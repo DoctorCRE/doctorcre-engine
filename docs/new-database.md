@@ -5,7 +5,8 @@ The engine will move to a new, cleanly connected database in one planned step, a
 ## Records
 
 - **`party`**: every person and company, once, each with its own id. `kind` is `person` or `company`.
-- **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. The partners can rename a label without touching any record.
+- **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's preferences and facts will be columns here, or a child table keyed by the user, as they come.
+- **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record.
 - **`property`**: a building or space, by address.
 - **`deal`**: one piece of brokerage work.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
@@ -17,6 +18,16 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
 
 Each record and link carries `created_at`, when its row was stored, so moving today's records across can keep their dates. Lists such as roles and phases do not, and neither do rows that carry their own time: activities and their emails, rounds, phase changes, posts and readings.
+
+## Users and who changed what
+
+Every row a person changes carries `changed_by_user_id`, the user who last added or changed it, and `changed_at`, when. These are the lists of roles and phases, parties and their emails, phone numbers, roles and companies, properties, deals and their phase changes, properties and parties, rounds and their documents, activity and what it is about, next steps, social accounts, ideas and design templates. The engine names the signed-in user once per transaction with `set_config('engine.user_id', <user id>, true)`, never for the whole connection, because a pooled connection serves the next user. A trigger writes both columns on every insert and update, whatever the statement says, and refuses the change when no user is named. A name that is not a user is refused by the key. Who removed a row waits for change history.
+
+In marketing, a text edit, a review and a sign-in also name their user. Documents, emails, posts and readings are written by jobs: the intake door, the mail capture, the publisher and the readings. Whether a job's change names a user it works for or the job itself is the owner's call (#244), so these tables carry no stamp yet. Until then, a user who settles a post stuck in `publishing` is not recorded.
+
+Only the owner adds a user, because every change is signed with a user's id. A user who has changed anything stays, so who changed what survives; a teammate who leaves will be a column on the user. Adding a teammate is a person row and a user row. The first user's own person row names them as its author, so that key is checked when the transaction ends. Being a user is not a role on a deal: who owns a deal will be a role on the deal, as client and listing agent are.
+
+Today's actors map across like this. The old `actor` table holds the two partners as `human`, the scheduled jobs and agent sessions as `automation`, and migrations and exporters as `system`. Its `created_by` and `updated_by` columns name an actor and are often empty, and the old `event` rows add a cause and, for an agent, the partner it worked for. Each `human` actor becomes a person with a user row. The owner loads them with the `stamp_change` triggers turned off, so a row keeps its old author and time: `changed_by_user_id` from `updated_by`, or `created_by` when never updated, and `changed_at` from `updated_at`, or `created_at`. A row an automation or system actor last changed takes the partner its event names, and the rest follow the owner's ruling on #244. The old columns that name a partner by slug, such as `deal.owner`, become deal roles in the deal-owner slice.
 
 ## Links
 
@@ -60,13 +71,14 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 24. A post is scheduled, or claimed for publishing, only when its account's `engine_publishes_from` is at or before its time. None means never. The account's time cannot change while a claim is being saved, and only the owner sets it.
 25. A sign-in is as its account's own platform account id, ends after it starts, and is never rewritten or removed.
 26. Each platform's formats come from the known platforms and formats, each once, and only a schema change adds one.
-27. A post's text versions run 1, 2, 3 with no gap. A later version is an edit by a partner, written while the post is scheduled and before its review closes, an hour before its time by the database's clock. Text is never blank, rewritten or removed.
+27. A post's text versions run 1, 2, 3 with no gap. A later version is an edit by a user, written while the post is scheduled and before its review closes, an hour before its time by the database's clock. Text is never blank, rewritten or removed.
 28. A post's media are documents in order, from 1 to 20. A text post has none, and only a photo set has more than one. Each medium is in its post's format, and its file is of the document's own type: an MP4 for a video, a PDF for a document, and a JPEG or PNG otherwise. A medium is never changed or removed.
-29. A review is an edit, a cancel or no response, judged by the database's clock. An edit names a text version after the first, and a cancel is of a cancelled post; both name a partner and come before review closes. No response names no one, comes at or after the close, only for a scheduled post with no other review. A review holds its post until it is saved, so an edit and the job writing no response take turns. Each version is reviewed once, a post is cancelled and gets no response at most once, and a review is never rewritten or removed.
+29. A review is an edit, a cancel or no response, judged by the database's clock. An edit names a text version after the first, and a cancel is of a cancelled post; both name a user and come before review closes. No response names no one, comes at or after the close, only for a scheduled post with no other review. A review holds its post until it is saved, so an edit and the job writing no response take turns. Each version is reviewed once, a post is cancelled and gets no response at most once, and a review is never rewritten or removed.
 30. A record or link keeps when it was stored.
 31. The engine empties no table, removes no history, and changes only the columns that may change.
 32. An email address is one address in lower case, with no name around it, and so is an email's sender. A person or company has each address once, labelled work or personal, and at most one primary.
 33. A phone number is a plus and digits only (E.164), and a North American one is +1 and ten digits. An extension is digits only. A person or company has each number and extension once, labelled work, mobile or home, and at most one primary.
+34. A change a person makes names the user who made it, and records them and the time itself. A user is a person, and only the owner adds one. A text edit, a review and a sign-in name a user.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -74,7 +86,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 `schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
 
-The role reads rows in every table, adds rows in every table except `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the clock's time, which it cannot write. It removes rows only outside history, and changes only these columns:
+The role reads rows in every table, adds rows in every table except `app_user`, `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the clock's time, which it cannot write. It removes rows only outside history, and changes only these columns:
 
 - a role's or a phase's label;
 - a party's, deal's, document's or design template's name, and a property's address;
@@ -86,7 +98,7 @@ The role reads rows in every table, adds rows in every table except `platform_me
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement` and `social_sign_in`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. The triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, and a reading of a published post.
+History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement` and `social_sign_in`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row, the triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, and a reading of a published post.
 
 The owner's own login can still change anything. That path is not the engine's concern.
 
@@ -128,10 +140,9 @@ A round's status records what happened to that round, and the deal's phase recor
 ## Activity, emails and next steps
 
 - **`activity`** records something that happened. **`activity_about`** links it to each deal, person or company, or property it concerns, one row each. One email about a deal, its client and its lender shows on all three timelines.
-- **`email`** holds the message's own Message-ID header (Outlook's `internetMessageId`), never an id one mailbox gives it, so mail both partners received is stored once. The id is unique, keeps its case, and is refused with spaces around it. The row also holds the sender, the subject and the new text only, with quoted history removed. The date is the activity's time. The agent stores only an email it ties to a record. Mail that matches nothing stays in the mailbox and is not copied, and the database refuses an email that is about no record. The original mailbox stays the full record.
+- **`email`** holds the message's own Message-ID header (Outlook's `internetMessageId`), never an id one mailbox gives it, so mail both users received is stored once. The id is unique, keeps its case, and is refused with spaces around it. The row also holds the sender, the subject and the new text only, with quoted history removed. The date is the activity's time. The agent stores only an email it ties to a record. Mail that matches nothing stays in the mailbox and is not copied, and the database refuses an email that is about no record. The original mailbox stays the full record.
 - **Attachments** go to R2. Each becomes a `document` that names the email it arrived with.
 - **`next_step`** is about exactly one deal, person or company, or property. Its owner is a party.
-- A step with no owner may be a partner's own, because partners become parties only in a later slice.
 
 A row that may point at one of several kinds of record has one checked key per kind and a check that exactly one is set. It never holds a type word and an id the database cannot check (decision 21). Activity and next steps are not history: a note can be corrected, and a step is marked done.
 
@@ -157,19 +168,19 @@ The tests run rounds 1 to 3, the acceptance, the email with its attachment, a ca
 
 The owner's automation keeps posting as it does today. These tables record what went out and how each post did, so each week's posts can learn from earlier ones.
 
-- **`social_account`**: a partner's presence on X, LinkedIn, Facebook or Instagram, by its handle, owned by a party. "Account" alone means a national account (`docs/glossary.md`). It holds the platform's own id for it, learned at sign-in, and `engine_publishes_from`, the time from which the engine publishes its posts.
-- **`social_sign_in`**: one row each time a partner signs in to a platform for an account: who, as which platform account, when, when it expires, and the scopes granted. The token itself lives in Workers KV, never in the database. A Facebook Page's sign-in does not expire, so it has no expiry.
+- **`social_account`**: a presence on X, LinkedIn, Facebook or Instagram, by its handle, owned by a party. "Account" alone means a national account (`docs/glossary.md`). It holds the platform's own id for it, learned at sign-in, and `engine_publishes_from`, the time from which the engine publishes its posts.
+- **`social_sign_in`**: one row each time a user signs in to a platform for an account: who, as which platform account, when, when it expires, and the scopes granted. The token itself lives in Workers KV, never in the database. A Facebook Page's sign-in does not expire, so it has no expiry.
 - **`platform_format`**: the formats each platform takes, one row each: text, photo, photo set (several photos or a carousel), document (a PDF carousel, LinkedIn only) and video (a Reel on Instagram). Instagram takes no text-only post, and Facebook no photo set. X keeps its rows for the posts already sent there. Only a schema change adds one.
 - **`idea`**: what a post says, as its angle, hook and pillar. One idea can run on several accounts.
 - **`design_template`**: a reusable look that a post's image is made from.
 - **`platform_metric`**: the metrics each platform reports, one row each. LinkedIn and X do not report saves, for example. The rows are a guess, to be confirmed against each platform's API. Each row says from when posts must have the metric. The first rows hold from the start, and a row added later holds from when it is added, so older posts, which have no reading of it, stay in the day-7 comparison. Only a schema change adds one.
 - **`post`**: one post on one account, with its format, idea, design template, when it was scheduled, and its status. A post without an idea or a template still counts for its account.
-- **`post_text`**: a post's words, one row per version. The weekly batch writes version 1. A partner's edit is the next version, with its author and time, so nothing is overwritten. The latest version is the one posted.
+- **`post_text`**: a post's words, one row per version. The weekly batch writes version 1. A user's edit is the next version, with its author and time, so nothing is overwritten. The latest version is the one posted.
 - **`post_media`**: a post's files in order, each a `document` in R2.
-- **`post_review`**: what happened in review: a partner's edit, naming its text version, a partner's cancel, or no response, written when review closes on a post nobody touched.
+- **`post_review`**: what happened in review: a user's edit, naming its text version, a user's cancel, or no response, written when review closes on a post nobody touched.
 - **`measurement`**: one reading of one metric of a post: when it was taken, its source and its value. A reading of a metric the post's platform does not report is refused, and so is a reading before the post is published. A reading that could not be taken is stored as not measured, with its reason, so a gap never reads as zero.
 
-A post goes out unless a partner cancels it. `scheduled` means the engine will publish it. At its time the publisher claims it by moving it to `publishing` with `where status = 'scheduled'`, so only one run can send it. It then becomes `published`, with the platform's id and time, or `failed`, with the platform's error as its reason. A post stuck in `publishing` is resolved by a partner to one or the other, never sent again. A cancelled post keeps its reason. Partners edit or cancel until review closes, an hour before the post's time, and each edit or cancel is a review row. A post another publisher sent, such as Blotato, is stored as `published` or `failed` from the start.
+A post goes out unless a user cancels it. `scheduled` means the engine will publish it. At its time the publisher claims it by moving it to `publishing` with `where status = 'scheduled'`, so only one run can send it. It then becomes `published`, with the platform's id and time, or `failed`, with the platform's error as its reason. A post stuck in `publishing` is resolved by a user to one or the other, never sent again. A cancelled post keeps its reason. Users edit or cancel until review closes, an hour before the post's time, and each edit or cancel is a review row. A post another publisher sent, such as Blotato, is stored as `published` or `failed` from the start.
 
 One publisher holds each account at each minute. The database refuses a scheduled post, or a claim, before its account's `engine_publishes_from`, and an account without one never gets an engine post. The weekly batch sends earlier posts elsewhere. Moving the time later stops new claims at once, and the engine cancels the posts it no longer holds. The engine's role cannot set or change the time, even on an account it adds; the owner sets it at each cut-over.
 
@@ -187,4 +198,4 @@ Pillars and hooks are text for now. They become lists, like roles and phases, wi
 
 ## Later slices
 
-Partners as people, and who changed what. Deal type, owner and dates. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
