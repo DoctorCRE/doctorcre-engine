@@ -19,6 +19,9 @@ const BROKERAGES = [id(9), id(10)];
 const EMAIL = id(300);
 const CALL = id(301);
 const NOTE = id(302);
+const DOCTOR = id(12);
+// Made up. No NPI issued yet starts with 9, so neither can be anyone's.
+const NPIS = ["9000000015", "9000000023"];
 const BAY = id(600);
 const HOME = id(610);
 const STATEWIDE = id(611);
@@ -31,11 +34,17 @@ const OUTSIDE = id(633);
 const SEED = `
 insert into role (slug, label) values
 	('client', 'Client'), ('listing_agent', 'Listing agent'), ('lender', 'Lender');
+insert into party (id, kind, name, npi) values
+	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}'), ('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}');
 insert into party (id, kind, name) values
-	('${CLIENT}', 'company', 'Example Dental Group'), ('${AGENT}', 'person', 'Avery Example'),
+	('${AGENT}', 'person', 'Avery Example'),
 	('${LENDERS[0]}', 'company', 'Example Bank'), ('${LENDERS[1]}', 'company', 'Example Credit Union'),
 	('${BROKERAGES[0]}', 'company', 'Example Realty'), ('${BROKERAGES[1]}', 'company', 'Example Properties');
 insert into party_role values ('${CLIENT}', 'client'), ('${AGENT}', 'listing_agent');
+insert into specialty values ('general_dentistry', 'General dentistry'), ('orthodontics', 'Orthodontics');
+insert into party_specialty (person_id, specialty) values ('${DOCTOR}', 'general_dentistry');
+insert into do_not_contact (party_id, reason) values ('${AGENT}', 'Example asked not to be contacted');
+insert into outside_id (source, value, party_id) values ('salesforce', 'a0EXAMPLE0000001', '${CLIENT}');
 insert into party_company (person_id, company_id, title, started_on, ended_on) values
 	('${AGENT}', '${BROKERAGES[0]}', 'Associate', '2020-01-06', '2025-12-31'),
 	('${AGENT}', '${BROKERAGES[1]}', 'Senior associate', '2026-01-05', null);
@@ -369,6 +378,10 @@ const STAMPED = [
 	"party_phone",
 	"party_role",
 	"party_company",
+	"do_not_contact",
+	"specialty",
+	"party_specialty",
+	"outside_id",
 	"property",
 	"market",
 	"market_county",
@@ -422,6 +435,8 @@ const STORED_AT = [
 	"party",
 	"party_email",
 	"party_phone",
+	"do_not_contact",
+	"party_specialty",
 	"property",
 	"market",
 	"market_county",
@@ -485,6 +500,85 @@ const RULES: Record<string, Case[]> = {
 			"party_kind_check",
 		],
 	],
+	"an NPI is ten digits ending in its check digit, and is held by one person or company":
+		[
+			...[
+				"900000001",
+				"90000000150",
+				"9000000016",
+				"900000001x",
+				" 900000001",
+				"9000000015\n",
+			].map(
+				(npi): Case => [
+					`update party set npi = '${npi}' where id = '${AGENT}'`,
+					"npi_shape",
+				],
+			),
+			[
+				`update party set npi = '${NPIS[0]}' where id = '${AGENT}'`,
+				"party_npi_key",
+			],
+		],
+	"a specialty is a person's, from the specialty list, each once": [
+		[
+			`insert into party_specialty (person_id, specialty) values ('${CLIENT}', 'orthodontics')`,
+			"party_specialty_person_id_person_kind_fkey",
+		],
+		[
+			`insert into party_specialty (person_id, specialty) values ('${DOCTOR}', 'podiatry')`,
+			"party_specialty_specialty_fkey",
+		],
+		[
+			`insert into party_specialty (person_id, specialty) values ('${DOCTOR}', 'general_dentistry')`,
+			"party_specialty_pkey",
+		],
+	],
+	"do not contact is set once per person or company, with a reason that never changes":
+		[
+			[
+				`insert into do_not_contact (party_id, reason) values ('${MISSING}', 'Example')`,
+				"do_not_contact_party_id_fkey",
+			],
+			[
+				`insert into do_not_contact (party_id, reason) values ('${CLIENT}', ' \t')`,
+				"do_not_contact_reason_check",
+			],
+			[
+				`insert into do_not_contact (party_id, reason) values ('${AGENT}', 'Example')`,
+				"do_not_contact_pkey",
+			],
+			[
+				"update do_not_contact set reason = 'Example'",
+				notGranted("do_not_contact"),
+			],
+		],
+	"an outside id is import history for one person, company or deal, once per source":
+		[
+			...[`'${CLIENT}', '${DEAL}'`, "null, null"].map(
+				(records): Case => [
+					`insert into outside_id (source, value, party_id, deal_id) values ('salesforce', 'a0EXAMPLE0000002', ${records})`,
+					"outside_id_one_record",
+				],
+			),
+			[
+				`insert into outside_id (source, value, deal_id) values ('salesforce', 'a0EXAMPLE0000001', '${DEAL}')`,
+				"outside_id_pkey",
+			],
+			[
+				`insert into outside_id (source, value, deal_id) values ('Sales Force', 'a0EXAMPLE0000002', '${DEAL}')`,
+				"outside_id_source_check",
+			],
+			[
+				`insert into outside_id (source, value, deal_id) values ('roster', ' 12', '${DEAL}')`,
+				"outside_id_value_check",
+			],
+			[
+				"update outside_id set value = 'a0EXAMPLE0000002'",
+				notGranted("outside_id"),
+			],
+			["delete from outside_id", notGranted("outside_id")],
+		],
 	"a person works at a company, ending no earlier than they started, linked once":
 		[
 			[
@@ -1206,7 +1300,8 @@ const OWNER_RULES: Record<string, Case[]> = {
 const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
 	phase: ["label"],
-	party: ["name"],
+	specialty: ["label"],
+	party: ["name", "npi"],
 	property: ["address", "county_fips", "latitude", "longitude"],
 	market: ["name"],
 	territory: ["name"],
@@ -1361,12 +1456,14 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				id: CLIENT,
 				kind: "company",
 				name: "Example Dental Group",
+				npi: NPIS[0],
 				role: "client",
 			},
 			{
 				id: AGENT,
 				kind: "person",
 				name: "Avery Example",
+				npi: null,
 				role: "listing_agent",
 			},
 		],
@@ -1457,7 +1554,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 
 test("every table a user or a job changes records who changed it and when", async () => {
 	const { rows } = await db.query(
-		`select array_agg(t.tgrelid::regclass::text order by t.tgrelid::regclass::text) as stamped
+		`select array_agg(t.tgrelid::regclass::text order by t.tgrelid::regclass::text collate "C") as stamped
 		from pg_trigger t
 		join pg_attribute stamp_at on stamp_at.attrelid = t.tgrelid and stamp_at.attname = 'changed_at' and stamp_at.attnotnull
 		join pg_constraint one on one.conrelid = t.tgrelid and one.conname = t.tgrelid::regclass::text || '_changed_by_a_user_or_a_job'

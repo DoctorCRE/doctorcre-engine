@@ -1,11 +1,26 @@
 -- The new database's core, designed in docs/new-database.md. Nothing applies it to a live database.
 -- It names no schema, so a loader chooses the namespace with search_path.
 
+-- The NPI check digit is Luhn's, taken over the 80840 prefix and the first nine digits.
+-- ascii(), not a cast, because PostgreSQL may run this before the shape test refuses a non-digit.
+create function npi_check_digit_holds(npi text) returns boolean
+language sql immutable
+return (
+	select sum(case when place % 2 = 0 then digit * 2 / 10 + digit * 2 % 10 else digit end) % 10 = 0
+	from (select ascii(substr(reverse('80840' || npi), place, 1)) - ascii('0'), place from generate_series(1, 15) place)
+		as digits (digit, place)
+);
+
+create domain npi as text
+	constraint npi_shape check (value ~ '^[0-9]{10}$' and npi_check_digit_holds(value));
+
 create table party (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	kind text not null check (kind in ('person', 'company')),
 	name text not null,
+	-- A person's is their individual NPI and a company's its organization NPI. A number is issued once, to one of them.
+	npi npi unique,
 	unique (id, kind)
 );
 
@@ -118,6 +133,27 @@ create table party_phone (
 
 create unique index party_phone_one_primary on party_phone (party_id) where is_primary;
 
+-- About the person or company in every role, so any outreach reads it from the party alone.
+create table do_not_contact (
+	party_id uuid primary key references party,
+	created_at timestamptz not null default now(),
+	reason text not null check (reason ~ '\S')
+);
+
+create table specialty (
+	slug text primary key,
+	label text not null
+);
+
+create table party_specialty (
+	person_id uuid not null,
+	person_kind text not null generated always as ('person') stored,
+	specialty text not null references specialty,
+	created_at timestamptz not null default now(),
+	primary key (person_id, specialty),
+	foreign key (person_id, person_kind) references party (id, kind)
+);
+
 -- Census FIPS codes. A county's five digits begin with its state's two.
 create domain state_fips as text constraint state_fips_shape check (value ~ '^[0-9]{2}$');
 create domain county_fips as text constraint county_fips_shape check (value ~ '^[0-9]{5}$');
@@ -207,6 +243,16 @@ create table deal (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	name text not null
+);
+
+-- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.
+create table outside_id (
+	source text not null check (source ~ '^[a-z][a-z0-9_]*$'),
+	value text not null check (value ~ '^\S(.*\S)?$'),
+	party_id uuid references party,
+	deal_id uuid references deal,
+	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id) = 1),
+	primary key (source, value)
 );
 
 create table phase (
@@ -699,10 +745,10 @@ declare
 	stamped text;
 begin
 	foreach stamped in array array['role', 'phase', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
-		'property', 'market', 'market_county', 'territory', 'territory_piece', 'party_territory',
-		'deal', 'deal_phase_change', 'deal_property', 'deal_party', 'activity', 'activity_about', 'next_step',
-		'document', 'email', 'offer', 'offer_document', 'social_account', 'idea', 'design_template', 'post', 'post_text',
-		'post_media', 'post_review', 'measurement'] loop
+		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
+		'territory_piece', 'party_territory', 'deal', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
+		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'social_account', 'idea',
+		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -772,7 +818,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, platform_metric and platform_format, never empties a table, and changes or removes only what the grants below name.
--- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in) is never removed.
+-- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -800,14 +846,15 @@ revoke insert on app_user, job from engine;
 revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
-grant delete on party, party_email, party_phone, property, market, market_county, territory, territory_piece,
-	party_territory, deal, party_role, party_company, deal_property, deal_party,
-	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;
+grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
+	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
+	activity_about, email, next_step, document, social_account, idea, design_template to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, phase to engine;
+grant update (label) on table role, phase, specialty to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
+grant update (npi) on party to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
 grant update (started_on, ended_on) on party_territory to engine;
