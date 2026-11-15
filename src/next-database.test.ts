@@ -30,10 +30,14 @@ const IN_STATE = id(630);
 const IN_MARKET = id(631);
 const IN_REACH = id(632);
 const OUTSIDE = id(633);
+const INTRODUCTION = id(640);
+const CLOSED_DEAL = id(650);
+const DEAD_DEAL = id(651);
 
 const SEED = `
-insert into role (slug, label) values
-	('client', 'Client'), ('listing_agent', 'Listing agent'), ('lender', 'Lender');
+insert into role (slug, label, category_of) values
+	('client', 'Client', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
+	('lender', 'Lender', 'vendor'), ('title', 'Title', 'vendor');
 insert into party (id, kind, name, npi) values
 	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}'), ('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}');
 insert into party (id, kind, name) values
@@ -292,6 +296,20 @@ insert into property (id, address, county_fips, latitude, longitude) values
 	('${IN_STATE}', '1 Example Road', '91005', null, null), ('${IN_MARKET}', '2 Example Road', '90003', 10.2, -150),
 	('${IN_REACH}', '3 Example Road', null, 10.5, -150), ('${OUTSIDE}', '4 Example Road', '90007', 11, -150);
 `;
+const VENDOR_SEED = `
+insert into stage values ('vendor', 'warm', 'Example warm'), ('client', 'warm', 'Example warm client');
+insert into party_role (party_id, role, stage, relationship_level) values
+	('${VENDOR}', 'vendor', 'warm', 1), ('${VENDOR}', 'title', null, null);
+insert into introduction (id, vendor_id, made_by, introduced_party_id, introduced_on, deal_id) values
+	('${INTRODUCTION}', '${VENDOR}', 'vendor', '${CLIENT}', '2026-02-02', '${DEAL}');
+`;
+const newIntroduction = (row: Record<string, string | null>) =>
+	insert("introduction", {
+		vendor_id: VENDOR,
+		made_by: "team",
+		introduced_party_id: CLIENT,
+		...row,
+	});
 const insert = (table: string, row: Record<string, string | number | null>) =>
 	`insert into ${table} (${Object.keys(row)}) values (${Object.values(row).map(
 		(value) => (value === null ? "null" : `'${value}'`),
@@ -378,6 +396,7 @@ const compared = async (client = db) =>
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
 	"role",
+	"stage",
 	"phase",
 	"party",
 	"merged_party",
@@ -396,6 +415,7 @@ const STAMPED = [
 	"territory_piece",
 	"party_territory",
 	"deal",
+	"introduction",
 	"deal_phase_change",
 	"deal_property",
 	"deal_party",
@@ -463,6 +483,7 @@ const STORED_AT = [
 	"idea",
 	"design_template",
 	"post_media",
+	"introduction",
 ];
 
 // A constraint's name, or the error PostgreSQL raises.
@@ -1254,6 +1275,94 @@ const RULES: Record<string, Case[]> = {
 				"party_territory_territory_id_fkey",
 			],
 		],
+	"a stage comes from its own role's list, and is stored once": [
+		[
+			`update party_role set stage = 'cold' where role = 'vendor'`,
+			"party_role_role_stage_fkey",
+		],
+		[
+			`update party_role set stage = 'warm' where role = 'listing_agent'`,
+			"party_role_role_stage_fkey",
+		],
+		[
+			"insert into stage values ('mayor', 'warm', 'Example')",
+			"stage_role_fkey",
+		],
+		["insert into stage values ('vendor', 'warm', 'Example')", "stage_pkey"],
+	],
+	"a relationship level is a vendor's, from the four levels, which only a schema change adds or renames":
+		[
+			[
+				"update party_role set relationship_level = 1 where role = 'title'",
+				"party_role_level_on_vendor",
+			],
+			[
+				"update party_role set relationship_level = 4 where role = 'vendor'",
+				"party_role_relationship_level_fkey",
+			],
+			[
+				"insert into relationship_level values (4, 'Example', 'Example')",
+				notGranted("relationship_level"),
+			],
+			[
+				"update relationship_level set label = 'Example'",
+				notGranted("relationship_level"),
+			],
+		],
+	"a vendor's category is a role, held only by a vendor, and stays a category":
+		[
+			[
+				"insert into role values ('sba_lender', 'SBA lender', 'lender')",
+				"role_category_of_check",
+			],
+			[
+				`insert into party_role values ('${AGENT}', 'title'); ${CHECK_AT_COMMIT}`,
+				"party_role_category_of_a_vendor",
+			],
+			[
+				`insert into party_role values ('${LENDERS[0]}', 'vendor'), ('${LENDERS[0]}', 'lender');
+				delete from party_role where party_id = '${LENDERS[0]}' and role = 'vendor'; ${CHECK_AT_COMMIT}`,
+				"party_role_category_of_a_vendor",
+			],
+			[
+				"update role set category_of = null where slug = 'lender'",
+				notGranted("role"),
+			],
+		],
+	"an introduction is between a vendor and someone else, made by the vendor or the team, and who it joins never changes":
+		[
+			[
+				newIntroduction({ vendor_id: AGENT }),
+				"introduction_vendor_id_vendor_role_fkey",
+			],
+			[
+				newIntroduction({ vendor_role: "title" }),
+				"introduction_vendor_role_check",
+			],
+			[newIntroduction({ made_by: "partner" }), "introduction_made_by_check"],
+			[
+				newIntroduction({ introduced_party_id: VENDOR }),
+				"introduction_of_someone_else",
+			],
+			[
+				newIntroduction({ introduced_party_id: MISSING }),
+				"introduction_introduced_party_id_fkey",
+			],
+			[newIntroduction({ deal_id: MISSING }), "introduction_deal_id_fkey"],
+			[newIntroduction({ note: " \n" }), "introduction_note_check"],
+			[
+				`delete from party_role where party_id = '${VENDOR}' and role = 'vendor'`,
+				"introduction_vendor_id_vendor_role_fkey",
+			],
+			[
+				`update introduction set introduced_party_id = '${AGENT}'`,
+				notGranted("introduction"),
+			],
+			[
+				`select merge_party('${CLIENT}', '${VENDOR}')`,
+				"introduction_of_someone_else",
+			],
+		],
 	"a record or link keeps when it was stored": STORED_AT.map((table) => [
 		`update ${table} set created_at = now()`,
 		notGranted(table),
@@ -1346,6 +1455,9 @@ const OWNER_RULES: Record<string, Case[]> = {
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
+	stage: ["label"],
+	party_role: ["relationship_level", "stage"],
+	introduction: ["deal_id", "introduced_on", "note"],
 	phase: ["label"],
 	specialty: ["label"],
 	party: ["name", "npi"],
@@ -1456,7 +1568,7 @@ before(async () => {
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
 	await db.query(
-		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED}`,
+		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED}`,
 	);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
@@ -1592,6 +1704,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 				"merged_party",
 				"platform_metric",
 				"platform_format",
+				"relationship_level",
 			].includes(table),
 			defaulted: DEFAULTED[table] ?? null,
 			removable: REMOVABLE.includes(table),
@@ -1709,6 +1822,69 @@ test("who serves a property today, while a vendor that left keeps its history", 
 		{ property_id: IN_MARKET, party_id: VENDOR, today: false },
 	]);
 });
+
+test("a vendor's track record counts the deals it worked and the deals its introductions led to", () =>
+	rolledBack(async () => {
+		await db.query(`insert into phase values ('closed', 'Closed');
+			insert into deal (id, name) values ('${CLOSED_DEAL}', 'Example Closed Deal'), ('${DEAD_DEAL}', 'Example Dead Deal');
+			insert into deal_phase_change values
+				('${CLOSED_DEAL}', '2026-04-01T15:00:00+00:00', 'negotiation', null),
+				('${CLOSED_DEAL}', '2026-05-01T15:00:00+00:00', 'closed', null),
+				('${DEAD_DEAL}', '2026-04-01T15:00:00+00:00', 'dead', 'Example: the client stayed put');
+			insert into party_role (party_id, role) values ('${LENDERS[0]}', 'vendor'), ('${VENDOR}', 'client');
+			insert into deal_party values
+				('${DEAL}', '${VENDOR}', 'title'), ('${CLOSED_DEAL}', '${VENDOR}', 'title'), ('${CLOSED_DEAL}', '${VENDOR}', 'lender'),
+				('${DEAD_DEAL}', '${VENDOR}', 'vendor'), ('${LENDER_DEAL}', '${VENDOR}', 'client'),
+				('${LENDER_DEAL}', '${LENDERS[1]}', 'lender');
+			${newIntroduction({ made_by: "vendor", deal_id: DEAL })}; ${newIntroduction({ deal_id: DEAD_DEAL })};
+			${newIntroduction({ deal_id: CLOSED_DEAL, introduced_party_id: AGENT })}; ${newIntroduction({})}`);
+		const { rows } = await db.query(
+			"select * from vendor_track_record order by party_id",
+		);
+		assert.deepEqual(rows, [
+			{
+				party_id: LENDERS[0],
+				deals_worked: "0",
+				deals_closed: "0",
+				deals_dead: "0",
+				deals_it_introduced: "0",
+				deals_we_introduced: "0",
+			},
+			{
+				party_id: VENDOR,
+				deals_worked: "3",
+				deals_closed: "1",
+				deals_dead: "1",
+				deals_it_introduced: "1",
+				deals_we_introduced: "2",
+			},
+		]);
+	}));
+
+test("a merge moves a vendor's introductions, and the survivor's stage and level win, filled from the duplicate's", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'company', 'Example Title Co');
+			insert into party_role (party_id, role, relationship_level) values ('${DUPLICATE}', 'vendor', 3), ('${LENDERS[0]}', 'vendor', null);
+			${newIntroduction({ vendor_id: DUPLICATE })};
+			select merge_party('${DUPLICATE}', '${VENDOR}');
+			select merge_party('${VENDOR}', '${LENDERS[0]}');
+			select merge_party('${LENDERS[0]}', '${LENDERS[1]}')`);
+		const { rows } = await db.query(
+			`select (select count(*) from introduction where vendor_id = $1) as introductions,
+				jsonb_agg(jsonb_build_array(role, stage, relationship_level) order by role) as roles
+			from party_role where party_id = $1`,
+			[LENDERS[1]],
+		);
+		assert.deepEqual(rows, [
+			{
+				introductions: "2",
+				roles: [
+					["title", null, null],
+					["vendor", "warm", 1],
+				],
+			},
+		]);
+	}));
 
 test("an email's sender is matched to its people through their email rows", async () => {
 	const { rows } = await db.query(
@@ -2197,9 +2373,13 @@ test("an import of a duplicate's id that waits on its merge is refused", async (
 		const blocked = async () =>
 			(await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [pid]))
 				.rows[0].blocked;
+		// Handled from the start, because the refusal can arrive before the commit's reply.
+		const refused = assert.rejects(waiting, {
+			constraint: "party_never_merged",
+		});
 		while (!settled && !(await blocked()));
 		await merge.query("commit");
-		await assert.rejects(waiting, { constraint: "party_never_merged" });
+		await refused;
 	} finally {
 		await Promise.all(sessions.map((session) => session.end()));
 	}

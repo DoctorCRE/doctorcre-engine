@@ -92,15 +92,60 @@ end $$;
 
 create table role (
 	slug text primary key,
-	label text not null
+	label text not null,
+	-- A vendor's category, such as lender, is a role of its own whose category_of is vendor.
+	category_of text check (category_of = 'vendor')
 );
+
+-- A role's stages, such as a vendor's. Like roles, a label can be renamed.
+create table stage (
+	role text not null references role,
+	slug text not null,
+	label text not null,
+	primary key (role, slug)
+);
+
+-- How well the team knows a vendor. Only a schema change adds or renames a level.
+create table relationship_level (
+	level smallint primary key,
+	label text not null,
+	meaning text not null
+);
+
+insert into relationship_level values
+	(0, 'Prospective', 'Worth knowing. No two-way contact yet.'),
+	(1, 'Building', 'Two-way contact: they replied, or we met. Reaching out alone does not count.'),
+	(2, 'Established', 'Value has moved in either direction: an introduction, a referral or a deal.'),
+	(3, 'Core', 'Value has moved both ways, more than once.');
 
 create table party_role (
 	party_id uuid not null references party,
 	role text not null references role,
 	created_at timestamptz not null default now(),
-	primary key (party_id, role)
+	stage text,
+	-- None is not yet judged, which is not 0.
+	relationship_level smallint references relationship_level,
+	primary key (party_id, role),
+	foreign key (role, stage) references stage,
+	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor')
 );
+
+create function party_role_category_of_a_vendor() returns trigger
+language plpgsql as $$
+declare
+	wanted uuid := case tg_op when 'DELETE' then old.party_id else new.party_id end;
+begin
+	if exists (select from party_role p join role r on r.slug = p.role where p.party_id = wanted and r.category_of = 'vendor')
+		and not exists (select from party_role where party_id = wanted and role = 'vendor') then
+		raise exception 'only a vendor holds a vendor category'
+			using errcode = 'check_violation', constraint = 'party_role_category_of_a_vendor';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, so a vendor and its category can be saved, or removed, in either order.
+create constraint trigger party_role_category_of_a_vendor after insert or update or delete on party_role
+	initially deferred for each row execute function party_role_category_of_a_vendor();
 
 -- A person's place at a company, dated, so their history survives a move.
 create table party_company (
@@ -304,6 +349,45 @@ create table deal_party (
 	created_at timestamptz not null default now(),
 	primary key (deal_id, party_id, role)
 );
+
+-- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
+create table introduction (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	vendor_id uuid not null,
+	vendor_role text not null default 'vendor' check (vendor_role = 'vendor'),
+	made_by text not null check (made_by in ('vendor', 'team')),
+	-- Whom the vendor introduced to the team, or the team to the vendor.
+	introduced_party_id uuid not null references party,
+	introduced_on date,
+	deal_id uuid references deal,
+	note text check (note ~ '\S'),
+	constraint introduction_of_someone_else check (introduced_party_id <> vendor_id),
+	-- Only a merge changes a party_role key, and its introductions move with it.
+	foreign key (vendor_id, vendor_role) references party_role on update cascade
+);
+
+-- From deal history only: the deals a vendor worked in a vendor role, and the deals its introductions led to.
+create view vendor_track_record as
+with worked as (
+	select dp.party_id, dp.deal_id, (
+		select phase from deal_phase_change c where c.deal_id = dp.deal_id order by happened_at desc limit 1
+	) as phase
+	from deal_party dp join role r on r.slug = dp.role
+	where 'vendor' in (r.slug, r.category_of)
+)
+select v.party_id,
+	count(distinct w.deal_id) as deals_worked,
+	count(distinct w.deal_id) filter (where w.phase = 'closed') as deals_closed,
+	count(distinct w.deal_id) filter (where w.phase = 'dead') as deals_dead,
+	(select count(distinct deal_id) from introduction where vendor_id = v.party_id and made_by = 'vendor')
+		as deals_it_introduced,
+	(select count(distinct deal_id) from introduction where vendor_id = v.party_id and made_by = 'team')
+		as deals_we_introduced
+from party_role v
+left join worked w using (party_id)
+where v.role = 'vendor'
+group by v.party_id;
 
 create table activity (
 	id uuid primary key default gen_random_uuid(),
@@ -783,7 +867,14 @@ begin
 			using errcode = 'check_violation', constraint = 'merge_party_one_npi';
 	end if;
 
+	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
+	update introduction set vendor_id = survivor
+	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
+	-- Its stage and level stay too, and the duplicate's fill any it lacks.
+	update party_role s set stage = coalesce(s.stage, d.stage),
+		relationship_level = coalesce(s.relationship_level, d.relationship_level)
+	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
 	-- A primary on a shared address or number stays primary when the survivor has none.
@@ -849,9 +940,9 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'phase', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
-		'territory_piece', 'party_territory', 'deal', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
+		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party'] loop
@@ -923,7 +1014,7 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but app_user, job, merged_party, platform_metric and platform_format, never empties a table, and changes or removes only what the grants below name.
+-- It reads everywhere, adds everywhere but app_user, job, merged_party, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
 -- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id) is never removed.
 do $$ begin
 	begin
@@ -943,8 +1034,8 @@ do $$ begin
 	execute format('grant usage on schema %1$I to engine;
 		grant select, insert on all tables in schema %1$I to engine', current_schema());
 end $$;
--- Which metrics and formats a platform offers is a schema decision.
-revoke insert on platform_metric, platform_format from engine;
+-- Which metrics and formats a platform offers, and the relationship levels, are schema decisions.
+revoke insert on platform_metric, platform_format, relationship_level from engine;
 -- Only the owner adds a user or a job, because every change is signed with one.
 revoke insert on app_user, job from engine;
 -- Only a merge leaves a pointer, after it has moved everything.
@@ -958,11 +1049,13 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, document, social_account, idea, design_template to engine;
+	activity_about, email, next_step, document, social_account, idea, design_template, introduction to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, phase, specialty to engine;
+grant update (label) on table role, stage, phase, specialty to engine;
+grant update (stage, relationship_level) on party_role to engine;
+grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (npi) on party to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;

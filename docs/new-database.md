@@ -11,7 +11,10 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason.
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
 - **`outside_id`**: another system's id for a person, company or deal, such as a Salesforce or roster id, kept as import history.
-- **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record.
+- **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record. A vendor's category, such as lender, is a role whose `category_of` is vendor.
+- **`stage`**: each role's list of stages, such as a vendor's. Like roles, a label can be renamed.
+- **`relationship_level`**: the four levels of how well the team knows a vendor, from 0, Prospective, to 3, Core.
+- **`introduction`**: one introduction between a vendor and the team, made either way, and the deal it led to.
 - **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
@@ -28,7 +31,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 ## Users, jobs and who changed what
 
-Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, phases and specialties, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, deals and their phase changes, properties and parties, rounds and their documents, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
+Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases and specialties, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
 
 The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. Who removed a row waits for change history.
 
@@ -54,7 +57,7 @@ Today's actors map across like this. The old `actor` table holds the two partner
 
 Each link is one row. No record holds a list or a column per role.
 
-- **`party_role`**: what a person or company is to us. One row per role.
+- **`party_role`**: what a person or company is to us. One row per role. A vendor's vendor role also holds its stage and relationship level.
 - **`party_email`** and **`party_phone`**: a person's or company's emails and phone numbers, one row each, with a label and whether it is the primary one.
 - **`party_specialty`**: a person's specialties, one row each.
 - **`party_company`**: a person at a company, with their title there and the dates they started and left. A person who moves keeps the old row, with its end date, and gets a new one.
@@ -114,6 +117,10 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 44. A merge joins two different people or two different companies, neither merged away. It never merges a user away, and never two records that each hold an NPI.
 45. A merge moves everything that points at the duplicate, in every table, to the survivor, and removes the duplicate. Where both hold the same link, the survivor's row stays, and so do its primary email, primary phone and do-not-contact reason. A second merge onto the same records waits for the first.
 46. Only a merge leaves a merged-into pointer, and it names a live record, so merges never chain or loop. Nothing new points at a merged-away record, and its id is never used again. Only the engine and the owner run a merge.
+47. A vendor's category is a role whose `category_of` is vendor, and it stays one. Only a vendor holds a vendor category, checked when the change is saved.
+48. A stage comes from its own role's stage list, and is stored once per role.
+49. A relationship level is a vendor role's, one of the four levels, and only a schema change adds or renames a level.
+50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. Its note is never blank, and who it joins never changes. A vendor keeps its vendor role while it has introductions.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -121,9 +128,10 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 `schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
 
-The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
+The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
-- a role's, a phase's or a specialty's label;
+- a role's, a stage's, a phase's or a specialty's label;
+- a vendor role's stage and relationship level, and an introduction's date, deal and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, and a property's address, county and point;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
@@ -261,6 +269,33 @@ Today's system keeps a vendor's markets as a list of named markets with a bounda
 
 Rents and expenses read from LOIs and leases build the market database. It needs no table of its own. A round already holds its rent, NNN, TI and free rent, and names its property, so a market's rents are the rounds whose property falls in it, read with `property_territory` or `market_county`. A lease's terms join the same way when leases come. A figure read from a document outside any deal, such as a broker's survey, is a following slice, with its source document and date.
 
+## Vendors
+
+A vendor is a person or company holding the `vendor` role. The owner ruled on #257 that a vendor's category, such as lender or contractor, is a role (2026-11-15). Each category is a role whose `category_of` is vendor, and a vendor holds a `party_role` row for each one. On a deal, a vendor is a `deal_party` row in the role it played, such as lender, so the deal shows it under that role and its track record reads the same rows. A vendor nobody has categorized holds only the vendor role, which says so plainly, where a catch-all category would hide it. A rare category is a new role.
+
+A vendor's stage and relationship level are on its vendor role, because they describe the team's relationship with the vendor, not one of its categories. A stage comes from its role's own list in `stage`, so leads can take their own stages on the same column later. The four levels, as the owner defined them for today's system:
+
+| Level | Label       | Meaning                                                                      |
+| ----- | ----------- | ---------------------------------------------------------------------------- |
+| 0     | Prospective | Worth knowing. No two-way contact yet.                                       |
+| 1     | Building    | Two-way contact: they replied, or we met. Reaching out alone does not count. |
+| 2     | Established | Value has moved in either direction: an introduction, a referral or a deal.  |
+| 3     | Core        | Value has moved both ways, more than once.                                   |
+
+No level means not yet judged, a different fact from 0.
+
+An introduction is one `introduction` row, made either way: the vendor introducing someone to the team, such as a new client, or the team introducing someone to the vendor. It names the vendor, who made it, whom it introduced, when, a note, and the deal it led to, which can be set when one comes of it.
+
+`vendor_track_record` gives each vendor's record from deal history only. Nothing stores a rating (owner, #257). It counts the deals the vendor worked in any vendor role, how many of them closed and how many died, by each deal's latest phase, and the deals that its introductions to the team, and the team's to it, led to. A deal counts once, however many roles or introductions tie it to the vendor.
+
+Moving today's rows across:
+
+- Each `vendor` becomes the vendor role on its party, with its `relationship_level` as it is.
+- Each `vendor_category` row becomes a role whose `category_of` is vendor, and a vendor's `category_slug` its role. The deal roles of `deal_vendor_assignment`, such as title and inspector, join the same list, and `gc` becomes contractor. Each assignment becomes a `deal_party` row, and so does each worked deal in a vendor's `deal_evidence`.
+- Each `vendor_stage` row becomes a vendor stage, and a vendor's `stage` the stage on its vendor role. The old system's migration 0047 split its nine original stages into level, disposition and target, so an original stage such as avoid or target waits on #258 rather than coming back as a stage.
+- Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
+- `trust_override`, a hand-set rating, does not move. Disposition and target wait for the owner (#258).
+
 ## Merging duplicates
 
 The owner ruled on #196: the merged-away record disappears and everything points at the survivor. `merge_party(duplicate, survivor)` moves every row that points at the duplicate, then removes it and leaves a `merged_party` row, so an old link finds the survivor. Email matches need nothing more, because the duplicate's addresses are now the survivor's. The foreign keys then refuse any row that still names the duplicate, in any table, including tables added later. The merge finds what to move from the catalog, so a new table that points at a party moves with no change to it.
@@ -274,7 +309,9 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Both have a primary email or phone? The survivor's stays primary. If only the duplicate has one, it becomes the survivor's.
 - Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
-- The survivor keeps its name. Outside ids, next steps, sent activity and social accounts all move.
+- The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
+- Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks.
+- A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
 
 A catalog test lists every unique key that holds a party. A new one fails it until the merge says which row stays.

@@ -46,6 +46,32 @@ An individual or company who plays a role in the transaction or provides service
 _Avoid_: service provider, party, partner
 _Database_: `vendor`; `deal_vendor_assignment.role`, whose check allows `lender`, `contractor`, `architect`, `attorney`, `title`, `inspector` and `landlord_rep` (no `consultant` yet); `v_deal_room_vendor`.
 _Engine_: `vendors` on the board and the deal page.
+_New database_: a party with the `vendor` role. Its category, such as lender, is a role too (see Vendor category).
+
+**Vendor category**:
+What kind of vendor someone is, such as lender, attorney or contractor. Never "misc": a rare kind gets its own category.
+_Avoid_: vendor type
+_Database_: `vendor.category_slug` and `vendor_category` today; in the new database, a role whose `category_of` is `vendor`, held in `party_role` and named on a deal in `deal_party`.
+
+**Vendor stage**:
+Where a vendor stands with the team, from a list the partners keep.
+_Avoid_: status, phase (deals have phases)
+_Database_: `vendor.stage` and `vendor_stage` today; `party_role.stage` on the vendor role and `stage` in the new database.
+
+**Relationship level**:
+How well the team knows a vendor: 0 Prospective, 1 Building, 2 Established, 3 Core. None means not yet judged.
+_Avoid_: contact level, rating, tier
+_Database_: `vendor.relationship_level` and `vendor_relationship_level` today; `party_role.relationship_level` and `relationship_level` in the new database.
+
+**Introduction**:
+A vendor introducing someone to the team, or the team introducing someone to a vendor, and the deal it led to.
+_Avoid_: intro, link, referral (on its own)
+_Database_: `party_link` and `party_link_deal` today; `introduction` in the new database.
+
+**Track record**:
+What a vendor's deals show: the deals it worked, how they ended, and the deals its introductions led to. It is read from deal history, never set by hand.
+_Avoid_: rating, trust tier, score
+_Database_: computed from `vendor.deal_evidence`, `party_link_deal` and `party_link` today; `vendor_track_record` in the new database.
 
 **Listing agent**:
 An agent or broker representing the property owner.
