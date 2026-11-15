@@ -19,7 +19,7 @@ const FIRST_PAGES = 5;
 
 const REFUSALS = new Set([400, 404, 409, 422]);
 
-// The old system allows a session 60 tool calls a minute; each tool ask makes one.
+// The old system allowed a browser session 60 tool calls a minute; the pause keeps the old side's pace.
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
@@ -79,13 +79,13 @@ function mirrored(
 
 // The old door served the directory and the Relationships map over HTTP.
 const business = (path: string): Request => ({
-	path: `/api/engine${path}`,
+	path,
 	oldPath: `/api/v1/business${path}`,
 });
 const DIRECTORY = "contract=vendor-directory.v1";
 
 const leadPage = (cursor: Record<string, unknown> = {}) =>
-	mirrored("/api/engine/leads", "lead-board", {
+	mirrored("/leads", "lead-board", {
 		workspace: "leads",
 		...cursor,
 	});
@@ -93,7 +93,7 @@ const leadPage = (cursor: Record<string, unknown> = {}) =>
 // The app's first page of reasons and each "more" after it.
 const reasonsPage = (before_id?: string) =>
 	mirrored(
-		"/api/engine/reasons-to-reach-out",
+		"/reasons-to-reach-out",
 		"list-practice-origination",
 		before_id === undefined ? { limit: 25 } : { limit: 25, before_id },
 	);
@@ -105,11 +105,11 @@ type Walked = Extract<
 const walkedPage = (ask: Walked, cursor?: string) => {
 	const more = cursor !== undefined && { cursor };
 	return ask.read === "vendor meetings"
-		? mirrored("/api/engine/vendor-meetings", "read-vendor-meetings", {
+		? mirrored("/vendor-meetings", "read-vendor-meetings", {
 				view: ask.view,
 				...more,
 			})
-		: mirrored("/api/engine/today-triage", "today-triage", {
+		: mirrored("/today-triage", "today-triage", {
 				...(ask.owners && { owners: ask.owners }),
 				...more,
 			});
@@ -122,34 +122,31 @@ const unavailable = (calendar: unknown) =>
 function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 	switch (ask.read) {
 		case "board":
-			return mirrored("/api/engine/deals", "deal-room-board", {
+			return mirrored("/deals", "deal-room-board", {
 				workspace: ask.workspace,
 			});
 		case "deal":
 			return {
-				path: `/api/engine/deals/${encodeURIComponent(ask.deal)}`,
+				path: `/deals/${encodeURIComponent(ask.deal)}`,
 				call: { name: "get-deal-room", arguments: { deal: ask.deal } },
 			};
 		// The app's first ask, with no filters.
 		case "client fit":
-			return mirrored("/api/engine/client-fit", "ideal-client-profile");
+			return mirrored("/client-fit", "ideal-client-profile");
 		case "capture queue":
-			return mirrored("/api/engine/capture-queue", "capture-queue");
+			return mirrored("/capture-queue", "capture-queue");
 		case "find":
-			return mirrored("/api/engine/find", "find", { query: ask.query });
+			return mirrored("/find", "find", { query: ask.query });
 		case "lead board":
 			return leadPage();
 		case "quiet follow-ups":
-			return mirrored("/api/engine/quiet-follow-ups", "quiet-follow-ups");
+			return mirrored("/quiet-follow-ups", "quiet-follow-ups");
 		case "territory":
-			return mirrored(
-				"/api/engine/territory-state-board",
-				"territory-state-board",
-			);
+			return mirrored("/territory-state-board", "territory-state-board");
 		case "reasons to reach out":
 			return reasonsPage();
 		case "invoices":
-			return mirrored("/api/engine/invoices", "read-invoice-tracker");
+			return mirrored("/invoices", "read-invoice-tracker");
 		case "client list":
 			return business(`/clients?${DIRECTORY}`);
 		case "client":
@@ -164,19 +161,16 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 				`/vendors/${encodeURIComponent(ask.vendor)}?contract=vendor-directory.v2`,
 			);
 		case "vendor markets":
-			return mirrored("/api/engine/vendor-markets", "read-vendor-markets-v1");
+			return mirrored("/vendor-markets", "read-vendor-markets-v1");
 		case "relationships":
 			return business("/relationships?contract=relationship-network.v1");
 		case "recent activity":
-			return mirrored("/api/engine/recent-activity", "find-and-catch-up", {
+			return mirrored("/recent-activity", "find-and-catch-up", {
 				query: ask.name,
 				limit: 10,
 			});
 		case "meeting prep":
-			return mirrored(
-				"/api/engine/calendar-meeting-prep",
-				"calendar-meeting-prep",
-			);
+			return mirrored("/calendar-meeting-prep", "calendar-meeting-prep");
 	}
 }
 
@@ -266,15 +260,23 @@ async function answerOf(
 	};
 }
 
-export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
-	const cookie = `__Host-dealroom_session=${session}`;
-
-	async function send(path: string, init: RequestInit) {
+// `door` is the engine's comparison door for one partner, such as
+// https://engine.example.test/compare/joe; Access admits only the comparison's token.
+export function askers(
+	door: URL,
+	token: { id: string; secret: string },
+	fetch: Fetch,
+	wait = pause,
+) {
+	async function send(path: string) {
 		let response: Response;
 		try {
-			response = await fetch(new URL(path, app), {
-				...init,
-				headers: { ...init.headers, cookie },
+			response = await fetch(new URL(door.pathname + path, door), {
+				headers: {
+					accept: "application/json",
+					"CF-Access-Client-Id": token.id,
+					"CF-Access-Client-Secret": token.secret,
+				},
 				redirect: "manual",
 				signal: AbortSignal.timeout(30_000),
 			});
@@ -283,7 +285,7 @@ export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
 		}
 		const { status } = response;
 		if (status === 401 || status === 403 || (status >= 300 && status < 400))
-			throw new StopRun("not signed in");
+			throw new StopRun("not admitted");
 		return response;
 	}
 
@@ -293,12 +295,7 @@ export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
 		const cursors: string[] = [];
 		let cursor = start;
 		for (let page = 0; page < PAGES; page++) {
-			const response = await send(
-				`${path}?${new URLSearchParams({ cursor })}`,
-				{
-					headers: { accept: "application/json" },
-				},
-			);
+			const response = await send(`${path}?${new URLSearchParams({ cursor })}`);
 			if (response.status !== 200) throw new Error("feed read failed");
 			const body: unknown = await response.json();
 			if (!isFeedPage(body)) throw new Error("feed page without events");
@@ -311,9 +308,7 @@ export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
 	}
 
 	async function readHttp(ask: ToolAsk, path: string) {
-		const response = await send(path, {
-			headers: { accept: "application/json" },
-		});
+		const response = await send(path);
 		if (response.status === 200) return response.json();
 		if (REFUSALS.has(response.status))
 			return refusal(ask, await response.json());
@@ -322,35 +317,26 @@ export function askers(app: URL, session: string, fetch: Fetch, wait = pause) {
 
 	async function askEngine(ask: Ask): Promise<unknown> {
 		if (ask.read === "feed")
-			return readFeed("/api/engine/pipeline/changes", ask.start);
+			return readFeed("/engine/pipeline/changes", ask.start);
 		return answerOf(
 			ask,
-			({ path }) => readHttp(ask, path),
+			({ path }) => readHttp(ask, `/engine${path}`),
 			async () => {},
 		);
 	}
 
-	let rpcId = 0;
 	async function askOld(ask: Ask): Promise<unknown> {
-		if (ask.read === "feed") return readFeed("/pipeline/changes", ask.start);
+		if (ask.read === "feed")
+			return readFeed("/old/pipeline/changes", ask.start);
 		return answerOf(
 			ask,
 			async (request) => {
-				if ("oldPath" in request) return readHttp(ask, request.oldPath);
-				const response = await send("/mcp", {
-					method: "POST",
-					headers: {
-						accept: "application/json, text/event-stream",
-						"content-type": "application/json",
-						origin: app.origin,
-					},
-					body: JSON.stringify({
-						jsonrpc: "2.0",
-						id: ++rpcId,
-						method: "tools/call",
-						params: request.call,
-					}),
-				});
+				if ("oldPath" in request)
+					return readHttp(ask, `/old${request.oldPath}`);
+				const { name, arguments: args } = request.call;
+				const response = await send(
+					`/old/mcp/${encodeURIComponent(name)}?${new URLSearchParams({ arguments: JSON.stringify(args) })}`,
+				);
 				if (response.status !== 200) throw new Error("old read failed");
 				const text = await response.text();
 				const stream = response.headers

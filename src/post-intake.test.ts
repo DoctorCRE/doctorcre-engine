@@ -9,7 +9,7 @@ import app from "./worker.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const PARTNER = id(1);
+const USER = id(1);
 const LINKEDIN = id(2);
 const INSTAGRAM = id(3);
 const FACEBOOK = id(4);
@@ -43,11 +43,13 @@ before(async () => {
 	await owner.connect();
 	await owner.query(`create schema next; set search_path = next;
 		${await readFile(new URL("../schema/next.sql", import.meta.url), "utf8")}
-		insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Jordan Example');
+		select set_config('engine.user_id', '${USER}', false);
+		insert into party (id, kind, name) values ('${USER}', 'person', 'Jordan Example');
+		insert into app_user (id) values ('${USER}');
 		insert into social_account (id, platform, owner_party_id, handle, engine_publishes_from) values
-			('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example', '${ENGINE_FROM}'),
-			('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example', '${ENGINE_FROM}'),
-			('${FACEBOOK}', 'facebook', '${PARTNER}', 'jordan-example-page', null);
+			('${LINKEDIN}', 'linkedin', '${USER}', 'jordan-example', '${ENGINE_FROM}'),
+			('${INSTAGRAM}', 'instagram', '${USER}', 'jordan.example', '${ENGINE_FROM}'),
+			('${FACEBOOK}', 'facebook', '${USER}', 'jordan-example-page', null);
 		insert into document (id, name, r2_key) values ('${UNTYPED}', 'Example attachment.pdf', 'example/attachment.pdf');`);
 	await owner.end();
 	target.searchParams.set("options", "-c search_path=next -c role=engine");
@@ -179,14 +181,28 @@ test("a post goes in with its text and picture, and reads back alone and in its 
 	assert.equal(created.status, 201);
 	assert.deepEqual(await created.json(), expected);
 	assert.deepEqual(await (await read(`/posts/${id(10)}`)).json(), expected);
-	const partner = new pg.Client({ connectionString: target.href });
-	await partner.connect();
-	await partner.query(
-		`insert into post_text (post_id, version, body, author_party_id)
-		values ($1, 2, 'Six example lease questions', $2)`,
-		[id(10), PARTNER],
+	const user = new pg.Client({ connectionString: target.href });
+	await user.connect();
+	const { rows: authors } = await user.query(
+		`select changed_by_job, changed_by_user_id, changed_for_user_id from post where id = $1
+		union select changed_by_job, changed_by_user_id, changed_for_user_id from post_text where post_id = $1
+		union select changed_by_job, changed_by_user_id, changed_for_user_id from post_media where post_id = $1
+		union select changed_by_job, changed_by_user_id, changed_for_user_id from document where id = $2`,
+		[id(10), document_id],
 	);
-	await partner.end();
+	assert.deepEqual(authors, [
+		{
+			changed_by_job: "intake",
+			changed_by_user_id: null,
+			changed_for_user_id: null,
+		},
+	]);
+	await user.query("select set_config('engine.user_id', $1, false)", [USER]);
+	await user.query(
+		"insert into post_text (post_id, version, body) values ($1, 2, 'Six example lease questions')",
+		[id(10)],
+	);
+	await user.end();
 	assert.deepEqual(await (await read(`/posts/${id(10)}`)).json(), {
 		...expected,
 		text: { version: 2, body: "Six example lease questions" },

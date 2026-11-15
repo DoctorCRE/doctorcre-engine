@@ -71,7 +71,7 @@ export function report(target: string, run: Run): string {
 	];
 	if (run.stopped)
 		lines.push(
-			"stopped at a network or sign-in failure, later requests were not asked",
+			"stopped at a network failure or a refused request, later requests were not asked",
 		);
 
 	const reads = [...new Set(run.outcomes.map((o) => readOf(o.ask)))];

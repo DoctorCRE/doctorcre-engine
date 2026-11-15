@@ -12,8 +12,10 @@ The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a shared server.
 One server serves every worktree, because each check makes and drops its own database.
 
-Each check restores `schema/business.sql`, generates ignored `src/database.d.ts`
+Each check restores `schema/business.sql` once, generates ignored `src/database.d.ts`
 with `kysely-codegen`, and runs TypeScript and tests against that database.
+A test that needs its own database copies that restore, because one restore
+holds about 2,100 locks and many at once exhaust the server's lock table (#237).
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
 query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops` tables, which the generated types leave out.
@@ -41,10 +43,13 @@ to that file, or the command reports it. This command does not update the snapsh
 or apply any schema change to its target.
 
 To compare the old system's and the engine's Deals answers outside CI, set
-`COMPARE_TARGET` to `staging` or `production`, `COMPARE_APP_URL` to the app's
-https base URL and `COMPARE_SESSION` to a signed-in partner's session cookie
-value, then run `npm run compare`. Both systems are read through the app's host,
-because sign-in works only there. Production also needs
+`COMPARE_TARGET` to `staging` or `production`, `COMPARE_PARTNER` to `joe` or
+`dell` and `COMPARE_ENGINE_URL` to the engine's https base URL, then run
+`npm run compare`. Both systems are read as that partner through the engine's
+`/compare/<partner>/` door, which Cloudflare Access opens only to the
+comparison's service token. The script reads that token from the macOS login
+keychain, service `doctorcre-compare-access`, accounts
+`<target>-client-id` and `<target>-client-secret`. Production also needs
 `COMPARE_CONFIRM_PRODUCTION=read-only`. It only reads and waits 1.5 seconds
 between requests. It asks the engine before and after the old system and sets a
 request aside as unsettled when the engine's two answers differ. Boards are asked
@@ -64,7 +69,7 @@ read from the parsed answers, where JavaScript puts whole-number keys first, so
 their order is not checked. A refused deal, client or vendor is compared as its
 refusal; a refused board, invoices read, list, reminders read, meeting prep or
 vendor meetings read counts as failed, and so does an unavailable calendar. A
-network or sign-in failure stops the run. It prints counts, field paths and
-record IDs, never values, bodies or the cookie. A suggested vendor meeting
+network failure or a refused token stops the run. It prints counts, field paths and
+record IDs, never values, bodies or the token. A suggested vendor meeting
 prints its vendor ref and, when it has one, its contact ID. Exit codes are 0
 for a match, 1 for differences or unsettled requests and 2 for failure.

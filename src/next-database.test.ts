@@ -19,18 +19,31 @@ const BROKERAGES = [id(9), id(10)];
 const EMAIL = id(300);
 const CALL = id(301);
 const NOTE = id(302);
+const DOCTOR = id(12);
+// Made up. No NPI issued yet starts with 9, so neither can be anyone's.
+const NPIS = ["9000000015", "9000000023"];
 
 const SEED = `
 insert into role (slug, label) values
 	('client', 'Client'), ('listing_agent', 'Listing agent'), ('lender', 'Lender');
+insert into party (id, kind, name, npi) values
+	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}'), ('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}');
 insert into party (id, kind, name) values
-	('${CLIENT}', 'company', 'Example Dental Group'), ('${AGENT}', 'person', 'Avery Example'),
+	('${AGENT}', 'person', 'Avery Example'),
 	('${LENDERS[0]}', 'company', 'Example Bank'), ('${LENDERS[1]}', 'company', 'Example Credit Union'),
 	('${BROKERAGES[0]}', 'company', 'Example Realty'), ('${BROKERAGES[1]}', 'company', 'Example Properties');
 insert into party_role values ('${CLIENT}', 'client'), ('${AGENT}', 'listing_agent');
+insert into specialty values ('general_dentistry', 'General dentistry'), ('orthodontics', 'Orthodontics');
+insert into party_specialty (person_id, specialty) values ('${DOCTOR}', 'general_dentistry');
+insert into do_not_contact (party_id, reason) values ('${AGENT}', 'Example asked not to be contacted');
+insert into outside_id (source, value, party_id) values ('salesforce', 'a0EXAMPLE0000001', '${CLIENT}');
 insert into party_company (person_id, company_id, title, started_on, ended_on) values
 	('${AGENT}', '${BROKERAGES[0]}', 'Associate', '2020-01-06', '2025-12-31'),
 	('${AGENT}', '${BROKERAGES[1]}', 'Senior associate', '2026-01-05', null);
+insert into party_email (party_id, address, label, is_primary) values
+	('${AGENT}', 'avery@example.com', 'work', true), ('${AGENT}', 'avery.example@example.net', 'personal', false);
+insert into party_phone (party_id, number, extension, label, is_primary) values
+	('${AGENT}', '+12175550100', '12', 'work', true), ('${AGENT}', '+12175550101', null, 'mobile', false);
 insert into phase (slug, label) values ('negotiation', 'Negotiating'), ('legal', 'Legal'), ('dead', 'Dead');
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
@@ -57,12 +70,12 @@ insert into next_step (id, what, owner_party_id, due_on, done_at, deal_id, party
 `;
 const phases = [
 	{
-		changed_at: "2026-03-02T15:00:00+00:00",
+		happened_at: "2026-03-02T15:00:00+00:00",
 		phase: "negotiation",
 		reason: null,
 	},
 	{
-		changed_at: "2026-03-20T15:00:00+00:00",
+		happened_at: "2026-03-20T15:00:00+00:00",
 		phase: "legal",
 		reason: "LOI accepted",
 	},
@@ -152,7 +165,16 @@ const TERMS = [
 	"commencement_days_after_delivery",
 ];
 
-const PARTNER = id(20);
+const USER = id(20);
+const TEAMMATE = id(21);
+// Only the owner adds users.
+const USERS = `insert into party (id, kind, name) values
+	('${USER}', 'person', 'Jordan Example'), ('${TEAMMATE}', 'person', 'Riley Example');
+insert into app_user (id) values ('${USER}'), ('${TEAMMATE}')`;
+const asUser = (user: string) =>
+	`select set_config('engine.user_id', '${user}', true), set_config('engine.job', '', true)`;
+const asJob = (job: string, forUser = "") =>
+	`select set_config('engine.user_id', '${forUser}', true), set_config('engine.job', '${job}', true)`;
 const LINKEDIN = id(500);
 const X = id(501);
 const INSTAGRAM = id(502);
@@ -195,15 +217,14 @@ const READINGS: [number, number, Record<string, number | null>][] = [
 	[10, 168, { views: 1000, reactions: 10, comments: 0, shares: 0 }],
 ];
 const MARKETING_SEED = `
-insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Jordan Example');
 insert into social_account (id, platform, owner_party_id, handle, platform_account_id) values
-	('${LINKEDIN}', 'linkedin', '${PARTNER}', 'jordan-example', 'example-person-1'),
-	('${X}', 'x', '${PARTNER}', 'jordanexample', null), ('${INSTAGRAM}', 'instagram', '${PARTNER}', 'jordan.example', null);
+	('${LINKEDIN}', 'linkedin', '${USER}', 'jordan-example', 'example-person-1'),
+	('${X}', 'x', '${USER}', 'jordanexample', null), ('${INSTAGRAM}', 'instagram', '${USER}', 'jordan.example', null);
 -- Only the owner sets when the engine starts publishing for an account.
 set role none;
 update social_account set engine_publishes_from = '${ENGINE_FROM}' where id = '${LINKEDIN}';
 set role engine;
-insert into social_sign_in values ('${LINKEDIN}', 'example-person-1', '${PARTNER}',
+insert into social_sign_in values ('${LINKEDIN}', 'example-person-1', '${USER}',
 	'2026-06-01T15:00:00+00:00', '2026-07-31T15:00:00+00:00', '{openid,profile,w_member_social}');
 insert into idea (id, angle, hook, pillar) values
 	('${RENT_IDEA}', 'Example rents rose this year', 'number', 'local_market'),
@@ -269,14 +290,13 @@ const newReading = (row: Record<string, string | number | null>) =>
 		...row,
 	});
 const NEW_ACCOUNT = `insert into social_account (id, platform, owner_party_id, handle)
-	values ('${id(503)}', 'facebook', '${PARTNER}', 'example-page')`;
+	values ('${id(503)}', 'facebook', '${USER}', 'example-page')`;
 const CLAIM = `update post set status = 'publishing' where id = '${post(8)}'`;
 const newText = (row: Record<string, string | number | null>) =>
 	insert("post_text", {
 		post_id: OPEN,
 		version: 2,
 		body: "Six example lease questions",
-		author_party_id: PARTNER,
 		...row,
 	});
 const newMedium = (row: Record<string, string | number>) =>
@@ -289,20 +309,18 @@ const newMedium = (row: Record<string, string | number>) =>
 		...row,
 	});
 const newReview = (row: Record<string, string | number | null>) =>
-	insert("post_review", { post_id: OPEN, by_party_id: PARTNER, ...row });
+	insert("post_review", { post_id: OPEN, ...row });
 const EDITED = `${newText({})}; ${newReview({ outcome: "edited", text_version: 2 })}`;
-const NO_RESPONSE = {
-	post_id: CLOSED,
-	outcome: "no_response",
-	by_party_id: null,
-};
+const NO_RESPONSE = { post_id: CLOSED, outcome: "no_response" };
+const noResponse = (row: Record<string, string> = {}) =>
+	`${asJob("review_close")}; ${newReview({ ...NO_RESPONSE, ...row })}`;
 const cancel = (post: string) =>
 	`update post set status = 'cancelled', reason = 'Example: the rent number changed' where id = '${post}'`;
 const newSignIn = (row: Record<string, string>) =>
 	insert("social_sign_in", {
 		social_account_id: LINKEDIN,
 		platform_account_id: "example-person-1",
-		signed_in_by_party_id: PARTNER,
+		signed_in_by_user_id: USER,
 		signed_in_at: "2026-07-30T15:00:00+00:00",
 		expires_at: "2026-09-28T15:00:00+00:00",
 		scopes: "{w_member_social}",
@@ -326,13 +344,67 @@ const compared = async (client = db) =>
 		}) => [account.platform, account.posts, account.best.id, account.worst.id],
 	);
 
+// Every table whose rows a user or a job adds or changes.
+const STAMPED = [
+	"role",
+	"phase",
+	"party",
+	"party_email",
+	"party_phone",
+	"party_role",
+	"party_company",
+	"do_not_contact",
+	"specialty",
+	"party_specialty",
+	"outside_id",
+	"property",
+	"deal",
+	"deal_phase_change",
+	"deal_property",
+	"deal_party",
+	"activity",
+	"activity_about",
+	"next_step",
+	"document",
+	"email",
+	"offer",
+	"offer_document",
+	"social_account",
+	"idea",
+	"design_template",
+	"post",
+	"post_text",
+	"post_media",
+	"post_review",
+	"measurement",
+];
+const newAddress = (row: Record<string, string>) =>
+	insert("party_email", {
+		party_id: AGENT,
+		address: "avery@example.com",
+		label: "work",
+		...row,
+	});
+const newPhone = (row: Record<string, string | null>) =>
+	insert("party_phone", {
+		party_id: AGENT,
+		number: "+12175550100",
+		extension: null,
+		label: "work",
+		...row,
+	});
+
 // The engine's role lacks the privilege, so PostgreSQL refuses before any row is touched.
 const notGranted = (table: string) => ({
 	code: "42501",
 	message: `permission denied for table ${table}`,
 });
-const STAMPED = [
+const STORED_AT = [
 	"party",
+	"party_email",
+	"party_phone",
+	"do_not_contact",
+	"party_specialty",
 	"property",
 	"deal",
 	"party_role",
@@ -359,7 +431,8 @@ const SCHEMA = await readFile(
 	"utf8",
 );
 
-const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
+type Case = [sql: string, refusal: Refusal];
+const RULES: Record<string, Case[]> = {
 	"a link to a record that does not exist is refused": [
 		[
 			`insert into deal_party values ('${DEAL}', '${MISSING}', 'client')`,
@@ -390,6 +463,85 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			"party_kind_check",
 		],
 	],
+	"an NPI is ten digits ending in its check digit, and is held by one person or company":
+		[
+			...[
+				"900000001",
+				"90000000150",
+				"9000000016",
+				"900000001x",
+				" 900000001",
+				"9000000015\n",
+			].map(
+				(npi): Case => [
+					`update party set npi = '${npi}' where id = '${AGENT}'`,
+					"npi_shape",
+				],
+			),
+			[
+				`update party set npi = '${NPIS[0]}' where id = '${AGENT}'`,
+				"party_npi_key",
+			],
+		],
+	"a specialty is a person's, from the specialty list, each once": [
+		[
+			`insert into party_specialty (person_id, specialty) values ('${CLIENT}', 'orthodontics')`,
+			"party_specialty_person_id_person_kind_fkey",
+		],
+		[
+			`insert into party_specialty (person_id, specialty) values ('${DOCTOR}', 'podiatry')`,
+			"party_specialty_specialty_fkey",
+		],
+		[
+			`insert into party_specialty (person_id, specialty) values ('${DOCTOR}', 'general_dentistry')`,
+			"party_specialty_pkey",
+		],
+	],
+	"do not contact is set once per person or company, with a reason that never changes":
+		[
+			[
+				`insert into do_not_contact (party_id, reason) values ('${MISSING}', 'Example')`,
+				"do_not_contact_party_id_fkey",
+			],
+			[
+				`insert into do_not_contact (party_id, reason) values ('${CLIENT}', ' \t')`,
+				"do_not_contact_reason_check",
+			],
+			[
+				`insert into do_not_contact (party_id, reason) values ('${AGENT}', 'Example')`,
+				"do_not_contact_pkey",
+			],
+			[
+				"update do_not_contact set reason = 'Example'",
+				notGranted("do_not_contact"),
+			],
+		],
+	"an outside id is import history for one person, company or deal, once per source":
+		[
+			...[`'${CLIENT}', '${DEAL}'`, "null, null"].map(
+				(records): Case => [
+					`insert into outside_id (source, value, party_id, deal_id) values ('salesforce', 'a0EXAMPLE0000002', ${records})`,
+					"outside_id_one_record",
+				],
+			),
+			[
+				`insert into outside_id (source, value, deal_id) values ('salesforce', 'a0EXAMPLE0000001', '${DEAL}')`,
+				"outside_id_pkey",
+			],
+			[
+				`insert into outside_id (source, value, deal_id) values ('Sales Force', 'a0EXAMPLE0000002', '${DEAL}')`,
+				"outside_id_source_check",
+			],
+			[
+				`insert into outside_id (source, value, deal_id) values ('roster', ' 12', '${DEAL}')`,
+				"outside_id_value_check",
+			],
+			[
+				"update outside_id set value = 'a0EXAMPLE0000002'",
+				notGranted("outside_id"),
+			],
+			["delete from outside_id", notGranted("outside_id")],
+		],
 	"a person works at a company, ending no earlier than they started, linked once":
 		[
 			[
@@ -413,6 +565,63 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 				`insert into party_company (person_id, company_id)
 				values ('${AGENT}', '${CLIENT}'), ('${AGENT}', '${CLIENT}')`,
 				"party_company_person_id_company_id_started_on_key",
+			],
+		],
+	"an email is kept once per person or company, in one form, with one primary":
+		[
+			[newAddress({}), "party_email_address_party_id_key"],
+			...[
+				"Avery@example.com",
+				"Avery Example <avery@example.com>",
+				"avery@example.com, avery@example.net",
+				"avery @example.com",
+				"avery@example",
+				"avery\u00a0@example.com",
+				"avery\u200b@example.com",
+			].map(
+				(address): Case => [newAddress({ address }), "email_address_shape"],
+			),
+			[
+				newAddress({ address: "avery@example.org", label: "mobile" }),
+				"party_email_label_check",
+			],
+			[
+				newAddress({ address: "avery@example.org", is_primary: "true" }),
+				"party_email_one_primary",
+			],
+			[
+				`insert into activity (id, kind, happened_at) values ('${id(303)}', 'email', now());
+				insert into email (activity_id, message_id, sender, subject, body)
+				values ('${id(303)}', '<sender@example.com>', 'Avery@Example.com', 'Example', 'Example')`,
+				"email_address_shape",
+			],
+		],
+	"a phone number is kept once per person or company, in one form, with one primary":
+		[
+			[
+				newPhone({ extension: "12" }),
+				"party_phone_number_extension_party_id_key",
+			],
+			[
+				newPhone({ number: "+12175550101", label: "mobile" }),
+				"party_phone_number_extension_party_id_key",
+			],
+			...[
+				"(217) 555-0100",
+				"+1 217 555 0100",
+				"2175550100",
+				"+1217555010",
+				"+12171550100",
+				"+0442079460123",
+			].map((number): Case => [newPhone({ number }), "phone_number_shape"]),
+			[newPhone({ extension: "x12" }), "party_phone_extension_check"],
+			[
+				newPhone({ number: "+12175550102", label: "fax" }),
+				"party_phone_label_check",
+			],
+			[
+				newPhone({ number: "+12175550102", is_primary: "true" }),
+				"party_phone_one_primary",
 			],
 		],
 	"a deal's phase history is kept, comes from the phase list, and a dead deal says why":
@@ -511,6 +720,34 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 		],
 		["insert into next_step (what) values ('Example')", "next_step_one_record"],
 	],
+	"a change names the user or the job that made it": [
+		[
+			`${asUser("")}; insert into deal (name) values ('Example')`,
+			"change_names_who_made_it",
+		],
+		[
+			`${asUser("")}; update deal set name = 'Example'`,
+			"change_names_who_made_it",
+		],
+		[
+			`${asJob("mailroom")}; update deal set name = 'Example'`,
+			"deal_changed_by_job_fkey",
+		],
+		[
+			`${asJob("mail_capture", CLIENT)}; update deal set name = 'Example'`,
+			"deal_changed_for_user_id_fkey",
+		],
+		["insert into job values ('mailroom', 'Example')", notGranted("job")],
+		[
+			`${asUser(CLIENT)}; update deal set name = 'Example'`,
+			"deal_changed_by_user_id_fkey",
+		],
+		[
+			`${asUser(AGENT)}; insert into party (kind, name) values ('person', 'Example'); ${CHECK_AT_COMMIT}`,
+			"party_changed_by_user_id_fkey",
+		],
+		[`insert into app_user (id) values ('${AGENT}')`, notGranted("app_user")],
+	],
 	"a round is never rewritten or removed, and one round per deal is accepted": [
 		[
 			"update offer set rent_per_sf_yr = 30 where round = 1",
@@ -558,15 +795,15 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 	],
 	"a social account is on a known platform, once per handle in any case": [
 		[
-			`insert into social_account (platform, owner_party_id, handle) values ('myspace', '${PARTNER}', 'example')`,
+			`insert into social_account (platform, owner_party_id, handle) values ('myspace', '${USER}', 'example')`,
 			"social_account_platform_check",
 		],
 		[
-			`insert into social_account (platform, owner_party_id, handle) values ('x', '${PARTNER}', 'JordanExample')`,
+			`insert into social_account (platform, owner_party_id, handle) values ('x', '${USER}', 'JordanExample')`,
 			"social_account_one_per_handle",
 		],
 		[
-			`insert into social_account (platform, owner_party_id, handle) values ('x', '${PARTNER}', '\t')`,
+			`insert into social_account (platform, owner_party_id, handle) values ('x', '${USER}', '\t')`,
 			"social_account_handle_check",
 		],
 	],
@@ -574,7 +811,7 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 		[
 			[
 				`insert into social_account (platform, owner_party_id, handle, platform_account_id)
-				values ('linkedin', '${PARTNER}', 'another-example', 'example-person-1')`,
+				values ('linkedin', '${USER}', 'another-example', 'example-person-1')`,
 				"social_account_platform_platform_account_id_key",
 			],
 			[
@@ -681,7 +918,7 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 		[
 			[
 				`insert into social_account (platform, owner_party_id, handle, engine_publishes_from)
-				values ('facebook', '${PARTNER}', 'example-page', now())`,
+				values ('facebook', '${USER}', 'example-page', now())`,
 				notGranted("social_account"),
 			],
 			[
@@ -720,16 +957,15 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			"post_final",
 		],
 	],
-	"a post's text is edited as the next version by a partner, while it is scheduled and until review closes":
+	"a post's text is edited as the next version by a user, while it is scheduled and until review closes":
 		[
 			[newText({ version: 1 }), "post_text_pkey"],
 			[newText({ version: 0 }), "post_text_version_check"],
 			[newText({ version: 3 }), "post_text_post_id_previous_version_fkey"],
 			[newText({ body: " \n" }), "post_text_body_check"],
-			[newText({ author_party_id: null }), "post_text_edit_has_author"],
+			[`${asJob("agent")}; ${newText({})}`, "post_text_edit_by_a_user"],
 			[newText({ post_id: CLOSED }), "post_text_before_review_closes"],
 			[`${cancel(OPEN)}; ${newText({})}`, "post_text_before_review_closes"],
-			[newText({ written_at: "2020-01-01" }), notGranted("post_text")],
 			["update post_text set body = 'Example'", notGranted("post_text")],
 			["delete from post_text", notGranted("post_text")],
 		],
@@ -766,7 +1002,7 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 			["update post_media set position = 2", notGranted("post_media")],
 			["delete from post_media", notGranted("post_media")],
 		],
-	"a review is a partner's edit or cancel before review closes, or no response alone at its close, each once":
+	"a review is a user's edit or cancel before review closes, or no response alone at its close, each once":
 		[
 			[newReview({ outcome: "approved" }), "post_review_outcome_check"],
 			[newReview({ outcome: "edited" }), "post_review_edit_names_its_text"],
@@ -778,34 +1014,40 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 				newReview({ outcome: "edited", text_version: 5 }),
 				"post_review_post_id_text_version_fkey",
 			],
+			[newReview(NO_RESPONSE), "post_review_by_a_user"],
 			[
-				newReview({ ...NO_RESPONSE, by_party_id: PARTNER }),
-				"post_review_by_a_partner",
+				`${asJob("review_close", USER)}; ${newReview(NO_RESPONSE)}`,
+				"post_review_by_a_user",
+			],
+			[
+				`${cancel(OPEN)}; ${asJob("agent")}; ${newReview({ outcome: "cancelled" })}`,
+				"post_review_by_a_user",
 			],
 			[
 				`${cancel(CLOSED)}; ${newReview({ post_id: CLOSED, outcome: "cancelled" })}`,
 				"post_review_in_window",
 			],
-			[newReview({ ...NO_RESPONSE, post_id: OPEN }), "post_review_in_window"],
+			[noResponse({ post_id: OPEN }), "post_review_in_window"],
 			[newReview({ outcome: "cancelled" }), "post_review_matches_the_post"],
+			[`${cancel(CLOSED)}; ${noResponse()}`, "post_review_matches_the_post"],
+			[`${noResponse()}; ${noResponse()}`, "post_review_once"],
 			[
-				`${cancel(CLOSED)}; ${newReview(NO_RESPONSE)}`,
-				"post_review_matches_the_post",
-			],
-			[
-				`${newReview(NO_RESPONSE)}; ${newReview(NO_RESPONSE)}`,
-				"post_review_once",
-			],
-			[
-				newReview({ outcome: "cancelled", reviewed_at: "2020-01-01" }),
-				notGranted("post_review"),
-			],
-			[
-				`${EDITED}; update post_review set by_party_id = null`,
+				`${EDITED}; update post_review set changed_by_user_id = null`,
 				notGranted("post_review"),
 			],
 			[`${EDITED}; delete from post_review`, notGranted("post_review")],
 		],
+	"a post's edit, a review and a sign-in name a user": [
+		[`${asUser(AGENT)}; ${newText({})}`, "post_text_changed_by_user_id_fkey"],
+		[
+			`${cancel(OPEN)}; ${asUser(AGENT)}; ${newReview({ outcome: "cancelled" })}`,
+			"post_review_changed_by_user_id_fkey",
+		],
+		[
+			newSignIn({ signed_in_by_user_id: AGENT }),
+			"social_sign_in_signed_in_by_user_id_fkey",
+		],
+	],
 	"a reading is a metric its post's platform reports, names its source, is never negative, and not measured is a reason, never a zero":
 		[
 			[newReading({ metric: "saves" }), "measurement_platform_metric_fkey"],
@@ -842,7 +1084,7 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 		["delete from measurement", notGranted("measurement")],
 		["truncate measurement", notGranted("measurement")],
 	],
-	"a record or link keeps when it was stored": STAMPED.map((table) => [
+	"a record or link keeps when it was stored": STORED_AT.map((table) => [
 		`update ${table} set created_at = now()`,
 		notGranted(table),
 	]),
@@ -850,7 +1092,28 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
-const OWNER_RULES: Record<string, [sql: string, refusal: Refusal][]> = {
+const OWNER_RULES: Record<string, Case[]> = {
+	"a user is a person": [
+		[`insert into app_user (id) values ('${CLIENT}')`, "app_user_id_kind_fkey"],
+	],
+	"a row loaded with the stamp turned off still names a user or a job, never both":
+		[
+			[
+				`alter table deal disable trigger stamp_change;
+			insert into deal (name, changed_at) values ('Example', now())`,
+				"deal_changed_by_a_user_or_a_job",
+			],
+			[
+				`alter table post disable trigger stamp_change;
+			update post set changed_by_job = 'old_system' where id = '${post(8)}'`,
+				"post_changed_by_a_user_or_a_job",
+			],
+			[
+				`alter table deal disable trigger stamp_change;
+			update deal set changed_for_user_id = '${TEAMMATE}' where id = '${DEAL}'`,
+				"deal_changed_by_a_user_or_a_job",
+			],
+		],
 	"a platform reports metrics from the known lists, each once": [
 		[
 			"insert into platform_metric values ('myspace', 'views')",
@@ -868,11 +1131,11 @@ const OWNER_RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 	"no response is a post's only review, even when its time moves": [
 		[
 			`${EDITED}; update post set scheduled_at = now() + interval '30 minutes' where id = '${OPEN}';
-			set local role engine; ${newReview({ ...NO_RESPONSE, post_id: OPEN })}`,
+			set local role engine; ${noResponse({ post_id: OPEN })}`,
 			"post_review_in_window",
 		],
 		[
-			`${newReview(NO_RESPONSE)}; update post set scheduled_at = now() + interval '2 hours' where id = '${CLOSED}';
+			`${noResponse()}; ${asUser(USER)}; update post set scheduled_at = now() + interval '2 hours' where id = '${CLOSED}';
 			set local role engine; ${cancel(CLOSED)}; ${newReview({ post_id: CLOSED, outcome: "cancelled" })}`,
 			"post_review_in_window",
 		],
@@ -908,10 +1171,13 @@ const OWNER_RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
 	phase: ["label"],
-	party: ["name"],
+	specialty: ["label"],
+	party: ["name", "npi"],
 	property: ["address"],
 	deal: ["name"],
 	party_company: ["ended_on", "started_on", "title"],
+	party_email: ["is_primary", "label"],
+	party_phone: ["is_primary", "label"],
 	activity: ["from_party_id", "happened_at", "summary"],
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
 	document: ["name"],
@@ -923,12 +1189,16 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
-	social_account: ["engine_publishes_from"],
-	post_text: ["previous_version", "written_at"],
-	post_review: ["reviewed_at"],
+	social_account: [
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"engine_publishes_from",
+	],
 };
 const REMOVABLE = [
-	...STAMPED.filter(
+	...STORED_AT.filter(
 		(table) => !["offer_document", "post_media"].includes(table),
 	),
 	"activity",
@@ -945,7 +1215,7 @@ async function rolledBack(run: () => Promise<unknown>) {
 	}
 }
 // Each case runs in its own owner's transaction, rolled back.
-async function asOwner(cases: [sql: string, refusal: Refusal][]) {
+async function asOwner(cases: Case[]) {
 	const owner = await connect("none");
 	try {
 		for (const [sql, refusal] of cases) {
@@ -960,11 +1230,19 @@ async function asOwner(cases: [sql: string, refusal: Refusal][]) {
 		await owner.end();
 	}
 }
-// When a row was stored is the clock's, so reads are compared without it.
+// When a row was stored or changed is the clock's, so reads are compared without it, and who changed it has its own test.
 const unstamped = (read: unknown) =>
 	JSON.parse(
 		JSON.stringify(read, (key, value) =>
-			key === "created_at" ? undefined : value,
+			[
+				"created_at",
+				"changed_at",
+				"changed_by_user_id",
+				"changed_by_job",
+				"changed_for_user_id",
+			].includes(key)
+				? undefined
+				: value,
 		),
 	);
 const readDeal = async () =>
@@ -985,7 +1263,7 @@ target.pathname = `/${name}`;
 const connect = async (role = "engine") => {
 	const client = new pg.Client({
 		connectionString: target.href,
-		options: `-c search_path=next -c TimeZone=UTC -c role=${role}`,
+		options: `-c search_path=next -c TimeZone=UTC -c role=${role} -c engine.user_id=${USER}`,
 	});
 	await client.connect();
 	return client;
@@ -997,6 +1275,7 @@ before(async () => {
 	await admin.query(`create database "${name}" template template0`);
 	db = await connect("none");
 	await db.query(`create schema next; ${SCHEMA}`);
+	await db.query(USERS);
 	await db.query(`set role engine; ${SEED} ${MARKETING_SEED}`);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
@@ -1035,12 +1314,14 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				id: CLIENT,
 				kind: "company",
 				name: "Example Dental Group",
+				npi: NPIS[0],
 				role: "client",
 			},
 			{
 				id: AGENT,
 				kind: "person",
 				name: "Avery Example",
+				npi: null,
 				role: "listing_agent",
 			},
 		],
@@ -1116,7 +1397,12 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 		rows.map(({ table }) => ({
 			table,
 			changeable: CHANGEABLE[table] ?? null,
-			addable: !["platform_metric", "platform_format"].includes(table),
+			addable: ![
+				"app_user",
+				"job",
+				"platform_metric",
+				"platform_format",
+			].includes(table),
 			defaulted: DEFAULTED[table] ?? null,
 			removable: REMOVABLE.includes(table),
 			emptied: false,
@@ -1124,29 +1410,122 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 	);
 });
 
+test("every table a user or a job changes records who changed it and when", async () => {
+	const { rows } = await db.query(
+		`select array_agg(t.tgrelid::regclass::text order by t.tgrelid::regclass::text collate "C") as stamped
+		from pg_trigger t
+		join pg_attribute stamp_at on stamp_at.attrelid = t.tgrelid and stamp_at.attname = 'changed_at' and stamp_at.attnotnull
+		join pg_constraint one on one.conrelid = t.tgrelid and one.conname = t.tgrelid::regclass::text || '_changed_by_a_user_or_a_job'
+		where t.tgname = 'stamp_change' and t.tgfoid = 'stamp_change'::regproc`,
+	);
+	assert.deepEqual(rows[0].stamped, STAMPED.toSorted());
+});
+
+test("each change records the user who made it and when, whatever the statement says", () =>
+	rolledBack(async () => {
+		await db.query(`${asUser(TEAMMATE)}; update deal set name = 'Example' where id = '${DEAL}';
+			insert into deal (id, name, changed_by_user_id, changed_at) values ('${id(11)}', 'Example', '${USER}', '2020-01-01')`);
+		const { rows } = await db.query(
+			"select id, changed_by_user_id, changed_at = now() as now from deal order by id",
+		);
+		assert.deepEqual(rows, [
+			{ id: DEAL, changed_by_user_id: TEAMMATE, now: true },
+			{ id: LENDER_DEAL, changed_by_user_id: USER, now: false },
+			{ id: id(11), changed_by_user_id: TEAMMATE, now: true },
+		]);
+	}));
+
+test("a job's change names the job and the user it works for, and a user who settles a stuck post is named", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("publisher")}; ${CLAIM};
+			${asJob("mail_capture", TEAMMATE)}; update activity set summary = 'Example' where id = '${EMAIL}';
+			${asUser(TEAMMATE)}; update post set status = 'failed', reason = 'Example: sent twice?' where id = '${post(8)}'`);
+		const { rows } = await db.query(
+			`select changed_by_user_id, changed_by_job, changed_for_user_id from activity where id = $1
+			union all select changed_by_user_id, changed_by_job, changed_for_user_id from post where id = $2`,
+			[EMAIL, post(8)],
+		);
+		assert.deepEqual(rows, [
+			{
+				changed_by_user_id: null,
+				changed_by_job: "mail_capture",
+				changed_for_user_id: TEAMMATE,
+			},
+			{
+				changed_by_user_id: TEAMMATE,
+				changed_by_job: null,
+				changed_for_user_id: null,
+			},
+		]);
+	}));
+
+test("a statement that changes nothing keeps who last changed the row, even on a published post", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("publisher")}; update post set reason = reason where id = '${post(1)}';
+			update deal set name = name where id = '${DEAL}'; update party_company set title = title`);
+		const { rows } = await db.query(
+			`select changed_by_user_id, changed_at < now() as before from post where id = $1
+			union all select changed_by_user_id, changed_at < now() from deal where id = $2
+			union all select changed_by_user_id, changed_at < now() from party_company`,
+			[post(1), DEAL],
+		);
+		assert.deepEqual(rows, [
+			{ changed_by_user_id: USER, before: true },
+			{ changed_by_user_id: USER, before: true },
+			{ changed_by_user_id: USER, before: true },
+			{ changed_by_user_id: USER, before: true },
+		]);
+	}));
+
+test("an agent working for a user edits and cancels a post as that user's", () =>
+	rolledBack(() =>
+		db.query(`${asJob("agent", TEAMMATE)}; ${EDITED}; ${cancel(OPEN)};
+			${newReview({ outcome: "cancelled" })}`),
+	));
+
+test("an email's sender is matched to its people through their email rows", async () => {
+	const { rows } = await db.query(
+		"select party_id from email join party_email on address = sender where activity_id = $1",
+		[EMAIL],
+	);
+	assert.deepEqual(rows, [{ party_id: AGENT }]);
+});
+
+test("emails and phone numbers the rules allow are kept", () =>
+	rolledBack(() =>
+		db.query(`update party_email set is_primary = false where party_id = '${AGENT}';
+			update party_email set is_primary = true where address = 'avery.example@example.net';
+			${newAddress({ party_id: CLIENT, address: "o''brien+loi@example.com", is_primary: "true" })};
+			${newAddress({ party_id: CLIENT, address: "first.last_2@example.co.uk" })};
+			-- A front desk shares its address and line.
+			${newAddress({ party_id: CLIENT })};
+			${newPhone({ party_id: CLIENT, extension: "12", is_primary: "true" })};
+			${newPhone({ number: "+442079460123", label: "mobile" })}`),
+	));
+
 test("the engine claims a scheduled post, then publishes it", () =>
 	rolledBack(() =>
 		db.query(`${CLAIM}; update post set status = 'published', platform_post_id = 'example-8',
 			published_at = now() where id = '${post(8)}'`),
 	));
 
-test("a partner's edit and cancel are reviewed before review closes, and an untouched post gets no response", () =>
+test("a user's edit and cancel are reviewed before review closes, and an untouched post gets no response", () =>
 	rolledBack(() =>
 		db.query(`${EDITED}; ${cancel(OPEN)}; ${newReview({ outcome: "cancelled" })};
-			${newReview(NO_RESPONSE)}`),
+			${noResponse()}`),
 	));
 
 test("a review holds its post until it is saved", async () => {
-	const [partner, job] = [await connect(), await connect()];
+	const [user, job] = [await connect(), await connect()];
 	try {
-		await partner.query(`begin; ${EDITED}`);
+		await user.query(`begin; ${EDITED}`);
 		await job.query("begin; set local lock_timeout = '100ms'");
 		await assert.rejects(
 			job.query("select from post where id = $1 for no key update", [OPEN]),
 			{ code: "55P03" },
 		);
 	} finally {
-		for (const client of [partner, job]) {
+		for (const client of [user, job]) {
 			await client.query("rollback");
 			await client.end();
 		}
@@ -1196,7 +1575,7 @@ test("posts compare at day 7, best and worst per account", async () => {
 	) => ({
 		id,
 		platform,
-		owner_party_id: PARTNER,
+		owner_party_id: USER,
 		handle,
 		platform_account_id: id === LINKEDIN ? "example-person-1" : null,
 		engine_publishes_from: id === LINKEDIN ? ENGINE_FROM : null,
@@ -1303,7 +1682,7 @@ test("a deal that dies after acceptance keeps its accepted round, and a revival 
 		);
 	}));
 
-test("two partners adding different lenders to one deal at once both keep them", async () => {
+test("two users adding different lenders to one deal at once both keep them", async () => {
 	const writers = [await connect(), await connect()];
 	try {
 		for (const writer of writers) await writer.query("begin");

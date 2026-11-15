@@ -97,7 +97,9 @@ async function inTransaction<T>(
 	db.on("error", () => {});
 	await db.connect();
 	try {
-		await db.query("begin; set local time zone 'UTC'");
+		await db.query(
+			"begin; set local time zone 'UTC'; set local engine.job = 'intake'",
+		);
 		const result = await run(db);
 		await db.query("commit");
 		return result;
