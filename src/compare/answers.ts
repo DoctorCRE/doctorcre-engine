@@ -96,9 +96,14 @@ const edgeOf = (value: unknown, name: string): Edge | null => {
 	return typeof text === "string" && !Number.isNaN(ms) ? { text, ms } : null;
 };
 
-// Each answer's openings cut to the window both share, dropping any left
-// shorter than its minimum. A cut edge takes that window's own text, so
-// formats still compare. Anything unreadable stays for the walk to report.
+// Reads in one run are seconds apart, so a window moved further than this,
+// or of another length, is a real difference.
+const DRIFT_MS = 30 * 60_000;
+
+// Two windows read moments apart compare as one. Each answer's openings are
+// cut to the part both share, dropping any left shorter than its minimum, and
+// a list the cut empties is empty. A cut edge keeps its own text when its
+// format differs. Anything else stays for the walk to report.
 function shareWindow(a: Record<string, unknown>, b: Record<string, unknown>) {
 	const [startA, startB, endA, endB] = [
 		edgeOf(a, "window.start"),
@@ -109,20 +114,33 @@ function shareWindow(a: Record<string, unknown>, b: Record<string, unknown>) {
 	if (!startA || !startB || !endA || !endB) return [a, b];
 	const from = startA.ms >= startB.ms ? startA : startB;
 	const to = endA.ms <= endB.ms ? endA : endB;
-	if (from.ms >= to.ms) return [a, b];
+	const alike =
+		from.ms < to.ms &&
+		endA.ms - startA.ms === endB.ms - startB.ms &&
+		Math.abs(startA.ms - startB.ms) < DRIFT_MS &&
+		sameFormat(startA.text, startB.text) &&
+		sameFormat(endA.text, endB.text);
+	if (!alike) return [a, b];
 	const cut = (side: Record<string, unknown>) => {
-		if (!Array.isArray(side.items)) return side;
+		if (!Array.isArray(side.items)) return { ...side, window: a.window };
 		const minimum = Number(side.minimum_duration_minutes) * 60_000 || 0;
 		const items = side.items.flatMap((item) => {
 			const start = edgeOf(item, "start");
 			const end = edgeOf(item, "end");
 			if (!isRecord(item) || !start || !end) return [item];
-			const first = start.ms < from.ms ? from : start;
-			const last = end.ms > to.ms ? to : end;
+			const first =
+				start.ms < from.ms && sameFormat(start.text, from.text) ? from : start;
+			const last = end.ms > to.ms && sameFormat(end.text, to.text) ? to : end;
 			const kept = last.ms > first.ms && last.ms - first.ms >= minimum;
 			return kept ? [{ ...item, start: first.text, end: last.text }] : [];
 		});
-		return { ...side, items };
+		const emptied = side.items.length > 0 && items.length === 0;
+		return {
+			...side,
+			window: a.window,
+			items,
+			...(emptied && { state: "empty" }),
+		};
 	};
 	return [cut(a), cut(b)];
 }
@@ -215,13 +233,7 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	const tiedRowsReordered: Place[] = [];
 	const full: (Cap & { path: string })[] = [];
 	const opaque = new Set(shape.opaque);
-	const clocks = new Set([
-		...(shape.clocks ?? []),
-		...(shape.windows ?? []).flatMap((path) => [
-			`${path}.window.start`,
-			`${path}.window.end`,
-		]),
-	]);
+	const clocks = new Set(shape.clocks);
 	const windows = new Set(shape.windows);
 
 	function walk(a: unknown, b: unknown, path: string, records: Step[]): void {

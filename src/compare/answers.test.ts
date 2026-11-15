@@ -840,7 +840,7 @@ test("vendor meeting openings compare only inside the day both reads share", () 
 					scheduling: {
 						window: { start: at(start), end: at(end) },
 						minimum_duration_minutes: 30,
-						state: "ready",
+						state: openings.length ? "ready" : "empty",
 						items: openings.map(([from, to]) => ({
 							start: at(from),
 							end: at(to),
@@ -889,4 +889,34 @@ test("vendor meeting openings compare only inside the day both reads share", () 
 			},
 		],
 	);
+	const paths = (a: unknown, b: unknown) =>
+		compareAnswers(a, b, vendorMeetingsShape).differences.map((d) => d.path);
+	const window = "pages[].calendar.scheduling.window";
+	const shifted = read("1T03:00:00.000", "2T03:00:00.000", [
+		["1T03:00:00.000", "1T10:00:00.000"],
+		["1T11:00:00.000", "2T03:00:00.000"],
+	]);
+	assert.deepEqual(paths(first, shifted).slice(0, 2), [
+		`${window}.start`,
+		`${window}.end`,
+	]);
+	const short = read("1T09:00:00.000", "1T21:00:00.000", [
+		["1T09:00:00.000", "1T10:00:00.000"],
+		["1T11:00:00.000", "1T21:00:00.000"],
+	]);
+	assert.deepEqual(paths(first, short).slice(0, 1), [`${window}.end`]);
+	const booked = read("1T09:00:00.000", "2T09:00:00.000", []);
+	const edgeOnly = read("1T09:00:04.000", "2T09:00:04.000", [
+		["2T08:30:02.000", "2T09:00:04.000"],
+	]);
+	assert.deepEqual(compareAnswers(booked, edgeOnly, vendorMeetingsShape), none);
+	const evening = read("1T09:00:00.000", "2T09:00:00.000", [
+		["2T08:00:00.000", "2T09:00:00.000"],
+	]);
+	const unpadded = read("1T09:00:04.000", "2T09:00:04.000", [
+		["2T08:00:00.000", "2T09:00:04"],
+	]);
+	assert.deepEqual(paths(evening, unpadded), [
+		"pages[].calendar.scheduling.items[].end",
+	]);
 });
