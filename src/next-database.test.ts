@@ -31,6 +31,10 @@ insert into party_role values ('${CLIENT}', 'client'), ('${AGENT}', 'listing_age
 insert into party_company (person_id, company_id, title, started_on, ended_on) values
 	('${AGENT}', '${BROKERAGES[0]}', 'Associate', '2020-01-06', '2025-12-31'),
 	('${AGENT}', '${BROKERAGES[1]}', 'Senior associate', '2026-01-05', null);
+insert into party_email (party_id, address, label, is_primary) values
+	('${AGENT}', 'avery@example.com', 'work', true), ('${AGENT}', 'avery.example@example.net', 'personal', false);
+insert into party_phone (party_id, number, extension, label, is_primary) values
+	('${AGENT}', '+12175550100', '12', 'work', true), ('${AGENT}', '+12175550101', null, 'mobile', false);
 insert into phase (slug, label) values ('negotiation', 'Negotiating'), ('legal', 'Legal'), ('dead', 'Dead');
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
@@ -326,6 +330,22 @@ const compared = async (client = db) =>
 		}) => [account.platform, account.posts, account.best.id, account.worst.id],
 	);
 
+const newAddress = (row: Record<string, string>) =>
+	insert("party_email", {
+		party_id: AGENT,
+		address: "avery@example.com",
+		label: "work",
+		...row,
+	});
+const newPhone = (row: Record<string, string | null>) =>
+	insert("party_phone", {
+		party_id: AGENT,
+		number: "+12175550100",
+		extension: null,
+		label: "work",
+		...row,
+	});
+
 // The engine's role lacks the privilege, so PostgreSQL refuses before any row is touched.
 const notGranted = (table: string) => ({
 	code: "42501",
@@ -333,6 +353,8 @@ const notGranted = (table: string) => ({
 });
 const STAMPED = [
 	"party",
+	"party_email",
+	"party_phone",
 	"property",
 	"deal",
 	"party_role",
@@ -359,7 +381,8 @@ const SCHEMA = await readFile(
 	"utf8",
 );
 
-const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
+type Case = [sql: string, refusal: Refusal];
+const RULES: Record<string, Case[]> = {
 	"a link to a record that does not exist is refused": [
 		[
 			`insert into deal_party values ('${DEAL}', '${MISSING}', 'client')`,
@@ -413,6 +436,57 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 				`insert into party_company (person_id, company_id)
 				values ('${AGENT}', '${CLIENT}'), ('${AGENT}', '${CLIENT}')`,
 				"party_company_person_id_company_id_started_on_key",
+			],
+		],
+	"an email is kept once per person or company, in one form, with one primary":
+		[
+			[newAddress({}), "party_email_address_party_id_key"],
+			...[
+				"Avery@example.com",
+				"Avery Example <avery@example.com>",
+				"avery@example.com, avery@example.net",
+				"avery @example.com",
+				"avery@example",
+			].map(
+				(address): Case => [newAddress({ address }), "email_address_shape"],
+			),
+			[
+				newAddress({ address: "avery@example.org", label: "mobile" }),
+				"party_email_label_check",
+			],
+			[
+				newAddress({ address: "avery@example.org", is_primary: "true" }),
+				"party_email_one_primary",
+			],
+			[
+				`insert into activity (id, kind, happened_at) values ('${id(303)}', 'email', now());
+				insert into email (activity_id, message_id, sender, subject, body)
+				values ('${id(303)}', '<sender@example.com>', 'Avery@Example.com', 'Example', 'Example')`,
+				"email_address_shape",
+			],
+		],
+	"a phone number is kept once per person or company, in one form, with one primary":
+		[
+			[
+				newPhone({ extension: "12" }),
+				"party_phone_number_extension_party_id_key",
+			],
+			...[
+				"(217) 555-0100",
+				"+1 217 555 0100",
+				"2175550100",
+				"+1217555010",
+				"+12171550100",
+				"+0442079460123",
+			].map((number): Case => [newPhone({ number }), "phone_number_shape"]),
+			[newPhone({ extension: "x12" }), "party_phone_extension_check"],
+			[
+				newPhone({ number: "+12175550102", label: "fax" }),
+				"party_phone_label_check",
+			],
+			[
+				newPhone({ number: "+12175550102", is_primary: "true" }),
+				"party_phone_one_primary",
 			],
 		],
 	"a deal's phase history is kept, comes from the phase list, and a dead deal says why":
@@ -850,7 +924,7 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
-const OWNER_RULES: Record<string, [sql: string, refusal: Refusal][]> = {
+const OWNER_RULES: Record<string, Case[]> = {
 	"a platform reports metrics from the known lists, each once": [
 		[
 			"insert into platform_metric values ('myspace', 'views')",
@@ -912,6 +986,8 @@ const CHANGEABLE: Record<string, string[]> = {
 	property: ["address"],
 	deal: ["name"],
 	party_company: ["ended_on", "started_on", "title"],
+	party_email: ["is_primary", "label"],
+	party_phone: ["is_primary", "label"],
 	activity: ["from_party_id", "happened_at", "summary"],
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
 	document: ["name"],
@@ -945,7 +1021,7 @@ async function rolledBack(run: () => Promise<unknown>) {
 	}
 }
 // Each case runs in its own owner's transaction, rolled back.
-async function asOwner(cases: [sql: string, refusal: Refusal][]) {
+async function asOwner(cases: Case[]) {
 	const owner = await connect("none");
 	try {
 		for (const [sql, refusal] of cases) {
@@ -1123,6 +1199,21 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 		})),
 	);
 });
+
+test("an email's sender is matched to its people through their email rows", async () => {
+	const { rows } = await db.query(
+		"select party_id from email join party_email on address = sender where activity_id = $1",
+		[EMAIL],
+	);
+	assert.deepEqual(rows, [{ party_id: AGENT }]);
+});
+
+test("a primary moves to another email, and a number outside North America is kept", () =>
+	rolledBack(() =>
+		db.query(`update party_email set is_primary = false where party_id = '${AGENT}';
+			update party_email set is_primary = true where address = 'avery.example@example.net';
+			${newPhone({ number: "+442079460123", label: "mobile" })}`),
+	));
 
 test("the engine claims a scheduled post, then publishes it", () =>
 	rolledBack(() =>
