@@ -207,6 +207,7 @@ test("a lead off the board opens as null, and the board still answers", () =>
 		assert.equal(answer.leads.length, 2);
 	}));
 
+// A temp view shadows the board's view for this transaction to add a field.
 // "é" is one character but two bytes, so jsonb lists it after "id".
 test("an opened lead orders a non-ASCII field by its bytes", () =>
 	withRollback(async (tx) => {
