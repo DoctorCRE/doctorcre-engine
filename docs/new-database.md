@@ -11,7 +11,9 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
 - **`outside_id`**: another system's id for a person, company or deal, such as a Salesforce or roster id, kept as import history.
 - **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record.
-- **`property`**: a building or space, by address.
+- **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
+- **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
+- **`territory`**: the area someone serves, as a set of `territory_piece` rows.
 - **`deal`**: one piece of brokerage work.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
 - **`deal_phase_change`**: one row each time a deal changes phase, with when, the new phase and the reason. A deal's phase is its latest row.
@@ -25,7 +27,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 ## Users, jobs and who changed what
 
-Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, phases and specialties, parties and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, deals and their phase changes, properties and parties, rounds and their documents, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
+Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, phases and specialties, parties and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, deals and their phase changes, properties and parties, rounds and their documents, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
 
 The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. Who removed a row waits for change history.
 
@@ -55,6 +57,7 @@ Each link is one row. No record holds a list or a column per role.
 - **`party_email`** and **`party_phone`**: a person's or company's emails and phone numbers, one row each, with a label and whether it is the primary one.
 - **`party_specialty`**: a person's specialties, one row each.
 - **`party_company`**: a person at a company, with their title there and the dates they started and left. A person who moves keeps the old row, with its end date, and gets a new one.
+- **`party_territory`**: who serves a territory, with the dates they started and stopped. A user serves as their person.
 - **`deal_party`**: who is on a deal, in which role. The client, the listing agent and each vendor are rows here.
 - **`deal_property`**: the properties a deal is considering.
 - **`offer_document`**: the documents of each round.
@@ -103,6 +106,10 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 37. A specialty is a person's, comes from the specialty list, and is stored once per person.
 38. A person or company is marked do not contact once, with a reason that is never blank and never changes.
 39. An outside id is for exactly one person, company or deal, is stored once per source, and the engine never rewrites or removes one. Merging duplicates (#252) will move it to the surviving record. Its source is a lower-case name, and its value has no space around it.
+40. A territory piece is exactly one of a whole state, a named market, or a distance of more than zero miles from a base point, and a territory holds each piece once.
+41. A state is a two-digit and a county a five-digit Census FIPS code. A latitude is between -90 and 90 and a longitude between -180 and 180, and a property has both or neither.
+42. A market's name is never blank and is used once, and a market holds each county once. A territory's name is never blank.
+43. Someone serves a territory that exists, ends no earlier than they started, and is linked once per start date.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -113,8 +120,8 @@ Two people adding different links to one deal at the same time both keep theirs,
 The role reads rows in every table, adds rows in every table except `app_user`, `job`, `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
 - a role's, a phase's or a specialty's label;
-- a party's, deal's, document's or design template's name, a party's NPI, and a property's address;
-- a person-at-company link's title and dates;
+- a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, and a property's address, county and point;
+- a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
 - a next step's text, owner, due date and done time;
@@ -228,6 +235,26 @@ Each ranked post carries `reading_age_hours`, the age of the oldest reading it w
 
 Pillars and hooks are text for now. They become lists, like roles and phases, with the rotation rules.
 
+## Markets and territories
+
+A territory is the area someone serves. A user's territory, a vendor's market and a lead's area are one idea, so one `territory` table serves all three, and `party_territory` says who serves which, dated. A vendor that leaves a market keeps the old row, with its end date.
+
+A territory is a set of pieces, because its shape varies. Each `territory_piece` is exactly one of:
+
+- **a whole state**, by its two-digit Census FIPS code;
+- **a named market**, a `market` row;
+- **a distance from a base**, a latitude and longitude and how many miles the team will travel from it.
+
+A named market covers whole counties, by their five-digit FIPS codes, in `market_county`. Counties are what metro areas are drawn from, so a market keeps the boundary the partners mean, and a property's county comes back with its point when its address is geocoded, such as by the Census geocoder. ZIP prefixes cross state and metro lines. A point and radius is already the distance piece. A property's state is the first two digits of its county.
+
+`property_territory` lists each territory each property falls in. It has one branch per piece kind: the state of the property's county, a market holding its county, or a base within the piece's miles of its point. `miles_between` measures along the earth's surface. A property with no county or point falls in no territory until it is geocoded. Who serves a property is that list joined to `party_territory`.
+
+The distance is plain SQL. PostGIS is offered on the production Neon project, but the check's PostgreSQL has no PostGIS, and changing the check is the owner's. `earthdistance` is in both, but as an extension it belongs to the whole database, not to the namespace this schema loads into. A sphere is close enough for "how far we will travel": the formula is the haversine, on a 3,958.8-mile radius.
+
+Today's system keeps a vendor's markets as a list of named markets with a boundary written as text, a vendor's membership in each, and a free-text territory on the vendor. Moving them across, each old market becomes a `market` once its counties are listed, each membership a `party_territory` row on a territory holding that market, and each text territory a territory for a partner to draw.
+
+Rents and expenses read from LOIs and leases build the market database. It needs no table of its own. A round already holds its rent, NNN, TI and free rent, and names its property, so a market's rents are the rounds whose property falls in it, read with `property_territory` or `market_county`. A lease's terms join the same way when leases come. A figure read from a document outside any deal, such as a broker's survey, is a following slice, with its source document and date.
+
 ## Later slices
 
-Deal type, owner and dates. Merging duplicates (#252). "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. Merging duplicates (#252). "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Market figures from outside deals. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.

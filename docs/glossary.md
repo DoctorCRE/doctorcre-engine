@@ -105,6 +105,12 @@ The city or metro area where the client needs space.
 _Avoid_: territory, submarket
 _Database_: `deal.city`, shown as `market` in `v_deal_room_board`.
 _Engine_: `market` on the board; the deal page renames it back to `city`.
+_New database_: a named market (`market`), by the counties it covers. A vendor's "market" is a whole territory, and a `market` row is one named piece of one.
+
+**Territory**:
+The area someone serves: a user's, a vendor's or a lead's. A vendor's market is its territory. It is made of whole states, named markets and distances from a base.
+_Avoid_: market, for someone's whole area
+_Database_: `vendor.territory` (text) and `vendor_market_membership` today; `territory`, `territory_piece` and `party_territory` in the new database.
 
 **Critical date**:
 A date in the deal or its lease that must not be missed, such as a due-diligence deadline or a lease expiration.

@@ -154,11 +154,90 @@ create table party_specialty (
 	foreign key (person_id, person_kind) references party (id, kind)
 );
 
+-- Census FIPS codes. A county's five digits begin with its state's two.
+create domain state_fips as text constraint state_fips_shape check (value ~ '^[0-9]{2}$');
+create domain county_fips as text constraint county_fips_shape check (value ~ '^[0-9]{5}$');
+create domain latitude as numeric(8, 6) constraint latitude_range check (value between -90 and 90);
+create domain longitude as numeric(9, 6) constraint longitude_range check (value between -180 and 180);
+
 create table property (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
-	address text not null
+	address text not null,
+	-- Geocoded from the address. A property without them falls in no territory.
+	county_fips county_fips,
+	latitude latitude,
+	longitude longitude,
+	constraint property_point_whole check (num_nonnulls(latitude, longitude) <> 1)
 );
+
+-- A named market covers whole counties, the units metro areas are drawn from.
+create table market (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	name text not null unique check (name ~ '\S')
+);
+
+create table market_county (
+	market_id uuid not null references market,
+	county_fips county_fips not null,
+	created_at timestamptz not null default now(),
+	primary key (market_id, county_fips)
+);
+
+-- The area someone serves. A vendor's market and a user's or a lead's territory are one idea.
+create table territory (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	name text not null check (name ~ '\S')
+);
+
+-- A territory is the sum of its pieces: whole states, named markets and distances from a base.
+create table territory_piece (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	territory_id uuid not null references territory,
+	state_fips state_fips,
+	market_id uuid references market,
+	base_latitude latitude,
+	base_longitude longitude,
+	miles numeric(6, 1) check (miles > 0),
+	constraint territory_piece_one_kind check (num_nonnulls(state_fips, market_id, miles) = 1),
+	constraint territory_piece_distance_from_a_base check (num_nonnulls(base_latitude, base_longitude, miles) in (0, 3)),
+	constraint territory_piece_once
+		unique nulls not distinct (territory_id, state_fips, market_id, base_latitude, base_longitude, miles)
+);
+
+-- Who serves a territory, dated, so a vendor that leaves a market keeps its history. A user serves as their person.
+create table party_territory (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	party_id uuid not null references party,
+	territory_id uuid not null references territory,
+	started_on date,
+	ended_on date check (ended_on >= started_on),
+	unique nulls not distinct (party_id, territory_id, started_on)
+);
+
+-- Along the earth's surface, by the haversine formula on a 3,958.8-mile radius.
+create function miles_between(lat1 float8, lng1 float8, lat2 float8, lng2 float8) returns float8
+language sql immutable strict
+return 2 * 3958.8 * asin(sqrt(sin(radians(lat2 - lat1) / 2) ^ 2
+	+ cos(radians(lat1)) * cos(radians(lat2)) * sin(radians(lng2 - lng1) / 2) ^ 2));
+
+-- Each territory a property falls in, by each kind of piece.
+create view property_territory as
+select p.id as property_id, piece.territory_id
+from property p join territory_piece piece on piece.state_fips = left(p.county_fips, 2)
+union
+select p.id, piece.territory_id
+from property p
+join market_county m on m.county_fips = p.county_fips
+join territory_piece piece on piece.market_id = m.market_id
+union
+select p.id, piece.territory_id
+from property p
+join territory_piece piece on miles_between(p.latitude, p.longitude, piece.base_latitude, piece.base_longitude) <= piece.miles;
 
 create table deal (
 	id uuid primary key default gen_random_uuid(),
@@ -666,10 +745,10 @@ declare
 	stamped text;
 begin
 	foreach stamped in array array['role', 'phase', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
-		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'deal', 'deal_phase_change',
-		'deal_property', 'deal_party', 'activity', 'activity_about', 'next_step', 'document', 'email', 'offer',
-		'offer_document', 'social_account', 'idea', 'design_template', 'post', 'post_text', 'post_media', 'post_review',
-		'measurement'] loop
+		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
+		'territory_piece', 'party_territory', 'deal', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
+		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'social_account', 'idea',
+		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -767,17 +846,18 @@ revoke insert on app_user, job from engine;
 revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
-grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, deal, party_role, party_company,
-	deal_property, deal_party, activity, activity_about, email, next_step, document, social_account, idea, design_template
-	to engine;
+grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
+	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
+	activity_about, email, next_step, document, social_account, idea, design_template to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, phase, specialty to engine;
-grant update (name) on party, deal, document, design_template to engine;
+grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (npi) on party to engine;
-grant update (address) on property to engine;
+grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
+grant update (started_on, ended_on) on party_territory to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
 grant update (what, owner_party_id, due_on, done_at) on next_step to engine;
