@@ -21,7 +21,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`email`**: the email behind an email activity.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
 
-Each record and link carries `created_at`, when its row was stored, so moving today's records across can keep their dates. Lists such as roles and phases do not, and neither do rows that carry their own time: activities and their emails, rounds, phase changes, posts and readings.
+Each record and link carries `created_at`, when its row was stored, so moving today's records across can keep their dates. Lists such as roles and phases do not, and neither do rows that carry their own time: activities and their emails, rounds, phase changes, posts and readings. An outside id has none either; it never changes, so its stamp's time is when it was imported.
 
 ## Users, jobs and who changed what
 
@@ -102,7 +102,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 36. An NPI is ten digits ending in its check digit, and one person or company holds it.
 37. A specialty is a person's, comes from the specialty list, and is stored once per person.
 38. A person or company is marked do not contact once, with a reason that is never blank and never changes.
-39. An outside id is for exactly one person, company or deal, is stored once per source, and is never rewritten or removed. Its source is a lower-case name, and its value has no space around it.
+39. An outside id is for exactly one person, company or deal, is stored once per source, and the engine never rewrites or removes one. Merging duplicates (#252) will move it to the surviving record. Its source is a lower-case name, and its value has no space around it.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 

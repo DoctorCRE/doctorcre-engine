@@ -1,7 +1,8 @@
 -- The new database's core, designed in docs/new-database.md. Nothing applies it to a live database.
 -- It names no schema, so a loader chooses the namespace with search_path.
 
--- The NPI check digit is Luhn's, taken over the 80840 prefix and the first nine digits. ascii() never fails on a non-digit.
+-- The NPI check digit is Luhn's, taken over the 80840 prefix and the first nine digits.
+-- ascii(), not a cast, because PostgreSQL may run this before the shape test refuses a non-digit.
 create function npi_check_digit_holds(npi text) returns boolean
 language sql immutable
 return (
