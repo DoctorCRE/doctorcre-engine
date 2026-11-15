@@ -309,7 +309,7 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 	assert.match(report("production", run), /\nfailed {2}change feed {2}-\n$/);
 });
 
-test("a network or sign-in failure stops the run", async () => {
+test("a network failure or a refused request stops the run", async () => {
 	const { run, calls } = await runWith(answer, (ask) => {
 		if (ask.read === "board" && ask.workspace === "national_account")
 			throw new StopRun("made-up body");
@@ -324,7 +324,7 @@ test("a network or sign-in failure stops the run", async () => {
 	assert.equal(exitCode(run), 2);
 	assert.match(
 		report("production", run),
-		/stopped at a network or sign-in failure/,
+		/stopped at a network failure or a refused request/,
 	);
 });
 
