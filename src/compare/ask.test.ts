@@ -3,8 +3,8 @@ import { mock, test } from "node:test";
 import { askers, pause } from "./ask.ts";
 import { type Ask, StopRun } from "./run.ts";
 
-const app = new URL("https://app.example.test");
-const session = "made-up-session-value";
+const door = new URL("https://engine.example.test/compare/joe");
+const token = { id: "made-up-id", secret: "made-up-secret-value" };
 const deal = "00000000-0000-4000-8000-000000000001";
 const board: Ask = { read: "board", workspace: "national_account" };
 const detail: Ask = { read: "deal", deal };
@@ -35,8 +35,8 @@ function fake(respond: (sent: Sent) => Response) {
 	const sent: Sent[] = [];
 	const waits: number[] = [];
 	const ask = askers(
-		app,
-		session,
+		door,
+		token,
 		async (url, init) => {
 			sent.push({ url, init });
 			return respond({ url, init });
@@ -60,8 +60,20 @@ const failedRead = (verb: string) => ({
 });
 const header = (sent: Sent, name: string) =>
 	new Headers(sent.init.headers).get(name);
+const admitted = (sent: Sent) => {
+	assert.equal(header(sent, "cf-access-client-id"), token.id);
+	assert.equal(header(sent, "cf-access-client-secret"), token.secret);
+	assert.equal(header(sent, "cookie"), null);
+	assert.equal(sent.init.method ?? "GET", "GET");
+	assert.equal(sent.init.body, undefined);
+};
+// The tool and arguments of an old read, from its address at the door.
+const called = (url: URL) => ({
+	name: decodeURIComponent(url.pathname.slice("/compare/joe/old/mcp/".length)),
+	arguments: JSON.parse(url.searchParams.get("arguments") ?? "null"),
+});
 
-test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue, a find, the invoices, vendor markets and recent activity, on the app's host with the session", async () => {
+test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue, a find, the invoices, vendor markets and recent activity, at the door with the Access token", async () => {
 	const { askEngine, sent } = fake(() => json({ made_up: true }));
 	assert.deepEqual(await askEngine(board), { made_up: true });
 	await askEngine(detail);
@@ -74,24 +86,23 @@ test("asks the engine's board by workspace, a deal by its reference, the client 
 	assert.deepEqual(
 		sent.map((s) => s.url.href),
 		[
-			"https://app.example.test/api/engine/deals?workspace=national_account",
-			`https://app.example.test/api/engine/deals/${deal}`,
-			"https://app.example.test/api/engine/client-fit",
-			"https://app.example.test/api/engine/capture-queue",
-			"https://app.example.test/api/engine/find?query=Made-up+%26+50%25",
-			"https://app.example.test/api/engine/invoices",
-			"https://app.example.test/api/engine/vendor-markets",
-			"https://app.example.test/api/engine/recent-activity?query=Made-up+%26+Co&limit=10",
+			"https://engine.example.test/compare/joe/engine/deals?workspace=national_account",
+			`https://engine.example.test/compare/joe/engine/deals/${deal}`,
+			"https://engine.example.test/compare/joe/engine/client-fit",
+			"https://engine.example.test/compare/joe/engine/capture-queue",
+			"https://engine.example.test/compare/joe/engine/find?query=Made-up+%26+50%25",
+			"https://engine.example.test/compare/joe/engine/invoices",
+			"https://engine.example.test/compare/joe/engine/vendor-markets",
+			"https://engine.example.test/compare/joe/engine/recent-activity?query=Made-up+%26+Co&limit=10",
 		],
 	);
 	for (const s of sent) {
-		assert.equal(header(s, "cookie"), `__Host-dealroom_session=${session}`);
-		assert.equal(s.init.method ?? "GET", "GET");
+		admitted(s);
 		assert.equal(s.init.redirect, "manual");
 	}
 });
 
-test("asks the old system through the same host with the session and the app's origin", async () => {
+test("asks each old tool as a GET at the door's old mcp address with the Access token", async () => {
 	const { askOld, sent } = fake(() => content({ made_up: true }));
 	assert.deepEqual(await askOld(board), { made_up: true });
 	await askOld(detail);
@@ -101,12 +112,12 @@ test("asks the old system through the same host with the session and the app's o
 	await askOld(invoices);
 	await askOld(markets);
 	await askOld(activity);
-	assert.deepEqual(
-		sent.map((s) => [s.url.href, s.init.method]),
-		Array(8).fill(["https://app.example.test/mcp", "POST"]),
+	assert.equal(
+		sent[1]?.url.href,
+		`https://engine.example.test/compare/joe/old/mcp/get-deal-room?arguments=${encodeURIComponent(JSON.stringify({ deal }))}`,
 	);
 	assert.deepEqual(
-		sent.map((s) => JSON.parse(String(s.init.body)).params),
+		sent.map((s) => called(s.url)),
 		[
 			{ name: "deal-room-board", arguments: { workspace: "national_account" } },
 			{ name: "get-deal-room", arguments: { deal } },
@@ -122,8 +133,8 @@ test("asks the old system through the same host with the session and the app's o
 		],
 	);
 	for (const s of sent) {
-		assert.equal(header(s, "cookie"), `__Host-dealroom_session=${session}`);
-		assert.equal(header(s, "origin"), "https://app.example.test");
+		admitted(s);
+		assert.equal(header(s, "origin"), null);
 	}
 });
 
@@ -192,20 +203,27 @@ test("an engine find, Leads, vendor markets or recent activity read that fails w
 		);
 });
 
-test("a network or sign-in failure stops the run, and no failure shows the session", async () => {
+test("a network failure or a refused token stops the run, and no failure shows the token", async () => {
 	const failures: (() => Response)[] = [
 		() => {
-			throw new TypeError(`fetch failed ${session}`);
+			throw new TypeError(`fetch failed ${token.secret}`);
 		},
-		() => json({ error: "unauthorized", state: "sign_in_required" }, 401),
-		() => new Response(null, { status: 302, headers: { location: "/login" } }),
+		() => json({ error: "unauthorized" }, 401),
+		() => new Response("Forbidden", { status: 403 }),
+		() =>
+			new Response(null, {
+				status: 302,
+				headers: { location: "https://made-up.cloudflareaccess.com/" },
+			}),
 	];
 	for (const respond of failures)
 		for (const ask of [fake(respond).askEngine, fake(respond).askOld])
 			await assert.rejects(
 				ask(detail),
 				(error: Error) =>
-					error instanceof StopRun && !error.message.includes(session),
+					error instanceof StopRun &&
+					!error.message.includes(token.secret) &&
+					!error.message.includes(token.id),
 			);
 	for (const ask of [
 		fake(() => json(failedRead("get-deal-room"), 500)).askEngine,
@@ -214,7 +232,7 @@ test("a network or sign-in failure stops the run, and no failure shows the sessi
 		await assert.rejects(
 			ask(detail),
 			(error: Error) =>
-				!(error instanceof StopRun) && !error.message.includes(session),
+				!(error instanceof StopRun) && !error.message.includes(token.secret),
 		);
 });
 
@@ -247,8 +265,8 @@ test("pages each side's feed from the start with that side's cursors until a sho
 		["c2", last],
 	]);
 	const sides = [
-		["askEngine", "/api/engine/pipeline/changes"],
-		["askOld", "/pipeline/changes"],
+		["askEngine", "/compare/joe/engine/pipeline/changes"],
+		["askOld", "/compare/joe/old/pipeline/changes"],
 	] as const;
 	for (const [side, path] of sides) {
 		const asked = fake(({ url }) =>
@@ -266,10 +284,7 @@ test("pages each side's feed from the start with that side's cursors until a sho
 				[path, "c2"],
 			],
 		);
-		for (const s of asked.sent) {
-			assert.equal(header(s, "cookie"), `__Host-dealroom_session=${session}`);
-			assert.equal(s.init.method ?? "GET", "GET");
-		}
+		for (const s of asked.sent) admitted(s);
 	}
 });
 
@@ -318,13 +333,13 @@ test("asks the Leads board, quiet follow-ups and territory with the app's inputs
 	assert.deepEqual(
 		engine.sent.map((s) => s.url.href),
 		[
-			"https://app.example.test/api/engine/leads?workspace=leads",
-			"https://app.example.test/api/engine/quiet-follow-ups",
-			"https://app.example.test/api/engine/territory-state-board",
+			"https://engine.example.test/compare/joe/engine/leads?workspace=leads",
+			"https://engine.example.test/compare/joe/engine/quiet-follow-ups",
+			"https://engine.example.test/compare/joe/engine/territory-state-board",
 		],
 	);
 	assert.deepEqual(
-		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		old.sent.map((s) => called(s.url)),
 		[
 			{ name: "lead-board", arguments: { workspace: "leads" } },
 			{ name: "quiet-follow-ups", arguments: {} },
@@ -413,12 +428,10 @@ test("an opened lead follows each side's correspondence and stage-history cursor
 	);
 	assert.deepEqual(engine.waits, []);
 
-	const old = fake(({ init }) =>
-		content(pageAfter(JSON.parse(String(init.body)).params.arguments)),
-	);
+	const old = fake(({ url }) => content(pageAfter(called(url).arguments)));
 	assert.deepEqual(await old.askOld(opened), expected);
 	assert.deepEqual(
-		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		old.sent.map((s) => called(s.url)),
 		[
 			{ workspace: "leads", lead_id: lead },
 			{ workspace: "leads", lead_id: lead, correspondence_cursor: mail(1) },
@@ -445,19 +458,17 @@ test("reasons to reach out follow next_cursor at a limit of 25 to the last page 
 	assert.deepEqual(
 		engine.sent.map((s) => s.url.pathname + s.url.search),
 		[
-			"/api/engine/reasons-to-reach-out?limit=25",
-			"/api/engine/reasons-to-reach-out?limit=25&before_id=30",
-			"/api/engine/reasons-to-reach-out?limit=25&before_id=20",
+			"/compare/joe/engine/reasons-to-reach-out?limit=25",
+			"/compare/joe/engine/reasons-to-reach-out?limit=25&before_id=30",
+			"/compare/joe/engine/reasons-to-reach-out?limit=25&before_id=20",
 		],
 	);
-	const old = fake(({ init }) =>
-		content(
-			cards(JSON.parse(String(init.body)).params.arguments.before_id ?? null),
-		),
+	const old = fake(({ url }) =>
+		content(cards(called(url).arguments.before_id ?? null)),
 	);
 	assert.deepEqual(await old.askOld(reasons), expected);
 	assert.deepEqual(
-		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		old.sent.map((s) => called(s.url)),
 		[
 			{ limit: 25 },
 			{ limit: 25, before_id: "30" },
@@ -497,18 +508,17 @@ test("asks the directory and the Relationships map as the app does, the old ones
 		"/relationships?contract=relationship-network.v1",
 	];
 	for (const [ask, prefix] of [
-		["askEngine", "/api/engine"],
-		["askOld", "/api/v1/business"],
+		["askEngine", "/compare/joe/engine"],
+		["askOld", "/compare/joe/old/api/v1/business"],
 	] as const) {
 		const asker = fake(() => json({ made_up: true }));
 		for (const read of directory)
 			assert.deepEqual(await asker[ask](read), { made_up: true });
 		assert.deepEqual(
 			asker.sent.map((s) => [s.url.href, s.init.method ?? "GET"]),
-			paths.map((path) => [`${app.origin}${prefix}${path}`, "GET"]),
+			paths.map((path) => [`${door.origin}${prefix}${path}`, "GET"]),
 		);
-		for (const s of asker.sent)
-			assert.equal(header(s, "cookie"), `__Host-dealroom_session=${session}`);
+		for (const s of asker.sent) admitted(s);
 	}
 });
 
@@ -561,23 +571,21 @@ test("today's reminders ask the default and the partners' queues and follow each
 	assert.deepEqual(
 		engine.sent.map((s) => s.url.pathname + s.url.search),
 		[
-			"/api/engine/today-triage",
-			"/api/engine/today-triage?cursor=a",
-			"/api/engine/today-triage?cursor=b",
-			"/api/engine/today-triage?owners=partners",
-			"/api/engine/today-triage?owners=partners&cursor=a",
-			"/api/engine/today-triage?owners=partners&cursor=b",
+			"/compare/joe/engine/today-triage",
+			"/compare/joe/engine/today-triage?cursor=a",
+			"/compare/joe/engine/today-triage?cursor=b",
+			"/compare/joe/engine/today-triage?owners=partners",
+			"/compare/joe/engine/today-triage?owners=partners&cursor=a",
+			"/compare/joe/engine/today-triage?owners=partners&cursor=b",
 		],
 	);
-	const old = fake(({ init }) =>
-		content(
-			triage(JSON.parse(String(init.body)).params.arguments.cursor ?? null),
-		),
+	const old = fake(({ url }) =>
+		content(triage(called(url).arguments.cursor ?? null)),
 	);
 	for (const read of reminders)
 		assert.deepEqual(await old.askOld(read), expected);
 	assert.deepEqual(
-		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		old.sent.map((s) => called(s.url)),
 		[
 			{},
 			{ cursor: "a" },
@@ -604,12 +612,12 @@ test("meeting prep asks with no input on both sides", async () => {
 	assert.deepEqual(await engine.askEngine(prep), { state: "ready", items: [] });
 	assert.deepEqual(
 		engine.sent.map((s) => s.url.href),
-		["https://app.example.test/api/engine/calendar-meeting-prep"],
+		["https://engine.example.test/compare/joe/engine/calendar-meeting-prep"],
 	);
 	const old = fake(() => content({ state: "ready", items: [] }));
 	await old.askOld(prep);
 	assert.deepEqual(
-		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		old.sent.map((s) => called(s.url)),
 		[{ name: "calendar-meeting-prep", arguments: {} }],
 	);
 });
@@ -660,22 +668,18 @@ test("vendor meetings ask each view with the default limit and follow each side'
 	assert.deepEqual(
 		engine.sent.map((s) => s.url.pathname + s.url.search),
 		[
-			"/api/engine/vendor-meetings?view=suggested",
-			"/api/engine/vendor-meetings?view=suggested&cursor=a",
-			"/api/engine/vendor-meetings?view=research",
-			"/api/engine/vendor-meetings?view=research&cursor=a",
+			"/compare/joe/engine/vendor-meetings?view=suggested",
+			"/compare/joe/engine/vendor-meetings?view=suggested&cursor=a",
+			"/compare/joe/engine/vendor-meetings?view=research",
+			"/compare/joe/engine/vendor-meetings?view=research&cursor=a",
 		],
 	);
-	const old = fake(({ init }) =>
-		content(
-			meetingsPage(
-				JSON.parse(String(init.body)).params.arguments.cursor ?? null,
-			),
-		),
+	const old = fake(({ url }) =>
+		content(meetingsPage(called(url).arguments.cursor ?? null)),
 	);
 	for (const read of meetingViews) await old.askOld(read);
 	assert.deepEqual(
-		old.sent.map((s) => JSON.parse(String(s.init.body)).params),
+		old.sent.map((s) => called(s.url)),
 		[
 			{ view: "suggested" },
 			{ view: "suggested", cursor: "a" },
@@ -703,11 +707,8 @@ test("an unavailable calendar on any page, a refusal or a server error fails ven
 		[
 			fake(({ url }) => json(secondPage(url.searchParams.get("cursor"))))
 				.askEngine,
-			fake(({ init }) =>
-				content(
-					secondPage(JSON.parse(String(init.body)).params.arguments.cursor),
-				),
-			).askOld,
+			fake(({ url }) => content(secondPage(called(url).arguments.cursor)))
+				.askOld,
 			fake(() => json(refused, 400)).askEngine,
 			fake(() => content(refused, true)).askOld,
 			fake(() => json(failedRead("read-vendor-meetings"), 500)).askEngine,

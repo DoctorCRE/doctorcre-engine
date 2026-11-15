@@ -41,10 +41,13 @@ to that file, or the command reports it. This command does not update the snapsh
 or apply any schema change to its target.
 
 To compare the old system's and the engine's Deals answers outside CI, set
-`COMPARE_TARGET` to `staging` or `production`, `COMPARE_APP_URL` to the app's
-https base URL and `COMPARE_SESSION` to a signed-in partner's session cookie
-value, then run `npm run compare`. Both systems are read through the app's host,
-because sign-in works only there. Production also needs
+`COMPARE_TARGET` to `staging` or `production`, `COMPARE_PARTNER` to `joe` or
+`dell` and `COMPARE_ENGINE_URL` to the engine's https base URL, then run
+`npm run compare`. Both systems are read as that partner through the engine's
+`/compare/<partner>/` door, which Cloudflare Access opens only to the
+comparison's service token. The script reads that token from the macOS login
+keychain, service `doctorcre-compare-access`, accounts
+`<target>-client-id` and `<target>-client-secret`. Production also needs
 `COMPARE_CONFIRM_PRODUCTION=read-only`. It only reads and waits 1.5 seconds
 between requests. It asks the engine before and after the old system and sets a
 request aside as unsettled when the engine's two answers differ. Boards are asked
@@ -64,7 +67,7 @@ read from the parsed answers, where JavaScript puts whole-number keys first, so
 their order is not checked. A refused deal, client or vendor is compared as its
 refusal; a refused board, invoices read, list, reminders read, meeting prep or
 vendor meetings read counts as failed, and so does an unavailable calendar. A
-network or sign-in failure stops the run. It prints counts, field paths and
-record IDs, never values, bodies or the cookie. A suggested vendor meeting
+network failure or a refused token stops the run. It prints counts, field paths and
+record IDs, never values, bodies or the token. A suggested vendor meeting
 prints its vendor ref and, when it has one, its contact ID. Exit codes are 0
 for a match, 1 for differences or unsettled requests and 2 for failure.

@@ -1,114 +1,118 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readSettings } from "./settings.ts";
+import { type Keychain, readSettings } from "./settings.ts";
 
 const base = {
-	COMPARE_APP_URL: "https://app.example.test",
-	COMPARE_SESSION: "made-up-session",
+	COMPARE_PARTNER: "joe",
+	COMPARE_ENGINE_URL: "https://engine.example.test",
 };
+const staging = { ...base, COMPARE_TARGET: "staging" };
+const stored: Keychain = (account) => `made-up-${account}`;
 
 test("runs only against a named target, and production needs a read-only acknowledgement", () => {
 	assert.throws(
-		() => readSettings(base),
+		() => readSettings(base, stored),
 		/COMPARE_TARGET to staging or production/,
 	);
 	assert.throws(
-		() => readSettings({ ...base, COMPARE_TARGET: "local" }),
+		() => readSettings({ ...base, COMPARE_TARGET: "local" }, stored),
 		/COMPARE_TARGET/,
 	);
-	assert.equal(
-		readSettings({ ...base, COMPARE_TARGET: "staging" }).target,
-		"staging",
-	);
+	assert.equal(readSettings(staging, stored).target, "staging");
+	const production = { ...base, COMPARE_TARGET: "production" };
 	assert.throws(
-		() => readSettings({ ...base, COMPARE_TARGET: "production" }),
+		() => readSettings(production, stored),
 		/COMPARE_CONFIRM_PRODUCTION=read-only/,
 	);
 	assert.throws(
 		() =>
-			readSettings({
-				...base,
-				COMPARE_TARGET: "production",
-				COMPARE_CONFIRM_PRODUCTION: "yes",
-			}),
+			readSettings(
+				{ ...production, COMPARE_CONFIRM_PRODUCTION: "yes" },
+				stored,
+			),
 		/COMPARE_CONFIRM_PRODUCTION/,
 	);
-	const production = readSettings({
+	assert.equal(
+		readSettings(
+			{ ...production, COMPARE_CONFIRM_PRODUCTION: "read-only" },
+			stored,
+		).target,
+		"production",
+	);
+});
+
+test("reads through the engine's comparison door as the named partner", () => {
+	assert.equal(
+		readSettings(staging, stored).door.href,
+		"https://engine.example.test/compare/joe",
+	);
+	assert.equal(
+		readSettings({ ...staging, COMPARE_PARTNER: "dell" }, stored).door.href,
+		"https://engine.example.test/compare/dell",
+	);
+	for (const partner of [undefined, "", "Joe", "someone"])
+		assert.throws(
+			() => readSettings({ ...staging, COMPARE_PARTNER: partner }, stored),
+			/COMPARE_PARTNER to joe or dell/,
+		);
+});
+
+test("the engine URL is an https origin, and a refused value is never echoed", () => {
+	for (const value of [
+		undefined,
+		"http://engine.example.test",
+		"not a url secretmarker",
+		"https://engine.example.test/secretmarker",
+		"https://engine.example.test/?secretmarker=1",
+		"https://engine.example.test/#secretmarker",
+		"https://secretmarker@engine.example.test/",
+	])
+		assert.throws(
+			() => readSettings({ ...staging, COMPARE_ENGINE_URL: value }, stored),
+			(error: Error) =>
+				/COMPARE_ENGINE_URL/.test(error.message) &&
+				!error.message.includes("secretmarker"),
+		);
+});
+
+test("takes the target's Access token from the keychain", () => {
+	const asked: string[] = [];
+	const production = {
 		...base,
 		COMPARE_TARGET: "production",
 		COMPARE_CONFIRM_PRODUCTION: "read-only",
+	};
+	const settings = readSettings(production, (account) => {
+		asked.push(account);
+		return stored(account);
 	});
-	assert.equal(production.target, "production");
-});
-
-test("needs a session and https URLs, and never echoes a setting's value", () => {
-	const staging = { ...base, COMPARE_TARGET: "staging" };
-	assert.throws(
-		() => readSettings({ ...staging, COMPARE_SESSION: "" }),
-		/COMPARE_SESSION/,
-	);
-	for (const value of ["http://app.example.test", "not a url secretmarker"])
-		assert.throws(
-			() => readSettings({ ...staging, COMPARE_APP_URL: value }),
-			(error: Error) =>
-				/COMPARE_APP_URL/.test(error.message) && !error.message.includes(value),
-		);
-});
-
-test("reads the old system and the engine through the one app URL", () => {
-	const settings = readSettings({
-		COMPARE_TARGET: "staging",
-		COMPARE_APP_URL: "https://app.example.test",
-		COMPARE_ENGINE_URL: "https://engine.example.test",
-		COMPARE_SESSION: "made-up-session",
+	assert.deepEqual(asked, ["production-client-id", "production-client-secret"]);
+	assert.deepEqual(settings.token, {
+		id: "made-up-production-client-id",
+		secret: "made-up-production-client-secret",
 	});
-	assert.deepEqual(Object.keys(settings).sort(), ["app", "session", "target"]);
-	assert.equal(settings.app.origin, "https://app.example.test");
 });
 
-test("the app URL is an origin, with no path, query or fragment", () => {
-	const staging = { ...base, COMPARE_TARGET: "staging" };
-	assert.equal(
-		readSettings({ ...staging, COMPARE_APP_URL: "https://app.example.test/" })
-			.app.href,
-		"https://app.example.test/",
-	);
+test("a missing or unusable keychain value names the item, never the value", () => {
 	for (const value of [
-		"https://app.example.test/secretmarker",
-		"https://app.example.test/?secretmarker=1",
-		"https://app.example.test/#secretmarker",
-		"https://secretmarker@app.example.test/",
-	])
-		assert.throws(
-			() => readSettings({ ...staging, COMPARE_APP_URL: value }),
-			(error: Error) =>
-				/COMPARE_APP_URL/.test(error.message) &&
-				!error.message.includes("secretmarker"),
-		);
-});
-
-test("the session is one cookie value, so a pasted value cannot add cookies", () => {
-	const staging = { ...base, COMPARE_TARGET: "staging" };
-	assert.equal(
-		readSettings({ ...staging, COMPARE_SESSION: "made-up.Session_9~+/=" })
-			.session,
-		"made-up.Session_9~+/=",
-	);
-	for (const value of [
-		"secretmarker; other=1",
-		"secretmarker,other=1",
+		undefined,
+		"",
 		"secret marker",
-		"secretmarker\t",
 		"secretmarker\n",
+		"secretmarker\r\nx-other: 1",
 		"secretmarker\x00",
 		"secretmarker\x7f",
-		'"secretmarker"',
-		"secret\\marker",
+		"sécretmarker",
 	])
-		assert.throws(
-			() => readSettings({ ...staging, COMPARE_SESSION: value }),
-			(error: Error) =>
-				/COMPARE_SESSION/.test(error.message) &&
-				!error.message.includes("secretmarker"),
-		);
+		for (const item of ["client-id", "client-secret"])
+			assert.throws(
+				() =>
+					readSettings(staging, (account) =>
+						account === `staging-${item}` ? value : "made-up",
+					),
+				(error: Error) =>
+					error.message.includes(
+						`service doctorcre-compare-access, account staging-${item}`,
+					) && !error.message.includes("secretmarker"),
+			);
 });
