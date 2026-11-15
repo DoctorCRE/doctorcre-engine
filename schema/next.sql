@@ -9,6 +9,27 @@ create table party (
 	unique (id, kind)
 );
 
+-- A person who uses the system, and the home for their own preferences. "user" is reserved in PostgreSQL.
+create table app_user (
+	id uuid primary key,
+	kind text not null generated always as ('person') stored,
+	created_at timestamptz not null default now(),
+	foreign key (id, kind) references party (id, kind)
+);
+
+-- The engine names the signed-in user once per transaction: set_config('engine.user_id', <id>, true).
+create function stamp_change() returns trigger
+language plpgsql as $$
+begin
+	new.changed_by_user_id := nullif(current_setting('engine.user_id', true), '');
+	if new.changed_by_user_id is null then
+		raise exception 'a change names the user who made it'
+			using errcode = 'not_null_violation', constraint = 'change_names_its_user';
+	end if;
+	new.changed_at := now();
+	return new;
+end $$;
+
 create table role (
 	slug text primary key,
 	label text not null
@@ -56,10 +77,10 @@ create table phase (
 
 create table deal_phase_change (
 	deal_id uuid not null references deal,
-	changed_at timestamptz not null,
+	happened_at timestamptz not null,
 	phase text not null references phase,
 	reason text,
-	primary key (deal_id, changed_at),
+	primary key (deal_id, happened_at),
 	constraint deal_phase_change_dead_has_reason check (phase <> 'dead' or reason is not null)
 );
 
@@ -131,7 +152,6 @@ create table next_step (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	what text not null,
-	-- No owner also covers a partner's own step, until partners become parties.
 	owner_party_id uuid references party,
 	due_on date,
 	done_at timestamptz,
@@ -223,13 +243,30 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
+-- Each of these rows says which user last changed it and when, set by the database, never by the statement.
+do $$
+declare
+	stamped text;
+begin
+	foreach stamped in array array['role', 'phase', 'party', 'party_role', 'party_company', 'property', 'deal',
+		'deal_phase_change', 'deal_property', 'deal_party', 'activity', 'activity_about', 'next_step', 'offer',
+		'offer_document'] loop
+		execute format('alter table %1$I add changed_by_user_id uuid not null references app_user %2$s,
+				add changed_at timestamptz not null;
+			create trigger stamp_change before insert or update on %1$I
+				for each row execute function stamp_change()',
+			-- A new user's own person row names them before their user row exists.
+			stamped, case stamped when 'party' then 'deferrable initially deferred' end);
+	end loop;
+end $$;
+
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable
 begin atomic
 	select jsonb_build_object(
 		'deal', to_jsonb(d),
 		'phases', (
-			select coalesce(jsonb_agg(to_jsonb(c) - 'deal_id' order by c.changed_at), '[]')
+			select coalesce(jsonb_agg(to_jsonb(c) - 'deal_id' order by c.happened_at), '[]')
 			from deal_phase_change c
 			where c.deal_id = d.id
 		),
@@ -298,7 +335,7 @@ create unique index social_account_one_per_handle on social_account (platform, l
 create table social_sign_in (
 	social_account_id uuid not null,
 	platform_account_id text not null,
-	signed_in_by_party_id uuid not null references party,
+	signed_in_by_user_id uuid not null references app_user,
 	signed_in_at timestamptz not null default now(),
 	-- None for a sign-in that does not expire, such as a Facebook Page's.
 	expires_at timestamptz check (expires_at > signed_in_at),
@@ -432,10 +469,10 @@ create table post_text (
 	version smallint not null check (version >= 1),
 	body text not null check (body ~ '\S'),
 	-- None means the weekly batch wrote it.
-	author_party_id uuid references party,
+	author_user_id uuid references app_user,
 	written_at timestamptz not null default now(),
 	previous_version smallint generated always as (nullif(version - 1, 0)) stored,
-	constraint post_text_edit_has_author check (version = 1 or author_party_id is not null),
+	constraint post_text_edit_has_author check (version = 1 or author_user_id is not null),
 	primary key (post_id, version),
 	foreign key (post_id, previous_version) references post_text
 );
@@ -477,9 +514,9 @@ create table post_review (
 	post_id uuid not null references post,
 	outcome text not null check (outcome in ('edited', 'cancelled', 'no_response')),
 	reviewed_at timestamptz not null default now(),
-	by_party_id uuid references party,
+	by_user_id uuid references app_user,
 	text_version smallint check (text_version > 1),
-	constraint post_review_by_a_partner check ((outcome = 'no_response') = (by_party_id is null)),
+	constraint post_review_by_a_user check ((outcome = 'no_response') = (by_user_id is null)),
 	constraint post_review_edit_names_its_text check ((outcome = 'edited') = (text_version is not null)),
 	unique (post_id, text_version),
 	foreign key (post_id, text_version) references post_text
@@ -587,7 +624,7 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but platform_metric and platform_format, never empties a table, and changes or removes only what the grants below name.
+-- It reads everywhere, adds everywhere but app_user, platform_metric and platform_format, never empties a table, and changes or removes only what the grants below name.
 -- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in) is never removed.
 do $$ begin
 	begin
@@ -609,6 +646,8 @@ do $$ begin
 end $$;
 -- Which metrics and formats a platform offers is a schema decision.
 revoke insert on platform_metric, platform_format from engine;
+-- Only the owner adds a user, because every change is signed with a user's id.
+revoke insert on app_user from engine;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;
@@ -616,8 +655,8 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 -- An edit's and a review's time is the clock's, which the review window is judged by.
 revoke insert on post_text, post_review from engine;
-grant insert (post_id, version, body, author_party_id) on post_text to engine;
-grant insert (post_id, outcome, by_party_id, text_version) on post_review to engine;
+grant insert (post_id, version, body, author_user_id) on post_text to engine;
+grant insert (post_id, outcome, by_user_id, text_version) on post_review to engine;
 
 grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
 	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;
