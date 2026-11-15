@@ -272,9 +272,9 @@ insert into territory_piece (territory_id, state_fips, market_id, base_latitude,
 insert into party_territory (party_id, territory_id, started_on, ended_on) values
 	('${USER}', '${HOME}', '2024-01-01', null),
 	('${VENDOR}', '${HOME}', '2024-01-01', '2025-06-30'), ('${VENDOR}', '${STATEWIDE}', '2025-07-01', null);
--- A degree of latitude is about 69 miles, so the third is 35 miles from the base and the fourth 69.
+-- A degree of latitude is about 69 miles: the second is also 14 miles from the base, the third 35 and the fourth 69.
 insert into property (id, address, county_fips, latitude, longitude) values
-	('${IN_STATE}', '1 Example Road', '91005', null, null), ('${IN_MARKET}', '2 Example Road', '90003', null, null),
+	('${IN_STATE}', '1 Example Road', '91005', null, null), ('${IN_MARKET}', '2 Example Road', '90003', 10.2, -150),
 	('${IN_REACH}', '3 Example Road', null, 10.5, -150), ('${OUTSIDE}', '4 Example Road', '90007', 11, -150);
 `;
 const insert = (table: string, row: Record<string, string | number | null>) =>
@@ -1103,6 +1103,10 @@ const RULES: Record<string, Case[]> = {
 				`insert into party_territory (party_id, territory_id, started_on) values ('${USER}', '${HOME}', '2024-01-01')`,
 				"party_territory_party_id_territory_id_started_on_key",
 			],
+			[
+				`insert into party_territory (party_id, territory_id) values ('${VENDOR}', '${HOME}'), ('${VENDOR}', '${HOME}')`,
+				"party_territory_party_id_territory_id_started_on_key",
+			],
 		],
 	"someone serves a territory that exists, ending no earlier than they started":
 		[
@@ -1527,7 +1531,7 @@ test("an agent working for a user edits and cancels a post as that user's", () =
 test("a property falls in a territory by a whole state, a named market or a distance from its base", async () => {
 	const { rows } = await db.query(
 		"select property_id, territory_id from property_territory where property_id = any($1) order by property_id",
-		[[IN_STATE, IN_MARKET, IN_REACH, OUTSIDE]],
+		[[PROPERTY, IN_STATE, IN_MARKET, IN_REACH, OUTSIDE]],
 	);
 	assert.deepEqual(rows, [
 		{ property_id: IN_STATE, territory_id: STATEWIDE },
