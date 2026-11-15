@@ -1,6 +1,6 @@
 import { sql } from "kysely";
 import { isCalendarDate } from "../calendar-date.ts";
-import type { Reader } from "../reader.ts";
+import { inJsonbOrder, type Reader } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import { readLeadBoard } from "./board.ts";
 
@@ -155,14 +155,6 @@ const detailFields = (
 	from lead l join party p on p.id = l.party_id where l.id = ${leadId}::uuid`.execute(
 		db,
 	);
-
-// jsonb prints an object's keys shortest first, then bytewise.
-const inJsonbOrder = <T extends object>(value: T) =>
-	Object.fromEntries(
-		Object.entries(value).sort(
-			([a], [b]) => a.length - b.length || (a < b ? -1 : 1),
-		),
-	) as T;
 
 // The old detail merged the board row and the detail fields as one jsonb
 // object, then appended the advice, the label and the research summary.
