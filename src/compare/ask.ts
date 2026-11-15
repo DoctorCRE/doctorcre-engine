@@ -19,7 +19,7 @@ const FIRST_PAGES = 5;
 
 const REFUSALS = new Set([400, 404, 409, 422]);
 
-// The old system allows a session 60 tool calls a minute; each tool ask makes one.
+// The old system allowed a browser session 60 tool calls a minute; the pause keeps the old side's pace.
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
@@ -268,11 +268,10 @@ export function askers(
 	fetch: Fetch,
 	wait = pause,
 ) {
-	async function send(path: string, init: RequestInit = {}) {
+	async function send(path: string) {
 		let response: Response;
 		try {
 			response = await fetch(new URL(door.pathname + path, door), {
-				...init,
 				headers: {
 					accept: "application/json",
 					"CF-Access-Client-Id": token.id,
