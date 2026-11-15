@@ -8,9 +8,15 @@ Each entry gives the meaning, the words to avoid, the database names, and the en
 
 **Partner**:
 One of the two partners, signed in to the app.
-_Avoid_: actor, user
+_Avoid_: actor
 _Database_: `actor` (rows with `kind = 'human'`; the table also holds automations). Columns that name a partner hold the actor's `slug`: `deal.owner`, `v_deal_room_board.parked_by`, `account_owner`.
+_New database_: a user (`app_user`).
 _Engine_: `partner` in `src/session.ts`, `src/deals/routes.ts` and `readBoard`; the board answer keeps the old `actor` key.
+
+**User**:
+A person who uses the system: today the two partners, and any teammate added later. A user is a person in the party list, so they show on deals and timelines. Being a user is not a role on a deal; who owns a deal is.
+_Avoid_: partner (in the new database), actor, member
+_Database_: `app_user` in the new database, one row per user with their person's `party` id; `changed_by_user_id` names the user who last changed a row.
 
 **Client**:
 Any person or company we represent on a transaction.
