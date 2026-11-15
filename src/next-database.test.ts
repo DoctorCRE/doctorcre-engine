@@ -19,6 +19,14 @@ const BROKERAGES = [id(9), id(10)];
 const EMAIL = id(300);
 const CALL = id(301);
 const NOTE = id(302);
+const BAY = id(600);
+const HOME = id(610);
+const STATEWIDE = id(611);
+const VENDOR = id(620);
+const IN_STATE = id(630);
+const IN_MARKET = id(631);
+const IN_REACH = id(632);
+const OUTSIDE = id(633);
 
 const SEED = `
 insert into role (slug, label) values
@@ -252,6 +260,23 @@ from post p join (values ${READINGS.flatMap(([n, hours, values]) =>
 	),
 )}) r (post_id, hours, metric, value) on r.post_id = p.id;
 `;
+// Made-up places: states 90 and 91 are unassigned FIPS codes, and the base is open ocean.
+const TERRITORY_SEED = `
+insert into party (id, kind, name) values ('${VENDOR}', 'company', 'Example Title Company');
+insert into market (id, name) values ('${BAY}', 'Example Bay');
+insert into market_county values ('${BAY}', '90001'), ('${BAY}', '90003');
+insert into territory (id, name) values ('${HOME}', 'Example home turf'), ('${STATEWIDE}', 'Example State');
+insert into territory_piece (territory_id, state_fips, market_id, base_latitude, base_longitude, miles) values
+	('${HOME}', null, '${BAY}', null, null, null), ('${HOME}', null, null, 10, -150, 60),
+	('${STATEWIDE}', '91', null, null, null, null);
+insert into party_territory (party_id, territory_id, started_on, ended_on) values
+	('${USER}', '${HOME}', '2024-01-01', null),
+	('${VENDOR}', '${HOME}', '2024-01-01', '2025-06-30'), ('${VENDOR}', '${STATEWIDE}', '2025-07-01', null);
+-- A degree of latitude is about 69 miles, so the third is 35 miles from the base and the fourth 69.
+insert into property (id, address, county_fips, latitude, longitude) values
+	('${IN_STATE}', '1 Example Road', '91005', null, null), ('${IN_MARKET}', '2 Example Road', '90003', null, null),
+	('${IN_REACH}', '3 Example Road', null, 10.5, -150), ('${OUTSIDE}', '4 Example Road', '90007', 11, -150);
+`;
 const insert = (table: string, row: Record<string, string | number | null>) =>
 	`insert into ${table} (${Object.keys(row)}) values (${Object.values(row).map(
 		(value) => (value === null ? "null" : `'${value}'`),
@@ -345,6 +370,11 @@ const STAMPED = [
 	"party_role",
 	"party_company",
 	"property",
+	"market",
+	"market_county",
+	"territory",
+	"territory_piece",
+	"party_territory",
 	"deal",
 	"deal_phase_change",
 	"deal_property",
@@ -372,6 +402,8 @@ const newAddress = (row: Record<string, string>) =>
 		label: "work",
 		...row,
 	});
+const piece = (row: Record<string, string | number>) =>
+	insert("territory_piece", { territory_id: HOME, ...row });
 const newPhone = (row: Record<string, string | null>) =>
 	insert("party_phone", {
 		party_id: AGENT,
@@ -391,6 +423,11 @@ const STORED_AT = [
 	"party_email",
 	"party_phone",
 	"property",
+	"market",
+	"market_county",
+	"territory",
+	"territory_piece",
+	"party_territory",
 	"deal",
 	"party_role",
 	"party_company",
@@ -990,6 +1027,94 @@ const RULES: Record<string, Case[]> = {
 		["delete from measurement", notGranted("measurement")],
 		["truncate measurement", notGranted("measurement")],
 	],
+	"a territory piece is exactly one of a whole state, a named market or a distance from a base":
+		[
+			[piece({}), "territory_piece_one_kind"],
+			[piece({ state_fips: "91", market_id: BAY }), "territory_piece_one_kind"],
+			[
+				piece({
+					market_id: BAY,
+					base_latitude: 10,
+					base_longitude: -150,
+					miles: 30,
+				}),
+				"territory_piece_one_kind",
+			],
+			[piece({ miles: 30 }), "territory_piece_distance_from_a_base"],
+			[
+				piece({ state_fips: "91", base_latitude: 10, base_longitude: -150 }),
+				"territory_piece_distance_from_a_base",
+			],
+			[
+				piece({ base_latitude: 10, base_longitude: -150, miles: 0 }),
+				"territory_piece_miles_check",
+			],
+			[
+				`insert into territory_piece (territory_id, market_id) values ('${HOME}', '${MISSING}')`,
+				"territory_piece_market_id_fkey",
+			],
+		],
+	"a state is two digits and a county five, as the Census codes them": [
+		[piece({ state_fips: "XA" }), "state_fips_shape"],
+		[
+			`insert into market_county values ('${BAY}', '9001')`,
+			"county_fips_shape",
+		],
+		[
+			`update property set county_fips = '90 01' where id = '${IN_STATE}'`,
+			"county_fips_shape",
+		],
+	],
+	"a point is on the earth and has both its latitude and longitude": [
+		[
+			`update property set latitude = 91 where id = '${IN_REACH}'`,
+			"latitude_range",
+		],
+		[
+			`update property set longitude = 181 where id = '${IN_REACH}'`,
+			"longitude_range",
+		],
+		[
+			`update property set latitude = null where id = '${IN_REACH}'`,
+			"property_point_whole",
+		],
+		[
+			piece({ base_latitude: -91, base_longitude: -150, miles: 30 }),
+			"latitude_range",
+		],
+	],
+	"a market's and a territory's name is never blank, and a market's is used once":
+		[
+			["insert into market (name) values (' ')", "market_name_check"],
+			["insert into market (name) values ('Example Bay')", "market_name_key"],
+			["insert into territory (name) values ('')", "territory_name_check"],
+		],
+	"a market's county, a territory's piece and who serves it are each stored once":
+		[
+			[
+				`insert into market_county values ('${BAY}', '90001')`,
+				"market_county_pkey",
+			],
+			[
+				piece({ territory_id: STATEWIDE, state_fips: "91" }),
+				"territory_piece_once",
+			],
+			[
+				`insert into party_territory (party_id, territory_id, started_on) values ('${USER}', '${HOME}', '2024-01-01')`,
+				"party_territory_party_id_territory_id_started_on_key",
+			],
+		],
+	"someone serves a territory that exists, ending no earlier than they started":
+		[
+			[
+				`update party_territory set ended_on = '2023-12-31' where party_id = '${USER}'`,
+				"party_territory_check",
+			],
+			[
+				`insert into party_territory (party_id, territory_id) values ('${VENDOR}', '${MISSING}')`,
+				"party_territory_territory_id_fkey",
+			],
+		],
 	"a record or link keeps when it was stored": STORED_AT.map((table) => [
 		`update ${table} set created_at = now()`,
 		notGranted(table),
@@ -1078,7 +1203,10 @@ const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
 	phase: ["label"],
 	party: ["name"],
-	property: ["address"],
+	property: ["address", "county_fips", "latitude", "longitude"],
+	market: ["name"],
+	territory: ["name"],
+	party_territory: ["ended_on", "started_on"],
 	deal: ["name"],
 	party_company: ["ended_on", "started_on", "title"],
 	party_email: ["is_primary", "label"],
@@ -1181,7 +1309,9 @@ before(async () => {
 	db = await connect("none");
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
-	await db.query(`set role engine; ${SEED} ${MARKETING_SEED}`);
+	await db.query(
+		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED}`,
+	);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
 			"insert into offer select * from jsonb_populate_record(null::offer, $1)",
@@ -1213,7 +1343,15 @@ test("everything about the LOI deal comes back in one read, each list in order",
 	assert.deepEqual(await readDeal(), {
 		deal: { id: DEAL, name: "Example Dental Springfield Deal" },
 		phases,
-		properties: [{ id: PROPERTY, address: "100 Example Way, Springfield" }],
+		properties: [
+			{
+				id: PROPERTY,
+				address: "100 Example Way, Springfield",
+				county_fips: null,
+				latitude: null,
+				longitude: null,
+			},
+		],
 		parties: [
 			{
 				id: CLIENT,
@@ -1385,6 +1523,43 @@ test("an agent working for a user edits and cancels a post as that user's", () =
 		db.query(`${asJob("agent", TEAMMATE)}; ${EDITED}; ${cancel(OPEN)};
 			${newReview({ outcome: "cancelled" })}`),
 	));
+
+test("a property falls in a territory by a whole state, a named market or a distance from its base", async () => {
+	const { rows } = await db.query(
+		"select property_id, territory_id from property_territory where property_id = any($1) order by property_id",
+		[[IN_STATE, IN_MARKET, IN_REACH, OUTSIDE]],
+	);
+	assert.deepEqual(rows, [
+		{ property_id: IN_STATE, territory_id: STATEWIDE },
+		{ property_id: IN_MARKET, territory_id: HOME },
+		{ property_id: IN_REACH, territory_id: HOME },
+	]);
+});
+
+test("a distance is miles along the earth's surface", async () => {
+	const { rows } = await db.query(
+		`select round(miles_between(10, -150, 11, -150)::numeric, 1) as north,
+			round(miles_between(60, 0, 60, 1)::numeric, 1) as east_at_60,
+			round(miles_between(8, 0, -8, 180)::numeric) as half_way_round`,
+	);
+	assert.deepEqual(rows, [
+		{ north: "69.1", east_at_60: "34.5", half_way_round: "12437" },
+	]);
+});
+
+test("who serves a property today, while a vendor that left keeps its history", async () => {
+	const { rows } = await db.query(
+		`select t.property_id, s.party_id, s.ended_on is null as today
+		from property_territory t join party_territory s using (territory_id)
+		where t.property_id = any($1) order by t.property_id, s.party_id`,
+		[[IN_STATE, IN_MARKET]],
+	);
+	assert.deepEqual(rows, [
+		{ property_id: IN_STATE, party_id: VENDOR, today: true },
+		{ property_id: IN_MARKET, party_id: USER, today: true },
+		{ property_id: IN_MARKET, party_id: VENDOR, today: false },
+	]);
+});
 
 test("an email's sender is matched to its people through their email rows", async () => {
 	const { rows } = await db.query(
