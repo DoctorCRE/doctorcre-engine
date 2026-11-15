@@ -156,13 +156,16 @@ test("the check names the server to start when none answers", () => {
 });
 
 test("a snapshot copied from another keeps its rows and the Chicago zone", () =>
-	withSnapshot(async (template, name) => {
-		const source = new pg.Client({ connectionString: template });
-		await source.connect();
-		await source.query(
-			"create table copied (n int); insert into copied values (1)",
-		);
-		await source.end();
+	withSnapshot(async (source, name) => {
+		const original = new pg.Client({ connectionString: source });
+		await original.connect();
+		try {
+			await original.query(
+				"create table copied (n int); insert into copied values (1)",
+			);
+		} finally {
+			await original.end();
+		}
 		await withSnapshot(async (url) => {
 			const copy = new pg.Client({ connectionString: url });
 			await copy.connect();

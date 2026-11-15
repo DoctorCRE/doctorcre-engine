@@ -5,9 +5,7 @@ import pg from "pg";
 
 export class NoDatabase extends Error {}
 
-// Restoring business.sql holds about 2,100 locks in one transaction, so
-// concurrent restores exhaust the server's lock table. A check restores it
-// once and every snapshot inside the check copies that database instead.
+// One restore holds about 2,100 locks, so a check's snapshots copy its restore (#237).
 export async function withSnapshot(
 	run: (url: string, name: string) => Promise<void>,
 	template = process.env.TEST_SNAPSHOT,
