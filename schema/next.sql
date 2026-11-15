@@ -34,10 +34,14 @@ language plpgsql as $$
 declare
 	acting_job text := nullif(current_setting('engine.job', true), '');
 	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+	generated text[];
 begin
-	-- A statement that changes nothing keeps who last changed the row.
-	if tg_op = 'UPDATE' and new is not distinct from old then
-		return new;
+	-- Kept, so a no-op update cannot restamp a final post. NEW holds no generated column's value yet.
+	if tg_op = 'UPDATE' then
+		generated := array(select attname from pg_attribute where attrelid = tg_relid and attgenerated = 's');
+		if to_jsonb(new) - generated = to_jsonb(old) - generated then
+			return new;
+		end if;
 	end if;
 	if acting_job is null and acting_user is null then
 		raise exception 'a change names the user or the job that made it'
@@ -633,9 +637,11 @@ begin
 	end loop;
 end $$;
 
--- A text edit, an edit's review and a cancel are a user's, and no response is a job's.
-alter table post_text add constraint post_text_edit_by_a_user check (version = 1 or changed_by_user_id is not null);
-alter table post_review add constraint post_review_by_a_user check ((outcome = 'no_response') = (changed_by_user_id is null));
+-- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
+alter table post_text add constraint post_text_edit_by_a_user
+	check (version = 1 or coalesce(changed_by_user_id, changed_for_user_id) is not null);
+alter table post_review add constraint post_review_by_a_user
+	check ((outcome = 'no_response') = (coalesce(changed_by_user_id, changed_for_user_id) is null));
 
 create function posts_at_day_7(as_of timestamptz) returns jsonb
 language sql stable

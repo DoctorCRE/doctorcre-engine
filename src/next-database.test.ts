@@ -869,7 +869,7 @@ const RULES: Record<string, Case[]> = {
 			[newText({ version: 0 }), "post_text_version_check"],
 			[newText({ version: 3 }), "post_text_post_id_previous_version_fkey"],
 			[newText({ body: " \n" }), "post_text_body_check"],
-			[`${asJob("agent", USER)}; ${newText({})}`, "post_text_edit_by_a_user"],
+			[`${asJob("agent")}; ${newText({})}`, "post_text_edit_by_a_user"],
 			[newText({ post_id: CLOSED }), "post_text_before_review_closes"],
 			[`${cancel(OPEN)}; ${newText({})}`, "post_text_before_review_closes"],
 			["update post_text set body = 'Example'", notGranted("post_text")],
@@ -922,7 +922,11 @@ const RULES: Record<string, Case[]> = {
 			],
 			[newReview(NO_RESPONSE), "post_review_by_a_user"],
 			[
-				`${cancel(OPEN)}; ${asJob("agent", USER)}; ${newReview({ outcome: "cancelled" })}`,
+				`${asJob("review_close", USER)}; ${newReview(NO_RESPONSE)}`,
+				"post_review_by_a_user",
+			],
+			[
+				`${cancel(OPEN)}; ${asJob("agent")}; ${newReview({ outcome: "cancelled" })}`,
 				"post_review_by_a_user",
 			],
 			[
@@ -1360,18 +1364,27 @@ test("a job's change names the job and the user it works for, and a user who set
 
 test("a statement that changes nothing keeps who last changed the row, even on a published post", () =>
 	rolledBack(async () => {
-		await db.query(`${asJob("publisher")};
-			update post set reason = reason where id = '${post(1)}'; update deal set name = name where id = '${DEAL}'`);
+		await db.query(`${asJob("publisher")}; update post set reason = reason where id = '${post(1)}';
+			update deal set name = name where id = '${DEAL}'; update party_company set title = title`);
 		const { rows } = await db.query(
 			`select changed_by_user_id, changed_at < now() as before from post where id = $1
-			union all select changed_by_user_id, changed_at < now() from deal where id = $2`,
+			union all select changed_by_user_id, changed_at < now() from deal where id = $2
+			union all select changed_by_user_id, changed_at < now() from party_company`,
 			[post(1), DEAL],
 		);
 		assert.deepEqual(rows, [
 			{ changed_by_user_id: USER, before: true },
 			{ changed_by_user_id: USER, before: true },
+			{ changed_by_user_id: USER, before: true },
+			{ changed_by_user_id: USER, before: true },
 		]);
 	}));
+
+test("an agent working for a user edits and cancels a post as that user's", () =>
+	rolledBack(() =>
+		db.query(`${asJob("agent", TEAMMATE)}; ${EDITED}; ${cancel(OPEN)};
+			${newReview({ outcome: "cancelled" })}`),
+	));
 
 test("an email's sender is matched to its people through their email rows", async () => {
 	const { rows } = await db.query(
