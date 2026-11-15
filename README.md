@@ -12,8 +12,10 @@ The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a shared server.
 One server serves every worktree, because each check makes and drops its own database.
 
-Each check restores `schema/business.sql`, generates ignored `src/database.d.ts`
+Each check restores `schema/business.sql` once, generates ignored `src/database.d.ts`
 with `kysely-codegen`, and runs TypeScript and tests against that database.
+A test that needs its own database copies that restore, because one restore
+holds about 2,100 locks and many at once exhaust the server's lock table (#237).
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
 query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops` tables, which the generated types leave out.
