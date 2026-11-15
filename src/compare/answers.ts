@@ -107,7 +107,9 @@ function stepOf(value: unknown, index: number, rows: Rows): Step {
 		.flat()
 		.map((name) => fieldOf(value, name));
 	if (typeof ref !== "string" || !REF.test(ref)) return { index };
-	const ids = more.filter((id) => typeof id === "string" && UUID.test(id));
+	const ids = more.filter(
+		(field) => typeof field === "string" && UUID.test(field),
+	);
 	return { id: [ref, ...ids].join("/") };
 }
 
