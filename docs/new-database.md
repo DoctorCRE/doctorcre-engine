@@ -21,7 +21,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 ## Users and who changed what
 
-Every row a person changes carries `changed_by_user_id`, the user who last added or changed it, and `changed_at`, when. These are the lists of roles and phases, parties and their roles and companies, properties, deals and their phase changes, properties and parties, rounds and their documents, activity and what it is about, next steps, social accounts, ideas and design templates. The engine names the signed-in user once per transaction with `set_config('engine.user_id', <user id>, true)`, never for the whole connection, because a pooled connection serves the next user. A trigger writes both columns on every insert and update, whatever the statement says, and refuses the change when no user is named. A name that is not a user is refused by the key. Who removed a row waits for change history.
+Every row a person changes carries `changed_by_user_id`, the user who last added or changed it, and `changed_at`, when. These are the lists of roles and phases, parties and their emails, phone numbers, roles and companies, properties, deals and their phase changes, properties and parties, rounds and their documents, activity and what it is about, next steps, social accounts, ideas and design templates. The engine names the signed-in user once per transaction with `set_config('engine.user_id', <user id>, true)`, never for the whole connection, because a pooled connection serves the next user. A trigger writes both columns on every insert and update, whatever the statement says, and refuses the change when no user is named. A name that is not a user is refused by the key. Who removed a row waits for change history.
 
 In marketing, a text edit, a review and a sign-in also name their user. Documents, emails, posts and readings are written by jobs: the intake door, the mail capture, the publisher and the readings. Whether a job's change names a user it works for or the job itself is the owner's call (#244), so these tables carry no stamp yet. Until then, a user who settles a post stuck in `publishing` is not recorded.
 
@@ -34,6 +34,7 @@ Today's actors map across like this. The old `actor` table holds the two partner
 Each link is one row. No record holds a list or a column per role.
 
 - **`party_role`**: what a person or company is to us. One row per role.
+- **`party_email`** and **`party_phone`**: a person's or company's emails and phone numbers, one row each, with a label and whether it is the primary one.
 - **`party_company`**: a person at a company, with their title there and the dates they started and left. A person who moves keeps the old row, with its end date, and gets a new one.
 - **`deal_party`**: who is on a deal, in which role. The client, the listing agent and each vendor are rows here.
 - **`deal_property`**: the properties a deal is considering.
@@ -75,7 +76,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 29. A review is an edit, a cancel or no response, judged by the database's clock. An edit names a text version after the first, and a cancel is of a cancelled post; both name a user and come before review closes. No response names no one, comes at or after the close, only for a scheduled post with no other review. A review holds its post until it is saved, so an edit and the job writing no response take turns. Each version is reviewed once, a post is cancelled and gets no response at most once, and a review is never rewritten or removed.
 30. A record or link keeps when it was stored.
 31. The engine empties no table, removes no history, and changes only the columns that may change.
-32. A change a person makes names the user who made it, and records them and the time itself. A user is a person, and only the owner adds one. A text edit, a review and a sign-in name a user.
+32. An email address is one address in lower case, with no name around it, and so is an email's sender. A person or company has each address once, labelled work or personal, and at most one primary.
+33. A phone number is a plus and digits only (E.164), and a North American one is +1 and ten digits. An extension is digits only. A person or company has each number and extension once, labelled work, mobile or home, and at most one primary.
+34. A change a person makes names the user who made it, and records them and the time itself. A user is a person, and only the owner adds one. A text edit, a review and a sign-in name a user.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -88,6 +91,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a role's or a phase's label;
 - a party's, deal's, document's or design template's name, and a property's address;
 - a person-at-company link's title and dates;
+- an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
 - a next step's text, owner, due date and done time;
 - a round's status;
@@ -97,6 +101,22 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement` and `social_sign_in`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row, the triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, and a reading of a published post.
 
 The owner's own login can still change anything. That path is not the engine's concern.
+
+## Emails and phone numbers
+
+A person or company can have several emails and phone numbers. Each is a row in `party_email` or `party_phone` with a label, and one of each may be primary. A changed address or number is a removed row and a new one.
+
+Each is stored in one form, so a repeated address or number is caught (decision 32). The database checks the form and does not convert; whoever writes a row converts first. An email address is lower case ASCII, with no display name. A phone number is E.164, such as `+12175550100`, and an extension such as "x12" is its own column. The same address or number can be on two parties, such as a shared front desk. Two parties that turn out to be one person are merged in a later slice.
+
+An email's `sender` is stored in the same form, so the agent finds who sent it by matching `sender` to `party_email.address`, and sets the activity's `from_party_id`. The rows are keyed address first, so that match is a lookup.
+
+Today's `party` row holds one free-text `email`, `phone` and `cell` on each person and company, as typed. Moving them across:
+
+- `phone`, the office line, becomes a work number, primary. `cell` becomes a mobile number, primary when there is no `phone`.
+- A ten-digit number, with or without a leading 1 and in any punctuation, becomes +1 and its ten digits. A trailing extension moves to `extension`.
+- `email` sometimes holds several addresses, or a name with the address in angle brackets. Each address becomes its own work row, lower case and trimmed, and the first is primary.
+- The same number or address twice becomes one row. `cell` is primary when no `phone` row is stored.
+- A value that fits neither form is not stored. The move lists it for a partner to fix.
 
 ## Offer rounds
 
@@ -178,4 +198,4 @@ Pillars and hooks are text for now. They become lists, like roles and phases, wi
 
 ## Later slices
 
-Deal type, owner and dates. Emails and phone numbers per person. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. Merging duplicates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.

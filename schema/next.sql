@@ -58,6 +58,42 @@ create table party_company (
 	foreign key (company_id, company_kind) references party (id, kind)
 );
 
+-- One stored form, so a repeat is caught: lower case, one address, no display name, ASCII only.
+create domain email_address as text
+	constraint email_address_shape check (
+		value = lower(value) and value ~ '^[a-z0-9.!#$%&''*+/=?^_`{|}~-]+@([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z]$'
+	);
+
+-- E.164: a plus, the country code and the number, digits only. A North American number is +1 and ten digits.
+create domain phone_number as text
+	constraint phone_number_shape check (value ~ '^\+(1[2-9][0-9]{2}[2-9][0-9]{6}|[2-9][0-9]{6,14})$');
+
+create table party_email (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	party_id uuid not null references party,
+	address email_address not null,
+	label text not null check (label in ('work', 'personal')),
+	is_primary boolean not null default false,
+	-- Address first, so an email's sender finds its people.
+	unique (address, party_id)
+);
+
+create unique index party_email_one_primary on party_email (party_id) where is_primary;
+
+create table party_phone (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	party_id uuid not null references party,
+	number phone_number not null,
+	extension text check (extension ~ '^[0-9]{1,6}$'),
+	label text not null check (label in ('work', 'mobile', 'home')),
+	is_primary boolean not null default false,
+	unique nulls not distinct (number, extension, party_id)
+);
+
+create unique index party_phone_one_primary on party_phone (party_id) where is_primary;
+
 create table property (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -123,7 +159,8 @@ create table email (
 	activity_id uuid primary key,
 	activity_kind text not null generated always as ('email') stored,
 	message_id text not null unique check (message_id = btrim(message_id)),
-	sender text not null,
+	-- Matched to a person through party_email.
+	sender email_address not null,
 	subject text not null,
 	body text not null,
 	foreign key (activity_id, activity_kind) references activity (id, kind)
@@ -564,9 +601,9 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'phase', 'party', 'party_role', 'party_company', 'property', 'deal',
-		'deal_phase_change', 'deal_property', 'deal_party', 'activity', 'activity_about', 'next_step', 'offer',
-		'offer_document', 'social_account', 'idea', 'design_template'] loop
+	foreach stamped in array array['role', 'phase', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+		'property', 'deal', 'deal_phase_change', 'deal_property', 'deal_party', 'activity', 'activity_about', 'next_step',
+		'offer', 'offer_document', 'social_account', 'idea', 'design_template'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid not null references app_user %2$s,
 				add changed_at timestamptz not null;
 			create trigger stamp_change before insert or update on %1$I
@@ -658,7 +695,7 @@ revoke insert on post_text, post_review from engine;
 grant insert (post_id, version, body, author_user_id) on post_text to engine;
 grant insert (post_id, outcome, by_user_id, text_version) on post_review to engine;
 
-grant delete on party, property, deal, party_role, party_company, deal_property, deal_party,
+grant delete on party, party_email, party_phone, property, deal, party_role, party_company, deal_property, deal_party,
 	activity, activity_about, email, next_step, document, social_account, idea, design_template to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
@@ -667,6 +704,7 @@ grant update (label) on table role, phase to engine;
 grant update (name) on party, deal, document, design_template to engine;
 grant update (address) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
+grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
 grant update (what, owner_party_id, due_on, done_at) on next_step to engine;
 grant update (status) on offer to engine;
