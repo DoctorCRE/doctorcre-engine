@@ -94,7 +94,7 @@ create table role (
 	slug text primary key,
 	label text not null,
 	-- A vendor's category, such as lender, is a role of its own whose category_of is vendor.
-	category_of text references role
+	category_of text check (category_of = 'vendor')
 );
 
 -- A role's stages, such as a vendor's. Like roles, a label can be renamed.
@@ -127,8 +127,25 @@ create table party_role (
 	relationship_level smallint references relationship_level,
 	primary key (party_id, role),
 	foreign key (role, stage) references stage,
-	constraint party_role_level_is_a_vendor_s check (relationship_level is null or role = 'vendor')
+	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor')
 );
+
+create function party_role_category_of_a_vendor() returns trigger
+language plpgsql as $$
+declare
+	wanted uuid := case tg_op when 'DELETE' then old.party_id else new.party_id end;
+begin
+	if exists (select from party_role p join role r on r.slug = p.role where p.party_id = wanted and r.category_of = 'vendor')
+		and not exists (select from party_role where party_id = wanted and role = 'vendor') then
+		raise exception 'only a vendor holds a vendor category'
+			using errcode = 'check_violation', constraint = 'party_role_category_of_a_vendor';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, so a vendor and its category can be saved, or removed, in either order.
+create constraint trigger party_role_category_of_a_vendor after insert or update or delete on party_role
+	initially deferred for each row execute function party_role_category_of_a_vendor();
 
 -- A person's place at a company, dated, so their history survives a move.
 create table party_company (
@@ -363,11 +380,12 @@ select v.party_id,
 	count(distinct w.deal_id) as deals_worked,
 	count(distinct w.deal_id) filter (where w.phase = 'closed') as deals_closed,
 	count(distinct w.deal_id) filter (where w.phase = 'dead') as deals_dead,
-	count(distinct i.deal_id) filter (where i.made_by = 'vendor') as deals_it_introduced,
-	count(distinct i.deal_id) filter (where i.made_by = 'team') as deals_we_introduced
+	(select count(distinct deal_id) from introduction where vendor_id = v.party_id and made_by = 'vendor')
+		as deals_it_introduced,
+	(select count(distinct deal_id) from introduction where vendor_id = v.party_id and made_by = 'team')
+		as deals_we_introduced
 from party_role v
 left join worked w using (party_id)
-left join introduction i on i.vendor_id = v.party_id
 where v.role = 'vendor'
 group by v.party_id;
 
@@ -849,9 +867,14 @@ begin
 			using errcode = 'check_violation', constraint = 'merge_party_one_npi';
 	end if;
 
-	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
+	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
+	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
+	-- Its stage and level stay too, and the duplicate's fill any it lacks.
+	update party_role s set stage = coalesce(s.stage, d.stage),
+		relationship_level = coalesce(s.relationship_level, d.relationship_level)
+	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
 	-- A primary on a shared address or number stays primary when the survivor has none.

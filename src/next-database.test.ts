@@ -1294,7 +1294,7 @@ const RULES: Record<string, Case[]> = {
 		[
 			[
 				"update party_role set relationship_level = 1 where role = 'title'",
-				"party_role_level_is_a_vendor_s",
+				"party_role_level_on_vendor",
 			],
 			[
 				"update party_role set relationship_level = 4 where role = 'vendor'",
@@ -1309,11 +1309,20 @@ const RULES: Record<string, Case[]> = {
 				notGranted("relationship_level"),
 			],
 		],
-	"a vendor's category is a role, a category of one on the role list, and stays one":
+	"a vendor's category is a role, held only by a vendor, and stays a category":
 		[
 			[
-				"insert into role values ('architect', 'Architect', 'mayor')",
-				"role_category_of_fkey",
+				"insert into role values ('sba_lender', 'SBA lender', 'lender')",
+				"role_category_of_check",
+			],
+			[
+				`insert into party_role values ('${AGENT}', 'title'); ${CHECK_AT_COMMIT}`,
+				"party_role_category_of_a_vendor",
+			],
+			[
+				`insert into party_role values ('${LENDERS[0]}', 'vendor'), ('${LENDERS[0]}', 'lender');
+				delete from party_role where party_id = '${LENDERS[0]}' and role = 'vendor'; ${CHECK_AT_COMMIT}`,
+				"party_role_category_of_a_vendor",
 			],
 			[
 				"update role set category_of = null where slug = 'lender'",
@@ -1348,6 +1357,10 @@ const RULES: Record<string, Case[]> = {
 			[
 				`update introduction set introduced_party_id = '${AGENT}'`,
 				notGranted("introduction"),
+			],
+			[
+				`select merge_party('${CLIENT}', '${VENDOR}')`,
+				"introduction_of_someone_else",
 			],
 		],
 	"a record or link keeps when it was stored": STORED_AT.map((table) => [
@@ -1848,13 +1861,14 @@ test("a vendor's track record counts the deals it worked and the deals its intro
 		]);
 	}));
 
-test("a merge moves a vendor's introductions and keeps the survivor's stage and level", () =>
+test("a merge moves a vendor's introductions, and the survivor's stage and level win, filled from the duplicate's", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'company', 'Example Title Co');
-			insert into party_role (party_id, role, relationship_level) values ('${DUPLICATE}', 'vendor', 3);
+			insert into party_role (party_id, role, relationship_level) values ('${DUPLICATE}', 'vendor', 3), ('${LENDERS[0]}', 'vendor', null);
 			${newIntroduction({ vendor_id: DUPLICATE })};
 			select merge_party('${DUPLICATE}', '${VENDOR}');
-			select merge_party('${VENDOR}', '${LENDERS[1]}')`);
+			select merge_party('${VENDOR}', '${LENDERS[0]}');
+			select merge_party('${LENDERS[0]}', '${LENDERS[1]}')`);
 		const { rows } = await db.query(
 			`select (select count(*) from introduction where vendor_id = $1) as introductions,
 				jsonb_agg(jsonb_build_array(role, stage, relationship_level) order by role) as roles
@@ -2359,9 +2373,13 @@ test("an import of a duplicate's id that waits on its merge is refused", async (
 		const blocked = async () =>
 			(await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [pid]))
 				.rows[0].blocked;
+		// Handled from the start, because the refusal can arrive before the commit's reply.
+		const refused = assert.rejects(waiting, {
+			constraint: "party_never_merged",
+		});
 		while (!settled && !(await blocked()));
 		await merge.query("commit");
-		await assert.rejects(waiting, { constraint: "party_never_merged" });
+		await refused;
 	} finally {
 		await Promise.all(sessions.map((session) => session.end()));
 	}

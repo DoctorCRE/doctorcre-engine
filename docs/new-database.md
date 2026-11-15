@@ -117,7 +117,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 44. A merge joins two different people or two different companies, neither merged away. It never merges a user away, and never two records that each hold an NPI.
 45. A merge moves everything that points at the duplicate, in every table, to the survivor, and removes the duplicate. Where both hold the same link, the survivor's row stays, and so do its primary email, primary phone and do-not-contact reason. A second merge onto the same records waits for the first.
 46. Only a merge leaves a merged-into pointer, and it names a live record, so merges never chain or loop. Nothing new points at a merged-away record, and its id is never used again. Only the engine and the owner run a merge.
-47. A vendor's category is a role whose `category_of` names a role on the list, and it stays a category of that role.
+47. A vendor's category is a role whose `category_of` is vendor, and it stays one. Only a vendor holds a vendor category, checked when the change is saved.
 48. A stage comes from its own role's stage list, and is stored once per role.
 49. A relationship level is a vendor role's, one of the four levels, and only a schema change adds or renames a level.
 50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. Its note is never blank, and who it joins never changes. A vendor keeps its vendor role while it has introductions.
@@ -292,8 +292,8 @@ Moving today's rows across:
 
 - Each `vendor` becomes the vendor role on its party, with its `relationship_level` as it is.
 - Each `vendor_category` row becomes a role whose `category_of` is vendor, and a vendor's `category_slug` its role. The deal roles of `deal_vendor_assignment`, such as title and inspector, join the same list, and `gc` becomes contractor. Each assignment becomes a `deal_party` row, and so does each worked deal in a vendor's `deal_evidence`.
-- Each `vendor_stage` row becomes a vendor stage, and a vendor's `stage` the stage on its vendor role.
-- Each `party_link` of kind `intro`, `intro_received` or `introduced` becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team. Each `party_link_deal` referral becomes an introduction made by the vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
+- Each `vendor_stage` row becomes a vendor stage, and a vendor's `stage` the stage on its vendor role. The old system's migration 0047 split its nine original stages into level, disposition and target, so an original stage such as avoid or target waits on #258 rather than coming back as a stage.
+- Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
 - `trust_override`, a hand-set rating, does not move. Disposition and target wait for the owner (#258).
 
 ## Merging duplicates
@@ -310,7 +310,8 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
-- Both vendors? The survivor's vendor role stays, with its stage and level.
+- Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks.
+- A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
 
 A catalog test lists every unique key that holds a party. A new one fails it until the merge says which row stays.
