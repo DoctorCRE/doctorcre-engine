@@ -24,6 +24,27 @@ create table party (
 	unique (id, kind)
 );
 
+-- What a merged-away duplicate leaves behind, so an old link still finds its record. Nothing lists or shows it.
+create table merged_party (
+	id uuid primary key,
+	created_at timestamptz not null default now(),
+	survivor_id uuid not null references party
+);
+
+create function party_never_merged() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from merged_party where id = new.id) then
+		raise exception 'a merged-away record never comes back'
+			using errcode = 'check_violation', constraint = 'party_never_merged';
+	end if;
+	return null;
+end $$;
+
+-- A repeated import of an old id would otherwise bring a duplicate back. After, so an insert that waited on a merge sees it.
+create trigger party_never_merged after insert on party
+	for each row execute function party_never_merged();
+
 -- A person who uses the system, and the home for their own preferences. "user" is reserved in PostgreSQL.
 create table app_user (
 	id uuid primary key,
@@ -383,7 +404,8 @@ create table offer (
 		check (commencement_on is null or commencement_days_after_delivery is null),
 	unique (deal_id, round),
 	foreign key (deal_id, property_id) references deal_property,
-	foreign key (deal_id, from_party_id, from_role) references deal_party,
+	-- Only a merge changes a deal_party key, and its rounds move with it.
+	foreign key (deal_id, from_party_id, from_role) references deal_party on update cascade,
 	foreign key (deal_id, answers_round) references offer (deal_id, round)
 );
 
@@ -738,6 +760,89 @@ end $$;
 create trigger measurement_after_publishing before insert on measurement
 	for each row execute function measurement_after_publishing();
 
+-- Everything that points at the duplicate moves to the survivor, and the duplicate is removed (decision 39).
+-- It runs with the owner's rights, because it also moves history the engine never rewrites, such as rounds and outside ids.
+create function merge_party(duplicate uuid, survivor uuid) returns void
+language plpgsql security definer as $$
+declare
+	pointer record;
+	duplicate_npi text;
+begin
+	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
+	perform from party where id in (duplicate, survivor) for update;
+	if (select count(*) <> 2 or count(distinct kind) <> 1 from party where id in (duplicate, survivor)) then
+		raise exception 'a merge joins two different records of one kind, neither merged away'
+			using errcode = 'check_violation', constraint = 'merge_party_two_of_a_kind';
+	end if;
+	if exists (select from app_user where id = duplicate) then
+		raise exception 'a user is never merged away, because their changes name them'
+			using errcode = 'check_violation', constraint = 'merge_party_keeps_users';
+	end if;
+	if (select count(npi) = 2 from party where id in (duplicate, survivor)) then
+		raise exception 'two NPIs are two people or organizations, so they are not merged'
+			using errcode = 'check_violation', constraint = 'merge_party_one_npi';
+	end if;
+
+	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
+	delete from party_role d using party_role s
+	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
+	-- A primary on a shared address or number stays primary when the survivor has none.
+	update party_email s set is_primary = true from party_email d
+	where s.party_id = survivor and d.party_id = duplicate and d.address = s.address and d.is_primary
+		and not exists (select from party_email where party_id = survivor and is_primary);
+	delete from party_email d using party_email s
+	where d.party_id = duplicate and s.party_id = survivor and s.address = d.address;
+	update party_email set is_primary = false
+	where party_id = duplicate and exists (select from party_email where party_id = survivor and is_primary);
+	update party_phone s set is_primary = true from party_phone d
+	where s.party_id = survivor and d.party_id = duplicate and d.number = s.number
+		and d.extension is not distinct from s.extension and d.is_primary
+		and not exists (select from party_phone where party_id = survivor and is_primary);
+	delete from party_phone d using party_phone s
+	where d.party_id = duplicate and s.party_id = survivor and s.number = d.number
+		and s.extension is not distinct from d.extension;
+	update party_phone set is_primary = false
+	where party_id = duplicate and exists (select from party_phone where party_id = survivor and is_primary);
+	delete from do_not_contact
+	where party_id = duplicate and exists (select from do_not_contact where party_id = survivor);
+	delete from party_specialty d using party_specialty s
+	where d.person_id = duplicate and s.person_id = survivor and s.specialty = d.specialty;
+	delete from party_company d using party_company s
+	where s.started_on is not distinct from d.started_on and (
+		d.person_id = duplicate and s.person_id = survivor and s.company_id = d.company_id
+		or d.company_id = duplicate and s.company_id = survivor and s.person_id = d.person_id);
+	update offer o set from_party_id = survivor from deal_party s
+	where o.from_party_id = duplicate and s.deal_id = o.deal_id and s.party_id = survivor and s.role = o.from_role;
+	delete from deal_party d using deal_party s
+	where d.party_id = duplicate and s.party_id = survivor and s.deal_id = d.deal_id and s.role = d.role;
+	delete from activity_about d using activity_about s
+	where d.party_id = duplicate and s.party_id = survivor and s.activity_id = d.activity_id;
+	delete from party_territory d using party_territory s
+	where d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
+		and s.started_on is not distinct from d.started_on;
+
+	-- Read from the catalog, so a table added later moves too. A unique key the merge would repeat refuses it here.
+	for pointer in
+		select c.conrelid::regclass as tbl, a.attname as col
+		from pg_constraint c
+		join pg_attribute target on target.attrelid = c.confrelid and target.attname = 'id'
+		join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[array_position(c.confkey, target.attnum)]
+		where c.contype = 'f' and c.confrelid = 'party'::regclass
+	loop
+		execute format('update %s set %I = $1 where %I = $2', pointer.tbl, pointer.col, pointer.col)
+		using survivor, duplicate;
+	end loop;
+
+	delete from party where id = duplicate returning npi into duplicate_npi;
+	update party set npi = coalesce(npi, duplicate_npi) where id = survivor;
+	insert into merged_party (id, survivor_id) values (duplicate, survivor);
+end $$;
+
+-- Pinned, with pg_temp last, so a caller's own tables cannot stand in for these.
+do $$ begin
+	execute format('alter function merge_party set search_path = %I, pg_temp', current_schema());
+end $$;
+
 -- Each of these rows says which user or job last changed it and when, set by the database, never by the statement.
 -- The check holds the owner's load of old rows too, which turns the trigger off.
 do $$
@@ -748,7 +853,8 @@ begin
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'social_account', 'idea',
-		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement'] loop
+		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
+		'merged_party'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -817,7 +923,7 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but app_user, job, platform_metric and platform_format, never empties a table, and changes or removes only what the grants below name.
+-- It reads everywhere, adds everywhere but app_user, job, merged_party, platform_metric and platform_format, never empties a table, and changes or removes only what the grants below name.
 -- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id) is never removed.
 do $$ begin
 	begin
@@ -841,6 +947,10 @@ end $$;
 revoke insert on platform_metric, platform_format from engine;
 -- Only the owner adds a user or a job, because every change is signed with one.
 revoke insert on app_user, job from engine;
+-- Only a merge leaves a pointer, after it has moved everything.
+revoke insert on merged_party from engine;
+revoke execute on function merge_party from public;
+grant execute on function merge_party to engine;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;
