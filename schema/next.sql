@@ -243,23 +243,6 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
--- Each of these rows says which user last changed it and when, set by the database, never by the statement.
-do $$
-declare
-	stamped text;
-begin
-	foreach stamped in array array['role', 'phase', 'party', 'party_role', 'party_company', 'property', 'deal',
-		'deal_phase_change', 'deal_property', 'deal_party', 'activity', 'activity_about', 'next_step', 'offer',
-		'offer_document'] loop
-		execute format('alter table %1$I add changed_by_user_id uuid not null references app_user %2$s,
-				add changed_at timestamptz not null;
-			create trigger stamp_change before insert or update on %1$I
-				for each row execute function stamp_change()',
-			-- A new user's own person row names them before their user row exists.
-			stamped, case stamped when 'party' then 'deferrable initially deferred' end);
-	end loop;
-end $$;
-
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable
 begin atomic
@@ -575,6 +558,23 @@ end $$;
 
 create trigger measurement_after_publishing before insert on measurement
 	for each row execute function measurement_after_publishing();
+
+-- Each of these rows says which user last changed it and when, set by the database, never by the statement.
+do $$
+declare
+	stamped text;
+begin
+	foreach stamped in array array['role', 'phase', 'party', 'party_role', 'party_company', 'property', 'deal',
+		'deal_phase_change', 'deal_property', 'deal_party', 'activity', 'activity_about', 'next_step', 'offer',
+		'offer_document', 'social_account', 'idea', 'design_template'] loop
+		execute format('alter table %1$I add changed_by_user_id uuid not null references app_user %2$s,
+				add changed_at timestamptz not null;
+			create trigger stamp_change before insert or update on %1$I
+				for each row execute function stamp_change()',
+			-- A new user's own person row names them before their user row exists.
+			stamped, case stamped when 'party' then 'deferrable initially deferred' end);
+	end loop;
+end $$;
 
 create function posts_at_day_7(as_of timestamptz) returns jsonb
 language sql stable

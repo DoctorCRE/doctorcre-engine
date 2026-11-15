@@ -332,12 +332,33 @@ const compared = async (client = db) =>
 		}) => [account.platform, account.posts, account.best.id, account.worst.id],
 	);
 
+// Every table whose rows a user adds or changes; documents, emails, posts and readings wait for #244.
+const CHANGED_BY_USERS = [
+	"role",
+	"phase",
+	"party",
+	"party_role",
+	"party_company",
+	"property",
+	"deal",
+	"deal_phase_change",
+	"deal_property",
+	"deal_party",
+	"activity",
+	"activity_about",
+	"next_step",
+	"offer",
+	"offer_document",
+	"social_account",
+	"idea",
+	"design_template",
+];
 // The engine's role lacks the privilege, so PostgreSQL refuses before any row is touched.
 const notGranted = (table: string) => ({
 	code: "42501",
 	message: `permission denied for table ${table}`,
 });
-const STAMPED = [
+const STORED_AT = [
 	"party",
 	"property",
 	"deal",
@@ -878,7 +899,7 @@ const RULES: Record<string, [sql: string, refusal: Refusal][]> = {
 		["delete from measurement", notGranted("measurement")],
 		["truncate measurement", notGranted("measurement")],
 	],
-	"a record or link keeps when it was stored": STAMPED.map((table) => [
+	"a record or link keeps when it was stored": STORED_AT.map((table) => [
 		`update ${table} set created_at = now()`,
 		notGranted(table),
 	]),
@@ -962,12 +983,12 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
-	social_account: ["engine_publishes_from"],
+	social_account: ["changed_at", "changed_by_user_id", "engine_publishes_from"],
 	post_text: ["previous_version", "written_at"],
 	post_review: ["reviewed_at"],
 };
 const REMOVABLE = [
-	...STAMPED.filter(
+	...STORED_AT.filter(
 		(table) => !["offer_document", "post_media"].includes(table),
 	),
 	"activity",
@@ -1166,6 +1187,17 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			emptied: false,
 		})),
 	);
+});
+
+test("every table a user changes records who changed it and when", async () => {
+	const { rows } = await db.query(
+		`select array_agg(t.tgrelid::regclass::text order by t.tgrelid::regclass::text) as stamped
+		from pg_trigger t
+		join pg_attribute who on who.attrelid = t.tgrelid and who.attname = 'changed_by_user_id' and who.attnotnull
+		join pg_attribute stamp_at on stamp_at.attrelid = t.tgrelid and stamp_at.attname = 'changed_at' and stamp_at.attnotnull
+		where t.tgname = 'stamp_change' and t.tgfoid = 'stamp_change'::regproc`,
+	);
+	assert.deepEqual(rows[0].stamped, CHANGED_BY_USERS.toSorted());
 });
 
 test("each change records the user who made it and when, whatever the statement says", () =>
