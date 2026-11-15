@@ -447,6 +447,8 @@ const RULES: Record<string, Case[]> = {
 				"avery@example.com, avery@example.net",
 				"avery @example.com",
 				"avery@example",
+				"avery\u00a0@example.com",
+				"avery\u200b@example.com",
 			].map(
 				(address): Case => [newAddress({ address }), "email_address_shape"],
 			),
@@ -469,6 +471,10 @@ const RULES: Record<string, Case[]> = {
 		[
 			[
 				newPhone({ extension: "12" }),
+				"party_phone_number_extension_party_id_key",
+			],
+			[
+				newPhone({ number: "+12175550101", label: "mobile" }),
 				"party_phone_number_extension_party_id_key",
 			],
 			...[
@@ -1208,10 +1214,15 @@ test("an email's sender is matched to its people through their email rows", asyn
 	assert.deepEqual(rows, [{ party_id: AGENT }]);
 });
 
-test("a primary moves to another email, and a number outside North America is kept", () =>
+test("emails and phone numbers the rules allow are kept", () =>
 	rolledBack(() =>
 		db.query(`update party_email set is_primary = false where party_id = '${AGENT}';
 			update party_email set is_primary = true where address = 'avery.example@example.net';
+			${newAddress({ party_id: CLIENT, address: "o''brien+loi@example.com", is_primary: "true" })};
+			${newAddress({ party_id: CLIENT, address: "first.last_2@example.co.uk" })};
+			-- A front desk shares its address and line.
+			${newAddress({ party_id: CLIENT })};
+			${newPhone({ party_id: CLIENT, extension: "12", is_primary: "true" })};
 			${newPhone({ number: "+442079460123", label: "mobile" })}`),
 	));
 

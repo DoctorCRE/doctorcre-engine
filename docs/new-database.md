@@ -94,7 +94,7 @@ The owner's own login can still change anything. That path is not the engine's c
 
 A person or company can have several emails and phone numbers. Each is a row in `party_email` or `party_phone` with a label, and one of each may be primary. A changed address or number is a removed row and a new one.
 
-Each is stored in one form, so the same address or number is caught however it was typed (decision 32). The database checks the form and does not convert; whoever writes a row converts first. An email address is lower case, with no display name. A phone number is E.164, such as `+12175550100`, and an extension such as "x12" is its own column. The same address or number can be on two parties, such as a shared front desk. Two parties that turn out to be one person are merged in a later slice.
+Each is stored in one form, so a repeated address or number is caught (decision 32). The database checks the form and does not convert; whoever writes a row converts first. An email address is lower case ASCII, with no display name. A phone number is E.164, such as `+12175550100`, and an extension such as "x12" is its own column. The same address or number can be on two parties, such as a shared front desk. Two parties that turn out to be one person are merged in a later slice.
 
 An email's `sender` is stored in the same form, so the agent finds who sent it by matching `sender` to `party_email.address`, and sets the activity's `from_party_id`. The rows are keyed address first, so that match is a lookup.
 
@@ -103,6 +103,7 @@ Today's `party` row holds one free-text `email`, `phone` and `cell` on each pers
 - `phone`, the office line, becomes a work number, primary. `cell` becomes a mobile number, primary when there is no `phone`.
 - A ten-digit number, with or without a leading 1 and in any punctuation, becomes +1 and its ten digits. A trailing extension moves to `extension`.
 - `email` sometimes holds several addresses, or a name with the address in angle brackets. Each address becomes its own work row, lower case and trimmed, and the first is primary.
+- The same number or address twice becomes one row. `cell` is primary when no `phone` row is stored.
 - A value that fits neither form is not stored. The move lists it for a partner to fix.
 
 ## Offer rounds

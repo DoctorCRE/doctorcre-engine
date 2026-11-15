@@ -37,15 +37,15 @@ create table party_company (
 	foreign key (company_id, company_kind) references party (id, kind)
 );
 
--- One stored form, so the same address is caught however it was typed: lower case, one address, no display name.
+-- One stored form, so a repeat is caught: lower case, one address, no display name, ASCII only.
 create domain email_address as text
 	constraint email_address_shape check (
-		value = lower(value) and value ~ '^[^\s@<>(),;:"]+@([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z]$'
+		value = lower(value) and value ~ '^[a-z0-9.!#$%&''*+/=?^_`{|}~-]+@([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z]$'
 	);
 
 -- E.164: a plus, the country code and the number, digits only. A North American number is +1 and ten digits.
 create domain phone_number as text
-	constraint phone_number_shape check (value ~ '^\+(1[2-9][0-9]{2}[2-9][0-9]{6}|[2-9][0-9]{7,14})$');
+	constraint phone_number_shape check (value ~ '^\+(1[2-9][0-9]{2}[2-9][0-9]{6}|[2-9][0-9]{6,14})$');
 
 create table party_email (
 	id uuid primary key default gen_random_uuid(),
