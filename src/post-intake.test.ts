@@ -183,10 +183,24 @@ test("a post goes in with its text and picture, and reads back alone and in its 
 	assert.deepEqual(await (await read(`/posts/${id(10)}`)).json(), expected);
 	const user = new pg.Client({ connectionString: target.href });
 	await user.connect();
+	const { rows: authors } = await user.query(
+		`select changed_by_job, changed_by_user_id, changed_for_user_id from post where id = $1
+		union select changed_by_job, changed_by_user_id, changed_for_user_id from post_text where post_id = $1
+		union select changed_by_job, changed_by_user_id, changed_for_user_id from post_media where post_id = $1
+		union select changed_by_job, changed_by_user_id, changed_for_user_id from document where id = $2`,
+		[id(10), document_id],
+	);
+	assert.deepEqual(authors, [
+		{
+			changed_by_job: "intake",
+			changed_by_user_id: null,
+			changed_for_user_id: null,
+		},
+	]);
+	await user.query("select set_config('engine.user_id', $1, false)", [USER]);
 	await user.query(
-		`insert into post_text (post_id, version, body, author_user_id)
-		values ($1, 2, 'Six example lease questions', $2)`,
-		[id(10), USER],
+		"insert into post_text (post_id, version, body) values ($1, 2, 'Six example lease questions')",
+		[id(10)],
 	);
 	await user.end();
 	assert.deepEqual(await (await read(`/posts/${id(10)}`)).json(), {

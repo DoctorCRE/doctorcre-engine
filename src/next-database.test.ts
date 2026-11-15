@@ -172,7 +172,9 @@ const USERS = `insert into party (id, kind, name) values
 	('${USER}', 'person', 'Jordan Example'), ('${TEAMMATE}', 'person', 'Riley Example');
 insert into app_user (id) values ('${USER}'), ('${TEAMMATE}')`;
 const asUser = (user: string) =>
-	`select set_config('engine.user_id', '${user}', true)`;
+	`select set_config('engine.user_id', '${user}', true), set_config('engine.job', '', true)`;
+const asJob = (job: string, forUser = "") =>
+	`select set_config('engine.user_id', '${forUser}', true), set_config('engine.job', '${job}', true)`;
 const LINKEDIN = id(500);
 const X = id(501);
 const INSTAGRAM = id(502);
@@ -295,7 +297,6 @@ const newText = (row: Record<string, string | number | null>) =>
 		post_id: OPEN,
 		version: 2,
 		body: "Six example lease questions",
-		author_user_id: USER,
 		...row,
 	});
 const newMedium = (row: Record<string, string | number>) =>
@@ -308,13 +309,11 @@ const newMedium = (row: Record<string, string | number>) =>
 		...row,
 	});
 const newReview = (row: Record<string, string | number | null>) =>
-	insert("post_review", { post_id: OPEN, by_user_id: USER, ...row });
+	insert("post_review", { post_id: OPEN, ...row });
 const EDITED = `${newText({})}; ${newReview({ outcome: "edited", text_version: 2 })}`;
-const NO_RESPONSE = {
-	post_id: CLOSED,
-	outcome: "no_response",
-	by_user_id: null,
-};
+const NO_RESPONSE = { post_id: CLOSED, outcome: "no_response" };
+const noResponse = (row: Record<string, string> = {}) =>
+	`${asJob("review_close")}; ${newReview({ ...NO_RESPONSE, ...row })}`;
 const cancel = (post: string) =>
 	`update post set status = 'cancelled', reason = 'Example: the rent number changed' where id = '${post}'`;
 const newSignIn = (row: Record<string, string>) =>
@@ -345,8 +344,8 @@ const compared = async (client = db) =>
 		}) => [account.platform, account.posts, account.best.id, account.worst.id],
 	);
 
-// Every table whose rows a user adds or changes; documents, emails, posts and readings wait for #244.
-const CHANGED_BY_USERS = [
+// Every table whose rows a user or a job adds or changes.
+const STAMPED = [
 	"role",
 	"phase",
 	"party",
@@ -357,6 +356,7 @@ const CHANGED_BY_USERS = [
 	"do_not_contact",
 	"specialty",
 	"party_specialty",
+	"outside_id",
 	"property",
 	"deal",
 	"deal_phase_change",
@@ -365,11 +365,18 @@ const CHANGED_BY_USERS = [
 	"activity",
 	"activity_about",
 	"next_step",
+	"document",
+	"email",
 	"offer",
 	"offer_document",
 	"social_account",
 	"idea",
 	"design_template",
+	"post",
+	"post_text",
+	"post_media",
+	"post_review",
+	"measurement",
 ];
 const newAddress = (row: Record<string, string>) =>
 	insert("party_email", {
@@ -713,15 +720,24 @@ const RULES: Record<string, Case[]> = {
 		],
 		["insert into next_step (what) values ('Example')", "next_step_one_record"],
 	],
-	"a change names the user who made it": [
+	"a change names the user or the job that made it": [
 		[
 			`${asUser("")}; insert into deal (name) values ('Example')`,
-			"change_names_its_user",
+			"change_names_who_made_it",
 		],
 		[
 			`${asUser("")}; update deal set name = 'Example'`,
-			"change_names_its_user",
+			"change_names_who_made_it",
 		],
+		[
+			`${asJob("mailroom")}; update deal set name = 'Example'`,
+			"deal_changed_by_job_fkey",
+		],
+		[
+			`${asJob("mail_capture", CLIENT)}; update deal set name = 'Example'`,
+			"deal_changed_for_user_id_fkey",
+		],
+		["insert into job values ('mailroom', 'Example')", notGranted("job")],
 		[
 			`${asUser(CLIENT)}; update deal set name = 'Example'`,
 			"deal_changed_by_user_id_fkey",
@@ -947,10 +963,9 @@ const RULES: Record<string, Case[]> = {
 			[newText({ version: 0 }), "post_text_version_check"],
 			[newText({ version: 3 }), "post_text_post_id_previous_version_fkey"],
 			[newText({ body: " \n" }), "post_text_body_check"],
-			[newText({ author_user_id: null }), "post_text_edit_has_author"],
+			[`${asJob("agent")}; ${newText({})}`, "post_text_edit_by_a_user"],
 			[newText({ post_id: CLOSED }), "post_text_before_review_closes"],
 			[`${cancel(OPEN)}; ${newText({})}`, "post_text_before_review_closes"],
-			[newText({ written_at: "2020-01-01" }), notGranted("post_text")],
 			["update post_text set body = 'Example'", notGranted("post_text")],
 			["delete from post_text", notGranted("post_text")],
 		],
@@ -999,39 +1014,34 @@ const RULES: Record<string, Case[]> = {
 				newReview({ outcome: "edited", text_version: 5 }),
 				"post_review_post_id_text_version_fkey",
 			],
+			[newReview(NO_RESPONSE), "post_review_by_a_user"],
 			[
-				newReview({ ...NO_RESPONSE, by_user_id: USER }),
+				`${asJob("review_close", USER)}; ${newReview(NO_RESPONSE)}`,
+				"post_review_by_a_user",
+			],
+			[
+				`${cancel(OPEN)}; ${asJob("agent")}; ${newReview({ outcome: "cancelled" })}`,
 				"post_review_by_a_user",
 			],
 			[
 				`${cancel(CLOSED)}; ${newReview({ post_id: CLOSED, outcome: "cancelled" })}`,
 				"post_review_in_window",
 			],
-			[newReview({ ...NO_RESPONSE, post_id: OPEN }), "post_review_in_window"],
+			[noResponse({ post_id: OPEN }), "post_review_in_window"],
 			[newReview({ outcome: "cancelled" }), "post_review_matches_the_post"],
+			[`${cancel(CLOSED)}; ${noResponse()}`, "post_review_matches_the_post"],
+			[`${noResponse()}; ${noResponse()}`, "post_review_once"],
 			[
-				`${cancel(CLOSED)}; ${newReview(NO_RESPONSE)}`,
-				"post_review_matches_the_post",
-			],
-			[
-				`${newReview(NO_RESPONSE)}; ${newReview(NO_RESPONSE)}`,
-				"post_review_once",
-			],
-			[
-				newReview({ outcome: "cancelled", reviewed_at: "2020-01-01" }),
-				notGranted("post_review"),
-			],
-			[
-				`${EDITED}; update post_review set by_user_id = null`,
+				`${EDITED}; update post_review set changed_by_user_id = null`,
 				notGranted("post_review"),
 			],
 			[`${EDITED}; delete from post_review`, notGranted("post_review")],
 		],
 	"a post's edit, a review and a sign-in name a user": [
-		[newText({ author_user_id: AGENT }), "post_text_author_user_id_fkey"],
+		[`${asUser(AGENT)}; ${newText({})}`, "post_text_changed_by_user_id_fkey"],
 		[
-			`${cancel(OPEN)}; ${newReview({ outcome: "cancelled", by_user_id: AGENT })}`,
-			"post_review_by_user_id_fkey",
+			`${cancel(OPEN)}; ${asUser(AGENT)}; ${newReview({ outcome: "cancelled" })}`,
+			"post_review_changed_by_user_id_fkey",
 		],
 		[
 			newSignIn({ signed_in_by_user_id: AGENT }),
@@ -1086,6 +1096,24 @@ const OWNER_RULES: Record<string, Case[]> = {
 	"a user is a person": [
 		[`insert into app_user (id) values ('${CLIENT}')`, "app_user_id_kind_fkey"],
 	],
+	"a row loaded with the stamp turned off still names a user or a job, never both":
+		[
+			[
+				`alter table deal disable trigger stamp_change;
+			insert into deal (name, changed_at) values ('Example', now())`,
+				"deal_changed_by_a_user_or_a_job",
+			],
+			[
+				`alter table post disable trigger stamp_change;
+			update post set changed_by_job = 'old_system' where id = '${post(8)}'`,
+				"post_changed_by_a_user_or_a_job",
+			],
+			[
+				`alter table deal disable trigger stamp_change;
+			update deal set changed_for_user_id = '${TEAMMATE}' where id = '${DEAL}'`,
+				"deal_changed_by_a_user_or_a_job",
+			],
+		],
 	"a platform reports metrics from the known lists, each once": [
 		[
 			"insert into platform_metric values ('myspace', 'views')",
@@ -1103,11 +1131,11 @@ const OWNER_RULES: Record<string, Case[]> = {
 	"no response is a post's only review, even when its time moves": [
 		[
 			`${EDITED}; update post set scheduled_at = now() + interval '30 minutes' where id = '${OPEN}';
-			set local role engine; ${newReview({ ...NO_RESPONSE, post_id: OPEN })}`,
+			set local role engine; ${noResponse({ post_id: OPEN })}`,
 			"post_review_in_window",
 		],
 		[
-			`${newReview(NO_RESPONSE)}; update post set scheduled_at = now() + interval '2 hours' where id = '${CLOSED}';
+			`${noResponse()}; ${asUser(USER)}; update post set scheduled_at = now() + interval '2 hours' where id = '${CLOSED}';
 			set local role engine; ${cancel(CLOSED)}; ${newReview({ post_id: CLOSED, outcome: "cancelled" })}`,
 			"post_review_in_window",
 		],
@@ -1161,9 +1189,13 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
-	social_account: ["changed_at", "changed_by_user_id", "engine_publishes_from"],
-	post_text: ["previous_version", "written_at"],
-	post_review: ["reviewed_at"],
+	social_account: [
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"engine_publishes_from",
+	],
 };
 const REMOVABLE = [
 	...STORED_AT.filter(
@@ -1202,7 +1234,13 @@ async function asOwner(cases: Case[]) {
 const unstamped = (read: unknown) =>
 	JSON.parse(
 		JSON.stringify(read, (key, value) =>
-			["created_at", "changed_at", "changed_by_user_id"].includes(key)
+			[
+				"created_at",
+				"changed_at",
+				"changed_by_user_id",
+				"changed_by_job",
+				"changed_for_user_id",
+			].includes(key)
 				? undefined
 				: value,
 		),
@@ -1359,9 +1397,12 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 		rows.map(({ table }) => ({
 			table,
 			changeable: CHANGEABLE[table] ?? null,
-			addable: !["app_user", "platform_metric", "platform_format"].includes(
-				table,
-			),
+			addable: ![
+				"app_user",
+				"job",
+				"platform_metric",
+				"platform_format",
+			].includes(table),
 			defaulted: DEFAULTED[table] ?? null,
 			removable: REMOVABLE.includes(table),
 			emptied: false,
@@ -1369,15 +1410,15 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 	);
 });
 
-test("every table a user changes records who changed it and when", async () => {
+test("every table a user or a job changes records who changed it and when", async () => {
 	const { rows } = await db.query(
-		`select array_agg(t.tgrelid::regclass::text order by t.tgrelid::regclass::text) as stamped
+		`select array_agg(t.tgrelid::regclass::text order by t.tgrelid::regclass::text collate "C") as stamped
 		from pg_trigger t
-		join pg_attribute who on who.attrelid = t.tgrelid and who.attname = 'changed_by_user_id' and who.attnotnull
 		join pg_attribute stamp_at on stamp_at.attrelid = t.tgrelid and stamp_at.attname = 'changed_at' and stamp_at.attnotnull
+		join pg_constraint one on one.conrelid = t.tgrelid and one.conname = t.tgrelid::regclass::text || '_changed_by_a_user_or_a_job'
 		where t.tgname = 'stamp_change' and t.tgfoid = 'stamp_change'::regproc`,
 	);
-	assert.deepEqual(rows[0].stamped, CHANGED_BY_USERS.toSorted());
+	assert.deepEqual(rows[0].stamped, STAMPED.toSorted());
 });
 
 test("each change records the user who made it and when, whatever the statement says", () =>
@@ -1393,6 +1434,54 @@ test("each change records the user who made it and when, whatever the statement 
 			{ id: id(11), changed_by_user_id: TEAMMATE, now: true },
 		]);
 	}));
+
+test("a job's change names the job and the user it works for, and a user who settles a stuck post is named", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("publisher")}; ${CLAIM};
+			${asJob("mail_capture", TEAMMATE)}; update activity set summary = 'Example' where id = '${EMAIL}';
+			${asUser(TEAMMATE)}; update post set status = 'failed', reason = 'Example: sent twice?' where id = '${post(8)}'`);
+		const { rows } = await db.query(
+			`select changed_by_user_id, changed_by_job, changed_for_user_id from activity where id = $1
+			union all select changed_by_user_id, changed_by_job, changed_for_user_id from post where id = $2`,
+			[EMAIL, post(8)],
+		);
+		assert.deepEqual(rows, [
+			{
+				changed_by_user_id: null,
+				changed_by_job: "mail_capture",
+				changed_for_user_id: TEAMMATE,
+			},
+			{
+				changed_by_user_id: TEAMMATE,
+				changed_by_job: null,
+				changed_for_user_id: null,
+			},
+		]);
+	}));
+
+test("a statement that changes nothing keeps who last changed the row, even on a published post", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("publisher")}; update post set reason = reason where id = '${post(1)}';
+			update deal set name = name where id = '${DEAL}'; update party_company set title = title`);
+		const { rows } = await db.query(
+			`select changed_by_user_id, changed_at < now() as before from post where id = $1
+			union all select changed_by_user_id, changed_at < now() from deal where id = $2
+			union all select changed_by_user_id, changed_at < now() from party_company`,
+			[post(1), DEAL],
+		);
+		assert.deepEqual(rows, [
+			{ changed_by_user_id: USER, before: true },
+			{ changed_by_user_id: USER, before: true },
+			{ changed_by_user_id: USER, before: true },
+			{ changed_by_user_id: USER, before: true },
+		]);
+	}));
+
+test("an agent working for a user edits and cancels a post as that user's", () =>
+	rolledBack(() =>
+		db.query(`${asJob("agent", TEAMMATE)}; ${EDITED}; ${cancel(OPEN)};
+			${newReview({ outcome: "cancelled" })}`),
+	));
 
 test("an email's sender is matched to its people through their email rows", async () => {
 	const { rows } = await db.query(
@@ -1423,7 +1512,7 @@ test("the engine claims a scheduled post, then publishes it", () =>
 test("a user's edit and cancel are reviewed before review closes, and an untouched post gets no response", () =>
 	rolledBack(() =>
 		db.query(`${EDITED}; ${cancel(OPEN)}; ${newReview({ outcome: "cancelled" })};
-			${newReview(NO_RESPONSE)}`),
+			${noResponse()}`),
 	));
 
 test("a review holds its post until it is saved", async () => {
