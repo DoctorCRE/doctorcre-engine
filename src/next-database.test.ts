@@ -600,6 +600,11 @@ const RULES: Record<string, Case[]> = {
 				],
 			),
 			[`select merge_party('${USER}', '${AGENT}')`, "merge_party_keeps_users"],
+			// A caller's own table must not stand in for the schema's.
+			[
+				`create temp table app_user (id uuid); select merge_party('${USER}', '${TEAMMATE}')`,
+				"merge_party_keeps_users",
+			],
 			[
 				`update party set npi = '${NPIS[2]}' where id = '${AGENT}'; select merge_party('${DOCTOR}', '${AGENT}')`,
 				"merge_party_one_npi",
@@ -1929,7 +1934,7 @@ test("two users adding different lenders to one deal at once both keep them", as
 });
 
 // Everything each record holds, as a merge would move it.
-const holdings = async (party: string) =>
+const holdings = async (party: string | undefined) =>
 	(
 		await db.query(
 			`select
@@ -1977,7 +1982,8 @@ test("a merge moves everything to the survivor, whose own row wins where both ho
 			insert into next_step (what, owner_party_id, party_id) values ('Example follow-up', '${DUPLICATE}', '${DUPLICATE}');
 			insert into social_account (platform, owner_party_id, handle) values ('facebook', '${DUPLICATE}', 'example-duplicate');
 			insert into party_territory (party_id, territory_id, started_on) values
-				('${AGENT}', '${HOME}', '2024-01-01'), ('${DUPLICATE}', '${HOME}', '2024-01-01'), ('${DUPLICATE}', '${STATEWIDE}', null);
+				('${AGENT}', '${HOME}', '2024-01-01'), ('${DUPLICATE}', '${HOME}', '2024-01-01'), ('${DUPLICATE}', '${HOME}', '2025-01-01'),
+				('${DUPLICATE}', '${STATEWIDE}', null);
 			${asUser(TEAMMATE)}; set local search_path = public;
 			select next.merge_party('${OLD}', '${DUPLICATE}');
 			select next.merge_party('${DUPLICATE}', '${AGENT}');
@@ -2011,7 +2017,7 @@ test("a merge moves everything to the survivor, whose own row wins where both ho
 			about: [EMAIL, id(303)],
 			next_steps: ["Example follow-up"],
 			social_accounts: ["example-duplicate"],
-			territories: [HOME, STATEWIDE],
+			territories: [HOME, HOME, STATEWIDE],
 		});
 		const { rows } = await db.query(
 			"select id, survivor_id, changed_by_user_id, exists (select from party p where p.id = m.id) as listed from merged_party m order by id",
@@ -2041,10 +2047,31 @@ test("a merge takes the duplicate's NPI and do not contact when the survivor has
 		]);
 	}));
 
+test("a survivor with no primary takes the duplicate's, even on an address or number both hold", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party_email (party_id, address, label, is_primary) values
+				('${LENDERS[0]}', 'loans@example.com', 'work', false), ('${LENDERS[1]}', 'loans@example.com', 'personal', true);
+			insert into party_phone (party_id, number, extension, label, is_primary) values
+				('${LENDERS[0]}', '+12175550103', null, 'work', false), ('${LENDERS[1]}', '+12175550103', null, 'mobile', true),
+				('${LENDERS[1]}', '+12175550103', '7', 'work', false);
+			select merge_party('${LENDERS[1]}', '${LENDERS[0]}')`);
+		const { emails, phones } = await holdings(LENDERS[0]);
+		assert.deepEqual(
+			{ emails, phones },
+			{
+				emails: [["loans@example.com", "work", true]],
+				phones: [
+					["+12175550103", null, "work", true],
+					["+12175550103", "7", "work", false],
+				],
+			},
+		);
+	}));
+
 test("a company's merge keeps one link per person and start date", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party_company (person_id, company_id, started_on) values
-				('${AGENT}', '${BROKERAGES[0]}', '2026-01-05');
+				('${AGENT}', '${BROKERAGES[0]}', '2026-01-05'), ('${AGENT}', '${BROKERAGES[1]}', '2027-01-04');
 			select merge_party('${BROKERAGES[1]}', '${BROKERAGES[0]}')`);
 		const { rows } = await db.query(
 			"select company_id, title, started_on::text from party_company order by started_on",
@@ -2056,6 +2083,7 @@ test("a company's merge keeps one link per person and start date", () =>
 				started_on: "2020-01-06",
 			},
 			{ company_id: BROKERAGES[0], title: null, started_on: "2026-01-05" },
+			{ company_id: BROKERAGES[0], title: null, started_on: "2027-01-04" },
 		]);
 	}));
 
@@ -2083,7 +2111,7 @@ test("only the engine and the owner run a merge", async () => {
 	assert.deepEqual(rows, [{ anyone: false, engine: true }]);
 });
 
-// A merge would repeat these keys, so merge_party keeps the survivor's row and removes the duplicate's first.
+// A merge would repeat these keys, so merge_party keeps the survivor's row and removes the duplicate's first, or refuses a user.
 const COLLAPSED = [
 	"activity_about_activity_id_deal_id_party_id_property_id_key",
 	"app_user_pkey",
@@ -2143,5 +2171,36 @@ test("a merge waits for one that moves rows onto its duplicate, then moves them 
 		]);
 	} finally {
 		await Promise.all(merges.map((merge) => merge.end()));
+	}
+});
+
+// Last, because it commits.
+test("an import of a duplicate's id that waits on its merge is refused", async () => {
+	await db.query(
+		`insert into party (id, kind, name) values ('${OLD}', 'person', 'Avery E. Example')`,
+	);
+	const sessions = [await connect(), await connect()];
+	try {
+		const [merge, reimport] = sessions as [pg.Client, pg.Client];
+		const { pid } = (await reimport.query("select pg_backend_pid() as pid"))
+			.rows[0];
+		await merge.query("begin");
+		await merge.query(`select merge_party('${OLD}', '${AGENT}')`);
+		let settled = false;
+		const waiting = reimport
+			.query(
+				`insert into party (id, kind, name) values ('${OLD}', 'person', 'Avery E. Example')`,
+			)
+			.finally(() => {
+				settled = true;
+			});
+		const blocked = async () =>
+			(await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [pid]))
+				.rows[0].blocked;
+		while (!settled && !(await blocked()));
+		await merge.query("commit");
+		await assert.rejects(waiting, { constraint: "party_never_merged" });
+	} finally {
+		await Promise.all(sessions.map((session) => session.end()));
 	}
 });

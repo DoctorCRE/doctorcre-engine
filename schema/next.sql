@@ -38,11 +38,11 @@ begin
 		raise exception 'a merged-away record never comes back'
 			using errcode = 'check_violation', constraint = 'party_never_merged';
 	end if;
-	return new;
+	return null;
 end $$;
 
--- A repeated import of an old id would otherwise bring a duplicate back.
-create trigger party_never_merged before insert on party
+-- A repeated import of an old id would otherwise bring a duplicate back. After, so an insert that waited on a merge sees it.
+create trigger party_never_merged after insert on party
 	for each row execute function party_never_merged();
 
 -- A person who uses the system, and the home for their own preferences. "user" is reserved in PostgreSQL.
@@ -786,10 +786,18 @@ begin
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
+	-- A primary on a shared address or number stays primary when the survivor has none.
+	update party_email s set is_primary = true from party_email d
+	where s.party_id = survivor and d.party_id = duplicate and d.address = s.address and d.is_primary
+		and not exists (select from party_email where party_id = survivor and is_primary);
 	delete from party_email d using party_email s
 	where d.party_id = duplicate and s.party_id = survivor and s.address = d.address;
 	update party_email set is_primary = false
 	where party_id = duplicate and exists (select from party_email where party_id = survivor and is_primary);
+	update party_phone s set is_primary = true from party_phone d
+	where s.party_id = survivor and d.party_id = duplicate and d.number = s.number
+		and d.extension is not distinct from s.extension and d.is_primary
+		and not exists (select from party_phone where party_id = survivor and is_primary);
 	delete from party_phone d using party_phone s
 	where d.party_id = duplicate and s.party_id = survivor and s.number = d.number
 		and s.extension is not distinct from d.extension;
