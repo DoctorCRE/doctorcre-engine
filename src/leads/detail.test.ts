@@ -54,6 +54,13 @@ async function opened(tx: Reader, lead: string, cursors = first) {
 	return answer;
 }
 
+const keysAsJsonbPrints = async (tx: Reader, keys: string[]) =>
+	(
+		await sql<{ keys: string[] }>`select array(
+			select jsonb_object_keys(${JSON.stringify(Object.fromEntries(keys.map((k) => [k, 0])))}::jsonb)
+		) as keys`.execute(tx)
+	).rows[0]?.keys;
+
 test("an opened lead merges the board row and detail in jsonb key order", () =>
 	withRollback(async (tx) => {
 		await seed(tx);
@@ -71,10 +78,7 @@ test("an opened lead merges the board row and detail in jsonb key order", () =>
 			"research",
 		]);
 		const merged = keys.slice(0, -4);
-		const printed = await sql<{ keys: string[] }>`select array(
-			select jsonb_object_keys(${JSON.stringify(Object.fromEntries(merged.map((k) => [k, 0])))}::jsonb)
-		) as keys`.execute(tx);
-		assert.deepEqual(merged, printed.rows[0]?.keys);
+		assert.deepEqual(merged, await keysAsJsonbPrints(tx, merged));
 		const {
 			phone,
 			email,
@@ -201,4 +205,17 @@ test("a lead off the board opens as null, and the board still answers", () =>
 		const answer = await opened(tx, uuid(99));
 		assert.equal(answer.detail, null);
 		assert.equal(answer.leads.length, 2);
+	}));
+
+// A temp view adds a field "é", one character but two bytes, so after "id".
+test("an opened lead orders a non-ASCII field by its bytes", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await sql`create temp view v_lead_workspace as
+			select w.*, 0 as "é" from public.v_lead_workspace w`.execute(tx);
+		const { detail } = await opened(tx, uuid(12));
+		assert.ok(detail);
+		const merged = Object.keys(detail).slice(0, -4);
+		assert.ok(merged.includes("é"));
+		assert.deepEqual(merged, await keysAsJsonbPrints(tx, merged));
 	}));

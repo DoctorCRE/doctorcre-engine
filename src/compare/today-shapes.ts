@@ -16,7 +16,7 @@ export const vendorMeetingsShape = {
 	rows: {
 		"pages[].items[]": {
 			key: ["vendor_id", "contact.id"],
-			ref: "ref",
+			ref: ["ref", "contact.id"],
 			sortedBy: [],
 		},
 		"pages[].items[].possible_meetings[]": {

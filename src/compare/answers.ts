@@ -5,11 +5,12 @@ import { UUID } from "../uuid.ts";
 type Cap = { size: number; decides: readonly string[] };
 // `key` names the fields that pair rows without an ID; otherwise the whole row does.
 // An ID matching `printable` prints as a record ID, as a UUID always does.
+// Without one, a `ref` prints, followed by any UUIDs its further fields hold.
 type Rows = {
 	id?: string;
 	printable?: RegExp;
 	key?: readonly string[];
-	ref?: string;
+	ref?: string | readonly string[];
 	cap?: Cap;
 } & ({ sortedBy: readonly string[] } | { unordered: true });
 export type ReadShape = {
@@ -102,8 +103,14 @@ function stepOf(value: unknown, index: number, rows: Rows): Step {
 			? UUID.test(id) || rows.printable?.test(id) === true
 			: Number.isSafeInteger(id);
 	if (printed) return { id: String(id) };
-	const ref = fieldOf(value, rows.ref);
-	return typeof ref === "string" && REF.test(ref) ? { id: ref } : { index };
+	const [ref, ...more] = [rows.ref ?? []]
+		.flat()
+		.map((name) => fieldOf(value, name));
+	if (typeof ref !== "string" || !REF.test(ref)) return { index };
+	const ids = more.filter(
+		(field) => typeof field === "string" && UUID.test(field),
+	);
+	return { id: [ref, ...ids].join("/") };
 }
 
 function tiesOf(value: unknown, rows: Rows): unknown[] | null {
