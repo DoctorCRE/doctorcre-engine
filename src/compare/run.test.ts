@@ -1345,7 +1345,7 @@ const meetingReads = (run: { outcomes: { ask: Ask; result: string }[] }) =>
 		o.ask.read === "vendor meetings" ? [o.result] : [],
 	);
 
-test("vendor meetings pair a vendor's rows by vendor and contact and report a changed reason by path and vendor ref", async () => {
+test("vendor meetings pair a vendor's rows by vendor and contact and report a changed reason by path, vendor ref and contact", async () => {
 	const alike = await runWith(
 		withVendorMeetings("Made-up"),
 		withVendorMeetings("Made-up"),
@@ -1360,8 +1360,8 @@ test("vendor meetings pair a vendor's rows by vendor and contact and report a ch
 	const text = report("production", run);
 	for (const line of [
 		"vendor meetings                                  2         0         0         0         2         0         0",
-		"meetings.pages[].items[].reason  value differs  2  V-1",
-		"meetings.pages[].items[].possible_meetings[].reason  value differs  2  V-1",
+		`meetings.pages[].items[].reason  value differs  2  V-1/${person}`,
+		`meetings.pages[].items[].possible_meetings[].reason  value differs  2  V-1/${person}`,
 	])
 		assert.ok(text.includes(`\n${line}\n`), line);
 	assert.ok(!text.includes("Changed") && !text.includes("example.test"));

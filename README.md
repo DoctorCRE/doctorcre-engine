@@ -63,7 +63,8 @@ compared whole, such as a card's facts, reports it at its own path. Order is
 read from the parsed answers, where JavaScript puts whole-number keys first, so
 their order is not checked. A refused deal, client or vendor is compared as its
 refusal; a refused board, invoices read, list, reminders read, meeting prep or
-vendor meetings read counts as failed, and so does an unavailable calendar. A network or sign-in
-failure stops the run. It prints counts, field paths and record IDs,
-never values, bodies or the cookie. Exit codes are 0 for a match, 1 for
+vendor meetings read counts as failed, and so does an unavailable calendar. A
+network or sign-in failure stops the run. It prints counts, field paths and
+record IDs, never values, bodies or the cookie. A suggested vendor meeting
+prints its vendor ref and contact ID. Exit codes are 0 for a match, 1 for
 differences or unsettled requests and 2 for failure.
