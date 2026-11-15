@@ -54,7 +54,7 @@ async function opened(tx: Reader, lead: string, cursors = first) {
 	return answer;
 }
 
-const inJsonbKeyOrder = async (tx: Reader, keys: string[]) =>
+const keysAsJsonbPrints = async (tx: Reader, keys: string[]) =>
 	(
 		await sql<{ keys: string[] }>`select array(
 			select jsonb_object_keys(${JSON.stringify(Object.fromEntries(keys.map((k) => [k, 0])))}::jsonb)
@@ -78,7 +78,7 @@ test("an opened lead merges the board row and detail in jsonb key order", () =>
 			"research",
 		]);
 		const merged = keys.slice(0, -4);
-		assert.deepEqual(merged, await inJsonbKeyOrder(tx, merged));
+		assert.deepEqual(merged, await keysAsJsonbPrints(tx, merged));
 		const {
 			phone,
 			email,
@@ -207,8 +207,7 @@ test("a lead off the board opens as null, and the board still answers", () =>
 		assert.equal(answer.leads.length, 2);
 	}));
 
-// A temp view shadows the board's view for this transaction to add a field.
-// "é" is one character but two bytes, so jsonb lists it after "id".
+// A temp view adds a field "é", one character but two bytes, so after "id".
 test("an opened lead orders a non-ASCII field by its bytes", () =>
 	withRollback(async (tx) => {
 		await seed(tx);
@@ -218,5 +217,5 @@ test("an opened lead orders a non-ASCII field by its bytes", () =>
 		assert.ok(detail);
 		const merged = Object.keys(detail).slice(0, -4);
 		assert.ok(merged.includes("é"));
-		assert.deepEqual(merged, await inJsonbKeyOrder(tx, merged));
+		assert.deepEqual(merged, await keysAsJsonbPrints(tx, merged));
 	}));
