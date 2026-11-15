@@ -5,6 +5,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 ## Records
 
 - **`party`**: every person and company, once, each with its own id. `kind` is `person` or `company`. A person's `npi` is their individual NPI, and a company's its organization NPI.
+- **`merged_party`**: what a merged-away duplicate leaves behind: its old id and the record it became. Nothing lists or shows it.
 - **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's preferences and facts will be columns here, or a child table keyed by the user, as they come.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.
 - **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason.
@@ -65,7 +66,7 @@ Each link is one row. No record holds a list or a column per role.
 
 ## Rules the database enforces
 
-Each rule has a test in `src/next-database.test.ts` that fails without it. The tests work as the engine's role (see "Who may change what"), so each refusal is a constraint, a trigger that checks values, or a privilege the role lacks.
+Each rule has a test in `src/next-database.test.ts` that fails without it. The tests work as the engine's role (see "Who may change what"), so each refusal is a constraint, a trigger or the merge checking values, or a privilege the role lacks.
 
 1. A link to a record that does not exist is refused, and so is deleting a record something still links to.
 2. Every role on a person or a deal comes from the role list.
@@ -73,7 +74,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 4. A person or company is one of the two kinds.
 5. A round's number is used once per deal, and a round answers an earlier round of the same deal.
 6. A round comes from someone on the deal, in their role on that deal, about a property the deal is considering.
-7. A round is never rewritten or removed, not even by emptying the table. Only its status changes. New terms are the next round, and `withdrawn` takes a round back.
+7. A round is never rewritten or removed, not even by emptying the table. Only its status changes, and a merge points it at the survivor. New terms are the next round, and `withdrawn` takes a round back.
 8. At most one round per deal is accepted at a time.
 9. Rent, NNN, term, TI, free rent, the escalator and days after delivery are never negative.
 10. A round's status moves only out of `open`, or from `accepted` to `superseded`. Every other status is final. A round is superseded only when a later round of the same deal is accepted, checked when the change is saved.
@@ -105,11 +106,14 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 36. An NPI is ten digits ending in its check digit, and one person or company holds it.
 37. A specialty is a person's, comes from the specialty list, and is stored once per person.
 38. A person or company is marked do not contact once, with a reason that is never blank and never changes.
-39. An outside id is for exactly one person, company or deal, is stored once per source, and the engine never rewrites or removes one. Merging duplicates (#252) will move it to the surviving record. Its source is a lower-case name, and its value has no space around it.
+39. An outside id is for exactly one person, company or deal, is stored once per source, and the engine never rewrites or removes one. A merge moves it to the survivor. Its source is a lower-case name, and its value has no space around it.
 40. A territory piece is exactly one of a whole state, a named market, or a distance of more than zero miles from a base point, and a territory holds each piece once.
 41. A state is a two-digit and a county a five-digit Census FIPS code. A latitude is between -90 and 90 and a longitude between -180 and 180, and a property has both or neither.
 42. A market's name is never blank and is used once, and a market holds each county once. A territory's name is never blank.
 43. Someone serves a territory that exists, ends no earlier than they started, and is linked once per start date.
+44. A merge joins two different people or two different companies, neither merged away. It never merges a user away, and never two records that each hold an NPI.
+45. A merge moves everything that points at the duplicate, in every table, to the survivor, and removes the duplicate. Where both hold the same link, the survivor's row stays, and so do its primary email, primary phone and do-not-contact reason. A second merge onto the same records waits for the first.
+46. Only a merge leaves a merged-into pointer, and it names a live record, so merges never chain or loop. Nothing new points at a merged-away record, and its id is never used again. Only the engine and the owner run a merge.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -117,7 +121,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 `schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
 
-The role reads rows in every table, adds rows in every table except `app_user`, `job`, `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
+The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `platform_metric` and `platform_format`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
 - a role's, a phase's or a specialty's label;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, and a property's address, county and point;
@@ -131,13 +135,15 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 
 History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in` and `outside_id`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row, the triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, and a reading of a published post.
 
+A merge is the one path that rewrites history: `merge_party` runs with the owner's rights and points rounds and outside ids at the survivor. Each row it moves is stamped with whoever ran it.
+
 The owner's own login can still change anything. That path is not the engine's concern.
 
 ## Emails and phone numbers
 
 A person or company can have several emails and phone numbers. Each is a row in `party_email` or `party_phone` with a label, and one of each may be primary. A changed address or number is a removed row and a new one.
 
-Each is stored in one form, so a repeated address or number is caught (decision 32). The database checks the form and does not convert; whoever writes a row converts first. An email address is lower case ASCII, with no display name. A phone number is E.164, such as `+12175550100`, and an extension such as "x12" is its own column. The same address or number can be on two parties, such as a shared front desk. Two parties that turn out to be one person are merged in a later slice.
+Each is stored in one form, so a repeated address or number is caught (decision 32). The database checks the form and does not convert; whoever writes a row converts first. An email address is lower case ASCII, with no display name. A phone number is E.164, such as `+12175550100`, and an extension such as "x12" is its own column. The same address or number can be on two parties, such as a shared front desk. Two parties that turn out to be one person are merged (see "Merging duplicates").
 
 An email's `sender` is stored in the same form, so the agent finds who sent it by matching `sender` to `party_email.address`, and sets the activity's `from_party_id`. The rows are keyed address first, so that match is a lookup.
 
@@ -255,6 +261,24 @@ Today's system keeps a vendor's markets as a list of named markets with a bounda
 
 Rents and expenses read from LOIs and leases build the market database. It needs no table of its own. A round already holds its rent, NNN, TI and free rent, and names its property, so a market's rents are the rounds whose property falls in it, read with `property_territory` or `market_county`. A lease's terms join the same way when leases come. A figure read from a document outside any deal, such as a broker's survey, is a following slice, with its source document and date.
 
+## Merging duplicates
+
+The owner ruled on #196: the merged-away record disappears and everything points at the survivor. `merge_party(duplicate, survivor)` moves every row that points at the duplicate, then removes it and leaves a `merged_party` row, so an old link finds the survivor. Email matches need nothing more, because the duplicate's addresses are now the survivor's. The foreign keys then refuse any row that still names the duplicate, in any table, including tables added later. The merge finds what to move from the catalog, so a new table that points at a party moves with no change to it.
+
+A conflict keeps the survivor's data and refuses what cannot be settled safely:
+
+- Two people, two companies, or a person and a company? Only two of one kind merge.
+- A user? A user is never merged away, because their changes name them. They can be the survivor.
+- Both have an NPI? Refused. NPPES issues one number per person or organization, so two numbers are two of them. Otherwise the survivor keeps its own NPI or takes the duplicate's.
+- The same email, phone number, role, specialty, company link, territory link or activity on both? One row stays, the survivor's, with its label and title.
+- Both have a primary email or phone? The survivor's stays primary. If only the duplicate has one, it becomes the survivor's.
+- Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays.
+- Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
+- The survivor keeps its name. Outside ids, next steps, sent activity and social accounts all move.
+- A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
+
+A catalog test lists every unique key that holds a party. A new one fails it until the merge says which row stays.
+
 ## Later slices
 
-Deal type, owner and dates. Merging duplicates (#252). "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Market figures from outside deals. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Market figures from outside deals. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
