@@ -9,6 +9,7 @@ import {
 } from "./directory-shapes.ts";
 import { leadBoardShape, leadShape, reasonsShape } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
+import { vendorMeetingsShape } from "./today-shapes.ts";
 
 const shape = {
 	rows: {
@@ -825,5 +826,67 @@ test("recent activity rows at one moment may swap, and a page cut inside that mo
 			activityShape,
 		).differences.length,
 		2,
+	);
+});
+
+test("vendor meeting openings compare only inside the day both reads share", () => {
+	const at = (time: string) => `2030-01-0${time}Z`;
+	const read = (start: string, end: string, openings: [string, string][]) => ({
+		pages: [
+			{
+				items: [],
+				calendar: {
+					state: "ready",
+					scheduling: {
+						window: { start: at(start), end: at(end) },
+						minimum_duration_minutes: 30,
+						state: "ready",
+						items: openings.map(([from, to]) => ({
+							start: at(from),
+							end: at(to),
+						})),
+					},
+				},
+			},
+		],
+	});
+	// Busy 10:00 to 11:00, and the next day 08:00 to 08:30:02, read 4s apart.
+	const first = read("1T09:00:00.000", "2T09:00:00.000", [
+		["1T09:00:00.000", "1T10:00:00.000"],
+		["1T11:00:00.000", "2T08:00:00.000"],
+	]);
+	const second = read("1T09:00:04.000", "2T09:00:04.000", [
+		["1T09:00:04.000", "1T10:00:00.000"],
+		["1T11:00:00.000", "2T08:00:00.000"],
+		["2T08:30:02.000", "2T09:00:04.000"],
+	]);
+	assert.deepEqual(compareAnswers(first, second, vendorMeetingsShape), none);
+	const moved = read("1T09:00:04.000", "2T09:00:04.000", [
+		["1T09:00:04.000", "1T10:00:00.000"],
+		["1T11:30:00.000", "2T08:00:00.000"],
+	]);
+	assert.deepEqual(
+		compareAnswers(first, moved, vendorMeetingsShape).differences,
+		[
+			{
+				path: "pages[].calendar.scheduling.items[].start",
+				records: [{ index: 0 }, { index: 1 }],
+				kind: "value differs",
+			},
+		],
+	);
+	const reformatted = read("1T09:00:04.000", "2T09:00:04.000", [
+		["1T09:00:04.000", "1T10:00:00.000"],
+		["1T11:00:00", "2T08:00:00.000"],
+	]);
+	assert.deepEqual(
+		compareAnswers(first, reformatted, vendorMeetingsShape).differences,
+		[
+			{
+				path: "pages[].calendar.scheduling.items[].start",
+				records: [{ index: 0 }, { index: 1 }],
+				kind: "value differs",
+			},
+		],
 	);
 });

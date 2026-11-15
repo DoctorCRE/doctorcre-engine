@@ -24,4 +24,6 @@ export const vendorMeetingsShape = {
 			sortedBy: [],
 		},
 	},
+	// Each page's openings run a day from when it was read.
+	windows: ["pages[].calendar.scheduling"],
 };

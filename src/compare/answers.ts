@@ -19,6 +19,9 @@ export type ReadShape = {
 	// The time the answer was made, or a random id: its value may differ, its
 	// format may not.
 	clocks?: readonly string[];
+	// Objects whose `window` starts when the answer was made and whose
+	// `items[]` are openings in it: only the part both windows share compares.
+	windows?: readonly string[];
 };
 type Kind =
 	| "value differs"
@@ -85,6 +88,44 @@ const fieldOf = (value: unknown, name?: string) =>
 	name
 		?.split(".")
 		.reduce<unknown>((at, key) => (isRecord(at) ? at[key] : undefined), value);
+
+type Edge = { text: string; ms: number };
+const edgeOf = (value: unknown, name: string): Edge | null => {
+	const text = fieldOf(value, name);
+	const ms = typeof text === "string" ? Date.parse(text) : Number.NaN;
+	return typeof text === "string" && !Number.isNaN(ms) ? { text, ms } : null;
+};
+
+// Each answer's openings cut to the window both share, dropping any left
+// shorter than its minimum. A cut edge takes that window's own text, so
+// formats still compare. Anything unreadable stays for the walk to report.
+function shareWindow(a: Record<string, unknown>, b: Record<string, unknown>) {
+	const [startA, startB, endA, endB] = [
+		edgeOf(a, "window.start"),
+		edgeOf(b, "window.start"),
+		edgeOf(a, "window.end"),
+		edgeOf(b, "window.end"),
+	];
+	if (!startA || !startB || !endA || !endB) return [a, b];
+	const from = startA.ms >= startB.ms ? startA : startB;
+	const to = endA.ms <= endB.ms ? endA : endB;
+	if (from.ms >= to.ms) return [a, b];
+	const cut = (side: Record<string, unknown>) => {
+		if (!Array.isArray(side.items)) return side;
+		const minimum = Number(side.minimum_duration_minutes) * 60_000 || 0;
+		const items = side.items.flatMap((item) => {
+			const start = edgeOf(item, "start");
+			const end = edgeOf(item, "end");
+			if (!isRecord(item) || !start || !end) return [item];
+			const first = start.ms < from.ms ? from : start;
+			const last = end.ms > to.ms ? to : end;
+			const kept = last.ms > first.ms && last.ms - first.ms >= minimum;
+			return kept ? [{ ...item, start: first.text, end: last.text }] : [];
+		});
+		return { ...side, items };
+	};
+	return [cut(a), cut(b)];
+}
 
 function baseOf(value: unknown, rows: Rows): string {
 	const id = fieldOf(value, rows.id);
@@ -174,9 +215,18 @@ export function compareAnswers(old: unknown, next: unknown, shape: ReadShape) {
 	const tiedRowsReordered: Place[] = [];
 	const full: (Cap & { path: string })[] = [];
 	const opaque = new Set(shape.opaque);
-	const clocks = new Set(shape.clocks);
+	const clocks = new Set([
+		...(shape.clocks ?? []),
+		...(shape.windows ?? []).flatMap((path) => [
+			`${path}.window.start`,
+			`${path}.window.end`,
+		]),
+	]);
+	const windows = new Set(shape.windows);
 
 	function walk(a: unknown, b: unknown, path: string, records: Step[]): void {
+		if (windows.has(path) && isRecord(a) && isRecord(b))
+			[a, b] = shareWindow(a, b);
 		if (kindOf(a) !== kindOf(b)) {
 			differences.push({ path, records, kind: "type differs" });
 		} else if (opaque.has(path)) {
