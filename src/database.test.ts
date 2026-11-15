@@ -155,6 +155,28 @@ test("the check names the server to start when none answers", () => {
 	);
 });
 
+test("a snapshot copied from another keeps its rows and the Chicago zone", () =>
+	withSnapshot(async (template, name) => {
+		const source = new pg.Client({ connectionString: template });
+		await source.connect();
+		await source.query(
+			"create table copied (n int); insert into copied values (1)",
+		);
+		await source.end();
+		await withSnapshot(async (url) => {
+			const copy = new pg.Client({ connectionString: url });
+			await copy.connect();
+			try {
+				const { rows } = await copy.query(
+					"select (select count(*)::int from copied) as n, current_setting('TimeZone') as zone",
+				);
+				assert.deepEqual(rows, [{ n: 1, zone: "America/Chicago" }]);
+			} finally {
+				await copy.end();
+			}
+		}, name);
+	}));
+
 test("drift compares catalogs read-only and prints object names", () =>
 	withSnapshot(async (url) => {
 		const run = () =>
