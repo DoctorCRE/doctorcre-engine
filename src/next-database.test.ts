@@ -413,6 +413,7 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"proposal",
 	"client_type",
 	"client",
 	"national_account",
@@ -1873,7 +1874,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	client_brand: ["ended_on", "started_on"],
 	national_account_owner: ["ended_on", "started_on"],
 
-	lead_stage_move: ["status"],
+	proposal: ["status"],
 	role: ["label"],
 	do_not_contact: ["until_date"],
 	stage: ["label"],
@@ -3082,7 +3083,7 @@ for (const [label, sql, refusal] of [
 	[
 		"nonlead evidence",
 		`insert into activity_about (activity_id, party_id) values ('${CALL}', '${DOCTOR}'); ${newLeadMove({ party_id: DOCTOR })}; ${CHECK_AT_COMMIT}`,
-		"lead_stage_move_party_id_role_fkey",
+		"lead_stage_move_current_stage",
 	],
 	[
 		"blank evidence",
@@ -3142,7 +3143,7 @@ for (const [label, sql, refusal] of [
 	[
 		"reopen applied evidence",
 		`${newLeadMove({ status: "applied" })}; update lead_stage_move set status = 'proposed'`,
-		"lead_stage_move_final",
+		notGranted("lead_stage_move"),
 	],
 	[
 		"rewrite evidence",
@@ -3160,38 +3161,6 @@ for (const [label, sql, refusal] of [
 			await assert.rejects(db.query(sql), expected(refusal));
 		}));
 }
-
-test("weak job evidence waits, and a direct user applies it with both decisions in history", () =>
-	rolledBack(async () => {
-		await db.query(`${asJob("agent", USER)}; ${newLeadMove()}`);
-		assert.equal(
-			(
-				await db.query(
-					`select stage from party_role where party_id = '${LEAD}'`,
-				)
-			).rows[0].stage,
-			"nurture",
-		);
-		await db.query(
-			`${asUser(TEAMMATE)}; update lead_stage_move set status = 'applied' where id = '${MOVE}'`,
-		);
-		assert.equal(
-			(
-				await db.query(
-					`select stage from party_role where party_id = '${LEAD}'`,
-				)
-			).rows[0].stage,
-			"opportunity",
-		);
-		const history = (
-			await db.query(`select action, changed_by_job, changed_by_user_id from change
-		where table_name = 'lead_stage_move' and record ->> 'id' = '${MOVE}' order by id`)
-		).rows;
-		assert.deepEqual(history, [
-			{ action: "insert", changed_by_job: "agent", changed_by_user_id: null },
-			{ action: "update", changed_by_job: null, changed_by_user_id: TEAMMATE },
-		]);
-	}));
 
 test("stage evidence stays with the survivor when two leads merge", () =>
 	rolledBack(async () => {
@@ -3216,27 +3185,20 @@ for (const [from, to] of [
 	["engaged", "nurture"],
 	["engaged", "opportunity"],
 ] satisfies [string, string][]) {
-	test(`strong evidence applies ${from} to ${to}, weak evidence waits`, () =>
+	test(`strong evidence applies ${from} to ${to}`, () =>
 		rolledBack(async () => {
-			await db.query(`update party_role set stage = '${from}' where party_id = '${LEAD}';
-			${asJob("lead_stage")}; ${newLeadMove({ from_stage: from, to_stage: to })}`);
-			assert.equal(
-				(
-					await db.query(
-						`select stage from party_role where party_id = '${LEAD}'`,
-					)
-				).rows[0].stage,
-				from,
+			await db.query(
+				`update party_role set stage = '${from}' where party_id = '${LEAD}';`,
 			);
 			await db.query(
-				newLeadMove({
+				`${asJob("lead_stage")}; ${newLeadMove({
 					id: id(732),
 					activity_id: NOTE,
 					from_stage: from,
 					to_stage: to,
 					strength: "strong",
 					status: "applied",
-				}),
+				})}`,
 			);
 			assert.equal(
 				(
@@ -3291,7 +3253,7 @@ test("an agent working for a user corrects an ordinary stage, and a user archive
 		);
 	}));
 
-test("a merge collapses matching proposals and retains the removed row in change history", () =>
+test("a merge collapses matching applied evidence and retains the removed row in change history", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Duplicate', 'public_records');
 		insert into party_role (party_id, role, stage) values ('${OLD}', 'lead', 'nurture');
@@ -3984,3 +3946,283 @@ test("distinct manually sourced deadlines may share their kind and day", async (
 		);
 	});
 });
+
+const PROPOSAL = id(900);
+const newProposal = (row: Record<string, string | null> = {}) =>
+	`${asJob("mail_capture", USER)}; ${insert("proposal", {
+		id: PROPOSAL,
+		kind: "next_step",
+		activity_id: CALL,
+		activity_kind: "call",
+		evidence: "Example asked for an outline",
+		proposed_by_job: "mail_capture",
+		deal_id: DEAL,
+		what: "Send an outline",
+		...row,
+	})}`;
+const decide = (status = "accepted") =>
+	`${asUser(TEAMMATE)}; update proposal set status = '${status}' where id = '${PROPOSAL}'`;
+
+for (const [label, sql, refusal] of [
+	["blank evidence", newProposal({ evidence: " " }), "proposal_evidence_check"],
+	[
+		"missing source",
+		newProposal({ activity_id: MISSING }),
+		"proposal_activity_id_activity_kind_fkey",
+	],
+	[
+		"note source",
+		newProposal({ activity_id: NOTE, activity_kind: "note" }),
+		"proposal_activity_kind_check",
+	],
+	[
+		"wrong source kind",
+		newProposal({ activity_kind: "meeting" }),
+		"proposal_activity_id_activity_kind_fkey",
+	],
+	[
+		"missing job",
+		newProposal({ proposed_by_job: "missing" }),
+		"proposal_starts_pending",
+	],
+	[
+		"preaccepted",
+		newProposal({ status: "accepted" }),
+		"proposal_starts_pending",
+	],
+	[
+		"forged decision",
+		newProposal({ decided_by_user_id: USER }),
+		"proposal_starts_pending",
+	],
+	["two subjects", newProposal({ party_id: CLIENT }), "proposal_one_record"],
+	["missing payload", newProposal({ what: null }), "proposal_payload"],
+	["mixed payload", newProposal({ to_phase: "dead" }), "proposal_payload"],
+	[
+		"missing lead stage",
+		newProposal({
+			kind: "new_lead",
+			deal_id: null,
+			party_id: DOCTOR,
+			what: null,
+			how_found: "referral",
+		}),
+		"proposal_payload",
+	],
+	[
+		"job decision",
+		`${newProposal()}; update proposal set status = 'accepted'`,
+		"proposal_user_decides",
+	],
+	[
+		"agent decision",
+		`${newProposal()}; ${asJob("agent", USER)}; update proposal set status = 'dismissed'`,
+		"proposal_user_decides",
+	],
+	[
+		"repeat decision",
+		`${newProposal()}; ${decide()}; ${decide()}`,
+		"proposal_final",
+	],
+	[
+		"rewrite",
+		`${newProposal()}; update proposal set evidence = 'replacement'`,
+		notGranted("proposal"),
+	],
+	["erase", `${newProposal()}; delete from proposal`, notGranted("proposal")],
+	["truncate", "truncate proposal", notGranted("proposal")],
+	[
+		"pending stage outside queue",
+		newLeadMove({ status: "proposed" }),
+		"lead_stage_move_status_check",
+	],
+] satisfies [string, string, Refusal][]) {
+	test(`shared proposals refuse ${label}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+
+test("acceptance creates one next step and keeps both actors, dismissal creates nothing", () =>
+	rolledBack(async () => {
+		await db.query(newProposal());
+		assert.equal(
+			(
+				await db.query(
+					`select count(*) from next_step where id = '${PROPOSAL}'`,
+				)
+			).rows[0].count,
+			"0",
+		);
+		await db.query(decide());
+		assert.deepEqual(
+			(
+				await db.query(
+					`select what, changed_by_user_id from next_step where id = '${PROPOSAL}'`,
+				)
+			).rows,
+			[{ what: "Send an outline", changed_by_user_id: TEAMMATE }],
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select status, proposed_by_job, decided_by_user_id, decided_at is not null as dated from proposal`,
+				)
+			).rows,
+			[
+				{
+					status: "accepted",
+					proposed_by_job: "mail_capture",
+					decided_by_user_id: TEAMMATE,
+					dated: true,
+				},
+			],
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select action, changed_by_job, changed_by_user_id from change where table_name = 'proposal' order by id`,
+				)
+			).rows,
+			[
+				{
+					action: "insert",
+					changed_by_job: "mail_capture",
+					changed_by_user_id: null,
+				},
+				{
+					action: "update",
+					changed_by_job: null,
+					changed_by_user_id: TEAMMATE,
+				},
+			],
+		);
+		await db.query(newProposal({ id: id(901) }));
+		await db.query(
+			`${asUser(USER)}; update proposal set status = 'dismissed' where id = '${id(901)}'`,
+		);
+		assert.equal(
+			(await db.query(`select count(*) from next_step where id = '${id(901)}'`))
+				.rows[0].count,
+			"0",
+		);
+	}));
+
+test("phase and new lead suggestions create their real rows only on acceptance", () =>
+	rolledBack(async () => {
+		await db.query(
+			newProposal({
+				kind: "phase_move",
+				what: null,
+				from_phase: "legal",
+				to_phase: "dead",
+				reason: "Example withdrew",
+			}),
+		);
+		await db.query(decide());
+		await db.query(
+			`insert into party (id, kind, name) values ('${id(904)}', 'person', 'Example Suggested Lead')`,
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select phase from deal_phase_change where deal_id = '${DEAL}' order by happened_at desc limit 1`,
+				)
+			).rows[0].phase,
+			"dead",
+		);
+		await db.query(
+			newProposal({
+				id: id(902),
+				kind: "new_lead",
+				what: null,
+				deal_id: null,
+				party_id: id(904),
+				to_stage: "new",
+				how_found: "referral",
+			}),
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select count(*) from party_role where party_id = '${id(904)}' and role = 'lead'`,
+				)
+			).rows[0].count,
+			"0",
+		);
+		await db.query(
+			`${asUser(USER)}; update proposal set status = 'accepted' where id = '${id(902)}'`,
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select stage from party_role where party_id = '${id(904)}' and role = 'lead'`,
+				)
+			).rows[0].stage,
+			"new",
+		);
+	}));
+
+for (const stale of [false, true]) {
+	test(`weak lead evidence uses the shared queue with stale=${stale}`, () =>
+		rolledBack(async () => {
+			await db.query(
+				newProposal({
+					kind: "lead_stage_move",
+					what: null,
+					deal_id: null,
+					party_id: LEAD,
+					from_stage: "nurture",
+					to_stage: "opportunity",
+				}),
+			);
+			assert.equal(
+				(
+					await db.query(
+						`select stage from party_role where party_id = '${LEAD}'`,
+					)
+				).rows[0].stage,
+				"nurture",
+			);
+			if (stale) {
+				await db.query(
+					`${asUser(USER)}; update party_role set stage = 'engaged' where party_id = '${LEAD}'`,
+				);
+				await assert.rejects(
+					db.query(decide()),
+					expected("lead_stage_move_current_stage"),
+				);
+			} else {
+				await db.query(decide());
+				assert.equal(
+					(
+						await db.query(
+							`select stage from party_role where party_id = '${LEAD}'`,
+						)
+					).rows[0].stage,
+					"opportunity",
+				);
+				assert.equal(
+					(await db.query(`select id from lead_stage_move`)).rows[0].id,
+					PROPOSAL,
+				);
+			}
+		}));
+}
+
+test("a stale phase suggestion cannot overwrite another phase", () =>
+	rolledBack(async () => {
+		await db.query(
+			newProposal({
+				kind: "phase_move",
+				what: null,
+				from_phase: "negotiation",
+				to_phase: "dead",
+				reason: "Example withdrew",
+			}),
+		);
+		await assert.rejects(
+			db.query(decide()),
+			expected("proposal_current_phase"),
+		);
+	}));
