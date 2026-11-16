@@ -90,7 +90,7 @@ select id, 'party', name, 'merged into a record copied before, so of its values 
 from old_party
 where survivor_id <> id and survivor_id not in (select id from copied) and survivor_id not in (select id from old_party)
 	and (concat(email, phone, cell, npi, specialty, title, city, state, county, contact_state_cadence, notes_path) ~ '\S'
-		or org_id is not null or contact_state <> 'active');
+		or org_id is not null or contact_state not in ('active', 'nurture'));
 
 -- Each email or phone number as typed, in order, in the one form the new database stores, or null when it has none.
 create temp table typed_value on commit drop as
@@ -177,17 +177,20 @@ from public.party p
 left join outside_id map on map.source = 'old_system' and map.value = p.id::text
 cross join lateral copy_attribution('party', p.id,
 	coalesce(p.contact_state_set_by, p.updated_by), 'contact_state') setter
-where p.contact_state = 'nurture' and p.deleted_at is null;
+where p.contact_state = 'nurture';
 
 update party_role r set stage = 'nurture', changed_by_user_id = n.changed_by_user_id,
 	changed_by_job = n.changed_by_job, changed_for_user_id = n.changed_for_user_id, changed_at = n.set_at
 from (select distinct on (party_id) * from nurture order by party_id, set_at desc, old_id) n
-where r.party_id = n.party_id and r.role = 'lead' and r.stage <> 'nurture';
+where r.party_id = n.party_id and r.role = 'lead' and r.stage <> 'nurture' and r.changed_at < n.set_at;
 
 insert into not_copied
 select old_id, 'contact_state', 'nurture',
-	case when party_id is null then 'its record is not copied' else 'its record has no lead role' end
-from nurture n where not exists (select from party_role r where r.party_id = n.party_id and r.role = 'lead');
+	case when n.party_id is null then 'its record is not copied'
+		when r.party_id is null then 'its record has no lead role'
+		else 'its lead stage is as recent or newer than the nurture mark' end
+from nurture n left join party_role r on r.party_id = n.party_id and r.role = 'lead'
+where r.stage is distinct from 'nurture';
 
 -- Each specialty typed, split at commas and semicolons. Spellings that differ only in case, spaces or punctuation
 -- are one specialty, labelled as first typed, and one already on the list keeps its label.

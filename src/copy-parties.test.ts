@@ -218,7 +218,8 @@ test("each old id maps to the record it became, a merged-away one to where its m
 	);
 });
 
-test("each value it does not copy is listed, with why", () => {
+test("each value it does not copy is listed, with why", async () => {
+	assert.deepEqual(await rows("select * from party_role"), []);
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
 		[id(10), "city", "Springfield", "no place in the new database"],
@@ -683,17 +684,28 @@ test("nurture marks move to existing lead roles through old ids, with the setter
 			insert into stage values ('lead', 'new', 'New'), ('lead', 'nurture', 'Nurture');
 			insert into how_found values ('referral', 'Referral');
 			update party set how_found = 'referral' where id in ('${id(10)}', '${id(17)}', '${id(26)}');
-			insert into party_role (party_id, role, stage, owner_user_id) values
-				('${id(10)}', 'lead', 'new', '${PARTNER}'),
-				('${id(17)}', 'lead', 'new', null),
-				('${id(26)}', 'lead', 'new', null);
+			alter table party_role disable trigger stamp_change;
+			insert into party_role (party_id, role, stage, owner_user_id, changed_by_job, changed_at) values
+				('${id(10)}', 'lead', 'new', '${PARTNER}', 'old_system', '2020-01-01'),
+				('${id(17)}', 'lead', 'new', null, 'old_system', '2020-01-01'),
+				('${id(26)}', 'lead', 'new', null, 'old_system', '2020-01-01');
+			set constraints all immediate;
+			alter table party_role enable trigger stamp_change;
 			update public.party set contact_state = 'nurture', contact_state_set_by = '${AUTOMATION}',
 				contact_state_set_at = '2024-01-01T00:00:00Z' where id = '${id(10)}';
 			update public.party set contact_state = 'nurture', contact_state_set_by = '${PARTNER}',
 				contact_state_set_at = '2025-08-09T10:11:12Z' where id = '${id(12)}';
 			set constraints all immediate;
 		`);
-		const first = await copy();
+		const first = await copy(
+			oldParty(80, {
+				merged_into: id(26),
+				deleted_at: "2025-01-02T00:00:00Z",
+				contact_state: "nurture",
+				contact_state_set_at: "2024-06-01T00:00:00Z",
+			}),
+		);
+		assert.ok(!first?.some((row) => row[0] === id(80)));
 		assert.ok(
 			!first?.some((row) => row[1] === "contact_state" && row[2] === "nurture"),
 		);
@@ -704,7 +716,7 @@ test("nurture marks move to existing lead roles through old ids, with the setter
 			[
 				{ party_id: id(10), stage: "nurture", owner_user_id: PARTNER },
 				{ party_id: id(17), stage: "nurture", owner_user_id: null },
-				{ party_id: id(26), stage: "new", owner_user_id: null },
+				{ party_id: id(26), stage: "nurture", owner_user_id: null },
 			],
 		);
 		assert.deepEqual(
@@ -732,17 +744,34 @@ test("nurture marks move to existing lead roles through old ids, with the setter
 		);
 	}));
 
-test("a nurture mark without a lead role stays listed and never creates one", () =>
-	rolledBack(async () => {
-		const result = await copy();
-		assert.ok(
-			result?.some(
-				(row) =>
-					row[0] === id(17) &&
-					row[1] === "contact_state" &&
-					row[2] === "nurture" &&
-					row[3] === "its record has no lead role",
-			),
-		);
-		assert.deepEqual(await rows("select * from party_role"), []);
-	}));
+for (const stage of ["new", "opportunity", "archived"]) {
+	test(`a nurture mark cannot overwrite a newer ${stage} stage`, () =>
+		rolledBack(async () => {
+			await db.query(`
+				select set_config('engine.job', 'old_system', true);
+				insert into role (slug, label) values ('lead', 'Lead');
+				insert into stage values ('lead', '${stage}', 'Example stage'), ('lead', 'nurture', 'Nurture');
+				insert into how_found values ('referral', 'Referral');
+				update party set how_found = 'referral' where id = '${id(17)}';
+				insert into party_role (party_id, role, stage) values ('${id(17)}', 'lead', '${stage}');
+				set constraints all immediate;
+			`);
+			const before = await rows(
+				`select * from party_role where party_id = '${id(17)}'`,
+			);
+			const result = await copy();
+			assert.deepEqual(
+				await rows(`select * from party_role where party_id = '${id(17)}'`),
+				before,
+			);
+			assert.ok(
+				result?.some(
+					(row) =>
+						row[0] === id(17) &&
+						row[1] === "contact_state" &&
+						row[3] ===
+							"its lead stage is as recent or newer than the nurture mark",
+				),
+			);
+		}));
+}
