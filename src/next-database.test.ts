@@ -3244,12 +3244,14 @@ test("a merge moves lone profiles onto bare roles even after foreign keys are re
 		set constraints all immediate;
 		alter table party_role drop constraint party_role_party_id_fkey;
 		alter table party_role add foreign key (party_id) references party;
+		set constraints all deferred;
 		update party set how_found = 'referral' where id = '${BROKERAGES[0]}';
 		insert into party_role (party_id, role) values ('${BROKERAGES[0]}', 'client');
 		select merge_party('${BRAND}', '${NEXT_BRAND}');
 		insert into party_role (party_id, role) values ('${BROKERAGES[1]}', 'national_account');
 		select merge_party('${NEXT_BRAND}', '${BROKERAGES[1]}');
-		select merge_party('${CLIENT}', '${BROKERAGES[0]}')`);
+		select merge_party('${CLIENT}', '${BROKERAGES[0]}');
+		set constraints all immediate`);
 		assert.deepEqual(
 			(await owner.query("select location_id, brand_id from client_brand"))
 				.rows,
