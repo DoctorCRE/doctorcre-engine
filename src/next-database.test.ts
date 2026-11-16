@@ -434,6 +434,8 @@ const STAMPED = [
 	"email",
 	"offer",
 	"offer_document",
+	"lease",
+	"lease_option",
 	"social_account",
 	"idea",
 	"design_template",
@@ -506,7 +508,112 @@ const SCHEMA = await readFile(
 );
 
 type Case = [sql: string, refusal: Refusal];
+const LEASE = id(700);
+const newLease = (row: Record<string, string | number | null> = {}) =>
+	insert("lease", {
+		id: LEASE,
+		deal_id: DEAL,
+		property_id: PROPERTY,
+		version: 1,
+		offer_id: id(102),
+		document_id: PDF_FILE,
+		executed_on: "2026-04-01",
+		commencement_on: "2026-07-01",
+		expiration_on: "2033-06-30",
+		...row,
+	});
+const newOption = (row: Record<string, string | number | null> = {}) =>
+	insert("lease_option", {
+		lease_id: LEASE,
+		number: 1,
+		kind: "renewal",
+		notice_on: "2032-12-31",
+		terms: "Example five-year renewal",
+		...row,
+	});
 const RULES: Record<string, Case[]> = {
+	"leases preserve sourced terms and a consecutive history on their deal": [
+		[newLease({ version: 0 }), "lease_version_check"],
+		[newLease({ version: 2 }), "lease_deal_id_previous_version_fkey"],
+		[
+			newLease({ property_id: ELSEWHERE, offer_id: null }),
+			"lease_deal_id_property_id_fkey",
+		],
+		[newLease({ document_id: MISSING }), "lease_document_id_fkey"],
+		[
+			newLease({ document_id: null }),
+			{
+				code: "23502",
+				message:
+					'null value in column "document_id" of relation "lease" violates not-null constraint',
+			},
+		],
+		[newLease({ offer_id: id(100) }), "lease_from_accepted_offer"],
+		[
+			`${newLease()}; insert into deal_property values ('${DEAL}', '${ELSEWHERE}');
+			${newLease({ id: id(701), version: 2, property_id: ELSEWHERE })}`,
+			"lease_offer_id_deal_id_property_id_fkey",
+		],
+		[
+			`${newLease()}; ${newLease({ id: id(701) })}`,
+			"lease_deal_id_version_key",
+		],
+		...[
+			"rent_per_sf_yr",
+			"nnn_per_sf_yr",
+			"ti_per_sf",
+			"free_rent_months",
+			"escalation_pct",
+			"rent_days_after_delivery",
+		].map((field): Case => [newLease({ [field]: -1 }), `lease_${field}_check`]),
+		[newLease({ term_months: 0 }), "lease_term_months_check"],
+		[newLease({ expiration_on: "2026-07-01" }), "lease_dates_in_order"],
+		[newLease({ executed_on: "2034-01-01" }), "lease_dates_in_order"],
+		[
+			newLease({ rent_starts_on: "2026-07-01", rent_days_after_delivery: 30 }),
+			"lease_rent_date_or_days",
+		],
+		[newLease({ expense_structure: " " }), "lease_expense_structure_check"],
+		...[
+			"update lease set version = 2",
+			"delete from lease",
+			"truncate lease",
+		].map((sql): Case => [sql, notGranted("lease")]),
+	],
+	"lease options have a kind, exact notice deadline and terms, and remain history":
+		[
+			[newOption(), "lease_option_lease_id_fkey"],
+			[
+				`${newLease()}; ${newOption({ notice_on: "2040-01-01" })}`,
+				"lease_option_before_expiration",
+			],
+			[
+				`${newLease()}; ${newOption({ kind: "other" })}`,
+				"lease_option_kind_check",
+			],
+			[
+				`${newLease()}; ${newOption({ number: 0 })}`,
+				"lease_option_number_check",
+			],
+			[
+				`${newLease()}; ${newOption({ terms: " " })}`,
+				"lease_option_terms_check",
+			],
+			[`${newLease()}; ${newOption()}; ${newOption()}`, "lease_option_pkey"],
+			[
+				`${newLease()}; ${newOption({ notice_on: null })}`,
+				{
+					code: "23502",
+					message:
+						'null value in column "notice_on" of relation "lease_option" violates not-null constraint',
+				},
+			],
+			...[
+				"update lease_option set notice_on = current_date",
+				"delete from lease_option",
+				"truncate lease_option",
+			].map((sql): Case => [sql, notGranted("lease_option")]),
+		],
 	"a link to a record that does not exist is refused": [
 		[
 			`insert into deal_party values ('${DEAL}', '${MISSING}', 'client')`,
@@ -2695,4 +2802,82 @@ test("an import of a duplicate's id that waits on its merge is refused", async (
 	} finally {
 		await Promise.all(sessions.map((session) => session.end()));
 	}
+});
+
+test("a lease amendment preserves earlier terms and options while the ending list uses the latest version", async () => {
+	await rolledBack(async () => {
+		await db.query(`${newLease({ rent_per_sf_yr: 35, term_months: 84 })}; ${newOption()};
+			${newOption({ number: 2, kind: "expansion" })}; ${newOption({ number: 3, kind: "early_termination" })}`);
+		await db.query(
+			newLease({
+				id: id(701),
+				version: 2,
+				offer_id: null,
+				expiration_on: "2034-06-30",
+			}),
+		);
+		const { rows } = await db.query(
+			`select version, expiration_on::text from current_lease where deal_id = '${DEAL}'`,
+		);
+		assert.deepEqual(rows, [{ version: 2, expiration_on: "2034-06-30" }]);
+		assert.equal(
+			(await db.query(`select count(*) from lease where deal_id = '${DEAL}'`))
+				.rows[0].count,
+			"2",
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select count(*) from lease_option where lease_id = '${LEASE}'`,
+				)
+			).rows[0].count,
+			"3",
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select changed_by_user_id from lease where id = '${LEASE}'`,
+				)
+			).rows[0].changed_by_user_id,
+			USER,
+		);
+		assert.equal(
+			(
+				await db.query(
+					"select count(*) from change where table_name in ('lease', 'lease_option')",
+				)
+			).rows[0].count,
+			"5",
+		);
+	});
+});
+
+test("signed terms survive a later accepted round on the deal", async () => {
+	await rolledBack(async () => {
+		await db.query(newLease({ rent_per_sf_yr: 35 }));
+		await db.query(`update offer set status = 'superseded' where id = '${id(102)}';
+			insert into offer (deal_id, property_id, round, from_party_id, from_role, offered_at, status)
+			values ('${DEAL}', '${PROPERTY}', 4, '${CLIENT}', 'client', now(), 'accepted');
+			${CHECK_AT_COMMIT}`);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select offer_id, rent_per_sf_yr from current_lease where id = '${LEASE}'`,
+				)
+			).rows,
+			[{ offer_id: id(102), rent_per_sf_yr: "35.00" }],
+		);
+	});
+});
+
+test("sourced options can be extracted later for a historical lease version", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${newLease()}; ${newLease({ id: id(701), version: 2, offer_id: null })}; ${newOption()}`,
+		);
+		assert.equal(
+			(await db.query(`select lease_id from lease_option`)).rows[0].lease_id,
+			LEASE,
+		);
+	});
 });
