@@ -378,3 +378,11 @@ Today's system keeps one `event` row per field changed, with the actor, a verb a
 ## Later slices
 
 A deal's parked state and needs attention (#283). "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+
+## Copying today's deals
+
+`schema/copy-deals.sql` runs after the party copy, in a separate owner transaction with `search_path` set to the new schema. It only reads `public`. Deals keep their ids and timestamps; `outside_id` under `old_system` makes a repeat leave copied deals unchanged. Types split as described under Deals. A missing owner refuses a deal, while an unknown market, unfiled type or nonpositive value is listed and left empty. Client links follow the party map, including merged-away ids. Current participants become deal parties; ended participants are listed for the later history copy. Vendor assignments whose roles are not available are listed too.
+
+Phase events keep `occurred_at`, their phase and their stated reason. Without events, the current phase is listed as `no_phase_history`, because its start date is unknown. Unknown phases, dead without a reason, same-time events and conflicts with previously copied events are listed, never assigned invented dates or reasons.
+
+Rounds are numbered across each deal by old creation time, then old id. The refusal report retains original side and round number alongside that proposed number. Our side requires exactly one client party; the other side requires exactly one landlord, property owner or listing agent party. Properties are distinct buildings reached through premises and spaces. Missing or several candidates produce `no_sender_candidate`, `several_sender_candidates`, `no_property` or `several_properties`. A row can list several failures. Even a uniquely mappable round is currently listed as `unknown_offer_status`: today's table has none and the new schema requires one (#294). No offer, status or response link is invented. Durable round import history belongs with the eventual offer copy (#294).
