@@ -42,7 +42,7 @@ _Database_: `lead.owner_id` today; `party_role.owner_user_id` on the lead role i
 **How found**:
 How we found a lead or client, from a short list, such as referral, vendor, marketing post, public records or cold outreach.
 _Avoid_: source on its own, lane (a radar lane), referral source
-_Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database.
+_Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database, with `party.how_found_detail` for attribution detail.
 
 **Prospect**:
 The stage in between lead and client. A lead becomes a prospect when it turns warm, or a potential client becomes one when introduced. It stays a prospect until we represent them. An inactive prospect goes back to Leads.
@@ -194,6 +194,13 @@ A deal that is not active work for now, with a reason. Parking keeps the deal; r
 _Avoid_: on hold, inactive, archived, paused
 _Database_: `deal.operating_state` (`active` or `parked`), `parking_reason` (`prospect_never_active`, `client_paused`, `other`), `parking_note`, `parked_at`, `parked_by`.
 _Engine_: `operating_state`.
+_New database_: `deal.parking_reason`, none when active, and `deal.parking_note`. Who parked it and when is in change history.
+
+**Needs attention**:
+A flag a user sets on a deal to say it needs a look. Nothing sets it on its own.
+_Avoid_: flagged, urgent, priority
+_Database_: `deal.attention` today; `deal.needs_attention` in the new database.
+_Engine_: `attention`.
 
 **Pipeline call**:
 A sitting where a partner goes through the open deals and marks each reviewed or skipped.
@@ -206,3 +213,27 @@ A tenant's agreement for a property, whether negotiated by the team or elsewhere
 
 **Lease option**:
 A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
+
+## Clients in the new database
+
+**Client status** is active deal when a client has open work, past client after closed work when none is open, and otherwise its manual roster, cold, engaged or paused status. `client_status` derives it; `client.status` holds only the manual value.
+
+**Brand membership** joins a client location company to its brand company for dates in `client_brand`. A franchisee is a client of type franchise with its own deals. Rebranding ends the old membership and begins another.
+
+**National account owner** is the person responsible for the account, including an outside referring agent. `national_account_owner` keeps dated ownership; a deal's owner is separate. `national_account` identifies the brand company, independently of client type.
+
+**Lead stage evidence**:
+An activity and its reference supporting a proposed or applied lead stage move. Weak job evidence waits for a user. Archiving always needs a user and a reason.
+_New database_: `lead_stage_move`. Ordinary stage edits and who and when stay in `change`.
+
+**Lead segment**:
+The free-text board segment used to group leads.
+_New database_: `party_role.segment` on the lead role.
+
+**Lead lane**:
+The kind of opportunity being worked, independent of how the lead was found.
+_New database_: `party_role.lane` on the lead role, from `lead_lane`.
+
+**Estimated lease date**:
+A lead's expected lease event, with its source and optional confidence. It is an estimate, not an executed lease ending.
+_New database_: `party_role.estimated_lease_on`, `lease_estimate_source` and `lease_estimate_confidence` on the lead role.
