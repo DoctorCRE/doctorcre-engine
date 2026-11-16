@@ -346,6 +346,25 @@ create table deal (
 	constraint deal_parking_note_when_parked check (parking_note is null or parking_reason is not null)
 );
 
+-- A job alone never parks, revives or flags a deal; one working for a user, such as the agent, does.
+create function deal_parked_or_flagged_by_a_user() returns trigger
+language plpgsql as $$
+begin
+	if nullif(current_setting('engine.user_id', true), '') is null
+		and (case tg_op
+			when 'INSERT' then new.parking_reason is not null or new.needs_attention
+			else (new.parking_reason, new.parking_note, new.needs_attention)
+				is distinct from (old.parking_reason, old.parking_note, old.needs_attention)
+		end) then
+		raise exception 'a user parks, revives and flags a deal'
+			using errcode = 'check_violation', constraint = 'deal_parked_or_flagged_by_a_user';
+	end if;
+	return new;
+end $$;
+
+create trigger deal_parked_or_flagged_by_a_user before insert or update of parking_reason, parking_note, needs_attention
+	on deal for each row execute function deal_parked_or_flagged_by_a_user();
+
 -- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.
 create table outside_id (
 	source text not null check (source ~ '^[a-z][a-z0-9_]*$'),

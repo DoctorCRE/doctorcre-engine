@@ -132,7 +132,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 56. A deal has exactly one deal owner, a user.
 57. A deal's market comes from the market list, and its closed value is more than zero.
 58. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank.
-59. A deal needs attention or does not; it is never unknown.
+59. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -154,7 +154,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
+History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a deal parked, revived or flagged by a user, a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
 
 A merge is the one path that rewrites history: `merge_party` runs with the owner's rights and points rounds and outside ids at the survivor. Each row it moves is stamped with whoever ran it, so a moved row's stamp no longer names who first stored it. Its change history still does, and names the merge.
 
@@ -288,7 +288,7 @@ A deal names its market from the `market` list, which can be set when the deal o
 
 A parked deal is not active work for now, and says why in `parking_reason`: the client paused, the prospect was never active, or another reason, with an optional note. No reason means the deal is active, as no disposition means a vendor is. Parking is not a phase and never changes one, so reviving a deal, which clears its reason and note, leaves it in the phase it was in. Who parked a deal and when is the latest change to its `parking_reason` in change history, so the deal holds no date or user of its own for it, and the same history keeps every earlier parking and revival.
 
-`needs_attention` is a flag a user sets on a deal and clears, never worked out from anything else. Change history keeps who set it and when.
+`needs_attention` is a flag a user sets on a deal and clears, never worked out from anything else. Change history keeps who set it and when. Parking, reviving and flagging are each a user's act, or an agent's working for one, so a job working for no one, such as the publisher, cannot do them; it can still change the deal's other columns. A copy of today's parked deals turns that check off, as it does the stamp, because its history names who parked each one.
 
 National is never stored. A deal is national exactly when its client is a location of a national account. National accounts and the brand behind each location come with #275, and with them the read that answers it. Until then nothing answers it, and since nothing stores it, no flag can disagree with the client, as today's lane sometimes does.
 

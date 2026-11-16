@@ -781,6 +781,20 @@ const RULES: Record<string, Case[]> = {
 			"deal_parking_note_check",
 		],
 	],
+	"a job alone never parks, revives or flags a deal": [
+		[
+			`${asJob("mail_capture")}; update deal set parking_reason = 'other'`,
+			"deal_parked_or_flagged_by_a_user",
+		],
+		[
+			`${asJob("mail_capture")}; update deal set needs_attention = true`,
+			"deal_parked_or_flagged_by_a_user",
+		],
+		[
+			`${asJob("old_system")}; insert into deal (name, owner_user_id, parking_reason) values ('Example', '${USER}', 'other')`,
+			"deal_parked_or_flagged_by_a_user",
+		],
+	],
 	"a deal needs attention or not, never unknown": [
 		[
 			"update deal set needs_attention = null",
@@ -2061,10 +2075,11 @@ test("a parked deal stays in its phase and is revived to it, and history keeps w
 		]);
 	}));
 
-test("a user flags a deal as needing attention, and history keeps who and when", () =>
+test("a user, or an agent working for one, flags a deal as needing attention, and a job alone still renames it", () =>
 	rolledBack(async () => {
 		await db.query(
-			`${asUser(TEAMMATE)}; update deal set needs_attention = true where id = '${DEAL}'`,
+			`${asJob("agent", TEAMMATE)}; update deal set needs_attention = true where id = '${DEAL}';
+			${asJob("old_system")}; update deal set name = 'Example renamed', needs_attention = true where id = '${DEAL}'`,
 		);
 		assert.deepEqual(await history(), [
 			{
@@ -2073,8 +2088,19 @@ test("a user flags a deal as needing attention, and history keeps who and when",
 				action: "update",
 				old_value: { needs_attention: false },
 				new_value: { needs_attention: true },
-				changed_by_user_id: TEAMMATE,
-				changed_by_job: null,
+				changed_by_user_id: null,
+				changed_by_job: "agent",
+				changed_for_user_id: TEAMMATE,
+				merge_of: null,
+			},
+			{
+				table_name: "deal",
+				record: { id: DEAL },
+				action: "update",
+				old_value: { name: "Example Dental Springfield Deal" },
+				new_value: { name: "Example renamed" },
+				changed_by_user_id: null,
+				changed_by_job: "old_system",
 				changed_for_user_id: null,
 				merge_of: null,
 			},
