@@ -127,6 +127,7 @@ const rounds = ROUNDS.map(
 		from_role,
 		offered_at: `${day}T15:00:00+00:00`,
 		status,
+		expires_on: null,
 		rent_per_sf_yr: rent,
 		nnn_per_sf_yr: nnn,
 		term_months: term,
@@ -430,6 +431,7 @@ const STAMPED = [
 	"offer_document",
 	"lease",
 	"lease_option",
+	"critical_date",
 	"social_account",
 	"idea",
 	"design_template",
@@ -525,7 +527,74 @@ const newOption = (row: Record<string, string | number | null> = {}) =>
 		terms: "Example five-year renewal",
 		...row,
 	});
+const DATE = id(710);
+const newCriticalDate = (row: Record<string, string | null> = {}) =>
+	insert("critical_date", {
+		id: DATE,
+		deal_id: DEAL,
+		kind: "due_diligence",
+		due_on: "2026-06-01",
+		source: "Example signed agreement",
+		...row,
+	});
 const RULES: Record<string, Case[]> = {
+	"critical dates start proposed and only a user confirms or resolves them": [
+		[newCriticalDate({ status: "open" }), "critical_date_starts_proposed"],
+		[
+			newCriticalDate({ confirmed_by_user_id: USER }),
+			"critical_date_starts_proposed",
+		],
+		[newCriticalDate({ kind: "unknown" }), "critical_date_kind_check"],
+		[newCriticalDate({ source: " " }), "critical_date_source_check"],
+		[
+			newCriticalDate({ offer_id: id(102), document_id: PDF_FILE }),
+			"critical_date_one_source",
+		],
+		[newCriticalDate({ option_number: "1" }), "critical_date_option_on_lease"],
+		[
+			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, deal_id: LENDER_DEAL })}`,
+			"critical_date_lease_id_deal_id_fkey",
+		],
+		[
+			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, option_number: "1" })}`,
+			"critical_date_lease_id_option_number_fkey",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; ${asJob("agent", USER)}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+			"critical_date_user_decides",
+		],
+		[newCriticalDate({ deal_id: MISSING }), "critical_date_deal_id_fkey"],
+		[
+			newCriticalDate({ offer_id: id(102), deal_id: LENDER_DEAL }),
+			"critical_date_offer_id_deal_id_fkey",
+		],
+		[
+			`${newCriticalDate()}; ${asJob("agent", USER)}; update critical_date set status = 'open'`,
+			"critical_date_user_decides",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+			"critical_date_status_moves",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; update critical_date set status = 'done'`,
+			"critical_date_resolution_whole",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; update critical_date set status = 'done', resolution_reason = 'Example completed';
+			update critical_date set status = 'open'`,
+			"critical_date_status_moves",
+		],
+		[
+			"update critical_date set confirmed_at = now()",
+			notGranted("critical_date"),
+		],
+		[
+			"update critical_date set due_on = current_date",
+			notGranted("critical_date"),
+		],
+		["delete from critical_date", notGranted("critical_date")],
+	],
 	"leases preserve sourced terms and a consecutive history on their deal": [
 		[newLease({ version: 0 }), "lease_version_check"],
 		[newLease({ version: 2 }), "lease_deal_id_previous_version_fkey"],
@@ -1665,6 +1734,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
 	document: ["name"],
 	offer: ["status"],
+	critical_date: ["resolution_reason", "status"],
 	social_account: ["handle", "platform_account_id"],
 	idea: ["angle", "hook", "pillar"],
 	design_template: ["name"],
@@ -2805,5 +2875,41 @@ test("sourced options can be extracted later for a historical lease version", as
 			(await db.query(`select lease_id from lease_option`)).rows[0].lease_id,
 			LEASE,
 		);
+	});
+});
+
+test("lease and LOI dates are repeatable proposals, then a user's confirmation survives resolution", async () => {
+	await rolledBack(async () => {
+		await db.query(`${newLease({ rent_starts_on: "2026-07-01" })}; ${newOption()};
+			insert into offer (deal_id, property_id, round, from_party_id, from_role, offered_at, expires_on)
+			values ('${DEAL}', '${PROPERTY}', 4, '${CLIENT}', 'client', now(), '2026-06-10');
+			select propose_critical_dates('${DEAL}'); select propose_critical_dates('${DEAL}')`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select kind, status, due_on::text from critical_date order by kind",
+				)
+			).rows,
+			[
+				{ kind: "lease_end", status: "proposed", due_on: "2033-06-30" },
+				{ kind: "loi_expiry", status: "proposed", due_on: "2026-06-10" },
+				{ kind: "option_notice", status: "proposed", due_on: "2032-12-31" },
+				{ kind: "rent_start", status: "proposed", due_on: "2026-07-01" },
+			],
+		);
+		await db.query("update critical_date set status = 'open'");
+		await db.query(
+			`${asUser(TEAMMATE)}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+		);
+		const { rows } = await db.query(
+			"select distinct confirmed_by_user_id, resolved_by_user_id, confirmed_at = transaction_timestamp() as confirmed_now from critical_date",
+		);
+		assert.deepEqual(rows, [
+			{
+				confirmed_by_user_id: USER,
+				resolved_by_user_id: TEAMMATE,
+				confirmed_now: true,
+			},
+		]);
 	});
 });

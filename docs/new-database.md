@@ -24,6 +24,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`offer`**: one round of an LOI or other offer on a deal.
 - **`lease`**: a sourced version of a signed lease on a deal and property.
 - **`lease_option`**: one option in a lease version, with its notice deadline and terms.
+- **`critical_date`**: a proposed deadline, with its user confirmation and resolution.
 - **`document`**: a file, as its name, its key in object storage (Cloudflare R2) and its type, read from the file's own bytes when the engine stores it. The file itself is never in the database. An email attachment names the email it arrived with.
 - **`activity`**: something that happened: an email, a call, a meeting or a note, with when, who it came from and a summary.
 - **`email`**: the email behind an email activity.
@@ -131,6 +132,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 55. Lease versions are consecutive on a deal, have a source document and ordered dates, and never change or disappear. A supplied offer was accepted when recorded and belongs to the same deal and property. Typed amounts are nonnegative, term is positive and rent starts on a date or after delivery, never both.
 56. Every lease option is numbered once on its version, is renewal, expansion or early termination, and has an exact notice deadline and nonblank terms. An option notice is no later than the lease ends. Options never change or disappear; sourced options may be added to any version as they are extracted.
 
+57. A critical date starts proposed, with a known kind and nonblank source; its source round, lease or option exists and belongs to its deal. Repeated generated proposals are stored once.
+58. Only a direct user confirms or resolves a critical date. The database records who and when, retains confirmation through resolution, and refuses all other transitions, rewrites and removals. Resolution needs a nonblank reason.
+
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
 ## Who may change what
@@ -146,11 +150,11 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
 - a next step's text, owner, due date and done time;
-- a round's status;
+- a round's status, and a critical date's status and resolution reason;
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `lease`, `lease_option`, `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a round's status moves, a later acceptance superseding a round, a lease's round accepted when recorded, an option notice before lease expiration, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
+History is `critical_date`, `lease`, `lease_option`, `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a round's status moves, a later acceptance superseding a round, a lease's round accepted when recorded, an option notice before lease expiration, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
 
 A merge is the one path that rewrites history: `merge_party` runs with the owner's rights and points rounds and outside ids at the survivor. Each row it moves is stamped with whoever ran it, so a moved row's stamp no longer names who first stored it. Its change history still does, and names the merge.
 
@@ -251,6 +255,16 @@ An optional `offer_id` names a round accepted when the lease is recorded, on tha
 Each amendment or correction is the next consecutive version on the deal. Versions and their `lease_option` rows are history, never rewritten or removed by the engine. `current_lease` selects the latest version per deal, so lease endings can be queried by `expiration_on`. Options are numbered within that version, each with its kind, exact `notice_on` and terms. A new version includes every option that still applies. Sourced options may be added to any version when they are extracted later; an existing option row never changes. A notice may predate an amendment that retains it, but cannot follow the lease expiration.
 
 Moving today's rows across, order each deal's leases by its supersedes chain and preserve every version. Rows missing execution or expiration dates or a source document are listed for a partner to fix, never silently dropped or completed by inference. Exact end dates stay exact, never calculated from term months. Store the executed lease, amendment or abstract evidence as a document. Unknown typed terms stay null. Convert a legacy rent quote only when its unit is known; otherwise keep the wording in `other_terms`. Options in `options_note` need their individual terms and sourced deadlines before becoming option rows; keep unparsed wording in `other_terms`. The old radar's current lease ending becomes `current_lease.expiration_on`; the 24-month radar and 18-month renewal windows remain read filters. Leases without brokerage work and the link from a new renewal deal to the lease it renews follow in #280. Critical date proposals follow in #279.
+
+## Critical dates
+
+A `critical_date` starts proposed, with a deal, kind, due date and nonblank source. It can name its source round, lease, lease option or document; a round or lease must belong to that deal. Kinds are LOI expiry, option notice, rent start, lease end, due diligence or other. The source text describes manually added dates too.
+
+`propose_critical_dates(deal_id)` derives dates from current lease versions and their options, and expiries on open or accepted rounds. Repeating it adds nothing twice. It uses exact dates only; days after delivery need an actual delivery date before a rent-start proposal can be made. New amendments produce new proposals; old proposals and confirmed dates remain for a user to drop when appropriate.
+
+A direct user confirms a proposal to open, or drops it with a reason. Only a direct user resolves an open date as done, dropped or passed, with a reason. The database writes confirmation and resolution users and times itself. Jobs, including agents working for a user, can propose but cannot decide. Confirmation stays when a different user later resolves the date. Dates, sources and decisions cannot be rewritten or removed; a correction is a new proposal and a reasoned drop.
+
+Today's `critical_date` rows keep their kinds, dates, sources and notes. `option_window` maps to `option_notice`, an unlisted kind to `other` with its original wording in the note. Open rows need user confirmation; done, dropped and passed rows keep their historical confirmation and resolution when known. The owner's load preserves known users and times with the transition and stamp triggers disabled, and lists missing evidence or decisions for a partner to fix rather than inventing confirmation. Today shows confirmed open dates; proposals stay in the confirmation queue. These reads follow in later slices.
 
 ## Marketing
 
@@ -367,4 +381,4 @@ Today's system keeps one `event` row per field changed, with the actor, a verb a
 
 ## Later slices
 
-Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Critical dates and commissions. Leases negotiated elsewhere and renewal links. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Commissions. Serving confirmed critical dates and proposals. Leases negotiated elsewhere and renewal links. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
