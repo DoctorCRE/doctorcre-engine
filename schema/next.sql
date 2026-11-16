@@ -788,6 +788,26 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
+-- What a side can claim about its own position, such as best and final. Like roles, a label can be renamed.
+-- A deadline is the round's expires_on, never a claim.
+create table claim_type (
+	slug text primary key,
+	label text not null
+);
+
+-- What the side that sent a round claimed in it. History, like its documents; a claim heard later is added later.
+create table offer_claim (
+	offer_id uuid not null references offer,
+	claim_type text not null references claim_type,
+	created_at timestamptz not null default now(),
+	-- The rent a side says it will not go past, when it differs from the round's own.
+	floor_rent_per_sf_yr numeric(10, 2) check (floor_rent_per_sf_yr > 0),
+	-- Their words, as near verbatim as heard.
+	quote text check (quote ~ '\S'),
+	note text check (note ~ '\S'),
+	primary key (offer_id, claim_type)
+);
+
 -- Signed terms are their own history; an amendment is the next version, never an overwrite.
 create table lease (
 	id uuid primary key default gen_random_uuid(),
@@ -975,6 +995,10 @@ begin atomic
 				select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 				from offer_document od join document doc on doc.id = od.document_id
 				where od.offer_id = o.id
+			), 'claims', (
+				select coalesce(jsonb_agg(to_jsonb(c) - 'offer_id' order by c.claim_type), '[]')
+				from offer_claim c
+				where c.offer_id = o.id
 			)) order by o.round), '[]')
 			from offer o
 			where o.deal_id = d.id
@@ -1432,7 +1456,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -1567,7 +1591,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (lease, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- History (lease, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -1609,7 +1633,7 @@ grant delete on party, party_email, party_phone, do_not_contact, party_specialty
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found to engine;
+grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found, claim_type to engine;
 grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;

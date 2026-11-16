@@ -63,6 +63,8 @@ insert into party_email (party_id, address, label, is_primary) values
 insert into party_phone (party_id, number, extension, label, is_primary) values
 	('${AGENT}', '+12175550100', '12', 'work', true), ('${AGENT}', '+12175550101', null, 'mobile', false);
 insert into phase (slug, label) values ('negotiation', 'Negotiating'), ('legal', 'Legal'), ('dead', 'Dead');
+insert into claim_type values
+	('finality', 'Best and final'), ('authority', 'Authority limit'), ('competing_interest', 'Competing interest');
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
 insert into deal_kind values ('lease', 'Lease'), ('purchase', 'Purchase');
@@ -155,6 +157,24 @@ const rounds = ROUNDS.map(
 				email_activity_id: i === 1 ? EMAIL : null,
 			},
 		],
+		// The landlord's counter claims a floor below its own rent, and another tenant.
+		claims:
+			i === 1
+				? [
+						{
+							claim_type: "authority",
+							floor_rent_per_sf_yr: 34,
+							quote: "The owner will not go below 34",
+							note: null,
+						},
+						{
+							claim_type: "competing_interest",
+							floor_rent_per_sf_yr: null,
+							quote: "Another tenant is looking at the space",
+							note: "Said on the call, not in the counter",
+						},
+					]
+				: [],
 	}),
 );
 
@@ -170,6 +190,12 @@ const offer = (
 	values ('${DEAL}', ${round}, ${answers}, '${from}', '${role}', now(), ${Object.values(row).map((value) => `'${value}'`)})`;
 };
 const NEXT_ROUND = offer(4, 3, AGENT, "listing_agent");
+const newClaim = (row: Record<string, string | number>) =>
+	insert("offer_claim", {
+		offer_id: id(101),
+		claim_type: "finality",
+		...row,
+	});
 // Runs the checks commit would run, inside a transaction the test still rolls back.
 // Later statements in the transaction are then checked as they run.
 const CHECK_AT_COMMIT = "set constraints all immediate";
@@ -454,6 +480,8 @@ const STAMPED = [
 	"email",
 	"offer",
 	"offer_document",
+	"claim_type",
+	"offer_claim",
 	"lease",
 	"lease_option",
 	"critical_date",
@@ -513,6 +541,7 @@ const STORED_AT = [
 	"deal_party",
 	"activity_about",
 	"offer_document",
+	"offer_claim",
 	"next_step",
 	"document",
 	"social_account",
@@ -1139,6 +1168,23 @@ const RULES: Record<string, Case[]> = {
 			"offer_one_accepted_per_deal",
 		],
 	],
+	"a claim is on a round, of a listed type, once per round, and like the round is never rewritten or removed":
+		[
+			[newClaim({ offer_id: MISSING }), "offer_claim_offer_id_fkey"],
+			[newClaim({ claim_type: "deadline" }), "offer_claim_claim_type_fkey"],
+			[newClaim({ claim_type: "authority" }), "offer_claim_pkey"],
+			[
+				newClaim({ floor_rent_per_sf_yr: 0 }),
+				"offer_claim_floor_rent_per_sf_yr_check",
+			],
+			[newClaim({ quote: " \n" }), "offer_claim_quote_check"],
+			[newClaim({ note: "" }), "offer_claim_note_check"],
+			...[
+				"update offer_claim set quote = 'Example'",
+				"delete from offer_claim",
+				"truncate offer_claim",
+			].map((sql): Case => [sql, notGranted("offer_claim")]),
+		],
 	"a round's status moves only out of open, or from accepted to superseded": [
 		[
 			"update offer set status = 'accepted' where round = 1",
@@ -1878,6 +1924,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	do_not_contact: ["until_date"],
 	stage: ["label"],
 	how_found: ["label"],
+	claim_type: ["label"],
 	party_role: [
 		"disposition",
 		"disposition_reason",
@@ -1932,7 +1979,7 @@ const DEFAULTED: Record<string, string[]> = {
 };
 const REMOVABLE = [
 	...STORED_AT.filter(
-		(table) => !["offer_document", "post_media"].includes(table),
+		(table) => !["offer_document", "offer_claim", "post_media"].includes(table),
 	),
 	"activity",
 	"email",
@@ -2010,7 +2057,7 @@ before(async () => {
 	await db.query(
 		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED}`,
 	);
-	for (const { documents, ...round } of rounds) {
+	for (const { documents, claims, ...round } of rounds) {
 		await db.query(
 			"insert into offer select * from jsonb_populate_record(null::offer, $1)",
 			[{ ...round, deal_id: DEAL, status: "open" }],
@@ -2022,6 +2069,12 @@ before(async () => {
 					from jsonb_populate_record(null::document, $1) returning id)
 				insert into offer_document select $2, id from saved`,
 				[document, round.id],
+			);
+		for (const claim of claims)
+			await db.query(
+				`insert into offer_claim (offer_id, claim_type, floor_rent_per_sf_yr, quote, note)
+				select $2, claim_type, floor_rent_per_sf_yr, quote, note from jsonb_populate_record(null::offer_claim, $1)`,
+				[claim, round.id],
 			);
 		if (round.answers_round)
 			await db.query("update offer set status = 'countered' where round = $1", [
