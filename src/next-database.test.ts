@@ -2791,62 +2791,27 @@ test("a rebrand and a new outside owner keep the previous dated membership", asy
 	});
 });
 
+// biome-ignore format: one row per refusal
 const CLIENT_REFUSALS: Case[] = [
 	[`update client set status = 'active_deal'`, "client_status_check"],
 	[`update client set status = 'past_client'`, "client_status_check"],
 	[`update client set client_type = 'unknown'`, "client_client_type_fkey"],
-	[
-		`insert into client (party_id) values ('${AGENT}')`,
-		"client_party_id_role_fkey",
-	],
-	[
-		`insert into client (party_id, role) values ('${AGENT}', 'listing_agent')`,
-		"client_role_check",
-	],
-	[
-		`insert into party_role (party_id, role) values ('${USER}', 'national_account');
-	insert into national_account (party_id) values ('${USER}')`,
-		"national_account_party_id_kind_fkey",
-	],
-	[
-		`insert into national_account (party_id) values ('${NEXT_BRAND}')`,
-		"national_account_party_id_role_fkey",
-	],
-	[
-		`insert into national_account (party_id, role) values ('${CLIENT}', 'client')`,
-		"national_account_role_check",
-	],
-	[
-		`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${CLIENT}', '2026-01-01')`,
-		"client_brand_different_companies",
-	],
-	[
-		`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${AGENT}', '2026-01-01')`,
-		"client_brand_brand_id_brand_kind_fkey",
-	],
-	[
-		`insert into client_brand (location_id, brand_id, started_on) values ('${NEXT_BRAND}', '${BRAND}', '2026-01-01')`,
-		"client_brand_location_id_fkey",
-	],
-	[
-		`insert into party_role (party_id, role) values ('${USER}', 'client');
+	[`insert into client (party_id) values ('${AGENT}')`, "client_party_id_role_fkey"],
+	[`insert into client (party_id, role) values ('${AGENT}', 'listing_agent')`, "client_role_check"],
+	[`insert into party_role (party_id, role) values ('${USER}', 'national_account');
+	insert into national_account (party_id) values ('${USER}')`, "national_account_party_id_kind_fkey"],
+	[`insert into national_account (party_id) values ('${NEXT_BRAND}')`, "national_account_party_id_role_fkey"],
+	[`insert into national_account (party_id, role) values ('${CLIENT}', 'client')`, "national_account_role_check"],
+	[`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${CLIENT}', '2026-01-01')`, "client_brand_different_companies"],
+	[`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${AGENT}', '2026-01-01')`, "client_brand_brand_id_brand_kind_fkey"],
+	[`insert into client_brand (location_id, brand_id, started_on) values ('${NEXT_BRAND}', '${BRAND}', '2026-01-01')`, "client_brand_location_id_fkey"],
+	[`insert into party_role (party_id, role) values ('${USER}', 'client');
 	insert into client (party_id) values ('${USER}');
-	insert into client_brand (location_id, brand_id, started_on) values ('${USER}', '${BRAND}', '2026-01-01')`,
-		"client_brand_location_id_location_kind_fkey",
-	],
+	insert into client_brand (location_id, brand_id, started_on) values ('${USER}', '${BRAND}', '2026-01-01')`, "client_brand_location_id_location_kind_fkey"],
 	[`update client_brand set ended_on = '2020-01-01'`, "client_brand_check"],
-	[
-		`update national_account_owner set ended_on = '2020-01-01'`,
-		"national_account_owner_check",
-	],
-	[
-		`insert into national_account_owner (account_id, owner_id, started_on) values ('${BRAND}', '${CLIENT}', '2026-01-01')`,
-		"national_account_owner_owner_id_owner_kind_fkey",
-	],
-	[
-		`insert into national_account_owner (account_id, owner_id, started_on) values ('${NEXT_BRAND}', '${AGENT}', '2026-01-01')`,
-		"national_account_owner_account_id_fkey",
-	],
+	[`update national_account_owner set ended_on = '2020-01-01'`, "national_account_owner_check"],
+	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${BRAND}', '${CLIENT}', '2026-01-01')`, "national_account_owner_owner_id_owner_kind_fkey"],
+	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${NEXT_BRAND}', '${AGENT}', '2026-01-01')`, "national_account_owner_account_id_fkey"],
 	...(["client_brand", "national_account_owner"] as const).flatMap(
 		(table): Case[] => {
 			const columns =
