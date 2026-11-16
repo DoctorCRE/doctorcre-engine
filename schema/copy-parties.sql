@@ -15,6 +15,7 @@ alter table party_phone disable trigger stamp_change;
 alter table do_not_contact disable trigger stamp_change;
 alter table party_specialty disable trigger stamp_change;
 alter table party_company disable trigger stamp_change;
+alter table party_role disable trigger stamp_change;
 
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
@@ -166,8 +167,27 @@ select id, 'contact_state', concat_ws(' until ', contact_state, contact_state_un
 	case when contact_state in ('do_not_contact', 'paused') and not coalesce(contact_state_reason ~ '\S', false) then 'do not contact without a reason'
 		when contact_state = 'paused' then 'paused without an end date'
 		else 'no place in the new database' end
-from chain where contact_state <> 'active' and not (contact_state in ('do_not_contact', 'paused')
+from chain where contact_state not in ('active', 'nurture') and not (contact_state in ('do_not_contact', 'paused')
 	and contact_state_reason ~ '\S' and (contact_state <> 'paused' or contact_state_until is not null));
+
+-- Revisit mapped records too: their lead roles may have been copied after their people.
+create temp table nurture on commit drop as
+select p.id as old_id, map.party_id, coalesce(p.contact_state_set_at, p.updated_at) as set_at, setter.*
+from public.party p
+left join outside_id map on map.source = 'old_system' and map.value = p.id::text
+cross join lateral copy_attribution('party', p.id,
+	coalesce(p.contact_state_set_by, p.updated_by), 'contact_state') setter
+where p.contact_state = 'nurture' and p.deleted_at is null;
+
+update party_role r set stage = 'nurture', changed_by_user_id = n.changed_by_user_id,
+	changed_by_job = n.changed_by_job, changed_for_user_id = n.changed_for_user_id, changed_at = n.set_at
+from (select distinct on (party_id) * from nurture order by party_id, set_at desc, old_id) n
+where r.party_id = n.party_id and r.role = 'lead' and r.stage <> 'nurture';
+
+insert into not_copied
+select old_id, 'contact_state', 'nurture',
+	case when party_id is null then 'its record is not copied' else 'its record has no lead role' end
+from nurture n where not exists (select from party_role r where r.party_id = n.party_id and r.role = 'lead');
 
 -- Each specialty typed, split at commas and semicolons. Spellings that differ only in case, spaces or punctuation
 -- are one specialty, labelled as first typed, and one already on the list keeps its label.
@@ -284,5 +304,6 @@ alter table party_phone enable trigger stamp_change;
 alter table do_not_contact enable trigger stamp_change;
 alter table party_specialty enable trigger stamp_change;
 alter table party_company enable trigger stamp_change;
+alter table party_role enable trigger stamp_change;
 
 select * from not_copied order by old_id, field, value;
