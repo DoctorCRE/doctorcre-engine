@@ -1885,7 +1885,16 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
-	candidate: ["promoted_party_id", "reason", "status"],
+	candidate: [
+		"estimated_lease_on",
+		"lease_estimate_source",
+		"name",
+		"promoted_party_id",
+		"qualification",
+		"reason",
+		"source_row",
+		"status",
+	],
 	lead_lane: ["label"],
 	client_type: ["label"],
 	client: ["client_type", "status"],
@@ -3563,7 +3572,7 @@ for (const [label, sql, refusal] of [
 	],
 	[
 		"rewrite provenance",
-		"update candidate set source_row = '{}'",
+		"update candidate set source = 'replacement'",
 		notGranted("candidate"),
 	],
 	["remove candidate", "delete from candidate", notGranted("candidate")],
@@ -3633,6 +3642,92 @@ test("a promoted candidate can only follow its party through a merge", () =>
 			(await db.query("select promoted_party_id from candidate")).rows[0]
 				.promoted_party_id,
 			OLD,
+		);
+	}));
+
+for (const [label, sql, refusal] of [
+	[
+		"job reopening suppression",
+		`${newCandidate({ status: "suppressed", reason: "Example duplicate" })}; ${asJob("candidate_sweep")}; update candidate set status = 'unreviewed', reason = null`,
+		"candidate_user_decides",
+	],
+	[
+		"rewriting decline reason",
+		`${newCandidate({ status: "declined", reason: "Example not a fit" })}; ${asJob("candidate_sweep")}; update candidate set reason = 'Example replacement'`,
+		"candidate_decision_final",
+	],
+] satisfies [string, string, Refusal][]) {
+	test(`candidate refuses ${label}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+for (const fields of [
+	"source_row = '{}'",
+	"name = 'Example replacement'",
+	"qualification = 'Example new basis'",
+	"estimated_lease_on = '2031-01-01', lease_estimate_source = 'Example new feed'",
+]) {
+	test(`a decided candidate refuses refreshed ${fields}`, () =>
+		rolledBack(async () => {
+			await db.query(
+				newCandidate({ status: "promoted", promoted_party_id: LEAD }),
+			);
+			await assert.rejects(
+				db.query(`update candidate set ${fields}`),
+				expected("candidate_refresh_unreviewed"),
+			);
+		}));
+}
+
+test("a repeated sweep refreshes an unreviewed candidate and history keeps the earlier source facts", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("candidate_sweep")}; ${newCandidate()};
+		${newCandidate({ id: id(751), name: "Example refreshed", source_row: JSON.stringify({ reading: 2 }), estimated_lease_on: "2031-01-01", lease_estimate_source: "Example new feed" })}
+		on conflict (source, source_key) do update set name = excluded.name, source_row = excluded.source_row,
+			estimated_lease_on = excluded.estimated_lease_on, lease_estimate_source = excluded.lease_estimate_source`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select name, source_row, estimated_lease_on::text as estimate from candidate",
+				)
+			).rows,
+			[
+				{
+					name: "Example refreshed",
+					source_row: { reading: 2 },
+					estimate: "2031-01-01",
+				},
+			],
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select old_value -> 'source_row' as source from change where table_name = 'candidate' and action = 'update'",
+				)
+			).rows,
+			[{ source: { license: "example-1", email: "example@example.com" } }],
+		);
+	}));
+
+test("an agent acting for a user can promote a reviewed candidate", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${newCandidate()}; ${asJob("agent", USER)}; update candidate set status = 'promoted', promoted_party_id = '${LEAD}'`,
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select status, changed_by_job, changed_for_user_id from candidate",
+				)
+			).rows,
+			[
+				{
+					status: "promoted",
+					changed_by_job: "agent",
+					changed_for_user_id: USER,
+				},
+			],
 		);
 	}));
 

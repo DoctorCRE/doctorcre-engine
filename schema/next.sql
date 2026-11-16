@@ -496,32 +496,41 @@ create table candidate (
 
 create function candidate_review() returns trigger
 language plpgsql as $$
+declare
+	needs_user boolean := new.status in ('promoted', 'declined');
 begin
-	if tg_op = 'UPDATE' and old.status in ('promoted', 'declined') and new.status is distinct from old.status then
-		raise exception 'a promoted or declined candidate stays decided'
-			using errcode = 'check_violation', constraint = 'candidate_decision_final';
-	end if;
-	if tg_op = 'UPDATE' and old.status = 'promoted' and new.promoted_party_id is distinct from old.promoted_party_id
-		and not exists (select from merged_party where id = old.promoted_party_id and survivor_id = new.promoted_party_id
-			and id = nullif(current_setting('engine.merge', true), '')::uuid and created_at = now()) then
-		raise exception 'only a merge moves a promoted candidate to another lead'
-			using errcode = 'check_violation', constraint = 'candidate_promotion_stays';
-	end if;
-	if tg_op = 'UPDATE' and old.status = new.status then return null; end if;
-	if new.status in ('promoted', 'declined') or tg_op = 'UPDATE' and old.status = 'suppressed' then
-		if nullif(current_setting('engine.user_id', true), '') is null then
-			raise exception 'a user promotes, declines or reopens a candidate'
-				using errcode = 'check_violation', constraint = 'candidate_user_decides';
+	if tg_op = 'UPDATE' then
+		if old.status in ('promoted', 'declined') and new.status is distinct from old.status
+			or old.status = 'declined' and new.reason is distinct from old.reason then
+			raise exception 'a promoted or declined candidate stays decided'
+				using errcode = 'check_violation', constraint = 'candidate_decision_final';
 		end if;
+		if old.status = 'promoted' and new.promoted_party_id is distinct from old.promoted_party_id
+			and not exists (select from merged_party where id = old.promoted_party_id and survivor_id = new.promoted_party_id
+				and id = nullif(current_setting('engine.merge', true), '')::uuid and created_at = now()) then
+			raise exception 'only a merge moves a promoted candidate to another lead'
+				using errcode = 'check_violation', constraint = 'candidate_promotion_stays';
+		end if;
+		if old.status <> 'unreviewed' and (new.source_row, new.name, new.qualification, new.estimated_lease_on, new.lease_estimate_source)
+			is distinct from (old.source_row, old.name, old.qualification, old.estimated_lease_on, old.lease_estimate_source) then
+			raise exception 'only an unreviewed candidate receives refreshed source facts'
+				using errcode = 'check_violation', constraint = 'candidate_refresh_unreviewed';
+		end if;
+		if old.status = new.status then return null; end if;
+		if new.status = 'promoted' and old.status <> 'unreviewed' then
+			raise exception 'only an unreviewed candidate is promoted'
+				using errcode = 'check_violation', constraint = 'candidate_unreviewed_promotes';
+		end if;
+		needs_user := needs_user or old.status = 'suppressed';
 	end if;
-	if tg_op = 'UPDATE' and new.status = 'promoted' and old.status <> 'unreviewed' then
-		raise exception 'only an unreviewed candidate is promoted'
-			using errcode = 'check_violation', constraint = 'candidate_unreviewed_promotes';
+	if needs_user and nullif(current_setting('engine.user_id', true), '') is null then
+		raise exception 'a user promotes, declines or reopens a candidate'
+			using errcode = 'check_violation', constraint = 'candidate_user_decides';
 	end if;
 	return null;
 end $$;
 
-create trigger candidate_review after insert or update of status, promoted_party_id on candidate
+create trigger candidate_review after insert or update on candidate
 	for each row execute function candidate_review();
 
 -- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
@@ -1719,3 +1728,5 @@ grant update (how_found_detail) on party to engine;
 grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) on party_role to engine;
 
 grant update (status, reason, promoted_party_id) on candidate to engine;
+
+grant update (source_row, name, qualification, estimated_lease_on, lease_estimate_source) on candidate to engine;

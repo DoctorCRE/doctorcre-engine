@@ -44,15 +44,17 @@ The engine names who acts once per transaction, never for the whole connection, 
 
 The jobs today:
 
-| Job            | Writes                                                                         | Works for                      |
-| -------------- | ------------------------------------------------------------------------------ | ------------------------------ |
-| `intake`       | posts, their text and media, and their files' documents, from the Friday batch | no one                         |
-| `mail_capture` | emails, their activity and what it is about, and attachments                   | the user whose mailbox it read |
-| `publisher`    | a post's claim and its published or failed status                              | no one                         |
-| `readings`     | readings                                                                       | no one                         |
-| `review_close` | no response, when review closes                                                | no one                         |
-| `agent`        | whatever an agent session saves                                                | the user it works for          |
-| `old_system`   | rows the old system's own migrations and exporters last changed                | no one                         |
+| Job               | Writes                                                                         | Works for                      |
+| ----------------- | ------------------------------------------------------------------------------ | ------------------------------ |
+| `intake`          | posts, their text and media, and their files' documents, from the Friday batch | no one                         |
+| `mail_capture`    | emails, their activity and what it is about, and attachments                   | the user whose mailbox it read |
+| `publisher`       | a post's claim and its published or failed status                              | no one                         |
+| `readings`        | readings                                                                       | no one                         |
+| `review_close`    | no response, when review closes                                                | no one                         |
+| `agent`           | whatever an agent session saves                                                | the user it works for          |
+| `lead_stage`      | evidence-backed lead stage proposals and moves                                 | no one                         |
+| `candidate_sweep` | unreviewed candidate source refreshes and suppression                          | no one                         |
+| `old_system`      | rows the old system's own migrations and exporters last changed                | no one                         |
 
 A user who settles a post stuck in `publishing` is named on the post. In marketing, a text edit, an edit's review and a cancel name a user, as the one who made it or the one a job worked for, and no response is a job's for no one. A sign-in names its user.
 
@@ -424,7 +426,7 @@ A lead is a person or company holding the `lead` role, and a client one holding 
 
 - **Working details.** The lead role keeps its `lane` from `lead_lane`, `segment`, and `estimated_lease_on` with `lease_estimate_source` and optional high, medium or low confidence. An estimate always has its source; neither can stand alone. Lanes are independent of how found. `party.how_found_detail` keeps the attribution detail in every role. A merge keeps the survivor's working details, filling gaps from the duplicate, and moves an estimate with its own source and confidence. How-found detail fills only when the source agrees or the survivor had none.
 
-- **Candidates.** `candidate` is the separate list from sweeps and public records. Its source and source key identify a row once, with its original object-shaped context, name and qualifying reason. Unreviewed rows name no party. A user, including an agent working for one, promotes to a party holding the lead role, or declines with a reason. Jobs may suppress with a reason; a user must reopen before promoting. Promoted and declined decisions stay decided, so sweeps cannot put them back in the list. Only a merge changes the promoted party. Provenance is never rewritten or removed.
+- **Candidates.** `candidate` is the separate list from sweeps and public records. Its source and source key identify a row once, with its original object-shaped context, name and qualifying reason. Unreviewed rows name no party. A user, including an agent working for one, promotes to a party holding the lead role, or declines with a reason. Jobs may suppress with a reason; a user must reopen before promoting. Promoted and declined decisions stay decided, so sweeps cannot put them back in the list. Only a merge changes the promoted party. Source and source key never change. Sweeps may refresh source context, name, qualification and estimates only while unreviewed; change history keeps earlier facts. Decline reasons stay as the user decided, and candidates are never removed.
 - **Not kept.** The 0 to 100 lead score and named drip campaigns do not come across (owner, #196).
 
 Moving today's rows across:
@@ -442,7 +444,7 @@ Moving today's rows across:
 - `client.acquisition_detail` becomes `party.how_found_detail`, otherwise `lead.source_detail` does. If both differ, the lead detail becomes a separate note activity so both survive. A detail without mapped how found waits with its source.
 - `notes` becomes a note activity about the party, dated at the old row's last change. `last_touch` comes from the latest contact activity; a standalone old date or imported last-touch-stamp note with no contact activity is listed rather than invented as contact. `next_action_date` becomes the due date of a next step about the party, with text marking it as an imported lead follow-up. `notes_path` is an old file reference, not note text; its file must be copied as a document or listed for a user.
 
-- Each old `candidate_pool` row becomes a `candidate`, retaining its id, source and source key. `pool` becomes `unreviewed`, `suppressed_dup` becomes `suppressed`, and promoted and declined stay. `score_basis` becomes qualification; `est_lease_event` and `est_basis` become the estimated date and its source. The complete old source row and qualifying context, including channel, location, segment, duplicate review and candidate ranking fields, stay in `source_row`; candidate ranking never becomes a lead score. A promoted lead id maps to its lead party. Decline or duplicate basis supplies the reason. Missing qualification, ambiguous promotion, a reasonless rejection or an unsourced estimate is listed for a user. Moving an estimate and verified contact channels onto a newly promoted lead is part of the promotion save, not an unattended sweep.
+- Each old `candidate_pool` row becomes a `candidate`, retaining its id, source and source key. `pool` becomes `unreviewed`, `suppressed_dup` becomes `suppressed`, and promoted and declined stay. `expired` becomes reversible suppression with its recorded expiry basis, or the factual reason "Expired by Clear the deck". Email intake's `confirmed` can target an existing record or deal without creating a lead, so those rows are listed for a user with their existing target; they never become invented promotions. `score_basis` becomes qualification; `est_lease_event` and `est_basis` become the estimated date and its source. The complete old source row and qualifying context, including channel, location, segment, duplicate review and candidate ranking fields, stay in `source_row` as `{"row": <old source_row>, "pool": <old typed columns except source_row>}`, including `source_seq` and the old confirmation values in `pool`; candidate ranking never becomes a lead score. A promoted lead id maps to its lead party. Promotion events name the deciding user, including the user a sponsored agent acted for; `declined_by` names the declining user. `confirmed_at` and `confirmed_by` become a historical confirmation entry, and their original values stay in the copied context. An automated decision without a recoverable user is listed. Decline or duplicate basis supplies the reason. Missing qualification, ambiguous promotion, a reasonless rejection or an unsourced estimate is listed for a user. Moving an estimate and verified contact channels onto a newly promoted lead is part of the promotion save, not an unattended sweep.
 - Outreach drafts are the other slice of #286.
 
 ## Merging duplicates
