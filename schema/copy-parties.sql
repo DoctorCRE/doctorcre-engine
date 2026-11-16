@@ -2,6 +2,7 @@
 -- and each person's company and title there, into the new database.
 -- The owner runs it in one transaction, as psql --single-transaction does, with search_path set to the new schema.
 -- It only reads today's tables in public, and ends by listing each value it did not copy, for a partner to fix there.
+-- Load schema/copy-attribution.sql in the new schema before any copy.
 -- A record keeps its old id, and outside_id maps each old id, merged-away ones too, to the record it became.
 -- That map follows later merges, so later copies find a record through it; a second run copies only what is new.
 
@@ -33,15 +34,14 @@ with recursive merged (id, survivor_id) as (
 	union all
 	select p.id, m.survivor_id from public.party p join merged m on p.merged_into = m.id
 )
-select p.*, m.survivor_id,
-	case author.kind when 'human' then author.id end as changed_by_user_id,
-	case when author.kind is distinct from 'human' then 'old_system' end as changed_by_job,
-	case setter.kind when 'human' then setter.id end as dnc_by_user_id,
-	case when setter.kind is distinct from 'human' then 'old_system' end as dnc_by_job
+select p.*, m.survivor_id, author.*,
+	setter.changed_by_user_id as dnc_by_user_id, setter.changed_by_job as dnc_by_job,
+	setter.changed_for_user_id as dnc_for_user_id
 from public.party p
 left join merged m using (id)
-left join public.actor author on author.id = p.updated_by
-left join public.actor setter on setter.id = coalesce(p.contact_state_set_by, p.updated_by)
+cross join lateral copy_attribution('party', p.id, p.updated_by) author
+cross join lateral copy_attribution('party', p.id,
+	coalesce(p.contact_state_set_by, p.updated_by), 'contact_state') setter
 where not exists (select from outside_id where source = 'old_system' and value = p.id::text);
 
 create temp table copied on commit drop as
@@ -60,10 +60,10 @@ select s.id, s.survivor_id, s.npi as typed, btrim(s.npi) as npi, s.rank, pg_inpu
 from chain s left join party held on held.npi = btrim(s.npi)
 where btrim(s.npi) <> '';
 
-insert into party (id, created_at, kind, name, npi, changed_by_user_id, changed_by_job, changed_at)
+insert into party (id, created_at, kind, name, npi, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, created_at, case kind when 'org' then 'company' else kind end, name,
 	(select npi from npi_claim c where c.survivor_id = p.id and c.valid and c.holder = p.id order by c.rank limit 1),
-	changed_by_user_id, changed_by_job, updated_at
+	changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from copied p;
 
 insert into not_copied
@@ -134,28 +134,32 @@ select old_id, field, typed, case field when 'email' then 'not an email address'
 from typed_value where stored is null;
 
 -- The first value stored is primary, so cell is primary only when there is no phone, and a repeat is one row.
-insert into party_email (party_id, address, label, is_primary, created_at, changed_by_user_id, changed_by_job, changed_at)
+insert into party_email (party_id, address, label, is_primary, created_at, changed_by_user_id, changed_by_job,
+	changed_for_user_id, changed_at)
 select distinct on (v.party_id, v.stored) v.party_id, v.stored, v.label,
-	v.place = min(v.place) over (partition by v.party_id), p.created_at, p.changed_by_user_id, p.changed_by_job, p.updated_at
+	v.place = min(v.place) over (partition by v.party_id), p.created_at, p.changed_by_user_id, p.changed_by_job,
+	p.changed_for_user_id, p.updated_at
 from typed_value v join copied p on p.id = v.party_id
 where v.field = 'email' and v.stored is not null
 order by v.party_id, v.stored, v.place;
 
 insert into party_phone (party_id, number, extension, label, is_primary, created_at, changed_by_user_id, changed_by_job,
-	changed_at)
+	changed_for_user_id, changed_at)
 select distinct on (v.party_id, v.stored, v.extension) v.party_id, v.stored, v.extension, v.label,
-	v.place = min(v.place) over (partition by v.party_id), p.created_at, p.changed_by_user_id, p.changed_by_job, p.updated_at
+	v.place = min(v.place) over (partition by v.party_id), p.created_at, p.changed_by_user_id, p.changed_by_job,
+	p.changed_for_user_id, p.updated_at
 from typed_value v join copied p on p.id = v.party_id
 where v.field <> 'email' and v.stored is not null
 order by v.party_id, v.stored, v.extension, v.place;
 
 -- Keep the longest restriction, with an indefinite stop first.
-insert into do_not_contact (party_id, reason, until_date, created_at, changed_by_user_id, changed_by_job, changed_at)
+insert into do_not_contact (party_id, reason, until_date, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (survivor_id) survivor_id, btrim(contact_state_reason), contact_state_until,
-	coalesce(contact_state_set_at, updated_at), dnc_by_user_id, dnc_by_job, coalesce(contact_state_set_at, updated_at)
+	coalesce(contact_state_set_at, updated_at), dnc_by_user_id, dnc_by_job, dnc_for_user_id, coalesce(contact_state_set_at, updated_at)
 from chain where contact_state in ('do_not_contact', 'paused') and contact_state_reason ~ '\S'
 	and (contact_state <> 'paused' or contact_state_until is not null)
 order by survivor_id, contact_state_until desc nulls first, rank;
+
 
 insert into not_copied
 select id, 'contact_state', concat_ws(' until ', contact_state, contact_state_until),
@@ -179,8 +183,9 @@ from typed_specialty v join copied p on p.id = v.party_id
 where p.kind = 'person' and v.slug <> '' and v.slug not in (select slug from specialty)
 order by v.slug, v.created_at, v.old_id, v.place;
 
-insert into party_specialty (person_id, specialty, created_at, changed_by_user_id, changed_by_job, changed_at)
-select distinct v.party_id, v.slug, p.created_at, p.changed_by_user_id, p.changed_by_job, p.updated_at
+insert into party_specialty (person_id, specialty, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+select distinct v.party_id, v.slug, p.created_at, p.changed_by_user_id, p.changed_by_job,
+	p.changed_for_user_id, p.updated_at
 from typed_specialty v join copied p on p.id = v.party_id
 where p.kind = 'person' and v.slug <> '';
 
@@ -198,9 +203,9 @@ join copied p on p.id = s.survivor_id
 left join outside_id map on map.source = 'old_system' and map.value = s.org_id::text
 left join party company on company.id = map.party_id;
 
-insert into party_company (person_id, company_id, title, created_at, changed_by_user_id, changed_by_job, changed_at)
+insert into party_company (person_id, company_id, title, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (v.person_id, v.company_id) v.person_id, v.company_id, v.title, p.created_at, p.changed_by_user_id,
-	p.changed_by_job, p.updated_at
+	p.changed_by_job, p.changed_for_user_id, p.updated_at
 from typed_company v join copied p on p.id = v.person_id
 where v.kind = 'person' and v.company_kind = 'company'
 order by v.person_id, v.company_id, v.title is null, v.rank;
