@@ -2188,7 +2188,7 @@ const asLeadOrClient = async (party: string) =>
 
 test("a lead becomes a client when a deal is opened for them, and keeps its stage, owner and how it was found", () =>
 	rolledBack(async () => {
-		await db.query(`insert into deal (id, name) values ('${id(662)}', 'Example Lead Deal');
+		await db.query(`insert into deal (id, name, owner_user_id) values ('${id(662)}', 'Example Lead Deal', '${TEAMMATE}');
 			insert into deal_party values ('${id(662)}', '${LEAD}', 'client');
 			insert into party_role (party_id, role) values ('${LEAD}', 'client'); ${CHECK_AT_COMMIT}`);
 		assert.deepEqual(await asLeadOrClient(LEAD), [
