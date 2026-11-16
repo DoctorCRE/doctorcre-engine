@@ -133,8 +133,8 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 55. A deal's kind comes from the kind list and its reason from the reason list. Either may be unknown.
 56. A deal has exactly one deal owner, a user.
 57. A deal's market comes from the market list, and its closed value is more than zero.
-56. Lease versions are consecutive on a deal, have a source document and ordered dates, and never change or disappear. A supplied offer was accepted when recorded and belongs to the same deal and property. Typed amounts are nonnegative, term is positive and rent starts on a date or after delivery, never both.
-57. Every lease option is numbered once on its version, is renewal, expansion or early termination, and has an exact notice deadline and nonblank terms. An option notice is no later than the lease ends. Options never change or disappear; sourced options may be added to any version as they are extracted.
+58. Lease versions are consecutive on a deal, have a source document and ordered dates, and never change or disappear. A supplied offer was accepted when recorded and belongs to the same deal and property. Typed amounts are nonnegative, term is positive and rent starts on a date or after delivery, never both.
+59. Every lease option is numbered once on its version, is renewal, expansion or early termination, and has an exact notice deadline and nonblank terms. An option notice is no later than the lease ends. Options never change or disappear; sourced options may be added to any version as they are extracted.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
