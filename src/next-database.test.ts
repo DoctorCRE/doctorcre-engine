@@ -436,6 +436,7 @@ const STAMPED = [
 	"post_media",
 	"post_review",
 	"measurement",
+	"change",
 ];
 const newAddress = (row: Record<string, string>) =>
 	insert("party_email", {
@@ -1412,6 +1413,29 @@ const RULES: Record<string, Case[]> = {
 				"introduction_of_someone_else",
 			],
 		],
+	"history is never added, rewritten or removed by hand": [
+		[
+			`insert into change (table_name, record, action) values ('deal', '{}', 'insert')`,
+			notGranted("change"),
+		],
+		["update change set action = 'insert'", notGranted("change")],
+		["delete from change", notGranted("change")],
+		["truncate change", notGranted("change")],
+		[
+			`create temp table deal (id uuid primary key);
+			create trigger forged after insert on pg_temp.deal for each row execute function record_change('id')`,
+			{
+				code: "42501",
+				message: "permission denied for function record_change",
+			},
+		],
+	],
+	"a removal names the user or the job that made it": [
+		[
+			`select set_config('engine.user_id', '', true); delete from next_step where id = '${id(402)}'`,
+			"change_names_who_made_it",
+		],
+	],
 	"a record or link keeps when it was stored": STORED_AT.map((table) => [
 		`update ${table} set created_at = now()`,
 		notGranted(table),
@@ -1494,6 +1518,12 @@ const OWNER_RULES: Record<string, Case[]> = {
 		[
 			"insert into platform_format values ('x', 'text')",
 			"platform_format_pkey",
+		],
+	],
+	"a change is an insert, an update or a delete": [
+		[
+			`insert into change (table_name, record, action) values ('deal', '{}', 'merge')`,
+			"change_action_check",
 		],
 	],
 	"loading the schema refuses an engine role with rights beyond its grants": [
@@ -1754,6 +1784,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 				"app_user",
 				"job",
 				"merged_party",
+				"change",
 				"platform_metric",
 				"platform_format",
 				"relationship_level",
@@ -1829,6 +1860,75 @@ test("a statement that changes nothing keeps who last changed the row, even on a
 			{ changed_by_user_id: USER, before: true },
 			{ changed_by_user_id: USER, before: true },
 			{ changed_by_user_id: USER, before: true },
+		]);
+	}));
+
+test("every row a user or a job changes keeps its history", async () => {
+	const { rows } = await db.query(
+		`select array_agg(tgrelid::regclass::text order by tgrelid::regclass::text collate "C") as recorded
+		from pg_trigger where tgname = 'record_change' and tgfoid = 'record_change'::regproc`,
+	);
+	assert.deepEqual(
+		rows[0].recorded,
+		STAMPED.filter((table) => table !== "change").toSorted(),
+	);
+});
+
+// This transaction's history, without the times rows were stored.
+const history = async (client = db) =>
+	(
+		await client.query(
+			`select table_name, record - 'created_at' as record, action, old_value - 'created_at' as old_value,
+				new_value - 'created_at' as new_value, changed_by_user_id, changed_by_job, changed_for_user_id, merge_of
+			from change where changed_at = now() order by id`,
+		)
+	).rows;
+
+test("each insert, update and delete leaves history: the record, its fields from what to what, and who made it", () =>
+	rolledBack(async () => {
+		await db.query(`${asUser(TEAMMATE)}; insert into deal (id, name) values ('${id(11)}', 'Example');
+			${asJob("mail_capture", TEAMMATE)}; update deal set name = 'Example renamed' where id = '${id(11)}';
+			${asJob("agent")}; delete from party_specialty where person_id = '${DOCTOR}';
+			update deal set name = name`);
+		const by = (
+			user: string | null,
+			job: string | null,
+			forUser: string | null = null,
+		) => ({
+			changed_by_user_id: user,
+			changed_by_job: job,
+			changed_for_user_id: forUser,
+			merge_of: null,
+		});
+		assert.deepEqual(await history(), [
+			{
+				table_name: "deal",
+				record: { id: id(11) },
+				action: "insert",
+				old_value: null,
+				new_value: { id: id(11), name: "Example" },
+				...by(TEAMMATE, null),
+			},
+			{
+				table_name: "deal",
+				record: { id: id(11) },
+				action: "update",
+				old_value: { name: "Example" },
+				new_value: { name: "Example renamed" },
+				...by(null, "mail_capture", TEAMMATE),
+			},
+			{
+				table_name: "party_specialty",
+				record: { person_id: DOCTOR, specialty: "general_dentistry" },
+				action: "delete",
+				old_value: {
+					person_id: DOCTOR,
+					person_kind: "person",
+					specialty: "general_dentistry",
+				},
+				new_value: null,
+				...by(null, "agent"),
+			},
 		]);
 	}));
 
@@ -2329,6 +2429,88 @@ test("a merge moves what a table added later points at", async () => {
 			select merge_party('${DUPLICATE}', '${AGENT}')`);
 		const { rows } = await owner.query("select party_id from later");
 		assert.deepEqual(rows, [{ party_id: AGENT }]);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
+	}
+});
+
+test("a merge's moves are history told as that merge's", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into party_role values ('${DUPLICATE}', 'listing_agent'), ('${DUPLICATE}', 'lender');
+			insert into activity_about (activity_id, party_id) values ('${CALL}', '${DUPLICATE}');
+			select merge_party('${DUPLICATE}', '${AGENT}');
+			update deal set name = 'Example' where id = '${DEAL}'`);
+		const told = async (merge: string | null) =>
+			(
+				await db.query(
+					`select table_name, action, record - 'created_at' as record, case action when 'update'
+						then jsonb_build_array(old_value, new_value) end as moved
+					from change where changed_at = now() and merge_of is not distinct from $1
+					order by table_name, action, record::text`,
+					[merge],
+				)
+			).rows;
+		const row = (
+			table_name: string,
+			action: string,
+			record: object,
+			moved: object[] | null = null,
+		) => ({ table_name, action, record, moved });
+		const roles = ["lender", "listing_agent"].map((role) => ({
+			party_id: DUPLICATE,
+			role,
+		}));
+		const about = {
+			activity_id: CALL,
+			deal_id: null,
+			party_id: DUPLICATE,
+			property_id: null,
+		};
+		assert.deepEqual(await told(DUPLICATE), [
+			row("activity_about", "update", about, [
+				{ party_id: DUPLICATE },
+				{ party_id: AGENT },
+			]),
+			row("merged_party", "insert", { id: DUPLICATE }),
+			row("party", "delete", { id: DUPLICATE }),
+			// The survivor already holds this role, so the duplicate's row goes.
+			row("party_role", "delete", roles[1] as object),
+			row("party_role", "update", roles[0] as object, [
+				{ party_id: DUPLICATE },
+				{ party_id: AGENT },
+			]),
+		]);
+		// Before the merge, and after it ends.
+		assert.deepEqual(await told(null), [
+			row("activity_about", "insert", about),
+			row("deal", "update", { id: DEAL }, [
+				{ name: "Example Dental Springfield Deal" },
+				{ name: "Example" },
+			]),
+			row("party", "insert", { id: DUPLICATE }),
+			...roles.map((role) => row("party_role", "insert", role)),
+		]);
+	}));
+
+test("a setting alone never tells a change as a merge's", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query("begin");
+		await owner.query(`insert into merged_party (id, survivor_id, created_at) values ('${OLD}', '${AGENT}', '2026-01-01');
+			set local role engine; select set_config('engine.merge', '${OLD}', true);
+			update deal set name = 'Example' where id = '${DEAL}'`);
+		assert.deepEqual(
+			(await history(owner)).map((change) => [
+				change.table_name,
+				change.merge_of,
+			]),
+			[
+				["merged_party", null],
+				["deal", null],
+			],
+		);
 	} finally {
 		await owner.query("rollback");
 		await owner.end();

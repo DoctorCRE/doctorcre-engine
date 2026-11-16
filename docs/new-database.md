@@ -26,6 +26,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`activity`**: something that happened: an email, a call, a meeting or a note, with when, who it came from and a summary.
 - **`email`**: the email behind an email activity.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
+- **`change`**: one row for each insert, update or delete of a row above, with who made it and when.
 
 Each record and link carries `created_at`, when its row was stored, so moving today's records across can keep their dates. Lists such as roles and phases do not, and neither do rows that carry their own time: activities and their emails, rounds, phase changes, posts and readings. An outside id has none either; only a merge changes it, so its stamp's time is when it was imported or last merged.
 
@@ -33,7 +34,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases and specialties, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
 
-The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. Who removed a row waits for change history.
+The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. A removal names who made it too, in change history.
 
 The jobs today:
 
@@ -122,6 +123,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 49. A relationship level is a vendor role's, one of the four levels, and only a schema change adds or renames a level.
 50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. One the team made names the user who made it, and one the vendor made names none. Its note is never blank, and who it joins and who made it never change. A vendor keeps its vendor role while it has introductions.
 51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none. A merge keeps the stricter disposition, avoid over parked over none, with its reason.
+52. Every insert, update and delete of a stamped row leaves one change row: the record's key, the fields it changed from what to what, and who made it and when. A statement that changes nothing leaves none.
+53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update or a delete.
+54. A change a merge makes names the merge, and only a merge saved in the same transaction is named.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -129,7 +133,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 `schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
 
-The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
+The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
 - a role's, a stage's, a phase's or a specialty's label;
 - a vendor role's stage, relationship level, disposition, reason and target, and an introduction's date, deal and note;
@@ -142,9 +146,9 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in` and `outside_id`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row, the triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
+History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
 
-A merge is the one path that rewrites history: `merge_party` runs with the owner's rights and points rounds and outside ids at the survivor. Each row it moves is stamped with whoever ran it, so a moved row's stamp no longer names who first stored it.
+A merge is the one path that rewrites history: `merge_party` runs with the owner's rights and points rounds and outside ids at the survivor. Each row it moves is stamped with whoever ran it, so a moved row's stamp no longer names who first stored it. Its change history still does, and names the merge.
 
 The owner's own login can still change anything. That path is not the engine's concern.
 
@@ -315,7 +319,7 @@ Moving today's rows across:
 
 ## Merging duplicates
 
-The owner ruled on #196: the merged-away record disappears and everything points at the survivor. `merge_party(duplicate, survivor)` moves every row that points at the duplicate, then removes it and leaves a `merged_party` row, so an old link finds the survivor. Email matches need nothing more, because the duplicate's addresses are now the survivor's. The foreign keys then refuse any row that still names the duplicate, in any table, including tables added later. The merge finds what to move from the catalog, so a new table that points at a party moves with no change to it.
+The owner ruled on #196: the merged-away record disappears and everything points at the survivor. `merge_party(duplicate, survivor)` leaves a `merged_party` row, so an old link finds the survivor, moves every row that points at the duplicate, then removes it. Email matches need nothing more, because the duplicate's addresses are now the survivor's. The foreign keys then refuse any row that still names the duplicate, in any table, including tables added later. The merge finds what to move from the catalog, so a new table that points at a party moves with no change to it.
 
 A conflict keeps the survivor's data and refuses what cannot be settled safely:
 
@@ -333,6 +337,18 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 
 A catalog test lists every unique key that holds a party. A new one fails it until the merge says which row stays.
 
+## Change history
+
+Every insert, update and delete of a stamped row writes one `change` row: the table, the record's key, whether the row was added, changed or removed, and the stamp of who made it and when. An added row's `new_value` is the whole row, and a removed row's `old_value` is the whole row. A changed row's hold only the fields it changed, from what to what. The stamp's own columns are left out, because the change's stamp names who and when. A statement that changes nothing writes nothing.
+
+The key is the row's primary key, such as `{"id": …}` for a deal, or `{"deal_id": …, "party_id": …, "role": …}` for someone on a deal. `activity_about` and `post_review` have none, so their key is the whole row. Who moved a deal to which phase, and when, is the deal's `deal_phase_change` inserts: `table_name = 'deal_phase_change' and record ->> 'deal_id' = <deal id>`.
+
+One trigger function, `record_change`, writes history for every table that carries the stamp, and a test fails when a stamped table has no history. It runs with the owner's rights, and no role but the owner may attach it to a table, so a temporary table cannot write history either. The engine's role reads `change` but cannot add, change or remove a row of it, so history is written only by changing a record.
+
+A merge marks each change it makes with the duplicate it merged, in `merge_of`: each link it moves or removes, the duplicate's removal and its merged-into pointer. `merge_party` sets `engine.merge` for its own run, and the mark counts only when a merge of that record was saved in the same transaction, so setting it by hand cannot pass an edit off as an earlier merge's. Set by hand after a merge in the same transaction, it would mark an unrelated edit as that merge's; the change still names who made it and when.
+
+Today's system keeps one `event` row per field changed, with the actor, a verb and a cause, and `/pipeline/changes` reads a deal's events. A change row holds every field one statement changed, so the old per-field rows are `jsonb_each` over its values. A copy of old rows, such as `schema/copy-parties.sql`, keeps each row's old stamp, and its history records the copy itself: an insert by `old_system`, at the time the copy ran. The old `event` rows come across later. Serving the change feed and deal events from this table is a later slice.
+
 ## Later slices
 
-Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
