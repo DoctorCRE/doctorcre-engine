@@ -218,7 +218,8 @@ test("each old id maps to the record it became, a merged-away one to where its m
 	);
 });
 
-test("each value it does not copy is listed, with why", () => {
+test("each value it does not copy is listed, with why", async () => {
+	assert.deepEqual(await rows("select * from party_role"), []);
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
 		[id(10), "city", "Springfield", "no place in the new database"],
@@ -246,7 +247,7 @@ test("each value it does not copy is listed, with why", () => {
 		[id(16), "org_id", id(14), "its company is not copied"],
 		[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
 		[id(17), "cell", "217-555-0104 (fax)", "not a phone number"],
-		[id(17), "contact_state", "nurture", "no place in the new database"],
+		[id(17), "contact_state", "nurture", "its record has no lead role"],
 		[id(17), "email", "@example.com; ok@example.com", "not an email address"],
 		[id(17), "org_id", id(16), "not a company"],
 		[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
@@ -411,6 +412,7 @@ test("a second run copies only what is new, finds a record merged since through 
 			[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
 			[id(15), "party", "Example 15", "merged into a record not copied"],
 			[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
+			[id(17), "contact_state", "nurture", "its record has no lead role"],
 			[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
 			[id(20), "party", "Example 20", "merged into a record copied before, so of its values only its outside ids are copied"],
 			[id(21), "npi", ` ${NPI} `, `also held by ${id(10)}`],
@@ -670,6 +672,106 @@ for (const [survivor, duplicate, winner] of [
 						until_date: winner === "survivor" ? survivor : duplicate,
 					},
 				],
+			);
+		}));
+}
+
+test("nurture marks move to existing lead roles through old ids, with the setter's stamp", () =>
+	rolledBack(async () => {
+		await db.query(`
+			select set_config('engine.job', 'old_system', true);
+			insert into role (slug, label) values ('lead', 'Lead');
+			insert into stage values ('lead', 'new', 'New'), ('lead', 'nurture', 'Nurture');
+			insert into how_found values ('referral', 'Referral');
+			update party set how_found = 'referral' where id in ('${id(10)}', '${id(17)}', '${id(26)}');
+			alter table party_role disable trigger stamp_change;
+			insert into party_role (party_id, role, stage, owner_user_id, changed_by_job, changed_at) values
+				('${id(10)}', 'lead', 'new', '${PARTNER}', 'old_system', '2020-01-01'),
+				('${id(17)}', 'lead', 'new', null, 'old_system', '2020-01-01'),
+				('${id(26)}', 'lead', 'new', null, 'old_system', '2020-01-01');
+			set constraints all immediate;
+			alter table party_role enable trigger stamp_change;
+			update public.party set contact_state = 'nurture', contact_state_set_by = '${AUTOMATION}',
+				contact_state_set_at = '2024-01-01T00:00:00Z' where id = '${id(10)}';
+			update public.party set contact_state = 'nurture', contact_state_set_by = '${PARTNER}',
+				contact_state_set_at = '2025-08-09T10:11:12Z' where id = '${id(12)}';
+			set constraints all immediate;
+		`);
+		const first = await copy(
+			oldParty(80, {
+				merged_into: id(26),
+				deleted_at: "2025-01-02T00:00:00Z",
+				contact_state: "nurture",
+				contact_state_set_at: "2024-06-01T00:00:00Z",
+			}),
+		);
+		assert.ok(!first?.some((row) => row[0] === id(80)));
+		assert.ok(
+			!first?.some((row) => row[1] === "contact_state" && row[2] === "nurture"),
+		);
+		assert.deepEqual(
+			await rows(
+				"select party_id, stage, owner_user_id from party_role where role = 'lead' order by party_id",
+			),
+			[
+				{ party_id: id(10), stage: "nurture", owner_user_id: PARTNER },
+				{ party_id: id(17), stage: "nurture", owner_user_id: null },
+				{ party_id: id(26), stage: "nurture", owner_user_id: null },
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select changed_by_user_id, changed_by_job, changed_at::text from party_role where party_id = '${id(10)}'`,
+			),
+			[
+				{
+					changed_by_user_id: PARTNER,
+					changed_by_job: null,
+					changed_at: "2025-08-09 10:11:12+00",
+				},
+			],
+		);
+		const history = await rows(
+			"select * from change where table_name = 'party_role' order by id",
+		);
+		await db.query("discard temp");
+		assert.deepEqual(await copy(), first);
+		assert.deepEqual(
+			await rows(
+				"select * from change where table_name = 'party_role' order by id",
+			),
+			history,
+		);
+	}));
+
+for (const stage of ["new", "opportunity", "archived"]) {
+	test(`a nurture mark cannot overwrite a newer ${stage} stage`, () =>
+		rolledBack(async () => {
+			await db.query(`
+				select set_config('engine.job', 'old_system', true);
+				insert into role (slug, label) values ('lead', 'Lead');
+				insert into stage values ('lead', '${stage}', 'Example stage'), ('lead', 'nurture', 'Nurture');
+				insert into how_found values ('referral', 'Referral');
+				update party set how_found = 'referral' where id = '${id(17)}';
+				insert into party_role (party_id, role, stage) values ('${id(17)}', 'lead', '${stage}');
+				set constraints all immediate;
+			`);
+			const before = await rows(
+				`select * from party_role where party_id = '${id(17)}'`,
+			);
+			const result = await copy();
+			assert.deepEqual(
+				await rows(`select * from party_role where party_id = '${id(17)}'`),
+				before,
+			);
+			assert.ok(
+				result?.some(
+					(row) =>
+						row[0] === id(17) &&
+						row[1] === "contact_state" &&
+						row[3] ===
+							"its lead stage is as recent or newer than the nurture mark",
+				),
 			);
 		}));
 }
