@@ -120,7 +120,8 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 47. A vendor's category is a role whose `category_of` is vendor, and it stays one. Only a vendor holds a vendor category, checked when the change is saved.
 48. A stage comes from its own role's stage list, and is stored once per role.
 49. A relationship level is a vendor role's, one of the four levels, and only a schema change adds or renames a level.
-50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. Its note is never blank, and who it joins never changes. A vendor keeps its vendor role while it has introductions.
+50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. One the team made names the user who made it, and one the vendor made names none. Its note is never blank, and who it joins and who made it never change. A vendor keeps its vendor role while it has introductions.
+51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -131,7 +132,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
 - a role's, a stage's, a phase's or a specialty's label;
-- a vendor role's stage and relationship level, and an introduction's date, deal and note;
+- a vendor role's stage, relationship level, disposition, reason and target, and an introduction's date, deal and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, and a property's address, county and point;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
@@ -284,17 +285,19 @@ A vendor's stage and relationship level are on its vendor role, because they des
 
 No level means not yet judged, a different fact from 0.
 
-An introduction is one `introduction` row, made either way: the vendor introducing someone to the team, such as a new client, or the team introducing someone to the vendor. It names the vendor, who made it, whom it introduced, when, a note, and the deal it led to, which can be set when one comes of it.
+A vendor's disposition is the team's ruling on it, and its target flag says the team wants to meet it. Both sit on the vendor role next to its stage and level (owner, #258). A disposition is parked, deliberately dormant and on drip only, or avoid, ruled out as a partner. No disposition is active, in the network. A ruling always carries its reason, so a vendor never leaves play without one. Disposition and target are not stages: today's stage list once held them, and the old system's migration 0047 split them out because a stage mixed how well the team knows a vendor, a ruling and an intent.
+
+An introduction is one `introduction` row, made either way: the vendor introducing someone to the team, such as a new client, or the team introducing someone to the vendor. It names the vendor, who made it, whom it introduced, when, a note, and the deal it led to, which can be set when one comes of it. One the team made names the user who made it.
 
 `vendor_track_record` gives each vendor's record from deal history only. Nothing stores a rating (owner, #257). It counts the deals the vendor worked in any vendor role, how many of them closed and how many died, by each deal's latest phase, and the deals that its introductions to the team, and the team's to it, led to. A deal counts once, however many roles or introductions tie it to the vendor.
 
 Moving today's rows across:
 
-- Each `vendor` becomes the vendor role on its party, with its `relationship_level` as it is.
+- Each `vendor` becomes the vendor role on its party, with its `relationship_level` and `is_target` as they are. A `disposition` of `parked` or `avoid` stays, and `active` becomes none. Today's rows have no reason, so a parked or avoided vendor takes its old stage's label as its reason when it still holds `tabled_parked_drip_only` or `avoid_not_a_good_partner`, and otherwise waits for a partner to give one.
 - Each `vendor_category` row becomes a role whose `category_of` is vendor, and a vendor's `category_slug` its role. The deal roles of `deal_vendor_assignment`, such as title and inspector, join the same list, and `gc` becomes contractor. Each assignment becomes a `deal_party` row, and so does each worked deal in a vendor's `deal_evidence`.
-- Each `vendor_stage` row becomes a vendor stage, and a vendor's `stage` the stage on its vendor role. The old system's migration 0047 split its nine original stages into level, disposition and target, so an original stage such as avoid or target waits on #258 rather than coming back as a stage.
-- Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
-- `trust_override`, a hand-set rating, does not move. Disposition and target wait for the owner (#258).
+- Each `vendor_stage` row becomes a vendor stage, and a vendor's `stage` the stage on its vendor role. The old system's migration 0047 split its nine original stages into level, disposition and target, so an original stage such as avoid or target does not come back as a stage (owner, #258). It maps as 0047 mapped it, to a level, a disposition or the target flag.
+- Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is neither waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
+- `trust_override`, a hand-set rating, does not move.
 
 ## Merging duplicates
 
@@ -310,7 +313,7 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
-- Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks.
+- Both vendors? The survivor's vendor role stays, with its stage, level and disposition with its reason, and the duplicate's fill any it lacks. If either is a target, the survivor is.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
 
