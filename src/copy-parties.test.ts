@@ -60,6 +60,7 @@ ${oldParty(11, {
 	ref: " P-0011 ",
 	org_id: id(11),
 })}
+${oldParty(25, { kind: "org", merged_into: id(11) })}
 ${oldParty(10, {
 	npi: ` ${NPI} `,
 	created_at: "2024-03-04T05:06:07Z",
@@ -117,6 +118,8 @@ ${oldParty(17, {
 	org_id: id(16),
 	title: "Dentist",
 })}
+${oldParty(26, { org_id: id(25) })}
+${oldParty(27, { merged_into: id(26), org_id: id(11), title: "Lead" })}
 insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Example active', true, 10);
 insert into public.lead_stage (slug, label) values ('example', 'Example stage');
 insert into public.vendor (id, party_id, category, created_by, updated_by) values
@@ -196,6 +199,7 @@ test("people and companies keep their ids and names, a company is no longer an o
 		{ id: id(11), kind: "company", name: "Example Dental Group" },
 		{ id: id(16), kind: "person", name: "Example 16" },
 		{ id: id(17), kind: "person", name: "Example 17" },
+		{ id: id(26), kind: "person", name: "Example 26" },
 	]);
 	assert.deepEqual(await rows("select id from app_user"), [{ id: PARTNER }]);
 });
@@ -205,9 +209,9 @@ test("each old id maps to the record it became, a merged-away one to where its m
 		await rows(
 			"select value, party_id from outside_id where source = 'old_system' order by value",
 		),
-		[1, 10, 11, 12, 13, 16, 17, 18].map((n) => ({
+		[1, 10, 11, 12, 13, 16, 17, 18, 25, 26, 27].map((n) => ({
 			value: id(n),
-			party_id: id({ 12: 10, 13: 10, 18: 16 }[n] ?? n),
+			party_id: id({ 12: 10, 13: 10, 18: 16, 25: 11, 27: 26 }[n] ?? n),
 		})),
 	);
 });
@@ -224,7 +228,7 @@ test("each value it does not copy is listed, with why", () => {
 		[id(10), "state", "IL", "no place in the new database"],
 		[id(11), "email", "ask the front desk", "not an email address"],
 		[id(11), "npi", NPI, `also held by ${id(10)}`],
-		[id(11), "org_id", id(11), "only a person works at a company"],
+		[id(11), "org_id", id(11), "a national account has no place in the new database yet"],
 		[id(11), "phone", "555-0100", "not a phone number"],
 		[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
 		[id(11), "specialty", "Dental", "only a person holds a specialty"],
@@ -247,7 +251,7 @@ test("each value it does not copy is listed, with why", () => {
 		[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
 		[id(17), "record_source", "Vendors XLSX V-EX-001", `also the id of ${id(16)}`],
 		[id(17), "specialty", "--", "not a specialty"],
-		[id(17), "title", "Dentist", "a title without a company"],
+		[id(17), "title", "Dentist", "its company is not copied"],
 		[id(18), "title", "Owner", "a title without a company"],
 		[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
 	]);
@@ -365,21 +369,12 @@ test("a person's specialties are on the specialty list once however spelled, lab
 	);
 });
 
-test("a person keeps their company and their title there, their own title first", async () => {
-	assert.deepEqual(
-		await rows(
-			"select person_id, company_id, title, started_on, ended_on from party_company",
-		),
-		[
-			{
-				person_id: id(10),
-				company_id: id(11),
-				title: "Office Manager",
-				started_on: null,
-				ended_on: null,
-			},
-		],
-	);
+test("a person keeps their company, through its merges, and a title from the survivor first, then any", async () => {
+	// biome-ignore format: one row per place
+	assert.deepEqual(await rows("select person_id, company_id, title, started_on, ended_on from party_company order by person_id"), [
+		{ person_id: id(10), company_id: id(11), title: "Office Manager", started_on: null, ended_on: null },
+		{ person_id: id(26), company_id: id(11), title: "Lead", started_on: null, ended_on: null },
+	]);
 });
 
 test("today's import history and reference numbers are outside ids of the record each old one became", async () => {
@@ -403,7 +398,8 @@ test("a second run copies only what is new, finds a record merged since through 
 			${oldParty(21, { npi: ` ${NPI} `, specialty: "ORTHO", ref: "P-0021" })}
 			${oldParty(22, { merged_into: id(17), specialty: "Example" })}
 			${oldParty(23, { merged_into: id(17), org_id: id(11) })}
-			${oldParty(24, { merged_into: id(17), notes_path: "notes/example-24.md" })}`;
+			${oldParty(24, { merged_into: id(17), notes_path: "notes/example-24.md" })}
+			${oldParty(28, { merged_into: id(17), title: "Example title" })}`;
 		// biome-ignore format: one row per value
 		assert.deepEqual(await copy(merged), [
 			[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
@@ -420,6 +416,7 @@ test("a second run copies only what is new, finds a record merged since through 
 			[id(22), "party", "Example 22", "merged into a record copied before, so of its values only its outside ids are copied"],
 			[id(23), "party", "Example 23", "merged into a record copied before, so of its values only its outside ids are copied"],
 			[id(24), "party", "Example 24", "merged into a record copied before, so of its values only its outside ids are copied"],
+			[id(28), "party", "Example 28", "merged into a record copied before, so of its values only its outside ids are copied"],
 			[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
 		]);
 		assert.deepEqual(

@@ -186,7 +186,7 @@ select v.old_id, 'specialty', v.typed, case when v.slug = '' then 'not a special
 from typed_specialty v join copied p on p.id = v.party_id
 where p.kind <> 'person' or v.slug = '';
 
--- A person's company and their title there. A survivor's own title comes first, and the company is the record it became.
+-- A person's company and their title there, the survivor's own first, at the record the company became.
 create temp table typed_company on commit drop as
 select s.id as old_id, s.survivor_id as person_id, s.org_id, s.title as typed_title, p.kind, map.party_id as company_id,
 	company.kind as company_kind, nullif(regexp_replace(s.title, '^\s+|\s+$', '', 'g'), '') as title, s.rank
@@ -204,7 +204,8 @@ order by v.person_id, v.company_id, v.title is null, v.rank;
 
 insert into not_copied
 select old_id, 'org_id', org_id::text, case
-	when kind <> 'person' then 'only a person works at a company'
+	-- A company's own company is its national account, which waits for that slice.
+	when kind <> 'person' then 'a national account has no place in the new database yet'
 	when company_id is null then 'its company is not copied'
 	else 'not a company' end
 from typed_company where org_id is not null and (kind <> 'person' or company_kind is distinct from 'company');
@@ -213,6 +214,7 @@ insert into not_copied
 select v.old_id, 'title', v.typed_title, case
 	when exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id)
 		then 'its record holds another title there'
+	when v.org_id is not null then 'its company is not copied'
 	else 'a title without a company' end
 from typed_company v
 where v.title is not null
