@@ -19,7 +19,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
-- **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market and its closed value.
+- **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, and whether it needs attention.
 - **`deal_kind`**: the list of kinds of transaction, such as lease and purchase. Like roles, a label can be renamed.
 - **`deal_reason`**: the list of reasons a client takes space, such as a start-up or a relocation. Like roles, a label can be renamed.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
@@ -145,8 +145,17 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 62. A lead has a stage. Only a lead has an owner, and the owner is a user.
 63. A lead or client says how they were found, from the list. A new lead or client is checked when the change is saved.
 64. Someone on a deal as its client holds the client role, checked when the change is saved, so the role cannot be removed while they are.
-65. A lease names its tenant and property, with an optional originating deal. A negotiated lease is for that deal's client and property, and only one lease originates from a deal. An outside lease needs no invented deal. Lease identities never change or disappear.
-66. A renewal reason and the lease it renews are required together. The source lease exists, and its originating deal is not the renewal deal. A user may correct the reason and source together.
+65. A client profile names its client role, has only roster, cold, engaged or paused as manual status, and takes its type from the client type list. Active deal and past client come from deals.
+66. A brand membership joins two different companies, its location has a client profile, and its dates never overlap another membership of that location.
+67. A national account is a company holding that role. Its dated owners are people, and their dates never overlap on one account. Membership and ownership end strictly after they start, with the end excluded.
+68. Client and account profiles and their dated links keep their parties; users may correct dates and remove mistakes. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
+69. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank.
+70. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
+71. Lead stage evidence names a lead and two different lead stages. Non-archive moves name an activity about that lead and nonblank evidence. Repeated proposals for the same activity and move are refused. An unattended job applies only strong evidence along the funnel; weak evidence and every archive wait for a direct user, and archiving has a nonblank reason. Applying a stale proposal is refused. Applied evidence is final and never rewritten or removed.
+
+72. A lead's lane comes from its list. A lease estimate has both date and nonblank source, and confidence only with an estimate. Lane, estimate, confidence and segment belong only to the lead role. How-found detail is nonblank and has how found.
+73. A lease names its tenant and property, with an optional originating deal. A negotiated lease is for that deal's client and property, and only one lease originates from a deal. An outside lease needs no invented deal. Lease identities never change or disappear.
+74. A renewal reason and the lease it renews are required together. The source lease exists, and its originating deal is not the renewal deal. A user may correct the reason and source together.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -159,7 +168,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's or a how-found's label;
 - a vendor role's stage, relationship level, disposition, reason and target, a lead role's stage and owner, and an introduction's date, deal and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI and how found, and a property's address, county and point;
-- a deal's kind, reason, lease it renews, deal owner, market and closed value;
+- a deal's kind, reason, lease it renews, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
@@ -169,7 +178,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `critical_date`, `lease`, `lease_version`, `lease_option`, `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a round's status moves, a later acceptance superseding a round, a lease's round accepted when recorded, a critical date's user confirmation and resolution, an option notice before lease expiration, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
+History is `critical_date`, `lease`, `lease_version`, `lease_option`, `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a deal parked, revived or flagged by a user, a round's status moves, a later acceptance superseding a round, a lease's round accepted when recorded, a critical date's user confirmation and resolution, an option notice before lease expiration, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
 
 A merge is the one path that rewrites history: `merge_party` runs with the owner's rights and points rounds and outside ids at the survivor. Each row it moves is stamped with whoever ran it, so a moved row's stamp no longer names who first stored it. Its change history still does, and names the merge.
 
@@ -209,11 +218,29 @@ Old reference ids, such as Salesforce ids and roster numbers, are kept in `outsi
 - A deleted record is not copied, nor one merged into it.
 - Emails and phone numbers follow "Emails and phone numbers" above. The first value stored is primary. An email holding an `@` that no address took is listed whole.
 - An NPI stays with the record that held it first: one already in the new database, or else the first stored. A second holder is copied without it and listed, since it may be the same person or company. So is a duplicate's NPI when its survivor holds another, and an NPI with a wrong check digit.
-- Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` moves with its reason and end date; one missing either is listed. `nurture` waits for #282 after #274.
+- Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` moves with its reason and end date; one missing either is listed.
+- `nurture` sets an existing lead role's stage to nurture, through the old-id map, including merged-away ids. It applies only when the mark is newer than the lead role, keeps the latest nurture setter's stamp and leaves the lead owner and other roles alone. A mark without a copied record or lead role is listed with a reason and never creates a lead. Each run revisits nurture marks so roles copied later can receive them. It updates only stages other than nurture, so an unchanged rerun adds no change history. A lead stage as recent as or newer than the mark stays unchanged, and the mark is listed for a partner.
 - Today's free-text specialty is split at commas and semicolons. Spellings that differ only in case, spaces or punctuation are one specialty on the list, with a slug of lower case letters, digits and `_` and the spelling first typed as its label. One already on the list keeps its label. A company's specialty, and one with no ASCII letter or digit, is listed.
 - Today's `record_source` rows for a party, vendor, lead or client become outside ids of the record it became, and each party's `ref` one under `old_system_ref`. A source is lower-cased, with `_` for each run of anything but letters and digits, so `vendors.xlsx` becomes `vendors_xlsx`. A `dup_candidate` row only hints at a duplicate, so it is listed. So is a row for another kind of record, a row whose record is not copied, a source that folds to `old_system` or `old_system_ref`, which the copy keeps for itself, and an id another record already holds. Rows for deals, activity, events and loop items are left to the copies of those records.
 - A person's company and title become a `party_company` row, with no dates, at the record the company became. A title comes from the survivor first, then its duplicates, and a title beats none. A company's own `org_id` is the national account it belongs to, which has no place until national accounts are designed, so it is listed. So are a company that is not copied or is a person, with the title held there, a title without a company, and a duplicate's other title at the same company.
 - `city`, `state`, `county`, `contact_state_cadence` and `notes_path` have no place yet, so each value is listed (#271).
+
+## Clients, brands and national accounts
+
+A `client` row extends its party's client role with a manual status and a `client_type` from the short list. The initial types are independent, group practice, DSO, franchise and regional system. Labels may change, like roles. Only roster, cold, engaged and paused are stored. `client_status` reports active_deal when any client deal's latest phase is neither closed nor dead, including a deal with no phase yet. Otherwise any closed phase in its history makes it past_client, and otherwise the manual status applies. An open deal wins over past work. A dead deal alone does not make a past client.
+
+A brand is a company. `client_brand` joins a client location company to a different brand company, with dates. Its dates include started_on and exclude ended_on, and an absent end means still a member. Memberships never overlap, even across brands. Ending one and starting the next on the same day preserves which brand held the location on each date. A franchisee has its own client row and franchise type; its deals name it, never its brand.
+
+A `national_account` is a company with that role. It need not itself be a client. `national_account_owner` names a person, including an outside agent who refers work, with dates under the same non-overlap rule. It does not name an app user or decide a deal's owner. The engine can correct membership and ownership dates and remove mistaken links; change history keeps what was corrected. Changing the parties removes the mistaken link and adds the right one. All five tables are stamped and their changes recorded. A merge moves a lone profile and its dated links; two client profiles or two account profiles are refused for a user to settle first, as are overlapping histories or a location becoming its own brand.
+
+For #273, national on a date means a `client_brand` membership covering that date whose `brand_id` joins `national_account.party_id`. A deal uses its location client and its own date for this join, so a later rebrand does not move old work. The current directory uses current_date instead. There is no stored national flag here.
+
+Moving today's rows across:
+
+- Each client becomes its party's client role and client row. Roster, cold, engaged and paused map directly. Active deal and past client are recomputed; those old labels supply no manual status, so start those records at roster.
+- The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. Vertical and subtype do not move as free text.
+- A company location's `party.org_id` becomes its brand membership. A person's org_id remains party_company. Existing national_account_owner rows map their human actor to its person; an outside owner's person is used directly. The old system lacks membership start dates and complete owner history, so a user must supply the first known dates before copying these links. Never invent an earlier history.
+- Client owner and acquisition source belong to the lead and attribution slice, not account ownership. ETL status and agreements are excluded by the owner's B9 answer. No representation agreement table is added.
 
 ## Offer rounds
 
@@ -329,6 +356,10 @@ Every deal has exactly one deal owner, a user, in `owner_user_id`. A second user
 
 A deal names its market from the `market` list, which can be set when the deal opens, before any property is chosen, and stays empty until known. A closed deal records its value, such as the total lease value or the purchase price, in `closed_value`, which is empty until known and never zero. Nothing requires it at the move to closed, because the mail job closes a deal when its invoice arrives and the invoice does not carry it, so the value is left for a user to fill in.
 
+A parked deal is not active work for now, and says why in `parking_reason`: the client paused, the prospect was never active, or another reason, with an optional note. No reason means the deal is active, as no disposition means a vendor is. Parking is not a phase and never changes one, so reviving a deal, which clears its reason and note, leaves it in the phase it was in. Who parked a deal and when is the latest change to its `parking_reason` in change history, so the deal holds no date or user of its own for it, and the same history keeps every earlier parking and revival.
+
+`needs_attention` is a flag a user sets on a deal and clears, never worked out from anything else. Change history keeps who set it and when. Parking, reviving and flagging are each a user's act, or an agent's working for one, so a job working for no one, such as the publisher, cannot do them; it can still change the deal's other columns. A copy of today's parked deals turns that check off, as it does the stamp, because its history names who parked each one.
+
 National is never stored. A deal is national exactly when its client is a location of a national account. National accounts and the brand behind each location come with #275, and with them the read that answers it. Until then nothing answers it, and since nothing stores it, no flag can disagree with the client, as today's lane sometimes does.
 
 Moving today's rows across:
@@ -338,6 +369,8 @@ Moving today's rows across:
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
 - `won_value` becomes `closed_value`. `sf_commission_placeholder` is a commission, not the deal's value, so it waits for commissions.
 - `lane` is not copied. A deal whose old lane disagrees with its client's national account is listed once #275 lands.
+- A `parked` deal's `parking_reason` comes across as it is, and its `parking_note` trimmed, a blank one as none. An `active` deal has no reason. `parked_at` and `parked_by` come across into change history with the old `event` rows, as earlier deal owners do, dated when the deal was parked and naming who parked it.
+- `attention` becomes `needs_attention`.
 
 ## Markets and territories
 
@@ -396,6 +429,9 @@ A lead is a person or company holding the `lead` role, and a client one holding 
 - **Owner.** A lead's owner is the user who works it. None means nobody works it yet, and any user can take it. Territory is shared, so a lead's area never picks its owner. Change history keeps who owned it before.
 - **Stage.** A lead's stage comes from the lead stages in `stage`: New, Qualified, Outreach Active, Engaged, Nurture, Opportunity and Archived. Nurture replaces named drip campaigns. Do not contact is the party's `do_not_contact` row, and deal outcomes are deal phases, not lead stages.
 - **How found.** Each lead and client says how they were found, from the `how_found` list: referral, vendor, marketing post, public records and cold outreach to start. It is a fact about the person or company, so it holds in every role, and a lead that becomes a client copies nothing. A list can be counted for lead attribution, where free text cannot.
+- **Stage evidence.** `lead_stage_move` holds evidence-backed proposals and applied moves, with the activity, evidence reference and strength. The activity must remain linked to that party through `activity_about`, checked at commit. A proposed row leaves the stage alone. Applying it holds the lead and changes its stage only if it still matches `from_stage`. Unattended jobs apply strong evidence only along New → Qualified → Outreach Active → Engaged → Nurture or Opportunity. Weak evidence, including an agent acting for a user, waits for a direct user to apply it. Every archive needs a direct user and a nonblank reason. Ordinary user stage edits, including corrections by an agent working for a user, use change history alone. Archiving may omit activity and evidence reference, so a user never invents contact to give a reason. Matching proposals collapse on merge, with the removed row retained in change history. Evidence rows use the same stamp and change history, so proposal and approval keep both actors without duplicate who-and-when fields. Applied evidence stays applied; undo is a new move or a user stage correction.
+
+- **Working details.** The lead role keeps its `lane` from `lead_lane`, `segment`, and `estimated_lease_on` with `lease_estimate_source` and optional high, medium or low confidence. An estimate always has its source; neither can stand alone. Lanes are independent of how found. `party.how_found_detail` keeps the attribution detail in every role. A merge keeps the survivor's working details, filling gaps from the duplicate, and moves an estimate with its own source and confidence. How-found detail fills only when the source agrees or the survivor had none.
 - **Not kept.** The 0 to 100 lead score and named drip campaigns do not come across (owner, #196).
 
 Moving today's rows across:
@@ -406,7 +442,13 @@ Moving today's rows across:
 - How found comes from `client.acquisition_source`, asked of the client, or else `lead.source_type`. Both are free text today. A `prospect-pool` lead is mapped by its candidate's own pool source. Every other value is listed for a partner to map to the list, and so is a party whose two values disagree. A lead or client with neither waits, listed, since the database refuses one without how it was found.
 - A lead whose `client_id` points at a client on another party, such as the practice a doctor runs, keeps its lead role on the person, and the client role stays on the practice.
 - `score`, `score_reason`, `drip_campaign`, `drip_added`, `report_back_due` and `sf_deal` do not move. Only the old spreadsheet import wrote the last four, and nothing reads them.
-- Lanes, stage moves, the estimated lease date, outreach drafts, candidates and the remaining free text come with #286.
+- Each old `lead_stage_move` becomes evidence on its lead party, keeping its id, activity, evidence reference, strength, reason and status. `nurture_drip` becomes `nurture`. Proposal creation and approval map to their respective change-history entries, retaining the old actors and dates. An undone row remains applied evidence followed by its undo in change history. A missing activity, blank evidence or reason, unknown actor or contradictory stage is listed for a user rather than invented. The owner loads historical rows without replaying the application trigger; ordinary stage events map to change history only.
+
+- The old lane list becomes `lead_lane`, and `lead.lane` and `segment` stay on its lead role. An unknown lane or whitespace-only segment is listed for a user.
+- `est_lease_event`, `event_source` and `event_confidence` become the estimate date, source and confidence. A promoted candidate's `est_basis` supplies a missing source. An estimate without a source, confidence without an estimate, unknown confidence or an unparsed `est_lease_event_raw` is listed rather than inferred.
+- `client.acquisition_detail` becomes `party.how_found_detail`, otherwise `lead.source_detail` does. If both differ, the lead detail becomes a separate note activity so both survive. A detail without mapped how found waits with its source.
+- `notes` becomes a note activity about the party, dated at the old row's last change. `last_touch` comes from the latest contact activity; a standalone old date or imported last-touch-stamp note with no contact activity is listed rather than invented as contact. `next_action_date` becomes the due date of a next step about the party, with text marking it as an imported lead follow-up. `notes_path` is an old file reference, not note text; its file must be copied as a document or listed for a user.
+- Outreach drafts and candidates are the other slices of #286.
 
 ## Merging duplicates
 
@@ -445,4 +487,4 @@ Only the schema owner's database role may call `erase_change(removed_change_id, 
 
 ## Later slices
 
-A deal's parked state and needs attention (#283). "Everything about this person." The rest of leads (#286). National accounts and franchisees. Commissions. Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+"Everything about this person." The rest of leads (#286). Commissions. Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.

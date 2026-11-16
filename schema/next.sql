@@ -61,7 +61,7 @@ create table job (
 
 insert into job values
 	('intake', 'Post intake'), ('mail_capture', 'Mail filing'), ('publisher', 'Publisher'), ('readings', 'Post readings'),
-	('review_close', 'Review close'), ('agent', 'Agent'), ('old_system', 'Old system');
+	('review_close', 'Review close'), ('lead_stage', 'Lead stages'), ('agent', 'Agent'), ('old_system', 'Old system');
 
 -- The engine names who acts once per transaction: set_config('engine.user_id', <id>, true) for a user, and
 -- set_config('engine.job', <slug>, true) for a job, with engine.user_id then the user it works for, if any.
@@ -342,8 +342,33 @@ create table deal (
 	-- Can be named before any property is chosen.
 	market_id uuid references market,
 	-- Such as the total lease value or the purchase price. Empty until known, never zero.
-	closed_value numeric(14, 2) check (closed_value > 0)
+	closed_value numeric(14, 2) check (closed_value > 0),
+	-- None is active. Parking never touches the phase, so a revived deal is back in the phase it was in.
+	parking_reason text check (parking_reason in ('client_paused', 'prospect_never_active', 'other')),
+	parking_note text check (parking_note ~ '\S'),
+	-- A flag a user sets, never worked out from anything else.
+	needs_attention boolean not null default false,
+	constraint deal_parking_note_when_parked check (parking_note is null or parking_reason is not null)
 );
+
+-- A job alone never parks, revives or flags a deal; one working for a user, such as the agent, does.
+create function deal_parked_or_flagged_by_a_user() returns trigger
+language plpgsql as $$
+begin
+	if nullif(current_setting('engine.user_id', true), '') is null
+		and (case tg_op
+			when 'INSERT' then new.parking_reason is not null or new.needs_attention
+			else (new.parking_reason, new.parking_note, new.needs_attention)
+				is distinct from (old.parking_reason, old.parking_note, old.needs_attention)
+		end) then
+		raise exception 'a user parks, revives and flags a deal'
+			using errcode = 'check_violation', constraint = 'deal_parked_or_flagged_by_a_user';
+	end if;
+	return new;
+end $$;
+
+create trigger deal_parked_or_flagged_by_a_user before insert or update of parking_reason, parking_note, needs_attention
+	on deal for each row execute function deal_parked_or_flagged_by_a_user();
 
 -- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.
 create table outside_id (
@@ -399,6 +424,23 @@ alter table party add how_found text references how_found;
 alter table party_role add owner_user_id uuid references app_user,
 	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
 	add constraint party_role_owner_on_lead check (owner_user_id is null or role = 'lead');
+
+create table lead_lane (
+	slug text primary key,
+	label text not null
+);
+
+alter table party add how_found_detail text check (how_found_detail ~ '\S'),
+	add constraint party_how_found_detail_has_source check (how_found_detail is null or how_found is not null);
+alter table party_role add lane text references lead_lane,
+	add estimated_lease_on date,
+	add lease_estimate_source text check (lease_estimate_source ~ '\S'),
+	add lease_estimate_confidence text check (lease_estimate_confidence in ('high', 'medium', 'low')),
+	add segment text check (segment ~ '\S'),
+	add constraint party_role_lease_estimate_has_source check ((estimated_lease_on is null) = (lease_estimate_source is null)),
+	add constraint party_role_lease_confidence_has_estimate check (lease_estimate_confidence is null or estimated_lease_on is not null),
+	add constraint party_role_working_details_on_lead check (role = 'lead'
+		or num_nonnulls(lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) = 0);
 
 create function lead_or_client_how_found() returns trigger
 language plpgsql as $$
@@ -471,6 +513,68 @@ left join worked w using (party_id)
 where v.role = 'vendor'
 group by v.party_id;
 
+-- Clients and national accounts (walkthrough 4, topic B).
+create extension if not exists btree_gist;
+create table client_type (
+	slug text primary key,
+	label text not null
+);
+
+create table client (
+	party_id uuid primary key,
+	role text not null default 'client' check (role = 'client'),
+	created_at timestamptz not null default now(),
+	status text not null default 'roster' check (status in ('roster', 'cold', 'engaged', 'paused')),
+	client_type text references client_type,
+	foreign key (party_id, role) references party_role on update cascade
+);
+
+create table national_account (
+	party_id uuid primary key,
+	kind text generated always as ('company') stored,
+	role text not null default 'national_account' check (role = 'national_account'),
+	created_at timestamptz not null default now(),
+	foreign key (party_id, kind) references party (id, kind),
+	foreign key (party_id, role) references party_role on update cascade
+);
+
+create table client_brand (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	location_id uuid not null references client (party_id) on update cascade,
+	location_kind text generated always as ('company') stored,
+	brand_id uuid not null,
+	brand_kind text generated always as ('company') stored,
+	started_on date not null,
+	ended_on date check (ended_on > started_on),
+	constraint client_brand_different_companies check (location_id <> brand_id),
+	foreign key (location_id, location_kind) references party (id, kind),
+	foreign key (brand_id, brand_kind) references party (id, kind),
+	exclude using gist (location_id with =, daterange(started_on, ended_on) with &&)
+);
+
+create table national_account_owner (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	account_id uuid not null references national_account (party_id) on update cascade,
+	owner_id uuid not null,
+	owner_kind text generated always as ('person') stored,
+	started_on date not null,
+	ended_on date check (ended_on > started_on),
+	foreign key (owner_id, owner_kind) references party (id, kind),
+	exclude using gist (account_id with =, daterange(started_on, ended_on) with &&)
+);
+
+create view client_status as
+select c.party_id, case
+	when exists (select from deal_party dp where dp.party_id = c.party_id and dp.role = 'client'
+		and coalesce((select phase from deal_phase_change p where p.deal_id = dp.deal_id
+			order by happened_at desc limit 1), '') not in ('closed', 'dead')) then 'active_deal'
+	when exists (select from deal_party dp join deal_phase_change p using (deal_id)
+		where dp.party_id = c.party_id and dp.role = 'client' and p.phase = 'closed') then 'past_client'
+	else c.status end as status
+from client c;
+
 create table activity (
 	id uuid primary key default gen_random_uuid(),
 	kind text not null check (kind in ('email', 'call', 'meeting', 'note')),
@@ -520,6 +624,87 @@ create constraint trigger email_about_a_record after insert on email
 	initially deferred for each row execute function email_about_a_record();
 create constraint trigger email_about_a_record after delete on activity_about
 	initially deferred for each row execute function email_about_a_record();
+
+alter table activity_about add constraint activity_about_activity_party_key unique (activity_id, party_id);
+
+-- Evidence is separate from ordinary stage edits, whose author and time are already in change history.
+create table lead_stage_move (
+	id uuid primary key default gen_random_uuid(),
+	party_id uuid not null references party,
+	role text not null generated always as ('lead') stored,
+	from_stage text not null,
+	to_stage text not null,
+	activity_id uuid references activity,
+	evidence_ref text check (evidence_ref ~ '\S'),
+	strength text not null check (strength in ('strong', 'weak')),
+	status text not null default 'proposed' check (status in ('proposed', 'applied')),
+	reason text check (reason ~ '\S'),
+	unique (party_id, from_stage, to_stage, activity_id),
+	constraint lead_stage_move_has_evidence check (to_stage = 'archived' or (activity_id is not null and evidence_ref is not null)),
+	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
+	constraint lead_stage_move_changes_stage check (from_stage <> to_stage),
+	constraint lead_stage_move_archive_reason check (to_stage <> 'archived' or reason is not null),
+	foreign key (role, from_stage) references stage,
+	foreign key (role, to_stage) references stage,
+	foreign key (party_id, role) references party_role deferrable initially deferred
+);
+
+create function apply_lead_stage_move() returns trigger
+language plpgsql as $$
+begin
+	if tg_op = 'UPDATE' and old.status = new.status then return null; end if;
+	if tg_op = 'UPDATE' and old.status = 'applied' then
+		raise exception 'an applied move stays applied; a correction is a new move'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_final';
+	end if;
+	if new.status = 'proposed' then
+		return null;
+	end if;
+	if new.changed_by_job is not null and (new.strength = 'weak' or new.to_stage = 'archived') then
+		raise exception 'weak evidence and archiving wait for a direct user'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_needs_user';
+	end if;
+	if new.changed_by_job is not null and new.changed_for_user_id is null and not (
+		new.from_stage = 'new' and new.to_stage = 'qualified'
+		or new.from_stage = 'qualified' and new.to_stage = 'outreach_active'
+		or new.from_stage = 'outreach_active' and new.to_stage = 'engaged'
+		or new.from_stage = 'engaged' and new.to_stage in ('nurture', 'opportunity')) then
+		raise exception 'a job follows the lead funnel'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_job_funnel';
+	end if;
+	-- The conditional update holds the lead, so a stale proposal cannot overwrite another move.
+	update party_role set stage = new.to_stage
+	where party_id = new.party_id and role = 'lead' and stage = new.from_stage;
+	if not found then
+		raise exception 'the lead has moved since this evidence was proposed'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_current_stage';
+	end if;
+	return null;
+end $$;
+
+create trigger apply_lead_stage_move after insert or update of status on lead_stage_move
+	for each row execute function apply_lead_stage_move();
+
+create function lead_stage_needs_evidence() returns trigger
+language plpgsql as $$
+begin
+	if tg_op = 'UPDATE' and new.stage is not distinct from old.stage then return null; end if;
+	-- The matching stamp identifies evidence applied by this actor in this transaction.
+	if (tg_op = 'UPDATE' and new.changed_by_job is not null and new.changed_for_user_id is null or new.stage = 'archived')
+		and not exists (select from lead_stage_move m
+			where m.party_id = new.party_id and m.from_stage = old.stage and m.to_stage = new.stage
+				and m.status = 'applied' and m.changed_at = now()
+				and m.changed_by_user_id is not distinct from new.changed_by_user_id
+				and m.changed_by_job is not distinct from new.changed_by_job) then
+		raise exception 'a job stage move or an archive needs its applied evidence'
+			using errcode = 'check_violation', constraint = 'lead_stage_needs_evidence';
+	end if;
+	return null;
+end $$;
+
+create trigger lead_stage_needs_evidence after insert or update of stage on party_role
+	for each row when (new.role = 'lead')
+	execute function lead_stage_needs_evidence();
 
 create table next_step (
 	id uuid primary key default gen_random_uuid(),
@@ -1138,6 +1323,7 @@ declare
 	pointer record;
 	duplicate_npi text;
 	duplicate_how_found text;
+	duplicate_how_found_detail text;
 begin
 	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
 	perform from party where id in (duplicate, survivor) for update;
@@ -1157,6 +1343,21 @@ begin
 	perform set_config('engine.merge', duplicate::text, true);
 	insert into merged_party (id, survivor_id) values (duplicate, survivor);
 
+	-- Conflicting client or account profiles need a user to settle their dated history first.
+	if exists (select from client d join client s on s.party_id = survivor where d.party_id = duplicate)
+		or exists (select from national_account d join national_account s on s.party_id = survivor where d.party_id = duplicate) then
+		raise exception 'settle both client or national account profiles before merging'
+			using errcode = 'check_violation', constraint = 'merge_party_client_profiles';
+	end if;
+
+	update client set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'client');
+	update national_account set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'national_account');
+
+	delete from lead_stage_move d using lead_stage_move s
+	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
+		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
@@ -1171,7 +1372,11 @@ begin
 			order by array_position(array['parked', 'avoid'], ruling) desc nulls last, side limit 1),
 		is_target = (s.is_target or d.is_target) and coalesce(s.disposition, '') <> 'avoid'
 			and coalesce(d.disposition, '') <> 'avoid',
-		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id)
+		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id),
+		lane = coalesce(s.lane, d.lane), segment = coalesce(s.segment, d.segment),
+		lease_estimate_source = case when s.estimated_lease_on is null then d.lease_estimate_source else s.lease_estimate_source end,
+		lease_estimate_confidence = case when s.estimated_lease_on is null then d.lease_estimate_confidence else s.lease_estimate_confidence end,
+		estimated_lease_on = coalesce(s.estimated_lease_on, d.estimated_lease_on)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
@@ -1216,6 +1421,9 @@ begin
 	where d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
 		and s.started_on is not distinct from d.started_on;
 
+	-- Profiles cascade with their roles before their direct party keys move.
+	update party_role set party_id = survivor where party_id = duplicate;
+
 	-- Read from the catalog, so a table added later moves too. A unique key the merge would repeat refuses it here.
 	for pointer in
 		select c.conrelid::regclass as tbl, a.attname as col
@@ -1228,8 +1436,10 @@ begin
 		using survivor, duplicate;
 	end loop;
 
-	delete from party where id = duplicate returning npi, how_found into duplicate_npi, duplicate_how_found;
-	update party set npi = coalesce(npi, duplicate_npi), how_found = coalesce(how_found, duplicate_how_found)
+	delete from party where id = duplicate returning npi, how_found, how_found_detail into duplicate_npi, duplicate_how_found, duplicate_how_found_detail;
+	update party set npi = coalesce(npi, duplicate_npi),
+		how_found_detail = coalesce(how_found_detail, case when how_found is null or how_found = duplicate_how_found
+			then duplicate_how_found_detail end), how_found = coalesce(how_found, duplicate_how_found)
 	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
@@ -1285,12 +1495,12 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'merged_party', 'change'] loop
+		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -1305,6 +1515,8 @@ begin
 			case when stamped = 'change' then 'insert' else 'insert or update' end);
 	end loop;
 end $$;
+
+
 
 -- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
 alter table post_text add constraint post_text_edit_by_a_user
@@ -1467,7 +1679,7 @@ grant update (label) on table role, stage, phase, specialty, deal_kind, deal_rea
 grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
-grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value) on deal to engine;
+grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
 grant update (npi, how_found) on party to engine;
 grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
@@ -1482,3 +1694,16 @@ grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;
 
 grant update (status, resolution_reason) on critical_date to engine;
+
+grant update (label) on client_type to engine;
+grant update (status, client_type) on client to engine;
+grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
+grant delete on client, national_account, client_brand, national_account_owner to engine;
+
+grant update (status) on lead_stage_move to engine;
+
+
+
+grant update (label) on lead_lane to engine;
+grant update (how_found_detail) on party to engine;
+grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) on party_role to engine;
