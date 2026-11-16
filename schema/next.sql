@@ -881,11 +881,14 @@ begin
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
-	-- Its stage, level and ruling stay too, and the duplicate's fill any it lacks. A target on either holds.
+	-- Its stage and level stay too, and the duplicate's fill any it lacks. A target on either holds.
+	-- The stricter ruling stays with its reason, so a merge never puts an avoided vendor back in play.
 	update party_role s set stage = coalesce(s.stage, d.stage),
 		relationship_level = coalesce(s.relationship_level, d.relationship_level),
-		disposition = coalesce(s.disposition, d.disposition),
-		disposition_reason = coalesce(s.disposition_reason, d.disposition_reason),
+		(disposition, disposition_reason) = (
+			select ruling, reason
+			from (values (s.disposition, s.disposition_reason, 1), (d.disposition, d.disposition_reason, 2)) r (ruling, reason, side)
+			order by array_position(array['parked', 'avoid'], ruling) desc nulls last, side limit 1),
 		is_target = s.is_target or d.is_target
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s

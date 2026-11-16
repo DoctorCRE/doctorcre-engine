@@ -1915,12 +1915,12 @@ test("a vendor's track record counts the deals it worked and the deals its intro
 		]);
 	}));
 
-test("a merge moves a vendor's introductions, and the survivor's stage, level and ruling win, filled from the duplicate's", () =>
+test("a merge moves a vendor's introductions, keeps the stricter ruling and either's target, and the survivor's stage and level win, filled from the duplicate's", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'company', 'Example Title Co');
 			insert into party_role (party_id, role, relationship_level, disposition, disposition_reason, is_target) values
-				('${DUPLICATE}', 'vendor', 3, 'avoid', 'Example: slow to close', true), ('${LENDERS[0]}', 'vendor', null, null, null, false);
-			update party_role set disposition = 'parked', disposition_reason = 'Example: drip only'
+				('${DUPLICATE}', 'vendor', 3, 'avoid', 'Example: slow to close', false), ('${LENDERS[0]}', 'vendor', null, null, null, false);
+			update party_role set disposition = 'parked', disposition_reason = 'Example: drip only', is_target = true
 			where party_id = '${VENDOR}' and role = 'vendor';
 			${newIntroduction({ vendor_id: DUPLICATE })};
 			select merge_party('${DUPLICATE}', '${VENDOR}');
@@ -1938,7 +1938,7 @@ test("a merge moves a vendor's introductions, and the survivor's stage, level an
 				introductions: "2",
 				roles: [
 					["title", null, null, null, null, false],
-					["vendor", "warm", 1, "parked", "Example: drip only", true],
+					["vendor", "warm", 1, "avoid", "Example: slow to close", true],
 				],
 			},
 		]);

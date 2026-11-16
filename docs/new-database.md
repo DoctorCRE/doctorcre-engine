@@ -121,7 +121,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 48. A stage comes from its own role's stage list, and is stored once per role.
 49. A relationship level is a vendor role's, one of the four levels, and only a schema change adds or renames a level.
 50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. One the team made names the user who made it, and one the vendor made names none. Its note is never blank, and who it joins and who made it never change. A vendor keeps its vendor role while it has introductions.
-51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none.
+51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none. A merge keeps the stricter disposition, avoid over parked over none, with its reason.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -293,10 +293,10 @@ An introduction is one `introduction` row, made either way: the vendor introduci
 
 Moving today's rows across:
 
-- Each `vendor` becomes the vendor role on its party, with its `relationship_level` and `is_target` as they are. A `disposition` of `parked` or `avoid` stays, and `active` becomes none. Today's rows have no reason, so a parked or avoided vendor takes its old stage's label as its reason when it still holds `tabled_parked_drip_only` or `avoid_not_a_good_partner`, and otherwise waits for a partner to give one.
+- Each `vendor` becomes the vendor role on its party, with its `relationship_level`, `disposition` and `is_target` as they are, and `active` becomes no disposition. These columns hold 0047's split and every change since, so they win over an old stage. Today's rows have no reason, so a parked or avoided vendor waits to move until a partner gives one. It never moves as active, which would put it back in play.
 - Each `vendor_category` row becomes a role whose `category_of` is vendor, and a vendor's `category_slug` its role. The deal roles of `deal_vendor_assignment`, such as title and inspector, join the same list, and `gc` becomes contractor. Each assignment becomes a `deal_party` row, and so does each worked deal in a vendor's `deal_evidence`.
-- Each `vendor_stage` row becomes a vendor stage, and a vendor's `stage` the stage on its vendor role. The old system's migration 0047 split its nine original stages into level, disposition and target, so an original stage such as avoid or target does not come back as a stage (owner, #258). It maps as 0047 mapped it, to a level, a disposition or the target flag.
-- Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is neither waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
+- Each `vendor_stage` row becomes a vendor stage, and a vendor's `stage` the stage on its vendor role, except the nine original stages. The old system's migration 0047 split those into level, disposition and target, which already hold what they meant, so none of them, such as avoid or target, comes back as a stage (owner, #258).
+- Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is empty, or is neither the vendor nor a user, waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
 - `trust_override`, a hand-set rating, does not move.
 
 ## Merging duplicates
@@ -313,7 +313,7 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
-- Both vendors? The survivor's vendor role stays, with its stage, level and disposition with its reason, and the duplicate's fill any it lacks. If either is a target, the survivor is.
+- Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
 
