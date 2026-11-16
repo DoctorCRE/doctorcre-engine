@@ -337,7 +337,13 @@ create table deal (
 	-- Can be named before any property is chosen.
 	market_id uuid references market,
 	-- Such as the total lease value or the purchase price. Empty until known, never zero.
-	closed_value numeric(14, 2) check (closed_value > 0)
+	closed_value numeric(14, 2) check (closed_value > 0),
+	-- None is active. Parking never touches the phase, so a revived deal is back in the phase it was in.
+	parking_reason text check (parking_reason in ('client_paused', 'prospect_never_active', 'other')),
+	parking_note text check (parking_note ~ '\S'),
+	-- A flag a user sets, never worked out from anything else.
+	needs_attention boolean not null default false,
+	constraint deal_parking_note_when_parked check (parking_note is null or parking_reason is not null)
 );
 
 -- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.
@@ -1159,7 +1165,7 @@ grant update (label) on table role, stage, phase, specialty, deal_kind, deal_rea
 grant update (stage, relationship_level, disposition, disposition_reason, is_target) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
-grant update (kind, reason, owner_user_id, market_id, closed_value) on deal to engine;
+grant update (kind, reason, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
 grant update (npi) on party to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;

@@ -18,7 +18,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
-- **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market and its closed value.
+- **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, and whether it needs attention.
 - **`deal_kind`**: the list of kinds of transaction, such as lease and purchase. Like roles, a label can be renamed.
 - **`deal_reason`**: the list of reasons a client takes space, such as a start-up or a relocation. Like roles, a label can be renamed.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
@@ -131,6 +131,8 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 55. A deal's kind comes from the kind list and its reason from the reason list. Either may be unknown.
 56. A deal has exactly one deal owner, a user.
 57. A deal's market comes from the market list, and its closed value is more than zero.
+58. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank.
+59. A deal needs attention or does not; it is never unknown.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -143,7 +145,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's or a specialty's label;
 - a vendor role's stage, relationship level, disposition, reason and target, and an introduction's date, deal and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, and a property's address, county and point;
-- a deal's kind, reason, deal owner, market and closed value;
+- a deal's kind, reason, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
@@ -284,6 +286,10 @@ Every deal has exactly one deal owner, a user, in `owner_user_id`. A second user
 
 A deal names its market from the `market` list, which can be set when the deal opens, before any property is chosen, and stays empty until known. A closed deal records its value, such as the total lease value or the purchase price, in `closed_value`, which is empty until known and never zero. Nothing requires it at the move to closed, because the mail job closes a deal when its invoice arrives and the invoice does not carry it, so the value is left for a user to fill in.
 
+A parked deal is not active work for now, and says why in `parking_reason`: the client paused, the prospect was never active, or another reason, with an optional note. No reason means the deal is active, as no disposition means a vendor is. Parking is not a phase and never changes one, so reviving a deal, which clears its reason and note, leaves it in the phase it was in. Who parked a deal and when is the latest change to its `parking_reason` in change history, so the deal holds no date or user of its own for it, and the same history keeps every earlier parking and revival.
+
+`needs_attention` is a flag a user sets on a deal and clears, never worked out from anything else. Change history keeps who set it and when.
+
 National is never stored. A deal is national exactly when its client is a location of a national account. National accounts and the brand behind each location come with #275, and with them the read that answers it. Until then nothing answers it, and since nothing stores it, no flag can disagree with the client, as today's lane sometimes does.
 
 Moving today's rows across:
@@ -293,6 +299,8 @@ Moving today's rows across:
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
 - `won_value` becomes `closed_value`. `sf_commission_placeholder` is a commission, not the deal's value, so it waits for commissions.
 - `lane` is not copied. A deal whose old lane disagrees with its client's national account is listed once #275 lands.
+- A `parked` deal's `parking_reason` comes across as it is, and its `parking_note` trimmed, a blank one as none. An `active` deal has no reason. `parked_at` and `parked_by` come across into change history with the old `event` rows, as earlier deal owners do, dated when the deal was parked and naming who parked it.
+- `attention` becomes `needs_attention`.
 
 ## Markets and territories
 
@@ -377,4 +385,4 @@ Today's system keeps one `event` row per field changed, with the actor, a verb a
 
 ## Later slices
 
-A deal's parked state and needs attention (#283). "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+"Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.

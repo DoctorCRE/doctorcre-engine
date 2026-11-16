@@ -770,6 +770,27 @@ const RULES: Record<string, Case[]> = {
 			[`update deal set market_id = '${MISSING}'`, "deal_market_id_fkey"],
 			["update deal set closed_value = 0", "deal_closed_value_check"],
 		],
+	"a parked deal says why, and only a parked deal has a note, never blank": [
+		["update deal set parking_reason = 'on_hold'", "deal_parking_reason_check"],
+		[
+			"update deal set parking_note = 'Example note'",
+			"deal_parking_note_when_parked",
+		],
+		[
+			"update deal set parking_reason = 'other', parking_note = ' '",
+			"deal_parking_note_check",
+		],
+	],
+	"a deal needs attention or not, never unknown": [
+		[
+			"update deal set needs_attention = null",
+			{
+				code: "23502",
+				message:
+					'null value in column "needs_attention" of relation "deal" violates not-null constraint',
+			},
+		],
+	],
 	"a round number is used once per deal and answers an earlier round": [
 		[offer(3, 2, AGENT, "listing_agent"), "offer_deal_id_round_key"],
 		[offer(4, 4, AGENT, "listing_agent"), "offer_answers_earlier_round"],
@@ -1584,7 +1605,10 @@ const CHANGEABLE: Record<string, string[]> = {
 		"kind",
 		"market_id",
 		"name",
+		"needs_attention",
 		"owner_user_id",
+		"parking_note",
+		"parking_reason",
 		"reason",
 	],
 	party_company: ["ended_on", "started_on", "title"],
@@ -1725,6 +1749,9 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			owner_user_id: USER,
 			market_id: BAY,
 			closed_value: null,
+			parking_reason: null,
+			parking_note: null,
+			needs_attention: false,
 		},
 		phases,
 		properties: [
@@ -1959,6 +1986,9 @@ test("each insert, update and delete leaves history: the record, its fields from
 					owner_user_id: USER,
 					market_id: null,
 					closed_value: null,
+					parking_reason: null,
+					parking_note: null,
+					needs_attention: false,
 				},
 				...by(TEAMMATE, null),
 			},
@@ -1997,6 +2027,52 @@ test("a deal's new deal owner is history: who held it before, who moved it and w
 				action: "update",
 				old_value: { owner_user_id: USER },
 				new_value: { owner_user_id: TEAMMATE },
+				changed_by_user_id: TEAMMATE,
+				changed_by_job: null,
+				changed_for_user_id: null,
+				merge_of: null,
+			},
+		]);
+	}));
+
+test("a parked deal stays in its phase and is revived to it, and history keeps who parked it, why and when", () =>
+	rolledBack(async () => {
+		await db.query(`${asUser(TEAMMATE)};
+			update deal set parking_reason = 'client_paused', parking_note = 'Example pause' where id = '${DEAL}';
+			${asUser(USER)}; update deal set parking_reason = null, parking_note = null where id = '${DEAL}'`);
+		assert.deepEqual((await readDeal()).phases, phases);
+		const parked = {
+			parking_reason: "client_paused",
+			parking_note: "Example pause",
+		};
+		const active = { parking_reason: null, parking_note: null };
+		const by = (user: string) => ({
+			table_name: "deal",
+			record: { id: DEAL },
+			action: "update",
+			changed_by_user_id: user,
+			changed_by_job: null,
+			changed_for_user_id: null,
+			merge_of: null,
+		});
+		assert.deepEqual(await history(), [
+			{ ...by(TEAMMATE), old_value: active, new_value: parked },
+			{ ...by(USER), old_value: parked, new_value: active },
+		]);
+	}));
+
+test("a user flags a deal as needing attention, and history keeps who and when", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${asUser(TEAMMATE)}; update deal set needs_attention = true where id = '${DEAL}'`,
+		);
+		assert.deepEqual(await history(), [
+			{
+				table_name: "deal",
+				record: { id: DEAL },
+				action: "update",
+				old_value: { needs_attention: false },
+				new_value: { needs_attention: true },
 				changed_by_user_id: TEAMMATE,
 				changed_by_job: null,
 				changed_for_user_id: null,
