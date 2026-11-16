@@ -105,6 +105,7 @@ ${oldParty(16, {
 	phone: "+1 217 555 0103",
 	cell: "2175550103",
 	contact_state: "paused",
+	contact_state_reason: "Example pause",
 	contact_state_until: "2027-01-04",
 	specialty: "\tPhysical Therapy",
 	org_id: id(14),
@@ -241,7 +242,6 @@ test("each value it does not copy is listed, with why", () => {
 		[id(14), "party", "Example 14", "deleted"],
 		[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
 		[id(15), "party", "Example 15", "merged into a record not copied"],
-		[id(16), "contact_state", "paused until 2027-01-04", "no place in the new database"],
 		[id(16), "npi", "9000000016", "not an NPI"],
 		[id(16), "org_id", id(14), "its company is not copied"],
 		[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
@@ -316,7 +316,7 @@ test("a phone is a work number and a cell a mobile one, in E.164 with the extens
 test("do not contact keeps its reason and who set it and when, and a survivor takes its duplicate's", async () => {
 	assert.deepEqual(
 		await rows(
-			"select party_id, reason, created_at::text, changed_by_user_id, changed_by_job, changed_at::text from do_not_contact order by party_id",
+			"select party_id, reason, created_at::text, changed_by_user_id, changed_by_job, changed_at::text from do_not_contact where until_date is null order by party_id",
 		),
 		[
 			{
@@ -445,7 +445,7 @@ test("after the copy, a change is stamped with who made it again", () =>
 			update party set name = 'Example renamed' where id = '${id(10)}';
 			update party_email set label = 'personal';
 			update party_phone set label = 'home';
-			insert into do_not_contact (party_id, reason) values ('${id(16)}', 'Example asked us to stop');
+			update do_not_contact set until_date = null where party_id = '${id(16)}';
 			insert into party_specialty (person_id, specialty) values ('${id(16)}', 'gp');
 			update party_company set title = 'Example title'`);
 		for (const table of [
@@ -467,7 +467,14 @@ test("after the copy, a change is stamped with who made it again", () =>
 
 test("copied rows share the last author's job and sponsor across every copied value", () =>
 	rolledBack(async () => {
-		const agents = ["claude", "codex", "grok", "joe-local", "dell-local"];
+		const agents = [
+			"claude",
+			"codex",
+			"grok",
+			"hermes-pilot",
+			"joe-local",
+			"dell-local",
+		];
 		await db.query(
 			agents
 				.map(
@@ -519,7 +526,8 @@ test("copied rows share the last author's job and sponsor across every copied va
 				specialty: "Example specialty",
 				org_id: id(11),
 				title: "Example title",
-				contact_state: "do_not_contact",
+				contact_state: i % 2 ? "paused" : "do_not_contact",
+				...(i % 2 ? { contact_state_until: "2027-01-04" } : {}),
 				contact_state_reason: "Example request",
 				contact_state_set_by: row.author,
 			});
@@ -597,3 +605,71 @@ test("the latest mutation supplies the sponsor only for its author, record and f
 			],
 		);
 	}));
+test("paused copies as do not contact with its reason and end date", async () => {
+	assert.deepEqual(
+		await rows(
+			"select party_id, reason, until_date::text from do_not_contact where until_date is not null",
+		),
+		[{ party_id: id(16), reason: "Example pause", until_date: "2027-01-04" }],
+	);
+});
+
+test("a pause without an end date is reported and never becomes a permanent stop", () =>
+	rolledBack(async () => {
+		const report = await copy(
+			oldParty(950, {
+				contact_state: "paused",
+				contact_state_reason: "Example pause",
+			}),
+		);
+		assert.deepEqual(
+			(report ?? []).filter((row) => row[0] === id(950)),
+			[[id(950), "contact_state", "paused", "paused without an end date"]],
+		);
+		assert.deepEqual(
+			await rows(
+				`select party_id from do_not_contact where party_id = '${id(950)}'`,
+			),
+			[],
+		);
+	}));
+for (const [survivor, duplicate, winner] of [
+	["2028-01-01", "2029-01-01", "duplicate"],
+	["2029-01-01", "2028-01-01", "survivor"],
+	["2028-01-01", null, "duplicate"],
+	[null, "2028-01-01", "survivor"],
+] as const) {
+	test(`the copy keeps the strongest stop with its reason: ${survivor}, ${duplicate}`, () =>
+		rolledBack(async () => {
+			const report = await copy(
+				oldParty(951, {
+					contact_state: survivor ? "paused" : "do_not_contact",
+					...(survivor ? { contact_state_until: survivor } : {}),
+					contact_state_reason: "Example survivor",
+				}) +
+					oldParty(952, {
+						merged_into: id(951),
+						contact_state: duplicate ? "paused" : "do_not_contact",
+						...(duplicate ? { contact_state_until: duplicate } : {}),
+						contact_state_reason: "Example duplicate",
+					}),
+			);
+			assert.deepEqual(
+				(report ?? []).filter(
+					(row) => row[0] === id(951) || row[0] === id(952),
+				),
+				[],
+			);
+			assert.deepEqual(
+				await rows(
+					`select reason, until_date::text from do_not_contact where party_id = '${id(951)}'`,
+				),
+				[
+					{
+						reason: `Example ${winner}`,
+						until_date: winner === "survivor" ? survivor : duplicate,
+					},
+				],
+			);
+		}));
+}

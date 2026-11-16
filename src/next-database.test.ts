@@ -132,6 +132,7 @@ const rounds = ROUNDS.map(
 		from_role,
 		offered_at: `${day}T15:00:00+00:00`,
 		status,
+		expires_on: null,
 		rent_per_sf_yr: rent,
 		nnn_per_sf_yr: nnn,
 		term_months: term,
@@ -436,6 +437,7 @@ const STAMPED = [
 	"offer_document",
 	"lease",
 	"lease_option",
+	"critical_date",
 	"social_account",
 	"idea",
 	"design_template",
@@ -531,7 +533,74 @@ const newOption = (row: Record<string, string | number | null> = {}) =>
 		terms: "Example five-year renewal",
 		...row,
 	});
+const DATE = id(710);
+const newCriticalDate = (row: Record<string, string | null> = {}) =>
+	insert("critical_date", {
+		id: DATE,
+		deal_id: DEAL,
+		kind: "due_diligence",
+		due_on: "2026-06-01",
+		source: "Example signed agreement",
+		...row,
+	});
 const RULES: Record<string, Case[]> = {
+	"critical dates start proposed and only a user confirms or resolves them": [
+		[newCriticalDate({ status: "open" }), "critical_date_starts_proposed"],
+		[
+			newCriticalDate({ confirmed_by_user_id: USER }),
+			"critical_date_starts_proposed",
+		],
+		[newCriticalDate({ kind: "unknown" }), "critical_date_kind_check"],
+		[newCriticalDate({ source: " " }), "critical_date_source_check"],
+		[
+			newCriticalDate({ offer_id: id(102), document_id: PDF_FILE }),
+			"critical_date_one_source",
+		],
+		[newCriticalDate({ option_number: "1" }), "critical_date_option_on_lease"],
+		[
+			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, deal_id: LENDER_DEAL })}`,
+			"critical_date_lease_id_deal_id_fkey",
+		],
+		[
+			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, option_number: "1" })}`,
+			"critical_date_lease_id_option_number_fkey",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; ${asJob("agent", USER)}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+			"critical_date_user_decides",
+		],
+		[newCriticalDate({ deal_id: MISSING }), "critical_date_deal_id_fkey"],
+		[
+			newCriticalDate({ offer_id: id(102), deal_id: LENDER_DEAL }),
+			"critical_date_offer_id_deal_id_fkey",
+		],
+		[
+			`${newCriticalDate()}; ${asJob("agent", USER)}; update critical_date set status = 'open'`,
+			"critical_date_user_decides",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+			"critical_date_status_moves",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; update critical_date set status = 'done'`,
+			"critical_date_resolution_whole",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; update critical_date set status = 'done', resolution_reason = 'Example completed';
+			update critical_date set status = 'open'`,
+			"critical_date_status_moves",
+		],
+		[
+			"update critical_date set confirmed_at = now()",
+			notGranted("critical_date"),
+		],
+		[
+			"update critical_date set due_on = current_date",
+			notGranted("critical_date"),
+		],
+		["delete from critical_date", notGranted("critical_date")],
+	],
 	"leases preserve sourced terms and a consecutive history on their deal": [
 		[newLease({ version: 0 }), "lease_version_check"],
 		[newLease({ version: 2 }), "lease_deal_id_previous_version_fkey"],
@@ -1469,6 +1538,10 @@ const RULES: Record<string, Case[]> = {
 				"party_role_disposition_reason_check",
 			],
 			[
+				"update party_role set disposition = 'avoid', disposition_reason = 'Example', is_target = true where role = 'vendor'",
+				"party_role_avoid_not_target",
+			],
+			[
 				"update party_role set is_target = true where role = 'title'",
 				"party_role_target_on_vendor",
 			],
@@ -1549,6 +1622,11 @@ const RULES: Record<string, Case[]> = {
 		],
 	"history is never added, rewritten or removed by hand": [
 		[
+			"select erase_change(1, array['summary'])",
+			{ code: "42501", message: "permission denied for function erase_change" },
+		],
+
+		[
 			`insert into change (table_name, record, action) values ('deal', '{}', 'insert')`,
 			notGranted("change"),
 		],
@@ -1579,6 +1657,16 @@ const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
 const OWNER_RULES: Record<string, Case[]> = {
+	"historical critical date loads still require a whole confirmation": [
+		[
+			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ confirmed_by_user_id: USER })}`,
+			"critical_date_confirmation_whole",
+		],
+		[
+			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ status: "open" })}`,
+			"critical_date_confirmed_when_real",
+		],
+	],
 	"a user is a person": [
 		[`insert into app_user (id) values ('${CLIENT}')`, "app_user_id_kind_fkey"],
 	],
@@ -1668,6 +1756,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
+	do_not_contact: ["until_date"],
 	stage: ["label"],
 	party_role: [
 		"disposition",
@@ -1701,6 +1790,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
 	document: ["name"],
 	offer: ["status"],
+	critical_date: ["resolution_reason", "status"],
 	social_account: ["handle", "platform_account_id"],
 	idea: ["angle", "hook", "pillar"],
 	design_template: ["name"],
@@ -2194,7 +2284,7 @@ test("a vendor's track record counts the deals it worked and the deals its intro
 		]);
 	}));
 
-test("a merge moves a vendor's introductions, keeps the stricter ruling and either's target, and the survivor's stage and level win, filled from the duplicate's", () =>
+test("a merge moves a vendor's introductions, keeps avoid and clears target, and fills missing stage and level", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'company', 'Example Title Co');
 			insert into party_role (party_id, role, relationship_level, disposition, disposition_reason, is_target) values
@@ -2217,7 +2307,7 @@ test("a merge moves a vendor's introductions, keeps the stricter ruling and eith
 				introductions: "2",
 				roles: [
 					["title", null, null, null, null, false],
-					["vendor", "warm", 1, "avoid", "Example: slow to close", true],
+					["vendor", "warm", 1, "avoid", "Example: slow to close", false],
 				],
 			},
 		]);
@@ -2804,6 +2894,180 @@ test("an import of a duplicate's id that waits on its merge is refused", async (
 	}
 });
 
+test("outreach respects an indefinite stop and a pause through its end date", () =>
+	rolledBack(async () => {
+		await db.query(`insert into do_not_contact (party_id, reason, until_date) values ('${CLIENT}', 'Example pause', current_date);
+   update do_not_contact set until_date = current_date - 1 where party_id = '${AGENT}'`);
+		assert.deepEqual(
+			(await db.query("select party_id from active_do_not_contact")).rows,
+			[{ party_id: CLIENT }],
+		);
+		await db.query(
+			`update do_not_contact set until_date = null where party_id = '${AGENT}'`,
+		);
+		assert.equal(
+			(await db.query("select count(*) from active_do_not_contact")).rows[0]
+				.count,
+			"2",
+		);
+	}));
+for (const [left, right] of [
+	[true, false],
+	[false, true],
+]) {
+	test(`a vendor merge keeps a target from either side: ${left}, ${right}`, () =>
+		rolledBack(async () => {
+			await db.query(`insert into party (id, kind, name) values ('${id(980)}', 'company', 'Example vendor');
+    insert into party_role (party_id, role, is_target) values ('${id(980)}', 'vendor', ${left});
+    update party_role set is_target = ${right} where party_id = '${VENDOR}' and role = 'vendor';
+    select merge_party('${id(980)}', '${VENDOR}')`);
+			assert.equal(
+				(
+					await db.query(
+						"select is_target from party_role where party_id = $1 and role = 'vendor'",
+						[VENDOR],
+					)
+				).rows[0].is_target,
+				true,
+			);
+		}));
+}
+for (const [first, second, expected] of [
+	["null", "current_date", null],
+	["current_date", "null", null],
+	["current_date", "current_date + 1", 1],
+	["current_date + 1", "current_date", 1],
+] as const) {
+	test(`a merge keeps the longest stop: ${first}, ${second}`, () =>
+		rolledBack(async () => {
+			await db.query(`insert into party (id, kind, name) values ('${id(980)}', 'company', 'Example one'), ('${id(981)}', 'company', 'Example two');
+    insert into do_not_contact (party_id, reason, until_date) values ('${id(980)}', 'Example one', ${first}), ('${id(981)}', 'Example two', ${second});
+    select merge_party('${id(980)}', '${id(981)}')`);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select reason, until_date - current_date as days from do_not_contact where party_id = $1",
+						[id(981)],
+					)
+				).rows,
+				[
+					{
+						reason:
+							(expected === null && first === "null") ||
+							first === "current_date + 1"
+								? "Example one"
+								: "Example two",
+						days: expected,
+					},
+				],
+			);
+		}));
+}
+
+test("only the owner erases a removed record's values, keeping who and when and recording the erase", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query(`begin; ${asUser(TEAMMATE)}`);
+		await owner.query(`insert into activity (id, kind, happened_at, summary) values ('${id(982)}', 'note', now(), 'Example private note');
+   update activity set summary = 'Example corrected note' where id = '${id(982)}';
+   delete from activity where id = '${id(982)}'`);
+		await owner.query(`insert into activity (id, kind, happened_at) values ('${id(983)}', 'email', now());
+			insert into activity_about (activity_id, party_id) values ('${id(983)}', '${CLIENT}');
+			insert into email (activity_id, message_id, sender, subject, body)
+			values ('${id(983)}', '<erase@example.com>', 'erase@example.com', 'Example subject', 'Example private body');
+			delete from email where activity_id = '${id(983)}';
+			select erase_change((select max(id) from change where table_name = 'email' and action = 'delete' and record = jsonb_build_object('activity_id', '${id(983)}')), array['subject', 'body'])`);
+		assert.equal(
+			(
+				await owner.query(
+					"select count(*) from change where table_name = 'email' and record = $1 and (old_value ?| array['subject','body'] or new_value ?| array['subject','body'])",
+					[{ activity_id: id(983) }],
+				)
+			).rows[0].count,
+			"0",
+		);
+		const before = (
+			await owner.query(
+				"select id, table_name, record, action, changed_by_user_id, changed_at, merge_of from change where record = $1 order by id",
+				[{ id: id(982) }],
+			)
+		).rows;
+		const removed = before.at(-1);
+		assert.ok(removed);
+		await owner.query("savepoint invalid_erase");
+		await assert.rejects(
+			owner.query("select erase_change($1, array['summary'])", [before[0].id]),
+			{ code: "P0002" },
+		);
+		await owner.query("rollback to invalid_erase");
+		for (const fields of [[], ["happened_at"], ["id"], ["missing"], [null]]) {
+			await assert.rejects(
+				owner.query("select erase_change($1, $2)", [removed.id, fields]),
+				{ code: "23514", constraint: "erase_only_text_fields" },
+			);
+			await owner.query("rollback to invalid_erase");
+		}
+
+		await owner.query(asUser(USER));
+		await owner.query("select erase_change($1, array['summary'])", [
+			removed.id,
+		]);
+		const after = (
+			await owner.query(
+				"select id, table_name, record, action, changed_by_user_id, changed_at, merge_of, old_value, new_value from change where record = $1 order by id",
+				[{ id: id(982) }],
+			)
+		).rows;
+		assert.deepEqual(
+			after.slice(0, -1).map(({ old_value, new_value, ...metadata }) => {
+				assert.equal(old_value?.summary, undefined);
+				assert.equal(new_value?.summary, undefined);
+				return metadata;
+			}),
+			before,
+		);
+		assert.equal(after.at(-1).action, "erase");
+		assert.deepEqual(after.at(-1).new_value, { fields: ["summary"] });
+		assert.equal(after[0].new_value.kind, "note");
+		assert.ok(after[0].new_value.happened_at);
+		assert.equal(after.at(-1).changed_by_user_id, USER);
+		assert.ok(after.at(-1).changed_at);
+		await owner.query("select erase_change($1, array['summary'])", [
+			removed.id,
+		]);
+		assert.equal(
+			(
+				await owner.query("select count(*) from change where record = $1", [
+					{ id: id(982) },
+				])
+			).rows[0].count,
+			"4",
+		);
+		assert.equal(
+			(
+				await owner.query(
+					"select new_value->>'summary' as summary from change where table_name = 'activity' and record = $1 and action = 'insert'",
+					[{ id: NOTE }],
+				)
+			).rows[0].summary,
+			"Example prefers mornings",
+		);
+		await owner.query(
+			`insert into activity (id, kind, happened_at, summary) values ('${id(982)}', 'note', now(), 'Example recreated note')`,
+		);
+		await assert.rejects(
+			owner.query("select erase_change($1, array['summary'])", [removed.id]),
+			{
+				code: "23514",
+				constraint: "erase_only_removed",
+			},
+		);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
+	}
+});
+
 test("a lease amendment preserves earlier terms and options while the ending list uses the latest version", async () => {
 	await rolledBack(async () => {
 		await db.query(`${newLease({ rent_per_sf_yr: 35, term_months: 84 })}; ${newOption()};
@@ -2878,6 +3142,85 @@ test("sourced options can be extracted later for a historical lease version", as
 		assert.equal(
 			(await db.query(`select lease_id from lease_option`)).rows[0].lease_id,
 			LEASE,
+		);
+	});
+});
+
+test("lease and LOI dates are repeatable proposals, then a user's confirmation survives resolution", async () => {
+	await rolledBack(async () => {
+		await db.query(`${newLease({ rent_starts_on: "2026-07-01" })}; ${newOption()};
+			insert into offer (deal_id, property_id, round, from_party_id, from_role, offered_at, expires_on)
+			values ('${DEAL}', '${PROPERTY}', 4, '${CLIENT}', 'client', now(), '2026-06-10');
+			select propose_critical_dates('${DEAL}'); select propose_critical_dates('${DEAL}')`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select kind, status, due_on::text from critical_date order by kind",
+				)
+			).rows,
+			[
+				{ kind: "lease_end", status: "proposed", due_on: "2033-06-30" },
+				{ kind: "loi_expiry", status: "proposed", due_on: "2026-06-10" },
+				{ kind: "option_notice", status: "proposed", due_on: "2032-12-31" },
+				{ kind: "rent_start", status: "proposed", due_on: "2026-07-01" },
+			],
+		);
+		await db.query("update critical_date set status = 'open'");
+		await db.query(
+			`${asUser(TEAMMATE)}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+		);
+		const { rows } = await db.query(
+			"select distinct confirmed_by_user_id, resolved_by_user_id, confirmed_at = transaction_timestamp() as confirmed_now from critical_date",
+		);
+		assert.deepEqual(rows, [
+			{
+				confirmed_by_user_id: USER,
+				resolved_by_user_id: TEAMMATE,
+				confirmed_now: true,
+			},
+		]);
+	});
+});
+
+for (const [start, end] of [
+	["proposed", "dropped"],
+	["open", "dropped"],
+	["open", "passed"],
+]) {
+	test(`a user moves a critical date from ${start} to ${end}`, async () => {
+		await rolledBack(async () => {
+			await db.query(newCriticalDate());
+			if (start === "open")
+				await db.query("update critical_date set status = 'open'");
+			await db.query(
+				`update critical_date set status = '${end}', resolution_reason = 'Example decision'`,
+			);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select status, confirmed_by_user_id, resolved_by_user_id from critical_date",
+					)
+				).rows,
+				[
+					{
+						status: end,
+						confirmed_by_user_id: start === "open" ? USER : null,
+						resolved_by_user_id: USER,
+					},
+				],
+			);
+		});
+	});
+}
+
+test("distinct manually sourced deadlines may share their kind and day", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${newCriticalDate()}; ${newCriticalDate({ id: id(711), source: "Another example agreement" })}`,
+		);
+		assert.equal(
+			(await db.query("select count(*) from critical_date")).rows[0].count,
+			"2",
 		);
 	});
 });

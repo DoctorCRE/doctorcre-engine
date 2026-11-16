@@ -12,7 +12,8 @@ begin atomic
 	), attribution as (
 		select a.kind, a.id, case
 			when a.kind = 'human' then null
-			when a.kind = 'automation' and a.slug in ('claude', 'codex', 'grok', 'joe-local', 'dell-local') then 'agent'
+			-- Interactive runtimes registered in old migrations 0074, 0095, 0169 and 0469.
+			when a.kind = 'automation' and a.slug in ('claude', 'codex', 'grok', 'hermes-pilot', 'joe-local', 'dell-local') then 'agent'
 			when a.kind = 'automation' and e.cause = 'ingest_email' then 'mail_capture'
 			else 'old_system'
 		end as job, sponsor.id as sponsor_id

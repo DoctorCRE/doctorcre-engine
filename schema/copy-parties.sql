@@ -39,9 +39,9 @@ select p.*, m.survivor_id, author.*,
 	setter.changed_for_user_id as dnc_for_user_id
 from public.party p
 left join merged m using (id)
-cross join lateral copy_attribution('party', p.id, coalesce(p.updated_by, p.created_by)) author
+cross join lateral copy_attribution('party', p.id, p.updated_by) author
 cross join lateral copy_attribution('party', p.id,
-	coalesce(p.contact_state_set_by, p.updated_by, p.created_by), 'contact_state') setter
+	coalesce(p.contact_state_set_by, p.updated_by), 'contact_state') setter
 where not exists (select from outside_id where source = 'old_system' and value = p.id::text);
 
 create temp table copied on commit drop as
@@ -63,7 +63,7 @@ where btrim(s.npi) <> '';
 insert into party (id, created_at, kind, name, npi, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, created_at, case kind when 'org' then 'company' else kind end, name,
 	(select npi from npi_claim c where c.survivor_id = p.id and c.valid and c.holder = p.id order by c.rank limit 1),
-	changed_by_user_id, changed_by_job, changed_for_user_id, coalesce(updated_at, created_at)
+	changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from copied p;
 
 insert into not_copied
@@ -138,7 +138,7 @@ insert into party_email (party_id, address, label, is_primary, created_at, chang
 	changed_for_user_id, changed_at)
 select distinct on (v.party_id, v.stored) v.party_id, v.stored, v.label,
 	v.place = min(v.place) over (partition by v.party_id), p.created_at, p.changed_by_user_id, p.changed_by_job,
-	p.changed_for_user_id, coalesce(p.updated_at, p.created_at)
+	p.changed_for_user_id, p.updated_at
 from typed_value v join copied p on p.id = v.party_id
 where v.field = 'email' and v.stored is not null
 order by v.party_id, v.stored, v.place;
@@ -147,23 +147,27 @@ insert into party_phone (party_id, number, extension, label, is_primary, created
 	changed_for_user_id, changed_at)
 select distinct on (v.party_id, v.stored, v.extension) v.party_id, v.stored, v.extension, v.label,
 	v.place = min(v.place) over (partition by v.party_id), p.created_at, p.changed_by_user_id, p.changed_by_job,
-	p.changed_for_user_id, coalesce(p.updated_at, p.created_at)
+	p.changed_for_user_id, p.updated_at
 from typed_value v join copied p on p.id = v.party_id
 where v.field <> 'email' and v.stored is not null
 order by v.party_id, v.stored, v.extension, v.place;
 
--- A survivor is do not contact if any of its records is, with its own reason first.
-insert into do_not_contact (party_id, reason, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select distinct on (survivor_id) survivor_id, btrim(contact_state_reason), coalesce(contact_state_set_at, updated_at),
-	dnc_by_user_id, dnc_by_job, dnc_for_user_id, coalesce(contact_state_set_at, updated_at)
-from chain where contact_state = 'do_not_contact' and contact_state_reason ~ '\S'
-order by survivor_id, rank;
+-- Keep the longest restriction, with an indefinite stop first.
+insert into do_not_contact (party_id, reason, until_date, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+select distinct on (survivor_id) survivor_id, btrim(contact_state_reason), contact_state_until,
+	coalesce(contact_state_set_at, updated_at), dnc_by_user_id, dnc_by_job, dnc_for_user_id, coalesce(contact_state_set_at, updated_at)
+from chain where contact_state in ('do_not_contact', 'paused') and contact_state_reason ~ '\S'
+	and (contact_state <> 'paused' or contact_state_until is not null)
+order by survivor_id, contact_state_until desc nulls first, rank;
 
--- Paused and nurture have no place in the new database yet, and do not contact needs its reason.
+
 insert into not_copied
 select id, 'contact_state', concat_ws(' until ', contact_state, contact_state_until),
-	case contact_state when 'do_not_contact' then 'do not contact without a reason' else 'no place in the new database' end
-from chain where contact_state <> 'active' and not (contact_state = 'do_not_contact' and contact_state_reason ~ '\S');
+	case when contact_state in ('do_not_contact', 'paused') and not coalesce(contact_state_reason ~ '\S', false) then 'do not contact without a reason'
+		when contact_state = 'paused' then 'paused without an end date'
+		else 'no place in the new database' end
+from chain where contact_state <> 'active' and not (contact_state in ('do_not_contact', 'paused')
+	and contact_state_reason ~ '\S' and (contact_state <> 'paused' or contact_state_until is not null));
 
 -- Each specialty typed, split at commas and semicolons. Spellings that differ only in case, spaces or punctuation
 -- are one specialty, labelled as first typed, and one already on the list keeps its label.
@@ -181,7 +185,7 @@ order by v.slug, v.created_at, v.old_id, v.place;
 
 insert into party_specialty (person_id, specialty, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct v.party_id, v.slug, p.created_at, p.changed_by_user_id, p.changed_by_job,
-	p.changed_for_user_id, coalesce(p.updated_at, p.created_at)
+	p.changed_for_user_id, p.updated_at
 from typed_specialty v join copied p on p.id = v.party_id
 where p.kind = 'person' and v.slug <> '';
 
@@ -201,7 +205,7 @@ left join party company on company.id = map.party_id;
 
 insert into party_company (person_id, company_id, title, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (v.person_id, v.company_id) v.person_id, v.company_id, v.title, p.created_at, p.changed_by_user_id,
-	p.changed_by_job, p.changed_for_user_id, coalesce(p.updated_at, p.created_at)
+	p.changed_by_job, p.changed_for_user_id, p.updated_at
 from typed_company v join copied p on p.id = v.person_id
 where v.kind = 'person' and v.company_kind = 'company'
 order by v.person_id, v.company_id, v.title is null, v.rank;

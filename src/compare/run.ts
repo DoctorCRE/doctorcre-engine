@@ -42,9 +42,9 @@ export class StopRun extends Error {}
 export type Ask =
 	| { read: "board"; workspace: Workspace }
 	| { read: "deal"; deal: string }
-	| { read: "client fit" }
+	| { read: "client fit"; state?: string }
 	| { read: "capture queue" }
-	| { read: "feed"; start: string }
+	| { read: "feed"; start?: string }
 	| { read: "find"; query: string }
 	| { read: "lead board" }
 	| { read: "lead"; lead: string }
@@ -58,8 +58,8 @@ export type Ask =
 	| { read: "vendor"; vendor: string }
 	| { read: "vendor markets" }
 	| { read: "relationships" }
-	// `record` is the opened client or vendor whose name is asked.
-	| { read: "recent activity"; name: string; record: string }
+	// `record` identifies the deal, client or vendor whose name is asked.
+	| { read: "recent activity"; name: string; record: string; limit?: 20 }
 	// With no owners, the old default queue of every owner.
 	| { read: "today's reminders"; owners?: "partners" }
 	| { read: "meeting prep" }
@@ -194,8 +194,9 @@ export async function compareDeals(
 		...WORKSPACES.map((workspace) => ({ read: "board", workspace }) as const),
 		{ read: "client fit" },
 		{ read: "capture queue" },
-		// Every read of the feed starts here. A write between the reads shows as an unsettled feed.
+		// The recent walk and the app's cursorless first page are separate asks.
 		{ read: "feed", start: feedStart(Date.now()) },
+		{ read: "feed" },
 		...PROBES.map((query) => ({ read: "find", query }) as const),
 		{ read: "lead board" },
 		// The app's inputs: no filters, and the first page of reasons.
@@ -217,6 +218,7 @@ export async function compareDeals(
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));
 	let names = 0;
+	let searchActivity = false;
 	const asked = { client: 0, vendor: 0 };
 	const enqueue = (ask: Ask) => {
 		const key = JSON.stringify(ask);
@@ -243,8 +245,36 @@ export async function compareDeals(
 			return run;
 		}
 		const [first, old, second] = answers;
+		if (ask.read === "client fit" && ask.state === undefined) {
+			const profiles =
+				isRecord(old) && Array.isArray(old.profiles) ? old.profiles : [];
+			const profile = profiles.find(
+				(p) => isRecord(p) && typeof p.state === "string" && p.state.trim(),
+			);
+			const state =
+				isRecord(profile) && typeof profile.state === "string"
+					? profile.state
+					: "ZZ";
+			enqueue({ read: "client fit", state });
+		}
 		if (ask.read === "board")
 			for (const { id, client_name } of dealsOn(old)) {
+				if (
+					!searchActivity &&
+					typeof id === "string" &&
+					UUID.test(id) &&
+					typeof client_name === "string" &&
+					client_name.trim() &&
+					client_name.trim().length <= NAME_MAX
+				) {
+					enqueue({
+						read: "recent activity",
+						name: client_name.trim(),
+						record: id,
+						limit: 20,
+					});
+					searchActivity = true;
+				}
 				if (typeof id === "string" && UUID.test(id))
 					enqueue({ read: "deal", deal: id });
 				if (

@@ -162,7 +162,7 @@ _Avoid_: market, for someone's whole area
 _Database_: `vendor.territory` (text) and `vendor_market_membership` today; `territory`, `territory_piece` and `party_territory` in the new database.
 
 **Critical date**:
-A date in the deal or its lease that must not be missed, such as a due-diligence deadline or a lease expiration.
+A date in the deal or its lease that must not be missed, such as a due-diligence deadline or a lease expiration. In the new database it is proposed until a user confirms it; only a user resolves it.
 _Avoid_: deadline, milestone, key date
 _Database_: `critical_date`; `v_deal_room_critical_date`.
 _Engine_: `critical_dates`.
