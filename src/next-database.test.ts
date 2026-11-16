@@ -552,6 +552,14 @@ const newCriticalDate = (row: Record<string, string | null> = {}) =>
 const RULES: Record<string, Case[]> = {
 	"outside leases and renewal deals keep checked identities": [
 		[
+			`${newLease()}; ${insert("lease", { id: id(722), party_id: CLIENT, property_id: PROPERTY, deal_id: DEAL })}`,
+			"lease_deal_id_key",
+		],
+		[
+			`${newLease()}; update deal set reason = 'renewal', renews_lease_id = '${LEASE_RECORD}' where id = '${DEAL}'`,
+			"deal_renews_another_lease",
+		],
+		[
 			newLease({ lease_id: MISSING, offer_id: null }),
 			"lease_version_lease_id_fkey",
 		],
@@ -1840,6 +1848,7 @@ const CHANGEABLE: Record<string, string[]> = {
 		"name",
 		"owner_user_id",
 		"reason",
+		"renews_lease_id",
 	],
 	party_company: ["ended_on", "started_on", "title"],
 	party_email: ["is_primary", "label"],
@@ -3118,7 +3127,13 @@ test("distinct manually sourced deadlines may share their kind and day", async (
 test("an outside lease has no brokerage deal and a renewal is its own deal", async () => {
 	await rolledBack(async () => {
 		await db.query(
-			newLease({ deal_id: null, offer_id: null, executed_on: null }),
+			newLease({
+				deal_id: null,
+				offer_id: null,
+				executed_on: null,
+				rent_starts_on: "2020-01-01",
+				commencement_on: "2020-01-01",
+			}),
 		);
 		await db.query(`insert into deal (id, name, owner_user_id, reason, renews_lease_id)
 			values ('${id(730)}', 'Example Renewal', '${USER}', 'renewal', '${id(721)}'); select propose_critical_dates('${id(730)}')`);
@@ -3145,16 +3160,35 @@ test("an outside lease has no brokerage deal and a renewal is its own deal", asy
 			).rows,
 			[{ deal_id: id(730), lease_version_id: LEASE, kind: "lease_end" }],
 		);
-	});
-});
-
-test("merging a lease tenant preserves its versions when both parties are clients on the deal", async () => {
-	await rolledBack(async () => {
-		await db.query(`${newLease()}; insert into deal_party (deal_id, party_id, role) values ('${DEAL}', '${LENDERS[0]}', 'client');
-			select merge_party('${CLIENT}', '${LENDERS[0]}'); ${CHECK_AT_COMMIT}`);
+		await db.query(`update deal set reason = 'relocation', renews_lease_id = null where id = '${id(730)}';
+			update deal set reason = 'renewal', renews_lease_id = '${id(721)}' where id = '${id(730)}';
+			insert into deal_property (deal_id, property_id) values ('${id(730)}', '${PROPERTY}');
+			insert into deal_party (deal_id, party_id, role) values ('${id(730)}', '${AGENT}', 'client');
+			insert into lease (id, party_id, property_id, deal_id) values ('${id(731)}', '${AGENT}', '${PROPERTY}', '${id(730)}');
+			insert into lease_version (id, lease_id, version, document_id, expiration_on)
+			values ('${id(732)}', '${id(731)}', 1, '${PDF_FILE}', '2040-06-30')`);
 		assert.deepEqual(
-			(await db.query("select party_id, id from current_lease")).rows,
-			[{ party_id: LENDERS[0], id: LEASE }],
+			(await db.query("select lease_id, party_id from lease_ending")).rows,
+			[{ lease_id: id(731), party_id: AGENT }],
 		);
 	});
 });
+
+for (const alreadyClient of [false, true]) {
+	test(`a tenant merge preserves lease versions when the survivor is ${alreadyClient ? "already" : "not yet"} on the deal`, async () => {
+		await rolledBack(async () => {
+			await db.query(newLease());
+			if (alreadyClient)
+				await db.query(
+					`insert into deal_party (deal_id, party_id, role) values ('${DEAL}', '${LENDERS[0]}', 'client')`,
+				);
+			await db.query(
+				`select merge_party('${CLIENT}', '${LENDERS[0]}'); ${CHECK_AT_COMMIT}`,
+			);
+			assert.deepEqual(
+				(await db.query("select party_id, id from current_lease")).rows,
+				[{ party_id: LENDERS[0], id: LEASE }],
+			);
+		});
+	});
+}

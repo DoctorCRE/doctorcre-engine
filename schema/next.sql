@@ -568,7 +568,6 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
--- Signed terms are their own history; an amendment is the next version, never an overwrite.
 create table lease (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -597,6 +596,7 @@ end $$;
 create trigger deal_renews_another_lease before insert or update on deal
 	for each row when (new.renews_lease_id is not null) execute function deal_renews_another_lease();
 
+-- Signed terms are their own history; an amendment is the next version, never an overwrite.
 create table lease_version (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -667,6 +667,12 @@ create trigger lease_option_before_expiration before insert on lease_option
 create view current_lease as
 select v.*, l.deal_id, l.party_id, l.property_id from lease_version v join lease l on l.id = v.lease_id
 where not exists (select from lease_version newer where newer.lease_id = v.lease_id and newer.version > v.version);
+
+create view lease_ending as
+select c.* from current_lease c where not exists (
+	select from deal d join lease l on l.deal_id = d.id join lease_version v on v.lease_id = l.id
+	where d.renews_lease_id = c.lease_id
+);
 
 create table critical_date (
 	id uuid primary key default gen_random_uuid(),
@@ -752,7 +758,7 @@ begin atomic
 	insert into critical_date (deal_id, kind, due_on, source, lease_version_id, option_number)
 	select wanted, dates.kind, dates.due_on, 'Signed lease', l.id, null
 	from current_lease l cross join lateral (values ('lease_end', l.expiration_on), ('rent_start', l.rent_starts_on)) dates(kind, due_on)
-	where (l.deal_id = wanted or l.lease_id = (select renews_lease_id from deal where id = wanted)) and dates.due_on is not null
+	where (l.deal_id = wanted or l.lease_id = (select renews_lease_id from deal where id = wanted)) and dates.due_on is not null and (dates.kind <> 'rent_start' or l.deal_id = wanted)
 	on conflict do nothing;
 	insert into critical_date (deal_id, kind, due_on, source, lease_version_id, option_number)
 	select wanted, 'option_notice', o.notice_on, 'Signed lease option', l.id, o.number
@@ -1146,6 +1152,7 @@ begin
 	where l.party_id = duplicate and s.deal_id = l.deal_id and s.party_id = survivor and s.role = 'client';
 	delete from deal_party d using deal_party s
 	where d.party_id = duplicate and s.party_id = survivor and s.deal_id = d.deal_id and s.role = d.role;
+	update deal_party set party_id = survivor where party_id = duplicate;
 	delete from activity_about d using activity_about s
 	where d.party_id = duplicate and s.party_id = survivor and s.activity_id = d.activity_id;
 	delete from party_territory d using party_territory s
@@ -1359,7 +1366,7 @@ grant update (label) on table role, stage, phase, specialty, deal_kind, deal_rea
 grant update (stage, relationship_level, disposition, disposition_reason, is_target) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
-grant update (kind, reason, owner_user_id, market_id, closed_value) on deal to engine;
+grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value) on deal to engine;
 grant update (npi) on party to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
