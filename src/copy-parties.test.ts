@@ -15,8 +15,9 @@ const NPI = "9000000015";
 
 const read = (file: string) =>
 	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const [SCHEMA, COPY] = await Promise.all([
+const [SCHEMA, ATTRIBUTION, COPY] = await Promise.all([
 	read("next.sql"),
+	read("copy-attribution.sql"),
 	read("copy-parties.sql"),
 ]);
 
@@ -35,7 +36,7 @@ const oldParty = (n: number, row: Record<string, string> = {}) => {
 };
 const OLD = `
 insert into public.actor (id, slug, kind, display_name) values
-	('${PARTNER}', 'example-partner', 'human', 'Jordan Example'),
+	('${PARTNER}', 'partner_one', 'human', 'Jordan Example'),
 	('${AUTOMATION}', 'example-job', 'automation', 'Example job'),
 	('${SYSTEM}', 'example-system', 'system', 'Example system');
 insert into public.contact_state (slug, label, contactable, sort) values
@@ -104,6 +105,7 @@ ${oldParty(16, {
 	phone: "+1 217 555 0103",
 	cell: "2175550103",
 	contact_state: "paused",
+	contact_state_reason: "Example pause",
 	contact_state_until: "2027-01-04",
 	specialty: "\tPhysical Therapy",
 	org_id: id(14),
@@ -182,7 +184,7 @@ before(async () => {
 	await admin.connect();
 	await admin.query(`create database "${name}" template "${snapshot}"`);
 	await db.connect();
-	await db.query(`create schema next; ${SCHEMA}`);
+	await db.query(`create schema next; ${SCHEMA} ${ATTRIBUTION}`);
 	report = await copy(OLD);
 });
 
@@ -240,7 +242,6 @@ test("each value it does not copy is listed, with why", () => {
 		[id(14), "party", "Example 14", "deleted"],
 		[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
 		[id(15), "party", "Example 15", "merged into a record not copied"],
-		[id(16), "contact_state", "paused until 2027-01-04", "no place in the new database"],
 		[id(16), "npi", "9000000016", "not an NPI"],
 		[id(16), "org_id", id(14), "its company is not copied"],
 		[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
@@ -315,7 +316,7 @@ test("a phone is a work number and a cell a mobile one, in E.164 with the extens
 test("do not contact keeps its reason and who set it and when, and a survivor takes its duplicate's", async () => {
 	assert.deepEqual(
 		await rows(
-			"select party_id, reason, created_at::text, changed_by_user_id, changed_by_job, changed_at::text from do_not_contact order by party_id",
+			"select party_id, reason, created_at::text, changed_by_user_id, changed_by_job, changed_at::text from do_not_contact where until_date is null order by party_id",
 		),
 		[
 			{
@@ -444,7 +445,7 @@ test("after the copy, a change is stamped with who made it again", () =>
 			update party set name = 'Example renamed' where id = '${id(10)}';
 			update party_email set label = 'personal';
 			update party_phone set label = 'home';
-			insert into do_not_contact (party_id, reason) values ('${id(16)}', 'Example asked us to stop');
+			update do_not_contact set until_date = null where party_id = '${id(16)}';
 			insert into party_specialty (person_id, specialty) values ('${id(16)}', 'gp');
 			update party_company set title = 'Example title'`);
 		for (const table of [
@@ -463,3 +464,212 @@ test("after the copy, a change is stamped with who made it again", () =>
 				table,
 			);
 	}));
+
+test("copied rows share the last author's job and sponsor across every copied value", () =>
+	rolledBack(async () => {
+		const agents = [
+			"claude",
+			"codex",
+			"grok",
+			"hermes-pilot",
+			"joe-local",
+			"dell-local",
+		];
+		await db.query(
+			agents
+				.map(
+					(slug, i) =>
+						`insert into public.actor (id, slug, kind, display_name)
+			values ('${id(100 + i)}', '${slug}', 'automation', 'Example runtime ${i}');`,
+				)
+				.join(""),
+		);
+		const cases = [
+			...agents.map((_, i) => ({
+				author: id(100 + i),
+				cause: "human_stated",
+				job: "agent",
+				sponsor: PARTNER,
+			})),
+			{
+				author: id(100),
+				cause: "ingest_email",
+				job: "agent",
+				sponsor: PARTNER,
+			},
+			{
+				author: AUTOMATION,
+				cause: "ingest_email",
+				job: "mail_capture",
+				sponsor: PARTNER,
+			},
+			{
+				author: AUTOMATION,
+				cause: "automation_job",
+				job: "old_system",
+				sponsor: null,
+			},
+			{
+				author: SYSTEM,
+				cause: "ingest_email",
+				job: "old_system",
+				sponsor: null,
+			},
+			{ author: PARTNER, cause: "ingest_email", job: null, sponsor: null },
+		];
+		let sql = "";
+		for (const [i, row] of cases.entries()) {
+			sql += oldParty(200 + i, {
+				updated_by: row.author,
+				email: `example${i}@example.com`,
+				phone: "2175550100",
+				specialty: "Example specialty",
+				org_id: id(11),
+				title: "Example title",
+				contact_state: i % 2 ? "paused" : "do_not_contact",
+				...(i % 2 ? { contact_state_until: "2027-01-04" } : {}),
+				contact_state_reason: "Example request",
+				contact_state_set_by: row.author,
+			});
+			sql += `insert into public.event (actor_id, verb, subject_type, subject_id, field, cause, occurred_at, sponsoring_human_slug)
+				values ('${row.author}', 'example', 'party', '${id(200 + i)}', 'contact_state', '${row.cause}', now(), 'partner_one');`;
+		}
+		await copy(sql);
+		for (const [i, row] of cases.entries()) {
+			for (const [table, key] of [
+				["party", "id"],
+				["party_email", "party_id"],
+				["party_phone", "party_id"],
+				["party_specialty", "person_id"],
+				["party_company", "person_id"],
+				["do_not_contact", "party_id"],
+			]) {
+				assert.deepEqual(
+					await rows(`select changed_by_user_id, changed_by_job, changed_for_user_id
+					from ${table} where ${key} = '${id(200 + i)}'`),
+					[
+						{
+							changed_by_user_id: row.job === null ? PARTNER : null,
+							changed_by_job: row.job,
+							changed_for_user_id: row.sponsor,
+						},
+					],
+					`${i} ${table}`,
+				);
+			}
+		}
+	}));
+
+test("the latest mutation supplies the sponsor only for its author, record and field", () =>
+	rolledBack(async () => {
+		await db.query(`insert into public.actor (id, slug, kind, display_name)
+			values ('${id(100)}', 'codex', 'automation', 'Example runtime');
+			insert into public.event (actor_id, verb, subject_type, subject_id, field, cause, occurred_at, sponsoring_human_slug) values
+			('${AUTOMATION}', 'example', 'party', '${id(10)}', 'contact_state', 'ingest_email', '2026-01-02', 'partner_one'),
+			('${id(100)}', 'example', 'party', '${id(10)}', 'name', 'human_stated', '2026-01-01', null),
+			('${AUTOMATION}', 'example', 'deal', '${id(10)}', null, 'ingest_email', now(), 'partner_one'),
+			('${AUTOMATION}', 'example', 'party', '${id(11)}', null, 'ingest_email', now(), 'partner_one');`);
+		const stamp = (author: string, field = "null") =>
+			rows(
+				`select * from copy_attribution('party', '${id(10)}', '${author}', ${field})`,
+			);
+		assert.deepEqual(await stamp(id(100)), [
+			{
+				changed_by_user_id: null,
+				changed_by_job: "agent",
+				changed_for_user_id: null,
+			},
+		]);
+		assert.deepEqual(await stamp(AUTOMATION), [
+			{
+				changed_by_user_id: null,
+				changed_by_job: "old_system",
+				changed_for_user_id: null,
+			},
+		]);
+		assert.deepEqual(await stamp(AUTOMATION, "'contact_state'"), [
+			{
+				changed_by_user_id: null,
+				changed_by_job: "mail_capture",
+				changed_for_user_id: PARTNER,
+			},
+		]);
+		assert.deepEqual(
+			await rows(`select * from copy_attribution('party', '${id(99)}', null)`),
+			[
+				{
+					changed_by_user_id: null,
+					changed_by_job: "old_system",
+					changed_for_user_id: null,
+				},
+			],
+		);
+	}));
+test("paused copies as do not contact with its reason and end date", async () => {
+	assert.deepEqual(
+		await rows(
+			"select party_id, reason, until_date::text from do_not_contact where until_date is not null",
+		),
+		[{ party_id: id(16), reason: "Example pause", until_date: "2027-01-04" }],
+	);
+});
+
+test("a pause without an end date is reported and never becomes a permanent stop", () =>
+	rolledBack(async () => {
+		const report = await copy(
+			oldParty(950, {
+				contact_state: "paused",
+				contact_state_reason: "Example pause",
+			}),
+		);
+		assert.deepEqual(
+			(report ?? []).filter((row) => row[0] === id(950)),
+			[[id(950), "contact_state", "paused", "paused without an end date"]],
+		);
+		assert.deepEqual(
+			await rows(
+				`select party_id from do_not_contact where party_id = '${id(950)}'`,
+			),
+			[],
+		);
+	}));
+for (const [survivor, duplicate, winner] of [
+	["2028-01-01", "2029-01-01", "duplicate"],
+	["2029-01-01", "2028-01-01", "survivor"],
+	["2028-01-01", null, "duplicate"],
+	[null, "2028-01-01", "survivor"],
+] as const) {
+	test(`the copy keeps the strongest stop with its reason: ${survivor}, ${duplicate}`, () =>
+		rolledBack(async () => {
+			const report = await copy(
+				oldParty(951, {
+					contact_state: survivor ? "paused" : "do_not_contact",
+					...(survivor ? { contact_state_until: survivor } : {}),
+					contact_state_reason: "Example survivor",
+				}) +
+					oldParty(952, {
+						merged_into: id(951),
+						contact_state: duplicate ? "paused" : "do_not_contact",
+						...(duplicate ? { contact_state_until: duplicate } : {}),
+						contact_state_reason: "Example duplicate",
+					}),
+			);
+			assert.deepEqual(
+				(report ?? []).filter(
+					(row) => row[0] === id(951) || row[0] === id(952),
+				),
+				[],
+			);
+			assert.deepEqual(
+				await rows(
+					`select reason, until_date::text from do_not_contact where party_id = '${id(951)}'`,
+				),
+				[
+					{
+						reason: `Example ${winner}`,
+						until_date: winner === "survivor" ? survivor : duplicate,
+					},
+				],
+			);
+		}));
+}

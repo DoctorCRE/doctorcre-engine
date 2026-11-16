@@ -135,7 +135,8 @@ create table party_role (
 	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor'),
 	constraint party_role_disposition_on_vendor check (disposition is null or role = 'vendor'),
 	constraint party_role_ruling_has_a_reason check ((disposition is null) = (disposition_reason is null)),
-	constraint party_role_target_on_vendor check (not is_target or role = 'vendor')
+	constraint party_role_target_on_vendor check (not is_target or role = 'vendor'),
+	constraint party_role_avoid_not_target check (not is_target or disposition is distinct from 'avoid')
 );
 
 create function party_role_category_of_a_vendor() returns trigger
@@ -211,8 +212,12 @@ create unique index party_phone_one_primary on party_phone (party_id) where is_p
 create table do_not_contact (
 	party_id uuid primary key references party,
 	created_at timestamptz not null default now(),
-	reason text not null check (reason ~ '\S')
+	reason text not null check (reason ~ '\S'),
+	until_date date
 );
+
+create view active_do_not_contact as
+select * from do_not_contact where until_date is null or until_date >= current_date;
 
 create table specialty (
 	slug text primary key,
@@ -404,6 +409,52 @@ create table deal_party (
 	primary key (deal_id, party_id, role)
 );
 
+-- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
+
+-- How a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
+create table how_found (
+	slug text primary key,
+	label text not null
+);
+
+-- A fact about the person or company, so it holds in every role and a lead that becomes a client copies nothing.
+alter table party add how_found text references how_found;
+
+-- A lead's stage comes from the lead stages, and its owner is the user who works it. None means nobody works it yet.
+alter table party_role add owner_user_id uuid references app_user,
+	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
+	add constraint party_role_owner_on_lead check (owner_user_id is null or role = 'lead');
+
+create function lead_or_client_how_found() returns trigger
+language plpgsql as $$
+declare
+	-- The trigger names the column that holds the party.
+	wanted uuid := to_jsonb(new) ->> tg_argv[0];
+begin
+	if exists (select from party p
+		where p.id = wanted and p.how_found is null
+			and exists (select from party_role where party_id = p.id and role in ('lead', 'client'))) then
+		raise exception 'a lead or client says how they were found'
+			using errcode = 'check_violation', constraint = 'lead_or_client_how_found';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, so a person and their role can be saved in either order. A merge moves a role only with how it was found.
+create constraint trigger lead_or_client_how_found after insert on party_role
+	initially deferred for each row when (new.role in ('lead', 'client'))
+	execute function lead_or_client_how_found('party_id');
+-- Only clearing it can break the rule.
+create constraint trigger lead_or_client_how_found after update of how_found on party
+	for each row when (old.how_found is not null and new.how_found is null)
+	execute function lead_or_client_how_found('id');
+
+-- Someone is a client once a deal is opened for them, signed or not. The client role's row keeps when that was.
+-- Deferred, so the role and the deal can be saved in either order, and a merge can move both.
+alter table deal_party add client_role text generated always as (case when role = 'client' then role end) stored,
+	add constraint deal_party_client_is_a_client foreign key (party_id, client_role) references party_role
+		deferrable initially deferred;
+
 -- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
 create table introduction (
 	id uuid primary key default gen_random_uuid(),
@@ -444,6 +495,68 @@ from party_role v
 left join worked w using (party_id)
 where v.role = 'vendor'
 group by v.party_id;
+
+-- Clients and national accounts (walkthrough 4, topic B).
+create extension if not exists btree_gist;
+create table client_type (
+	slug text primary key,
+	label text not null
+);
+
+create table client (
+	party_id uuid primary key,
+	role text not null default 'client' check (role = 'client'),
+	created_at timestamptz not null default now(),
+	status text not null default 'roster' check (status in ('roster', 'cold', 'engaged', 'paused')),
+	client_type text references client_type,
+	foreign key (party_id, role) references party_role on update cascade
+);
+
+create table national_account (
+	party_id uuid primary key,
+	kind text generated always as ('company') stored,
+	role text not null default 'national_account' check (role = 'national_account'),
+	created_at timestamptz not null default now(),
+	foreign key (party_id, kind) references party (id, kind),
+	foreign key (party_id, role) references party_role on update cascade
+);
+
+create table client_brand (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	location_id uuid not null references client (party_id) on update cascade,
+	location_kind text generated always as ('company') stored,
+	brand_id uuid not null,
+	brand_kind text generated always as ('company') stored,
+	started_on date not null,
+	ended_on date check (ended_on > started_on),
+	constraint client_brand_different_companies check (location_id <> brand_id),
+	foreign key (location_id, location_kind) references party (id, kind),
+	foreign key (brand_id, brand_kind) references party (id, kind),
+	exclude using gist (location_id with =, daterange(started_on, ended_on) with &&)
+);
+
+create table national_account_owner (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	account_id uuid not null references national_account (party_id) on update cascade,
+	owner_id uuid not null,
+	owner_kind text generated always as ('person') stored,
+	started_on date not null,
+	ended_on date check (ended_on > started_on),
+	foreign key (owner_id, owner_kind) references party (id, kind),
+	exclude using gist (account_id with =, daterange(started_on, ended_on) with &&)
+);
+
+create view client_status as
+select c.party_id, case
+	when exists (select from deal_party dp where dp.party_id = c.party_id and dp.role = 'client'
+		and coalesce((select phase from deal_phase_change p where p.deal_id = dp.deal_id
+			order by happened_at desc limit 1), '') not in ('closed', 'dead')) then 'active_deal'
+	when exists (select from deal_party dp join deal_phase_change p using (deal_id)
+		where dp.party_id = c.party_id and dp.role = 'client' and p.phase = 'closed') then 'past_client'
+	else c.status end as status
+from client c;
 
 create table activity (
 	id uuid primary key default gen_random_uuid(),
@@ -528,6 +641,7 @@ create table offer (
 	from_party_id uuid not null,
 	from_role text not null,
 	offered_at timestamptz not null,
+	expires_on date,
 	status text not null default 'open'
 		check (status in ('open', 'countered', 'accepted', 'rejected', 'withdrawn', 'superseded')),
 	rent_per_sf_yr numeric(10, 2) check (rent_per_sf_yr >= 0),
@@ -544,6 +658,7 @@ create table offer (
 		check (commencement_on is null or commencement_days_after_delivery is null),
 	unique (deal_id, round),
 	unique (id, deal_id, property_id),
+	unique (id, deal_id),
 	foreign key (deal_id, property_id) references deal_property,
 	-- Only a merge changes a deal_party key, and its rounds move with it.
 	foreign key (deal_id, from_party_id, from_role) references deal_party on update cascade,
@@ -618,6 +733,7 @@ create table lease (
 	constraint lease_dates_in_order check (expiration_on > commencement_on and expiration_on >= executed_on),
 	constraint lease_rent_date_or_days check (num_nonnulls(rent_starts_on, rent_days_after_delivery) <= 1),
 	unique (deal_id, version),
+	unique (id, deal_id),
 	foreign key (deal_id, previous_version) references lease (deal_id, version),
 	foreign key (deal_id, property_id) references deal_property,
 	foreign key (offer_id, deal_id, property_id) references offer (id, deal_id, property_id)
@@ -663,6 +779,95 @@ create trigger lease_option_before_expiration before insert on lease_option
 create view current_lease as
 select l.* from lease l
 where not exists (select from lease newer where newer.deal_id = l.deal_id and newer.version > l.version);
+
+create table critical_date (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references deal,
+	kind text not null check (kind in ('loi_expiry', 'option_notice', 'rent_start', 'lease_end', 'due_diligence', 'other')),
+	due_on date not null,
+	source text not null check (source ~ '\S'),
+	offer_id uuid,
+	lease_id uuid,
+	option_number smallint,
+	document_id uuid references document,
+	note text,
+	status text not null default 'proposed' check (status in ('proposed', 'open', 'done', 'dropped', 'passed')),
+	confirmed_by_user_id uuid references app_user,
+	confirmed_at timestamptz,
+	resolved_by_user_id uuid references app_user,
+	resolved_at timestamptz,
+	resolution_reason text check (resolution_reason ~ '\S'),
+	constraint critical_date_one_source check (num_nonnulls(offer_id, lease_id, document_id) <= 1),
+	constraint critical_date_option_on_lease check (option_number is null or lease_id is not null),
+	constraint critical_date_confirmation_whole check (num_nonnulls(confirmed_by_user_id, confirmed_at) in (0, 2)),
+	constraint critical_date_confirmed_when_real check (status not in ('open', 'done', 'passed') or confirmed_at is not null),
+	constraint critical_date_resolution_whole check (
+		num_nonnulls(resolved_by_user_id, resolved_at, resolution_reason) = case when status in ('done', 'dropped', 'passed') then 3 else 0 end),
+	foreign key (offer_id, deal_id) references offer (id, deal_id),
+	foreign key (lease_id, deal_id) references lease (id, deal_id),
+	foreign key (lease_id, option_number) references lease_option (lease_id, number)
+);
+
+-- Generated proposals repeat by their immutable source; hand-added dates may share a day.
+create unique index critical_date_generated_once on critical_date (deal_id, kind, offer_id, lease_id, option_number)
+	nulls not distinct where offer_id is not null or lease_id is not null;
+
+create function critical_date_transition() returns trigger
+language plpgsql as $$
+declare
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+begin
+	if tg_op = 'INSERT' then
+		if new.status <> 'proposed' or num_nonnulls(new.confirmed_by_user_id, new.confirmed_at,
+			new.resolved_by_user_id, new.resolved_at, new.resolution_reason) <> 0 then
+			raise exception 'a critical date starts as a proposal'
+				using errcode = 'check_violation', constraint = 'critical_date_starts_proposed';
+		end if;
+		return new;
+	end if;
+	if new.status = old.status and new.resolution_reason is not distinct from old.resolution_reason then
+		return new;
+	end if;
+	if acting_user is null or nullif(current_setting('engine.job', true), '') is not null then
+		raise exception 'only a user confirms or resolves a critical date'
+			using errcode = 'check_violation', constraint = 'critical_date_user_decides';
+	end if;
+	if not (old.status = 'proposed' and new.status in ('open', 'dropped')
+		or old.status = 'open' and new.status in ('done', 'dropped', 'passed')) then
+		raise exception 'a proposal is confirmed or dropped, and an open date is resolved once'
+			using errcode = 'check_violation', constraint = 'critical_date_status_moves';
+	end if;
+	if new.status = 'open' then
+		new.confirmed_by_user_id := acting_user;
+		new.confirmed_at := now();
+	else
+		new.resolved_by_user_id := acting_user;
+		new.resolved_at := now();
+	end if;
+	return new;
+end $$;
+
+create trigger critical_date_transition before insert or update on critical_date
+	for each row execute function critical_date_transition();
+
+create function propose_critical_dates(wanted uuid) returns void
+language sql
+begin atomic
+	insert into critical_date (deal_id, kind, due_on, source, lease_id, option_number)
+	select l.deal_id, dates.kind, dates.due_on, 'Signed lease', l.id, null
+	from current_lease l cross join lateral (values ('lease_end', l.expiration_on), ('rent_start', l.rent_starts_on)) dates(kind, due_on)
+	where l.deal_id = wanted and dates.due_on is not null
+	on conflict do nothing;
+	insert into critical_date (deal_id, kind, due_on, source, lease_id, option_number)
+	select l.deal_id, 'option_notice', o.notice_on, 'Signed lease option', l.id, o.number
+	from current_lease l join lease_option o on o.lease_id = l.id where l.deal_id = wanted
+	on conflict do nothing;
+	insert into critical_date (deal_id, kind, due_on, source, offer_id)
+	select deal_id, 'loi_expiry', expires_on, 'Offer round', id from offer
+	where deal_id = wanted and expires_on is not null and status = 'open'
+	on conflict do nothing;
+end;
 
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable
@@ -980,6 +1185,7 @@ language plpgsql security definer as $$
 declare
 	pointer record;
 	duplicate_npi text;
+	duplicate_how_found text;
 begin
 	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
 	perform from party where id in (duplicate, survivor) for update;
@@ -999,11 +1205,23 @@ begin
 	perform set_config('engine.merge', duplicate::text, true);
 	insert into merged_party (id, survivor_id) values (duplicate, survivor);
 
+	-- Conflicting client or account profiles need a user to settle their dated history first.
+	if exists (select from client d join client s on s.party_id = survivor where d.party_id = duplicate)
+		or exists (select from national_account d join national_account s on s.party_id = survivor where d.party_id = duplicate) then
+		raise exception 'settle both client or national account profiles before merging'
+			using errcode = 'check_violation', constraint = 'merge_party_client_profiles';
+	end if;
+
+	update client set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'client');
+	update national_account set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'national_account');
+
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
-	-- Its stage and level stay too, and the duplicate's fill any it lacks. A target on either holds.
+	-- Its stage, level and lead owner stay too, and the duplicate's fill any it lacks. A target on either holds.
 	-- The stricter ruling stays with its reason, so a merge never puts an avoided vendor back in play.
 	update party_role s set stage = coalesce(s.stage, d.stage),
 		relationship_level = coalesce(s.relationship_level, d.relationship_level),
@@ -1011,7 +1229,9 @@ begin
 			select ruling, reason
 			from (values (s.disposition, s.disposition_reason, 1), (d.disposition, d.disposition_reason, 2)) r (ruling, reason, side)
 			order by array_position(array['parked', 'avoid'], ruling) desc nulls last, side limit 1),
-		is_target = s.is_target or d.is_target
+		is_target = (s.is_target or d.is_target) and coalesce(s.disposition, '') <> 'avoid'
+			and coalesce(d.disposition, '') <> 'avoid',
+		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
@@ -1032,6 +1252,9 @@ begin
 		and s.extension is not distinct from d.extension;
 	update party_phone set is_primary = false
 	where party_id = duplicate and exists (select from party_phone where party_id = survivor and is_primary);
+	update do_not_contact s set until_date = d.until_date, reason = d.reason
+	from do_not_contact d where s.party_id = survivor and d.party_id = duplicate
+		and s.until_date is not null and (d.until_date is null or d.until_date > s.until_date);
 	delete from do_not_contact
 	where party_id = duplicate and exists (select from do_not_contact where party_id = survivor);
 	delete from party_specialty d using party_specialty s
@@ -1050,6 +1273,9 @@ begin
 	where d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
 		and s.started_on is not distinct from d.started_on;
 
+	-- Profiles cascade with their roles before their direct party keys move.
+	update party_role set party_id = survivor where party_id = duplicate;
+
 	-- Read from the catalog, so a table added later moves too. A unique key the merge would repeat refuses it here.
 	for pointer in
 		select c.conrelid::regclass as tbl, a.attname as col
@@ -1062,8 +1288,9 @@ begin
 		using survivor, duplicate;
 	end loop;
 
-	delete from party where id = duplicate returning npi into duplicate_npi;
-	update party set npi = coalesce(npi, duplicate_npi) where id = survivor;
+	delete from party where id = duplicate returning npi, how_found into duplicate_npi, duplicate_how_found;
+	update party set npi = coalesce(npi, duplicate_npi), how_found = coalesce(how_found, duplicate_how_found)
+	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
 
@@ -1078,7 +1305,7 @@ create table change (
 	table_name text not null,
 	-- The row's primary key, or the whole row where its table has none.
 	record jsonb not null,
-	action text not null check (action in ('insert', 'update', 'delete')),
+	action text not null check (action in ('insert', 'update', 'delete', 'erase')),
 	-- An insert has the whole new row and a delete the whole old one. An update has only the fields it changed.
 	old_value jsonb,
 	new_value jsonb,
@@ -1118,23 +1345,24 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'social_account', 'idea',
+		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'merged_party', 'change'] loop
+		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
 				add changed_at timestamptz not null,
 				add constraint %3$I check (num_nonnulls(changed_by_user_id, changed_by_job) = 1
 					and (changed_by_job is not null or changed_for_user_id is null));
-			create trigger stamp_change before insert or update on %1$I
+			create trigger stamp_change before %4$s on %1$I
 				for each row execute function stamp_change()',
 			-- A new user's own person row, and its history, name them before their user row exists.
 			stamped, case when stamped in ('party', 'change') then 'deferrable initially deferred' end,
-			stamped || '_changed_by_a_user_or_a_job');
+			stamped || '_changed_by_a_user_or_a_job',
+			case when stamped = 'change' then 'insert' else 'insert or update' end);
 	end loop;
 end $$;
 
@@ -1161,6 +1389,48 @@ begin
 				where i.indrelid = recorded and i.indisprimary));
 	end loop;
 end $$;
+
+-- An erase keeps the original stamps and keys. Its own change names who requested it.
+create function erase_change(removed_change_id bigint, fields text[]) returns void
+language plpgsql as $$
+declare
+	removed change;
+	source_table regclass;
+	still_present boolean;
+begin
+	select * into strict removed from change where id = removed_change_id and action = 'delete';
+	select c.oid into strict source_table from pg_class c
+	where c.relnamespace = current_schema()::regnamespace and c.relname = removed.table_name and c.relkind = 'r';
+	execute format('lock table %s in share row exclusive mode', source_table);
+	execute format('select exists (select from %s r where to_jsonb(r) @> $1)', source_table)
+		into still_present using removed.record;
+	if still_present then
+		raise exception 'only a removed record can be erased'
+			using errcode = 'check_violation', constraint = 'erase_only_removed';
+	end if;
+	if coalesce(cardinality(fields), 0) = 0 or exists (
+		select from unnest(fields) f where f is null or removed.record ? f or not exists (
+			select from pg_attribute a join pg_type t on t.oid = a.atttypid
+			where a.attrelid = source_table and a.attname = f and not a.attisdropped
+				and t.typcategory = 'S' and f not like 'changed_%'
+		)
+	) then
+		raise exception 'erase names non-key text fields'
+			using errcode = 'check_violation', constraint = 'erase_only_text_fields';
+	end if;
+	update change set old_value = old_value - fields, new_value = new_value - fields
+	where table_name = removed.table_name and record = removed.record and action <> 'erase'
+		and (old_value ?| fields or new_value ?| fields);
+	if found then
+		insert into change (table_name, record, action, new_value)
+		values (removed.table_name, removed.record, 'erase', jsonb_build_object('fields', fields));
+	end if;
+end $$;
+
+do $$ begin
+	execute format('alter function erase_change set search_path = %I, pg_temp', current_schema());
+end $$;
+revoke execute on function erase_change from public;
 
 create function posts_at_day_7(as_of timestamptz) returns jsonb
 language sql stable
@@ -1211,7 +1481,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- History (lease, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -1253,12 +1523,13 @@ grant delete on party, party_email, party_phone, do_not_contact, party_specialty
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason to engine;
-grant update (stage, relationship_level, disposition, disposition_reason, is_target) on party_role to engine;
+grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found to engine;
+grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (kind, reason, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
-grant update (npi) on party to engine;
+grant update (npi, how_found) on party to engine;
+grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
 grant update (started_on, ended_on) on party_territory to engine;
@@ -1269,3 +1540,10 @@ grant update (status) on offer to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;
+
+grant update (status, resolution_reason) on critical_date to engine;
+
+grant update (label) on client_type to engine;
+grant update (status, client_type) on client to engine;
+grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
+grant delete on client, national_account, client_brand, national_account_owner to engine;

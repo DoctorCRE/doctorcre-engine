@@ -36,13 +36,16 @@ const CLOSED_DEAL = id(650);
 const DEAD_DEAL = id(651);
 const USER = id(20);
 const TEAMMATE = id(21);
+const LEAD = id(660);
 
 const SEED = `
 insert into role (slug, label, category_of) values
-	('client', 'Client', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
+	('client', 'Client', null), ('lead', 'Lead', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
 	('lender', 'Lender', 'vendor'), ('title', 'Title', 'vendor');
-insert into party (id, kind, name, npi) values
-	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}'), ('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}');
+insert into how_found values ('referral', 'Referral'), ('vendor', 'Vendor'), ('public_records', 'Public records');
+insert into party (id, kind, name, npi, how_found) values
+	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}', 'referral'),
+	('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}', null);
 insert into party (id, kind, name) values
 	('${AGENT}', 'person', 'Avery Example'),
 	('${LENDERS[0]}', 'company', 'Example Bank'), ('${LENDERS[1]}', 'company', 'Example Credit Union'),
@@ -132,6 +135,7 @@ const rounds = ROUNDS.map(
 		from_role,
 		offered_at: `${day}T15:00:00+00:00`,
 		status,
+		expires_on: null,
 		rent_per_sf_yr: rent,
 		nnn_per_sf_yr: nnn,
 		term_months: term,
@@ -308,6 +312,12 @@ insert into party_role (party_id, role, stage, relationship_level) values
 insert into introduction (id, vendor_id, made_by, introduced_party_id, introduced_on, deal_id) values
 	('${INTRODUCTION}', '${VENDOR}', 'vendor', '${CLIENT}', '2026-02-02', '${DEAL}');
 `;
+const LEAD_SEED = `
+insert into stage values
+	('lead', 'new', 'New'), ('lead', 'engaged', 'Engaged'), ('lead', 'nurture', 'Nurture'), ('lead', 'opportunity', 'Opportunity');
+insert into party (id, kind, name, how_found) values ('${LEAD}', 'person', 'Dr. Example Lead', 'public_records');
+insert into party_role (party_id, role, stage, owner_user_id) values ('${LEAD}', 'lead', 'nurture', '${TEAMMATE}');
+`;
 const newIntroduction = (row: Record<string, string | null>) =>
 	insert("introduction", {
 		vendor_id: VENDOR,
@@ -401,11 +411,17 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"client_type",
+	"client",
+	"national_account",
+	"client_brand",
+	"national_account_owner",
 	"role",
 	"stage",
 	"phase",
 	"deal_kind",
 	"deal_reason",
+	"how_found",
 	"party",
 	"merged_party",
 	"party_email",
@@ -436,6 +452,7 @@ const STAMPED = [
 	"offer_document",
 	"lease",
 	"lease_option",
+	"critical_date",
 	"social_account",
 	"idea",
 	"design_template",
@@ -470,6 +487,10 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"client",
+	"national_account",
+	"client_brand",
+	"national_account_owner",
 	"party",
 	"party_email",
 	"party_phone",
@@ -531,7 +552,74 @@ const newOption = (row: Record<string, string | number | null> = {}) =>
 		terms: "Example five-year renewal",
 		...row,
 	});
+const DATE = id(710);
+const newCriticalDate = (row: Record<string, string | null> = {}) =>
+	insert("critical_date", {
+		id: DATE,
+		deal_id: DEAL,
+		kind: "due_diligence",
+		due_on: "2026-06-01",
+		source: "Example signed agreement",
+		...row,
+	});
 const RULES: Record<string, Case[]> = {
+	"critical dates start proposed and only a user confirms or resolves them": [
+		[newCriticalDate({ status: "open" }), "critical_date_starts_proposed"],
+		[
+			newCriticalDate({ confirmed_by_user_id: USER }),
+			"critical_date_starts_proposed",
+		],
+		[newCriticalDate({ kind: "unknown" }), "critical_date_kind_check"],
+		[newCriticalDate({ source: " " }), "critical_date_source_check"],
+		[
+			newCriticalDate({ offer_id: id(102), document_id: PDF_FILE }),
+			"critical_date_one_source",
+		],
+		[newCriticalDate({ option_number: "1" }), "critical_date_option_on_lease"],
+		[
+			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, deal_id: LENDER_DEAL })}`,
+			"critical_date_lease_id_deal_id_fkey",
+		],
+		[
+			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, option_number: "1" })}`,
+			"critical_date_lease_id_option_number_fkey",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; ${asJob("agent", USER)}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+			"critical_date_user_decides",
+		],
+		[newCriticalDate({ deal_id: MISSING }), "critical_date_deal_id_fkey"],
+		[
+			newCriticalDate({ offer_id: id(102), deal_id: LENDER_DEAL }),
+			"critical_date_offer_id_deal_id_fkey",
+		],
+		[
+			`${newCriticalDate()}; ${asJob("agent", USER)}; update critical_date set status = 'open'`,
+			"critical_date_user_decides",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+			"critical_date_status_moves",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; update critical_date set status = 'done'`,
+			"critical_date_resolution_whole",
+		],
+		[
+			`${newCriticalDate()}; update critical_date set status = 'open'; update critical_date set status = 'done', resolution_reason = 'Example completed';
+			update critical_date set status = 'open'`,
+			"critical_date_status_moves",
+		],
+		[
+			"update critical_date set confirmed_at = now()",
+			notGranted("critical_date"),
+		],
+		[
+			"update critical_date set due_on = current_date",
+			notGranted("critical_date"),
+		],
+		["delete from critical_date", notGranted("critical_date")],
+	],
 	"leases preserve sourced terms and a consecutive history on their deal": [
 		[newLease({ version: 0 }), "lease_version_check"],
 		[newLease({ version: 2 }), "lease_deal_id_previous_version_fkey"],
@@ -1504,6 +1592,10 @@ const RULES: Record<string, Case[]> = {
 				"party_role_disposition_reason_check",
 			],
 			[
+				"update party_role set disposition = 'avoid', disposition_reason = 'Example', is_target = true where role = 'vendor'",
+				"party_role_avoid_not_target",
+			],
+			[
 				"update party_role set is_target = true where role = 'title'",
 				"party_role_target_on_vendor",
 			],
@@ -1582,7 +1674,55 @@ const RULES: Record<string, Case[]> = {
 				"introduction_of_someone_else",
 			],
 		],
+	"a lead has a stage, and only a lead has an owner, who is a user": [
+		[
+			"update party_role set stage = null where role = 'lead'",
+			"party_role_lead_has_a_stage",
+		],
+		[
+			`update party_role set owner_user_id = '${USER}' where role = 'vendor'`,
+			"party_role_owner_on_lead",
+		],
+		[
+			`update party_role set owner_user_id = '${CLIENT}' where role = 'lead'`,
+			"party_role_owner_user_id_fkey",
+		],
+	],
+	"a lead or client says how they were found, from the list": [
+		[
+			`insert into party (id, kind, name) values ('${id(661)}', 'person', 'Example');
+			insert into party_role (party_id, role, stage) values ('${id(661)}', 'lead', 'new'); ${CHECK_AT_COMMIT}`,
+			"lead_or_client_how_found",
+		],
+		[
+			`insert into party_role values ('${AGENT}', 'client'); ${CHECK_AT_COMMIT}`,
+			"lead_or_client_how_found",
+		],
+		[
+			`update party set how_found = null where id = '${LEAD}'`,
+			"lead_or_client_how_found",
+		],
+		[
+			`update party set how_found = 'billboard' where id = '${LEAD}'`,
+			"party_how_found_fkey",
+		],
+	],
+	"someone a deal is opened for is a client": [
+		[
+			`insert into deal_party values ('${DEAL}', '${LEAD}', 'client'); ${CHECK_AT_COMMIT}`,
+			"deal_party_client_is_a_client",
+		],
+		[
+			`delete from party_role where party_id = '${CLIENT}' and role = 'client'; ${CHECK_AT_COMMIT}`,
+			"deal_party_client_is_a_client",
+		],
+	],
 	"history is never added, rewritten or removed by hand": [
+		[
+			"select erase_change(1, array['summary'])",
+			{ code: "42501", message: "permission denied for function erase_change" },
+		],
+
 		[
 			`insert into change (table_name, record, action) values ('deal', '{}', 'insert')`,
 			notGranted("change"),
@@ -1614,6 +1754,16 @@ const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
 const OWNER_RULES: Record<string, Case[]> = {
+	"historical critical date loads still require a whole confirmation": [
+		[
+			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ confirmed_by_user_id: USER })}`,
+			"critical_date_confirmation_whole",
+		],
+		[
+			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ status: "open" })}`,
+			"critical_date_confirmed_when_real",
+		],
+	],
 	"a user is a person": [
 		[`insert into app_user (id) values ('${CLIENT}')`, "app_user_id_kind_fkey"],
 	],
@@ -1702,12 +1852,19 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	client_type: ["label"],
+	client: ["client_type", "status"],
+	client_brand: ["ended_on", "started_on"],
+	national_account_owner: ["ended_on", "started_on"],
 	role: ["label"],
+	do_not_contact: ["until_date"],
 	stage: ["label"],
+	how_found: ["label"],
 	party_role: [
 		"disposition",
 		"disposition_reason",
 		"is_target",
+		"owner_user_id",
 		"relationship_level",
 		"stage",
 	],
@@ -1716,7 +1873,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	deal_kind: ["label"],
 	deal_reason: ["label"],
 	specialty: ["label"],
-	party: ["name", "npi"],
+	party: ["how_found", "name", "npi"],
 	property: ["address", "county_fips", "latitude", "longitude"],
 	market: ["name"],
 	territory: ["name"],
@@ -1739,6 +1896,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
 	document: ["name"],
 	offer: ["status"],
+	critical_date: ["resolution_reason", "status"],
 	social_account: ["handle", "platform_account_id"],
 	idea: ["angle", "hook", "pillar"],
 	design_template: ["name"],
@@ -1832,7 +1990,7 @@ before(async () => {
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
 	await db.query(
-		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED}`,
+		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED}`,
 	);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
@@ -1890,6 +2048,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				kind: "company",
 				name: "Example Dental Group",
 				npi: NPIS[0],
+				how_found: "referral",
 				role: "client",
 			},
 			{
@@ -1897,6 +2056,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				kind: "person",
 				name: "Avery Example",
 				npi: null,
+				how_found: null,
 				role: "listing_agent",
 			},
 		],
@@ -2296,7 +2456,7 @@ test("a vendor's track record counts the deals it worked and the deals its intro
 		]);
 	}));
 
-test("a merge moves a vendor's introductions, keeps the stricter ruling and either's target, and the survivor's stage and level win, filled from the duplicate's", () =>
+test("a merge moves a vendor's introductions, keeps avoid and clears target, and fills missing stage and level", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'company', 'Example Title Co');
 			insert into party_role (party_id, role, relationship_level, disposition, disposition_reason, is_target) values
@@ -2319,8 +2479,60 @@ test("a merge moves a vendor's introductions, keeps the stricter ruling and eith
 				introductions: "2",
 				roles: [
 					["title", null, null, null, null, false],
-					["vendor", "warm", 1, "avoid", "Example: slow to close", true],
+					["vendor", "warm", 1, "avoid", "Example: slow to close", false],
 				],
+			},
+		]);
+	}));
+
+// How a party was found, its roles with each one's stage and owner, and the deals it is the client of.
+const asLeadOrClient = async (party: string) =>
+	(
+		await db.query(
+			`select how_found,
+				(select jsonb_agg(jsonb_build_array(role, stage, owner_user_id) order by role) from party_role where party_id = $1)
+					as roles,
+				(select array_agg(deal_id order by deal_id) from deal_party where party_id = $1 and role = 'client') as deals
+			from party where id = $1`,
+			[party],
+		)
+	).rows;
+
+test("a lead becomes a client when a deal is opened for them, and keeps its stage, owner and how it was found", () =>
+	rolledBack(async () => {
+		await db.query(`insert into deal (id, name, owner_user_id) values ('${id(662)}', 'Example Lead Deal', '${TEAMMATE}');
+			insert into deal_party values ('${id(662)}', '${LEAD}', 'client');
+			insert into party_role (party_id, role) values ('${LEAD}', 'client'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(await asLeadOrClient(LEAD), [
+			{
+				how_found: "public_records",
+				roles: [
+					["client", null, null],
+					["lead", "nurture", TEAMMATE],
+				],
+				deals: [id(662)],
+			},
+		]);
+	}));
+
+test("a merge keeps the survivor's lead owner and how it was found, filled from the duplicate's, and moves its deals as client", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values
+				('${DUPLICATE}', 'person', 'Dr. E. Lead', 'vendor'), ('${OLD}', 'person', 'Dr. Lead', null);
+			insert into party_role (party_id, role, stage, owner_user_id) values
+				('${DUPLICATE}', 'lead', 'engaged', '${USER}'), ('${DUPLICATE}', 'client', null, null),
+				('${OLD}', 'lead', 'new', null);
+			insert into deal_party values ('${LENDER_DEAL}', '${DUPLICATE}', 'client');
+			select merge_party('${DUPLICATE}', '${LEAD}');
+			select merge_party('${LEAD}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(await asLeadOrClient(OLD), [
+			{
+				how_found: "public_records",
+				roles: [
+					["client", null, null],
+					["lead", "new", TEAMMATE],
+				],
+				deals: [LENDER_DEAL],
 			},
 		]);
 	}));
@@ -2814,6 +3026,7 @@ const COLLAPSED = [
 	"app_user_pkey",
 	"deal_party_pkey",
 	"do_not_contact_pkey",
+	"national_account_pkey",
 	"party_company_person_id_company_id_started_on_key",
 	"party_email_address_party_id_key",
 	"party_email_one_primary",
@@ -2906,6 +3119,431 @@ test("an import of a duplicate's id that waits on its merge is refused", async (
 	}
 });
 
+const BRAND = id(700);
+const NEXT_BRAND = id(701);
+const CLIENT_PROFILE = `
+insert into role (slug, label) values ('national_account', 'National account');
+insert into client_type values ('franchise', 'Franchise'), ('independent', 'Independent');
+insert into client (party_id, status, client_type) values ('${CLIENT}', 'engaged', 'franchise');
+insert into party (id, kind, name) values
+	('${BRAND}', 'company', 'Example Brand'), ('${NEXT_BRAND}', 'company', 'Example Next Brand');
+insert into party_role (party_id, role) values ('${BRAND}', 'national_account');
+insert into national_account (party_id) values ('${BRAND}');
+insert into client_brand (id, location_id, brand_id, started_on, ended_on)
+values ('${id(702)}', '${CLIENT}', '${BRAND}', '2020-01-01', '2026-01-01');
+insert into national_account_owner (id, account_id, owner_id, started_on, ended_on)
+values ('${id(703)}', '${BRAND}', '${AGENT}', '2020-01-01', '2026-01-01');
+`;
+
+test("clients derive active and past status from deals, keeping the manual status", async () => {
+	await rolledBack(async () => {
+		await db.query(CLIENT_PROFILE);
+		await db.query(`update party set how_found = 'referral' where id = '${NEXT_BRAND}';
+		insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
+		insert into client (party_id, status) values ('${NEXT_BRAND}', 'engaged')`);
+		await db.query(`insert into deal (id, name, owner_user_id) values ('${id(710)}', 'Example new work', '${USER}');
+		insert into deal_party (deal_id, party_id, role) values ('${id(710)}', '${NEXT_BRAND}', 'client');`);
+		const status = async () =>
+			(
+				await db.query(
+					`select status from client_status where party_id = '${NEXT_BRAND}'`,
+				)
+			).rows[0].status;
+		assert.equal(await status(), "active_deal");
+		await db.query(`insert into phase (slug, label) values ('closed', 'Closed');
+		insert into deal_phase_change values ('${id(710)}', '2026-04-01', 'closed', null)`);
+		assert.equal(await status(), "past_client");
+		await db.query(`insert into deal_phase_change values ('${id(710)}', '2026-05-01', 'dead', 'Example');
+		update client set status = 'paused', client_type = 'independent' where party_id = '${NEXT_BRAND}'`);
+		assert.equal(await status(), "past_client");
+		await db.query(
+			`insert into deal_phase_change values ('${id(710)}', '2026-06-01', 'legal', null)`,
+		);
+		assert.equal(await status(), "active_deal");
+		await db.query(
+			`delete from deal_party where deal_id = '${id(710)}' and role = 'client'`,
+		);
+		assert.equal(await status(), "paused");
+	});
+});
+
+test("a rebrand and a new outside owner keep the previous dated membership", async () => {
+	await rolledBack(async () => {
+		await db.query(CLIENT_PROFILE);
+		await db.query(`insert into client_brand (location_id, brand_id, started_on)
+		values ('${CLIENT}', '${NEXT_BRAND}', '2026-01-01');
+		insert into national_account_owner (account_id, owner_id, started_on)
+		values ('${BRAND}', '${USER}', '2026-01-01');
+		update client_brand set started_on = '2026-02-01', ended_on = '2027-01-01' where brand_id = '${NEXT_BRAND}';
+		update national_account_owner set started_on = '2026-02-01', ended_on = '2027-01-01' where owner_id = '${USER}';
+		update client_type set label = 'Example franchise' where slug = 'franchise'`);
+		for (const [date, national] of [
+			["2025-12-31", true],
+			["2026-01-01", false],
+		] as const) {
+			const { rows } = await db.query(
+				`select exists (select from client_brand b join national_account n
+			on n.party_id = b.brand_id where b.location_id = '${CLIENT}'
+			and daterange(b.started_on, b.ended_on) @> $1::date) as national`,
+				[date],
+			);
+			assert.equal(rows[0].national, national);
+		}
+		assert.deepEqual(
+			(
+				await db.query(
+					`select owner_id from national_account_owner order by started_on`,
+				)
+			).rows,
+			[{ owner_id: AGENT }, { owner_id: USER }],
+		);
+	});
+});
+
+// biome-ignore format: one row per refusal
+const CLIENT_REFUSALS: Case[] = [
+	[`update client set status = 'active_deal'`, "client_status_check"],
+	[`update client set status = 'past_client'`, "client_status_check"],
+	[`update client set client_type = 'unknown'`, "client_client_type_fkey"],
+	[`insert into client (party_id) values ('${AGENT}')`, "client_party_id_role_fkey"],
+	[`insert into client (party_id, role) values ('${AGENT}', 'listing_agent')`, "client_role_check"],
+	[`insert into party_role (party_id, role) values ('${USER}', 'national_account');
+	insert into national_account (party_id) values ('${USER}')`, "national_account_party_id_kind_fkey"],
+	[`insert into national_account (party_id) values ('${NEXT_BRAND}')`, "national_account_party_id_role_fkey"],
+	[`insert into national_account (party_id, role) values ('${CLIENT}', 'client')`, "national_account_role_check"],
+	[`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${CLIENT}', '2026-01-01')`, "client_brand_different_companies"],
+	[`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${AGENT}', '2026-01-01')`, "client_brand_brand_id_brand_kind_fkey"],
+	[`insert into client_brand (location_id, brand_id, started_on) values ('${NEXT_BRAND}', '${BRAND}', '2026-01-01')`, "client_brand_location_id_fkey"],
+	[`insert into party_role (party_id, role) values ('${USER}', 'client');
+	insert into client (party_id) values ('${USER}');
+	insert into client_brand (location_id, brand_id, started_on) values ('${USER}', '${BRAND}', '2026-01-01')`, "client_brand_location_id_location_kind_fkey"],
+	[`update client_brand set ended_on = '2020-01-01'`, "client_brand_check"],
+	[`update national_account_owner set ended_on = '2020-01-01'`, "national_account_owner_check"],
+	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${BRAND}', '${CLIENT}', '2026-01-01')`, "national_account_owner_owner_id_owner_kind_fkey"],
+	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${NEXT_BRAND}', '${AGENT}', '2026-01-01')`, "national_account_owner_account_id_fkey"],
+	...(["client_brand", "national_account_owner"] as const).flatMap(
+		(table): Case[] => {
+			const columns =
+				table === "client_brand"
+					? "location_id, brand_id"
+					: "account_id, owner_id";
+			const values =
+				table === "client_brand"
+					? `'${CLIENT}', '${NEXT_BRAND}'`
+					: `'${BRAND}', '${USER}'`;
+			return [
+				[
+					`insert into ${table} (${columns}, started_on) values (${values}, '2025-01-01')`,
+					`${table}_${table === "client_brand" ? "location_id" : "account_id"}_daterange_excl`,
+				],
+				[
+					`insert into ${table} (${columns}, started_on) values (${values}, '2026-01-01'); update ${table} set ended_on = '2027-01-01' where started_on = '2020-01-01'`,
+					`${table}_${table === "client_brand" ? "location_id" : "account_id"}_daterange_excl`,
+				],
+			];
+		},
+	),
+];
+for (const [sql, refusal] of CLIENT_REFUSALS) {
+	test(`client rule refuses ${sql}`, async () => {
+		await rolledBack(async () => {
+			await db.query(CLIENT_PROFILE);
+			await assert.rejects(db.query(sql), expected(refusal));
+		});
+	});
+}
+
+test("a merge carries a client and its brand, and refuses conflicting profiles", async () => {
+	await rolledBack(async () => {
+		await db.query(CLIENT_PROFILE);
+		await db.query(`select merge_party('${BRAND}', '${NEXT_BRAND}')`);
+		assert.equal(
+			(await db.query(`select brand_id from client_brand`)).rows[0].brand_id,
+			NEXT_BRAND,
+		);
+		assert.equal(
+			(await db.query(`select account_id from national_account_owner`)).rows[0]
+				.account_id,
+			NEXT_BRAND,
+		);
+		await db.query(`update party set how_found = 'referral' where id = '${NEXT_BRAND}';
+		insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
+		insert into client (party_id) values ('${NEXT_BRAND}')`);
+		await assert.rejects(
+			db.query(`select merge_party('${CLIENT}', '${NEXT_BRAND}')`),
+			expected("merge_party_client_profiles"),
+		);
+	});
+});
+
+test("a merge refuses two national account profiles", async () => {
+	await rolledBack(async () => {
+		await db.query(CLIENT_PROFILE);
+		await db.query(`insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'national_account');
+		insert into national_account (party_id) values ('${NEXT_BRAND}')`);
+		await assert.rejects(
+			db.query(`select merge_party('${BRAND}', '${NEXT_BRAND}')`),
+			expected("merge_party_client_profiles"),
+		);
+	});
+});
+
+for (const table of ["client_brand", "national_account_owner"]) {
+	test(`${table} serializes concurrent overlapping saves`, async () => {
+		const [first, second] = [await connect(), await connect()];
+		try {
+			await first.query(`begin; ${CLIENT_PROFILE}`);
+			await first.query("commit; begin");
+			const columns =
+				table === "client_brand"
+					? "location_id, brand_id"
+					: "account_id, owner_id";
+			const values =
+				table === "client_brand"
+					? `'${CLIENT}', '${NEXT_BRAND}'`
+					: `'${BRAND}', '${USER}'`;
+			const save = `insert into ${table} (${columns}, started_on) values (${values}, '2026-01-01')`;
+			await first.query(save);
+			await second.query("begin isolation level repeatable read");
+			const { pid } = (await second.query("select pg_backend_pid() as pid"))
+				.rows[0];
+			let settled = false;
+			const refusal = assert.rejects(
+				second.query(save).finally(() => {
+					settled = true;
+				}),
+				{ code: "23P01" },
+			);
+			while (
+				!settled &&
+				!(
+					await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+						pid,
+					])
+				).rows[0].blocked
+			);
+			await first.query("commit");
+			await refusal;
+		} finally {
+			await first.query("rollback");
+			await second.query("rollback");
+			await Promise.all([first.end(), second.end()]);
+			// These fixtures committed only to let a second session see the same parents.
+			const owner = await connect("none");
+			await owner.query(`delete from client_brand; delete from national_account_owner;
+			delete from national_account; delete from client; delete from client_type;
+			delete from party_role where role = 'national_account'; delete from role where slug = 'national_account';
+			delete from party where id in ('${BRAND}', '${NEXT_BRAND}')`);
+			await owner.end();
+		}
+	});
+}
+
+test("a merge moves lone profiles onto bare roles even after foreign keys are recreated", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query(`begin; ${CLIENT_PROFILE}
+		set constraints all immediate;
+		alter table party_role drop constraint party_role_party_id_fkey;
+		alter table party_role add foreign key (party_id) references party;
+		set constraints all deferred;
+		update party set how_found = 'referral' where id = '${BROKERAGES[0]}';
+		insert into party_role (party_id, role) values ('${BROKERAGES[0]}', 'client');
+		select merge_party('${BRAND}', '${NEXT_BRAND}');
+		insert into party_role (party_id, role) values ('${BROKERAGES[1]}', 'national_account');
+		select merge_party('${NEXT_BRAND}', '${BROKERAGES[1]}');
+		select merge_party('${CLIENT}', '${BROKERAGES[0]}');
+		set constraints all immediate`);
+		assert.deepEqual(
+			(await owner.query("select location_id, brand_id from client_brand"))
+				.rows,
+			[{ location_id: BROKERAGES[0], brand_id: BROKERAGES[1] }],
+		);
+		assert.equal(
+			(await owner.query("select account_id from national_account_owner"))
+				.rows[0].account_id,
+			BROKERAGES[1],
+		);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
+	}
+});
+
+test("outreach respects an indefinite stop and a pause through its end date", () =>
+	rolledBack(async () => {
+		await db.query(`insert into do_not_contact (party_id, reason, until_date) values ('${CLIENT}', 'Example pause', current_date);
+   update do_not_contact set until_date = current_date - 1 where party_id = '${AGENT}'`);
+		assert.deepEqual(
+			(await db.query("select party_id from active_do_not_contact")).rows,
+			[{ party_id: CLIENT }],
+		);
+		await db.query(
+			`update do_not_contact set until_date = null where party_id = '${AGENT}'`,
+		);
+		assert.equal(
+			(await db.query("select count(*) from active_do_not_contact")).rows[0]
+				.count,
+			"2",
+		);
+	}));
+for (const [left, right] of [
+	[true, false],
+	[false, true],
+]) {
+	test(`a vendor merge keeps a target from either side: ${left}, ${right}`, () =>
+		rolledBack(async () => {
+			await db.query(`insert into party (id, kind, name) values ('${id(980)}', 'company', 'Example vendor');
+    insert into party_role (party_id, role, is_target) values ('${id(980)}', 'vendor', ${left});
+    update party_role set is_target = ${right} where party_id = '${VENDOR}' and role = 'vendor';
+    select merge_party('${id(980)}', '${VENDOR}')`);
+			assert.equal(
+				(
+					await db.query(
+						"select is_target from party_role where party_id = $1 and role = 'vendor'",
+						[VENDOR],
+					)
+				).rows[0].is_target,
+				true,
+			);
+		}));
+}
+for (const [first, second, expected] of [
+	["null", "current_date", null],
+	["current_date", "null", null],
+	["current_date", "current_date + 1", 1],
+	["current_date + 1", "current_date", 1],
+] as const) {
+	test(`a merge keeps the longest stop: ${first}, ${second}`, () =>
+		rolledBack(async () => {
+			await db.query(`insert into party (id, kind, name) values ('${id(980)}', 'company', 'Example one'), ('${id(981)}', 'company', 'Example two');
+    insert into do_not_contact (party_id, reason, until_date) values ('${id(980)}', 'Example one', ${first}), ('${id(981)}', 'Example two', ${second});
+    select merge_party('${id(980)}', '${id(981)}')`);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select reason, until_date - current_date as days from do_not_contact where party_id = $1",
+						[id(981)],
+					)
+				).rows,
+				[
+					{
+						reason:
+							(expected === null && first === "null") ||
+							first === "current_date + 1"
+								? "Example one"
+								: "Example two",
+						days: expected,
+					},
+				],
+			);
+		}));
+}
+
+test("only the owner erases a removed record's values, keeping who and when and recording the erase", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query(`begin; ${asUser(TEAMMATE)}`);
+		await owner.query(`insert into activity (id, kind, happened_at, summary) values ('${id(982)}', 'note', now(), 'Example private note');
+   update activity set summary = 'Example corrected note' where id = '${id(982)}';
+   delete from activity where id = '${id(982)}'`);
+		await owner.query(`insert into activity (id, kind, happened_at) values ('${id(983)}', 'email', now());
+			insert into activity_about (activity_id, party_id) values ('${id(983)}', '${CLIENT}');
+			insert into email (activity_id, message_id, sender, subject, body)
+			values ('${id(983)}', '<erase@example.com>', 'erase@example.com', 'Example subject', 'Example private body');
+			delete from email where activity_id = '${id(983)}';
+			select erase_change((select max(id) from change where table_name = 'email' and action = 'delete' and record = jsonb_build_object('activity_id', '${id(983)}')), array['subject', 'body'])`);
+		assert.equal(
+			(
+				await owner.query(
+					"select count(*) from change where table_name = 'email' and record = $1 and (old_value ?| array['subject','body'] or new_value ?| array['subject','body'])",
+					[{ activity_id: id(983) }],
+				)
+			).rows[0].count,
+			"0",
+		);
+		const before = (
+			await owner.query(
+				"select id, table_name, record, action, changed_by_user_id, changed_at, merge_of from change where record = $1 order by id",
+				[{ id: id(982) }],
+			)
+		).rows;
+		const removed = before.at(-1);
+		assert.ok(removed);
+		await owner.query("savepoint invalid_erase");
+		await assert.rejects(
+			owner.query("select erase_change($1, array['summary'])", [before[0].id]),
+			{ code: "P0002" },
+		);
+		await owner.query("rollback to invalid_erase");
+		for (const fields of [[], ["happened_at"], ["id"], ["missing"], [null]]) {
+			await assert.rejects(
+				owner.query("select erase_change($1, $2)", [removed.id, fields]),
+				{ code: "23514", constraint: "erase_only_text_fields" },
+			);
+			await owner.query("rollback to invalid_erase");
+		}
+
+		await owner.query(asUser(USER));
+		await owner.query("select erase_change($1, array['summary'])", [
+			removed.id,
+		]);
+		const after = (
+			await owner.query(
+				"select id, table_name, record, action, changed_by_user_id, changed_at, merge_of, old_value, new_value from change where record = $1 order by id",
+				[{ id: id(982) }],
+			)
+		).rows;
+		assert.deepEqual(
+			after.slice(0, -1).map(({ old_value, new_value, ...metadata }) => {
+				assert.equal(old_value?.summary, undefined);
+				assert.equal(new_value?.summary, undefined);
+				return metadata;
+			}),
+			before,
+		);
+		assert.equal(after.at(-1).action, "erase");
+		assert.deepEqual(after.at(-1).new_value, { fields: ["summary"] });
+		assert.equal(after[0].new_value.kind, "note");
+		assert.ok(after[0].new_value.happened_at);
+		assert.equal(after.at(-1).changed_by_user_id, USER);
+		assert.ok(after.at(-1).changed_at);
+		await owner.query("select erase_change($1, array['summary'])", [
+			removed.id,
+		]);
+		assert.equal(
+			(
+				await owner.query("select count(*) from change where record = $1", [
+					{ id: id(982) },
+				])
+			).rows[0].count,
+			"4",
+		);
+		assert.equal(
+			(
+				await owner.query(
+					"select new_value->>'summary' as summary from change where table_name = 'activity' and record = $1 and action = 'insert'",
+					[{ id: NOTE }],
+				)
+			).rows[0].summary,
+			"Example prefers mornings",
+		);
+		await owner.query(
+			`insert into activity (id, kind, happened_at, summary) values ('${id(982)}', 'note', now(), 'Example recreated note')`,
+		);
+		await assert.rejects(
+			owner.query("select erase_change($1, array['summary'])", [removed.id]),
+			{
+				code: "23514",
+				constraint: "erase_only_removed",
+			},
+		);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
+	}
+});
+
 test("a lease amendment preserves earlier terms and options while the ending list uses the latest version", async () => {
 	await rolledBack(async () => {
 		await db.query(`${newLease({ rent_per_sf_yr: 35, term_months: 84 })}; ${newOption()};
@@ -2980,6 +3618,85 @@ test("sourced options can be extracted later for a historical lease version", as
 		assert.equal(
 			(await db.query(`select lease_id from lease_option`)).rows[0].lease_id,
 			LEASE,
+		);
+	});
+});
+
+test("lease and LOI dates are repeatable proposals, then a user's confirmation survives resolution", async () => {
+	await rolledBack(async () => {
+		await db.query(`${newLease({ rent_starts_on: "2026-07-01" })}; ${newOption()};
+			insert into offer (deal_id, property_id, round, from_party_id, from_role, offered_at, expires_on)
+			values ('${DEAL}', '${PROPERTY}', 4, '${CLIENT}', 'client', now(), '2026-06-10');
+			select propose_critical_dates('${DEAL}'); select propose_critical_dates('${DEAL}')`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select kind, status, due_on::text from critical_date order by kind",
+				)
+			).rows,
+			[
+				{ kind: "lease_end", status: "proposed", due_on: "2033-06-30" },
+				{ kind: "loi_expiry", status: "proposed", due_on: "2026-06-10" },
+				{ kind: "option_notice", status: "proposed", due_on: "2032-12-31" },
+				{ kind: "rent_start", status: "proposed", due_on: "2026-07-01" },
+			],
+		);
+		await db.query("update critical_date set status = 'open'");
+		await db.query(
+			`${asUser(TEAMMATE)}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
+		);
+		const { rows } = await db.query(
+			"select distinct confirmed_by_user_id, resolved_by_user_id, confirmed_at = transaction_timestamp() as confirmed_now from critical_date",
+		);
+		assert.deepEqual(rows, [
+			{
+				confirmed_by_user_id: USER,
+				resolved_by_user_id: TEAMMATE,
+				confirmed_now: true,
+			},
+		]);
+	});
+});
+
+for (const [start, end] of [
+	["proposed", "dropped"],
+	["open", "dropped"],
+	["open", "passed"],
+]) {
+	test(`a user moves a critical date from ${start} to ${end}`, async () => {
+		await rolledBack(async () => {
+			await db.query(newCriticalDate());
+			if (start === "open")
+				await db.query("update critical_date set status = 'open'");
+			await db.query(
+				`update critical_date set status = '${end}', resolution_reason = 'Example decision'`,
+			);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select status, confirmed_by_user_id, resolved_by_user_id from critical_date",
+					)
+				).rows,
+				[
+					{
+						status: end,
+						confirmed_by_user_id: start === "open" ? USER : null,
+						resolved_by_user_id: USER,
+					},
+				],
+			);
+		});
+	});
+}
+
+test("distinct manually sourced deadlines may share their kind and day", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${newCriticalDate()}; ${newCriticalDate({ id: id(711), source: "Another example agreement" })}`,
+		);
+		assert.equal(
+			(await db.query("select count(*) from critical_date")).rows[0].count,
+			"2",
 		);
 	});
 });

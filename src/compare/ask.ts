@@ -130,9 +130,12 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 				path: `/deals/${encodeURIComponent(ask.deal)}`,
 				call: { name: "get-deal-room", arguments: { deal: ask.deal } },
 			};
-		// The app's first ask, with no filters.
 		case "client fit":
-			return mirrored("/client-fit", "ideal-client-profile");
+			return mirrored(
+				"/client-fit",
+				"ideal-client-profile",
+				ask.state === undefined ? {} : { state: ask.state },
+			);
 		case "capture queue":
 			return mirrored("/capture-queue", "capture-queue");
 		case "find":
@@ -167,7 +170,7 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 		case "recent activity":
 			return mirrored("/recent-activity", "find-and-catch-up", {
 				query: ask.name,
-				limit: 10,
+				limit: ask.limit ?? 10,
 			});
 		case "meeting prep":
 			return mirrored("/calendar-meeting-prep", "calendar-meeting-prep");
@@ -290,18 +293,23 @@ export function askers(
 	}
 
 	// Presence and capture sessions change between any two requests, so only events and cursors are kept.
-	async function readFeed(path: string, start: string) {
+	async function readFeed(path: string, start?: string) {
 		const events: unknown[] = [];
 		const cursors: string[] = [];
 		let cursor = start;
 		for (let page = 0; page < PAGES; page++) {
-			const response = await send(`${path}?${new URLSearchParams({ cursor })}`);
+			const response = await send(
+				cursor === undefined
+					? path
+					: `${path}?${new URLSearchParams({ cursor })}`,
+			);
 			if (response.status !== 200) throw new Error("feed read failed");
 			const body: unknown = await response.json();
 			if (!isFeedPage(body)) throw new Error("feed page without events");
 			events.push(...body.events);
 			cursors.push(body.cursor);
-			if (body.events.length < FEED_PAGE) return { events, cursors };
+			if (start === undefined || body.events.length < FEED_PAGE)
+				return { events, cursors };
 			cursor = body.cursor;
 		}
 		throw new Error("feed did not end");
