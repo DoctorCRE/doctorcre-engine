@@ -307,6 +307,7 @@ const newIntroduction = (row: Record<string, string | null>) =>
 	insert("introduction", {
 		vendor_id: VENDOR,
 		made_by: "team",
+		introduced_by_user_id: USER,
 		introduced_party_id: CLIENT,
 		...row,
 	});
@@ -1310,6 +1311,41 @@ const RULES: Record<string, Case[]> = {
 				notGranted("relationship_level"),
 			],
 		],
+	"a disposition and a target are a vendor's, and a parked or avoided vendor has a reason":
+		[
+			[
+				"update party_role set disposition = 'retired', disposition_reason = 'Example' where role = 'vendor'",
+				"party_role_disposition_check",
+			],
+			[
+				"update party_role set disposition = 'avoid', disposition_reason = 'Example' where role = 'title'",
+				"party_role_disposition_on_vendor",
+			],
+			[
+				"update party_role set disposition = 'avoid' where role = 'vendor'",
+				"party_role_ruling_has_a_reason",
+			],
+			[
+				"update party_role set disposition_reason = 'Example' where role = 'vendor'",
+				"party_role_ruling_has_a_reason",
+			],
+			[
+				"update party_role set disposition = 'parked', disposition_reason = ' \n' where role = 'vendor'",
+				"party_role_disposition_reason_check",
+			],
+			[
+				"update party_role set is_target = true where role = 'title'",
+				"party_role_target_on_vendor",
+			],
+			[
+				"update party_role set is_target = null where role = 'vendor'",
+				{
+					code: "23502",
+					message:
+						'null value in column "is_target" of relation "party_role" violates not-null constraint',
+				},
+			],
+		],
 	"a vendor's category is a role, held only by a vendor, and stays a category":
 		[
 			[
@@ -1341,6 +1377,18 @@ const RULES: Record<string, Case[]> = {
 				"introduction_vendor_role_check",
 			],
 			[newIntroduction({ made_by: "partner" }), "introduction_made_by_check"],
+			[
+				newIntroduction({ introduced_by_user_id: null }),
+				"introduction_team_names_its_user",
+			],
+			[
+				newIntroduction({ made_by: "vendor" }),
+				"introduction_team_names_its_user",
+			],
+			[
+				newIntroduction({ introduced_by_user_id: CLIENT }),
+				"introduction_introduced_by_user_id_fkey",
+			],
 			[
 				newIntroduction({ introduced_party_id: VENDOR }),
 				"introduction_of_someone_else",
@@ -1478,7 +1526,13 @@ const OWNER_RULES: Record<string, Case[]> = {
 const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
 	stage: ["label"],
-	party_role: ["relationship_level", "stage"],
+	party_role: [
+		"disposition",
+		"disposition_reason",
+		"is_target",
+		"relationship_level",
+		"stage",
+	],
 	introduction: ["deal_id", "introduced_on", "note"],
 	phase: ["label"],
 	specialty: ["label"],
@@ -1928,7 +1982,7 @@ test("a vendor's track record counts the deals it worked and the deals its intro
 				('${DEAL}', '${VENDOR}', 'title'), ('${CLOSED_DEAL}', '${VENDOR}', 'title'), ('${CLOSED_DEAL}', '${VENDOR}', 'lender'),
 				('${DEAD_DEAL}', '${VENDOR}', 'vendor'), ('${LENDER_DEAL}', '${VENDOR}', 'client'),
 				('${LENDER_DEAL}', '${LENDERS[1]}', 'lender');
-			${newIntroduction({ made_by: "vendor", deal_id: DEAL })}; ${newIntroduction({ deal_id: DEAD_DEAL })};
+			${newIntroduction({ made_by: "vendor", introduced_by_user_id: null, deal_id: DEAL })}; ${newIntroduction({ deal_id: DEAD_DEAL })};
 			${newIntroduction({ deal_id: CLOSED_DEAL, introduced_party_id: AGENT })}; ${newIntroduction({})}`);
 		const { rows } = await db.query(
 			"select * from vendor_track_record order by party_id",
@@ -1953,17 +2007,21 @@ test("a vendor's track record counts the deals it worked and the deals its intro
 		]);
 	}));
 
-test("a merge moves a vendor's introductions, and the survivor's stage and level win, filled from the duplicate's", () =>
+test("a merge moves a vendor's introductions, keeps the stricter ruling and either's target, and the survivor's stage and level win, filled from the duplicate's", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'company', 'Example Title Co');
-			insert into party_role (party_id, role, relationship_level) values ('${DUPLICATE}', 'vendor', 3), ('${LENDERS[0]}', 'vendor', null);
+			insert into party_role (party_id, role, relationship_level, disposition, disposition_reason, is_target) values
+				('${DUPLICATE}', 'vendor', 3, 'avoid', 'Example: slow to close', false), ('${LENDERS[0]}', 'vendor', null, null, null, false);
+			update party_role set disposition = 'parked', disposition_reason = 'Example: drip only', is_target = true
+			where party_id = '${VENDOR}' and role = 'vendor';
 			${newIntroduction({ vendor_id: DUPLICATE })};
 			select merge_party('${DUPLICATE}', '${VENDOR}');
 			select merge_party('${VENDOR}', '${LENDERS[0]}');
 			select merge_party('${LENDERS[0]}', '${LENDERS[1]}')`);
 		const { rows } = await db.query(
 			`select (select count(*) from introduction where vendor_id = $1) as introductions,
-				jsonb_agg(jsonb_build_array(role, stage, relationship_level) order by role) as roles
+				jsonb_agg(jsonb_build_array(role, stage, relationship_level, disposition, disposition_reason, is_target)
+					order by role) as roles
 			from party_role where party_id = $1`,
 			[LENDERS[1]],
 		);
@@ -1971,8 +2029,8 @@ test("a merge moves a vendor's introductions, and the survivor's stage and level
 			{
 				introductions: "2",
 				roles: [
-					["title", null, null],
-					["vendor", "warm", 1],
+					["title", null, null, null, null, false],
+					["vendor", "warm", 1, "avoid", "Example: slow to close", true],
 				],
 			},
 		]);

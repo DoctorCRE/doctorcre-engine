@@ -125,9 +125,17 @@ create table party_role (
 	stage text,
 	-- None is not yet judged, which is not 0.
 	relationship_level smallint references relationship_level,
+	-- The team's ruling on a vendor. None is active.
+	disposition text check (disposition in ('parked', 'avoid')),
+	disposition_reason text check (disposition_reason ~ '\S'),
+	-- We want to meet this one.
+	is_target boolean not null default false,
 	primary key (party_id, role),
 	foreign key (role, stage) references stage,
-	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor')
+	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor'),
+	constraint party_role_disposition_on_vendor check (disposition is null or role = 'vendor'),
+	constraint party_role_ruling_has_a_reason check ((disposition is null) = (disposition_reason is null)),
+	constraint party_role_target_on_vendor check (not is_target or role = 'vendor')
 );
 
 create function party_role_category_of_a_vendor() returns trigger
@@ -357,12 +365,14 @@ create table introduction (
 	vendor_id uuid not null,
 	vendor_role text not null default 'vendor' check (vendor_role = 'vendor'),
 	made_by text not null check (made_by in ('vendor', 'team')),
+	introduced_by_user_id uuid references app_user,
 	-- Whom the vendor introduced to the team, or the team to the vendor.
 	introduced_party_id uuid not null references party,
 	introduced_on date,
 	deal_id uuid references deal,
 	note text check (note ~ '\S'),
 	constraint introduction_of_someone_else check (introduced_party_id <> vendor_id),
+	constraint introduction_team_names_its_user check ((made_by = 'team') = (introduced_by_user_id is not null)),
 	-- Only a merge changes a party_role key, and its introductions move with it.
 	foreign key (vendor_id, vendor_role) references party_role on update cascade
 );
@@ -874,9 +884,15 @@ begin
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
-	-- Its stage and level stay too, and the duplicate's fill any it lacks.
+	-- Its stage and level stay too, and the duplicate's fill any it lacks. A target on either holds.
+	-- The stricter ruling stays with its reason, so a merge never puts an avoided vendor back in play.
 	update party_role s set stage = coalesce(s.stage, d.stage),
-		relationship_level = coalesce(s.relationship_level, d.relationship_level)
+		relationship_level = coalesce(s.relationship_level, d.relationship_level),
+		(disposition, disposition_reason) = (
+			select ruling, reason
+			from (values (s.disposition, s.disposition_reason, 1), (d.disposition, d.disposition_reason, 2)) r (ruling, reason, side)
+			order by array_position(array['parked', 'avoid'], ruling) desc nulls last, side limit 1),
+		is_target = s.is_target or d.is_target
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
@@ -1117,7 +1133,7 @@ grant delete on party, party_email, party_phone, do_not_contact, party_specialty
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty to engine;
-grant update (stage, relationship_level) on party_role to engine;
+grant update (stage, relationship_level, disposition, disposition_reason, is_target) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (npi) on party to engine;

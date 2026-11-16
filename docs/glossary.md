@@ -63,10 +63,20 @@ How well the team knows a vendor: 0 Prospective, 1 Building, 2 Established, 3 Co
 _Avoid_: contact level, rating, tier
 _Database_: `vendor.relationship_level` and `vendor_relationship_level` today; `party_role.relationship_level` and `relationship_level` in the new database.
 
+**Disposition**:
+The team's ruling on a vendor: active, parked (deliberately dormant, drip only) or avoid (ruled out as a partner). A parked or avoided vendor has a reason.
+_Avoid_: stage, status
+_Database_: `vendor.disposition` and `vendor_disposition` today; `party_role.disposition` and `party_role.disposition_reason` on the vendor role in the new database, where none is active.
+
+**Target**:
+A vendor the team wants to meet.
+_Avoid_: target stage
+_Database_: `vendor.is_target` today; `party_role.is_target` on the vendor role in the new database.
+
 **Introduction**:
-A vendor introducing someone to the team, or the team introducing someone to a vendor, and the deal it led to.
+A vendor introducing someone to the team, or the team introducing someone to a vendor, and the deal it led to. One the team made names the user who made it.
 _Avoid_: intro, link, referral (on its own)
-_Database_: `party_link` and `party_link_deal` today; `introduction` in the new database.
+_Database_: `party_link` and `party_link_deal` today, with `via_party` naming who made it; `introduction` in the new database, with `introduced_by_user_id` for a team's.
 
 **Track record**:
 What a vendor's deals show: the deals it worked, how they ended, and the deals its introductions led to. It is read from deal history, never set by hand.
