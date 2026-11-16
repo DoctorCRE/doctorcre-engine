@@ -214,3 +214,11 @@ A renewal, expansion or early termination right in one lease version, with its e
 **Brand membership** joins a client location company to its brand company for dates in `client_brand`. A franchisee is a client of type franchise with its own deals. Rebranding ends the old membership and begins another.
 
 **National account owner** is the person responsible for the account, including an outside referring agent. `national_account_owner` keeps dated ownership; a deal's owner is separate. `national_account` identifies the brand company, independently of client type.
+
+**Lead lane**:
+The kind of opportunity being worked, independent of how the lead was found.
+_New database_: `party_role.lane` on the lead role, from `lead_lane`.
+
+**Estimated lease date**:
+A lead's expected lease event, with its source and optional confidence. It is an estimate, not an executed lease ending.
+_New database_: `party_role.estimated_lease_on`, `lease_estimate_source` and `lease_estimate_confidence` on the lead role.

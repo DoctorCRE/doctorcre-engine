@@ -144,11 +144,11 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 62. A lead has a stage. Only a lead has an owner, and the owner is a user.
 63. A lead or client says how they were found, from the list. A new lead or client is checked when the change is saved.
 64. Someone on a deal as its client holds the client role, checked when the change is saved, so the role cannot be removed while they are.
-
 65. A client profile names its client role, has only roster, cold, engaged or paused as manual status, and takes its type from the client type list. Active deal and past client come from deals.
 66. A brand membership joins two different companies, its location has a client profile, and its dates never overlap another membership of that location.
 67. A national account is a company holding that role. Its dated owners are people, and their dates never overlap on one account. Membership and ownership end strictly after they start, with the end excluded.
 68. Client and account profiles and their dated links keep their parties; users may correct dates and remove mistakes. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
+69. A lead's lane comes from its list. A lease estimate has both date and nonblank source, and confidence only with an estimate. Lane, estimate, confidence and segment belong only to the lead role. How-found detail is nonblank and has how found.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -407,6 +407,7 @@ A lead is a person or company holding the `lead` role, and a client one holding 
 - **Owner.** A lead's owner is the user who works it. None means nobody works it yet, and any user can take it. Territory is shared, so a lead's area never picks its owner. Change history keeps who owned it before.
 - **Stage.** A lead's stage comes from the lead stages in `stage`: New, Qualified, Outreach Active, Engaged, Nurture, Opportunity and Archived. Nurture replaces named drip campaigns. Do not contact is the party's `do_not_contact` row, and deal outcomes are deal phases, not lead stages.
 - **How found.** Each lead and client says how they were found, from the `how_found` list: referral, vendor, marketing post, public records and cold outreach to start. It is a fact about the person or company, so it holds in every role, and a lead that becomes a client copies nothing. A list can be counted for lead attribution, where free text cannot.
+- **Working details.** The lead role keeps its `lane` from `lead_lane`, `segment`, and `estimated_lease_on` with `lease_estimate_source` and optional high, medium or low confidence. An estimate always has its source; neither can stand alone. Lanes are independent of how found. `party.how_found_detail` keeps the attribution detail in every role. A merge keeps the survivor's working details, filling gaps from the duplicate, and moves an estimate with its own source and confidence. How-found detail fills only when the source agrees or the survivor had none.
 - **Not kept.** The 0 to 100 lead score and named drip campaigns do not come across (owner, #196).
 
 Moving today's rows across:
@@ -417,7 +418,11 @@ Moving today's rows across:
 - How found comes from `client.acquisition_source`, asked of the client, or else `lead.source_type`. Both are free text today. A `prospect-pool` lead is mapped by its candidate's own pool source. Every other value is listed for a partner to map to the list, and so is a party whose two values disagree. A lead or client with neither waits, listed, since the database refuses one without how it was found.
 - A lead whose `client_id` points at a client on another party, such as the practice a doctor runs, keeps its lead role on the person, and the client role stays on the practice.
 - `score`, `score_reason`, `drip_campaign`, `drip_added`, `report_back_due` and `sf_deal` do not move. Only the old spreadsheet import wrote the last four, and nothing reads them.
-- Lanes, stage moves, the estimated lease date, outreach drafts, candidates and the remaining free text come with #286.
+- The old lane list becomes `lead_lane`, and `lead.lane` and `segment` stay on its lead role. An unknown lane or whitespace-only segment is listed for a user.
+- `est_lease_event`, `event_source` and `event_confidence` become the estimate date, source and confidence. A promoted candidate's `est_basis` supplies a missing source. An estimate without a source, confidence without an estimate, unknown confidence or an unparsed `est_lease_event_raw` is listed rather than inferred.
+- `client.acquisition_detail` becomes `party.how_found_detail`, otherwise `lead.source_detail` does. If both differ, the lead detail becomes a separate note activity so both survive. A detail without mapped how found waits with its source.
+- `notes` becomes a note activity about the party, dated at the old row's last change. `last_touch` comes from the latest contact activity; a standalone old date with no activity is listed rather than invented as contact. `next_action_date` becomes the due date of a next step about the party, with text marking it as an imported lead follow-up. `notes_path` is an old file reference, not note text; its file must be copied as a document or listed for a user.
+- Stage moves, outreach drafts and candidates are the other slices of #286.
 
 ## Merging duplicates
 
