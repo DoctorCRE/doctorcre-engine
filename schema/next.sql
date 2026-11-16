@@ -330,15 +330,14 @@ create table deal (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	name text not null,
-	-- None is not known yet.
 	kind text references deal_kind,
 	reason text references deal_reason,
-	-- One owner, so a change of owner is an update, and change history keeps who held it before.
+	-- One deal owner, so a new one is an update, and change history keeps who held it before.
 	owner_user_id uuid not null references app_user,
-	-- Named from the start, before any property is chosen.
+	-- Can be named before any property is chosen.
 	market_id uuid references market,
-	-- Such as the total lease value or the purchase price.
-	closed_value numeric(14, 2) check (closed_value >= 0)
+	-- Such as the total lease value or the purchase price. Empty until known, never zero.
+	closed_value numeric(14, 2) check (closed_value > 0)
 );
 
 -- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.

@@ -754,7 +754,7 @@ const RULES: Record<string, Case[]> = {
 		[`update deal set kind = 'start_up'`, "deal_kind_fkey"],
 		[`update deal set reason = 'lease'`, "deal_reason_fkey"],
 	],
-	"a deal has exactly one owner, a user": [
+	"a deal has exactly one deal owner, a user": [
 		[
 			"insert into deal (name) values ('Example')",
 			{
@@ -765,10 +765,10 @@ const RULES: Record<string, Case[]> = {
 		],
 		[`update deal set owner_user_id = '${CLIENT}'`, "deal_owner_user_id_fkey"],
 	],
-	"a deal's market comes from the market list, and its closed value is never negative":
+	"a deal's market comes from the market list, and its closed value is more than zero":
 		[
 			[`update deal set market_id = '${MISSING}'`, "deal_market_id_fkey"],
-			["update deal set closed_value = -1", "deal_closed_value_check"],
+			["update deal set closed_value = 0", "deal_closed_value_check"],
 		],
 	"a round number is used once per deal and answers an earlier round": [
 		[offer(3, 2, AGENT, "listing_agent"), "offer_deal_id_round_key"],
@@ -1985,7 +1985,7 @@ test("each insert, update and delete leaves history: the record, its fields from
 		]);
 	}));
 
-test("a deal's new owner is history: who held it before, who moved it and when", () =>
+test("a deal's new deal owner is history: who held it before, who moved it and when", () =>
 	rolledBack(async () => {
 		await db.query(
 			`${asUser(TEAMMATE)}; update deal set owner_user_id = '${TEAMMATE}' where id = '${DEAL}'`,

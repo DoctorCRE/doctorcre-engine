@@ -14,7 +14,7 @@ _New database_: a user (`app_user`).
 _Engine_: `partner` in `src/session.ts`, `src/deals/routes.ts` and `readBoard`; the board answer keeps the old `actor` key.
 
 **User**:
-A person who uses the system: today the two partners, and any teammate added later. A user is a person in the party list, so they show on deals and timelines. Being a user is not a role on a deal, and each deal names its owner, a user.
+A person who uses the system: today the two partners, and any teammate added later. A user is a person in the party list, so they show on deals and timelines. Being a user is not a role on a deal; each deal's deal owner is a user.
 _Avoid_: partner (in the new database), actor, member
 _Database_: `app_user` in the new database, one row per user with their person's `party` id; `changed_by_user_id` names the user who last changed a row.
 

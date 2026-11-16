@@ -18,7 +18,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
-- **`deal`**: one piece of brokerage work, with its kind, its reason, its owner, its market and its closed value.
+- **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market and its closed value.
 - **`deal_kind`**: the list of kinds of transaction, such as lease and purchase. Like roles, a label can be renamed.
 - **`deal_reason`**: the list of reasons a client takes space, such as a start-up or a relocation. Like roles, a label can be renamed.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
@@ -52,7 +52,7 @@ The jobs today:
 
 A user who settles a post stuck in `publishing` is named on the post. In marketing, a text edit, an edit's review and a cancel name a user, as the one who made it or the one a job worked for, and no response is a job's for no one. A sign-in names its user.
 
-Only the owner adds a user or a job, because every change is signed with one. A user who has changed anything stays, so who changed what survives; a teammate who leaves will be a column on the user. Adding a teammate is a person row and a user row. The first user's own person row names them as its author, so that key is checked when the transaction ends. Being a user is not a role on a deal. A deal names its one owner, a user, on the deal itself (see "Deals").
+Only the owner adds a user or a job, because every change is signed with one. A user who has changed anything stays, so who changed what survives; a teammate who leaves will be a column on the user. Adding a teammate is a person row and a user row. The first user's own person row names them as its author, so that key is checked when the transaction ends. Being a user is not a role on a deal. A deal names its one deal owner, a user, on the deal itself (see "Deals").
 
 Today's actors map across like this. The old `actor` table holds the two partners as `human`, the scheduled jobs and agent sessions as `automation`, and migrations and exporters as `system`. Its `created_by` and `updated_by` columns name an actor and are often empty, and the old `event` rows add a cause and, for an agent, the partner it worked for. Each `human` actor becomes a person with a user row. The owner loads them with the `stamp_change` triggers turned off, so a row keeps its old author and time: its author from `updated_by`, or `created_by` when never updated, and `changed_at` from `updated_at`, or `created_at`. The check that a row names a user or a job still holds during that load. A row a `human` actor last changed names that user. A row an `automation` actor last changed names the job that now does its work, such as `mail_capture` for the old mail filing, or `old_system` when none does, and an agent session's names `agent`; each takes the partner its event names as the user it worked for. A row a `system` actor last changed names `old_system`. A row with no author names `old_system` too. The first copy, of people and companies, names `old_system` for every `automation` actor's row until #264 tells the jobs apart. The old columns that name a partner by slug, such as `deal.owner`, name that partner's user.
 
@@ -129,8 +129,8 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update or a delete.
 54. A change a merge makes names the merge, and only a merge saved in the same transaction is named.
 55. A deal's kind comes from the kind list and its reason from the reason list. Either may be unknown.
-56. A deal has exactly one owner, and the owner is a user.
-57. A deal's market comes from the market list, and its closed value is never negative.
+56. A deal has exactly one deal owner, a user.
+57. A deal's market comes from the market list, and its closed value is more than zero.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -143,7 +143,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's or a specialty's label;
 - a vendor role's stage, relationship level, disposition, reason and target, and an introduction's date, deal and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, and a property's address, county and point;
-- a deal's kind, reason, owner, market and closed value;
+- a deal's kind, reason, deal owner, market and closed value;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
@@ -280,16 +280,16 @@ Pillars and hooks are text for now. They become lists, like roles and phases, wi
 
 A deal records what kind of transaction it is and why the client is taking space, each from its own short list. The owner ruled on #196 that today's one deal type is two facts, because a start-up lease was filed as one or the other (2026-11-16). The kinds are lease, purchase, sale-leaseback and build-to-suit. The reasons are start-up, relocation, expansion, renewal and additional office. Either may be unknown, as a deal's kind often is before a site is found.
 
-Every deal has exactly one owner, a user, in `owner_user_id`. A second user can still be on the deal in another role. A change of owner is an update of that column, so change history keeps who owned it before, who moved it and when, with no dated table of its own. Who owned a deal on a given day is the latest owner change at or before it.
+Every deal has exactly one deal owner, a user, in `owner_user_id`. A second user can still be on the deal in another role. A new deal owner is an update of that column, so change history keeps who held the deal before, who moved it and when, with no dated table of its own. Who held a deal on a given day is the latest change to `owner_user_id` at or before it.
 
-A deal names its market from the `market` list, which can be set when the deal opens, before any property is chosen. A closed deal records its value, such as the total lease value or the purchase price, in `closed_value`. Nothing requires it at the move to closed, because the mail job closes a deal when its invoice arrives and the invoice does not carry it. A user fills in the value of a closed deal that has none.
+A deal names its market from the `market` list, which can be set when the deal opens, before any property is chosen, and stays empty until known. A closed deal records its value, such as the total lease value or the purchase price, in `closed_value`, which is empty until known and never zero. Nothing requires it at the move to closed, because the mail job closes a deal when its invoice arrives and the invoice does not carry it, so the value is left for a user to fill in.
 
 National is never stored. A deal is national exactly when its client is a location of a national account. National accounts and the brand behind each location come with #275, and with them the read that answers it. Until then nothing answers it, and since nothing stores it, no flag can disagree with the client, as today's lane sometimes does.
 
 Moving today's rows across:
 
-- `deal_type` splits in two. `lease`, `purchase`, `sale_leaseback` and `build_to_suit` become the kind, with no reason. `startup`, `relocation`, `expansion`, `renewal` and `additional_office` become the reason, with no kind, until a user sets it. `other` sets neither, and the deal is listed with its imported type for a user to file.
-- `deal.owner`, a partner's slug, becomes that partner's user. A closed or lost deal with none takes its open `deal_participant` row with role `lead`. A deal with neither is listed. Earlier owners, the closed `lead` rows, come across with the old `event` rows.
+- `deal_type` splits in two. `lease`, `purchase`, `sale_leaseback` and `build_to_suit` become the kind, with no reason. `relocation`, `expansion`, `renewal` and `additional_office` become the reason of the same slug, and `startup` the reason `start_up`, each with no kind until a user sets it. `other` sets neither, and the deal is listed with its imported type for a user to file.
+- `deal.owner`, a partner's slug, becomes that partner's user as the deal owner. A closed or lost deal with none takes its open `deal_participant` row with role `lead`. A deal with neither is listed. Earlier deal owners, from the closed `lead` rows, come across later into change history, dated when each changed, with the old `event` rows.
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
 - `won_value` becomes `closed_value`. `sf_commission_placeholder` is a commission, not the deal's value, so it waits for commissions.
 - `lane` is not copied. A deal whose old lane disagrees with its client's national account is listed once #275 lands.
