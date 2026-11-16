@@ -666,11 +666,14 @@ create table critical_date (
 	constraint critical_date_confirmed_when_real check (status not in ('open', 'done', 'passed') or confirmed_at is not null),
 	constraint critical_date_resolution_whole check (
 		num_nonnulls(resolved_by_user_id, resolved_at, resolution_reason) = case when status in ('done', 'dropped', 'passed') then 3 else 0 end),
-	unique nulls not distinct (deal_id, kind, due_on, offer_id, lease_id, option_number, document_id),
 	foreign key (offer_id, deal_id) references offer (id, deal_id),
 	foreign key (lease_id, deal_id) references lease (id, deal_id),
 	foreign key (lease_id, option_number) references lease_option (lease_id, number)
 );
+
+-- Generated proposals repeat by their immutable source; hand-added dates may share a day.
+create unique index critical_date_generated_once on critical_date (deal_id, kind, offer_id, lease_id, option_number)
+	nulls not distinct where offer_id is not null or lease_id is not null;
 
 create function critical_date_transition() returns trigger
 language plpgsql as $$
@@ -724,7 +727,7 @@ begin atomic
 	on conflict do nothing;
 	insert into critical_date (deal_id, kind, due_on, source, offer_id)
 	select deal_id, 'loi_expiry', expires_on, 'Offer round', id from offer
-	where deal_id = wanted and expires_on is not null and status in ('open', 'accepted')
+	where deal_id = wanted and expires_on is not null and status = 'open'
 	on conflict do nothing;
 end;
 
@@ -1275,7 +1278,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- History (lease, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;

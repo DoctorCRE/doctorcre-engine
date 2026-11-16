@@ -1648,6 +1648,16 @@ const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
 const OWNER_RULES: Record<string, Case[]> = {
+	"historical critical date loads still require a whole confirmation": [
+		[
+			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ confirmed_by_user_id: USER })}`,
+			"critical_date_confirmation_whole",
+		],
+		[
+			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ status: "open" })}`,
+			"critical_date_confirmed_when_real",
+		],
+	],
 	"a user is a person": [
 		[`insert into app_user (id) values ('${CLIENT}')`, "app_user_id_kind_fkey"],
 	],
@@ -2985,5 +2995,48 @@ test("lease and LOI dates are repeatable proposals, then a user's confirmation s
 				confirmed_now: true,
 			},
 		]);
+	});
+});
+
+for (const [start, end] of [
+	["proposed", "dropped"],
+	["open", "dropped"],
+	["open", "passed"],
+]) {
+	test(`a user moves a critical date from ${start} to ${end}`, async () => {
+		await rolledBack(async () => {
+			await db.query(newCriticalDate());
+			if (start === "open")
+				await db.query("update critical_date set status = 'open'");
+			await db.query(
+				`update critical_date set status = '${end}', resolution_reason = 'Example decision'`,
+			);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select status, confirmed_by_user_id, resolved_by_user_id from critical_date",
+					)
+				).rows,
+				[
+					{
+						status: end,
+						confirmed_by_user_id: start === "open" ? USER : null,
+						resolved_by_user_id: USER,
+					},
+				],
+			);
+		});
+	});
+}
+
+test("distinct manually sourced deadlines may share their kind and day", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${newCriticalDate()}; ${newCriticalDate({ id: id(711), source: "Another example agreement" })}`,
+		);
+		assert.equal(
+			(await db.query("select count(*) from critical_date")).rows[0].count,
+			"2",
+		);
 	});
 });
