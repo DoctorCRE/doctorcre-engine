@@ -321,6 +321,12 @@ insert into party (id, kind, name, how_found) values ('${LEAD}', 'person', 'Dr. 
 insert into party_role (party_id, role, stage, owner_user_id) values ('${LEAD}', 'lead', 'nurture', '${TEAMMATE}');
 insert into activity_about (activity_id, party_id) values ('${CALL}', '${LEAD}'), ('${NOTE}', '${LEAD}');
 `;
+// Made up, so two sessions can race on one commission and one ladder.
+const COMMISSION_SEED = `
+insert into commission_tier (user_id, from_deal, partner_user_id, closing_share) values
+	('${TEAMMATE}', 1, '${USER}', 0.8), ('${TEAMMATE}', 3, '${USER}', 0.6);
+insert into commission (deal_id, gross) values ('${LENDER_DEAL}', 1000);
+`;
 const newIntroduction = (row: Record<string, string | null>) =>
 	insert("introduction", {
 		vendor_id: VENDOR,
@@ -2028,7 +2034,7 @@ before(async () => {
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
 	await db.query(
-		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED}`,
+		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED} ${COMMISSION_SEED}`,
 	);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
@@ -4119,7 +4125,6 @@ test("distinct manually sourced deadlines may share their kind and day", async (
 	});
 });
 
-const COMMISSION = `insert into commission (deal_id, gross) values ('${DEAL}', 10000)`;
 const payment = (row: Record<string, string | number>) =>
 	insert("commission_payment", { deal_id: DEAL, amount: 5000, ...row });
 const share = (row: Record<string, string | number>) =>
@@ -4135,6 +4140,7 @@ const tiers = (...rows: [number, number][]) =>
 		.join(", ")}`;
 // Made up, and each count a broken rule could give lands on a different tier.
 const LADDER = tiers([1, 0.9], [3, 0.7], [4, 0.6]);
+const COMMISSION = `${LADDER}; insert into commission (deal_id, gross) values ('${DEAL}', 10000)`;
 
 // biome-ignore format: one row per refusal
 const COMMISSION_REFUSALS: Record<string, Case[]> = {
@@ -4170,7 +4176,13 @@ const COMMISSION_REFUSALS: Record<string, Case[]> = {
 		[`insert into commission_tier values ('${USER}', 1, '${AGENT}', 0.9)`, "commission_tier_partner_user_id_fkey"],
 		[`${tiers([2, 0.9])}; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
 		[`${tiers([1, 0.7], [3, 0.9])}; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
-		[`${LADDER}; delete from commission_tier where from_deal = 1; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
+		[`${LADDER}; delete from commission_tier where user_id = '${USER}' and from_deal = 1; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
+	],
+	"a gross needs its closing user's ladder, so its split names both users": [
+		[`insert into commission (deal_id, gross) values ('${DEAL}', 10000); ${CHECK_AT_COMMIT}`, "commission_split_names_both_users"],
+		[`insert into commission (deal_id, gross, closing_share) values ('${DEAL}', 10000, 0.6); ${CHECK_AT_COMMIT}`, "commission_split_names_both_users"],
+		[`delete from commission_tier where user_id = '${TEAMMATE}'; ${CHECK_AT_COMMIT}`, "commission_split_names_both_users"],
+		[`update deal set owner_user_id = '${USER}' where id = '${LENDER_DEAL}'; ${CHECK_AT_COMMIT}`, "commission_split_names_both_users"],
 	],
 };
 
@@ -4256,3 +4268,61 @@ test("an open deal carries its expected commission, and its users' shares wait f
 			{ kind: "partner", party_id: TEAMMATE, share: null, amount: null },
 		]);
 	}));
+
+test("rounding never makes an amount negative, and the amounts still add up to the gross", () =>
+	rolledBack(async () => {
+		await db.query(`${LADDER};
+			insert into commission (deal_id, gross, closing_share) values ('${DEAL}', 0.01, 0.5);
+			${share({ id: id(760), share: 0.5 })};
+			${share({ id: id(761), party_id: `${BROKERAGES[0]}`, kind: "brokerage", share: 0.5 })}`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select kind, amount::text as amount from commission_split where deal_id = $1 order by amount desc, kind",
+					[DEAL],
+				)
+			).rows,
+			[
+				{ kind: "referral", amount: "0.01" },
+				{ kind: "brokerage", amount: "0.00" },
+				{ kind: "closing_user", amount: "0.00" },
+				{ kind: "partner", amount: "0.00" },
+			],
+		);
+	}));
+
+// Each save passes alone; together they would break the rule, so the second waits for the first.
+for (const [what, first, second] of [
+	[
+		"payments on one gross",
+		payment({ deal_id: LENDER_DEAL, amount: 600 }),
+		payment({ deal_id: LENDER_DEAL, amount: 600 }),
+	],
+	[
+		"others' shares of one commission",
+		share({ deal_id: LENDER_DEAL, share: 0.6 }),
+		share({ deal_id: LENDER_DEAL, share: 0.6 }),
+	],
+	[
+		"tiers of one ladder",
+		`update commission_tier set closing_share = 0.65 where user_id = '${TEAMMATE}' and from_deal = 1`,
+		`update commission_tier set closing_share = 0.7 where user_id = '${TEAMMATE}' and from_deal = 3`,
+	],
+])
+	test(`${what} are checked one save at a time`, async () => {
+		const sessions = [await connect(), await connect()] as const;
+		try {
+			await sessions[0].query(`begin; ${first}; ${CHECK_AT_COMMIT}`);
+			await sessions[1].query(
+				`begin; set local lock_timeout = '100ms'; ${second}`,
+			);
+			await assert.rejects(sessions[1].query(CHECK_AT_COMMIT), {
+				code: "55P03",
+			});
+		} finally {
+			for (const session of sessions) {
+				await session.query("rollback");
+				await session.end();
+			}
+		}
+	});

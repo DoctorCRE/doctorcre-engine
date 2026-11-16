@@ -1323,9 +1323,11 @@ create table commission_tier (
 );
 
 -- Deferred, so a lowered gross and a removed payment, or two changed shares, save in either order.
+-- Held per deal until the transaction ends, so two saves cannot each pass alone and together break it.
 create function commission_adds_up() returns trigger
 language plpgsql as $$
 begin
+	perform pg_advisory_xact_lock(hashtextextended('commission ' || new.deal_id, 0));
 	if (select sum(p.amount) > coalesce(min(m.gross), 0)
 			from commission m join commission_payment p using (deal_id) where m.deal_id = new.deal_id) then
 		raise exception 'payments never add up to more than the gross'
@@ -1345,12 +1347,20 @@ create constraint trigger commission_adds_up after insert or update on commissio
 create constraint trigger commission_adds_up after insert or update on commission_share
 	initially deferred for each row execute function commission_adds_up();
 
--- Deferred, so a ladder's tiers can be replaced in any order.
-create function commission_ladder_steps_down() returns trigger
+-- Deferred, so a ladder's tiers can be replaced in any order. Held per user, like commission_adds_up.
+create function commission_ladder_holds() returns trigger
 language plpgsql as $$
 declare
-	ladder constant uuid := coalesce(new.user_id, old.user_id);
+	ladder uuid;
 begin
+	if tg_table_name = 'commission_tier' then
+		ladder := coalesce(new.user_id, old.user_id);
+	elsif tg_table_name = 'deal' then
+		ladder := new.owner_user_id;
+	else
+		ladder := (select owner_user_id from deal where id = new.deal_id);
+	end if;
+	perform pg_advisory_xact_lock(hashtextextended('commission_tier ' || ladder, 0));
 	if (select min(from_deal) <> 1 from commission_tier where user_id = ladder)
 		or exists (select from (
 			select closing_share > lag(closing_share) over (order by from_deal) as steps_up
@@ -1359,11 +1369,21 @@ begin
 		raise exception 'a ladder starts at the first closed deal and never steps up'
 			using errcode = 'check_violation', constraint = 'commission_ladder_steps_down';
 	end if;
+	if not exists (select from commission_tier where user_id = ladder)
+		and exists (select from commission m join deal d on d.id = m.deal_id
+			where d.owner_user_id = ladder and m.gross is not null) then
+		raise exception 'a gross needs its closing user''s ladder, so its split names both users'
+			using errcode = 'check_violation', constraint = 'commission_split_names_both_users';
+	end if;
 	return null;
 end $$;
 
-create constraint trigger commission_ladder_steps_down after insert or update or delete on commission_tier
-	initially deferred for each row execute function commission_ladder_steps_down();
+create constraint trigger commission_ladder_holds after insert or update or delete on commission_tier
+	initially deferred for each row execute function commission_ladder_holds();
+create constraint trigger commission_ladder_holds after insert or update of gross on commission
+	initially deferred for each row execute function commission_ladder_holds();
+create constraint trigger commission_ladder_holds after update of owner_user_id on deal
+	initially deferred for each row execute function commission_ladder_holds();
 
 -- Everyone's share of each deal's commission and its amount. The users' come from here, never typed.
 -- A user's count of closed deals is lifetime, so it never resets.
@@ -1376,30 +1396,29 @@ with closed as (
 	where last.phase = 'closed'
 ),
 users as (
-	select m.deal_id, d.owner_user_id,
-		(select partner_user_id from commission_tier where user_id = d.owner_user_id limit 1) as partner_user_id,
+	select m.deal_id, d.owner_user_id, ladder.partner_user_id,
 		coalesce(m.closing_share, (
 			select t.closing_share from commission_tier t
 			where t.user_id = d.owner_user_id and t.from_deal <= closed.number order by t.from_deal desc limit 1
 		)) as closing_share,
-		1 - coalesce(sum(s.share), 0) as left_share,
-		-- Each amount is rounded to the cent, and the partner takes what rounding leaves, so they add up to the gross.
-		m.gross - coalesce(sum(round(m.gross * s.share, 2)), 0) as left_amount
+		1 - coalesce((select sum(share) from commission_share where deal_id = m.deal_id), 0) as left_share
 	from commission m
 	join deal d on d.id = m.deal_id
+	join lateral (select partner_user_id from commission_tier where user_id = d.owner_user_id limit 1) ladder on true
 	left join closed using (deal_id)
-	left join commission_share s using (deal_id)
-	group by m.deal_id, d.owner_user_id, closed.number
+),
+parts as (
+	select deal_id, party_id, kind, share, 0 as part, id from commission_share
+	union all
+	select deal_id, owner_user_id, 'closing_user', left_share * closing_share, 1, null from users
+	union all
+	select deal_id, partner_user_id, 'partner', left_share * (1 - closing_share), 2, null from users
 )
-select s.deal_id, s.party_id, s.kind, s.share, round(m.gross * s.share, 2) as amount
-from commission_share s join commission m using (deal_id)
-union all
-select deal_id, owner_user_id, 'closing_user', left_share * closing_share, round(left_amount * closing_share, 2)
-from users
-union all
-select deal_id, partner_user_id, 'partner', left_share * (1 - closing_share),
-	left_amount - round(left_amount * closing_share, 2)
-from users;
+-- Each amount is the cents its running share adds, so none is negative and together they are the gross.
+select p.deal_id, p.party_id, p.kind, p.share,
+	round(m.gross * sum(p.share) over running, 2) - round(m.gross * (sum(p.share) over running - p.share), 2) as amount
+from parts p join commission m using (deal_id)
+window running as (partition by p.deal_id order by p.part, p.id);
 
 -- Everything that points at the duplicate moves to the survivor, and the duplicate is removed (decision 39).
 -- It runs with the owner's rights, because it also moves history the engine never rewrites, such as rounds and outside ids.
