@@ -4306,6 +4306,29 @@ test("the same extraction is stored once even without a model", () =>
 		await assert.rejects(db.query(extraction()), { code: "23505" });
 	}));
 
+test("a fact extraction keeps its successful receipt without pretending it produced page text", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${dealFile()}; ${extraction({ status: "receipt_only", pages: "{}", text_format_version: "fact-receipt.v1" })}`,
+		);
+		assert.deepEqual(
+			(await db.query("select status, pages, receipt from document_extraction"))
+				.rows,
+			[{ status: "receipt_only", pages: [], receipt: { canonical: false } }],
+		);
+	}));
+
+test("receipt-only extraction requires a receipt", () =>
+	rolledBack(async () => {
+		await db.query(dealFile());
+		await assert.rejects(
+			db.query(
+				extraction({ status: "receipt_only", pages: "{}", receipt: null }),
+			),
+			{ constraint: "document_extraction_status_matches_text" },
+		);
+	}));
+
 for (const sql of [
 	"delete from document",
 	"update document set r2_key = 'example/overwrite'",
@@ -4319,7 +4342,7 @@ for (const sql of [
 }
 
 for (const pages of [
-	"array_fill('Example', array[1001])",
+	"array_fill('Example'::text, array[1001])",
 	"array[repeat('x', 500001)]",
 ]) {
 	test(`extraction refuses oversized pages from ${pages}`, () =>

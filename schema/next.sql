@@ -760,7 +760,7 @@ create table document_extraction (
 	extractor_version text not null check (extractor_version ~ '\S'),
 	model text check (model ~ '\S'),
 	text_format_version text not null check (text_format_version ~ '\S'),
-	status text not null check (status in ('produced', 'no_text', 'unavailable')),
+	status text not null check (status in ('produced', 'no_text', 'unavailable', 'receipt_only')),
 	pages text[] not null,
 	receipt jsonb check (jsonb_typeof(receipt) = 'object'),
 	foreign key (document_id, deal_id) references document (id, deal_id),
@@ -770,7 +770,8 @@ create table document_extraction (
 		and cardinality(pages) <= 1000 and length(array_to_string(pages, '')) <= 500000),
 	constraint document_extraction_status_matches_text check (
 		(status = 'produced') = (array_to_string(pages, '') ~ '\S')
-		and (status <> 'unavailable' or cardinality(pages) = 0))
+		and (status not in ('unavailable', 'receipt_only') or cardinality(pages) = 0)
+		and (status <> 'receipt_only' or receipt is not null))
 );
 
 create table offer (
@@ -1634,7 +1635,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (lease, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- History (document, document_extraction, lease, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
