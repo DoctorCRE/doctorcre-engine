@@ -52,6 +52,8 @@ ${oldParty(10, {
 	cell: "1-217-555-0101",
 	contact_state: "do_not_contact",
 	contact_state_reason: " ",
+	specialty: "GP; Ortho, ORTHO,",
+	ref: "P-0010",
 })}
 ${oldParty(11, {
 	kind: "org",
@@ -67,18 +69,23 @@ ${oldParty(11, {
 	contact_state_reason: " Example asked us to stop ",
 	contact_state_set_by: PARTNER,
 	contact_state_set_at: "2025-05-06T07:08:09Z",
+	specialty: "Dental",
+	ref: " P-0011 ",
 })}
 ${oldParty(12, {
 	merged_into: id(10),
+	created_at: "2024-01-01T00:00:00Z",
 	npi: "9000000023",
 	email: "Merged@example.com avery@example.com",
 	cell: "217-555-0105",
+	specialty: " gp",
 })}
 ${oldParty(13, {
 	merged_into: id(12),
 	contact_state: "do_not_contact",
 	contact_state_reason: "Example asked again",
 	contact_state_set_at: "2025-07-08T09:10:11Z",
+	ref: "P-0013",
 })}
 ${oldParty(14, { deleted_at: "2026-01-05T00:00:00Z" })} ${oldParty(15, { merged_into: id(14) })}
 ${oldParty(16, {
@@ -87,6 +94,7 @@ ${oldParty(16, {
 	cell: "2175550103",
 	contact_state: "paused",
 	contact_state_until: "2027-01-04",
+	specialty: "\tPhysical Therapy",
 })}
 ${oldParty(18, { merged_into: id(16), npi: "9000000031" })}
 ${oldParty(17, {
@@ -94,7 +102,33 @@ ${oldParty(17, {
 	phone: "+44 20 7946 0958 x7",
 	cell: "217-555-0104 (fax)",
 	contact_state: "nurture",
+	specialty: "--",
 })}
+insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Example active', true, 10);
+insert into public.lead_stage (slug, label) values ('example', 'Example stage');
+insert into public.vendor (id, party_id, category, created_by, updated_by) values
+	('${id(40)}', '${id(16)}', 'example', '${SYSTEM}', '${SYSTEM}'),
+	('${id(41)}', '${id(17)}', 'example', '${SYSTEM}', '${SYSTEM}');
+insert into public.lead (id, party_id, stage, created_by, updated_by) values
+	('${id(42)}', '${id(11)}', 'example', '${SYSTEM}', '${SYSTEM}'),
+	('${id(43)}', '${id(14)}', 'example', '${SYSTEM}', '${SYSTEM}');
+insert into public.client (id, party_id, created_by, updated_by) values ('${id(44)}', '${id(12)}', '${SYSTEM}', '${SYSTEM}');
+insert into public.record_source (entity_type, entity_id, source_system, external_key) values
+	('vendor', '${id(40)}', 'vendors.xlsx', 'V-EX-001'),
+	('vendor', '${id(41)}', 'Vendors XLSX', 'V-EX-001'),
+	('lead', '${id(42)}', 'Lead Registry.', 'L-EX-002'),
+	('lead', '${id(43)}', 'lead-registry', 'L-EX-001'),
+	('client', '${id(44)}', 'client-roster', ' C-EX-001 '),
+	('client', '${id(44)}', 'dup_candidate', 'C-EX-001:C-EX-002'),
+	('client', '${id(44)}', '2024 import', 'X-EX-1'),
+	('client', '${id(44)}', 'client-roster-2', ' '),
+	('party', '${id(16)}', 'example-brokers', 'B-EX-1'),
+	('vendor', '${id(30)}', 'vendors.xlsx', 'V-EX-030'),
+	('contact', '${id(16)}', 'example-contacts', 'K-EX-1'),
+	('lead', '${id(17)}', 'lead-registry', 'L-EX-017'),
+	('party', '${id(11)}', 'Old System', 'X-EX-2'),
+	('activity', '${id(31)}', 'example-ledger', 'A-EX-1'),
+	('deal', '${id(32)}', 'example-deals', 'D-EX-1');
 `;
 
 const url = process.env.TEST_DATABASE_URL;
@@ -173,14 +207,25 @@ test("each value it does not copy is listed, with why", () => {
 		[id(11), "email", "ask the front desk", "not an email address"],
 		[id(11), "npi", NPI, `also held by ${id(10)}`],
 		[id(11), "phone", "555-0100", "not a phone number"],
+		[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
+		[id(11), "specialty", "Dental", "only a person holds a specialty"],
 		[id(12), "npi", "9000000023", "its record holds another NPI"],
+		[id(12), "record_source", "2024 import X-EX-1", "not an outside id"],
+		[id(12), "record_source", "client-roster-2  ", "not an outside id"],
+		[id(12), "record_source", "dup_candidate C-EX-001:C-EX-002", "a hint of a duplicate, not an id"],
 		[id(14), "party", "Example 14", "deleted"],
+		[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
 		[id(15), "party", "Example 15", "merged into a record not copied"],
 		[id(16), "contact_state", "paused until 2027-01-04", "no place in the new database"],
 		[id(16), "npi", "9000000016", "not an NPI"],
+		[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
 		[id(17), "cell", "217-555-0104 (fax)", "not a phone number"],
 		[id(17), "contact_state", "nurture", "no place in the new database"],
 		[id(17), "email", "@example.com; ok@example.com", "not an email address"],
+		[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
+		[id(17), "record_source", "Vendors XLSX V-EX-001", `also the id of ${id(16)}`],
+		[id(17), "specialty", "--", "not a specialty"],
+		[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
 	]);
 });
 
@@ -196,6 +241,7 @@ test("each row keeps when it was stored, and names the partner who last changed 
 		["party", "id"],
 		["party_email", "party_id"],
 		["party_phone", "party_id"],
+		["party_specialty", "person_id"],
 	] as const)
 		assert.deepEqual(
 			await rows(`select ${stamp} from ${table} where ${key} = '${id(10)}'`),
@@ -273,26 +319,79 @@ test("an NPI stays with the first record that holds it, and a survivor without o
 	);
 });
 
+test("a person's specialties are on the specialty list once however spelled, labelled as first typed", async () => {
+	assert.deepEqual(
+		await rows("select slug, label from specialty order by slug"),
+		[
+			{ slug: "gp", label: "gp" },
+			{ slug: "ortho", label: "Ortho" },
+			{ slug: "physical_therapy", label: "Physical Therapy" },
+		],
+	);
+	assert.deepEqual(
+		await rows(
+			"select person_id, specialty from party_specialty order by person_id, specialty",
+		),
+		[
+			{ person_id: id(10), specialty: "gp" },
+			{ person_id: id(10), specialty: "ortho" },
+			{ person_id: id(16), specialty: "physical_therapy" },
+		],
+	);
+});
+
+test("today's import history and reference numbers are outside ids of the record each old one became", async () => {
+	// biome-ignore format: one row per id
+	assert.deepEqual(await rows("select source, value, party_id from outside_id where source <> 'old_system' order by source, value"), [
+		{ source: "client_roster", value: "C-EX-001", party_id: id(10) },
+		{ source: "example_brokers", value: "B-EX-1", party_id: id(16) },
+		{ source: "lead_registry", value: "L-EX-002", party_id: id(11) },
+		{ source: "old_system_ref", value: "P-0010", party_id: id(10) },
+		{ source: "old_system_ref", value: "P-0011", party_id: id(11) },
+		{ source: "old_system_ref", value: "P-0013", party_id: id(10) },
+		{ source: "vendors_xlsx", value: "V-EX-001", party_id: id(16) },
+	]);
+});
+
 test("a second run copies only what is new, finds a record merged since through the map, and lists again what it left", () =>
 	rolledBack(async () => {
 		const merged = `select set_config('engine.user_id', '${PARTNER}', true), merge_party('${id(17)}', '${id(16)}');
-			${oldParty(20, { merged_into: id(17), email: "late@example.com" })} ${oldParty(21, { npi: ` ${NPI} ` })}`;
+			update specialty set label = 'Orthodontics' where slug = 'ortho';
+			${oldParty(20, { merged_into: id(17), email: "late@example.com" })}
+			${oldParty(21, { npi: ` ${NPI} `, specialty: "ORTHO", ref: "P-0021" })}
+			${oldParty(22, { merged_into: id(17), specialty: "Example" })}`;
 		// biome-ignore format: one row per value
 		assert.deepEqual(await copy(merged), [
+			[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
+			[id(12), "record_source", "2024 import X-EX-1", "not an outside id"],
+			[id(12), "record_source", "client-roster-2  ", "not an outside id"],
+			[id(12), "record_source", "dup_candidate C-EX-001:C-EX-002", "a hint of a duplicate, not an id"],
 			[id(14), "party", "Example 14", "deleted"],
+			[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
 			[id(15), "party", "Example 15", "merged into a record not copied"],
-			[id(20), "party", "Example 20", "merged into a record copied before, so its values are not copied"],
+			[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
+			[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
+			[id(20), "party", "Example 20", "merged into a record copied before, so its emails, phone numbers, NPI, specialties and do not contact are not copied"],
 			[id(21), "npi", ` ${NPI} `, `also held by ${id(10)}`],
+			[id(22), "party", "Example 22", "merged into a record copied before, so its emails, phone numbers, NPI, specialties and do not contact are not copied"],
+			[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
 		]);
 		assert.deepEqual(
 			await rows(
-				`select value, party_id from outside_id where value in ('${id(17)}', '${id(20)}', '${id(21)}') order by value`,
+				`select value, party_id from outside_id where value in ('${id(17)}', '${id(20)}', '${id(21)}', 'P-0021') order by value`,
 			),
 			[
 				{ value: id(17), party_id: id(16) },
 				{ value: id(20), party_id: id(16) },
 				{ value: id(21), party_id: id(21) },
+				{ value: "P-0021", party_id: id(21) },
 			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select s.slug, s.label from specialty s join party_specialty p on p.specialty = s.slug where p.person_id = '${id(21)}'`,
+			),
+			[{ slug: "ortho", label: "Orthodontics" }],
 		);
 	}));
 
@@ -302,12 +401,14 @@ test("after the copy, a change is stamped with who made it again", () =>
 			update party set name = 'Example renamed' where id = '${id(10)}';
 			update party_email set label = 'personal';
 			update party_phone set label = 'home';
-			insert into do_not_contact (party_id, reason) values ('${id(16)}', 'Example asked us to stop')`);
+			insert into do_not_contact (party_id, reason) values ('${id(16)}', 'Example asked us to stop');
+			insert into party_specialty (person_id, specialty) values ('${id(16)}', 'gp')`);
 		for (const table of [
 			"party",
 			"party_email",
 			"party_phone",
 			"do_not_contact",
+			"party_specialty",
 		])
 			assert.deepEqual(
 				await rows(

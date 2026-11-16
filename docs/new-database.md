@@ -178,7 +178,7 @@ Old reference ids, such as Salesforce ids and roster numbers, are kept in `outsi
 
 ## Copying today's people and companies
 
-`schema/copy-parties.sql` copies today's parties into the new database, with their emails, phone numbers, NPIs and do not contact. The owner runs it in one transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list: each old record or value it left behind, as typed, and why, for a partner to fix in today's system before the real run.
+`schema/copy-parties.sql` copies today's parties into the new database, with their emails, phone numbers, NPIs, do not contact, specialties and outside ids. The owner runs it in one transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list: each old record or value it left behind, as typed, and why, for a partner to fix in today's system before the real run.
 
 - Each record keeps its id and when it was stored, and `org` becomes `company`. Each partner, a `human` actor, becomes a person and a user under the actor's id.
 - `outside_id` maps each old id, under the source `old_system`, to the record it became. A merged-away old record maps to the record its merges end in. A merge in the new database moves the map, so later copies of deals, vendors and territories find each record through it. A second run copies only old records the map does not hold.
@@ -187,8 +187,8 @@ Old reference ids, such as Salesforce ids and roster numbers, are kept in `outsi
 - Emails and phone numbers follow "Emails and phone numbers" above. The first value stored is primary. An email holding an `@` that no address took is listed whole.
 - An NPI stays with the record that held it first: one already in the new database, or else the first stored. A second holder is copied without it and listed, since it may be the same person or company. So is a duplicate's NPI when its survivor holds another, and an NPI with a wrong check digit.
 - Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` and `nurture` have no place yet, so they are listed.
-
-Specialties and outside ids from today's `record_source` and `ref` follow in #263.
+- Today's free-text specialty is split at commas and semicolons. Spellings that differ only in case, spaces or punctuation are one specialty on the list, with a slug of lower case letters, digits and `_` and the spelling first typed as its label. One already on the list keeps its label. A company's specialty, and one with no ASCII letter or digit, is listed.
+- Today's `record_source` rows for a party, vendor, lead or client become outside ids of the record it became, and each party's `ref` one under `old_system_ref`. A source is lower-cased, with `_` for each run of anything but letters and digits, so `vendors.xlsx` becomes `vendors_xlsx`. A `dup_candidate` row only hints at a duplicate, so it is listed. So is a row for another kind of record, a row whose record is not copied, a source that folds to `old_system` or `old_system_ref`, which the copy keeps for itself, and an id another record already holds. Rows for deals, activity, events and loop items are left to the copies of those records.
 
 ## Offer rounds
 
