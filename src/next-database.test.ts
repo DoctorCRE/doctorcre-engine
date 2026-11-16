@@ -39,6 +39,7 @@ const TEAMMATE = id(21);
 const LEAD = id(660);
 
 const SEED = `
+insert into document_kind values ('loi', 'LOI'), ('lease', 'Lease'), ('amendment', 'Amendment'), ('invoice', 'Invoice'), ('other', 'Other');
 insert into role (slug, label, category_of) values
 	('client', 'Client', null), ('lead', 'Lead', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
 	('lender', 'Lender', 'vendor'), ('title', 'Title', 'vendor');
@@ -150,6 +151,7 @@ const rounds = ROUNDS.map(
 				id: id(200 + i),
 				name: `LOI round ${i + 1}.pdf`,
 				r2_key: `example/loi-${i + 1}.pdf`,
+				r2_bucket: "post_media",
 				content_type: null,
 				deal_id: null,
 				kind: null,
@@ -461,6 +463,7 @@ const STAMPED = [
 	"next_step",
 	"document",
 	"document_extraction",
+	"document_kind",
 	"email",
 	"offer",
 	"offer_document",
@@ -1929,7 +1932,8 @@ const CHANGEABLE: Record<string, string[]> = {
 	party_phone: ["is_primary", "label"],
 	activity: ["from_party_id", "happened_at", "summary"],
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
-	document: ["name"],
+	document: ["bytes", "content_type", "deal_id", "kind", "name", "sha256"],
+	document_kind: ["label"],
 	offer: ["status"],
 	critical_date: ["resolution_reason", "status"],
 	social_account: ["handle", "platform_account_id"],
@@ -4149,113 +4153,43 @@ const extraction = (row: Record<string, string | number | null> = {}) =>
 		...row,
 	});
 
-for (const [label, sql, refusal] of [
+// biome-ignore format: one row per refusal
+const FILE_REFUSALS = [
+	["unfiled kind", dealFile({ deal_id: null }), "document_deal_file_whole"],
+	[ "unfiled successor", dealFile({ deal_id: null, kind: null, version: 2, supersedes_id: id(200) }), "document_deal_file_whole", ],
+	[ "receipt-only pages", `${dealFile()}; ${extraction({ status: "receipt_only", pages: '{" "}' })}`, "document_extraction_status_matches_text", ],
+	[ "multidimensional pages", `${dealFile()}; ${extraction({ pages: '{{"Example"}}' })}`, "document_extraction_pages", ],
 	["missing deal", dealFile({ deal_id: MISSING }), "document_deal_id_fkey"],
 	["missing kind", dealFile({ kind: null }), "document_deal_file_whole"],
-	["blank kind", dealFile({ kind: " " }), "document_kind_check"],
+	["blank kind", dealFile({ kind: " " }), "document_kind_fkey"],
 	["missing hash", dealFile({ sha256: null }), "document_deal_file_whole"],
 	["invalid hash", dealFile({ sha256: "invalid" }), "document_sha256_check"],
 	["missing size", dealFile({ bytes: null }), "document_deal_file_whole"],
 	["empty file", dealFile({ bytes: 0 }), "document_bytes_check"],
-	[
-		"missing type",
-		dealFile({ content_type: null }),
-		"document_deal_file_whole",
-	],
+	[ "missing type", dealFile({ content_type: null }), "document_deal_file_whole", ],
 	["blank type", dealFile({ content_type: " " }), "document_deal_file_whole"],
 	["blank key", dealFile({ r2_key: " " }), "document_r2_key_check"],
 	["zero version", dealFile({ version: 0 }), "document_version_check"],
-	[
-		"missing predecessor",
-		dealFile({ version: 2 }),
-		"document_version_has_predecessor",
-	],
-	[
-		"orphan predecessor",
-		dealFile({ version: 2, supersedes_id: MISSING }),
-		"document_previous_version",
-	],
-	[
-		"skipped version",
-		`${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v3", version: 3, supersedes_id: DEAL_FILE })}`,
-		"document_previous_version",
-	],
-	[
-		"other deal predecessor",
-		`${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v2", version: 2, supersedes_id: DEAL_FILE, deal_id: LENDER_DEAL })}`,
-		"document_previous_version",
-	],
-	[
-		"other kind predecessor",
-		`${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v2", version: 2, supersedes_id: DEAL_FILE, kind: "loi" })}`,
-		"document_previous_version",
-	],
-	[
-		"reused key",
-		`${dealFile()}; ${dealFile({ id: id(8001) })}`,
-		"document_r2_key_key",
-	],
-	[
-		"unattached extraction",
-		extraction(),
-		"document_extraction_document_id_deal_id_fkey",
-	],
-	[
-		"other deal extraction",
-		`${dealFile()}; ${extraction({ deal_id: LENDER_DEAL })}`,
-		"document_extraction_document_id_deal_id_fkey",
-	],
-	[
-		"blank method",
-		`${dealFile()}; ${extraction({ method: " " })}`,
-		"document_extraction_method_check",
-	],
-	[
-		"blank extractor",
-		`${dealFile()}; ${extraction({ extractor_version: " " })}`,
-		"document_extraction_extractor_version_check",
-	],
-	[
-		"blank model",
-		`${dealFile()}; ${extraction({ model: " " })}`,
-		"document_extraction_model_check",
-	],
-	[
-		"blank text format",
-		`${dealFile()}; ${extraction({ text_format_version: " " })}`,
-		"document_extraction_text_format_version_check",
-	],
-	[
-		"unknown status",
-		`${dealFile()}; ${extraction({ status: "waiting" })}`,
-		"document_extraction_status_check",
-	],
-	[
-		"produced without text",
-		`${dealFile()}; ${extraction({ pages: "{}" })}`,
-		"document_extraction_status_matches_text",
-	],
-	[
-		"no text with text",
-		`${dealFile()}; ${extraction({ status: "no_text" })}`,
-		"document_extraction_status_matches_text",
-	],
-	[
-		"unavailable with pages",
-		`${dealFile()}; ${extraction({ status: "unavailable", pages: '{" "}' })}`,
-		"document_extraction_status_matches_text",
-	],
-	[
-		"null page",
-		`${dealFile()}; ${extraction({ pages: "{NULL}" })}`,
-		"document_extraction_pages",
-	],
-	[
-		"invalid receipt",
-		`${dealFile()}; ${extraction({ receipt: "[]" })}`,
-		"document_extraction_receipt_check",
-	],
-] satisfies [string, string, string][]) {
+	[ "missing predecessor", dealFile({ version: 2 }), "document_version_has_predecessor", ],
+	[ "orphan predecessor", dealFile({ version: 2, supersedes_id: MISSING }), "document_previous_version", ],
+	[ "skipped version", `${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v3", version: 3, supersedes_id: DEAL_FILE })}`, "document_previous_version", ],
+	[ "other deal predecessor", `${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v2", version: 2, supersedes_id: DEAL_FILE, deal_id: LENDER_DEAL })}`, "document_previous_version", ],
+	[ "other kind predecessor", `${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v2", version: 2, supersedes_id: DEAL_FILE, kind: "loi" })}`, "document_previous_version", ],
+	[ "reused key", `${dealFile()}; ${dealFile({ id: id(8001) })}`, "document_r2_bucket_r2_key_key", ],
+	[ "unattached extraction", extraction(), "document_extraction_document_id_deal_id_fkey", ],
+	[ "other deal extraction", `${dealFile()}; ${extraction({ deal_id: LENDER_DEAL })}`, "document_extraction_document_id_deal_id_fkey", ],
+	[ "blank method", `${dealFile()}; ${extraction({ method: " " })}`, "document_extraction_method_check", ],
+	[ "blank extractor", `${dealFile()}; ${extraction({ extractor_version: " " })}`, "document_extraction_extractor_version_check", ],
+	[ "blank model", `${dealFile()}; ${extraction({ model: " " })}`, "document_extraction_model_check", ],
+	[ "blank text format", `${dealFile()}; ${extraction({ text_format_version: " " })}`, "document_extraction_text_format_version_check", ],
+	[ "unknown status", `${dealFile()}; ${extraction({ status: "waiting" })}`, "document_extraction_status_check", ],
+	[ "produced without text", `${dealFile()}; ${extraction({ pages: "{}" })}`, "document_extraction_status_matches_text", ],
+	[ "no text with text", `${dealFile()}; ${extraction({ status: "no_text" })}`, "document_extraction_status_matches_text", ],
+	[ "unavailable with pages", `${dealFile()}; ${extraction({ status: "unavailable", pages: '{" "}' })}`, "document_extraction_status_matches_text", ],
+	[ "null page", `${dealFile()}; ${extraction({ pages: "{NULL}" })}`, "document_extraction_pages", ],
+	[ "invalid receipt", `${dealFile()}; ${extraction({ receipt: "[]" })}`, "document_extraction_receipt_check", ],
+] satisfies [string, string, string][];
+for (const [label, sql, refusal] of FILE_REFUSALS) {
 	test(`deal files refuse ${label}`, () =>
 		rolledBack(() => assert.rejects(db.query(sql), { constraint: refusal })));
 }
@@ -4391,4 +4325,72 @@ test("a job's extracted text keeps its own stamp and the user it worked for", ()
 				changed_for_user_id: USER,
 			},
 		]);
+	}));
+
+test("legacy whitespace-only pages keep their no-text status in every locale", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${dealFile()}; ${extraction({ status: "no_text", pages: '{"\u00a0\u0085\u001c\u001d\u001e\u001f"}' })}`,
+		);
+	}));
+
+test("an email attachment is filed once without copying its R2 object", () =>
+	rolledBack(async () => {
+		await db.query(
+			`update document set deal_id = '${DEAL}', kind = 'loi', content_type = 'application/pdf', sha256 = '${"a".repeat(64)}', bytes = 1024 where id = '${id(201)}'`,
+		);
+		const { rows } = await db.query(
+			`select deal_id, kind, r2_key, email_activity_id from document where id = '${id(201)}'`,
+		);
+		assert.deepEqual(rows, [
+			{
+				deal_id: DEAL,
+				kind: "loi",
+				r2_key: "example/loi-2.pdf",
+				email_activity_id: EMAIL,
+			},
+		]);
+		await assert.rejects(
+			db.query(
+				`update document set deal_id = '${LENDER_DEAL}' where id = '${id(201)}'`,
+			),
+			{ constraint: "document_filed_once" },
+		);
+	}));
+
+test("two buckets may use the same key but stored file metadata cannot change", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${dealFile()}; ${dealFile({ id: id(8001), r2_bucket: "deal_documents" })}`,
+		);
+		await assert.rejects(
+			db.query(
+				`update document set sha256 = '${"b".repeat(64)}' where id = '${DEAL_FILE}'`,
+			),
+			{ constraint: "document_filed_once" },
+		);
+	}));
+
+for (const column of ["deal_id", "kind", "sha256", "bytes", "content_type"]) {
+	test(`filed ${column} never clears or changes`, () =>
+		rolledBack(async () => {
+			await db.query(dealFile());
+			await assert.rejects(
+				db.query(
+					`update document set ${column} = null where id = '${DEAL_FILE}'`,
+				),
+				{ constraint: "document_filed_once" },
+			);
+		}));
+}
+
+test("filing preserves known attachment metadata", () =>
+	rolledBack(async () => {
+		await db.query(dealFile({ deal_id: null, kind: null }));
+		await assert.rejects(
+			db.query(
+				`update document set deal_id = '${DEAL}', kind = 'lease', bytes = 2048 where id = '${DEAL_FILE}'`,
+			),
+			{ constraint: "document_filed_once" },
+		);
 	}));

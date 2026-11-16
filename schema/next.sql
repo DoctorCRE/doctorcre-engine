@@ -723,17 +723,21 @@ create table document (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	name text not null,
-	r2_key text not null unique check (r2_key ~ '\S'),
+	r2_key text not null check (r2_key ~ '\S'),
+	r2_bucket text not null default 'post_media' check (r2_bucket in ('post_media', 'deal_documents')),
+	unique (r2_bucket, r2_key),
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
 	email_activity_id uuid references email,
 	unique (id, content_type)
 );
 
+create table document_kind (slug text primary key, label text not null);
+
 -- Deal files share documents with email attachments and post media; a replacement keeps the earlier bytes.
 alter table document
 	add deal_id uuid references deal,
-	add kind text check (kind ~ '^[-a-z0-9_]+$'),
+	add kind text references document_kind,
 	add version integer not null default 1 check (version >= 1),
 	add supersedes_id uuid unique,
 	add previous_version integer generated always as (nullif(version - 1, 0)) stored,
@@ -748,6 +752,24 @@ alter table document
 	add constraint document_version_has_predecessor check ((version = 1) = (supersedes_id is null)),
 	add constraint document_previous_version foreign key (supersedes_id, deal_id, kind, previous_version)
 		references document (id, deal_id, kind, version);
+
+create function document_filed_once() returns trigger
+language plpgsql as $$
+begin
+	if old.deal_id is not null or new.deal_id is null
+		or old.content_type is not null and new.content_type is distinct from old.content_type
+		or old.sha256 is not null and new.sha256 is distinct from old.sha256
+		or old.bytes is not null and new.bytes is distinct from old.bytes then
+		raise exception 'an attachment is filed to a deal once; stored file metadata never changes'
+			using errcode = 'check_violation', constraint = 'document_filed_once';
+	end if;
+	return new;
+end $$;
+
+create trigger document_filed_once before update on document
+	for each row when ((old.deal_id, old.kind, old.content_type, old.sha256, old.bytes)
+		is distinct from (new.deal_id, new.kind, new.content_type, new.sha256, new.bytes))
+	execute function document_filed_once();
 
 -- One completed attempt, including no text or failure, belongs to the exact stored file version.
 create table document_extraction (
@@ -766,10 +788,10 @@ create table document_extraction (
 	foreign key (document_id, deal_id) references document (id, deal_id),
 	unique nulls not distinct (document_id, method, extractor_version, model, text_format_version),
 	constraint document_extraction_pages check (
-		coalesce(array_ndims(pages), 1) = 1 and array_position(pages, null) is null
+		case when coalesce(array_ndims(pages), 1) = 1 then array_position(pages, null) is null else false end
 		and cardinality(pages) <= 1000 and length(array_to_string(pages, '')) <= 500000),
 	constraint document_extraction_status_matches_text check (
-		(status = 'produced') = (array_to_string(pages, '') ~ '\S')
+		(status = 'produced') = (translate(array_to_string(pages, ''), U&'\0009\000A\000B\000C\000D\001C\001D\001E\001F\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000', '') <> '')
 		and (status not in ('unavailable', 'receipt_only') or cardinality(pages) = 0)
 		and (status <> 'receipt_only' or receipt is not null))
 );
@@ -1500,7 +1522,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'lead_stage_move', 'next_step', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'lead_stage_move', 'next_step', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -1677,7 +1699,7 @@ grant delete on party, party_email, party_phone, do_not_contact, party_specialty
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found to engine;
+grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found to engine;
 grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
@@ -1709,3 +1731,5 @@ grant update (status) on lead_stage_move to engine;
 grant update (label) on lead_lane to engine;
 grant update (how_found_detail) on party to engine;
 grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) on party_role to engine;
+
+grant update (deal_id, kind, content_type, sha256, bytes) on document to engine;
