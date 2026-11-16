@@ -397,6 +397,11 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"client_type",
+	"client",
+	"national_account",
+	"client_brand",
+	"national_account_owner",
 	"role",
 	"stage",
 	"phase",
@@ -462,6 +467,10 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"client",
+	"national_account",
+	"client_brand",
+	"national_account_owner",
 	"party",
 	"party_email",
 	"party_phone",
@@ -1533,6 +1542,10 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	client_type: ["label"],
+	client: ["client_type", "status"],
+	client_brand: ["ended_on"],
+	national_account_owner: ["ended_on"],
 	role: ["label"],
 	stage: ["label"],
 	party_role: [
@@ -1575,7 +1588,15 @@ const DEFAULTED: Record<string, string[]> = {
 };
 const REMOVABLE = [
 	...STORED_AT.filter(
-		(table) => !["offer_document", "post_media"].includes(table),
+		(table) =>
+			![
+				"offer_document",
+				"post_media",
+				"client",
+				"national_account",
+				"client_brand",
+				"national_account_owner",
+			].includes(table),
 	),
 	"activity",
 	"email",
@@ -2531,6 +2552,7 @@ const COLLAPSED = [
 	"app_user_pkey",
 	"deal_party_pkey",
 	"do_not_contact_pkey",
+	"national_account_pkey",
 	"party_company_person_id_company_id_started_on_key",
 	"party_email_address_party_id_key",
 	"party_email_one_primary",
@@ -2622,3 +2644,256 @@ test("an import of a duplicate's id that waits on its merge is refused", async (
 		await Promise.all(sessions.map((session) => session.end()));
 	}
 });
+
+const BRAND = id(700);
+const NEXT_BRAND = id(701);
+const CLIENT_PROFILE = `
+insert into role (slug, label) values ('national_account', 'National account');
+insert into client_type values ('franchise', 'Franchise'), ('independent', 'Independent');
+insert into client (party_id, status, client_type) values ('${CLIENT}', 'engaged', 'franchise');
+insert into party (id, kind, name) values
+	('${BRAND}', 'company', 'Example Brand'), ('${NEXT_BRAND}', 'company', 'Example Next Brand');
+insert into party_role (party_id, role) values ('${BRAND}', 'national_account');
+insert into national_account (party_id) values ('${BRAND}');
+insert into client_brand (id, location_id, brand_id, started_on, ended_on)
+values ('${id(702)}', '${CLIENT}', '${BRAND}', '2020-01-01', '2026-01-01');
+insert into national_account_owner (id, account_id, owner_id, started_on, ended_on)
+values ('${id(703)}', '${BRAND}', '${AGENT}', '2020-01-01', '2026-01-01');
+`;
+
+test("clients derive active and past status from deals, keeping the manual status", async () => {
+	await rolledBack(async () => {
+		await db.query(CLIENT_PROFILE);
+		await db.query(`insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
+		insert into client (party_id, status) values ('${NEXT_BRAND}', 'engaged')`);
+		await db.query(`insert into deal (id, name) values ('${id(710)}', 'Example new work');
+		insert into deal_party (deal_id, party_id, role) values ('${id(710)}', '${NEXT_BRAND}', 'client');`);
+		const status = async () =>
+			(
+				await db.query(
+					`select status from client_status where party_id = '${NEXT_BRAND}'`,
+				)
+			).rows[0].status;
+		assert.equal(await status(), "active_deal");
+		await db.query(`insert into phase (slug, label) values ('closed', 'Closed');
+		insert into deal_phase_change values ('${id(710)}', '2026-04-01', 'closed', null)`);
+		assert.equal(await status(), "past_client");
+		await db.query(`insert into deal_phase_change values ('${id(710)}', '2026-05-01', 'dead', 'Example');
+		update client set status = 'paused', client_type = 'independent' where party_id = '${NEXT_BRAND}'`);
+		assert.equal(await status(), "past_client");
+		await db.query(
+			`insert into deal_phase_change values ('${id(710)}', '2026-06-01', 'legal', null)`,
+		);
+		assert.equal(await status(), "active_deal");
+		await db.query(
+			`delete from deal_party where deal_id = '${id(710)}' and role = 'client'`,
+		);
+		assert.equal(await status(), "paused");
+	});
+});
+
+test("a rebrand and a new outside owner keep the previous dated membership", async () => {
+	await rolledBack(async () => {
+		await db.query(CLIENT_PROFILE);
+		await db.query(`insert into client_brand (location_id, brand_id, started_on)
+		values ('${CLIENT}', '${NEXT_BRAND}', '2026-01-01');
+		insert into national_account_owner (account_id, owner_id, started_on)
+		values ('${BRAND}', '${USER}', '2026-01-01');
+		update client_brand set ended_on = '2027-01-01' where brand_id = '${NEXT_BRAND}';
+		update national_account_owner set ended_on = '2027-01-01' where owner_id = '${USER}';
+		update client_type set label = 'Example franchise' where slug = 'franchise'`);
+		for (const [date, national] of [
+			["2025-12-31", true],
+			["2026-01-01", false],
+		] as const) {
+			const { rows } = await db.query(
+				`select exists (select from client_brand b join national_account n
+			on n.party_id = b.brand_id where b.location_id = '${CLIENT}'
+			and daterange(b.started_on, b.ended_on) @> $1::date) as national`,
+				[date],
+			);
+			assert.equal(rows[0].national, national);
+		}
+		assert.deepEqual(
+			(
+				await db.query(
+					`select owner_id from national_account_owner order by started_on`,
+				)
+			).rows,
+			[{ owner_id: AGENT }, { owner_id: USER }],
+		);
+	});
+});
+
+const CLIENT_REFUSALS: Case[] = [
+	[`update client set status = 'active_deal'`, "client_status_check"],
+	[`update client set status = 'past_client'`, "client_status_check"],
+	[`update client set client_type = 'unknown'`, "client_client_type_fkey"],
+	[
+		`insert into client (party_id) values ('${AGENT}')`,
+		"client_party_id_role_fkey",
+	],
+	[
+		`insert into client (party_id, role) values ('${AGENT}', 'listing_agent')`,
+		"client_role_check",
+	],
+	[
+		`insert into party_role (party_id, role) values ('${USER}', 'national_account');
+	insert into national_account (party_id) values ('${USER}')`,
+		"national_account_party_id_kind_fkey",
+	],
+	[
+		`insert into national_account (party_id) values ('${NEXT_BRAND}')`,
+		"national_account_party_id_role_fkey",
+	],
+	[
+		`insert into national_account (party_id, role) values ('${CLIENT}', 'client')`,
+		"national_account_role_check",
+	],
+	[
+		`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${CLIENT}', '2026-01-01')`,
+		"client_brand_different_companies",
+	],
+	[
+		`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${AGENT}', '2026-01-01')`,
+		"client_brand_brand_id_brand_kind_fkey",
+	],
+	[
+		`insert into client_brand (location_id, brand_id, started_on) values ('${NEXT_BRAND}', '${BRAND}', '2026-01-01')`,
+		"client_brand_location_id_fkey",
+	],
+	[
+		`insert into party_role (party_id, role) values ('${USER}', 'client');
+	insert into client (party_id) values ('${USER}');
+	insert into client_brand (location_id, brand_id, started_on) values ('${USER}', '${BRAND}', '2026-01-01')`,
+		"client_brand_location_id_location_kind_fkey",
+	],
+	[`update client_brand set ended_on = '2020-01-01'`, "client_brand_check"],
+	[
+		`update national_account_owner set ended_on = '2020-01-01'`,
+		"national_account_owner_check",
+	],
+	[
+		`insert into national_account_owner (account_id, owner_id, started_on) values ('${BRAND}', '${CLIENT}', '2026-01-01')`,
+		"national_account_owner_owner_id_owner_kind_fkey",
+	],
+	[
+		`insert into national_account_owner (account_id, owner_id, started_on) values ('${NEXT_BRAND}', '${AGENT}', '2026-01-01')`,
+		"national_account_owner_account_id_fkey",
+	],
+	...(["client_brand", "national_account_owner"] as const).flatMap(
+		(table): Case[] => {
+			const columns =
+				table === "client_brand"
+					? "location_id, brand_id"
+					: "account_id, owner_id";
+			const values =
+				table === "client_brand"
+					? `'${CLIENT}', '${NEXT_BRAND}'`
+					: `'${BRAND}', '${USER}'`;
+			return [
+				[
+					`insert into ${table} (${columns}, started_on) values (${values}, '2025-01-01')`,
+					"client_link_without_overlap",
+				],
+				[
+					`insert into ${table} (${columns}, started_on) values (${values}, '2026-01-01'); update ${table} set ended_on = '2027-01-01' where started_on = '2020-01-01'`,
+					"client_link_without_overlap",
+				],
+			];
+		},
+	),
+];
+for (const [sql, refusal] of CLIENT_REFUSALS) {
+	test(`client rule refuses ${sql}`, async () => {
+		await rolledBack(async () => {
+			await db.query(CLIENT_PROFILE);
+			await assert.rejects(db.query(sql), expected(refusal));
+		});
+	});
+}
+
+test("a merge carries a client and its brand, and refuses conflicting profiles", async () => {
+	await rolledBack(async () => {
+		await db.query(CLIENT_PROFILE);
+		await db.query(`select merge_party('${BRAND}', '${NEXT_BRAND}')`);
+		assert.equal(
+			(await db.query(`select brand_id from client_brand`)).rows[0].brand_id,
+			NEXT_BRAND,
+		);
+		assert.equal(
+			(await db.query(`select account_id from national_account_owner`)).rows[0]
+				.account_id,
+			NEXT_BRAND,
+		);
+		await db.query(`insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
+		insert into client (party_id) values ('${NEXT_BRAND}')`);
+		await assert.rejects(
+			db.query(`select merge_party('${CLIENT}', '${NEXT_BRAND}')`),
+			expected("merge_party_client_profiles"),
+		);
+	});
+});
+
+test("a merge refuses two national account profiles", async () => {
+	await rolledBack(async () => {
+		await db.query(CLIENT_PROFILE);
+		await db.query(`insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'national_account');
+		insert into national_account (party_id) values ('${NEXT_BRAND}')`);
+		await assert.rejects(
+			db.query(`select merge_party('${BRAND}', '${NEXT_BRAND}')`),
+			expected("merge_party_client_profiles"),
+		);
+	});
+});
+
+for (const table of ["client_brand", "national_account_owner"]) {
+	test(`${table} serializes concurrent overlapping saves`, async () => {
+		const [first, second] = [await connect(), await connect()];
+		try {
+			await first.query(`begin; ${CLIENT_PROFILE}`);
+			await first.query("commit; begin");
+			const columns =
+				table === "client_brand"
+					? "location_id, brand_id"
+					: "account_id, owner_id";
+			const values =
+				table === "client_brand"
+					? `'${CLIENT}', '${NEXT_BRAND}'`
+					: `'${BRAND}', '${USER}'`;
+			const save = `insert into ${table} (${columns}, started_on) values (${values}, '2026-01-01')`;
+			await first.query(save);
+			await second.query("begin isolation level repeatable read");
+			const { pid } = (await second.query("select pg_backend_pid() as pid"))
+				.rows[0];
+			let settled = false;
+			const refusal = assert.rejects(
+				second.query(save).finally(() => {
+					settled = true;
+				}),
+				{ code: "40001" },
+			);
+			while (
+				!settled &&
+				!(
+					await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+						pid,
+					])
+				).rows[0].blocked
+			);
+			await first.query("commit");
+			await refusal;
+		} finally {
+			await first.query("rollback");
+			await second.query("rollback");
+			await Promise.all([first.end(), second.end()]);
+			// These fixtures committed only to let a second session see the same parents.
+			const owner = await connect("none");
+			await owner.query(`delete from client_brand; delete from national_account_owner;
+			delete from national_account; delete from client; delete from client_type;
+			delete from party_role where role = 'national_account'; delete from role where slug = 'national_account';
+			delete from party where id in ('${BRAND}', '${NEXT_BRAND}')`);
+			await owner.end();
+		}
+	});
+}

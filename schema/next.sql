@@ -399,6 +399,89 @@ left join worked w using (party_id)
 where v.role = 'vendor'
 group by v.party_id;
 
+-- Clients and national accounts (walkthrough 4, topic B).
+create table client_type (
+	slug text primary key,
+	label text not null
+);
+
+create table client (
+	party_id uuid primary key,
+	role text not null default 'client' check (role = 'client'),
+	created_at timestamptz not null default now(),
+	status text not null default 'roster' check (status in ('roster', 'cold', 'engaged', 'paused')),
+	client_type text references client_type,
+	foreign key (party_id, role) references party_role on update cascade
+);
+
+create table national_account (
+	party_id uuid primary key,
+	kind text generated always as ('company') stored,
+	role text not null default 'national_account' check (role = 'national_account'),
+	created_at timestamptz not null default now(),
+	foreign key (party_id, kind) references party (id, kind),
+	foreign key (party_id, role) references party_role on update cascade
+);
+
+create table client_brand (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	location_id uuid not null references client (party_id) on update cascade,
+	location_kind text generated always as ('company') stored,
+	brand_id uuid not null,
+	brand_kind text generated always as ('company') stored,
+	started_on date not null,
+	ended_on date check (ended_on > started_on),
+	constraint client_brand_different_companies check (location_id <> brand_id),
+	foreign key (location_id, location_kind) references party (id, kind),
+	foreign key (brand_id, brand_kind) references party (id, kind)
+);
+
+create table national_account_owner (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	account_id uuid not null references national_account (party_id) on update cascade,
+	owner_id uuid not null,
+	owner_kind text generated always as ('person') stored,
+	started_on date not null,
+	ended_on date check (ended_on > started_on),
+	foreign key (owner_id, owner_kind) references party (id, kind)
+);
+
+-- A no-op write serializes saves and refuses a stale repeatable-read snapshot.
+create function client_link_without_overlap() returns trigger
+language plpgsql as $$
+declare
+	parent_column text := case tg_table_name when 'client_brand' then 'location_id' else 'account_id' end;
+	parent_id uuid := (to_jsonb(new) ->> parent_column)::uuid;
+	has_overlap boolean;
+begin
+	execute format('update %I.party set name = name where id = $1', tg_table_schema) using parent_id;
+	execute format('select exists (select from %I.%I where %I = $1 and id <> $2
+		and daterange(started_on, ended_on) && daterange($3, $4))', tg_table_schema, tg_table_name, parent_column)
+		into has_overlap using parent_id, new.id, new.started_on, new.ended_on;
+	if has_overlap then
+		raise exception 'dated memberships and account owners never overlap'
+			using errcode = 'check_violation', constraint = 'client_link_without_overlap';
+	end if;
+	return new;
+end $$;
+
+create trigger client_link_without_overlap before insert or update on client_brand
+	for each row execute function client_link_without_overlap();
+create trigger client_link_without_overlap before insert or update on national_account_owner
+	for each row execute function client_link_without_overlap();
+
+create view client_status as
+select c.party_id, case
+	when exists (select from deal_party dp where dp.party_id = c.party_id and dp.role = 'client'
+		and coalesce((select phase from deal_phase_change p where p.deal_id = dp.deal_id
+			order by happened_at desc limit 1), '') not in ('closed', 'dead')) then 'active_deal'
+	when exists (select from deal_party dp join deal_phase_change p using (deal_id)
+		where dp.party_id = c.party_id and dp.role = 'client' and p.phase = 'closed') then 'past_client'
+	else c.status end as status
+from client c;
+
 create table activity (
 	id uuid primary key default gen_random_uuid(),
 	kind text not null check (kind in ('email', 'call', 'meeting', 'note')),
@@ -880,6 +963,13 @@ begin
 	perform set_config('engine.merge', duplicate::text, true);
 	insert into merged_party (id, survivor_id) values (duplicate, survivor);
 
+	-- Conflicting client or account profiles need a user to settle their dated history first.
+	if exists (select from client d join client s on s.party_id = survivor where d.party_id = duplicate)
+		or exists (select from national_account d join national_account s on s.party_id = survivor where d.party_id = duplicate) then
+		raise exception 'settle both client or national account profiles before merging'
+			using errcode = 'check_violation', constraint = 'merge_party_client_profiles';
+	end if;
+
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
@@ -1004,7 +1094,7 @@ begin
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'merged_party', 'change'] loop
+		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -1149,3 +1239,7 @@ grant update (status) on offer to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;
+
+grant update (label) on client_type to engine;
+grant update (status, client_type) on client to engine;
+grant update (ended_on) on client_brand, national_account_owner to engine;

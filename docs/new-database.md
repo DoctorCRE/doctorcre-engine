@@ -127,6 +127,11 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update or a delete.
 54. A change a merge makes names the merge, and only a merge saved in the same transaction is named.
 
+55. A client profile names its client role, has only roster, cold, engaged or paused as manual status, and takes its type from the client type list. Active deal and past client come from deals.
+56. A brand membership joins two different companies, its location has a client profile, and its dates never overlap another membership of that location.
+57. A national account is a company holding that role. Its dated owners are people, and their dates never overlap on one account. Membership and ownership end strictly after they start, with the end excluded.
+58. Client and account profiles and their dated links keep their parties and start dates. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
+
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
 ## Who may change what
@@ -191,6 +196,23 @@ Old reference ids, such as Salesforce ids and roster numbers, are kept in `outsi
 - Today's `record_source` rows for a party, vendor, lead or client become outside ids of the record it became, and each party's `ref` one under `old_system_ref`. A source is lower-cased, with `_` for each run of anything but letters and digits, so `vendors.xlsx` becomes `vendors_xlsx`. A `dup_candidate` row only hints at a duplicate, so it is listed. So is a row for another kind of record, a row whose record is not copied, a source that folds to `old_system` or `old_system_ref`, which the copy keeps for itself, and an id another record already holds. Rows for deals, activity, events and loop items are left to the copies of those records.
 - A person's company and title become a `party_company` row, with no dates, at the record the company became. A title comes from the survivor first, then its duplicates, and a title beats none. A company's own `org_id` is the national account it belongs to, which has no place until national accounts are designed, so it is listed. So are a company that is not copied or is a person, with the title held there, a title without a company, and a duplicate's other title at the same company.
 - `city`, `state`, `county`, `contact_state_cadence` and `notes_path` have no place yet, so each value is listed (#271).
+
+## Clients, brands and national accounts
+
+A `client` row extends its party's client role with a manual status and a `client_type` from the short list. The initial types are independent, group practice, DSO, franchise and regional system. Labels may change, like roles. Only roster, cold, engaged and paused are stored. `client_status` reports active_deal when any client deal's latest phase is neither closed nor dead, including a deal with no phase yet. Otherwise any closed phase in its history makes it past_client, and otherwise the manual status applies. An open deal wins over past work. A dead deal alone does not make a past client.
+
+A brand is a company. `client_brand` joins a client location company to a different brand company, with dates. Its dates include started_on and exclude ended_on, and an absent end means still a member. Memberships never overlap, even across brands. Ending one and starting the next on the same day preserves which brand held the location on each date. A franchisee has its own client row and franchise type; its deals name it, never its brand.
+
+A `national_account` is a company with that role. It need not itself be a client. `national_account_owner` names a person, including an outside agent who refers work, with dates under the same non-overlap rule. It does not name an app user or decide a deal's owner. The engine can end memberships and ownerships but cannot remove them or rewrite their parties or start dates. All five tables are stamped and their changes recorded. A merge moves a lone profile and its dated links; two client profiles or two account profiles are refused for a user to settle first, as are overlapping histories or a location becoming its own brand.
+
+For #273, national on a date means a `client_brand` membership covering that date whose `brand_id` joins `national_account.party_id`. A deal uses its location client and its own date for this join, so a later rebrand does not move old work. The current directory uses current_date instead. There is no stored national flag here.
+
+Moving today's rows across:
+
+- Each client becomes its party's client role and client row. Roster, cold, engaged and paused map directly. Active deal and past client are recomputed; those old labels supply no manual status, so start those records at roster.
+- The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. Vertical and subtype do not move as free text.
+- A company location's `party.org_id` becomes its brand membership. A person's org_id remains party_company. Existing national_account_owner rows map their human actor to its person; an outside owner's person is used directly. The old system lacks membership start dates and complete owner history, so a partner must supply the first known dates before copying these links. Never invent an earlier history.
+- Client owner and acquisition source belong to the lead and attribution slice, not account ownership. ETL status and agreements are excluded by the owner's B9 answer. No representation agreement table is added.
 
 ## Offer rounds
 
@@ -353,4 +375,4 @@ Today's system keeps one `event` row per field changed, with the actor, a verb a
 
 ## Later slices
 
-Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
