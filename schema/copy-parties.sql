@@ -1,4 +1,5 @@
--- Copies today's people and companies, with their emails, phone numbers and do not contact, into the new database.
+-- Copies today's people and companies, with their emails, phone numbers, do not contact, specialties and outside ids,
+-- into the new database.
 -- The owner runs it in one transaction, as psql --single-transaction does, with search_path set to the new schema.
 -- It only reads today's tables in public, and ends by listing each value it did not copy, for a partner to fix there.
 -- A record keeps its old id, and outside_id maps each old id, merged-away ones too, to the record it became.
@@ -11,6 +12,7 @@ alter table party disable trigger stamp_change;
 alter table party_email disable trigger stamp_change;
 alter table party_phone disable trigger stamp_change;
 alter table do_not_contact disable trigger stamp_change;
+alter table party_specialty disable trigger stamp_change;
 
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
@@ -85,7 +87,7 @@ insert into not_copied
 select id, 'party', name, 'merged into a record copied before, so its values are not copied'
 from old_party
 where survivor_id <> id and survivor_id not in (select id from copied) and survivor_id not in (select id from old_party)
-	and (concat(email, phone, cell, npi) ~ '\S' or contact_state <> 'active');
+	and (concat(email, phone, cell, npi, specialty) ~ '\S' or contact_state <> 'active');
 
 -- Each email or phone number as typed, in order, in the one form the new database stores, or null when it has none.
 create temp table typed_value on commit drop as
@@ -158,11 +160,76 @@ select id, 'contact_state', concat_ws(' until ', contact_state, contact_state_un
 	case contact_state when 'do_not_contact' then 'do not contact without a reason' else 'no place in the new database' end
 from chain where contact_state <> 'active' and not (contact_state = 'do_not_contact' and contact_state_reason ~ '\S');
 
+-- Each specialty typed, split at commas and semicolons. Spellings that differ only in case, spaces or punctuation
+-- are one specialty, labelled as first typed, and one already on the list keeps its label.
+create temp table typed_specialty on commit drop as
+select s.id as old_id, s.survivor_id as party_id, s.created_at, t.place, btrim(t.typed) as typed,
+	btrim(regexp_replace(lower(t.typed), '[^a-z0-9]+', '_', 'g'), '_') as slug
+from chain s cross join lateral regexp_split_to_table(s.specialty, '[,;]') with ordinality as t (typed, place)
+where t.typed ~ '\S';
+
+insert into specialty (slug, label)
+select distinct on (v.slug) v.slug, v.typed
+from typed_specialty v join copied p on p.id = v.party_id
+where p.kind = 'person' and v.slug <> '' and v.slug not in (select slug from specialty)
+order by v.slug, v.created_at, v.old_id, v.place;
+
+insert into party_specialty (person_id, specialty, created_at, changed_by_user_id, changed_by_job, changed_at)
+select distinct v.party_id, v.slug, p.created_at, p.changed_by_user_id, p.changed_by_job, p.updated_at
+from typed_specialty v join copied p on p.id = v.party_id
+where p.kind = 'person' and v.slug <> '';
+
+insert into not_copied
+select v.old_id, 'specialty', v.typed, case when v.slug = '' then 'not a specialty' else 'only a person holds a specialty' end
+from typed_specialty v join copied p on p.id = v.party_id
+where p.kind <> 'person' or v.slug = '';
+
+-- Today's import history and its own reference numbers become outside ids of the record each old one became.
+-- A source takes _ for any run of characters other than lower case letters and digits.
+create temp table typed_outside_id on commit drop as
+select v.old_id, v.field, v.typed, v.source, v.value, map.party_id, v.reason
+from (
+	select coalesce(o.party_id, r.entity_id) as old_id, 'record_source' as field,
+		concat_ws(' ', r.source_system, r.external_key) as typed,
+		btrim(regexp_replace(lower(r.source_system), '[^a-z0-9]+', '_', 'g'), '_') as source,
+		regexp_replace(r.external_key, '^\s+|\s+$', '', 'g') as value, o.party_id,
+		case when r.source_system = 'dup_candidate' then 'a hint of a duplicate, not an id' end as reason
+	from public.record_source r
+	left join (
+		select id, id as party_id from public.party
+		union all select id, party_id from public.vendor
+		union all select id, party_id from public.lead
+		union all select id, party_id from public.client
+	) as o on o.id = r.entity_id
+	-- The rest, such as a deal's or an activity's, come across with those records.
+	where r.entity_type in ('party', 'vendor', 'lead', 'client')
+	union all
+	select id, 'ref', ref, 'old_system_ref', regexp_replace(ref, '^\s+|\s+$', '', 'g'), id, null
+	from old_party where ref ~ '\S'
+) as v
+left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text;
+
+insert into outside_id (source, value, party_id)
+select distinct on (source, value) source, value, party_id
+from typed_outside_id v
+where reason is null and party_id is not null and source ~ '^[a-z][a-z0-9_]*$' and value ~ '\S'
+	and not exists (select from outside_id o where o.source = v.source and o.value = v.value)
+order by source, value, old_id;
+
+insert into not_copied
+select v.old_id, v.field, v.typed, coalesce(v.reason, case
+	when v.party_id is null then 'its record is not copied'
+	when v.source !~ '^[a-z][a-z0-9_]*$' or v.value !~ '\S' then 'not an outside id'
+	else 'also the id of ' || o.party_id end)
+from typed_outside_id v left join outside_id o using (source, value)
+where v.party_id is null or o.party_id is distinct from v.party_id;
+
 -- A partner's own person row names them, checked now, because a table with checks waiting cannot be altered.
 set constraints all immediate;
 alter table party enable trigger stamp_change;
 alter table party_email enable trigger stamp_change;
 alter table party_phone enable trigger stamp_change;
 alter table do_not_contact enable trigger stamp_change;
+alter table party_specialty enable trigger stamp_change;
 
 select * from not_copied order by old_id, field, value;
