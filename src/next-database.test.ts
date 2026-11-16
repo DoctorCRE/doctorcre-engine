@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { URL } from "node:url";
 import pg from "pg";
+import { asAdmin } from "../scripts/test-database.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -1601,7 +1602,6 @@ if (!url)
 	throw new Error("Run npm run check to restore the test database first");
 // Its own database, because this schema's trigger would change the count database.test.ts reads.
 const name = `engine_next_${randomUUID().replaceAll("-", "")}`;
-const admin = new pg.Client({ connectionString: url });
 const target = new URL(url);
 target.pathname = `/${name}`;
 // Every test works as the engine; only loading the schema needs its owner (role none).
@@ -1616,8 +1616,7 @@ const connect = async (role = "engine") => {
 let db: pg.Client;
 
 before(async () => {
-	await admin.connect();
-	await admin.query(`create database "${name}" template template0`);
+	await asAdmin(`create database "${name}" template template0`);
 	db = await connect("none");
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
@@ -1647,8 +1646,7 @@ before(async () => {
 
 after(async () => {
 	await db.end();
-	await admin.query(`drop database "${name}" with (force)`);
-	await admin.end();
+	await asAdmin(`drop database "${name}" with (force)`);
 });
 
 test("everything about the LOI deal comes back in one read, each list in order", async () => {
