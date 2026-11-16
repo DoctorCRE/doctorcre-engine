@@ -425,6 +425,23 @@ alter table party_role add owner_user_id uuid references app_user,
 	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
 	add constraint party_role_owner_on_lead check (owner_user_id is null or role = 'lead');
 
+create table lead_lane (
+	slug text primary key,
+	label text not null
+);
+
+alter table party add how_found_detail text check (how_found_detail ~ '\S'),
+	add constraint party_how_found_detail_has_source check (how_found_detail is null or how_found is not null);
+alter table party_role add lane text references lead_lane,
+	add estimated_lease_on date,
+	add lease_estimate_source text check (lease_estimate_source ~ '\S'),
+	add lease_estimate_confidence text check (lease_estimate_confidence in ('high', 'medium', 'low')),
+	add segment text check (segment ~ '\S'),
+	add constraint party_role_lease_estimate_has_source check ((estimated_lease_on is null) = (lease_estimate_source is null)),
+	add constraint party_role_lease_confidence_has_estimate check (lease_estimate_confidence is null or estimated_lease_on is not null),
+	add constraint party_role_working_details_on_lead check (role = 'lead'
+		or num_nonnulls(lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) = 0);
+
 create function lead_or_client_how_found() returns trigger
 language plpgsql as $$
 declare
@@ -1352,6 +1369,7 @@ declare
 	pointer record;
 	duplicate_npi text;
 	duplicate_how_found text;
+	duplicate_how_found_detail text;
 begin
 	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
 	perform from party where id in (duplicate, survivor) for update;
@@ -1400,7 +1418,11 @@ begin
 			order by array_position(array['parked', 'avoid'], ruling) desc nulls last, side limit 1),
 		is_target = (s.is_target or d.is_target) and coalesce(s.disposition, '') <> 'avoid'
 			and coalesce(d.disposition, '') <> 'avoid',
-		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id)
+		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id),
+		lane = coalesce(s.lane, d.lane), segment = coalesce(s.segment, d.segment),
+		lease_estimate_source = case when s.estimated_lease_on is null then d.lease_estimate_source else s.lease_estimate_source end,
+		lease_estimate_confidence = case when s.estimated_lease_on is null then d.lease_estimate_confidence else s.lease_estimate_confidence end,
+		estimated_lease_on = coalesce(s.estimated_lease_on, d.estimated_lease_on)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
@@ -1457,8 +1479,10 @@ begin
 		using survivor, duplicate;
 	end loop;
 
-	delete from party where id = duplicate returning npi, how_found into duplicate_npi, duplicate_how_found;
-	update party set npi = coalesce(npi, duplicate_npi), how_found = coalesce(how_found, duplicate_how_found)
+	delete from party where id = duplicate returning npi, how_found, how_found_detail into duplicate_npi, duplicate_how_found, duplicate_how_found_detail;
+	update party set npi = coalesce(npi, duplicate_npi),
+		how_found_detail = coalesce(how_found_detail, case when how_found is null or how_found = duplicate_how_found
+			then duplicate_how_found_detail end), how_found = coalesce(how_found, duplicate_how_found)
 	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
@@ -1514,7 +1538,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
@@ -1722,3 +1746,7 @@ grant delete on client, national_account, client_brand, national_account_owner t
 grant update (status) on proposal to engine;
 
 
+
+grant update (label) on lead_lane to engine;
+grant update (how_found_detail) on party to engine;
+grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) on party_role to engine;
