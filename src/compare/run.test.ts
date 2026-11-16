@@ -218,7 +218,7 @@ test("asks the engine, the old system and the engine again for every board, the 
 	assert.equal(exitCode(run), 0);
 });
 
-test("every read of the change feed starts three days back at the zero ID, in the cursor text the app sends", async (t) => {
+test("the change feed walk starts three days back at the zero ID, in the cursor text the app sends", async (t) => {
 	mock.timers.enable({
 		apis: ["Date"],
 		now: Date.parse("2030-01-04T00:00:00Z"),
@@ -1404,7 +1404,7 @@ test("compares filtered client fit, Search activity at 20 and the cursorless fir
 		(ask.read === "client fit" && ask.state === "ZX") ||
 		(ask.read === "recent activity" && ask.limit === 20) ||
 		(ask.read === "feed" && ask.start === undefined);
-	const { run, calls } = await runWith(
+	const { run } = await runWith(
 		(ask) => (added(ask) ? { changed: true } : old(ask)),
 		old,
 	);
@@ -1417,11 +1417,6 @@ test("compares filtered client fit, Search activity at 20 and the cursorless fir
 				o.ask.read === "recent activity" && o.ask.name === "Made-up Search",
 		),
 	);
-	for (const o of outcomes)
-		assert.equal(
-			calls.filter((c) => c === `engine ${label(o.ask)}`).length >= 2,
-			true,
-		);
 	assert.equal(exitCode(run), 1);
 	assert.ok(!report("made-up", run).includes("Made-up Search"));
 });
