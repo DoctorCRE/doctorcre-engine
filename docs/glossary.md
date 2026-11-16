@@ -22,11 +22,33 @@ _Database_: `app_user` in the new database, one row per user with their person's
 Any person or company we represent on a transaction.
 _Avoid_: customer, party, account
 _Database_: `client`, joined to `party` for its name; `client_name`, `client_ref` and `client_id` in the deal views.
+_New database_: a party with the `client` role. Someone is a client as soon as a deal is opened for them, signed or not.
+
+**Lead**:
+A person or company we may represent, not yet a client. A lead whose deal opens becomes a client and keeps its lead history.
+_Avoid_: prospect (a client status), contact
+_Database_: `lead` today, with `client_id` pointing at a client it was linked to; a party with the `lead` role in the new database.
+
+**Lead stage**:
+Where a lead stands: New, Qualified, Outreach Active, Engaged, Nurture, Opportunity or Archived. Nurture replaces drip campaigns.
+_Avoid_: phase (deals have phases), status
+_Database_: `lead.stage` and `lead_stage` today; `party_role.stage` on the lead role and `stage` in the new database.
+
+**Lead owner**:
+The user who works a lead. A lead's territory does not decide it.
+_Avoid_: assignee, territory owner
+_Database_: `lead.owner_id` today; `party_role.owner_user_id` on the lead role in the new database.
+
+**How found**:
+How we found a lead or client, from a short list, such as referral, vendor, marketing post, public records or cold outreach.
+_Avoid_: source on its own, lane (a radar lane), referral source
+_Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database.
 
 **Prospect**:
 The stage in between lead and client. A lead becomes a prospect when it turns warm, or a potential client becomes one when introduced. It stays a prospect until we represent them. An inactive prospect goes back to Leads.
 _Avoid_: lead (still on the Leads screen), on-deck client
 _Database_: `client.status = 'prospect'` with `client.prospect_engagement_status` (`active` or `inactive`); `v_client_engagement_status`.
+_New database_: no prospect status. Someone is a client once a deal is opened for them, and a deal in Prospective Client is not signed yet.
 
 **National account**:
 A franchise or multi-location brand that we serve as one main client. One partner is its account owner. Each location is a franchisee with its own deals. A deal outside our territory is likely a national-account deal.
@@ -172,6 +194,13 @@ A deal that is not active work for now, with a reason. Parking keeps the deal; r
 _Avoid_: on hold, inactive, archived, paused
 _Database_: `deal.operating_state` (`active` or `parked`), `parking_reason` (`prospect_never_active`, `client_paused`, `other`), `parking_note`, `parked_at`, `parked_by`.
 _Engine_: `operating_state`.
+_New database_: `deal.parking_reason`, none when active, and `deal.parking_note`. Who parked it and when is in change history.
+
+**Needs attention**:
+A flag a user sets on a deal to say it needs a look. Nothing sets it on its own.
+_Avoid_: flagged, urgent, priority
+_Database_: `deal.attention` today; `deal.needs_attention` in the new database.
+_Engine_: `attention`.
 
 **Pipeline call**:
 A sitting where a partner goes through the open deals and marks each reviewed or skipped.
@@ -184,3 +213,15 @@ The signed agreement for a deal's property, with sourced dates and terms. An ame
 
 **Lease option**:
 A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
+
+## Clients in the new database
+
+**Client status** is active deal when a client has open work, past client after closed work when none is open, and otherwise its manual roster, cold, engaged or paused status. `client_status` derives it; `client.status` holds only the manual value.
+
+**Brand membership** joins a client location company to its brand company for dates in `client_brand`. A franchisee is a client of type franchise with its own deals. Rebranding ends the old membership and begins another.
+
+**National account owner** is the person responsible for the account, including an outside referring agent. `national_account_owner` keeps dated ownership; a deal's owner is separate. `national_account` identifies the brand company, independently of client type.
+
+**Lead stage evidence**:
+An activity and its reference supporting a proposed or applied lead stage move. Weak job evidence waits for a user. Archiving always needs a user and a reason.
+_New database_: `lead_stage_move`. Ordinary stage edits and who and when stay in `change`.

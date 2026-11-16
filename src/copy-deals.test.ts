@@ -12,6 +12,10 @@ const schema = await readFile(
 	new URL("../schema/next.sql", import.meta.url),
 	"utf8",
 );
+const attribution = await readFile(
+	new URL("../schema/copy-attribution.sql", import.meta.url),
+	"utf8",
+);
 const copy = await readFile(
 	new URL("../schema/copy-deals.sql", import.meta.url),
 	"utf8",
@@ -33,7 +37,7 @@ const run = async (): Promise<pg.QueryResultRow[]> => {
 };
 const deal = (n: number, type = "lease") => `insert into public.deal
  (id, client_id, name, deal_type, phase, owner, created_by, updated_by, created_at, updated_at)
- values ('${id(n)}', '${id(3)}', 'Example deal ${n}', '${type}', 'negotiation', 'example-user', '${id(1)}', '${id(1)}', '2025-01-01', '2025-02-01');`;
+ values ('${id(n)}', '${id(3)}', 'Example deal ${n}', '${type}', 'negotiation', 'partner_one', '${id(1)}', '${id(1)}', '2025-01-01', '2025-02-01');`;
 let report: pg.QueryResultRow[];
 before(async () => {
 	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
@@ -41,12 +45,16 @@ before(async () => {
 		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
 	);
 	await db.connect();
-	await db.query(`create schema next; ${schema}`);
+	await db.query(`create schema next; ${schema}; ${attribution}`);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
- insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'example-user', 'human', 'Example User');
+ insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'company', 'Example Client'),
  ('${id(4)}', 'person', 'Example Agent'), ('${id(5)}', 'person', 'Example Other');
  insert into app_user values ('${id(1)}');
+ insert into how_found values ('referral', 'Example referral');
+ update party set how_found = 'referral';
+ insert into role (slug, label) values ('client', 'Example client');
+ insert into party_role (party_id, role) values ('${id(2)}', 'client'), ('${id(5)}', 'client');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(1)}', '${id(1)}'),
  ('old_system', '${id(2)}', '${id(2)}'), ('old_system', '${id(6)}', '${id(2)}'),
  ('old_system', '${id(4)}', '${id(4)}'), ('old_system', '${id(5)}', '${id(5)}');
@@ -275,6 +283,66 @@ test("unmappable links and phase history are listed instead of lost", async () =
 				"select slug from role where slug in ('lender', 'attorney', 'other_vendor')",
 			),
 			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("shared attribution carries agent and mail sponsorship onto deals, clients and phase changes", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`
+   insert into public.actor (id, slug, kind, display_name) values ('${id(200)}', 'codex', 'automation', 'Example agent'), ('${id(201)}', 'example-mail', 'automation', 'Example mail');
+   ${deal(30)} ${deal(31)}
+   update public.deal set updated_by = '${id(200)}' where id = '${id(30)}';
+   update public.deal set updated_by = '${id(201)}' where id = '${id(31)}';
+   insert into public.event (actor_id, verb, subject_type, subject_id, field, cause, occurred_at, new_value, sponsoring_human_slug) values
+   ('${id(200)}', 'example', 'deal', '${id(30)}', 'phase', 'human_stated', '2025-02-01', '{"phase":"negotiation"}', null),
+   ('${id(201)}', 'example', 'deal', '${id(31)}', 'phase', 'system', '2025-02-01', '{"phase":"negotiation"}', null),
+   ('${id(200)}', 'example', 'deal', '${id(30)}', 'phase', 'human_stated', '2025-03-01', '{"phase":"negotiation"}', 'partner_one'),
+   ('${id(201)}', 'example', 'deal', '${id(31)}', 'phase', 'ingest_email', '2025-03-01', '{"phase":"negotiation"}', 'partner_one');
+   update public.deal set owner = 'partner_one' where id in ('${id(30)}', '${id(31)}');`);
+		await run();
+		for (const table of ["deal", "deal_party", "deal_phase_change"]) {
+			const key = table === "deal" ? "id" : "deal_id";
+			assert.deepEqual(
+				(
+					await rows(
+						`select changed_by_user_id, changed_by_job, changed_for_user_id from ${table} where ${key} in ('${id(30)}', '${id(31)}') ${table === "deal_phase_change" ? "and happened_at = '2025-03-01'" : ""} order by ${key}`,
+					)
+				).map(Object.values),
+				[
+					[null, "agent", id(1)],
+					[null, "mail_capture", id(1)],
+				],
+				table,
+			);
+		}
+		assert.deepEqual(
+			(
+				await rows(
+					`select changed_by_job, changed_for_user_id from deal_phase_change where deal_id in ('${id(30)}', '${id(31)}') and happened_at = '2025-02-01' order by deal_id`,
+				)
+			).map(Object.values),
+			[
+				["agent", null],
+				["old_system", null],
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("a client without its required role is listed", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.client set party_id = '${id(4)}' where id = '${id(3)}'`,
+		);
+		assert.ok(
+			(await run()).some((row) => row.reason === "client_role_not_available"),
 		);
 	} finally {
 		await db.query("rollback");
