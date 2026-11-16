@@ -36,13 +36,16 @@ const CLOSED_DEAL = id(650);
 const DEAD_DEAL = id(651);
 const USER = id(20);
 const TEAMMATE = id(21);
+const LEAD = id(660);
 
 const SEED = `
 insert into role (slug, label, category_of) values
-	('client', 'Client', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
+	('client', 'Client', null), ('lead', 'Lead', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
 	('lender', 'Lender', 'vendor'), ('title', 'Title', 'vendor');
-insert into party (id, kind, name, npi) values
-	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}'), ('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}');
+insert into how_found values ('referral', 'Referral'), ('vendor', 'Vendor'), ('public_records', 'Public records');
+insert into party (id, kind, name, npi, how_found) values
+	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}', 'referral'),
+	('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}', null);
 insert into party (id, kind, name) values
 	('${AGENT}', 'person', 'Avery Example'),
 	('${LENDERS[0]}', 'company', 'Example Bank'), ('${LENDERS[1]}', 'company', 'Example Credit Union'),
@@ -309,6 +312,12 @@ insert into party_role (party_id, role, stage, relationship_level) values
 insert into introduction (id, vendor_id, made_by, introduced_party_id, introduced_on, deal_id) values
 	('${INTRODUCTION}', '${VENDOR}', 'vendor', '${CLIENT}', '2026-02-02', '${DEAL}');
 `;
+const LEAD_SEED = `
+insert into stage values
+	('lead', 'new', 'New'), ('lead', 'engaged', 'Engaged'), ('lead', 'nurture', 'Nurture'), ('lead', 'opportunity', 'Opportunity');
+insert into party (id, kind, name, how_found) values ('${LEAD}', 'person', 'Dr. Example Lead', 'public_records');
+insert into party_role (party_id, role, stage, owner_user_id) values ('${LEAD}', 'lead', 'nurture', '${TEAMMATE}');
+`;
 const newIntroduction = (row: Record<string, string | null>) =>
 	insert("introduction", {
 		vendor_id: VENDOR,
@@ -407,6 +416,7 @@ const STAMPED = [
 	"phase",
 	"deal_kind",
 	"deal_reason",
+	"how_found",
 	"party",
 	"merged_party",
 	"party_email",
@@ -1690,6 +1700,49 @@ const RULES: Record<string, Case[]> = {
 				"introduction_of_someone_else",
 			],
 		],
+	"a lead has a stage, and only a lead has an owner, who is a user": [
+		[
+			"update party_role set stage = null where role = 'lead'",
+			"party_role_lead_has_a_stage",
+		],
+		[
+			`update party_role set owner_user_id = '${USER}' where role = 'vendor'`,
+			"party_role_owner_on_lead",
+		],
+		[
+			`update party_role set owner_user_id = '${CLIENT}' where role = 'lead'`,
+			"party_role_owner_user_id_fkey",
+		],
+	],
+	"a lead or client says how they were found, from the list": [
+		[
+			`insert into party (id, kind, name) values ('${id(661)}', 'person', 'Example');
+			insert into party_role (party_id, role, stage) values ('${id(661)}', 'lead', 'new'); ${CHECK_AT_COMMIT}`,
+			"lead_or_client_how_found",
+		],
+		[
+			`insert into party_role values ('${AGENT}', 'client'); ${CHECK_AT_COMMIT}`,
+			"lead_or_client_how_found",
+		],
+		[
+			`update party set how_found = null where id = '${LEAD}'`,
+			"lead_or_client_how_found",
+		],
+		[
+			`update party set how_found = 'billboard' where id = '${LEAD}'`,
+			"party_how_found_fkey",
+		],
+	],
+	"someone a deal is opened for is a client": [
+		[
+			`insert into deal_party values ('${DEAL}', '${LEAD}', 'client'); ${CHECK_AT_COMMIT}`,
+			"deal_party_client_is_a_client",
+		],
+		[
+			`delete from party_role where party_id = '${CLIENT}' and role = 'client'; ${CHECK_AT_COMMIT}`,
+			"deal_party_client_is_a_client",
+		],
+	],
 	"history is never added, rewritten or removed by hand": [
 		[
 			"select erase_change(1, array['summary'])",
@@ -1834,10 +1887,12 @@ const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
 	do_not_contact: ["until_date"],
 	stage: ["label"],
+	how_found: ["label"],
 	party_role: [
 		"disposition",
 		"disposition_reason",
 		"is_target",
+		"owner_user_id",
 		"relationship_level",
 		"stage",
 	],
@@ -1846,7 +1901,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	deal_kind: ["label"],
 	deal_reason: ["label"],
 	specialty: ["label"],
-	party: ["name", "npi"],
+	party: ["how_found", "name", "npi"],
 	property: ["address", "county_fips", "latitude", "longitude"],
 	market: ["name"],
 	territory: ["name"],
@@ -1961,7 +2016,7 @@ before(async () => {
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
 	await db.query(
-		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED}`,
+		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED}`,
 	);
 	for (const { documents, ...round } of rounds) {
 		await db.query(
@@ -2017,6 +2072,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				kind: "company",
 				name: "Example Dental Group",
 				npi: NPIS[0],
+				how_found: "referral",
 				role: "client",
 			},
 			{
@@ -2024,6 +2080,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				kind: "person",
 				name: "Avery Example",
 				npi: null,
+				how_found: null,
 				role: "listing_agent",
 			},
 		],
@@ -2388,6 +2445,58 @@ test("a merge moves a vendor's introductions, keeps avoid and clears target, and
 					["title", null, null, null, null, false],
 					["vendor", "warm", 1, "avoid", "Example: slow to close", false],
 				],
+			},
+		]);
+	}));
+
+// How a party was found, its roles with each one's stage and owner, and the deals it is the client of.
+const asLeadOrClient = async (party: string) =>
+	(
+		await db.query(
+			`select how_found,
+				(select jsonb_agg(jsonb_build_array(role, stage, owner_user_id) order by role) from party_role where party_id = $1)
+					as roles,
+				(select array_agg(deal_id order by deal_id) from deal_party where party_id = $1 and role = 'client') as deals
+			from party where id = $1`,
+			[party],
+		)
+	).rows;
+
+test("a lead becomes a client when a deal is opened for them, and keeps its stage, owner and how it was found", () =>
+	rolledBack(async () => {
+		await db.query(`insert into deal (id, name, owner_user_id) values ('${id(662)}', 'Example Lead Deal', '${TEAMMATE}');
+			insert into deal_party values ('${id(662)}', '${LEAD}', 'client');
+			insert into party_role (party_id, role) values ('${LEAD}', 'client'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(await asLeadOrClient(LEAD), [
+			{
+				how_found: "public_records",
+				roles: [
+					["client", null, null],
+					["lead", "nurture", TEAMMATE],
+				],
+				deals: [id(662)],
+			},
+		]);
+	}));
+
+test("a merge keeps the survivor's lead owner and how it was found, filled from the duplicate's, and moves its deals as client", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values
+				('${DUPLICATE}', 'person', 'Dr. E. Lead', 'vendor'), ('${OLD}', 'person', 'Dr. Lead', null);
+			insert into party_role (party_id, role, stage, owner_user_id) values
+				('${DUPLICATE}', 'lead', 'engaged', '${USER}'), ('${DUPLICATE}', 'client', null, null),
+				('${OLD}', 'lead', 'new', null);
+			insert into deal_party values ('${LENDER_DEAL}', '${DUPLICATE}', 'client');
+			select merge_party('${DUPLICATE}', '${LEAD}');
+			select merge_party('${LEAD}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(await asLeadOrClient(OLD), [
+			{
+				how_found: "public_records",
+				roles: [
+					["client", null, null],
+					["lead", "new", TEAMMATE],
+				],
+				deals: [LENDER_DEAL],
 			},
 		]);
 	}));

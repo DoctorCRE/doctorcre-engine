@@ -22,11 +22,33 @@ _Database_: `app_user` in the new database, one row per user with their person's
 Any person or company we represent on a transaction.
 _Avoid_: customer, party, account
 _Database_: `client`, joined to `party` for its name; `client_name`, `client_ref` and `client_id` in the deal views.
+_New database_: a party with the `client` role. Someone is a client as soon as a deal is opened for them, signed or not.
+
+**Lead**:
+A person or company we may represent, not yet a client. A lead whose deal opens becomes a client and keeps its lead history.
+_Avoid_: prospect (a client status), contact
+_Database_: `lead` today, with `client_id` pointing at a client it was linked to; a party with the `lead` role in the new database.
+
+**Lead stage**:
+Where a lead stands: New, Qualified, Outreach Active, Engaged, Nurture, Opportunity or Archived. Nurture replaces drip campaigns.
+_Avoid_: phase (deals have phases), status
+_Database_: `lead.stage` and `lead_stage` today; `party_role.stage` on the lead role and `stage` in the new database.
+
+**Lead owner**:
+The user who works a lead. A lead's territory does not decide it.
+_Avoid_: assignee, territory owner
+_Database_: `lead.owner_id` today; `party_role.owner_user_id` on the lead role in the new database.
+
+**How found**:
+How we found a lead or client, from a short list, such as referral, vendor, marketing post, public records or cold outreach.
+_Avoid_: source on its own, lane (a radar lane), referral source
+_Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database.
 
 **Prospect**:
 The stage in between lead and client. A lead becomes a prospect when it turns warm, or a potential client becomes one when introduced. It stays a prospect until we represent them. An inactive prospect goes back to Leads.
 _Avoid_: lead (still on the Leads screen), on-deck client
 _Database_: `client.status = 'prospect'` with `client.prospect_engagement_status` (`active` or `inactive`); `v_client_engagement_status`.
+_New database_: no prospect status. Someone is a client once a deal is opened for them, and a deal in Prospective Client is not signed yet.
 
 **National account**:
 A franchise or multi-location brand that we serve as one main client. One partner is its account owner. Each location is a franchisee with its own deals. A deal outside our territory is likely a national-account deal.

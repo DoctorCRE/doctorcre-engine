@@ -384,6 +384,52 @@ create table deal_party (
 	primary key (deal_id, party_id, role)
 );
 
+-- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
+
+-- How a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
+create table how_found (
+	slug text primary key,
+	label text not null
+);
+
+-- A fact about the person or company, so it holds in every role and a lead that becomes a client copies nothing.
+alter table party add how_found text references how_found;
+
+-- A lead's stage comes from the lead stages, and its owner is the user who works it. None means nobody works it yet.
+alter table party_role add owner_user_id uuid references app_user,
+	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
+	add constraint party_role_owner_on_lead check (owner_user_id is null or role = 'lead');
+
+create function lead_or_client_how_found() returns trigger
+language plpgsql as $$
+declare
+	-- The trigger names the column that holds the party.
+	wanted uuid := to_jsonb(new) ->> tg_argv[0];
+begin
+	if exists (select from party p
+		where p.id = wanted and p.how_found is null
+			and exists (select from party_role where party_id = p.id and role in ('lead', 'client'))) then
+		raise exception 'a lead or client says how they were found'
+			using errcode = 'check_violation', constraint = 'lead_or_client_how_found';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, so a person and their role can be saved in either order. A merge moves a role only with how it was found.
+create constraint trigger lead_or_client_how_found after insert on party_role
+	initially deferred for each row when (new.role in ('lead', 'client'))
+	execute function lead_or_client_how_found('party_id');
+-- Only clearing it can break the rule.
+create constraint trigger lead_or_client_how_found after update of how_found on party
+	for each row when (old.how_found is not null and new.how_found is null)
+	execute function lead_or_client_how_found('id');
+
+-- Someone is a client once a deal is opened for them, signed or not. The client role's row keeps when that was.
+-- Deferred, so the role and the deal can be saved in either order, and a merge can move both.
+alter table deal_party add client_role text generated always as (case when role = 'client' then role end) stored,
+	add constraint deal_party_client_is_a_client foreign key (party_id, client_role) references party_role
+		deferrable initially deferred;
+
 -- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
 create table introduction (
 	id uuid primary key default gen_random_uuid(),
@@ -1091,6 +1137,7 @@ language plpgsql security definer as $$
 declare
 	pointer record;
 	duplicate_npi text;
+	duplicate_how_found text;
 begin
 	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
 	perform from party where id in (duplicate, survivor) for update;
@@ -1114,7 +1161,7 @@ begin
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
-	-- Its stage and level stay too, and the duplicate's fill any it lacks. A target on either holds.
+	-- Its stage, level and lead owner stay too, and the duplicate's fill any it lacks. A target on either holds.
 	-- The stricter ruling stays with its reason, so a merge never puts an avoided vendor back in play.
 	update party_role s set stage = coalesce(s.stage, d.stage),
 		relationship_level = coalesce(s.relationship_level, d.relationship_level),
@@ -1123,7 +1170,8 @@ begin
 			from (values (s.disposition, s.disposition_reason, 1), (d.disposition, d.disposition_reason, 2)) r (ruling, reason, side)
 			order by array_position(array['parked', 'avoid'], ruling) desc nulls last, side limit 1),
 		is_target = (s.is_target or d.is_target) and coalesce(s.disposition, '') <> 'avoid'
-			and coalesce(d.disposition, '') <> 'avoid'
+			and coalesce(d.disposition, '') <> 'avoid',
+		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
@@ -1180,8 +1228,9 @@ begin
 		using survivor, duplicate;
 	end loop;
 
-	delete from party where id = duplicate returning npi into duplicate_npi;
-	update party set npi = coalesce(npi, duplicate_npi) where id = survivor;
+	delete from party where id = duplicate returning npi, how_found into duplicate_npi, duplicate_how_found;
+	update party set npi = coalesce(npi, duplicate_npi), how_found = coalesce(how_found, duplicate_how_found)
+	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
 
@@ -1236,7 +1285,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
@@ -1414,12 +1463,12 @@ grant delete on party, party_email, party_phone, do_not_contact, party_specialty
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason to engine;
-grant update (stage, relationship_level, disposition, disposition_reason, is_target) on party_role to engine;
+grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found to engine;
+grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value) on deal to engine;
-grant update (npi) on party to engine;
+grant update (npi, how_found) on party to engine;
 grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
