@@ -15,8 +15,9 @@ const NPI = "9000000015";
 
 const read = (file: string) =>
 	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const [SCHEMA, COPY] = await Promise.all([
+const [SCHEMA, ATTRIBUTION, COPY] = await Promise.all([
 	read("next.sql"),
+	read("copy-attribution.sql"),
 	read("copy-parties.sql"),
 ]);
 
@@ -35,7 +36,7 @@ const oldParty = (n: number, row: Record<string, string> = {}) => {
 };
 const OLD = `
 insert into public.actor (id, slug, kind, display_name) values
-	('${PARTNER}', 'example-partner', 'human', 'Jordan Example'),
+	('${PARTNER}', 'partner_one', 'human', 'Jordan Example'),
 	('${AUTOMATION}', 'example-job', 'automation', 'Example job'),
 	('${SYSTEM}', 'example-system', 'system', 'Example system');
 insert into public.contact_state (slug, label, contactable, sort) values
@@ -182,7 +183,7 @@ before(async () => {
 	await admin.connect();
 	await admin.query(`create database "${name}" template "${snapshot}"`);
 	await db.connect();
-	await db.query(`create schema next; ${SCHEMA}`);
+	await db.query(`create schema next; ${SCHEMA} ${ATTRIBUTION}`);
 	report = await copy(OLD);
 });
 
@@ -462,4 +463,137 @@ test("after the copy, a change is stamped with who made it again", () =>
 				[{ changed_by_user_id: PARTNER, changed_by_job: null }],
 				table,
 			);
+	}));
+
+test("copied rows share the last author's job and sponsor across every copied value", () =>
+	rolledBack(async () => {
+		const agents = ["claude", "codex", "grok", "joe-local", "dell-local"];
+		await db.query(
+			agents
+				.map(
+					(slug, i) =>
+						`insert into public.actor (id, slug, kind, display_name)
+			values ('${id(100 + i)}', '${slug}', 'automation', 'Example runtime ${i}');`,
+				)
+				.join(""),
+		);
+		const cases = [
+			...agents.map((_, i) => ({
+				author: id(100 + i),
+				cause: "human_stated",
+				job: "agent",
+				sponsor: PARTNER,
+			})),
+			{
+				author: id(100),
+				cause: "ingest_email",
+				job: "agent",
+				sponsor: PARTNER,
+			},
+			{
+				author: AUTOMATION,
+				cause: "ingest_email",
+				job: "mail_capture",
+				sponsor: PARTNER,
+			},
+			{
+				author: AUTOMATION,
+				cause: "automation_job",
+				job: "old_system",
+				sponsor: null,
+			},
+			{
+				author: SYSTEM,
+				cause: "ingest_email",
+				job: "old_system",
+				sponsor: null,
+			},
+			{ author: PARTNER, cause: "ingest_email", job: null, sponsor: null },
+		];
+		let sql = "";
+		for (const [i, row] of cases.entries()) {
+			sql += oldParty(200 + i, {
+				updated_by: row.author,
+				email: `example${i}@example.com`,
+				phone: "2175550100",
+				specialty: "Example specialty",
+				org_id: id(11),
+				title: "Example title",
+				contact_state: "do_not_contact",
+				contact_state_reason: "Example request",
+				contact_state_set_by: row.author,
+			});
+			sql += `insert into public.event (actor_id, verb, subject_type, subject_id, field, cause, occurred_at, sponsoring_human_slug)
+				values ('${row.author}', 'example', 'party', '${id(200 + i)}', 'contact_state', '${row.cause}', now(), 'partner_one');`;
+		}
+		await copy(sql);
+		for (const [i, row] of cases.entries()) {
+			for (const [table, key] of [
+				["party", "id"],
+				["party_email", "party_id"],
+				["party_phone", "party_id"],
+				["party_specialty", "person_id"],
+				["party_company", "person_id"],
+				["do_not_contact", "party_id"],
+			]) {
+				assert.deepEqual(
+					await rows(`select changed_by_user_id, changed_by_job, changed_for_user_id
+					from ${table} where ${key} = '${id(200 + i)}'`),
+					[
+						{
+							changed_by_user_id: row.job === null ? PARTNER : null,
+							changed_by_job: row.job,
+							changed_for_user_id: row.sponsor,
+						},
+					],
+					`${i} ${table}`,
+				);
+			}
+		}
+	}));
+
+test("the latest mutation supplies the sponsor only for its author, record and field", () =>
+	rolledBack(async () => {
+		await db.query(`insert into public.actor (id, slug, kind, display_name)
+			values ('${id(100)}', 'codex', 'automation', 'Example runtime');
+			insert into public.event (actor_id, verb, subject_type, subject_id, field, cause, occurred_at, sponsoring_human_slug) values
+			('${AUTOMATION}', 'example', 'party', '${id(10)}', 'contact_state', 'ingest_email', '2026-01-02', 'partner_one'),
+			('${id(100)}', 'example', 'party', '${id(10)}', 'name', 'human_stated', '2026-01-01', null),
+			('${AUTOMATION}', 'example', 'deal', '${id(10)}', null, 'ingest_email', now(), 'partner_one'),
+			('${AUTOMATION}', 'example', 'party', '${id(11)}', null, 'ingest_email', now(), 'partner_one');`);
+		const stamp = (author: string, field = "null") =>
+			rows(
+				`select * from copy_attribution('party', '${id(10)}', '${author}', ${field})`,
+			);
+		assert.deepEqual(await stamp(id(100)), [
+			{
+				changed_by_user_id: null,
+				changed_by_job: "agent",
+				changed_for_user_id: null,
+			},
+		]);
+		assert.deepEqual(await stamp(AUTOMATION), [
+			{
+				changed_by_user_id: null,
+				changed_by_job: "old_system",
+				changed_for_user_id: null,
+			},
+		]);
+		assert.deepEqual(await stamp(AUTOMATION, "'contact_state'"), [
+			{
+				changed_by_user_id: null,
+				changed_by_job: "mail_capture",
+				changed_for_user_id: PARTNER,
+			},
+		]);
+		assert.deepEqual(
+			await rows(`select * from copy_attribution('party', '${id(99)}', null)`),
+			[
+				{
+					changed_by_user_id: null,
+					changed_by_job: "old_system",
+					changed_for_user_id: null,
+				},
+			],
+		);
 	}));
