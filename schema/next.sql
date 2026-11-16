@@ -637,7 +637,6 @@ create table lead_stage_move (
 	activity_id uuid references activity,
 	evidence_ref text check (evidence_ref ~ '\S'),
 	strength text not null check (strength in ('strong', 'weak')),
-	status text not null default 'applied' check (status = 'applied'),
 	reason text check (reason ~ '\S'),
 	unique (party_id, from_stage, to_stage, activity_id),
 	constraint lead_stage_move_has_evidence check (to_stage = 'archived' or (activity_id is not null and evidence_ref is not null)),
@@ -685,7 +684,7 @@ begin
 	if (tg_op = 'UPDATE' and new.changed_by_job is not null and new.changed_for_user_id is null or new.stage = 'archived')
 		and not exists (select from lead_stage_move m
 			where m.party_id = new.party_id and m.from_stage = old.stage and m.to_stage = new.stage
-				and m.status = 'applied' and m.changed_at = now()
+				and m.changed_at = now()
 				and m.changed_by_user_id is not distinct from new.changed_by_user_id
 				and m.changed_by_job is not distinct from new.changed_by_job) then
 		raise exception 'a job stage move or an archive needs its applied evidence'
@@ -735,8 +734,10 @@ create table proposal (
 	from_stage text,
 	to_stage text,
 	how_found text references how_found,
+	strength text check (strength in ('strong', 'weak')),
 	reason text check (reason ~ '\S'),
 	foreign key (activity_id, activity_kind) references activity (id, kind),
+	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
 	foreign key (lead_role, from_stage) references stage (role, slug),
 	foreign key (lead_role, to_stage) references stage (role, slug),
 	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
@@ -744,16 +745,20 @@ create table proposal (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
 		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
 	constraint proposal_payload check ((
-		(kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found) = 0)
+		(kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'phase_move' and deal_id is not null and to_phase is not null
 			and from_phase is distinct from to_phase and (to_phase <> 'dead' or reason is not null)
-			and num_nonnulls(what, owner_party_id, due_on, from_stage, to_stage, how_found) = 0)
+			and num_nonnulls(what, owner_party_id, due_on, from_stage, to_stage, how_found, strength) = 0)
 		or (kind = 'new_lead' and party_id is not null and to_stage = 'new' and how_found is not null
-			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage) = 0)
-		or (kind = 'lead_stage_move' and party_id is not null and from_stage is not null and to_stage is not null
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, reason, strength) = 0)
+		or (kind = 'lead_stage_move' and strength is not null and party_id is not null and from_stage is not null and to_stage is not null
 			and from_stage <> to_stage and (to_stage <> 'archived' or reason is not null)
 			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, how_found) = 0)) is true)
 );
+
+create unique index proposal_source_payload_once on proposal
+	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found)
+	nulls not distinct;
 
 create function decide_proposal() returns trigger
 language plpgsql as $$
@@ -765,15 +770,15 @@ begin
 	if tg_op = 'INSERT' then
 		if new.status <> 'pending' or new.decided_by_user_id is not null or new.decided_at is not null
 			or acting_job is distinct from new.proposed_by_job then
-			raise exception 'a job creates a pending proposal' using errcode = '23514', constraint = 'proposal_starts_pending';
+			raise exception 'a job creates a pending proposal' using errcode = 'check_violation', constraint = 'proposal_starts_pending';
 		end if;
 		return new;
 	end if;
 	if old.status <> 'pending' or new.status not in ('accepted', 'dismissed') then
-		raise exception 'a pending proposal is decided once' using errcode = '23514', constraint = 'proposal_final';
+		raise exception 'a pending proposal is decided once' using errcode = 'check_violation', constraint = 'proposal_final';
 	end if;
 	if acting_job is not null or acting_user is null then
-		raise exception 'only a direct user decides a proposal' using errcode = '23514', constraint = 'proposal_user_decides';
+		raise exception 'only a direct user decides a proposal' using errcode = 'check_violation', constraint = 'proposal_user_decides';
 	end if;
 	new.decided_by_user_id := acting_user;
 	new.decided_at := clock_timestamp();
@@ -783,11 +788,11 @@ begin
 		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id)
 		values (new.id, new.what, new.owner_party_id, new.due_on, new.deal_id, new.party_id, new.property_id);
 	when 'phase_move' then
-		-- Hold the deal while checking the phase this suggestion was based on.
+		-- Two acceptances cannot both pass the stale-phase check.
 		perform from deal where id = new.deal_id for update;
 		select phase into current_phase from deal_phase_change where deal_id = new.deal_id order by happened_at desc limit 1;
 		if current_phase is distinct from new.from_phase then
-			raise exception 'the deal has moved' using errcode = '23514', constraint = 'proposal_current_phase';
+			raise exception 'the deal has moved' using errcode = 'check_violation', constraint = 'proposal_current_phase';
 		end if;
 		insert into deal_phase_change (deal_id, happened_at, phase, reason)
 		values (new.deal_id, new.decided_at, new.to_phase, new.reason);
@@ -796,7 +801,7 @@ begin
 		insert into party_role (party_id, role, stage) values (new.party_id, 'lead', new.to_stage);
 	when 'lead_stage_move' then
 		insert into lead_stage_move (id, party_id, from_stage, to_stage, activity_id, evidence_ref, strength, reason)
-		values (new.id, new.party_id, new.from_stage, new.to_stage, new.activity_id, new.evidence, 'weak', new.reason);
+		values (new.id, new.party_id, new.from_stage, new.to_stage, new.activity_id, new.evidence, new.strength, new.reason);
 	end case;
 	return new;
 end $$;
@@ -1401,6 +1406,12 @@ begin
 	update national_account set party_id = survivor where party_id = duplicate
 		and exists (select from party_role where party_id = survivor and role = 'national_account');
 
+	delete from proposal d using proposal s
+	where d.party_id = duplicate and s.party_id = survivor
+		and (s.activity_id, s.kind, s.deal_id, s.property_id, s.from_phase, s.to_phase, s.from_stage, s.to_stage,
+			s.what, s.owner_party_id, s.due_on, s.how_found) is not distinct from
+			(d.activity_id, d.kind, d.deal_id, d.property_id, d.from_phase, d.to_phase, d.from_stage, d.to_stage,
+			d.what, d.owner_party_id, d.due_on, d.how_found);
 	delete from lead_stage_move d using lead_stage_move s
 	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
 		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
