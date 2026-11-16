@@ -152,6 +152,8 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 69. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank.
 70. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
 
+71. An outreach draft belongs to a lead and is never dispatchable or allowed to send itself. It starts unapproved; a user or an agent working for one approves it. Changing its content, owner or intended time clears approval and advances its revision.
+
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
 ## Who may change what
@@ -416,6 +418,7 @@ A lead is a person or company holding the `lead` role, and a client one holding 
 - **Owner.** A lead's owner is the user who works it. None means nobody works it yet, and any user can take it. Territory is shared, so a lead's area never picks its owner. Change history keeps who owned it before.
 - **Stage.** A lead's stage comes from the lead stages in `stage`: New, Qualified, Outreach Active, Engaged, Nurture, Opportunity and Archived. Nurture replaces named drip campaigns. Do not contact is the party's `do_not_contact` row, and deal outcomes are deal phases, not lead stages.
 - **How found.** Each lead and client says how they were found, from the `how_found` list: referral, vendor, marketing post, public records and cold outreach to start. It is a fact about the person or company, so it holds in every role, and a lead that becomes a client copies nothing. A list can be counted for lead attribution, where free text cannot.
+- **Outreach drafts.** `lead_contact_draft` keeps one draft per lead, its subject, body, owner, intended send time and time zone. `requires_human_send` is always true and `dispatchable` always false. Approval never sends. A draft starts unapproved; a user or an agent working for one may approve it. Any edit to the text, owner or intended time clears approval and increments the database-written revision. A caller approves only with the revision it read in its update condition. Approval actors and times stay in change history. A merge keeps the survivor's draft and retains the removed duplicate's text in change history.
 - **Not kept.** The 0 to 100 lead score and named drip campaigns do not come across (owner, #196).
 
 Moving today's rows across:
@@ -426,7 +429,8 @@ Moving today's rows across:
 - How found comes from `client.acquisition_source`, asked of the client, or else `lead.source_type`. Both are free text today. A `prospect-pool` lead is mapped by its candidate's own pool source. Every other value is listed for a partner to map to the list, and so is a party whose two values disagree. A lead or client with neither waits, listed, since the database refuses one without how it was found.
 - A lead whose `client_id` points at a client on another party, such as the practice a doctor runs, keeps its lead role on the person, and the client role stays on the practice.
 - `score`, `score_reason`, `drip_campaign`, `drip_added`, `report_back_due` and `sf_deal` do not move. Only the old spreadsheet import wrote the last four, and nothing reads them.
-- Lanes, stage moves, the estimated lease date, outreach drafts, candidates and the remaining free text come with #286.
+- Each old `lead_contact_draft` becomes a draft on its lead party, preserving id, subject, body, owner, schedule and time zone. The old revision and approval become its revision and approved flag, with old creation and approval actors and times in change history. The owner loads old rows with the draft-review trigger disabled so it does not reset old approvals or revisions, then enables it. A missing lead, unknown owner, blank subject or body, or an approval without a known user is listed rather than guessed.
+- Lanes, stage moves, estimated lease dates, candidates and the remaining free text are the other slices of #286.
 
 ## Merging duplicates
 

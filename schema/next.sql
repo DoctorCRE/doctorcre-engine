@@ -455,6 +455,47 @@ alter table deal_party add client_role text generated always as (case when role 
 	add constraint deal_party_client_is_a_client foreign key (party_id, client_role) references party_role
 		deferrable initially deferred;
 
+-- Drafts record preparation and approval only. Sending stays in the user's mailbox.
+create table lead_contact_draft (
+	id uuid primary key default gen_random_uuid(),
+	party_id uuid not null unique references party,
+	role text not null generated always as ('lead') stored,
+	created_at timestamptz not null default now(),
+	owner_user_id uuid references app_user,
+	subject text not null check (subject ~ '\S'),
+	body text not null check (body ~ '\S'),
+	scheduled_for timestamptz not null,
+	time_zone text not null check (time_zone ~ '\S'),
+	revision integer not null default 1 check (revision >= 1),
+	approved boolean not null default false,
+	requires_human_send boolean not null default true check (requires_human_send),
+	dispatchable boolean not null default false check (not dispatchable),
+	foreign key (party_id, role) references party_role deferrable initially deferred
+);
+
+create function lead_contact_draft_review() returns trigger
+language plpgsql as $$
+begin
+	if tg_op = 'INSERT' then
+		if new.approved then
+			raise exception 'a draft starts unapproved'
+				using errcode = 'check_violation', constraint = 'lead_contact_draft_starts_unapproved';
+		end if;
+		new.revision := 1;
+	elsif (new.subject, new.body, new.owner_user_id, new.scheduled_for, new.time_zone)
+		is distinct from (old.subject, old.body, old.owner_user_id, old.scheduled_for, old.time_zone) then
+		new.revision := old.revision + 1;
+		new.approved := false;
+	elsif new.approved and not old.approved and nullif(current_setting('engine.user_id', true), '') is null then
+		raise exception 'a user approves the draft they read'
+			using errcode = 'check_violation', constraint = 'lead_contact_draft_user_approves';
+	end if;
+	return new;
+end $$;
+
+create trigger lead_contact_draft_review before insert or update on lead_contact_draft
+	for each row execute function lead_contact_draft_review();
+
 -- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
 create table introduction (
 	id uuid primary key default gen_random_uuid(),
@@ -1217,6 +1258,8 @@ begin
 	update national_account set party_id = survivor where party_id = duplicate
 		and exists (select from party_role where party_id = survivor and role = 'national_account');
 
+	delete from lead_contact_draft where party_id = duplicate
+		and exists (select from lead_contact_draft where party_id = survivor);
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
@@ -1345,7 +1388,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
@@ -1547,3 +1590,6 @@ grant update (label) on client_type to engine;
 grant update (status, client_type) on client to engine;
 grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
 grant delete on client, national_account, client_brand, national_account_owner to engine;
+
+grant update (subject, body, owner_user_id, scheduled_for, time_zone, approved) on lead_contact_draft to engine;
+grant delete on lead_contact_draft to engine;

@@ -411,6 +411,7 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"lead_contact_draft",
 	"client_type",
 	"client",
 	"national_account",
@@ -487,6 +488,7 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"lead_contact_draft",
 	"client",
 	"national_account",
 	"client_brand",
@@ -560,6 +562,18 @@ const newCriticalDate = (row: Record<string, string | null> = {}) =>
 		kind: "due_diligence",
 		due_on: "2026-06-01",
 		source: "Example signed agreement",
+		...row,
+	});
+const DRAFT = id(740);
+const newLeadDraft = (row: Record<string, string | null> = {}) =>
+	insert("lead_contact_draft", {
+		id: DRAFT,
+		party_id: LEAD,
+		owner_user_id: USER,
+		subject: "Example space plans",
+		body: "Example first contact",
+		scheduled_for: "2030-01-01T12:00:00Z",
+		time_zone: "UTC",
 		...row,
 	});
 const RULES: Record<string, Case[]> = {
@@ -1852,6 +1866,14 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	lead_contact_draft: [
+		"approved",
+		"body",
+		"owner_user_id",
+		"scheduled_for",
+		"subject",
+		"time_zone",
+	],
 	client_type: ["label"],
 	client: ["client_type", "status"],
 	client_brand: ["ended_on", "started_on"],
@@ -3026,6 +3048,7 @@ const COLLAPSED = [
 	"app_user_pkey",
 	"deal_party_pkey",
 	"do_not_contact_pkey",
+	"lead_contact_draft_party_id_key",
 	"national_account_pkey",
 	"party_company_person_id_company_id_started_on_key",
 	"party_email_address_party_id_key",
@@ -3047,6 +3070,124 @@ test("every unique key that holds a party is one a merge collapses", async () =>
 	);
 	assert.deepEqual(rows[0].keys, COLLAPSED);
 });
+
+for (const [sql, refusal] of [
+	[
+		newLeadDraft({ requires_human_send: "false" }),
+		"lead_contact_draft_requires_human_send_check",
+	],
+	[
+		newLeadDraft({ dispatchable: "true" }),
+		"lead_contact_draft_dispatchable_check",
+	],
+	[newLeadDraft({ approved: "true" }), "lead_contact_draft_starts_unapproved"],
+	[newLeadDraft({ subject: " " }), "lead_contact_draft_subject_check"],
+	[newLeadDraft({ body: " " }), "lead_contact_draft_body_check"],
+	[newLeadDraft({ time_zone: " " }), "lead_contact_draft_time_zone_check"],
+	[
+		newLeadDraft({ owner_user_id: CLIENT }),
+		"lead_contact_draft_owner_user_id_fkey",
+	],
+	[
+		`${newLeadDraft({ party_id: DOCTOR })}; ${CHECK_AT_COMMIT}`,
+		"lead_contact_draft_party_id_role_fkey",
+	],
+	[
+		`${newLeadDraft()}; ${newLeadDraft({ id: id(741) })}`,
+		"lead_contact_draft_party_id_key",
+	],
+	[
+		`${newLeadDraft()}; ${asJob("agent")}; update lead_contact_draft set approved = true`,
+		"lead_contact_draft_user_approves",
+	],
+	[
+		"update lead_contact_draft set dispatchable = true",
+		notGranted("lead_contact_draft"),
+	],
+	[
+		"update lead_contact_draft set revision = 5",
+		notGranted("lead_contact_draft"),
+	],
+] satisfies Case[]) {
+	test(`outreach draft refuses ${refusal}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+
+test("editing an approved outreach draft clears approval and increments its revision", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("agent", USER)}; ${newLeadDraft()}; update lead_contact_draft set approved = true;
+		update lead_contact_draft set body = 'Example revised contact', approved = true`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select approved, revision, requires_human_send, dispatchable from lead_contact_draft",
+				)
+			).rows,
+			[
+				{
+					approved: false,
+					revision: 2,
+					requires_human_send: true,
+					dispatchable: false,
+				},
+			],
+		);
+		await db.query(
+			`update lead_contact_draft set approved = true where revision = 1`,
+		);
+		assert.equal(
+			(await db.query("select approved from lead_contact_draft")).rows[0]
+				.approved,
+			false,
+		);
+		await db.query(
+			`${asUser(USER)}; update lead_contact_draft set approved = true where revision = 2`,
+		);
+		assert.equal(
+			(await db.query("select approved from lead_contact_draft")).rows[0]
+				.approved,
+			true,
+		);
+	}));
+
+test("a merge keeps the survivor's draft and retains the other in change history", () =>
+	rolledBack(async () => {
+		await db.query(`${newLeadDraft()};
+		insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Other', 'public_records');
+		insert into party_role (party_id, role, stage) values ('${OLD}', 'lead', 'new');
+		${newLeadDraft({ id: id(741), party_id: OLD, body: "Example other draft" })};
+		select merge_party('${OLD}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(
+			(await db.query("select id, body from lead_contact_draft")).rows,
+			[{ id: DRAFT, body: "Example first contact" }],
+		);
+		assert.equal(
+			(
+				await db.query(
+					"select count(*) from change where table_name = 'lead_contact_draft' and action = 'delete'",
+				)
+			).rows[0].count,
+			"1",
+		);
+	}));
+
+test("a lone approved draft moves with its lead without losing approval or revision", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Other', 'public_records');
+		insert into party_role (party_id, role, stage) values ('${OLD}', 'lead', 'new');
+		${newLeadDraft({ party_id: OLD })}; update lead_contact_draft set approved = true;
+		${asJob("agent", USER)}; select merge_party('${OLD}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select party_id, approved, revision from lead_contact_draft",
+				)
+			).rows,
+			[{ party_id: LEAD, approved: true, revision: 1 }],
+		);
+	}));
 
 // Last, because it commits.
 test("a merge waits for one that moves rows onto its duplicate, then moves them on", async () => {
