@@ -128,7 +128,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update or a delete.
 54. A change a merge makes names the merge, and only a merge saved in the same transaction is named.
 55. A lead has a stage. Only a lead has an owner, and the owner is a user.
-56. A lead or client says how they were found, from the list, checked when the change is saved.
+56. A lead or client says how they were found, from the list. A new lead or client is checked when the change is saved.
 57. Someone on a deal as its client holds the client role, checked when the change is saved, so the role cannot be removed while they are.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
@@ -335,10 +335,10 @@ A lead is a person or company holding the `lead` role, and a client one holding 
 
 Moving today's rows across:
 
-- Each `lead` becomes the lead role on its party, and each `client` the client role on its party, keeping its `created_at`.
-- Stages `new`, `qualified`, `outreach_active`, `engaged`, `opportunity` and `archived` stay. `nurture_drip` and `closed_lost` become nurture, as the Leads screen already shows Closed-Lost. `active_deal` and `closed_won` become opportunity, since the deal holds what happened. A `do_not_contact` stage or `suppressed` lead is the party's do not contact, moved by the copy of people, and its lead becomes archived.
-- `owner_id` names a partner's actor, which becomes that user. A lead with no owner keeps none.
-- How found comes from `client.acquisition_source`, asked of the client, or else `lead.source_type`. Both are free text today. `prospect-pool` is public records; every other value is listed for a partner to map to the list, and a party whose two values disagree is listed too.
+- Each `lead` becomes the lead role on its party, and each `client` the client role on its party, keeping its `created_at`. A client merged away today is not copied. A party with several leads or clients keeps the earliest `created_at` and the stage and owner of its most recently changed lead, and is listed for a partner.
+- Stages `new`, `qualified`, `outreach_active`, `engaged`, `opportunity` and `archived` stay. `nurture_drip` and `closed_lost` become nurture, as the Leads screen already shows Closed-Lost. `active_deal` and `closed_won` become opportunity, since the deal holds what happened. A `do_not_contact` stage or `suppressed` lead becomes archived. Today that sets only the lead, not the person's `contact_state`, so the copy of leads lists each one for a partner to give the reason its `do_not_contact` row needs.
+- `owner_id` names a partner's actor, which becomes that user. A lead with only an `owner_label` is listed for a partner, and one with neither keeps no owner.
+- How found comes from `client.acquisition_source`, asked of the client, or else `lead.source_type`. Both are free text today. A `prospect-pool` lead is mapped by its candidate's own pool source. Every other value is listed for a partner to map to the list, and so is a party whose two values disagree. A lead or client with neither waits, listed, since the database refuses one without how it was found.
 - A lead whose `client_id` points at a client on another party, such as the practice a doctor runs, keeps its lead role on the person, and the client role stays on the practice.
 - `score`, `score_reason`, `drip_campaign`, `drip_added`, `report_back_due` and `sf_deal` do not move. Only the old spreadsheet import wrote the last four, and nothing reads them.
 - Lanes, stage moves, the estimated lease date, outreach drafts, candidates and the remaining free text come with #286.

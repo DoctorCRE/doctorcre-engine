@@ -389,13 +389,13 @@ begin
 	return null;
 end $$;
 
--- Deferred, so a person and their role can be saved in either order. Only a merge moves a role.
-create constraint trigger lead_or_client_how_found after insert or update of party_id, role on party_role
+-- Deferred, so a person and their role can be saved in either order. A merge moves a role only with how it was found.
+create constraint trigger lead_or_client_how_found after insert on party_role
 	initially deferred for each row when (new.role in ('lead', 'client'))
 	execute function lead_or_client_how_found('party_id');
 -- Only clearing it can break the rule.
 create constraint trigger lead_or_client_how_found after update of how_found on party
-	initially deferred for each row when (old.how_found is not null and new.how_found is null)
+	for each row when (old.how_found is not null and new.how_found is null)
 	execute function lead_or_client_how_found('id');
 
 -- Someone is a client once a deal is opened for them, signed or not. The client role's row keeps when that was.

@@ -1448,7 +1448,7 @@ const RULES: Record<string, Case[]> = {
 			"lead_or_client_how_found",
 		],
 		[
-			`update party set how_found = null where id = '${LEAD}'; ${CHECK_AT_COMMIT}`,
+			`update party set how_found = null where id = '${LEAD}'`,
 			"lead_or_client_how_found",
 		],
 		[
@@ -2131,11 +2131,11 @@ test("a lead becomes a client when a deal is opened for them, and keeps its stag
 
 test("a merge keeps the survivor's lead owner and how it was found, filled from the duplicate's, and moves its deals as client", () =>
 	rolledBack(async () => {
-		await db.query(`update party_role set owner_user_id = null where party_id = '${LEAD}';
-			insert into party (id, kind, name, how_found) values
+		await db.query(`insert into party (id, kind, name, how_found) values
 				('${DUPLICATE}', 'person', 'Dr. E. Lead', 'vendor'), ('${OLD}', 'person', 'Dr. Lead', null);
 			insert into party_role (party_id, role, stage, owner_user_id) values
-				('${DUPLICATE}', 'lead', 'engaged', '${USER}'), ('${DUPLICATE}', 'client', null, null);
+				('${DUPLICATE}', 'lead', 'engaged', '${USER}'), ('${DUPLICATE}', 'client', null, null),
+				('${OLD}', 'lead', 'new', null);
 			insert into deal_party values ('${LENDER_DEAL}', '${DUPLICATE}', 'client');
 			select merge_party('${DUPLICATE}', '${LEAD}');
 			select merge_party('${LEAD}', '${OLD}'); ${CHECK_AT_COMMIT}`);
@@ -2144,7 +2144,7 @@ test("a merge keeps the survivor's lead owner and how it was found, filled from 
 				how_found: "public_records",
 				roles: [
 					["client", null, null],
-					["lead", "nurture", USER],
+					["lead", "new", TEAMMATE],
 				],
 				deals: [LENDER_DEAL],
 			},
