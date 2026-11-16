@@ -24,6 +24,8 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
 - **`deal_phase_change`**: one row each time a deal changes phase, with when, the new phase and the reason. A deal's phase is its latest row.
 - **`offer`**: one round of an LOI or other offer on a deal.
+- **`lease`**: a sourced version of a signed lease on a deal and property.
+- **`lease_option`**: one option in a lease version, with its notice deadline and terms.
 - **`document`**: a file, as its name, its key in object storage (Cloudflare R2) and its type, read from the file's own bytes when the engine stores it. The file itself is never in the database. An email attachment names the email it arrived with.
 - **`activity`**: something that happened: an email, a call, a meeting or a note, with when, who it came from and a summary.
 - **`email`**: the email behind an email activity.
@@ -34,7 +36,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 ## Users, jobs and who changed what
 
-Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons and specialties, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
+Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons and specialties, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, leases and their options, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
 
 The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. A removal names who made it too, in change history.
 
@@ -131,8 +133,10 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 55. A deal's kind comes from the kind list and its reason from the reason list. Either may be unknown.
 56. A deal has exactly one deal owner, a user.
 57. A deal's market comes from the market list, and its closed value is more than zero.
-58. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank.
-59. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
+58. Lease versions are consecutive on a deal, have a source document and ordered dates, and never change or disappear. A supplied offer was accepted when recorded and belongs to the same deal and property. Typed amounts are nonnegative, term is positive and rent starts on a date or after delivery, never both.
+59. Every lease option is numbered once on its version, is renewal, expansion or early termination, and has an exact notice deadline and nonblank terms. An option notice is no later than the lease ends. Options never change or disappear; sourced options may be added to any version as they are extracted.
+60. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank.
+61. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -154,7 +158,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a deal parked, revived or flagged by a user, a round's status moves, a later acceptance superseding a round, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
+History is `lease`, `lease_option`, `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a deal parked, revived or flagged by a user, a round's status moves, a later acceptance superseding a round, a lease's round accepted when recorded, an option notice before lease expiration, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
 
 A merge is the one path that rewrites history: `merge_party` runs with the owner's rights and points rounds and outside ids at the survivor. Each row it moves is stamped with whoever ran it, so a moved row's stamp no longer names who first stored it. Its change history still does, and names the merge.
 
@@ -245,6 +249,16 @@ The partners toured 100 Example Way with their client and sent an LOI. The listi
 9. A `next_step` on the deal says to start the lease draft.
 
 The tests run rounds 1 to 3, the acceptance, the email with its attachment, a call and the next steps, and read them back in order.
+
+## Leases and options
+
+A signed lease is a `lease` row with its deal, property, exact execution and expiration dates and source `document`. Its typed terms are independent of the LOI, because a signed agreement can differ. Rent and NNN are per square foot per year, TI per square foot, and escalation a yearly percent. `rent_starts_on` or `rent_days_after_delivery` keeps rent commencement separate from the lease's start.
+
+An optional `offer_id` names a round accepted when the lease is recorded, on that same deal and property. Old leases with no surviving rounds need no invented LOI. A later acceptance can supersede that round without changing the signed lease.
+
+Each amendment or correction is the next consecutive version on the deal. Versions and their `lease_option` rows are history, never rewritten or removed by the engine. `current_lease` selects the latest version per deal, so lease endings can be queried by `expiration_on`. Options are numbered within that version, each with its kind, exact `notice_on` and terms. A new version includes every option that still applies. Sourced options may be added to any version when they are extracted later; an existing option row never changes. A notice may predate an amendment that retains it, but cannot follow the lease expiration.
+
+Moving today's rows across, order each deal's leases by its supersedes chain and preserve every version. Rows missing execution or expiration dates or a source document are listed for a partner to fix, never silently dropped or completed by inference. Exact end dates stay exact, never calculated from term months. Store the executed lease, amendment or abstract evidence as a document. Unknown typed terms stay null. Convert a legacy rent quote only when its unit is known; otherwise keep the wording in `other_terms`. Options in `options_note` need their individual terms and sourced deadlines before becoming option rows; keep unparsed wording in `other_terms`. The old radar's current lease ending becomes `current_lease.expiration_on`; the 24-month radar and 18-month renewal windows remain read filters. Leases without brokerage work and the link from a new renewal deal to the lease it renews follow in #280. Critical date proposals follow in #279.
 
 ## Marketing
 
@@ -385,4 +399,4 @@ Today's system keeps one `event` row per field changed, with the actor, a verb a
 
 ## Later slices
 
-"Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+"Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Critical dates and commissions. Leases negotiated elsewhere and renewal links. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
