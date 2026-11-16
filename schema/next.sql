@@ -776,7 +776,6 @@ create table offer (
 	constraint offer_commencement_date_or_days
 		check (commencement_on is null or commencement_days_after_delivery is null),
 	unique (deal_id, round),
-	unique (id, deal_id, property_id),
 	unique (id, deal_id),
 	foreign key (deal_id, property_id) references deal_property,
 	-- Only a merge changes a deal_party key, and its rounds move with it.
@@ -826,17 +825,44 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
--- Signed terms are their own history; an amendment is the next version, never an overwrite.
 create table lease (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
-	deal_id uuid not null,
-	property_id uuid not null,
+	party_id uuid not null references party,
+	property_id uuid not null references property,
+	deal_id uuid unique references deal,
+	client_role text not null default 'client' check (client_role = 'client'),
+	foreign key (deal_id, party_id, client_role) references deal_party on update cascade,
+	foreign key (deal_id, property_id) references deal_property
+);
+
+alter table deal add renews_lease_id uuid references lease;
+alter table deal add constraint deal_renewal_names_lease
+	check ((reason is not distinct from 'renewal') = (renews_lease_id is not null));
+
+create function deal_renews_another_lease() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from lease where id = new.renews_lease_id and deal_id = new.id) then
+		raise exception 'a renewal is separate from the deal that negotiated its lease'
+			using errcode = 'check_violation', constraint = 'deal_renews_another_lease';
+	end if;
+	return new;
+end $$;
+
+create trigger deal_renews_another_lease before insert or update on deal
+	for each row when (new.renews_lease_id is not null) execute function deal_renews_another_lease();
+
+-- Signed terms are their own history; an amendment is the next version, never an overwrite.
+create table lease_version (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	lease_id uuid not null references lease,
 	version integer not null check (version >= 1),
 	previous_version integer generated always as (nullif(version - 1, 0)) stored,
 	offer_id uuid,
 	document_id uuid not null references document,
-	executed_on date not null,
+	executed_on date,
 	commencement_on date,
 	expiration_on date not null,
 	rent_per_sf_yr numeric(10, 2) check (rent_per_sf_yr >= 0),
@@ -851,17 +877,17 @@ create table lease (
 	other_terms text,
 	constraint lease_dates_in_order check (expiration_on > commencement_on and expiration_on >= executed_on),
 	constraint lease_rent_date_or_days check (num_nonnulls(rent_starts_on, rent_days_after_delivery) <= 1),
-	unique (deal_id, version),
-	unique (id, deal_id),
-	foreign key (deal_id, previous_version) references lease (deal_id, version),
-	foreign key (deal_id, property_id) references deal_property,
-	foreign key (offer_id, deal_id, property_id) references offer (id, deal_id, property_id)
+	unique (lease_id, version),
+	foreign key (lease_id, previous_version) references lease_version (lease_id, version),
+	foreign key (offer_id) references offer
 );
 
 create function lease_from_accepted_offer() returns trigger
 language plpgsql as $$
 begin
-	perform from offer where id = new.offer_id and status = 'accepted' for share;
+	perform from offer o join lease l on l.id = new.lease_id
+	where o.id = new.offer_id and o.status = 'accepted' and o.deal_id = l.deal_id and o.property_id = l.property_id
+	for share of o;
 	if not found then
 		raise exception 'a lease names a round accepted when the lease is recorded'
 			using errcode = 'check_violation', constraint = 'lease_from_accepted_offer';
@@ -869,23 +895,23 @@ begin
 	return new;
 end $$;
 
-create trigger lease_from_accepted_offer before insert on lease
+create trigger lease_from_accepted_offer before insert on lease_version
 	for each row when (new.offer_id is not null) execute function lease_from_accepted_offer();
 
 create table lease_option (
-	lease_id uuid not null references lease,
+	lease_version_id uuid not null references lease_version,
 	number smallint not null check (number > 0),
 	created_at timestamptz not null default now(),
 	kind text not null check (kind in ('renewal', 'expansion', 'early_termination')),
 	notice_on date not null,
 	terms text not null check (terms ~ '\S'),
-	primary key (lease_id, number)
+	primary key (lease_version_id, number)
 );
 
 create function lease_option_before_expiration() returns trigger
 language plpgsql as $$
 begin
-	if exists (select from lease where id = new.lease_id and new.notice_on > expiration_on) then
+	if exists (select from lease_version where id = new.lease_version_id and new.notice_on > expiration_on) then
 		raise exception 'an option notice is due no later than its lease expires'
 			using errcode = 'check_violation', constraint = 'lease_option_before_expiration';
 	end if;
@@ -896,8 +922,14 @@ create trigger lease_option_before_expiration before insert on lease_option
 	for each row execute function lease_option_before_expiration();
 
 create view current_lease as
-select l.* from lease l
-where not exists (select from lease newer where newer.deal_id = l.deal_id and newer.version > l.version);
+select v.*, l.deal_id, l.party_id, l.property_id from lease_version v join lease l on l.id = v.lease_id
+where not exists (select from lease_version newer where newer.lease_id = v.lease_id and newer.version > v.version);
+
+create view lease_ending as
+select c.* from current_lease c where not exists (
+	select from deal d join lease l on l.deal_id = d.id join lease_version v on v.lease_id = l.id
+	where d.renews_lease_id = c.lease_id
+);
 
 create table critical_date (
 	id uuid primary key default gen_random_uuid(),
@@ -907,7 +939,7 @@ create table critical_date (
 	due_on date not null,
 	source text not null check (source ~ '\S'),
 	offer_id uuid,
-	lease_id uuid,
+	lease_version_id uuid,
 	option_number smallint,
 	document_id uuid references document,
 	note text,
@@ -917,20 +949,20 @@ create table critical_date (
 	resolved_by_user_id uuid references app_user,
 	resolved_at timestamptz,
 	resolution_reason text check (resolution_reason ~ '\S'),
-	constraint critical_date_one_source check (num_nonnulls(offer_id, lease_id, document_id) <= 1),
-	constraint critical_date_option_on_lease check (option_number is null or lease_id is not null),
+	constraint critical_date_one_source check (num_nonnulls(offer_id, lease_version_id, document_id) <= 1),
+	constraint critical_date_option_on_lease check (option_number is null or lease_version_id is not null),
 	constraint critical_date_confirmation_whole check (num_nonnulls(confirmed_by_user_id, confirmed_at) in (0, 2)),
 	constraint critical_date_confirmed_when_real check (status not in ('open', 'done', 'passed') or confirmed_at is not null),
 	constraint critical_date_resolution_whole check (
 		num_nonnulls(resolved_by_user_id, resolved_at, resolution_reason) = case when status in ('done', 'dropped', 'passed') then 3 else 0 end),
 	foreign key (offer_id, deal_id) references offer (id, deal_id),
-	foreign key (lease_id, deal_id) references lease (id, deal_id),
-	foreign key (lease_id, option_number) references lease_option (lease_id, number)
+	foreign key (lease_version_id) references lease_version,
+	foreign key (lease_version_id, option_number) references lease_option (lease_version_id, number)
 );
 
 -- Generated proposals repeat by their immutable source; hand-added dates may share a day.
-create unique index critical_date_generated_once on critical_date (deal_id, kind, offer_id, lease_id, option_number)
-	nulls not distinct where offer_id is not null or lease_id is not null;
+create unique index critical_date_generated_once on critical_date (deal_id, kind, offer_id, lease_version_id, option_number)
+	nulls not distinct where offer_id is not null or lease_version_id is not null;
 
 create function critical_date_transition() returns trigger
 language plpgsql as $$
@@ -938,6 +970,13 @@ declare
 	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
 begin
 	if tg_op = 'INSERT' then
+		if new.lease_version_id is not null and not exists (
+			select from lease_version v join lease l on l.id = v.lease_id join deal d on d.id = new.deal_id
+			where v.id = new.lease_version_id and (l.deal_id = d.id or d.renews_lease_id = l.id)
+		) then
+			raise exception 'a critical date names a lease its deal negotiated or renews'
+				using errcode = 'check_violation', constraint = 'critical_date_lease_on_deal';
+		end if;
 		if new.status <> 'proposed' or num_nonnulls(new.confirmed_by_user_id, new.confirmed_at,
 			new.resolved_by_user_id, new.resolved_at, new.resolution_reason) <> 0 then
 			raise exception 'a critical date starts as a proposal'
@@ -973,14 +1012,14 @@ create trigger critical_date_transition before insert or update on critical_date
 create function propose_critical_dates(wanted uuid) returns void
 language sql
 begin atomic
-	insert into critical_date (deal_id, kind, due_on, source, lease_id, option_number)
-	select l.deal_id, dates.kind, dates.due_on, 'Signed lease', l.id, null
+	insert into critical_date (deal_id, kind, due_on, source, lease_version_id, option_number)
+	select wanted, dates.kind, dates.due_on, 'Signed lease', l.id, null
 	from current_lease l cross join lateral (values ('lease_end', l.expiration_on), ('rent_start', l.rent_starts_on)) dates(kind, due_on)
-	where l.deal_id = wanted and dates.due_on is not null
+	where (l.deal_id = wanted or l.lease_id = (select renews_lease_id from deal where id = wanted)) and dates.due_on is not null and (dates.kind <> 'rent_start' or l.deal_id = wanted)
 	on conflict do nothing;
-	insert into critical_date (deal_id, kind, due_on, source, lease_id, option_number)
-	select l.deal_id, 'option_notice', o.notice_on, 'Signed lease option', l.id, o.number
-	from current_lease l join lease_option o on o.lease_id = l.id where l.deal_id = wanted
+	insert into critical_date (deal_id, kind, due_on, source, lease_version_id, option_number)
+	select wanted, 'option_notice', o.notice_on, 'Signed lease option', l.id, o.number
+	from current_lease l join lease_option o on o.lease_version_id = l.id where l.deal_id = wanted or l.lease_id = (select renews_lease_id from deal where id = wanted)
 	on conflict do nothing;
 	insert into critical_date (deal_id, kind, due_on, source, offer_id)
 	select deal_id, 'loi_expiry', expires_on, 'Offer round', id from offer
@@ -1400,8 +1439,11 @@ begin
 		or d.company_id = duplicate and s.company_id = survivor and s.person_id = d.person_id);
 	update offer o set from_party_id = survivor from deal_party s
 	where o.from_party_id = duplicate and s.deal_id = o.deal_id and s.party_id = survivor and s.role = o.from_role;
+	update lease l set party_id = survivor from deal_party s
+	where l.party_id = duplicate and s.deal_id = l.deal_id and s.party_id = survivor and s.role = 'client';
 	delete from deal_party d using deal_party s
 	where d.party_id = duplicate and s.party_id = survivor and s.deal_id = d.deal_id and s.role = d.role;
+	update deal_party set party_id = survivor where party_id = duplicate;
 	delete from activity_about d using activity_about s
 	where d.party_id = duplicate and s.party_id = survivor and s.activity_id = d.activity_id;
 	delete from party_territory d using party_territory s
@@ -1485,7 +1527,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -1620,7 +1662,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (lease, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- History (lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -1667,7 +1709,7 @@ grant update (stage, relationship_level, disposition, disposition_reason, is_tar
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (started_on, ended_on, note) on party_link to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
-grant update (kind, reason, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
+grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
 grant update (npi, how_found) on party to engine;
 grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;

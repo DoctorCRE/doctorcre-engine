@@ -214,7 +214,7 @@ _Database_: `deal_review_session` and `deal_review_item`; `v_deal_room_session`;
 _Engine_: `open_session` on the board.
 
 **Lease**:
-The signed agreement for a deal's property, with sourced dates and terms. An amendment is the next version. The latest version is current.
+A tenant's agreement for a property, whether negotiated by the team or elsewhere. Its sourced terms are versions; an amendment is the next version. The latest version is current. A renewal is a new deal linked to this lease.
 
 **Lease option**:
 A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
