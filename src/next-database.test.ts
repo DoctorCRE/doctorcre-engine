@@ -313,6 +313,7 @@ insert into introduction (id, vendor_id, made_by, introduced_party_id, introduce
 	('${INTRODUCTION}', '${VENDOR}', 'vendor', '${CLIENT}', '2026-02-02', '${DEAL}');
 `;
 const LEAD_SEED = `
+insert into lead_lane (slug, label) values ('renewal_radar', 'Renewal radar'), ('new_entity', 'New entity');
 insert into stage values
 	('lead', 'qualified', 'Qualified'), ('lead', 'outreach_active', 'Outreach active'), ('lead', 'archived', 'Archived'),
 	('lead', 'new', 'New'), ('lead', 'engaged', 'Engaged'), ('lead', 'nurture', 'Nurture'), ('lead', 'opportunity', 'Opportunity');
@@ -417,6 +418,7 @@ const STAMPED = [
 	"commission_payment",
 	"commission_share",
 	"commission_tier",
+	"lead_lane",
 	"client_type",
 	"client",
 	"national_account",
@@ -1875,6 +1877,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	lead_lane: ["label"],
 	client_type: ["label"],
 	client: ["client_type", "status"],
 	client_brand: ["ended_on", "started_on"],
@@ -1892,9 +1895,14 @@ const CHANGEABLE: Record<string, string[]> = {
 	party_role: [
 		"disposition",
 		"disposition_reason",
+		"estimated_lease_on",
 		"is_target",
+		"lane",
+		"lease_estimate_confidence",
+		"lease_estimate_source",
 		"owner_user_id",
 		"relationship_level",
+		"segment",
 		"stage",
 	],
 	introduction: ["deal_id", "introduced_on", "note"],
@@ -1902,7 +1910,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	deal_kind: ["label"],
 	deal_reason: ["label"],
 	specialty: ["label"],
-	party: ["how_found", "name", "npi"],
+	party: ["how_found", "how_found_detail", "name", "npi"],
 	property: ["address", "county_fips", "latitude", "longitude"],
 	market: ["name"],
 	territory: ["name"],
@@ -2079,6 +2087,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				name: "Example Dental Group",
 				npi: NPIS[0],
 				how_found: "referral",
+				how_found_detail: null,
 				role: "client",
 			},
 			{
@@ -2087,6 +2096,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				name: "Avery Example",
 				npi: null,
 				how_found: null,
+				how_found_detail: null,
 				role: "listing_agent",
 			},
 		],
@@ -3343,6 +3353,118 @@ test("competing stage evidence holds the lead until the first move completes", a
 		}
 	}
 });
+
+for (const [sql, refusal] of [
+	[
+		"update party_role set lane = 'unknown' where role = 'lead'",
+		"party_role_lane_fkey",
+	],
+	[
+		"update party_role set lane = 'renewal_radar' where role = 'vendor'",
+		"party_role_working_details_on_lead",
+	],
+	[
+		"update party_role set estimated_lease_on = '2030-01-01' where role = 'lead'",
+		"party_role_lease_estimate_has_source",
+	],
+	[
+		"update party_role set lease_estimate_source = 'Example feed' where role = 'lead'",
+		"party_role_lease_estimate_has_source",
+	],
+	[
+		"update party_role set estimated_lease_on = '2030-01-01', lease_estimate_source = ' ' where role = 'lead'",
+		"party_role_lease_estimate_source_check",
+	],
+	[
+		"update party_role set estimated_lease_on = '2030-01-01', lease_estimate_source = 'Example feed', lease_estimate_confidence = 'certain' where role = 'lead'",
+		"party_role_lease_estimate_confidence_check",
+	],
+	[
+		"update party_role set lease_estimate_confidence = 'high' where role = 'lead'",
+		"party_role_lease_confidence_has_estimate",
+	],
+	[
+		"update party_role set segment = ' ' where role = 'lead'",
+		"party_role_segment_check",
+	],
+	[
+		"update party_role set segment = 'Example segment' where role = 'vendor'",
+		"party_role_working_details_on_lead",
+	],
+	[
+		`update party set how_found_detail = ' ' where id = '${LEAD}'`,
+		"party_how_found_detail_check",
+	],
+	[
+		`update party set how_found_detail = 'Example referral' where id = '${AGENT}'`,
+		"party_how_found_detail_has_source",
+	],
+] satisfies Case[]) {
+	test(`lead working details refuse ${refusal}: ${sql}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+
+test("lead working details keep sourced dates together when leads merge", () =>
+	rolledBack(async () => {
+		await db.query(`update party_role set lane = 'renewal_radar', segment = 'Example segment',
+		estimated_lease_on = '2030-01-01', lease_estimate_source = 'Example feed', lease_estimate_confidence = 'high'
+		where party_id = '${LEAD}';
+		update party set how_found_detail = 'Example public filing' where id = '${LEAD}';
+		insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Lead', 'public_records');
+		insert into party_role (party_id, role, stage) values ('${OLD}', 'lead', 'new');
+		select merge_party('${LEAD}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		const read = async () =>
+			(
+				await db.query(`select lane, segment, estimated_lease_on::text as date,
+		lease_estimate_source as source, lease_estimate_confidence as confidence, how_found_detail
+		from party_role join party on id = party_id where party_id = '${OLD}'`)
+			).rows;
+		const expected = [
+			{
+				lane: "renewal_radar",
+				segment: "Example segment",
+				date: "2030-01-01",
+				source: "Example feed",
+				confidence: "high",
+				how_found_detail: "Example public filing",
+			},
+		];
+		assert.deepEqual(await read(), expected);
+		await db.query(`insert into party (id, kind, name, how_found, how_found_detail) values ('${DUPLICATE}', 'person', 'Example Other', 'vendor', 'Different source');
+		insert into party_role (party_id, role, stage, lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence)
+		values ('${DUPLICATE}', 'lead', 'engaged', 'new_entity', '2040-01-01', 'Other feed', 'low');
+		select merge_party('${DUPLICATE}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(await read(), expected);
+	}));
+
+for (const source of ["public_records", "vendor"]) {
+	test(`a merge never borrows confidence and fills attribution detail only from matching ${source}`, () =>
+		rolledBack(async () => {
+			await db.query(`update party_role set estimated_lease_on = '2030-01-01', lease_estimate_source = 'Survivor feed'
+			where party_id = '${LEAD}';
+			insert into party (id, kind, name, how_found, how_found_detail) values ('${OLD}', 'person', 'Example Other', '${source}', 'Duplicate detail');
+			insert into party_role (party_id, role, stage, estimated_lease_on, lease_estimate_source, lease_estimate_confidence)
+			values ('${OLD}', 'lead', 'new', '2040-01-01', 'Duplicate feed', 'high');
+			select merge_party('${OLD}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+			assert.deepEqual(
+				(
+					await db.query(`select estimated_lease_on::text as date, lease_estimate_source as source,
+			lease_estimate_confidence as confidence, how_found_detail as detail from party_role
+			join party on id = party_id where party_id = '${LEAD}'`)
+				).rows,
+				[
+					{
+						date: "2030-01-01",
+						source: "Survivor feed",
+						confidence: null,
+						detail: source === "public_records" ? "Duplicate detail" : null,
+					},
+				],
+			);
+		}));
+}
 
 // Last, because it commits.
 test("a merge waits for one that moves rows onto its duplicate, then moves them on", async () => {

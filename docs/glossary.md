@@ -42,7 +42,7 @@ _Database_: `lead.owner_id` today; `party_role.owner_user_id` on the lead role i
 **How found**:
 How we found a lead or client, from a short list, such as referral, vendor, marketing post, public records or cold outreach.
 _Avoid_: source on its own, lane (a radar lane), referral source
-_Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database.
+_Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database, with `party.how_found_detail` for attribution detail.
 
 **Prospect**:
 The stage in between lead and client. A lead becomes a prospect when it turns warm, or a potential client becomes one when introduced. It stays a prospect until we represent them. An inactive prospect goes back to Leads.
@@ -252,3 +252,15 @@ _New database_: `commission_tier`, keyed by the user and the count its tier star
 **Lead stage evidence**:
 An activity and its reference supporting a proposed or applied lead stage move. Weak job evidence waits for a user. Archiving always needs a user and a reason.
 _New database_: `lead_stage_move`. Ordinary stage edits and who and when stay in `change`.
+
+**Lead segment**:
+The free-text board segment used to group leads.
+_New database_: `party_role.segment` on the lead role.
+
+**Lead lane**:
+The kind of opportunity being worked, independent of how the lead was found.
+_New database_: `party_role.lane` on the lead role, from `lead_lane`.
+
+**Estimated lease date**:
+A lead's expected lease event, with its source and optional confidence. It is an estimate, not an executed lease ending.
+_New database_: `party_role.estimated_lease_on`, `lease_estimate_source` and `lease_estimate_confidence` on the lead role.
