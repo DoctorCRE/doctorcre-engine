@@ -11,8 +11,8 @@ insert into deal_reason (slug, label) values ('start_up', 'Start-up'), ('relocat
  ('expansion', 'Expansion'), ('renewal', 'Renewal'), ('additional_office', 'Additional office') on conflict do nothing;
 insert into role (slug, label) values ('client', 'Client') on conflict do nothing;
 insert into role (slug, label)
-select case slug when 'listing_side' then 'listing_agent' else slug end, label
-from public.participant_role where slug <> 'lead' on conflict do nothing;
+select case slug when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else slug end, label
+from public.participant_role where slug in ('client', 'client_contact', 'support', 'referring_agent', 'listing_side', 'landlord_side', 'investor', 'capital_partner') on conflict do nothing;
 insert into phase (slug, label) select slug, label from public.deal_phase on conflict do nothing;
 insert into phase (slug, label) values ('dead', 'Dead') on conflict do nothing;
 
@@ -51,21 +51,23 @@ cross join lateral (values
 where f.refused;
 
 create temp table old_link on commit drop as
-select d.id as deal_id, d.client_id as old_id, c.party_id, 'client' as role, d.created_at, d.updated_at,
- d.changed_by_user_id, d.changed_by_job from old_deal d join public.client c on c.id = d.client_id
+select d.id as deal_id, d.client_id as old_id, c.party_id, 'client' as role, false as vendor_role, d.created_at, d.updated_at,
+ case a.kind when 'human' then a.id end as changed_by_user_id,
+ case when a.kind is distinct from 'human' then 'old_system' end as changed_by_job
+from public.deal d join public.client c on c.id = d.client_id left join public.actor a on a.id = coalesce(d.updated_by, d.created_by)
 union all
 select p.deal_id, p.id, coalesce(p.party_id, p.actor_id),
- case p.role when 'listing_side' then 'listing_agent' else p.role end, p.from_at, p.from_at,
+ case p.role when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else p.role end, p.role in ('lender', 'attorney', 'other_vendor'), p.from_at, p.from_at,
  case a.kind when 'human' then a.id end, case when a.kind is distinct from 'human' then 'old_system' end
 from public.deal_participant p join public.actor a on a.id = p.set_by where p.role <> 'lead' and p.to_at is null
 union all
-select v.deal_id, v.party_id, v.party_id, v.role, v.updated_at, v.updated_at,
+select v.deal_id, v.party_id, v.party_id, v.role, true, v.updated_at, v.updated_at,
  case a.kind when 'human' then a.id end, case when a.kind is distinct from 'human' then 'old_system' end
 from public.deal_vendor_assignment v join public.actor a on a.id = v.updated_by where v.active;
 create temp table mapped_link on commit drop as
 select l.*, m.party_id as mapped_party_id, r.slug from old_link l
 left join outside_id m on m.source = 'old_system' and m.value = l.party_id::text
-left join role r on r.slug = l.role;
+left join role r on r.slug = l.role and (not l.vendor_role or r.category_of = 'vendor');
 insert into deal_party (deal_id, party_id, role, created_at, changed_at, changed_by_user_id, changed_by_job)
 select distinct on (l.deal_id, l.mapped_party_id, l.role) l.deal_id, l.mapped_party_id, l.role,
  l.created_at, l.updated_at, l.changed_by_user_id, l.changed_by_job from mapped_link l join deal d on d.id = l.deal_id
@@ -73,7 +75,7 @@ where l.mapped_party_id is not null and l.slug is not null
  and not exists (select from deal_party p where (p.deal_id, p.party_id, p.role) = (l.deal_id, l.mapped_party_id, l.role))
 order by l.deal_id, l.mapped_party_id, l.role, l.created_at, l.old_id;
 insert into not_copied
-select l.old_id, 'deal_party', l.role, case when d.id is null then 'deal_not_copied'
+select l.old_id, 'deal_party', concat_ws(' ', l.deal_id, l.party_id, l.role), case when d.id is null then 'deal_not_copied'
  when l.mapped_party_id is null then 'party_not_copied' else 'role_not_available' end
 from mapped_link l left join deal d on d.id = l.deal_id
 where d.id is null or l.mapped_party_id is null or l.slug is null;
@@ -81,13 +83,13 @@ insert into not_copied select id, 'deal_participant', role, 'ended_participant_h
 from public.deal_participant where to_at is not null;
 
 create temp table old_phase on commit drop as
-select e.id as old_id, e.subject_id as deal_id, e.occurred_at as happened_at, e.new_value ->> 'phase' as phase,
+select e.id as old_id, e.subject_id as deal_id, e.occurred_at as happened_at, case when e.field = 'outcome' then 'dead' else e.new_value ->> 'phase' end as phase,
  coalesce(nullif(e.human_quote, ''), nullif(e.agent_rationale, '')) as reason,
  case a.kind when 'human' then a.id end as changed_by_user_id,
  case when a.kind is distinct from 'human' then 'old_system' end as changed_by_job
-from public.event e left join public.actor a on a.id = e.actor_id where e.subject_type = 'deal' and e.field = 'phase'
-;
-insert into not_copied select d.id, 'phase', d.phase, 'no_phase_history' from old_deal d
+from public.event e left join public.actor a on a.id = e.actor_id where e.subject_type = 'deal' and (e.field = 'phase' and e.old_value ->> 'phase' is distinct from e.new_value ->> 'phase'
+ or e.field = 'outcome' and e.new_value ->> 'outcome' = 'lost');
+insert into not_copied select d.id, 'phase', d.phase, 'no_phase_history' from public.deal d
 where not exists (select from public.event e where e.subject_type = 'deal' and e.subject_id = d.id and e.field = 'phase');
 create temp table mapped_phase on commit drop as
 select p.*, case when d.id is null then 'deal_not_copied' when f.slug is null then 'unknown_phase'
@@ -100,6 +102,13 @@ select p.deal_id, p.happened_at, p.phase, p.reason, p.changed_by_user_id, p.chan
 from mapped_phase p where refusal is null
  and not exists (select from deal_phase_change c where (c.deal_id, c.happened_at) = (p.deal_id, p.happened_at));
 insert into not_copied select old_id, 'phase', phase, refusal from mapped_phase where refusal is not null;
+insert into not_copied
+select d.id, 'phase', d.phase, case when d.outcome = 'lost' then 'lost_without_dated_reason' else 'current_phase_differs' end
+from public.deal d join deal n on n.id = d.id
+where (d.outcome = 'lost' or exists (select from deal_phase_change c where c.deal_id = d.id))
+ and (select c.phase from deal_phase_change c where c.deal_id = d.id order by happened_at desc limit 1)
+ is distinct from case when d.outcome = 'lost' then 'dead' else d.phase end;
+
 
 -- Source properties are buildings reached through the deal's premises and spaces. Several suites in one building are one.
 create temp table round_mapping on commit drop as
@@ -117,7 +126,7 @@ select r.id, 'negotiation_round', jsonb_build_object('side', r.side, 'round_no',
  ('no_sender_candidate', r.senders = 0), ('several_sender_candidates', r.senders > 1),
  ('no_property', r.properties = 0), ('several_properties', r.properties > 1),
  ('unknown_offer_status', r.senders = 1 and r.properties = 1 and exists (select from deal d where d.id = r.deal_id))) f(reason, refused)
-where f.refused;
+where f.refused and (f.reason = 'deal_not_copied' or exists (select from deal d where d.id = r.deal_id));
 set constraints all immediate;
 alter table deal enable trigger stamp_change;
 alter table deal_party enable trigger stamp_change;

@@ -31,10 +31,9 @@ const run = async (): Promise<pg.QueryResultRow[]> => {
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
-const deal = (n: number, type = "lease", extra = "") => `insert into public.deal
- (id, client_id, name, deal_type, phase, owner, created_by, updated_by, created_at, updated_at ${extra ? `, ${extra.split("=")[0]}` : ""})
- values ('${id(n)}', '${id(3)}', 'Example deal ${n}', '${type}', 'negotiation', 'example-user', '${id(1)}', '${id(1)}',
- '2025-01-01', '2025-02-01' ${extra ? `, ${extra.split("=").slice(1).join("=")}` : ""});`;
+const deal = (n: number, type = "lease") => `insert into public.deal
+ (id, client_id, name, deal_type, phase, owner, created_by, updated_by, created_at, updated_at)
+ values ('${id(n)}', '${id(3)}', 'Example deal ${n}', '${type}', 'negotiation', 'example-user', '${id(1)}', '${id(1)}', '2025-01-01', '2025-02-01');`;
 let report: pg.QueryResultRow[];
 before(async () => {
 	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
@@ -57,18 +56,20 @@ before(async () => {
  insert into public.client (id, party_id, created_by, updated_by) values ('${id(3)}', '${id(6)}', '${id(1)}', '${id(1)}');
  insert into public.deal_type_ref (slug, label, sort) select s, s, 1 from unnest(array['lease','purchase','sale_leaseback','build_to_suit','startup','relocation','expansion','renewal','additional_office','other']) s;
  insert into public.deal_phase (slug, label) values ('negotiation', 'Example negotiation'), ('closed', 'Example closed');
- insert into public.participant_role (slug, label) values ('listing_side', 'Example listing agent'), ('lead', 'Example owner');
+ insert into public.participant_role (slug, label) values ('listing_side', 'Example listing agent'), ('lead', 'Example owner'), ('landlord_side', 'Example landlord'), ('lender', 'Example lender'), ('attorney', 'Example attorney'), ('other_vendor', 'Example vendor'), ('support', 'Example support');
  insert into market (id, name) values ('${id(7)}', 'Example Market');
  ${["lease", "purchase", "sale_leaseback", "build_to_suit", "startup", "relocation", "expansion", "renewal", "additional_office", "other"].map((t, i) => deal(10 + i, t)).join("\n")}
- ${deal(20, "lease", "city='Missing Market'")} ${deal(21, "lease", "won_value=0")}
+ ${deal(20)} ${deal(21)}
  ${deal(22)} ${deal(23)} ${deal(24)} ${deal(25)} ${deal(26)} ${deal(27)}
  alter table public.deal disable trigger deal_touch;
+ update public.deal set city = 'Missing Market' where id = '${id(20)}';
+ update public.deal set won_value = 0 where id = '${id(21)}';
  update public.deal set owner = null where id in ('${id(22)}', '${id(23)}');
  update public.deal set phase = 'closed' where id = '${id(23)}';
  update public.deal set city = 'Example Market', won_value = 1234 where id = '${id(10)}';
  insert into public.deal_participant (id, deal_id, actor_id, role, set_by) values ('${id(80)}', '${id(23)}', '${id(1)}', 'lead', '${id(1)}');
  insert into public.deal_participant (deal_id, party_id, role, set_by) values
- ('${id(10)}', '${id(4)}', 'listing_side', '${id(1)}'), ('${id(24)}', '${id(4)}', 'listing_side', '${id(1)}'),
+ ('${id(10)}', '${id(4)}', 'landlord_side', '${id(1)}'), ('${id(24)}', '${id(4)}', 'listing_side', '${id(1)}'),
  ('${id(24)}', '${id(5)}', 'listing_side', '${id(1)}');
  insert into public.building (id, address, created_by, updated_by) values ('${id(90)}', '100 Example Way', '${id(1)}', '${id(1)}'), ('${id(91)}', '200 Example Way', '${id(1)}', '${id(1)}');
  insert into public.space (id, building_id, created_by, updated_by) values ('${id(92)}', '${id(90)}', '${id(1)}', '${id(1)}'), ('${id(93)}', '${id(91)}', '${id(1)}', '${id(1)}');
@@ -79,6 +80,8 @@ before(async () => {
  ('${id(101)}', '${id(10)}', 1, 'landlord', '2025-01-01', '2025-01-01', '${id(1)}'),
  ('${id(102)}', '${id(25)}', 1, 'landlord', '2025-01-01', '2025-01-01', '${id(1)}'),
  ('${id(103)}', '${id(24)}', 1, 'landlord', '2025-01-01', '2025-01-01', '${id(1)}'),
+ ('${id(105)}', '${id(10)}', 7, 'tenant', '2024-12-01', '2024-12-01', '${id(1)}'),
+ ('${id(106)}', '${id(22)}', 1, 'tenant', '2025-01-01', '2025-01-01', '${id(1)}'),
  ('${id(104)}', '${id(26)}', 1, 'tenant', '2025-01-01', '2025-01-01', '${id(1)}');
  insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause) values
  ('${id(110)}', 'deal', '${id(10)}', 'phase', '{"phase":"negotiation"}', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
@@ -95,11 +98,7 @@ after(async () => {
 
 test("types split into kind and reason, with startup renamed and other left unfiled", async () => {
 	const result = await rows(
-		"select kind, reason from deal where id between '" +
-			id(10) +
-			"' and '" +
-			id(19) +
-			"' order by id",
+		`select kind, reason from deal where id between '${id(10)}' and '${id(19)}' order by id`,
 	);
 	assert.deepEqual(result, [
 		...["lease", "purchase", "sale_leaseback", "build_to_suit"].map((kind) => ({
@@ -120,29 +119,17 @@ test("types split into kind and reason, with startup renamed and other left unfi
 	);
 });
 test("deals preserve identity, times, owner, market and value, and client links use the old-id map", async () => {
-	assert.deepEqual(
-		await rows(
-			`select name, owner_user_id, market_id, closed_value, created_at::text, changed_at::text, changed_by_user_id from deal where id = '${id(10)}'`,
-		),
-		[
-			{
-				name: "Example deal 10",
-				owner_user_id: id(1),
-				market_id: id(7),
-				closed_value: "1234.00",
-				created_at: "2025-01-01 00:00:00+00",
-				changed_at: "2025-02-01 00:00:00+00",
-				changed_by_user_id: id(1),
-			},
-		],
-	);
+	// biome-ignore format: one row per imported deal
+	assert.deepEqual((await rows(`select name, owner_user_id, market_id, closed_value, created_at::text, changed_at::text, changed_by_user_id from deal where id = '${id(10)}'`)).map(Object.values), [
+ ["Example deal 10", id(1), id(7), "1234.00", "2025-01-01 00:00:00+00", "2025-02-01 00:00:00+00", id(1)],
+ ]);
 	assert.deepEqual(
 		await rows(
 			`select party_id, role from deal_party where deal_id = '${id(10)}' order by role`,
 		),
 		[
 			{ party_id: id(2), role: "client" },
-			{ party_id: id(4), role: "listing_agent" },
+			{ party_id: id(4), role: "property_owner" },
 		],
 	);
 	assert.deepEqual(
@@ -197,13 +184,18 @@ test("rounds derive unique candidates, number across sides by creation then id, 
 			[103, "no_property"],
 			[103, "several_sender_candidates"],
 			[104, "several_properties"],
+			[105, "unknown_offer_status"],
+			[106, "deal_not_copied"],
 		].map(([n, reason]) => [id(Number(n)), reason]),
 	);
 	assert.deepEqual(
-		rounds.slice(0, 2).map((r) => JSON.parse(r.value)),
+		rounds
+			.filter((r) => r.reason === "unknown_offer_status")
+			.map((r) => JSON.parse(r.value)),
 		[
-			{ side: "tenant", round_no: 1, new_round: 1 },
-			{ side: "landlord", round_no: 1, new_round: 2 },
+			{ side: "tenant", round_no: 1, new_round: 2 },
+			{ side: "landlord", round_no: 1, new_round: 3 },
+			{ side: "tenant", round_no: 7, new_round: 1 },
 		],
 	);
 	assert.deepEqual(await rows("select * from offer"), []);
@@ -229,10 +221,16 @@ test("a repeat is idempotent and restores stamps after import", async () => {
 test("unmappable links and phase history are listed instead of lost", async () => {
 	await db.query("begin");
 	try {
-		await db.query(`select set_config('engine.job', 'old_system', true); delete from outside_id where value = '${id(5)}';
+		await db.query(`select set_config('engine.job', 'old_system', true);
+ update public.deal set outcome = 'lost' where id in ('${id(11)}', '${id(12)}');
+ insert into public.event (subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause, human_quote) values
+ ('deal', '${id(12)}', 'outcome', '{"outcome":"lost"}', '2025-07-01', '${id(1)}', 'update-deal', 'human_stated', 'Example client stopped');
+ update public.client set party_id = '${id(5)}' where id = '${id(3)}';
+ insert into public.deal_participant (deal_id, party_id, role, set_by) values ('${id(10)}', '${id(5)}', 'support', '${id(1)}');
+ delete from outside_id where value = '${id(4)}';
    insert into public.deal_vendor_assignment (deal_id, party_id, role, company_party_id, contact_party_id, updated_by)
-   values ('${id(10)}', '${id(4)}', 'lender', '${id(4)}', '${id(4)}', '${id(1)}');
-   insert into public.deal_participant (deal_id, party_id, role, set_by, to_at) values ('${id(10)}', '${id(4)}', 'listing_side', '${id(1)}', '2025-03-01');
+   values ('${id(10)}', '${id(5)}', 'lender', '${id(5)}', '${id(5)}', '${id(1)}');
+   insert into public.deal_participant (deal_id, party_id, role, set_by, to_at) values ('${id(10)}', '${id(4)}', 'landlord_side', '${id(1)}', '2025-03-01');
    insert into public.event (subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause) values
    ('deal', '${id(10)}', 'phase', '{"phase":"missing"}', '2025-04-01', '${id(1)}', 'update-deal', 'human_stated'),
    ('deal', '${id(10)}', 'phase', '{"phase":"dead"}', '2025-05-01', '${id(1)}', 'update-deal', 'human_stated'),
@@ -249,11 +247,35 @@ test("unmappable links and phase history are listed instead of lost", async () =
 			"dead_without_reason",
 			"same_time_phase_changes",
 			"existing_phase_conflict",
+			"current_phase_differs",
+			"lost_without_dated_reason",
 		])
 			assert.ok(
 				refused.some((r) => r.reason === reason),
 				reason,
 			);
+		assert.equal(
+			(
+				await rows(
+					`select phase from deal_phase_change where deal_id = '${id(12)}'`,
+				)
+			)[0]?.phase,
+			"dead",
+		);
+		assert.equal(
+			(
+				await rows(
+					`select count(*)::int as n from deal_party where deal_id = '${id(10)}' and party_id = '${id(5)}'`,
+				)
+			)[0]?.n,
+			2,
+		);
+		assert.deepEqual(
+			await rows(
+				"select slug from role where slug in ('lender', 'attorney', 'other_vendor')",
+			),
+			[],
+		);
 	} finally {
 		await db.query("rollback");
 	}
