@@ -14,7 +14,7 @@ _New database_: a user (`app_user`).
 _Engine_: `partner` in `src/session.ts`, `src/deals/routes.ts` and `readBoard`; the board answer keeps the old `actor` key.
 
 **User**:
-A person who uses the system: today the two partners, and any teammate added later. A user is a person in the party list, so they show on deals and timelines. Being a user is not a role on a deal; who owns a deal is.
+A person who uses the system: today the two partners, and any teammate added later. A user is a person in the party list, so they show on deals and timelines. Being a user is not a role on a deal, and each deal names its owner, a user.
 _Avoid_: partner (in the new database), actor, member
 _Database_: `app_user` in the new database, one row per user with their person's `party` id; `changed_by_user_id` names the user who last changed a row.
 
@@ -106,12 +106,24 @@ One piece of brokerage work for one client, such as a lease, a purchase or a ren
 _Avoid_: deal room (the old app's name), work record, record, deal space (in the old system that means a saved space search for a deal), transaction
 _Database_: `deal`; `v_deal_room_board` and `v_open_deal_room_board` for open deals; `v_deal_board` for closed and lost deals; the other `v_deal_room_*` views for a deal's parts. The type is `deal.deal_type`, with labels in `deal_type_ref`.
 _Engine_: `type` for the deal type; `short_name` for the name the board shows.
+_New database_: `deal`, where the type is two facts, its kind and its reason.
+
+**Deal kind**:
+What kind of transaction a deal is: lease, purchase, sale-leaseback or build-to-suit.
+_Avoid_: deal type, transaction type
+_Database_: part of `deal.deal_type` today; `deal.kind` and `deal_kind` in the new database.
+
+**Deal reason**:
+Why the client is taking space: start-up, relocation, expansion, renewal or additional office.
+_Avoid_: deal type, motive
+_Database_: part of `deal.deal_type` today; `deal.reason` and `deal_reason` in the new database.
 
 **Local deal**:
 A deal whose client is not under a national account. The partners work these themselves.
 _Avoid_: team deal, territory deal, workspace
 _Database_: `workspace_kind = 'team'` in `v_deal_room_board` and `deal_review_session`.
 _Engine_: `workspace: "team"` in `readBoard`.
+_New database_: never stored. A deal is national exactly when its client is a location of a national account, and local otherwise.
 
 **Deal board**:
 The screen that lists every open deal by phase, with Local Deals and National Accounts tabs and separate lists of closed and lost deals.
@@ -135,13 +147,14 @@ The partner responsible for a deal.
 _Avoid_: owner on its own, lead (a participant role that means deal owner), assignee
 _Database_: `deal.owner` for open deals. Closed and lost deals take it from `deal_participant` with role `lead`, shown as `v_deal_board.lead_owner`.
 _Engine_: `owner` in both places.
+_New database_: `deal.owner_user_id`, exactly one user per deal; change history keeps earlier owners.
 
 **Market**:
 The city or metro area where the client needs space.
 _Avoid_: territory, submarket
 _Database_: `deal.city`, shown as `market` in `v_deal_room_board`.
 _Engine_: `market` on the board; the deal page renames it back to `city`.
-_New database_: a named market (`market`), by the counties it covers. A vendor's "market" is a whole territory, and a `market` row is one named piece of one.
+_New database_: a named market (`market`), by the counties it covers, and `deal.market_id` for a deal's. A vendor's "market" is a whole territory, and a `market` row is one named piece of one.
 
 **Territory**:
 The area someone serves: a user's, a vendor's or a lead's. A vendor's market is its territory. It is made of whole states, named markets and distances from a base.
