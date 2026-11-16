@@ -321,7 +321,7 @@ National is never stored. A deal is national exactly when its client is a locati
 
 Moving today's rows across:
 
-- `deal_type` splits in two. `lease`, `purchase`, `sale_leaseback` and `build_to_suit` become the kind, with no reason. `relocation`, `expansion`, `renewal` and `additional_office` become the reason of the same slug, and `startup` the reason `start_up`, each with no kind until a user sets it. `other` sets neither, and the deal is listed with its imported type for a user to file.
+- `deal_type` splits in two. `lease`, `purchase`, `sale_leaseback` and `build_to_suit` become the kind, with no reason. `relocation`, `expansion` and `additional_office` become the reason of the same slug, and `startup` the reason `start_up`, each with no kind until a user sets it. `renewal` becomes that reason only with its source lease linked; otherwise leave the reason unknown and list the missing source for a user. `other` sets neither, and the deal is listed with its imported type for a user to file.
 - `deal.owner`, a partner's slug, becomes that partner's user as the deal owner. A closed or lost deal with none takes its open `deal_participant` row with role `lead`. A deal with neither is listed. Earlier deal owners, from the closed `lead` rows, come across later into change history, dated when each changed, with the old `event` rows.
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
 - `won_value` becomes `closed_value`. `sf_commission_placeholder` is a commission, not the deal's value, so it waits for commissions.
