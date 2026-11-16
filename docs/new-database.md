@@ -4,15 +4,16 @@ The engine will move to a new, cleanly connected database in one planned step, a
 
 ## Records
 
-- **`party`**: every person and company, once, each with its own id. `kind` is `person` or `company`. A person's `npi` is their individual NPI, and a company's its organization NPI.
+- **`party`**: every person and company, once, each with its own id. `kind` is `person` or `company`. A person's `npi` is their individual NPI, and a company's its organization NPI. `how_found` says how a lead or client was found.
 - **`merged_party`**: what a merged-away duplicate leaves behind: its old id and the record it became. Nothing lists or shows it.
 - **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's preferences and facts will be columns here, or a child table keyed by the user, as they come.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.
-- **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason.
+- **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason and an optional until-date.
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
 - **`outside_id`**: another system's id for a person, company or deal, such as a Salesforce or roster id, kept as import history.
 - **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record. A vendor's category, such as lender, is a role whose `category_of` is vendor.
-- **`stage`**: each role's list of stages, such as a vendor's. Like roles, a label can be renamed.
+- **`stage`**: each role's list of stages, such as a vendor's or a lead's. Like roles, a label can be renamed.
+- **`how_found`**: the short list of how a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
 - **`relationship_level`**: the four levels of how well the team knows a vendor, from 0, Prospective, to 3, Core.
 - **`introduction`**: one introduction between a vendor and the team, made either way, and the deal it led to.
 - **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
@@ -38,7 +39,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 ## Users, jobs and who changed what
 
-Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons and specialties, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, leases and their options, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
+Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons, specialties and how found, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, leases and their options, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
 
 The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. A removal names who made it too, in change history.
 
@@ -58,13 +59,15 @@ A user who settles a post stuck in `publishing` is named on the post. In marketi
 
 Only the owner adds a user or a job, because every change is signed with one. A user who has changed anything stays, so who changed what survives; a teammate who leaves will be a column on the user. Adding a teammate is a person row and a user row. The first user's own person row names them as its author, so that key is checked when the transaction ends. Being a user is not a role on a deal. A deal names its one deal owner, a user, on the deal itself (see "Deals").
 
-Today's actors map across like this. The old `actor` table holds the two partners as `human`, the scheduled jobs and agent sessions as `automation`, and migrations and exporters as `system`. Its `created_by` and `updated_by` columns name an actor and are often empty, and the old `event` rows add a cause and, for an agent, the partner it worked for. Each `human` actor becomes a person with a user row. The owner loads them with the `stamp_change` triggers turned off, so a row keeps its old author and time: its author from `updated_by`, or `created_by` when never updated, and `changed_at` from `updated_at`, or `created_at`. The check that a row names a user or a job still holds during that load. A row a `human` actor last changed names that user. A row an `automation` actor last changed names the job that now does its work, such as `mail_capture` for the old mail filing, or `old_system` when none does, and an agent session's names `agent`; each takes the partner its event names as the user it worked for. A row a `system` actor last changed names `old_system`. A row with no author names `old_system` too. The first copy, of people and companies, names `old_system` for every `automation` actor's row until #264 tells the jobs apart. The old columns that name a partner by slug, such as `deal.owner`, name that partner's user.
+Today's actors map across like this. The old `actor` table holds the two partners as `human`, the scheduled jobs and agent sessions as `automation`, and migrations and exporters as `system`. Its `created_by` and `updated_by` columns name an actor and are often empty, and the old `event` rows add a cause and, for an agent, the partner it worked for. Each `human` actor becomes a person with a user row. The owner loads them with the `stamp_change` triggers turned off, so a row keeps its old author and time: its author from `updated_by`, or `created_by` when never updated, and `changed_at` from `updated_at`, or `created_at`. The check that a row names a user or a job still holds during that load. A row a `human` actor last changed names that user. A row an `automation` actor last changed names the job that now does its work, such as `mail_capture` for the old mail filing, or `old_system` when none does, and an agent session's names `agent`; each takes the partner its event names as the user it worked for. A row a `system` actor last changed names `old_system`. A row with no author names `old_system` too. The old columns that name a partner by slug, such as `deal.owner`, name that partner's user.
+
+Every copy loads `schema/copy-attribution.sql` after `next.sql`, with the new schema on `search_path`. Its `copy_attribution(old_type, old_id, author_id, old_field)` returns `changed_by_user_id`, `changed_by_job` and `changed_for_user_id`. Pass `coalesce(updated_by, created_by)` as the author. Omit `old_field` for the whole row, or pass the field whose separate setter is being copied, such as `contact_state`. The latest event is ordered by `mutation_order`, not the date a caller supplied, and contributes only when its actor matches the author. `ingest_email` maps to `mail_capture`; the registered interactive runtime actors map to `agent`. Other automatic work stays `old_system` until a replacement is known. Only `agent` and `mail_capture` take the event's human sponsor. Missing sponsors stay unknown, and a human or system actor keeps its own mapping regardless of the event's cause. Drop this helper before dropping the old `public.actor` and `public.event` tables, which its SQL body depends on.
 
 ## Links
 
 Each link is one row. No record holds a list or a column per role.
 
-- **`party_role`**: what a person or company is to us. One row per role. A vendor's vendor role also holds its stage and relationship level.
+- **`party_role`**: what a person or company is to us. One row per role. A vendor's vendor role also holds its stage and relationship level, and a lead's lead role its stage and owner.
 - **`party_email`** and **`party_phone`**: a person's or company's emails and phone numbers, one row each, with a label and whether it is the primary one.
 - **`party_specialty`**: a person's specialties, one row each.
 - **`party_company`**: a person at a company, with their title there and the dates they started and left. A person who moves keeps the old row, with its end date, and gets a new one.
@@ -115,22 +118,22 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 35. A change a job makes names the job, and the user it worked for, if any. A row names a user or a job, never both and never neither, even when the owner loads it with the stamp turned off. A job comes from the list, and only the owner adds one. A statement that changes nothing keeps who last changed the row.
 36. An NPI is ten digits ending in its check digit, and one person or company holds it.
 37. A specialty is a person's, comes from the specialty list, and is stored once per person.
-38. A person or company is marked do not contact once, with a reason that is never blank and never changes.
+38. A person or company is marked do not contact once, with a reason that is never blank and never changes. Its optional until-date may change; outreach reads active_do_not_contact, which includes a stop through that date and an indefinite stop forever.
 39. An outside id is for exactly one person, company or deal, is stored once per source, and the engine never rewrites or removes one. A merge moves it to the survivor. Its source is a lower-case name, and its value has no space around it.
 40. A territory piece is exactly one of a whole state, a named market, or a distance of more than zero miles from a base point, and a territory holds each piece once.
 41. A state is a two-digit and a county a five-digit Census FIPS code. A latitude is between -90 and 90 and a longitude between -180 and 180, and a property has both or neither.
 42. A market's name is never blank and is used once, and a market holds each county once. A territory's name is never blank.
 43. Someone serves a territory that exists, ends no earlier than they started, and is linked once per start date.
 44. A merge joins two different people or two different companies, neither merged away. It never merges a user away, and never two records that each hold an NPI.
-45. A merge moves everything that points at the duplicate, in every table, to the survivor, and removes the duplicate. Where both hold the same link, the survivor's row stays, and so do its primary email, primary phone and do-not-contact reason. A second merge onto the same records waits for the first.
+45. A merge moves everything that points at the duplicate, in every table, to the survivor, and removes the duplicate. Where both hold the same link, the survivor's row stays, and so do its primary email and primary phone. Do not contact keeps the longest restriction and its reason. A second merge onto the same records waits for the first.
 46. Only a merge leaves a merged-into pointer, and it names a live record, so merges never chain or loop. Nothing new points at a merged-away record, and its id is never used again. Only the engine and the owner run a merge.
 47. A vendor's category is a role whose `category_of` is vendor, and it stays one. Only a vendor holds a vendor category, checked when the change is saved.
 48. A stage comes from its own role's stage list, and is stored once per role.
 49. A relationship level is a vendor role's, one of the four levels, and only a schema change adds or renames a level.
 50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. One the team made names the user who made it, and one the vendor made names none. Its note is never blank, and who it joins and who made it never change. A vendor keeps its vendor role while it has introductions.
-51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none. A merge keeps the stricter disposition, avoid over parked over none, with its reason.
+51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none. A merge keeps the stricter disposition, avoid over parked over none, with its reason. An avoided vendor cannot be a target, and a merge clears its target.
 52. Every insert, update and delete of a stamped row leaves one change row: the record's key, the fields it changed from what to what, and who made it and when. A statement that changes nothing leaves none.
-53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update or a delete.
+53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update, a delete or an owner-requested erase.
 54. A change a merge makes names the merge, and only a merge saved in the same transaction is named.
 55. A deal's kind comes from the kind list and its reason from the reason list. Either may be unknown.
 56. A deal has exactly one deal owner, a user.
@@ -139,8 +142,11 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 59. Every lease option is numbered once on its version, is renewal, expansion or early termination, and has an exact notice deadline and nonblank terms. An option notice is no later than the lease ends. Options never change or disappear; sourced options may be added to any version as they are extracted.
 60. A critical date starts proposed, with a known kind and nonblank source; its source round belongs to its deal, and its source lease version or option is on a lease the deal negotiated or renews. Repeated generated proposals are stored once.
 61. Only a direct user confirms or resolves a critical date. The database records who and when, retains confirmation through resolution, and refuses all other transitions, rewrites and removals. Resolution needs a nonblank reason.
-62. A lease names its tenant and property, with an optional originating deal. A negotiated lease is for that deal's client and property, and only one lease originates from a deal. An outside lease needs no invented deal. Lease identities never change or disappear.
-63. A renewal reason and the lease it renews are required together. The source lease exists, and its originating deal is not the renewal deal.
+62. A lead has a stage. Only a lead has an owner, and the owner is a user.
+63. A lead or client says how they were found, from the list. A new lead or client is checked when the change is saved.
+64. Someone on a deal as its client holds the client role, checked when the change is saved, so the role cannot be removed while they are.
+65. A lease names its tenant and property, with an optional originating deal. A negotiated lease is for that deal's client and property, and only one lease originates from a deal. An outside lease needs no invented deal. Lease identities never change or disappear.
+66. A renewal reason and the lease it renews are required together. The source lease exists, and its originating deal is not the renewal deal. A user may correct the reason and source together.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -150,15 +156,16 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
-- a role's, a stage's, a phase's, a deal kind's, a deal reason's or a specialty's label;
-- a vendor role's stage, relationship level, disposition, reason and target, and an introduction's date, deal and note;
-- a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, and a property's address, county and point;
-- a deal's kind, reason, deal owner, market and closed value;
+- a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's or a how-found's label;
+- a vendor role's stage, relationship level, disposition, reason and target, a lead role's stage and owner, and an introduction's date, deal and note;
+- a party's, market's, territory's, deal's, document's or design template's name, a party's NPI and how found, and a property's address, county and point;
+- a deal's kind, reason, lease it renews, deal owner, market and closed value;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
 - a next step's text, owner, due date and done time;
 - a round's status, and a critical date's status and resolution reason;
+- a do-not-contact row's until-date;
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
@@ -186,7 +193,7 @@ Today's `party` row holds one free-text `email`, `phone` and `cell` on each pers
 
 ## Do not contact, NPIs and outside ids
 
-Do not contact is a fact about the person or company, whatever roles they hold, so a lead, a client and a vendor contact are all covered by one row. The owner: "the only time we would make someone do not contact it would be for any reason." Its row is keyed by the party alone, so any outreach finds it with the party's id. It carries the reason, and its stamp says which user or job set it and when. The reason never changes, so the stamp stays the time it was set, or the time a merge moved it; lifting it removes the row.
+Do not contact is a fact about the person or company, whatever roles they hold, so a lead, a client and a vendor contact are all covered by one row. The owner: "the only time we would make someone do not contact it would be for any reason." Its row is keyed by the party alone, so any outreach finds it with the party's id. It carries the reason, and its stamp says which user or job set it and when. The reason never changes. Changing its until-date restamps it, and history keeps the earlier stamp; lifting it removes the row.
 
 An NPI is checked for shape: ten digits, the last a Luhn check digit over the prefix 80840 and the first nine. The first digit is not checked, so tests use made-up numbers starting with 9, which no NPI issued yet does. NPPES issues each number once, to a person or an organization, so the number is unique across both. A doctor's specialties are rows in `party_specialty`; a company has none.
 
@@ -202,7 +209,7 @@ Old reference ids, such as Salesforce ids and roster numbers, are kept in `outsi
 - A deleted record is not copied, nor one merged into it.
 - Emails and phone numbers follow "Emails and phone numbers" above. The first value stored is primary. An email holding an `@` that no address took is listed whole.
 - An NPI stays with the record that held it first: one already in the new database, or else the first stored. A second holder is copied without it and listed, since it may be the same person or company. So is a duplicate's NPI when its survivor holds another, and an NPI with a wrong check digit.
-- Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` and `nurture` have no place yet, so they are listed.
+- Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` moves with its reason and end date; one missing either is listed. `nurture` waits for #282 after #274.
 - Today's free-text specialty is split at commas and semicolons. Spellings that differ only in case, spaces or punctuation are one specialty on the list, with a slug of lower case letters, digits and `_` and the spelling first typed as its label. One already on the list keeps its label. A company's specialty, and one with no ASCII letter or digit, is listed.
 - Today's `record_source` rows for a party, vendor, lead or client become outside ids of the record it became, and each party's `ref` one under `old_system_ref`. A source is lower-cased, with `_` for each run of anything but letters and digits, so `vendors.xlsx` becomes `vendors_xlsx`. A `dup_candidate` row only hints at a duplicate, so it is listed. So is a row for another kind of record, a row whose record is not copied, a source that folds to `old_system` or `old_system_ref`, which the copy keeps for itself, and an id another record already holds. Rows for deals, activity, events and loop items are left to the copies of those records.
 - A person's company and title become a `party_company` row, with no dates, at the record the company became. A title comes from the survivor first, then its duplicates, and a title beats none. A company's own `org_id` is the national account it belongs to, which has no place until national accounts are designed, so it is listed. So are a company that is not copied or is a person, with the title held there, a title without a company, and a duplicate's other title at the same company.
@@ -260,11 +267,11 @@ A `lease` identifies its tenant party and property. Its optional `deal_id` names
 
 A `lease_version` has its source document and exact expiration. Execution and commencement dates remain null when unknown; dates are never inferred from term months. Rent and NNN are per square foot per year, TI per square foot, and escalation a yearly percent. `rent_starts_on` or `rent_days_after_delivery` keeps rent commencement separate from the lease's start. Signed terms are independent of the LOI. An optional offer names a round accepted when recorded, on the lease's negotiating deal and property; outside leases have none.
 
-Amendments and corrections are consecutive versions of the same lease. `current_lease` selects the latest version, including tenant, property and optional originating deal, so every sourced lease ending can be queried by `expiration_on`. The lease identity and existing versions and options are immutable. Source-backed options may be added later to any version. An option's `lease_version_id` names its exact version, with its kind, notice deadline and terms. Notices cannot follow expiration, but can predate an amendment retaining them.
+Amendments and corrections are consecutive versions of the same lease. `current_lease` selects the latest version, including tenant, property and optional originating deal, so every sourced lease ending can be queried by `expiration_on`. `lease_ending` is the work list; it excludes an old lease once a renewal deal has a new signed version. The lease identity and existing versions and options are immutable. Source-backed options may be added later to any version. An option's `lease_version_id` names its exact version, with its kind, notice deadline and terms. Notices cannot follow expiration, but can predate an amendment retaining them.
 
-A renewal is a new deal with `reason = 'renewal'` and `renews_lease_id` pointing at the lease it renews. Both fields are required together, and it cannot renew a lease negotiated by that same deal. Its offers and new lease belong to the new deal; the old lease and its negotiation history stay. Critical date proposals can refer to a version of either the lease the deal negotiated or the one it renews.
+A renewal is a new deal with `reason = 'renewal'` and `renews_lease_id` pointing at the lease it renews. Both fields are required together, and it cannot renew a lease negotiated by that same deal. Its client may be a successor tenant, such as after a practice acquisition, and need not be the old tenant. Its offers and new lease belong to the new deal; the old lease and its negotiation history stay. Critical date proposals can refer to a version of either the lease the deal negotiated or the one it renews. A renewal proposes the old lease's end and option notices, never its historical rent start.
 
-Moving today's rows across, each deal's lease chain becomes one lease and its ordered versions. A lease without brokerage work names only its tenant and property. Preserve exact known dates and source evidence as documents; list missing expiration or evidence for a partner to fix. Known executed dates stay, unknown ones stay null. Convert a legacy rent quote only when its unit is known; otherwise preserve its wording in `other_terms`. Options in `options_note` need individual terms and sourced deadlines before becoming option rows; preserve unparsed wording in `other_terms`. The old radar's current ending becomes `current_lease.expiration_on`, including outside leases; the 24-month radar and 18-month renewal windows remain read filters.
+Moving today's rows across, each deal's lease chain becomes one lease and its ordered versions. A lease without brokerage work names only its tenant and property. An old renewal deal becomes renewal with its source lease when known; otherwise leave its reason unknown and list it for a user to supply the source lease, retaining the old type in the move report. Preserve exact known dates and source evidence as documents; list missing expiration or evidence for a partner to fix. Known executed dates stay, unknown ones stay null. Convert a legacy rent quote only when its unit is known; otherwise preserve its wording in `other_terms`. Options in `options_note` need individual terms and sourced deadlines before becoming option rows; preserve unparsed wording in `other_terms`. The old radar's current ending becomes `current_lease.expiration_on`, including outside leases; the 24-month radar and 18-month renewal windows remain read filters on `lease_ending`.
 
 ## Critical dates
 
@@ -278,9 +285,9 @@ Today's `critical_date` rows keep their kinds, dates, sources and notes. `option
 
 ## Tours as meetings
 
-A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` links it once to the deal and once to every visited property. The same meeting appears on the deal and property timelines. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
+A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal; the property links support a later property read. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
 
-Moving today's rows across, each logged `activity` of kind `tour` becomes a meeting, retaining its actual time and summary. Resolve the subject to its deal and link each property known to have been visited. If a tour record and its logged activity describe the same completed visit, they become one meeting. Planned routes and appointment times do not prove a visit happened; unresolved deals, properties or completion evidence are listed for a partner to fix. Route order, appointments, client packets, share links, shortlists, comments and landlord registrations do not move in this slice. The owner accepted meetings only on #196, D5; a later planner can use the same deals and properties.
+Moving today's rows across, each logged `activity` of kind `tour` becomes a meeting, retaining its actual time and summary. Preserve its `party_id` and map every linked client, lead and vendor to that record's party in `activity_about`. Keep its deal link when present; a lead or client tour needs no invented deal. Old activity rows have no property column. Add visited properties from a user's confirmation of actual stops or a record of a completed visit naming those properties. If a tour record and its logged activity describe the same completed visit, they become one meeting. A planned route or appointment alone does not prove a visit happened. A meeting with known party links still moves when its deal or properties are unknown; only a tour with no resolvable record waits for a partner to fix it. Route order, appointments, client packets, share links, shortlists, comments and landlord registrations do not move in this slice. The owner accepted meetings only on #196, D5; a later planner can use the same parties, deals and properties.
 
 ## Marketing
 
@@ -326,7 +333,7 @@ National is never stored. A deal is national exactly when its client is a locati
 
 Moving today's rows across:
 
-- `deal_type` splits in two. `lease`, `purchase`, `sale_leaseback` and `build_to_suit` become the kind, with no reason. `relocation`, `expansion`, `renewal` and `additional_office` become the reason of the same slug, and `startup` the reason `start_up`, each with no kind until a user sets it. `other` sets neither, and the deal is listed with its imported type for a user to file.
+- `deal_type` splits in two. `lease`, `purchase`, `sale_leaseback` and `build_to_suit` become the kind, with no reason. `relocation`, `expansion` and `additional_office` become the reason of the same slug, and `startup` the reason `start_up`, each with no kind until a user sets it. `renewal` becomes that reason only with its source lease linked; otherwise leave the reason unknown and list the missing source for a user. `other` sets neither, and the deal is listed with its imported type for a user to file.
 - `deal.owner`, a partner's slug, becomes that partner's user as the deal owner. A closed or lost deal with none takes its open `deal_participant` row with role `lead`. A deal with neither is listed. Earlier deal owners, from the closed `lead` rows, come across later into change history, dated when each changed, with the old `event` rows.
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
 - `won_value` becomes `closed_value`. `sf_commission_placeholder` is a commission, not the deal's value, so it waits for commissions.
@@ -367,7 +374,7 @@ A vendor's stage and relationship level are on its vendor role, because they des
 
 No level means not yet judged, a different fact from 0.
 
-A vendor's disposition is the team's ruling on it, and its target flag says the team wants to meet it. Both sit on the vendor role next to its stage and level (owner, #258). A disposition is parked, deliberately dormant and on drip only, or avoid, ruled out as a partner. No disposition is active, in the network. A ruling always carries its reason, so a vendor never leaves play without one. Disposition and target are not stages: today's stage list once held them, and the old system's migration 0047 split them out because a stage mixed how well the team knows a vendor, a ruling and an intent.
+A vendor's disposition is the team's ruling on it, and its target flag says the team wants to meet it. Both sit on the vendor role next to its stage and level (owner, #258). A disposition is parked, deliberately dormant and on drip only, or avoid, ruled out as a partner. No disposition is active, in the network. A ruling always carries its reason, so a vendor never leaves play without one. An avoided vendor cannot be a target. Disposition and target are not stages: today's stage list once held them, and the old system's migration 0047 split them out because a stage mixed how well the team knows a vendor, a ruling and an intent.
 
 An introduction is one `introduction` row, made either way: the vendor introducing someone to the team, such as a new client, or the team introducing someone to the vendor. It names the vendor, who made it, whom it introduced, when, a note, and the deal it led to, which can be set when one comes of it. One the team made names the user who made it.
 
@@ -381,6 +388,26 @@ Moving today's rows across:
 - Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is empty, or is neither the vendor nor a user, waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
 - `trust_override`, a hand-set rating, does not move.
 
+## Leads and clients
+
+A lead is a person or company holding the `lead` role, and a client one holding the `client` role, so a lead that becomes a client is the same record with one more role. The owner ruled on #196 (walkthrough 4, 2026-11-16).
+
+- **Becoming a client.** Someone is a client as soon as a deal is opened for them, signed or not. The client on a deal is a `deal_party` row, and the database refuses one whose party does not hold the client role. The engine adds the role with the deal, in one save, and the role's `created_at` is when they became a client. The lead role stays, with its stage, owner and history, so the Leads screen can leave out a lead who has become a client.
+- **Owner.** A lead's owner is the user who works it. None means nobody works it yet, and any user can take it. Territory is shared, so a lead's area never picks its owner. Change history keeps who owned it before.
+- **Stage.** A lead's stage comes from the lead stages in `stage`: New, Qualified, Outreach Active, Engaged, Nurture, Opportunity and Archived. Nurture replaces named drip campaigns. Do not contact is the party's `do_not_contact` row, and deal outcomes are deal phases, not lead stages.
+- **How found.** Each lead and client says how they were found, from the `how_found` list: referral, vendor, marketing post, public records and cold outreach to start. It is a fact about the person or company, so it holds in every role, and a lead that becomes a client copies nothing. A list can be counted for lead attribution, where free text cannot.
+- **Not kept.** The 0 to 100 lead score and named drip campaigns do not come across (owner, #196).
+
+Moving today's rows across:
+
+- Each `lead` becomes the lead role on its party, and each `client` the client role on its party, keeping its `created_at`. A client merged away today is not copied. A party with several leads or clients keeps the earliest `created_at` and the stage and owner of its most recently changed lead, and is listed for a partner.
+- Stages `new`, `qualified`, `outreach_active`, `engaged`, `opportunity` and `archived` stay. `nurture_drip` and `closed_lost` become nurture, as the Leads screen already shows Closed-Lost. `active_deal` and `closed_won` become opportunity, since the deal holds what happened. A `do_not_contact` stage or `suppressed` lead becomes archived. Today that sets only the lead, not the person's `contact_state`, so the copy of leads lists each one for a partner to give the reason its `do_not_contact` row needs.
+- `owner_id` names a partner's actor, which becomes that user. A lead with only an `owner_label` is listed for a partner, and one with neither keeps no owner.
+- How found comes from `client.acquisition_source`, asked of the client, or else `lead.source_type`. Both are free text today. A `prospect-pool` lead is mapped by its candidate's own pool source. Every other value is listed for a partner to map to the list, and so is a party whose two values disagree. A lead or client with neither waits, listed, since the database refuses one without how it was found.
+- A lead whose `client_id` points at a client on another party, such as the practice a doctor runs, keeps its lead role on the person, and the client role stays on the practice.
+- `score`, `score_reason`, `drip_campaign`, `drip_added`, `report_back_due` and `sf_deal` do not move. Only the old spreadsheet import wrote the last four, and nothing reads them.
+- Lanes, stage moves, the estimated lease date, outreach drafts, candidates and the remaining free text come with #286.
+
 ## Merging duplicates
 
 The owner ruled on #196: the merged-away record disappears and everything points at the survivor. `merge_party(duplicate, survivor)` leaves a `merged_party` row, so an old link finds the survivor, moves every row that points at the duplicate, then removes it. Email matches need nothing more, because the duplicate's addresses are now the survivor's. The foreign keys then refuse any row that still names the duplicate, in any table, including tables added later. The merge finds what to move from the catalog, so a new table that points at a party moves with no change to it.
@@ -392,10 +419,11 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Both have an NPI? Refused. NPPES issues one number per person or organization, so two numbers are two of them. Otherwise the survivor keeps its own NPI or takes the duplicate's.
 - The same email, phone number, role, specialty, company link, territory link or activity on both? One row stays, the survivor's, with its label and title.
 - Both have a primary email or phone? The survivor's stays primary. If only the duplicate has one, it becomes the survivor's.
-- Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays.
+- Do not contact on either? The survivor is do not contact. If both are, the longer restriction stays with its reason, with no end date stronger than either date. Equal end dates keep the survivor's reason.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
-- Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is.
+- Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. How found stays the survivor's, or becomes the duplicate's.
+- Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is, unless the merged disposition is avoid.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
 
@@ -413,6 +441,8 @@ A merge marks each change it makes with the duplicate it merged, in `merge_of`: 
 
 Today's system keeps one `event` row per field changed, with the actor, a verb and a cause, and `/pipeline/changes` reads a deal's events. A change row holds every field one statement changed, so the old per-field rows are `jsonb_each` over its values. A copy of old rows, such as `schema/copy-parties.sql`, keeps each row's old stamp, and its history records the copy itself: an insert by `old_system`, at the time the copy ran. The old `event` rows come across later. Serving the change feed and deal events from this table is a later slice.
 
+Only the schema owner's database role may call `erase_change(removed_change_id, fields)`. It requires a delete change and refuses a record that exists again. It removes the selected non-key text fields from old and new values for that table and record, across inserts, edits and deletions. Unknown fields, keys and non-text fields are refused. Other values stay. Keys, actions, merge pointers, authors and times stay unchanged. An `erase` change records the request with its user or job and time, with the erased field names and without copying their words. Repeating a completed erase changes nothing. The function locks the source table while it checks absence and erases, so a concurrent insert cannot recreate the record during it. The engine cannot call it or change history directly. Linked records and external copies are separate requests.
+
 ## Later slices
 
-A deal's parked state and needs attention (#283). "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Commissions. Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+A deal's parked state and needs attention (#283). "Everything about this person." The rest of leads (#286). National accounts and franchisees. Commissions. Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.

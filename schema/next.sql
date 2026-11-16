@@ -135,7 +135,8 @@ create table party_role (
 	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor'),
 	constraint party_role_disposition_on_vendor check (disposition is null or role = 'vendor'),
 	constraint party_role_ruling_has_a_reason check ((disposition is null) = (disposition_reason is null)),
-	constraint party_role_target_on_vendor check (not is_target or role = 'vendor')
+	constraint party_role_target_on_vendor check (not is_target or role = 'vendor'),
+	constraint party_role_avoid_not_target check (not is_target or disposition is distinct from 'avoid')
 );
 
 create function party_role_category_of_a_vendor() returns trigger
@@ -211,8 +212,12 @@ create unique index party_phone_one_primary on party_phone (party_id) where is_p
 create table do_not_contact (
 	party_id uuid primary key references party,
 	created_at timestamptz not null default now(),
-	reason text not null check (reason ~ '\S')
+	reason text not null check (reason ~ '\S'),
+	until_date date
 );
+
+create view active_do_not_contact as
+select * from do_not_contact where until_date is null or until_date >= current_date;
 
 create table specialty (
 	slug text primary key,
@@ -378,6 +383,52 @@ create table deal_party (
 	created_at timestamptz not null default now(),
 	primary key (deal_id, party_id, role)
 );
+
+-- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
+
+-- How a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
+create table how_found (
+	slug text primary key,
+	label text not null
+);
+
+-- A fact about the person or company, so it holds in every role and a lead that becomes a client copies nothing.
+alter table party add how_found text references how_found;
+
+-- A lead's stage comes from the lead stages, and its owner is the user who works it. None means nobody works it yet.
+alter table party_role add owner_user_id uuid references app_user,
+	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
+	add constraint party_role_owner_on_lead check (owner_user_id is null or role = 'lead');
+
+create function lead_or_client_how_found() returns trigger
+language plpgsql as $$
+declare
+	-- The trigger names the column that holds the party.
+	wanted uuid := to_jsonb(new) ->> tg_argv[0];
+begin
+	if exists (select from party p
+		where p.id = wanted and p.how_found is null
+			and exists (select from party_role where party_id = p.id and role in ('lead', 'client'))) then
+		raise exception 'a lead or client says how they were found'
+			using errcode = 'check_violation', constraint = 'lead_or_client_how_found';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, so a person and their role can be saved in either order. A merge moves a role only with how it was found.
+create constraint trigger lead_or_client_how_found after insert on party_role
+	initially deferred for each row when (new.role in ('lead', 'client'))
+	execute function lead_or_client_how_found('party_id');
+-- Only clearing it can break the rule.
+create constraint trigger lead_or_client_how_found after update of how_found on party
+	for each row when (old.how_found is not null and new.how_found is null)
+	execute function lead_or_client_how_found('id');
+
+-- Someone is a client once a deal is opened for them, signed or not. The client role's row keeps when that was.
+-- Deferred, so the role and the deal can be saved in either order, and a merge can move both.
+alter table deal_party add client_role text generated always as (case when role = 'client' then role end) stored,
+	add constraint deal_party_client_is_a_client foreign key (party_id, client_role) references party_role
+		deferrable initially deferred;
 
 -- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
 create table introduction (
@@ -568,7 +619,6 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
--- Signed terms are their own history; an amendment is the next version, never an overwrite.
 create table lease (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -597,6 +647,7 @@ end $$;
 create trigger deal_renews_another_lease before insert or update on deal
 	for each row when (new.renews_lease_id is not null) execute function deal_renews_another_lease();
 
+-- Signed terms are their own history; an amendment is the next version, never an overwrite.
 create table lease_version (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -667,6 +718,12 @@ create trigger lease_option_before_expiration before insert on lease_option
 create view current_lease as
 select v.*, l.deal_id, l.party_id, l.property_id from lease_version v join lease l on l.id = v.lease_id
 where not exists (select from lease_version newer where newer.lease_id = v.lease_id and newer.version > v.version);
+
+create view lease_ending as
+select c.* from current_lease c where not exists (
+	select from deal d join lease l on l.deal_id = d.id join lease_version v on v.lease_id = l.id
+	where d.renews_lease_id = c.lease_id
+);
 
 create table critical_date (
 	id uuid primary key default gen_random_uuid(),
@@ -752,7 +809,7 @@ begin atomic
 	insert into critical_date (deal_id, kind, due_on, source, lease_version_id, option_number)
 	select wanted, dates.kind, dates.due_on, 'Signed lease', l.id, null
 	from current_lease l cross join lateral (values ('lease_end', l.expiration_on), ('rent_start', l.rent_starts_on)) dates(kind, due_on)
-	where (l.deal_id = wanted or l.lease_id = (select renews_lease_id from deal where id = wanted)) and dates.due_on is not null
+	where (l.deal_id = wanted or l.lease_id = (select renews_lease_id from deal where id = wanted)) and dates.due_on is not null and (dates.kind <> 'rent_start' or l.deal_id = wanted)
 	on conflict do nothing;
 	insert into critical_date (deal_id, kind, due_on, source, lease_version_id, option_number)
 	select wanted, 'option_notice', o.notice_on, 'Signed lease option', l.id, o.number
@@ -1080,6 +1137,7 @@ language plpgsql security definer as $$
 declare
 	pointer record;
 	duplicate_npi text;
+	duplicate_how_found text;
 begin
 	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
 	perform from party where id in (duplicate, survivor) for update;
@@ -1103,7 +1161,7 @@ begin
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
-	-- Its stage and level stay too, and the duplicate's fill any it lacks. A target on either holds.
+	-- Its stage, level and lead owner stay too, and the duplicate's fill any it lacks. A target on either holds.
 	-- The stricter ruling stays with its reason, so a merge never puts an avoided vendor back in play.
 	update party_role s set stage = coalesce(s.stage, d.stage),
 		relationship_level = coalesce(s.relationship_level, d.relationship_level),
@@ -1111,7 +1169,9 @@ begin
 			select ruling, reason
 			from (values (s.disposition, s.disposition_reason, 1), (d.disposition, d.disposition_reason, 2)) r (ruling, reason, side)
 			order by array_position(array['parked', 'avoid'], ruling) desc nulls last, side limit 1),
-		is_target = s.is_target or d.is_target
+		is_target = (s.is_target or d.is_target) and coalesce(s.disposition, '') <> 'avoid'
+			and coalesce(d.disposition, '') <> 'avoid',
+		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
@@ -1132,6 +1192,9 @@ begin
 		and s.extension is not distinct from d.extension;
 	update party_phone set is_primary = false
 	where party_id = duplicate and exists (select from party_phone where party_id = survivor and is_primary);
+	update do_not_contact s set until_date = d.until_date, reason = d.reason
+	from do_not_contact d where s.party_id = survivor and d.party_id = duplicate
+		and s.until_date is not null and (d.until_date is null or d.until_date > s.until_date);
 	delete from do_not_contact
 	where party_id = duplicate and exists (select from do_not_contact where party_id = survivor);
 	delete from party_specialty d using party_specialty s
@@ -1146,6 +1209,7 @@ begin
 	where l.party_id = duplicate and s.deal_id = l.deal_id and s.party_id = survivor and s.role = 'client';
 	delete from deal_party d using deal_party s
 	where d.party_id = duplicate and s.party_id = survivor and s.deal_id = d.deal_id and s.role = d.role;
+	update deal_party set party_id = survivor where party_id = duplicate;
 	delete from activity_about d using activity_about s
 	where d.party_id = duplicate and s.party_id = survivor and s.activity_id = d.activity_id;
 	delete from party_territory d using party_territory s
@@ -1164,8 +1228,9 @@ begin
 		using survivor, duplicate;
 	end loop;
 
-	delete from party where id = duplicate returning npi into duplicate_npi;
-	update party set npi = coalesce(npi, duplicate_npi) where id = survivor;
+	delete from party where id = duplicate returning npi, how_found into duplicate_npi, duplicate_how_found;
+	update party set npi = coalesce(npi, duplicate_npi), how_found = coalesce(how_found, duplicate_how_found)
+	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
 
@@ -1180,7 +1245,7 @@ create table change (
 	table_name text not null,
 	-- The row's primary key, or the whole row where its table has none.
 	record jsonb not null,
-	action text not null check (action in ('insert', 'update', 'delete')),
+	action text not null check (action in ('insert', 'update', 'delete', 'erase')),
 	-- An insert has the whole new row and a delete the whole old one. An update has only the fields it changed.
 	old_value jsonb,
 	new_value jsonb,
@@ -1220,7 +1285,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
@@ -1232,11 +1297,12 @@ begin
 				add changed_at timestamptz not null,
 				add constraint %3$I check (num_nonnulls(changed_by_user_id, changed_by_job) = 1
 					and (changed_by_job is not null or changed_for_user_id is null));
-			create trigger stamp_change before insert or update on %1$I
+			create trigger stamp_change before %4$s on %1$I
 				for each row execute function stamp_change()',
 			-- A new user's own person row, and its history, name them before their user row exists.
 			stamped, case when stamped in ('party', 'change') then 'deferrable initially deferred' end,
-			stamped || '_changed_by_a_user_or_a_job');
+			stamped || '_changed_by_a_user_or_a_job',
+			case when stamped = 'change' then 'insert' else 'insert or update' end);
 	end loop;
 end $$;
 
@@ -1263,6 +1329,48 @@ begin
 				where i.indrelid = recorded and i.indisprimary));
 	end loop;
 end $$;
+
+-- An erase keeps the original stamps and keys. Its own change names who requested it.
+create function erase_change(removed_change_id bigint, fields text[]) returns void
+language plpgsql as $$
+declare
+	removed change;
+	source_table regclass;
+	still_present boolean;
+begin
+	select * into strict removed from change where id = removed_change_id and action = 'delete';
+	select c.oid into strict source_table from pg_class c
+	where c.relnamespace = current_schema()::regnamespace and c.relname = removed.table_name and c.relkind = 'r';
+	execute format('lock table %s in share row exclusive mode', source_table);
+	execute format('select exists (select from %s r where to_jsonb(r) @> $1)', source_table)
+		into still_present using removed.record;
+	if still_present then
+		raise exception 'only a removed record can be erased'
+			using errcode = 'check_violation', constraint = 'erase_only_removed';
+	end if;
+	if coalesce(cardinality(fields), 0) = 0 or exists (
+		select from unnest(fields) f where f is null or removed.record ? f or not exists (
+			select from pg_attribute a join pg_type t on t.oid = a.atttypid
+			where a.attrelid = source_table and a.attname = f and not a.attisdropped
+				and t.typcategory = 'S' and f not like 'changed_%'
+		)
+	) then
+		raise exception 'erase names non-key text fields'
+			using errcode = 'check_violation', constraint = 'erase_only_text_fields';
+	end if;
+	update change set old_value = old_value - fields, new_value = new_value - fields
+	where table_name = removed.table_name and record = removed.record and action <> 'erase'
+		and (old_value ?| fields or new_value ?| fields);
+	if found then
+		insert into change (table_name, record, action, new_value)
+		values (removed.table_name, removed.record, 'erase', jsonb_build_object('fields', fields));
+	end if;
+end $$;
+
+do $$ begin
+	execute format('alter function erase_change set search_path = %I, pg_temp', current_schema());
+end $$;
+revoke execute on function erase_change from public;
 
 create function posts_at_day_7(as_of timestamptz) returns jsonb
 language sql stable
@@ -1355,12 +1463,13 @@ grant delete on party, party_email, party_phone, do_not_contact, party_specialty
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason to engine;
-grant update (stage, relationship_level, disposition, disposition_reason, is_target) on party_role to engine;
+grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found to engine;
+grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
-grant update (kind, reason, owner_user_id, market_id, closed_value) on deal to engine;
-grant update (npi) on party to engine;
+grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value) on deal to engine;
+grant update (npi, how_found) on party to engine;
+grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
 grant update (started_on, ended_on) on party_territory to engine;
