@@ -5,11 +5,7 @@ import pg from "pg";
 
 export class NoDatabase extends Error {}
 
-// One restore holds about 2,100 locks, so a check's snapshots copy its restore (#237).
-export async function withSnapshot(
-	run: (url: string, name: string) => Promise<void>,
-	template = process.env.TEST_SNAPSHOT,
-) {
+function serverUrl() {
 	const url = new URL(
 		process.env.TEST_DATABASE_URL ??
 			"postgres://postgres@127.0.0.1:5432/postgres",
@@ -22,6 +18,13 @@ export async function withSnapshot(
 			"TEST_DATABASE_URL must identify a local throwaway PostgreSQL server without query parameters",
 		);
 	}
+	return url;
+}
+
+// A check runs a test process per CPU against a server shared by every
+// worktree, so no admin connection stays open while tests run (#241).
+export async function asAdmin(...statements: string[]) {
+	const url = serverUrl();
 	const admin = new pg.Client({ connectionString: url.href });
 	await admin.connect().catch((error: unknown) => {
 		if (!(error instanceof Error && "code" in error)) throw error;
@@ -31,22 +34,32 @@ export async function withSnapshot(
 			`No PostgreSQL server answered at ${url.host}. Start one with: docker run --rm -p 127.0.0.1:${port}:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18`,
 		);
 	});
-	const name = `engine_test_${randomUUID().replaceAll("-", "")}`;
 	try {
-		await admin.query(
+		for (const statement of statements) await admin.query(statement);
+	} finally {
+		await admin.end();
+	}
+}
+
+// One restore holds about 2,100 locks, so a check's snapshots copy its restore (#237).
+export async function withSnapshot(
+	run: (url: string, name: string) => Promise<void>,
+	template = process.env.TEST_SNAPSHOT,
+) {
+	const name = `engine_test_${randomUUID().replaceAll("-", "")}`;
+	const url = serverUrl();
+	url.pathname = `/${name}`;
+	try {
+		await asAdmin(
 			`CREATE DATABASE "${name}" TEMPLATE "${template ?? "template0"}"`,
-		);
-		// The server's own zone must not shape a test; a non-UTC one makes a
-		// missing UTC pin fail on every server.
-		await admin.query(
+			// The server's own zone must not shape a test; a non-UTC one makes a
+			// missing UTC pin fail on every server.
 			`ALTER DATABASE "${name}" SET TimeZone = 'America/Chicago'`,
 		);
-		url.pathname = `/${name}`;
 		if (!template) await restore(url.href);
 		await run(url.href, name);
 	} finally {
-		await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
-		await admin.end();
+		await asAdmin(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
 	}
 }
 
