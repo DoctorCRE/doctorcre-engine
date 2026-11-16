@@ -866,6 +866,9 @@ begin
 		raise exception 'two NPIs are two people or organizations, so they are not merged'
 			using errcode = 'check_violation', constraint = 'merge_party_one_npi';
 	end if;
+	-- First, so change history tells every move below as this merge's.
+	perform set_config('engine.merge', duplicate::text, true);
+	insert into merged_party (id, survivor_id) values (duplicate, survivor);
 
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
@@ -926,12 +929,52 @@ begin
 
 	delete from party where id = duplicate returning npi into duplicate_npi;
 	update party set npi = coalesce(npi, duplicate_npi) where id = survivor;
-	insert into merged_party (id, survivor_id) values (duplicate, survivor);
+	perform set_config('engine.merge', '', true);
 end $$;
 
 -- Pinned, with pg_temp last, so a caller's own tables cannot stand in for these.
 do $$ begin
 	execute format('alter function merge_party set search_path = %I, pg_temp', current_schema());
+end $$;
+
+-- Change history: one row per insert, update or delete of a stamped row, stamped with who made it and when.
+create table change (
+	id bigint generated always as identity primary key,
+	table_name text not null,
+	-- The row's primary key, or the whole row where its table has none.
+	record jsonb not null,
+	action text not null check (action in ('insert', 'update', 'delete')),
+	-- An insert has the whole new row and a delete the whole old one. An update has only the fields it changed.
+	old_value jsonb,
+	new_value jsonb,
+	-- The duplicate whose merge made this change.
+	merge_of uuid references merged_party
+);
+
+-- The owner's rights, so the engine's login writes history only by changing a row.
+create function record_change() returns trigger
+language plpgsql security definer as $$
+declare
+	stamp constant text[] := array['changed_by_user_id', 'changed_by_job', 'changed_for_user_id', 'changed_at'];
+	was jsonb := to_jsonb(old) - stamp;
+	became jsonb := to_jsonb(new) - stamp;
+	whole jsonb := coalesce(was, became);
+	row_key jsonb := coalesce((select jsonb_object_agg(k, whole -> k) from unnest(tg_argv) k), whole);
+begin
+	if tg_op = 'UPDATE' then
+		select jsonb_object_agg(field, value), jsonb_object_agg(field, became -> field) into was, became
+		from jsonb_each(was) as fields (field, value) where value is distinct from became -> field;
+		-- A statement that changes nothing leaves no history.
+		if was is null then
+			return null;
+		end if;
+	end if;
+	insert into change (table_name, record, action, old_value, new_value, merge_of)
+	values (tg_table_name, row_key, lower(tg_op), was, became, (
+		-- Only a merge saved in this transaction, so a setting alone cannot pass a change off as a merge's.
+		select id from merged_party where id = nullif(current_setting('engine.merge', true), '')::uuid and created_at = now()
+	));
+	return null;
 end $$;
 
 -- Each of these rows says which user or job last changed it and when, set by the database, never by the statement.
@@ -945,7 +988,7 @@ begin
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'merged_party'] loop
+		'merged_party', 'change'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -954,8 +997,8 @@ begin
 					and (changed_by_job is not null or changed_for_user_id is null));
 			create trigger stamp_change before insert or update on %1$I
 				for each row execute function stamp_change()',
-			-- A new user's own person row names them before their user row exists.
-			stamped, case stamped when 'party' then 'deferrable initially deferred' end,
+			-- A new user's own person row, and its history, name them before their user row exists.
+			stamped, case when stamped in ('party', 'change') then 'deferrable initially deferred' end,
 			stamped || '_changed_by_a_user_or_a_job');
 	end loop;
 end $$;
@@ -965,6 +1008,24 @@ alter table post_text add constraint post_text_edit_by_a_user
 	check (version = 1 or coalesce(changed_by_user_id, changed_for_user_id) is not null);
 alter table post_review add constraint post_review_by_a_user
 	check ((outcome = 'no_response') = (coalesce(changed_by_user_id, changed_for_user_id) is null));
+
+-- Every stamped row but history's own records its changes. Pinned like merge_party, because it runs with the owner's rights.
+do $$
+declare
+	recorded regclass;
+begin
+	execute format('alter function record_change set search_path = %I, pg_temp', current_schema());
+	for recorded in
+		select t.tgrelid from pg_trigger t join pg_class c on c.oid = t.tgrelid
+		where t.tgname = 'stamp_change' and c.relnamespace = current_schema()::regnamespace and c.relname <> 'change'
+	loop
+		execute format('create trigger record_change after insert or update or delete on %s
+				for each row execute function record_change(%s)',
+			recorded, (select string_agg(quote_literal(a.attname), ', ')
+				from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any (i.indkey)
+				where i.indrelid = recorded and i.indisprimary));
+	end loop;
+end $$;
 
 create function posts_at_day_7(as_of timestamptz) returns jsonb
 language sql stable
@@ -1038,8 +1099,10 @@ end $$;
 revoke insert on platform_metric, platform_format, relationship_level from engine;
 -- Only the owner adds a user or a job, because every change is signed with one.
 revoke insert on app_user, job from engine;
--- Only a merge leaves a pointer, after it has moved everything.
+-- Only a merge leaves a pointer.
 revoke insert on merged_party from engine;
+-- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
+revoke insert on change from engine;
 revoke execute on function merge_party from public;
 grant execute on function merge_party to engine;
 
