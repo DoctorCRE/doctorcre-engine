@@ -66,7 +66,7 @@ insert into phase (slug, label) values ('negotiation', 'Negotiating'), ('legal',
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
 insert into deal_kind values ('lease', 'Lease'), ('purchase', 'Purchase');
-insert into deal_reason values ('start_up', 'Start-up'), ('relocation', 'Relocation');
+insert into deal_reason values ('start_up', 'Start-up'), ('relocation', 'Relocation'), ('renewal', 'Renewal');
 insert into deal (id, name, kind, reason, owner_user_id) values
 	('${DEAL}', 'Example Dental Springfield Deal', 'lease', 'relocation', '${USER}'),
 	('${LENDER_DEAL}', 'Example Loan Deal', null, null, '${TEAMMATE}');
@@ -457,6 +457,7 @@ const STAMPED = [
 	"offer",
 	"offer_document",
 	"lease",
+	"lease_version",
 	"lease_option",
 	"critical_date",
 	"social_account",
@@ -536,22 +537,27 @@ const SCHEMA = await readFile(
 
 type Case = [sql: string, refusal: Refusal];
 const LEASE = id(700);
-const newLease = (row: Record<string, string | number | null> = {}) =>
-	insert("lease", {
-		id: LEASE,
-		deal_id: DEAL,
-		property_id: PROPERTY,
-		version: 1,
-		offer_id: id(102),
-		document_id: PDF_FILE,
-		executed_on: "2026-04-01",
-		commencement_on: "2026-07-01",
-		expiration_on: "2033-06-30",
-		...row,
-	});
+const LEASE_RECORD = id(720);
+const newLease = (row: Record<string, string | number | null> = {}) => {
+	const { deal_id = DEAL, property_id = PROPERTY, ...version } = row;
+	const record =
+		property_id === PROPERTY && deal_id === DEAL ? LEASE_RECORD : id(721);
+	return `${insert("lease", { id: record, deal_id, property_id, party_id: CLIENT })} on conflict (id) do nothing;
+		${insert("lease_version", {
+			id: LEASE,
+			lease_id: record,
+			version: 1,
+			offer_id: id(102),
+			document_id: PDF_FILE,
+			executed_on: "2026-04-01",
+			commencement_on: "2026-07-01",
+			expiration_on: "2033-06-30",
+			...version,
+		})}`;
+};
 const newOption = (row: Record<string, string | number | null> = {}) =>
 	insert("lease_option", {
-		lease_id: LEASE,
+		lease_version_id: LEASE,
 		number: 1,
 		kind: "renewal",
 		notice_on: "2032-12-31",
@@ -581,6 +587,62 @@ const newLeadMove = (row: Record<string, string | null> = {}) =>
 		...row,
 	});
 const RULES: Record<string, Case[]> = {
+	"outside leases and renewal deals keep checked identities": [
+		[
+			`${newLease()}; ${insert("lease", { id: id(722), party_id: CLIENT, property_id: PROPERTY, deal_id: DEAL })}`,
+			"lease_deal_id_key",
+		],
+		[
+			`${newLease()}; update deal set reason = 'renewal', renews_lease_id = '${LEASE_RECORD}' where id = '${DEAL}'`,
+			"deal_renews_another_lease",
+		],
+		[
+			newLease({ lease_id: MISSING, offer_id: null }),
+			"lease_version_lease_id_fkey",
+		],
+		[
+			`${newLease()}; ${insert("deal", { name: "Example Incorrect Reason", owner_user_id: USER, reason: "start_up", renews_lease_id: LEASE_RECORD })}`,
+			"deal_renewal_names_lease",
+		],
+		[
+			insert("lease", {
+				party_id: CLIENT,
+				property_id: PROPERTY,
+				client_role: "vendor",
+			}),
+			"lease_client_role_check",
+		],
+		[
+			insert("lease", { party_id: MISSING, property_id: PROPERTY }),
+			"lease_party_id_fkey",
+		],
+		[
+			insert("lease", { party_id: CLIENT, property_id: MISSING }),
+			"lease_property_id_fkey",
+		],
+		[newLease({ deal_id: null }), "lease_from_accepted_offer"],
+		[
+			insert("lease", {
+				party_id: AGENT,
+				property_id: PROPERTY,
+				deal_id: DEAL,
+			}),
+			"lease_deal_id_party_id_client_role_fkey",
+		],
+		["update lease set party_id = null", notGranted("lease")],
+		["delete from lease", notGranted("lease")],
+		["truncate lease", notGranted("lease")],
+		["update deal set reason = 'renewal'", "deal_renewal_names_lease"],
+		[
+			insert("deal", {
+				name: "Example Renewal",
+				owner_user_id: USER,
+				reason: "renewal",
+				renews_lease_id: MISSING,
+			}),
+			"deal_renews_lease_id_fkey",
+		],
+	],
 	"critical dates start proposed and only a user confirms or resolves them": [
 		[newCriticalDate({ status: "open" }), "critical_date_starts_proposed"],
 		[
@@ -595,12 +657,12 @@ const RULES: Record<string, Case[]> = {
 		],
 		[newCriticalDate({ option_number: "1" }), "critical_date_option_on_lease"],
 		[
-			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, deal_id: LENDER_DEAL })}`,
-			"critical_date_lease_id_deal_id_fkey",
+			`${newLease()}; ${newCriticalDate({ lease_version_id: LEASE, deal_id: LENDER_DEAL })}`,
+			"critical_date_lease_on_deal",
 		],
 		[
-			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, option_number: "1" })}`,
-			"critical_date_lease_id_option_number_fkey",
+			`${newLease()}; ${newCriticalDate({ lease_version_id: LEASE, option_number: "1" })}`,
+			"critical_date_lease_version_id_option_number_fkey",
 		],
 		[
 			`${newCriticalDate()}; update critical_date set status = 'open'; ${asJob("agent", USER)}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
@@ -639,30 +701,30 @@ const RULES: Record<string, Case[]> = {
 		["delete from critical_date", notGranted("critical_date")],
 	],
 	"leases preserve sourced terms and a consecutive history on their deal": [
-		[newLease({ version: 0 }), "lease_version_check"],
-		[newLease({ version: 2 }), "lease_deal_id_previous_version_fkey"],
+		[newLease({ version: 0 }), "lease_version_version_check"],
+		[newLease({ version: 2 }), "lease_version_lease_id_previous_version_fkey"],
 		[
 			newLease({ property_id: ELSEWHERE, offer_id: null }),
 			"lease_deal_id_property_id_fkey",
 		],
-		[newLease({ document_id: MISSING }), "lease_document_id_fkey"],
+		[newLease({ document_id: MISSING }), "lease_version_document_id_fkey"],
 		[
 			newLease({ document_id: null }),
 			{
 				code: "23502",
 				message:
-					'null value in column "document_id" of relation "lease" violates not-null constraint',
+					'null value in column "document_id" of relation "lease_version" violates not-null constraint',
 			},
 		],
 		[newLease({ offer_id: id(100) }), "lease_from_accepted_offer"],
 		[
-			`${newLease()}; insert into deal_property values ('${DEAL}', '${ELSEWHERE}');
-			${newLease({ id: id(701), version: 2, property_id: ELSEWHERE })}`,
-			"lease_offer_id_deal_id_property_id_fkey",
+			`insert into deal_property values ('${DEAL}', '${ELSEWHERE}');
+			${newLease({ property_id: ELSEWHERE })}`,
+			"lease_from_accepted_offer",
 		],
 		[
 			`${newLease()}; ${newLease({ id: id(701) })}`,
-			"lease_deal_id_version_key",
+			"lease_version_lease_id_version_key",
 		],
 		...[
 			"rent_per_sf_yr",
@@ -671,24 +733,32 @@ const RULES: Record<string, Case[]> = {
 			"free_rent_months",
 			"escalation_pct",
 			"rent_days_after_delivery",
-		].map((field): Case => [newLease({ [field]: -1 }), `lease_${field}_check`]),
-		[newLease({ term_months: 0 }), "lease_term_months_check"],
+		].map(
+			(field): Case => [
+				newLease({ [field]: -1 }),
+				`lease_version_${field}_check`,
+			],
+		),
+		[newLease({ term_months: 0 }), "lease_version_term_months_check"],
 		[newLease({ expiration_on: "2026-07-01" }), "lease_dates_in_order"],
 		[newLease({ executed_on: "2034-01-01" }), "lease_dates_in_order"],
 		[
 			newLease({ rent_starts_on: "2026-07-01", rent_days_after_delivery: 30 }),
 			"lease_rent_date_or_days",
 		],
-		[newLease({ expense_structure: " " }), "lease_expense_structure_check"],
+		[
+			newLease({ expense_structure: " " }),
+			"lease_version_expense_structure_check",
+		],
 		...[
-			"update lease set version = 2",
-			"delete from lease",
-			"truncate lease",
-		].map((sql): Case => [sql, notGranted("lease")]),
+			"update lease_version set version = 2",
+			"delete from lease_version",
+			"truncate lease_version",
+		].map((sql): Case => [sql, notGranted("lease_version")]),
 	],
 	"lease options have a kind, exact notice deadline and terms, and remain history":
 		[
-			[newOption(), "lease_option_lease_id_fkey"],
+			[newOption(), "lease_option_lease_version_id_fkey"],
 			[
 				`${newLease()}; ${newOption({ notice_on: "2040-01-01" })}`,
 				"lease_option_before_expiration",
@@ -1772,6 +1842,12 @@ const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
 const OWNER_RULES: Record<string, Case[]> = {
+	"a renewal is separate from the deal that negotiated its source lease": [
+		[
+			`${newLease()}; update deal set reason = 'renewal', renews_lease_id = '${LEASE_RECORD}' where id = '${DEAL}'`,
+			"deal_renews_another_lease",
+		],
+	],
 	"historical critical date loads still require a whole confirmation": [
 		[
 			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ confirmed_by_user_id: USER })}`,
@@ -1914,6 +1990,7 @@ const CHANGEABLE: Record<string, string[]> = {
 		"parking_note",
 		"parking_reason",
 		"reason",
+		"renews_lease_id",
 	],
 	party_company: ["ended_on", "started_on", "title"],
 	party_email: ["is_primary", "label"],
@@ -2052,6 +2129,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			kind: "lease",
 			reason: "relocation",
 			owner_user_id: USER,
+			renews_lease_id: null,
 			market_id: BAY,
 			closed_value: null,
 			parking_reason: null,
@@ -2295,6 +2373,7 @@ test("each insert, update and delete leaves history: the record, its fields from
 					owner_user_id: USER,
 					market_id: null,
 					closed_value: null,
+					renews_lease_id: null,
 					parking_reason: null,
 					parking_note: null,
 					needs_attention: false,
@@ -3967,14 +4046,17 @@ test("a lease amendment preserves earlier terms and options while the ending lis
 		);
 		assert.deepEqual(rows, [{ version: 2, expiration_on: "2034-06-30" }]);
 		assert.equal(
-			(await db.query(`select count(*) from lease where deal_id = '${DEAL}'`))
-				.rows[0].count,
+			(
+				await db.query(
+					`select count(*) from lease_version where lease_id = '${LEASE_RECORD}'`,
+				)
+			).rows[0].count,
 			"2",
 		);
 		assert.equal(
 			(
 				await db.query(
-					`select count(*) from lease_option where lease_id = '${LEASE}'`,
+					`select count(*) from lease_option where lease_version_id = '${LEASE}'`,
 				)
 			).rows[0].count,
 			"3",
@@ -3982,7 +4064,7 @@ test("a lease amendment preserves earlier terms and options while the ending lis
 		assert.equal(
 			(
 				await db.query(
-					`select changed_by_user_id from lease where id = '${LEASE}'`,
+					`select changed_by_user_id from lease_version where id = '${LEASE}'`,
 				)
 			).rows[0].changed_by_user_id,
 			USER,
@@ -3990,7 +4072,7 @@ test("a lease amendment preserves earlier terms and options while the ending lis
 		assert.equal(
 			(
 				await db.query(
-					"select count(*) from change where table_name in ('lease', 'lease_option')",
+					"select count(*) from change where table_name in ('lease_version', 'lease_option')",
 				)
 			).rows[0].count,
 			"5",
@@ -4022,7 +4104,8 @@ test("sourced options can be extracted later for a historical lease version", as
 			`${newLease()}; ${newLease({ id: id(701), version: 2, offer_id: null })}; ${newOption()}`,
 		);
 		assert.equal(
-			(await db.query(`select lease_id from lease_option`)).rows[0].lease_id,
+			(await db.query(`select lease_version_id from lease_option`)).rows[0]
+				.lease_version_id,
 			LEASE,
 		);
 	});
@@ -4106,3 +4189,74 @@ test("distinct manually sourced deadlines may share their kind and day", async (
 		);
 	});
 });
+
+test("an outside lease has no brokerage deal and a renewal is its own deal", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			newLease({
+				deal_id: null,
+				offer_id: null,
+				executed_on: null,
+				rent_starts_on: "2020-01-01",
+				commencement_on: "2020-01-01",
+			}),
+		);
+		await db.query(`insert into deal (id, name, owner_user_id, reason, renews_lease_id)
+			values ('${id(730)}', 'Example Renewal', '${USER}', 'renewal', '${id(721)}'); select propose_critical_dates('${id(730)}')`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select party_id, property_id, deal_id, expiration_on::text from current_lease",
+				)
+			).rows,
+			[
+				{
+					party_id: CLIENT,
+					property_id: PROPERTY,
+					deal_id: null,
+					expiration_on: "2033-06-30",
+				},
+			],
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select deal_id, lease_version_id, kind from critical_date",
+				)
+			).rows,
+			[{ deal_id: id(730), lease_version_id: LEASE, kind: "lease_end" }],
+		);
+		await db.query(`update deal set reason = 'relocation', renews_lease_id = null where id = '${id(730)}';
+			update deal set reason = 'renewal', renews_lease_id = '${id(721)}' where id = '${id(730)}';
+			insert into deal_property (deal_id, property_id) values ('${id(730)}', '${PROPERTY}');
+			update party set how_found = 'referral' where id = '${AGENT}';
+			insert into party_role (party_id, role) values ('${AGENT}', 'client');
+			insert into deal_party (deal_id, party_id, role) values ('${id(730)}', '${AGENT}', 'client');
+			insert into lease (id, party_id, property_id, deal_id) values ('${id(731)}', '${AGENT}', '${PROPERTY}', '${id(730)}');
+			insert into lease_version (id, lease_id, version, document_id, expiration_on)
+			values ('${id(732)}', '${id(731)}', 1, '${PDF_FILE}', '2040-06-30'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(
+			(await db.query("select lease_id, party_id from lease_ending")).rows,
+			[{ lease_id: id(731), party_id: AGENT }],
+		);
+	});
+});
+
+for (const alreadyClient of [false, true]) {
+	test(`a tenant merge preserves lease versions when the survivor is ${alreadyClient ? "already" : "not yet"} on the deal`, async () => {
+		await rolledBack(async () => {
+			await db.query(newLease());
+			if (alreadyClient)
+				await db.query(
+					`insert into deal_party (deal_id, party_id, role) values ('${DEAL}', '${LENDERS[0]}', 'client')`,
+				);
+			await db.query(
+				`select merge_party('${CLIENT}', '${LENDERS[0]}'); ${CHECK_AT_COMMIT}`,
+			);
+			assert.deepEqual(
+				(await db.query("select party_id, id from current_lease")).rows,
+				[{ party_id: LENDERS[0], id: LEASE }],
+			);
+		});
+	});
+}

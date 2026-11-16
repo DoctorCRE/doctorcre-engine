@@ -113,13 +113,9 @@ test("types split into kind and reason, with startup renamed and other left unfi
 			kind,
 			reason: null,
 		})),
-		...[
-			"start_up",
-			"relocation",
-			"expansion",
-			"renewal",
-			"additional_office",
-		].map((reason) => ({ kind: null, reason })),
+		...["start_up", "relocation", "expansion", null, "additional_office"].map(
+			(reason) => ({ kind: null, reason }),
+		),
 		{ kind: null, reason: null },
 	]);
 	assert.ok(
@@ -377,4 +373,22 @@ test("participant and vendor links keep their deal event's sponsoring user", asy
 	} finally {
 		await db.query("rollback");
 	}
+});
+
+test("a renewal without a source lease keeps its old type in the needs-a-user report", async () => {
+	assert.deepEqual(
+		await rows(
+			`select reason, renews_lease_id from deal where id = '${id(17)}'`,
+		),
+		[{ reason: null, renews_lease_id: null }],
+	);
+	assert.ok(
+		report.some(
+			(row) =>
+				row.old_id === id(17) &&
+				row.field === "deal_type" &&
+				row.value === "renewal" &&
+				row.reason === "renewal_without_lease",
+		),
+	);
 });

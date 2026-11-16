@@ -35,7 +35,7 @@ insert into not_copied select id, 'deal', id::text, 'no_deal_owner' from old_dea
 insert into deal (id, created_at, name, kind, reason, owner_user_id, market_id, closed_value,
  changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, created_at, name, (select slug from deal_kind where slug = deal_type),
- (select slug from deal_reason where slug = case deal_type when 'startup' then 'start_up' else deal_type end),
+ (select slug from deal_reason where slug = case deal_type when 'startup' then 'start_up' when 'renewal' then null else deal_type end),
  owner_user_id, market_id, case when won_value > 0 then won_value end,
  changed_by_user_id, changed_by_job, changed_for_user_id, updated_at from old_deal where owner_user_id is not null;
 insert into outside_id (source, value, deal_id)
@@ -43,6 +43,7 @@ select 'old_system', d.id::text, d.id from old_deal d join deal n on n.id = d.id
 insert into not_copied
 select d.id, f.field, f.value, f.reason from old_deal d join deal n on n.id = d.id
 cross join lateral (values
+ ('deal_type', d.deal_type, 'renewal_without_lease', d.deal_type = 'renewal'),
  ('deal_type', d.deal_type, 'unfiled_deal_type', d.deal_type not in (select slug from deal_kind)
   and d.deal_type not in (select slug from deal_reason) and d.deal_type <> 'startup'),
  ('market', d.typed_market, 'unknown_market', d.typed_market is not null and d.market_id is null),
