@@ -578,6 +578,10 @@ const RULES: Record<string, Case[]> = {
 		[
 			[newOption(), "lease_option_lease_id_fkey"],
 			[
+				`${newLease()}; ${newOption({ notice_on: "2040-01-01" })}`,
+				"lease_option_before_expiration",
+			],
+			[
 				`${newLease()}; ${newOption({ kind: "other" })}`,
 				"lease_option_kind_check",
 			],
@@ -2788,6 +2792,18 @@ test("signed terms survive a later accepted round on the deal", async () => {
 				)
 			).rows,
 			[{ offer_id: id(102), rent_per_sf_yr: "35.00" }],
+		);
+	});
+});
+
+test("sourced options can be extracted later for a historical lease version", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${newLease()}; ${newLease({ id: id(701), version: 2, offer_id: null })}; ${newOption()}`,
+		);
+		assert.equal(
+			(await db.query(`select lease_id from lease_option`)).rows[0].lease_id,
+			LEASE,
 		);
 	});
 });

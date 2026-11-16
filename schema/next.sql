@@ -601,6 +601,19 @@ create table lease_option (
 	primary key (lease_id, number)
 );
 
+create function lease_option_before_expiration() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from lease where id = new.lease_id and new.notice_on > expiration_on) then
+		raise exception 'an option notice is due no later than its lease expires'
+			using errcode = 'check_violation', constraint = 'lease_option_before_expiration';
+	end if;
+	return new;
+end $$;
+
+create trigger lease_option_before_expiration before insert on lease_option
+	for each row execute function lease_option_before_expiration();
+
 create view current_lease as
 select l.* from lease l
 where not exists (select from lease newer where newer.deal_id = l.deal_id and newer.version > l.version);
