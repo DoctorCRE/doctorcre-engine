@@ -602,6 +602,12 @@ const newCandidate = (row: Record<string, string | null> = {}) =>
 		...row,
 	});
 const RULES: Record<string, Case[]> = {
+	"tours use meetings rather than a separate activity kind": [
+		[
+			insert("activity", { kind: "tour", happened_at: "2026-04-02T15:00:00Z" }),
+			"activity_kind_check",
+		],
+	],
 	"outside leases and renewal deals keep checked identities": [
 		[
 			`${newLease()}; ${insert("lease", { id: id(722), party_id: CLIENT, property_id: PROPERTY, deal_id: DEAL })}`,
@@ -1133,6 +1139,10 @@ const RULES: Record<string, Case[]> = {
 	],
 	"an activity is an email, call, meeting or note, and each about link names one record once":
 		[
+			[
+				insert("activity_about", { activity_id: CALL, property_id: MISSING }),
+				"activity_about_property_id_fkey",
+			],
 			[
 				"insert into activity (kind, happened_at) values ('fax', now())",
 				"activity_kind_check",
@@ -4537,3 +4547,26 @@ for (const alreadyClient of [false, true]) {
 		});
 	});
 }
+
+test("a completed tour appears once on its deal even when it visits several properties", async () => {
+	await rolledBack(async () => {
+		const tour = id(740);
+		await db.query(`insert into activity (id, kind, happened_at, from_party_id, summary)
+			values ('${tour}', 'meeting', '2026-04-02T15:00:00Z', '${CLIENT}', 'Example two-property tour');
+			insert into activity_about (activity_id, deal_id, property_id) values
+			('${tour}', '${DEAL}', null), ('${tour}', null, '${PROPERTY}'), ('${tour}', null, '${ELSEWHERE}')`);
+		assert.deepEqual(
+			(await readDeal()).activity.filter((a: { id: string }) => a.id === tour),
+			[
+				{
+					id: tour,
+					kind: "meeting",
+					happened_at: "2026-04-02T15:00:00+00:00",
+					from_party_id: CLIENT,
+					summary: "Example two-property tour",
+					email: null,
+				},
+			],
+		);
+	});
+});
