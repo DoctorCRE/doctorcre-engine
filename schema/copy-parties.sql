@@ -84,7 +84,8 @@ select id, 'party', name, case when deleted_at is null then 'merged into a recor
 from old_party p where not exists (select from outside_id where source = 'old_system' and value = p.id::text);
 
 insert into not_copied
-select id, 'party', name, 'merged into a record copied before, so its values are not copied'
+select id, 'party', name,
+	'merged into a record copied before, so its emails, phone numbers, NPI, specialties and do not contact are not copied'
 from old_party
 where survivor_id <> id and survivor_id not in (select id from copied) and survivor_id not in (select id from old_party)
 	and (concat(email, phone, cell, npi, specialty) ~ '\S' or contact_state <> 'active');
@@ -163,7 +164,7 @@ from chain where contact_state <> 'active' and not (contact_state = 'do_not_cont
 -- Each specialty typed, split at commas and semicolons. Spellings that differ only in case, spaces or punctuation
 -- are one specialty, labelled as first typed, and one already on the list keeps its label.
 create temp table typed_specialty on commit drop as
-select s.id as old_id, s.survivor_id as party_id, s.created_at, t.place, btrim(t.typed) as typed,
+select s.id as old_id, s.survivor_id as party_id, s.created_at, t.place, regexp_replace(t.typed, '^\s+|\s+$', '', 'g') as typed,
 	btrim(regexp_replace(lower(t.typed), '[^a-z0-9]+', '_', 'g'), '_') as slug
 from chain s cross join lateral regexp_split_to_table(s.specialty, '[,;]') with ordinality as t (typed, place)
 where t.typed ~ '\S';
@@ -185,26 +186,31 @@ from typed_specialty v join copied p on p.id = v.party_id
 where p.kind <> 'person' or v.slug = '';
 
 -- Today's import history and its own reference numbers become outside ids of the record each old one became.
--- A source takes _ for any run of characters other than lower case letters and digits.
+-- A source is lower-cased, with _ for each run of anything but letters and digits.
 create temp table typed_outside_id on commit drop as
-select v.old_id, v.field, v.typed, v.source, v.value, map.party_id, v.reason
+select v.old_id, v.field, v.typed, v.source, v.value, map.party_id, case
+	when v.field = 'record_source' and v.source = 'dup_candidate' then 'a hint of a duplicate, not an id'
+	when v.kind not in ('party', 'vendor', 'lead', 'client') then 'no place in the new database'
+	when map.party_id is null then 'its record is not copied'
+	when v.field = 'record_source' and v.source in ('old_system', 'old_system_ref') then 'a source the copy keeps for itself'
+	when v.source !~ '^[a-z][a-z0-9_]*$' or v.value !~ '\S' then 'not an outside id'
+end as reason
 from (
-	select coalesce(o.party_id, r.entity_id) as old_id, 'record_source' as field,
+	select coalesce(o.party_id, r.entity_id) as old_id, 'record_source' as field, r.entity_type as kind,
 		concat_ws(' ', r.source_system, r.external_key) as typed,
 		btrim(regexp_replace(lower(r.source_system), '[^a-z0-9]+', '_', 'g'), '_') as source,
-		regexp_replace(r.external_key, '^\s+|\s+$', '', 'g') as value, o.party_id,
-		case when r.source_system = 'dup_candidate' then 'a hint of a duplicate, not an id' end as reason
+		regexp_replace(r.external_key, '^\s+|\s+$', '', 'g') as value, o.party_id
 	from public.record_source r
 	left join (
-		select id, id as party_id from public.party
-		union all select id, party_id from public.vendor
-		union all select id, party_id from public.lead
-		union all select id, party_id from public.client
-	) as o on o.id = r.entity_id
-	-- The rest, such as a deal's or an activity's, come across with those records.
-	where r.entity_type in ('party', 'vendor', 'lead', 'client')
+		select 'party' as kind, id, id as party_id from public.party
+		union all select 'vendor', id, party_id from public.vendor
+		union all select 'lead', id, party_id from public.lead
+		union all select 'client', id, party_id from public.client
+	) as o on o.kind = r.entity_type and o.id = r.entity_id
+	-- These are left to the copies of those records.
+	where r.entity_type not in ('deal', 'activity', 'event', 'loop_item')
 	union all
-	select id, 'ref', ref, 'old_system_ref', regexp_replace(ref, '^\s+|\s+$', '', 'g'), id, null
+	select id, 'ref', 'party', ref, 'old_system_ref', regexp_replace(ref, '^\s+|\s+$', '', 'g'), id
 	from old_party where ref ~ '\S'
 ) as v
 left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text;
@@ -212,17 +218,13 @@ left join outside_id map on map.source = 'old_system' and map.value = v.party_id
 insert into outside_id (source, value, party_id)
 select distinct on (source, value) source, value, party_id
 from typed_outside_id v
-where reason is null and party_id is not null and source ~ '^[a-z][a-z0-9_]*$' and value ~ '\S'
-	and not exists (select from outside_id o where o.source = v.source and o.value = v.value)
+where reason is null and not exists (select from outside_id o where o.source = v.source and o.value = v.value)
 order by source, value, old_id;
 
 insert into not_copied
-select v.old_id, v.field, v.typed, coalesce(v.reason, case
-	when v.party_id is null then 'its record is not copied'
-	when v.source !~ '^[a-z][a-z0-9_]*$' or v.value !~ '\S' then 'not an outside id'
-	else 'also the id of ' || o.party_id end)
+select v.old_id, v.field, v.typed, coalesce(v.reason, 'also the id of ' || o.party_id)
 from typed_outside_id v left join outside_id o using (source, value)
-where v.party_id is null or o.party_id is distinct from v.party_id;
+where v.reason is not null or o.party_id is distinct from v.party_id;
 
 -- A partner's own person row names them, checked now, because a table with checks waiting cannot be altered.
 set constraints all immediate;

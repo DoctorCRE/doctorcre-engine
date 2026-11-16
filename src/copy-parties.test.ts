@@ -52,7 +52,7 @@ ${oldParty(10, {
 	cell: "1-217-555-0101",
 	contact_state: "do_not_contact",
 	contact_state_reason: " ",
-	specialty: "GP; Ortho,",
+	specialty: "GP; Ortho, ORTHO,",
 	ref: "P-0010",
 })}
 ${oldParty(11, {
@@ -94,7 +94,7 @@ ${oldParty(16, {
 	cell: "2175550103",
 	contact_state: "paused",
 	contact_state_until: "2027-01-04",
-	specialty: "Physical Therapy",
+	specialty: "\tPhysical Therapy",
 })}
 ${oldParty(18, { merged_into: id(16), npi: "9000000031" })}
 ${oldParty(17, {
@@ -124,6 +124,9 @@ insert into public.record_source (entity_type, entity_id, source_system, externa
 	('client', '${id(44)}', 'client-roster-2', ' '),
 	('party', '${id(16)}', 'example-brokers', 'B-EX-1'),
 	('vendor', '${id(30)}', 'vendors.xlsx', 'V-EX-030'),
+	('contact', '${id(16)}', 'example-contacts', 'K-EX-1'),
+	('lead', '${id(17)}', 'lead-registry', 'L-EX-017'),
+	('party', '${id(11)}', 'Old System', 'X-EX-2'),
 	('activity', '${id(31)}', 'example-ledger', 'A-EX-1'),
 	('deal', '${id(32)}', 'example-deals', 'D-EX-1');
 `;
@@ -204,6 +207,7 @@ test("each value it does not copy is listed, with why", () => {
 		[id(11), "email", "ask the front desk", "not an email address"],
 		[id(11), "npi", NPI, `also held by ${id(10)}`],
 		[id(11), "phone", "555-0100", "not a phone number"],
+		[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
 		[id(11), "specialty", "Dental", "only a person holds a specialty"],
 		[id(12), "npi", "9000000023", "its record holds another NPI"],
 		[id(12), "record_source", "2024 import X-EX-1", "not an outside id"],
@@ -214,9 +218,11 @@ test("each value it does not copy is listed, with why", () => {
 		[id(15), "party", "Example 15", "merged into a record not copied"],
 		[id(16), "contact_state", "paused until 2027-01-04", "no place in the new database"],
 		[id(16), "npi", "9000000016", "not an NPI"],
+		[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
 		[id(17), "cell", "217-555-0104 (fax)", "not a phone number"],
 		[id(17), "contact_state", "nurture", "no place in the new database"],
 		[id(17), "email", "@example.com; ok@example.com", "not an email address"],
+		[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
 		[id(17), "record_source", "Vendors XLSX V-EX-001", `also the id of ${id(16)}`],
 		[id(17), "specialty", "--", "not a specialty"],
 		[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
@@ -356,15 +362,18 @@ test("a second run copies only what is new, finds a record merged since through 
 			${oldParty(22, { merged_into: id(17), specialty: "Example" })}`;
 		// biome-ignore format: one row per value
 		assert.deepEqual(await copy(merged), [
+			[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
 			[id(12), "record_source", "2024 import X-EX-1", "not an outside id"],
 			[id(12), "record_source", "client-roster-2  ", "not an outside id"],
 			[id(12), "record_source", "dup_candidate C-EX-001:C-EX-002", "a hint of a duplicate, not an id"],
 			[id(14), "party", "Example 14", "deleted"],
 			[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
 			[id(15), "party", "Example 15", "merged into a record not copied"],
-			[id(20), "party", "Example 20", "merged into a record copied before, so its values are not copied"],
+			[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
+			[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
+			[id(20), "party", "Example 20", "merged into a record copied before, so its emails, phone numbers, NPI, specialties and do not contact are not copied"],
 			[id(21), "npi", ` ${NPI} `, `also held by ${id(10)}`],
-			[id(22), "party", "Example 22", "merged into a record copied before, so its values are not copied"],
+			[id(22), "party", "Example 22", "merged into a record copied before, so its emails, phone numbers, NPI, specialties and do not contact are not copied"],
 			[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
 		]);
 		assert.deepEqual(
