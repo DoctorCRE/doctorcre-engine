@@ -503,6 +503,7 @@ create table offer (
 	from_party_id uuid not null,
 	from_role text not null,
 	offered_at timestamptz not null,
+	expires_on date,
 	status text not null default 'open'
 		check (status in ('open', 'countered', 'accepted', 'rejected', 'withdrawn', 'superseded')),
 	rent_per_sf_yr numeric(10, 2) check (rent_per_sf_yr >= 0),
@@ -519,6 +520,7 @@ create table offer (
 		check (commencement_on is null or commencement_days_after_delivery is null),
 	unique (deal_id, round),
 	unique (id, deal_id, property_id),
+	unique (id, deal_id),
 	foreign key (deal_id, property_id) references deal_property,
 	-- Only a merge changes a deal_party key, and its rounds move with it.
 	foreign key (deal_id, from_party_id, from_role) references deal_party on update cascade,
@@ -593,6 +595,7 @@ create table lease (
 	constraint lease_dates_in_order check (expiration_on > commencement_on and expiration_on >= executed_on),
 	constraint lease_rent_date_or_days check (num_nonnulls(rent_starts_on, rent_days_after_delivery) <= 1),
 	unique (deal_id, version),
+	unique (id, deal_id),
 	foreign key (deal_id, previous_version) references lease (deal_id, version),
 	foreign key (deal_id, property_id) references deal_property,
 	foreign key (offer_id, deal_id, property_id) references offer (id, deal_id, property_id)
@@ -638,6 +641,95 @@ create trigger lease_option_before_expiration before insert on lease_option
 create view current_lease as
 select l.* from lease l
 where not exists (select from lease newer where newer.deal_id = l.deal_id and newer.version > l.version);
+
+create table critical_date (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references deal,
+	kind text not null check (kind in ('loi_expiry', 'option_notice', 'rent_start', 'lease_end', 'due_diligence', 'other')),
+	due_on date not null,
+	source text not null check (source ~ '\S'),
+	offer_id uuid,
+	lease_id uuid,
+	option_number smallint,
+	document_id uuid references document,
+	note text,
+	status text not null default 'proposed' check (status in ('proposed', 'open', 'done', 'dropped', 'passed')),
+	confirmed_by_user_id uuid references app_user,
+	confirmed_at timestamptz,
+	resolved_by_user_id uuid references app_user,
+	resolved_at timestamptz,
+	resolution_reason text check (resolution_reason ~ '\S'),
+	constraint critical_date_one_source check (num_nonnulls(offer_id, lease_id, document_id) <= 1),
+	constraint critical_date_option_on_lease check (option_number is null or lease_id is not null),
+	constraint critical_date_confirmation_whole check (num_nonnulls(confirmed_by_user_id, confirmed_at) in (0, 2)),
+	constraint critical_date_confirmed_when_real check (status not in ('open', 'done', 'passed') or confirmed_at is not null),
+	constraint critical_date_resolution_whole check (
+		num_nonnulls(resolved_by_user_id, resolved_at, resolution_reason) = case when status in ('done', 'dropped', 'passed') then 3 else 0 end),
+	foreign key (offer_id, deal_id) references offer (id, deal_id),
+	foreign key (lease_id, deal_id) references lease (id, deal_id),
+	foreign key (lease_id, option_number) references lease_option (lease_id, number)
+);
+
+-- Generated proposals repeat by their immutable source; hand-added dates may share a day.
+create unique index critical_date_generated_once on critical_date (deal_id, kind, offer_id, lease_id, option_number)
+	nulls not distinct where offer_id is not null or lease_id is not null;
+
+create function critical_date_transition() returns trigger
+language plpgsql as $$
+declare
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+begin
+	if tg_op = 'INSERT' then
+		if new.status <> 'proposed' or num_nonnulls(new.confirmed_by_user_id, new.confirmed_at,
+			new.resolved_by_user_id, new.resolved_at, new.resolution_reason) <> 0 then
+			raise exception 'a critical date starts as a proposal'
+				using errcode = 'check_violation', constraint = 'critical_date_starts_proposed';
+		end if;
+		return new;
+	end if;
+	if new.status = old.status and new.resolution_reason is not distinct from old.resolution_reason then
+		return new;
+	end if;
+	if acting_user is null or nullif(current_setting('engine.job', true), '') is not null then
+		raise exception 'only a user confirms or resolves a critical date'
+			using errcode = 'check_violation', constraint = 'critical_date_user_decides';
+	end if;
+	if not (old.status = 'proposed' and new.status in ('open', 'dropped')
+		or old.status = 'open' and new.status in ('done', 'dropped', 'passed')) then
+		raise exception 'a proposal is confirmed or dropped, and an open date is resolved once'
+			using errcode = 'check_violation', constraint = 'critical_date_status_moves';
+	end if;
+	if new.status = 'open' then
+		new.confirmed_by_user_id := acting_user;
+		new.confirmed_at := now();
+	else
+		new.resolved_by_user_id := acting_user;
+		new.resolved_at := now();
+	end if;
+	return new;
+end $$;
+
+create trigger critical_date_transition before insert or update on critical_date
+	for each row execute function critical_date_transition();
+
+create function propose_critical_dates(wanted uuid) returns void
+language sql
+begin atomic
+	insert into critical_date (deal_id, kind, due_on, source, lease_id, option_number)
+	select l.deal_id, dates.kind, dates.due_on, 'Signed lease', l.id, null
+	from current_lease l cross join lateral (values ('lease_end', l.expiration_on), ('rent_start', l.rent_starts_on)) dates(kind, due_on)
+	where l.deal_id = wanted and dates.due_on is not null
+	on conflict do nothing;
+	insert into critical_date (deal_id, kind, due_on, source, lease_id, option_number)
+	select l.deal_id, 'option_notice', o.notice_on, 'Signed lease option', l.id, o.number
+	from current_lease l join lease_option o on o.lease_id = l.id where l.deal_id = wanted
+	on conflict do nothing;
+	insert into critical_date (deal_id, kind, due_on, source, offer_id)
+	select deal_id, 'loi_expiry', expires_on, 'Offer round', id from offer
+	where deal_id = wanted and expires_on is not null and status = 'open'
+	on conflict do nothing;
+end;
 
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable
@@ -1096,7 +1188,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'social_account', 'idea',
+		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -1186,7 +1278,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- History (lease, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -1244,3 +1336,5 @@ grant update (status) on offer to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;
+
+grant update (status, resolution_reason) on critical_date to engine;
