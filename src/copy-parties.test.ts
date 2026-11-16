@@ -41,20 +41,7 @@ insert into public.actor (id, slug, kind, display_name) values
 insert into public.contact_state (slug, label, contactable, sort) values
 	('active', 'Example active', true, 10), ('nurture', 'Example nurture', true, 20),
 	('paused', 'Example paused', false, 30), ('do_not_contact', 'Example do not contact', false, 40);
-${oldParty(10, {
-	npi: ` ${NPI} `,
-	created_at: "2024-03-04T05:06:07Z",
-	updated_by: PARTNER,
-	updated_at: "2025-01-02T03:04:05Z",
-	email:
-		"Avery Example <bad@example>; Avery@Example.com, second@example.net avery@example.com",
-	phone: "(217) 555-0100 ext. 12",
-	cell: "1-217-555-0101",
-	contact_state: "do_not_contact",
-	contact_state_reason: " ",
-	specialty: "GP; Ortho, ORTHO,",
-	ref: "P-0010",
-})}
+${oldParty(14, { deleted_at: "2026-01-05T00:00:00Z" })} ${oldParty(15, { merged_into: id(14) })}
 ${oldParty(11, {
 	kind: "org",
 	name: "Example Dental Group",
@@ -71,6 +58,28 @@ ${oldParty(11, {
 	contact_state_set_at: "2025-05-06T07:08:09Z",
 	specialty: "Dental",
 	ref: " P-0011 ",
+	org_id: id(11),
+})}
+${oldParty(10, {
+	npi: ` ${NPI} `,
+	created_at: "2024-03-04T05:06:07Z",
+	updated_by: PARTNER,
+	updated_at: "2025-01-02T03:04:05Z",
+	email:
+		"Avery Example <bad@example>; Avery@Example.com, second@example.net avery@example.com",
+	phone: "(217) 555-0100 ext. 12",
+	cell: "1-217-555-0101",
+	contact_state: "do_not_contact",
+	contact_state_reason: " ",
+	specialty: "GP; Ortho, ORTHO,",
+	ref: "P-0010",
+	org_id: id(11),
+	title: " Office Manager ",
+	city: "Springfield",
+	state: "IL",
+	county: "Example County",
+	contact_state_cadence: "quarterly",
+	notes_path: "notes/example-10.md",
 })}
 ${oldParty(12, {
 	merged_into: id(10),
@@ -79,6 +88,8 @@ ${oldParty(12, {
 	email: "Merged@example.com avery@example.com",
 	cell: "217-555-0105",
 	specialty: " gp",
+	org_id: id(11),
+	title: "Manager",
 })}
 ${oldParty(13, {
 	merged_into: id(12),
@@ -87,7 +98,6 @@ ${oldParty(13, {
 	contact_state_set_at: "2025-07-08T09:10:11Z",
 	ref: "P-0013",
 })}
-${oldParty(14, { deleted_at: "2026-01-05T00:00:00Z" })} ${oldParty(15, { merged_into: id(14) })}
 ${oldParty(16, {
 	npi: "9000000016",
 	phone: "+1 217 555 0103",
@@ -95,14 +105,17 @@ ${oldParty(16, {
 	contact_state: "paused",
 	contact_state_until: "2027-01-04",
 	specialty: "\tPhysical Therapy",
+	org_id: id(14),
 })}
-${oldParty(18, { merged_into: id(16), npi: "9000000031" })}
+${oldParty(18, { merged_into: id(16), npi: "9000000031", title: "Owner" })}
 ${oldParty(17, {
 	email: "@example.com; ok@example.com",
 	phone: "+44 20 7946 0958 x7",
 	cell: "217-555-0104 (fax)",
 	contact_state: "nurture",
 	specialty: "--",
+	org_id: id(16),
+	title: "Dentist",
 })}
 insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Example active', true, 10);
 insert into public.lead_stage (slug, label) values ('example', 'Example stage');
@@ -202,10 +215,16 @@ test("each old id maps to the record it became, a merged-away one to where its m
 test("each value it does not copy is listed, with why", () => {
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
+		[id(10), "city", "Springfield", "no place in the new database"],
 		[id(10), "contact_state", "do_not_contact", "do not contact without a reason"],
+		[id(10), "contact_state_cadence", "quarterly", "no place in the new database"],
+		[id(10), "county", "Example County", "no place in the new database"],
 		[id(10), "email", "bad@example", "not an email address"],
+		[id(10), "notes_path", "notes/example-10.md", "no place in the new database"],
+		[id(10), "state", "IL", "no place in the new database"],
 		[id(11), "email", "ask the front desk", "not an email address"],
 		[id(11), "npi", NPI, `also held by ${id(10)}`],
+		[id(11), "org_id", id(11), "only a person works at a company"],
 		[id(11), "phone", "555-0100", "not a phone number"],
 		[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
 		[id(11), "specialty", "Dental", "only a person holds a specialty"],
@@ -213,18 +232,23 @@ test("each value it does not copy is listed, with why", () => {
 		[id(12), "record_source", "2024 import X-EX-1", "not an outside id"],
 		[id(12), "record_source", "client-roster-2  ", "not an outside id"],
 		[id(12), "record_source", "dup_candidate C-EX-001:C-EX-002", "a hint of a duplicate, not an id"],
+		[id(12), "title", "Manager", "its record holds another title there"],
 		[id(14), "party", "Example 14", "deleted"],
 		[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
 		[id(15), "party", "Example 15", "merged into a record not copied"],
 		[id(16), "contact_state", "paused until 2027-01-04", "no place in the new database"],
 		[id(16), "npi", "9000000016", "not an NPI"],
+		[id(16), "org_id", id(14), "its company is not copied"],
 		[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
 		[id(17), "cell", "217-555-0104 (fax)", "not a phone number"],
 		[id(17), "contact_state", "nurture", "no place in the new database"],
 		[id(17), "email", "@example.com; ok@example.com", "not an email address"],
+		[id(17), "org_id", id(16), "not a company"],
 		[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
 		[id(17), "record_source", "Vendors XLSX V-EX-001", `also the id of ${id(16)}`],
 		[id(17), "specialty", "--", "not a specialty"],
+		[id(17), "title", "Dentist", "a title without a company"],
+		[id(18), "title", "Owner", "a title without a company"],
 		[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
 	]);
 });
@@ -242,6 +266,7 @@ test("each row keeps when it was stored, and names the partner who last changed 
 		["party_email", "party_id"],
 		["party_phone", "party_id"],
 		["party_specialty", "person_id"],
+		["party_company", "person_id"],
 	] as const)
 		assert.deepEqual(
 			await rows(`select ${stamp} from ${table} where ${key} = '${id(10)}'`),
@@ -340,6 +365,23 @@ test("a person's specialties are on the specialty list once however spelled, lab
 	);
 });
 
+test("a person keeps their company and their title there, their own title first", async () => {
+	assert.deepEqual(
+		await rows(
+			"select person_id, company_id, title, started_on, ended_on from party_company",
+		),
+		[
+			{
+				person_id: id(10),
+				company_id: id(11),
+				title: "Office Manager",
+				started_on: null,
+				ended_on: null,
+			},
+		],
+	);
+});
+
 test("today's import history and reference numbers are outside ids of the record each old one became", async () => {
 	// biome-ignore format: one row per id
 	assert.deepEqual(await rows("select source, value, party_id from outside_id where source <> 'old_system' order by source, value"), [
@@ -359,7 +401,9 @@ test("a second run copies only what is new, finds a record merged since through 
 			update specialty set label = 'Orthodontics' where slug = 'ortho';
 			${oldParty(20, { merged_into: id(17), email: "late@example.com" })}
 			${oldParty(21, { npi: ` ${NPI} `, specialty: "ORTHO", ref: "P-0021" })}
-			${oldParty(22, { merged_into: id(17), specialty: "Example" })}`;
+			${oldParty(22, { merged_into: id(17), specialty: "Example" })}
+			${oldParty(23, { merged_into: id(17), org_id: id(11) })}
+			${oldParty(24, { merged_into: id(17), notes_path: "notes/example-24.md" })}`;
 		// biome-ignore format: one row per value
 		assert.deepEqual(await copy(merged), [
 			[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
@@ -371,9 +415,11 @@ test("a second run copies only what is new, finds a record merged since through 
 			[id(15), "party", "Example 15", "merged into a record not copied"],
 			[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
 			[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
-			[id(20), "party", "Example 20", "merged into a record copied before, so its emails, phone numbers, NPI, specialties and do not contact are not copied"],
+			[id(20), "party", "Example 20", "merged into a record copied before, so of its values only its outside ids are copied"],
 			[id(21), "npi", ` ${NPI} `, `also held by ${id(10)}`],
-			[id(22), "party", "Example 22", "merged into a record copied before, so its emails, phone numbers, NPI, specialties and do not contact are not copied"],
+			[id(22), "party", "Example 22", "merged into a record copied before, so of its values only its outside ids are copied"],
+			[id(23), "party", "Example 23", "merged into a record copied before, so of its values only its outside ids are copied"],
+			[id(24), "party", "Example 24", "merged into a record copied before, so of its values only its outside ids are copied"],
 			[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
 		]);
 		assert.deepEqual(
@@ -402,13 +448,15 @@ test("after the copy, a change is stamped with who made it again", () =>
 			update party_email set label = 'personal';
 			update party_phone set label = 'home';
 			insert into do_not_contact (party_id, reason) values ('${id(16)}', 'Example asked us to stop');
-			insert into party_specialty (person_id, specialty) values ('${id(16)}', 'gp')`);
+			insert into party_specialty (person_id, specialty) values ('${id(16)}', 'gp');
+			update party_company set title = 'Example title'`);
 		for (const table of [
 			"party",
 			"party_email",
 			"party_phone",
 			"do_not_contact",
 			"party_specialty",
+			"party_company",
 		])
 			assert.deepEqual(
 				await rows(

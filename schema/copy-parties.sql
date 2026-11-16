@@ -1,5 +1,5 @@
--- Copies today's people and companies, with their emails, phone numbers, do not contact, specialties and outside ids,
--- into the new database.
+-- Copies today's people and companies, with their emails, phone numbers, do not contact, specialties, outside ids,
+-- and each person's company and title there, into the new database.
 -- The owner runs it in one transaction, as psql --single-transaction does, with search_path set to the new schema.
 -- It only reads today's tables in public, and ends by listing each value it did not copy, for a partner to fix there.
 -- A record keeps its old id, and outside_id maps each old id, merged-away ones too, to the record it became.
@@ -13,6 +13,7 @@ alter table party_email disable trigger stamp_change;
 alter table party_phone disable trigger stamp_change;
 alter table do_not_contact disable trigger stamp_change;
 alter table party_specialty disable trigger stamp_change;
+alter table party_company disable trigger stamp_change;
 
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
@@ -84,11 +85,11 @@ select id, 'party', name, case when deleted_at is null then 'merged into a recor
 from old_party p where not exists (select from outside_id where source = 'old_system' and value = p.id::text);
 
 insert into not_copied
-select id, 'party', name,
-	'merged into a record copied before, so its emails, phone numbers, NPI, specialties and do not contact are not copied'
+select id, 'party', name, 'merged into a record copied before, so of its values only its outside ids are copied'
 from old_party
 where survivor_id <> id and survivor_id not in (select id from copied) and survivor_id not in (select id from old_party)
-	and (concat(email, phone, cell, npi, specialty) ~ '\S' or contact_state <> 'active');
+	and (concat(email, phone, cell, npi, specialty, title, city, state, county, contact_state_cadence, notes_path) ~ '\S'
+		or org_id is not null or contact_state <> 'active');
 
 -- Each email or phone number as typed, in order, in the one form the new database stores, or null when it has none.
 create temp table typed_value on commit drop as
@@ -185,6 +186,45 @@ select v.old_id, 'specialty', v.typed, case when v.slug = '' then 'not a special
 from typed_specialty v join copied p on p.id = v.party_id
 where p.kind <> 'person' or v.slug = '';
 
+-- A person's company and their title there. A survivor's own title comes first, and the company is the record it became.
+create temp table typed_company on commit drop as
+select s.id as old_id, s.survivor_id as person_id, s.org_id, s.title as typed_title, p.kind, map.party_id as company_id,
+	company.kind as company_kind, nullif(regexp_replace(s.title, '^\s+|\s+$', '', 'g'), '') as title, s.rank
+from chain s
+join copied p on p.id = s.survivor_id
+left join outside_id map on map.source = 'old_system' and map.value = s.org_id::text
+left join party company on company.id = map.party_id;
+
+insert into party_company (person_id, company_id, title, created_at, changed_by_user_id, changed_by_job, changed_at)
+select distinct on (v.person_id, v.company_id) v.person_id, v.company_id, v.title, p.created_at, p.changed_by_user_id,
+	p.changed_by_job, p.updated_at
+from typed_company v join copied p on p.id = v.person_id
+where v.kind = 'person' and v.company_kind = 'company'
+order by v.person_id, v.company_id, v.title is null, v.rank;
+
+insert into not_copied
+select old_id, 'org_id', org_id::text, case
+	when kind <> 'person' then 'only a person works at a company'
+	when company_id is null then 'its company is not copied'
+	else 'not a company' end
+from typed_company where org_id is not null and (kind <> 'person' or company_kind is distinct from 'company');
+
+insert into not_copied
+select v.old_id, 'title', v.typed_title, case
+	when exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id)
+		then 'its record holds another title there'
+	else 'a title without a company' end
+from typed_company v
+where v.title is not null
+	and not exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id and c.title = v.title);
+
+-- These have no place in the new database yet (#271).
+insert into not_copied
+select s.id, f.field, f.value, 'no place in the new database'
+from chain s cross join lateral (values ('city', s.city), ('state', s.state), ('county', s.county),
+	('contact_state_cadence', s.contact_state_cadence), ('notes_path', s.notes_path)) as f (field, value)
+where f.value ~ '\S';
+
 -- Today's import history and its own reference numbers become outside ids of the record each old one became.
 -- A source is lower-cased, with _ for each run of anything but letters and digits.
 create temp table typed_outside_id on commit drop as
@@ -233,5 +273,6 @@ alter table party_email enable trigger stamp_change;
 alter table party_phone enable trigger stamp_change;
 alter table do_not_contact enable trigger stamp_change;
 alter table party_specialty enable trigger stamp_change;
+alter table party_company enable trigger stamp_change;
 
 select * from not_copied order by old_id, field, value;
