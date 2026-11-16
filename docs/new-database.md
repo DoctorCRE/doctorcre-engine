@@ -51,7 +51,7 @@ A user who settles a post stuck in `publishing` is named on the post. In marketi
 
 Only the owner adds a user or a job, because every change is signed with one. A user who has changed anything stays, so who changed what survives; a teammate who leaves will be a column on the user. Adding a teammate is a person row and a user row. The first user's own person row names them as its author, so that key is checked when the transaction ends. Being a user is not a role on a deal: who owns a deal will be a role on the deal, as client and listing agent are.
 
-Today's actors map across like this. The old `actor` table holds the two partners as `human`, the scheduled jobs and agent sessions as `automation`, and migrations and exporters as `system`. Its `created_by` and `updated_by` columns name an actor and are often empty, and the old `event` rows add a cause and, for an agent, the partner it worked for. Each `human` actor becomes a person with a user row. The owner loads them with the `stamp_change` triggers turned off, so a row keeps its old author and time: its author from `updated_by`, or `created_by` when never updated, and `changed_at` from `updated_at`, or `created_at`. The check that a row names a user or a job still holds during that load. A row a `human` actor last changed names that user. A row an `automation` actor last changed names the job that now does its work, such as `mail_capture` for the old mail filing, or `old_system` when none does, and an agent session's names `agent`; each takes the partner its event names as the user it worked for. A row a `system` actor last changed names `old_system`. A row with no author names `old_system` too. The old columns that name a partner by slug, such as `deal.owner`, become deal roles in the deal-owner slice.
+Today's actors map across like this. The old `actor` table holds the two partners as `human`, the scheduled jobs and agent sessions as `automation`, and migrations and exporters as `system`. Its `created_by` and `updated_by` columns name an actor and are often empty, and the old `event` rows add a cause and, for an agent, the partner it worked for. Each `human` actor becomes a person with a user row. The owner loads them with the `stamp_change` triggers turned off, so a row keeps its old author and time: its author from `updated_by`, or `created_by` when never updated, and `changed_at` from `updated_at`, or `created_at`. The check that a row names a user or a job still holds during that load. A row a `human` actor last changed names that user. A row an `automation` actor last changed names the job that now does its work, such as `mail_capture` for the old mail filing, or `old_system` when none does, and an agent session's names `agent`; each takes the partner its event names as the user it worked for. A row a `system` actor last changed names `old_system`. A row with no author names `old_system` too. The first copy, of people and companies, names `old_system` for every `automation` actor's row until #264 tells the jobs apart. The old columns that name a partner by slug, such as `deal.owner`, become deal roles in the deal-owner slice.
 
 ## Links
 
@@ -170,6 +170,19 @@ Do not contact is a fact about the person or company, whatever roles they hold, 
 An NPI is checked for shape: ten digits, the last a Luhn check digit over the prefix 80840 and the first nine. The first digit is not checked, so tests use made-up numbers starting with 9, which no NPI issued yet does. NPPES issues each number once, to a person or an organization, so the number is unique across both. A doctor's specialties are rows in `party_specialty`; a company has none.
 
 Old reference ids, such as Salesforce ids and roster numbers, are kept in `outside_id` only to trace where a record came from. Nobody types or searches for them, so they are not party or deal columns. A source and value are stored once, so a repeated import finds the record it already made. Only a merge changes a row, so its stamp names the job or user that imported it, or the one that last merged it, and when.
+
+## Copying today's people and companies
+
+`schema/copy-parties.sql` copies today's parties into the new database, with their emails, phone numbers, NPIs and do not contact. The owner runs it in one transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list: each old record or value it left behind, as typed, and why, for a partner to fix in today's system before the real run.
+
+- Each record keeps its id and when it was stored, and `org` becomes `company`. Each partner, a `human` actor, becomes a person and a user under the actor's id.
+- `outside_id` maps each old id, under the source `old_system`, to the record it became. A merged-away old record maps to the record its merges end in. A merge in the new database moves the map, so later copies of deals, vendors and territories find each record through it. A second run copies only old records the map does not hold.
+- A deleted record is not copied, nor one merged into it.
+- Emails and phone numbers follow "Emails and phone numbers" above. The first value stored is primary.
+- An NPI stays with the first record, by when it was stored, that holds it. A second holder is copied without it and listed, since it may be the same person or company. An NPI with a wrong check digit is listed.
+- Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` and `nurture` have no place yet, so they are listed.
+
+Specialties and outside ids from today's `record_source` and `ref` follow in #263.
 
 ## Offer rounds
 
@@ -318,4 +331,4 @@ A catalog test lists every unique key that holds a party. A new one fails it unt
 
 ## Later slices
 
-Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Market figures from outside deals. Moving today's records across, where the old party kind `org` becomes `company`. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
