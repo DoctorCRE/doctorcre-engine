@@ -222,6 +222,10 @@ A renewal, expansion or early termination right in one lease version, with its e
 
 **National account owner** is the person responsible for the account, including an outside referring agent. `national_account_owner` keeps dated ownership; a deal's owner is separate. `national_account` identifies the brand company, independently of client type.
 
+**Lead stage evidence**:
+An activity and its reference supporting a proposed or applied lead stage move. Weak job evidence waits for a user. Archiving always needs a user and a reason.
+_New database_: `lead_stage_move`. Ordinary stage edits and who and when stay in `change`.
+
 **Outreach draft**:
 A lead's prepared first-contact message. Approval never sends it. A user sends it from their mailbox.
 _New database_: `lead_contact_draft`, always human-send and never dispatchable. An edit clears approval and advances the revision.

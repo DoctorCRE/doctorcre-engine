@@ -16,6 +16,7 @@ alter table do_not_contact disable trigger stamp_change;
 alter table party_specialty disable trigger stamp_change;
 alter table party_company disable trigger stamp_change;
 alter table party_role disable trigger stamp_change;
+alter table party_role disable trigger lead_stage_needs_evidence;
 
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
@@ -308,5 +309,6 @@ alter table do_not_contact enable trigger stamp_change;
 alter table party_specialty enable trigger stamp_change;
 alter table party_company enable trigger stamp_change;
 alter table party_role enable trigger stamp_change;
+alter table party_role enable trigger lead_stage_needs_evidence;
 
 select * from not_copied order by old_id, field, value;

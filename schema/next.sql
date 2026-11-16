@@ -61,7 +61,7 @@ create table job (
 
 insert into job values
 	('intake', 'Post intake'), ('mail_capture', 'Mail filing'), ('publisher', 'Publisher'), ('readings', 'Post readings'),
-	('review_close', 'Review close'), ('agent', 'Agent'), ('old_system', 'Old system');
+	('review_close', 'Review close'), ('lead_stage', 'Lead stages'), ('agent', 'Agent'), ('old_system', 'Old system');
 
 -- The engine names who acts once per transaction: set_config('engine.user_id', <id>, true) for a user, and
 -- set_config('engine.job', <slug>, true) for a job, with engine.user_id then the user it works for, if any.
@@ -648,6 +648,87 @@ create constraint trigger email_about_a_record after insert on email
 	initially deferred for each row execute function email_about_a_record();
 create constraint trigger email_about_a_record after delete on activity_about
 	initially deferred for each row execute function email_about_a_record();
+
+alter table activity_about add constraint activity_about_activity_party_key unique (activity_id, party_id);
+
+-- Evidence is separate from ordinary stage edits, whose author and time are already in change history.
+create table lead_stage_move (
+	id uuid primary key default gen_random_uuid(),
+	party_id uuid not null references party,
+	role text not null generated always as ('lead') stored,
+	from_stage text not null,
+	to_stage text not null,
+	activity_id uuid references activity,
+	evidence_ref text check (evidence_ref ~ '\S'),
+	strength text not null check (strength in ('strong', 'weak')),
+	status text not null default 'proposed' check (status in ('proposed', 'applied')),
+	reason text check (reason ~ '\S'),
+	unique (party_id, from_stage, to_stage, activity_id),
+	constraint lead_stage_move_has_evidence check (to_stage = 'archived' or (activity_id is not null and evidence_ref is not null)),
+	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
+	constraint lead_stage_move_changes_stage check (from_stage <> to_stage),
+	constraint lead_stage_move_archive_reason check (to_stage <> 'archived' or reason is not null),
+	foreign key (role, from_stage) references stage,
+	foreign key (role, to_stage) references stage,
+	foreign key (party_id, role) references party_role deferrable initially deferred
+);
+
+create function apply_lead_stage_move() returns trigger
+language plpgsql as $$
+begin
+	if tg_op = 'UPDATE' and old.status = new.status then return null; end if;
+	if tg_op = 'UPDATE' and old.status = 'applied' then
+		raise exception 'an applied move stays applied; a correction is a new move'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_final';
+	end if;
+	if new.status = 'proposed' then
+		return null;
+	end if;
+	if new.changed_by_job is not null and (new.strength = 'weak' or new.to_stage = 'archived') then
+		raise exception 'weak evidence and archiving wait for a direct user'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_needs_user';
+	end if;
+	if new.changed_by_job is not null and new.changed_for_user_id is null and not (
+		new.from_stage = 'new' and new.to_stage = 'qualified'
+		or new.from_stage = 'qualified' and new.to_stage = 'outreach_active'
+		or new.from_stage = 'outreach_active' and new.to_stage = 'engaged'
+		or new.from_stage = 'engaged' and new.to_stage in ('nurture', 'opportunity')) then
+		raise exception 'a job follows the lead funnel'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_job_funnel';
+	end if;
+	-- The conditional update holds the lead, so a stale proposal cannot overwrite another move.
+	update party_role set stage = new.to_stage
+	where party_id = new.party_id and role = 'lead' and stage = new.from_stage;
+	if not found then
+		raise exception 'the lead has moved since this evidence was proposed'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_current_stage';
+	end if;
+	return null;
+end $$;
+
+create trigger apply_lead_stage_move after insert or update of status on lead_stage_move
+	for each row execute function apply_lead_stage_move();
+
+create function lead_stage_needs_evidence() returns trigger
+language plpgsql as $$
+begin
+	if tg_op = 'UPDATE' and new.stage is not distinct from old.stage then return null; end if;
+	-- The matching stamp identifies evidence applied by this actor in this transaction.
+	if (tg_op = 'UPDATE' and new.changed_by_job is not null and new.changed_for_user_id is null or new.stage = 'archived')
+		and not exists (select from lead_stage_move m
+			where m.party_id = new.party_id and m.from_stage = old.stage and m.to_stage = new.stage
+				and m.status = 'applied' and m.changed_at = now()
+				and m.changed_by_user_id is not distinct from new.changed_by_user_id
+				and m.changed_by_job is not distinct from new.changed_by_job) then
+		raise exception 'a job stage move or an archive needs its applied evidence'
+			using errcode = 'check_violation', constraint = 'lead_stage_needs_evidence';
+	end if;
+	return null;
+end $$;
+
+create trigger lead_stage_needs_evidence after insert or update of stage on party_role
+	for each row when (new.role = 'lead')
+	execute function lead_stage_needs_evidence();
 
 create table next_step (
 	id uuid primary key default gen_random_uuid(),
@@ -1258,6 +1339,10 @@ begin
 	update national_account set party_id = survivor where party_id = duplicate
 		and exists (select from party_role where party_id = survivor and role = 'national_account');
 
+	delete from lead_stage_move d using lead_stage_move s
+	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
+		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
+
 	delete from lead_contact_draft where party_id = duplicate
 		and exists (select from lead_contact_draft where party_id = survivor);
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
@@ -1391,7 +1476,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -1408,6 +1493,8 @@ begin
 			case when stamped = 'change' then 'insert' else 'insert or update' end);
 	end loop;
 end $$;
+
+
 
 -- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
 alter table post_text add constraint post_text_edit_by_a_user
@@ -1590,6 +1677,10 @@ grant update (label) on client_type to engine;
 grant update (status, client_type) on client to engine;
 grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
 grant delete on client, national_account, client_brand, national_account_owner to engine;
+
+grant update (status) on lead_stage_move to engine;
+
+
 
 grant update (subject, body, owner_user_id, scheduled_for, time_zone, approved) on lead_contact_draft to engine;
 grant delete on lead_contact_draft to engine;
