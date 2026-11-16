@@ -720,3 +720,50 @@ test("an unavailable calendar on any page, a refusal or a server error fails ven
 			(error: Error) => !(error instanceof StopRun),
 		);
 });
+
+test("sends the filtered chart and Search page size to both doors", async () => {
+	const reads: Ask[] = [
+		{ read: "client fit", state: "Z&Z" },
+		{ ...activity, limit: 20 },
+	];
+	const engine = fake(() => json({ made_up: true }));
+	const old = fake(() => content({ made_up: true }));
+	for (const read of reads) {
+		await engine.askEngine(read);
+		await old.askOld(read);
+	}
+	assert.deepEqual(
+		engine.sent.map((s) => s.url.pathname + s.url.search),
+		[
+			"/compare/joe/engine/client-fit?state=Z%26Z",
+			"/compare/joe/engine/recent-activity?query=Made-up+%26+Co&limit=20",
+		],
+	);
+	assert.deepEqual(
+		old.sent.map((s) => called(s.url)),
+		[
+			{ name: "ideal-client-profile", arguments: { state: "Z&Z" } },
+			{
+				name: "find-and-catch-up",
+				arguments: { query: activity.name, limit: 20 },
+			},
+		],
+	);
+});
+
+test("compares just the cursorless first feed page even when it is full", async () => {
+	for (const side of ["askEngine", "askOld"] as const) {
+		const first = { events: events(0, 200), cursor: "made-up-next" };
+		const asked = fake(() => feedPage(first));
+		assert.deepEqual(await asked[side]({ read: "feed" }), {
+			events: first.events,
+			cursors: [first.cursor],
+		});
+		assert.equal(asked.sent.length, 1);
+		assert.equal(asked.sent[0]?.url.search, "");
+		assert.equal(
+			asked.sent[0]?.url.pathname,
+			`/compare/joe/${side === "askEngine" ? "engine" : "old"}/pipeline/changes`,
+		);
+	}
+});
