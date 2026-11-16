@@ -1608,6 +1608,10 @@ const RULES: Record<string, Case[]> = {
 				"party_role_disposition_reason_check",
 			],
 			[
+				"update party_role set disposition = 'avoid', disposition_reason = 'Example', is_target = true where role = 'vendor'",
+				"party_role_avoid_not_target",
+			],
+			[
 				"update party_role set is_target = true where role = 'title'",
 				"party_role_target_on_vendor",
 			],
@@ -1687,6 +1691,11 @@ const RULES: Record<string, Case[]> = {
 			],
 		],
 	"history is never added, rewritten or removed by hand": [
+		[
+			"select erase_change(1, array['summary'])",
+			{ code: "42501", message: "permission denied for function erase_change" },
+		],
+
 		[
 			`insert into change (table_name, record, action) values ('deal', '{}', 'insert')`,
 			notGranted("change"),
@@ -1823,6 +1832,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
+	do_not_contact: ["until_date"],
 	stage: ["label"],
 	party_role: [
 		"disposition",
@@ -2353,7 +2363,7 @@ test("a vendor's track record counts the deals it worked and the deals its intro
 		]);
 	}));
 
-test("a merge moves a vendor's introductions, keeps the stricter ruling and either's target, and the survivor's stage and level win, filled from the duplicate's", () =>
+test("a merge moves a vendor's introductions, keeps avoid and clears target, and fills missing stage and level", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'company', 'Example Title Co');
 			insert into party_role (party_id, role, relationship_level, disposition, disposition_reason, is_target) values
@@ -2376,7 +2386,7 @@ test("a merge moves a vendor's introductions, keeps the stricter ruling and eith
 				introductions: "2",
 				roles: [
 					["title", null, null, null, null, false],
-					["vendor", "warm", 1, "avoid", "Example: slow to close", true],
+					["vendor", "warm", 1, "avoid", "Example: slow to close", false],
 				],
 			},
 		]);
@@ -2960,6 +2970,180 @@ test("an import of a duplicate's id that waits on its merge is refused", async (
 		await refused;
 	} finally {
 		await Promise.all(sessions.map((session) => session.end()));
+	}
+});
+
+test("outreach respects an indefinite stop and a pause through its end date", () =>
+	rolledBack(async () => {
+		await db.query(`insert into do_not_contact (party_id, reason, until_date) values ('${CLIENT}', 'Example pause', current_date);
+   update do_not_contact set until_date = current_date - 1 where party_id = '${AGENT}'`);
+		assert.deepEqual(
+			(await db.query("select party_id from active_do_not_contact")).rows,
+			[{ party_id: CLIENT }],
+		);
+		await db.query(
+			`update do_not_contact set until_date = null where party_id = '${AGENT}'`,
+		);
+		assert.equal(
+			(await db.query("select count(*) from active_do_not_contact")).rows[0]
+				.count,
+			"2",
+		);
+	}));
+for (const [left, right] of [
+	[true, false],
+	[false, true],
+]) {
+	test(`a vendor merge keeps a target from either side: ${left}, ${right}`, () =>
+		rolledBack(async () => {
+			await db.query(`insert into party (id, kind, name) values ('${id(980)}', 'company', 'Example vendor');
+    insert into party_role (party_id, role, is_target) values ('${id(980)}', 'vendor', ${left});
+    update party_role set is_target = ${right} where party_id = '${VENDOR}' and role = 'vendor';
+    select merge_party('${id(980)}', '${VENDOR}')`);
+			assert.equal(
+				(
+					await db.query(
+						"select is_target from party_role where party_id = $1 and role = 'vendor'",
+						[VENDOR],
+					)
+				).rows[0].is_target,
+				true,
+			);
+		}));
+}
+for (const [first, second, expected] of [
+	["null", "current_date", null],
+	["current_date", "null", null],
+	["current_date", "current_date + 1", 1],
+	["current_date + 1", "current_date", 1],
+] as const) {
+	test(`a merge keeps the longest stop: ${first}, ${second}`, () =>
+		rolledBack(async () => {
+			await db.query(`insert into party (id, kind, name) values ('${id(980)}', 'company', 'Example one'), ('${id(981)}', 'company', 'Example two');
+    insert into do_not_contact (party_id, reason, until_date) values ('${id(980)}', 'Example one', ${first}), ('${id(981)}', 'Example two', ${second});
+    select merge_party('${id(980)}', '${id(981)}')`);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select reason, until_date - current_date as days from do_not_contact where party_id = $1",
+						[id(981)],
+					)
+				).rows,
+				[
+					{
+						reason:
+							(expected === null && first === "null") ||
+							first === "current_date + 1"
+								? "Example one"
+								: "Example two",
+						days: expected,
+					},
+				],
+			);
+		}));
+}
+
+test("only the owner erases a removed record's values, keeping who and when and recording the erase", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query(`begin; ${asUser(TEAMMATE)}`);
+		await owner.query(`insert into activity (id, kind, happened_at, summary) values ('${id(982)}', 'note', now(), 'Example private note');
+   update activity set summary = 'Example corrected note' where id = '${id(982)}';
+   delete from activity where id = '${id(982)}'`);
+		await owner.query(`insert into activity (id, kind, happened_at) values ('${id(983)}', 'email', now());
+			insert into activity_about (activity_id, party_id) values ('${id(983)}', '${CLIENT}');
+			insert into email (activity_id, message_id, sender, subject, body)
+			values ('${id(983)}', '<erase@example.com>', 'erase@example.com', 'Example subject', 'Example private body');
+			delete from email where activity_id = '${id(983)}';
+			select erase_change((select max(id) from change where table_name = 'email' and action = 'delete' and record = jsonb_build_object('activity_id', '${id(983)}')), array['subject', 'body'])`);
+		assert.equal(
+			(
+				await owner.query(
+					"select count(*) from change where table_name = 'email' and record = $1 and (old_value ?| array['subject','body'] or new_value ?| array['subject','body'])",
+					[{ activity_id: id(983) }],
+				)
+			).rows[0].count,
+			"0",
+		);
+		const before = (
+			await owner.query(
+				"select id, table_name, record, action, changed_by_user_id, changed_at, merge_of from change where record = $1 order by id",
+				[{ id: id(982) }],
+			)
+		).rows;
+		const removed = before.at(-1);
+		assert.ok(removed);
+		await owner.query("savepoint invalid_erase");
+		await assert.rejects(
+			owner.query("select erase_change($1, array['summary'])", [before[0].id]),
+			{ code: "P0002" },
+		);
+		await owner.query("rollback to invalid_erase");
+		for (const fields of [[], ["happened_at"], ["id"], ["missing"], [null]]) {
+			await assert.rejects(
+				owner.query("select erase_change($1, $2)", [removed.id, fields]),
+				{ code: "23514", constraint: "erase_only_text_fields" },
+			);
+			await owner.query("rollback to invalid_erase");
+		}
+
+		await owner.query(asUser(USER));
+		await owner.query("select erase_change($1, array['summary'])", [
+			removed.id,
+		]);
+		const after = (
+			await owner.query(
+				"select id, table_name, record, action, changed_by_user_id, changed_at, merge_of, old_value, new_value from change where record = $1 order by id",
+				[{ id: id(982) }],
+			)
+		).rows;
+		assert.deepEqual(
+			after.slice(0, -1).map(({ old_value, new_value, ...metadata }) => {
+				assert.equal(old_value?.summary, undefined);
+				assert.equal(new_value?.summary, undefined);
+				return metadata;
+			}),
+			before,
+		);
+		assert.equal(after.at(-1).action, "erase");
+		assert.deepEqual(after.at(-1).new_value, { fields: ["summary"] });
+		assert.equal(after[0].new_value.kind, "note");
+		assert.ok(after[0].new_value.happened_at);
+		assert.equal(after.at(-1).changed_by_user_id, USER);
+		assert.ok(after.at(-1).changed_at);
+		await owner.query("select erase_change($1, array['summary'])", [
+			removed.id,
+		]);
+		assert.equal(
+			(
+				await owner.query("select count(*) from change where record = $1", [
+					{ id: id(982) },
+				])
+			).rows[0].count,
+			"4",
+		);
+		assert.equal(
+			(
+				await owner.query(
+					"select new_value->>'summary' as summary from change where table_name = 'activity' and record = $1 and action = 'insert'",
+					[{ id: NOTE }],
+				)
+			).rows[0].summary,
+			"Example prefers mornings",
+		);
+		await owner.query(
+			`insert into activity (id, kind, happened_at, summary) values ('${id(982)}', 'note', now(), 'Example recreated note')`,
+		);
+		await assert.rejects(
+			owner.query("select erase_change($1, array['summary'])", [removed.id]),
+			{
+				code: "23514",
+				constraint: "erase_only_removed",
+			},
+		);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
 	}
 });
 

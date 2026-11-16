@@ -135,7 +135,8 @@ create table party_role (
 	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor'),
 	constraint party_role_disposition_on_vendor check (disposition is null or role = 'vendor'),
 	constraint party_role_ruling_has_a_reason check ((disposition is null) = (disposition_reason is null)),
-	constraint party_role_target_on_vendor check (not is_target or role = 'vendor')
+	constraint party_role_target_on_vendor check (not is_target or role = 'vendor'),
+	constraint party_role_avoid_not_target check (not is_target or disposition is distinct from 'avoid')
 );
 
 create function party_role_category_of_a_vendor() returns trigger
@@ -211,8 +212,12 @@ create unique index party_phone_one_primary on party_phone (party_id) where is_p
 create table do_not_contact (
 	party_id uuid primary key references party,
 	created_at timestamptz not null default now(),
-	reason text not null check (reason ~ '\S')
+	reason text not null check (reason ~ '\S'),
+	until_date date
 );
+
+create view active_do_not_contact as
+select * from do_not_contact where until_date is null or until_date >= current_date;
 
 create table specialty (
 	slug text primary key,
@@ -1117,7 +1122,8 @@ begin
 			select ruling, reason
 			from (values (s.disposition, s.disposition_reason, 1), (d.disposition, d.disposition_reason, 2)) r (ruling, reason, side)
 			order by array_position(array['parked', 'avoid'], ruling) desc nulls last, side limit 1),
-		is_target = s.is_target or d.is_target
+		is_target = (s.is_target or d.is_target) and coalesce(s.disposition, '') <> 'avoid'
+			and coalesce(d.disposition, '') <> 'avoid'
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
@@ -1138,6 +1144,9 @@ begin
 		and s.extension is not distinct from d.extension;
 	update party_phone set is_primary = false
 	where party_id = duplicate and exists (select from party_phone where party_id = survivor and is_primary);
+	update do_not_contact s set until_date = d.until_date, reason = d.reason
+	from do_not_contact d where s.party_id = survivor and d.party_id = duplicate
+		and s.until_date is not null and (d.until_date is null or d.until_date > s.until_date);
 	delete from do_not_contact
 	where party_id = duplicate and exists (select from do_not_contact where party_id = survivor);
 	delete from party_specialty d using party_specialty s
@@ -1187,7 +1196,7 @@ create table change (
 	table_name text not null,
 	-- The row's primary key, or the whole row where its table has none.
 	record jsonb not null,
-	action text not null check (action in ('insert', 'update', 'delete')),
+	action text not null check (action in ('insert', 'update', 'delete', 'erase')),
 	-- An insert has the whole new row and a delete the whole old one. An update has only the fields it changed.
 	old_value jsonb,
 	new_value jsonb,
@@ -1239,11 +1248,12 @@ begin
 				add changed_at timestamptz not null,
 				add constraint %3$I check (num_nonnulls(changed_by_user_id, changed_by_job) = 1
 					and (changed_by_job is not null or changed_for_user_id is null));
-			create trigger stamp_change before insert or update on %1$I
+			create trigger stamp_change before %4$s on %1$I
 				for each row execute function stamp_change()',
 			-- A new user's own person row, and its history, name them before their user row exists.
 			stamped, case when stamped in ('party', 'change') then 'deferrable initially deferred' end,
-			stamped || '_changed_by_a_user_or_a_job');
+			stamped || '_changed_by_a_user_or_a_job',
+			case when stamped = 'change' then 'insert' else 'insert or update' end);
 	end loop;
 end $$;
 
@@ -1270,6 +1280,48 @@ begin
 				where i.indrelid = recorded and i.indisprimary));
 	end loop;
 end $$;
+
+-- An erase keeps the original stamps and keys. Its own change names who requested it.
+create function erase_change(removed_change_id bigint, fields text[]) returns void
+language plpgsql as $$
+declare
+	removed change;
+	source_table regclass;
+	still_present boolean;
+begin
+	select * into strict removed from change where id = removed_change_id and action = 'delete';
+	select c.oid into strict source_table from pg_class c
+	where c.relnamespace = current_schema()::regnamespace and c.relname = removed.table_name and c.relkind = 'r';
+	execute format('lock table %s in share row exclusive mode', source_table);
+	execute format('select exists (select from %s r where to_jsonb(r) @> $1)', source_table)
+		into still_present using removed.record;
+	if still_present then
+		raise exception 'only a removed record can be erased'
+			using errcode = 'check_violation', constraint = 'erase_only_removed';
+	end if;
+	if coalesce(cardinality(fields), 0) = 0 or exists (
+		select from unnest(fields) f where f is null or removed.record ? f or not exists (
+			select from pg_attribute a join pg_type t on t.oid = a.atttypid
+			where a.attrelid = source_table and a.attname = f and not a.attisdropped
+				and t.typcategory = 'S' and f not like 'changed_%'
+		)
+	) then
+		raise exception 'erase names non-key text fields'
+			using errcode = 'check_violation', constraint = 'erase_only_text_fields';
+	end if;
+	update change set old_value = old_value - fields, new_value = new_value - fields
+	where table_name = removed.table_name and record = removed.record and action <> 'erase'
+		and (old_value ?| fields or new_value ?| fields);
+	if found then
+		insert into change (table_name, record, action, new_value)
+		values (removed.table_name, removed.record, 'erase', jsonb_build_object('fields', fields));
+	end if;
+end $$;
+
+do $$ begin
+	execute format('alter function erase_change set search_path = %I, pg_temp', current_schema());
+end $$;
+revoke execute on function erase_change from public;
 
 create function posts_at_day_7(as_of timestamptz) returns jsonb
 language sql stable
@@ -1368,6 +1420,7 @@ grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value) on deal to engine;
 grant update (npi) on party to engine;
+grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
 grant update (started_on, ended_on) on party_territory to engine;
