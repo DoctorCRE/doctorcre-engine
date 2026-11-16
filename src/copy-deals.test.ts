@@ -94,6 +94,9 @@ before(async () => {
  insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause) values
  ('${id(110)}', 'deal', '${id(10)}', 'phase', '{"phase":"negotiation"}', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(111)}', 'deal', '${id(10)}', 'phase', '{"phase":"closed"}', '2025-02-02', '${id(1)}', 'update-deal', 'human_stated');
+ insert into public.negotiation_claim_type (slug, label, falsifiable, reversal_test, sort) values ('example', 'Example claim', true, 'Example evidence', 1);
+ insert into public.negotiation_claim (id, round_id, claim_type, created_by) values ('${id(120)}', '${id(100)}', 'example', '${id(1)}'), ('${id(121)}', '${id(102)}', 'example', '${id(1)}');
+ update public.negotiation_round set rate_amount = 2, rate_basis = 'usd_sf_mo', term_months = 60, ti_amount = 20, ti_basis = 'usd_sf', free_rent_months = 2, note = 'Example original terms' where id = '${id(100)}';
  commit;`);
 	await db.query("begin");
 	report = await run();
@@ -176,40 +179,83 @@ test("phase events retain evidence dates and actors; missing history never inven
 		report.some((r) => r.old_id === id(11) && r.reason === "no_phase_history"),
 	);
 });
-test("rounds derive unique candidates, number across sides by creation then id, and never invent status", async () => {
+test("rounds derive unique candidates, number across sides by creation then id, and retain unknown imported status", async () => {
 	const rounds = report.filter((r) => r.field === "negotiation_round");
 	assert.deepEqual(
 		rounds.map((r) => [r.old_id, r.reason]),
 		[
-			[100, "unknown_offer_status"],
-			[101, "unknown_offer_status"],
 			[102, "no_property"],
 			[102, "no_sender_candidate"],
 			[103, "no_property"],
 			[103, "several_sender_candidates"],
 			[104, "several_properties"],
-			[105, "unknown_offer_status"],
 			[106, "deal_not_copied"],
 		].map(([n, reason]) => [id(Number(n)), reason]),
 	);
 	assert.deepEqual(
-		rounds
-			.filter((r) => r.reason === "unknown_offer_status")
-			.map((r) => JSON.parse(r.value)),
+		await rows(
+			"select id, round, status, answers_round, from_party_id, from_role, import_record ->> 'side' as side, import_record ->> 'round_no' as old_round from offer order by round",
+		),
 		[
-			{ side: "tenant", round_no: 1, new_round: 2 },
-			{ side: "landlord", round_no: 1, new_round: 3 },
-			{ side: "tenant", round_no: 7, new_round: 1 },
+			[105, 1, 2, "client", "tenant", "7"],
+			[100, 2, 2, "client", "tenant", "1"],
+			[101, 3, 4, "property_owner", "landlord", "1"],
+		].map(([n, round, party, role, side, old_round]) => ({
+			id: id(Number(n)),
+			round,
+			status: "unknown",
+			answers_round: null,
+			from_party_id: id(Number(party)),
+			from_role: role,
+			side,
+			old_round,
+		})),
+	);
+	assert.deepEqual(
+		await rows(
+			"select deal_id, property_id from deal_property order by deal_id, property_id",
+		),
+		[
+			{ deal_id: id(10), property_id: id(90) },
+			{ deal_id: id(26), property_id: id(90) },
+			{ deal_id: id(26), property_id: id(91) },
 		],
 	);
-	assert.deepEqual(await rows("select * from offer"), []);
+	assert.deepEqual(
+		await rows(
+			`select rent_per_sf_yr, term_months, ti_per_sf, free_rent_months from offer where id = '${id(100)}'`,
+		),
+		[
+			{
+				rent_per_sf_yr: "24.00",
+				term_months: 60,
+				ti_per_sf: "20.00",
+				free_rent_months: "2.0",
+			},
+		],
+	);
+	assert.equal(report.filter((r) => r.field === "negotiation_claim").length, 2);
+	for (const n of [120, 121])
+		assert.ok(
+			report.some(
+				(r) => r.old_id === id(n) && r.reason === "no_claim_destination",
+			),
+		);
+	assert.deepEqual(
+		await rows(`select import_record from offer where id = '${id(100)}'`),
+		await rows(
+			`select to_jsonb(r) as import_record from public.negotiation_round r where id = '${id(100)}'`,
+		),
+	);
 });
 test("a repeat is idempotent and restores stamps after import", async () => {
 	const original = await rows("select * from deal order by id");
+	const offers = await rows("select * from offer order by id");
 	await db.query("begin");
 	await run();
 	await db.query("commit");
 	assert.deepEqual(await rows("select * from deal order by id"), original);
+	assert.deepEqual(await rows("select * from offer order by id"), offers);
 	await db.query(
 		`begin; select set_config('engine.user_id', '${id(1)}', true); update deal set name = 'Example renamed' where id = '${id(10)}'`,
 	);
@@ -391,4 +437,146 @@ test("a renewal without a source lease keeps its old type in the needs-a-user re
 				row.reason === "renewal_without_lease",
 		),
 	);
+});
+
+const refused = await run();
+		for (const reason of [
+			"party_not_copied",
+			"role_not_available",
+			"ended_participant_history",
+			"deal_not_copied",
+			"unknown_phase",
+			"dead_without_reason",
+			"same_time_phase_changes",
+			"existing_phase_conflict",
+			"current_phase_differs",
+			"lost_without_dated_reason",
+		])
+			assert.ok(
+				refused.some((r) => r.reason === reason),
+				reason,
+			);
+		assert.equal(
+			(
+				await rows(
+					`select phase from deal_phase_change where deal_id = '${id(12)}'`,
+				)
+			)[0]?.phase,
+			"dead",
+		);
+		assert.equal(
+			(
+				await rows(
+					`select count(*)::int as n from deal_party where deal_id = '${id(10)}' and party_id = '${id(5)}'`,
+				)
+			)[0]?.n,
+			2,
+		);
+		assert.deepEqual(
+			await rows(
+				"select slug from role where slug in ('lender', 'attorney', 'other_vendor')",
+			),
+			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+const refused = async (sql: string, code: string) => {
+	await db.query("savepoint refused");
+	try {
+		await assert.rejects(db.query(sql), { code });
+	} finally {
+		await db.query("rollback to refused");
+	}
+};
+
+test("only an owner import may create unknown status; users and jobs cannot supply provenance", async () => {
+	await db.query("begin; select set_config('engine.job', 'agent', true)");
+	try {
+		const insert = (status: string, provenance = "") =>
+			`insert into offer (deal_id, property_id, round, from_party_id, from_role, offered_at, status ${provenance ? ", import_source, import_id, import_record" : ""}) values ('${id(10)}', '${id(90)}', 20, '${id(2)}', 'client', now(), '${status}' ${provenance})`;
+		await refused(insert("unknown"), "23514");
+		await refused(insert("unknown", ", 'old_system', null, '{}'"), "23514");
+		await refused(
+			insert("unknown", ", 'old_system', 'example', null"),
+			"23514",
+		);
+		await refused(
+			insert("unknown", `, 'old_system', '${id(100)}', '{}'`),
+			"23505",
+		);
+		for (const actor of [
+			`select set_config('engine.user_id', '${id(1)}', true), set_config('engine.job', '', true)`,
+			"select set_config('engine.user_id', '', true), set_config('engine.job', 'old_system', true)",
+		]) {
+			await db.query(actor);
+			await db.query("set local role engine");
+			await refused(insert("unknown"), "23514");
+			await refused(
+				insert("unknown", ", 'old_system', 'example', '{}'"),
+				"42501",
+			);
+			await db.query(insert("open"));
+			await refused(
+				`update offer set status = 'unknown' where round = 20`,
+				"23514",
+			);
+			await refused(
+				`update offer set import_source = 'example' where id = '${id(100)}'`,
+				"42501",
+			);
+			await db.query("reset role");
+			await db.query("delete from offer where round = 20");
+		}
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("unknown can resolve to every real status, with normal acceptance and supersession rules", async () => {
+	for (const status of [
+		"open",
+		"countered",
+		"accepted",
+		"rejected",
+		"withdrawn",
+		"superseded",
+	]) {
+		await db.query(
+			"begin; select set_config('engine.job', 'agent', true); set constraints all immediate; set local role engine",
+		);
+		try {
+			if (status === "superseded") {
+				await refused(
+					`update offer set status = 'superseded' where id = '${id(105)}'`,
+					"23514",
+				);
+				await db.query(
+					`update offer set status = 'accepted' where id = '${id(101)}'`,
+				);
+			}
+			await db.query(
+				`update offer set status = '${status}' where id = '${id(105)}'`,
+			);
+			await db.query("set constraints all immediate");
+			assert.equal(
+				(await rows(`select status from offer where id = '${id(105)}'`))[0]
+					?.status,
+				status,
+			);
+			await refused(
+				`update offer set status = 'unknown' where id = '${id(105)}'`,
+				"23514",
+			);
+			if (status === "accepted")
+				await refused(
+					`update offer set status = 'accepted' where id = '${id(100)}'`,
+					"23505",
+				);
+		} finally {
+			await db.query("rollback");
+		}
+	}
 });

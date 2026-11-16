@@ -118,23 +118,46 @@ where (d.outcome = 'lost' or exists (select from deal_phase_change c where c.dea
  is distinct from case when d.outcome = 'lost' then 'dead' else d.phase end;
 
 
--- Source properties are buildings reached through the deal's premises and spaces. Several suites in one building are one.
+-- Several suites in one building are one property.
+create temp table old_property on commit drop as
+select distinct p.deal_id, b.id as property_id, b.address, b.created_at
+from public.premises p join public.premises_space ps on ps.premises_id = p.id
+join public.space s on s.id = ps.space_id join public.building b on b.id = s.building_id
+join deal d on d.id = p.deal_id;
+insert into property (id, address, created_at)
+select distinct property_id, address, created_at from old_property on conflict (id) do nothing;
+insert into deal_property (deal_id, property_id)
+select distinct deal_id, property_id from old_property on conflict do nothing;
+
 create temp table round_mapping on commit drop as
 select r.*, row_number() over (partition by r.deal_id order by r.created_at, r.id) as new_round,
- (select count(distinct s.building_id) from public.premises p join public.premises_space ps on ps.premises_id = p.id
- join public.space s on s.id = ps.space_id where p.deal_id = r.deal_id) as properties,
+ (select count(*) from old_property p where p.deal_id = r.deal_id) as properties,
+ (select min(p.property_id::text)::uuid from old_property p where p.deal_id = r.deal_id) as property_id,
  (select count(distinct p.party_id) from deal_party p where p.deal_id = r.deal_id and
   (r.side in ('tenant', 'buyer') and p.role = 'client' or r.side in ('landlord', 'seller')
    and p.role in ('landlord', 'property_owner', 'listing_agent'))) as senders
 from public.negotiation_round r;
+insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at, expires_on,
+ status, rent_per_sf_yr, term_months, ti_per_sf, free_rent_months, import_source, import_id, import_record)
+select r.id, r.deal_id, r.property_id, r.new_round, sender.party_id, sender.role, r.proposed_on, r.expires_on,
+ 'unknown', r.rate_norm_sf_yr, r.term_months, case when r.ti_basis = 'usd_sf' and r.ti_amount >= 0 then r.ti_amount end,
+ r.free_rent_months, 'old_system', r.id::text, to_jsonb(original)
+from round_mapping r join public.negotiation_round original on original.id = r.id
+cross join lateral (select p.party_id, p.role from deal_party p where p.deal_id = r.deal_id and
+ (r.side in ('tenant', 'buyer') and p.role = 'client' or r.side in ('landlord', 'seller')
+ and p.role in ('landlord', 'property_owner', 'listing_agent')) order by p.role limit 1) sender
+where r.senders = 1 and r.properties = 1
+ and not exists (select from offer o where o.import_source = 'old_system' and o.import_id = r.id::text);
 insert into not_copied
 select r.id, 'negotiation_round', jsonb_build_object('side', r.side, 'round_no', r.round_no, 'new_round', r.new_round)::text,
  f.reason from round_mapping r cross join lateral (values
  ('deal_not_copied', not exists (select from deal d where d.id = r.deal_id)),
  ('no_sender_candidate', r.senders = 0), ('several_sender_candidates', r.senders > 1),
- ('no_property', r.properties = 0), ('several_properties', r.properties > 1),
- ('unknown_offer_status', r.senders = 1 and r.properties = 1 and exists (select from deal d where d.id = r.deal_id))) f(reason, refused)
-where f.refused and (f.reason = 'deal_not_copied' or exists (select from deal d where d.id = r.deal_id));
+ ('no_property', r.properties = 0), ('several_properties', r.properties > 1)) f(reason, refused)
+where f.refused and (f.reason = 'deal_not_copied' or exists (select from deal d where d.id = r.deal_id))
+ and not exists (select from offer o where o.import_source = 'old_system' and o.import_id = r.id::text);
+insert into not_copied
+select c.id, 'negotiation_claim', c.round_id::text, 'no_claim_destination' from public.negotiation_claim c;
 set constraints all immediate;
 alter table deal enable trigger stamp_change;
 alter table deal_party enable trigger stamp_change;

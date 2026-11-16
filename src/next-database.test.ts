@@ -136,6 +136,9 @@ const rounds = ROUNDS.map(
 		offered_at: `${day}T15:00:00+00:00`,
 		status,
 		expires_on: null,
+		import_source: null,
+		import_id: null,
+		import_record: null,
 		rent_per_sf_yr: rent,
 		nnn_per_sf_yr: nnn,
 		term_months: term,
@@ -2017,6 +2020,15 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	offer: [
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"import_id",
+		"import_record",
+		"import_source",
+	],
 	social_account: [
 		"changed_at",
 		"changed_by_job",
@@ -2106,8 +2118,12 @@ before(async () => {
 		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED}`,
 	);
 	for (const { documents, ...round } of rounds) {
+		const columns = Object.keys(round).filter(
+			(key) => !key.startsWith("import_"),
+		);
 		await db.query(
-			"insert into offer select * from jsonb_populate_record(null::offer, $1)",
+			`insert into offer (${columns}, deal_id)
+			 select ${columns}, deal_id from jsonb_populate_record(null::offer, $1)`,
 			[{ ...round, deal_id: DEAL, status: "open" }],
 		);
 		for (const document of documents)
