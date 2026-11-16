@@ -753,8 +753,10 @@ for (const stage of ["new", "opportunity", "archived"]) {
 				insert into stage values ('lead', '${stage}', 'Example stage'), ('lead', 'nurture', 'Nurture');
 				insert into how_found values ('referral', 'Referral');
 				update party set how_found = 'referral' where id = '${id(17)}';
+				alter table party_role disable trigger lead_stage_needs_evidence;
 				insert into party_role (party_id, role, stage) values ('${id(17)}', 'lead', '${stage}');
 				set constraints all immediate;
+				alter table party_role enable trigger lead_stage_needs_evidence;
 			`);
 			const before = await rows(
 				`select * from party_role where party_id = '${id(17)}'`,
