@@ -348,3 +348,33 @@ test("a client without its required role is listed", async () => {
 		await db.query("rollback");
 	}
 });
+
+test("participant and vendor links keep their deal event's sponsoring user", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+ insert into public.actor (id, slug, kind, display_name) values ('${id(200)}', 'codex', 'automation', 'Example agent');
+ ${deal(30)} ${deal(31)}
+ insert into role (slug, label, category_of) values ('lender', 'Example lender', 'vendor');
+ insert into public.deal_participant (deal_id, party_id, role, set_by) values ('${id(30)}', '${id(4)}', 'support', '${id(200)}');
+ insert into public.deal_vendor_assignment (deal_id, party_id, role, company_party_id, contact_party_id, updated_by)
+ values ('${id(31)}', '${id(5)}', 'lender', '${id(5)}', '${id(5)}', '${id(200)}');
+ insert into public.event (actor_id, verb, subject_type, subject_id, field, cause, occurred_at, sponsoring_human_slug) values
+ ('${id(200)}', 'example', 'deal', '${id(30)}', 'participant', 'human_stated', '2025-03-01', 'partner_one'),
+ ('${id(200)}', 'example', 'deal', '${id(31)}', 'vendor_assignment', 'human_stated', '2025-03-01', 'partner_one'),
+ ('${id(200)}', 'example', 'deal', '${id(31)}', 'phase', 'human_stated', '2025-03-02', null);`);
+		await run();
+		assert.deepEqual(
+			(
+				await rows(`select role, changed_by_user_id, changed_by_job, changed_for_user_id from deal_party
+ where deal_id in ('${id(30)}', '${id(31)}') and role in ('support', 'lender') order by deal_id`)
+			).map(Object.values),
+			[
+				["support", null, "agent", id(1)],
+				["lender", null, "agent", id(1)],
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});

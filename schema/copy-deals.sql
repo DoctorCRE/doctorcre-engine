@@ -57,11 +57,13 @@ union all
 select p.deal_id, p.id, coalesce(p.party_id, p.actor_id),
  case p.role when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else p.role end, p.role in ('lender', 'attorney', 'other_vendor'), p.from_at, p.from_at,
  a.*
-from public.deal_participant p cross join lateral copy_attribution('deal_participant', p.id, p.set_by) a where p.role <> 'lead' and p.to_at is null
+from public.deal_participant p cross join lateral copy_attribution('deal', p.deal_id, p.set_by) a
+where p.role <> 'lead' and p.to_at is null
 union all
 select v.deal_id, v.party_id, v.party_id, v.role, true, v.updated_at, v.updated_at,
  a.*
-from public.deal_vendor_assignment v cross join lateral copy_attribution('deal', v.deal_id, v.updated_by) a where v.active;
+from public.deal_vendor_assignment v cross join lateral copy_attribution('deal', v.deal_id, v.updated_by, 'vendor_assignment') a
+where v.active;
 create temp table mapped_link on commit drop as
 select l.*, m.party_id as mapped_party_id, r.slug from old_link l
 left join outside_id m on m.source = 'old_system' and m.value = l.party_id::text
@@ -91,7 +93,8 @@ from public.event e cross join lateral copy_attribution('event', e.id, e.actor_i
 left join public.actor actor on actor.id = e.actor_id
 cross join lateral (select case when a.changed_by_job = 'old_system' and actor.kind = 'automation'
  and e.cause = 'ingest_email' then 'mail_capture' else a.changed_by_job end as slug) job
-left join public.actor sponsor on sponsor.slug = e.sponsoring_human_slug and sponsor.kind = 'human' where e.subject_type = 'deal' and (e.field = 'phase' and e.old_value ->> 'phase' is distinct from e.new_value ->> 'phase'
+left join public.actor sponsor on sponsor.slug = e.sponsoring_human_slug and sponsor.kind = 'human'
+where e.subject_type = 'deal' and (e.field = 'phase' and e.old_value ->> 'phase' is distinct from e.new_value ->> 'phase'
  or e.field = 'outcome' and e.new_value ->> 'outcome' = 'lost');
 insert into not_copied select d.id, 'phase', d.phase, 'no_phase_history' from public.deal d
 where not exists (select from public.event e where e.subject_type = 'deal' and e.subject_id = d.id and e.field = 'phase');
