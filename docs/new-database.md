@@ -276,6 +276,12 @@ A direct user confirms a proposal to open, or drops it with a reason. Only a dir
 
 Today's `critical_date` rows keep their kinds, dates, sources and notes. `option_window` maps to `option_notice`, an unlisted kind to `other` with its original wording in the note. A date directly added by a user takes its confirmation from `created_by` and `created_at`; dates proposed by automation still need user confirmation. `cleared` maps to `done`. Resolved rows take their user, time and reason from the resolution event log; a legacy resolution without that evidence is listed for a partner to fix. The owner's load preserves known users and times with the transition and stamp triggers disabled, and lists missing evidence or decisions for a partner to fix rather than inventing confirmation. Today shows confirmed open dates; proposals stay in the confirmation queue. These reads follow in later slices.
 
+## Tours as meetings
+
+A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` links it once to the deal and once to every visited property. The same meeting appears on the deal and property timelines. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
+
+Moving today's rows across, each logged `activity` of kind `tour` becomes a meeting, retaining its actual time and summary. Resolve the subject to its deal and link each property known to have been visited. If a tour record and its logged activity describe the same completed visit, they become one meeting. Planned routes and appointment times do not prove a visit happened; unresolved deals, properties or completion evidence are listed for a partner to fix. Route order, appointments, client packets, share links, shortlists, comments and landlord registrations do not move in this slice. The owner accepted meetings only on #196, D5; a later planner can use the same deals and properties.
+
 ## Marketing
 
 The owner's automation keeps posting as it does today. These tables record what went out and how each post did, so each week's posts can learn from earlier ones.

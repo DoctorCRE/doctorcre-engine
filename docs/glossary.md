@@ -184,3 +184,6 @@ A tenant's agreement for a property, whether negotiated by the team or elsewhere
 
 **Lease option**:
 A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
+
+**Tour**:
+A visit to properties with a client. In the new database a completed tour is a meeting about its deal and each visited property.

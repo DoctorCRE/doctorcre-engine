@@ -550,6 +550,20 @@ const newCriticalDate = (row: Record<string, string | null> = {}) =>
 		...row,
 	});
 const RULES: Record<string, Case[]> = {
+	"tour meetings use the existing activity kinds and checked property links": [
+		[
+			insert("activity", { kind: "tour", happened_at: "2026-04-02T15:00:00Z" }),
+			"activity_kind_check",
+		],
+		[
+			insert("activity_about", { activity_id: CALL, property_id: MISSING }),
+			"activity_about_property_id_fkey",
+		],
+		[
+			`${insert("activity_about", { activity_id: CALL, property_id: PROPERTY })}; ${insert("activity_about", { activity_id: CALL, property_id: PROPERTY })}`,
+			"activity_about_activity_id_deal_id_party_id_property_id_key",
+		],
+	],
 	"outside leases and renewal deals keep checked identities": [
 		[
 			newLease({ lease_id: MISSING, offer_id: null }),
@@ -3155,6 +3169,47 @@ test("merging a lease tenant preserves its versions when both parties are client
 		assert.deepEqual(
 			(await db.query("select party_id, id from current_lease")).rows,
 			[{ party_id: LENDERS[0], id: LEASE }],
+		);
+	});
+});
+
+test("a completed tour is one meeting on its deal and every visited property", async () => {
+	await rolledBack(async () => {
+		const tour = id(740);
+		await db.query(`insert into activity (id, kind, happened_at, from_party_id, summary)
+			values ('${tour}', 'meeting', '2026-04-02T15:00:00Z', '${CLIENT}', 'Example two-property tour');
+			insert into activity_about (activity_id, deal_id, property_id) values
+			('${tour}', '${DEAL}', null), ('${tour}', null, '${PROPERTY}'), ('${tour}', null, '${ELSEWHERE}')`);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select kind, from_party_id, summary from activity where id = '${tour}'`,
+				)
+			).rows,
+			[
+				{
+					kind: "meeting",
+					from_party_id: CLIENT,
+					summary: "Example two-property tour",
+				},
+			],
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select deal_id, property_id from activity_about where activity_id = '${tour}' order by property_id nulls first`,
+				)
+			).rows,
+			[
+				{ deal_id: DEAL, property_id: null },
+				{ deal_id: null, property_id: PROPERTY },
+				{ deal_id: null, property_id: ELSEWHERE },
+			],
+		);
+		assert.equal(
+			(await readDeal()).activity.filter((a: { id: string }) => a.id === tour)
+				.length,
+			1,
 		);
 	});
 });
