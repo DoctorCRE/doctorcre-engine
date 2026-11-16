@@ -476,24 +476,35 @@ create table lead_contact_draft (
 create function lead_contact_draft_review() returns trigger
 language plpgsql as $$
 begin
-	if tg_op = 'INSERT' then
-		if new.approved then
-			raise exception 'a draft starts unapproved'
-				using errcode = 'check_violation', constraint = 'lead_contact_draft_starts_unapproved';
-		end if;
-		new.revision := 1;
-	elsif (new.subject, new.body, new.owner_user_id, new.scheduled_for, new.time_zone)
+	if (new.subject, new.body, new.owner_user_id, new.scheduled_for, new.time_zone, new.approved)
+		is not distinct from (old.subject, old.body, old.owner_user_id, old.scheduled_for, old.time_zone, old.approved) then
+		return new;
+	end if;
+	if nullif(current_setting('engine.user_id', true), '') is null then
+		raise exception 'a user edits or approves an outreach draft'
+			using errcode = 'check_violation', constraint = 'lead_contact_draft_user_approves';
+	end if;
+	perform from party p join party_role lead on lead.party_id = p.id
+	where p.id = new.party_id and lead.role = 'lead' and lead.stage = 'qualified' for update of p, lead;
+	if not found then
+		raise exception 'only a qualified lead has its outreach draft edited or approved'
+			using errcode = 'check_violation', constraint = 'lead_contact_draft_contactable';
+	end if;
+	-- Hold existing restrictions as well as the party against a new restriction while approving.
+	perform from do_not_contact where party_id = new.party_id for share;
+	if exists (select from active_do_not_contact where party_id = new.party_id) then
+		raise exception 'do not contact prevents editing or approving outreach'
+			using errcode = 'check_violation', constraint = 'lead_contact_draft_contactable';
+	end if;
+	if (new.subject, new.body, new.owner_user_id, new.scheduled_for, new.time_zone)
 		is distinct from (old.subject, old.body, old.owner_user_id, old.scheduled_for, old.time_zone) then
 		new.revision := old.revision + 1;
 		new.approved := false;
-	elsif new.approved and not old.approved and nullif(current_setting('engine.user_id', true), '') is null then
-		raise exception 'a user approves the draft they read'
-			using errcode = 'check_violation', constraint = 'lead_contact_draft_user_approves';
 	end if;
 	return new;
 end $$;
 
-create trigger lead_contact_draft_review before insert or update on lead_contact_draft
+create trigger lead_contact_draft_review before update on lead_contact_draft
 	for each row execute function lead_contact_draft_review();
 
 -- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
@@ -1345,6 +1356,7 @@ begin
 
 	delete from lead_contact_draft where party_id = duplicate
 		and exists (select from lead_contact_draft where party_id = survivor);
+
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
@@ -1680,7 +1692,8 @@ grant delete on client, national_account, client_brand, national_account_owner t
 
 grant update (status) on lead_stage_move to engine;
 
-
-
 grant update (subject, body, owner_user_id, scheduled_for, time_zone, approved) on lead_contact_draft to engine;
 grant delete on lead_contact_draft to engine;
+
+revoke insert on lead_contact_draft from engine;
+grant insert (id, party_id, owner_user_id, subject, body, scheduled_for, time_zone) on lead_contact_draft to engine;
