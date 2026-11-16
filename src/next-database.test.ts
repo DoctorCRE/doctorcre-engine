@@ -3195,10 +3195,10 @@ test("weak job evidence waits, and a direct user applies it with both decisions 
 
 test("stage evidence stays with the survivor when two leads merge", () =>
 	rolledBack(async () => {
-		await db.query(`${newLeadMove()};
+		await db.query(`${newLeadMove({ status: "applied" })};
 		insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Survivor', 'public_records');
 		insert into party_role (party_id, role, stage) values ('${OLD}', 'lead', 'new');
-		select merge_party('${LEAD}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		${asJob("agent", USER)}; select merge_party('${LEAD}', '${OLD}'); ${CHECK_AT_COMMIT}`);
 		assert.equal(
 			(
 				await db.query(

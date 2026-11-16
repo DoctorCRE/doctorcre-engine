@@ -643,6 +643,10 @@ begin
 	if new.status = 'proposed' then
 		return null;
 	end if;
+	if new.changed_by_job is not null and (new.strength = 'weak' or new.to_stage = 'archived') then
+		raise exception 'weak evidence and archiving wait for a direct user'
+			using errcode = 'check_violation', constraint = 'lead_stage_move_needs_user';
+	end if;
 	if new.changed_by_job is not null and new.changed_for_user_id is null and not (
 		new.from_stage = 'new' and new.to_stage = 'qualified'
 		or new.from_stage = 'qualified' and new.to_stage = 'outreach_active'
@@ -1446,8 +1450,7 @@ begin
 	end loop;
 end $$;
 
-alter table lead_stage_move add constraint lead_stage_move_needs_user
-	check (status <> 'applied' or strength = 'strong' and to_stage <> 'archived' or changed_by_user_id is not null);
+
 
 -- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
 alter table post_text add constraint post_text_edit_by_a_user
