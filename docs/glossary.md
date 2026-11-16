@@ -178,3 +178,9 @@ A sitting where a partner goes through the open deals and marks each reviewed or
 _Avoid_: deal review, session, agenda
 _Database_: `deal_review_session` and `deal_review_item`; `v_deal_room_session`; `last_review_at` in `v_deal_room_board` and `v_deal_room_account`.
 _Engine_: `open_session` on the board.
+
+**Lease**:
+The signed agreement for a deal's property, with sourced dates and terms. An amendment is the next version. The latest version is current.
+
+**Lease option**:
+A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
