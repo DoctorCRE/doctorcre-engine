@@ -413,6 +413,10 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"commission",
+	"commission_payment",
+	"commission_share",
+	"commission_tier",
 	"client_type",
 	"client",
 	"national_account",
@@ -491,6 +495,9 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"commission",
+	"commission_payment",
+	"commission_share",
 	"client",
 	"national_account",
 	"client_brand",
@@ -1874,6 +1881,10 @@ const CHANGEABLE: Record<string, string[]> = {
 	national_account_owner: ["ended_on", "started_on"],
 
 	lead_stage_move: ["status"],
+	commission: ["closing_share", "expected", "gross"],
+	commission_payment: ["amount", "due_on", "invoiced_on", "received_on"],
+	commission_share: ["share"],
+	commission_tier: ["closing_share"],
 	role: ["label"],
 	do_not_contact: ["until_date"],
 	stage: ["label"],
@@ -1936,6 +1947,7 @@ const REMOVABLE = [
 	),
 	"activity",
 	"email",
+	"commission_tier",
 ];
 
 // Each case runs in a transaction it rolls back, so a broken rule leaves nothing behind.
@@ -3984,3 +3996,141 @@ test("distinct manually sourced deadlines may share their kind and day", async (
 		);
 	});
 });
+
+const COMMISSION = `insert into commission (deal_id, gross) values ('${DEAL}', 10000)`;
+const payment = (row: Record<string, string | number>) =>
+	insert("commission_payment", { deal_id: DEAL, amount: 5000, ...row });
+const share = (row: Record<string, string | number>) =>
+	insert("commission_share", {
+		deal_id: DEAL,
+		party_id: AGENT,
+		kind: "referral",
+		...row,
+	});
+const tiers = (...rows: [number, number][]) =>
+	`insert into commission_tier (user_id, from_deal, partner_user_id, closing_share) values ${rows
+		.map(([from, closing]) => `('${USER}', ${from}, '${TEAMMATE}', ${closing})`)
+		.join(", ")}`;
+// Made up, and each count a broken rule could give lands on a different tier.
+const LADDER = tiers([1, 0.9], [3, 0.7], [4, 0.6]);
+
+// biome-ignore format: one row per refusal
+const COMMISSION_REFUSALS: Record<string, Case[]> = {
+	"a deal's commission is recorded once, and its expected and gross amounts and any override are in range": [
+		[`${COMMISSION}; insert into commission (deal_id) values ('${DEAL}')`, "commission_pkey"],
+		[`insert into commission (deal_id) values ('${MISSING}')`, "commission_deal_id_fkey"],
+		[`insert into commission (deal_id, expected) values ('${DEAL}', 0)`, "commission_expected_check"],
+		[`insert into commission (deal_id, gross) values ('${DEAL}', -1)`, "commission_gross_check"],
+		[`insert into commission (deal_id, closing_share) values ('${DEAL}', 1.1)`, "commission_closing_share_check"],
+	],
+	"a payment is part of a deal's gross, more than zero, invoiced before it is due or received": [
+		[payment({}), "commission_payment_deal_id_fkey"],
+		[`${COMMISSION}; ${payment({ amount: 0 })}`, "commission_payment_amount_check"],
+		[`${COMMISSION}; ${payment({ invoiced_on: "2026-05-01", due_on: "2026-04-30" })}`, "commission_payment_dates_in_order"],
+		[`${COMMISSION}; ${payment({ invoiced_on: "2026-05-01", received_on: "2026-04-30" })}`, "commission_payment_dates_in_order"],
+	],
+	"payments never add up to more than the gross, checked when the change is saved": [
+		[`${COMMISSION}; ${payment({ amount: 6000 })}; ${payment({})}; ${CHECK_AT_COMMIT}`, "commission_payments_within_gross"],
+		[`insert into commission (deal_id, expected) values ('${DEAL}', 10000); ${payment({})}; ${CHECK_AT_COMMIT}`, "commission_payments_within_gross"],
+		[`${COMMISSION}; ${payment({})}; update commission set gross = 4000; ${CHECK_AT_COMMIT}`, "commission_payments_within_gross"],
+	],
+	"others' shares go to a person or company, by kind, and never add up to more than the whole": [
+		[`${COMMISSION}; ${share({ kind: "house", share: 0.1 })}`, "commission_share_kind_check"],
+		[`${COMMISSION}; ${share({ share: 0 })}`, "commission_share_share_check"],
+		[`${COMMISSION}; ${share({ party_id: MISSING, share: 0.1 })}`, "commission_share_party_id_fkey"],
+		[`${COMMISSION}; ${share({ share: 0.6 })}; ${share({ party_id: `${BROKERAGES[0]}`, kind: "brokerage", share: 0.5 })}; ${CHECK_AT_COMMIT}`, "commission_shares_within_whole"],
+	],
+	"a ladder is a user's, with another user as partner, and starts at the first closed deal, stepping down toward even": [
+		[tiers([0, 0.9]), "commission_tier_from_deal_check"],
+		[tiers([1, 0.4]), "commission_tier_closing_share_check"],
+		[`${tiers([1, 0.9])}; ${tiers([1, 0.8])}`, "commission_tier_pkey"],
+		[`insert into commission_tier values ('${USER}', 1, '${USER}', 0.9)`, "commission_tier_another_user"],
+		[`insert into commission_tier values ('${USER}', 1, '${AGENT}', 0.9)`, "commission_tier_partner_user_id_fkey"],
+		[`${tiers([2, 0.9])}; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
+		[`${tiers([1, 0.7], [3, 0.9])}; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
+		[`${LADDER}; delete from commission_tier where from_deal = 1; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
+	],
+};
+
+for (const [rule, cases] of Object.entries(COMMISSION_REFUSALS))
+	test(rule, async () => {
+		for (const [sql, refusal] of cases)
+			await rolledBack(() => assert.rejects(db.query(sql), expected(refusal)));
+	});
+
+test("a user's ladder names one partner", () =>
+	asOwner([
+		[
+			`insert into party (id, kind, name) values ('${id(22)}', 'person', 'Casey Example');
+			insert into app_user (id) values ('${id(22)}');
+			insert into commission_tier values ('${USER}', 1, '${TEAMMATE}', 0.9), ('${USER}', 3, '${id(22)}', 0.7)`,
+			"commission_tier_one_partner",
+		],
+	]));
+
+const FIRST = id(750);
+const SECOND = id(751);
+const DIED = id(752);
+const TEAMMATES = id(753);
+const THIRD = id(754);
+const CLOSED_DEALS = `
+insert into phase values ('closed', 'Closed');
+insert into deal (id, name, owner_user_id) values
+	('${FIRST}', 'Example First Deal', '${USER}'), ('${SECOND}', 'Example Second Deal', '${USER}'),
+	('${DIED}', 'Example Reopened Deal', '${USER}'), ('${TEAMMATES}', 'Example Teammate Deal', '${TEAMMATE}'),
+	('${THIRD}', 'Example Third Deal', '${USER}');
+insert into deal_phase_change values
+	('${FIRST}', '2019-03-01T15:00:00+00:00', 'closed', null), ('${SECOND}', '2019-09-01T15:00:00+00:00', 'closed', null),
+	('${DIED}', '2025-01-01T15:00:00+00:00', 'closed', null), ('${DIED}', '2025-06-01T15:00:00+00:00', 'dead', 'Example fell through'),
+	('${TEAMMATES}', '2025-03-01T15:00:00+00:00', 'closed', null), ('${THIRD}', '2026-02-01T15:00:00+00:00', 'closed', null);
+`;
+const split = async (deal: string) =>
+	(
+		await db.query(
+			"select kind, party_id, share::float8 as share, amount::text as amount from commission_split where deal_id = $1 order by share desc nulls last, kind",
+			[deal],
+		)
+	).rows;
+
+test("each user's share comes from their ladder, by their lifetime count of closed deals, after the others' shares", () =>
+	rolledBack(async () => {
+		await db.query(`${LADDER}; ${CLOSED_DEALS};
+			insert into commission (deal_id, gross) values ('${THIRD}', 10000);
+			insert into commission_share (deal_id, party_id, kind, share) values
+				('${THIRD}', '${AGENT}', 'referral', 0.25), ('${THIRD}', '${BROKERAGES[0]}', 'brokerage', 0.1);
+			insert into commission_payment (deal_id, amount, invoiced_on, due_on, received_on) values
+				('${THIRD}', 5000, '2026-02-01', '2026-03-01', '2026-02-20'), ('${THIRD}', 5000, '2026-06-01', '2026-07-01', null);
+			${CHECK_AT_COMMIT}`);
+		assert.deepEqual(await split(THIRD), [
+			{ kind: "closing_user", party_id: USER, share: 0.455, amount: "4550.00" },
+			{ kind: "referral", party_id: AGENT, share: 0.25, amount: "2500.00" },
+			{ kind: "partner", party_id: TEAMMATE, share: 0.195, amount: "1950.00" },
+			{
+				kind: "brokerage",
+				party_id: BROKERAGES[0],
+				share: 0.1,
+				amount: "1000.00",
+			},
+		]);
+	}));
+
+test("a deal's own split overrides the ladder, and the amounts add up to the gross to the cent", () =>
+	rolledBack(async () => {
+		await db.query(`${LADDER}; ${CLOSED_DEALS};
+			insert into commission (deal_id, gross, closing_share) values ('${THIRD}', 100.01, 0.5)`);
+		assert.deepEqual(await split(THIRD), [
+			{ kind: "closing_user", party_id: USER, share: 0.5, amount: "50.01" },
+			{ kind: "partner", party_id: TEAMMATE, share: 0.5, amount: "50.00" },
+		]);
+	}));
+
+test("an open deal carries its expected commission, and its users' shares wait for it to close", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${LADDER}; insert into commission (deal_id, expected) values ('${DEAL}', 8000)`,
+		);
+		assert.deepEqual(await split(DEAL), [
+			{ kind: "closing_user", party_id: USER, share: null, amount: null },
+			{ kind: "partner", party_id: TEAMMATE, share: null, amount: null },
+		]);
+	}));
