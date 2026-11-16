@@ -42,7 +42,7 @@ _Database_: `lead.owner_id` today; `party_role.owner_user_id` on the lead role i
 **How found**:
 How we found a lead or client, from a short list, such as referral, vendor, marketing post, public records or cold outreach.
 _Avoid_: source on its own, lane (a radar lane), referral source
-_Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database.
+_Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database, with `party.how_found_detail` for attribution detail.
 
 **Prospect**:
 The stage in between lead and client. A lead becomes a prospect when it turns warm, or a potential client becomes one when introduced. It stays a prospect until we represent them. An inactive prospect goes back to Leads.
