@@ -4,7 +4,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 
 ## Records
 
-- **`party`**: every person and company, once, each with its own id. `kind` is `person` or `company`. A person's `npi` is their individual NPI, and a company's its organization NPI.
+- **`party`**: every person and company, once, each with its own id. `kind` is `person` or `company`. A person's `npi` is their individual NPI, and a company's its organization NPI. `how_found` says how a lead or client was found.
 - **`merged_party`**: what a merged-away duplicate leaves behind: its old id and the record it became. Nothing lists or shows it.
 - **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's preferences and facts will be columns here, or a child table keyed by the user, as they come.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.
@@ -12,7 +12,8 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
 - **`outside_id`**: another system's id for a person, company or deal, such as a Salesforce or roster id, kept as import history.
 - **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record. A vendor's category, such as lender, is a role whose `category_of` is vendor.
-- **`stage`**: each role's list of stages, such as a vendor's. Like roles, a label can be renamed.
+- **`stage`**: each role's list of stages, such as a vendor's or a lead's. Like roles, a label can be renamed.
+- **`how_found`**: the short list of how a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
 - **`relationship_level`**: the four levels of how well the team knows a vendor, from 0, Prospective, to 3, Core.
 - **`introduction`**: one introduction between a vendor and the team, made either way, and the deal it led to.
 - **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
@@ -32,7 +33,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 ## Users, jobs and who changed what
 
-Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases and specialties, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
+Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, specialties and how found, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
 
 The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. A removal names who made it too, in change history.
 
@@ -58,7 +59,7 @@ Today's actors map across like this. The old `actor` table holds the two partner
 
 Each link is one row. No record holds a list or a column per role.
 
-- **`party_role`**: what a person or company is to us. One row per role. A vendor's vendor role also holds its stage and relationship level.
+- **`party_role`**: what a person or company is to us. One row per role. A vendor's vendor role also holds its stage and relationship level, and a lead's lead role its stage and owner.
 - **`party_email`** and **`party_phone`**: a person's or company's emails and phone numbers, one row each, with a label and whether it is the primary one.
 - **`party_specialty`**: a person's specialties, one row each.
 - **`party_company`**: a person at a company, with their title there and the dates they started and left. A person who moves keeps the old row, with its end date, and gets a new one.
@@ -126,6 +127,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 52. Every insert, update and delete of a stamped row leaves one change row: the record's key, the fields it changed from what to what, and who made it and when. A statement that changes nothing leaves none.
 53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update or a delete.
 54. A change a merge makes names the merge, and only a merge saved in the same transaction is named.
+55. A lead has a stage. Only a lead has an owner, and the owner is a user.
+56. A lead or client says how they were found, from the list, checked when the change is saved.
+57. Someone on a deal as its client holds the client role, checked when the change is saved, so the role cannot be removed while they are.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -135,9 +139,9 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
-- a role's, a stage's, a phase's or a specialty's label;
-- a vendor role's stage, relationship level, disposition, reason and target, and an introduction's date, deal and note;
-- a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, and a property's address, county and point;
+- a role's, a stage's, a phase's, a specialty's or a how-found's label;
+- a vendor role's stage, relationship level, disposition, reason and target, a lead role's stage and owner, and an introduction's date, deal and note;
+- a party's, market's, territory's, deal's, document's or design template's name, a party's NPI and how found, and a property's address, county and point;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
@@ -319,6 +323,26 @@ Moving today's rows across:
 - Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is empty, or is neither the vendor nor a user, waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
 - `trust_override`, a hand-set rating, does not move.
 
+## Leads and clients
+
+A lead is a person or company holding the `lead` role, and a client one holding the `client` role, so a lead that becomes a client is the same record with one more role. The owner ruled on #196 (walkthrough 4, 2026-11-16).
+
+- **Becoming a client.** Someone is a client as soon as a deal is opened for them, signed or not. The client on a deal is a `deal_party` row, and the database refuses one whose party does not hold the client role. The engine adds the role with the deal, in one save, and the role's `created_at` is when they became a client. The lead role stays, with its stage, owner and history, so the Leads screen can leave out a lead who has become a client.
+- **Owner.** A lead's owner is the user who works it. None means nobody works it yet, and any user can take it. Territory is shared, so a lead's area never picks its owner. Change history keeps who owned it before.
+- **Stage.** A lead's stage comes from the lead stages in `stage`: New, Qualified, Outreach Active, Engaged, Nurture, Opportunity and Archived. Nurture replaces named drip campaigns. Do not contact is the party's `do_not_contact` row, and deal outcomes are deal phases, not lead stages.
+- **How found.** Each lead and client says how they were found, from the `how_found` list: referral, vendor, marketing post, public records and cold outreach to start. It is a fact about the person or company, so it holds in every role, and a lead that becomes a client copies nothing. A list can be counted for lead attribution, where free text cannot.
+- **Not kept.** The 0 to 100 lead score and named drip campaigns do not come across (owner, #196).
+
+Moving today's rows across:
+
+- Each `lead` becomes the lead role on its party, and each `client` the client role on its party, keeping its `created_at`.
+- Stages `new`, `qualified`, `outreach_active`, `engaged`, `opportunity` and `archived` stay. `nurture_drip` and `closed_lost` become nurture, as the Leads screen already shows Closed-Lost. `active_deal` and `closed_won` become opportunity, since the deal holds what happened. A `do_not_contact` stage or `suppressed` lead is the party's do not contact, moved by the copy of people, and its lead becomes archived.
+- `owner_id` names a partner's actor, which becomes that user. A lead with no owner keeps none.
+- How found comes from `client.acquisition_source`, asked of the client, or else `lead.source_type`. Both are free text today. `prospect-pool` is public records; every other value is listed for a partner to map to the list, and a party whose two values disagree is listed too.
+- A lead whose `client_id` points at a client on another party, such as the practice a doctor runs, keeps its lead role on the person, and the client role stays on the practice.
+- `score`, `score_reason`, `drip_campaign`, `drip_added`, `report_back_due` and `sf_deal` do not move. Only the old spreadsheet import wrote the last four, and nothing reads them.
+- Lanes, stage moves, the estimated lease date, outreach drafts, candidates and the remaining free text come with #286.
+
 ## Merging duplicates
 
 The owner ruled on #196: the merged-away record disappears and everything points at the survivor. `merge_party(duplicate, survivor)` leaves a `merged_party` row, so an old link finds the survivor, moves every row that points at the duplicate, then removes it. Email matches need nothing more, because the duplicate's addresses are now the survivor's. The foreign keys then refuse any row that still names the duplicate, in any table, including tables added later. The merge finds what to move from the catalog, so a new table that points at a party moves with no change to it.
@@ -333,6 +357,7 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
+- Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. How found stays the survivor's, or becomes the duplicate's.
 - Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
@@ -353,4 +378,4 @@ Today's system keeps one `event` row per field changed, with the actor, a verb a
 
 ## Later slices
 
-Deal type, owner and dates. "Everything about this person." Leads and their conversion to clients. National accounts and franchisees. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+Deal type, owner and dates. "Everything about this person." The rest of leads (#286). National accounts and franchisees. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
