@@ -413,6 +413,7 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"candidate",
 	"client_type",
 	"client",
 	"national_account",
@@ -576,6 +577,20 @@ const newLeadMove = (row: Record<string, string | null> = {}) =>
 		activity_id: CALL,
 		evidence_ref: "example:held-call",
 		strength: "weak",
+		...row,
+	});
+const CANDIDATE = id(750);
+const newCandidate = (row: Record<string, string | null> = {}) =>
+	insert("candidate", {
+		id: CANDIDATE,
+		source: "example_sweep",
+		source_key: "example-1",
+		source_row: JSON.stringify({
+			license: "example-1",
+			email: "example@example.com",
+		}),
+		name: "Example Candidate",
+		qualification: "Example lease window",
 		...row,
 	});
 const RULES: Record<string, Case[]> = {
@@ -1868,6 +1883,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	candidate: ["promoted_party_id", "reason", "status"],
 	client_type: ["label"],
 	client: ["client_type", "status"],
 	client_brand: ["ended_on", "started_on"],
@@ -3331,6 +3347,172 @@ test("competing stage evidence holds the lead until the first move completes", a
 		}
 	}
 });
+
+for (const [label, sql, refusal] of [
+	[
+		"duplicate sweep row",
+		`${newCandidate()}; ${newCandidate({ id: id(751) })}`,
+		"candidate_source_source_key_key",
+	],
+	["blank source", newCandidate({ source: " " }), "candidate_source_check"],
+	[
+		"padded key",
+		newCandidate({ source_key: " example-1 " }),
+		"candidate_source_key_check",
+	],
+	[
+		"nonobject context",
+		newCandidate({ source_row: "[]" }),
+		"candidate_source_row_check",
+	],
+	["blank name", newCandidate({ name: " " }), "candidate_name_check"],
+	[
+		"blank qualification",
+		newCandidate({ qualification: " " }),
+		"candidate_qualification_check",
+	],
+	[
+		"estimate without source",
+		newCandidate({ estimated_lease_on: "2030-01-01" }),
+		"candidate_estimate_has_source",
+	],
+	[
+		"source without estimate",
+		newCandidate({ lease_estimate_source: "Example feed" }),
+		"candidate_estimate_has_source",
+	],
+	[
+		"blank estimate source",
+		newCandidate({
+			estimated_lease_on: "2030-01-01",
+			lease_estimate_source: " ",
+		}),
+		"candidate_lease_estimate_source_check",
+	],
+	[
+		"promotion without lead",
+		newCandidate({ status: "promoted" }),
+		"candidate_promoted_has_lead",
+	],
+	[
+		"unreviewed linked to party",
+		newCandidate({ promoted_party_id: LEAD }),
+		"candidate_promoted_has_lead",
+	],
+	[
+		"promoted nonlead",
+		`${newCandidate({ status: "promoted", promoted_party_id: DOCTOR })}; ${CHECK_AT_COMMIT}`,
+		"candidate_promoted_party_id_lead_role_fkey",
+	],
+	[
+		"decline without reason",
+		newCandidate({ status: "declined" }),
+		"candidate_rejection_has_reason",
+	],
+	[
+		"blank reason",
+		newCandidate({ status: "suppressed", reason: " " }),
+		"candidate_reason_check",
+	],
+	[
+		"unattended promotion",
+		`${asJob("candidate_sweep")}; ${newCandidate({ status: "promoted", promoted_party_id: LEAD })}`,
+		"candidate_user_decides",
+	],
+	[
+		"unattended decline",
+		`${asJob("candidate_sweep")}; ${newCandidate({ status: "declined", reason: "Example not a fit" })}`,
+		"candidate_user_decides",
+	],
+	[
+		"suppressed promotion",
+		`${newCandidate({ status: "suppressed", reason: "Example duplicate" })}; update candidate set status = 'promoted', reason = null, promoted_party_id = '${LEAD}'`,
+		"candidate_unreviewed_promotes",
+	],
+	[
+		"reopen declined",
+		`${newCandidate({ status: "declined", reason: "Example not a fit" })}; update candidate set status = 'unreviewed', reason = null`,
+		"candidate_decision_final",
+	],
+	[
+		"reopen promoted",
+		`${newCandidate({ status: "promoted", promoted_party_id: LEAD })}; update candidate set status = 'unreviewed', promoted_party_id = null`,
+		"candidate_decision_final",
+	],
+	[
+		"rewrite provenance",
+		"update candidate set source_row = '{}'",
+		notGranted("candidate"),
+	],
+	["remove candidate", "delete from candidate", notGranted("candidate")],
+] satisfies [string, string, Refusal][]) {
+	test(`candidate refuses ${label}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+
+test("a sweep adds no party; a user promotes a candidate to a lead and its source context stays", () =>
+	rolledBack(async () => {
+		const before = (await db.query("select count(*) from party")).rows[0].count;
+		await db.query(
+			`${asJob("candidate_sweep")}; ${newCandidate({ estimated_lease_on: "2030-01-01", lease_estimate_source: "Example feed" })}`,
+		);
+		assert.equal(
+			(await db.query("select count(*) from party")).rows[0].count,
+			before,
+		);
+		await db.query(
+			`${asUser(USER)}; update candidate set status = 'promoted', promoted_party_id = '${LEAD}'`,
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select status, promoted_party_id, source_row, estimated_lease_on::text as estimate, lease_estimate_source from candidate",
+				)
+			).rows,
+			[
+				{
+					status: "promoted",
+					promoted_party_id: LEAD,
+					source_row: { license: "example-1", email: "example@example.com" },
+					estimate: "2030-01-01",
+					lease_estimate_source: "Example feed",
+				},
+			],
+		);
+	}));
+
+test("suppression waits for a user to reopen before promotion", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("candidate_sweep")}; ${newCandidate({ status: "suppressed", reason: "Example possible duplicate" })};
+		${asUser(USER)}; update candidate set status = 'unreviewed', reason = null;
+		update candidate set status = 'promoted', promoted_party_id = '${LEAD}'; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(await db.query("select status from candidate")).rows[0].status,
+			"promoted",
+		);
+	}));
+
+test("a promoted candidate can only follow its party through a merge", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${newCandidate({ status: "promoted", promoted_party_id: LEAD })}; savepoint promotion`,
+		);
+		await assert.rejects(
+			db.query(`update candidate set promoted_party_id = '${CLIENT}'`),
+			expected("candidate_promotion_stays"),
+		);
+		await db.query(`rollback to promotion;
+		insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Survivor', 'public_records');
+		insert into party_role (party_id, role, stage) values ('${OLD}', 'lead', 'new');
+		${asJob("agent", USER)}; select merge_party('${LEAD}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(await db.query("select promoted_party_id from candidate")).rows[0]
+				.promoted_party_id,
+			OLD,
+		);
+	}));
 
 // Last, because it commits.
 test("a merge waits for one that moves rows onto its duplicate, then moves them on", async () => {

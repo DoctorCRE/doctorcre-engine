@@ -61,7 +61,7 @@ create table job (
 
 insert into job values
 	('intake', 'Post intake'), ('mail_capture', 'Mail filing'), ('publisher', 'Publisher'), ('readings', 'Post readings'),
-	('review_close', 'Review close'), ('lead_stage', 'Lead stages'), ('agent', 'Agent'), ('old_system', 'Old system');
+	('review_close', 'Review close'), ('lead_stage', 'Lead stages'), ('candidate_sweep', 'Candidate sweeps'), ('agent', 'Agent'), ('old_system', 'Old system');
 
 -- The engine names who acts once per transaction: set_config('engine.user_id', <id>, true) for a user, and
 -- set_config('engine.job', <slug>, true) for a job, with engine.user_id then the user it works for, if any.
@@ -454,6 +454,58 @@ create constraint trigger lead_or_client_how_found after update of how_found on 
 alter table deal_party add client_role text generated always as (case when role = 'client' then role end) stored,
 	add constraint deal_party_client_is_a_client foreign key (party_id, client_role) references party_role
 		deferrable initially deferred;
+
+-- Candidates have no party until a user promotes them; source context stays outside the working contact list.
+create table candidate (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	source text not null check (source = btrim(source) and source ~ '\S'),
+	source_key text not null check (source_key = btrim(source_key) and source_key ~ '\S'),
+	source_row jsonb not null check (jsonb_typeof(source_row) = 'object'),
+	name text not null check (name ~ '\S'),
+	qualification text not null check (qualification ~ '\S'),
+	estimated_lease_on date,
+	lease_estimate_source text check (lease_estimate_source ~ '\S'),
+	status text not null default 'unreviewed' check (status in ('unreviewed', 'promoted', 'declined', 'suppressed')),
+	reason text check (reason ~ '\S'),
+	promoted_party_id uuid references party,
+	lead_role text generated always as (case when status = 'promoted' then 'lead' end) stored,
+	unique (source, source_key),
+	constraint candidate_estimate_has_source check ((estimated_lease_on is null) = (lease_estimate_source is null)),
+	constraint candidate_promoted_has_lead check ((status = 'promoted') = (promoted_party_id is not null)),
+	constraint candidate_rejection_has_reason check ((status in ('declined', 'suppressed')) = (reason is not null)),
+	foreign key (promoted_party_id, lead_role) references party_role deferrable initially deferred
+);
+
+create function candidate_review() returns trigger
+language plpgsql as $$
+begin
+	if tg_op = 'UPDATE' and old.status in ('promoted', 'declined') and new.status is distinct from old.status then
+		raise exception 'a promoted or declined candidate stays decided'
+			using errcode = 'check_violation', constraint = 'candidate_decision_final';
+	end if;
+	if tg_op = 'UPDATE' and old.status = 'promoted' and new.promoted_party_id is distinct from old.promoted_party_id
+		and not exists (select from merged_party where id = old.promoted_party_id and survivor_id = new.promoted_party_id
+			and id = nullif(current_setting('engine.merge', true), '')::uuid and created_at = now()) then
+		raise exception 'only a merge moves a promoted candidate to another lead'
+			using errcode = 'check_violation', constraint = 'candidate_promotion_stays';
+	end if;
+	if tg_op = 'UPDATE' and old.status = new.status then return null; end if;
+	if new.status in ('promoted', 'declined') or tg_op = 'UPDATE' and old.status = 'suppressed' then
+		if nullif(current_setting('engine.user_id', true), '') is null then
+			raise exception 'a user promotes, declines or reopens a candidate'
+				using errcode = 'check_violation', constraint = 'candidate_user_decides';
+		end if;
+	end if;
+	if tg_op = 'UPDATE' and new.status = 'promoted' and old.status <> 'unreviewed' then
+		raise exception 'only an unreviewed candidate is promoted'
+			using errcode = 'check_violation', constraint = 'candidate_unreviewed_promotes';
+	end if;
+	return null;
+end $$;
+
+create trigger candidate_review after insert or update of status, promoted_party_id on candidate
+	for each row execute function candidate_review();
 
 -- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
 create table introduction (
@@ -1429,7 +1481,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'candidate', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
@@ -1637,3 +1689,5 @@ grant delete on client, national_account, client_brand, national_account_owner t
 grant update (status) on lead_stage_move to engine;
 
 
+
+grant update (status, reason, promoted_party_id) on candidate to engine;

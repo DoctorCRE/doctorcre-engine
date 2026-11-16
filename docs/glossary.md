@@ -225,3 +225,7 @@ A renewal, expansion or early termination right in one lease version, with its e
 **Lead stage evidence**:
 An activity and its reference supporting a proposed or applied lead stage move. Weak job evidence waits for a user. Archiving always needs a user and a reason.
 _New database_: `lead_stage_move`. Ordinary stage edits and who and when stay in `change`.
+
+**Candidate**:
+An unreviewed sweep or public-record result kept outside the working contact list. A user promotes it to a lead, or declines it with a reason.
+_New database_: `candidate`, retaining source context and qualification after promotion. A suppressed candidate waits for user review.
