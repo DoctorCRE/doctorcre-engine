@@ -3456,10 +3456,12 @@ test("an outside lease has no brokerage deal and a renewal is its own deal", asy
 		await db.query(`update deal set reason = 'relocation', renews_lease_id = null where id = '${id(730)}';
 			update deal set reason = 'renewal', renews_lease_id = '${id(721)}' where id = '${id(730)}';
 			insert into deal_property (deal_id, property_id) values ('${id(730)}', '${PROPERTY}');
+			update party set how_found = 'referral' where id = '${AGENT}';
+			insert into party_role (party_id, role) values ('${AGENT}', 'client');
 			insert into deal_party (deal_id, party_id, role) values ('${id(730)}', '${AGENT}', 'client');
 			insert into lease (id, party_id, property_id, deal_id) values ('${id(731)}', '${AGENT}', '${PROPERTY}', '${id(730)}');
 			insert into lease_version (id, lease_id, version, document_id, expiration_on)
-			values ('${id(732)}', '${id(731)}', 1, '${PDF_FILE}', '2040-06-30')`);
+			values ('${id(732)}', '${id(731)}', 1, '${PDF_FILE}', '2040-06-30'); ${CHECK_AT_COMMIT}`);
 		assert.deepEqual(
 			(await db.query("select lease_id, party_id from lease_ending")).rows,
 			[{ lease_id: id(731), party_id: AGENT }],
