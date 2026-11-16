@@ -788,12 +788,52 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
+-- Space needs, suites and building ownership (#312).
+create table space_need (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references deal,
+	name text not null check (name ~ '\S'),
+	min_sf numeric(10, 1) check (min_sf > 0 and min_sf < 'Infinity'::numeric),
+	max_sf numeric(10, 1) check (max_sf > 0 and max_sf < 'Infinity'::numeric),
+	space_type text check (space_type ~ '\S'),
+	market_id uuid references market,
+	must_haves text check (must_haves ~ '\S'),
+	constraint space_need_size_in_order check (max_sf >= min_sf)
+);
+
+create table suite (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	property_id uuid not null references property,
+	label text check (label = btrim(label) and label ~ '\S'),
+	floor integer,
+	area_sf numeric(10, 1) check (area_sf > 0 and area_sf < 'Infinity'::numeric),
+	area_basis text check (area_basis in ('rentable', 'usable', 'county_heated', 'listed_unverified')),
+	condition text check (condition ~ '\S'),
+	unique (property_id, label),
+	unique (id, property_id)
+);
+
+create table building_ownership (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	property_id uuid not null references property,
+	party_id uuid not null references party,
+	kind text not null check (kind in ('owner', 'landlord_rep', 'property_manager', 'listing_agent')),
+	started_on date,
+	ended_on date check (ended_on >= started_on),
+	source text not null check (source ~ '\S'),
+	unique nulls not distinct (property_id, party_id, kind, started_on)
+);
+
 -- Signed terms are their own history; an amendment is the next version, never an overwrite.
 create table lease (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	deal_id uuid not null,
 	property_id uuid not null,
+	suite_id uuid,
 	version integer not null check (version >= 1),
 	previous_version integer generated always as (nullif(version - 1, 0)) stored,
 	offer_id uuid,
@@ -815,6 +855,7 @@ create table lease (
 	constraint lease_rent_date_or_days check (num_nonnulls(rent_starts_on, rent_days_after_delivery) <= 1),
 	unique (deal_id, version),
 	unique (id, deal_id),
+	foreign key (suite_id, property_id) references suite (id, property_id),
 	foreign key (deal_id, previous_version) references lease (deal_id, version),
 	foreign key (deal_id, property_id) references deal_property,
 	foreign key (offer_id, deal_id, property_id) references offer (id, deal_id, property_id)
@@ -1357,6 +1398,10 @@ begin
 	where d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
 		and s.started_on is not distinct from d.started_on;
 
+	delete from building_ownership d using building_ownership s
+	where d.party_id = duplicate and s.party_id = survivor and s.property_id = d.property_id
+		and s.kind = d.kind and s.started_on is not distinct from d.started_on;
+
 	-- Profiles cascade with their roles before their direct party keys move.
 	update party_role set party_id = survivor where party_id = duplicate;
 
@@ -1434,7 +1479,7 @@ begin
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
+		'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -1637,3 +1682,9 @@ grant delete on client, national_account, client_brand, national_account_owner t
 grant update (status) on lead_stage_move to engine;
 
 
+
+
+grant delete on suite, space_need, building_ownership to engine;
+grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
+grant update (name, min_sf, max_sf, space_type, market_id, must_haves) on space_need to engine;
+grant update (started_on, ended_on, source) on building_ownership to engine;

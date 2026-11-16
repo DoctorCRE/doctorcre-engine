@@ -413,6 +413,9 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"suite",
+	"space_need",
+	"building_ownership",
 	"client_type",
 	"client",
 	"national_account",
@@ -491,6 +494,9 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"suite",
+	"space_need",
+	"building_ownership",
 	"client",
 	"national_account",
 	"client_brand",
@@ -1868,6 +1874,16 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	suite: ["area_basis", "area_sf", "condition", "floor", "label"],
+	space_need: [
+		"market_id",
+		"max_sf",
+		"min_sf",
+		"must_haves",
+		"name",
+		"space_type",
+	],
+	building_ownership: ["ended_on", "source", "started_on"],
 	client_type: ["label"],
 	client: ["client_type", "status"],
 	client_brand: ["ended_on", "started_on"],
@@ -3043,6 +3059,7 @@ const COLLAPSED = [
 	"activity_about_activity_id_deal_id_party_id_property_id_key",
 	"activity_about_activity_party_key",
 	"app_user_pkey",
+	"building_ownership_property_id_party_id_kind_started_on_key",
 	"deal_party_pkey",
 	"do_not_contact_pkey",
 	"lead_stage_move_party_id_from_stage_to_stage_activity_id_key",
@@ -3984,3 +4001,206 @@ test("distinct manually sourced deadlines may share their kind and day", async (
 		);
 	});
 });
+
+const SUITE = id(800);
+const SPACE_NEED = id(801);
+const SPACE_SEED = `
+insert into suite (id, property_id, label, floor, area_sf, area_basis)
+values ('${SUITE}', '${PROPERTY}', '101', 1, 2400, 'rentable');
+insert into space_need (id, deal_id, name, min_sf, max_sf, space_type, must_haves)
+values ('${SPACE_NEED}', '${DEAL}', 'Example search', 2000, 3000, 'medical', 'Ground floor');
+insert into building_ownership (property_id, party_id, kind, started_on, ended_on, source)
+values ('${PROPERTY}', '${BROKERAGES[0]}', 'owner', '2020-01-01', '2025-12-31', 'Example deed'),
+('${PROPERTY}', '${BROKERAGES[1]}', 'owner', '2026-01-01', null, 'Example deed');`;
+
+for (const [name, sql, refusal] of [
+	[
+		"reversed size range",
+		`update space_need set min_sf = 4000`,
+		"space_need_size_in_order",
+	],
+	[
+		"negative minimum",
+		`update space_need set min_sf = -1`,
+		"space_need_min_sf_check",
+	],
+	[
+		"zero maximum",
+		`update space_need set max_sf = 0`,
+		"space_need_max_sf_check",
+	],
+	[
+		"unknown market",
+		`update space_need set market_id = '${MISSING}'`,
+		"space_need_market_id_fkey",
+	],
+	[
+		"unknown deal",
+		`insert into space_need (deal_id, name) values ('${MISSING}', 'Example')`,
+		"space_need_deal_id_fkey",
+	],
+	[
+		"blank must-have",
+		`update space_need set must_haves = ' '`,
+		"space_need_must_haves_check",
+	],
+	[
+		"blank type",
+		`update space_need set space_type = ' '`,
+		"space_need_space_type_check",
+	],
+	["blank name", `update space_need set name = ' '`, "space_need_name_check"],
+	[
+		"duplicate suite",
+		`insert into suite (property_id, label) values ('${PROPERTY}', '101')`,
+		"suite_property_id_label_key",
+	],
+	["blank suite", `update suite set label = ' '`, "suite_label_check"],
+	["zero suite area", `update suite set area_sf = 0`, "suite_area_sf_check"],
+	[
+		"unknown area basis",
+		`update suite set area_basis = 'guess'`,
+		"suite_area_basis_check",
+	],
+	[
+		"unknown property",
+		`insert into suite (property_id) values ('${MISSING}')`,
+		"suite_property_id_fkey",
+	],
+	[
+		"reversed ownership dates",
+		`update building_ownership set ended_on = '2010-01-01'`,
+		"building_ownership_check",
+	],
+	[
+		"unknown owner",
+		`insert into building_ownership (property_id, party_id, kind, source) values ('${PROPERTY}', '${MISSING}', 'owner', 'Example')`,
+		"building_ownership_party_id_fkey",
+	],
+	[
+		"unknown ownership kind",
+		`insert into building_ownership (property_id, party_id, kind, source) values ('${PROPERTY}', '${CLIENT}', 'other', 'Example')`,
+		"building_ownership_kind_check",
+	],
+	[
+		"blank ownership source",
+		`update building_ownership set source = ' '`,
+		"building_ownership_source_check",
+	],
+	[
+		"duplicate ownership",
+		`insert into building_ownership (property_id, party_id, kind, started_on, source) values ('${PROPERTY}', '${BROKERAGES[0]}', 'owner', '2020-01-01', 'Example')`,
+		"building_ownership_property_id_party_id_kind_started_on_key",
+	],
+	[
+		"lease suite in another building",
+		`insert into suite (id, property_id) values ('${id(802)}', '${ELSEWHERE}'); ${newLease({ suite_id: id(802) })}`,
+		"lease_suite_id_property_id_fkey",
+	],
+	[
+		"missing lease suite",
+		newLease({ suite_id: MISSING }),
+		"lease_suite_id_property_id_fkey",
+	],
+] satisfies [string, string, string][]) {
+	test(`space records refuse ${name}`, () =>
+		rolledBack(async () => {
+			await db.query(SPACE_SEED);
+			await assert.rejects(db.query(sql), { constraint: refusal });
+		}));
+}
+
+test("space needs keep typed criteria and suites join leases only within their property", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED};
+		update space_need set market_id = '${BAY}' where id = '${SPACE_NEED}';
+		${newLease({ suite_id: SUITE })}`);
+		const { rows } =
+			await db.query(`select n.min_sf, n.max_sf, n.space_type, n.must_haves, m.name,
+		s.label, s.area_sf, l.suite_id, n.changed_by_user_id
+		from space_need n join market m on m.id = n.market_id
+		join lease l on l.deal_id = n.deal_id join suite s on s.id = l.suite_id`);
+		assert.deepEqual(rows, [
+			{
+				min_sf: "2000.0",
+				max_sf: "3000.0",
+				space_type: "medical",
+				must_haves: "Ground floor",
+				name: "Example Bay",
+				label: "101",
+				area_sf: "2400.0",
+				suite_id: SUITE,
+				changed_by_user_id: USER,
+			},
+		]);
+		await assert.rejects(db.query(`delete from suite where id = '${SUITE}'`), {
+			constraint: "lease_suite_id_property_id_fkey",
+		});
+	}));
+
+test("ownership keeps former and joint owners, and a merge preserves the survivor's duplicate link", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED};
+		insert into building_ownership (property_id, party_id, kind, started_on, source)
+		values ('${PROPERTY}', '${LENDERS[0]}', 'owner', '2026-01-01', 'Example joint owner');
+		select merge_party('${BROKERAGES[0]}', '${BROKERAGES[1]}')`);
+		const { rows } =
+			await db.query(`select party_id, started_on::text, ended_on::text
+		from building_ownership order by started_on, party_id`);
+		assert.equal(rows.length, 3);
+		assert.deepEqual(rows[0], {
+			party_id: BROKERAGES[1],
+			started_on: "2020-01-01",
+			ended_on: "2025-12-31",
+		});
+		await db.query(`insert into building_ownership (property_id, party_id, kind, started_on, source)
+		values ('${PROPERTY}', '${LENDERS[0]}', 'owner', '2020-01-01', 'Example duplicate');
+		select merge_party('${LENDERS[0]}', '${BROKERAGES[1]}')`);
+		assert.equal(
+			(await db.query("select * from building_ownership")).rowCount,
+			2,
+		);
+	}));
+
+test("unknown space facts stay unknown, alternatives and same labels in other buildings are allowed", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED};
+		insert into suite (property_id, label) values ('${ELSEWHERE}', '101'), ('${PROPERTY}', null), ('${PROPERTY}', null);
+		insert into space_need (deal_id, name, max_sf) values ('${DEAL}', 'Example alternative', 1500);
+		insert into space_need (deal_id, name, min_sf) values ('${DEAL}', 'Example larger alternative', 3000);
+		insert into building_ownership (property_id, party_id, kind, source)
+		values ('${ELSEWHERE}', '${CLIENT}', 'owner', 'Example undated source');`);
+		assert.equal((await db.query("select * from suite")).rowCount, 4);
+		assert.equal((await db.query("select * from space_need")).rowCount, 3);
+		await assert.rejects(
+			db.query(`insert into building_ownership (property_id, party_id, kind, source)
+		values ('${ELSEWHERE}', '${CLIENT}', 'owner', 'Example repeated source')`),
+			{
+				constraint:
+					"building_ownership_property_id_party_id_kind_started_on_key",
+			},
+		);
+	}));
+
+test("space edits carry job attribution and retain their prior values in history", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED}; ${asJob("agent", TEAMMATE)};
+		update suite set area_sf = 2500 where id = '${SUITE}';
+		update space_need set must_haves = 'Example parking' where id = '${SPACE_NEED}';
+		update building_ownership set source = 'Example corrected source';`);
+		const { rows } =
+			await db.query(`select table_name, changed_by_job, changed_for_user_id,
+		old_value is not null as keeps_before from change where action = 'update'
+		and table_name in ('suite', 'space_need', 'building_ownership') order by table_name`);
+		assert.deepEqual(
+			rows.map((r) => [
+				r.table_name,
+				r.changed_by_job,
+				r.changed_for_user_id,
+				r.keeps_before,
+			]),
+			["building_ownership", "building_ownership", "space_need", "suite"].map(
+				(table) => [table, "agent", TEAMMATE, true],
+			),
+		);
+	}));

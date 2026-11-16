@@ -16,7 +16,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`how_found`**: the short list of how a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
 - **`relationship_level`**: the four levels of how well the team knows a vendor, from 0, Prospective, to 3, Core.
 - **`introduction`**: one introduction between a vendor and the team, made either way, and the deal it led to.
-- **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
+- **`property`**: a building, by address, with its county and its point on the map once geocoded.
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
 - **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, and whether it needs attention.
@@ -152,6 +152,10 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 69. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank.
 70. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
 71. Lead stage evidence names a lead and two different lead stages. Non-archive moves name an activity about that lead and nonblank evidence. Repeated proposals for the same activity and move are refused. An unattended job applies only strong evidence along the funnel; weak evidence and every archive wait for a direct user, and archiving has a nonblank reason. Applying a stale proposal is refused. Applied evidence is final and never rewritten or removed.
+
+72. A space need belongs to an existing deal. Known size bounds are positive finite square feet and the maximum is no smaller than the minimum. A market exists; a supplied name, type or must-have is nonblank.
+73. A suite belongs to one property. A known label is trimmed, nonblank and used once in that property. Known area is positive finite square feet, with a measurement basis from the known list when supplied. A lease may name a suite only in its own property, and a referenced suite cannot be removed.
+74. Building ownership names an existing property and party, a known kind and nonblank source. Its end is no earlier than its known start. The same property, party, kind and start, including an unknown start, is stored once. Co-owners and former owners remain separate rows.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -469,3 +473,25 @@ Only the schema owner's database role may call `erase_change(removed_change_id, 
 ## Later slices
 
 "Everything about this person." The rest of leads (#286). Commissions. Serving confirmed critical dates and proposals. Leases negotiated elsewhere and renewal links. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+
+## Space needs, suites and building owners
+
+`space_need` holds a deal's named requirement set with optional minimum and maximum square feet, space type, market and must-haves. Unknown bounds stay null, and a one-sided range is allowed. A deal can have several sets for alternative searches. Space type stays text because today's criteria do not share a controlled list. The market uses the existing market list. Needs describe the client's requirements; `deal_property` continues to name candidate buildings.
+
+`suite` is space within one `property`, with its label, floor, square feet, area basis and condition. Unknown suite labels remain null and are not treated as duplicates. Labels are unique within a building, so the same label can occur in another. Area basis keeps today's rentable, usable, county_heated and listed_unverified meanings. Area does not imply availability. A lease's optional `suite_id` joins by both suite and property, so adding it never changes the lease's property or creates another property. Like other signed terms, the suite link is immutable and a correction is another lease version.
+
+`building_ownership` links a property to a person or company with start and end dates and a source. It retains today's owner, landlord_rep, property_manager and listing_agent kinds. Dates are inclusive, may be unknown and allow joint ownership. It does not pick a single owner for a building. Ending an ownership leaves its row; change history records corrections. A party merge moves these links and keeps the survivor's row when both hold the same property, kind and start.
+
+All three tables have the shared user or job stamp and change history. The engine may correct their descriptive fields and ownership dates, and remove mistakes. Their deal, property and party links never change through ordinary edits. A referenced suite stays while a lease points to it. This is schema design only; no production migration or search endpoint is added.
+
+Today's rows map as follows. The eventual copier must list unresolved values for correction rather than guess or discard them.
+
+| Today's table           | New record and mapping                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `space_search`          | A deal-bound search becomes `space_need`, extracting size bounds, type and market from `spec` and its requirements into must_haves. Client-only searches wait for a deal assignment. Unknown criteria keys, ambiguous markets and conflicting criteria wait for correction. Search delivery status and report paths describe execution, not the need.                                                                    |
+| `ops.deal_space_search` | Each saved deal search becomes a named `space_need`; typed criteria and market map as above, requirements become must_haves. Archived searches remain recoverable from history when retired. Draft criteria require confirmation. Cached result ids, run criteria, cursors, tenant keys and staleness are not business requirements.                                                                                     |
+| `deal_client_need`      | Approved, current, unwithdrawn descriptions and applicability supply must-haves for that deal, with source_ref and source_revision included in the text for provenance. Vendor eligibility, restriction and approval metadata are not space criteria and must be reviewed before consolidating a row; pending, stale or restricted assertions wait for confirmation. Never promote a proposal into a client requirement. |
+| `space`                 | Preserve id and created_at. building_id maps to property_id, suite to label, floor directly, area_amount to area_sf, and area_basis and condition directly. Missing building mappings or duplicate known labels wait for correction. Preserve unknown labels and areas.                                                                                                                                                  |
+| `building_ownership`    | Preserve id, created_at, party, kind and source. building_id maps to property_id, from_on to started_on and to_on to ended_on. Resolve parties through the existing outside-id map. Reversed dates and duplicate link keys wait for correction.                                                                                                                                                                          |
+
+Existing stamp attribution rules apply to these rows. `parcel` and `availability` are excluded by the owner's coverage ruling on #196. No listing or availability table is added.
