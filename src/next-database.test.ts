@@ -2596,6 +2596,75 @@ test("a link either way round is two links only for can introduce, and a merge k
 		]);
 	}));
 
+test("a merge collapses only the same link on the same start date, keeping the survivor's row, and keeps can introduce's direction", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into party_link (id, kind, party_id, other_party_id, started_on, note) values
+				('${id(800)}', 'can_introduce', '${AGENT}', '${CLIENT}', null, 'Example: survivor'),
+				('${id(801)}', 'can_introduce', '${DUPLICATE}', '${CLIENT}', null, 'Example: duplicate'),
+				('${id(802)}', 'can_introduce', '${AGENT}', '${LENDERS[0]}', null, null),
+				('${id(803)}', 'can_introduce', '${LENDERS[0]}', '${DUPLICATE}', null, null),
+				('${id(804)}', 'knows', '${AGENT}', '${BROKERAGES[0]}', null, 'Example: survivor'),
+				('${id(805)}', 'knows', '${BROKERAGES[0]}', '${DUPLICATE}', null, 'Example: duplicate'),
+				('${id(806)}', 'knows', '${AGENT}', '${BROKERAGES[1]}', '2020-01-06', null),
+				('${id(807)}', 'knows', '${DUPLICATE}', '${BROKERAGES[1]}', '2021-01-04', null);
+			select merge_party('${DUPLICATE}', '${AGENT}')`);
+		const { rows } = await db.query(
+			`select id, kind, party_id, other_party_id, started_on::text, note from party_link
+			where id between '${id(800)}' and '${id(807)}' order by id`,
+		);
+		assert.deepEqual(rows, [
+			{
+				id: id(800),
+				kind: "can_introduce",
+				party_id: AGENT,
+				other_party_id: CLIENT,
+				started_on: null,
+				note: "Example: survivor",
+			},
+			{
+				id: id(802),
+				kind: "can_introduce",
+				party_id: AGENT,
+				other_party_id: LENDERS[0],
+				started_on: null,
+				note: null,
+			},
+			{
+				id: id(803),
+				kind: "can_introduce",
+				party_id: LENDERS[0],
+				other_party_id: AGENT,
+				started_on: null,
+				note: null,
+			},
+			{
+				id: id(804),
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: BROKERAGES[0],
+				started_on: null,
+				note: "Example: survivor",
+			},
+			{
+				id: id(806),
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: BROKERAGES[1],
+				started_on: "2020-01-06",
+				note: null,
+			},
+			{
+				id: id(807),
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: BROKERAGES[1],
+				started_on: "2021-01-04",
+				note: null,
+			},
+		]);
+	}));
+
 // How a party was found, its roles with each one's stage and owner, and the deals it is the client of.
 const asLeadOrClient = async (party: string) =>
 	(
