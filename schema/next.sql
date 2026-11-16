@@ -313,10 +313,31 @@ select p.id, piece.territory_id
 from property p
 join territory_piece piece on miles_between(p.latitude, p.longitude, piece.base_latitude, piece.base_longitude) <= piece.miles;
 
+-- What kind of transaction a deal is, such as a lease or a purchase. Like roles, a label can be renamed.
+create table deal_kind (
+	slug text primary key,
+	label text not null
+);
+
+-- Why the client is taking space, such as a start-up or a relocation. Like roles, a label can be renamed.
+create table deal_reason (
+	slug text primary key,
+	label text not null
+);
+
+-- National is never stored: a deal is national exactly when its client is a location of a national account (#275).
 create table deal (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
-	name text not null
+	name text not null,
+	kind text references deal_kind,
+	reason text references deal_reason,
+	-- One deal owner, so a new one is an update, and change history keeps who held it before.
+	owner_user_id uuid not null references app_user,
+	-- Can be named before any property is chosen.
+	market_id uuid references market,
+	-- Such as the total lease value or the purchase price. Empty until known, never zero.
+	closed_value numeric(14, 2) check (closed_value > 0)
 );
 
 -- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.
@@ -1076,7 +1097,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'social_account', 'idea',
@@ -1211,10 +1232,11 @@ grant delete on party, party_email, party_phone, do_not_contact, party_specialty
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, stage, phase, specialty to engine;
+grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason to engine;
 grant update (stage, relationship_level, disposition, disposition_reason, is_target) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
+grant update (kind, reason, owner_user_id, market_id, closed_value) on deal to engine;
 grant update (npi) on party to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
