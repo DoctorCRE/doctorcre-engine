@@ -414,6 +414,7 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"lease_suite",
 	"lead_lane",
 	"suite",
 	"space_need",
@@ -496,6 +497,7 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"lease_suite",
 	"suite",
 	"space_need",
 	"building_ownership",
@@ -1879,12 +1881,17 @@ const CHANGEABLE: Record<string, string[]> = {
 	lead_lane: ["label"],
 	suite: ["area_basis", "area_sf", "condition", "floor", "label"],
 	space_need: [
+		"applicability",
 		"market_id",
+		"max_rate_sf_yr",
 		"max_sf",
 		"min_sf",
 		"must_haves",
 		"name",
+		"source_ref",
+		"source_revision",
 		"space_type",
+		"vendor_id",
 	],
 	building_ownership: ["ended_on", "source", "started_on"],
 	client_type: ["label"],
@@ -1956,7 +1963,7 @@ const DEFAULTED: Record<string, string[]> = {
 };
 const REMOVABLE = [
 	...STORED_AT.filter(
-		(table) => !["offer_document", "post_media"].includes(table),
+		(table) => !["lease_suite", "offer_document", "post_media"].includes(table),
 	),
 	"activity",
 	"email",
@@ -4126,6 +4133,12 @@ test("distinct manually sourced deadlines may share their kind and day", async (
 
 const SUITE = id(800);
 const SPACE_NEED = id(801);
+const leaseSuite = (suite: string, property = PROPERTY) =>
+	insert("lease_suite", {
+		lease_id: LEASE,
+		property_id: property,
+		suite_id: suite,
+	});
 const SPACE_SEED = `
 insert into suite (id, property_id, label, floor, area_sf, area_basis)
 values ('${SUITE}', '${PROPERTY}', '101', 1, 2400, 'rentable');
@@ -4216,13 +4229,13 @@ for (const [name, sql, refusal] of [
 	],
 	[
 		"lease suite in another building",
-		`insert into suite (id, property_id) values ('${id(802)}', '${ELSEWHERE}'); ${newLease({ suite_id: id(802) })}`,
-		"lease_suite_id_property_id_fkey",
+		`insert into suite (id, property_id) values ('${id(802)}', '${ELSEWHERE}'); ${newLease()}; ${leaseSuite(id(802))}`,
+		"lease_suite_suite_id_property_id_fkey",
 	],
 	[
 		"missing lease suite",
-		newLease({ suite_id: MISSING }),
-		"lease_suite_id_property_id_fkey",
+		`${newLease()}; ${leaseSuite(MISSING)}`,
+		"lease_suite_suite_id_property_id_fkey",
 	],
 ] satisfies [string, string, string][]) {
 	test(`space records refuse ${name}`, () =>
@@ -4236,12 +4249,12 @@ test("space needs keep typed criteria and suites join leases only within their p
 	rolledBack(async () => {
 		await db.query(`${SPACE_SEED};
 		update space_need set market_id = '${BAY}' where id = '${SPACE_NEED}';
-		${newLease({ suite_id: SUITE })}`);
+		${newLease()}; ${leaseSuite(SUITE)}`);
 		const { rows } =
 			await db.query(`select n.min_sf, n.max_sf, n.space_type, n.must_haves, m.name,
-		s.label, s.area_sf, l.suite_id, n.changed_by_user_id
+		s.label, s.area_sf, ls.suite_id, n.changed_by_user_id
 		from space_need n join market m on m.id = n.market_id
-		join lease l on l.deal_id = n.deal_id join suite s on s.id = l.suite_id`);
+		join lease l on l.deal_id = n.deal_id join lease_suite ls on ls.lease_id = l.id join suite s on s.id = ls.suite_id`);
 		assert.deepEqual(rows, [
 			{
 				min_sf: "2000.0",
@@ -4256,7 +4269,7 @@ test("space needs keep typed criteria and suites join leases only within their p
 			},
 		]);
 		await assert.rejects(db.query(`delete from suite where id = '${SUITE}'`), {
-			constraint: "lease_suite_id_property_id_fkey",
+			constraint: "lease_suite_suite_id_property_id_fkey",
 		});
 	}));
 
@@ -4278,9 +4291,13 @@ test("ownership keeps former and joint owners, and a merge preserves the survivo
 		await db.query(`insert into building_ownership (property_id, party_id, kind, started_on, source)
 		values ('${PROPERTY}', '${LENDERS[0]}', 'owner', '2020-01-01', 'Example duplicate');
 		select merge_party('${LENDERS[0]}', '${BROKERAGES[1]}')`);
-		assert.equal(
-			(await db.query("select * from building_ownership")).rowCount,
-			2,
+		assert.deepEqual(
+			(
+				await db.query(
+					"select source from building_ownership order by started_on",
+				)
+			).rows,
+			[{ source: "Example deed" }, { source: "Example deed" }],
 		);
 	}));
 
@@ -4324,5 +4341,76 @@ test("space edits carry job attribution and retain their prior values in history
 			["building_ownership", "building_ownership", "space_need", "suite"].map(
 				(table) => [table, "agent", TEAMMATE, true],
 			),
+		);
+	}));
+
+for (const [sql, constraint] of [
+	["update space_need set min_sf = 'NaN'", "space_need_min_sf_check"],
+	["update space_need set max_sf = 'NaN'", "space_need_max_sf_check"],
+	["update suite set area_sf = 'NaN'", "suite_area_sf_check"],
+	[
+		"update space_need set max_rate_sf_yr = -1",
+		"space_need_max_rate_sf_yr_check",
+	],
+	[
+		"update space_need set max_rate_sf_yr = 'NaN'",
+		"space_need_max_rate_sf_yr_check",
+	],
+	[
+		"update space_need set source_ref = 'Example partial source'",
+		"space_need_vendor_source_whole",
+	],
+	[
+		`${newLease()}; ${leaseSuite(SUITE, ELSEWHERE)}`,
+		"lease_suite_lease_id_property_id_fkey",
+	],
+	[
+		`${newLease()}; ${leaseSuite(SUITE)}; ${leaseSuite(SUITE)}`,
+		"lease_suite_pkey",
+	],
+] satisfies [string, string][]) {
+	test(`space records enforce ${constraint}: ${sql}`, () =>
+		rolledBack(async () => {
+			await db.query(SPACE_SEED);
+			await assert.rejects(db.query(sql), { constraint });
+		}));
+}
+
+test("one signed lease covers several suites and keeps its links as history", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED}; ${newLease()}; ${leaseSuite(SUITE)};
+		insert into suite (id, property_id, label) values ('${id(802)}', '${PROPERTY}', '102');
+		${leaseSuite(id(802))};`);
+		assert.deepEqual(
+			(await db.query("select suite_id from lease_suite order by suite_id"))
+				.rows,
+			[{ suite_id: SUITE }, { suite_id: id(802) }],
+		);
+		await assert.rejects(
+			db.query("delete from lease_suite"),
+			notGranted("lease_suite"),
+		);
+	}));
+
+test("a vendor requirement keeps structured provenance and the rent ceiling remains typed", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED}; update space_need set max_rate_sf_yr = 40,
+		vendor_id = '${LENDERS[0]}', source_ref = 'example-source', source_revision = 'v1',
+		applicability = 'Example location' where id = '${SPACE_NEED}'`);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select max_rate_sf_yr, vendor_id, source_ref, source_revision, applicability from space_need`,
+				)
+			).rows,
+			[
+				{
+					max_rate_sf_yr: "40.00",
+					vendor_id: LENDERS[0],
+					source_ref: "example-source",
+					source_revision: "v1",
+					applicability: "Example location",
+				},
+			],
 		);
 	}));
