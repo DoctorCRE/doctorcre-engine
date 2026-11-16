@@ -130,7 +130,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 55. A client profile names its client role, has only roster, cold, engaged or paused as manual status, and takes its type from the client type list. Active deal and past client come from deals.
 56. A brand membership joins two different companies, its location has a client profile, and its dates never overlap another membership of that location.
 57. A national account is a company holding that role. Its dated owners are people, and their dates never overlap on one account. Membership and ownership end strictly after they start, with the end excluded.
-58. Client and account profiles and their dated links keep their parties and start dates. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
+58. Client and account profiles and their dated links keep their parties; users may correct dates and remove mistakes. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -203,7 +203,7 @@ A `client` row extends its party's client role with a manual status and a `clien
 
 A brand is a company. `client_brand` joins a client location company to a different brand company, with dates. Its dates include started_on and exclude ended_on, and an absent end means still a member. Memberships never overlap, even across brands. Ending one and starting the next on the same day preserves which brand held the location on each date. A franchisee has its own client row and franchise type; its deals name it, never its brand.
 
-A `national_account` is a company with that role. It need not itself be a client. `national_account_owner` names a person, including an outside agent who refers work, with dates under the same non-overlap rule. It does not name an app user or decide a deal's owner. The engine can end memberships and ownerships but cannot remove them or rewrite their parties or start dates. All five tables are stamped and their changes recorded. A merge moves a lone profile and its dated links; two client profiles or two account profiles are refused for a user to settle first, as are overlapping histories or a location becoming its own brand.
+A `national_account` is a company with that role. It need not itself be a client. `national_account_owner` names a person, including an outside agent who refers work, with dates under the same non-overlap rule. It does not name an app user or decide a deal's owner. The engine can correct membership and ownership dates and remove mistaken links; change history keeps what was corrected. Changing the parties removes the mistaken link and adds the right one. All five tables are stamped and their changes recorded. A merge moves a lone profile and its dated links; two client profiles or two account profiles are refused for a user to settle first, as are overlapping histories or a location becoming its own brand.
 
 For #273, national on a date means a `client_brand` membership covering that date whose `brand_id` joins `national_account.party_id`. A deal uses its location client and its own date for this join, so a later rebrand does not move old work. The current directory uses current_date instead. There is no stored national flag here.
 
@@ -211,7 +211,7 @@ Moving today's rows across:
 
 - Each client becomes its party's client role and client row. Roster, cold, engaged and paused map directly. Active deal and past client are recomputed; those old labels supply no manual status, so start those records at roster.
 - The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. Vertical and subtype do not move as free text.
-- A company location's `party.org_id` becomes its brand membership. A person's org_id remains party_company. Existing national_account_owner rows map their human actor to its person; an outside owner's person is used directly. The old system lacks membership start dates and complete owner history, so a partner must supply the first known dates before copying these links. Never invent an earlier history.
+- A company location's `party.org_id` becomes its brand membership. A person's org_id remains party_company. Existing national_account_owner rows map their human actor to its person; an outside owner's person is used directly. The old system lacks membership start dates and complete owner history, so a user must supply the first known dates before copying these links. Never invent an earlier history.
 - Client owner and acquisition source belong to the lead and attribution slice, not account ownership. ETL status and agreements are excluded by the owner's B9 answer. No representation agreement table is added.
 
 ## Offer rounds

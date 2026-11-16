@@ -400,6 +400,7 @@ where v.role = 'vendor'
 group by v.party_id;
 
 -- Clients and national accounts (walkthrough 4, topic B).
+create extension if not exists btree_gist;
 create table client_type (
 	slug text primary key,
 	label text not null
@@ -434,7 +435,8 @@ create table client_brand (
 	ended_on date check (ended_on > started_on),
 	constraint client_brand_different_companies check (location_id <> brand_id),
 	foreign key (location_id, location_kind) references party (id, kind),
-	foreign key (brand_id, brand_kind) references party (id, kind)
+	foreign key (brand_id, brand_kind) references party (id, kind),
+	exclude using gist (location_id with =, daterange(started_on, ended_on) with &&)
 );
 
 create table national_account_owner (
@@ -445,32 +447,9 @@ create table national_account_owner (
 	owner_kind text generated always as ('person') stored,
 	started_on date not null,
 	ended_on date check (ended_on > started_on),
-	foreign key (owner_id, owner_kind) references party (id, kind)
+	foreign key (owner_id, owner_kind) references party (id, kind),
+	exclude using gist (account_id with =, daterange(started_on, ended_on) with &&)
 );
-
--- A no-op write serializes saves and refuses a stale repeatable-read snapshot.
-create function client_link_without_overlap() returns trigger
-language plpgsql as $$
-declare
-	parent_column text := case tg_table_name when 'client_brand' then 'location_id' else 'account_id' end;
-	parent_id uuid := (to_jsonb(new) ->> parent_column)::uuid;
-	has_overlap boolean;
-begin
-	execute format('update %I.party set name = name where id = $1', tg_table_schema) using parent_id;
-	execute format('select exists (select from %I.%I where %I = $1 and id <> $2
-		and daterange(started_on, ended_on) && daterange($3, $4))', tg_table_schema, tg_table_name, parent_column)
-		into has_overlap using parent_id, new.id, new.started_on, new.ended_on;
-	if has_overlap then
-		raise exception 'dated memberships and account owners never overlap'
-			using errcode = 'check_violation', constraint = 'client_link_without_overlap';
-	end if;
-	return new;
-end $$;
-
-create trigger client_link_without_overlap before insert or update on client_brand
-	for each row execute function client_link_without_overlap();
-create trigger client_link_without_overlap before insert or update on national_account_owner
-	for each row execute function client_link_without_overlap();
 
 create view client_status as
 select c.party_id, case
@@ -970,6 +949,11 @@ begin
 			using errcode = 'check_violation', constraint = 'merge_party_client_profiles';
 	end if;
 
+	update client set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'client');
+	update national_account set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'national_account');
+
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
@@ -1020,6 +1004,9 @@ begin
 	delete from party_territory d using party_territory s
 	where d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
 		and s.started_on is not distinct from d.started_on;
+
+	-- Profiles cascade with their roles before their direct party keys move.
+	update party_role set party_id = survivor where party_id = duplicate;
 
 	-- Read from the catalog, so a table added later moves too. A unique key the merge would repeat refuses it here.
 	for pointer in
@@ -1242,4 +1229,5 @@ grant update (status, reason, platform_post_id, published_at) on post to engine;
 
 grant update (label) on client_type to engine;
 grant update (status, client_type) on client to engine;
-grant update (ended_on) on client_brand, national_account_owner to engine;
+grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
+grant delete on client, national_account, client_brand, national_account_owner to engine;

@@ -1544,8 +1544,8 @@ const OWNER_RULES: Record<string, Case[]> = {
 const CHANGEABLE: Record<string, string[]> = {
 	client_type: ["label"],
 	client: ["client_type", "status"],
-	client_brand: ["ended_on"],
-	national_account_owner: ["ended_on"],
+	client_brand: ["ended_on", "started_on"],
+	national_account_owner: ["ended_on", "started_on"],
 	role: ["label"],
 	stage: ["label"],
 	party_role: [
@@ -1588,15 +1588,7 @@ const DEFAULTED: Record<string, string[]> = {
 };
 const REMOVABLE = [
 	...STORED_AT.filter(
-		(table) =>
-			![
-				"offer_document",
-				"post_media",
-				"client",
-				"national_account",
-				"client_brand",
-				"national_account_owner",
-			].includes(table),
+		(table) => !["offer_document", "post_media"].includes(table),
 	),
 	"activity",
 	"email",
@@ -2699,8 +2691,8 @@ test("a rebrand and a new outside owner keep the previous dated membership", asy
 		values ('${CLIENT}', '${NEXT_BRAND}', '2026-01-01');
 		insert into national_account_owner (account_id, owner_id, started_on)
 		values ('${BRAND}', '${USER}', '2026-01-01');
-		update client_brand set ended_on = '2027-01-01' where brand_id = '${NEXT_BRAND}';
-		update national_account_owner set ended_on = '2027-01-01' where owner_id = '${USER}';
+		update client_brand set started_on = '2026-02-01', ended_on = '2027-01-01' where brand_id = '${NEXT_BRAND}';
+		update national_account_owner set started_on = '2026-02-01', ended_on = '2027-01-01' where owner_id = '${USER}';
 		update client_type set label = 'Example franchise' where slug = 'franchise'`);
 		for (const [date, national] of [
 			["2025-12-31", true],
@@ -2794,11 +2786,11 @@ const CLIENT_REFUSALS: Case[] = [
 			return [
 				[
 					`insert into ${table} (${columns}, started_on) values (${values}, '2025-01-01')`,
-					"client_link_without_overlap",
+					`${table}_${table === "client_brand" ? "location_id" : "account_id"}_daterange_excl`,
 				],
 				[
 					`insert into ${table} (${columns}, started_on) values (${values}, '2026-01-01'); update ${table} set ended_on = '2027-01-01' where started_on = '2020-01-01'`,
-					"client_link_without_overlap",
+					`${table}_${table === "client_brand" ? "location_id" : "account_id"}_daterange_excl`,
 				],
 			];
 		},
@@ -2871,7 +2863,7 @@ for (const table of ["client_brand", "national_account_owner"]) {
 				second.query(save).finally(() => {
 					settled = true;
 				}),
-				{ code: "40001" },
+				{ code: "23P01" },
 			);
 			while (
 				!settled &&
@@ -2897,3 +2889,31 @@ for (const table of ["client_brand", "national_account_owner"]) {
 		}
 	});
 }
+
+test("a merge moves lone profiles onto bare roles even after foreign keys are recreated", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query(`begin; ${CLIENT_PROFILE}
+		set constraints all immediate;
+		alter table party_role drop constraint party_role_party_id_fkey;
+		alter table party_role add foreign key (party_id) references party;
+		insert into party_role (party_id, role) values ('${BROKERAGES[0]}', 'client');
+		select merge_party('${BRAND}', '${NEXT_BRAND}');
+		insert into party_role (party_id, role) values ('${BROKERAGES[1]}', 'national_account');
+		select merge_party('${NEXT_BRAND}', '${BROKERAGES[1]}');
+		select merge_party('${CLIENT}', '${BROKERAGES[0]}')`);
+		assert.deepEqual(
+			(await owner.query("select location_id, brand_id from client_brand"))
+				.rows,
+			[{ location_id: BROKERAGES[0], brand_id: BROKERAGES[1] }],
+		);
+		assert.equal(
+			(await owner.query("select account_id from national_account_owner"))
+				.rows[0].account_id,
+			BROKERAGES[1],
+		);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
+	}
+});
