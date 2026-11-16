@@ -706,11 +706,54 @@ create table document (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	name text not null,
-	r2_key text not null,
+	r2_key text not null unique check (r2_key ~ '\S'),
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
 	email_activity_id uuid references email,
 	unique (id, content_type)
+);
+
+-- Deal files share documents with email attachments and post media; a replacement keeps the earlier bytes.
+alter table document
+	add deal_id uuid references deal,
+	add kind text check (kind ~ '^[-a-z0-9_]+$'),
+	add version integer not null default 1 check (version >= 1),
+	add supersedes_id uuid unique,
+	add previous_version integer generated always as (nullif(version - 1, 0)) stored,
+	add sha256 text check (sha256 ~ '^[0-9a-f]{64}$'),
+	add bytes bigint check (bytes > 0),
+	add unique (id, deal_id),
+	add unique (id, deal_id, kind, version),
+	add constraint document_deal_file_whole check (
+		(deal_id is null and kind is null and version = 1 and supersedes_id is null)
+		or (deal_id is not null and kind is not null and content_type ~ '\S'
+			and content_type is not null and sha256 is not null and bytes is not null)),
+	add constraint document_version_has_predecessor check ((version = 1) = (supersedes_id is null)),
+	add constraint document_previous_version foreign key (supersedes_id, deal_id, kind, previous_version)
+		references document (id, deal_id, kind, version);
+
+-- One completed attempt, including no text or failure, belongs to the exact stored file version.
+create table document_extraction (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	document_id uuid not null,
+	deal_id uuid not null,
+	extracted_at timestamptz not null,
+	method text not null check (method ~ '\S'),
+	extractor_version text not null check (extractor_version ~ '\S'),
+	model text check (model ~ '\S'),
+	text_format_version text not null check (text_format_version ~ '\S'),
+	status text not null check (status in ('produced', 'no_text', 'unavailable')),
+	pages text[] not null,
+	receipt jsonb check (jsonb_typeof(receipt) = 'object'),
+	foreign key (document_id, deal_id) references document (id, deal_id),
+	unique nulls not distinct (document_id, method, extractor_version, model, text_format_version),
+	constraint document_extraction_pages check (
+		coalesce(array_ndims(pages), 1) = 1 and array_position(pages, null) is null
+		and cardinality(pages) <= 1000 and length(array_to_string(pages, '')) <= 500000),
+	constraint document_extraction_status_matches_text check (
+		(status = 'produced') = (array_to_string(pages, '') ~ '\S')
+		and (status <> 'unavailable' or cardinality(pages) = 0))
 );
 
 create table offer (
@@ -1432,7 +1475,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'lead_stage_move', 'next_step', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -1605,7 +1648,7 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, document, social_account, idea, design_template, introduction to engine;
+	activity_about, email, next_step, social_account, idea, design_template, introduction to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
