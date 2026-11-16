@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { URL } from "node:url";
 import pg from "pg";
+import { asAdmin } from "../scripts/test-database.ts";
 import { intake } from "./post-intake.ts";
 import app from "./worker.ts";
 
@@ -32,13 +33,11 @@ const url = process.env.TEST_DATABASE_URL;
 if (!url)
 	throw new Error("Run npm run check to restore the test database first");
 const name = `engine_intake_${randomUUID().replaceAll("-", "")}`;
-const admin = new pg.Client({ connectionString: url });
 const target = new URL(url);
 target.pathname = `/${name}`;
 
 before(async () => {
-	await admin.connect();
-	await admin.query(`create database "${name}" template template0`);
+	await asAdmin(`create database "${name}" template template0`);
 	const owner = new pg.Client({ connectionString: target.href });
 	await owner.connect();
 	await owner.query(`create schema next; set search_path = next;
@@ -56,8 +55,7 @@ before(async () => {
 });
 
 after(async () => {
-	await admin.query(`drop database "${name}" with (force)`);
-	await admin.end();
+	await asAdmin(`drop database "${name}" with (force)`);
 });
 
 const stored = new Map<string, string>();

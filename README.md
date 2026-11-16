@@ -11,6 +11,8 @@ POSTGRES_HOST_AUTH_METHOD=trust postgres:18`, then run `npm run check`.
 The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a shared server.
 One server serves every worktree, because each check makes and drops its own database.
+A check opens a little over one connection per CPU core, so a stock server's
+100 connections take four checks at once on an 18-core machine (#241).
 
 Each check restores `schema/business.sql` once, generates ignored `src/database.d.ts`
 with `kysely-codegen`, and runs TypeScript and tests against that database.
