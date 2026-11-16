@@ -178,9 +178,10 @@ Old reference ids, such as Salesforce ids and roster numbers, are kept in `outsi
 
 - Each record keeps its id and when it was stored, and `org` becomes `company`. Each partner, a `human` actor, becomes a person and a user under the actor's id.
 - `outside_id` maps each old id, under the source `old_system`, to the record it became. A merged-away old record maps to the record its merges end in. A merge in the new database moves the map, so later copies of deals, vendors and territories find each record through it. A second run copies only old records the map does not hold.
+- Today's merge left a duplicate's values on it, so they come across to its survivor, as `merge_party` would move them: the survivor's own first, then its duplicates' by when they were stored. A record merged into one an earlier run copied is listed if it holds values.
 - A deleted record is not copied, nor one merged into it.
-- Emails and phone numbers follow "Emails and phone numbers" above. The first value stored is primary.
-- An NPI stays with the first record, by when it was stored, that holds it. A second holder is copied without it and listed, since it may be the same person or company. An NPI with a wrong check digit is listed.
+- Emails and phone numbers follow "Emails and phone numbers" above. The first value stored is primary. An email holding an `@` that no address took is listed whole.
+- An NPI stays with the record that held it first: one already in the new database, or else the first stored. A second holder is copied without it and listed, since it may be the same person or company. So is a duplicate's NPI when its survivor holds another, and an NPI with a wrong check digit.
 - Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` and `nurture` have no place yet, so they are listed.
 
 Specialties and outside ids from today's `record_source` and `ref` follow in #263.

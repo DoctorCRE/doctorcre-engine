@@ -68,7 +68,18 @@ ${oldParty(11, {
 	contact_state_set_by: PARTNER,
 	contact_state_set_at: "2025-05-06T07:08:09Z",
 })}
-${oldParty(12, { merged_into: id(10) })} ${oldParty(13, { merged_into: id(12) })}
+${oldParty(12, {
+	merged_into: id(10),
+	npi: "9000000023",
+	email: "Merged@example.com avery@example.com",
+	cell: "217-555-0105",
+})}
+${oldParty(13, {
+	merged_into: id(12),
+	contact_state: "do_not_contact",
+	contact_state_reason: "Example asked again",
+	contact_state_set_at: "2025-07-08T09:10:11Z",
+})}
 ${oldParty(14, { deleted_at: "2026-01-05T00:00:00Z" })} ${oldParty(15, { merged_into: id(14) })}
 ${oldParty(16, {
 	npi: "9000000016",
@@ -77,7 +88,9 @@ ${oldParty(16, {
 	contact_state: "paused",
 	contact_state_until: "2027-01-04",
 })}
+${oldParty(18, { merged_into: id(16), npi: "9000000031" })}
 ${oldParty(17, {
+	email: "@example.com; ok@example.com",
 	phone: "+44 20 7946 0958 x7",
 	cell: "217-555-0104 (fax)",
 	contact_state: "nurture",
@@ -145,9 +158,9 @@ test("each old id maps to the record it became, a merged-away one to where its m
 		await rows(
 			"select value, party_id from outside_id where source = 'old_system' order by value",
 		),
-		[1, 10, 11, 12, 13, 16, 17].map((n) => ({
+		[1, 10, 11, 12, 13, 16, 17, 18].map((n) => ({
 			value: id(n),
-			party_id: id(n === 12 || n === 13 ? 10 : n),
+			party_id: id({ 12: 10, 13: 10, 18: 16 }[n] ?? n),
 		})),
 	);
 });
@@ -157,16 +170,17 @@ test("each value it does not copy is listed, with why", () => {
 	assert.deepEqual(report, [
 		[id(10), "contact_state", "do_not_contact", "do not contact without a reason"],
 		[id(10), "email", "bad@example", "not an email address"],
-		
 		[id(11), "email", "ask the front desk", "not an email address"],
 		[id(11), "npi", NPI, `also held by ${id(10)}`],
 		[id(11), "phone", "555-0100", "not a phone number"],
+		[id(12), "npi", "9000000023", "its record holds another NPI"],
 		[id(14), "party", "Example 14", "deleted"],
 		[id(15), "party", "Example 15", "merged into a record not copied"],
 		[id(16), "contact_state", "paused until 2027-01-04", "no place in the new database"],
 		[id(16), "npi", "9000000016", "not an NPI"],
 		[id(17), "cell", "217-555-0104 (fax)", "not a phone number"],
 		[id(17), "contact_state", "nurture", "no place in the new database"],
+		[id(17), "email", "@example.com; ok@example.com", "not an email address"],
 	]);
 });
 
@@ -205,6 +219,8 @@ test("each address in an email is a work row in lower case, once, and the first 
 	// biome-ignore format: one row per address
 	assert.deepEqual(await rows("select party_id, address, label, is_primary from party_email order by address"), [
 		{ party_id: id(10), address: "avery@example.com", label: "work", is_primary: true },
+		{ party_id: id(10), address: "merged@example.com", label: "work", is_primary: false },
+		{ party_id: id(17), address: "ok@example.com", label: "work", is_primary: true },
 		{ party_id: id(10), address: "second@example.net", label: "work", is_primary: false },
 	]);
 });
@@ -214,52 +230,68 @@ test("a phone is a work number and a cell a mobile one, in E.164 with the extens
 	assert.deepEqual(await rows("select party_id, number, extension, label, is_primary from party_phone order by party_id, number"), [
 		{ party_id: id(10), number: "+12175550100", extension: "12", label: "work", is_primary: true },
 		{ party_id: id(10), number: "+12175550101", extension: null, label: "mobile", is_primary: false },
+		{ party_id: id(10), number: "+12175550105", extension: null, label: "mobile", is_primary: false },
 		{ party_id: id(11), number: "+12175550102", extension: null, label: "mobile", is_primary: true },
 		{ party_id: id(16), number: "+12175550103", extension: null, label: "work", is_primary: true },
 		{ party_id: id(17), number: "+442079460958", extension: "7", label: "work", is_primary: true },
 	]);
 });
 
-test("do not contact keeps its reason, and the partner who set it and when", async () => {
+test("do not contact keeps its reason and who set it and when, and a survivor takes its duplicate's", async () => {
 	assert.deepEqual(
 		await rows(
-			"select party_id, reason, created_at::text, changed_by_user_id, changed_at::text from do_not_contact",
+			"select party_id, reason, created_at::text, changed_by_user_id, changed_by_job, changed_at::text from do_not_contact order by party_id",
 		),
 		[
+			{
+				party_id: id(10),
+				reason: "Example asked again",
+				created_at: "2025-07-08 09:10:11+00",
+				changed_by_user_id: null,
+				changed_by_job: "old_system",
+				changed_at: "2025-07-08 09:10:11+00",
+			},
 			{
 				party_id: id(11),
 				reason: "Example asked us to stop",
 				created_at: "2025-05-06 07:08:09+00",
 				changed_by_user_id: PARTNER,
+				changed_by_job: null,
 				changed_at: "2025-05-06 07:08:09+00",
 			},
 		],
 	);
 });
 
-test("an NPI stays with the first record that holds it", async () => {
+test("an NPI stays with the first record that holds it, and a survivor without one takes its duplicate's", async () => {
 	assert.deepEqual(
-		await rows("select id, npi from party where npi is not null"),
-		[{ id: id(10), npi: NPI }],
+		await rows("select id, npi from party where npi is not null order by id"),
+		[
+			{ id: id(10), npi: NPI },
+			{ id: id(16), npi: "9000000031" },
+		],
 	);
 });
 
 test("a second run copies only what is new, finds a record merged since through the map, and lists again what it left", () =>
 	rolledBack(async () => {
 		const merged = `select set_config('engine.user_id', '${PARTNER}', true), merge_party('${id(17)}', '${id(16)}');
-			${oldParty(18, { merged_into: id(17) })} ${oldParty(19)}`;
+			${oldParty(20, { merged_into: id(17), email: "late@example.com" })} ${oldParty(21, { npi: ` ${NPI} ` })}`;
+		// biome-ignore format: one row per value
 		assert.deepEqual(await copy(merged), [
 			[id(14), "party", "Example 14", "deleted"],
 			[id(15), "party", "Example 15", "merged into a record not copied"],
+			[id(20), "party", "Example 20", "merged into a record copied before, so its values are not copied"],
+			[id(21), "npi", ` ${NPI} `, `also held by ${id(10)}`],
 		]);
 		assert.deepEqual(
 			await rows(
-				`select value, party_id from outside_id where value in ('${id(17)}', '${id(18)}', '${id(19)}') order by value`,
+				`select value, party_id from outside_id where value in ('${id(17)}', '${id(20)}', '${id(21)}') order by value`,
 			),
 			[
 				{ value: id(17), party_id: id(16) },
-				{ value: id(18), party_id: id(16) },
-				{ value: id(19), party_id: id(19) },
+				{ value: id(20), party_id: id(16) },
+				{ value: id(21), party_id: id(21) },
 			],
 		);
 	}));
