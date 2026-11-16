@@ -342,8 +342,33 @@ create table deal (
 	-- Can be named before any property is chosen.
 	market_id uuid references market,
 	-- Such as the total lease value or the purchase price. Empty until known, never zero.
-	closed_value numeric(14, 2) check (closed_value > 0)
+	closed_value numeric(14, 2) check (closed_value > 0),
+	-- None is active. Parking never touches the phase, so a revived deal is back in the phase it was in.
+	parking_reason text check (parking_reason in ('client_paused', 'prospect_never_active', 'other')),
+	parking_note text check (parking_note ~ '\S'),
+	-- A flag a user sets, never worked out from anything else.
+	needs_attention boolean not null default false,
+	constraint deal_parking_note_when_parked check (parking_note is null or parking_reason is not null)
 );
+
+-- A job alone never parks, revives or flags a deal; one working for a user, such as the agent, does.
+create function deal_parked_or_flagged_by_a_user() returns trigger
+language plpgsql as $$
+begin
+	if nullif(current_setting('engine.user_id', true), '') is null
+		and (case tg_op
+			when 'INSERT' then new.parking_reason is not null or new.needs_attention
+			else (new.parking_reason, new.parking_note, new.needs_attention)
+				is distinct from (old.parking_reason, old.parking_note, old.needs_attention)
+		end) then
+		raise exception 'a user parks, revives and flags a deal'
+			using errcode = 'check_violation', constraint = 'deal_parked_or_flagged_by_a_user';
+	end if;
+	return new;
+end $$;
+
+create trigger deal_parked_or_flagged_by_a_user before insert or update of parking_reason, parking_note, needs_attention
+	on deal for each row execute function deal_parked_or_flagged_by_a_user();
 
 -- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.
 create table outside_id (
@@ -400,7 +425,6 @@ alter table party_role add owner_user_id uuid references app_user,
 	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
 	add constraint party_role_owner_on_lead check (owner_user_id is null or role = 'lead');
 
--- A lead's lane is independent of how it was found.
 create table lead_lane (
 	slug text primary key,
 	label text not null
@@ -1527,7 +1551,7 @@ grant update (label) on table role, stage, phase, specialty, deal_kind, deal_rea
 grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
-grant update (kind, reason, owner_user_id, market_id, closed_value) on deal to engine;
+grant update (kind, reason, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
 grant update (npi, how_found) on party to engine;
 grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;

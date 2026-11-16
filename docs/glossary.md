@@ -194,6 +194,13 @@ A deal that is not active work for now, with a reason. Parking keeps the deal; r
 _Avoid_: on hold, inactive, archived, paused
 _Database_: `deal.operating_state` (`active` or `parked`), `parking_reason` (`prospect_never_active`, `client_paused`, `other`), `parking_note`, `parked_at`, `parked_by`.
 _Engine_: `operating_state`.
+_New database_: `deal.parking_reason`, none when active, and `deal.parking_note`. Who parked it and when is in change history.
+
+**Needs attention**:
+A flag a user sets on a deal to say it needs a look. Nothing sets it on its own.
+_Avoid_: flagged, urgent, priority
+_Database_: `deal.attention` today; `deal.needs_attention` in the new database.
+_Engine_: `attention`.
 
 **Pipeline call**:
 A sitting where a partner goes through the open deals and marks each reviewed or skipped.
@@ -214,6 +221,10 @@ A renewal, expansion or early termination right in one lease version, with its e
 **Brand membership** joins a client location company to its brand company for dates in `client_brand`. A franchisee is a client of type franchise with its own deals. Rebranding ends the old membership and begins another.
 
 **National account owner** is the person responsible for the account, including an outside referring agent. `national_account_owner` keeps dated ownership; a deal's owner is separate. `national_account` identifies the brand company, independently of client type.
+
+**Lead segment**:
+The free-text board segment used to group leads.
+_New database_: `party_role.segment` on the lead role.
 
 **Lead lane**:
 The kind of opportunity being worked, independent of how the lead was found.

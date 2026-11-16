@@ -967,6 +967,41 @@ const RULES: Record<string, Case[]> = {
 			[`update deal set market_id = '${MISSING}'`, "deal_market_id_fkey"],
 			["update deal set closed_value = 0", "deal_closed_value_check"],
 		],
+	"a parked deal says why, and only a parked deal has a note, never blank": [
+		["update deal set parking_reason = 'on_hold'", "deal_parking_reason_check"],
+		[
+			"update deal set parking_note = 'Example note'",
+			"deal_parking_note_when_parked",
+		],
+		[
+			"update deal set parking_reason = 'other', parking_note = ' '",
+			"deal_parking_note_check",
+		],
+	],
+	"a job alone never parks, revives or flags a deal": [
+		[
+			`${asJob("mail_capture")}; update deal set parking_reason = 'other'`,
+			"deal_parked_or_flagged_by_a_user",
+		],
+		[
+			`${asJob("mail_capture")}; update deal set needs_attention = true`,
+			"deal_parked_or_flagged_by_a_user",
+		],
+		[
+			`${asJob("old_system")}; insert into deal (name, owner_user_id, parking_reason) values ('Example', '${USER}', 'other')`,
+			"deal_parked_or_flagged_by_a_user",
+		],
+	],
+	"a deal needs attention or not, never unknown": [
+		[
+			"update deal set needs_attention = null",
+			{
+				code: "23502",
+				message:
+					'null value in column "needs_attention" of relation "deal" violates not-null constraint',
+			},
+		],
+	],
 	"a round number is used once per deal and answers an earlier round": [
 		[offer(3, 2, AGENT, "listing_agent"), "offer_deal_id_round_key"],
 		[offer(4, 4, AGENT, "listing_agent"), "offer_answers_earlier_round"],
@@ -1856,7 +1891,10 @@ const CHANGEABLE: Record<string, string[]> = {
 		"kind",
 		"market_id",
 		"name",
+		"needs_attention",
 		"owner_user_id",
+		"parking_note",
+		"parking_reason",
 		"reason",
 	],
 	party_company: ["ended_on", "started_on", "title"],
@@ -1998,6 +2036,9 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			owner_user_id: USER,
 			market_id: BAY,
 			closed_value: null,
+			parking_reason: null,
+			parking_note: null,
+			needs_attention: false,
 		},
 		phases,
 		properties: [
@@ -2236,6 +2277,9 @@ test("each insert, update and delete leaves history: the record, its fields from
 					owner_user_id: USER,
 					market_id: null,
 					closed_value: null,
+					parking_reason: null,
+					parking_note: null,
+					needs_attention: false,
 				},
 				...by(TEAMMATE, null),
 			},
@@ -2276,6 +2320,64 @@ test("a deal's new deal owner is history: who held it before, who moved it and w
 				new_value: { owner_user_id: TEAMMATE },
 				changed_by_user_id: TEAMMATE,
 				changed_by_job: null,
+				changed_for_user_id: null,
+				merge_of: null,
+			},
+		]);
+	}));
+
+test("a parked deal stays in its phase and is revived to it, and history keeps who parked it, why and when", () =>
+	rolledBack(async () => {
+		await db.query(`${asUser(TEAMMATE)};
+			update deal set parking_reason = 'client_paused', parking_note = 'Example pause' where id = '${DEAL}';
+			${asUser(USER)}; update deal set parking_reason = null, parking_note = null where id = '${DEAL}'`);
+		assert.deepEqual((await readDeal()).phases, phases);
+		const parked = {
+			parking_reason: "client_paused",
+			parking_note: "Example pause",
+		};
+		const active = { parking_reason: null, parking_note: null };
+		const by = (user: string) => ({
+			table_name: "deal",
+			record: { id: DEAL },
+			action: "update",
+			changed_by_user_id: user,
+			changed_by_job: null,
+			changed_for_user_id: null,
+			merge_of: null,
+		});
+		assert.deepEqual(await history(), [
+			{ ...by(TEAMMATE), old_value: active, new_value: parked },
+			{ ...by(USER), old_value: parked, new_value: active },
+		]);
+	}));
+
+test("a user, or an agent working for one, flags a deal as needing attention, and a job alone still renames it", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${asJob("agent", TEAMMATE)}; update deal set needs_attention = true where id = '${DEAL}';
+			${asJob("old_system")}; update deal set name = 'Example renamed', needs_attention = true where id = '${DEAL}'`,
+		);
+		assert.deepEqual(await history(), [
+			{
+				table_name: "deal",
+				record: { id: DEAL },
+				action: "update",
+				old_value: { needs_attention: false },
+				new_value: { needs_attention: true },
+				changed_by_user_id: null,
+				changed_by_job: "agent",
+				changed_for_user_id: TEAMMATE,
+				merge_of: null,
+			},
+			{
+				table_name: "deal",
+				record: { id: DEAL },
+				action: "update",
+				old_value: { name: "Example Dental Springfield Deal" },
+				new_value: { name: "Example renamed" },
+				changed_by_user_id: null,
+				changed_by_job: "old_system",
 				changed_for_user_id: null,
 				merge_of: null,
 			},
@@ -2998,9 +3100,7 @@ for (const [sql, refusal] of [
 		"party_how_found_detail_check",
 	],
 	[
-		"update party set how_found_detail = 'Example referral' where id = '" +
-			AGENT +
-			"'",
+		`update party set how_found_detail = 'Example referral' where id = '${AGENT}'`,
 		"party_how_found_detail_has_source",
 	],
 ] satisfies Case[]) {
@@ -3042,6 +3142,33 @@ test("lead working details keep sourced dates together when leads merge", () =>
 		select merge_party('${DUPLICATE}', '${OLD}'); ${CHECK_AT_COMMIT}`);
 		assert.deepEqual(await read(), expected);
 	}));
+
+for (const source of ["public_records", "vendor"]) {
+	test(`a merge never borrows confidence and fills attribution detail only from matching ${source}`, () =>
+		rolledBack(async () => {
+			await db.query(`update party_role set estimated_lease_on = '2030-01-01', lease_estimate_source = 'Survivor feed'
+			where party_id = '${LEAD}';
+			insert into party (id, kind, name, how_found, how_found_detail) values ('${OLD}', 'person', 'Example Other', '${source}', 'Duplicate detail');
+			insert into party_role (party_id, role, stage, estimated_lease_on, lease_estimate_source, lease_estimate_confidence)
+			values ('${OLD}', 'lead', 'new', '2040-01-01', 'Duplicate feed', 'high');
+			select merge_party('${OLD}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+			assert.deepEqual(
+				(
+					await db.query(`select estimated_lease_on::text as date, lease_estimate_source as source,
+			lease_estimate_confidence as confidence, how_found_detail as detail from party_role
+			join party on id = party_id where party_id = '${LEAD}'`)
+				).rows,
+				[
+					{
+						date: "2030-01-01",
+						source: "Survivor feed",
+						confidence: null,
+						detail: source === "public_records" ? "Duplicate detail" : null,
+					},
+				],
+			);
+		}));
+}
 
 // Last, because it commits.
 test("a merge waits for one that moves rows onto its duplicate, then moves them on", async () => {
