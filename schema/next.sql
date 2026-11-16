@@ -1091,8 +1091,8 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but app_user, job, merged_party, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id) is never removed.
+-- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
+-- History (deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -1119,6 +1119,8 @@ revoke insert on app_user, job from engine;
 revoke insert on merged_party from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change from engine;
+-- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
+revoke execute on function record_change from public;
 revoke execute on function merge_party from public;
 grant execute on function merge_party to engine;
 

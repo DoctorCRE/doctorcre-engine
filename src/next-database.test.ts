@@ -1420,6 +1420,14 @@ const RULES: Record<string, Case[]> = {
 		["update change set action = 'insert'", notGranted("change")],
 		["delete from change", notGranted("change")],
 		["truncate change", notGranted("change")],
+		[
+			`create temp table deal (id uuid primary key);
+			create trigger forged after insert on pg_temp.deal for each row execute function record_change('id')`,
+			{
+				code: "42501",
+				message: "permission denied for function record_change",
+			},
+		],
 	],
 	"a removal names the user or the job that made it": [
 		[
