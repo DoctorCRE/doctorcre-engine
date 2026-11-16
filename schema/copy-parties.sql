@@ -149,18 +149,20 @@ from typed_value v join copied p on p.id = v.party_id
 where v.field <> 'email' and v.stored is not null
 order by v.party_id, v.stored, v.extension, v.place;
 
--- A survivor is do not contact if any of its records is, with its own reason first.
-insert into do_not_contact (party_id, reason, created_at, changed_by_user_id, changed_by_job, changed_at)
-select distinct on (survivor_id) survivor_id, btrim(contact_state_reason), coalesce(contact_state_set_at, updated_at),
-	dnc_by_user_id, dnc_by_job, coalesce(contact_state_set_at, updated_at)
-from chain where contact_state = 'do_not_contact' and contact_state_reason ~ '\S'
-order by survivor_id, rank;
+-- Keep the longest restriction, with an indefinite stop first.
+insert into do_not_contact (party_id, reason, until_date, created_at, changed_by_user_id, changed_by_job, changed_at)
+select distinct on (survivor_id) survivor_id, btrim(contact_state_reason), contact_state_until,
+	coalesce(contact_state_set_at, updated_at), dnc_by_user_id, dnc_by_job, coalesce(contact_state_set_at, updated_at)
+from chain where contact_state in ('do_not_contact', 'paused') and contact_state_reason ~ '\S'
+	and (contact_state <> 'paused' or contact_state_until is not null)
+order by survivor_id, contact_state_until desc nulls first, rank;
 
--- Paused and nurture have no place in the new database yet, and do not contact needs its reason.
 insert into not_copied
 select id, 'contact_state', concat_ws(' until ', contact_state, contact_state_until),
-	case contact_state when 'do_not_contact' then 'do not contact without a reason' else 'no place in the new database' end
-from chain where contact_state <> 'active' and not (contact_state = 'do_not_contact' and contact_state_reason ~ '\S');
+	case when contact_state in ('do_not_contact', 'paused') then 'do not contact needs a reason and paused needs an end date'
+		else 'no place in the new database' end
+from chain where contact_state <> 'active' and not (contact_state in ('do_not_contact', 'paused')
+	and contact_state_reason ~ '\S' and (contact_state <> 'paused' or contact_state_until is not null));
 
 -- Each specialty typed, split at commas and semicolons. Spellings that differ only in case, spaces or punctuation
 -- are one specialty, labelled as first typed, and one already on the list keeps its label.

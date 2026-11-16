@@ -104,6 +104,7 @@ ${oldParty(16, {
 	phone: "+1 217 555 0103",
 	cell: "2175550103",
 	contact_state: "paused",
+	contact_state_reason: "Example pause",
 	contact_state_until: "2027-01-04",
 	specialty: "\tPhysical Therapy",
 	org_id: id(14),
@@ -220,7 +221,7 @@ test("each value it does not copy is listed, with why", () => {
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
 		[id(10), "city", "Springfield", "no place in the new database"],
-		[id(10), "contact_state", "do_not_contact", "do not contact without a reason"],
+		[id(10), "contact_state", "do_not_contact", "do not contact needs a reason and paused needs an end date"],
 		[id(10), "contact_state_cadence", "quarterly", "no place in the new database"],
 		[id(10), "county", "Example County", "no place in the new database"],
 		[id(10), "email", "bad@example", "not an email address"],
@@ -240,7 +241,6 @@ test("each value it does not copy is listed, with why", () => {
 		[id(14), "party", "Example 14", "deleted"],
 		[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
 		[id(15), "party", "Example 15", "merged into a record not copied"],
-		[id(16), "contact_state", "paused until 2027-01-04", "no place in the new database"],
 		[id(16), "npi", "9000000016", "not an NPI"],
 		[id(16), "org_id", id(14), "its company is not copied"],
 		[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
@@ -315,7 +315,7 @@ test("a phone is a work number and a cell a mobile one, in E.164 with the extens
 test("do not contact keeps its reason and who set it and when, and a survivor takes its duplicate's", async () => {
 	assert.deepEqual(
 		await rows(
-			"select party_id, reason, created_at::text, changed_by_user_id, changed_by_job, changed_at::text from do_not_contact order by party_id",
+			"select party_id, reason, created_at::text, changed_by_user_id, changed_by_job, changed_at::text from do_not_contact where until_date is null order by party_id",
 		),
 		[
 			{
@@ -444,7 +444,7 @@ test("after the copy, a change is stamped with who made it again", () =>
 			update party set name = 'Example renamed' where id = '${id(10)}';
 			update party_email set label = 'personal';
 			update party_phone set label = 'home';
-			insert into do_not_contact (party_id, reason) values ('${id(16)}', 'Example asked us to stop');
+			update do_not_contact set until_date = null where party_id = '${id(16)}';
 			insert into party_specialty (person_id, specialty) values ('${id(16)}', 'gp');
 			update party_company set title = 'Example title'`);
 		for (const table of [
@@ -463,3 +463,12 @@ test("after the copy, a change is stamped with who made it again", () =>
 				table,
 			);
 	}));
+
+test("paused copies as do not contact with its reason and end date", async () => {
+	assert.deepEqual(
+		await rows(
+			"select party_id, reason, until_date::text from do_not_contact where until_date is not null",
+		),
+		[{ party_id: id(16), reason: "Example pause", until_date: "2027-01-04" }],
+	);
+});

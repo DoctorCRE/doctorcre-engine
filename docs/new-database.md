@@ -8,7 +8,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`merged_party`**: what a merged-away duplicate leaves behind: its old id and the record it became. Nothing lists or shows it.
 - **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's preferences and facts will be columns here, or a child table keyed by the user, as they come.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.
-- **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason.
+- **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason and an optional until-date.
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
 - **`outside_id`**: another system's id for a person, company or deal, such as a Salesforce or roster id, kept as import history.
 - **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record. A vendor's category, such as lender, is a role whose `category_of` is vendor.
@@ -109,7 +109,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 35. A change a job makes names the job, and the user it worked for, if any. A row names a user or a job, never both and never neither, even when the owner loads it with the stamp turned off. A job comes from the list, and only the owner adds one. A statement that changes nothing keeps who last changed the row.
 36. An NPI is ten digits ending in its check digit, and one person or company holds it.
 37. A specialty is a person's, comes from the specialty list, and is stored once per person.
-38. A person or company is marked do not contact once, with a reason that is never blank and never changes.
+38. A person or company is marked do not contact once, with a reason that is never blank and never changes. Its optional until-date may change; outreach reads active_do_not_contact, which includes a stop through that date and an indefinite stop forever.
 39. An outside id is for exactly one person, company or deal, is stored once per source, and the engine never rewrites or removes one. A merge moves it to the survivor. Its source is a lower-case name, and its value has no space around it.
 40. A territory piece is exactly one of a whole state, a named market, or a distance of more than zero miles from a base point, and a territory holds each piece once.
 41. A state is a two-digit and a county a five-digit Census FIPS code. A latitude is between -90 and 90 and a longitude between -180 and 180, and a property has both or neither.
@@ -122,9 +122,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 48. A stage comes from its own role's stage list, and is stored once per role.
 49. A relationship level is a vendor role's, one of the four levels, and only a schema change adds or renames a level.
 50. An introduction is with a vendor, made by the vendor or the team, of a person or company other than the vendor, and about a deal that exists. One the team made names the user who made it, and one the vendor made names none. Its note is never blank, and who it joins and who made it never change. A vendor keeps its vendor role while it has introductions.
-51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none. A merge keeps the stricter disposition, avoid over parked over none, with its reason.
+51. A disposition and a target are a vendor role's. A disposition is parked or avoid, and none is active. A parked or avoided vendor has a reason that is never blank, and an active one has none. A merge keeps the stricter disposition, avoid over parked over none, with its reason. An avoided vendor cannot be a target, and a merge clears its target.
 52. Every insert, update and delete of a stamped row leaves one change row: the record's key, the fields it changed from what to what, and who made it and when. A statement that changes nothing leaves none.
-53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update or a delete.
+53. The engine never adds, rewrites or removes a change, and a removal names who made it. A change is an insert, an update, a delete or an owner-requested erase.
 54. A change a merge makes names the merge, and only a merge saved in the same transaction is named.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
@@ -143,6 +143,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - an activity's time, sender and summary;
 - a next step's text, owner, due date and done time;
 - a round's status;
+- a do-not-contact row's until-date;
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
@@ -170,7 +171,7 @@ Today's `party` row holds one free-text `email`, `phone` and `cell` on each pers
 
 ## Do not contact, NPIs and outside ids
 
-Do not contact is a fact about the person or company, whatever roles they hold, so a lead, a client and a vendor contact are all covered by one row. The owner: "the only time we would make someone do not contact it would be for any reason." Its row is keyed by the party alone, so any outreach finds it with the party's id. It carries the reason, and its stamp says which user or job set it and when. The reason never changes, so the stamp stays the time it was set, or the time a merge moved it; lifting it removes the row.
+Do not contact is a fact about the person or company, whatever roles they hold, so a lead, a client and a vendor contact are all covered by one row. The owner: "the only time we would make someone do not contact it would be for any reason." Its row is keyed by the party alone, so any outreach finds it with the party's id. It carries the reason, and its stamp says which user or job set it and when. The reason never changes. Changing its until-date restamps it, and history keeps the earlier stamp; lifting it removes the row.
 
 An NPI is checked for shape: ten digits, the last a Luhn check digit over the prefix 80840 and the first nine. The first digit is not checked, so tests use made-up numbers starting with 9, which no NPI issued yet does. NPPES issues each number once, to a person or an organization, so the number is unique across both. A doctor's specialties are rows in `party_specialty`; a company has none.
 
@@ -186,7 +187,7 @@ Old reference ids, such as Salesforce ids and roster numbers, are kept in `outsi
 - A deleted record is not copied, nor one merged into it.
 - Emails and phone numbers follow "Emails and phone numbers" above. The first value stored is primary. An email holding an `@` that no address took is listed whole.
 - An NPI stays with the record that held it first: one already in the new database, or else the first stored. A second holder is copied without it and listed, since it may be the same person or company. So is a duplicate's NPI when its survivor holds another, and an NPI with a wrong check digit.
-- Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` and `nurture` have no place yet, so they are listed.
+- Do not contact moves with its reason, trimmed, and whoever set it and when. One without a reason is listed. `paused` moves with its reason and end date; one missing either is listed. `nurture` waits for #282 after #274.
 - Today's free-text specialty is split at commas and semicolons. Spellings that differ only in case, spaces or punctuation are one specialty on the list, with a slug of lower case letters, digits and `_` and the spelling first typed as its label. One already on the list keeps its label. A company's specialty, and one with no ASCII letter or digit, is listed.
 - Today's `record_source` rows for a party, vendor, lead or client become outside ids of the record it became, and each party's `ref` one under `old_system_ref`. A source is lower-cased, with `_` for each run of anything but letters and digits, so `vendors.xlsx` becomes `vendors_xlsx`. A `dup_candidate` row only hints at a duplicate, so it is listed. So is a row for another kind of record, a row whose record is not copied, a source that folds to `old_system` or `old_system_ref`, which the copy keeps for itself, and an id another record already holds. Rows for deals, activity, events and loop items are left to the copies of those records.
 - A person's company and title become a `party_company` row, with no dates, at the record the company became. A title comes from the survivor first, then its duplicates, and a title beats none. A company's own `org_id` is the national account it belongs to, which has no place until national accounts are designed, so it is listed. So are a company that is not copied or is a person, with the title held there, a title without a company, and a duplicate's other title at the same company.
@@ -305,7 +306,7 @@ A vendor's stage and relationship level are on its vendor role, because they des
 
 No level means not yet judged, a different fact from 0.
 
-A vendor's disposition is the team's ruling on it, and its target flag says the team wants to meet it. Both sit on the vendor role next to its stage and level (owner, #258). A disposition is parked, deliberately dormant and on drip only, or avoid, ruled out as a partner. No disposition is active, in the network. A ruling always carries its reason, so a vendor never leaves play without one. Disposition and target are not stages: today's stage list once held them, and the old system's migration 0047 split them out because a stage mixed how well the team knows a vendor, a ruling and an intent.
+A vendor's disposition is the team's ruling on it, and its target flag says the team wants to meet it. Both sit on the vendor role next to its stage and level (owner, #258). A disposition is parked, deliberately dormant and on drip only, or avoid, ruled out as a partner. No disposition is active, in the network. A ruling always carries its reason, so a vendor never leaves play without one. An avoided vendor cannot be a target. Disposition and target are not stages: today's stage list once held them, and the old system's migration 0047 split them out because a stage mixed how well the team knows a vendor, a ruling and an intent.
 
 An introduction is one `introduction` row, made either way: the vendor introducing someone to the team, such as a new client, or the team introducing someone to the vendor. It names the vendor, who made it, whom it introduced, when, a note, and the deal it led to, which can be set when one comes of it. One the team made names the user who made it.
 
@@ -319,6 +320,8 @@ Moving today's rows across:
 - Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is empty, or is neither the vendor nor a user, waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
 - `trust_override`, a hand-set rating, does not move.
 
+Paused contacts copy to do_not_contact with their reason and end date. Missing reasons or a pause without an end date stay on not_copied for correction. Duplicate stops copy with the longest restriction, no end date first. Outreach uses active_do_not_contact and stops through the until-date, inclusive. Nurture mapping is #282 after #274.
+
 ## Merging duplicates
 
 The owner ruled on #196: the merged-away record disappears and everything points at the survivor. `merge_party(duplicate, survivor)` leaves a `merged_party` row, so an old link finds the survivor, moves every row that points at the duplicate, then removes it. Email matches need nothing more, because the duplicate's addresses are now the survivor's. The foreign keys then refuse any row that still names the duplicate, in any table, including tables added later. The merge finds what to move from the catalog, so a new table that points at a party moves with no change to it.
@@ -330,10 +333,10 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Both have an NPI? Refused. NPPES issues one number per person or organization, so two numbers are two of them. Otherwise the survivor keeps its own NPI or takes the duplicate's.
 - The same email, phone number, role, specialty, company link, territory link or activity on both? One row stays, the survivor's, with its label and title.
 - Both have a primary email or phone? The survivor's stays primary. If only the duplicate has one, it becomes the survivor's.
-- Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays.
+- Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays and the later until-date wins, with no end date stronger than either date.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
-- Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is.
+- Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is, unless the merged disposition is avoid.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
 
@@ -350,6 +353,8 @@ One trigger function, `record_change`, writes history for every table that carri
 A merge marks each change it makes with the duplicate it merged, in `merge_of`: each link it moves or removes, the duplicate's removal and its merged-into pointer. `merge_party` sets `engine.merge` for its own run, and the mark counts only when a merge of that record was saved in the same transaction, so setting it by hand cannot pass an edit off as an earlier merge's. Set by hand after a merge in the same transaction, it would mark an unrelated edit as that merge's; the change still names who made it and when.
 
 Today's system keeps one `event` row per field changed, with the actor, a verb and a cause, and `/pipeline/changes` reads a deal's events. A change row holds every field one statement changed, so the old per-field rows are `jsonb_each` over its values. A copy of old rows, such as `schema/copy-parties.sql`, keeps each row's old stamp, and its history records the copy itself: an insert by `old_system`, at the time the copy ran. The old `event` rows come across later. Serving the change feed and deal events from this table is a later slice.
+
+Only the schema owner's database role may call `erase_change(removed_change_id)`. It requires a delete change and refuses a record that exists again. It clears all old and new values for that table and record, across inserts, edits and deletions. Keys, actions, merge pointers, authors and times stay unchanged. An `erase` change records the request with its user or job and time, without copying the erased words. Repeating a completed erase changes nothing. The function locks the source table while it checks absence and erases, so a concurrent insert cannot recreate the record during it. The engine cannot call it or change history directly. This clears the snapshots entirely, not just a chosen text field. Linked records and external copies are separate requests.
 
 ## Later slices
 
