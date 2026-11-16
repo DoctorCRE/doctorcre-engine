@@ -3119,7 +3119,7 @@ for (const [from, to] of [
 	["outreach_active", "engaged"],
 	["engaged", "nurture"],
 	["engaged", "opportunity"],
-]) {
+] satisfies [string, string][]) {
 	test(`strong evidence applies ${from} to ${to}, weak evidence waits`, () =>
 		rolledBack(async () => {
 			await db.query(`update party_role set stage = '${from}' where party_id = '${LEAD}';
