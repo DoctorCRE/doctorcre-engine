@@ -497,6 +497,7 @@ create table offer (
 	constraint offer_commencement_date_or_days
 		check (commencement_on is null or commencement_days_after_delivery is null),
 	unique (deal_id, round),
+	unique (id, deal_id, property_id),
 	foreign key (deal_id, property_id) references deal_property,
 	-- Only a merge changes a deal_party key, and its rounds move with it.
 	foreign key (deal_id, from_party_id, from_role) references deal_party on update cascade,
@@ -544,6 +545,65 @@ create table offer_document (
 	created_at timestamptz not null default now(),
 	primary key (offer_id, document_id)
 );
+
+-- Signed terms are their own history; an amendment is the next version, never an overwrite.
+create table lease (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null,
+	property_id uuid not null,
+	version integer not null check (version >= 1),
+	previous_version integer generated always as (nullif(version - 1, 0)) stored,
+	offer_id uuid,
+	document_id uuid not null references document,
+	executed_on date not null,
+	commencement_on date,
+	expiration_on date not null,
+	rent_per_sf_yr numeric(10, 2) check (rent_per_sf_yr >= 0),
+	nnn_per_sf_yr numeric(10, 2) check (nnn_per_sf_yr >= 0),
+	term_months integer check (term_months > 0),
+	ti_per_sf numeric(10, 2) check (ti_per_sf >= 0),
+	free_rent_months numeric(4, 1) check (free_rent_months >= 0),
+	escalation_pct numeric(5, 2) check (escalation_pct >= 0),
+	rent_starts_on date,
+	rent_days_after_delivery integer check (rent_days_after_delivery >= 0),
+	expense_structure text check (expense_structure ~ '\S'),
+	other_terms text,
+	constraint lease_dates_in_order check (expiration_on > commencement_on and expiration_on >= executed_on),
+	constraint lease_rent_date_or_days check (num_nonnulls(rent_starts_on, rent_days_after_delivery) <= 1),
+	unique (deal_id, version),
+	foreign key (deal_id, previous_version) references lease (deal_id, version),
+	foreign key (deal_id, property_id) references deal_property,
+	foreign key (offer_id, deal_id, property_id) references offer (id, deal_id, property_id)
+);
+
+create function lease_from_accepted_offer() returns trigger
+language plpgsql as $$
+begin
+	perform from offer where id = new.offer_id and status = 'accepted' for share;
+	if not found then
+		raise exception 'a lease names a round accepted when the lease is recorded'
+			using errcode = 'check_violation', constraint = 'lease_from_accepted_offer';
+	end if;
+	return new;
+end $$;
+
+create trigger lease_from_accepted_offer before insert on lease
+	for each row when (new.offer_id is not null) execute function lease_from_accepted_offer();
+
+create table lease_option (
+	lease_id uuid not null references lease,
+	number smallint not null check (number > 0),
+	created_at timestamptz not null default now(),
+	kind text not null check (kind in ('renewal', 'expansion', 'early_termination')),
+	notice_on date not null,
+	terms text not null check (terms ~ '\S'),
+	primary key (lease_id, number)
+);
+
+create view current_lease as
+select l.* from lease l
+where not exists (select from lease newer where newer.deal_id = l.deal_id and newer.version > l.version);
 
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable
@@ -1002,7 +1062,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'social_account', 'idea',
+		'activity_about', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
