@@ -806,9 +806,9 @@ create table offer_document (
 );
 
 -- What a side can claim about its own position, such as best and final. Like roles, a label can be renamed.
--- A deadline is the round's expires_on, never a claim.
 create table claim_type (
-	slug text primary key,
+	-- A deadline is the round's expires_on, never a claim.
+	slug text primary key check (slug <> 'deadline'),
 	label text not null
 );
 

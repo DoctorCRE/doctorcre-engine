@@ -1173,7 +1173,11 @@ const RULES: Record<string, Case[]> = {
 	"a claim is on a round, of a listed type, once per round, and like the round is never rewritten or removed":
 		[
 			[newClaim({ offer_id: MISSING }), "offer_claim_offer_id_fkey"],
-			[newClaim({ claim_type: "deadline" }), "offer_claim_claim_type_fkey"],
+			[newClaim({ claim_type: "unknown" }), "offer_claim_claim_type_fkey"],
+			[
+				"insert into claim_type values ('deadline', 'Deadline')",
+				"claim_type_slug_check",
+			],
 			[newClaim({ claim_type: "authority" }), "offer_claim_pkey"],
 			[
 				newClaim({ floor_rent_per_sf_yr: 0 }),
