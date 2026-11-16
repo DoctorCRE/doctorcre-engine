@@ -206,3 +206,7 @@ The signed agreement for a deal's property, with sourced dates and terms. An ame
 
 **Lease option**:
 A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
+
+**Lead stage evidence**:
+An activity and its reference supporting a proposed or applied lead stage move. Weak job evidence waits for a user. Archiving always needs a user and a reason.
+_New database_: `lead_stage_move`. Ordinary stage edits and who and when stay in `change`.

@@ -142,6 +142,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 62. A lead has a stage. Only a lead has an owner, and the owner is a user.
 63. A lead or client says how they were found, from the list. A new lead or client is checked when the change is saved.
 64. Someone on a deal as its client holds the client role, checked when the change is saved, so the role cannot be removed while they are.
+65. Lead stage evidence names a lead, two different lead stages and an activity, with nonblank evidence. A job applies only strong evidence along the funnel; weak evidence and every archive wait for a direct user, and archiving has a nonblank reason. Applying a stale proposal is refused. Applied evidence is final and never rewritten or removed.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -383,6 +384,7 @@ A lead is a person or company holding the `lead` role, and a client one holding 
 - **Owner.** A lead's owner is the user who works it. None means nobody works it yet, and any user can take it. Territory is shared, so a lead's area never picks its owner. Change history keeps who owned it before.
 - **Stage.** A lead's stage comes from the lead stages in `stage`: New, Qualified, Outreach Active, Engaged, Nurture, Opportunity and Archived. Nurture replaces named drip campaigns. Do not contact is the party's `do_not_contact` row, and deal outcomes are deal phases, not lead stages.
 - **How found.** Each lead and client says how they were found, from the `how_found` list: referral, vendor, marketing post, public records and cold outreach to start. It is a fact about the person or company, so it holds in every role, and a lead that becomes a client copies nothing. A list can be counted for lead attribution, where free text cannot.
+- **Stage evidence.** `lead_stage_move` holds evidence-backed proposals and applied moves, with the activity, evidence reference and strength. A proposed row leaves the stage alone. Applying it holds the lead and changes its stage only if it still matches `from_stage`. Jobs apply strong evidence only along New → Qualified → Outreach Active → Engaged → Nurture or Opportunity. Weak evidence, including an agent acting for a user, waits for a direct user to apply it. Every archive needs a direct user and a nonblank reason. Ordinary user stage edits use change history alone. Evidence rows use the same stamp and change history, so proposal and approval keep both actors without duplicate who-and-when fields. Applied evidence stays applied; undo is a new move or a user stage correction.
 - **Not kept.** The 0 to 100 lead score and named drip campaigns do not come across (owner, #196).
 
 Moving today's rows across:
@@ -393,7 +395,8 @@ Moving today's rows across:
 - How found comes from `client.acquisition_source`, asked of the client, or else `lead.source_type`. Both are free text today. A `prospect-pool` lead is mapped by its candidate's own pool source. Every other value is listed for a partner to map to the list, and so is a party whose two values disagree. A lead or client with neither waits, listed, since the database refuses one without how it was found.
 - A lead whose `client_id` points at a client on another party, such as the practice a doctor runs, keeps its lead role on the person, and the client role stays on the practice.
 - `score`, `score_reason`, `drip_campaign`, `drip_added`, `report_back_due` and `sf_deal` do not move. Only the old spreadsheet import wrote the last four, and nothing reads them.
-- Lanes, stage moves, the estimated lease date, outreach drafts, candidates and the remaining free text come with #286.
+- Each old `lead_stage_move` becomes evidence on its lead party, keeping its id, activity, evidence reference, strength, reason and status. `nurture_drip` becomes `nurture`. Proposal creation and approval map to their respective change-history entries, retaining the old actors and dates. An undone row remains applied evidence followed by its undo in change history. A missing activity, blank evidence or reason, unknown actor or contradictory stage is listed for a user rather than invented. The owner loads historical rows without replaying the application trigger; ordinary stage events map to change history only.
+- Lanes, the estimated lease date, outreach drafts, candidates and the remaining free text come with #286.
 
 ## Merging duplicates
 

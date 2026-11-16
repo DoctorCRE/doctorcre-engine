@@ -314,6 +314,7 @@ insert into introduction (id, vendor_id, made_by, introduced_party_id, introduce
 `;
 const LEAD_SEED = `
 insert into stage values
+	('lead', 'qualified', 'Qualified'), ('lead', 'outreach_active', 'Outreach active'), ('lead', 'archived', 'Archived'),
 	('lead', 'new', 'New'), ('lead', 'engaged', 'Engaged'), ('lead', 'nurture', 'Nurture'), ('lead', 'opportunity', 'Opportunity');
 insert into party (id, kind, name, how_found) values ('${LEAD}', 'person', 'Dr. Example Lead', 'public_records');
 insert into party_role (party_id, role, stage, owner_user_id) values ('${LEAD}', 'lead', 'nurture', '${TEAMMATE}');
@@ -411,6 +412,7 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"lead_stage_move",
 	"role",
 	"stage",
 	"phase",
@@ -551,6 +553,18 @@ const newCriticalDate = (row: Record<string, string | null> = {}) =>
 		kind: "due_diligence",
 		due_on: "2026-06-01",
 		source: "Example signed agreement",
+		...row,
+	});
+const MOVE = id(730);
+const newLeadMove = (row: Record<string, string | null> = {}) =>
+	insert("lead_stage_move", {
+		id: MOVE,
+		party_id: LEAD,
+		from_stage: "nurture",
+		to_stage: "opportunity",
+		activity_id: CALL,
+		evidence_ref: "example:held-call",
+		strength: "weak",
 		...row,
 	});
 const RULES: Record<string, Case[]> = {
@@ -1808,6 +1822,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	lead_stage_move: ["status"],
 	role: ["label"],
 	do_not_contact: ["until_date"],
 	stage: ["label"],
@@ -2931,6 +2946,211 @@ test("every unique key that holds a party is one a merge collapses", async () =>
 	);
 	assert.deepEqual(rows[0].keys, COLLAPSED);
 });
+
+for (const [label, sql, refusal] of [
+	[
+		"initial archive bypass",
+		`insert into party_role (party_id, role, stage) values ('${DOCTOR}', 'lead', 'archived')`,
+		"lead_stage_needs_evidence",
+	],
+	[
+		"blank archive reason",
+		newLeadMove({ to_stage: "archived", reason: " " }),
+		"lead_stage_move_reason_check",
+	],
+	[
+		"nonlead evidence",
+		`${newLeadMove({ party_id: DOCTOR })}; ${CHECK_AT_COMMIT}`,
+		"lead_stage_move_party_id_role_fkey",
+	],
+	[
+		"blank evidence",
+		newLeadMove({ evidence_ref: " " }),
+		"lead_stage_move_evidence_ref_check",
+	],
+	[
+		"missing activity",
+		newLeadMove({ activity_id: MISSING }),
+		"lead_stage_move_activity_id_fkey",
+	],
+	[
+		"wrong role's stage",
+		newLeadMove({ to_stage: "unknown" }),
+		"lead_stage_move_role_to_stage_fkey",
+	],
+	[
+		"no stage change",
+		newLeadMove({ to_stage: "nurture" }),
+		"lead_stage_move_changes_stage",
+	],
+	[
+		"archive without reason",
+		newLeadMove({ to_stage: "archived" }),
+		"lead_stage_move_archive_reason",
+	],
+	[
+		"weak job evidence",
+		`${asJob("agent", USER)}; ${newLeadMove({ status: "applied" })}`,
+		"lead_stage_move_needs_user",
+	],
+	[
+		"job archive",
+		`${asJob("agent", USER)}; ${newLeadMove({ status: "applied", strength: "strong", to_stage: "archived", reason: "Example retired" })}`,
+		"lead_stage_move_needs_user",
+	],
+	[
+		"job skips funnel",
+		`${asJob("agent")}; ${newLeadMove({ status: "applied", strength: "strong" })}`,
+		"lead_stage_move_job_funnel",
+	],
+	[
+		"stale proposal",
+		newLeadMove({ status: "applied", from_stage: "new" }),
+		"lead_stage_move_current_stage",
+	],
+	[
+		"job bypass",
+		`${asJob("agent")}; update party_role set stage = 'engaged' where party_id = '${LEAD}'`,
+		"lead_stage_needs_evidence",
+	],
+	[
+		"archive bypass",
+		`update party_role set stage = 'archived' where party_id = '${LEAD}'`,
+		"lead_stage_needs_evidence",
+	],
+	[
+		"reopen applied evidence",
+		`${newLeadMove({ status: "applied" })}; update lead_stage_move set status = 'proposed'`,
+		"lead_stage_move_final",
+	],
+	[
+		"rewrite evidence",
+		"update lead_stage_move set evidence_ref = 'replacement'",
+		notGranted("lead_stage_move"),
+	],
+	[
+		"remove evidence",
+		"delete from lead_stage_move",
+		notGranted("lead_stage_move"),
+	],
+] satisfies [string, string, Refusal][]) {
+	test(`lead stage evidence refuses ${label}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+
+test("weak job evidence waits, and a direct user applies it with both decisions in history", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("agent", USER)}; ${newLeadMove()}`);
+		assert.equal(
+			(
+				await db.query(
+					`select stage from party_role where party_id = '${LEAD}'`,
+				)
+			).rows[0].stage,
+			"nurture",
+		);
+		await db.query(
+			`${asUser(TEAMMATE)}; update lead_stage_move set status = 'applied' where id = '${MOVE}'`,
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select stage from party_role where party_id = '${LEAD}'`,
+				)
+			).rows[0].stage,
+			"opportunity",
+		);
+		const history = (
+			await db.query(`select action, changed_by_job, changed_by_user_id from change
+		where table_name = 'lead_stage_move' and record ->> 'id' = '${MOVE}' order by id`)
+		).rows;
+		assert.deepEqual(history, [
+			{ action: "insert", changed_by_job: "agent", changed_by_user_id: null },
+			{ action: "update", changed_by_job: null, changed_by_user_id: TEAMMATE },
+		]);
+	}));
+
+test("strong job evidence applies the next funnel step, and a user can archive with a reason", () =>
+	rolledBack(async () => {
+		await db.query(`update party_role set stage = 'new' where party_id = '${LEAD}';
+		${asJob("agent")}; ${newLeadMove({ from_stage: "new", to_stage: "qualified", strength: "strong", status: "applied" })}`);
+		assert.equal(
+			(
+				await db.query(
+					`select stage from party_role where party_id = '${LEAD}'`,
+				)
+			).rows[0].stage,
+			"qualified",
+		);
+		await db.query(
+			`${asUser(USER)}; ${newLeadMove({ id: id(731), from_stage: "qualified", to_stage: "archived", reason: "Example retired", status: "applied" })}`,
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select stage from party_role where party_id = '${LEAD}'`,
+				)
+			).rows[0].stage,
+			"archived",
+		);
+	}));
+
+test("stage evidence stays with the survivor when two leads merge", () =>
+	rolledBack(async () => {
+		await db.query(`${newLeadMove()};
+		insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Survivor', 'public_records');
+		insert into party_role (party_id, role, stage) values ('${OLD}', 'lead', 'new');
+		select merge_party('${LEAD}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select party_id from lead_stage_move where id = '${MOVE}'`,
+				)
+			).rows[0].party_id,
+			OLD,
+		);
+	}));
+
+for (const [from, to] of [
+	["new", "qualified"],
+	["qualified", "outreach_active"],
+	["outreach_active", "engaged"],
+	["engaged", "nurture"],
+	["engaged", "opportunity"],
+]) {
+	test(`strong evidence applies ${from} to ${to}, weak evidence waits`, () =>
+		rolledBack(async () => {
+			await db.query(`update party_role set stage = '${from}' where party_id = '${LEAD}';
+			${asJob("agent")}; ${newLeadMove({ from_stage: from, to_stage: to })}`);
+			assert.equal(
+				(
+					await db.query(
+						`select stage from party_role where party_id = '${LEAD}'`,
+					)
+				).rows[0].stage,
+				from,
+			);
+			await db.query(
+				newLeadMove({
+					id: id(732),
+					from_stage: from,
+					to_stage: to,
+					strength: "strong",
+					status: "applied",
+				}),
+			);
+			assert.equal(
+				(
+					await db.query(
+						`select stage from party_role where party_id = '${LEAD}'`,
+					)
+				).rows[0].stage,
+				to,
+			);
+		}));
+}
 
 // Last, because it commits.
 test("a merge waits for one that moves rows onto its duplicate, then moves them on", async () => {
