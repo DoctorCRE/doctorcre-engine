@@ -19,7 +19,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`property`**: a building or space, by address, with its county and its point on the map once geocoded.
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
-- **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market and its closed value.
+- **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, and whether it needs attention.
 - **`deal_kind`**: the list of kinds of transaction, such as lease and purchase. Like roles, a label can be renamed.
 - **`deal_reason`**: the list of reasons a client takes space, such as a start-up or a relocation. Like roles, a label can be renamed.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
@@ -149,7 +149,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 66. A brand membership joins two different companies, its location has a client profile, and its dates never overlap another membership of that location.
 67. A national account is a company holding that role. Its dated owners are people, and their dates never overlap on one account. Membership and ownership end strictly after they start, with the end excluded.
 68. Client and account profiles and their dated links keep their parties; users may correct dates and remove mistakes. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
-69. Lead stage evidence names a lead and two different lead stages. Non-archive moves name an activity about that lead and nonblank evidence. Repeated proposals for the same activity and move are refused. An unattended job applies only strong evidence along the funnel; weak evidence and every archive wait for a direct user, and archiving has a nonblank reason. Applying a stale proposal is refused. Applied evidence is final and never rewritten or removed.
+69. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank.
+70. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
+71. Lead stage evidence names a lead and two different lead stages. Non-archive moves name an activity about that lead and nonblank evidence. Repeated proposals for the same activity and move are refused. An unattended job applies only strong evidence along the funnel; weak evidence and every archive wait for a direct user, and archiving has a nonblank reason. Applying a stale proposal is refused. Applied evidence is final and never rewritten or removed.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -162,7 +164,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's or a how-found's label;
 - a vendor role's stage, relationship level, disposition, reason and target, a lead role's stage and owner, and an introduction's date, deal and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI and how found, and a property's address, county and point;
-- a deal's kind, reason, deal owner, market and closed value;
+- a deal's kind, reason, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
@@ -172,7 +174,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
 - a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
 
-History is `critical_date`, `lease`, `lease_option`, `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a round's status moves, a later acceptance superseding a round, a lease's round accepted when recorded, a critical date's user confirmation and resolution, an option notice before lease expiration, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
+History is `critical_date`, `lease`, `lease_option`, `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a deal parked, revived or flagged by a user, a round's status moves, a later acceptance superseding a round, a lease's round accepted when recorded, a critical date's user confirmation and resolution, an option notice before lease expiration, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
 
 A merge is the one path that rewrites history: `merge_party` runs with the owner's rights and points rounds and outside ids at the survivor. Each row it moves is stamped with whoever ran it, so a moved row's stamp no longer names who first stored it. Its change history still does, and names the merge.
 
@@ -341,6 +343,10 @@ Every deal has exactly one deal owner, a user, in `owner_user_id`. A second user
 
 A deal names its market from the `market` list, which can be set when the deal opens, before any property is chosen, and stays empty until known. A closed deal records its value, such as the total lease value or the purchase price, in `closed_value`, which is empty until known and never zero. Nothing requires it at the move to closed, because the mail job closes a deal when its invoice arrives and the invoice does not carry it, so the value is left for a user to fill in.
 
+A parked deal is not active work for now, and says why in `parking_reason`: the client paused, the prospect was never active, or another reason, with an optional note. No reason means the deal is active, as no disposition means a vendor is. Parking is not a phase and never changes one, so reviving a deal, which clears its reason and note, leaves it in the phase it was in. Who parked a deal and when is the latest change to its `parking_reason` in change history, so the deal holds no date or user of its own for it, and the same history keeps every earlier parking and revival.
+
+`needs_attention` is a flag a user sets on a deal and clears, never worked out from anything else. Change history keeps who set it and when. Parking, reviving and flagging are each a user's act, or an agent's working for one, so a job working for no one, such as the publisher, cannot do them; it can still change the deal's other columns. A copy of today's parked deals turns that check off, as it does the stamp, because its history names who parked each one.
+
 National is never stored. A deal is national exactly when its client is a location of a national account. National accounts and the brand behind each location come with #275, and with them the read that answers it. Until then nothing answers it, and since nothing stores it, no flag can disagree with the client, as today's lane sometimes does.
 
 Moving today's rows across:
@@ -350,6 +356,8 @@ Moving today's rows across:
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
 - `won_value` becomes `closed_value`. `sf_commission_placeholder` is a commission, not the deal's value, so it waits for commissions.
 - `lane` is not copied. A deal whose old lane disagrees with its client's national account is listed once #275 lands.
+- A `parked` deal's `parking_reason` comes across as it is, and its `parking_note` trimmed, a blank one as none. An `active` deal has no reason. `parked_at` and `parked_by` come across into change history with the old `event` rows, as earlier deal owners do, dated when the deal was parked and naming who parked it.
+- `attention` becomes `needs_attention`.
 
 ## Markets and territories
 
@@ -459,4 +467,4 @@ Only the schema owner's database role may call `erase_change(removed_change_id, 
 
 ## Later slices
 
-A deal's parked state and needs attention (#283). "Everything about this person." The rest of leads (#286). Commissions. Serving confirmed critical dates and proposals. Leases negotiated elsewhere and renewal links. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+"Everything about this person." The rest of leads (#286). Commissions. Serving confirmed critical dates and proposals. Leases negotiated elsewhere and renewal links. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
