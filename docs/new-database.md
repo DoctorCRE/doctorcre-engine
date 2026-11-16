@@ -399,4 +399,4 @@ Today's system keeps one `event` row per field changed, with the actor, a verb a
 
 ## Later slices
 
-Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+A deal's parked state and needs attention (#283). "Everything about this person." Leads and their conversion to clients. Leases, critical dates and commissions. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
