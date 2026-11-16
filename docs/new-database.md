@@ -6,7 +6,9 @@ The engine will move to a new, cleanly connected database in one planned step, a
 
 - **`party`**: every person and company, once, each with its own id. `kind` is `person` or `company`. A person's `npi` is their individual NPI, and a company's its organization NPI. `how_found` says how a lead or client was found.
 - **`merged_party`**: what a merged-away duplicate leaves behind: its old id and the record it became. Nothing lists or shows it.
-- **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's preferences and facts will be columns here, or a child table keyed by the user, as they come.
+- **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's facts will be columns here, or a child table keyed by the user, as they come.
+- **`user_preference`**: a user's own settings and notification choices: their time zone, quiet hours and whether notifications reach their devices.
+- **`home_mark`**: a user's own mark on an item on their Home: snoozed until a time or settled, and whom it waits on and why.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.
 - **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason and an optional until-date.
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
@@ -38,7 +40,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 ## Users, jobs and who changed what
 
-Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons, specialties and how found, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, leases and their options, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
+Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons, specialties and how found, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, leases and their options, documents, activity and what it is about, emails, next steps, users' preferences and Home marks, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
 
 The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. A removal names who made it too, in change history.
 
@@ -153,6 +155,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 71. Lead stage evidence names a lead and two different lead stages. Non-archive moves name an activity about that lead and nonblank evidence. Repeated proposals for the same activity and move are refused. An unattended job applies only strong evidence along the funnel; weak evidence and every archive wait for a direct user, and archiving has a nonblank reason. Applying a stale proposal is refused. Applied evidence is final and never rewritten or removed.
 
 72. A lead's lane comes from its list. A lease estimate has both date and nonblank source, and confidence only with an estimate. Lane, estimate, confidence and segment belong only to the lead role. How-found detail is nonblank and has how found.
+73. A user has one preferences row, in a time zone the database knows. Quiet hours have a start and a different end, or neither. A Home mark is one per user and item, is snoozed with a time, settled or neither, waits on someone only with a nonblank reason, and marks something. A next step with a mark is not removed until its marks are.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -170,6 +173,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
 - a next step's text, owner, due date and done time;
+- a user's time zone, quiet hours and device notifications, and a Home mark's disposition, snooze time and whom it waits on and why;
 - a round's status, and a critical date's status and resolution reason;
 - a do-not-contact row's until-date;
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
@@ -196,6 +200,21 @@ Today's `party` row holds one free-text `email`, `phone` and `cell` on each pers
 - `email` sometimes holds several addresses, or a name with the address in angle brackets. Each address becomes its own work row, lower case and trimmed, and the first is primary.
 - The same number or address twice becomes one row. `cell` is primary when no `phone` row is stored.
 - A value that fits neither form is not stored. The move lists it for a partner to fix.
+
+## Users' preferences and Home marks
+
+The owner ruled on #196 that each user's settings, Home marks and notification choices become per-user preferences on the user (2026-11-16). Both tables are keyed by the user, so the owner still adds users while the engine keeps their preferences.
+
+- **Preferences.** `user_preference` holds one row per user: their `time_zone`, an IANA name such as `America/Chicago` that the database knows; quiet hours, `quiet_from` and `quiet_until`, in that zone, which may run past midnight; and `push_to_device`, whether notifications reach their devices. A user with no row has chosen nothing, and a read uses the defaults.
+- **Home marks.** An item on a user's Home with no `home_mark` is in their inbox. A mark snoozes it until `snoozed_until`, or settles it, and can say whom it waits on, a person or company, with the reason. Waiting is separate from snoozing, as today. A next step is the only kind of Home item so far. Each kind that comes, such as a suggestion from mail, adds its own key, with a check that exactly one is set (decision 21). Removing a next step removes its marks in the same save. Whether a settled item changed since it was settled is read from change history, so a mark holds no version.
+
+Moving today's rows across:
+
+- Each `ops.notification_preference` row becomes its actor's user's preferences: `timezone`, `quiet_hours_start` and `quiet_hours_end`, and `device_opt_in` as `push_to_device`. A zone the database does not know, or equal start and end, is listed for that user to fix. `version` does not move; change history replaces it.
+- Each `ops.home_inbox_disposition` that is snoozed or settled on a `next_action:` item becomes a mark on the next step it became. An `inbox` row is no mark. Marks on other items, such as call actions, call sessions, reply drafts and notifications, wait for those records, with the suggestions from mail, calls and meetings. `source_version`, `material_version` and `explicit_unsettle` do not move.
+- Each `ops.home_waiting` with someone named becomes the mark's `waiting_on_party_id`, an actor as their person, and its `reason`. Its `evidence` lines do not move. A row whose identity was cleared waits on no one.
+- `ops.home_inbox_batch` and the `_write` tables are receipts of past saves and do not move.
+- Feature switches (`feature_switch`) are switches for releasing old-system features, and `system_config` holds system-wide values. Neither is a user's setting, so neither moves here; the owner decides them separately.
 
 ## Do not contact, NPIs and outside ids
 
