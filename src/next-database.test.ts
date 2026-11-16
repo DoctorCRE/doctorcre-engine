@@ -1419,7 +1419,7 @@ const RULES: Record<string, Case[]> = {
 		],
 	"history is never added, rewritten or removed by hand": [
 		[
-			"select erase_change(1)",
+			"select erase_change(1, array['summary'])",
 			{ code: "42501", message: "permission denied for function erase_change" },
 		],
 
@@ -2689,7 +2689,16 @@ for (const [first, second, expected] of [
 						[id(981)],
 					)
 				).rows,
-				[{ reason: "Example two", days: expected }],
+				[
+					{
+						reason:
+							(expected === null && first === "null") ||
+							first === "current_date + 1"
+								? "Example one"
+								: "Example two",
+						days: expected,
+					},
+				],
 			);
 		}));
 }
@@ -2706,11 +2715,11 @@ test("only the owner erases a removed record's values, keeping who and when and 
 			insert into email (activity_id, message_id, sender, subject, body)
 			values ('${id(983)}', '<erase@example.com>', 'erase@example.com', 'Example subject', 'Example private body');
 			delete from email where activity_id = '${id(983)}';
-			select erase_change((select max(id) from change where table_name = 'email' and action = 'delete' and record = jsonb_build_object('activity_id', '${id(983)}')))`);
+			select erase_change((select max(id) from change where table_name = 'email' and action = 'delete' and record = jsonb_build_object('activity_id', '${id(983)}')), array['subject', 'body'])`);
 		assert.equal(
 			(
 				await owner.query(
-					"select count(*) from change where table_name = 'email' and record = $1 and (old_value is not null or new_value is not null)",
+					"select count(*) from change where table_name = 'email' and record = $1 and (old_value ?| array['subject','body'] or new_value ?| array['subject','body'])",
 					[{ activity_id: id(983) }],
 				)
 			).rows[0].count,
@@ -2724,8 +2733,24 @@ test("only the owner erases a removed record's values, keeping who and when and 
 		).rows;
 		const removed = before.at(-1);
 		assert.ok(removed);
+		await owner.query("savepoint invalid_erase");
+		await assert.rejects(
+			owner.query("select erase_change($1, array['summary'])", [before[0].id]),
+			{ code: "P0002" },
+		);
+		await owner.query("rollback to invalid_erase");
+		for (const fields of [[], ["happened_at"], ["id"], ["missing"], [null]]) {
+			await assert.rejects(
+				owner.query("select erase_change($1, $2)", [removed.id, fields]),
+				{ code: "23514", constraint: "erase_only_text_fields" },
+			);
+			await owner.query("rollback to invalid_erase");
+		}
+
 		await owner.query(asUser(USER));
-		await owner.query("select erase_change($1)", [removed.id]);
+		await owner.query("select erase_change($1, array['summary'])", [
+			removed.id,
+		]);
 		const after = (
 			await owner.query(
 				"select id, table_name, record, action, changed_by_user_id, changed_at, merge_of, old_value, new_value from change where record = $1 order by id",
@@ -2734,16 +2759,21 @@ test("only the owner erases a removed record's values, keeping who and when and 
 		).rows;
 		assert.deepEqual(
 			after.slice(0, -1).map(({ old_value, new_value, ...metadata }) => {
-				assert.equal(old_value, null);
-				assert.equal(new_value, null);
+				assert.equal(old_value?.summary, undefined);
+				assert.equal(new_value?.summary, undefined);
 				return metadata;
 			}),
 			before,
 		);
 		assert.equal(after.at(-1).action, "erase");
+		assert.deepEqual(after.at(-1).new_value, { fields: ["summary"] });
+		assert.equal(after[0].new_value.kind, "note");
+		assert.ok(after[0].new_value.happened_at);
 		assert.equal(after.at(-1).changed_by_user_id, USER);
 		assert.ok(after.at(-1).changed_at);
-		await owner.query("select erase_change($1)", [removed.id]);
+		await owner.query("select erase_change($1, array['summary'])", [
+			removed.id,
+		]);
 		assert.equal(
 			(
 				await owner.query("select count(*) from change where record = $1", [
@@ -2764,10 +2794,13 @@ test("only the owner erases a removed record's values, keeping who and when and 
 		await owner.query(
 			`insert into activity (id, kind, happened_at, summary) values ('${id(982)}', 'note', now(), 'Example recreated note')`,
 		);
-		await assert.rejects(owner.query("select erase_change($1)", [removed.id]), {
-			code: "23514",
-			constraint: "erase_only_removed",
-		});
+		await assert.rejects(
+			owner.query("select erase_change($1, array['summary'])", [removed.id]),
+			{
+				code: "23514",
+				constraint: "erase_only_removed",
+			},
+		);
 	} finally {
 		await owner.query("rollback");
 		await owner.end();

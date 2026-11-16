@@ -159,7 +159,8 @@ order by survivor_id, contact_state_until desc nulls first, rank;
 
 insert into not_copied
 select id, 'contact_state', concat_ws(' until ', contact_state, contact_state_until),
-	case when contact_state in ('do_not_contact', 'paused') then 'do not contact needs a reason and paused needs an end date'
+	case when contact_state in ('do_not_contact', 'paused') and not coalesce(contact_state_reason ~ '\S', false) then 'do not contact without a reason'
+		when contact_state = 'paused' then 'paused without an end date'
 		else 'no place in the new database' end
 from chain where contact_state <> 'active' and not (contact_state in ('do_not_contact', 'paused')
 	and contact_state_reason ~ '\S' and (contact_state <> 'paused' or contact_state_until is not null));

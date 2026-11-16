@@ -919,9 +919,9 @@ begin
 		and s.extension is not distinct from d.extension;
 	update party_phone set is_primary = false
 	where party_id = duplicate and exists (select from party_phone where party_id = survivor and is_primary);
-	update do_not_contact s set until_date = case
-		when s.until_date is null or d.until_date is null then null else greatest(s.until_date, d.until_date) end
-	from do_not_contact d where s.party_id = survivor and d.party_id = duplicate;
+	update do_not_contact s set until_date = d.until_date, reason = d.reason
+	from do_not_contact d where s.party_id = survivor and d.party_id = duplicate
+		and s.until_date is not null and (d.until_date is null or d.until_date > s.until_date);
 	delete from do_not_contact
 	where party_id = duplicate and exists (select from do_not_contact where party_id = survivor);
 	delete from party_specialty d using party_specialty s
@@ -1054,7 +1054,7 @@ begin
 end $$;
 
 -- An erase keeps the original stamps and keys. Its own change names who requested it.
-create function erase_change(removed_change_id bigint) returns void
+create function erase_change(removed_change_id bigint, fields text[]) returns void
 language plpgsql as $$
 declare
 	removed change;
@@ -1071,10 +1071,22 @@ begin
 		raise exception 'only a removed record can be erased'
 			using errcode = 'check_violation', constraint = 'erase_only_removed';
 	end if;
-	update change set old_value = null, new_value = null
-	where table_name = removed.table_name and record = removed.record and (old_value is not null or new_value is not null);
+	if coalesce(cardinality(fields), 0) = 0 or exists (
+		select from unnest(fields) f where f is null or removed.record ? f or not exists (
+			select from pg_attribute a join pg_type t on t.oid = a.atttypid
+			where a.attrelid = source_table and a.attname = f and not a.attisdropped
+				and t.typcategory = 'S' and f not like 'changed_%'
+		)
+	) then
+		raise exception 'erase names non-key text fields'
+			using errcode = 'check_violation', constraint = 'erase_only_text_fields';
+	end if;
+	update change set old_value = old_value - fields, new_value = new_value - fields
+	where table_name = removed.table_name and record = removed.record and action <> 'erase'
+		and (old_value ?| fields or new_value ?| fields);
 	if found then
-		insert into change (table_name, record, action) values (removed.table_name, removed.record, 'erase');
+		insert into change (table_name, record, action, new_value)
+		values (removed.table_name, removed.record, 'erase', jsonb_build_object('fields', fields));
 	end if;
 end $$;
 

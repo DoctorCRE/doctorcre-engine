@@ -221,7 +221,7 @@ test("each value it does not copy is listed, with why", () => {
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
 		[id(10), "city", "Springfield", "no place in the new database"],
-		[id(10), "contact_state", "do_not_contact", "do not contact needs a reason and paused needs an end date"],
+		[id(10), "contact_state", "do_not_contact", "do not contact without a reason"],
 		[id(10), "contact_state_cadence", "quarterly", "no place in the new database"],
 		[id(10), "county", "Example County", "no place in the new database"],
 		[id(10), "email", "bad@example", "not an email address"],
@@ -472,3 +472,63 @@ test("paused copies as do not contact with its reason and end date", async () =>
 		[{ party_id: id(16), reason: "Example pause", until_date: "2027-01-04" }],
 	);
 });
+
+test("a pause without an end date is reported and never becomes a permanent stop", () =>
+	rolledBack(async () => {
+		const report = await copy(
+			oldParty(950, {
+				contact_state: "paused",
+				contact_state_reason: "Example pause",
+			}),
+		);
+		assert.deepEqual(
+			(report ?? []).filter((row) => row[0] === id(950)),
+			[[id(950), "contact_state", "paused", "paused without an end date"]],
+		);
+		assert.deepEqual(
+			await rows(
+				`select party_id from do_not_contact where party_id = '${id(950)}'`,
+			),
+			[],
+		);
+	}));
+for (const [survivor, duplicate, winner] of [
+	["2028-01-01", "2029-01-01", "duplicate"],
+	["2029-01-01", "2028-01-01", "survivor"],
+	["2028-01-01", null, "duplicate"],
+	[null, "2028-01-01", "survivor"],
+] as const) {
+	test(`the copy keeps the strongest stop with its reason: ${survivor}, ${duplicate}`, () =>
+		rolledBack(async () => {
+			const report = await copy(
+				oldParty(951, {
+					contact_state: survivor ? "paused" : "do_not_contact",
+					...(survivor ? { contact_state_until: survivor } : {}),
+					contact_state_reason: "Example survivor",
+				}) +
+					oldParty(952, {
+						merged_into: id(951),
+						contact_state: duplicate ? "paused" : "do_not_contact",
+						...(duplicate ? { contact_state_until: duplicate } : {}),
+						contact_state_reason: "Example duplicate",
+					}),
+			);
+			assert.deepEqual(
+				(report ?? []).filter(
+					(row) => row[0] === id(951) || row[0] === id(952),
+				),
+				[],
+			);
+			assert.deepEqual(
+				await rows(
+					`select reason, until_date::text from do_not_contact where party_id = '${id(951)}'`,
+				),
+				[
+					{
+						reason: `Example ${winner}`,
+						until_date: winner === "survivor" ? survivor : duplicate,
+					},
+				],
+			);
+		}));
+}

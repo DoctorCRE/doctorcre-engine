@@ -116,7 +116,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 42. A market's name is never blank and is used once, and a market holds each county once. A territory's name is never blank.
 43. Someone serves a territory that exists, ends no earlier than they started, and is linked once per start date.
 44. A merge joins two different people or two different companies, neither merged away. It never merges a user away, and never two records that each hold an NPI.
-45. A merge moves everything that points at the duplicate, in every table, to the survivor, and removes the duplicate. Where both hold the same link, the survivor's row stays, and so do its primary email, primary phone and do-not-contact reason. A second merge onto the same records waits for the first.
+45. A merge moves everything that points at the duplicate, in every table, to the survivor, and removes the duplicate. Where both hold the same link, the survivor's row stays, and so do its primary email and primary phone. Do not contact keeps the longest restriction and its reason. A second merge onto the same records waits for the first.
 46. Only a merge leaves a merged-into pointer, and it names a live record, so merges never chain or loop. Nothing new points at a merged-away record, and its id is never used again. Only the engine and the owner run a merge.
 47. A vendor's category is a role whose `category_of` is vendor, and it stays one. Only a vendor holds a vendor category, checked when the change is saved.
 48. A stage comes from its own role's stage list, and is stored once per role.
@@ -320,8 +320,6 @@ Moving today's rows across:
 - Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is empty, or is neither the vendor nor a user, waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
 - `trust_override`, a hand-set rating, does not move.
 
-Paused contacts copy to do_not_contact with their reason and end date. Missing reasons or a pause without an end date stay on not_copied for correction. Duplicate stops copy with the longest restriction, no end date first. Outreach uses active_do_not_contact and stops through the until-date, inclusive. Nurture mapping is #282 after #274.
-
 ## Merging duplicates
 
 The owner ruled on #196: the merged-away record disappears and everything points at the survivor. `merge_party(duplicate, survivor)` leaves a `merged_party` row, so an old link finds the survivor, moves every row that points at the duplicate, then removes it. Email matches need nothing more, because the duplicate's addresses are now the survivor's. The foreign keys then refuse any row that still names the duplicate, in any table, including tables added later. The merge finds what to move from the catalog, so a new table that points at a party moves with no change to it.
@@ -333,7 +331,7 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Both have an NPI? Refused. NPPES issues one number per person or organization, so two numbers are two of them. Otherwise the survivor keeps its own NPI or takes the duplicate's.
 - The same email, phone number, role, specialty, company link, territory link or activity on both? One row stays, the survivor's, with its label and title.
 - Both have a primary email or phone? The survivor's stays primary. If only the duplicate has one, it becomes the survivor's.
-- Do not contact on either? The survivor is do not contact. If both are, the survivor's reason stays and the later until-date wins, with no end date stronger than either date.
+- Do not contact on either? The survivor is do not contact. If both are, the longer restriction stays with its reason, with no end date stronger than either date. Equal end dates keep the survivor's reason.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
 - Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is, unless the merged disposition is avoid.
@@ -354,7 +352,7 @@ A merge marks each change it makes with the duplicate it merged, in `merge_of`: 
 
 Today's system keeps one `event` row per field changed, with the actor, a verb and a cause, and `/pipeline/changes` reads a deal's events. A change row holds every field one statement changed, so the old per-field rows are `jsonb_each` over its values. A copy of old rows, such as `schema/copy-parties.sql`, keeps each row's old stamp, and its history records the copy itself: an insert by `old_system`, at the time the copy ran. The old `event` rows come across later. Serving the change feed and deal events from this table is a later slice.
 
-Only the schema owner's database role may call `erase_change(removed_change_id)`. It requires a delete change and refuses a record that exists again. It clears all old and new values for that table and record, across inserts, edits and deletions. Keys, actions, merge pointers, authors and times stay unchanged. An `erase` change records the request with its user or job and time, without copying the erased words. Repeating a completed erase changes nothing. The function locks the source table while it checks absence and erases, so a concurrent insert cannot recreate the record during it. The engine cannot call it or change history directly. This clears the snapshots entirely, not just a chosen text field. Linked records and external copies are separate requests.
+Only the schema owner's database role may call `erase_change(removed_change_id, fields)`. It requires a delete change and refuses a record that exists again. It removes the selected non-key text fields from old and new values for that table and record, across inserts, edits and deletions. Unknown fields, keys and non-text fields are refused. Other values stay. Keys, actions, merge pointers, authors and times stay unchanged. An `erase` change records the request with its user or job and time, with the erased field names and without copying their words. Repeating a completed erase changes nothing. The function locks the source table while it checks absence and erases, so a concurrent insert cannot recreate the record during it. The engine cannot call it or change history directly. Linked records and external copies are separate requests.
 
 ## Later slices
 
