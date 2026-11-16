@@ -180,6 +180,7 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"client fit",
 		"capture queue",
 		"feed",
+		"feed",
 		"find %",
 		"find _",
 		"find  ",
@@ -200,6 +201,7 @@ test("asks the engine, the old system and the engine again for every board, the 
 		d1,
 		d2,
 		d3,
+		"client fit",
 		l1,
 		l2,
 	]);
@@ -210,13 +212,13 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 27);
-	assert.deepEqual([run.oldReads, run.engineReads], [28, 56]);
+	assert.equal(pauses, 29);
+	assert.deepEqual([run.oldReads, run.engineReads], [30, 60]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
 
-test("every read of the change feed starts three days back at the zero ID, in the cursor text the app sends", async (t) => {
+test("the change feed walk starts three days back at the zero ID, in the cursor text the app sends", async (t) => {
 	mock.timers.enable({
 		apis: ["Date"],
 		now: Date.parse("2030-01-04T00:00:00Z"),
@@ -224,7 +226,7 @@ test("every read of the change feed starts three days back at the zero ID, in th
 	t.after(() => mock.timers.reset());
 	const starts = new Set<string>();
 	const remember = (ask: Ask) => {
-		if (ask.read === "feed") starts.add(ask.start);
+		if (ask.read === "feed" && ask.start !== undefined) starts.add(ask.start);
 		return answer(ask);
 	};
 	await runWith(remember, remember);
@@ -281,6 +283,7 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"client fit matched",
 			"capture queue matched",
 			"feed failed",
+			"feed failed",
 			"find % matched",
 			"find _ matched",
 			"find   matched",
@@ -301,6 +304,7 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			`${d1} matched`,
 			`${d2} matched`,
 			`${d3} matched`,
+			"client fit matched",
 			`${l1} matched`,
 			`${l2} matched`,
 		],
@@ -370,15 +374,15 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(
 		report("production", run),
 		`Old and new answers compared on production
-old reads made: 28, engine reads made: 56
+old reads made: 30, engine reads made: 60
 
 read                                         asked   matched tie order    at cap different unsettled    failed
 board team                                       1         1         0         0         0         0         0
 board national_account                           1         1         0         0         0         0         0
 board all                                        1         0         1         0         0         0         0
-client fit                                       1         1         0         0         0         0         0
+client fit                                       2         2         0         0         0         0         0
 capture queue                                    1         1         0         0         0         0         0
-change feed                                      1         1         0         0         0         0         0
+change feed                                      2         2         0         0         0         0         0
 search find                                      3         3         0         0         0         0         0
 lead board                                       1         1         0         0         0         0         0
 quiet follow-ups                                 1         1         0         0         0         0         0
@@ -454,16 +458,16 @@ test("the change feed reports a differing event field by path and event ID, an e
 	const outcome = run.outcomes.find((o) => o.ask.read === "feed");
 	assert.equal(outcome?.result, "different");
 	const text = report("production", run);
-	assert.match(text, /\nchange feed +1 +0 +0 +0 +1 +0 +0\n/);
+	assert.match(text, /\nchange feed +2 +0 +0 +0 +2 +0 +0\n/);
 	assert.match(
 		text,
 		new RegExp(
 			[
 				"differences: field path, kind, records, first record IDs",
-				`feed.events\\[\\]  missing in new  1  ${uuid(14)}`,
-				`feed.events\\[\\].field  value differs  1  ${uuid(11)}`,
-				`feed.events\\[\\]  missing in old  1  ${uuid(13)}`,
-				"feed.cursors\\[\\]  value differs  1  -",
+				`feed.events\\[\\]  missing in new  2  ${uuid(14)}`,
+				`feed.events\\[\\].field  value differs  2  ${uuid(11)}`,
+				`feed.events\\[\\]  missing in old  2  ${uuid(13)}`,
+				"feed.cursors\\[\\]  value differs  2  -",
 			].join("\n"),
 		),
 	);
@@ -1386,4 +1390,33 @@ test("vendor meetings that still have pages after the last page read are at cap,
 		report("production", run),
 		/\nvendor meetings +2 +0 +0 +2 +0 +0 +0\n/,
 	);
+});
+
+test("compares filtered client fit, Search activity at 20 and the cursorless first feed page", async () => {
+	const old = (ask: Ask) => {
+		if (ask.read === "board")
+			return board([{ id: d1, client_name: "Made-up Search" }]);
+		if (ask.read === "client fit")
+			return { profiles: [{ state: "ZX", won_deals: 1 }] };
+		return answer(ask);
+	};
+	const added = (ask: Ask) =>
+		(ask.read === "client fit" && ask.state === "ZX") ||
+		(ask.read === "recent activity" && ask.limit === 20) ||
+		(ask.read === "feed" && ask.start === undefined);
+	const { run } = await runWith(
+		(ask) => (added(ask) ? { changed: true } : old(ask)),
+		old,
+	);
+	const outcomes = run.outcomes.filter((o) => added(o.ask));
+	assert.equal(outcomes.length, 3);
+	assert.ok(outcomes.every((o) => o.result === "different"));
+	assert.ok(
+		outcomes.some(
+			(o) =>
+				o.ask.read === "recent activity" && o.ask.name === "Made-up Search",
+		),
+	);
+	assert.equal(exitCode(run), 1);
+	assert.ok(!report("made-up", run).includes("Made-up Search"));
 });

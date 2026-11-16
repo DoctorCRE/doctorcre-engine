@@ -184,7 +184,7 @@ _Avoid_: market, for someone's whole area
 _Database_: `vendor.territory` (text) and `vendor_market_membership` today; `territory`, `territory_piece` and `party_territory` in the new database.
 
 **Critical date**:
-A date in the deal or its lease that must not be missed, such as a due-diligence deadline or a lease expiration.
+A date in the deal or its lease that must not be missed, such as a due-diligence deadline or a lease expiration. In the new database it is proposed until a user confirms it; only a user resolves it.
 _Avoid_: deadline, milestone, key date
 _Database_: `critical_date`; `v_deal_room_critical_date`.
 _Engine_: `critical_dates`.
@@ -200,3 +200,9 @@ A sitting where a partner goes through the open deals and marks each reviewed or
 _Avoid_: deal review, session, agenda
 _Database_: `deal_review_session` and `deal_review_item`; `v_deal_room_session`; `last_review_at` in `v_deal_room_board` and `v_deal_room_account`.
 _Engine_: `open_session` on the board.
+
+**Lease**:
+The signed agreement for a deal's property, with sourced dates and terms. An amendment is the next version. The latest version is current.
+
+**Lease option**:
+A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
