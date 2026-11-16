@@ -34,6 +34,8 @@ const OUTSIDE = id(633);
 const INTRODUCTION = id(640);
 const CLOSED_DEAL = id(650);
 const DEAD_DEAL = id(651);
+const USER = id(20);
+const TEAMMATE = id(21);
 
 const SEED = `
 insert into role (slug, label, category_of) values
@@ -60,8 +62,11 @@ insert into party_phone (party_id, number, extension, label, is_primary) values
 insert into phase (slug, label) values ('negotiation', 'Negotiating'), ('legal', 'Legal'), ('dead', 'Dead');
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
-insert into deal (id, name) values
-	('${DEAL}', 'Example Dental Springfield Deal'), ('${LENDER_DEAL}', 'Example Loan Deal');
+insert into deal_kind values ('lease', 'Lease'), ('purchase', 'Purchase');
+insert into deal_reason values ('start_up', 'Start-up'), ('relocation', 'Relocation');
+insert into deal (id, name, kind, reason, owner_user_id) values
+	('${DEAL}', 'Example Dental Springfield Deal', 'lease', 'relocation', '${USER}'),
+	('${LENDER_DEAL}', 'Example Loan Deal', null, null, '${TEAMMATE}');
 insert into deal_property values ('${DEAL}', '${PROPERTY}');
 insert into deal_party values ('${DEAL}', '${CLIENT}', 'client'), ('${DEAL}', '${AGENT}', 'listing_agent');
 insert into deal_phase_change values
@@ -178,8 +183,6 @@ const TERMS = [
 	"commencement_days_after_delivery",
 ];
 
-const USER = id(20);
-const TEAMMATE = id(21);
 // Only the owner adds users.
 const USERS = `insert into party (id, kind, name) values
 	('${USER}', 'person', 'Jordan Example'), ('${TEAMMATE}', 'person', 'Riley Example');
@@ -289,6 +292,7 @@ insert into territory (id, name) values ('${HOME}', 'Example home turf'), ('${ST
 insert into territory_piece (territory_id, state_fips, market_id, base_latitude, base_longitude, miles) values
 	('${HOME}', null, '${BAY}', null, null, null), ('${HOME}', null, null, 10, -150, 60),
 	('${STATEWIDE}', '91', null, null, null, null);
+update deal set market_id = '${BAY}' where id = '${DEAL}';
 insert into party_territory (party_id, territory_id, started_on, ended_on) values
 	('${USER}', '${HOME}', '2024-01-01', null),
 	('${VENDOR}', '${HOME}', '2024-01-01', '2025-06-30'), ('${VENDOR}', '${STATEWIDE}', '2025-07-01', null);
@@ -400,6 +404,8 @@ const STAMPED = [
 	"role",
 	"stage",
 	"phase",
+	"deal_kind",
+	"deal_reason",
 	"party",
 	"merged_party",
 	"party_email",
@@ -849,6 +855,27 @@ const RULES: Record<string, Case[]> = {
 			],
 			["delete from deal_phase_change", notGranted("deal_phase_change")],
 			["truncate deal_phase_change", notGranted("deal_phase_change")],
+		],
+	"a deal's kind and reason each come from their own list": [
+		[`update deal set kind = 'sublease'`, "deal_kind_fkey"],
+		[`update deal set kind = 'start_up'`, "deal_kind_fkey"],
+		[`update deal set reason = 'lease'`, "deal_reason_fkey"],
+	],
+	"a deal has exactly one deal owner, a user": [
+		[
+			"insert into deal (name) values ('Example')",
+			{
+				code: "23502",
+				message:
+					'null value in column "owner_user_id" of relation "deal" violates not-null constraint',
+			},
+		],
+		[`update deal set owner_user_id = '${CLIENT}'`, "deal_owner_user_id_fkey"],
+	],
+	"a deal's market comes from the market list, and its closed value is more than zero":
+		[
+			[`update deal set market_id = '${MISSING}'`, "deal_market_id_fkey"],
+			["update deal set closed_value = 0", "deal_closed_value_check"],
 		],
 	"a round number is used once per deal and answers an earlier round": [
 		[offer(3, 2, AGENT, "listing_agent"), "offer_deal_id_round_key"],
@@ -1565,7 +1592,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 		[
 			[
 				`alter table deal disable trigger stamp_change;
-			insert into deal (name, changed_at) values ('Example', now())`,
+			insert into deal (name, owner_user_id, changed_at) values ('Example', '${USER}', now())`,
 				"deal_changed_by_a_user_or_a_job",
 			],
 			[
@@ -1651,13 +1678,22 @@ const CHANGEABLE: Record<string, string[]> = {
 	],
 	introduction: ["deal_id", "introduced_on", "note"],
 	phase: ["label"],
+	deal_kind: ["label"],
+	deal_reason: ["label"],
 	specialty: ["label"],
 	party: ["name", "npi"],
 	property: ["address", "county_fips", "latitude", "longitude"],
 	market: ["name"],
 	territory: ["name"],
 	party_territory: ["ended_on", "started_on"],
-	deal: ["name"],
+	deal: [
+		"closed_value",
+		"kind",
+		"market_id",
+		"name",
+		"owner_user_id",
+		"reason",
+	],
 	party_company: ["ended_on", "started_on", "title"],
 	party_email: ["is_primary", "label"],
 	party_phone: ["is_primary", "label"],
@@ -1788,7 +1824,15 @@ after(async () => {
 
 test("everything about the LOI deal comes back in one read, each list in order", async () => {
 	assert.deepEqual(await readDeal(), {
-		deal: { id: DEAL, name: "Example Dental Springfield Deal" },
+		deal: {
+			id: DEAL,
+			name: "Example Dental Springfield Deal",
+			kind: "lease",
+			reason: "relocation",
+			owner_user_id: USER,
+			market_id: BAY,
+			closed_value: null,
+		},
 		phases,
 		properties: [
 			{
@@ -1917,7 +1961,8 @@ test("every table a user or a job changes records who changed it and when", asyn
 test("each change records the user who made it and when, whatever the statement says", () =>
 	rolledBack(async () => {
 		await db.query(`${asUser(TEAMMATE)}; update deal set name = 'Example' where id = '${DEAL}';
-			insert into deal (id, name, changed_by_user_id, changed_at) values ('${id(11)}', 'Example', '${USER}', '2020-01-01')`);
+			insert into deal (id, name, owner_user_id, changed_by_user_id, changed_at)
+			values ('${id(11)}', 'Example', '${USER}', '${USER}', '2020-01-01')`);
 		const { rows } = await db.query(
 			"select id, changed_by_user_id, changed_at = now() as now from deal order by id",
 		);
@@ -1993,7 +2038,7 @@ const history = async (client = db) =>
 
 test("each insert, update and delete leaves history: the record, its fields from what to what, and who made it", () =>
 	rolledBack(async () => {
-		await db.query(`${asUser(TEAMMATE)}; insert into deal (id, name) values ('${id(11)}', 'Example');
+		await db.query(`${asUser(TEAMMATE)}; insert into deal (id, name, owner_user_id) values ('${id(11)}', 'Example', '${USER}');
 			${asJob("mail_capture", TEAMMATE)}; update deal set name = 'Example renamed' where id = '${id(11)}';
 			${asJob("agent")}; delete from party_specialty where person_id = '${DOCTOR}';
 			update deal set name = name`);
@@ -2013,7 +2058,15 @@ test("each insert, update and delete leaves history: the record, its fields from
 				record: { id: id(11) },
 				action: "insert",
 				old_value: null,
-				new_value: { id: id(11), name: "Example" },
+				new_value: {
+					id: id(11),
+					name: "Example",
+					kind: null,
+					reason: null,
+					owner_user_id: USER,
+					market_id: null,
+					closed_value: null,
+				},
 				...by(TEAMMATE, null),
 			},
 			{
@@ -2035,6 +2088,26 @@ test("each insert, update and delete leaves history: the record, its fields from
 				},
 				new_value: null,
 				...by(null, "agent"),
+			},
+		]);
+	}));
+
+test("a deal's new deal owner is history: who held it before, who moved it and when", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${asUser(TEAMMATE)}; update deal set owner_user_id = '${TEAMMATE}' where id = '${DEAL}'`,
+		);
+		assert.deepEqual(await history(), [
+			{
+				table_name: "deal",
+				record: { id: DEAL },
+				action: "update",
+				old_value: { owner_user_id: USER },
+				new_value: { owner_user_id: TEAMMATE },
+				changed_by_user_id: TEAMMATE,
+				changed_by_job: null,
+				changed_for_user_id: null,
+				merge_of: null,
 			},
 		]);
 	}));
@@ -2085,7 +2158,8 @@ test("who serves a property today, while a vendor that left keeps its history", 
 test("a vendor's track record counts the deals it worked and the deals its introductions led to", () =>
 	rolledBack(async () => {
 		await db.query(`insert into phase values ('closed', 'Closed');
-			insert into deal (id, name) values ('${CLOSED_DEAL}', 'Example Closed Deal'), ('${DEAD_DEAL}', 'Example Dead Deal');
+			insert into deal (id, name, owner_user_id) values
+				('${CLOSED_DEAL}', 'Example Closed Deal', '${USER}'), ('${DEAD_DEAL}', 'Example Dead Deal', '${USER}');
 			insert into deal_phase_change values
 				('${CLOSED_DEAL}', '2026-04-01T15:00:00+00:00', 'negotiation', null),
 				('${CLOSED_DEAL}', '2026-05-01T15:00:00+00:00', 'closed', null),
