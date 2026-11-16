@@ -80,6 +80,7 @@ before(async () => {
  ('${id(10)}', '${id(4)}', 'landlord_side', '${id(1)}'), ('${id(24)}', '${id(4)}', 'listing_side', '${id(1)}'),
  ('${id(24)}', '${id(5)}', 'listing_side', '${id(1)}');
  insert into public.building (id, address, created_by, updated_by) values ('${id(90)}', '100 Example Way', '${id(1)}', '${id(1)}'), ('${id(91)}', '200 Example Way', '${id(1)}', '${id(1)}');
+ update public.building set name = 'Example Building' where id = '${id(90)}';
  insert into public.space (id, building_id, created_by, updated_by) values ('${id(92)}', '${id(90)}', '${id(1)}', '${id(1)}'), ('${id(93)}', '${id(91)}', '${id(1)}', '${id(1)}');
  insert into public.premises (id, deal_id, label, created_by) values ('${id(94)}', '${id(10)}', 'Example', '${id(1)}'), ('${id(95)}', '${id(26)}', 'Example', '${id(1)}');
  insert into public.premises_space values ('${id(94)}', '${id(92)}'), ('${id(95)}', '${id(92)}'), ('${id(95)}', '${id(93)}');
@@ -233,6 +234,14 @@ test("rounds derive unique candidates, number across sides by creation then id, 
 				free_rent_months: "2.0",
 			},
 		],
+	);
+	assert.ok(
+		report.some(
+			(r) =>
+				r.old_id === id(90) &&
+				r.reason === "unmapped_building_fields" &&
+				JSON.parse(r.value).name === "Example Building",
+		),
 	);
 	assert.equal(report.filter((r) => r.field === "negotiation_claim").length, 2);
 	for (const n of [120, 121])
@@ -439,50 +448,6 @@ test("a renewal without a source lease keeps its old type in the needs-a-user re
 	);
 });
 
-const refused = await run();
-		for (const reason of [
-			"party_not_copied",
-			"role_not_available",
-			"ended_participant_history",
-			"deal_not_copied",
-			"unknown_phase",
-			"dead_without_reason",
-			"same_time_phase_changes",
-			"existing_phase_conflict",
-			"current_phase_differs",
-			"lost_without_dated_reason",
-		])
-			assert.ok(
-				refused.some((r) => r.reason === reason),
-				reason,
-			);
-		assert.equal(
-			(
-				await rows(
-					`select phase from deal_phase_change where deal_id = '${id(12)}'`,
-				)
-			)[0]?.phase,
-			"dead",
-		);
-		assert.equal(
-			(
-				await rows(
-					`select count(*)::int as n from deal_party where deal_id = '${id(10)}' and party_id = '${id(5)}'`,
-				)
-			)[0]?.n,
-			2,
-		);
-		assert.deepEqual(
-			await rows(
-				"select slug from role where slug in ('lender', 'attorney', 'other_vendor')",
-			),
-			[],
-		);
-	} finally {
-		await db.query("rollback");
-	}
-});
-
 const refused = async (sql: string, code: string) => {
 	await db.query("savepoint refused");
 	try {
@@ -578,5 +543,105 @@ test("unknown can resolve to every real status, with normal acceptance and super
 		} finally {
 			await db.query("rollback");
 		}
+	}
+});
+
+test("building survivors keep full addresses and copied rows keep source authors and times", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`delete from offer; delete from deal_property; delete from property;
+ update public.building set city = 'Example City', state = 'TX', zip = '75000' where id = '${id(90)}';
+ update public.building set merged_into = '${id(90)}' where id = '${id(91)}';
+ delete from public.premises_space where premises_id = '${id(95)}' and space_id = '${id(92)}';`);
+		await run();
+		assert.deepEqual(await rows("select id, address from property"), [
+			{ id: id(90), address: "100 Example Way, Example City, TX, 75000" },
+		]);
+		assert.equal((await rows("select count(*)::int as n from offer"))[0]?.n, 4);
+		assert.deepEqual(
+			await rows(
+				`select o.changed_by_user_id, o.changed_at = r.updated_at as same_time from offer o join public.negotiation_round r on r.id = o.id where o.id = '${id(100)}'`,
+			),
+			[{ changed_by_user_id: id(1), same_time: true }],
+		);
+		assert.deepEqual(
+			await rows(
+				`select n.changed_by_user_id, n.changed_at = b.updated_at as same_time from property n join public.building b on b.id = n.id`,
+			),
+			[{ changed_by_user_id: id(1), same_time: true }],
+		);
+		assert.deepEqual(
+			await rows(
+				`select n.changed_by_user_id, n.created_at = p.created_at as same_time from deal_property n join public.premises p on p.deal_id = n.deal_id order by n.deal_id`,
+			),
+			[
+				{ changed_by_user_id: id(1), same_time: true },
+				{ changed_by_user_id: id(1), same_time: true },
+			],
+		);
+		const result = await rows(
+			`select everything_about_deal('${id(10)}') as deal`,
+		);
+		assert.ok(result[0]);
+		for (const offer of result[0].deal.offers)
+			for (const key of ["import_source", "import_id", "import_record"])
+				assert.equal(key in offer, false);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("round collisions, ambiguous roles and untyped terms are listed without aborting the copy", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at) values ('${id(200)}', '${id(10)}', '${id(90)}', 4, '${id(2)}', 'client', now());
+ insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by, rate_amount, rate_basis, ti_amount, ti_basis) values ('${id(107)}', '${id(10)}', 8, 'tenant', '2025-03-01', '2025-03-01', '${id(1)}', 1000, 'usd_mo_gross', 10000, 'usd_total');`);
+		await db.query("savepoint copy_attempt");
+		let result = await run();
+		assert.ok(
+			result.some(
+				(r) => r.old_id === id(107) && r.reason === "round_number_unavailable",
+			),
+		);
+		await db.query(
+			`rollback to copy_attempt; delete from offer where id = '${id(200)}'`,
+		);
+		result = await run();
+		assert.deepEqual(
+			result
+				.filter((r) => r.old_id === id(107))
+				.map((r) => [r.field, r.reason]),
+			[
+				["rate_amount", "no_typed_destination"],
+				["ti_amount", "no_typed_destination"],
+			],
+		);
+		assert.equal(
+			(
+				await rows(
+					`select import_record ->> 'ti_amount' as ti from offer where id = '${id(107)}'`,
+				)
+			)[0]?.ti,
+			"10000.00",
+		);
+		await db.query(`rollback to copy_attempt; insert into public.deal_participant (deal_id, party_id, role, set_by) values ('${id(10)}', '${id(4)}', 'listing_side', '${id(1)}');
+ insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by) values ('${id(108)}', '${id(10)}', 8, 'landlord', '2025-04-01', '2025-04-01', '${id(1)}');`);
+		result = await run();
+		assert.ok(
+			result.some(
+				(r) => r.old_id === id(108) && r.reason === "several_sender_roles",
+			),
+		);
+		assert.ok(!result.some((r) => r.old_id === id(101)));
+		assert.equal(
+			(
+				await rows(
+					`select count(*)::int as n from offer where id = '${id(108)}'`,
+				)
+			)[0]?.n,
+			0,
+		);
+	} finally {
+		await db.query("rollback");
 	}
 });

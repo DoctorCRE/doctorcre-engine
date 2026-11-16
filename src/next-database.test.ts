@@ -136,9 +136,6 @@ const rounds = ROUNDS.map(
 		offered_at: `${day}T15:00:00+00:00`,
 		status,
 		expires_on: null,
-		import_source: null,
-		import_id: null,
-		import_record: null,
 		rent_per_sf_yr: rent,
 		nnn_per_sf_yr: nnn,
 		term_months: term,
@@ -2118,9 +2115,7 @@ before(async () => {
 		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED}`,
 	);
 	for (const { documents, ...round } of rounds) {
-		const columns = Object.keys(round).filter(
-			(key) => !key.startsWith("import_"),
-		);
+		const columns = Object.keys(round).join(", ");
 		await db.query(
 			`insert into offer (${columns}, deal_id)
 			 select ${columns}, deal_id from jsonb_populate_record(null::offer, $1)`,

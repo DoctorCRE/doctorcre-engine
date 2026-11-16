@@ -4,6 +4,9 @@ select set_config('engine.job', 'old_system', true), set_config('engine.user_id'
 alter table deal disable trigger stamp_change;
 alter table deal_party disable trigger stamp_change;
 alter table deal_phase_change disable trigger stamp_change;
+alter table property disable trigger stamp_change;
+alter table deal_property disable trigger stamp_change;
+alter table offer disable trigger stamp_change;
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 insert into deal_kind (slug, label) values ('lease', 'Lease'), ('purchase', 'Purchase'),
  ('sale_leaseback', 'Sale-leaseback'), ('build_to_suit', 'Build-to-suit') on conflict do nothing;
@@ -118,48 +121,87 @@ where (d.outcome = 'lost' or exists (select from deal_phase_change c where c.dea
  is distinct from case when d.outcome = 'lost' then 'dead' else d.phase end;
 
 
--- Several suites in one building are one property.
+-- Follow merged buildings to their survivor; several suites there remain one property.
+create temp table building_map on commit drop as
+with recursive chain as (
+ select id as old_id, id, merged_into, array[id] as path from public.building
+ union all
+ select c.old_id, b.id, b.merged_into, c.path || b.id from chain c
+ join public.building b on b.id = c.merged_into where not b.id = any(c.path)
+) select old_id, id from chain where merged_into is null;
 create temp table old_property on commit drop as
-select distinct p.deal_id, b.id as property_id, b.address, b.created_at
+select distinct p.deal_id, b.id as property_id
 from public.premises p join public.premises_space ps on ps.premises_id = p.id
-join public.space s on s.id = ps.space_id join public.building b on b.id = s.building_id
-join deal d on d.id = p.deal_id;
-insert into property (id, address, created_at)
-select distinct property_id, address, created_at from old_property on conflict (id) do nothing;
-insert into deal_property (deal_id, property_id)
-select distinct deal_id, property_id from old_property on conflict do nothing;
+join public.space s on s.id = ps.space_id join building_map m on m.old_id = s.building_id
+join public.building b on b.id = m.id join deal d on d.id = p.deal_id;
+insert into property (id, address, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select b.id, concat_ws(', ', b.address, nullif(b.city, ''), nullif(b.state, ''), nullif(b.zip, '')),
+ b.created_at, b.updated_at, a.* from public.building b
+cross join lateral copy_attribution('building', b.id, b.updated_by) a
+where exists (select from old_property p where p.property_id = b.id) on conflict (id) do nothing;
+insert into deal_property (deal_id, property_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select distinct on (p.deal_id, m.id) p.deal_id, m.id, p.created_at, p.created_at, a.*
+from public.premises p join public.premises_space ps on ps.premises_id = p.id
+join public.space s on s.id = ps.space_id join building_map m on m.old_id = s.building_id
+join deal d on d.id = p.deal_id cross join lateral copy_attribution('premises', p.id, p.created_by) a
+order by p.deal_id, m.id, p.created_at, p.id on conflict do nothing;
+insert into not_copied
+select s.building_id, 'property', s.building_id::text, 'building_merge_unresolved'
+from public.premises p join public.premises_space ps on ps.premises_id = p.id join public.space s on s.id = ps.space_id
+where not exists (select from building_map m where m.old_id = s.building_id);
+
+insert into not_copied
+select b.id, 'property', remaining.value::text, 'unmapped_building_fields' from public.building b
+cross join lateral (select jsonb_strip_nulls(to_jsonb(b) - array['id', 'address', 'city', 'state', 'zip',
+ 'created_at', 'created_by', 'updated_at', 'updated_by', 'merged_into', 'version']) as value) remaining
+where remaining.value <> '{}'::jsonb and exists (select from old_property p where p.property_id = b.id);
 
 create temp table round_mapping on commit drop as
 select r.*, row_number() over (partition by r.deal_id order by r.created_at, r.id) as new_round,
  (select count(*) from old_property p where p.deal_id = r.deal_id) as properties,
- (select min(p.property_id::text)::uuid from old_property p where p.deal_id = r.deal_id) as property_id,
- (select count(distinct p.party_id) from deal_party p where p.deal_id = r.deal_id and
-  (r.side in ('tenant', 'buyer') and p.role = 'client' or r.side in ('landlord', 'seller')
-   and p.role in ('landlord', 'property_owner', 'listing_agent'))) as senders
-from public.negotiation_round r;
-insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at, expires_on,
- status, rent_per_sf_yr, term_months, ti_per_sf, free_rent_months, import_source, import_id, import_record)
-select r.id, r.deal_id, r.property_id, r.new_round, sender.party_id, sender.role, r.proposed_on, r.expires_on,
- 'unknown', r.rate_norm_sf_yr, r.term_months, case when r.ti_basis = 'usd_sf' and r.ti_amount >= 0 then r.ti_amount end,
- r.free_rent_months, 'old_system', r.id::text, to_jsonb(original)
-from round_mapping r join public.negotiation_round original on original.id = r.id
-cross join lateral (select p.party_id, p.role from deal_party p where p.deal_id = r.deal_id and
+ sender.* from public.negotiation_round r
+cross join lateral (select count(distinct p.party_id) as senders, count(*) as sender_roles,
+ (array_agg(p.party_id))[1] as party_id, (array_agg(p.role))[1] as role
+ from deal_party p where p.deal_id = r.deal_id and
  (r.side in ('tenant', 'buyer') and p.role = 'client' or r.side in ('landlord', 'seller')
- and p.role in ('landlord', 'property_owner', 'listing_agent')) order by p.role limit 1) sender
-where r.senders = 1 and r.properties = 1
+ and p.role in ('landlord', 'property_owner', 'listing_agent'))) sender;
+create temp table round_refusal on commit drop as
+select r.id, f.reason from round_mapping r cross join lateral (values
+ ('deal_not_copied', not exists (select from deal d where d.id = r.deal_id)),
+ ('no_sender_candidate', r.senders = 0), ('several_sender_candidates', r.senders > 1),
+ ('several_sender_roles', r.senders = 1 and r.sender_roles > 1),
+ ('no_property', r.properties = 0), ('several_properties', r.properties > 1),
+ ('round_number_unavailable', r.new_round > 32767 or exists (select from offer o where (o.deal_id, o.round) = (r.deal_id, r.new_round))),
+ ('offer_id_unavailable', exists (select from offer o where o.id = r.id))) f(reason, refused)
+where f.refused and (f.reason = 'deal_not_copied' or exists (select from deal d where d.id = r.deal_id))
+ and not exists (select from offer o where o.import_source = 'old_system' and o.import_id = r.id::text);
+insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at, expires_on,
+ status, rent_per_sf_yr, term_months, ti_per_sf, free_rent_months, import_source, import_id, import_record,
+ changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select r.id, r.deal_id, p.property_id, r.new_round, r.party_id, r.role, r.proposed_on, r.expires_on,
+ 'unknown', r.rate_norm_sf_yr, r.term_months, case when r.ti_basis = 'usd_sf' and r.ti_amount >= 0 then r.ti_amount end,
+ r.free_rent_months, 'old_system', r.id::text, to_jsonb(original), r.updated_at, a.*
+from round_mapping r join public.negotiation_round original on original.id = r.id
+join old_property p on p.deal_id = r.deal_id
+cross join lateral copy_attribution('negotiation_round', r.id, coalesce(r.updated_by, r.created_by)) a
+where not exists (select from round_refusal f where f.id = r.id)
  and not exists (select from offer o where o.import_source = 'old_system' and o.import_id = r.id::text);
 insert into not_copied
 select r.id, 'negotiation_round', jsonb_build_object('side', r.side, 'round_no', r.round_no, 'new_round', r.new_round)::text,
- f.reason from round_mapping r cross join lateral (values
- ('deal_not_copied', not exists (select from deal d where d.id = r.deal_id)),
- ('no_sender_candidate', r.senders = 0), ('several_sender_candidates', r.senders > 1),
- ('no_property', r.properties = 0), ('several_properties', r.properties > 1)) f(reason, refused)
-where f.refused and (f.reason = 'deal_not_copied' or exists (select from deal d where d.id = r.deal_id))
- and not exists (select from offer o where o.import_source = 'old_system' and o.import_id = r.id::text);
+ f.reason from round_refusal f join round_mapping r on r.id = f.id;
+insert into not_copied
+select r.id, f.field, f.value, 'no_typed_destination' from public.negotiation_round r
+cross join lateral (values
+ ('rate_amount', r.rate_amount::text, r.rate_amount is not null and r.rate_norm_sf_yr is null),
+ ('ti_amount', r.ti_amount::text, r.ti_amount is not null and (r.ti_basis is distinct from 'usd_sf' or r.ti_amount < 0))) f(field, value, refused)
+where f.refused;
 insert into not_copied
 select c.id, 'negotiation_claim', c.round_id::text, 'no_claim_destination' from public.negotiation_claim c;
 set constraints all immediate;
 alter table deal enable trigger stamp_change;
 alter table deal_party enable trigger stamp_change;
 alter table deal_phase_change enable trigger stamp_change;
+alter table property enable trigger stamp_change;
+alter table deal_property enable trigger stamp_change;
+alter table offer enable trigger stamp_change;
 select * from not_copied order by old_id, field, value, reason;

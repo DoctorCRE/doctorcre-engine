@@ -774,7 +774,7 @@ create unique index offer_one_accepted_per_deal on offer (deal_id) where status 
 create function offer_status_moves() returns trigger
 language plpgsql as $$
 begin
-	if not (old.status = 'unknown' and new.status <> 'unknown'
+	if not (old.status = 'unknown'
 		or old.status = 'open' and new.status not in ('unknown', 'superseded')
 		or old.status = 'accepted' and new.status = 'superseded') then
 		raise exception 'a round''s status moves out of unknown or open, or from accepted to superseded'
@@ -1034,7 +1034,7 @@ begin atomic
 			where dp.deal_id = d.id
 		),
 		'offers', (
-			select coalesce(jsonb_agg(to_jsonb(o) - 'deal_id' || jsonb_build_object('documents', (
+			select coalesce(jsonb_agg(to_jsonb(o) - array['deal_id', 'import_source', 'import_id', 'import_record'] || jsonb_build_object('documents', (
 				select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 				from offer_document od join document doc on doc.id = od.document_id
 				where od.offer_id = o.id
