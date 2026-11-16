@@ -311,6 +311,9 @@ insert into party_role (party_id, role, stage, relationship_level) values
 	('${VENDOR}', 'vendor', 'warm', 1), ('${VENDOR}', 'title', null, null);
 insert into introduction (id, vendor_id, made_by, introduced_party_id, introduced_on, deal_id) values
 	('${INTRODUCTION}', '${VENDOR}', 'vendor', '${CLIENT}', '2026-02-02', '${DEAL}');
+insert into party_link (kind, party_id, other_party_id, started_on, note) values
+	('knows', '${AGENT}', '${DOCTOR}', '2024-05-01', 'Example: trained together'),
+	('can_introduce', '${VENDOR}', '${DOCTOR}', null, null);
 `;
 const LEAD_SEED = `
 insert into lead_lane (slug, label) values ('renewal_radar', 'Renewal radar'), ('new_entity', 'New entity');
@@ -327,6 +330,14 @@ const newIntroduction = (row: Record<string, string | null>) =>
 		made_by: "team",
 		introduced_by_user_id: USER,
 		introduced_party_id: CLIENT,
+		...row,
+	});
+const newLink = (row: Record<string, string | null>) =>
+	insert("party_link", {
+		kind: "knows",
+		party_id: DOCTOR,
+		other_party_id: AGENT,
+		started_on: "2024-05-01",
 		...row,
 	});
 const insert = (table: string, row: Record<string, string | number | null>) =>
@@ -446,6 +457,7 @@ const STAMPED = [
 	"party_territory",
 	"deal",
 	"introduction",
+	"party_link",
 	"deal_phase_change",
 	"deal_property",
 	"deal_party",
@@ -522,6 +534,7 @@ const STORED_AT = [
 	"design_template",
 	"post_media",
 	"introduction",
+	"party_link",
 ];
 
 // A constraint's name, or the error PostgreSQL raises.
@@ -1692,6 +1705,36 @@ const RULES: Record<string, Case[]> = {
 				"introduction_of_someone_else",
 			],
 		],
+	"a knows or can-introduce link joins two different records, ends no earlier than it starts, and is stored once":
+		[
+			[newLink({ kind: "introduced" }), "party_link_kind_check"],
+			[newLink({ other_party_id: DOCTOR }), "party_link_two_parties"],
+			[newLink({ party_id: MISSING }), "party_link_party_id_fkey"],
+			[newLink({ other_party_id: MISSING }), "party_link_other_party_id_fkey"],
+			[
+				newLink({ kind: "can_introduce", ended_on: "2024-01-01" }),
+				"party_link_ends_after_it_starts",
+			],
+			[newLink({ note: " " }), "party_link_note_check"],
+			[
+				newLink({ party_id: AGENT, other_party_id: DOCTOR }),
+				"party_link_party_id_other_party_id_kind_started_on_key",
+			],
+			[newLink({}), "party_link_knows_once"],
+			[
+				newLink({
+					kind: "can_introduce",
+					party_id: VENDOR,
+					started_on: null,
+					other_party_id: DOCTOR,
+				}),
+				"party_link_party_id_other_party_id_kind_started_on_key",
+			],
+			[
+				`update party_link set other_party_id = '${CLIENT}'`,
+				notGranted("party_link"),
+			],
+		],
 	"a lead has a stage, and only a lead has an owner, who is a user": [
 		[
 			"update party_role set stage = null where role = 'lead'",
@@ -1895,6 +1938,7 @@ const CHANGEABLE: Record<string, string[]> = {
 		"stage",
 	],
 	introduction: ["deal_id", "introduced_on", "note"],
+	party_link: ["ended_on", "note", "started_on"],
 	phase: ["label"],
 	deal_kind: ["label"],
 	deal_reason: ["label"],
@@ -2513,6 +2557,45 @@ test("a merge moves a vendor's introductions, keeps avoid and clears target, and
 		]);
 	}));
 
+test("a link either way round is two links only for can introduce, and a merge keeps one link and drops one between the two", () =>
+	rolledBack(async () => {
+		await db.query(`${newLink({ kind: "can_introduce", started_on: null })};
+			insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into party_link (kind, party_id, other_party_id, started_on) values
+				('knows', '${DOCTOR}', '${DUPLICATE}', '2024-05-01'), ('knows', '${DUPLICATE}', '${AGENT}', null),
+				('can_introduce', '${DUPLICATE}', '${CLIENT}', null);
+			select merge_party('${DUPLICATE}', '${AGENT}')`);
+		const { rows } = await db.query(
+			"select kind, party_id, other_party_id, started_on::text from party_link order by kind, party_id, other_party_id",
+		);
+		assert.deepEqual(rows, [
+			{
+				kind: "can_introduce",
+				party_id: AGENT,
+				other_party_id: CLIENT,
+				started_on: null,
+			},
+			{
+				kind: "can_introduce",
+				party_id: DOCTOR,
+				other_party_id: AGENT,
+				started_on: null,
+			},
+			{
+				kind: "can_introduce",
+				party_id: VENDOR,
+				other_party_id: DOCTOR,
+				started_on: null,
+			},
+			{
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: DOCTOR,
+				started_on: "2024-05-01",
+			},
+		]);
+	}));
+
 // How a party was found, its roles with each one's stage and owner, and the deals it is the client of.
 const asLeadOrClient = async (party: string) =>
 	(
@@ -3060,6 +3143,7 @@ const COLLAPSED = [
 	"party_company_person_id_company_id_started_on_key",
 	"party_email_address_party_id_key",
 	"party_email_one_primary",
+	"party_link_party_id_other_party_id_kind_started_on_key",
 	"party_phone_number_extension_party_id_key",
 	"party_phone_one_primary",
 	"party_role_pkey",

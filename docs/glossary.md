@@ -100,6 +100,11 @@ A vendor introducing someone to the team, or the team introducing someone to a v
 _Avoid_: intro, link, referral (on its own)
 _Database_: `party_link` and `party_link_deal` today, with `via_party` naming who made it; `introduction` in the new database, with `introduced_by_user_id` for a team's.
 
+**Knows** and **can introduce**:
+That one person or company knows another, or could introduce the team to another. Neither has happened the way an introduction has, and neither needs a vendor.
+_Avoid_: introduction, intro, connection
+_Database_: `party_link` of kind `knows` or `can_introduce` today, and `party_link` of the same two kinds in the new database.
+
 **Track record**:
 What a vendor's deals show: the deals it worked, how they ended, and the deals its introductions led to. It is read from deal history, never set by hand.
 _Avoid_: rating, trust tier, score

@@ -491,6 +491,27 @@ create table introduction (
 	foreign key (vendor_id, vendor_role) references party_role on update cascade
 );
 
+-- Who knows whom, and who can introduce the team to whom: any two people or companies, dated.
+-- An introduction is one that happened with a vendor; a can_introduce link is one that might.
+create table party_link (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	kind text not null check (kind in ('knows', 'can_introduce')),
+	-- Who knows the other, or who can introduce the team to the other.
+	party_id uuid not null references party,
+	other_party_id uuid not null references party,
+	started_on date,
+	ended_on date,
+	note text check (note ~ '\S'),
+	constraint party_link_two_parties check (party_id <> other_party_id),
+	constraint party_link_ends_after_it_starts check (ended_on >= started_on),
+	unique nulls not distinct (party_id, other_party_id, kind, started_on)
+);
+
+-- Knowing goes both ways, so a knows link is stored once whichever party it names first.
+create unique index party_link_knows_once on party_link
+	(least(party_id, other_party_id), greatest(party_id, other_party_id), started_on) nulls not distinct where kind = 'knows';
+
 -- From deal history only: the deals a vendor worked in a vendor role, and the deals its introductions led to.
 create view vendor_track_record as
 with worked as (
@@ -1319,6 +1340,14 @@ begin
 	delete from lead_stage_move d using lead_stage_move s
 	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
 		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
+	-- A link between the two says nothing once they are one. Of two links that become one, the survivor's stays.
+	delete from party_link where duplicate in (party_id, other_party_id) and survivor in (party_id, other_party_id);
+	delete from party_link d using party_link s
+	where duplicate in (d.party_id, d.other_party_id) and survivor in (s.party_id, s.other_party_id)
+		and s.kind = d.kind and s.started_on is not distinct from d.started_on
+		and case d.party_id when duplicate then d.other_party_id else d.party_id end
+			= case s.party_id when survivor then s.other_party_id else s.party_id end
+		and (d.kind = 'knows' or (d.party_id = duplicate) = (s.party_id = survivor));
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
@@ -1455,7 +1484,7 @@ declare
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
-		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
+		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
@@ -1629,13 +1658,14 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, document, social_account, idea, design_template, introduction to engine;
+	activity_about, email, next_step, document, social_account, idea, design_template, introduction, party_link to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found to engine;
 grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
+grant update (started_on, ended_on, note) on party_link to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (kind, reason, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
 grant update (npi, how_found) on party to engine;
