@@ -103,9 +103,13 @@ insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, 
  ('${id(32)}', '${id(30)}', 1, 'tenant', '2025-01-10', '2025-01-10', '${id(1)}');
 update public.vendor set verticals = '{dental}', loan_programs = '{construction}';
 update public.vendor set deal_evidence = '[{"deal_id": "${id(30)}", "role": "worked", "occurred_at": "2025-01-20T00:00:00Z", "evidence_ref": "Example worked"}]';
-insert into public.party_link_kind (slug, label, sort) values ('referral', 'Example referral', 1);
+insert into public.party_link_kind (slug, label, sort) values ('referral', 'Example referral', 1), ('knows', 'Example knows', 2);
 insert into public.party_link (id, from_party, to_party, kind, source, created_by, created_at, occurred_on, note) values
- ('${id(33)}', '${id(12)}', '${id(10)}', 'referral', 'example', '${id(1)}', '2024-12-01', '2024-12-01', 'Example referral note');
+ ('${id(33)}', '${id(12)}', '${id(10)}', 'referral', 'example', '${id(1)}', '2024-12-01', '2024-12-01', 'Example referral note'),
+ ('${id(38)}', '${id(11)}', '${id(14)}', 'knows', 'example', '${id(1)}', '2024-12-03', '2024-12-03', 'Example acquaintance');
+insert into public.negotiation_claim_type (slug, label, falsifiable, reversal_test, sort) values ('annual', 'Example annual floor', false, 'Example test', 1);
+insert into public.negotiation_claim (id, round_id, claim_type, stated_floor, stated_floor_basis, quote, source, created_by, created_at) values
+ ('${id(39)}', '${id(32)}', 'annual', 31, 'usd_sf_yr', 'Example stated floor', 'stated', '${id(1)}', '2025-01-10');
 insert into public.party_link_deal (link_id, deal_id, referred_by, note, created_by, created_at) values
  ('${id(33)}', '${id(30)}', '${id(12)}', 'Example deal referral', '${id(1)}', '2024-12-02');
 insert into public.building (id, address, city, state, zip, created_by, updated_by, created_at, updated_at) values
@@ -256,7 +260,7 @@ const counts = async () =>
 const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1,
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
- deal_property: 1, deal_phase_change: 3, offer: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
+ deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 3, activity_about: 4, lead_stage_move: 1, proposal: 1,
  candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 1 };
