@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type pg from "pg";
-import { leadCopyTest } from "./test-lead-copy.ts";
+import { copyTest, readSchema } from "./test-copy.ts";
 import {
 	assertCompletionDates,
 	completionEvents,
@@ -9,9 +9,8 @@ import {
 	stepsAndHistory,
 } from "./test-step-completions.ts";
 
-const { db, copy, setup, cleanup } = await leadCopyTest(
-	"copy-leads-clients.sql",
-);
+const { db, setup, cleanup } = copyTest();
+const copy = await readSchema("copy-leads-clients.sql");
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const clients = async () => {
 	const copied = await rows(
@@ -64,6 +63,7 @@ before(async () => {
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
  insert into app_user values ('${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
+ insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','nurture_drip','closed_lost','closed_won','active_deal','do_not_contact','engaged','other']) s;
  insert into public.client_status (slug,label) select s,s from unnest(array['roster','active_deal','past_client','cold','prospect']) s;
  insert into public.client_type (slug,label) values ('franchise','Example franchise'),('national_account','Example account'), ('group','Example group'), ('other','Example unknown');

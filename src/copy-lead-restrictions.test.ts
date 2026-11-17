@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type pg from "pg";
-import { leadCopyTest } from "./test-lead-copy.ts";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const { db, copy, setup, cleanup } = await leadCopyTest(
-	"copy-leads-clients.sql",
-);
+const { db, setup, cleanup } = copyTest();
+const copy = await readSchema("copy-leads-clients.sql");
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (input = ""): Promise<pg.QueryResultRow[]> => {
 	const result = await db.query(`discard temp;
@@ -32,6 +31,7 @@ before(async () => {
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
  insert into app_user values ('${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
+ insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  insert into public.lead_stage (slug,label) values ('new','New'),('do_not_contact','Do not contact');
  insert into public.party (id,kind,name,created_by,updated_by)
  values ('${id(10)}','person','Example person','${id(1)}','${id(1)}');

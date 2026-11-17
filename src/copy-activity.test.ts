@@ -1,29 +1,12 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-activity.sql"),
-]);
-const name = `copy_activity_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-activity.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	await db.query("begin");
@@ -66,12 +49,7 @@ const activity = (
 		.join(", ")}, ${extra})`;
 
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
   ('${id(2)}', 'claude', 'automation', 'Example Agent');
@@ -160,10 +138,7 @@ before(async () => {
   ('${id(2)}', 'add-deal-note', 'deal', '${id(30)}', 'note', '{"note": "Example other note"}', 'automation_job', '2024-05-04', 'partner_one');
  commit;`);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("copies calls, meetings, tours and notes, and other kinds as notes that keep their word, listing what has no place", async () => {
 	const report = await run();

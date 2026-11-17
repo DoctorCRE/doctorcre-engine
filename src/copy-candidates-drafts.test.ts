@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type pg from "pg";
-import { leadCopyTest } from "./test-lead-copy.ts";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const { db, copy, setup, cleanup } = await leadCopyTest(
-	"copy-candidates-drafts.sql",
-);
+const { db, setup, cleanup } = copyTest();
+const copy = await readSchema("copy-candidates-drafts.sql");
 const rows = async (sql: string) =>
 	(await db.query(sql)).rows.map(Object.values);
 const run = async () => {
@@ -74,6 +73,7 @@ before(async () => {
  insert into role (slug,label) values ('lead','Lead');
  insert into stage (role,slug,label) values ('lead','new','New');
  insert into public.lead_stage (slug,label) values ('new','New');
+ insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  ${[20, 21, 22, 23, 24, 25, 26, 27]
 		.map(
 			(
