@@ -319,7 +319,7 @@ create table party_territory (
 	unique nulls not distinct (party_id, territory_id, started_on)
 );
 
--- What a reviewer found behind someone serving a territory. Its stamp is the review, never the membership's start.
+-- What a reviewer found behind someone serving a territory, and who reviewed it when, which is never the membership's start.
 create table party_territory_review (
 	party_territory_id uuid primary key references party_territory,
 	created_at timestamptz not null default now(),
@@ -327,8 +327,36 @@ create table party_territory_review (
 	-- The coverage they declare, in their words. It is never drawn into pieces.
 	coverage text check (coverage ~ '\S'),
 	source text not null check (source ~ '\S'),
-	constraint party_territory_review_says_something check (has_office or coverage is not null)
+	reviewed_by_user_id uuid references app_user,
+	reviewed_by_job text references job,
+	reviewed_for_user_id uuid references app_user,
+	reviewed_at timestamptz not null,
+	constraint party_territory_review_says_something check (has_office or coverage is not null),
+	constraint party_territory_review_by_a_user_or_a_job check (num_nonnulls(reviewed_by_user_id, reviewed_by_job) = 1
+		and (reviewed_by_job is not null or reviewed_for_user_id is null))
 );
+
+-- Every save is a review, even one confirming the same evidence, so it names who acts as stamp_change does.
+create function stamp_review() returns trigger
+language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+begin
+	-- Only a merge moves a review, and the merger reviewed nothing.
+	if tg_op = 'UPDATE' and new.party_territory_id <> old.party_territory_id then
+		return new;
+	end if;
+	new.reviewed_by_user_id := case when acting_job is null then acting_user end;
+	new.reviewed_by_job := acting_job;
+	new.reviewed_for_user_id := case when acting_job is not null then acting_user end;
+	new.reviewed_at := now();
+	return new;
+end $$;
+
+-- Named to run before stamp_change, which then sees the changed reviewer or time and restamps.
+create trigger review_stamp before insert or update on party_territory_review
+	for each row execute function stamp_review();
 
 -- Along the earth's surface, by the haversine formula on a 3,958.8-mile radius.
 create function miles_between(lat1 float8, lng1 float8, lat2 float8, lng2 float8) returns float8
@@ -2358,21 +2386,7 @@ begin
 	end loop;
 end $$;
 
--- A review's stamp is its reviewer and time, so a merge moving it unchanged keeps them; change history names the merger.
-create function keep_review_stamp() returns trigger
-language plpgsql as $$
-begin
-	new.changed_by_user_id := old.changed_by_user_id;
-	new.changed_by_job := old.changed_by_job;
-	new.changed_for_user_id := old.changed_for_user_id;
-	new.changed_at := old.changed_at;
-	return new;
-end $$;
 
--- Triggers run in name order, so this one undoes stamp_change's restamp.
-create trigger stamp_change_keeps_review before update on party_territory_review for each row
-	when ((new.has_office, new.coverage, new.source) is not distinct from (old.has_office, old.coverage, old.source))
-	execute function keep_review_stamp();
 
 -- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
 alter table post_text add constraint post_text_edit_by_a_user
