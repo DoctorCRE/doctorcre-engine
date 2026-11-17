@@ -166,7 +166,7 @@ test("captured, applied and undone evidence retain facts, targets and original h
 		[["Example invoice reason"]],
 	);
 	assert.deepEqual(
-		await values(`select new_value -> 'deal_id', new_value -> 'payment_id' from change
+		await values(`select new_value -> 'deal_id' as deal_id, new_value -> 'payment_id' as payment_id from change
  where table_name='invoice_email' and record='{"id":"${id(200)}"}' and action='insert'`),
 		[[null, null]],
 	);
