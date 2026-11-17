@@ -769,3 +769,13 @@ Run `schema/copy-activity.sql` as the owner after `copy-parties.sql` and `copy-d
 - A deal note of kind note becomes a note about its deal, at its time, signed from its `add-deal-note` event on the deal, which has the same text and time. An agent's activity or note whose partner is unknown is copied as the agent's and listed.
 - Listed and not copied: emails, and the notes the mail intake files with an email's full text or its links, even without email context (#365), deal notes of kind next step (#366), and the old kinds `text`, `analysis`, `task`, `loi`, `counter_sent`, `counter_received` and `lease_signed`, which have no kind yet. Listed but copied without the value: what a row says is owed, whether a call connected, and a detail that is a JSON object, which is a job's own record. `source`, `version` and `calendar_event_key` record how today's system captured the row and are dropped.
 - A rerun copies only rows not yet copied, and adds the links of records copied since, so an unchanged rerun changes nothing.
+
+## Copying today's deal next steps
+
+Run `schema/copy-deal-next-steps.sql` as the owner after the party, deal and activity copies, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`.
+
+Deal next actions keep their ids, descriptions, owners and nullable due dates. As in the lead copy, done actions use their last change time as `done_at`; dropped and expired actions stay listed. Unknown owners stay empty and listed. Holds, source references and display titles and bullets have no destination and are listed.
+
+The board's newest unsuperseded next-step note copies only when no open action hides it. Older, superseded and hidden notes stay listed without an invented completion. The fallback note takes `deal.next_date`, including null, and the deal's mapped owner. A deal with a date but no actions or next-step notes gets an `Imported deal follow-up`, with a stable id derived from its deal id. A date that cannot attach to either fallback is listed rather than assigned to a different action.
+
+Following #363, task activities become next steps, never notes. They keep their ids and summary with plain-text detail, resolve exactly one distinct deal or party through the old-id map, and have no due date, owner or done time. Missing or several targets wait listed. Structured detail and owed text are listed. Notes and tasks retain their event attribution; an unknown agent sponsor is listed. Existing source ids prevent duplicates and leave rows, stamps and history unchanged on reruns. A later run retries records whose deal or party has since copied.
