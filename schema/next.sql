@@ -1508,126 +1508,6 @@ begin atomic
 	where d.id = wanted;
 end;
 
-create function everything_about_party(wanted uuid) returns jsonb
-language sql stable
-begin atomic
-	select jsonb_build_object(
-		'party', to_jsonb(p),
-		'do_not_contact', (
-			select to_jsonb(r) - 'party_id' || jsonb_build_object('active', a.party_id is not null)
-			from do_not_contact r left join active_do_not_contact a using (party_id) where r.party_id = p.id
-		),
-		'outreach_draft', (
-			select to_jsonb(d) - array['party_id', 'role', 'requires_human_send', 'dispatchable']
-			from lead_contact_draft d where d.party_id = p.id
-		),
-		'brands', (
-			select coalesce(jsonb_agg(to_jsonb(b) - array['location_kind', 'brand_kind']
-				|| jsonb_build_object('party', to_jsonb(other)) order by b.started_on, b.id), '[]')
-			from client_brand b join party other on other.id = case when b.location_id = p.id then b.brand_id else b.location_id end
-			where p.id in (b.location_id, b.brand_id)
-		),
-		'national_account_owners', (
-			select coalesce(jsonb_agg(to_jsonb(o) - 'owner_kind'
-				|| jsonb_build_object('party', to_jsonb(other)) order by o.started_on, o.id), '[]')
-			from national_account_owner o join party other on other.id = case when o.account_id = p.id then o.owner_id else o.account_id end
-			where p.id in (o.account_id, o.owner_id)
-		),
-		'leases', (
-			select coalesce(jsonb_agg(to_jsonb(l) - array['party_id', 'client_role'] || jsonb_build_object(
-				'property', to_jsonb(pr), 'versions', (
-					select coalesce(jsonb_agg(to_jsonb(v) - array['lease_id', 'previous_version'] || jsonb_build_object(
-						'document', (select to_jsonb(doc) from document doc where doc.id = v.document_id),
-						'suites', (
-							select coalesce(jsonb_agg(to_jsonb(s) order by s.label nulls last, s.id), '[]')
-							from lease_suite ls join suite s on s.id = ls.suite_id where ls.lease_version_id = v.id
-						), 'options', (
-							select coalesce(jsonb_agg(to_jsonb(o) - 'lease_version_id' order by o.number), '[]')
-							from lease_option o where o.lease_version_id = v.id
-						)) order by v.version), '[]')
-					from lease_version v where v.lease_id = l.id
-				)) order by pr.address, l.id), '[]')
-			from lease l join property pr on pr.id = l.property_id where l.party_id = p.id
-		),
-		'emails', (
-			select coalesce(jsonb_agg(to_jsonb(e) - 'party_id' order by e.is_primary desc, e.address, e.id), '[]')
-			from party_email e where e.party_id = p.id
-		),
-		'phones', (
-			select coalesce(jsonb_agg(to_jsonb(n) - 'party_id'
-				order by n.is_primary desc, n.number, n.extension nulls last, n.id), '[]')
-			from party_phone n where n.party_id = p.id
-		),
-		'companies', (
-			select coalesce(jsonb_agg(to_jsonb(c) - array['person_kind', 'company_kind'] || jsonb_build_object(
-				'party', to_jsonb(other))
-				order by c.started_on nulls last, c.id), '[]')
-			from party_company c join party other on other.id = case when c.person_id = p.id then c.company_id else c.person_id end
-			where p.id in (c.person_id, c.company_id)
-		),
-		'roles', (
-			select coalesce(jsonb_agg(to_jsonb(r) - 'party_id' || jsonb_build_object('client', (
-				select to_jsonb(c) - array['party_id', 'role'] || jsonb_build_object('current_status', cs.status)
-				from client c join client_status cs using (party_id) where c.party_id = p.id and r.role = 'client'
-			)) order by r.role), '[]')
-			from party_role r where r.party_id = p.id
-		),
-		'specialties', (
-			select coalesce(jsonb_agg(to_jsonb(s) - array['person_id', 'person_kind'] order by s.specialty), '[]')
-			from party_specialty s where s.person_id = p.id
-		),
-		'territories', (
-			select coalesce(jsonb_agg(to_jsonb(pt) - 'party_id' || jsonb_build_object('territory', to_jsonb(t) || jsonb_build_object(
-				'pieces', (
-					select coalesce(jsonb_agg(to_jsonb(piece) - 'territory_id' || jsonb_build_object('market', to_jsonb(m))
-						order by piece.state_fips nulls last, m.name nulls last, piece.miles nulls last, piece.id), '[]')
-					from territory_piece piece left join market m on m.id = piece.market_id where piece.territory_id = t.id
-				))) order by pt.started_on nulls last, pt.id), '[]')
-			from party_territory pt join territory t on t.id = pt.territory_id where pt.party_id = p.id
-		),
-		'vendor_verticals', (
-			select coalesce(jsonb_agg(to_jsonb(v) - array['party_id', 'role'] order by v.vertical), '[]')
-			from vendor_vertical v where v.party_id = p.id
-		),
-		'vendor_loan_programs', (
-			select coalesce(jsonb_agg(to_jsonb(l) - array['party_id', 'role'] order by l.loan_program), '[]')
-			from vendor_loan_program l where l.party_id = p.id
-		),
-		'deals', (
-			select coalesce(jsonb_agg(to_jsonb(d) || jsonb_build_object('role', dp.role)
-				order by d.name, d.id, dp.role), '[]')
-			from deal_party dp join deal d on d.id = dp.deal_id where dp.party_id = p.id
-		),
-		'links', (
-			select coalesce(jsonb_agg(to_jsonb(l) || jsonb_build_object('party', to_jsonb(other)) order by l.kind, l.started_on nulls last, l.id), '[]')
-			from party_link l join party other on other.id = case when l.party_id = p.id then l.other_party_id else l.party_id end
-			where p.id in (l.party_id, l.other_party_id)
-		),
-		'introductions', (
-			select coalesce(jsonb_agg(to_jsonb(i) - 'vendor_role' || jsonb_build_object('party', to_jsonb(other))
-				order by i.introduced_on nulls last, i.id), '[]')
-			from introduction i join party other on other.id = case when i.vendor_id = p.id then i.introduced_party_id else i.vendor_id end
-			where p.id in (i.vendor_id, i.introduced_party_id)
-		),
-		'activity', (
-			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
-			from activity_about aa join activity a on a.id = aa.activity_id where aa.party_id = p.id
-		),
-		'next_steps', (
-			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id']
-				order by s.due_on nulls last, s.id), '[]')
-			from next_step s where s.party_id = p.id
-		),
-		'proposals', (
-			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id']
-				order by s.created_at, s.id), '[]')
-			from proposal s where s.party_id = p.id and s.status = 'pending'
-		)
-	)
-	from party p
-	where p.id = coalesce((select survivor_id from merged_party where id = wanted), wanted);
-end;
-
 -- "Account" alone means a national account (docs/glossary.md).
 create table social_account (
 	id uuid primary key default gen_random_uuid(),
@@ -2334,6 +2214,8 @@ create table change (
 	merge_of uuid references merged_party
 );
 
+create index change_record on change (table_name, record);
+
 alter table invoice_email add foreign key (payment_change_id) references change;
 create index change_payment_invoice_date on change (record, id desc)
 	where table_name = 'commission_payment' and new_value ? 'invoiced_on';
@@ -2536,6 +2418,141 @@ create table imported_change (
 create index imported_change_record on imported_change (table_name, record);
 create trigger stamp_imported_change before insert on imported_change
  for each row execute function stamp_change();
+
+create function everything_about_party(wanted uuid) returns jsonb
+language sql stable
+begin atomic
+	with subject as (
+		select * from party where id = coalesce((select survivor_id from merged_party where id = wanted), wanted)
+	), records as (
+		select jsonb_build_object('id', id) as record from subject
+		union all
+		select jsonb_build_object('id', m.id) from merged_party m
+		where m.survivor_id = (select id from subject)
+	)
+	select jsonb_build_object(
+		'party', to_jsonb(p),
+		'history', (
+			select coalesce(jsonb_agg(to_jsonb(c) order by c.changed_at, c.id), '[]')
+			from change c join records r on r.record = c.record where c.table_name = 'party'
+		),
+		'imported_history', (
+			select coalesce(jsonb_agg(to_jsonb(c) order by c.changed_at, c.id), '[]')
+			from imported_change c join records r on r.record = c.record where c.table_name = 'party'
+		),
+		'do_not_contact', (
+			select to_jsonb(r) - 'party_id' || jsonb_build_object('active', a.party_id is not null)
+			from do_not_contact r left join active_do_not_contact a using (party_id) where r.party_id = p.id
+		),
+		'outreach_draft', (
+			select to_jsonb(d) - array['party_id', 'role', 'requires_human_send', 'dispatchable']
+			from lead_contact_draft d where d.party_id = p.id
+		),
+		'brands', (
+			select coalesce(jsonb_agg(to_jsonb(b) - array['location_kind', 'brand_kind']
+				|| jsonb_build_object('party', to_jsonb(other)) order by b.started_on, b.id), '[]')
+			from client_brand b join party other on other.id = case when b.location_id = p.id then b.brand_id else b.location_id end
+			where p.id in (b.location_id, b.brand_id)
+		),
+		'national_account_owners', (
+			select coalesce(jsonb_agg(to_jsonb(o) - 'owner_kind'
+				|| jsonb_build_object('party', to_jsonb(other)) order by o.started_on, o.id), '[]')
+			from national_account_owner o join party other on other.id = case when o.account_id = p.id then o.owner_id else o.account_id end
+			where p.id in (o.account_id, o.owner_id)
+		),
+		'leases', (
+			select coalesce(jsonb_agg(to_jsonb(l) - array['party_id', 'client_role'] || jsonb_build_object(
+				'property', to_jsonb(pr), 'versions', (
+					select coalesce(jsonb_agg(to_jsonb(v) - array['lease_id', 'previous_version'] || jsonb_build_object(
+						'document', (select to_jsonb(doc) from document doc where doc.id = v.document_id),
+						'suites', (
+							select coalesce(jsonb_agg(to_jsonb(s) order by s.label nulls last, s.id), '[]')
+							from lease_suite ls join suite s on s.id = ls.suite_id where ls.lease_version_id = v.id
+						), 'options', (
+							select coalesce(jsonb_agg(to_jsonb(o) - 'lease_version_id' order by o.number), '[]')
+							from lease_option o where o.lease_version_id = v.id
+						)) order by v.version), '[]')
+					from lease_version v where v.lease_id = l.id
+				)) order by pr.address, l.id), '[]')
+			from lease l join property pr on pr.id = l.property_id where l.party_id = p.id
+		),
+		'emails', (
+			select coalesce(jsonb_agg(to_jsonb(e) - 'party_id' order by e.is_primary desc, e.address, e.id), '[]')
+			from party_email e where e.party_id = p.id
+		),
+		'phones', (
+			select coalesce(jsonb_agg(to_jsonb(n) - 'party_id'
+				order by n.is_primary desc, n.number, n.extension nulls last, n.id), '[]')
+			from party_phone n where n.party_id = p.id
+		),
+		'companies', (
+			select coalesce(jsonb_agg(to_jsonb(c) - array['person_kind', 'company_kind'] || jsonb_build_object(
+				'party', to_jsonb(other))
+				order by c.started_on nulls last, c.id), '[]')
+			from party_company c join party other on other.id = case when c.person_id = p.id then c.company_id else c.person_id end
+			where p.id in (c.person_id, c.company_id)
+		),
+		'roles', (
+			select coalesce(jsonb_agg(to_jsonb(r) - 'party_id' || jsonb_build_object('client', (
+				select to_jsonb(c) - array['party_id', 'role'] || jsonb_build_object('current_status', cs.status)
+				from client c join client_status cs using (party_id) where c.party_id = p.id and r.role = 'client'
+			)) order by r.role), '[]')
+			from party_role r where r.party_id = p.id
+		),
+		'specialties', (
+			select coalesce(jsonb_agg(to_jsonb(s) - array['person_id', 'person_kind'] order by s.specialty), '[]')
+			from party_specialty s where s.person_id = p.id
+		),
+		'territories', (
+			select coalesce(jsonb_agg(to_jsonb(pt) - 'party_id' || jsonb_build_object('territory', to_jsonb(t) || jsonb_build_object(
+				'pieces', (
+					select coalesce(jsonb_agg(to_jsonb(piece) - 'territory_id' || jsonb_build_object('market', to_jsonb(m))
+						order by piece.state_fips nulls last, m.name nulls last, piece.miles nulls last, piece.id), '[]')
+					from territory_piece piece left join market m on m.id = piece.market_id where piece.territory_id = t.id
+				))) order by pt.started_on nulls last, pt.id), '[]')
+			from party_territory pt join territory t on t.id = pt.territory_id where pt.party_id = p.id
+		),
+		'vendor_verticals', (
+			select coalesce(jsonb_agg(to_jsonb(v) - array['party_id', 'role'] order by v.vertical), '[]')
+			from vendor_vertical v where v.party_id = p.id
+		),
+		'vendor_loan_programs', (
+			select coalesce(jsonb_agg(to_jsonb(l) - array['party_id', 'role'] order by l.loan_program), '[]')
+			from vendor_loan_program l where l.party_id = p.id
+		),
+		'deals', (
+			select coalesce(jsonb_agg(to_jsonb(d) || jsonb_build_object('role', dp.role)
+				order by d.name, d.id, dp.role), '[]')
+			from deal_party dp join deal d on d.id = dp.deal_id where dp.party_id = p.id
+		),
+		'links', (
+			select coalesce(jsonb_agg(to_jsonb(l) || jsonb_build_object('party', to_jsonb(other)) order by l.kind, l.started_on nulls last, l.id), '[]')
+			from party_link l join party other on other.id = case when l.party_id = p.id then l.other_party_id else l.party_id end
+			where p.id in (l.party_id, l.other_party_id)
+		),
+		'introductions', (
+			select coalesce(jsonb_agg(to_jsonb(i) - 'vendor_role' || jsonb_build_object('party', to_jsonb(other))
+				order by i.introduced_on nulls last, i.id), '[]')
+			from introduction i join party other on other.id = case when i.vendor_id = p.id then i.introduced_party_id else i.vendor_id end
+			where p.id in (i.vendor_id, i.introduced_party_id)
+		),
+		'activity', (
+			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
+			from activity_about aa join activity a on a.id = aa.activity_id where aa.party_id = p.id
+		),
+		'next_steps', (
+			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id']
+				order by s.due_on nulls last, s.id), '[]')
+			from next_step s where s.party_id = p.id
+		),
+		'proposals', (
+			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id']
+				order by s.created_at, s.id), '[]')
+			from proposal s where s.party_id = p.id and s.status = 'pending'
+		)
+	)
+	from subject p;
+end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
