@@ -156,6 +156,35 @@ test("client and generated working and PDF files keep their bytes, times and aut
 	);
 });
 
+test("a prepared file keeps its note as written, and files with disagreeing notes wait", async () => {
+	assert.deepEqual(
+		(await files()).filter((f) => f.note !== null).map((f) => [f.id, f.note]),
+		[
+			[id(112), "Example generated note"],
+			[id(113), "Example generated note"],
+		],
+	);
+	await db.query("begin");
+	try {
+		await db.query(`update public.document set note = 'Example note A' where id = '${id(403)}';
+ update public.document set note = 'Example note B' where id = '${id(404)}'`);
+		const result = await db.query(copy);
+		assert.ok(Array.isArray(result));
+		const waiting: pg.QueryResultRow[] = result.at(-1)?.rows ?? [];
+		assert.deepEqual(
+			waiting
+				.filter((r) => r.reason === "several_notes")
+				.map((r) => [r.old_id, r.value]),
+			[
+				[id(100), "Example note A"],
+				[id(100), "Example note B"],
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("a generated file with both a deal and a client stays out of client files", async () => {
 	assert.deepEqual(
 		(await files()).filter((f) => f.id === id(115)),
@@ -200,7 +229,6 @@ test("missing bytes, deleted files, unmapped clients and conflicts are listed wi
 			[id(108), "file_conflict"],
 			[id(110), "file_conflict"],
 			[id(111), "document_id_taken"],
-			[id(400), "generated_note"],
 			[id(401), "no_file"],
 			[id(402), "file_deleted"],
 			[id(404), "client_not_copied"],
@@ -235,22 +263,14 @@ test("a rerun changes no files, links or history and keeps the correction list",
 test("client-only generated corrections appear once across the deal and client copiers", async () => {
 	await db.query("begin");
 	try {
-		await db.query(
-			`update public.document set note = 'Example deal note' where id = '${id(405)}'`,
-		);
 		const result = await db.query(await sql("copy-deal-files.sql"));
 		assert.ok(Array.isArray(result));
 		const combined = [...(result.at(-1)?.rows ?? []), ...report];
-		assert.deepEqual(
-			combined.filter((r) => r.old_id === id(405)).map((r) => r.reason),
-			["generated_note"],
-		);
 		assert.deepEqual(
 			combined
 				.filter((r) => [400, 401, 402, 403, 404].map(id).includes(r.old_id))
 				.map((r) => [r.old_id, r.field, r.value, r.reason]),
 			[
-				[id(400), "note", "Example generated note", "generated_note"],
 				[id(401), "id", id(401), "no_file"],
 				[id(402), "working_attachment", id(105), "file_deleted"],
 				[id(404), "client_id", id(23), "client_not_copied"],

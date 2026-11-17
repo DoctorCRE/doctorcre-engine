@@ -769,6 +769,7 @@ create table client (
 	created_at timestamptz not null default now(),
 	status text not null default 'roster' check (status in ('roster', 'cold', 'engaged', 'paused')),
 	client_type text references client_type,
+	owner_user_id uuid references app_user,
 	foreign key (party_id, role) references party_role on update cascade
 );
 
@@ -947,6 +948,7 @@ create table next_step (
 	what text not null,
 	owner_party_id uuid references party,
 	due_on date,
+	hold_until date,
 	done_at timestamptz,
 	resolution text check (resolution in ('done', 'cancelled', 'expired')),
 	resolved_at timestamptz,
@@ -963,8 +965,10 @@ create table next_step (
 	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
 
+-- A hold ends on the partners' day in Central time, as today's system ends it.
 create view home_next_step with (security_invoker = true) as
-	select * from next_step where status = 'open';
+	select * from next_step where status = 'open'
+		and (hold_until is null or hold_until <= (now() at time zone 'America/Chicago')::date);
 
 -- Each user's own preferences. A user without a row has chosen nothing yet.
 create function is_time_zone(zone text) returns boolean
@@ -1109,6 +1113,8 @@ create table document (
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
 	email_activity_id uuid references email,
+	-- A partner's note on a prepared file.
+	note text check (note ~ '\S'),
 	unique (id, content_type)
 );
 

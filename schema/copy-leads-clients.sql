@@ -114,10 +114,23 @@ select mapped_id, kind, case when kind = 'lead' then mapped_stage end, case when
  first_created, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from ready_relationship r where rank = 1
 on conflict do nothing;
-insert into client (party_id, status, client_type, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+-- Client responsibility is independent of national-account ownership; labels never identify users.
+create temp table client_owner on commit drop as
+select r.*, case
+ when r.owner is null then null
+ when exists (select from examined_relationship other where other.kind = 'client' and other.mapped_id = r.mapped_id
+  and (other.owner is distinct from r.owner) and (other.fields ->> 'owner_id' is not null or other.fields ->> 'owner_label' ~ '\S'))
+ then 'client_owners_disagree'
+ when c.owner_user_id <> r.owner then 'existing_client_owner_differs'
+ end as owner_refusal
+from examined_relationship r left join client c on c.party_id = r.mapped_id
+where r.kind = 'client';
+insert into client (party_id, status, client_type, owner_user_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select mapped_id, case when fields ->> 'status' in ('roster','cold','engaged','paused') then fields ->> 'status' else 'roster' end,
- (select slug from client_type where slug = mapped_type), first_created, updated_at,
- changed_by_user_id, changed_by_job, changed_for_user_id from ready_relationship where kind = 'client' and rank = 1 on conflict do nothing;
+ (select slug from client_type where slug = mapped_type),
+ (select distinct owner from client_owner o where o.mapped_id = r.mapped_id and o.owner is not null and o.owner_refusal is null),
+ first_created, updated_at,
+ changed_by_user_id, changed_by_job, changed_for_user_id from ready_relationship r where kind = 'client' and rank = 1 on conflict do nothing;
 insert into party_role (party_id, role, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select r.mapped_id, 'national_account', r.first_created, r.updated_at, r.changed_by_user_id, r.changed_by_job, r.changed_for_user_id
 from ready_relationship r join party p on p.id = r.mapped_id
@@ -170,8 +183,7 @@ from examined_lead_restriction where restriction_refusal is not null;
 insert into not_copied
 select r.id, f.field, f.value, f.reason from classified_relationship r
 cross join lateral (values
- ('owner_id', fields ->> 'owner_id', 'owner_not_a_user', kind = 'lead' and fields ->> 'owner_id' is not null and owner is null),
- ('owner_id', fields ->> 'owner_id', 'client_owner_has_no_target', kind = 'client' and fields ->> 'owner_id' is not null),
+ ('owner_id', fields ->> 'owner_id', 'owner_not_a_user', fields ->> 'owner_id' is not null and owner is null),
  ('owner_label', fields ->> 'owner_label', 'owner_label_only', fields ->> 'owner_id' is null and fields ->> 'owner_label' ~ '\S'),
  ('lane', fields ->> 'lane', 'unknown_lane', fields ->> 'lane' is not null and not exists (select from lead_lane where slug = fields ->> 'lane')),
  ('segment', fields ->> 'segment', 'blank_segment', fields ->> 'segment' is not null and fields ->> 'segment' !~ '\S'),
@@ -201,6 +213,13 @@ join party_role pr on pr.party_id = r.mapped_id and pr.role = r.kind
 where (r.kind = 'lead' or exists (select from client c where c.party_id = r.mapped_id))
  and not exists (select from outside_id o where o.source = 'old_system' and o.value = r.id::text);
 
+update client c set owner_user_id = r.owner from client_owner r
+where c.party_id = r.mapped_id and c.owner_user_id is null and r.owner is not null and r.owner_refusal is null;
+insert into not_copied select r.id, 'owner_id', r.fields ->> 'owner_id', r.owner_refusal
+from client_owner r
+join outside_id copied on copied.source = 'old_system' and copied.value = r.id::text and copied.party_id = r.mapped_id
+where r.owner_refusal is not null;
+
 -- Today's lead export shows next_action rows; lead.next_action_date is only a fallback for a lead without any.
 -- Actions of records copied earlier are retried, so a corrected or newer action still arrives.
 create temp table old_next_action on commit drop as
@@ -213,14 +232,14 @@ left join copy_action_end() e on e.id = n.id
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
 cross join lateral copy_attribution('next_action', n.id, coalesce(n.updated_by, n.created_by)) a;
-insert into next_step (id, party_id, what, due_on, owner_party_id, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
+insert into next_step (id, party_id, what, due_on, hold_until, owner_party_id, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
  created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select distinct on (mapped_id, what, due_on) * from (
- select id, mapped_id, what, due_on, owner, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
+ select id, mapped_id, what, due_on, hold_until, owner, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
   created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
  from old_next_action where copied and what is not null and refusal is null
  union all
- select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported lead follow-up', (fields ->> 'next_action_date')::date,
+ select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported lead follow-up', (fields ->> 'next_action_date')::date, null,
   owner, null, null, null, null, null, created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
  from ready_relationship r where kind = 'lead' and fields ->> 'next_action_date' is not null
   and not exists (select from public.next_action n where n.subject_type = 'lead' and n.subject_id = r.id)
@@ -233,7 +252,6 @@ cross join lateral (values
  ('status', n.status, n.refusal, n.refusal is not null),
  ('resolution_event_id', null, 'expiry_unproven', n.resolution = 'expired' and not n.proven),
  ('owner_id', n.owner_id::text, 'owner_not_a_user', n.owner is null),
- ('hold_until', n.hold_until::text, 'hold_has_no_place', n.hold_until is not null),
  ('source_ref', n.source_ref, 'reference_not_copied', n.source_ref ~ '\S')
 ) f(field, value, reason, refused) where f.refused;
 

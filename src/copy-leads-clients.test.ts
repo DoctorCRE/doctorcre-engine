@@ -13,6 +13,16 @@ const { db, copy, setup, cleanup } = await leadCopyTest(
 	"copy-leads-clients.sql",
 );
 const rows = async (sql: string) => (await db.query(sql)).rows;
+const clients = async () => {
+	const copied = await rows(
+		"select party_id, owner_user_id, changed_at, changed_by_user_id from client order by party_id",
+	);
+	return {
+		owners: copied.map((r) => [r.party_id, r.owner_user_id]),
+		stamps: copied.map((r) => [r.party_id, r.changed_at, r.changed_by_user_id]),
+	};
+};
+const history = () => rows("select * from change order by id");
 // A copy starts clear of every temp table, so it supplies the source mappings again before sql.
 const freshCopy = async (sql = ""): Promise<pg.QueryResultRow[]> => {
 	const result =
@@ -302,7 +312,7 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 			waiting
 				.filter((r) => r.old_id === id(84) && r.field === "owner_id")
 				.map((r) => r.reason),
-			["client_owner_has_no_target"],
+			["owner_not_a_user"],
 		);
 		assert.deepEqual(await answer(), [
 			{ how_found: null, how_found_detail: null, roles: 0 },
@@ -475,6 +485,12 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(105), id(92), "Example lapsed", null, id(1), null],
 		];
 		assert.deepEqual((await steps()).map(Object.values), copied);
+		assert.deepEqual(
+			await rows(
+				"select id, hold_until::text from next_step where hold_until is not null",
+			),
+			[{ id: id(115), hold_until: "2027-03-01" }],
+		);
 		// biome-ignore format: one row per ended action
 		assert.deepEqual((await rows(`select id,status,resolved_at::text,resolution_reason,resolution_event_id from next_step where party_id in ('${id(90)}','${id(92)}') and status <> 'open' order by id`)).map(Object.values), [
 			[id(105), "expired", null, null, null],
@@ -527,7 +543,6 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(106), "status", "dropped", "cancellation_reason_missing"],
 			[id(114), "description", "\t\n", "blank_next_action"],
 			[id(114), "owner_id", id(119), "owner_not_a_user"],
-			[id(115), "hold_until", "2027-03-01", "hold_has_no_place"],
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],
 		];
 		assert.deepEqual(listed(report), expected);
@@ -570,3 +585,169 @@ for (const [subject, record] of [
 		}
 	});
 }
+
+test("a first client copy records only its insert with the agreed owner", async () => {
+	try {
+		await run(
+			`${extraParties}
+ insert into public.client (id,party_id,status,acquisition_source,owner_id,created_by,updated_by,created_at,updated_at) values
+ ('${id(900)}','${id(80)}','prospect','Example client source','${id(1)}','${id(1)}','${id(1)}','2020-01-01','2024-01-01'),
+ ('${id(901)}','${id(80)}','roster','Example client source',null,'${id(1)}','${id(1)}','2020-01-01','2025-01-01');`,
+			true,
+		);
+		assert.deepEqual(
+			await rows(
+				`select action, new_value ->> 'owner_user_id' as owner from change where table_name = 'client' and record = jsonb_build_object('party_id', '${id(80)}'::text) order by id`,
+			),
+			[{ action: "insert", owner: id(1) }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("client responsibility maps known users, retries unknown owners, and leaves account ownership alone", async () => {
+	try {
+		const waiting = await run(
+			`
+ insert into public.actor (id,slug,kind,display_name) values ('${id(89)}','example_unknown_owner','human','Example unknown user');
+ update public.client set owner_id = '${id(1)}', owner_label = 'Example display label' where id = '${id(40)}';
+ insert into public.client (id,party_id,status,acquisition_source,owner_id,created_by,updated_by,created_at,updated_at) values
+ ('${id(901)}','${id(11)}','prospect','Example client source','${id(89)}','${id(1)}','${id(1)}','2020-01-01','2024-01-01');
+ update public.client set owner_label = 'Example User' where id = '${id(42)}';`,
+			true,
+		);
+		assert.deepEqual((await clients()).owners, [
+			[id(10), id(1)],
+			[id(11), null],
+			[id(12), null],
+			[id(21), null],
+		]);
+		assert.ok(
+			waiting.some(
+				(r) => r.old_id === id(901) && r.reason === "owner_not_a_user",
+			),
+		);
+		assert.ok(
+			waiting.some(
+				(r) => r.old_id === id(42) && r.reason === "owner_label_only",
+			),
+		);
+		assert.deepEqual(await rows("select * from national_account_owner"), []);
+
+		const stamps = (await clients()).stamps;
+		const beforeRerun = await history();
+		assert.deepEqual(await freshCopy(), waiting);
+		assert.deepEqual(await history(), beforeRerun);
+		await freshCopy(
+			`insert into outside_id (source,value,party_id) values ('old_system','${id(89)}','${id(1)}')`,
+		);
+		assert.deepEqual((await clients()).owners, [
+			[id(10), id(1)],
+			[id(11), id(1)],
+			[id(12), null],
+			[id(21), null],
+		]);
+		assert.deepEqual((await clients()).stamps, stamps);
+		const afterCorrection = await history();
+		await freshCopy();
+		assert.deepEqual(await history(), afterCorrection);
+		assert.equal((await clients()).owners[1]?.[1], id(1));
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("conflicting client owners wait, a corrected conflict retries, and an existing owner is never replaced", async () => {
+	try {
+		const waiting = await run(
+			`${extraParties}
+ insert into public.actor (id,slug,kind,display_name) values ('${id(2)}','example_second_user','human','Example second user'), ('${id(89)}','example_unmapped_user','human','Example unmapped user');
+ insert into party (id,kind,name) values ('${id(2)}','person','Example second user');
+ insert into app_user (id) values ('${id(2)}');
+ insert into outside_id (source,value,party_id) values ('old_system','${id(2)}','${id(2)}');
+ insert into public.client (id,party_id,status,acquisition_source,owner_id,created_by,updated_by) values
+ ${(
+		[
+			[900, 80, 1],
+			[901, 80, 2],
+			[902, 81, 1],
+			[903, 81, 89],
+			[904, 82, 1],
+			[905, 82, null],
+		] satisfies [number, number, number | null][]
+ )
+		.map(
+			([client, party, owner]) =>
+				`('${id(client)}','${id(party)}','roster','Example client source',${owner === null ? "null" : `'${id(owner)}'`},'${id(1)}','${id(1)}')`,
+		)
+		.join(",")};`,
+			true,
+		);
+		const reasons = (report: pg.QueryResultRow[], n: number) =>
+			report
+				.filter((r) => r.old_id === id(n) && r.field === "owner_id")
+				.map((r) => r.reason);
+		assert.deepEqual(reasons(waiting, 900), ["client_owners_disagree"]);
+		assert.deepEqual(reasons(waiting, 901), ["client_owners_disagree"]);
+		assert.deepEqual(reasons(waiting, 902), ["client_owners_disagree"]);
+		assert.deepEqual(reasons(waiting, 903), ["owner_not_a_user"]);
+		assert.deepEqual(reasons(waiting, 904), []);
+		assert.deepEqual(reasons(waiting, 905), []);
+		assert.deepEqual(
+			(await clients()).owners.filter(
+				([party]) => party >= id(80) && party <= id(82),
+			),
+			[
+				[id(80), null],
+				[id(81), null],
+				[id(82), id(1)],
+			],
+		);
+		assert.deepEqual(await freshCopy(), waiting);
+		await freshCopy(
+			`update public.client set owner_id = '${id(1)}' where id = '${id(901)}'`,
+		);
+		assert.deepEqual(
+			(await clients()).owners.filter(
+				([party]) => party >= id(80) && party <= id(82),
+			),
+			[
+				[id(80), id(1)],
+				[id(81), null],
+				[id(82), id(1)],
+			],
+		);
+		const conflict = await freshCopy(
+			`update public.client set owner_id = '${id(2)}' where id in ('${id(900)}','${id(901)}')`,
+		);
+		assert.deepEqual(reasons(conflict, 900), ["existing_client_owner_differs"]);
+		assert.deepEqual(reasons(conflict, 901), ["existing_client_owner_differs"]);
+		assert.deepEqual(
+			(await clients()).owners.filter(
+				([party]) => party >= id(80) && party <= id(82),
+			),
+			[
+				[id(80), id(1)],
+				[id(81), null],
+				[id(82), id(1)],
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("the database refuses a client owner who is not a user", async () => {
+	await db.query("begin; select set_config('engine.job','old_system',true)");
+	try {
+		await assert.rejects(
+			db.query(
+				`update client set owner_user_id = '${id(10)}' where party_id = '${id(10)}'`,
+			),
+			{ code: "23503", constraint: "client_owner_user_id_fkey" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
