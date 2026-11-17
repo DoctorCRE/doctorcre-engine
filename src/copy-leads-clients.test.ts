@@ -272,7 +272,10 @@ const extraParties = [80, 81, 82]
 test("an unmapped client source waits, and mapping it later matches mapping it at once", async () => {
 	const setup = `${extraParties}
  insert into public.lead (id,party_id,stage,source_type,source_detail,created_by,updated_by) values ('${id(83)}','${id(80)}','new','Example referral','Lead waiting detail','${id(1)}','${id(1)}');
- insert into public.client (id,party_id,status,client_type,acquisition_source,acquisition_detail,created_by,updated_by) values ('${id(84)}','${id(80)}','roster','franchise','Unmapped client source','Client waiting detail','${id(1)}','${id(1)}');`;
+ insert into public.client (id,party_id,status,client_type,acquisition_source,acquisition_detail,created_by,updated_by) values ('${id(84)}','${id(80)}','roster','franchise','Unmapped client source','Client waiting detail','${id(1)}','${id(1)}');
+ insert into public.actor (id,slug,kind,display_name) values ('${id(89)}','example_source_job','automation','Example source job');
+ update public.lead set owner_id = '${id(89)}' where id = '${id(83)}';
+ update public.client set owner_id = '${id(89)}' where id = '${id(84)}';`;
 	const mapping =
 		"insert into copy_how_found values ('client','Unmapped client source','vendor');";
 	const answer = () =>
@@ -282,6 +285,33 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 	let staged: pg.QueryResultRow[];
 	try {
 		const waiting = await run(setup, true);
+		assert.ok(
+			waiting.some(
+				(r) =>
+					r.old_id === id(83) &&
+					r.reason === "client_source_needs_mapping" &&
+					r.field === "how_found" &&
+					r.value === "Unmapped client source",
+			),
+		);
+		assert.ok(
+			!waiting.some(
+				(r) =>
+					[id(83), id(84)].includes(r.old_id) &&
+					r.reason === "existing_source_differs",
+			),
+		);
+		assert.ok(
+			waiting.some(
+				(r) => r.old_id === id(83) && r.reason === "owner_not_a_user",
+			),
+		);
+		assert.deepEqual(
+			waiting
+				.filter((r) => r.old_id === id(84) && r.field === "owner_id")
+				.map((r) => r.reason),
+			["client_owner_has_no_target"],
+		);
 		assert.deepEqual(await answer(), [
 			{ how_found: null, how_found_detail: null, roles: 0 },
 		]);
@@ -322,6 +352,32 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 	try {
 		await run(setup + mapping, true);
 		assert.deepEqual(await answer(), staged);
+	} finally {
+		await db.query("rollback");
+	}
+	try {
+		const waiting = await run(
+			setup +
+				`update party set how_found='referral' where id='${id(80)}';
+  insert into party_role (party_id,role,stage) values ('${id(80)}','lead','new');
+  update public.lead set notes='Waiting existing note' where id='${id(83)}';`,
+			true,
+		);
+		assert.deepEqual(await answer(), [
+			{ how_found: "referral", how_found_detail: null, roles: 1 },
+		]);
+		assert.ok(
+			waiting.some(
+				(r) =>
+					r.old_id === id(83) && r.reason === "client_source_needs_mapping",
+			),
+		);
+		assert.deepEqual(
+			await rows(
+				"select * from activity where summary='Waiting existing note'",
+			),
+			[],
+		);
 	} finally {
 		await db.query("rollback");
 	}

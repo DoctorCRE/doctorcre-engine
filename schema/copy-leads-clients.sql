@@ -72,7 +72,7 @@ where p.id = s.mapped_id and p.how_found is null
  and not exists (select from waiting_client_source w where w.mapped_id = p.id);
 insert into not_copied select s.id, 'how_found', s.typed_source, 'existing_source_differs'
 from mapped_source s join party p on p.id = s.mapped_id
-where s.mapped_source is not null and p.how_found is distinct from s.mapped_source;
+where s.mapped_source is not null and p.how_found is not null and p.how_found <> s.mapped_source;
 create temp table examined_relationship on commit drop as
 select r.*, p.how_found, p.how_found_detail,
  case fields ->> 'client_type' when 'group' then 'group_practice' else fields ->> 'client_type' end as mapped_type,
@@ -82,7 +82,7 @@ select r.*, p.how_found, p.how_found_detail,
  u.id as owner, coalesce(nullif(btrim(fields ->> 'event_source'), ''),
  (select case when count(*) = 1 then min(nullif(btrim(est_basis), '')) end
   from public.candidate_pool where promoted_lead_id = r.id)) as estimate_source
-from mapped_source r join party p on p.id = r.mapped_id
+from old_relationship r join party p on p.id = r.mapped_id
 left join outside_id o on o.source = 'old_system' and o.value = r.fields ->> 'owner_id'
 left join app_user u on u.id = o.party_id;
 create temp table classified_relationship on commit drop as
@@ -125,9 +125,12 @@ select r.mapped_id, r.first_created, r.updated_at, r.changed_by_user_id, r.chang
 from ready_relationship r join party_role pr on pr.party_id = r.mapped_id and pr.role = 'national_account'
 where r.rank = 1 and r.kind = 'client' and r.fields ->> 'client_type' = 'national_account' on conflict do nothing;
 insert into not_copied
-select id, field, fields ->> field, refusal from classified_relationship
+select r.id, field, case when refusal = 'client_source_needs_mapping' then
+ (select s.typed_source from mapped_source s where s.mapped_id = r.mapped_id and s.kind = 'client'
+  and s.mapped_source is null order by s.id limit 1) else fields ->> field end, refusal
+from classified_relationship r
 cross join lateral (select case refusal when 'unknown_stage' then 'stage'
- when 'unknown_client_status' then 'status' when 'client_source_needs_mapping' then 'acquisition_source'
+ when 'unknown_client_status' then 'status' when 'client_source_needs_mapping' then 'how_found'
  else 'client_type' end as field) f
 where refusal is not null and refusal <> 'source_needs_mapping';
 insert into not_copied
