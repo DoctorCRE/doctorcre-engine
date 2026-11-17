@@ -1,12 +1,12 @@
-import { sql, type Transaction } from "kysely";
+import { type Expression, sql, type Transaction } from "kysely";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { Scope } from "./board.ts";
 
 const ENDED_PHASES = ["closed", "invoiced", "dead"];
 // Today's board groups by brand and owner as they stand on the partners' calendar day.
-const covers = (from: string, to: string) =>
-	sql<boolean>`daterange(${sql.ref(from)}, ${sql.ref(to)}) @> (now() at time zone 'America/Chicago')::date`;
+const covers = (from: Expression<string>, to: Expression<string | null>) =>
+	sql<boolean>`daterange(${from}, ${to}) @> (now() at time zone 'America/Chicago')::date`;
 
 // Fields come in today's board answer's key order.
 export function readNextBoardDeals(
@@ -41,7 +41,7 @@ export function readNextBoardDeals(
 					.leftJoin("national_account_owner as o", (join) =>
 						join
 							.onRef("o.account_id", "=", "na.party_id")
-							.on(covers("o.started_on", "o.ended_on")),
+							.on((eb) => covers(eb.ref("o.started_on"), eb.ref("o.ended_on"))),
 					)
 					.leftJoin("app_user as ao", "ao.id", "o.owner_id")
 					.select([
@@ -50,7 +50,7 @@ export function readNextBoardDeals(
 						"ao.slug as account_owner",
 					])
 					.whereRef("b.location_id", "=", "c.party_id")
-					.where(covers("b.started_on", "b.ended_on"))
+					.where((eb) => covers(eb.ref("b.started_on"), eb.ref("b.ended_on")))
 					.as("a"),
 			(join) => join.onTrue(),
 		)

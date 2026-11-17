@@ -2294,6 +2294,27 @@ const OWNER_RULES: Record<string, Case[]> = {
 			"app_user_id_kind_fkey",
 		],
 	],
+	"every user signs in under their own slug": [
+		[
+			`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into app_user (id) values ('${DUPLICATE}')`,
+			{
+				code: "23502",
+				message:
+					'null value in column "slug" of relation "app_user" violates not-null constraint',
+			},
+		],
+		[
+			`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into app_user (id, slug) values ('${DUPLICATE}', ' ')`,
+			"app_user_slug_check",
+		],
+		[
+			`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into app_user (id, slug) values ('${DUPLICATE}', 'user-${USER}')`,
+			"app_user_slug_key",
+		],
+	],
 	"a merged-away record points at a live one, so merges never chain": [
 		[
 			`${MERGED}; insert into merged_party (id, survivor_id) values ('${OLD}', '${DUPLICATE}')`,
