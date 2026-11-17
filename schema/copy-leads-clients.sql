@@ -137,8 +137,7 @@ insert into not_copied
 select r.id, f.field, f.value, f.reason from classified_relationship r
 cross join lateral (values
  ('do_not_contact', fields ->> 'stage', 'restriction_needs_reason', kind = 'lead' and ((fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact')),
- ('owner_id', fields ->> 'owner_id', 'owner_not_a_user', kind = 'lead' and fields ->> 'owner_id' is not null and owner is null),
- ('owner_id', fields ->> 'owner_id', 'client_owner_has_no_target', kind = 'client' and fields ->> 'owner_id' is not null),
+ ('owner_id', fields ->> 'owner_id', 'owner_not_a_user', fields ->> 'owner_id' is not null and owner is null),
  ('owner_label', fields ->> 'owner_label', 'owner_label_only', fields ->> 'owner_id' is null and fields ->> 'owner_label' ~ '\S'),
  ('lane', fields ->> 'lane', 'unknown_lane', fields ->> 'lane' is not null and not exists (select from lead_lane where slug = fields ->> 'lane')),
  ('segment', fields ->> 'segment', 'blank_segment', fields ->> 'segment' is not null and fields ->> 'segment' !~ '\S'),
@@ -167,6 +166,24 @@ select 'old_system', r.id::text, r.mapped_id from ready_relationship r
 join party_role pr on pr.party_id = r.mapped_id and pr.role = r.kind
 where (r.kind = 'lead' or exists (select from client c where c.party_id = r.mapped_id))
  and not exists (select from outside_id o where o.source = 'old_system' and o.value = r.id::text);
+
+-- Client responsibility is independent of national-account ownership; labels never identify users.
+create temp table client_owner on commit drop as
+select r.*, case
+ when fields ->> 'owner_id' is not null and owner is null then 'owner_not_a_user'
+ when fields ->> 'owner_id' is null and fields ->> 'owner_label' ~ '\S' then 'owner_label_only'
+ when exists (select from examined_relationship other where other.kind = 'client' and other.mapped_id = r.mapped_id
+  and (other.owner is distinct from r.owner) and (other.fields ->> 'owner_id' is not null or other.fields ->> 'owner_label' ~ '\S'))
+ then 'client_owners_disagree'
+ when c.owner_user_id is not null and owner is not null and c.owner_user_id <> owner then 'existing_client_owner_differs'
+ end as owner_refusal
+from examined_relationship r join client c on c.party_id = r.mapped_id
+join outside_id copied on copied.source = 'old_system' and copied.value = r.id::text and copied.party_id = c.party_id
+where r.kind = 'client';
+update client c set owner_user_id = r.owner from client_owner r
+where c.party_id = r.mapped_id and c.owner_user_id is null and r.owner is not null and r.owner_refusal is null;
+insert into not_copied select id, 'owner_id', fields ->> 'owner_id', owner_refusal
+from client_owner where owner_refusal is not null and owner_refusal not in ('owner_label_only', 'owner_not_a_user');
 
 -- Today's lead export shows next_action rows; lead.next_action_date is only a fallback for a lead without any.
 -- Actions of records copied earlier are retried, so a corrected or newer action still arrives.

@@ -327,7 +327,7 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 			waiting
 				.filter((r) => r.old_id === id(84) && r.field === "owner_id")
 				.map((r) => r.reason),
-			["client_owner_has_no_target"],
+			["owner_not_a_user"],
 		);
 		assert.deepEqual(await answer(), [
 			{ how_found: null, how_found_detail: null, roles: 0 },
@@ -595,3 +595,144 @@ for (const [subject, record] of [
 		}
 	});
 }
+
+test("client responsibility maps known users, retries unknown owners, and leaves account ownership alone", async () => {
+	try {
+		const waiting = await run(
+			`
+ insert into public.actor (id,slug,kind,display_name) values ('${id(89)}','example_unknown_owner','human','Example unknown user');
+ update public.client set owner_id = '${id(1)}', owner_label = 'Example display label' where id = '${id(40)}';
+ update public.client set owner_id = '${id(89)}' where id = '${id(41)}';
+ update public.client set owner_label = 'Example User' where id = '${id(42)}';`,
+			true,
+		);
+		const owners = () =>
+			rows("select party_id, owner_user_id from client order by party_id");
+		assert.deepEqual((await owners()).map(Object.values), [
+			[id(10), id(1)],
+			[id(11), null],
+			[id(12), null],
+			[id(21), null],
+		]);
+		assert.ok(
+			waiting.some(
+				(r) => r.old_id === id(41) && r.reason === "owner_not_a_user",
+			),
+		);
+		assert.ok(
+			waiting.some(
+				(r) => r.old_id === id(42) && r.reason === "owner_label_only",
+			),
+		);
+		assert.deepEqual(await rows("select * from national_account_owner"), []);
+		const stamps = await rows(
+			"select party_id, changed_at, changed_by_user_id from client order by party_id",
+		);
+		const history = () => rows("select * from change order by id");
+		const beforeRerun = await history();
+		assert.deepEqual(await freshCopy(), waiting);
+		assert.deepEqual(await history(), beforeRerun);
+		await freshCopy(
+			`insert into outside_id (source,value,party_id) values ('old_system','${id(89)}','${id(1)}')`,
+		);
+		assert.deepEqual((await owners()).map(Object.values), [
+			[id(10), id(1)],
+			[id(11), id(1)],
+			[id(12), null],
+			[id(21), null],
+		]);
+		assert.deepEqual(
+			await rows(
+				"select party_id, changed_at, changed_by_user_id from client order by party_id",
+			),
+			stamps,
+		);
+		const afterCorrection = await history();
+		await freshCopy();
+		assert.deepEqual(await history(), afterCorrection);
+		assert.equal((await owners())[1]?.owner_user_id, id(1));
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("conflicting client owners wait, a corrected conflict retries, and an existing owner is never replaced", async () => {
+	try {
+		const waiting = await run(
+			`${extraParties}
+ insert into public.actor (id,slug,kind,display_name) values ('${id(2)}','example_second_user','human','Example second user'), ('${id(89)}','example_unmapped_user','human','Example unmapped user');
+ insert into party (id,kind,name) values ('${id(2)}','person','Example second user');
+ insert into app_user (id) values ('${id(2)}');
+ insert into outside_id (source,value,party_id) values ('old_system','${id(2)}','${id(2)}');
+ insert into public.client (id,party_id,status,acquisition_source,owner_id,created_by,updated_by) values
+ ${(
+		[
+			[900, 80, 1],
+			[901, 80, 2],
+			[902, 81, 1],
+			[903, 81, 89],
+			[904, 82, 1],
+			[905, 82, null],
+		] satisfies [number, number, number | null][]
+ )
+		.map(
+			([client, party, owner]) =>
+				`('${id(client)}','${id(party)}','roster','Example client source',${owner === null ? "null" : `'${id(owner)}'`},'${id(1)}','${id(1)}')`,
+		)
+		.join(",")};`,
+			true,
+		);
+		const reasons = (report: pg.QueryResultRow[], n: number) =>
+			report
+				.filter((r) => r.old_id === id(n) && r.field === "owner_id")
+				.map((r) => r.reason);
+		assert.deepEqual(reasons(waiting, 900), ["client_owners_disagree"]);
+		assert.deepEqual(reasons(waiting, 901), ["client_owners_disagree"]);
+		assert.deepEqual(reasons(waiting, 902), ["client_owners_disagree"]);
+		assert.deepEqual(reasons(waiting, 903), ["owner_not_a_user"]);
+		const owners = () =>
+			rows(
+				`select owner_user_id from client where party_id between '${id(80)}' and '${id(82)}' order by party_id`,
+			);
+		assert.deepEqual((await owners()).map(Object.values), [
+			[null],
+			[null],
+			[id(1)],
+		]);
+		assert.deepEqual(await freshCopy(), waiting);
+		await freshCopy(
+			`update public.client set owner_id = '${id(1)}' where id = '${id(901)}'`,
+		);
+		assert.deepEqual((await owners()).map(Object.values), [
+			[id(1)],
+			[null],
+			[id(1)],
+		]);
+		const conflict = await freshCopy(
+			`update public.client set owner_id = '${id(2)}' where id in ('${id(900)}','${id(901)}')`,
+		);
+		assert.deepEqual(reasons(conflict, 900), ["existing_client_owner_differs"]);
+		assert.deepEqual(reasons(conflict, 901), ["existing_client_owner_differs"]);
+		assert.deepEqual((await owners()).map(Object.values), [
+			[id(1)],
+			[null],
+			[id(1)],
+		]);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("the database refuses a client owner who is not a user", async () => {
+	await db.query("begin; select set_config('engine.job','old_system',true)");
+	try {
+		await assert.rejects(
+			db.query(
+				`update client set owner_user_id = '${id(10)}' where party_id = '${id(10)}'`,
+			),
+			{ code: "23503", constraint: "client_owner_user_id_fkey" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
