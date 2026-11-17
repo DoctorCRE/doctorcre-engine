@@ -543,6 +543,7 @@ const STAMPED = [
 	"deal_party",
 	"imported_deal_party",
 	"imported_deal_owner",
+	"imported_deal_invoiced",
 	"activity",
 	"activity_about",
 	"next_step",
@@ -4128,6 +4129,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 				"imported_change",
 				"imported_deal_party",
 				"imported_deal_owner",
+				"imported_deal_invoiced",
 				"app_user",
 				"job",
 				"merged_party",
@@ -8400,13 +8402,14 @@ test("a trusted invoice closes its deal, dates one payment once, and a user undo
 			"closed",
 		);
 		await db.query(`${asUser(USER)}; ${UNDO_INVOICE}; ${CHECK_AT_COMMIT}`);
-		assert.equal(
+		assert.deepEqual(
 			(
 				await db.query(
 					`select invoiced_on from deal_invoiced where deal_id = '${DEAL}'`,
 				)
-			).rows[0].invoiced_on,
-			null,
+			).rows,
+			[],
+			"an undone invoice leaves the deal uninvoiced",
 		);
 		assert.equal(
 			(

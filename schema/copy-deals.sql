@@ -11,7 +11,7 @@ alter table offer disable trigger stamp_change;
 alter table offer_claim disable trigger stamp_change;
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 insert into deal_kind (slug, label) values ('lease', 'Lease'), ('purchase', 'Purchase'),
- ('sale_leaseback', 'Sale-leaseback'), ('build_to_suit', 'Build-to-suit') on conflict do nothing;
+ ('sale_leaseback', 'Sale-leaseback'), ('build_to_suit', 'Build-to-suit'), ('other', 'Other') on conflict do nothing;
 insert into deal_reason (slug, label) values ('start_up', 'Start-up'), ('relocation', 'Relocation'),
  ('expansion', 'Expansion'), ('renewal', 'Renewal'), ('additional_office', 'Additional office') on conflict do nothing;
 insert into role (slug, label) values ('client', 'Client'), ('market_agent', 'Market agent') on conflict do nothing;
@@ -24,6 +24,7 @@ insert into phase (slug, label) values ('dead', 'Dead') on conflict do nothing;
 create temp table old_deal on commit drop as
 select d.*, u.id as owner_user_id, m.id as market_id, parker.id as parked_by_user_id,
  coalesce(nullif(btrim(d.city), ''), nullif(btrim(a.market), '')) as typed_market,
+ exists (select from outside_id o where o.source = 'old_system' and o.value = d.id::text) as copied_before,
  author.*
 from public.deal d
 left join public.deal_market_assignment a on a.deal_id = d.id and d.lane = 'national'
@@ -36,9 +37,8 @@ left join outside_id owner_map on owner_map.source = 'old_system' and owner_map.
 left join app_user u on u.id = owner_map.party_id
 left join outside_id parker_map on parker_map.source = 'old_system' and parker_map.value = d.parked_by::text
 left join app_user parker on parker.id = parker_map.party_id
-cross join lateral copy_attribution('deal', d.id, coalesce(d.updated_by, d.created_by)) author
-where not exists (select from outside_id o where o.source = 'old_system' and o.value = d.id::text);
-insert into not_copied select id, 'deal', id::text, 'no_deal_owner' from old_deal where owner_user_id is null;
+cross join lateral copy_attribution('deal', d.id, coalesce(d.updated_by, d.created_by)) author;
+insert into not_copied select id, 'deal', id::text, 'no_deal_owner' from old_deal where owner_user_id is null and not copied_before;
 insert into deal (id, created_at, name, kind, reason, owner_user_id, market_id, closed_value,
  parking_reason, parking_note, needs_attention, parked_at, parked_by_user_id,
  changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
@@ -48,9 +48,11 @@ select id, created_at, name, (select slug from deal_kind where slug = deal_type)
  case when operating_state = 'parked' then parking_reason end,
  case when operating_state = 'parked' then nullif(regexp_replace(parking_note, '^\s+|\s+$', '', 'g'), '') end, attention,
  case when operating_state = 'parked' then parked_at end, case when operating_state = 'parked' then parked_by_user_id end,
- changed_by_user_id, changed_by_job, changed_for_user_id, updated_at from old_deal where owner_user_id is not null;
+ changed_by_user_id, changed_by_job, changed_for_user_id, updated_at from old_deal where owner_user_id is not null and not copied_before;
 insert into outside_id (source, value, deal_id)
-select 'old_system', d.id::text, d.id from old_deal d join deal n on n.id = d.id;
+select 'old_system', d.id::text, d.id from old_deal d join deal n on n.id = d.id where not d.copied_before;
+insert into imported_deal_invoiced (deal_id, invoiced_on)
+select d.id, d.invoiced_on from old_deal d join deal n on n.id = d.id where d.invoiced_on is not null on conflict do nothing;
 create temp table deal_outside_id on commit drop as
 select r.entity_id as old_id, concat_ws(' ', r.source_system, r.external_key) as typed, k.source, k.value, m.deal_id
 from public.record_source r cross join lateral copy_outside_id(r.source_system, r.external_key) k
@@ -73,14 +75,13 @@ where reason is null and not exists (select from outside_id o where (o.source, o
 insert into not_copied
 select old_id, 'record_source', typed, reason from deal_outside_id_refusal where reason is not null;
 
+-- Every run lists the leftovers of every copied deal, so the list a partner fixes stays whole.
 insert into not_copied
 select d.id, f.field, f.value, f.reason from old_deal d join deal n on n.id = d.id
 cross join lateral (values
  ('deal_type', d.deal_type, 'renewal_without_lease', d.deal_type = 'renewal'),
- ('deal_type', d.deal_type, 'unfiled_deal_type', d.deal_type not in (select slug from deal_kind)
-  and d.deal_type not in (select slug from deal_reason) and d.deal_type <> 'startup'),
- ('market', d.typed_market, 'unknown_market', d.typed_market is not null and d.market_id is null),
- ('won_value', d.won_value::text, 'nonpositive_value', d.won_value <= 0)) f(field, value, reason, refused)
+ ('market', d.typed_market, 'unknown_market', d.typed_market is not null and n.market_id is null),
+ ('won_value', d.won_value::text, 'nonpositive_value', d.won_value is not null and n.closed_value is null)) f(field, value, reason, refused)
 where f.refused;
 
 -- Only a copy leaves a parked deal without its parker; the engine's own parking always names one.
@@ -246,6 +247,11 @@ select p.deal_id, p.happened_at, p.phase, p.reason, p.changed_by_user_id, p.chan
 from mapped_phase p where refusal is null
  and not exists (select from deal_phase_change c where (c.deal_id, c.happened_at) = (p.deal_id, p.happened_at));
 insert into not_copied select old_id, 'phase', phase, refusal from mapped_phase where refusal is not null;
+-- With no phase events, the current phase is known only to hold at the deal's last change.
+insert into deal_phase_change (deal_id, happened_at, phase, changed_by_job, changed_at)
+select d.id, d.updated_at, d.phase, 'old_system', d.updated_at from public.deal d join deal n on n.id = d.id
+where d.outcome is distinct from 'lost' and not exists (select from deal_phase_change c where c.deal_id = d.id)
+ and not exists (select from public.event e where e.subject_type = 'deal' and e.subject_id = d.id and e.field = 'phase');
 insert into not_copied
 select d.id, 'phase', d.phase, case when d.outcome = 'lost' then 'lost_without_dated_reason' else 'current_phase_differs' end
 from public.deal d join deal n on n.id = d.id

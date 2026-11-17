@@ -43,7 +43,7 @@ insert into stage (role, slug, label)
 select 'vendor', slug, label from public.vendor_stage where slug not in (select slug from original_stage)
 on conflict do nothing;
 
--- Each vendor not copied before, at the record its party became. Today's merge joins vendors of one party and leaves
+-- Each vendor, at the record its party became. Today's merge joins vendors of one party and leaves
 -- a value that conflicted on the merged-away one, so that one joins its survivor here, after the live ones.
 create temp table old_vendor on commit drop as
 select v.*, map.party_id as record_id,
@@ -56,7 +56,8 @@ select v.*, map.party_id as record_id,
 	when v.disposition = 'active' then null
 	when v.disposition not in ('parked', 'avoid') then 'not a ruling'
 	when reviewed.reasons > 1 then 'its reviewed reasons conflict'
-	when reviewed.reason is null then 'a ruling without a reason' end as ruling_refusal, author.*
+	when reviewed.reason is null then 'a ruling without a reason' end as ruling_refusal,
+	exists (select from outside_id where source = 'old_system' and value = v.id::text) as copied_before, author.*
 from public.vendor v
 left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text
 cross join lateral (select count(distinct r.value) as reasons, min(r.value) as reason
@@ -65,15 +66,14 @@ cross join lateral (select count(distinct r.value) as reasons, min(r.value) as r
 	where c.old_id = v.id) reviewed
 left join stage on stage.role = 'vendor' and stage.slug = v.stage
 left join relationship_level level on level.level = v.relationship_level
-cross join lateral copy_attribution('vendor', v.id, v.updated_by) author
-where not exists (select from outside_id where source = 'old_system' and value = v.id::text);
+cross join lateral copy_attribution('vendor', v.id, v.updated_by) author;
 
 -- Today's rulings have no reason, and the new database keeps none without one, so a ruled vendor's record waits whole
 -- until a partner reviews one. Copying it without the ruling would put it back in play.
 create temp table copied on commit drop as
 select * from old_vendor v
-where record_id is not null and not record_had_vendor
-	and not exists (select from old_vendor w where w.record_id = v.record_id and w.ruling_refusal is not null);
+where not copied_before and record_id is not null and not record_had_vendor
+	and not exists (select from old_vendor w where w.record_id = v.record_id and w.ruling_refusal is not null and not w.copied_before);
 
 -- One record's vendors are one vendor role, as merge_party would join them: the first stage and level, the record's
 -- own vendor's first, then by when they were stored, the strictest ruling with its reason, and a target on any unless
@@ -102,6 +102,12 @@ from copied cross join lateral (select case category_slug when 'gc' then 'contra
 where role is not null
 order by record_id, role, rank;
 
+insert into outside_id (source, value, party_id) select 'old_system', id::text, record_id from copied;
+
+-- Every vendor copied, now or before, so each run lists the same leftovers and the list a partner fixes stays whole.
+create temp table kept on commit drop as
+select * from old_vendor v where exists (select from outside_id where source = 'old_system' and value = v.id::text);
+
 insert into vendor_vertical (party_id, vertical, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select distinct on (record_id, regexp_replace(value, '^\s+|\s+$', '', 'g')) record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), created_at, updated_at,
 	changed_by_user_id, changed_by_job, changed_for_user_id
@@ -110,7 +116,7 @@ order by record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), rank;
 
 insert into not_copied
 select id, 'verticals', value, 'blank or null list entry'
-from copied cross join lateral unnest(verticals) value where value is null or value !~ '\S';
+from kept cross join lateral unnest(verticals) value where value is null or value !~ '\S';
 
 insert into vendor_loan_program (party_id, loan_program, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select distinct on (record_id, regexp_replace(value, '^\s+|\s+$', '', 'g')) record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), created_at, updated_at,
@@ -120,17 +126,15 @@ order by record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), rank;
 
 insert into not_copied
 select id, 'loan_programs', value, 'blank or null list entry'
-from copied cross join lateral unnest(loan_programs) value where value is null or value !~ '\S';
+from kept cross join lateral unnest(loan_programs) value where value is null or value !~ '\S';
 
 insert into not_copied
 select v.id, f.field, f.value, 'its record holds another value'
-from copied v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
+from kept v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
 cross join lateral (values ('offers', v.typed_offers, r.offers), ('seeking', v.typed_seeking, r.seeking),
 	('originated', v.originated, r.relationship_origin), ('rivalry_group', v.rivalry_group, r.rivalry_note),
 	('referral_active', v.referral_active::text, r.refers_business::text)) f(field, value, stored)
 where f.value is not null and f.value <> f.stored;
-
-insert into outside_id (source, value, party_id) select 'old_system', id::text, record_id from copied;
 
 -- A merged-away vendor's note that its survivor holds too was filled in by today's merge.
 create temp table vendor_note on commit drop as
@@ -148,7 +152,7 @@ select activity_id, record_id, updated_at, updated_at, changed_by_user_id, chang
 from vendor_note;
 
 create temp table typed_ref on commit drop as
-select id, vendor_ref, record_id, regexp_replace(vendor_ref, '^\s+|\s+$', '', 'g') as value from copied where vendor_ref ~ '\S';
+select id, vendor_ref, record_id, regexp_replace(vendor_ref, '^\s+|\s+$', '', 'g') as value from kept where vendor_ref ~ '\S';
 
 insert into outside_id (source, value, party_id)
 select distinct on (value) 'old_system_ref', value, record_id
@@ -166,9 +170,9 @@ select id, 'vendor', vendor_ref, case
 	when record_had_vendor then 'its record holds a vendor role copied before'
 	else 'another vendor of its record waits for a ruling' end
 from old_vendor v
-where ruling_refusal is null and not exists (select from copied c where c.id = v.id);
+where not copied_before and ruling_refusal is null and not exists (select from copied c where c.id = v.id);
 
-insert into not_copied select id, 'disposition', disposition, ruling_refusal from old_vendor where ruling_refusal is not null;
+insert into not_copied select id, 'disposition', disposition, ruling_refusal from old_vendor where not copied_before and ruling_refusal is not null;
 
 insert into not_copied
 select c.old_id, 'disposition_reason', c.reason, case when v.id is null then 'not a vendor' else 'not a parked or avoided vendor' end
@@ -177,7 +181,7 @@ where coalesce(v.disposition, '') not in ('parked', 'avoid');
 
 insert into not_copied
 select v.id, f.field, f.value, f.reason
-from copied v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
+from kept v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
 cross join lateral (values
 	('disposition_reason', v.ruling_reason, case when v.ruling <> r.disposition then 'its record holds a stricter ruling'
 		when v.ruling_reason <> r.disposition_reason then 'its record holds another reason' end),
@@ -186,19 +190,19 @@ where f.reason is not null;
 
 insert into not_copied
 select v.id, 'stage', v.stage, 'its record holds another stage'
-from copied v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
+from kept v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
 where v.stage_slug <> r.stage;
 
 insert into not_copied
 select v.id, 'relationship_level', v.relationship_level::text,
 	case when v.level is null then 'not a relationship level' else 'its record holds another level' end
-from copied v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
+from kept v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
 where v.relationship_level is distinct from r.relationship_level and v.relationship_level is not null;
 
 -- Today's free-text category is what 0050 could not name, kept for a partner to give a category.
 create temp table unplaced on commit drop as
 select v.id, v.record_id, v.merged_into, f.field, f.value, f.reason
-from copied v cross join lateral (values ('category', case when v.category_slug is null then v.category end, 'not a vendor category'),
+from kept v cross join lateral (values ('category', case when v.category_slug is null then v.category end, 'not a vendor category'),
 	('trust_override', v.trust_override ->> 'tier', 'a hand-set rating, which the new database does not keep'),
 	('owner_id', v.owner_id::text, 'relationship owner awaits an owner ruling'),
 	('out_of_market', nullif(v.out_of_market, false)::text, null)) as f (field, value, reason)

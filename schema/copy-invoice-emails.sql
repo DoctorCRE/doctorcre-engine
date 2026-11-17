@@ -160,7 +160,7 @@ begin
 end $$;
 insert into not_copied
 select d.id, 'invoiced_on', d.invoiced_on::text, 'invoice_date_not_reconciled' from public.deal d
-where d.invoiced_on is not null and not exists (select from outside_id m join commission_payment p on p.deal_id = m.deal_id
+where d.invoiced_on is not null and not exists (select from outside_id m join deal_invoiced p on p.deal_id = m.deal_id
  where m.source = 'old_system' and m.value = d.id::text and p.invoiced_on = d.invoiced_on);
 set constraints all immediate;
 alter table invoice_email enable trigger invoice_email_transition;
