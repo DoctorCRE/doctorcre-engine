@@ -132,29 +132,48 @@ for (const [name, role] of [
 	});
 }
 
-test("the probe appends new-section reachability and preserves the old fields", async () => {
-	for (const [name, readable] of [
-		[reader, true],
-		[reader, false],
-		[directReader, false],
-	] as const) {
-		if (name === directReader) {
-			const client = new pg.Client({ connectionString: login(name) });
+for (const { name, readable, setup, cleanup } of [
+	{
+		name: "a reader login",
+		readable: true,
+		setup: async () => login(reader),
+		cleanup: async () => {},
+	},
+	{
+		name: "a reader login without table access",
+		readable: false,
+		setup: async () => {
+			await db.query("revoke select on next.deal from engine_reader");
+			return login(reader);
+		},
+		cleanup: async () => {
+			await db.query("grant select on next.deal to engine_reader");
+		},
+	},
+	{
+		name: "a directly granted login without the reader role",
+		readable: false,
+		setup: async () => {
+			const client = new pg.Client({ connectionString: login(directReader) });
 			await client.connect();
 			try {
 				await client.query("select 1 from next.deal limit 1");
 			} finally {
 				await client.end();
 			}
-		}
-		if (name === reader && !readable)
-			await db.query("revoke select on next.deal from engine_reader");
+			return login(directReader);
+		},
+		cleanup: async () => {},
+	},
+]) {
+	test(`the probe preserves the old fields and reports new-section reachability for ${name}`, async () => {
 		try {
+			const connectionString = await setup();
 			const response = await worker.request(
 				"https://app.example.test/api/engine/database",
 				{ headers: { Cookie: "__Host-dealroom_session=made-up-session" } },
 				{
-					DATABASE: { connectionString: login(name) },
+					DATABASE: { connectionString },
 					CARR: {
 						fetch: async () =>
 							Response.json({
@@ -176,7 +195,7 @@ test("the probe appends new-section reachability and preserves the old fields", 
 				}),
 			);
 		} finally {
-			await db.query("grant select on next.deal to engine_reader");
+			await cleanup();
 		}
-	}
-});
+	});
+}

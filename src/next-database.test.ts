@@ -2372,6 +2372,10 @@ const OWNER_RULES: Record<string, Case[]> = {
 	"loading the schema refuses an engine role with rights beyond its grants": [
 		[`grant pg_write_all_data to engine; ${RELOAD}`, TOO_MUCH],
 		[`alter role engine bypassrls; ${RELOAD}`, TOO_MUCH],
+		[
+			`grant pg_read_all_data to engine_reader; ${RELOAD}`,
+			{ message: "role engine_reader holds rights beyond its grants" },
+		],
 	],
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
