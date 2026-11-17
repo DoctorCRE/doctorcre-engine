@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type pg from "pg";
-import { lead, leadCopyTest } from "./test-lead-copy.ts";
+import { leadCopyTest } from "./test-lead-copy.ts";
 import {
 	assertCompletionDates,
 	completionEvents,
@@ -11,17 +11,6 @@ import {
 
 const { db, copy, setup, cleanup } = await leadCopyTest(
 	"copy-leads-clients.sql",
-	[
-		["new", "new"],
-		["qualified", "qualified"],
-		["nurture_drip", "nurture_drip"],
-		["closed_lost", "closed_lost"],
-		["closed_won", "closed_won"],
-		["active_deal", "active_deal"],
-		["do_not_contact", "do_not_contact"],
-		["engaged", "engaged"],
-		["other", "other"],
-	],
 );
 const rows = async (sql: string) => (await db.query(sql)).rows;
 // A copy starts clear of every temp table, so it supplies the source mappings again before sql.
@@ -65,6 +54,7 @@ before(async () => {
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
  insert into app_user values ('${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
+ insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','nurture_drip','closed_lost','closed_won','active_deal','do_not_contact','engaged','other']) s;
  insert into public.client_status (slug,label) select s,s from unnest(array['roster','active_deal','past_client','cold','prospect']) s;
  insert into public.client_type (slug,label) values ('franchise','Example franchise'),('national_account','Example account'), ('group','Example group'), ('other','Example unknown');
  insert into public.lead_lane (slug,label) values ('example_lane','Example lane');
@@ -94,13 +84,14 @@ before(async () => {
 		"engaged",
 	].entries()) {
 		await db.query(
-			lead({
-				leadId: id(51 + i),
-				partyId: id(14 + i),
-				actorId: id(1),
+			`insert into public.lead (id,party_id,stage,source_type,created_by,updated_by) values ($1,$2,$3,$4,$5,$5)`,
+			[
+				id(51 + i),
+				id(14 + i),
 				stage,
-				source: i === 4 ? "Unmapped source" : "Example referral",
-			}),
+				i === 4 ? "Unmapped source" : "Example referral",
+				id(1),
+			],
 		);
 	}
 	await db.query(

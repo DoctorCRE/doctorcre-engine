@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type pg from "pg";
-import { lead, leadCopyTest } from "./test-lead-copy.ts";
+import { leadCopyTest } from "./test-lead-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const { db, copy, setup, cleanup } = await leadCopyTest(
 	"copy-candidates-drafts.sql",
-	[["new", "New"]],
 );
 const rows = async (sql: string) =>
 	(await db.query(sql)).rows.map(Object.values);
@@ -74,14 +73,13 @@ before(async () => {
  insert into how_found (slug,label) values ('referral','Referral');
  insert into role (slug,label) values ('lead','Lead');
  insert into stage (role,slug,label) values ('lead','new','New');
+ insert into public.lead_stage (slug,label) values ('new','New');
  ${[20, 21, 22, 23, 24, 25, 26, 27]
-		.map((n) =>
-			lead({
-				leadId: id(n),
-				partyId: id(n - 10),
-				actorId: user,
-				name: `Example ${n}`,
-			}),
+		.map(
+			(
+				n,
+			) => `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n - 10)}','person','Example ${n}','${user}','${user}');
+ insert into public.lead (id,party_id,stage,created_by,updated_by) values ('${id(n)}','${id(n - 10)}','new','${user}','${user}');`,
 		)
 		.join("\n")}
  ${[...new Set(copiedLeads.map(party))]

@@ -1,16 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type pg from "pg";
-import { lead, leadCopyTest } from "./test-lead-copy.ts";
+import { leadCopyTest } from "./test-lead-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const { db, copy, setup, cleanup } = await leadCopyTest(
 	"copy-leads-clients.sql",
-	[
-		["new", "New"],
-		["do_not_contact", "Do not contact"],
-	],
 );
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (input = ""): Promise<pg.QueryResultRow[]> => {
@@ -36,13 +32,18 @@ before(async () => {
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
  insert into app_user values ('${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
+ insert into public.lead_stage (slug,label) values ('new','New'),('do_not_contact','Do not contact');
+ insert into public.party (id,kind,name,created_by,updated_by)
+ values ('${id(10)}','person','Example person','${id(1)}','${id(1)}');
  commit;`);
 	await db.query(`begin; select set_config('engine.job','old_system',true);
- ${lead({ leadId: id(30), partyId: id(10), actorId: id(1), stage: "do_not_contact", name: "Example person", source: "Example referral", suppressed: true, createdAt: "2024-01-01", updatedAt: "2025-01-01" })}
- ${lead({ leadId: id(31), partyId: id(11), actorId: id(1), name: "Example duplicate", source: "Example referral", suppressed: true, createdAt: "2024-02-01", updatedAt: "2025-02-01" })}
- ${lead({ leadId: id(32), partyId: id(10), actorId: id(1), source: "Example referral", createdAt: "2024-03-01", updatedAt: "2025-03-01" })}
+ insert into public.party (id,kind,name,created_by,updated_by) values ('${id(11)}','person','Example duplicate','${id(1)}','${id(1)}');
  insert into party (id,kind,name) values ('${id(20)}','person','Example survivor');
  insert into outside_id (source,value,party_id) values ('old_system','${id(10)}','${id(20)}'),('old_system','${id(11)}','${id(20)}');
+ insert into public.lead (id,party_id,stage,suppressed,source_type,created_by,updated_by,created_at,updated_at) values
+ ('${id(30)}','${id(10)}','do_not_contact',true,'Example referral','${id(1)}','${id(1)}','2024-01-01','2025-01-01'),
+ ('${id(31)}','${id(11)}','new',true,'Example referral','${id(1)}','${id(1)}','2024-02-01','2025-02-01'),
+ ('${id(32)}','${id(10)}','new',false,'Example referral','${id(1)}','${id(1)}','2024-03-01','2025-03-01');
  commit;`);
 });
 after(cleanup);

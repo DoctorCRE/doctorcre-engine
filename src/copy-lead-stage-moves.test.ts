@@ -1,21 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type pg from "pg";
-import { lead, leadCopyTest } from "./test-lead-copy.ts";
+import { leadCopyTest } from "./test-lead-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const { db, copy, setup, cleanup } = await leadCopyTest(
 	"copy-lead-stage-moves.sql",
-	[
-		["new", "new"],
-		["qualified", "qualified"],
-		["outreach_active", "outreach_active"],
-		["engaged", "engaged"],
-		["nurture_drip", "nurture_drip"],
-		["opportunity", "opportunity"],
-		["archived", "archived"],
-	],
 );
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (): Promise<pg.QueryResultRow[]> => {
@@ -39,10 +30,12 @@ before(async () => {
  insert into role (slug,label) values ('lead','Lead');
  insert into how_found (slug,label) values ('referral','Example referral');
  insert into stage (role,slug,label) select 'lead',s,s from unnest(array['new','qualified','outreach_active','engaged','nurture','opportunity','archived']) s;
+ insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','outreach_active','engaged','nurture_drip','opportunity','archived']) s;
  alter table party_role disable trigger lead_stage_needs_evidence;
  ${Array.from({ length: 8 }, (_, i) => {
 		const n = i + 10;
-		return `${lead({ leadId: id(n + 20), partyId: id(n), actorId: id(2), stage: "engaged", name: "Example Lead" })}
+		return `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n)}','person','Example Lead','${id(2)}','${id(2)}');
+ insert into public.lead (id,party_id,stage,created_by,updated_by) values ('${id(n + 20)}','${id(n)}','engaged','${id(2)}','${id(2)}');
  insert into party (id,kind,name,how_found) values ('${id(n)}','person','Example Lead','referral');
  insert into party_role (party_id,role,stage) values ('${id(n)}','lead','engaged');
  insert into outside_id (source,value,party_id) values ('old_system','${id(n + 20)}','${id(n)}');
