@@ -41,6 +41,11 @@ const saved = (n: number, criteria: object, status = "saved") =>
 		`insert into ops.deal_space_search (id, organization_tenant_id, deal_id, name, criteria, requirements, status, updated_at) values ($1,'example-tenant',$2,'Example search',$3,'Near transit',$4,'2025-02-01')`,
 		[id(n), id(10), JSON.stringify(criteria), status],
 	);
+const need = (n: number, patch: object) =>
+	db.query(
+		`insert into public.deal_client_need select (jsonb_populate_record(null::public.deal_client_need,to_jsonb(n)||$1::jsonb)).* from public.deal_client_need n where id=$2`,
+		[JSON.stringify({ ...patch, id: id(n) }), id(300)],
+	);
 before(async () => {
 	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
 	await asAdmin(
@@ -152,9 +157,10 @@ test("reruns leave needs and their history unchanged", async () => {
 	];
 	const before = await snapshot();
 	await db.query("begin");
-	await run();
+	const again = await run();
 	await db.query("commit");
 	assert.deepEqual(await snapshot(), before);
+	assert.deepEqual(again, report);
 });
 test("invalid numbers, shapes and ambiguous markets are listed without aborting", async () => {
 	await db.query("begin; select set_config('engine.job','old_system',true)");
@@ -209,11 +215,7 @@ test("unmapped vendors, approval conflicts, blank text and source collisions wai
  insert into public.vendor (id,party_id,category,created_by,updated_by) values ('${id(8)}','${id(9)}','Example','${id(1)}','${id(1)}');`);
 		// biome-ignore format: one corrected source field and exact refusal per case
 		const cases = [{vendor_id:id(8)},{approved_client_id:id(4)},{approved_by:id(5)},{description:"\n"},{source_ref:"\t"},{source_revision:"\n"},{applicability:"\t"}];
-		for (const [i, patch] of cases.entries())
-			await db.query(
-				`insert into public.deal_client_need select (jsonb_populate_record(null::public.deal_client_need,to_jsonb(n)||$1::jsonb)).* from public.deal_client_need n where id=$2`,
-				[JSON.stringify({ ...patch, id: id(500 + i) }), id(300)],
-			);
+		for (const [i, patch] of cases.entries()) await need(500 + i, patch);
 		await saved(507, {});
 		await db.query(
 			`update ops.deal_space_search set name=' ' where id='${id(507)}'`,
@@ -243,6 +245,28 @@ test("unmapped vendors, approval conflicts, blank text and source collisions wai
 			),
 			[{ id: id(509), market_id: id(20) }],
 		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("client assertions credit their creator and wait only when observed after approval", async () => {
+	await db.query("begin; select set_config('engine.job','old_system',true)");
+	try {
+		await db.query(
+			`insert into public.actor (id,slug,kind,display_name) values ('${id(5)}','codex','automation','Example Agent')`,
+		);
+		await need(600, { created_by: id(5) });
+		await need(601, { observed_at: "2025-01-03" });
+		await need(602, { observed_at: "2025-01-02" });
+		const result = await run();
+		assert.deepEqual(reasons(result, 600), []);
+		assert.deepEqual(reasons(result, 601), ["observed_after_approval"]);
+		assert.deepEqual(reasons(result, 602), []);
+		// biome-ignore format: one row per history event
+		assert.deepEqual((await rows(`select record->>'id',action,changed_by_user_id,changed_by_job from change where table_name='space_need' and record->>'id'>='${id(600)}' order by id`)).map(Object.values), [[id(600),"insert",null,"agent"],[id(600),"update",id(1),null],[id(602),"insert",id(1),null],[id(602),"update",id(1),null]]);
+		// biome-ignore format: one row per copied need
+		assert.deepEqual((await rows(`select id,changed_by_user_id from space_need where id >= '${id(600)}' order by id`)).map(Object.values), [[id(600),id(1)],[id(602),id(1)]]);
 	} finally {
 		await db.query("rollback");
 	}
