@@ -2546,6 +2546,11 @@ begin atomic
 			from next_step s
 			where s.deal_id = d.id
 		),
+		'critical_dates', (
+			select coalesce(jsonb_agg(to_jsonb(c) - 'deal_id' order by c.due_on, c.id), '[]')
+			from critical_date c
+			where c.deal_id = d.id and c.status = 'open'
+		),
 		'earlier_parties', (
 			select coalesce(jsonb_agg(to_jsonb(e) - 'deal_id' || jsonb_build_object('party', to_jsonb(p))
 				order by e.ended_at, e.id), '[]')
