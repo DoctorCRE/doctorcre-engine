@@ -89,10 +89,10 @@ insert into email (activity_id, message_id, sender, subject, body) values
 insert into activity_about (activity_id, deal_id, party_id) values
 	('${EMAIL}', '${DEAL}', null), ('${EMAIL}', null, '${AGENT}'),
 	('${CALL}', '${DEAL}', null), ('${NOTE}', null, '${CLIENT}');
-insert into next_step (id, what, owner_party_id, due_on, done_at, deal_id, party_id) values
-	('${id(400)}', 'Start the lease draft', null, '2026-03-20', null, '${DEAL}', null),
-	('${id(401)}', 'Send the signed LOI', '${CLIENT}', '2026-03-13', '2026-03-13T18:00:00+00:00', '${DEAL}', null),
-	('${id(402)}', 'Ask about a second location', null, null, null, null, '${CLIENT}');
+insert into next_step (id, what, owner_party_id, due_on, resolution, done_at, deal_id, party_id) values
+	('${id(400)}', 'Start the lease draft', null, '2026-03-20', null, null, '${DEAL}', null),
+	('${id(401)}', 'Send the signed LOI', '${CLIENT}', '2026-03-13', 'done', '2026-03-13T18:00:00+00:00', '${DEAL}', null),
+	('${id(402)}', 'Ask about a second location', null, null, null, null, null, '${CLIENT}');
 -- Quiet hours may run past midnight.
 insert into user_preference (user_id, time_zone, quiet_from, quiet_until, push_to_device) values
 	('${USER}', 'America/Chicago', '21:00', '07:00', true);
@@ -3028,10 +3028,10 @@ test("party activity is explicit, chronological and once per item with ordered e
 
 test("party next steps retain completed steps, sort due dates with id ties and leave undated last", async () => {
 	await withParty(async () => {
-		await db.query(`insert into next_step (id, what, party_id, due_on, done_at) values
-			('${id(9072)}', 'Undated', '${SUBJECT}', null, null),
-			('${id(9071)}', 'Open', '${SUBJECT}', '2020-01-01', null),
-			('${id(9070)}', 'Done', '${SUBJECT}', '2020-01-01', '2020-01-01')`);
+		await db.query(`insert into next_step (id, what, party_id, due_on, resolution, done_at) values
+			('${id(9072)}', 'Undated', '${SUBJECT}', null, null, null),
+			('${id(9071)}', 'Open', '${SUBJECT}', '2020-01-01', null, null),
+			('${id(9070)}', 'Done', '${SUBJECT}', '2020-01-01', 'done', '2020-01-01')`);
 		const steps = (await readParty()).next_steps;
 		assert.deepEqual(
 			steps.map((s: { id: string }) => s.id),
@@ -3120,6 +3120,7 @@ test("next-step end states reject contradictory times, reasons and evidence", as
 			"resolution = 'done', resolution_reason = 'Not needed'",
 			"next_step_cancellation_reason",
 		],
+		["done_at = now()", "next_step_done_time"],
 		["resolution = 'expired', done_at = now()", "next_step_done_time"],
 		[
 			"resolution = 'cancelled', resolution_reason = 'Not needed', done_at = now()",
@@ -3615,7 +3616,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				owner_party_id: CLIENT,
 				due_on: "2026-03-13",
 				done_at: "2026-03-13T18:00:00+00:00",
-				resolution: null,
+				resolution: "done",
 				resolved_at: null,
 				resolution_reason: null,
 				resolution_event_id: null,

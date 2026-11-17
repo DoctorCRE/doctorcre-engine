@@ -32,6 +32,49 @@ begin atomic
 		order by mutation_order desc limit 1));
 end;
 
+-- Each old action's end state as its latest closing event proves it. A later keep or reopen leaves no proof.
+-- A cancellation needs one partner drop with its reason, on the row as that drop left it.
+create or replace function copy_action_end()
+returns table (id uuid, resolution text, proven boolean, done_at timestamptz, resolved_at timestamptz,
+	resolution_reason text, resolution_event_id uuid, refusal text)
+language sql stable
+begin atomic
+	with closure as (
+		select distinct on (e.action_id, e.resolution) e.*, count(*) over (partition by e.action_id, e.resolution) as events
+		from (select e.new_value ->> 'next_action_id' as action_id, 'cancelled' as resolution, e.id, e.occurred_at, e.mutation_order,
+				coalesce(e.new_value ->> 'reason', e.human_quote) as reason, e.new_value ->> 'version' as version, true as proves
+			from public.event e where e.verb = 'drop-action'
+			union all
+			select r ->> 'id', 'expired', e.id, e.occurred_at, e.mutation_order, null, null, e.new_value ->> 'action' = 'drop'
+			from public.event e cross join jsonb_array_elements(e.new_value -> 'rows') r
+			where e.verb = 'clear-the-deck-apply' and e.new_value ->> 'kind' = 'next_action'
+				and (e.new_value ->> 'action' = 'keep' or r ->> 'status' = 'open')
+			union all
+			select coalesce(e.new_value ->> 'next_action_id', e.new_value ->> 'item_id', e.new_value ->> 'action_id'), 'done',
+				e.id, e.occurred_at, e.mutation_order, null, null, e.verb <> 'reopen-one-action'
+			from public.event e where e.verb in ('complete-one-action', 'complete-deal-item', 'reopen-one-action')) e
+		order by e.action_id, e.resolution, e.mutation_order desc
+	), action as (
+		select n.id, n.status, n.version, null::timestamptz as completed_at from public.next_action n
+		union all
+		select n.id, n.status, n.version, n.completed_at from public.capture_post_call_action n
+	)
+	select n.id, s.resolution, p.proven,
+		case when s.resolution = 'done' then coalesce(n.completed_at, case when p.proven then c.occurred_at end) end,
+		case when s.resolution <> 'done' and p.proven then c.occurred_at end,
+		case when s.resolution = 'cancelled' and p.proven then c.reason end,
+		case when s.resolution <> 'done' and p.proven then c.id end,
+		case when s.resolution = 'cancelled' and not p.proven then case when coalesce(c.reason, '') !~ '\S'
+			then 'cancellation_reason_missing' else 'cancellation_evidence_conflict' end end
+	from action n
+	cross join lateral (values (case n.status when 'done' then 'done' when 'dropped' then 'cancelled'
+		when 'expired' then 'expired' end)) s(resolution)
+	left join closure c on c.action_id = n.id::text and c.resolution = s.resolution
+	cross join lateral (values (coalesce(case when s.resolution <> 'cancelled' then c.proves
+		else c.events = 1 and c.version = n.version::text and c.reason ~ '\S' end, false))) p(proven)
+	where s.resolution is not null;
+end;
+
 -- A phone projection wins; otherwise the one text-bearing meeting record, unless a logged activity carries it.
 create or replace function copy_capture_summary(capture_session_id uuid, is_logged boolean)
 returns table (summary text, records bigint)

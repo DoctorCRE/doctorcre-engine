@@ -946,8 +946,7 @@ create table next_step (
 	resolved_at timestamptz,
 	resolution_reason text check (resolution_reason is null or btrim(resolution_reason) <> ''),
 	resolution_event_id uuid,
-	status text generated always as
-		(coalesce(resolution, case when done_at is not null then 'done' else 'open' end)) stored,
+	status text generated always as (coalesce(resolution, 'open')) stored,
 	deal_id uuid references deal,
 	party_id uuid references party,
 	property_id uuid references property,
