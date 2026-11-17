@@ -1973,13 +1973,6 @@ begin
 		if new.deal_id is null then
 			raise exception 'an invoice needs its payment' using errcode = 'check_violation', constraint = 'invoice_email_needs_payment';
 		end if;
-		select id into new.application_id from invoice_email
-		where deal_id = new.deal_id and payment_id = new.payment_id and email_date = new.email_date
-			and status in ('applied', 'undone');
-		if found then
-			new.status := 'attached';
-			return new;
-		end if;
 		if latest.happened_at is null then
 			raise exception 'an invoice needs the previous phase for undo' using errcode = 'check_violation', constraint = 'invoice_email_needs_prior_phase';
 		end if;
@@ -1998,6 +1991,13 @@ begin
 			or (select count(*) from commission_payment where deal_id = new.deal_id
 				and (invoiced_on is null or invoiced_on = new.email_date)) <> 1) then
 			raise exception 'a doubtful invoice waits for a user' using errcode = 'check_violation', constraint = 'invoice_email_needs_user';
+		end if;
+		select id into new.application_id from invoice_email
+		where deal_id = new.deal_id and payment_id = new.payment_id and email_date = new.email_date
+			and status in ('applied', 'undone');
+		if found then
+			new.status := 'attached';
+			return new;
 		end if;
 		new.prior_phase_at := latest.happened_at;
 		new.prior_invoiced_on := payment.invoiced_on;

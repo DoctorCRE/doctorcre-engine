@@ -6354,6 +6354,10 @@ const INVOICE_REFUSALS: Case[] = [
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; delete from invoice_email`, notGranted("invoice_email")],
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; update invoice_email set email_date = '2026-04-02'`, notGranted("invoice_email")],
 	...[
+		{sender: "stranger@example.net"}, {deal_name: "Example Unrelated Deal"},
+		{client_name: "Example Other Client"},
+	].map((row): Case => [`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture")}; ${APPLY_INVOICE}; ${resendEmail(row)}; ${APPLY_RESEND}`, "invoice_email_needs_user"]),
+	...[
 		"update invoice_email set status = 'undone'",
 		"update invoice_email set status = 'applied'",
 		"update invoice_email set deal_id = null, payment_id = null",
@@ -6715,8 +6719,11 @@ test("invoice matching and payment checks cannot straddle a user's transaction",
 	}
 });
 
-for (const actor of [asUser(USER), asJob("mail_capture")]) {
-	test(`resent invoice evidence attaches without changing the original close under ${actor}`, async () => {
+for (const [label, actor] of [
+	["user", asUser(USER)],
+	["job", asJob("mail_capture")],
+]) {
+	test(`resent invoice evidence attaches without changing the original close for a ${label}`, async () => {
 		await rolledBack(async () => {
 			await db.query(`${INVOICE_SETUP}; ${invoiceEmail()}; ${actor}; ${APPLY_INVOICE};
 				${resendEmail()}; ${APPLY_RESEND}; ${CHECK_AT_COMMIT}`);
