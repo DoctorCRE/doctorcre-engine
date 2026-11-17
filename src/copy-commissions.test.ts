@@ -36,8 +36,11 @@ const payment = (
 	status: string,
 	amount: string,
 	dates = "null, null, null",
+	created = "2025-01-01",
+	updated = "2025-02-01",
+	author: number | null = null,
 ) =>
-	`('${id(n)}', '${id(deal)}', '${status}', ${amount}, ${dates}, '${n === 100 ? "2024-12-01" : "2025-01-01"}', '${n === 103 ? "2025-03-01" : "2025-02-01"}', '${id(1)}', ${n === 103 ? `'${id(2)}'` : "null"})`;
+	`('${id(n)}', '${id(deal)}', '${status}', ${amount}, ${dates}, '${created}', '${updated}', '${id(1)}', ${author === null ? "null" : `'${id(author)}'`})`;
 let report: pg.QueryResultRow[];
 before(async () => {
 	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
@@ -69,7 +72,7 @@ before(async () => {
  update public.deal set sf_commission_placeholder = 9876 where id = '${id(22)}';
  insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by, updated_by) values
  ${[
-		payment(100, 10, "expected", "100"),
+		payment(100, 10, "expected", "100", "null, null, null", "2024-12-01"),
 		payment(101, 10, "expected", "200"),
 		payment(102, 10, "invoiced", "120", "'2025-01-01', '2025-02-01', null"),
 		payment(
@@ -78,6 +81,9 @@ before(async () => {
 			"received",
 			"80",
 			"'2025-01-01', '2025-02-01', '2025-01-15'",
+			"2025-01-01",
+			"2025-03-01",
+			2,
 		),
 		payment(110, 11, "expected", "75"),
 		payment(120, 12, "received", "20"),
@@ -86,9 +92,11 @@ before(async () => {
 		payment(140, 14, "invoiced", "30", "'2025-02-01', '2025-01-01', null"),
 		payment(150, 15, "expected", "999999999999.99"),
 		payment(151, 15, "expected", "1"),
-		payment(160, 16, "invoiced", "40"),
+		payment(160, 16, "invoiced", "40", "'2025-01-01', null, null"),
 		payment(170, 17, "expected", "50", "'2025-01-01', null, null"),
-		payment(180, 18, "invoiced", "60"),
+		payment(180, 18, "invoiced", "60", "'2025-01-01', null, null"),
+		payment(190, 19, "invoiced", "10", "'2025-01-01', null, '2025-01-20'"),
+		payment(191, 19, "invoiced", "10"),
 		payment(200, 20, "expected", "90"),
 		payment(210, 21, "expected", "25"),
  ].join(",")};
@@ -137,7 +145,7 @@ test("expected rows add to the estimate and other rows add to gross as separate 
 	);
 });
 
-test("absent totals and unknown dates stay null; deals resolve through the deal copy", async () => {
+test("absent totals and unknown due dates stay null; deals resolve through the deal copy", async () => {
 	assert.deepEqual(
 		(
 			await rows(
@@ -152,9 +160,9 @@ test("absent totals and unknown dates stay null; deals resolve through the deal 
 	);
 	assert.deepEqual(
 		await rows(
-			`select invoiced_on, due_on, received_on from commission_payment where id = '${id(180)}'`,
+			`select invoiced_on::text, due_on, received_on from commission_payment where id = '${id(180)}'`,
 		),
-		[{ invoiced_on: null, due_on: null, received_on: null }],
+		[{ invoiced_on: "2025-01-01", due_on: null, received_on: null }],
 	);
 	assert.deepEqual(
 		await rows(`select * from commission where deal_id = '${id(22)}'`),
@@ -166,6 +174,8 @@ test("absent totals and unknown dates stay null; deals resolve through the deal 
 });
 
 test("unmappable rows are listed and their whole deal waits without aborting good deals", async () => {
+	assert.equal(report.find((r) => r.old_id === id(190))?.field, "status");
+	assert.match(report.find((r) => r.old_id === id(190))?.value, /2025-01-20/);
 	for (const [n, reason] of [
 		[120, "received_without_date"],
 		[121, "another_row_on_deal_waits"],
@@ -175,11 +185,13 @@ test("unmappable rows are listed and their whole deal waits without aborting goo
 		[151, "amount_out_of_range"],
 		[160, "ladder_not_entered"],
 		[210, "deal_not_copied"],
+		[190, "status_disagrees_with_dates"],
+		[191, "status_disagrees_with_dates"],
 	] as const)
 		assert.ok(reasons(report, n).includes(reason), `${n}: ${reason}`);
 	assert.deepEqual(
 		await rows(
-			`select * from commission where deal_id in (${[12, 13, 14, 15, 16, 21].map((n) => `'${id(n)}'`).join(",")})`,
+			`select * from commission where deal_id in (${[12, 13, 14, 15, 16, 19, 21].map((n) => `'${id(n)}'`).join(",")})`,
 		),
 		[],
 	);
@@ -266,11 +278,11 @@ test("receipt order, gross overflow and unmapped authors are listed, with origin
 	try {
 		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(7)}', 'example_missing', 'human', 'Example Missing');
  insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by, updated_by) values
- ${payment(190, 19, "received", "10", "'2025-02-01', null, '2025-01-01'")};
+ ${payment(192, 19, "received", "10", "'2025-02-01', null, '2025-01-01'")};
  update public.commission set updated_by = '${id(7)}' where id = '${id(160)}';
  update public.commission set gross_amount = 999999999999.99 where id in ('${id(102)}','${id(103)}');`);
 		const refused = await run();
-		assert.ok(reasons(refused, 190).includes("dates_out_of_order"));
+		assert.ok(reasons(refused, 192).includes("dates_out_of_order"));
 		assert.ok(reasons(refused, 102).includes("amount_out_of_range"));
 		assert.ok(reasons(refused, 160).includes("author_not_copied"));
 	} finally {

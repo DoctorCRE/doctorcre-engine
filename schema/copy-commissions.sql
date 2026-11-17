@@ -24,7 +24,8 @@ left join commission_total t on t.record_id = c.record_id
 cross join lateral (values
  ('deal_not_copied', c.record_id is null),
  ('nonpositive_amount', c.gross_amount <= 0),
- ('amount_out_of_range', c.gross_amount > 999999999999.99 or t.expected > 999999999999.99 or t.gross > 999999999999.99),
+ ('amount_out_of_range', t.expected > 999999999999.99 or t.gross > 999999999999.99),
+ ('status_disagrees_with_dates', c.status = 'invoiced' and (c.invoiced_on is null or c.received_on is not null)),
  ('received_without_date', c.status = 'received' and c.received_on is null),
  ('dates_out_of_order', c.status <> 'expected' and (c.due_on < c.invoiced_on or c.received_on < c.invoiced_on)),
  ('ladder_not_entered', t.gross is not null and not exists (select from commission_tier where user_id = c.owner_user_id)),
@@ -60,9 +61,17 @@ select c.id, c.record_id, c.gross_amount, c.invoiced_on, c.due_on, c.received_on
  c.updated_at, c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id
 from old_commission c join copied t on t.record_id = c.record_id where c.status <> 'expected';
 
-insert into not_copied select id, 'commission', null, reason from refusal;
 insert into not_copied
-select c.id, 'commission', null, 'another_row_on_deal_waits' from old_commission c
+select c.id, case r.reason when 'deal_not_copied' then 'deal_id' when 'nonpositive_amount' then 'gross_amount'
+ when 'received_without_date' then 'received_on' when 'dates_out_of_order' then 'dates'
+ when 'status_disagrees_with_dates' then 'status' else 'commission' end,
+ jsonb_build_object('deal_id', c.deal_id, 'status', c.status, 'gross_amount', c.gross_amount,
+  'expected_total', t.expected, 'gross_total', t.gross, 'owner_user_id', c.owner_user_id,
+  'author_id', coalesce(c.updated_by, c.created_by), 'sponsor_id', c.changed_for_user_id,
+  'invoiced_on', c.invoiced_on, 'due_on', c.due_on, 'received_on', c.received_on)::text, r.reason
+from refusal r join old_commission c on c.id = r.id left join commission_total t on t.record_id = c.record_id;
+insert into not_copied
+select c.id, 'deal_id', c.deal_id::text, 'another_row_on_deal_waits' from old_commission c
 where exists (select from refusal r where r.record_id = c.record_id) and not exists (select from refusal r where r.id = c.id);
 insert into not_copied
 select id, f.field, f.value::text, 'expected_date_has_no_destination' from old_commission
