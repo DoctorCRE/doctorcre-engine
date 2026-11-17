@@ -60,7 +60,7 @@ Check which models are available each time you start a worker. Never write a pro
 
 ## The old system
 
-Read `carr-system` to learn what a feature does. Never copy its code. Port the behavior the partners use, write it fresh and small, and prove it matches by comparing old and new answers on the same input.
+Read `carr-system` to learn what a feature does. Never copy its code. Port the behavior the partners use, write it fresh and small, and check the result on the real screen against a copy of production. It is right when the screen shows the records, counts and values a partner relies on, and saves land.
 
 Start from the Graphify code maps, built locally in code-only mode outside this repo (your brief gives the commands): the old system's map for definitions and call chains, the engine's alongside grep.
 
