@@ -429,6 +429,14 @@ Today's `critical_date` rows keep their kinds, dates, sources and notes. `option
 - A generated document with a filed file keeps its id as an outside id under `old_generated_document` on its deal. Its note is listed as `generated_note`.
 - Unfinished uploads, expiry and sharing are dropped. Listed, not copied: a deleted attachment, with any upload or generated pointer to it, a generated document with no deal or no file, a file whose deal is not copied, one missing its type, hash or size, rows of one key that disagree on deal, type, hash or size, or with a stored file there, two template kinds for one file, an id another file holds, and a generated id another deal holds.
 
+## Copying today's deal-file text
+
+`schema/copy-deal-file-text.sql` runs after the deal-file copy, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public` and `ops`, and ends with its `not_copied` list. An old page text or job belongs to the deal file its attachment's key became on the same deal.
+
+- Each page text becomes a `text_layer` attempt by extractor `page-text.v1` with no model, keeping its pages in order, status, format and creation time as its extraction time. The old system did not record who stored it, so the old-system job is its author. Its text digest is dropped; the pages can recompute it.
+- Each fact job becomes a `legacy_fact_receipt` attempt with its id, actor, recorded time, and its contract's extractor version and model. It has format `fact-receipt.v1`, status `receipt_only`, no pages, and a receipt holding the job's full contract and receipt. Its fact batch is not copied.
+- Listed, not copied: a text by its attachment id and a job by its id, when the attachment is deleted or did not become a deal file there, when its hash is not the file's, when a job's contract has no extractor version or a blank model, and when another text, job or stored attempt on that file has the same method, extractor, model and format, or a stored attempt has the job's id. A stored attempt with the same identity and content is left alone, so a repeat changes nothing.
+
 ## Tours as meetings
 
 A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal; the property links support a later property read. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.

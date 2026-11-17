@@ -398,6 +398,35 @@ CREATE TABLE ops.deal_deliverable (
     CONSTRAINT deal_deliverable_visibility_check CHECK ((visibility = ANY (ARRAY['private'::text, 'shared'::text])))
 );
 
+CREATE TABLE ops.deal_document_text (
+    document_ref uuid NOT NULL,
+    entity_ref uuid NOT NULL,
+    content_hash text NOT NULL,
+    text_format_version text NOT NULL,
+    status text NOT NULL,
+    pages jsonb NOT NULL,
+    text_hash text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT deal_document_text_content_hash_check CHECK ((content_hash ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT deal_document_text_pages_check CHECK (((jsonb_typeof(pages) = 'array'::text) AND (jsonb_array_length(pages) <= 1000))),
+    CONSTRAINT deal_document_text_status_check CHECK ((status = ANY (ARRAY['produced'::text, 'no_text'::text, 'unavailable'::text]))),
+    CONSTRAINT deal_document_text_text_format_version_check CHECK ((text_format_version = 'page-text.v1'::text))
+);
+
+CREATE TABLE ops.deal_extraction_job (
+    id uuid NOT NULL,
+    organization_tenant_id text NOT NULL,
+    actor_id uuid NOT NULL,
+    entity_ref text NOT NULL,
+    document_ref uuid NOT NULL,
+    contract jsonb NOT NULL,
+    content_hash text NOT NULL,
+    receipt jsonb NOT NULL,
+    batch_id uuid,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT deal_extraction_job_content_hash_check CHECK ((content_hash ~ '^[0-9a-f]{64}$'::text))
+);
+
 CREATE TABLE ops.requirement_request (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     organization_tenant_id text NOT NULL,
@@ -3834,6 +3863,12 @@ ALTER TABLE ONLY ops.deal_deliverable
 ALTER TABLE ONLY ops.deal_deliverable
     ADD CONSTRAINT deal_deliverable_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY ops.deal_document_text
+    ADD CONSTRAINT deal_document_text_pkey PRIMARY KEY (document_ref, content_hash, text_format_version);
+
+ALTER TABLE ONLY ops.deal_extraction_job
+    ADD CONSTRAINT deal_extraction_job_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY ops.requirement_request
     ADD CONSTRAINT requirement_request_id_organization_tenant_id_deal_id_row_k_key UNIQUE (id, organization_tenant_id, deal_id, row_key);
 
@@ -4333,6 +4368,10 @@ CREATE UNIQUE INDEX client_portal_one_active_per_deal ON ops.client_portal USING
 
 CREATE INDEX deal_deliverable_deal ON ops.deal_deliverable USING btree (organization_tenant_id, deal_id, created_at, id);
 
+CREATE INDEX deal_extraction_job_field ON ops.deal_extraction_job USING btree (organization_tenant_id, entity_ref);
+
+CREATE UNIQUE INDEX deal_extraction_job_identity ON ops.deal_extraction_job USING btree (organization_tenant_id, document_ref, content_hash, ((contract ->> 'extractor_version'::text)), ((contract ->> 'model'::text)));
+
 CREATE INDEX requirement_upload_receipt_request ON ops.requirement_upload_receipt USING btree (request_id);
 
 CREATE UNIQUE INDEX activity_calendar_event_deal_uidx ON public.activity USING btree (calendar_event_key, deal_id) WHERE (calendar_event_key IS NOT NULL);
@@ -4643,6 +4682,15 @@ ALTER TABLE ONLY ops.client_portal
 
 ALTER TABLE ONLY ops.deal_deliverable
     ADD CONSTRAINT deal_deliverable_deal_id_fkey FOREIGN KEY (deal_id) REFERENCES public.deal(id);
+
+ALTER TABLE ONLY ops.deal_document_text
+    ADD CONSTRAINT deal_document_text_document_ref_fkey FOREIGN KEY (document_ref) REFERENCES public.attachment(id);
+
+ALTER TABLE ONLY ops.deal_extraction_job
+    ADD CONSTRAINT deal_extraction_job_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY ops.deal_extraction_job
+    ADD CONSTRAINT deal_extraction_job_document_ref_fkey FOREIGN KEY (document_ref) REFERENCES public.attachment(id);
 
 ALTER TABLE ONLY ops.requirement_request
     ADD CONSTRAINT requirement_request_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.actor(id);
