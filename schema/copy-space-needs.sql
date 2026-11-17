@@ -1,4 +1,4 @@
--- Run after copy-attribution.sql, copy-markets.sql, copy-deals.sql and copy-vendors.sql in an owner transaction.
+-- Run in a separate owner transaction after copy-attribution.sql, copy-markets.sql, copy-deals.sql and copy-vendors.sql.
 -- pg_temp.copy_space_need_county supplies complete, owner-reviewed county sets, keyed by source table and old id.
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 create temp table if not exists copy_space_need_county (
@@ -28,6 +28,7 @@ select 'deal_client_need', n.id, n.deal_id, 'Client requirement', n.observed_at,
  jsonb_build_object('approved_by', n.approved_by, 'approved_at', n.approved_at,
  'approved_revision', n.approved_revision, 'approved_client_id', n.approved_client_id),
  case when n.approved_revision is distinct from n.revision or n.approved_at is null then 'pending_confirmation'
+ when n.observed_at > n.approved_at then 'observed_after_approval'
  when n.fresh_until <= current_timestamp then 'stale_requirement'
  when n.restriction <> 'allowed' then 'restricted_requirement'
  when n.withdrawn then 'withdrawn_requirement'
