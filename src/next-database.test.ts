@@ -21,6 +21,8 @@ const EMAIL = id(300);
 const CALL = id(301);
 const NOTE = id(302);
 const DOCTOR = id(12);
+// Referenced only by its role, so removing it can break exactly one link.
+const ROLE_ONLY = id(15);
 // Made up. No NPI issued yet starts with 9, so none can be anyone's.
 const NPIS = ["9000000015", "9000000023", "9000000031"];
 const BAY = id(600);
@@ -933,7 +935,12 @@ const RULES: Record<string, Case[]> = {
 			"deal_party_party_id_fkey",
 		],
 		[newPost({ idea_id: MISSING }), "post_idea_id_fkey"],
-		[`delete from party where id = '${AGENT}'`, "party_role_party_id_fkey"],
+		[
+			`insert into party (id, kind, name) values ('${ROLE_ONLY}', 'person', 'Example');
+			insert into party_role values ('${ROLE_ONLY}', 'listing_agent');
+			delete from party where id = '${ROLE_ONLY}'`,
+			"party_role_party_id_fkey",
+		],
 	],
 	"the role list refuses a role it does not hold": [
 		[
@@ -6123,7 +6130,7 @@ for (const [sql, constraint] of [
 		"space_need_vendor_source_whole",
 	],
 	[
-		`${newLease()}; ${leaseSuite(SUITE, ELSEWHERE)}`,
+		`insert into suite (id, property_id) values ('${id(802)}', '${ELSEWHERE}'); ${newLease()}; ${leaseSuite(id(802), ELSEWHERE)}`,
 		"lease_suite_lease_id_property_id_fkey",
 	],
 	[
