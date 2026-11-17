@@ -177,7 +177,7 @@ select r.id, f.reason from round_mapping r cross join lateral (values
 where f.refused and (f.reason = 'deal_not_copied' or exists (select from deal d where d.id = r.deal_id))
  and not exists (select from offer o where o.import_source = 'old_system' and o.import_id = r.id::text);
 insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at, expires_on,
- status, rent_per_sf_yr, term_months, ti_per_sf, free_rent_months, other_terms, import_source, import_id, import_record,
+ status, rent_per_sf_yr, term_months, ti_per_sf, free_rent_months, other_terms, submarket_condition, import_source, import_id, import_record,
  changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select r.id, r.deal_id, p.property_id, r.new_round, r.party_id, r.role, r.proposed_on::timestamp at time zone 'America/Chicago', r.expires_on,
  'unknown', r.rate_norm_sf_yr, r.term_months, case when r.ti_basis = 'usd_sf' and r.ti_amount >= 0 then r.ti_amount end,
@@ -186,7 +186,7 @@ select r.id, r.deal_id, p.property_id, r.new_round, r.party_id, r.role, r.propos
  case when r.options_note is not null then 'Options: ' || r.options_note end,
  case when r.opex_note is not null then 'Operating costs: ' || r.opex_note end,
  case when r.note is not null then 'Note: ' || r.note end), ''),
- 'old_system', r.id::text, to_jsonb(original), r.updated_at, a.*
+ case when r.submarket_condition in ('soft', 'balanced', 'tight') then r.submarket_condition end, 'old_system', r.id::text, to_jsonb(original), r.updated_at, a.*
 from round_mapping r join public.negotiation_round original on original.id = r.id
 join old_property p on p.deal_id = r.deal_id
 cross join lateral copy_attribution('negotiation_round', r.id, coalesce(r.updated_by, r.created_by)) a
@@ -200,7 +200,7 @@ select r.id, f.field, f.value, 'no_typed_destination' from public.negotiation_ro
 cross join lateral (values
  ('rate_amount', r.rate_amount::text, r.rate_amount is not null and r.rate_norm_sf_yr is null),
  ('ti_amount', r.ti_amount::text, r.ti_amount is not null and (r.ti_basis is distinct from 'usd_sf' or r.ti_amount < 0)),
- ('submarket_condition', r.submarket_condition, r.submarket_condition is not null)) f(field, value, refused)
+ ('submarket_condition', r.submarket_condition, r.submarket_condition not in ('soft', 'balanced', 'tight'))) f(field, value, refused)
 where f.refused;
 insert into not_copied
 select c.id, 'negotiation_claim', c.round_id::text, 'no_claim_destination' from public.negotiation_claim c;

@@ -1020,6 +1020,8 @@ create table offer (
 	commencement_on date,
 	commencement_days_after_delivery integer check (commencement_days_after_delivery >= 0),
 	other_terms text,
+	-- How the submarket stood when this round was sent. Null is not recorded, never balanced.
+	submarket_condition text check (submarket_condition in ('soft', 'balanced', 'tight')),
 	constraint offer_answers_earlier_round check (answers_round < round),
 	constraint offer_commencement_date_or_days
 		check (commencement_on is null or commencement_days_after_delivery is null),
@@ -2218,7 +2220,7 @@ grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) o
 revoke insert on offer from engine;
 grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,
 	expires_on, status, rent_per_sf_yr, nnn_per_sf_yr, term_months, ti_per_sf, free_rent_months,
-	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms) on offer to engine;
+	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms, submarket_condition) on offer to engine;
 grant update (status) on offer to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
