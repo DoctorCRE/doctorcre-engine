@@ -12,6 +12,11 @@ const ITEM = {
 	bullets: ["First example point"],
 	source_ref: "example:call",
 };
+// The dated facts the old system writes on a post-call item, which the copy keeps.
+const FACTS = [
+	{ date: null, kind: "call", text: "Example first fact" },
+	{ date: "2025-01-01", kind: "call", text: "Example second fact" },
+];
 
 before(async () => {
 	await setup();
@@ -38,7 +43,7 @@ const seen = async (step: unknown) =>
 const stepNow = async (step: unknown) =>
 	(
 		await db.query(
-			`select s.what, s.due_on::text, s.item_title, s.item_bullets, s.status, s.resolution_reason,
+			`select s.what, s.owner_party_id, s.due_on::text, s.hold_until::text, s.item_title, s.item_bullets, s.status, s.resolution_reason,
 				s.done_at is not null as done, s.resolved_at is not null as resolved, s.resolution_event_id,
 				by_user.slug as by_user, s.changed_by_job as by_job, for_user.slug as for_user
 			from next_step s
@@ -89,7 +94,9 @@ test("a partner's checklist item lands once on its deal, stamped with the partne
 	);
 	assert.deepEqual(await stepNow(answer.next_step_id), {
 		what: "Send the example plan",
+		owner_party_id: ALEX,
 		due_on: "2026-02-01",
+		hold_until: null,
 		item_title: ITEM.title,
 		item_bullets: ITEM.bullets,
 		status: "open",
@@ -122,8 +129,8 @@ test("a job for a partner adds a held step on a party; an item off a deal, two r
 	assert.equal(status, 201);
 	const step = await stepNow(answer.next_step_id);
 	assert.deepEqual(
-		[step.by_user, step.by_job, step.for_user],
-		[null, "agent", "blair"],
+		[step.hold_until, step.by_user, step.by_job, step.for_user],
+		["2026-03-01", null, "agent", "blair"],
 	);
 	const refused = async (args: object) => {
 		const [status, body] = await create(agent, { what: "Example", ...args });
@@ -180,6 +187,42 @@ test("a change lands from what the caller saw; a crossed field is refused and ot
 		[now.what, now.due_on, now.item_bullets],
 		["Call the example clinic back", "2026-04-01", ["Second example point"]],
 	);
+});
+
+test("a copied item's dated facts come back through a change, and a new item takes them", async () => {
+	await db.query(
+		`begin; select set_config('engine.job', 'old_system', true);
+		insert into next_step (id, deal_id, what, item_title, item_bullets, source_ref)
+		values ('${id(60)}', '${DEAL}', 'Copied example', 'Review lease terms', '${JSON.stringify(FACTS)}', 'example:copy'); commit;`,
+	);
+	const copied = (await stepNow(id(60))).item_bullets;
+	const bullets = [
+		...copied,
+		{ date: "2026-02-02", kind: "status", text: "Example third fact" },
+	];
+	const [status] = await act(id(60), "changes", {
+		seen_change_id: await seen(id(60)),
+		item_bullets: bullets,
+	});
+	assert.equal(status, 200);
+	assert.deepEqual((await stepNow(id(60))).item_bullets, bullets);
+	const step = await newStep({ item: { ...ITEM, bullets: FACTS } });
+	assert.deepEqual((await stepNow(step)).item_bullets, FACTS);
+	for (const bullet of [
+		{ kind: "call", text: "Example undated" },
+		{ date: null, kind: "other", text: "Example kind" },
+		{ date: null, kind: "call", text: " " },
+		{ ...FACTS[0], extra: true },
+	])
+		assert.deepEqual(
+			(
+				await act(step, "changes", {
+					seen_change_id: 0,
+					item_bullets: [bullet],
+				})
+			)[1].fields,
+			["item_bullets"],
+		);
 });
 
 test("a step ends done or cancelled once, and reopens once", async () => {
