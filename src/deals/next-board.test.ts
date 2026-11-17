@@ -10,8 +10,8 @@ const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 // A national clinic location, a doctor, a dental group and a location that left its brand, each with an open deal,
-// one closed deal, two invoiced deals still in negotiation, one with no commission, and an other-type deal with no
-// phase events.
+// one closed deal, two invoiced deals still in negotiation, one with no commission, a deal paid before its invoice,
+// and an other-type deal with no phase events.
 const OLD = `
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
@@ -56,7 +56,10 @@ insert into public.commission (id, deal_id, gross_amount, status, invoiced_on, c
  ('${id(50)}', '${id(35)}', 1000, 'invoiced', '2025-02-01', '${id(1)}');
 insert into public.deal (id, client_id, name, deal_type, phase, owner, invoiced_on, created_by, updated_by, created_at) values
  ('${id(36)}', '${id(22)}', 'Example invoiced lease without commission', 'lease', 'negotiation', 'partner_one', '2025-02-02', '${id(1)}', '${id(1)}', '2025-01-07'),
- ('${id(37)}', '${id(22)}', 'Example other office', 'other', 'touring', 'partner_one', null, '${id(1)}', '${id(1)}', '2025-01-08');
+ ('${id(37)}', '${id(22)}', 'Example other office', 'other', 'touring', 'partner_one', null, '${id(1)}', '${id(1)}', '2025-01-08'),
+ ('${id(38)}', '${id(22)}', 'Example lease paid before invoice', 'lease', 'touring', 'partner_one', null, '${id(1)}', '${id(1)}', '2025-01-09');
+insert into public.commission (id, deal_id, gross_amount, status, received_on, created_by) values
+ ('${id(51)}', '${id(38)}', 1000, 'received', '2025-02-03', '${id(1)}');
 insert into public.deal (id, client_id, name, deal_type, phase, owner, city, operating_state, parking_reason, parking_note, parked_at, parked_by,
  created_by, updated_by, created_at) values
  ('${id(32)}', '${id(22)}', 'Example dental move', 'relocation', 'negotiation', 'partner_one', 'Example Bay', 'parked', 'client_paused',
@@ -207,6 +210,7 @@ test("the comparison covers every open deal, owner, parking, national account, f
 			["Example clinic lease", "partner_one", null, "partner_two"],
 			["Example dental move", "partner_one", "partner_two", null],
 			["Example former brand lease", "partner_one", null, null],
+			["Example lease paid before invoice", "partner_one", null, null],
 			["Example other office", "partner_one", null, null],
 		],
 	);

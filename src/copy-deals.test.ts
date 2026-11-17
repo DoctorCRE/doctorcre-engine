@@ -42,12 +42,13 @@ before(async () => {
  insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at) values ('example-market', 'Example Market', 'market', 'Example counties', 'Example review', '${id(1)}', '2025-01-01');
  ${["lease", "purchase", "sale_leaseback", "build_to_suit", "startup", "relocation", "expansion", "renewal", "additional_office", "other"].map((t, i) => deal(10 + i, t)).join("\n")}
  ${deal(20)} ${deal(21)}
- ${deal(22)} ${deal(23)} ${deal(24)} ${deal(25)} ${deal(26)} ${deal(27)}
+ ${deal(22)} ${deal(23)} ${deal(24)} ${deal(25)} ${deal(26)} ${deal(27)} ${deal(28)}
  alter table public.deal disable trigger deal_touch;
  update public.deal set city = 'Missing Market' where id = '${id(20)}';
  update public.deal set won_value = 0 where id = '${id(21)}';
  update public.deal set owner = null where id in ('${id(22)}', '${id(23)}');
  update public.deal set phase = 'closed', invoiced_on = '2025-03-01' where id = '${id(23)}';
+ update public.deal set outcome = 'lost' where id = '${id(28)}';
  update public.deal set city = 'Example Market', won_value = 1234 where id = '${id(10)}';
  insert into public.deal_participant (id, deal_id, actor_id, role, set_by) values ('${id(80)}', '${id(23)}', '${id(1)}', 'lead', '${id(1)}');
  insert into public.deal_participant (deal_id, party_id, role, set_by) values
@@ -167,6 +168,18 @@ test("phase events retain evidence dates and actors; without them the current ph
 	);
 	assert.ok(
 		report.some((r) => r.old_id === id(11) && r.reason === "no_phase_history"),
+	);
+	assert.deepEqual(
+		await rows(
+			`select phase from deal_phase_change where deal_id = '${id(28)}'`,
+		),
+		[],
+		"a lost deal without events gets no phase",
+	);
+	assert.ok(
+		report.some(
+			(r) => r.old_id === id(28) && r.reason === "lost_without_dated_reason",
+		),
 	);
 });
 test("an invoiced deal keeps today's invoiced date without a commission", async () => {
@@ -310,6 +323,26 @@ test("a repeat is idempotent and restores stamps after import", async () => {
 		id(1),
 	);
 	await db.query("rollback");
+});
+
+test("a rerun lists a market or value the copied deal still lacks, even once the old deal has it", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+ insert into market (name) values ('Missing Market');
+ update public.deal set won_value = 500 where id = '${id(21)}';`);
+		const listed = await run();
+		for (const [n, reason] of [
+			[20, "unknown_market"],
+			[21, "nonpositive_value"],
+		] as const)
+			assert.ok(
+				listed.some((r) => r.old_id === id(n) && r.reason === reason),
+				reason,
+			);
+	} finally {
+		await db.query("rollback");
+	}
 });
 
 test("unmappable links and phase history are listed instead of lost", async () => {
