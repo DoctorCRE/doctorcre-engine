@@ -48,6 +48,7 @@ const order: [file: string, input?: string][] = [
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
 	["copy-emails.sql"],
+	["copy-attachment-emails.sql"],
 	["copy-calls.sql"],
 	["copy-meetings.sql"],
 	["copy-lead-stage-moves.sql"],
@@ -66,6 +67,9 @@ create table ops.meeting_action (meeting_id uuid, action_number integer, state t
 create table ops.meeting_action_revision (id uuid primary key, meeting_id uuid not null, action_number integer not null, revision integer not null,
  summary text not null, command jsonb, basis text not null, source text not null, proposed_by_actor uuid not null, created_at timestamptz not null);
 create table ops.meeting_action_decision_request (idempotency_key uuid primary key, request jsonb not null);
+create table public.email (id uuid primary key, mailbox_account text not null, message_id text);
+alter table public.activity add column email_id uuid references public.email;
+create table ops.requirement_reply_proposal (id uuid primary key, activity_id uuid not null, attachment_id uuid not null, created_at timestamptz not null);
 
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
@@ -171,6 +175,7 @@ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, act
  select v, 'email_in', '2025-01-06', '2025-01-06', '2025-01-06', '${id(3)}', 'Email from Example Doctor: Example tour', 'Example email text',
   '{"mailbox_owner": "partner_one", "sender_email": "doctor@example.com"}', d, c
  from (values ('${id(120)}'::uuid, '${id(30)}'::uuid, null::uuid), ('${id(121)}', null, '${id(20)}')) f(v, d, c);
+insert into ops.requirement_reply_proposal values ('${id(122)}', '${id(120)}', '${id(52)}', '2025-01-06');
 insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(84)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2025-01-04');
 insert into public.event (id, actor_id, verb, subject_type, subject_id, field, old_value, new_value, cause, occurred_at) values
@@ -294,6 +299,7 @@ const corrections = [
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
  ["copy-emails.sql", id(120), "message_id", null, "email_without_message_id"],
  ["copy-emails.sql", id(121), "message_id", null, "email_without_message_id"],
+ ["copy-attachment-emails.sql", id(52), "activity_id", id(120), "email_not_copied"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
