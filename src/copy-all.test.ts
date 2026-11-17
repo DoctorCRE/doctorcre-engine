@@ -38,9 +38,11 @@ const order: [file: string, input?: string][] = [
 		`insert into commission_tier (user_id, from_deal, partner_user_id, closing_share)
  values ('${id(1)}', 1, '${id(2)}', 0.6), ('${id(2)}', 1, '${id(1)}', 0.6) on conflict do nothing;`,
 	],
+	["copy-invoice-emails.sql"],
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
 	["copy-lead-stage-moves.sql"],
+	["copy-deal-next-steps.sql"],
 	["copy-preferences.sql"],
 ];
 
@@ -48,7 +50,8 @@ const order: [file: string, input?: string][] = [
 const OLD = `
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
- ('${id(2)}', 'partner_two', 'human', 'Example Partner Two');
+ ('${id(2)}', 'partner_two', 'human', 'Example Partner Two'),
+ ('${id(3)}', 'example-mail', 'automation', 'Example mail job');
 insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
 insert into public.party (id, kind, name, created_by, updated_by, created_at, updated_at, email, phone, title, org_id, city) values
  ('${id(10)}', 'org', 'Example Clinic Group', '${id(1)}', '${id(1)}', '2024-01-01', '2024-02-01', null, null, null, null, null),
@@ -131,7 +134,16 @@ insert into public.candidate_pool (id, source, source_key, source_seq, source_ro
 insert into public.lead_contact_draft (id, lead_id, party_id, owner_id, subject, body, scheduled_for, time_zone, created_by, created_at) values
  ('${id(87)}', '${id(21)}', '${id(14)}', '${id(1)}', 'Example subject', 'Example body', '2025-04-01', 'America/Chicago', '${id(1)}', '2025-01-01');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, created_by) values
- ('${id(88)}', 'lead', '${id(21)}', '${id(1)}', 'Example step', 'open', '${id(1)}');
+ ('${id(88)}', 'lead', '${id(21)}', '${id(1)}', 'Example step', 'open', '${id(1)}'),
+ ('${id(89)}', 'deal', '${id(30)}', '${id(1)}', 'Example deal step', 'open', '${id(1)}');
+insert into ops.home_inbox_disposition (actor_id, item_id, disposition, source_version, material_version, updated_at) values
+ ('${id(1)}', 'next_action:${id(89)}', 'settled', '1', 'm', '2026-10-04');
+insert into public.deal_invoice_email (id, evidence_ref, from_address, deal_name, client_name, property_address, occurred_at, email_date, created_by, status) values
+ ('${id(90)}', 'local-mail:example-90', 'billing@example.test', 'Example clinic lease', 'Example Clinic Group', '100 Example Way',
+ '2025-03-01T12:00:00Z', '2025-03-01', '${id(3)}', 'captured');
+insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug) values
+ ('${id(3)}', 'record-deal-invoice', 'deal_invoice_email', '${id(90)}', '{"evidence_ref": "local-mail:example-90", "email_date": "2025-03-01"}',
+ 'ingest_email', '2025-03-01T12:00:00Z', 'partner_one');
 insert into ops.notification_preference (actor, device_opt_in, quiet_hours_start, quiet_hours_end, timezone, version) values
  ('${id(1)}', true, '22:00', '06:00', 'America/Chicago', 1);
 insert into ops.home_waiting (actor_id, item_id, identity_kind, identity_id, reason, evidence, version, updated_at) values
@@ -219,7 +231,7 @@ const copied = { party: 7, party_email: 1, party_phone: 1, party_company: 1, par
  party_territory: 1, deal: 1, deal_party: 3, deal_phase_change: 1, offer: 1, introduction: 1, property: 1, suite: 1,
  building_ownership: 1, lease: 1, lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1,
  commission: 1, space_need: 2, activity: 3, activity_about: 4, lead_stage_move: 1, candidate: 1, lead_contact_draft: 1,
- next_step: 1, user_preference: 1, home_mark: 1 };
+ next_step: 2, user_preference: 1, home_mark: 2, invoice_email: 1 };
 // The party copy lists a copied record's leftover values on its first run only (#392).
 // biome-ignore format: one row per correction
 const leftover = ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"];

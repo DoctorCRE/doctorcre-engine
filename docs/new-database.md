@@ -279,12 +279,14 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 11. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
 12. `copy-deal-file-text.sql`: needs the deal files.
 13. `copy-commissions.sql`, after the partners enter their ladders.
-14. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
-15. `copy-activity.sql`: needs parties and deals.
-16. `copy-lead-stage-moves.sql`: needs the activity each move cites.
-17. `copy-preferences.sql`: needs the next steps the lead and deal copies make.
+14. `copy-invoice-emails.sql`: needs the deals and their payments.
+15. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
+16. `copy-activity.sql`: needs parties and deals.
+17. `copy-lead-stage-moves.sql`: needs the activity each move cites.
+18. `copy-deal-next-steps.sql`: needs deals and activity.
+19. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
 
-Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot. The copies of deal next steps (#386), invoice emails (#387) and change history (#385) join this order as they land.
+Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot. The copy of change history (#385) joins this order when it lands.
 
 ## Copying today's people and companies
 
