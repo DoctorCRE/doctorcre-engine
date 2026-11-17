@@ -142,7 +142,7 @@ where l.mapped_party_id is not null and l.slug is not null
 -- A deal has one client, so a client changed in today's system since the last copy is listed, never added beside it.
 create temp table second_client on commit drop as
 select l.old_id, l.deal_id, l.party_id, l.mapped_party_id from mapped_link l
-where l.role = 'client' and exists (select from deal_party p
+where l.role = 'client' and l.slug is not null and exists (select from deal_party p
  where p.deal_id = l.deal_id and p.role = 'client' and p.party_id <> l.mapped_party_id);
 insert into not_copied
 select old_id, 'deal_party', concat_ws(' ', deal_id, party_id, 'client'), 'deal_has_another_client' from second_client;

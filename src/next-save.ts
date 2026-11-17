@@ -6,7 +6,9 @@ import type { DB } from "./next-database.d.ts";
 import { idempotencyKey, SaveRefusal, sortedHash } from "./save.ts";
 
 // A partner by the name they sign in under, or a job and the partner it works for.
-export type Stamp = { user: string } | { job: string; for_user?: string };
+export type Stamp =
+	| { user: string; job?: never }
+	| { job: string; for_user?: string; user?: never };
 
 export type NextSave = { stamp: Stamp; verb: string; args: JsonObject };
 

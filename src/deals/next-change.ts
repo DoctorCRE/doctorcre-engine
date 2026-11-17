@@ -12,6 +12,9 @@ export async function changeDeal(
 	seen: number,
 	fields: Updateable<DB["deal"]>,
 ) {
+	const keys = Object.keys(fields);
+	if (!keys.length)
+		throw new SaveRefusal(new Refusal(400, "unhandled_verb_failure"));
 	// The row lock queues crossed saves, so the later one sees the earlier one's change.
 	const deal = await tx
 		.selectFrom("deal")
@@ -24,19 +27,21 @@ export async function changeDeal(
 		.selectFrom("change")
 		.where("table_name", "=", "deal")
 		.where("record", "=", { id: deal_id });
-	const crossed = await changes
+	const unseen = await changes
 		.select("id")
-		.orderBy("id", "desc")
+		.select(sql<boolean>`new_value ?| ${keys}::text[]`.as("crossed"))
 		.where("id", ">", String(seen))
-		.where(sql<boolean>`new_value ?| ${Object.keys(fields)}::text[]`)
-		.executeTakeFirst();
-	if (crossed)
+		.orderBy("id")
+		.execute();
+	const ids = unseen.map((change) => Number(change.id));
+	if (unseen.some((change) => change.crossed))
 		throw new SaveRefusal(
-			new Refusal(409, "version_conflict", {
-				current_change_id: Number(crossed.id),
-			}),
+			new Refusal(409, "version_conflict", { current_version: ids.at(-1) }),
 		);
 	await tx.updateTable("deal").set(fields).where("id", "=", deal_id).execute();
+	// An answer's change id would cover the unseen changes, so the app re-reads first.
+	if (ids.length)
+		return { deal_id, rebased: true, intervening_change_ids: ids };
 	const latest = await changes
 		.select((eb) => eb.fn.max("id").as("id"))
 		.executeTakeFirstOrThrow();

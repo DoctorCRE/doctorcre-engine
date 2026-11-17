@@ -55,8 +55,10 @@ const flag: NextChange = (tx, args) =>
 		needs_attention: Boolean(args.flag),
 	});
 
-const refusedAs = (error: string) => (thrown: unknown) =>
-	thrown instanceof SaveRefusal && thrown.refusal.error === error;
+const refusedAs =
+	(error: string) =>
+	(thrown: unknown): thrown is SaveRefusal =>
+		thrown instanceof SaveRefusal && thrown.refusal.error === error;
 
 const stampOfDeal = async () =>
 	(
@@ -69,6 +71,8 @@ const stampOfDeal = async () =>
 	).rows[0];
 
 test("a save names the partner or the job that made it", async () => {
+	// @ts-expect-error A stamp names a partner or a job, never both.
+	({ user: "alex", job: "agent" }) satisfies Stamp;
 	const seen = await latestChange();
 	await save(
 		{ user: "blair" },
@@ -132,40 +136,38 @@ test("a retried save lands once and answers the same", async () => {
 	);
 });
 
-test("a crossed edit is refused, and an edit to another field stands", async () => {
+test("a crossed edit is refused, and so is its retry", async () => {
 	const seen = await latestChange();
-	const owners = ["alex", "casey"];
+	const tries = ["alex", "casey"].map((owner) => ({
+		idempotency_key: randomUUID(),
+		seen,
+		owner,
+	}));
 	const outcomes = await Promise.allSettled(
-		owners.map((owner) =>
-			save(
-				{ user: "blair" },
-				{ idempotency_key: randomUUID(), seen, owner },
-				handOver,
-			),
-		),
+		tries.map((args) => save({ user: "blair" }, args, handOver)),
 	);
-	const winner = outcomes.findIndex((o) => o.status === "fulfilled");
-	const loser = outcomes[1 - winner];
-	assert.ok(
-		loser?.status === "rejected" && refusedAs("version_conflict")(loser.reason),
-	);
+	const [won, lost] =
+		outcomes[0]?.status === "fulfilled" ? tries : tries.toReversed();
+	const refused = outcomes.find((o) => o.status === "rejected");
+	assert.ok(won && lost && refused);
+	assert.ok(refusedAs("version_conflict")(refused.reason));
 	assert.deepEqual(
 		(
 			await db.query(
 				"select u.slug from deal d join app_user u on u.id = d.owner_user_id",
 			)
 		).rows,
-		[{ slug: owners[winner] }],
+		[{ slug: won.owner }],
 	);
-	const flagged = await save(
-		{ user: "blair" },
-		{ idempotency_key: randomUUID(), seen, flag: true },
-		flag,
+	await assert.rejects(
+		save({ user: "blair" }, lost, handOver),
+		refusedAs("version_conflict"),
 	);
-	assert.equal(flagged.change_id, seen + 2);
 });
 
-test("a save over an unseen change to another field answers rebased, so the next save re-reads", async () => {
+test("an edit over an unseen change to another field stands and answers rebased, so the next save re-reads", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		update deal set owner_user_id = '${ALEX}', needs_attention = false; commit;`);
 	const seen = await latestChange();
 	await save(
 		{ user: "blair" },
@@ -182,12 +184,30 @@ test("a save over an unseen change to another field answers rebased, so the next
 		rebased: true,
 		intervening_change_ids: [seen + 1],
 	});
+	assert.equal(
+		(await db.query("select needs_attention from deal")).rows[0]
+			.needs_attention,
+		true,
+	);
 	await assert.rejects(
 		save(
 			{ user: "alex" },
 			{ idempotency_key: randomUUID(), seen, owner: "alex" },
 			handOver,
 		),
-		refusedAs("version_conflict"),
+		(thrown) =>
+			refusedAs("version_conflict")(thrown) &&
+			thrown.refusal.extra.current_version === seen + 2,
+	);
+});
+
+test("a deal save with no fields is refused", async () => {
+	await assert.rejects(
+		save(
+			{ user: "alex" },
+			{ idempotency_key: randomUUID(), seen: await latestChange() },
+			(tx, args) => changeDeal(tx, DEAL, Number(args.seen), {}),
+		),
+		refusedAs("unhandled_verb_failure"),
 	);
 });

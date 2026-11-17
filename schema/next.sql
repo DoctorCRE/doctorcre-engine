@@ -2532,6 +2532,8 @@ create table imported_change (
   and (changed_by_job is not null or changed_for_user_id is null))
 );
 create index imported_change_record on imported_change (table_name, record);
+create trigger stamp_imported_change before insert on imported_change
+ for each row execute function stamp_change();
 
 -- A save's answer under its key, so a retry gets the same answer instead of saving twice.
 -- The hash covers who saved and what, so a key reused for another save is refused.
@@ -2542,8 +2544,6 @@ create table save_receipt (
 	request_hash text not null,
 	answer jsonb not null check (jsonb_typeof(answer) = 'object')
 );
-create trigger stamp_imported_change before insert on imported_change
- for each row execute function stamp_change();
 
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable

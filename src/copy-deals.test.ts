@@ -409,15 +409,15 @@ test("shared attribution carries agent and mail sponsorship onto deals, clients 
 	}
 });
 
-test("a client without its required role is listed", async () => {
+test("a client without its required role is listed once", async () => {
 	await db.query("begin");
 	try {
 		await db.query(
 			`update public.client set party_id = '${id(4)}' where id = '${id(3)}'`,
 		);
-		assert.ok(
-			(await run()).some((row) => row.reason === "client_role_not_available"),
-		);
+		const reasons = (await run()).map((row) => row.reason);
+		assert.ok(reasons.includes("client_role_not_available"));
+		assert.ok(!reasons.includes("deal_has_another_client"));
 	} finally {
 		await db.query("rollback");
 	}
