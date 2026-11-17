@@ -238,6 +238,91 @@ test("a job names itself and a partner the engine knows", async () => {
 
 const otherMailbox = { ...MAIL_CAPTURE, "Engine-For-User": "dell" };
 
+test("a calendar review saves one meeting per partner and replays each request", async () => {
+	const calendar_review_key = "0123456789abcdef";
+	const meeting = note({
+		kind: "meeting",
+		calendar_review_key,
+		summary: "Example meeting",
+		about: [{ deal_id: DEAL }],
+	});
+	const first = await viaApp(meeting);
+	const { activity_id } = first.body;
+	assert.deepEqual(first, {
+		status: 201,
+		body: { activity_id, existing: false, about: meeting.about, unmatched: [] },
+	});
+	assert.deepEqual((await viaApp(meeting)).body, {
+		...first.body,
+		replayed: true,
+	});
+
+	const second = note({
+		...meeting,
+		idempotency_key: randomUUID(),
+		summary: "Changed summary",
+		about: [{ party_id: CASEY }],
+	});
+	const existing = await viaApp(second);
+	assert.deepEqual(existing, {
+		status: 201,
+		body: { ...first.body, existing: true },
+	});
+	assert.deepEqual((await viaApp(second)).body, {
+		...existing.body,
+		replayed: true,
+	});
+
+	const other = await viaJob(
+		{ ...meeting, idempotency_key: randomUUID() },
+		otherMailbox,
+	);
+	assert.equal(other.status, 201);
+	assert.equal(other.body.existing, false);
+	assert.notEqual(other.body.activity_id, activity_id);
+	const { rows } = await db.query(
+		`select id, kind, summary, calendar_review_user_id from activity
+		where calendar_review_key = $1 order by calendar_review_user_id`,
+		[calendar_review_key],
+	);
+	assert.deepEqual(rows, [
+		{
+			id: activity_id,
+			kind: "meeting",
+			summary: "Example meeting",
+			calendar_review_user_id: JOE,
+		},
+		{
+			id: other.body.activity_id,
+			kind: "meeting",
+			summary: "Example meeting",
+			calendar_review_user_id: DELL,
+		},
+	]);
+});
+
+test("only a meeting can carry a 16-character lowercase hex calendar review key", async () => {
+	const fields = { fields: ["calendar_review_key"] };
+	await refused(
+		viaApp(note({ calendar_review_key: "0123456789abcdef" })),
+		400,
+		"invalid_field_value",
+		fields,
+	);
+	for (const calendar_review_key of [
+		null,
+		"0123456789abcde",
+		"0123456789abcdeg",
+		"0123456789ABCDEF",
+	])
+		await refused(
+			viaApp(note({ kind: "meeting", calendar_review_key })),
+			400,
+			"invalid_field_value",
+			fields,
+		);
+});
+
 test("sender name and ordered to/cc recipients survive a second mailbox copy", async () => {
 	const message = mail("router-facts@example.com", {
 		sender_name: "Casey Display",
