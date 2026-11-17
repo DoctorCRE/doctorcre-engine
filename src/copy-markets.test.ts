@@ -320,6 +320,7 @@ for (const hidden of ["vendor", "party"] as const) {
 			await db.query(`begin; ${mergedVendor}
 insert into party (id, kind, name) values ('${id(3)}', 'company', 'Example survivor');
 update outside_id set party_id = '${id(3)}' where source = 'old_system';
+${hidden === "vendor" ? `update public.vendor set party_id = '${id(3)}' where id = '${id(6)}';` : ""}
 update public.${hidden} set merged_into = '${id(hidden === "vendor" ? 4 : 3)}'
 where id = '${id(hidden === "vendor" ? 6 : 5)}';
 update public.vendor_market_membership set reviewed_at = '${time}' where vendor_id = '${id(6)}';`);
