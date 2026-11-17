@@ -262,6 +262,33 @@ An NPI is checked for shape: ten digits, the last a Luhn check digit over the pr
 
 Old reference ids, such as Salesforce ids and roster numbers, are kept in `outside_id` only to trace where a record came from. Nobody types or searches for them, so they are not party or deal columns. A source and value are stored once, so a repeated import finds the record it already made. Only a merge changes a row, so its stamp names the job or user that imported it, or the one that last merged it, and when.
 
+## Running the copies
+
+Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schema. Then run each copy as the owner, in its own transaction with the new schema on `search_path`, in this order. Each copy finds what an earlier one made through `outside_id`, so a copy run too early lists its rows as waiting instead of copying them.
+
+1. `copy-parties.sql`: every other copy finds its people and companies, and the partners as users, through this map.
+2. `copy-markets.sql`, with `copy_market_county`: the deal copy matches a deal's market by name.
+3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role.
+4. `copy-candidates-drafts.sql`: drafts and candidates find their leads.
+5. `copy-vendors.sql`: the deal copy finds the vendor roles.
+6. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
+7. `copy-deals.sql`.
+8. `copy-vendors.sql` again: introductions and worked deals find their deals.
+9. `copy-leases.sql`: needs its deal, client and building.
+10. `copy-critical-dates.sql`.
+11. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
+12. `copy-deal-file-text.sql`: needs the deal files.
+13. `copy-commissions.sql`, after the partners enter their ladders.
+14. `copy-invoice-emails.sql`: needs the deals and their payments.
+15. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
+16. `copy-activity.sql`: needs parties and deals.
+17. `copy-lead-stage-moves.sql`: needs the activity each move cites.
+18. `copy-deal-next-steps.sql`: needs deals and activity.
+19. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
+20. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
+
+Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
+
 ## Copying today's people and companies
 
 `schema/copy-parties.sql` copies today's parties into the new database, with their emails, phone numbers, NPIs, do not contact, specialties and outside ids, and each person's company and title there. The owner runs it in one transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list: each old record or value it left behind, as typed, and why, for a partner to fix in today's system before the real run.
@@ -669,7 +696,7 @@ Moving today's rows across:
 
 After `copy-deals.sql`, load the partners' ladders, then run `schema/copy-commissions.sql` as the owner in its own transaction with the new schema on `search_path`. Load `copy-attribution.sql` first. Resolve deals through their `old_system` outside ids. Expected rows add to `expected`; all other rows become payments with their original ids and dates, and add to `gross`. An absent total stays null. No allocation, placeholder, share or ladder is copied.
 
-Keep the final report for correction in the old system. A deal waits whole for an unmapped deal or author, missing ladder, nonpositive amount, overflowing total, undated receipt, invoiced status without an invoice date or with a received date, conflicting saved row or payment dates outside the database's order. Dates on expected rows are listed because they have no destination. The aggregate keeps the earliest creation time and latest row's author and change time, breaking ties by id; payments retain their own attribution and times. Reruns leave saved commissions and payments unchanged, including their change history, and list conflicts instead of overwriting them.
+Keep the final report for correction in the old system. A deal waits whole for an unmapped deal or author, missing ladder, nonpositive amount, overflowing total, undated receipt, invoiced status without an invoice date or with a received date, conflicting saved row or payment dates outside the database's order. A payment today's row leaves undated matches a saved invoice date only when a copied, applied invoice email gave it that date. Dates on expected rows are listed because they have no destination. The aggregate keeps the earliest creation time and latest row's author and change time, breaking ties by id; payments retain their own attribution and times. Reruns leave saved commissions and payments unchanged, including their change history, and list conflicts instead of overwriting them.
 
 ## Later slices
 
