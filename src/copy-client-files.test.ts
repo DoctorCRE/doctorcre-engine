@@ -232,6 +232,35 @@ test("a rerun changes no files, links or history and keeps the correction list",
 	);
 });
 
+test("client-only generated corrections appear once across the deal and client copiers", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.document set note = 'Example deal note' where id = '${id(405)}'`,
+		);
+		const result = await db.query(await sql("copy-deal-files.sql"));
+		assert.ok(Array.isArray(result));
+		const combined = [...(result.at(-1)?.rows ?? []), ...report];
+		assert.deepEqual(
+			combined.filter((r) => r.old_id === id(405)).map((r) => r.reason),
+			["generated_note"],
+		);
+		assert.deepEqual(
+			combined
+				.filter((r) => [400, 401, 402, 403, 404].map(id).includes(r.old_id))
+				.map((r) => [r.old_id, r.field, r.value, r.reason]),
+			[
+				[id(400), "note", "Example generated note", "generated_note"],
+				[id(401), "id", id(401), "no_file"],
+				[id(402), "working_attachment", id(105), "file_deleted"],
+				[id(404), "client_id", id(23), "client_not_copied"],
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("a later party merge keeps shared files once and a rerun follows the moved map", async () => {
 	await db.query(`begin; select set_config('engine.user_id', '${id(1)}', true);
  select merge_party('${id(11)}', '${id(10)}')`);
