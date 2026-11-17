@@ -10,10 +10,10 @@ create temp table old_link on commit drop as select * from copy_activity_link();
 create temp table suggestion on commit drop as
 select p.id, p.created_at, p.activity_id as old_activity_id, p.deal_id as old_deal_id, p.evidence_quote as evidence, btrim(p.task_text) as what,
  p.next_date as due_on, p.owner as owner_slug, p.status as old_status, p.resolved_by, p.resolved_at, p.resolution_reason, p.resolution_note,
- p.deferred_until, case when p.status in ('pending', 'dismissed') then p.status end as status, email.activity_id, deal.deal_id,
+ p.deferred_until, case when p.status in ('pending', 'dismissed') then p.status end as status, email.email_activity_id as activity_id, deal.deal_id,
  subject.party_id, owner.id as owner, (select u.id from app_user u where u.id = decided.changed_by_user_id) as decider
 from public.email_proposal p
-left join email on email.activity_id = p.activity_id
+left join outside_id email on email.source = 'old_system' and email.value = p.activity_id::text
 left join outside_id deal on deal.source = 'old_system' and deal.value = p.deal_id::text and deal.deal_id is not null
 -- Without a deal, a step is for its email's one client, lead or vendor, as today's review shows it.
 left join lateral (select case when count(*) = 1 then (array_agg(l.party_id))[1] end as party_id from old_link l

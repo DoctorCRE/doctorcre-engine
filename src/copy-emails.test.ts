@@ -82,12 +82,34 @@ const mail: Mail[] = [
 	{ n: 56, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: deal, context: context(DOCTOR, "Example visit", ', "lifecycle": {"state": "deleted"}'), email: 92 },
 	{ n: 57, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: ["client_id", 20], context: `'{"subject": "Example visit"}'`, email: 93 },
 ];
+// Without a Message-ID; 60 and 61 are one email in two mailboxes, and 65 matches two emails that have one.
+// 66 was sent a second later and 67's subject has a space today's intake kept, so each is its own email.
+// biome-ignore format: one old row per line
+const withoutId: Mail[] = [
+	{ n: 60, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: Example offer", link: deal, context: context(DOCTOR, "Example offer") },
+	{ n: 61, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: example offer", link: ["client_id", 20], source },
+	{ n: 62, kind: "email_in", time: "21:00", summary: "Email from someone: Example unknown", link: deal },
+	{ n: 63, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source, email: 88 },
+	{ n: 64, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source, email: 89 },
+	{ n: 65, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source },
+	{ n: 66, kind: "email_in", time: "20:00:01", summary: "Email from Example Doctor: Example offer", link: deal, source },
+	{ n: 67, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: Example offer ", link: deal, source },
+];
 // Filed after the first copy, with lower ids than the emails they belong to.
 // biome-ignore format: one old row per line
 const later: Mail[] = [
 	{ n: 38, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", link: ["client_id", 20], context: context(DOCTOR, "Example tour"), email: 91 },
 	{ n: 39, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", link: ["client_id", 20], source, email: 94 },
 ];
+const offerWithId: Mail = {
+	n: 59,
+	kind: "email_in",
+	time: "20:00",
+	summary: "Email from Example Doctor: Example offer",
+	link: ["lead_id", 21],
+	source,
+	email: 87,
+};
 const insert = (m: Mail) =>
 	`insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, detail,
   email_context, email_source, email_identity, email_id, ${m.link[0]})
@@ -181,7 +203,6 @@ test("stores each email once by its Message-ID with all its records and its full
 			`50 activity ${id(50)} about_nothing_copied`,
 			`50 lead_id ${id(25)} lead_not_copied`,
 			`51 activity ${id(51)} full_text_without_its_email`,
-			"52 message_id null email_without_message_id",
 			"53 kind call mail_note_has_no_place",
 			"56 email_context deleted email_not_live",
 		],
@@ -206,4 +227,67 @@ test("stores each email once by its Message-ID with all its records and its full
 		links.toSpliced(4, 0, "43 null 10 2024-02-01 00:00:00+00"),
 		"it adds that row's record",
 	);
+});
+
+test("matches an email without its Message-ID by sender, sent time and subject, once across mailboxes and reruns", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into public.email values ('${id(87)}', '${JOE}', '<Offer@example.test>'), ('${id(88)}', '${JOE}', '<Twin-1@example.test>'),
+  ('${id(89)}', '${DELL}', '<Twin-2@example.test>');
+ ${withoutId.map(insert).join("\n ")} commit;`);
+	const listed = async () =>
+		(await run())
+			.filter((r) => r.old_id > id(58))
+			.map((r) => `${r.old_id.slice(-2)} ${r.field} ${r.value} ${r.reason}`);
+	const emails = () =>
+		lines(
+			`select activity_id, message_id, subject, imported from email where activity_id > '${id(58)}' order by activity_id`,
+		);
+	const emailOf = () =>
+		lines(
+			`select value, email_activity_id from outside_id where email_activity_id > '${id(58)}' order by value`,
+		);
+	const offerLinks = () =>
+		lines(
+			`select deal_id, party_id from activity_about where activity_id = '${id(60)}' order by deal_id, party_id`,
+		);
+	assert.deepEqual(await listed(), [
+		"62 sender null no_message_id_or_sender",
+		"65 message_id null matches_several_message_ids",
+	]);
+	assert.deepEqual(await emails(), [
+		"60 null Example offer true",
+		"63 <Twin-1@example.test> Example twin true",
+		"64 <Twin-2@example.test> Example twin true",
+		"66 null Example offer true",
+		"67 null Example offer  true",
+	]);
+	assert.deepEqual(
+		await emailOf(),
+		["60 60", "61 60", "63 63", "64 64", "66 66", "67 67"],
+		"each of today's rows finds the email it became",
+	);
+	assert.deepEqual(
+		await offerLinks(),
+		["30 null", "null 10"],
+		"both mailboxes' records",
+	);
+	const before = await everything();
+	await run();
+	assert.deepEqual(await everything(), before, "a rerun adds nothing");
+
+	await db.query(
+		`begin; select set_config('engine.job', 'old_system', true); ${insert(offerWithId)} commit;`,
+	);
+	await run();
+	assert.deepEqual(
+		(await emails())[0],
+		"60 <Offer@example.test> Example offer true",
+		"a row filed since brings the Message-ID",
+	);
+	assert.deepEqual(await offerLinks(), ["30 null", "null 10", "null 11"]);
+	assert.deepEqual(
+		await lines(`select count(*) from email where activity_id > '${id(58)}'`),
+		["5"],
+	);
+	assert.deepEqual((await emailOf())[0], "59 60", "so does a row filed since");
 });

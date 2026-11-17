@@ -216,7 +216,7 @@ insert into ops.meeting (id, organization_tenant_id, source_system, native_id, n
 insert into ops.meeting_note (id, meeting_id, note_number, revision, body, author_actor, author_instance, created_at)
  values ('${id(111)}', '${id(110)}', 1, 1, 'Example planning note', '${id(1)}', 'example-device', '2023-01-01 01:00Z');
 insert into public.email_proposal (id, kind, deal_id, activity_id, evidence_quote, task_text, next_date, owner, confidence, created_by)
- values ('${id(122)}', 'next_step', '${id(30)}', '${id(120)}', 'Example quote', 'Example email step', '2025-02-01', 'partner_one', 0.9, '${id(3)}');
+ values ('${id(122)}', 'next_step', '${id(30)}', '${id(121)}', 'Example quote', 'Example email step', '2025-02-01', 'partner_one', 0.9, '${id(3)}');
 insert into public.email_lead_exclusion (mailbox_owner, message_hash) values ('partner_one', '${"8".repeat(64)}');
 insert into ops.meeting_action values ('${id(110)}', 1, 'proposed', 1, null, null, null, null, null, null);
 insert into ops.meeting_action_revision values ('${id(112)}', '${id(110)}', 1, 1, 'Example planning action',
@@ -285,7 +285,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, lead_stage_move: 1, proposal: 4,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
 const corrections = [
@@ -298,11 +298,8 @@ const corrections = [
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
- ["copy-emails.sql", id(120), "message_id", null, "email_without_message_id"],
- ["copy-emails.sql", id(121), "message_id", null, "email_without_message_id"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
- ["copy-email-suggestions.sql", id(122), "activity_id", id(120), "email_not_copied"],
  ["copy-email-suggestions.sql", null, "message_hash", "8".repeat(64), "message_not_stored"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(35), "phase", "field_has_no_mapping"],
@@ -323,6 +320,11 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 	assert.deepEqual(
 		await rows("select party_id, document_id from party_document"),
 		[{ party_id: id(10), document_id: id(53) }],
+	);
+	assert.deepEqual(
+		await rows(`select activity_id from proposal where id = '${id(122)}'`),
+		[{ activity_id: id(120) }],
+		"a step suggested from a row of an email copied without a Message-ID cites that email",
 	);
 	assert.deepEqual(first, corrections);
 });

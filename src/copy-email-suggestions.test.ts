@@ -67,12 +67,17 @@ before(async () => {
   ('${id(60)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', '${id(30)}', null),
   ('${id(61)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', null, '${id(21)}'),
   ('${id(62)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', '${id(30)}', null),
-  ('${id(63)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', null, '${id(21)}');
- insert into activity (id, kind, happened_at) select v, 'email', '2024-01-01 15:00' from unnest(array['${id(60)}', '${id(61)}', '${id(63)}']::uuid[]) v;
+  ('${id(63)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', null, '${id(21)}'),
+  ('${id(64)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', '${id(30)}', null),
+  ('${id(65)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', '${id(30)}', null);
+ insert into activity (id, kind, happened_at) select v, 'email', '2024-01-01 15:00' from unnest(array['${id(60)}', '${id(61)}', '${id(63)}', '${id(66)}']::uuid[]) v;
  insert into activity_about (activity_id, deal_id, party_id) values ('${id(60)}', '${id(30)}', null), ('${id(61)}', null, '${id(12)}'),
-  ('${id(63)}', '${id(30)}', null);
- insert into email (activity_id, message_id, sender, subject, body) select v, 'message-' || v, 'sender@example.com', 'Example', 'Example'
-  from unnest(array['${id(60)}', '${id(61)}', '${id(63)}']::uuid[]) v;
+  ('${id(63)}', '${id(30)}', null), ('${id(66)}', '${id(30)}', null);
+ insert into email (activity_id, message_id, sender, subject, body, imported) select v, case when v <> '${id(66)}' then 'message-' || v end,
+  'sender@example.com', 'Example', 'Example', true from unnest(array['${id(60)}', '${id(61)}', '${id(63)}', '${id(66)}']::uuid[]) v;
+ -- Row 64 is another mailbox's row of email 60, and row 65 joined email 66, copied without a Message-ID; row 62 never copied.
+ insert into outside_id (source, value, email_activity_id) values ('old_system', '${id(60)}', '${id(60)}'), ('old_system', '${id(61)}', '${id(61)}'),
+  ('old_system', '${id(63)}', '${id(63)}'), ('old_system', '${id(64)}', '${id(60)}'), ('old_system', '${id(65)}', '${id(66)}');
  insert into public.email_proposal (id, kind, deal_id, activity_id, evidence_quote, task_text, next_date, owner, confidence, status, created_by,
   created_at, resolved_by, resolved_at, resolution_reason) values
   ${[
@@ -84,6 +89,8 @@ before(async () => {
 		step(76, 30, 63, "dismissed", "partner_one", 3),
 		step(77, 31, 61, "confirmed"),
 		step(78, null, 63),
+		step(80, 30, 64),
+		step(81, 30, 65),
 	].join(",\n  ")};
  update public.email_proposal set resolution_note = 'Example note' where id = '${id(72)}';
  insert into public.email_proposal (id, kind, deal_id, activity_id, evidence_quote, confidence, sender_role, created_by)
@@ -99,6 +106,8 @@ test("copies each email next step with its decision and email, lists what waits,
   deal_id, party_id, what, owner_party_id, due_on::text, changed_by_user_id, changed_by_job, changed_at::text from proposal order by id`), [
 		"#71 next_step #60 email Example quote 71 old_system pending - - #30 - Example step 71 #01 2024-02-01 - old_system 2024-01-01 15:01:00+00",
 		"#72 next_step #61 email Example quote 72 old_system dismissed #01 2024-01-10 00:00:00+00 - #12 Example step 72 #01 2024-02-01 #01 - 2024-01-10 00:00:00+00",
+		"#80 next_step #60 email Example quote 80 old_system pending - - #30 - Example step 80 #01 2024-02-01 - old_system 2024-01-01 15:01:00+00",
+		"#81 next_step #66 email Example quote 81 old_system pending - - #30 - Example step 81 #01 2024-02-01 - old_system 2024-01-01 15:01:00+00",
 	]);
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select record ->> 'id' as id, action, new_value ->> 'status' as status, changed_by_user_id, changed_by_job,
@@ -106,6 +115,8 @@ test("copies each email next step with its decision and email, lists what waits,
 		"#71 insert pending - old_system 2024-01-01 15:01:00+00",
 		"#72 insert pending - old_system 2024-01-01 15:01:00+00",
 		"#72 update dismissed #01 - 2024-01-10 00:00:00+00",
+		"#80 insert pending - old_system 2024-01-01 15:01:00+00",
+		"#81 insert pending - old_system 2024-01-01 15:01:00+00",
 	]);
 	assert.deepEqual(report, [
 		"#72 resolution_note Example note note_has_no_place",
@@ -144,5 +155,7 @@ test("copies each email next step with its decision and email, lists what waits,
 		"#71 pending #30 Example step 71",
 		"#72 dismissed - Example step 72",
 		"#75 pending #30 Example step 75",
+		"#80 pending #30 Example step 80",
+		"#81 pending #30 Example step 81",
 	]);
 });
