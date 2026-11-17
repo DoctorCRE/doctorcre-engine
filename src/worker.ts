@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 
+import { filedEmails } from "./activity/filed-emails.ts";
+import { activityDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
 import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
@@ -73,6 +75,7 @@ app.route("/api/engine", engine);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", nextSteps);
 app.route("/api/engine", proposalDecisions);
+app.route("/api/engine", activityDoor);
 app.route("/api/engine", replySubmissions);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
@@ -101,6 +104,8 @@ app.route("/jobs", nextDeals);
 app.route("/jobs", nextSteps);
 app.route("/jobs", proposalJobs);
 app.route("/jobs", routerQueue);
+app.route("/jobs", activityDoor);
+app.route("/jobs", filedEmails);
 app.route("/jobs", replyJobs);
 
 export default app;
