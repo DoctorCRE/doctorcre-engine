@@ -322,7 +322,6 @@ test("unmappable links and phase history are listed instead of lost", async () =
 		for (const reason of [
 			"party_not_copied",
 			"role_not_available",
-
 			"deal_not_copied",
 			"unknown_phase",
 			"dead_without_reason",
@@ -1351,6 +1350,44 @@ test("deal outside ids normalize sources and keys, report collisions, and stay u
 	}
 });
 
+test("an importer-made owner followed by an agent handoff copies both periods", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`insert into public.actor (id, slug, kind, display_name) values
+ ('${id(750)}', 'example_import', 'system', 'Example importer'),
+ ('${id(751)}', 'codex', 'automation', 'Example agent');
+ insert into public.deal_participant (id, deal_id, actor_id, role, from_at, to_at, set_by) values
+ ('${id(752)}', '${id(10)}', '${id(1)}', 'lead', '2024-01-01', '2024-02-01', '${id(750)}'),
+ ('${id(753)}', '${id(10)}', '${id(1)}', 'lead', '2024-02-01', '2024-03-01', '${id(751)}');`);
+		const first = await run();
+		assert.deepEqual(
+			first.filter((r) => r.old_id >= id(750)),
+			[],
+		);
+		const periods = `select id, user_id, started_at::text, ended_at::text
+ from imported_deal_owner order by id`;
+		const expected = [
+			{
+				id: id(752),
+				user_id: id(1),
+				started_at: null,
+				ended_at: "2024-02-01 00:00:00+00",
+			},
+			{
+				id: id(753),
+				user_id: id(1),
+				started_at: "2024-02-01 00:00:00+00",
+				ended_at: "2024-03-01 00:00:00+00",
+			},
+		];
+		assert.deepEqual(await rows(periods), expected);
+		assert.deepEqual(await run(), first);
+		assert.deepEqual(await rows(periods), expected);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("earlier people follow merges and owners keep only supported starts, with stable reruns", async () => {
 	await db.query("begin");
 	try {
@@ -1552,12 +1589,30 @@ test("a later current membership conflicting with copied history is listed and s
  ('${id(730)}', '${id(10)}', '${id(4)}', 'support', '2024-01-01', '2024-03-01');
  insert into public.deal_participant (id, deal_id, party_id, role, from_at, set_by) values
  ('${id(731)}', '${id(10)}', '${id(4)}', 'support', '2024-02-01', '${id(1)}');`);
-		assert.ok(
-			(await run()).some(
-				(r) =>
-					r.old_id === id(731) &&
-					r.reason === "current_membership_overlaps_history",
-			),
+		assert.deepEqual(
+			(await run()).filter((r) => r.old_id === id(731)),
+			[
+				{
+					old_id: id(731),
+					field: "deal_party",
+					value: `${id(10)} ${id(4)} support`,
+					reason: "current_membership_overlaps_history",
+				},
+			],
+		);
+		await db.query(`insert into role (slug, label) values ('lender', 'Example lender');
+ update imported_deal_party set role = 'lender' where id = '${id(730)}';
+ update public.deal_participant set role = 'lender' where id = '${id(731)}';`);
+		assert.deepEqual(
+			(await run()).filter((r) => r.old_id === id(731)),
+			[
+				{
+					old_id: id(731),
+					field: "deal_party",
+					value: `${id(10)} ${id(4)} lender`,
+					reason: "role_not_available",
+				},
+			],
 		);
 		assert.deepEqual(
 			await rows(
