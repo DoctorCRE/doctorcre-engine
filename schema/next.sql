@@ -1186,6 +1186,7 @@ create table reply_draft (
 	evidence text not null check (evidence ~ '\S'),
 	subject text not null check (subject ~ '\S' and length(subject) <= 998),
 	body text not null check (body ~ '\S'),
+	-- The outbox keys each send on it, so every change its owner makes advances it and a recorded try never does.
 	revision integer not null default 1 check (revision >= 1),
 	status text not null default 'pending' check (status in ('pending', 'dismissed', 'approved', 'sent', 'failed')),
 	decided_at timestamptz,
@@ -1196,16 +1197,14 @@ create table reply_draft (
 	-- The sending mailbox's id for the message, so one sent message settles one draft.
 	sent_item_id text unique check (sent_item_id ~ '\S'),
 	failure_reason text check (failure_reason ~ '\S'),
-	-- Only a sender sure the message never left may let it go out again.
-	may_have_sent boolean,
 	unique (email_activity_id, owner_user_id),
 	constraint reply_draft_delivery_facts check ((
-		status = 'pending' and num_nonnulls(decided_at, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason, may_have_sent) = 0
+		status = 'pending' and num_nonnulls(decided_at, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason) = 0
 		or status = 'dismissed' and num_nonnulls(decided_at, dismiss_reason) = 2
-			and num_nonnulls(to_address, cc_address, sent_at, sent_item_id, failure_reason, may_have_sent) = 0
+			and num_nonnulls(to_address, cc_address, sent_at, sent_item_id, failure_reason) = 0
 		or status in ('approved', 'sent', 'failed') and num_nonnulls(decided_at, to_address, cc_address) = 3 and dismiss_reason is null
 			and (status = 'sent') = (sent_at is not null) and (status = 'sent') = (sent_item_id is not null)
-			and (status = 'failed') = (failure_reason is not null) and (status = 'failed') = (may_have_sent is not null)) is true)
+			and (status = 'failed') = (failure_reason is not null)) is true)
 );
 
 create function reply_draft_delivery() returns trigger
@@ -1222,18 +1221,22 @@ begin
 		end if;
 		return new;
 	end if;
-	if (new.subject, new.body) is distinct from (old.subject, old.body) then
-		if not (by_owner and (old.status, new.status) in (('pending', 'pending'), ('pending', 'approved'), ('failed', 'approved'))) then
-			raise exception 'only its owner edits a reply draft, before it goes out'
-				using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
-		end if;
-		new.revision := old.revision + 1;
+	new.revision := old.revision + by_owner::integer;
+	if (new.subject, new.body) is distinct from (old.subject, old.body)
+		and not (by_owner and (old.status, new.status) in (('pending', 'pending'), ('pending', 'approved'), ('failed', 'approved'))) then
+		raise exception 'only its owner edits a reply draft, before it goes out'
+			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
 	end if;
-	-- Sending starts only from approved, and a draft that may have gone out never returns there.
-	if new.status = old.status and to_jsonb(new) - editable <> to_jsonb(old) - editable
-		or new.status <> old.status and (not (old.status, new.status) in (('pending', 'approved'), ('pending', 'dismissed'),
-			('approved', 'sent'), ('approved', 'failed'), ('failed', 'approved'), ('failed', 'sent'))
-			or old.status = 'failed' and (new.status = 'sent') <> old.may_have_sent) then
+	-- As today's sender: only a try aborted before Send goes out again, and only one it could not confirm may be found sent.
+	-- A try keeps the recipients its owner approved.
+	if new.status in ('sent', 'failed') and (new.to_address, new.cc_address) is distinct from (old.to_address, old.cc_address)
+		or new.status = old.status and to_jsonb(new) - editable <> to_jsonb(old) - editable
+		or new.status <> old.status and not (case old.status
+			when 'pending' then new.status in ('approved', 'dismissed')
+			when 'approved' then new.status in ('sent', 'failed')
+			when 'failed' then new.status = 'approved' and old.failure_reason = 'aborted_before_dispatch'
+				or new.status = 'sent' and old.failure_reason ~ '^unconfirmed_after_[0-9]+$'
+			else false end) then
 		raise exception 'a reply draft is decided once and sent at most once'
 			using errcode = 'check_violation', constraint = 'reply_draft_sent_once';
 	end if;
@@ -1338,6 +1341,32 @@ end $$;
 
 create trigger party_document_stored before insert on party_document
 	for each row execute function party_document_stored();
+
+-- A reply draft's attachments are part of what its owner approves, so they change only while its text may.
+create table reply_draft_document (
+	reply_draft_id uuid not null references reply_draft,
+	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
+	primary key (reply_draft_id, document_id)
+);
+
+create function reply_draft_document_owner_edits() returns trigger
+language plpgsql as $$
+declare
+	draft reply_draft;
+begin
+	select * into draft from reply_draft where id = coalesce(new.reply_draft_id, old.reply_draft_id);
+	if not (nullif(current_setting('engine.job', true), '') is null
+		and nullif(current_setting('engine.user_id', true), '')::uuid is not distinct from draft.owner_user_id
+		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason = 'aborted_before_dispatch')) then
+		raise exception 'only its owner attaches files to a reply draft, before it goes out'
+			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
+	end if;
+	return coalesce(new, old);
+end $$;
+
+create trigger reply_draft_document_owner_edits before insert or delete on reply_draft_document
+	for each row execute function reply_draft_document_owner_edits();
 
 -- One completed attempt, including no text or failure, belongs to the exact stored file version.
 create table document_extraction (
@@ -2504,7 +2533,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
-		'activity_about', 'proposal', 'reply_draft', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
@@ -2984,7 +3013,7 @@ grant update (started_on, ended_on) on client_brand, national_account_owner to e
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
 grant update (status) on proposal to engine;
-grant update (subject, body, status, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason, may_have_sent)
+grant update (subject, body, status, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason)
 	on reply_draft to engine;
 
 grant update (expected, gross, closing_share) on commission to engine;
@@ -3003,7 +3032,7 @@ grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_co
 
 grant update (deal_id, kind, content_type, sha256, bytes) on document to engine;
 -- A mistaken party link is removed; its file stays.
-grant delete on party_document to engine;
+grant delete on party_document, reply_draft_document to engine;
 grant delete on suite, space_need, building_ownership to engine;
 grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
 grant update (name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id, must_haves, vendor_id, source_ref, source_revision, applicability) on space_need to engine;

@@ -45,7 +45,8 @@ insert into not_copied select d.id, f.field, f.value, f.reason from old_draft d 
  ('submitted_email', d.to_list::text || ' ' || d.cc_list::text, 'recipients_not_one_each', d.new_status = 'failed'
   and not (d.to_list = jsonb_build_array(d.to_list ->> 0) and d.cc_list = jsonb_build_array(d.cc_list ->> 0)
    and pg_input_is_valid(lower(d.to_list ->> 0), 'email_address') and pg_input_is_valid(lower(d.cc_list ->> 0), 'email_address'))),
- ('submitted_email', d.attachments::text, 'attachments_have_no_place', coalesce(d.attachments, '[]') <> '[]'),
+ -- Today's attachments are paths on a partner's computer, not stored documents.
+ ('submitted_email', d.attachments::text, 'attachment_not_a_document', coalesce(d.attachments, '[]') <> '[]'),
  ('send_result', d.failure_reason, 'failure_without_reason', d.new_status = 'failed' and coalesce(d.failure_reason, '') !~ '\S'),
  ('result_recorded_at', null, 'failure_time_unknown', d.new_status = 'failed' and d.result_recorded_at is null)
 ) f(field, value, reason, refused) where f.refused and (d.new_status is not null or f.field = 'status');
@@ -58,8 +59,6 @@ select d.id, d.created_at, d.email_activity_id, d.owner_user_id, d.evidence_quot
  case when d.new_status = 'failed' then lower(d.to_list ->> 0) end as to_address,
  case when d.new_status = 'failed' then lower(d.cc_list ->> 0) end as cc_address,
  case when d.new_status = 'failed' then d.failure_reason end as failure_reason,
- -- Today's sender resubmits only this failure, the one it knows never left.
- case when d.new_status = 'failed' then d.failure_reason <> 'aborted_before_dispatch' end as may_have_sent,
  case when d.new_status = 'dismissed' then d.decided_by_user end as changed_by_user_id,
  case when d.new_status = 'dismissed' then d.decided_by_job else 'old_system' end as changed_by_job,
  case d.new_status when 'dismissed' then d.decided_for_user when 'failed' then d.owner_user_id end as changed_for_user_id,
@@ -70,8 +69,8 @@ from old_draft d where not exists (select from not_copied n where n.old_id = d.i
 insert into not_copied select r.id, 'reply_draft', r.id::text, 'existing_draft_conflicts' from ready r
 where exists (select from reply_draft x where (x.id = r.id) <> ((x.email_activity_id, x.owner_user_id) = (r.email_activity_id, r.owner_user_id))
  or x.id = r.id and (x.created_at, x.proposed_by_job, x.evidence, x.subject, x.body, x.status, x.decided_at, x.dismiss_reason,
-  x.to_address, x.cc_address, x.failure_reason, x.may_have_sent) is distinct from (r.created_at, 'old_system', r.evidence,
-  r.subject, r.body, r.status, r.decided_at, r.dismiss_reason, r.to_address, r.cc_address, r.failure_reason, r.may_have_sent))
+  x.to_address, x.cc_address, x.failure_reason) is distinct from (r.created_at, 'old_system', r.evidence,
+  r.subject, r.body, r.status, r.decided_at, r.dismiss_reason, r.to_address, r.cc_address, r.failure_reason))
  or exists (select from ready other where other.id <> r.id
   and (other.email_activity_id, other.owner_user_id) = (r.email_activity_id, r.owner_user_id));
 
@@ -84,9 +83,9 @@ insert into not_copied select d.id, f.field, f.value, f.reason from old_draft d 
 create temp table copied on commit drop as
 with inserted as (
  insert into reply_draft (id, created_at, email_activity_id, owner_user_id, proposed_by_job, evidence, subject, body, status, decided_at,
-  dismiss_reason, to_address, cc_address, failure_reason, may_have_sent, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+  dismiss_reason, to_address, cc_address, failure_reason, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
  select id, created_at, email_activity_id, owner_user_id, 'old_system', evidence, subject, body, status, decided_at,
-  dismiss_reason, to_address, cc_address, failure_reason, may_have_sent, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at
+  dismiss_reason, to_address, cc_address, failure_reason, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at
  from ready r where not exists (select from not_copied n where n.old_id = r.id and n.reason = 'existing_draft_conflicts')
  on conflict (id) do nothing returning *
 ) select * from inserted;
@@ -96,7 +95,7 @@ insert into change (table_name, record, action, old_value, new_value, changed_by
 select 'reply_draft', jsonb_build_object('id', d.id), 'insert', null,
  to_jsonb(d) - array['changed_by_user_id', 'changed_by_job', 'changed_for_user_id', 'changed_at'] || '{"status": "pending"}'
   || (select jsonb_object_agg(k, null::jsonb)
-   from unnest(array['decided_at', 'dismiss_reason', 'to_address', 'cc_address', 'failure_reason', 'may_have_sent']) k),
+   from unnest(array['decided_at', 'dismiss_reason', 'to_address', 'cc_address', 'failure_reason']) k),
  null, 'old_system', null, d.created_at
 from copied d;
 insert into change (table_name, record, action, old_value, new_value, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
@@ -107,7 +106,7 @@ select 'reply_draft', jsonb_build_object('id', d.id), 'update',
 from copied d cross join lateral (values
  ('pending', 'dismissed', array['decided_at', 'dismiss_reason'], d.changed_by_user_id, d.changed_by_job, d.changed_for_user_id, d.decided_at),
  ('pending', 'approved', array['decided_at', 'to_address', 'cc_address'], d.owner_user_id, null, null, d.decided_at),
- ('approved', 'failed', array['failure_reason', 'may_have_sent'], null, 'old_system', d.owner_user_id, d.changed_at)
+ ('approved', 'failed', array['failure_reason'], null, 'old_system', d.owner_user_id, d.changed_at)
 ) s(was, became, fields, by_user, by_job, for_user, at)
 where d.status = s.became or d.status = 'failed' and s.became = 'approved';
 
