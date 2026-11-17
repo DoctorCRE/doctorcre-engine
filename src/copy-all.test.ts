@@ -56,6 +56,7 @@ const order: [file: string, input?: string][] = [
 	["copy-deal-next-steps.sql"],
 	["copy-call-suggestions.sql"],
 	["copy-meeting-suggestions.sql"],
+	["copy-email-suggestions.sql"],
 	["copy-preferences.sql"],
 	["copy-change-history.sql"],
 ];
@@ -68,6 +69,8 @@ create table ops.meeting_action (meeting_id uuid, action_number integer, state t
 create table ops.meeting_action_revision (id uuid primary key, meeting_id uuid not null, action_number integer not null, revision integer not null,
  summary text not null, command jsonb, basis text not null, source text not null, proposed_by_actor uuid not null, created_at timestamptz not null);
 create table ops.meeting_action_decision_request (idempotency_key uuid primary key, request jsonb not null);
+create table public.email_lead_exclusion (mailbox_owner text not null, message_hash text not null, recorded_at timestamptz not null default now(),
+ primary key (mailbox_owner, message_hash));
 create table ops.requirement_reply_proposal (id uuid primary key, activity_id uuid not null, attachment_id uuid not null, created_at timestamptz not null);
 
 insert into public.actor (id, slug, kind, display_name) values
@@ -176,7 +179,7 @@ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, act
  from (values ('${id(120)}'::uuid, '${id(30)}'::uuid, null::uuid), ('${id(121)}', null, '${id(20)}')) f(v, d, c);
 insert into ops.requirement_reply_proposal values ('${id(122)}', '${id(120)}', '${id(52)}', '2025-01-06');
 insert into public.email_proposal (id, kind, activity_id, evidence_quote, owner, confidence, created_by, draft_subject, draft_body)
- values ('${id(122)}', 'reply_draft', '${id(120)}', 'Example asks to tour', 'partner_one', 0.9, '${id(3)}', 'Re: Example tour', 'Example reply');
+ values ('${id(123)}', 'reply_draft', '${id(120)}', 'Example asks to tour', 'partner_one', 0.9, '${id(3)}', 'Re: Example tour', 'Example reply');
 insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(84)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2025-01-04');
 insert into public.event (id, actor_id, verb, subject_type, subject_id, field, old_value, new_value, cause, occurred_at) values
@@ -218,6 +221,9 @@ insert into ops.meeting (id, organization_tenant_id, source_system, native_id, n
  values ('${id(110)}', 'example-tenant', 'example-app', 'meeting-110', '1', 'one_tap_user_activation', 'Example planning meeting', '${id(1)}', '2023-01-01');
 insert into ops.meeting_note (id, meeting_id, note_number, revision, body, author_actor, author_instance, created_at)
  values ('${id(111)}', '${id(110)}', 1, 1, 'Example planning note', '${id(1)}', 'example-device', '2023-01-01 01:00Z');
+insert into public.email_proposal (id, kind, deal_id, activity_id, evidence_quote, task_text, next_date, owner, confidence, created_by)
+ values ('${id(122)}', 'next_step', '${id(30)}', '${id(121)}', 'Example quote', 'Example email step', '2025-02-01', 'partner_one', 0.9, '${id(3)}');
+insert into public.email_lead_exclusion (mailbox_owner, message_hash) values ('partner_one', '${"8".repeat(64)}');
 insert into ops.meeting_action values ('${id(110)}', 1, 'proposed', 1, null, null, null, null, null, null);
 insert into ops.meeting_action_revision values ('${id(112)}', '${id(110)}', 1, 1, 'Example planning action',
  '{"verb": "set-next-action", "args": {"ref": "${id(30)}", "description": "Example planning step"}}', 'tentative_discussion', 'participant', '${id(1)}', '2023-01-01 02:00Z');
@@ -285,7 +291,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, lead_stage_move: 1, proposal: 3,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, lead_stage_move: 1, proposal: 4,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
 const corrections = [
@@ -300,6 +306,7 @@ const corrections = [
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
+ ["copy-email-suggestions.sql", null, "message_hash", "8".repeat(64), "message_not_stored"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(35), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(36), "phase", "field_has_no_mapping"],
@@ -319,6 +326,11 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 	assert.deepEqual(
 		await rows("select party_id, document_id from party_document"),
 		[{ party_id: id(10), document_id: id(53) }],
+	);
+	assert.deepEqual(
+		await rows(`select activity_id from proposal where id = '${id(122)}'`),
+		[{ activity_id: id(120) }],
+		"a step suggested from a row of an email copied without a Message-ID cites that email",
 	);
 	assert.deepEqual(
 		await rows(
