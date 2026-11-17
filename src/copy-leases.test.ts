@@ -155,6 +155,41 @@ test("known dates and per-foot rent copy; other wording stays in other terms and
 	);
 });
 
+test("mapped source-file kinds leave only unresolved evidence in the correction list", () => {
+	const evidence = copied.find(
+		(r) => r.old_id === id(100) && r.field === "evidence",
+	);
+	assert.ok(evidence);
+	assert.deepEqual(JSON.parse(evidence.value), {
+		source: "stated",
+		evidence_ref: "Example lease file",
+	});
+});
+
+test("amendment kinds are resolved while abstract and unfiled evidence stay listed", async () => {
+	for (const [kind, deal, expected] of [
+		["lease_amendment", id(10), undefined],
+		["lease_abstract", id(10), "lease_abstract"],
+		["executed_lease", null, "executed_lease"],
+	] as const) {
+		await db.query("begin");
+		try {
+			await db.query(
+				"update public.lease set evidence_kind = $1, deal_id = $2 where id = $3",
+				[kind, deal, id(100)],
+			);
+			const report = await run();
+			const evidence = report.find(
+				(r) => r.old_id === id(100) && r.field === "evidence",
+			);
+			assert.ok(evidence);
+			assert.equal(JSON.parse(evidence.value).evidence_kind, expected);
+		} finally {
+			await db.query("rollback");
+		}
+	}
+});
+
 test("source files become stored documents, waiting to be filed to their deal", async () => {
 	assert.deepEqual(
 		await rows(

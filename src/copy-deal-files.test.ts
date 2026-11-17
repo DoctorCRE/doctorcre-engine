@@ -73,10 +73,16 @@ before(async () => {
  ${deliverable(229, "deliverables/example-tenant/10/229")};
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_by) values
  ${[202, 210, 211, 218, 219, 220, 221, 222, 226, 227, 228, 229].map((n) => attachment(n)).join(", ")},
- ${attachment(212, 12)}, ${attachment(216)}, ${attachment(223, 3, "client")}, ${attachment(225, 11)};
+ ${attachment(230, 3, "client")}, ${attachment(231)}, ${attachment(212, 12)}, ${attachment(216)}, ${attachment(223, 3, "client")}, ${attachment(225, 11)};
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by) values
  ('${id(217)}', 'deal', '${id(10)}', 'files/217', 'Example file 217.pdf', ' ', 'not-a-hash', 217, '${id(1)}'),
  ('${id(224)}', 'deal', '${id(10)}', 'files/224', 'Example file 224.pdf', 'application/pdf', '${sha(224)}', 224, '${id(1)}');
+ insert into public.lease (id, deal_id, doc_attachment, evidence_kind, created_by) values
+ ('${id(500)}', '${id(10)}', '${id(218)}', 'executed_lease', '${id(1)}'),
+ ('${id(501)}', '${id(10)}', '${id(230)}', 'lease_amendment', '${id(1)}'),
+ ('${id(502)}', '${id(10)}', '${id(231)}', 'lease_abstract', '${id(1)}'),
+ ('${id(503)}', '${id(10)}', null, 'executed_lease', '${id(1)}');
+ update public.attachment set filename = 'Example executed lease.pdf' where id = '${id(231)}';
  update public.attachment set deleted_at = '2025-03-01' where id in ('${id(211)}', '${id(228)}');
  insert into public.doc_template (id, slug, name, source_path, template_version, field_map, created_by) values
  ('${id(300)}', 'example-loi', 'Example LOI', 'templates/loi', '1', '{}', '${id(1)}'),
@@ -162,10 +168,32 @@ test("rows naming one key are one file whatever their names, and a lease's store
 				id: id(218),
 				r2_key: "files/218",
 				deal_id: id(10),
-				kind: "other",
+				kind: "lease",
 				name: "Example lease 218.pdf",
 			},
 		],
+	);
+});
+
+test("lease evidence types file source attachments without guessing from names or inventing a missing file", async () => {
+	assert.deepEqual(
+		(
+			await rows(
+				`select id, deal_id, kind from document where id in ('${id(218)}', '${id(230)}', '${id(231)}') order by id`,
+			)
+		).map(Object.values),
+		[
+			[id(218), id(10), "lease"],
+			[id(230), id(10), "amendment"],
+			[id(231), id(10), "other"],
+		],
+	);
+	assert.deepEqual(reasons(report, 218), []);
+	assert.deepEqual(reasons(report, 230), []);
+	assert.deepEqual(reasons(report, 231), ["kind_unclassified"]);
+	assert.deepEqual(
+		await rows(`select id from document where id = '${id(503)}'`),
+		[],
 	);
 });
 
@@ -241,6 +269,34 @@ test("files that cannot map are listed with a reason and not stored, never guess
 		await rows(`select deal_id, bytes from document where id = '${id(219)}'`),
 		[{ deal_id: null, bytes: "1" }],
 	);
+});
+
+test("disagreeing lease kinds on one source file are listed and left unfiled", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_by) values ${attachment(234)};
+ insert into public.lease (deal_id, doc_attachment, evidence_kind, created_by) values
+ ('${id(10)}', '${id(234)}', 'executed_lease', '${id(1)}'),
+ ('${id(10)}', '${id(234)}', 'lease_amendment', '${id(1)}');`);
+		const result = await db.query(copy);
+		assert.ok(Array.isArray(result));
+		const report: pg.QueryResultRow[] = result.at(-1)?.rows ?? [];
+		assert.deepEqual(
+			report
+				.filter((r) => r.old_id === id(234))
+				.map((r) => [r.reason, r.value]),
+			[
+				["several_kinds", "amendment"],
+				["several_kinds", "lease"],
+			],
+		);
+		assert.deepEqual(
+			await rows(`select id from document where r2_key = 'files/234'`),
+			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
 });
 
 test("a repeat with the same template list changes nothing", async () => {
