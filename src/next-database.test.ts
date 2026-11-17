@@ -91,6 +91,12 @@ insert into next_step (id, what, owner_party_id, due_on, done_at, deal_id, party
 	('${id(400)}', 'Start the lease draft', null, '2026-03-20', null, '${DEAL}', null),
 	('${id(401)}', 'Send the signed LOI', '${CLIENT}', '2026-03-13', '2026-03-13T18:00:00+00:00', '${DEAL}', null),
 	('${id(402)}', 'Ask about a second location', null, null, null, null, '${CLIENT}');
+-- Quiet hours may run past midnight.
+insert into user_preference (user_id, time_zone, quiet_from, quiet_until, push_to_device) values
+	('${USER}', 'America/Chicago', '21:00', '07:00', true);
+insert into home_mark (user_id, next_step_id, disposition, snoozed_until, waiting_on_party_id, waiting_reason) values
+	('${USER}', '${id(400)}', 'snoozed', '2026-03-21T14:00:00+00:00', null, null),
+	('${TEAMMATE}', '${id(400)}', null, null, '${CLIENT}', 'Example: waiting on the signed LOI');
 `;
 const phases = [
 	{
@@ -373,6 +379,13 @@ const newIntroduction = (row: Record<string, string | null>) =>
 		introduced_party_id: CLIENT,
 		...row,
 	});
+const newMark = (row: Record<string, string | null>) =>
+	insert("home_mark", {
+		user_id: USER,
+		next_step_id: id(402),
+		disposition: "settled",
+		...row,
+	});
 const newLink = (row: Record<string, string | null>) =>
 	insert("party_link", {
 		kind: "knows",
@@ -514,6 +527,8 @@ const STAMPED = [
 	"activity",
 	"activity_about",
 	"next_step",
+	"user_preference",
+	"home_mark",
 	"document",
 	"document_extraction",
 	"document_kind",
@@ -591,6 +606,8 @@ const STORED_AT = [
 	"offer_document",
 	"offer_claim",
 	"next_step",
+	"user_preference",
+	"home_mark",
 	"document",
 	"document_extraction",
 	"social_account",
@@ -1869,6 +1886,76 @@ const RULES: Record<string, Case[]> = {
 				"introduction_of_someone_else",
 			],
 		],
+	"a user's preferences are one row, in a known time zone, with quiet hours that start and end":
+		[
+			[
+				`update user_preference set time_zone = 'Example/Nowhere'`,
+				"time_zone_known",
+			],
+			[
+				"update user_preference set quiet_until = null",
+				"user_preference_quiet_hours",
+			],
+			[
+				"update user_preference set quiet_from = null",
+				"user_preference_quiet_hours",
+			],
+			[
+				"update user_preference set quiet_until = quiet_from",
+				"user_preference_quiet_hours",
+			],
+			[
+				`insert into user_preference (user_id, time_zone) values ('${USER}', 'UTC')`,
+				"user_preference_pkey",
+			],
+			[
+				`insert into user_preference (user_id, time_zone) values ('${CLIENT}', 'UTC')`,
+				"user_preference_user_id_fkey",
+			],
+			["delete from user_preference", notGranted("user_preference")],
+		],
+	"a Home mark is one user's, on one item, snoozed until a time or settled, and waiting on someone for a reason":
+		[
+			[newMark({ disposition: "done" }), "home_mark_disposition_check"],
+			[newMark({ disposition: "snoozed" }), "home_mark_snoozed_until"],
+			[
+				newMark({ snoozed_until: "2026-03-21T14:00:00+00:00" }),
+				"home_mark_snoozed_until",
+			],
+			[
+				newMark({
+					disposition: null,
+					snoozed_until: "2026-03-21T14:00:00+00:00",
+					waiting_on_party_id: CLIENT,
+					waiting_reason: "Example",
+				}),
+				"home_mark_snoozed_until",
+			],
+			[
+				newMark({ waiting_on_party_id: CLIENT }),
+				"home_mark_waiting_has_a_reason",
+			],
+			[
+				newMark({ waiting_reason: "Example" }),
+				"home_mark_waiting_has_a_reason",
+			],
+			[
+				newMark({ waiting_on_party_id: CLIENT, waiting_reason: " " }),
+				"home_mark_waiting_reason_check",
+			],
+			[newMark({ disposition: null }), "home_mark_marks_something"],
+			[newMark({ next_step_id: id(400) }), "home_mark_pkey"],
+			[newMark({ user_id: CLIENT }), "home_mark_user_id_fkey"],
+			[newMark({ next_step_id: MISSING }), "home_mark_next_step_id_fkey"],
+			[
+				`delete from next_step where id = '${id(400)}'`,
+				"home_mark_next_step_id_fkey",
+			],
+			[
+				`update home_mark set next_step_id = '${id(402)}'`,
+				notGranted("home_mark"),
+			],
+		],
 	"a knows or can-introduce link joins two different records, ends no earlier than it starts, and is stored once":
 		[
 			[newLink({ kind: "introduced" }), "party_link_kind_check"],
@@ -2155,6 +2242,13 @@ const CHANGEABLE: Record<string, string[]> = {
 	party_phone: ["is_primary", "label"],
 	activity: ["from_party_id", "happened_at", "summary"],
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
+	user_preference: ["push_to_device", "quiet_from", "quiet_until", "time_zone"],
+	home_mark: [
+		"disposition",
+		"snoozed_until",
+		"waiting_on_party_id",
+		"waiting_reason",
+	],
 	document: ["bytes", "content_type", "deal_id", "kind", "name", "sha256"],
 	document_kind: ["label"],
 	offer: ["status"],
@@ -2193,6 +2287,7 @@ const REMOVABLE = [
 				"post_media",
 				"document",
 				"document_extraction",
+				"user_preference",
 			].includes(table),
 	),
 	"activity",

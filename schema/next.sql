@@ -731,6 +731,40 @@ create table next_step (
 	constraint next_step_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1)
 );
 
+-- Each user's own preferences. A user without a row has chosen nothing yet.
+create function is_time_zone(zone text) returns boolean
+language sql stable
+return exists (select from pg_timezone_names where name = zone);
+
+create domain time_zone as text constraint time_zone_known check (is_time_zone(value));
+
+create table user_preference (
+	user_id uuid primary key references app_user,
+	created_at timestamptz not null default now(),
+	time_zone time_zone not null,
+	-- Notifications wait through quiet hours, in the user's time zone, which may run past midnight.
+	quiet_from time,
+	quiet_until time,
+	push_to_device boolean not null default false,
+	constraint user_preference_quiet_hours check ((quiet_from is null) = (quiet_until is null) and quiet_from <> quiet_until)
+);
+
+-- A user's own marks on an item on their Home. An item without one is in the inbox.
+-- A next step is the one kind of item so far; each kind that comes adds its own key.
+create table home_mark (
+	user_id uuid not null references app_user,
+	next_step_id uuid not null references next_step,
+	created_at timestamptz not null default now(),
+	disposition text check (disposition in ('snoozed', 'settled')),
+	snoozed_until timestamptz,
+	waiting_on_party_id uuid references party,
+	waiting_reason text check (waiting_reason ~ '\S'),
+	primary key (user_id, next_step_id),
+	constraint home_mark_snoozed_until check ((disposition is not distinct from 'snoozed') = (snoozed_until is not null)),
+	constraint home_mark_waiting_has_a_reason check ((waiting_on_party_id is null) = (waiting_reason is null)),
+	constraint home_mark_marks_something check (disposition is not null or waiting_on_party_id is not null)
+);
+
 -- Suggestions from mail, calls and meetings share one decision queue, including weak lead moves.
 create table proposal (
 	id uuid primary key default gen_random_uuid(),
@@ -1930,7 +1964,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
@@ -2104,7 +2138,7 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, social_account, idea, design_template, introduction, party_link to engine;
+	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
@@ -2122,6 +2156,8 @@ grant update (started_on, ended_on) on party_territory to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
 grant update (what, owner_party_id, due_on, done_at) on next_step to engine;
+grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
+grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) on home_mark to engine;
 -- Only the owner's import supplies provenance. A user's or job's new round has a known status.
 revoke insert on offer from engine;
 grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,
