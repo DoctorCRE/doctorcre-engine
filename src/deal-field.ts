@@ -3,6 +3,7 @@ import { sql } from "kysely";
 import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { type Patch, preparePatch } from "./deal-field-base.ts";
+import { dropOverdueWork } from "./overdue-work.ts";
 import {
 	answerSave,
 	SaveRefusal,
@@ -11,7 +12,7 @@ import {
 } from "./save.ts";
 
 export const dealField = new Hono<WriterEnv>();
-const FIELDS = ["owner", "operating_state"];
+const FIELDS = ["phase", "owner", "operating_state"];
 
 dealField.post("/patch-deal-field", (c) =>
 	answerSave(
@@ -41,9 +42,11 @@ async function patch(saving: Saving, args: JsonObject) {
 	const { field } = change;
 	const { tx, record, idempotency_key } = saving;
 	const old_value =
-		change.field === "owner"
-			? await applyOwner(saving, deal_id, change.value)
-			: await applyParking(saving, deal_id, change.value);
+		change.field === "phase"
+			? await applyPhase(saving, deal_id, change.value)
+			: change.field === "owner"
+				? await applyOwner(saving, deal_id, change.value)
+				: await applyParking(saving, deal_id, change.value);
 	await record({
 		subject_type: "deal",
 		subject_id: deal_id,
@@ -57,6 +60,11 @@ async function patch(saving: Saving, args: JsonObject) {
 		...(typeof args.change_reason === "string" && {
 			agent_rationale: args.change_reason,
 		}),
+		// Noon in the business zone reads back as the stated day.
+		...(change.field === "phase" &&
+			change.occurred_on && {
+				occurred_at: `${change.occurred_on} 12:00 America/Chicago`,
+			}),
 	});
 	const committed = await tx
 		.selectFrom("event")
@@ -67,15 +75,35 @@ async function patch(saving: Saving, args: JsonObject) {
 		.where("field", "=", field)
 		.where("idempotency_key", "=", idempotency_key)
 		.executeTakeFirstOrThrow();
+	const status =
+		change.field === "phase" && old_value !== change.value
+			? await dropOverdueWork(saving, deal_id)
+			: {};
 	return {
 		ok: true,
 		deal_id,
 		field,
+		...status,
 		old_value,
 		new_value: change.value,
 		event_id: committed.id,
 		event_recorded_at: committed.recorded_at,
 	};
+}
+
+async function applyPhase(saving: Saving, deal_id: string, phase: string) {
+	const { tx, actor_id } = saving;
+	const old = await tx
+		.selectFrom("deal")
+		.select("phase")
+		.where("id", "=", deal_id)
+		.executeTakeFirstOrThrow();
+	await tx
+		.updateTable("deal")
+		.set({ phase, updated_by: actor_id })
+		.where("id", "=", deal_id)
+		.execute();
+	return old.phase;
 }
 
 async function applyOwner(
