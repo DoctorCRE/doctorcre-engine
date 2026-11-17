@@ -35,8 +35,7 @@ dealUpdate.post("/add-deal-note", (c) =>
 	),
 );
 
-// The old writer checks held overdue work after commit, which the engine does
-// not port yet (decision 96), so that update rolls back and goes to the old system.
+// The engine lacks the old after-commit overdue check (decision 96), so it rolls back.
 const updateUnlessOverdue: Change = async (saving, args) => {
 	const answer = await addDealUpdate(saving, args);
 	if ("overdue_assessment" in answer)
