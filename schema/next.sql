@@ -967,6 +967,53 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
+create table space_need (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references deal,
+	name text not null check (name ~ '\S'),
+	min_sf numeric(10, 1) check (min_sf > 0 and min_sf <> 'NaN'::numeric),
+	max_sf numeric(10, 1) check (max_sf > 0 and max_sf <> 'NaN'::numeric),
+	space_type text check (space_type ~ '\S'),
+	market_id uuid references market,
+	max_rate_sf_yr numeric(10, 2) check (max_rate_sf_yr >= 0 and max_rate_sf_yr <> 'NaN'::numeric),
+	vendor_id uuid,
+	vendor_role text not null default 'vendor' check (vendor_role = 'vendor'),
+	source_ref text check (source_ref ~ '\S'),
+	source_revision text check (source_revision ~ '\S'),
+	applicability text check (applicability ~ '\S'),
+	constraint space_need_vendor_source_whole check (num_nonnulls(vendor_id, source_ref, source_revision, applicability) in (0, 4)),
+	must_haves text check (must_haves ~ '\S'),
+	constraint space_need_size_in_order check (max_sf >= min_sf),
+	foreign key (vendor_id, vendor_role) references party_role on update cascade
+);
+
+create table suite (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	property_id uuid not null references property,
+	label text check (label = btrim(label) and label ~ '\S'),
+	floor integer,
+	area_sf numeric(10, 1) check (area_sf > 0 and area_sf <> 'NaN'::numeric),
+	area_basis text check (area_basis in ('rentable', 'usable', 'county_heated', 'listed_unverified')),
+	condition text check (condition ~ '\S'),
+	unique (property_id, label),
+	-- Carries the building into the signed lease link.
+	unique (id, property_id)
+);
+
+create table building_ownership (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	property_id uuid not null references property,
+	party_id uuid not null references party,
+	kind text not null check (kind in ('owner', 'landlord_rep', 'property_manager', 'listing_agent')),
+	started_on date,
+	ended_on date check (ended_on >= started_on),
+	source text not null check (source ~ '\S'),
+	unique nulls not distinct (property_id, party_id, kind, started_on)
+);
+
 create table lease (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -974,6 +1021,7 @@ create table lease (
 	property_id uuid not null references property,
 	deal_id uuid unique references deal,
 	client_role text not null default 'client' check (client_role = 'client'),
+	unique (id, property_id),
 	foreign key (deal_id, party_id, client_role) references deal_party on update cascade,
 	foreign key (deal_id, property_id) references deal_property
 );
@@ -1020,8 +1068,21 @@ create table lease_version (
 	constraint lease_dates_in_order check (expiration_on > commencement_on and expiration_on >= executed_on),
 	constraint lease_rent_date_or_days check (num_nonnulls(rent_starts_on, rent_days_after_delivery) <= 1),
 	unique (lease_id, version),
+	unique (id, lease_id),
 	foreign key (lease_id, previous_version) references lease_version (lease_id, version),
 	foreign key (offer_id) references offer
+);
+
+create table lease_suite (
+	lease_version_id uuid not null,
+	lease_id uuid not null,
+	property_id uuid not null,
+	suite_id uuid not null,
+	created_at timestamptz not null default now(),
+	primary key (lease_version_id, suite_id),
+	foreign key (lease_version_id, lease_id) references lease_version (id, lease_id),
+	foreign key (lease_id, property_id) references lease (id, property_id),
+	foreign key (suite_id, property_id) references suite (id, property_id)
 );
 
 create function lease_from_accepted_offer() returns trigger
@@ -1674,6 +1735,8 @@ begin
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
+	update space_need set vendor_id = survivor
+	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
 	-- Its stage, level and lead owner stay too, and the duplicate's fill any it lacks. A target on either holds.
 	-- The stricter ruling stays with its reason, so a merge never puts an avoided vendor back in play.
@@ -1733,6 +1796,9 @@ begin
 	delete from party_territory d using party_territory s
 	where d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
 		and s.started_on is not distinct from d.started_on;
+	delete from building_ownership d using building_ownership s
+	where d.party_id = duplicate and s.party_id = survivor and s.property_id = d.property_id
+		and s.kind = d.kind and s.started_on is not distinct from d.started_on;
 
 	-- Profiles cascade with their roles before their direct party keys move.
 	update party_role set party_id = survivor where party_id = duplicate;
@@ -1813,7 +1879,7 @@ begin
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
+		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
@@ -2034,3 +2100,7 @@ grant update (how_found_detail) on party to engine;
 grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) on party_role to engine;
 
 grant update (deal_id, kind, content_type, sha256, bytes) on document to engine;
+grant delete on suite, space_need, building_ownership to engine;
+grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
+grant update (name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id, must_haves, vendor_id, source_ref, source_revision, applicability) on space_need to engine;
+grant update (started_on, ended_on, source) on building_ownership to engine;

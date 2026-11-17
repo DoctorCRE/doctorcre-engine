@@ -267,3 +267,15 @@ _New database_: `party_role.lane` on the lead role, from `lead_lane`.
 **Estimated lease date**:
 A lead's expected lease event, with its source and optional confidence. It is an estimate, not an executed lease ending.
 _New database_: `party_role.estimated_lease_on`, `lease_estimate_source` and `lease_estimate_confidence` on the lead role.
+
+**Space need**:
+A client's requirements on a deal, such as size, space type, market and must-haves. A deal may have several named alternatives.
+_Database_: `space_need` in the new database; today's `space_search`, `ops.deal_space_search` and approved requirements in `deal_client_need` supply its mapping.
+
+**Suite**:
+Space within a building, with a label, floor and area when known. A lease can name a suite in its property.
+_Database_: `suite` in the new database; `space` today.
+
+**Building owner**:
+A person or company that owns a property, with dates when known. A building can have joint and former owners.
+_Database_: `building_ownership` in both databases. The table also keeps property managers and listing representatives under their own kinds.
