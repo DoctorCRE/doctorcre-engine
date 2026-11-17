@@ -9,6 +9,8 @@ Database checks need a local, disposable PostgreSQL 18 server with `pgcrypto` an
 When builders run checks concurrently, give each check its own server. Separate
 databases on one server still share its connection limit (#322).
 
+This block needs Docker. If `docker` is missing, the single shared-server check below still works.
+
 With Docker running, paste this block from the worktree to run a check on its own
 throwaway server. Docker chooses a free loopback port. The subshell stops only
 its own container when the check exits, including on failure or interruption.
