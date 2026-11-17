@@ -3673,11 +3673,62 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				status: "open",
 			},
 		],
+		critical_dates: [],
 		earlier_parties: [],
 		earlier_owners: [],
 		imported_history: [],
 	});
 });
+
+test("a deal read lists only its confirmed open critical dates, by due date then id", () =>
+	rolledBack(async () => {
+		const dated = (n: number, due_on: string, deal_id = DEAL) =>
+			newCriticalDate({ id: id(n), due_on, deal_id });
+		const resolve = (n: number, status: string) =>
+			`update critical_date set status = '${status}', resolution_reason = 'Example reason' where id = '${id(n)}'`;
+		await db.query(`${dated(712, "2026-06-01")}; ${dated(711, "2026-06-01")}; ${dated(713, "2026-05-01")};
+			${dated(714, "2026-04-01")}; ${dated(715, "2026-04-01")}; ${dated(716, "2026-04-01")};
+			${dated(717, "2026-04-01")}; ${dated(718, "2026-04-01")};
+			${dated(719, "2026-04-01", LENDER_DEAL)};
+			update critical_date set status = 'open' where id <> '${id(714)}' and id <> '${id(717)}';
+			${resolve(715, "done")}; ${resolve(716, "passed")}; ${resolve(717, "dropped")}; ${resolve(718, "dropped")}`);
+		const datesOn = async (deal: string) =>
+			unstamped(
+				(
+					await db.query(
+						"select everything_about_deal($1) -> 'critical_dates' as dates",
+						[deal],
+					)
+				).rows[0].dates,
+			);
+		const dates = await datesOn(DEAL);
+		assert.deepEqual(
+			dates.map((date: { id: string }) => date.id),
+			[id(713), id(711), id(712)],
+		);
+		const { confirmed_at, ...first } = dates[0];
+		assert.ok(confirmed_at);
+		assert.deepEqual(first, {
+			id: id(713),
+			kind: "due_diligence",
+			due_on: "2026-05-01",
+			source: "Example signed agreement",
+			offer_id: null,
+			lease_version_id: null,
+			option_number: null,
+			document_id: null,
+			note: null,
+			status: "open",
+			confirmed_by_user_id: USER,
+			resolved_by_user_id: null,
+			resolved_at: null,
+			resolution_reason: null,
+		});
+		assert.deepEqual(
+			(await datesOn(LENDER_DEAL)).map((date: { id: string }) => date.id),
+			[id(719)],
+		);
+	}));
 
 test("a deal read lists who was on it and who owned it before, in the order they left", () =>
 	rolledBack(async () => {
