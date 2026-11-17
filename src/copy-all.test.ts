@@ -301,15 +301,10 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
  candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 4 };
-// The party copy lists a copied record's leftover values on its first run only (#392).
-// biome-ignore format: one row per correction
-const leftover = [
- ["copy-parties.sql", id(10), "org_id", id(16), "a national account has no place in the new database yet"],
- ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
-];
 // biome-ignore format: one row per correction
 const corrections = [
- ...leftover,
+ ["copy-parties.sql", id(10), "org_id", id(16), "a national account has no place in the new database yet"],
+ ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
  ["copy-markets.sql", id(22), "membership_details", '{"market": "example-bay", "source": "Example review", "office_presence": true, "service_coverage": null}', "no_typed_destination"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
@@ -342,5 +337,5 @@ test("running every copy again changes no row or change history and lists the sa
 	const before = await everything();
 	const again = await runAll();
 	assert.deepEqual(await everything(), before);
-	assert.deepEqual(again, corrections.slice(leftover.length));
+	assert.deepEqual(again, corrections);
 });
