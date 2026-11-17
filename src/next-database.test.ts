@@ -481,6 +481,8 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"vendor_vertical",
+	"vendor_loan_program",
 	"commission",
 	"commission_payment",
 	"commission_share",
@@ -579,6 +581,8 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"vendor_vertical",
+	"vendor_loan_program",
 	"lease_suite",
 	"suite",
 	"space_need",
@@ -2274,8 +2278,10 @@ const CHANGEABLE: Record<string, string[]> = {
 		"lane",
 		"lease_estimate_confidence",
 		"lease_estimate_source",
+		"offers",
 		"owner_user_id",
 		"relationship_level",
+		"seeking",
 		"segment",
 		"stage",
 	],
