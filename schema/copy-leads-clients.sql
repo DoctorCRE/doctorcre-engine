@@ -55,18 +55,21 @@ where exists (select from mapped_source other where other.mapped_id = s.mapped_i
 -- Client testimony takes precedence; an existing mapped fact is never overwritten.
 update party p set how_found = s.mapped_source, how_found_detail = coalesce(nullif(btrim(s.fields ->> 'acquisition_detail'), ''),
  (select nullif(btrim(l.fields ->> 'source_detail'), '') from mapped_source l
-  where l.mapped_id = s.mapped_id and l.kind = 'lead' and l.fields ->> 'source_detail' ~ '\S'
+  where l.mapped_id = s.mapped_id and l.kind = 'lead' and l.mapped_source = s.mapped_source and l.fields ->> 'source_detail' ~ '\S'
   order by l.updated_at desc, l.id limit 1)),
- changed_by_user_id = s.changed_by_user_id, changed_by_job = s.changed_by_job,
- changed_for_user_id = s.changed_for_user_id, changed_at = s.updated_at
+ changed_by_user_id = case when s.updated_at > p.changed_at then s.changed_by_user_id else p.changed_by_user_id end,
+ changed_by_job = case when s.updated_at > p.changed_at then s.changed_by_job else p.changed_by_job end,
+ changed_for_user_id = case when s.updated_at > p.changed_at then s.changed_for_user_id else p.changed_for_user_id end,
+ changed_at = greatest(p.changed_at, s.updated_at)
 from (select distinct on (mapped_id) * from mapped_source where mapped_source is not null
  order by mapped_id, kind = 'client' desc, updated_at desc, id) s
 where p.id = s.mapped_id and p.how_found is null;
 insert into not_copied select s.id, 'how_found', s.typed_source, 'existing_source_differs'
 from mapped_source s join party p on p.id = s.mapped_id
 where s.mapped_source is not null and p.how_found is distinct from s.mapped_source;
-create temp table ready_relationship on commit drop as
+create temp table examined_relationship on commit drop as
 select r.*, p.how_found, p.how_found_detail,
+ case fields ->> 'client_type' when 'group' then 'group_practice' else fields ->> 'client_type' end as mapped_type,
  case when (fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact' then 'archived'
  when fields ->> 'stage' in ('nurture_drip','closed_lost') then 'nurture'
  when fields ->> 'stage' in ('active_deal','closed_won') then 'opportunity' else fields ->> 'stage' end as mapped_stage,
@@ -76,7 +79,20 @@ select r.*, p.how_found, p.how_found_detail,
 from old_relationship r join party p on p.id = r.mapped_id
 left join outside_id o on o.source = 'old_system' and o.value = r.fields ->> 'owner_id'
 left join app_user u on u.id = o.party_id
-where p.how_found is not null
+;
+create temp table classified_relationship on commit drop as
+select r.*, case
+ when how_found is null then 'source_needs_mapping'
+ when kind = 'lead' and not exists (select from stage where role = 'lead' and slug = mapped_stage) then 'unknown_stage'
+ when kind = 'client' and coalesce(fields ->> 'status', '') not in ('roster','cold','engaged','paused','active_deal','past_client') then 'unknown_client_status'
+ when kind = 'client' and mapped_type is not null and mapped_type <> 'national_account'
+  and not exists (select from client_type where slug = mapped_type) then 'unknown_client_type'
+ when mapped_type = 'national_account' and not exists (select from party where id = mapped_id and kind = 'company') then 'national_account_needs_company'
+ end as refusal from examined_relationship r;
+create temp table ready_relationship on commit drop as
+select r.* from classified_relationship r where refusal is null
+ and exists (select from classified_relationship latest where latest.mapped_id = r.mapped_id
+  and latest.kind = r.kind and latest.rank = 1 and latest.refusal is null)
  and not exists (select from outside_id done where done.source = 'old_system' and done.value = r.id::text);
 insert into party_role (party_id, role, stage, owner_user_id, lane, segment,
  estimated_lease_on, lease_estimate_source, lease_estimate_confidence,
@@ -88,15 +104,12 @@ select mapped_id, kind, case when kind = 'lead' then mapped_stage end, case when
  case when estimate_source is not null and fields ->> 'est_lease_event' is not null
  and fields ->> 'event_confidence' in ('high','medium','low') then fields ->> 'event_confidence' end,
  first_created, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
-from ready_relationship r where rank = 1 and (kind = 'client' or exists (select from stage where role = 'lead' and slug = r.mapped_stage))
+from ready_relationship r where rank = 1
 on conflict do nothing;
 insert into client (party_id, status, client_type, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select mapped_id, case when fields ->> 'status' in ('roster','cold','engaged','paused') then fields ->> 'status' else 'roster' end,
- (select slug from client_type where slug = fields ->> 'client_type'), first_created, updated_at,
- changed_by_user_id, changed_by_job, changed_for_user_id from ready_relationship where kind = 'client' and rank = 1
- and fields ->> 'status' in ('roster','cold','engaged','paused','active_deal','past_client')
- and (fields ->> 'client_type' is null or fields ->> 'client_type' = 'national_account'
-  or exists (select from client_type where slug = fields ->> 'client_type')) on conflict do nothing;
+ (select slug from client_type where slug = mapped_type), first_created, updated_at,
+ changed_by_user_id, changed_by_job, changed_for_user_id from ready_relationship where kind = 'client' and rank = 1 on conflict do nothing;
 insert into party_role (party_id, role, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select r.mapped_id, 'national_account', r.first_created, r.updated_at, r.changed_by_user_id, r.changed_by_job, r.changed_for_user_id
 from ready_relationship r join party p on p.id = r.mapped_id
@@ -106,7 +119,7 @@ select r.mapped_id, r.first_created, r.updated_at, r.changed_by_user_id, r.chang
 from ready_relationship r join party_role pr on pr.party_id = r.mapped_id and pr.role = 'national_account'
 where r.rank = 1 and r.kind = 'client' and r.fields ->> 'client_type' = 'national_account' on conflict do nothing;
 insert into not_copied
-select r.id, f.field, f.value, f.reason from ready_relationship r
+select r.id, f.field, f.value, f.reason from classified_relationship r
 cross join lateral (values
  ('stage', fields ->> 'stage', 'unknown_stage', kind = 'lead' and not exists (select from stage where role = 'lead' and slug = mapped_stage)),
  ('do_not_contact', fields ->> 'stage', 'restriction_needs_reason', kind = 'lead' and ((fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact')),
@@ -123,7 +136,7 @@ cross join lateral (values
  ('notes_path', fields ->> 'notes_path', 'file_not_copied', fields ->> 'notes_path' ~ '\S'),
  ('last_touch', fields ->> 'last_touch', 'contact_activity_copy_required', fields ->> 'last_touch' is not null),
  ('client_type', fields ->> 'client_type', 'unknown_client_type', kind = 'client' and fields ->> 'client_type' is not null
-  and fields ->> 'client_type' <> 'national_account' and not exists (select from client_type where slug = fields ->> 'client_type')),
+  and fields ->> 'client_type' <> 'national_account' and not exists (select from client_type where slug = mapped_type)),
  ('client_type', fields ->> 'client_type', 'national_account_needs_company', fields ->> 'client_type' = 'national_account' and not exists (select from party where id = mapped_id and kind = 'company')),
  ('status', fields ->> 'status', 'unknown_client_status', kind = 'client' and coalesce(fields ->> 'status', '') not in ('roster','cold','engaged','paused','active_deal','past_client'))
 ) f(field, value, reason, refused) where f.refused;
@@ -131,7 +144,7 @@ cross join lateral (values
 create temp table relationship_note on commit drop as
 select r.*, md5('old_system:' || kind || ':' || id || ':' || n.field)::uuid as activity_id, n.text
 from ready_relationship r cross join lateral (values ('notes', fields ->> 'notes'),
- ('source_detail', case when kind = 'lead' and fields ->> 'source_detail' is distinct from how_found_detail then fields ->> 'source_detail' end)) n(field, text)
+ ('source_detail', case when kind = 'lead' and nullif(btrim(fields ->> 'source_detail'), '') is distinct from how_found_detail then fields ->> 'source_detail' end)) n(field, text)
 where n.text ~ '\S';
 insert into activity (id, kind, happened_at, summary, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select activity_id, 'note', updated_at, text, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
@@ -144,7 +157,7 @@ select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported
  (fields ->> 'next_action_date')::date, owner, created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from ready_relationship where kind = 'lead' and fields ->> 'next_action_date' is not null on conflict do nothing;
 insert into outside_id (source, value, party_id)
-select 'old_system', r.id::text, r.mapped_id from old_relationship r
+select 'old_system', r.id::text, r.mapped_id from ready_relationship r
 join party_role pr on pr.party_id = r.mapped_id and pr.role = r.kind
 where (r.kind = 'lead' or exists (select from client c where c.party_id = r.mapped_id))
  and not exists (select from outside_id o where o.source = 'old_system' and o.value = r.id::text);

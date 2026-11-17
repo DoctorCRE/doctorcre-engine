@@ -25,14 +25,15 @@ const db = new pg.Client({
 	options: "-c search_path=next -c TimeZone=UTC",
 });
 const rows = async (sql: string) => (await db.query(sql)).rows;
-const run = async () => {
+const run = async (setup = "", keepOpen = false) => {
 	await db.query(
-		"begin; create temp table copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop; insert into copy_how_found values ('lead','Example referral','referral'), ('client','Example client source','vendor');",
+		"begin; create temp table copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop; insert into copy_how_found values ('lead','Example referral','referral'), ('client','Example client source','vendor'), ('candidate_pool','Example pool','public_records');",
 	);
 	try {
+		if (setup) await db.query(setup);
 		const result = await db.query(copy);
 		assert.ok(Array.isArray(result));
-		await db.query("commit");
+		if (!keepOpen) await db.query("commit");
 		return result.at(-1)?.rows ?? [];
 	} catch (error) {
 		await db.query("rollback");
@@ -53,11 +54,11 @@ before(async () => {
  insert into app_user values ('${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
- insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','nurture_drip','closed_lost','closed_won','active_deal','do_not_contact','engaged']) s;
- insert into public.client_status (slug,label) select s,s from unnest(array['roster','active_deal','past_client','cold']) s;
- insert into public.client_type (slug,label) values ('franchise','Example franchise'),('national_account','Example account');
+ insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','nurture_drip','closed_lost','closed_won','active_deal','do_not_contact','engaged','other']) s;
+ insert into public.client_status (slug,label) select s,s from unnest(array['roster','active_deal','past_client','cold','prospect']) s;
+ insert into public.client_type (slug,label) values ('franchise','Example franchise'),('national_account','Example account'), ('group','Example group'), ('other','Example unknown');
  insert into public.lead_lane (slug,label) values ('example_lane','Example lane');
- ${Array.from({ length: 12 }, (_, i) => {
+ ${Array.from({ length: 16 }, (_, i) => {
 		const n = i + 10;
 		return `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n)}','${n === 11 || n === 12 ? "org" : "person"}','Example ${n}','${id(1)}','${id(1)}');
  insert into party (id,kind,name) values ('${id(n)}','${n === 11 || n === 12 ? "company" : "person"}','Example ${n}');
@@ -99,6 +100,19 @@ before(async () => {
 	await db.query(`update public.lead set client_id = '${id(41)}' where id = '${id(30)}';
  insert into public.lead (id,party_id,stage,source_type,created_by,updated_by,owner_label,segment,est_lease_event,event_confidence) values
  ('${id(61)}','${id(20)}','new','Example referral','${id(1)}','${id(1)}','Shared','   ','2027-01-01','unknown');`);
+	await db.query(`insert into public.client (id,party_id,status,client_type,acquisition_source,created_by,updated_by) values
+ ('${id(43)}','${id(21)}','roster','group','Example client source','${id(1)}','${id(1)}'),
+ ('${id(44)}','${id(22)}','prospect','franchise','Example client source','${id(1)}','${id(1)}'),
+ ('${id(45)}','${id(23)}','roster','other','Example client source','${id(1)}','${id(1)}');
+ insert into public.lead (id,party_id,stage,source_type,source_detail,notes,next_action_date,created_by,updated_by) values
+ ('${id(62)}','${id(24)}','other','Example referral',null,'Refused note','2027-01-01','${id(1)}','${id(1)}'),
+ ('${id(63)}','${id(25)}','new','prospect-pool','  Pool detail  ',null,null,'${id(1)}','${id(1)}'),
+ ('${id(64)}','${id(12)}','new','Example referral','Unrelated source detail',null,null,'${id(1)}','${id(1)}');
+ insert into public.candidate_pool (id,source,source_key,source_row,name,status,promoted_lead_id,score_basis,est_lease_event,est_basis,created_by,updated_by) values
+ ('${id(70)}','Example pool','example-key','{}','Example candidate','promoted','${id(63)}','Example qualification','2027-02-01','Example basis','${id(1)}','${id(1)}');
+ update public.lead set est_lease_event = '2027-02-01' where id = '${id(63)}';`);
+	await db.query(`begin; select set_config('engine.job','old_system',true); alter table party disable trigger stamp_change;
+ update party set changed_at = '2030-01-01' where id = '${id(10)}'; alter table party enable trigger stamp_change; commit;`);
 	report = await run();
 });
 after(async () => {
@@ -108,21 +122,23 @@ after(async () => {
 
 test("roles use earliest creation and latest lead details without turning a doctor into their practice", async () => {
 	assert.deepEqual(
-		await rows(
-			`select stage, owner_user_id, lane, segment, estimated_lease_on::text, lease_estimate_source, lease_estimate_confidence, created_at::text, changed_by_user_id from party_role where party_id = '${id(10)}' and role = 'lead'`,
-		),
+		(
+			await rows(
+				`select stage, owner_user_id, lane, segment, estimated_lease_on::text, lease_estimate_source, lease_estimate_confidence, created_at::text, changed_by_user_id from party_role where party_id = '${id(10)}' and role = 'lead'`,
+			)
+		).map(Object.values),
 		[
-			{
-				stage: "qualified",
-				owner_user_id: id(1),
-				lane: "example_lane",
-				segment: "Example segment",
-				estimated_lease_on: "2027-01-01",
-				lease_estimate_source: "Example lease source",
-				lease_estimate_confidence: "high",
-				created_at: "2023-01-01 00:00:00+00",
-				changed_by_user_id: id(1),
-			},
+			[
+				"qualified",
+				id(1),
+				"example_lane",
+				"Example segment",
+				"2027-01-01",
+				"Example lease source",
+				"high",
+				"2023-01-01 00:00:00+00",
+				id(1),
+			],
 		],
 	);
 	assert.deepEqual(
@@ -133,11 +149,12 @@ test("roles use earliest creation and latest lead details without turning a doct
 	);
 	assert.ok(report.some((r) => r.reason === "sources_disagree"));
 	assert.ok(report.some((r) => r.reason === "several_records_on_one_party"));
-	assert.equal((await rows("select count(*)::int as n from client"))[0]?.n, 3);
+	assert.equal((await rows("select count(*)::int as n from client"))[0]?.n, 4);
 	assert.deepEqual(await rows("select status from client order by party_id"), [
 		{ status: "roster" },
 		{ status: "roster" },
 		{ status: "cold" },
+		{ status: "roster" },
 	]);
 	assert.deepEqual(await rows("select party_id from national_account"), [
 		{ party_id: id(12) },
@@ -168,6 +185,10 @@ test("legacy stages map exactly and missing facts are listed without invented co
 		"blank_segment",
 		"estimate_needs_source",
 		"invalid_or_unsourced_confidence",
+		"unknown_stage",
+		"unknown_client_status",
+		"unknown_client_type",
+		"existing_source_differs",
 	])
 		assert.ok(
 			report.some((r) => r.reason === reason),
@@ -178,7 +199,11 @@ test("legacy stages map exactly and missing facts are listed without invented co
 	assert.deepEqual(await rows("select * from do_not_contact"), []);
 	assert.deepEqual(
 		await rows("select summary from activity order by summary"),
-		[{ summary: "Example lead detail" }, { summary: "Example note" }],
+		[
+			{ summary: "Example lead detail" },
+			{ summary: "Example note" },
+			{ summary: "Unrelated source detail" },
+		],
 	);
 	assert.deepEqual(
 		await rows("select what,due_on::text,owner_party_id from next_step"),
@@ -197,27 +222,73 @@ test("rerunning changes no copied row, stamp, activity or follow-up", async () =
 			`select jsonb_build_object('parties',(select jsonb_agg(p order by id) from party p),'roles',(select jsonb_agg(r order by party_id,role) from party_role r),'notes',(select jsonb_agg(a order by id) from activity a),'steps',(select jsonb_agg(s order by id) from next_step s),'profiles',(select jsonb_agg(c order by party_id) from client c),'history',(select jsonb_agg(c order by id) from change c)) as snapshot`,
 		);
 	const original = await snapshot();
-	await run();
+	assert.deepEqual(await run(), report);
 	assert.deepEqual(await snapshot(), original);
 });
 
 test("a correction can supply a missing source without changing already copied leads", async () => {
-	await db.query(
+	await run(
 		`update public.lead set source_type = 'Example referral' where id = '${id(55)}'`,
+		true,
 	);
-	await run();
+	try {
+		assert.deepEqual(
+			await rows(
+				`select stage,owner_user_id from party_role where party_id = '${id(18)}'`,
+			),
+			[{ stage: "new", owner_user_id: null }],
+		);
+		assert.equal(
+			(
+				await rows(
+					`select count(*)::int as n from party_role where party_id = '${id(11)}' and role = 'lead'`,
+				)
+			)[0]?.n,
+			0,
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("group profiles map, refused records stay out, and pool estimates keep their source", async () => {
+	assert.deepEqual(
+		await rows(`select how_found_detail from party where id = '${id(12)}'`),
+		[{ how_found_detail: null }],
+	);
+	assert.deepEqual(
+		await rows(`select client_type from client where party_id = '${id(21)}'`),
+		[{ client_type: "group_practice" }],
+	);
+	for (const table of ["party_role", "activity_about", "next_step"])
+		assert.deepEqual(
+			await rows(
+				`select * from ${table} where party_id between '${id(22)}' and '${id(24)}'`,
+			),
+			[],
+		);
 	assert.deepEqual(
 		await rows(
-			`select stage,owner_user_id from party_role where party_id = '${id(18)}'`,
+			`select how_found,how_found_detail from party where id = '${id(25)}'`,
 		),
-		[{ stage: "new", owner_user_id: null }],
+		[{ how_found: "public_records", how_found_detail: "Pool detail" }],
 	);
-	assert.equal(
-		(
-			await rows(
-				`select count(*)::int as n from party_role where party_id = '${id(11)}' and role = 'lead'`,
-			)
-		)[0]?.n,
-		0,
+	assert.deepEqual(
+		await rows(
+			`select lease_estimate_source from party_role where party_id = '${id(25)}'`,
+		),
+		[{ lease_estimate_source: "Example basis" }],
+	);
+	assert.deepEqual(
+		await rows(
+			`select changed_at::text as preserved from party where id = '${id(10)}'`,
+		),
+		[{ preserved: "2030-01-01 00:00:00+00" }],
+	);
+	assert.deepEqual(
+		await rows(
+			`select tgname from pg_trigger where tgrelid in (select oid from pg_class where relnamespace = 'next'::regnamespace) and tgname in ('stamp_change','lead_stage_needs_evidence') and tgenabled <> 'O'`,
+		),
+		[],
 	);
 });
