@@ -63,6 +63,18 @@ select d.id, f.field, f.value, 'parking_history_not_copied' from public.deal d
 cross join lateral (values ('parked_at', d.parked_at::text), ('parked_by', d.parked_by::text)) f(field, value)
 where f.value is not null;
 
+-- Lane is not copied: national follows from the location's brand membership on the day the deal opened.
+insert into not_copied
+select d.id, 'lane', d.lane, case when answer.unreviewed then 'brand_dates_not_reviewed' else 'lane_disagrees_with_account' end
+from public.deal d join deal n on n.id = d.id
+join public.client c on c.id = d.client_id join public.party p on p.id = c.party_id
+join outside_id m on m.source = 'old_system' and m.value = p.id::text
+cross join lateral (select p.kind = 'org' and p.org_id is not null
+ and not exists (select from client_brand b where b.location_id = m.party_id) as unreviewed,
+ exists (select from client_brand b join national_account a on a.party_id = b.brand_id where b.location_id = m.party_id
+ and daterange(b.started_on, b.ended_on) @> (n.created_at at time zone 'America/Chicago')::date) as national) answer
+where d.lane is not null and (answer.unreviewed or (d.lane = 'national') <> answer.national);
+
 create temp table old_link on commit drop as
 select d.id as deal_id, d.client_id as old_id, c.party_id, 'client' as role, false as vendor_role, d.created_at, d.updated_at,
  a.*

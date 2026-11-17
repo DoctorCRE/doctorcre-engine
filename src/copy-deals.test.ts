@@ -1185,3 +1185,59 @@ test("a verified market agent joins the deal and a name-only agent waits for rev
 		await db.query("rollback");
 	}
 });
+
+test("a lane that disagrees with the account links is listed, and one awaiting brand dates is unresolved", async () => {
+	await db.query("begin");
+	try {
+		// biome-ignore format: one row per location
+		await db.query(`select set_config('engine.job', 'old_system', true);
+ insert into party (id, kind, name, how_found) values ('${id(30)}', 'company', 'Example Location', 'referral'),
+ ('${id(31)}', 'company', 'Example Brand', null), ('${id(32)}', 'company', 'Example Unreviewed Location', 'referral'),
+ ('${id(33)}', 'person', 'Example Franchisee', 'referral'), ('${id(34)}', 'company', 'Example Late Location', 'referral'),
+ ('${id(35)}', 'company', 'Example Local Client', 'referral');
+ insert into role (slug, label) values ('national_account', 'Example account');
+ insert into party_role (party_id, role) select v, 'client' from unnest(array['${id(30)}', '${id(32)}', '${id(33)}', '${id(34)}', '${id(35)}']::uuid[]) v;
+ insert into party_role (party_id, role) values ('${id(31)}', 'national_account');
+ insert into national_account (party_id) values ('${id(31)}');
+ insert into client (party_id) values ('${id(30)}'), ('${id(34)}');
+ insert into client_brand (location_id, brand_id, started_on) values ('${id(30)}', '${id(31)}', '2020-01-01'), ('${id(34)}', '${id(31)}', '2025-01-01');
+ insert into outside_id (source, value, party_id) values ('old_system', '${id(40)}', '${id(30)}'), ('old_system', '${id(41)}', '${id(31)}'),
+ ('old_system', '${id(42)}', '${id(32)}'), ('old_system', '${id(43)}', '${id(33)}'), ('old_system', '${id(44)}', '${id(34)}'),
+ ('old_system', '${id(45)}', '${id(35)}');
+ insert into public.party (id, kind, name, org_id, created_by, updated_by) values ('${id(41)}', 'org', 'Example Brand', null, '${id(1)}', '${id(1)}'),
+ ('${id(40)}', 'org', 'Example Location', '${id(41)}', '${id(1)}', '${id(1)}'), ('${id(42)}', 'org', 'Example Unreviewed Location', '${id(41)}', '${id(1)}', '${id(1)}'),
+ ('${id(43)}', 'person', 'Example Franchisee', '${id(41)}', '${id(1)}', '${id(1)}'), ('${id(44)}', 'org', 'Example Late Location', '${id(41)}', '${id(1)}', '${id(1)}'),
+ ('${id(45)}', 'org', 'Example Local Client', null, '${id(1)}', '${id(1)}');
+ insert into public.client (id, party_id, created_by, updated_by) values ('${id(50)}', '${id(40)}', '${id(1)}', '${id(1)}'),
+ ('${id(52)}', '${id(42)}', '${id(1)}', '${id(1)}'), ('${id(53)}', '${id(43)}', '${id(1)}', '${id(1)}'),
+ ('${id(54)}', '${id(44)}', '${id(1)}', '${id(1)}'), ('${id(55)}', '${id(45)}', '${id(1)}', '${id(1)}');
+ insert into public.deal_lane (slug, label, sort) values ('territory', 'Example territory', 10), ('national', 'Example national', 20);
+ ${[420, 421, 422, 423, 424, 425, 426].map((n) => deal(n)).join("\n")}
+ update public.deal d set client_id = v.client_id, lane = v.lane from (values
+ ('${id(420)}'::uuid, '${id(50)}'::uuid, 'national'), ('${id(421)}', '${id(50)}', 'territory'),
+ ('${id(422)}', '${id(52)}', 'national'), ('${id(423)}', '${id(53)}', 'national'),
+ ('${id(424)}', '${id(54)}', 'national'), ('${id(425)}', '${id(50)}', null), ('${id(426)}', '${id(55)}', 'territory')) v(id, client_id, lane)
+ where d.id = v.id;`);
+		const lanes = (r: pg.QueryResultRow[]) =>
+			r.filter((row) => row.field === "lane");
+		const listed = (n: number, value: string, reason: string) => ({
+			old_id: id(n),
+			field: "lane",
+			value,
+			reason,
+		});
+		const first = await run();
+		assert.deepEqual(lanes(first), [
+			listed(421, "territory", "lane_disagrees_with_account"),
+			listed(422, "national", "brand_dates_not_reviewed"),
+			listed(423, "national", "lane_disagrees_with_account"),
+			listed(424, "national", "lane_disagrees_with_account"),
+		]);
+		await db.query(`drop table pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
+ pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
+ pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
+		assert.deepEqual(lanes(await run()), lanes(first));
+	} finally {
+		await db.query("rollback");
+	}
+});
