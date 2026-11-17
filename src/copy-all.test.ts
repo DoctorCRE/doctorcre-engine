@@ -63,11 +63,6 @@ const order: [file: string, input?: string][] = [
 
 // One made-up snapshot of today's system: two partners and a clinic client leasing a suite, with its vendor and a lead.
 const OLD = `
-create table ops.meeting (id uuid primary key, title text not null, started_by_actor uuid not null references public.actor,
- started_at timestamptz not null, ended_at timestamptz, ended_by_actor uuid references public.actor);
-create table ops.meeting_note (id uuid primary key, meeting_id uuid not null references ops.meeting,
- note_number integer not null, revision integer not null, body text not null,
- author_actor uuid not null references public.actor, created_at timestamptz not null, unique (meeting_id,note_number,revision));
 create table ops.meeting_action (meeting_id uuid, action_number integer, state text not null, current_revision integer not null,
  decided_revision integer, decided_by_actor uuid, decided_at timestamptz, disposition text, assignee_actor uuid, operation_key uuid,
  primary key (meeting_id, action_number));
@@ -210,8 +205,10 @@ insert into public.phone_call_session (id, owner_id, sha256, byte_count, duratio
  values ('${id(95)}', '${id(1)}', '${"7".repeat(64)}', 1000, 60, 'audio/mp4', '2025-01-06', '2025-01-06', '{"summary": "Example call summary", "decisions": [], "open_questions": []}');
 insert into public.capture_post_call_candidate (session_id, idempotency_key, batch_hash, item_index, kind, deal_id, assignee_slug, action_description, evidence_quote, confidence)
  values ('${id(95)}', 'key-95', 'batch', 0, 'assigned_action', '${id(30)}', 'partner_one', 'Example action', 'Example quote', 0.9);
-insert into ops.meeting values ('${id(110)}','Example planning meeting','${id(1)}','2023-01-01',null,null);
-insert into ops.meeting_note values ('${id(111)}','${id(110)}',1,1,'Example planning note','${id(1)}','2023-01-01 01:00Z');
+insert into ops.meeting (id, organization_tenant_id, source_system, native_id, native_id_epoch, activation_intent, title, started_by_actor, started_at)
+ values ('${id(110)}', 'example-tenant', 'example-app', 'meeting-110', '1', 'one_tap_user_activation', 'Example planning meeting', '${id(1)}', '2023-01-01');
+insert into ops.meeting_note (id, meeting_id, note_number, revision, body, author_actor, author_instance, created_at)
+ values ('${id(111)}', '${id(110)}', 1, 1, 'Example planning note', '${id(1)}', 'example-device', '2023-01-01 01:00Z');
 insert into ops.meeting_action values ('${id(110)}', 1, 'proposed', 1, null, null, null, null, null, null);
 insert into ops.meeting_action_revision values ('${id(112)}', '${id(110)}', 1, 1, 'Example planning action',
  '{"verb": "set-next-action", "args": {"ref": "${id(30)}", "description": "Example planning step"}}', 'tentative_discussion', 'participant', '${id(1)}', '2023-01-01 02:00Z');
