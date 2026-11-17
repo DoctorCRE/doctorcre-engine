@@ -48,6 +48,7 @@ const order: [file: string, input?: string][] = [
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
 	["copy-emails.sql"],
+	["copy-attachment-emails.sql"],
 	["copy-calls.sql"],
 	["copy-meetings.sql"],
 	["copy-lead-stage-moves.sql"],
@@ -69,6 +70,7 @@ create table ops.meeting_action_revision (id uuid primary key, meeting_id uuid n
 create table ops.meeting_action_decision_request (idempotency_key uuid primary key, request jsonb not null);
 create table public.email_lead_exclusion (mailbox_owner text not null, message_hash text not null, recorded_at timestamptz not null default now(),
  primary key (mailbox_owner, message_hash));
+create table ops.requirement_reply_proposal (id uuid primary key, activity_id uuid not null, attachment_id uuid not null, created_at timestamptz not null);
 
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
@@ -174,6 +176,7 @@ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, act
  select v, 'email_in', '2025-01-06', '2025-01-06', '2025-01-06', '${id(3)}', 'Email from Example Doctor: Example tour', 'Example email text',
   '{"mailbox_owner": "partner_one", "sender_email": "doctor@example.com"}', d, c
  from (values ('${id(120)}'::uuid, '${id(30)}'::uuid, null::uuid), ('${id(121)}', null, '${id(20)}')) f(v, d, c);
+insert into ops.requirement_reply_proposal values ('${id(122)}', '${id(120)}', '${id(52)}', '2025-01-06');
 insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(84)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2025-01-04');
 insert into public.event (id, actor_id, verb, subject_type, subject_id, field, old_value, new_value, cause, occurred_at) values
@@ -325,6 +328,13 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 		await rows(`select activity_id from proposal where id = '${id(122)}'`),
 		[{ activity_id: id(120) }],
 		"a step suggested from a row of an email copied without a Message-ID cites that email",
+	);
+	assert.deepEqual(
+		await rows(
+			"select id, email_activity_id from document where email_activity_id is not null",
+		),
+		[{ id: id(52), email_activity_id: id(120) }],
+		"a file names the email without a Message-ID it arrived with",
 	);
 	assert.deepEqual(first, corrections);
 });
