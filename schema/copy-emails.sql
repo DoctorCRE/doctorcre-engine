@@ -31,9 +31,9 @@ cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.
 where a.kind in ('email_in', 'email_out');
 
 -- Without its Message-ID, a row matches by sender, the exact sent time and subject (owner ruling 2026-11-17).
--- The subject ignores case and outer spaces, as today's intake does when it tells two emails apart.
+-- The subject ignores case only, as today's intake does when it tells two emails apart.
 alter table old_email add match_key jsonb;
-update old_email set match_key = jsonb_build_array(sender, occurred_at, lower(btrim(subject))) where sender is not null;
+update old_email set match_key = jsonb_build_array(sender, occurred_at, lower(subject)) where sender is not null;
 -- A row without one joins the email whose Message-ID its match finds, if it finds only one.
 update old_email o set message_id = k.message_id
 from (select match_key, min(message_id) as message_id from old_email where message_id is not null
@@ -99,6 +99,10 @@ select distinct on (g.email_id, l.deal_id, l.party_id) g.email_id, l.deal_id, l.
 from email_group g join ready_email using (email_id) join old_link l on l.id = g.id
 where g.live and (l.deal_id is not null or l.party_id is not null)
 order by g.email_id, l.deal_id, l.party_id, g.recorded_at, g.id
+on conflict do nothing;
+-- Later copies find the email each of today's rows became.
+insert into outside_id (source, value, email_activity_id)
+select 'old_system', g.id::text, g.email_id from email_group g join email e on e.activity_id = g.email_id
 on conflict do nothing;
 
 set constraints all immediate;

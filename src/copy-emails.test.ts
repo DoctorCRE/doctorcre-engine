@@ -83,14 +83,17 @@ const mail: Mail[] = [
 	{ n: 57, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: ["client_id", 20], context: `'{"subject": "Example visit"}'`, email: 93 },
 ];
 // Without a Message-ID; 60 and 61 are one email in two mailboxes, and 65 matches two emails that have one.
+// 66 was sent a second later and 67's subject has a space today's intake kept, so each is its own email.
 // biome-ignore format: one old row per line
 const withoutId: Mail[] = [
 	{ n: 60, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: Example offer", link: deal, context: context(DOCTOR, "Example offer") },
-	{ n: 61, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: example offer ", link: ["client_id", 20], source },
+	{ n: 61, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: example offer", link: ["client_id", 20], source },
 	{ n: 62, kind: "email_in", time: "21:00", summary: "Email from someone: Example unknown", link: deal },
 	{ n: 63, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source, email: 88 },
 	{ n: 64, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source, email: 89 },
 	{ n: 65, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source },
+	{ n: 66, kind: "email_in", time: "20:00:01", summary: "Email from Example Doctor: Example offer", link: deal, source },
+	{ n: 67, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: Example offer ", link: deal, source },
 ];
 // Filed after the first copy, with lower ids than the emails they belong to.
 // biome-ignore format: one old row per line
@@ -239,6 +242,10 @@ test("matches an email without its Message-ID by sender, sent time and subject, 
 		lines(
 			`select activity_id, message_id, subject, imported from email where activity_id > '${id(58)}' order by activity_id`,
 		);
+	const emailOf = () =>
+		lines(
+			`select value, email_activity_id from outside_id where email_activity_id > '${id(58)}' order by value`,
+		);
 	const offerLinks = () =>
 		lines(
 			`select deal_id, party_id from activity_about where activity_id = '${id(60)}' order by deal_id, party_id`,
@@ -251,7 +258,14 @@ test("matches an email without its Message-ID by sender, sent time and subject, 
 		"60 null Example offer true",
 		"63 <Twin-1@example.test> Example twin true",
 		"64 <Twin-2@example.test> Example twin true",
+		"66 null Example offer true",
+		"67 null Example offer  true",
 	]);
+	assert.deepEqual(
+		await emailOf(),
+		["60 60", "61 60", "63 63", "64 64", "66 66", "67 67"],
+		"each of today's rows finds the email it became",
+	);
 	assert.deepEqual(
 		await offerLinks(),
 		["30 null", "null 10"],
@@ -273,6 +287,7 @@ test("matches an email without its Message-ID by sender, sent time and subject, 
 	assert.deepEqual(await offerLinks(), ["30 null", "null 10", "null 11"]);
 	assert.deepEqual(
 		await lines(`select count(*) from email where activity_id > '${id(58)}'`),
-		["3"],
+		["5"],
 	);
+	assert.deepEqual((await emailOf())[0], "59 60", "so does a row filed since");
 });

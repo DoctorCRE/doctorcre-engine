@@ -45,7 +45,8 @@ insert into document_kind values ('loi', 'LOI'), ('lease', 'Lease'), ('amendment
 insert into role (slug, label, category_of) values
 	('client', 'Client', null), ('lead', 'Lead', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
 	('lender', 'Lender', 'vendor'), ('title', 'Title', 'vendor');
-insert into how_found values ('referral', 'Referral'), ('vendor', 'Vendor'), ('public_records', 'Public records');
+insert into how_found values ('referral', 'Referral'), ('vendor', 'Vendor'), ('public_records', 'Public records'),
+	('not_recorded', 'Not recorded before this system');
 insert into party (id, kind, name, npi, how_found) values
 	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}', 'referral'),
 	('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}', null);
@@ -2175,6 +2176,17 @@ const RULES: Record<string, Case[]> = {
 			"party_how_found_fkey",
 		],
 	],
+	"only a record copied from the old system may say how it was found was not recorded":
+		[
+			[
+				`insert into party (id, kind, name, how_found) values ('${id(661)}', 'person', 'Example', 'not_recorded'); ${CHECK_AT_COMMIT}`,
+				"how_found_not_recorded_only_imported",
+			],
+			[
+				`update party set how_found = 'not_recorded' where id = '${CLIENT}'; ${CHECK_AT_COMMIT}`,
+				"how_found_not_recorded_only_imported",
+			],
+		],
 	"someone a deal is opened for is a client": [
 		[
 			`insert into deal_party values ('${LENDER_DEAL}', '${LEAD}', 'client'); ${CHECK_AT_COMMIT}`,
@@ -2232,7 +2244,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 	"an imported email without its Message-ID is stored once by its sender, sent time and subject":
 		[
 			[
-				`${emailWithoutId(id(303), "Example", true)}; ${emailWithoutId(id(304), " example ", true)}`,
+				`${emailWithoutId(id(303), "Example", true)}; ${emailWithoutId(id(304), "example", true)}`,
 				"email_without_message_id_once",
 			],
 		],
@@ -4775,6 +4787,35 @@ test("a merge keeps the survivor's lead owner and how it was found, filled from 
 				],
 				deals: [LENDER_DEAL],
 			},
+		]);
+	}));
+
+test("not recorded is judged on the saved party, after a correction or a merge in the same save", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values
+				('${id(663)}', 'person', 'Example Corrected', 'not_recorded'), ('${DUPLICATE}', 'person', 'Example Imported', 'not_recorded');
+			insert into outside_id (source, value, party_id) values ('old_system', '${id(664)}', '${DUPLICATE}');
+			update party set how_found = 'referral' where id = '${id(663)}';
+			select merge_party('${DUPLICATE}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+		const { rows } =
+			await db.query(`select (select how_found from party where id = '${id(663)}') as corrected,
+			(select how_found from party where id = '${LEAD}') as survivor`);
+		assert.deepEqual(rows, [
+			{ corrected: "referral", survivor: "public_records" },
+		]);
+	}));
+
+test("a merge keeps a recorded source and its detail over not recorded", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Imported', 'not_recorded');
+			insert into outside_id (source, value, party_id) values ('old_system', '${id(664)}', '${OLD}');
+			insert into party (id, kind, name, how_found, how_found_detail) values ('${DUPLICATE}', 'person', 'Example Other', 'vendor', 'Example vendor');
+			select merge_party('${DUPLICATE}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		const { rows } = await db.query(
+			`select how_found, how_found_detail from party where id = '${OLD}'`,
+		);
+		assert.deepEqual(rows, [
+			{ how_found: "vendor", how_found_detail: "Example vendor" },
 		]);
 	}));
 
