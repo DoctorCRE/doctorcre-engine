@@ -569,3 +569,170 @@ test("an uncopied capture holds its meeting before finishing and copying later",
 	assert.deepEqual(await run(), report);
 	assert.deepEqual(await snapshot(), before);
 });
+
+test("a distant equal source title holds an unlinked capture until it copies and is reviewed", async () => {
+	await capture(60, true, "2024-10-01", "Example no notes");
+	await db.query(
+		`update public.capture_candidate set payload = payload - 'ref' where session_id = '${id(60)}'`,
+	);
+	assert.deepEqual(await run("", callsCopy), [
+		[id(60), "activity", id(60), "about_nothing_copied"],
+	]);
+	const waiting = expected(
+		[13],
+		[id(13), "activity_id", id(60), "possible_duplicate"],
+	);
+	assert.deepEqual(await run(), waiting);
+	assert.deepEqual(
+		await rows(`select id from activity where id in ('${id(13)}','${id(60)}')`),
+		[],
+	);
+	const held = await snapshot();
+	assert.deepEqual(await run(), waiting);
+	assert.deepEqual(await snapshot(), held);
+	await db.query(
+		`update public.capture_candidate set payload = payload || '{"ref":"${id(1)}"}' where session_id = '${id(60)}'`,
+	);
+	assert.deepEqual(await run("", callsCopy), []);
+	assert.deepEqual(await run(), waiting);
+	assert.deepEqual(
+		await rows(
+			`select id,summary from activity where id in ('${id(13)}','${id(60)}')`,
+		),
+		[[id(60), "Example no notes"]],
+	);
+	const report = await run(
+		`insert into copy_meeting_activity values ('${id(13)}','${id(60)}')`,
+	);
+	assert.deepEqual(
+		report,
+		baseline.filter((r) => r[0] !== id(13)),
+	);
+	const before = await snapshot();
+	await run("", callsCopy);
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(await snapshot(), before);
+});
+
+for (const [projection, payload, title, duplicate, copiedSummary] of [
+	[
+		{ summary: " Example no notes " },
+		{ summary: "Example different" },
+		"Example no notes",
+		true,
+		"Example no notes",
+	],
+	[
+		{ summary: "Example different" },
+		{ summary: "Example no notes" },
+		"Example no notes",
+		false,
+		"Example different",
+	],
+	[
+		{
+			summary: " ",
+			decisions: [" Example decision ", " "],
+			open_questions: [" Example question "],
+		},
+		{ summary: "Example no notes" },
+		"Example no notes",
+		false,
+		"Decisions:\n- Example decision\n\nOpen questions:\n- Example question",
+	],
+	[
+		{ summary: " " },
+		{ summary: "Example record", detail: "Example detail" },
+		"Example record",
+		false,
+		"Example record\n\nExample detail",
+	],
+	[
+		{},
+		{ summary: " ", detail: "Example no notes" },
+		"Example no notes",
+		true,
+		"Example no notes",
+	],
+] as const) {
+	test(`source title recovery follows call precedence for ${JSON.stringify(projection)} and ${JSON.stringify(payload)}`, async () => {
+		await capture(60, true, "2024-10-01", "Example no notes");
+		await db.query(`insert into public.phone_call_session (id,owner_id,sha256,byte_count,duration_seconds,mime_type,started_at,consent_announced_at,projection)
+ values ('${id(60)}','${id(1)}','${"a".repeat(64)}',100,60,'audio/mp4','2024-10-01','2024-10-01','{}')`);
+
+		await db.query(
+			"update public.phone_call_session set projection = $1 where id = $2",
+			[JSON.stringify(projection), id(60)],
+		);
+		await db.query(
+			"update public.capture_candidate set payload = $1 where session_id = $2",
+			[JSON.stringify({ ...payload, ref: id(1) }), id(60)],
+		);
+		await db.query("update ops.meeting set title = $1 where id = $2", [
+			title,
+			id(13),
+		]);
+		const report = await run();
+		assert.equal(
+			report.some(
+				(r) =>
+					r[0] === id(13) && r[2] === id(60) && r[3] === "possible_duplicate",
+			),
+			duplicate,
+		);
+		await run("", callsCopy);
+		assert.deepEqual(
+			await rows(`select summary from activity where id = '${id(60)}'`),
+			[[copiedSummary]],
+		);
+	});
+}
+
+test("several source meeting records stay listed by the call copy and supply no guessed title", async () => {
+	await capture(60, false, "2024-10-01", "Example no notes");
+	await db.query(`insert into public.capture_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,payload,evidence_quote,confidence)
+ values ('${id(161)}','${id(60)}','example-other','example-batch',1,'meeting_record','{"ref":"${id(1)}","summary":"Example other"}','Example evidence',0.9)`);
+	assert.deepEqual(await run(), baseline);
+	assert.deepEqual(await run("", callsCopy), [
+		[id(60), "meeting_record", id(160), "several_meeting_records"],
+		[id(60), "meeting_record", id(161), "several_meeting_records"],
+	]);
+	assert.deepEqual(
+		await rows(`select summary from activity where id = '${id(60)}'`),
+		[[null]],
+	);
+	const before = await snapshot();
+	assert.deepEqual(await run(), baseline);
+	assert.deepEqual(await snapshot(), before);
+});
+
+test("skipped records and records with a confirmed logged identity supply no fallback title", async () => {
+	await capture(60, false, "2024-10-01", "Example no notes");
+	await capture(61, false, "2024-10-01", "Example no notes");
+	await db.query(`update public.capture_candidate set status = 'skipped', resolved_by = '${id(1)}', resolved_at = '2024-10-01' where session_id = '${id(60)}';
+ update public.capture_candidate set status = 'confirmed', resolved_by = '${id(1)}', resolved_at = '2024-10-01', resulting_ref = '${id(50)}' where session_id = '${id(61)}'`);
+	assert.deepEqual(await run(), baseline);
+	const before = await snapshot();
+	assert.deepEqual(await run(), baseline);
+	assert.deepEqual(await snapshot(), before);
+});
+
+test("a reviewed distant source-title pair permits a separate meeting before its capture copies", async () => {
+	await capture(60, false, "2024-10-01", "Example no notes");
+	const input = `insert into copy_meeting_distinct values ('${id(13)}','${id(60)}')`;
+	assert.deepEqual(
+		await run(),
+		expected([13], [id(13), "activity_id", id(60), "possible_duplicate"]),
+	);
+	assert.deepEqual(await run(input), baseline);
+	assert.deepEqual(await run("", callsCopy), []);
+	assert.deepEqual(
+		await rows(
+			`select id from activity where id in ('${id(13)}','${id(60)}') order by id`,
+		),
+		[[id(13)], [id(60)]],
+	);
+	const before = await snapshot();
+	assert.deepEqual(await run(input), baseline);
+	assert.deepEqual(await snapshot(), before);
+});

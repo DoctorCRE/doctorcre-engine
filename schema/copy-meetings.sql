@@ -14,14 +14,28 @@ with captured as (
   join public.activity a on a.id::text = c.resulting_ref
   where c.session_id = s.id and c.kind = 'meeting_record' and c.status = 'confirmed') as logged_activity_id
  from public.capture_session s
-) select id, started_at, coalesce(logged_activity_id, id) as activity_id
-from captured;
+) select s.id, s.started_at, coalesce(s.logged_activity_id, s.id) as activity_id,
+ coalesce(nullif(concat_ws(E'\n\n', nullif(btrim(p.projection ->> 'summary'), ''),
+  (select 'Decisions:' || string_agg(E'\n- ' || btrim(d.value), '' order by d.n)
+   from jsonb_array_elements_text(p.projection -> 'decisions') with ordinality d(value, n) where d.value ~ '\S'),
+  (select 'Open questions:' || string_agg(E'\n- ' || btrim(q.value), '' order by q.n)
+   from jsonb_array_elements_text(p.projection -> 'open_questions') with ordinality q(value, n) where q.value ~ '\S')), ''),
+  case when s.logged_activity_id is null then record.text end) as summary
+from captured s
+left join public.phone_call_session p using (id)
+cross join lateral (select case when count(*) = 1 then max(concat_ws(E'\n\n',
+  case when c.payload ->> 'summary' ~ '\S' then c.payload ->> 'summary' end,
+  case when c.payload ->> 'detail' ~ '\S' then c.payload ->> 'detail' end)) end as text
+ from public.capture_candidate c where c.session_id = s.id and c.kind = 'meeting_record' and c.status <> 'skipped'
+  and (c.payload ->> 'summary' ~ '\S' or c.payload ->> 'detail' ~ '\S')) record;
 
 create temp table meeting_source on commit drop as
 select id, occurred_at as happened_at, summary from public.activity where kind in ('meeting','tour')
 union
 select c.activity_id, c.started_at, a.summary from captured_activity c
-left join activity a on a.id = c.activity_id and a.kind in ('call','meeting');
+left join activity a on a.id = c.activity_id and a.kind in ('call','meeting')
+union
+select activity_id, started_at, summary from captured_activity;
 
 -- Neither native identity nor activation state identifies a business record or a logged activity.
 insert into not_copied
