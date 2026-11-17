@@ -1,7 +1,8 @@
 -- Load copy-attribution.sql after next.sql first. Run after copy-parties.sql, in a separate transaction, with search_path set to the new schema.
 -- Only reads public. Existing old_system deal maps make a repeat run leave copied deals alone.
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
-alter table deal disable trigger stamp_change;
+-- Historical parking and flags keep their source author rather than inventing an acting user.
+alter table deal disable trigger stamp_change, disable trigger deal_parked_or_flagged_by_a_user;
 alter table deal_party disable trigger stamp_change;
 alter table deal_phase_change disable trigger stamp_change;
 alter table property disable trigger stamp_change;
@@ -37,10 +38,13 @@ cross join lateral copy_attribution('deal', d.id, coalesce(d.updated_by, d.creat
 where not exists (select from outside_id o where o.source = 'old_system' and o.value = d.id::text);
 insert into not_copied select id, 'deal', id::text, 'no_deal_owner' from old_deal where owner_user_id is null;
 insert into deal (id, created_at, name, kind, reason, owner_user_id, market_id, closed_value,
+ parking_reason, parking_note, needs_attention,
  changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, created_at, name, (select slug from deal_kind where slug = deal_type),
  (select slug from deal_reason where slug = case deal_type when 'startup' then 'start_up' when 'renewal' then null else deal_type end),
  owner_user_id, market_id, case when won_value > 0 then won_value end,
+ case when operating_state = 'parked' then parking_reason end,
+ case when operating_state = 'parked' then nullif(regexp_replace(parking_note, '^\s+|\s+$', '', 'g'), '') end, attention,
  changed_by_user_id, changed_by_job, changed_for_user_id, updated_at from old_deal where owner_user_id is not null;
 insert into outside_id (source, value, deal_id)
 select 'old_system', d.id::text, d.id from old_deal d join deal n on n.id = d.id;
@@ -53,6 +57,11 @@ cross join lateral (values
  ('market', d.typed_market, 'unknown_market', d.typed_market is not null and d.market_id is null),
  ('won_value', d.won_value::text, 'nonpositive_value', d.won_value <= 0)) f(field, value, reason, refused)
 where f.refused;
+
+insert into not_copied
+select d.id, f.field, f.value, 'parking_history_not_copied' from public.deal d
+cross join lateral (values ('parked_at', d.parked_at::text), ('parked_by', d.parked_by::text)) f(field, value)
+where f.value is not null;
 
 create temp table old_link on commit drop as
 select d.id as deal_id, d.client_id as old_id, c.party_id, 'client' as role, false as vendor_role, d.created_at, d.updated_at,
@@ -230,7 +239,7 @@ insert into not_copied
 select c.id, 'negotiation_claim', to_jsonb(original)::text, r.reason from mapped_claim c
 join public.negotiation_claim original on original.id = c.id join claim_refusal r on r.id = c.id;
 set constraints all immediate;
-alter table deal enable trigger stamp_change;
+alter table deal enable trigger stamp_change, enable trigger deal_parked_or_flagged_by_a_user;
 alter table deal_party enable trigger stamp_change;
 alter table deal_phase_change enable trigger stamp_change;
 alter table property enable trigger stamp_change;

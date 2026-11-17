@@ -959,3 +959,150 @@ test("claims with uncopied authors or sponsors and blank notes wait for review",
 		await db.query("rollback");
 	}
 });
+
+test("parking reasons, trimmed notes and explicit attention flags copy without invented history", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`
+ ${[400, 401, 402, 403, 404, 405, 406].map((n) => deal(n)).join("\n")}
+ update public.deal set operating_state = 'parked', parking_reason = v.reason,
+ parking_note = v.note, parked_at = '2025-01-15', parked_by = '${id(1)}', attention = v.attention
+ from (values
+ ('${id(400)}'::uuid, 'client_paused', E' \tExample pause\n ', true),
+ ('${id(401)}'::uuid, 'prospect_never_active', null, false),
+ ('${id(402)}'::uuid, 'other', E' \t\n ', true),
+ ('${id(403)}'::uuid, 'other', 'Example other reason', false)) v(id, reason, note, attention)
+ where public.deal.id = v.id;
+ update public.deal set attention = true where id = '${id(404)}';
+ update public.deal set owner = null where id = '${id(406)}';`);
+		const first = await run();
+		assert.deepEqual(
+			await rows(
+				`select id, parking_reason, parking_note, needs_attention from deal where id >= '${id(400)}' order by id`,
+			),
+			[
+				{
+					id: id(400),
+					parking_reason: "client_paused",
+					parking_note: "Example pause",
+					needs_attention: true,
+				},
+				{
+					id: id(401),
+					parking_reason: "prospect_never_active",
+					parking_note: null,
+					needs_attention: false,
+				},
+				{
+					id: id(402),
+					parking_reason: "other",
+					parking_note: null,
+					needs_attention: true,
+				},
+				{
+					id: id(403),
+					parking_reason: "other",
+					parking_note: "Example other reason",
+					needs_attention: false,
+				},
+				{
+					id: id(404),
+					parking_reason: null,
+					parking_note: null,
+					needs_attention: true,
+				},
+				{
+					id: id(405),
+					parking_reason: null,
+					parking_note: null,
+					needs_attention: false,
+				},
+			],
+		);
+		assert.deepEqual(
+			first.filter((r) => r.old_id >= id(400)),
+			[
+				...[400, 401, 402, 403].flatMap((n) => [
+					{
+						old_id: id(n),
+						field: "parked_at",
+						value: "2025-01-15 00:00:00+00",
+						reason: "parking_history_not_copied",
+					},
+					{
+						old_id: id(n),
+						field: "parked_by",
+						value: id(1),
+						reason: "parking_history_not_copied",
+					},
+					{
+						old_id: id(n),
+						field: "phase",
+						value: "negotiation",
+						reason: "no_phase_history",
+					},
+				]),
+				...[404, 405].map((n) => ({
+					old_id: id(n),
+					field: "phase",
+					value: "negotiation",
+					reason: "no_phase_history",
+				})),
+				{
+					old_id: id(406),
+					field: "deal",
+					value: id(406),
+					reason: "no_deal_owner",
+				},
+				{
+					old_id: id(406),
+					field: "phase",
+					value: "negotiation",
+					reason: "no_phase_history",
+				},
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select * from deal_phase_change where deal_id >= '${id(400)}'`,
+			),
+			[],
+		);
+		assert.deepEqual(
+			await rows(
+				`select * from imported_change where table_name = 'deal' and record ->> 'id' >= '${id(400)}'`,
+			),
+			[],
+		);
+		assert.deepEqual(
+			await rows(`select n.id from deal n join public.deal d on d.id = n.id
+ where n.id >= '${id(400)}' and (n.created_at, n.changed_at, n.changed_by_user_id)
+ is distinct from (d.created_at, d.updated_at, d.updated_by)`),
+			[],
+		);
+		const copied = await rows(
+			`select * from deal where id >= '${id(400)}' order by id`,
+		);
+		await db.query(`drop table pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
+ pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
+ pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
+		assert.deepEqual(
+			(await run()).filter((r) => r.old_id >= id(400)),
+			first.filter((r) => r.old_id >= id(400)),
+		);
+		assert.deepEqual(
+			await rows(`select * from deal where id >= '${id(400)}' order by id`),
+			copied,
+		);
+		await refused(
+			`update deal set parking_reason = null, parking_note = null where id = '${id(400)}'`,
+			"23514",
+		);
+		await refused(
+			`update deal set needs_attention = false where id = '${id(404)}'`,
+			"23514",
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
