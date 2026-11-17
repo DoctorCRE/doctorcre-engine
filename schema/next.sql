@@ -1923,7 +1923,6 @@ language plpgsql as $$
 declare
 	latest deal_phase_change;
 	payment commission_payment;
-	matches uuid[];
 	direct_user boolean := nullif(current_setting('engine.user_id', true), '') is not null
 		and nullif(current_setting('engine.job', true), '') is null;
 begin
@@ -1945,15 +1944,15 @@ begin
 		if latest.happened_at is null then
 			raise exception 'an invoice needs the previous phase for undo' using errcode = 'check_violation', constraint = 'invoice_email_needs_prior_phase';
 		end if;
-		select array_agg(d.id) into matches from deal d
-		where invoice_name(d.name) = invoice_name(new.deal_name)
-			and (new.client_name is not null or new.property_address is not null)
-			and (new.client_name is null or exists (select from deal_party dp join party p on p.id = dp.party_id
-				where dp.deal_id = d.id and dp.role = 'client' and invoice_name(p.name) = invoice_name(new.client_name)))
-			and (new.property_address is null or exists (select from deal_property dp join property p on p.id = dp.property_id
-				where dp.deal_id = d.id and invoice_name(p.address) = invoice_name(new.property_address)));
-		perform from invoice_mailbox where address = new.sender;
-		if not direct_user and (not found or matches is distinct from array[new.deal_id]
+		-- One condition, so the automatic checks read the same snapshot.
+		if not direct_user and (not exists (select from invoice_mailbox where address = new.sender)
+			or (select array_agg(d.id) from deal d
+				where invoice_name(d.name) = invoice_name(new.deal_name)
+					and (new.client_name is not null or new.property_address is not null)
+					and (new.client_name is null or exists (select from deal_party dp join party p on p.id = dp.party_id
+						where dp.deal_id = d.id and dp.role = 'client' and invoice_name(p.name) = invoice_name(new.client_name)))
+					and (new.property_address is null or exists (select from deal_property dp join property p on p.id = dp.property_id
+						where dp.deal_id = d.id and invoice_name(p.address) = invoice_name(new.property_address)))) is distinct from array[new.deal_id]
 			or new.occurred_at > clock_timestamp() or new.email_date > current_date
 			or payment.invoiced_on is not null and payment.invoiced_on <> new.email_date
 			or exists (select from deal_invoiced where deal_id = new.deal_id and invoiced_on <> new.email_date)

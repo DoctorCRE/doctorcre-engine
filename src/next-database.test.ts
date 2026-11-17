@@ -6581,8 +6581,20 @@ test("the selected payment stays locked between the undo snapshot and date updat
 			).rows[0].blocked;
 		await db.query("select pg_advisory_unlock(324980)");
 		await applying;
-		await writer.query("rollback");
+		await writer.query("commit");
 		await editing;
+		await assert.rejects(
+			writer.query(UNDO_INVOICE),
+			expected("invoice_email_undo_current"),
+		);
+		assert.equal(
+			(
+				await owner.query(
+					`select invoiced_on::text from commission_payment where id = '${paymentId}'`,
+				)
+			).rows[0].invoiced_on,
+			"2026-03-31",
+		);
 		assert.equal(paused, true);
 		assert.equal(blocked, true);
 	} finally {
@@ -6594,6 +6606,86 @@ test("the selected payment stays locked between the undo snapshot and date updat
 			delete from deal_phase_change where deal_id = '${deal}';
 			delete from commission_payment where deal_id = '${deal}';
 			delete from commission where deal_id = '${deal}'; delete from deal where id = '${deal}'`);
+		await writer.end();
+		await owner.end();
+	}
+});
+
+test("invoice matching and payment checks cannot straddle a user's transaction", async () => {
+	const owner = await connect("none");
+	const writer = await connect();
+	const client = id(986);
+	const deal = id(987);
+	const selected = id(988);
+	const other = id(989);
+	try {
+		await owner.query(`insert into phase values ('closed', 'Closed') on conflict do nothing;
+			insert into party (id, kind, name, how_found) values ('${client}', 'company', 'Example Invoice Client', 'referral');
+			insert into party_role (party_id, role) values ('${client}', 'client');
+			insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Snapshot Deal', '${TEAMMATE}');
+			insert into deal_party (deal_id, party_id, role) values ('${deal}', '${client}', 'client');
+			insert into commission (deal_id, gross) values ('${deal}', 1000);
+			${payment({ id: selected, deal_id: deal, amount: 500 })};
+			${payment({ id: other, deal_id: deal, amount: 500, invoiced_on: "2026-03-01" })};
+			insert into deal_phase_change values ('${deal}', '2026-03-01', 'legal', 'Example prior phase');
+			${invoiceEmail({ deal_id: deal, payment_id: selected, deal_name: "Example Snapshot Deal", client_name: "Example Invoice Client" })};
+			create function pause_mailbox_test() returns boolean language plpgsql as $$
+			begin perform pg_advisory_xact_lock(324989); return true; end $$;
+			alter table invoice_mailbox enable row level security;
+			create policy pause_mailbox_test on invoice_mailbox for select to engine using (pause_mailbox_test())`);
+		await db.query("select pg_advisory_lock(324989)");
+		await writer.query(`begin; ${asJob("mail_capture")}`);
+		const { pid } = (await writer.query("select pg_backend_pid() as pid"))
+			.rows[0];
+		let settled = false;
+		const applying = assert
+			.rejects(
+				writer.query(APPLY_INVOICE),
+				expected("invoice_email_needs_user"),
+			)
+			.finally(() => {
+				settled = true;
+			});
+		let paused = false;
+		while (!settled && !paused)
+			paused = (
+				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [pid])
+			).rows[0].blocked;
+		await owner.query(`begin;
+			update party set name = 'Renamed Example Client' where id = '${client}';
+			delete from commission_payment where id = '${other}'; commit`);
+		await db.query("select pg_advisory_unlock(324989)");
+		await applying;
+		await writer.query("rollback");
+		assert.equal(paused, true);
+		assert.equal(
+			(
+				await owner.query(
+					`select status from invoice_email where id = '${INVOICE}'`,
+				)
+			).rows[0].status,
+			"captured",
+		);
+		assert.equal(
+			(
+				await owner.query(
+					`select invoiced_on from commission_payment where id = '${selected}'`,
+				)
+			).rows[0].invoiced_on,
+			null,
+		);
+	} finally {
+		await db.query("select pg_advisory_unlock(324989)");
+		await writer.query("rollback");
+		await owner.query(`rollback; drop policy if exists pause_mailbox_test on invoice_mailbox;
+			alter table invoice_mailbox disable row level security;
+			drop function if exists pause_mailbox_test();
+			delete from invoice_email where deal_id = '${deal}';
+			delete from deal_phase_change where deal_id = '${deal}';
+			delete from commission_payment where deal_id = '${deal}';
+			delete from commission where deal_id = '${deal}'; delete from deal_party where deal_id = '${deal}';
+			delete from deal where id = '${deal}';
+			delete from party_role where party_id = '${client}'; delete from party where id = '${client}'`);
 		await writer.end();
 		await owner.end();
 	}
