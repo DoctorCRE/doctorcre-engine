@@ -528,6 +528,7 @@ const STAMPED = [
 	"territory",
 	"territory_piece",
 	"party_territory",
+	"party_territory_review",
 	"deal",
 	"introduction",
 	"party_link",
@@ -573,6 +574,25 @@ const newAddress = (row: Record<string, string>) =>
 	});
 const piece = (row: Record<string, string | number>) =>
 	insert("territory_piece", { territory_id: HOME, ...row });
+// Reviews a record's membership of a territory; each value is SQL.
+const newMembershipReview = ({
+	party = VENDOR,
+	territory = STATEWIDE,
+	hasOffice = "true",
+	coverage = "null",
+	source = "'Example website'",
+} = {}) =>
+	`insert into party_territory_review (party_territory_id, has_office, coverage, source)
+	select id, ${hasOffice}, ${coverage}, ${source} from party_territory where party_id = '${party}' and territory_id = '${territory}'`;
+// Loads every review as the old system's, made at the start of 2024.
+const REVIEWED_AT = new Date("2024-01-01T00:00:00Z");
+const REVIEWED_BY_OLD_SYSTEM = `set local role none;
+	alter table party_territory_review disable trigger user;
+	update party_territory_review set reviewed_by_user_id = null, reviewed_by_job = 'old_system',
+		reviewed_for_user_id = null, reviewed_at = '${REVIEWED_AT.toISOString()}';
+	alter table party_territory_review enable trigger user;
+	set local role engine`;
+const DUPLICATE_TITLE_COMPANY = `insert into party (id, kind, name) values ('${DUPLICATE}', 'company', 'Example Title Co.')`;
 const newPhone = (row: Record<string, string | null>) =>
 	insert("party_phone", {
 		party_id: AGENT,
@@ -634,6 +654,7 @@ const STORED_AT = [
 	"post_media",
 	"introduction",
 	"party_link",
+	"party_territory_review",
 ];
 
 // A constraint's name, or the error PostgreSQL raises.
@@ -1822,6 +1843,40 @@ const RULES: Record<string, Case[]> = {
 				"party_territory_territory_id_fkey",
 			],
 		],
+	"a membership's review names its source and an office or the coverage declared, once per membership":
+		[
+			[
+				newMembershipReview({ hasOffice: "false" }),
+				"party_territory_review_says_something",
+			],
+			[
+				newMembershipReview({ hasOffice: "false", coverage: "' '" }),
+				"party_territory_review_coverage_check",
+			],
+			[
+				newMembershipReview({ source: "' '" }),
+				"party_territory_review_source_check",
+			],
+			[
+				`${newMembershipReview()}; ${newMembershipReview()}`,
+				"party_territory_review_pkey",
+			],
+			[
+				`insert into party_territory_review (party_territory_id, has_office, source) values ('${MISSING}', true, 'Example')`,
+				"party_territory_review_party_territory_id_fkey",
+			],
+			[
+				`${newMembershipReview()}; delete from party_territory where party_id = '${VENDOR}' and territory_id = '${STATEWIDE}'`,
+				"party_territory_review_party_territory_id_fkey",
+			],
+			[
+				`${DUPLICATE_TITLE_COMPANY};
+			insert into party_territory (party_id, territory_id, started_on) values ('${DUPLICATE}', '${STATEWIDE}', '2025-07-01');
+			${newMembershipReview()}; ${newMembershipReview({ party: DUPLICATE, source: "'Example call'" })};
+			select merge_party('${DUPLICATE}', '${VENDOR}')`,
+				"party_territory_review_pkey",
+			],
+		],
 	"a stage comes from its own role's list, and is stored once": [
 		[
 			`update party_role set stage = 'cold' where role = 'vendor'`,
@@ -2371,6 +2426,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	market: ["name"],
 	territory: ["name"],
 	party_territory: ["ended_on", "started_on"],
+	party_territory_review: ["coverage", "has_office", "source"],
 	deal: [
 		"closed_value",
 		"kind",
@@ -4840,6 +4896,69 @@ test("a setting alone never tells a change as a merge's", async () => {
 		await owner.end();
 	}
 });
+
+test("a merge moves each membership's review to the survivor, onto its own membership of the same territory and start, keeping its reviewer and time", () =>
+	rolledBack(async () => {
+		await db.query(`${DUPLICATE_TITLE_COMPANY};
+			insert into party_territory (party_id, territory_id, started_on) values
+				('${DUPLICATE}', '${STATEWIDE}', '2025-07-01'), ('${DUPLICATE}', '${HOME}', null);
+			${newMembershipReview({ party: DUPLICATE, hasOffice: "false", coverage: "'Example: the whole state'" })};
+			${newMembershipReview({ party: DUPLICATE, territory: HOME, source: "'Example call'" })};
+			${REVIEWED_BY_OLD_SYSTEM};
+			${asJob("agent")};
+			select merge_party('${DUPLICATE}', '${VENDOR}')`);
+		const { rows } = await db.query(
+			`select t.territory_id, t.started_on::text, r.has_office, r.coverage, r.source, r.reviewed_by_job, r.reviewed_at
+			from party_territory_review r join party_territory t on t.id = r.party_territory_id
+			where t.party_id = $1 order by t.started_on`,
+			[VENDOR],
+		);
+		assert.deepEqual(rows, [
+			{
+				territory_id: STATEWIDE,
+				started_on: "2025-07-01",
+				has_office: false,
+				coverage: "Example: the whole state",
+				source: "Example website",
+				reviewed_by_job: "old_system",
+				reviewed_at: REVIEWED_AT,
+			},
+			{
+				territory_id: HOME,
+				started_on: null,
+				has_office: true,
+				coverage: null,
+				source: "Example call",
+				reviewed_by_job: "old_system",
+				reviewed_at: REVIEWED_AT,
+			},
+		]);
+		const moves = await db.query(
+			`select changed_by_job, merge_of from change where table_name = 'party_territory_review' and action = 'update'`,
+		);
+		assert.deepEqual(moves.rows, [
+			{ changed_by_job: "agent", merge_of: DUPLICATE },
+		]);
+	}));
+
+test("another user confirming a review's unchanged evidence becomes its reviewer, and history keeps the earlier one", () =>
+	rolledBack(async () => {
+		await db.query(`${newMembershipReview()}; ${REVIEWED_BY_OLD_SYSTEM}; ${asUser(TEAMMATE)};
+			update party_territory_review set has_office = has_office, coverage = coverage, source = source`);
+		const review = await db.query(
+			"select reviewed_by_user_id, reviewed_by_job, reviewed_at = now() as now from party_territory_review",
+		);
+		assert.deepEqual(review.rows, [
+			{ reviewed_by_user_id: TEAMMATE, reviewed_by_job: null, now: true },
+		]);
+		const history = await db.query(
+			`select changed_by_user_id, old_value ->> 'reviewed_by_job' as was from change
+			where table_name = 'party_territory_review' and action = 'update'`,
+		);
+		assert.deepEqual(history.rows, [
+			{ changed_by_user_id: TEAMMATE, was: "old_system" },
+		]);
+	}));
 
 test("only the engine and the owner run a merge", async () => {
 	const { rows } = await db.query(

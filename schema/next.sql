@@ -319,6 +319,45 @@ create table party_territory (
 	unique nulls not distinct (party_id, territory_id, started_on)
 );
 
+-- What a reviewer found behind someone serving a territory, and who reviewed it when, which is never the membership's start.
+create table party_territory_review (
+	party_territory_id uuid primary key references party_territory,
+	created_at timestamptz not null default now(),
+	has_office boolean not null,
+	-- The coverage they declare, in their words. It is never drawn into pieces.
+	coverage text check (coverage ~ '\S'),
+	source text not null check (source ~ '\S'),
+	reviewed_by_user_id uuid references app_user,
+	reviewed_by_job text references job,
+	reviewed_for_user_id uuid references app_user,
+	reviewed_at timestamptz not null,
+	constraint party_territory_review_says_something check (has_office or coverage is not null),
+	constraint party_territory_review_by_a_user_or_a_job check (num_nonnulls(reviewed_by_user_id, reviewed_by_job) = 1
+		and (reviewed_by_job is not null or reviewed_for_user_id is null))
+);
+
+-- Every save is a review, even one confirming the same evidence, so it names who acts as stamp_change does.
+create function stamp_review() returns trigger
+language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+begin
+	-- Only a merge moves a review, and the merger reviewed nothing.
+	if tg_op = 'UPDATE' and new.party_territory_id <> old.party_territory_id then
+		return new;
+	end if;
+	new.reviewed_by_user_id := case when acting_job is null then acting_user end;
+	new.reviewed_by_job := acting_job;
+	new.reviewed_for_user_id := case when acting_job is not null then acting_user end;
+	new.reviewed_at := now();
+	return new;
+end $$;
+
+-- Named to run before stamp_change, which then sees the changed reviewer or time and restamps.
+create trigger review_stamp before insert or update on party_territory_review
+	for each row execute function stamp_review();
+
 -- Along the earth's surface, by the haversine formula on a 3,958.8-mile radius.
 create function miles_between(lat1 float8, lng1 float8, lat2 float8, lng2 float8) returns float8
 language sql immutable strict
@@ -2196,6 +2235,10 @@ begin
 	update deal_party set party_id = survivor where party_id = duplicate;
 	delete from activity_about d using activity_about s
 	where d.party_id = duplicate and s.party_id = survivor and s.activity_id = d.activity_id;
+	-- A collapsing membership's review moves to the survivor's, so a merge of two reviewed ones is refused.
+	update party_territory_review r set party_territory_id = s.id from party_territory d, party_territory s
+	where r.party_territory_id = d.id and d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
+		and s.started_on is not distinct from d.started_on;
 	delete from party_territory d using party_territory s
 	where d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
 		and s.started_on is not distinct from d.started_on;
@@ -2288,7 +2331,7 @@ declare
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
-		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'activity',
+		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
@@ -2701,7 +2744,7 @@ revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
 grant delete on vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
-	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
+	territory, territory_piece, party_territory, party_territory_review, deal, party_role, party_company, deal_property, deal_party, activity,
 	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
@@ -2717,6 +2760,7 @@ grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
 grant update (started_on, ended_on) on party_territory to engine;
+grant update (has_office, coverage, source) on party_territory_review to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
 grant update (what, owner_party_id, due_on, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
