@@ -9,21 +9,23 @@ alter table activity disable trigger record_change;
 alter table imported_change disable trigger stamp_imported_change;
 
 create temp table captured_activity on commit drop as
-select s.id, coalesce((select max(a.id::text)::uuid from public.capture_candidate c
- join public.activity a on a.id::text = c.resulting_ref
- where c.session_id = s.id and c.kind = 'meeting_record' and c.status = 'confirmed'), s.id) as activity_id
-from public.capture_session s;
+with captured as (
+ select s.id, s.started_at, (select max(a.id::text)::uuid from public.capture_candidate c
+  join public.activity a on a.id::text = c.resulting_ref
+  where c.session_id = s.id and c.kind = 'meeting_record' and c.status = 'confirmed') as logged_activity_id
+ from public.capture_session s
+) select id, started_at, coalesce(logged_activity_id, id) as activity_id
+from captured;
 
 create temp table meeting_source on commit drop as
 select id, occurred_at as happened_at, summary from public.activity where kind in ('meeting','tour')
 union
-select a.id, a.happened_at, a.summary from activity a join captured_activity c on c.activity_id = a.id
-where a.kind in ('call','meeting') and not exists
- (select from public.activity p where p.id = a.id and p.kind in ('meeting','tour'));
+select c.activity_id, c.started_at, a.summary from captured_activity c
+left join activity a on a.id = c.activity_id and a.kind in ('call','meeting');
 
 -- Neither native identity nor activation state identifies a business record or a logged activity.
 insert into not_copied
-select m.id, 'activity_id', a.id::text, 'possible_duplicate' from ops.meeting m join meeting_source a
+select distinct m.id, 'activity_id', a.id::text, 'possible_duplicate' from ops.meeting m join meeting_source a
  on (a.happened_at between m.started_at - interval '24 hours' and m.started_at + interval '24 hours'
  or (a.happened_at at time zone 'UTC')::date = (m.started_at at time zone 'America/Chicago')::date
  or a.summary = m.title)
