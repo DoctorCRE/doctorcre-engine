@@ -27,6 +27,9 @@ select c.lease_id, c.new_version, count(*) over (partition by c.lease_id, c.new_
  l.*, tenant.party_id as tenant_id, place.properties, place.unresolved, place.property_id,
  -- The new column holds less than the old one; a larger quote keeps its wording.
  case when l.rate_norm_sf_yr < 1e8 then l.rate_norm_sf_yr end as rent_per_sf_yr,
+ -- Current and superseded rows come only from the partner's own record, which names its evidence.
+ case when l.status = 'legacy_unverified' then false
+  when l.source ~ '\S' and l.evidence_kind is not null and l.evidence_ref ~ '\S' then true end as verified,
  exists (select from lease_version n where (n.id, n.lease_id, n.version) = (l.id, c.lease_id, c.new_version)) as copied,
  a.r2_key, a.deleted_at is not null as file_deleted,
  a.sha256 ~ '^[0-9a-f]{64}$' and a.bytes > 0 and a.r2_key ~ '\S' and a.mime ~ '\S' as file_whole, author.*
@@ -100,10 +103,11 @@ order by a.r2_key, a.created_at, a.id on conflict do nothing;
 insert into lease (id, created_at, party_id, property_id, deal_id, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select lease_id, created_at, tenant_id, property_id, deal_id, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from copyable c where new_version = 1 and not exists (select from lease n where n.id = c.lease_id);
-insert into lease_version (id, created_at, lease_id, version, document_id, executed_on, commencement_on, expiration_on,
- rent_per_sf_yr, term_months, free_rent_months, expense_structure, other_terms,
+insert into lease_version (id, created_at, lease_id, version, document_id, source, evidence_kind, evidence_ref, verified,
+ executed_on, commencement_on, expiration_on, rent_per_sf_yr, term_months, free_rent_months, expense_structure, other_terms,
  changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select v.id, v.created_at, v.lease_id, v.new_version, n.id, v.executed_on, v.commencement_on, v.expiration_on,
+select v.id, v.created_at, v.lease_id, v.new_version, n.id, case when v.source ~ '\S' then v.source end, v.evidence_kind,
+ case when v.evidence_ref ~ '\S' then v.evidence_ref end, v.verified, v.executed_on, v.commencement_on, v.expiration_on,
  v.rent_per_sf_yr, v.term_months, case when v.free_rent_months >= 0 then v.free_rent_months end,
  case when v.opex_structure ~ '\S' then v.opex_structure end,
  nullif(concat_ws(E'\n',
@@ -136,13 +140,8 @@ where v.space_property_id is distinct from v.property_id
 -- Each option needs its own kind, terms and notice date before it can be an option row.
 insert into not_copied select l.id, 'options_note', l.options_note, 'option_terms_unparsed'
 from old_version l join lease_version n on (n.id, n.lease_id, n.version) = (l.id, l.lease_id, l.new_version) where l.options_note ~ '\S';
-insert into not_copied select l.id, 'evidence', f.value::text, 'no_typed_destination'
-from old_version l join lease_version n on (n.id, n.lease_id, n.version) = (l.id, l.lease_id, l.new_version)
-cross join lateral (select jsonb_strip_nulls(jsonb_build_object('source', l.source, 'evidence_kind',
- -- The deal-file copier applies these kind mappings.
- case when l.deal_id is null or l.evidence_kind not in ('executed_lease', 'lease_amendment') then l.evidence_kind end,
- 'evidence_ref', l.evidence_ref, 'status', case when l.status = 'legacy_unverified' then l.status end)) as value) f
-where f.value <> '{}'::jsonb;
+insert into not_copied select l.id, 'status', l.status, 'verified_without_evidence'
+from old_version l join lease_version n on (n.id, n.lease_id, n.version) = (l.id, l.lease_id, l.new_version) where l.verified is null;
 alter table document enable trigger stamp_change;
 alter table lease enable trigger stamp_change;
 alter table lease_version enable trigger stamp_change;

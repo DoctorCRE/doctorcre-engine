@@ -938,8 +938,20 @@ const RULES: Record<string, Case[]> = {
 			newLease({ expense_structure: " " }),
 			"lease_version_expense_structure_check",
 		],
+		[newLease({ source: " " }), "lease_version_source_check"],
+		[newLease({ evidence_ref: " " }), "lease_version_evidence_ref_check"],
+		[newLease({ evidence_kind: "lease" }), "lease_version_evidence_kind_check"],
+		[
+			newLease({
+				verified: "true",
+				source: "Example partner record",
+				evidence_kind: "executed_lease",
+			}),
+			"lease_verified_has_evidence",
+		],
 		...[
 			"update lease_version set version = 2",
+			"update lease_version set verified = true",
 			"delete from lease_version",
 			"truncate lease_version",
 		].map((sql): Case => [sql, notGranted("lease_version")]),

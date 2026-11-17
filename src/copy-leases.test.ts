@@ -148,45 +148,50 @@ test("known dates and per-foot rent copy; other wording stays in other terms and
 	assert.deepEqual(await rows("select * from lease_option"), []);
 	assert.deepEqual(
 		copied.filter((r) => r.old_id === id(100)).map((r) => [r.field, r.reason]),
-		[
-			["evidence", "no_typed_destination"],
-			["options_note", "option_terms_unparsed"],
-		],
+		[["options_note", "option_terms_unparsed"]],
 	);
 });
 
-test("mapped source-file kinds leave only unresolved evidence in the correction list", () => {
-	const evidence = copied.find(
-		(r) => r.old_id === id(100) && r.field === "evidence",
+test("each version keeps where its terms came from, and an unverified version stays apart from an unknown one", async () => {
+	// biome-ignore format: one row per version
+	assert.deepEqual((await rows(`select id, source, evidence_kind, evidence_ref, verified from lease_version where id in ('${id(100)}', '${id(101)}', '${id(110)}') order by id`)).map(Object.values), [
+ [id(100), "stated", "executed_lease", "Example lease file", true],
+ [id(101), "stated", null, null, null],
+ [id(110), "stated", null, null, false],
+ ]);
+	assert.deepEqual(reasons(copied, 101), ["verified_without_evidence"]);
+	assert.deepEqual(reasons(copied, 110), []);
+	assert.deepEqual(
+		await rows(
+			`select new_value ->> 'evidence_ref' as evidence_ref, new_value -> 'verified' as verified from change where table_name = 'lease_version' and record = '{"id": "${id(100)}"}'`,
+		),
+		[{ evidence_ref: "Example lease file", verified: true }],
 	);
-	assert.ok(evidence);
-	assert.deepEqual(JSON.parse(evidence.value), {
-		source: "stated",
-		evidence_ref: "Example lease file",
-	});
 });
 
-test("amendment kinds are resolved while abstract and unfiled evidence stay listed", async () => {
-	for (const [kind, deal, expected] of [
-		["lease_amendment", id(10), undefined],
-		["lease_abstract", id(10), "lease_abstract"],
-		["executed_lease", null, "executed_lease"],
-	] as const) {
-		await db.query("begin");
-		try {
-			await db.query(
-				"update public.lease set evidence_kind = $1, deal_id = $2 where id = $3",
-				[kind, deal, id(100)],
-			);
-			const report = await run();
-			const evidence = report.find(
-				(r) => r.old_id === id(100) && r.field === "evidence",
-			);
-			assert.ok(evidence);
-			assert.equal(JSON.parse(evidence.value).evidence_kind, expected);
-		} finally {
-			await db.query("rollback");
-		}
+test("blank wording copies as none, and a partner's record without its evidence is listed rather than verified", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.lease set doc_attachment = '${id(203)}', source = ' ', evidence_kind = 'lease_abstract', evidence_ref = ' ', status = 'superseded' where id = '${id(102)}'`,
+		);
+		const report = await run();
+		assert.deepEqual(
+			await rows(
+				`select source, evidence_kind, evidence_ref, verified from lease_version where id = '${id(102)}'`,
+			),
+			[
+				{
+					source: null,
+					evidence_kind: "lease_abstract",
+					evidence_ref: null,
+					verified: null,
+				},
+			],
+		);
+		assert.deepEqual(reasons(report, 102), ["verified_without_evidence"]);
+	} finally {
+		await db.query("rollback");
 	}
 });
 

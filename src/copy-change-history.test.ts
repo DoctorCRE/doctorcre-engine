@@ -225,7 +225,7 @@ test("copies field evidence for every supported record kind without replay or in
 	assert.deepEqual(await snapshot(), before);
 });
 
-test("copies market and estimate evidence unchanged on rerun", async () => {
+test("copies market, estimate and lease source evidence unchanged on rerun", async () => {
 	const cases = [
 		["deal", 20, "city", "deal", { id: id(20) }, "market_id"],
 		[
@@ -244,6 +244,10 @@ test("copies market and estimate evidence unchanged on rerun", async () => {
 			{ party_id: id(10), role: "lead" },
 			"lease_estimate_confidence",
 		],
+		...(["source", "evidence_kind", "evidence_ref"] as const).map(
+			(field) =>
+				["lease", 41, field, "lease_version", { id: id(41) }, field] as const,
+		),
 	] as const;
 	for (const [i, [subject, subjectId, field]] of cases.entries())
 		await event(150 + i, subject, subjectId, field);

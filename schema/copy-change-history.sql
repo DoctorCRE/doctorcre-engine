@@ -24,7 +24,8 @@ select * from (values
  ('lease', 'lease_version', 'executed_on', 'executed_on'), ('lease', 'lease_version', 'commencement_on', 'commencement_on'),
  ('lease', 'lease_version', 'expiration_on', 'expiration_on'), ('lease', 'lease_version', 'rate_norm_sf_yr', 'rent_per_sf_yr'),
  ('lease', 'lease_version', 'term_months', 'term_months'), ('lease', 'lease_version', 'free_rent_months', 'free_rent_months'),
- ('lease', 'lease_version', 'opex_structure', 'expense_structure')
+ ('lease', 'lease_version', 'opex_structure', 'expense_structure'), ('lease', 'lease_version', 'source', 'source'),
+ ('lease', 'lease_version', 'evidence_kind', 'evidence_kind'), ('lease', 'lease_version', 'evidence_ref', 'evidence_ref')
 ) f(subject, table_name, old_field, field);
 
 -- The Deal Room writer wraps both values in the old field name.
