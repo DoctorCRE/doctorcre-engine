@@ -6,13 +6,11 @@ alter table document disable trigger stamp_change;
 
 -- One row per emailed attachment and the email a proposal names; rows naming one key are one file, as in the deal-file copy.
 create temp table emailed on commit drop as
-select a.id, n.id as document_id, p.activity_id, p.created_at, e.activity_id as email_id
+select a.id, n.id as document_id, p.activity_id, p.created_at, o.email_activity_id as email_id
 from public.attachment a
 join document n on (n.r2_bucket, n.r2_key, n.deal_id) = ('deal_documents', a.r2_key, a.subject_id)
 left join ops.requirement_reply_proposal p on p.attachment_id = a.id
-left join public.activity o on o.id = p.activity_id
-left join public.email m on m.id = o.email_id
-left join email e on e.message_id = m.message_id
+left join outside_id o on (o.source, o.value) = ('old_system', p.activity_id::text)
 where a.subject_type = 'deal' and a.deleted_at is null and (p.id is not null or exists (select from public.event v
  where v.verb = 'attach-deal-file' and v.new_value ->> 'attachment_id' = a.id::text));
 

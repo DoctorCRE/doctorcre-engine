@@ -67,8 +67,6 @@ create table ops.meeting_action (meeting_id uuid, action_number integer, state t
 create table ops.meeting_action_revision (id uuid primary key, meeting_id uuid not null, action_number integer not null, revision integer not null,
  summary text not null, command jsonb, basis text not null, source text not null, proposed_by_actor uuid not null, created_at timestamptz not null);
 create table ops.meeting_action_decision_request (idempotency_key uuid primary key, request jsonb not null);
-create table public.email (id uuid primary key, mailbox_account text not null, message_id text);
-alter table public.activity add column email_id uuid references public.email;
 create table ops.requirement_reply_proposal (id uuid primary key, activity_id uuid not null, attachment_id uuid not null, created_at timestamptz not null);
 
 insert into public.actor (id, slug, kind, display_name) values
@@ -284,7 +282,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, lead_stage_move: 1, proposal: 3,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
 const corrections = [
@@ -297,9 +295,6 @@ const corrections = [
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
- ["copy-emails.sql", id(120), "message_id", null, "email_without_message_id"],
- ["copy-emails.sql", id(121), "message_id", null, "email_without_message_id"],
- ["copy-attachment-emails.sql", id(52), "activity_id", id(120), "email_not_copied"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
@@ -321,6 +316,13 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 	assert.deepEqual(
 		await rows("select party_id, document_id from party_document"),
 		[{ party_id: id(10), document_id: id(53) }],
+	);
+	assert.deepEqual(
+		await rows(
+			"select id, email_activity_id from document where email_activity_id is not null",
+		),
+		[{ id: id(52), email_activity_id: id(120) }],
+		"a file names the email without a Message-ID it arrived with",
 	);
 	assert.deepEqual(first, corrections);
 });
