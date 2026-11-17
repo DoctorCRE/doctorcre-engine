@@ -4,7 +4,7 @@ import { Refusal, refuse } from "./answer.ts";
 import { nextTransaction } from "./next-connection.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { signNextCaller } from "./next-save.ts";
-import { MAX_FILE_BYTES, storeFile } from "./post-media.ts";
+import { storeFile } from "./post-media.ts";
 import { fit, isText, isUuid, optional } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 
@@ -21,8 +21,8 @@ const ATTACHMENT = {
 	sha256: isHash,
 	name: isText,
 	message_id: optional(isText),
-	deal_id: optional(isUuid),
-	kind: optional(isText),
+	deal_id: isUuid,
+	kind: isText,
 };
 
 async function asCaller<T>(
@@ -64,25 +64,13 @@ attachmentFiles.put("/files/:sha256", async (c) => {
 	const body = c.req.raw.body;
 	if (!body || !Number.isSafeInteger(length) || length <= 0)
 		return refuse(c, new Refusal(411, "length_required"));
-	if (length > MAX_FILE_BYTES) return refuse(c, new Refusal(422, "too_large"));
 	const bucket = c.env.DEAL_DOCUMENTS;
 	if (!bucket) return refuse(c, new Refusal(503, "database_unavailable"));
 	const stored = await storeFile(bucket, sha256, body, length);
-	if ("refused" in stored && stored.refused !== "already_stored")
-		return refuse(
-			c,
-			new Refusal(
-				422,
-				stored.refused === "too_large" || stored.refused === "sha256_mismatch"
-					? stored.refused
-					: "unsupported_file",
-			),
-		);
-	const file = await bucket.head(`sha256/${sha256}`);
-	if (!file) return refuse(c, new Refusal(503, "database_unavailable"));
+	if ("refused" in stored) return refuse(c, new Refusal(422, stored.refused));
 	return c.json(
-		{ sha256, content_type: file.httpMetadata?.contentType, bytes: file.size },
-		"refused" in stored ? 200 : 201,
+		{ sha256, content_type: stored.type, bytes: stored.bytes },
+		stored.existing ? 200 : 201,
 	);
 });
 
@@ -118,17 +106,14 @@ export const attachments = new Hono<AttachmentEnv>().post("/attachments", (c) =>
 	answerNextSave(
 		c,
 		"attachment",
-		(body) => {
-			const request = fit(
-				body,
-				ATTACHMENT,
-				["idempotency_key", "sha256", "name"],
-				["message_id", "deal_id"],
-			);
-			if (!(request instanceof Refusal) && request.deal_id && !request.kind)
-				return new Refusal(400, "missing_required", { fields: ["kind"] });
-			return request;
-		},
+		(body) =>
+			fit(body, ATTACHMENT, [
+				"idempotency_key",
+				"sha256",
+				"name",
+				"deal_id",
+				"kind",
+			]),
 		async (tx, request) => {
 			const { sha256, name, deal_id, kind, message_id } = request;
 			const bucket = c.env.DEAL_DOCUMENTS;
@@ -144,7 +129,6 @@ export const attachments = new Hono<AttachmentEnv>().post("/attachments", (c) =>
 			if (message_id && !email)
 				throw new SaveRefusal(new Refusal(409, "email_not_stored"));
 			if (
-				deal_id &&
 				!(await tx
 					.selectFrom("deal")
 					.select("id")
@@ -155,46 +139,42 @@ export const attachments = new Hono<AttachmentEnv>().post("/attachments", (c) =>
 			await sql`select pg_advisory_xact_lock(hashtextextended(${sha256}, 0))`.execute(
 				tx,
 			);
-			const { rows: matches } = await sql<{
-				id: string;
-				deal_id: string | null;
-			}>`
-    select id, deal_id from document where sha256 = ${sha256}
-     and (deal_id = ${deal_id ?? null}::uuid or
-      ((deal_id is null or ${deal_id ?? null}::uuid is null)
-       and (email_activity_id = ${email?.activity_id ?? null}::uuid or exists
-        (select from email_document where document_id = document.id
-         and email_activity_id = ${email?.activity_id ?? null}::uuid))))
-    order by deal_id desc nulls last limit 1`.execute(tx);
-			const prior = matches[0];
+			const prior = await tx
+				.selectFrom("document")
+				.select("id")
+				.where("deal_id", "=", deal_id)
+				.where("sha256", "=", sha256)
+				.limit(1)
+				.executeTakeFirst();
 			const linkEmail = async (document_id: string) => {
 				if (email)
-					await sql`insert into email_document (email_activity_id, document_id)
-     values (${email.activity_id}::uuid, ${document_id}::uuid) on conflict do nothing`.execute(
-						tx,
-					);
+					await tx
+						.insertInto("email_document")
+						.values({ email_activity_id: email.activity_id, document_id })
+						.onConflict((conflict) => conflict.doNothing())
+						.execute();
 			};
 			if (prior) {
-				if (deal_id && !prior.deal_id)
-					await tx
-						.updateTable("document")
-						.set({ deal_id, kind: kind ?? null })
-						.where("id", "=", prior.id)
-						.execute();
 				await linkEmail(prior.id);
 				return { document_id: prior.id, existing: true };
 			}
 			const file = await bucket.head(`sha256/${sha256}`);
 			if (!file?.httpMetadata?.contentType)
 				throw new SaveRefusal(new Refusal(409, "file_not_uploaded"));
-			const { rows } = await sql<{
-				id: string;
-			}>`insert into document (name, r2_bucket, r2_key, content_type, sha256, bytes, email_activity_id, deal_id, kind)
-		values (${name}, 'deal_documents', ${`sha256/${sha256}`}, ${file.httpMetadata.contentType}, ${sha256}, ${file.size}, ${email?.activity_id ?? null}::uuid, ${deal_id ?? null}::uuid, ${deal_id ? kind : null}) returning id`.execute(
-				tx,
-			);
-			const document = rows[0];
-			if (!document) throw new Error("document insert returned no row");
+			const document = await tx
+				.insertInto("document")
+				.values({
+					name,
+					r2_bucket: "deal_documents",
+					r2_key: `sha256/${sha256}`,
+					content_type: file.httpMetadata.contentType,
+					sha256,
+					bytes: file.size,
+					deal_id,
+					kind,
+				})
+				.returning("id")
+				.executeTakeFirstOrThrow();
 			await linkEmail(document.id);
 			return { document_id: document.id, existing: false };
 		},

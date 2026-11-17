@@ -1297,7 +1297,6 @@ create table document (
 	r2_bucket text not null default 'post_media' check (r2_bucket in ('post_media', 'deal_documents')),
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
-	email_activity_id uuid references email,
 	-- A partner's note on a prepared file.
 	note text check (note ~ '\S'),
 	unique (id, content_type)
@@ -1327,8 +1326,6 @@ alter table document
 	add constraint document_previous_version foreign key (supersedes_id, deal_id, kind, previous_version)
 		references document (id, deal_id, kind, version);
 
-create unique index document_email_hash on document (email_activity_id, sha256)
-	where deal_id is null and email_activity_id is not null and sha256 is not null;
 create unique index document_deal_hash on document (deal_id, sha256)
 	where r2_bucket = 'deal_documents' and r2_key like 'sha256/%';
 
@@ -1810,8 +1807,8 @@ begin atomic
 	select to_jsonb(a) || jsonb_build_object('email', (
 		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
-			from document doc where doc.email_activity_id = e.activity_id
-				or exists (select from email_document ed where ed.document_id = doc.id and ed.email_activity_id = e.activity_id)
+			from email_document ed join document doc on doc.id = ed.document_id
+			where ed.email_activity_id = e.activity_id
 		)) from email e where e.activity_id = a.id
 	));
 end;

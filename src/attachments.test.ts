@@ -22,8 +22,10 @@ const files = new Map<
 	string,
 	{ data: Uint8Array; httpMetadata: { contentType: string } }
 >();
+let heads = 0;
 const bucket = {
 	async head(key: string) {
+		heads++;
 		const file = files.get(key);
 		return file
 			? { size: file.data.length, httpMetadata: file.httpMetadata }
@@ -64,6 +66,8 @@ const tie = (args: object = {}) =>
 				sha256: hash,
 				name: "Example's plan.pdf",
 				message_id: "Example@example.test",
+				deal_id: id(2),
+				kind: "other",
 				...args,
 			}),
 		},
@@ -144,15 +148,23 @@ test("files upload, attach and open through door 20", async (t) => {
 				);
 				files.delete(`sha256/${officeHash}`);
 			}
-			const first = await upload();
-			assert.deepEqual(
-				[first.status, await json(first)],
-				[
-					201,
-					{ sha256: hash, content_type: "application/pdf", bytes: pdf.length },
-				],
-			);
-			assert.equal((await upload({ user: true })).status, 200);
+			const metadata = {
+				sha256: hash,
+				content_type: "application/pdf",
+				bytes: pdf.length,
+			};
+			for (const [user, status] of [
+				[false, 201],
+				[true, 200],
+			] as const) {
+				const before = heads;
+				const response = await upload({ user });
+				assert.deepEqual(
+					[response.status, await json(response)],
+					[status, metadata],
+				);
+				assert.equal(heads - before, 1);
+			}
 			assert.equal(
 				(await upload({ data: new TextEncoder().encode("%PDF-different") }))
 					.status,
@@ -174,10 +186,7 @@ test("files upload, attach and open through door 20", async (t) => {
 			const sha256 = createHash("sha256").update(fresh).digest("hex");
 			assert.equal((await upload({ data: fresh, hash: sha256 })).status, 201);
 			await db.query("begin; lock table document in share mode");
-			const pending = [
-				tie({ sha256, deal_id: id(2), kind: "other" }),
-				tie({ sha256, deal_id: id(2), kind: "other" }),
-			];
+			const pending = [tie({ sha256 }), tie({ sha256 })];
 			try {
 				let waiting = 0;
 				for (let attempts = 0; waiting < 2 && attempts < 1000; attempts++) {
@@ -203,11 +212,7 @@ test("files upload, attach and open through door 20", async (t) => {
 	await t.test(
 		"attachments converge by email and hash, file once, and open through both entrances",
 		async () => {
-			const args = {
-				idempotency_key: randomUUID(),
-				deal_id: id(2),
-				kind: "other",
-			};
+			const args = { idempotency_key: randomUUID() };
 			const first = await tie(args);
 			const answer = await json(first);
 			assert.equal(first.status, 201);
@@ -217,27 +222,15 @@ test("files upload, attach and open through door 20", async (t) => {
 				replayed: true,
 			});
 			assert.equal((await tie({ ...args, name: "Changed.pdf" })).status, 409);
-			const same = await Promise.all([
-				tie({ deal_id: id(2), kind: "other" }),
-				tie({ deal_id: id(2), kind: "other" }),
-			]);
+			const same = await Promise.all([tie(), tie()]);
 			for (const response of same)
 				assert.deepEqual(await json(response), { ...answer, existing: true });
-			const crossed = await json(await tie({ deal_id: id(3), kind: "other" }));
+			const crossed = await json(await tie({ deal_id: id(3) }));
 			assert.notEqual(crossed.document_id, answer.document_id);
 			const second = await json(
-				await tie({
-					message_id: "Second@example.test",
-					deal_id: id(2),
-					kind: "other",
-				}),
+				await tie({ message_id: "Second@example.test" }),
 			);
 			assert.equal(second.document_id, answer.document_id);
-			assert.equal(
-				(await json(await tie({ message_id: "Second@example.test" })))
-					.document_id,
-				answer.document_id,
-			);
 			for (const email of [id(4), id(5)]) {
 				const result = await db.query(
 					"select activity_entry(a)->'email'->'documents' as documents from activity a where id = $1",
@@ -296,9 +289,9 @@ test("files upload, attach and open through door 20", async (t) => {
 			for (const [args, status, error] of [
 				[{ message_id: "Missing@example.test" }, 409, "email_not_stored"],
 				[{ sha256: "1".repeat(64) }, 409, "file_not_uploaded"],
-				[{ deal_id: id(99), kind: "other" }, 404, "not_found"],
-				[{ deal_id: id(2) }, 400, "missing_required"],
-				[{ message_id: undefined }, 400, "missing_required"],
+				[{ deal_id: id(99) }, 404, "not_found"],
+				[{ deal_id: undefined }, 400, "missing_required"],
+				[{ kind: undefined }, 400, "missing_required"],
 			] as const) {
 				const response = await tie(args);
 				assert.deepEqual(
@@ -353,19 +346,13 @@ test("files upload, attach and open through door 20", async (t) => {
 				).status,
 				503,
 			);
-			const solo = await tie({
-				message_id: undefined,
-				deal_id: id(2),
-				kind: "other",
-			});
+			const solo = await tie({ message_id: undefined });
 			assert.equal(solo.status, 201);
 			const document = await json(solo);
-			assert.deepEqual(
-				await json(
-					await tie({ message_id: undefined, deal_id: id(2), kind: "other" }),
-				),
-				{ ...document, existing: true },
-			);
+			assert.deepEqual(await json(await tie({ message_id: undefined })), {
+				...document,
+				existing: true,
+			});
 		},
 	);
 });

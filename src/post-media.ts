@@ -154,13 +154,11 @@ function judge(
 	return refused ? { refused } : { type };
 }
 
-export const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 function judgeFile(
 	head: Uint8Array,
-	length: number,
-): { type: string } | { refused: Refusal } {
-	if (length > MAX_FILE_BYTES) return { refused: "too_large" };
+): { type: string } | { refused: "unsupported_file" } {
 	if (ascii(head, 0, 5) === "%PDF-") return { type: "application/pdf" };
 	if (startsWith(head, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
 		return { type: "application/x-ole-storage" };
@@ -171,7 +169,7 @@ function judgeFile(
 			["xl/", "spreadsheetml.sheet"],
 			["ppt/", "presentationml.presentation"],
 		])
-			if (entry && contents.includes(entry))
+			if (contents.includes(entry))
 				return {
 					type: `application/vnd.openxmlformats-officedocument.${type}`,
 				};
@@ -283,30 +281,42 @@ export async function storeFile(
 	body: ReadableStream<Uint8Array>,
 	length: number,
 ): Promise<
-	{ key: string; type: string } | { refused: Refusal | "sha256_mismatch" }
+	| { type: string | undefined; bytes: number; existing: boolean }
+	| { refused: "too_large" | "unsupported_file" | "sha256_mismatch" }
 > {
+	if (length > MAX_FILE_BYTES) return { refused: "too_large" };
 	const key = `sha256/${sha256}`;
-	if (await bucket.head(key)) return { refused: "already_stored" };
-	const reader = body.getReader();
-	const head = await readHead(reader);
-	const judged = judgeFile(head, length);
-	if ("refused" in judged) return judged;
-	try {
-		const stored = await bucket.put(
-			key,
-			rejoined(head, reader).pipeThrough(new FixedLengthStream(length)),
-			{
-				httpMetadata: { contentType: judged.type },
-				onlyIf: { etagDoesNotMatch: "*" },
-				sha256,
-			},
-		);
-		return stored ? { key, type: judged.type } : { refused: "already_stored" };
-	} catch (error) {
-		if (error instanceof Error && error.message.includes("10037"))
-			return { refused: "sha256_mismatch" };
-		throw error;
+	let file = await bucket.head(key);
+	if (!file) {
+		const reader = body.getReader();
+		const head = await readHead(reader);
+		const judged = judgeFile(head);
+		if ("refused" in judged) return judged;
+		try {
+			const stored = await bucket.put(
+				key,
+				rejoined(head, reader).pipeThrough(new FixedLengthStream(length)),
+				{
+					httpMetadata: { contentType: judged.type },
+					onlyIf: { etagDoesNotMatch: "*" },
+					sha256,
+				},
+			);
+			if (stored) return { type: judged.type, bytes: length, existing: false };
+		} catch (error) {
+			// R2 code 10037 means the checksum did not match.
+			if (error instanceof Error && error.message.includes("10037"))
+				return { refused: "sha256_mismatch" };
+			throw error;
+		}
+		file = await bucket.head(key);
+		if (!file) throw new Error("R2 did not return the stored file");
 	}
+	return {
+		type: file.httpMetadata?.contentType,
+		bytes: file.size,
+		existing: true,
+	};
 }
 
 export type MediaSigner = {

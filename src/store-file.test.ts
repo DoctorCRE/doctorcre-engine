@@ -47,12 +47,13 @@ test("R2 stores a length-bounded file, verifies its hash, and accepts retries an
 		await server.listen();
 		const bytes = "%PDF-example";
 		const hash = createHash("sha256").update(bytes).digest("hex");
+		const metadata = { type: "application/pdf", bytes: bytes.length };
 		assert.deepEqual(await (await put(hash, bytes)).json(), {
-			result: { key: `sha256/${hash}`, type: "application/pdf" },
+			result: { ...metadata, existing: false },
 			stored: true,
 		});
 		assert.deepEqual(await (await put(hash, bytes)).json(), {
-			result: { refused: "already_stored" },
+			result: { ...metadata, existing: true },
 			stored: true,
 		});
 		const bad = "0".repeat(64);
@@ -69,13 +70,14 @@ test("R2 stores a length-bounded file, verifies its hash, and accepts retries an
 		const answers = await Promise.all(race.map((r) => r.json()));
 		assert.deepEqual(
 			new Set(answers.map((a) => JSON.stringify(a))),
-			new Set([
-				JSON.stringify({
-					result: { key: `sha256/${raceHash}`, type: "application/pdf" },
-					stored: true,
-				}),
-				JSON.stringify({ result: { refused: "already_stored" }, stored: true }),
-			]),
+			new Set(
+				[false, true].map((existing) =>
+					JSON.stringify({
+						result: { ...metadata, bytes: raceBytes.length, existing },
+						stored: true,
+					}),
+				),
+			),
 		);
 	} finally {
 		await server.close();
