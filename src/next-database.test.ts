@@ -2501,7 +2501,10 @@ const DEFAULTED: Record<string, string[]> = {
 		"changed_by_user_id",
 		"changed_for_user_id",
 		"hold_until",
+		"item_bullets",
+		"item_title",
 		"resolution_event_id",
+		"source_ref",
 		"status",
 	],
 	invoice_email: [
@@ -3157,6 +3160,46 @@ test("a held step stays off Home until its hold day in Central time and stays on
 	});
 });
 
+test("deal checklist titles require two to four words, a source and array bullets", async () => {
+	for (const title of [
+		"Example item",
+		"Example three words",
+		"Example four word item",
+		"  Example   spaced item  ",
+	]) {
+		await rolledBack(async () => {
+			await db.query("set local role none");
+			await db.query(
+				`update next_step set item_title=$1, source_ref='example:call', item_bullets='[]'
+				where id='${id(400)}'`,
+				[title],
+			);
+		});
+	}
+	const invalid: Case[] = [
+		["item_title='Example'", "next_step_item_shape"],
+		["item_title='Example title has five words'", "next_step_item_shape"],
+		["item_title=' '", "next_step_item_shape"],
+		["source_ref=null", "next_step_item_shape"],
+		["source_ref='  '", "next_step_item_shape"],
+		["item_bullets='{}'", "next_step_item_shape"],
+		["item_bullets='null'", "next_step_item_shape"],
+		["item_bullets=null", "23502"],
+		[`deal_id=null, party_id='${CLIENT}'`, "next_step_item_shape"],
+	];
+	for (const [fields, refusal] of invalid) {
+		await rolledBack(async () => {
+			await db.query(`set local role none;
+				update next_step set item_title='Example item', source_ref='example:call'
+				where id='${id(400)}'`);
+			await assert.rejects(
+				db.query(`update next_step set ${fields} where id='${id(400)}'`),
+				refusal === "23502" ? { code: refusal } : expected(refusal),
+			);
+		});
+	}
+});
+
 test("next-step end states reject contradictory times, reasons and evidence", async () => {
 	const invalid: Case[] = [
 		["resolution = 'other'", "next_step_resolution_check"],
@@ -3684,6 +3727,9 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				owner_party_id: CLIENT,
 				due_on: "2026-03-13",
 				hold_until: null,
+				item_title: null,
+				item_bullets: [],
+				source_ref: null,
 				done_at: "2026-03-13T18:00:00+00:00",
 				resolution: "done",
 				resolved_at: null,
@@ -3697,6 +3743,9 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				owner_party_id: null,
 				due_on: "2026-03-20",
 				hold_until: null,
+				item_title: null,
+				item_bullets: [],
+				source_ref: null,
 				done_at: null,
 				resolution: null,
 				resolved_at: null,

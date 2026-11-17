@@ -139,11 +139,11 @@ before(async () => {
  insert into public.capture_post_call_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,deal_id,assignee_slug,action_description,evidence_quote,confidence)
  select v,'${id(400)}',v::text,'example-batch', row_number() over () - 1,'assigned_action','${id(10)}','partner_one','Example post-call action','Example evidence',1
  from unnest(array['${id(401)}','${id(402)}','${id(403)}','${id(404)}']::uuid[]) v;
- insert into public.capture_post_call_action (id,candidate_id,deal_id,owner_id,description,accepted_by,accepted_at,status,due_on,completed_at,updated_at) values
- ('${id(501)}','${id(401)}','${id(10)}','${id(1)}','Example post-call open','${id(1)}','2025-01-01','open',null,null,'2025-02-01'),
- ('${id(502)}','${id(402)}','${id(10)}','${id(1)}','Example post-call done','${id(1)}','2025-01-01','done','2025-02-01','2025-02-02','2025-02-03'),
- ('${id(503)}','${id(403)}','${id(10)}','${id(1)}','Example post-call dropped','${id(1)}','2025-01-01','dropped',null,null,'2025-02-01'),
- ('${id(504)}','${id(404)}','${id(17)}','${id(2)}','Example post-call missing deal','${id(1)}','2025-01-01','open',null,null,'2025-02-01');
+ insert into public.capture_post_call_action (id,candidate_id,deal_id,owner_id,description,accepted_by,accepted_at,status,due_on,completed_at,updated_at,item_title,item_bullets,source_ref) values
+ ('${id(501)}','${id(401)}','${id(10)}','${id(1)}','Example post-call open','${id(1)}','2025-01-01','open',null,null,'2025-02-01','Review lease terms','[{"date":null,"kind":"call","text":"Example first fact"},{"date":"2025-01-01","kind":"call","text":"Example second fact"}]','capture_post_call_candidate:${id(401)}'),
+ ('${id(502)}','${id(402)}','${id(10)}','${id(1)}','Example post-call done','${id(1)}','2025-01-01','done','2025-02-01','2025-02-02','2025-02-03',null,'[]',null),
+ ('${id(503)}','${id(403)}','${id(10)}','${id(1)}','Example post-call dropped','${id(1)}','2025-01-01','dropped',null,null,'2025-02-01',null,'[]',null),
+ ('${id(504)}','${id(404)}','${id(17)}','${id(2)}','Example post-call missing deal','${id(1)}','2025-01-01','open',null,null,'2025-02-01',null,'[]',null);
  insert into public.event (subject_type,subject_id,new_value,actor_id,verb,cause,sponsoring_human_slug,occurred_at) values
  ('deal','${id(10)}','{"next_action_id":"${id(501)}"}','${id(2)}','resolve-post-call-candidate','automation_job','partner_one','2025-01-01'),
  ('deal','${id(10)}','{"completed":"${id(502)}","completed_post_call_action_ids":["${id(502)}"]}','${id(2)}','log-outreach','automation_job','partner_one','2025-02-04');
@@ -225,6 +225,33 @@ test("logged task history waits for an owner ruling without creating open work",
 		[],
 	);
 });
+test("post-call checklist titles, ordered bullets and sources match the old deal items", async () => {
+	const old = await rows(`select item_title, item_bullets, source_ref
+		from public.v_deal_room_action where id='${id(501)}'`);
+	assert.deepEqual(
+		await rows(`select item_title, item_bullets, source_ref
+		from next_step where id='${id(501)}'`),
+		old,
+	);
+	assert.equal(old[0]?.item_title, "Review lease terms");
+	assert.equal(old[0]?.item_bullets.length, 2);
+	const detail = (
+		await rows(`select everything_about_deal('${id(10)}') as detail`)
+	)[0]?.detail;
+	const item = detail.next_steps.find(
+		(step: { id: string }) => step.id === id(501),
+	);
+	for (const field of ["item_title", "item_bullets", "source_ref"]) {
+		assert.deepEqual(item[field], old[0]?.[field]);
+	}
+	assert.deepEqual(reasons(report, 501), []);
+	assert.deepEqual(
+		await rows(`select item_title, item_bullets, source_ref
+		from next_step where id='${id(502)}'`),
+		[{ item_title: null, item_bullets: [], source_ref: null }],
+	);
+});
+
 test("post-call actions keep explicit completion times and list dropped or unmapped rows", async () => {
 	// biome-ignore format: one row per post-call action
 	assert.deepEqual((await rows(`select id,due_on::text,done_at::text,created_at::text,changed_at::text from next_step where id in ('${id(501)}','${id(502)}') order by id`)).map(Object.values), [

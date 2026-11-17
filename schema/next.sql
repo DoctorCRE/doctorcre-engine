@@ -945,6 +945,9 @@ create table next_step (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	what text not null,
+	item_title text,
+	item_bullets jsonb not null default '[]',
+	source_ref text,
 	owner_party_id uuid references party,
 	due_on date,
 	hold_until date,
@@ -957,6 +960,9 @@ create table next_step (
 	deal_id uuid references deal,
 	party_id uuid references party,
 	property_id uuid references property,
+	constraint next_step_item_shape check (item_title is null or (deal_id is not null
+		and cardinality(regexp_split_to_array(btrim(item_title), '\s+')) between 2 and 4
+		and source_ref is not null and btrim(source_ref) <> '' and jsonb_typeof(item_bullets) = 'array')),
 	constraint next_step_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
 	constraint next_step_done_time check (done_at is null or status = 'done'),
 	constraint next_step_resolution_time check (resolved_at is null or status in ('cancelled', 'expired')),
