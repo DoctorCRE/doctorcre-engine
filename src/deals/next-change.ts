@@ -5,48 +5,22 @@ import { isCalendarDate } from "../calendar-date.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
+import {
+	clearable,
+	type Fitted,
+	fit,
+	fitting,
+	isAmount,
+	isBoolean,
+	isChangeId,
+	isText,
+	isUuid,
+	optional,
+	orNull,
+} from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
-import { isArguments } from "../save-door.ts";
+import { seenAnswer, unseenChanges } from "../seen-change.ts";
 import { UUID } from "../uuid.ts";
-
-type Check<T> = (value: unknown) => value is T;
-type Shape = Readonly<Record<string, Check<unknown>>>;
-type Fitted<S extends Shape> = {
-	[K in keyof S]: S[K] extends Check<infer T> ? T : never;
-};
-
-const isText: Check<string> = (value): value is string =>
-	typeof value === "string" && value.trim() !== "";
-const isUuid: Check<string> = (value): value is string =>
-	typeof value === "string" && UUID.test(value);
-const isChangeId: Check<number> = (value): value is number =>
-	Number.isSafeInteger(value) && Number(value) >= 0;
-const isAmount: Check<number> = (value): value is number =>
-	typeof value === "number" && Number.isFinite(value);
-const isBoolean: Check<boolean> = (value): value is boolean =>
-	typeof value === "boolean";
-const optional =
-	<T>(check: Check<T>): Check<T | undefined> =>
-	(value): value is T | undefined =>
-		value === undefined || check(value);
-const orNull =
-	<T>(check: Check<T>): Check<T | null> =>
-	(value): value is T | null =>
-		value === null || check(value);
-// A field a caller may leave out or clear.
-const clearable = <T>(check: Check<T>) => optional(orNull(check));
-
-// A value's fields that break its shape, and any field the shape does not name.
-const misfits = (value: JsonObject, shape: Shape) => [
-	...Object.entries(shape)
-		.filter(([name, check]) => !check(value[name]))
-		.map(([name]) => name),
-	...Object.keys(value).filter((name) => !Object.hasOwn(shape, name)),
-];
-const fitting =
-	<S extends Shape>(shape: S): Check<Fitted<S>> =>
-	(value): value is Fitted<S> =>
-		isArguments(value) && misfits(value, shape).length === 0;
 
 // The database checks each value against its own rules, such as a known kind.
 const DEAL_FIELDS = {
@@ -82,22 +56,15 @@ type DealChanges = Exclude<ReturnType<typeof parseDealChanges>, Refusal>;
 
 function parseDealChanges(deal_id: string, body: JsonObject) {
 	if (!UUID.test(deal_id)) return new Refusal(404, "not_found");
-	const missing = [
-		...["idempotency_key", "seen_change_id"].filter(
-			(name) => body[name] === undefined,
-		),
-		...(body.fields === undefined && body.phase === undefined
-			? ["fields", "phase"]
-			: []),
-	];
-	if (missing.length)
-		return new Refusal(400, "missing_required", { fields: missing });
-	if (!fitting(DEAL_CHANGES)(body))
-		return new Refusal(400, "invalid_field_value", {
-			fields: misfits(body, DEAL_CHANGES),
-		});
-	const { idempotency_key, seen_change_id, phase } = body;
-	const fields: DealFields = body.fields ?? {};
+	const request = fit(
+		body,
+		DEAL_CHANGES,
+		["idempotency_key", "seen_change_id"],
+		["fields", "phase"],
+	);
+	if (request instanceof Refusal) return request;
+	const { idempotency_key, seen_change_id, phase } = request;
+	const fields: DealFields = request.fields ?? {};
 	return {
 		idempotency_key,
 		deal_id,
@@ -156,34 +123,14 @@ export async function changeDeal(
 		.forUpdate()
 		.executeTakeFirst();
 	if (!deal) throw new SaveRefusal(new Refusal(404, "not_found"));
-	const changes = tx
-		.selectFrom("change")
-		.where("table_name", "=", "deal")
-		.where("record", "=", { id: deal_id });
-	const unseen = await changes
-		.select("id")
-		.select(sql<boolean>`new_value ?| ${keys}::text[]`.as("crossed"))
-		.where("id", ">", String(seen))
-		.orderBy("id")
-		.execute();
-	const ids = unseen.map((change) => Number(change.id));
-	if (unseen.some((change) => change.crossed))
-		throw new SaveRefusal(
-			new Refusal(409, "version_conflict", { current_version: ids.at(-1) }),
-		);
+	const unseen = await unseenChanges(tx, "deal", deal_id, seen, keys);
 	if (keys.length)
 		await tx
 			.updateTable("deal")
 			.set(fields)
 			.where("id", "=", deal_id)
 			.execute();
-	// An answer's change id would cover the unseen changes, so the app re-reads first.
-	if (ids.length)
-		return { deal_id, rebased: true, intervening_change_ids: ids };
-	const latest = await changes
-		.select((eb) => eb.fn.max("id").as("id"))
-		.executeTakeFirstOrThrow();
-	return { deal_id, change_id: latest.id === null ? seen : Number(latest.id) };
+	return { deal_id, ...(await seenAnswer(tx, "deal", deal_id, seen, unseen)) };
 }
 
 // Called under changeDeal's row lock, so two moves from one phase cannot both pass.

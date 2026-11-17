@@ -1038,6 +1038,17 @@ create table next_step (
 	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
 
+-- A reopened step forgets the old event that closed it; its history keeps it.
+create function next_step_reopened() returns trigger
+language plpgsql as $$
+begin
+	new.resolution_event_id := null;
+	return new;
+end $$;
+
+create trigger next_step_reopened before update of resolution on next_step
+	for each row when (new.resolution is null) execute function next_step_reopened();
+
 -- A hold ends on the partners' day in Central time, as today's system ends it.
 create view home_next_step with (security_invoker = true) as
 	select * from next_step where status = 'open'
@@ -2986,13 +2997,13 @@ grant update (started_on, ended_on) on party_territory to engine;
 grant update (has_office, coverage, source) on party_territory_review to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
-grant update (what, owner_party_id, due_on, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
+grant update (what, owner_party_id, due_on, hold_until, item_bullets, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) on home_mark to engine;
 -- Only the owner's import supplies the old event that closed a step.
 revoke insert on next_step from engine;
-grant insert (id, created_at, what, owner_party_id, due_on, done_at, resolution, resolved_at,
-	resolution_reason, deal_id, party_id, property_id) on next_step to engine;
+grant insert (id, created_at, what, owner_party_id, due_on, hold_until, item_title, item_bullets, source_ref,
+	done_at, resolution, resolved_at, resolution_reason, deal_id, party_id, property_id) on next_step to engine;
 -- Only the owner's import supplies provenance. A user's or job's new round has a known status.
 revoke insert on offer from engine;
 grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,

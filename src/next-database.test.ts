@@ -2564,6 +2564,8 @@ const CHANGEABLE: Record<string, string[]> = {
 	next_step: [
 		"done_at",
 		"due_on",
+		"hold_until",
+		"item_bullets",
 		"owner_party_id",
 		"resolution",
 		"resolution_reason",
@@ -2601,11 +2603,7 @@ const DEFAULTED: Record<string, string[]> = {
 		"changed_by_job",
 		"changed_by_user_id",
 		"changed_for_user_id",
-		"hold_until",
-		"item_bullets",
-		"item_title",
 		"resolution_event_id",
-		"source_ref",
 		"status",
 	],
 	invoice_email: [
