@@ -124,7 +124,7 @@ after(async () => {
 	await asAdmin(`drop database "${name}" with (force)`);
 });
 
-test("copies each call suggestion into the queue with its decision, and an accepted one keeps the next step it made", async () => {
+test("copies each call suggestion with its decision, keeps the next step an accepted one made, and on a rerun adds what arrived and lists what changed", async () => {
 	const report = await run();
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select id, kind, activity_id, activity_kind, evidence, proposed_by_job, status, decided_by_user_id, decided_at::text,
@@ -170,9 +170,7 @@ test("copies each call suggestion into the queue with its decision, and an accep
 	const before = await rows(all);
 	assert.deepEqual(await run(), report);
 	assert.deepEqual(await rows(all), before);
-});
 
-test("an accepted suggestion whose deal item is copied later arrives on the next run, and a changed one waits", async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.next_action (id, subject_type, subject_id, owner_id, description, created_by, item_title, source_ref)
   values ('${id(93)}', 'deal', '${id(30)}', '${id(1)}', 'Example taken', '${id(1)}', 'Example taken', 'capture_candidate:${id(81)}');
@@ -186,12 +184,12 @@ test("an accepted suggestion whose deal item is copied later arrives on the next
   status, resolved_by, resulting_ref, resolved_at, created_at) values
   ${capture(89, "phase_move", { deal: id(30), field: "phase", value: "loi", base_event_id: id(51) })};
  commit;`);
-	const report = await run();
-	assert.ok(!report.some((r) => r.startsWith("#81 ")));
-	assert.ok(report.includes("#71 proposal #71 existing_proposal_conflicts"));
-	assert.ok(report.includes("#82 proposal #82 existing_proposal_conflicts"));
-	assert.ok(report.includes("#72 proposal #90 existing_proposal_conflicts"));
-	assert.ok(report.includes("#89 phase unmapped phase_before_call_unknown"));
+	const later = await run();
+	assert.ok(!later.some((r) => r.startsWith("#81 ")));
+	assert.ok(later.includes("#71 proposal #71 existing_proposal_conflicts"));
+	assert.ok(later.includes("#82 proposal #82 existing_proposal_conflicts"));
+	assert.ok(later.includes("#72 proposal #90 existing_proposal_conflicts"));
+	assert.ok(later.includes("#89 phase unmapped phase_before_call_unknown"));
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select id, status, what, due_on::text from proposal where id not in ('${id(80)}', '${id(90)}') order by id`), [
 		"#71 pending Example action 71 2024-02-01",
