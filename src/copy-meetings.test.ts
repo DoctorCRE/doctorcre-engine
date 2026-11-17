@@ -1,32 +1,17 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy, activityCopy, callsCopy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-meetings.sql"),
-	read("copy-activity.sql"),
-	read("copy-calls.sql"),
+const [copy, activityCopy, callsCopy] = await Promise.all([
+	readSchema("copy-meetings.sql"),
+	readSchema("copy-activity.sql"),
+	readSchema("copy-calls.sql"),
 ]);
-const name = `copy_meetings_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const connection = {
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-};
 let db: pg.Client;
+let cleanup: () => Promise<void>;
 const rows = async (text: string) =>
 	(await db.query({ text, rowMode: "array" })).rows;
 const run = async (input = "", script = copy): Promise<unknown[][]> => {
@@ -76,13 +61,9 @@ const notes =
 const mapping = `insert into copy_meeting_activity values ('${id(11)}','${id(50)}')`;
 
 beforeEach(async () => {
-	db = new pg.Client(connection);
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	const fresh = copyTest();
+	({ db, cleanup } = fresh);
+	await fresh.setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values
  ('${id(1)}','example_user','human','Example User'), ('${id(2)}','codex','automation','Example Agent'),
@@ -109,10 +90,7 @@ beforeEach(async () => {
  commit;`);
 	await run("", activityCopy);
 });
-afterEach(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+afterEach(() => cleanup());
 
 test("current summaries keep note order; imported edits keep source ids, authors, times and replaced text", async () => {
 	const report = await run();

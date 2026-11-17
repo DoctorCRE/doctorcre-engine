@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -13,13 +11,7 @@ const SYSTEM = id(3);
 // Made up. No NPI issued yet starts with 9, so none can be anyone's.
 const NPI = "9000000015";
 
-const read = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const [SCHEMA, ATTRIBUTION, COPY] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-parties.sql"),
-]);
+const COPY = await readSchema("copy-parties.sql");
 
 // A row shaped like today's party, last changed by the system unless it says otherwise.
 const oldParty = (n: number, row: Record<string, string> = {}) => {
@@ -149,19 +141,7 @@ insert into public.record_source (entity_type, entity_id, source_system, externa
 	('deal', '${id(32)}', 'example-deals', 'D-EX-1');
 `;
 
-const url = process.env.TEST_DATABASE_URL;
-const snapshot = process.env.TEST_SNAPSHOT;
-if (!url || !snapshot)
-	throw new Error("Run npm run check to restore the test database first");
-// Today's tables come from the check's snapshot, and the new schema loads beside them.
-const name = `engine_copy_${randomUUID().replaceAll("-", "")}`;
-const admin = new pg.Client({ connectionString: url });
-const target = new URL(url);
-target.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: target.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const { db, setup, cleanup } = copyTest();
 
 const copy = async (sql = "") => {
 	const results = await db.query(sql + COPY);
@@ -181,18 +161,11 @@ const rolledBack = async (check: () => Promise<void>) => {
 let report: Awaited<ReturnType<typeof copy>>;
 
 before(async () => {
-	await admin.connect();
-	await admin.query(`create database "${name}" template "${snapshot}"`);
-	await db.connect();
-	await db.query(`create schema next; ${SCHEMA} ${ATTRIBUTION}`);
+	await setup();
 	report = await copy(OLD);
 });
 
-after(async () => {
-	await db.end();
-	await admin.query(`drop database "${name}" with (force)`);
-	await admin.end();
-});
+after(cleanup);
 
 test("people and companies keep their ids and names, a company is no longer an org, and a partner is a user", async () => {
 	assert.deepEqual(await rows("select id, kind, name from party order by id"), [

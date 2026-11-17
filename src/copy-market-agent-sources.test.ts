@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -14,22 +11,8 @@ const noteId = (n: number) => {
 		.digest("hex");
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-market-agent-sources.sql"),
-]);
-const name = `copy_market_agent_sources_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-market-agent-sources.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (): Promise<
 	{ old_id: string; field: string; value: string | null; reason: string }[]
@@ -49,12 +32,7 @@ const transaction = async (check: () => Promise<void>) => {
 	}
 };
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values
  ('${id(1)}','partner_one','human','Example User'), ('${id(2)}','codex','automation','Example Job');
@@ -90,10 +68,7 @@ before(async () => {
  insert into outside_id (source,value,deal_id) values ('old_system','${id(14)}','${id(24)}');
  commit;`);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("sources retain exact text, dates and setter independently of agent verification", async () => {
 	await transaction(async () => {

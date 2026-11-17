@@ -1,23 +1,15 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PARTNER = id(1);
 const SYSTEM = id(2);
 
-const read = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const [SCHEMA, ATTRIBUTION, COPY] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-vendors.sql"),
-]);
+const COPY = await readSchema("copy-vendors.sql");
 
 // A row shaped like today's vendor, last changed by the system unless it says otherwise.
 const oldVendor = (
@@ -125,15 +117,7 @@ ${oldVendor(49, 10, {
 })}
 commit;`;
 
-const name = `copy_vendors_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const copy = async (sql = "") => {
 	const results = await db.query(sql + COPY);
@@ -163,21 +147,14 @@ const WAITING = [
 let report: unknown;
 
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${SCHEMA} ${ATTRIBUTION} ${SETUP}`);
+	await setup();
+	await db.query(SETUP);
 	await db.query("begin");
 	report = await copy();
 	await db.query("commit");
 });
 
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("each category is a vendor role, gc is contractor, and the roles vendors play on deals join them", async () => {
 	// biome-ignore format: one row per role

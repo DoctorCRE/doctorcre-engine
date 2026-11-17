@@ -1,29 +1,12 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-markets.sql"),
-]);
-const name = `copy_markets_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-markets.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) => (await db.query(sql)).rows;
 // A run starts clear of every temp table, so it takes the reviewed counties each time.
 const run = async (input = ""): Promise<pg.QueryResultRow[]> => {
@@ -32,12 +15,7 @@ const run = async (input = ""): Promise<pg.QueryResultRow[]> => {
 	return result.at(-1)?.rows ?? [];
 };
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'example_user', 'human', 'Example User');
 insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'company', 'Example Vendor');
@@ -58,10 +36,7 @@ select slug, '${id(4)}', true, 'Example review', '${id(1)}', '2025-03-01' from p
 insert into public.submarket_condition values ('example', 'Example tightness', 0, 'Example note', 1);
 commit;`);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 const countyTable =
 	"create temp table copy_market_county (market_slug text not null, county_fips text not null) on commit drop;";
 const counties = `${countyTable}

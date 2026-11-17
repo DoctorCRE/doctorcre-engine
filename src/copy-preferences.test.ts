@@ -1,31 +1,15 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const item = (n: number) => `next_action:${id(n)}`;
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, leads, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-leads-clients.sql"),
-	read("copy-preferences.sql"),
+const [leads, copy] = await Promise.all([
+	readSchema("copy-leads-clients.sql"),
+	readSchema("copy-preferences.sql"),
 ]);
-const name = `copy_preferences_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) =>
 	(await db.query({ text: sql, rowMode: "array" })).rows;
 const run = async (sql = copy, setup = "", keepOpen = false) => {
@@ -55,12 +39,7 @@ const preferences = () =>
 	);
 let report: unknown[][];
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id,slug,kind,display_name) values ${[1, 2, 3, 4].map((n) => `('${id(n)}','example_${n}','human','Example User ${n}')`).join(",")};
  ${users
@@ -109,10 +88,7 @@ before(async () => {
 	await run(leads);
 	report = await run();
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("each user's settings become their preferences, and unknown zones and equal quiet hours wait for that user", async () => {
 	assert.deepEqual(await preferences(), [
