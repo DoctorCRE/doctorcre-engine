@@ -486,6 +486,54 @@ CREATE TABLE ops.home_waiting (
     CONSTRAINT home_waiting_version_check CHECK ((version > 0))
 );
 
+CREATE TABLE ops.meeting (
+    id uuid NOT NULL,
+    organization_tenant_id text NOT NULL,
+    platform text,
+    source_system text NOT NULL,
+    native_id text NOT NULL,
+    native_id_epoch text NOT NULL,
+    title text NOT NULL,
+    activation_intent text NOT NULL,
+    recording text DEFAULT 'denied'::text NOT NULL,
+    mode_state text DEFAULT 'active_non_recording'::text NOT NULL,
+    started_by_actor uuid NOT NULL,
+    started_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    ended_by_actor uuid,
+    ended_at timestamp with time zone,
+    last_seq bigint DEFAULT 0 NOT NULL,
+    last_note_number integer DEFAULT 0 NOT NULL,
+    last_action_number integer DEFAULT 0 NOT NULL,
+    CONSTRAINT meeting_activation_intent_check CHECK ((activation_intent = 'one_tap_user_activation'::text)),
+    CONSTRAINT meeting_end_is_coherent CHECK ((((mode_state = 'ended'::text) = (ended_at IS NOT NULL)) AND ((ended_at IS NULL) = (ended_by_actor IS NULL)))),
+    CONSTRAINT meeting_last_action_number_check CHECK ((last_action_number >= 0)),
+    CONSTRAINT meeting_last_note_number_check CHECK ((last_note_number >= 0)),
+    CONSTRAINT meeting_last_seq_check CHECK ((last_seq >= 0)),
+    CONSTRAINT meeting_mode_state_check CHECK ((mode_state = ANY (ARRAY['active_non_recording'::text, 'ended'::text]))),
+    CONSTRAINT meeting_native_id_check CHECK ((native_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/@!+=-]{0,254}$'::text)),
+    CONSTRAINT meeting_native_id_epoch_check CHECK ((native_id_epoch ~ '^[A-Za-z0-9][A-Za-z0-9._:/@!+=-]{0,127}$'::text)),
+    CONSTRAINT meeting_organization_tenant_id_check CHECK ((organization_tenant_id <> ''::text)),
+    CONSTRAINT meeting_platform_check CHECK ((platform = ANY (ARRAY['teams'::text, 'zoom'::text]))),
+    CONSTRAINT meeting_recording_check CHECK ((recording = 'denied'::text)),
+    CONSTRAINT meeting_source_system_check CHECK ((source_system ~ '^[A-Za-z0-9][A-Za-z0-9._:/@!+=-]{0,127}$'::text)),
+    CONSTRAINT meeting_title_check CHECK (((char_length(title) BETWEEN 1 AND 200) AND (title !~ '[[:cntrl:]]'::text)))
+);
+
+CREATE TABLE ops.meeting_note (
+    id uuid NOT NULL,
+    meeting_id uuid NOT NULL,
+    note_number integer NOT NULL,
+    revision integer NOT NULL,
+    body text NOT NULL,
+    author_actor uuid NOT NULL,
+    author_instance text NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT meeting_note_author_instance_check CHECK ((author_instance ~ '^[A-Za-z0-9][A-Za-z0-9._:/@!+=-]{0,127}$'::text)),
+    CONSTRAINT meeting_note_body_check CHECK (((char_length(body) >= 1) AND (char_length(body) <= 20000))),
+    CONSTRAINT meeting_note_note_number_check CHECK ((note_number >= 1)),
+    CONSTRAINT meeting_note_revision_check CHECK ((revision >= 1))
+);
+
 CREATE TABLE ops.notification_preference (
     actor uuid NOT NULL,
     device_opt_in boolean DEFAULT false NOT NULL,
@@ -3978,6 +4026,15 @@ ALTER TABLE ONLY ops.home_inbox_disposition
 ALTER TABLE ONLY ops.home_waiting
     ADD CONSTRAINT home_waiting_pkey PRIMARY KEY (actor_id, item_id);
 
+ALTER TABLE ONLY ops.meeting_note
+    ADD CONSTRAINT meeting_note_meeting_id_note_number_revision_key UNIQUE (meeting_id, note_number, revision);
+
+ALTER TABLE ONLY ops.meeting_note
+    ADD CONSTRAINT meeting_note_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY ops.meeting
+    ADD CONSTRAINT meeting_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY ops.notification_preference
     ADD CONSTRAINT notification_preference_pkey PRIMARY KEY (actor);
 
@@ -4500,6 +4557,8 @@ CREATE INDEX deal_space_search_deal ON ops.deal_space_search USING btree (organi
 
 CREATE INDEX home_inbox_disposition_v2_item_idx ON ops.home_inbox_disposition USING btree (actor_id, v2_item_id) WHERE (v2_item_id IS NOT NULL);
 
+CREATE UNIQUE INDEX meeting_native_identity_uniq ON ops.meeting USING btree (organization_tenant_id, COALESCE(platform, ''::text), source_system, native_id, native_id_epoch);
+
 CREATE INDEX requirement_upload_receipt_request ON ops.requirement_upload_receipt USING btree (request_id);
 
 CREATE UNIQUE INDEX activity_calendar_event_deal_uidx ON public.activity USING btree (calendar_event_key, deal_id) WHERE (calendar_event_key IS NOT NULL);
@@ -4830,6 +4889,18 @@ ALTER TABLE ONLY ops.home_inbox_disposition
 
 ALTER TABLE ONLY ops.home_waiting
     ADD CONSTRAINT home_waiting_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY ops.meeting
+    ADD CONSTRAINT meeting_ended_by_actor_fkey FOREIGN KEY (ended_by_actor) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY ops.meeting_note
+    ADD CONSTRAINT meeting_note_author_actor_fkey FOREIGN KEY (author_actor) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY ops.meeting_note
+    ADD CONSTRAINT meeting_note_meeting_id_fkey FOREIGN KEY (meeting_id) REFERENCES ops.meeting(id);
+
+ALTER TABLE ONLY ops.meeting
+    ADD CONSTRAINT meeting_started_by_actor_fkey FOREIGN KEY (started_by_actor) REFERENCES public.actor(id);
 
 ALTER TABLE ONLY ops.notification_preference
     ADD CONSTRAINT notification_preference_actor_fkey FOREIGN KEY (actor) REFERENCES public.actor(id);

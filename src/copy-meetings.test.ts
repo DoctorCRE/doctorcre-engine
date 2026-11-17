@@ -67,6 +67,12 @@ const expected = (removed: number[], ...issues: unknown[][]) =>
 			String(a[1]).localeCompare(String(b[1])) ||
 			String(a[2]).localeCompare(String(b[2])),
 	);
+const meeting = (n: number) =>
+	`'${id(n)}','example-tenant','example-app','meeting-${n}','1','one_tap_user_activation'`;
+const meetings =
+	"insert into ops.meeting (id,organization_tenant_id,source_system,native_id,native_id_epoch,activation_intent,title,started_by_actor,started_at,ended_at,ended_by_actor,mode_state) values";
+const notes =
+	"insert into ops.meeting_note (id,meeting_id,note_number,revision,body,author_actor,created_at,author_instance) values";
 const mapping = `insert into copy_meeting_activity values ('${id(11)}','${id(50)}')`;
 
 beforeEach(async () => {
@@ -90,22 +96,16 @@ beforeEach(async () => {
  insert into public.activity (id,kind,occurred_at,recorded_at,updated_at,actor_id,summary,party_id) values
  ('${id(50)}','tour','2025-01-10','2025-01-10','2025-01-15','${id(1)}','Example logged visit','${id(1)}'),
  ('${id(51)}','meeting','2025-01-10','2025-01-10','2025-01-10','${id(1)}','Example second candidate','${id(1)}');
- create table ops.meeting (id uuid primary key, title text not null, started_by_actor uuid not null references public.actor,
- started_at timestamptz not null, ended_at timestamptz, ended_by_actor uuid references public.actor);
- create table ops.meeting_note (id uuid primary key, meeting_id uuid not null references ops.meeting,
- note_number integer not null check (note_number >= 1), revision integer not null check (revision >= 1),
- body text not null, author_actor uuid not null references public.actor, created_at timestamptz not null,
- unique (meeting_id,note_number,revision));
- insert into ops.meeting values
- ('${id(10)}','Example discussion','${id(1)}','2025-01-01',null,null),
- ('${id(11)}','Example visit','${id(1)}','2025-01-10','2025-01-20','${id(1)}'),
- ('${id(12)}','Example unknown author','${id(3)}','2025-01-20',null,null),
- ('${id(13)}','Example no notes','${id(1)}','2025-01-30',null,null);
- insert into ops.meeting_note values
- ('${id(20)}','${id(10)}',1,1,'Example original','${id(1)}','2025-01-01 01:00Z'),
- ('${id(21)}','${id(10)}',2,1,'Example second note','${id(2)}','2025-01-01 02:00Z'),
- ('${id(22)}','${id(10)}',1,2,'Example corrected','${id(1)}','2025-01-01 03:00Z'),
- ('${id(23)}','${id(11)}',1,1,'Example visit note','${id(1)}','2025-01-10 01:00Z');
+ ${meetings}
+ (${meeting(10)},'Example discussion','${id(1)}','2025-01-01',null,null,'active_non_recording'),
+ (${meeting(11)},'Example visit','${id(1)}','2025-01-10','2025-01-20','${id(1)}','ended'),
+ (${meeting(12)},'Example unknown author','${id(3)}','2025-01-20',null,null,'active_non_recording'),
+ (${meeting(13)},'Example no notes','${id(1)}','2025-01-30',null,null,'active_non_recording');
+ ${notes}
+ ('${id(20)}','${id(10)}',1,1,'Example original','${id(1)}','2025-01-01 01:00Z','example-device'),
+ ('${id(21)}','${id(10)}',2,1,'Example second note','${id(2)}','2025-01-01 02:00Z','example-device'),
+ ('${id(22)}','${id(10)}',1,2,'Example corrected','${id(1)}','2025-01-01 03:00Z','example-device'),
+ ('${id(23)}','${id(11)}',1,1,'Example visit note','${id(1)}','2025-01-10 01:00Z','example-device');
  commit;`);
 	await run("", activityCopy);
 });
@@ -203,7 +203,7 @@ test("invalid mappings and changed source history are listed without rewriting c
 		`update ops.meeting_note set body = 'Example original' where id = '${id(20)}'`,
 	);
 	await db.query(
-		`insert into ops.meeting_note values ('${id(24)}','${id(10)}',3,1,'Example later note','${id(1)}','2025-01-01 04:00Z')`,
+		`${notes} ('${id(24)}','${id(10)}',3,1,'Example later note','${id(1)}','2025-01-01 04:00Z','example-device')`,
 	);
 	assert.deepEqual(
 		await run(),
@@ -250,7 +250,7 @@ test("database constraints and engine grants still protect imported meeting hist
 test("uncopied mapping targets, reused targets and reversed revisions wait; later user edits survive", async () => {
 	await run(mapping);
 	await db.query(
-		`insert into ops.meeting values ('${id(14)}','Example other meeting','${id(1)}','2025-02-01',null,null)`,
+		`${meetings} (${meeting(14)},'Example other meeting','${id(1)}','2025-02-01',null,null,'active_non_recording')`,
 	);
 	assert.deepEqual(
 		await run(
