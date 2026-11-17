@@ -98,7 +98,8 @@ cross join lateral (select p.kind = 'org' and p.org_id is not null
 where d.lane is not null and (answer.unreviewed or (d.lane = 'national') <> answer.national);
 
 create temp table old_participant on commit drop as
-select p.*, case p.role when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else p.role end as mapped_role from public.deal_participant p;
+select p.*, case p.role when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else p.role end as mapped_role,
+ p.role in ('lender', 'attorney', 'other_vendor') as vendor_role from public.deal_participant p;
 
 create temp table old_link on commit drop as
 select d.id as deal_id, d.client_id as old_id, c.party_id, 'client' as role, false as vendor_role, d.created_at, d.updated_at,
@@ -106,7 +107,7 @@ select d.id as deal_id, d.client_id as old_id, c.party_id, 'client' as role, fal
 from public.deal d join public.client c on c.id = d.client_id cross join lateral copy_attribution('deal', d.id, coalesce(d.updated_by, d.created_by)) a
 union all
 select p.deal_id, p.id, coalesce(p.party_id, p.actor_id),
- p.mapped_role, p.role in ('lender', 'attorney', 'other_vendor'), p.from_at, p.from_at,
+ p.mapped_role, p.vendor_role, p.from_at, p.from_at,
  a.*
 from old_participant p cross join lateral copy_attribution('deal', p.deal_id, p.set_by) a
 where p.role <> 'lead' and p.to_at is null
@@ -166,7 +167,7 @@ left join outside_id m on m.source = 'old_system' and m.value = coalesce(p.party
 left join app_user u on u.id = m.party_id
 left join public.actor a on a.id = p.set_by
 left join role r on r.slug = p.mapped_role
- and (p.role not in ('lender', 'attorney', 'other_vendor') or r.category_of = 'vendor')
+ and (not p.vendor_role or r.category_of = 'vendor')
 where p.to_at is not null;
 do $$
 declare
