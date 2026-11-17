@@ -472,6 +472,16 @@ test("only an owner import may create unknown status; users and jobs cannot supp
 			insert("unknown", `, 'old_system', '${id(100)}', '{}'`),
 			"23505",
 		);
+		for (const source of ["", "OldSystem", "with-dash", "1source"])
+			await refused(
+				insert("unknown", `, '${source}', 'example', '{}'`),
+				"23514",
+			);
+		for (const value of ["", " leading", "trailing "])
+			await refused(
+				insert("unknown", `, 'old_system', '${value}', '{}'`),
+				"23514",
+			);
 		for (const actor of [
 			`select set_config('engine.user_id', '${id(1)}', true), set_config('engine.job', '', true)`,
 			"select set_config('engine.user_id', '', true), set_config('engine.job', 'old_system', true)",
@@ -640,6 +650,93 @@ test("round collisions, ambiguous roles and untyped terms are listed without abo
 				)
 			)[0]?.n,
 			0,
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("merge loops terminate and list each affected building once, only for copied deals", async () => {
+	await db.query("begin; set local statement_timeout = '2s'");
+	try {
+		await db.query(`update public.building set merged_into = '${id(91)}' where id = '${id(90)}';
+ update public.building set merged_into = '${id(90)}' where id = '${id(91)}';
+ insert into public.building (id, address, created_by, updated_by, merged_into) values ('${id(89)}', '300 Example Way', '${id(1)}', '${id(1)}', '${id(89)}');
+ insert into public.space (id, building_id, created_by, updated_by) values ('${id(98)}', '${id(89)}', '${id(1)}', '${id(1)}');
+ insert into public.premises (id, deal_id, label, created_by) values ('${id(96)}', '${id(10)}', 'Example duplicate', '${id(1)}'), ('${id(97)}', '${id(22)}', 'Example refused', '${id(1)}');
+ insert into public.premises_space values ('${id(96)}', '${id(92)}'), ('${id(97)}', '${id(98)}');`);
+		assert.deepEqual(
+			(await run())
+				.filter((r) => r.reason === "building_merge_unresolved")
+				.map((r) => r.old_id),
+			[id(90), id(91)],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("an existing offer id is listed without aborting unrelated imports", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at) values ('${id(107)}', '${id(10)}', '${id(90)}', 20, '${id(2)}', 'client', now());
+ insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by) values ('${id(107)}', '${id(10)}', 8, 'tenant', '2025-03-01', '2025-03-01', '${id(1)}'), ('${id(108)}', '${id(10)}', 9, 'tenant', '2025-04-01', '2025-04-01', '${id(1)}');`);
+		assert.deepEqual(
+			(await run()).filter((r) => r.old_id === id(107)).map((r) => r.reason),
+			["offer_id_unavailable"],
+		);
+		assert.deepEqual(
+			await rows(
+				`select round, import_source from offer where id = '${id(107)}'`,
+			),
+			[{ round: 20, import_source: null }],
+		);
+		assert.equal(
+			(await rows(`select import_id from offer where id = '${id(108)}'`))[0]
+				?.import_id,
+			id(108),
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("offer notes stay visible, submarket condition is listed, and proposed dates use Chicago in every session zone", async () => {
+	await db.query(
+		"begin; select set_config('engine.job', 'old_system', true); set local TimeZone = 'Asia/Tokyo'",
+	);
+	try {
+		await db.query(`insert into public.submarket_condition (slug, label, tightness, note, sort) values ('example', 'Example condition', 0, 'Example source', 1);
+ insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by, escalator, options_note, opex_note, note, submarket_condition) values ('${id(107)}', '${id(10)}', 8, 'tenant', '2025-03-01', '2025-03-01', '${id(1)}', '3% yearly', 'One renewal', 'Expenses capped', 'Example general note', 'example'), ('${id(108)}', '${id(10)}', 9, 'tenant', '2025-07-01', '2025-07-01', '${id(1)}', null, null, null, null, null);`);
+		assert.deepEqual(
+			(await run())
+				.filter((r) => r.old_id === id(107))
+				.map((r) => [r.field, r.value, r.reason]),
+			[["submarket_condition", "example", "no_typed_destination"]],
+		);
+		await db.query("set local TimeZone = 'UTC'");
+		assert.deepEqual(
+			await rows(
+				`select other_terms, offered_at::text from offer where id in ('${id(107)}', '${id(108)}') order by id`,
+			),
+			[
+				{
+					other_terms:
+						"Escalator: 3% yearly\nOptions: One renewal\nOperating costs: Expenses capped\nNote: Example general note",
+					offered_at: "2025-03-01 06:00:00+00",
+				},
+				{ other_terms: null, offered_at: "2025-07-01 05:00:00+00" },
+			],
+		);
+		const result = await rows(
+			`select everything_about_deal('${id(10)}') -> 'offers' as offers`,
+		);
+		assert.ok(result[0]);
+		assert.ok(
+			result[0].offers.some(
+				(o: { id: string; other_terms: string | null }) =>
+					o.id === id(107) && o.other_terms?.includes("Expenses capped"),
+			),
 		);
 	} finally {
 		await db.query("rollback");
