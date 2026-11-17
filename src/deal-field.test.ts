@@ -48,36 +48,47 @@ const request = (url: string, args: Record<string, unknown>) =>
 		},
 	);
 
-test("owner and parking saves match the documented old answers and commit atomically", () =>
+const withDeal = (run: (url: string, db: pg.Client) => Promise<void>) =>
 	withSnapshot(async (url) => {
 		const db = new pg.Client({ connectionString: url });
 		await db.connect();
 		try {
 			await db.query(seed);
 			await db.query("set timezone='UTC'");
+			await run(url, db);
+		} finally {
+			await db.end();
+		}
+	});
+
+for (const [field, cases] of [
+	[
+		"owner",
+		[
+			[PARTNERS[0], null, PARTNERS[0]],
+			[null, PARTNERS[0], null],
+		],
+	],
+	[
+		"operating_state",
+		[
+			[
+				{ state: "parked", reason: "other", note: "  Example note  " },
+				{ note: null, state: "active", reason: null },
+				{ state: "parked", reason: "other", note: "Example note" },
+			],
+			[
+				{ state: "active" },
+				{ note: "Example note", state: "parked", reason: "other" },
+				{ state: "active", reason: null, note: null },
+			],
+		],
+	],
+] as const) {
+	test(`${field} saves and replays match the documented old answers`, () =>
+		withDeal(async (url, db) => {
 			let base: string | null = null;
-			for (const [field, value, old_value, new_value] of [
-				["owner", PARTNERS[0], null, PARTNERS[0]],
-				["owner", null, PARTNERS[0], null],
-				[
-					"operating_state",
-					{ state: "parked", reason: "other", note: "  Example note  " },
-					{ note: null, state: "active", reason: null },
-					{ state: "parked", reason: "other", note: "Example note" },
-				],
-				[
-					"operating_state",
-					{ state: "active" },
-					{ note: "Example note", state: "parked", reason: "other" },
-					{ state: "active", reason: null, note: null },
-				],
-			] as const) {
-				if (
-					field === "operating_state" &&
-					typeof new_value === "object" &&
-					new_value?.state === "parked"
-				)
-					base = null;
+			for (const [value, old_value, new_value] of cases) {
 				const key = randomUUID();
 				const args: Record<string, unknown> = {
 					idempotency_key: key,
@@ -139,125 +150,203 @@ test("owner and parking saves match the documented old answers and commit atomic
 					).rows;
 					assert.deepEqual(leads, value ? [{ actor_id: B }] : []);
 				} else {
-					assert.equal(row.parked_by, new_value?.state === "parked" ? A : null);
-					assert.equal(row.parked_at !== null, new_value?.state === "parked");
+					assert.ok(new_value && typeof new_value === "object");
+					assert.equal(row.parked_by, new_value.state === "parked" ? A : null);
+					assert.equal(row.parked_at !== null, new_value.state === "parked");
 				}
 				base = event.id;
 			}
-			const ownerBase = (
-				await db.query(
-					"select id from event where field='owner' order by recorded_at desc,id desc limit 1",
-				)
-			).rows[0].id;
-			const role = `writer_${randomUUID().replaceAll("-", "")}`;
-			await db.query(`create role ${role} login noinherit`);
-			try {
-				for (const grant of [
-					"select on actor,event,deal,deal_participant,participant_role,deal_conflict,v_ref_index",
-					"select (idempotency_key,request_hash,response,created_at) on tool_call",
-					"insert (idempotency_key,verb,actor_id,request_hash,response,via,client_id,organization_tenant_id,sponsoring_human_slug,personal_scope,authorization_class,correlation_id) on tool_call",
-					"insert (actor_id,agent_rationale,authorization_class,cause,client_id,correlation_id,field,human_quote,idempotency_key,new_value,occurred_at,old_value,organization_tenant_id,personal_scope,recorded_at,sponsoring_human_slug,subject_id,subject_type,verb,via) on event",
-					"insert (deal_id,actor_id,role,set_by) on deal_participant",
-					"update (to_at) on deal_participant",
-					"update (owner,operating_state,parking_reason,parking_note,parked_at,parked_by,updated_by) on deal",
-					"insert (deal_id,field,value_a,actor_a,event_a,value_b,actor_b) on deal_conflict",
-				])
-					await db.query(`grant ${grant} to ${role}`);
-				const login = new URL(url);
-				login.username = role;
-				const args = {
-					idempotency_key: randomUUID(),
-					deal: D,
-					field: "owner",
-					value: PARTNERS[0],
-					base_event_id: ownerBase,
-				};
-				const answers = await Promise.all([
-					request(login.href, args),
-					request(login.href, args),
-				]);
-				const bodies = await Promise.all(
-					answers.map(async (r) => {
-						assert.equal(r.status, 200);
-						return JSON.parse(await r.text());
-					}),
-				);
-				assert.equal(bodies.filter((b) => b.replayed).length, 1);
-				assert.equal(
-					(await db.query("select count(*) from event")).rows[0].count,
-					"5",
-				);
-				await db.query("update actor set active=false where id=$1", [B]);
-				const refused = await request(url, {
-					idempotency_key: randomUUID(),
-					deal: D,
-					field: "owner",
-					value: PARTNERS[0],
-					base_event_id: bodies[0].event_id,
-				});
-				const refusal = JSON.parse(await refused.text());
-				assert.equal(
-					JSON.stringify(refusal),
-					JSON.stringify({
-						error: "unknown_owner",
-						correlation_id: refusal.correlation_id,
-						hint: "Owner is one of joe, dell or claude.",
-					}),
-				);
-				assert.equal(
-					(
-						await db.query(
-							"select count(*) from deal_participant where to_at is null",
-						)
-					).rows[0].count,
-					"1",
-				);
-				assert.equal(
-					(await db.query("select count(*) from event")).rows[0].count,
-					"5",
-				);
-				await db.query("update actor set active=true where id=$1", [B]);
-				const next = { ...args, base_event_id: bodies[0].event_id };
-				const crossed = await Promise.all([
-					request(login.href, {
-						...next,
-						idempotency_key: randomUUID(),
-						value: null,
-					}),
-					request(login.href, { ...next, idempotency_key: randomUUID() }),
-				]);
-				const choices = await Promise.all(
-					crossed.map(async (r) => JSON.parse(await r.text())),
-				);
-				assert.equal(choices.filter((b) => b.ok === true).length, 1);
-				assert.equal(
-					choices.filter((b) => b.ok === false && b.conflict).length,
-					1,
-				);
-				const parking = {
-					deal: D,
-					field: "operating_state",
-					value: { state: "parked", reason: "other", note: " " },
-					base_event_id: base,
-				};
-				const parked = await request(login.href, {
-					...parking,
-					idempotency_key: randomUUID(),
-				});
-				assert.equal(parked.status, 200, await parked.clone().text());
-				const parkAnswer = JSON.parse(await parked.text());
-				const revived = await request(login.href, {
-					...parking,
-					value: { state: "active" },
-					base_event_id: parkAnswer.event_id,
-					idempotency_key: randomUUID(),
-				});
-				assert.equal(revived.status, 200, await revived.text());
-			} finally {
-				await db.query(`drop owned by ${role}`);
-				await db.query(`drop role ${role}`);
-			}
+		}));
+}
+
+test("owner retries and parking saves use only the existing writer grants", () =>
+	withDeal(async (url, db) => {
+		const role = `writer_${randomUUID().replaceAll("-", "")}`;
+		await db.query(`create role ${role} login noinherit`);
+		try {
+			for (const grant of [
+				"select on actor,event,deal,deal_participant,participant_role,deal_conflict,v_ref_index",
+				"select (idempotency_key,request_hash,response,created_at) on tool_call",
+				"insert (idempotency_key,verb,actor_id,request_hash,response,via,client_id,organization_tenant_id,sponsoring_human_slug,personal_scope,authorization_class,correlation_id) on tool_call",
+				"insert (actor_id,agent_rationale,authorization_class,cause,client_id,correlation_id,field,human_quote,idempotency_key,new_value,occurred_at,old_value,organization_tenant_id,personal_scope,recorded_at,sponsoring_human_slug,subject_id,subject_type,verb,via) on event",
+				"insert (deal_id,actor_id,role,set_by) on deal_participant",
+				"update (to_at) on deal_participant",
+				"update (owner,operating_state,parking_reason,parking_note,parked_at,parked_by,updated_by) on deal",
+				"insert (deal_id,field,value_a,actor_a,event_a,value_b,actor_b) on deal_conflict",
+			])
+				await db.query(`grant ${grant} to ${role}`);
+			const login = new URL(url);
+			login.username = role;
+			const args = {
+				idempotency_key: randomUUID(),
+				deal: D,
+				field: "owner",
+				value: PARTNERS[0],
+				base_event_id: null,
+			};
+			const answers = await Promise.all([
+				request(login.href, args),
+				request(login.href, args),
+			]);
+			const bodies = await Promise.all(
+				answers.map(async (r) => {
+					assert.equal(r.status, 200);
+					return JSON.parse(await r.text());
+				}),
+			);
+			assert.equal(bodies.filter((b) => b.replayed).length, 1);
+			assert.equal(
+				(await db.query("select count(*) from event")).rows[0].count,
+				"1",
+			);
+			const parking = {
+				deal: D,
+				field: "operating_state",
+				value: { state: "parked", reason: "other", note: " " },
+				base_event_id: null,
+			};
+			const parked = await request(login.href, {
+				...parking,
+				idempotency_key: randomUUID(),
+			});
+			assert.equal(parked.status, 200, await parked.clone().text());
+			const parkAnswer = JSON.parse(await parked.text());
+			const revived = await request(login.href, {
+				...parking,
+				value: { state: "active" },
+				base_event_id: parkAnswer.event_id,
+				idempotency_key: randomUUID(),
+			});
+			assert.equal(revived.status, 200, await revived.text());
 		} finally {
-			await db.end();
+			await db.query(`drop owned by ${role}`);
+			await db.query(`drop role ${role}`);
 		}
 	}));
+
+test("an inactive owner refusal rolls back the lead change and history", () =>
+	withDeal(async (url, db) => {
+		await db.query("update actor set active=false where id=$1", [B]);
+		const refused = await request(url, {
+			idempotency_key: randomUUID(),
+			deal: D,
+			field: "owner",
+			value: PARTNERS[0],
+			base_event_id: null,
+		});
+		const refusal = JSON.parse(await refused.text());
+		assert.equal(
+			JSON.stringify(refusal),
+			JSON.stringify({
+				error: "unknown_owner",
+				correlation_id: refusal.correlation_id,
+				hint: "Owner is one of joe, dell or claude.",
+			}),
+		);
+		assert.equal(
+			(
+				await db.query(
+					"select count(*) from deal_participant where to_at is null",
+				)
+			).rows[0].count,
+			"1",
+		);
+		assert.equal(
+			(await db.query("select count(*) from event")).rows[0].count,
+			"0",
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select actor_id from deal_participant where to_at is null",
+				)
+			).rows,
+			[{ actor_id: A }],
+		);
+		assert.equal(
+			(await db.query("select count(*) from tool_call")).rows[0].count,
+			"0",
+		);
+	}));
+
+test("crossed owner edits commit one save and one conflict", () =>
+	withDeal(async (url) => {
+		const next = {
+			deal: D,
+			field: "owner",
+			value: PARTNERS[0],
+			base_event_id: null,
+		};
+		const crossed = await Promise.all([
+			request(url, {
+				...next,
+				idempotency_key: randomUUID(),
+				value: null,
+			}),
+			request(url, { ...next, idempotency_key: randomUUID() }),
+		]);
+		const choices = await Promise.all(
+			crossed.map(async (r) => JSON.parse(await r.text())),
+		);
+		assert.equal(choices.filter((b) => b.ok === true).length, 1);
+		assert.equal(choices.filter((b) => b.ok === false && b.conflict).length, 1);
+	}));
+
+for (const [field, value] of [
+	["owner", PARTNERS[0]],
+	["operating_state", { state: "parked", reason: "other" }],
+] as const) {
+	test(
+		`${field} history is stamped after the field lock`,
+		{ timeout: 10000 },
+		(t) =>
+			withDeal(async (url, db) => {
+				const key = randomUUID();
+				await db.query("begin");
+				await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+					`${D}:${field}`,
+				]);
+				const pending = request(url, {
+					idempotency_key: key,
+					deal: D,
+					field,
+					value,
+					base_event_id: null,
+				});
+				try {
+					let waiting = false;
+					while (!waiting) {
+						t.signal.throwIfAborted();
+						waiting = (
+							await db.query(`select exists (
+						select 1 from pg_locks
+						where locktype='advisory' and not granted
+						and pg_backend_pid() = any(pg_blocking_pids(pid))
+					) as waiting`)
+						).rows[0].waiting;
+					}
+					assert.ok(waiting, "save must be waiting on the held field lock");
+					const { stamp } = (
+						await db.query("select clock_timestamp()::text as stamp")
+					).rows[0];
+					await db.query("commit");
+					const response = await pending;
+					assert.equal(response.status, 200, await response.text());
+					const event = (
+						await db.query(
+							"select recorded_at > $1::timestamptz as after_lock from event where idempotency_key=$2",
+							[stamp, key],
+						)
+					).rows[0];
+					assert.equal(
+						event.after_lock,
+						true,
+						"history must be stamped after releasing the field lock",
+					);
+				} finally {
+					await db.query("rollback");
+					await pending;
+				}
+			}),
+	);
+}
