@@ -374,6 +374,30 @@ CREATE TABLE ops.client_portal (
     CONSTRAINT client_portal_slug_check CHECK ((slug ~ '^[a-z0-9][a-z0-9-]{0,62}$'::text))
 );
 
+CREATE TABLE ops.deal_deliverable (
+    id uuid NOT NULL,
+    organization_tenant_id text NOT NULL,
+    deal_id uuid NOT NULL,
+    filename text NOT NULL,
+    mime text NOT NULL,
+    bytes bigint NOT NULL,
+    sha256 text NOT NULL,
+    object_key text NOT NULL,
+    created_by text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone DEFAULT (now() + '24:00:00'::interval) NOT NULL,
+    finalized_at timestamp with time zone,
+    state text DEFAULT 'started'::text NOT NULL,
+    visibility text DEFAULT 'private'::text NOT NULL,
+    version integer DEFAULT 0 NOT NULL,
+    CONSTRAINT deal_deliverable_bytes_check CHECK ((bytes > 0)),
+    CONSTRAINT deal_deliverable_check CHECK ((((state = 'finalized'::text) AND (finalized_at IS NOT NULL) AND (version >= 1)) OR ((state <> 'finalized'::text) AND (finalized_at IS NULL) AND (version = 0) AND (visibility = 'private'::text)))),
+    CONSTRAINT deal_deliverable_organization_tenant_id_check CHECK ((organization_tenant_id = 'example-tenant'::text)),
+    CONSTRAINT deal_deliverable_sha256_check CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT deal_deliverable_state_check CHECK ((state = ANY (ARRAY['started'::text, 'uploading'::text, 'verified'::text, 'finalized'::text, 'expired'::text]))),
+    CONSTRAINT deal_deliverable_visibility_check CHECK ((visibility = ANY (ARRAY['private'::text, 'shared'::text])))
+);
+
 CREATE TABLE ops.requirement_request (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     organization_tenant_id text NOT NULL,
@@ -3804,6 +3828,12 @@ ALTER TABLE ONLY public.room_dispatch_link ALTER COLUMN id SET DEFAULT nextval('
 ALTER TABLE ONLY ops.client_portal
     ADD CONSTRAINT client_portal_pkey PRIMARY KEY (slug);
 
+ALTER TABLE ONLY ops.deal_deliverable
+    ADD CONSTRAINT deal_deliverable_object_key_key UNIQUE (object_key);
+
+ALTER TABLE ONLY ops.deal_deliverable
+    ADD CONSTRAINT deal_deliverable_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY ops.requirement_request
     ADD CONSTRAINT requirement_request_id_organization_tenant_id_deal_id_row_k_key UNIQUE (id, organization_tenant_id, deal_id, row_key);
 
@@ -4301,6 +4331,8 @@ ALTER TABLE ONLY public.vendor
 
 CREATE UNIQUE INDEX client_portal_one_active_per_deal ON ops.client_portal USING btree (deal_id) WHERE (disabled_at IS NULL);
 
+CREATE INDEX deal_deliverable_deal ON ops.deal_deliverable USING btree (organization_tenant_id, deal_id, created_at, id);
+
 CREATE INDEX requirement_upload_receipt_request ON ops.requirement_upload_receipt USING btree (request_id);
 
 CREATE UNIQUE INDEX activity_calendar_event_deal_uidx ON public.activity USING btree (calendar_event_key, deal_id) WHERE (calendar_event_key IS NOT NULL);
@@ -4608,6 +4640,9 @@ ALTER TABLE ONLY ops.client_portal
 
 ALTER TABLE ONLY ops.client_portal
     ADD CONSTRAINT client_portal_deal_id_fkey FOREIGN KEY (deal_id) REFERENCES public.deal(id);
+
+ALTER TABLE ONLY ops.deal_deliverable
+    ADD CONSTRAINT deal_deliverable_deal_id_fkey FOREIGN KEY (deal_id) REFERENCES public.deal(id);
 
 ALTER TABLE ONLY ops.requirement_request
     ADD CONSTRAINT requirement_request_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.actor(id);
