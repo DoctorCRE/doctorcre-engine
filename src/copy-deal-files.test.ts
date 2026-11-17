@@ -192,8 +192,12 @@ test("lease evidence types file source attachments without guessing from names o
 	assert.deepEqual(reasons(report, 230), []);
 	assert.deepEqual(reasons(report, 231), ["kind_unclassified"]);
 	assert.deepEqual(
-		await rows(`select id from document where id = '${id(503)}'`),
-		[],
+		(
+			await rows(
+				`select id from document where deal_id = '${id(10)}' order by id`,
+			)
+		).map((r) => r.id),
+		[200, 202, 210, 218, 220, 221, 222, 227, 230, 231].map(id),
 	);
 });
 
@@ -271,33 +275,35 @@ test("files that cannot map are listed with a reason and not stored, never guess
 	);
 });
 
-test("disagreeing lease kinds on one source file are listed and left unfiled", async () => {
-	await db.query("begin");
-	try {
-		await db.query(`insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_by) values ${attachment(234)};
+for (const [evidenceKind, fileKind] of [
+	["lease_amendment", "amendment"],
+	["lease_abstract", "other"],
+]) {
+	test(`an executed lease and ${evidenceKind} on one source file are listed and left unfiled`, async () => {
+		await db.query("begin");
+		try {
+			await db.query(`insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_by) values ${attachment(234)};
  insert into public.lease (deal_id, doc_attachment, evidence_kind, created_by) values
  ('${id(10)}', '${id(234)}', 'executed_lease', '${id(1)}'),
- ('${id(10)}', '${id(234)}', 'lease_amendment', '${id(1)}');`);
-		const result = await db.query(copy);
-		assert.ok(Array.isArray(result));
-		const report: pg.QueryResultRow[] = result.at(-1)?.rows ?? [];
-		assert.deepEqual(
-			report
-				.filter((r) => r.old_id === id(234))
-				.map((r) => [r.reason, r.value]),
-			[
-				["several_kinds", "amendment"],
-				["several_kinds", "lease"],
-			],
-		);
-		assert.deepEqual(
-			await rows(`select id from document where r2_key = 'files/234'`),
-			[],
-		);
-	} finally {
-		await db.query("rollback");
-	}
-});
+ ('${id(10)}', '${id(234)}', '${evidenceKind}', '${id(1)}');`);
+			const result = await db.query(copy);
+			assert.ok(Array.isArray(result));
+			const report: pg.QueryResultRow[] = result.at(-1)?.rows ?? [];
+			assert.deepEqual(
+				report
+					.filter((r) => r.old_id === id(234))
+					.map((r) => [r.reason, r.value]),
+				["lease", fileKind].sort().map((kind) => ["several_kinds", kind]),
+			);
+			assert.deepEqual(
+				await rows(`select id from document where r2_key = 'files/234'`),
+				[],
+			);
+		} finally {
+			await db.query("rollback");
+		}
+	});
+}
 
 test("a repeat with the same template list changes nothing", async () => {
 	const before = {
