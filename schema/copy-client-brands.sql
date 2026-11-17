@@ -27,7 +27,7 @@ left join party brand on brand.id = brand_map.party_id
 left join lateral (select e.id, e.actor_id, e.occurred_at from public.event e where e.subject_type = 'party' and e.subject_id = p.id
  and e.field = 'org_id' order by e.mutation_order desc limit 1) set_event on true
 left join lateral (select e.id from public.event e where e.subject_type = 'party' and e.subject_id = p.id
- order by e.mutation_order limit 1) made_event on true
+ and e.verb = 'add-party' order by e.mutation_order limit 1) made_event on true
 cross join lateral copy_event_attribution(coalesce(set_event.actor_id, p.created_by), coalesce(set_event.id, made_event.id)) author
 where c.merged_into is null and p.kind = 'org' and p.org_id is not null
  and not exists (select from client_brand done where done.id = md5('old_system:client_brand:' || c.id)::uuid);

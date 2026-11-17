@@ -249,16 +249,38 @@ test("reruns preserve accepted rows, stamps and change history even if reviewed 
 });
 
 for (const event of [
-	{ shape: "its org_id change", field: "'org_id'", created_by: 1 },
-	{ shape: "the company's creation", field: "null", created_by: 7 },
+	{
+		shape: "keeps the sponsor from its org_id change",
+		verb: "update-party",
+		field: "'org_id'",
+		created_by: 1,
+		at: "2025-06-01",
+		sponsor: id(1),
+	},
+	{
+		shape: "keeps the sponsor from the company's creation",
+		verb: "add-party",
+		field: "null",
+		created_by: 7,
+		at: "2023-05-01",
+		sponsor: id(1),
+	},
+	{
+		shape: "takes no sponsor from an unrelated edit",
+		verb: "update-party-contact",
+		field: "'city'",
+		created_by: 7,
+		at: "2023-05-01",
+		sponsor: null,
+	},
 ]) {
-	test(`an agent's membership keeps the sponsor from ${event.shape}`, async () => {
+	test(`an agent's membership ${event.shape}`, async () => {
 		await transaction(
 			`${brand(11)}${date(11)}
  insert into public.actor (id,slug,kind,display_name) values ('${id(7)}','codex','automation','Example agent');
  update public.party set created_by = '${id(event.created_by)}' where id = '${id(11)}';
  insert into public.event (id,actor_id,verb,subject_type,subject_id,field,new_value,cause,occurred_at,sponsoring_human_slug) values
- ('${id(70)}','${id(7)}','update-party','party','${id(11)}',${event.field},'{}','human_stated','2025-06-01','partner_one'),
+ ('${id(70)}','${id(7)}','${event.verb}','party','${id(11)}',${event.field},'{}','human_stated','2025-06-01','partner_one'),
  ('${id(71)}','${id(7)}','update-party','party','${id(11)}',null,'{}','human_stated','2025-07-01',null);`,
 			async () => {
 				assert.deepEqual(await run(), []);
@@ -268,13 +290,10 @@ for (const event of [
 					),
 					[
 						{
-							created_at:
-								event.field === "null"
-									? "2023-05-01 00:00:00+00"
-									: "2025-06-01 00:00:00+00",
+							created_at: `${event.at} 00:00:00+00`,
 							changed_by_user_id: null,
 							changed_by_job: "agent",
-							changed_for_user_id: id(1),
+							changed_for_user_id: event.sponsor,
 						},
 					],
 				);
