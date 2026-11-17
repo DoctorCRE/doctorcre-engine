@@ -51,7 +51,11 @@ async function closeDeal(saving: Saving, args: JsonObject) {
 	const fields = args.fields;
 	if (!isArguments(fields))
 		throw new SaveRefusal(new Refusal(400, "unhandled_verb_failure"));
+	if ("client_id" in fields)
+		throw new SaveRefusal(new Refusal(400, "unhandled_verb_failure"));
 	const keys = Object.keys(fields).filter(isClosingField);
+	if (keys.length !== Object.keys(fields).length)
+		throw new SaveRefusal(new Refusal(501, "old_system_required"));
 	if (
 		!keys.length ||
 		(keys.includes("invoiced_on") &&

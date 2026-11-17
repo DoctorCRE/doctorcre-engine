@@ -105,11 +105,24 @@ test("closing saves preserve field order, nulls, raw values, events and replay",
 			);
 			const events = (
 				await db.query(
-					"select field,old_value,new_value,cause,verb from event where idempotency_key=$1 order by recorded_at, field",
+					"select field,old_value,new_value,cause,verb from event where idempotency_key=$1 order by recorded_at",
 					[key],
 				)
 			).rows;
-			assert.equal(events.length, Object.keys(fields).length);
+			const ordinary = Object.keys(fields).filter(
+				(field) => field !== "invoiced_on",
+			);
+			assert.deepEqual(
+				events
+					.slice(0, ordinary.length)
+					.map((event) => event.field)
+					.sort(),
+				ordinary.sort(),
+			);
+			assert.deepEqual(
+				events.slice(ordinary.length).map((event) => event.field),
+				"invoiced_on" in fields ? ["invoiced_on"] : [],
+			);
 			for (const [field, value] of Object.entries(fields)) {
 				const event = events.find((e) => e.field === field);
 				assert.deepEqual(event.old_value, { [field]: before[field] });
@@ -128,6 +141,51 @@ test("closing saves preserve field order, nulls, raw values, events and replay",
 				JSON.stringify({ replayed: true, ...receipt }),
 			);
 		}
+	}));
+
+test("closing saves refuse extra fields without saving any part of the request", () =>
+	withDeal(async (url, db) => {
+		const before = (await db.query("select * from deal where id=$1", [D])).rows;
+		for (const extra of [
+			{ phase: "example" },
+			{ city: "Other City" },
+			{ unknown_field: null },
+			{ client_id: C },
+			{ client_id: null, city: "Other City" },
+		]) {
+			for (const fields of [extra, { outcome: "won", ...extra }]) {
+				const response = await request(url, {
+					deal: D,
+					base_version: 1,
+					fields,
+					idempotency_key: randomUUID(),
+				});
+				const client = "client_id" in fields;
+				assert.equal(response.status, client ? 400 : 501);
+				assert.equal(
+					await response.text(),
+					JSON.stringify({
+						error: client ? "unhandled_verb_failure" : "old_system_required",
+						correlation_id: response.headers.get("x-correlation-id"),
+						hint: client
+							? "The operation failed. Quote the correlation_id when reporting it."
+							: "The engine does not finish this save. Send it to the old system unchanged.",
+					}),
+				);
+			}
+		}
+		assert.deepEqual(
+			(await db.query("select * from deal where id=$1", [D])).rows,
+			before,
+		);
+		assert.equal(
+			(await db.query("select count(*) from event")).rows[0].count,
+			"0",
+		);
+		assert.equal(
+			(await db.query("select count(*) from tool_call")).rows[0].count,
+			"0",
+		);
 	}));
 
 test("crossed edits rebase disjoint fields and refuse the same field without writing", () =>
@@ -224,51 +282,61 @@ test("closing validation refuses invalid dates and outcomes atomically", () =>
 		);
 	}));
 
-test("changed outcomes drop only the partner's overdue work after the closing events", () =>
-	withDeal(async (url, db) => {
-		await db.query(
-			"update deal set owner='partner_one',next_date='2020-01-01' where id=$1",
-			[D],
-		);
-		const ids = [randomUUID(), randomUUID(), randomUUID()];
-		for (const [id, owner, item] of [
-			[ids[0], A, null],
-			[ids[1], B, null],
-			[ids[2], A, "Example item"],
-		])
+for (const invoiced of [false, true])
+	test(`changed outcomes ${invoiced ? "with an invoice keep" : "drop"} the current overdue work`, () =>
+		withDeal(async (url, db) => {
 			await db.query(
-				"insert into next_action (id,subject_type,subject_id,owner_id,description,due_on,item_title,created_by,updated_by,source_ref,updated_at) values ($1,'deal',$2,$3,'Example overdue step','2020-01-01',$4,$3,$3,'example',$5)",
-				[id, D, owner, item, id === ids[0] ? "2025-01-01" : "2024-01-01"],
+				"update deal set owner='partner_one',next_date='2020-01-01' where id=$1",
+				[D],
 			);
-		const version = (
-			await db.query("select version from deal where id=$1", [D])
-		).rows[0].version;
-		const key = randomUUID();
-		const response = await request(url, {
-			deal: D,
-			base_version: version,
-			fields: { outcome: "won" },
-			idempotency_key: key,
-		});
-		assert.equal(response.status, 200, await response.clone().text());
-		const body = await response.json();
-		assert.ok(isArguments(body));
-		assert.deepEqual(body.superseded_action_ids, [ids[0]]);
-		assert.deepEqual(
-			(
+			const ids = [randomUUID(), randomUUID(), randomUUID()];
+			for (const [id, owner, item] of [
+				[ids[0], A, null],
+				[ids[1], B, null],
+				[ids[2], A, "Example item"],
+			])
 				await db.query(
-					"select id from next_action where status='open' order by id",
-				)
-			).rows.map((r) => r.id),
-			[ids[1], ids[2]].sort(),
-		);
-		assert.deepEqual(
-			(
-				await db.query(
-					"select field from event where idempotency_key=$1 order by recorded_at",
-					[key],
-				)
-			).rows.map((r) => r.field),
-			["outcome", "next_action", "next_date", "next_step"],
-		);
-	}));
+					"insert into next_action (id,subject_type,subject_id,owner_id,description,due_on,item_title,created_by,updated_by,source_ref,updated_at) values ($1,'deal',$2,$3,'Example overdue step','2020-01-01',$4,$3,$3,'example',$5)",
+					[id, D, owner, item, id === ids[0] ? "2025-01-01" : "2024-01-01"],
+				);
+			const version = (
+				await db.query("select version from deal where id=$1", [D])
+			).rows[0].version;
+			const key = randomUUID();
+			const response = await request(url, {
+				deal: D,
+				base_version: version,
+				fields: {
+					outcome: "won",
+					...(invoiced && { invoiced_on: "2024-02-29" }),
+				},
+				idempotency_key: key,
+			});
+			assert.equal(response.status, 200, await response.clone().text());
+			const body = await response.json();
+			assert.ok(isArguments(body));
+			// Kept from the old system on purpose: invoicing hides the board's current overdue date.
+			assert.deepEqual(
+				body.superseded_action_ids,
+				invoiced ? undefined : [ids[0]],
+			);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select id from next_action where status='open' order by id",
+					)
+				).rows.map((r) => r.id),
+				(invoiced ? ids : [ids[1], ids[2]]).sort(),
+			);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select field from event where idempotency_key=$1 order by recorded_at",
+						[key],
+					)
+				).rows.map((r) => r.field),
+				invoiced
+					? ["outcome", "invoiced_on"]
+					: ["outcome", "next_action", "next_date", "next_step"],
+			);
+		}));
