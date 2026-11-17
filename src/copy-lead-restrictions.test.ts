@@ -106,7 +106,7 @@ test("reviewed suppression follows merged parties even after the lead was copied
 					id(20),
 					"Example request",
 					null,
-					"2024-02-01 00:00:00+00",
+					"2025-02-01 00:00:00+00",
 					"2025-02-01 00:00:00+00",
 					id(1),
 				],
@@ -149,6 +149,11 @@ test("a reviewed restriction copies while the lead source still needs mapping", 
 
 for (const [label, values, refusal] of [
 	["null", `('${id(30)}',null)`, "restriction_needs_reason"],
+	[
+		"null beside a valid reason",
+		`('${id(30)}',null),('${id(30)}','Example request')`,
+		"restriction_needs_reason",
+	],
 	["blank", `('${id(30)}',E' \\t\\n')`, "restriction_needs_reason"],
 	[
 		"conflicting lead input",

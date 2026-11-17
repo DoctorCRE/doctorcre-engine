@@ -158,7 +158,7 @@ select r.*, case
 from lead_restriction r;
 insert into do_not_contact (party_id, reason, created_at, changed_at,
  changed_by_user_id, changed_by_job, changed_for_user_id)
-select distinct on (mapped_id) mapped_id, reason, created_at, updated_at,
+select distinct on (mapped_id) mapped_id, reason, updated_at, updated_at,
  changed_by_user_id, changed_by_job, changed_for_user_id
 from examined_lead_restriction where restriction_refusal is null
 order by mapped_id, updated_at desc, id
