@@ -1,4 +1,4 @@
--- Run after the party, deal and activity copies, with attribution loaded, in one owner transaction.
+-- Run after the party, vendor, deal and activity copies, with attribution loaded, in one owner transaction.
 -- Put the new schema on search_path. Only public is read.
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 alter table next_step disable trigger stamp_change;
@@ -11,14 +11,15 @@ select n.*, row_number() over (partition by deal_id order by created_at desc, id
 from public.deal_note n where kind = 'next_step';
 
 create temp table old_action on commit drop as
-select n.id, 'next_action'::text as source, n.subject_id as deal_id, n.description, n.status, n.due_on,
+select n.id, 'next_action'::text as source, case n.subject_type when 'deal' then n.subject_id end as deal_id,
+ case n.subject_type when 'vendor' then n.subject_id end as vendor_id, n.description, n.status, n.due_on,
  n.owner_id, n.created_at, n.updated_at, case when n.status = 'done' then n.updated_at end as done_at,
  n.hold_until, n.source_ref, n.item_title, n.item_bullets, a.*
 from public.next_action n
 cross join lateral copy_attribution('next_action', n.id, coalesce(n.updated_by, n.created_by)) a
-where n.subject_type = 'deal'
+where n.subject_type in ('deal', 'vendor')
 union all
-select n.id, 'capture_post_call_action', n.deal_id, n.description, n.status, n.due_on,
+select n.id, 'capture_post_call_action', n.deal_id, null, n.description, n.status, n.due_on,
  n.owner_id, n.accepted_at, n.updated_at, n.completed_at, null, n.source_ref, n.item_title, n.item_bullets, a.*
 from public.capture_post_call_action n
 left join lateral (select e.id, e.actor_id from public.event e
@@ -29,15 +30,17 @@ left join lateral (select e.id, e.actor_id from public.event e
 cross join lateral copy_event_attribution(coalesce(event.actor_id, n.accepted_by), event.id) a;
 
 create temp table step_candidate on commit drop as
-select n.id, n.source, n.deal_id, null::uuid as party_id,
+select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
  regexp_replace(n.description, '^\s+|\s+$', '', 'g') as what, n.due_on, u.id as owner,
  n.done_at, n.created_at, n.updated_at as changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id,
  case when n.status not in ('open', 'done') then 'closed_without_doing' end as refusal
 from old_action n
+-- A vendor's next steps are about the person or company it became, merged-away vendors' too.
+left join outside_id vendor on vendor.source = 'old_system' and vendor.value = n.vendor_id::text
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
 union all
-select n.id, 'deal_note', n.deal_id, null, n.text, d.next_date, owner.id, null, n.created_at, n.created_at, a.*,
+select n.id, 'deal_note', n.deal_id, null, null, n.text, d.next_date, owner.id, null, n.created_at, n.created_at, a.*,
  case when n.superseded then 'superseded_note' when n.rank <> 1 then 'older_next_step_note'
  when current.status = 'done' then 'plan_already_done'
  when current.status = 'open' then 'note_hidden_by_action' end
@@ -52,7 +55,7 @@ cross join lateral copy_event_attribution(n.actor_id, (select e.id from public.e
  and e.actor_id = n.actor_id and e.occurred_at = n.created_at and e.new_value ->> 'note' = n.text
  order by e.mutation_order desc limit 1)) a
 union all
-select md5('old_system:deal:' || d.id || ':follow_up')::uuid, 'deal_date', d.id, null,
+select md5('old_system:deal:' || d.id || ':follow_up')::uuid, 'deal_date', d.id, null, null,
  'Imported deal follow-up', d.next_date, owner.id, null, d.created_at, d.updated_at, a.*, null
 from public.deal d
 left join public.actor actor on actor.slug = d.owner
@@ -69,6 +72,7 @@ select s.id, f.field, f.value, f.reason from step_candidate s cross join lateral
  case when s.refusal = 'closed_without_doing' then (select status from old_action a where a.id = s.id) when s.source = 'deal_note' then s.what else s.source end, s.refusal, s.refusal is not null),
  ('what', s.what, 'blank_next_step', s.what !~ '\S'),
  ('deal_id', s.deal_id::text, 'deal_not_copied', s.deal_id is not null and not exists (select from deal d where d.id = s.deal_id)),
+ ('vendor_id', s.vendor_id::text, 'vendor_not_copied', s.vendor_id is not null and s.party_id is null),
  ('id', s.id::text, 'id_taken', exists (select from next_step n where n.id = s.id
   and (n.deal_id, n.party_id) is distinct from (s.deal_id, s.party_id)))
 ) f(field, value, reason, refused) where f.refused;
