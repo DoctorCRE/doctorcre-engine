@@ -91,7 +91,8 @@ async function awaitingAssessment(
 }
 
 // The prior step stays as history; the partner's other open steps are dropped.
-async function appendNextStep(
+// A deal update's step is recorded under set-next-step too, as the old writer did.
+export async function appendNextStep(
 	{ tx, actor_id, record }: Saving,
 	deal_id: string,
 	text: string,
@@ -166,6 +167,7 @@ async function appendNextStep(
 		.returning("id")
 		.executeTakeFirstOrThrow();
 	const event = {
+		verb: "set-next-step",
 		subject_type: "deal",
 		subject_id: deal_id,
 		after_lock: true as const,
