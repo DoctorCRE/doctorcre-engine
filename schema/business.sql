@@ -1034,6 +1034,16 @@ CREATE TABLE public.capture_post_call_candidate (
     CONSTRAINT capture_post_call_candidate_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'skipped'::text])))
 );
 
+CREATE TABLE public.capture_post_call_report (
+    session_id uuid NOT NULL,
+    idempotency_key text NOT NULL,
+    report_sha256 text NOT NULL,
+    candidate_count integer NOT NULL,
+    filed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT capture_post_call_report_candidate_count_check CHECK ((candidate_count >= 0)),
+    CONSTRAINT capture_post_call_report_report_sha256_check CHECK ((report_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
 CREATE TABLE public.capture_session (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     nonce text NOT NULL,
@@ -1994,6 +2004,26 @@ CREATE TABLE public.party_link_kind (
     slug text NOT NULL,
     label text NOT NULL,
     sort integer NOT NULL
+);
+
+CREATE TABLE public.phone_call_session (
+    id uuid NOT NULL,
+    owner_id uuid NOT NULL,
+    sha256 text NOT NULL,
+    byte_count bigint NOT NULL,
+    duration_seconds numeric NOT NULL,
+    mime_type text NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    consent_announced_at timestamp with time zone NOT NULL,
+    admitted_on date DEFAULT ((now() AT TIME ZONE 'America/Chicago'::text))::date NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    transferred_at timestamp with time zone,
+    projection jsonb,
+    studio_status jsonb,
+    CONSTRAINT phone_call_session_byte_count_check CHECK ((byte_count > 0)),
+    CONSTRAINT phone_call_session_duration_seconds_check CHECK ((duration_seconds > (0)::numeric)),
+    CONSTRAINT phone_call_session_mime_type_check CHECK ((mime_type = ANY (ARRAY['audio/wav'::text, 'audio/x-wav'::text, 'audio/mp4'::text, 'audio/m4a'::text, 'audio/x-m4a'::text, 'audio/mpeg'::text, 'audio/webm'::text]))),
+    CONSTRAINT phone_call_session_sha256_check CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text))
 );
 
 CREATE TABLE public.practice_origination_event (
@@ -4050,6 +4080,12 @@ ALTER TABLE ONLY public.capture_post_call_candidate
 ALTER TABLE ONLY public.capture_post_call_candidate
     ADD CONSTRAINT capture_post_call_candidate_session_id_idempotency_key_item_key UNIQUE (session_id, idempotency_key, item_index);
 
+ALTER TABLE ONLY public.capture_post_call_report
+    ADD CONSTRAINT capture_post_call_report_pkey PRIMARY KEY (session_id);
+
+ALTER TABLE ONLY public.capture_post_call_report
+    ADD CONSTRAINT capture_post_call_report_session_id_idempotency_key_key UNIQUE (session_id, idempotency_key);
+
 ALTER TABLE ONLY public.capture_session
     ADD CONSTRAINT capture_session_nonce_key UNIQUE (nonce);
 
@@ -4334,6 +4370,12 @@ ALTER TABLE ONLY public.party_link
 
 ALTER TABLE ONLY public.party
     ADD CONSTRAINT party_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.phone_call_session
+    ADD CONSTRAINT phone_call_session_owner_id_sha256_key UNIQUE (owner_id, sha256);
+
+ALTER TABLE ONLY public.phone_call_session
+    ADD CONSTRAINT phone_call_session_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.practice_origination_event
     ADD CONSTRAINT practice_origination_event_pkey PRIMARY KEY (id);
@@ -4636,6 +4678,8 @@ CREATE UNIQUE INDEX party_org_identity_uniq ON public.party USING btree (public.
 
 CREATE UNIQUE INDEX party_ref_uniq ON public.party USING btree (ref);
 
+CREATE INDEX phone_call_session_daily ON public.phone_call_session USING btree (owner_id, admitted_on);
+
 CREATE INDEX practice_origination_record ON public.practice_origination_event USING btree (source, record_key, id DESC);
 
 CREATE INDEX prospect_pool_county_idx ON public.candidate_pool USING btree (county);
@@ -4933,6 +4977,9 @@ ALTER TABLE ONLY public.capture_post_call_candidate
 
 ALTER TABLE ONLY public.capture_post_call_candidate
     ADD CONSTRAINT capture_post_call_candidate_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.capture_session(id);
+
+ALTER TABLE ONLY public.capture_post_call_report
+    ADD CONSTRAINT capture_post_call_report_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.capture_session(id);
 
 ALTER TABLE ONLY public.capture_session
     ADD CONSTRAINT capture_session_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);
@@ -5461,6 +5508,12 @@ ALTER TABLE ONLY public.party
 
 ALTER TABLE ONLY public.party
     ADD CONSTRAINT party_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.actor(id);
+
+ALTER TABLE ONLY public.phone_call_session
+    ADD CONSTRAINT phone_call_session_id_fkey FOREIGN KEY (id) REFERENCES public.capture_session(id);
+
+ALTER TABLE ONLY public.phone_call_session
+    ADD CONSTRAINT phone_call_session_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.actor(id);
 
 ALTER TABLE ONLY public.practice_origination_event
     ADD CONSTRAINT practice_origination_event_recorded_by_fkey FOREIGN KEY (recorded_by) REFERENCES public.actor(id);

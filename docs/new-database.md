@@ -269,23 +269,25 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 1. `copy-parties.sql`: every other copy finds its people and companies, and the partners as users, through this map.
 2. `copy-markets.sql`, with `copy_market_county`: the deal copy matches a deal's market by name.
 3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role.
-4. `copy-candidates-drafts.sql`: drafts and candidates find their leads.
-5. `copy-vendors.sql`: the deal copy finds the vendor roles.
-6. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
-7. `copy-deals.sql`.
-8. `copy-vendors.sql` again: introductions and worked deals find their deals.
-9. `copy-leases.sql`: needs its deal, client and building.
-10. `copy-critical-dates.sql`.
-11. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
-12. `copy-deal-file-text.sql`: needs the deal files.
-13. `copy-commissions.sql`, after the partners enter their ladders.
-14. `copy-invoice-emails.sql`: needs the deals and their payments.
-15. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
-16. `copy-activity.sql`: needs parties and deals.
-17. `copy-lead-stage-moves.sql`: needs the activity each move cites.
-18. `copy-deal-next-steps.sql`: needs deals and activity.
-19. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
-20. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
+4. `copy-national-account-owners.sql`, with `copy_account_owner_date`: needs the national accounts and mapped human owners.
+5. `copy-candidates-drafts.sql`: drafts and candidates find their leads.
+6. `copy-vendors.sql`: the deal copy finds the vendor roles.
+7. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
+8. `copy-deals.sql`.
+9. `copy-vendors.sql` again: introductions and worked deals find their deals.
+10. `copy-leases.sql`: needs its deal, client and building.
+11. `copy-critical-dates.sql`.
+12. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
+13. `copy-deal-file-text.sql`: needs the deal files.
+14. `copy-commissions.sql`, after the partners enter their ladders.
+15. `copy-invoice-emails.sql`: needs the deals and their payments.
+16. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
+17. `copy-activity.sql`: needs parties and deals.
+18. `copy-calls.sql`: needs the activity a logged meeting already is.
+19. `copy-lead-stage-moves.sql`: needs the activity each move cites.
+20. `copy-deal-next-steps.sql`: needs deals and activity.
+21. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
+22. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
 Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
 
@@ -320,7 +322,7 @@ Moving today's rows across:
 
 - Each client becomes its party's client role and client row. Roster, cold, engaged and paused map directly. Active deal and past client are recomputed; those old labels supply no manual status, so start those records at roster.
 - The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. Vertical and subtype do not move as free text.
-- A company location's `party.org_id` becomes its brand membership. A person's org_id remains party_company. Existing national_account_owner rows map their human actor to its person; an outside owner's person is used directly. The old system lacks membership start dates and complete owner history, so a user must supply the first known dates before copying these links. Never invent an earlier history.
+- A company location's `party.org_id` becomes its brand membership. A person's org_id remains party_company. Existing national_account_owner rows map their human actor to its person. The old system lacks membership start dates and complete owner history, so a user must supply the first known dates before copying these links. Never invent an earlier history.
 - Client owner and acquisition source belong to the lead and attribution slice, not account ownership. ETL status and agreements are excluded by the owner's B9 answer. No representation agreement table is added.
 
 Run `schema/copy-national-account-owners.sql` after the party, client and attribution copies, in one owner transaction with the new schema on `search_path`. Before running it, create temporary `copy_account_owner_date (account_client_id uuid primary key, started_on date not null) on commit drop` and insert the partners' reviewed first known dates. An absent date stays listed; `set_at` is retained as the row's storage and change time, never used as its start. Overlaps with copied ownership or between accounts mapped to one company stay listed together. Accepted rows keep a stable import id and reruns leave them unchanged, including stamps and history.
@@ -825,6 +827,17 @@ Run `schema/copy-activity.sql` as the owner after `copy-parties.sql` and `copy-d
 - A deal note of kind note becomes a note about its deal, at its time, signed from its `add-deal-note` event on the deal, which has the same text and time. An agent's activity or note whose partner is unknown is copied as the agent's and listed.
 - Listed and not copied: emails, and the notes the mail intake files with an email's full text or its links, even without email context (#365), deal notes of kind next step (#366), and the old kinds `text`, `analysis`, `task`, `loi`, `counter_sent`, `counter_received` and `lease_signed`, which have no kind yet. Listed but copied without the value: what a row says is owed, whether a call connected, and a detail that is a JSON object, which is a job's own record. `source`, `version` and `calendar_event_key` record how today's system captured the row and are dropped.
 - A rerun copies only rows not yet copied, and adds the links of records copied since, so an unchanged rerun changes nothing.
+
+## Copying today's calls
+
+Run `schema/copy-calls.sql` as the owner after `copy-activity.sql`, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`. It is the source activity the call suggestions copy needs (decision 83).
+
+- Each `capture_session` becomes one activity with the session's id, a call when it ran the post-call workflow and a meeting otherwise. Its time is when recording started, and it is signed by the session's actor at its last state change, so a partner's phone import names that user and a recording device names `old_system`. A `phone_call_session` shares the session's id, so a phone call is one activity.
+- The summary is the phone report's summary, then its decisions and open questions as lists after a blank line. A meeting capture's summary is its one meeting record's summary, then its detail after a blank line; several records with text are listed and the summary stays empty. A skipped record, and any record beside a logged one that no activity carries, is listed. Post-call sessions stored no report text, only `capture_post_call_report`'s hash, so their summary is empty and the hash is listed.
+- A meeting capture with a confirmed meeting record that names an existing activity is that activity, the greatest one if several, which the activity copy carries. It is not copied again; it gains the links of its session's other suggestions once that copy has carried it, until then it is listed, and the suggestions copy uses it as their source.
+- A call is about each deal, person or company its suggestions name: a post-call suggestion's deal, and a capture suggestion's deal or record when it is an id. A client, lead or vendor is about its person or company. A name or a record not yet copied is listed, and a call about nothing copied waits.
+- Listed and copied without the value: an unfinished or failed session, the recording's hash, since the audio is not stored, and the Call Studio review state. Device, nonce, token, expiry, consent time, file facts and the outcome review are capture machinery and are dropped.
+- A rerun copies only sessions not yet copied, and adds the links of records copied since, so an unchanged rerun changes nothing.
 
 ## Copying today's preferences and Home marks
 

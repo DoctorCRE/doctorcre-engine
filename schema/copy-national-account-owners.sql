@@ -21,7 +21,7 @@ left join outside_id account_map on account_map.source = 'old_system' and accoun
 left join national_account account on account.party_id = account_map.party_id
 left join outside_id owner_map on owner_map.source = 'old_system' and owner_map.value = o.owner_actor_id::text
 left join party person on person.id = owner_map.party_id and person.kind = 'person' and actor.kind = 'human'
-cross join lateral copy_attribution('national_account_owner', o.account_client_id, o.set_by) author
+cross join lateral copy_attribution('client', o.account_client_id, o.set_by, 'account_owner') author
 where not exists (select from national_account_owner done
  where done.id = md5('old_system:national_account_owner:' || o.account_client_id)::uuid);
 

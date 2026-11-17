@@ -60,7 +60,7 @@ before(async () => {
 	await db.query(`create schema next; ${schema}; ${attribution}`);
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values
- ('${id(1)}','example_human','human','Example Human'),
+ ('${id(1)}','partner_one','human','Example Human'),
  ('${id(2)}','example_automation','automation','Example Automation'),
  ('${id(3)}','example_system','system','Example System'),
  ('${id(4)}','example_unmapped','human','Example Unmapped'),
@@ -241,6 +241,32 @@ test("a human owner's mapped person is used even when its id differs from the ac
 			assert.deepEqual(
 				await rows("select owner_id from national_account_owner"),
 				[{ owner_id: id(6) }],
+			);
+		},
+	);
+});
+
+test("an agent setter keeps the sponsor from the client's account_owner event", async () => {
+	await transaction(
+		`${owner(40)}${date(40)}
+ insert into public.actor (id,slug,kind,display_name) values ('${id(7)}','codex','automation','Example agent');
+ update public.national_account_owner set set_by='${id(7)}';
+ insert into public.event (id,actor_id,verb,subject_type,subject_id,field,new_value,cause,occurred_at,sponsoring_human_slug) values
+ ('${id(70)}','${id(7)}','set-account-owner','client','${id(40)}','account_owner','{}','human_stated','2025-06-01','partner_one'),
+ ('${id(71)}','${id(7)}','update-client','client','${id(40)}','notes','{}','human_stated','2025-07-01',null);`,
+		async () => {
+			assert.deepEqual(await run(), []);
+			assert.deepEqual(
+				await rows(
+					"select changed_by_user_id,changed_by_job,changed_for_user_id from national_account_owner",
+				),
+				[
+					{
+						changed_by_user_id: null,
+						changed_by_job: "agent",
+						changed_for_user_id: id(1),
+					},
+				],
 			);
 		},
 	);
