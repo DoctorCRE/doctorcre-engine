@@ -34,11 +34,21 @@ connection.get("/database", async (c) => {
 					board_view_readable = false;
 					await sql`rollback to savepoint board`.execute(db);
 				}
+				await sql`savepoint next_section`.execute(db);
+				let next_section_readable = true;
+				try {
+					await sql`set local role engine_reader`.execute(db);
+					await sql`select 1 from next.deal limit 1`.execute(db);
+				} catch {
+					next_section_readable = false;
+					await sql`rollback to savepoint next_section`.execute(db);
+				}
 				return {
 					read_only: read_only === "on",
 					isolation,
 					time_zone,
 					board_view_readable,
+					next_section_readable,
 				};
 			}),
 		);

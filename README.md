@@ -120,3 +120,25 @@ network failure or a refused token stops the run. It prints counts, field paths 
 record IDs, never values, bodies or the token. A suggested vendor meeting
 prints its vendor ref and, when it has one, its contact ID. Exit codes are 0
 for a match, 1 for differences or unsettled requests and 2 for failure.
+
+For the new section, `nextTransaction(connectionString, "read" | "save", run)`
+passes a `Transaction<DB>` from `src/next-database.d.ts` to `run`. It pins
+`search_path` to `next, pg_temp` and the time zone to UTC. Reads use a repeatable-read,
+read-only snapshot under `engine_reader`. Saves use a read-committed transaction
+under `engine`, with the existing column grants. The supplied SQL-created login
+must belong to the selected role and have no other grants. No application route
+uses this entry point yet. Row 12 adds save stamps, retries and edit checks.
+The health probe appends `next_section_readable` after its existing fields.
+
+The checked-in new-section types use the installed `kysely-codegen`. To regenerate,
+load `schema/next.sql` into `next` in a disposable local database, with `next` on
+`search_path`, then run this command with `DATABASE_URL` pointing at that database.
+Then run `npm run fix` to format the generated file.
+No production connection is needed.
+
+```sh
+node_modules/.bin/kysely-codegen --dialect postgres --include-pattern 'next.*' \
+	--default-schema next --date-parser string \
+	--type-mapping '{"timestamp":"string","timestamptz":"string"}' \
+	--out-file src/next-database.d.ts
+```

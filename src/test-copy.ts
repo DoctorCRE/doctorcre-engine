@@ -34,5 +34,5 @@ export function copyTest() {
 		await db.end();
 		await asAdmin(`drop database if exists "${name}" with (force)`);
 	};
-	return { db, setup, cleanup };
+	return { db, setup, cleanup, connectionString: url.href };
 }

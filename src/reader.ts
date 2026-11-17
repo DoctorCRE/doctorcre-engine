@@ -64,13 +64,15 @@ export function inJsonbOrder<T>(value: T): T {
 	) as T;
 }
 
-export function connect(connectionString: string): Kysely<DB> {
+export function connect<Database = DB>(
+	connectionString: string,
+): Kysely<Database> {
 	const pool = new pg.Pool({ connectionString, max: 1, types });
 	// A dropped pooled connection must not crash the Worker; the caller's own
 	// promise reports the failure.
 	pool.on("error", () => {});
 	pool.on("connect", (client) => client.on("error", () => {}));
-	return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
+	return new Kysely<Database>({ dialect: new PostgresDialect({ pool }) });
 }
 
 export async function readSnapshot<T>(

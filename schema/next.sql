@@ -2752,18 +2752,20 @@ end;
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, imported_deal_party, imported_deal_owner, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
 -- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change, imported_change, imported_deal_party, imported_deal_owner) is never removed.
-do $$ begin
-	begin
-		create role engine nologin;
-	-- Roles belong to the server and outlive a database, so a second load reuses it.
-	exception when duplicate_object or unique_violation then null;
-	end;
-	-- A reused role must hold nothing that would reach past the grants below.
-	if exists (select from pg_roles where rolname = 'engine'
-			and (rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolreplication))
-		or exists (select from pg_auth_members where member = 'engine'::regrole) then
-		raise exception 'role engine holds rights beyond its grants';
-	end if;
+do $$ declare role_name text; begin
+	foreach role_name in array array['engine', 'engine_reader'] loop
+		begin
+			execute format('create role %I nologin', role_name);
+		-- Roles belong to the server and outlive a database, so a second load reuses them.
+		exception when duplicate_object or unique_violation then null;
+		end;
+		-- A reused role must hold nothing that would reach past the grants below.
+		if exists (select from pg_roles where rolname = role_name
+				and (rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolreplication))
+			or exists (select from pg_auth_members where member = role_name::regrole) then
+			raise exception 'role % holds rights beyond its grants', role_name;
+		end if;
+	end loop;
 end $$;
 
 do $$ begin
@@ -2869,3 +2871,9 @@ grant update (status, deal_id, payment_id) on invoice_email to engine;
 grant update (status, reason, promoted_party_id) on candidate to engine;
 
 grant update (source_row, name, qualification, estimated_lease_on, lease_estimate_source) on candidate to engine;
+
+-- The read role gets only schema usage and table reads.
+do $$ begin
+	execute format('grant usage on schema %1$I to engine_reader;
+		grant select on all tables in schema %1$I to engine_reader', current_schema());
+end $$;
