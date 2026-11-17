@@ -9,6 +9,11 @@ const copy = await readSchema("copy-emails.sql");
 const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) =>
 	(await db.query(sql)).rows.map((r) => Object.values(r));
+// Each row as one line, with fixture ids shortened to their number.
+const lines = async (sql: string) =>
+	(await rows(sql)).map((r) =>
+		r.map((v) => String(v).replace(/^0{8}-0{4}-4000-8000-0{10}/, "")).join(" "),
+	);
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	await db.query("begin");
 	try {
@@ -31,7 +36,9 @@ const DOCTOR = "doctor@example.test";
 const context = (sender: string, subject: string, extra = "") =>
 	`'{"sender": {"email": "${sender}"}, "subject": "${subject}"${extra}}'`;
 const source = `'{"mailbox_owner": "partner_one", "sender_email": "${DOCTOR}"}'`;
-const identity = `'{"mailbox_owner": "partner_one", "mailbox_account": "${JOE}", "item_id": "example-46", "subject": "${id(30)}"}'`;
+// The identity's subject is the record the row is filed to.
+const identity = (item: number, record = 30) =>
+	`'{"mailbox_owner": "partner_one", "mailbox_account": "${JOE}", "item_id": "example-${item}", "subject": "${id(record)}"}'`;
 // Today's rows; context, source and identity are SQL literals, and email names the old public.email row.
 type Mail = {
 	n: number;
@@ -55,13 +62,25 @@ const mail: Mail[] = [
 	{ n: 43, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", detail: "Example short", link: deal, source },
 	{ n: 44, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", detail: "Example short", link: ["lead_id", 21], source },
 	{ n: 45, kind: "note", time: "11:00", summary: "Full text of email: Example lease", detail: "Example full lease text", link: deal, context: `'{"source_activity_id": "${id(44)}"}'` },
-	{ n: 46, kind: "email_out", time: "12:00", summary: `Email to ${DOCTOR}: Example question`, detail: "Example short question", link: deal, identity },
+	{ n: 46, kind: "email_out", time: "12:00", summary: `Email to ${DOCTOR}: Example question`, detail: "Example short question", link: deal, identity: identity(46) },
 	{ n: 47, kind: "note", time: "12:00", summary: "Full text of email: Example question", detail: "Example full question", link: deal },
 	{ n: 48, kind: "email_in", time: "13:00", summary: "Email from Example Doctor: Example withdrawn", link: deal, context: context(DOCTOR, "Example withdrawn", ', "lifecycle": {"state": "deleted"}') },
 	{ n: 49, kind: "email_in", time: "14:00", summary: "Email from someone", link: deal },
 	{ n: 50, kind: "email_out", time: "15:00", summary: "Email to someone: Example", link: ["lead_id", 25], context: context(JOE, "Example") },
 	{ n: 51, kind: "note", time: "16:00", summary: "Full text of email: Example lost", link: deal },
 	{ n: 53, kind: "call", time: "17:00", summary: "Example call about an email", link: deal, context: context(DOCTOR, "Example") },
+	{ n: 54, kind: "email_out", time: "18:00", summary: `Email to ${DOCTOR}: Example offer`, detail: "Example offer", link: deal, identity: identity(54) },
+	{ n: 55, kind: "email_out", time: "18:00:00.36", summary: `Email to ${DOCTOR}: Example offer`, detail: "Example offer", link: ["client_id", 20], identity: identity(54, 20) },
+	{ n: 56, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: deal, context: context(DOCTOR, "Example visit", ', "lifecycle": {"state": "deleted"}'), email: 92 },
+	{ n: 57, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: ["client_id", 20], context: `'{"subject": "Example visit"}'`, email: 93 },
+	{ n: 58, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: Example plan", link: deal, source },
+	{ n: 59, kind: "email_in", time: "20:00", summary: "Email from Example plan: Example plan", link: ["lead_id", 21], source },
+];
+// Filed after the first copy, with lower ids than the emails they belong to.
+// biome-ignore format: one old row per line
+const later: Mail[] = [
+	{ n: 38, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", link: ["client_id", 20], context: context(DOCTOR, "Example tour"), email: 91 },
+	{ n: 39, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", link: ["client_id", 20], source },
 ];
 const insert = (m: Mail) =>
 	`insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, detail,
@@ -75,7 +94,8 @@ before(async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  create table public.email (id uuid primary key, mailbox_account text not null, message_id text check (message_id = btrim(message_id)));
  alter table public.activity add column email_id uuid references public.email;
- insert into public.email values ('${id(90)}', '${JOE}', '<Tour@example.test>'), ('${id(91)}', '${DELL}', '<Tour@example.test>');
+ insert into public.email values ('${id(90)}', '${JOE}', '<Tour@example.test>'), ('${id(91)}', '${DELL}', '<Tour@example.test>'),
+  ('${id(92)}', '${JOE}', '<Visit@example.test>'), ('${id(93)}', '${DELL}', '<Visit@example.test>');
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
   ('${id(3)}', 'example-mail', 'automation', 'Example mail job');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(10)}', 'company', 'Example Clinic'),
@@ -106,64 +126,54 @@ after(cleanup);
 test("stores each email once with all its records, its full text and its Message-ID, listing what it cannot copy", async () => {
 	const report = await run();
 	assert.deepEqual(
-		await rows(
-			"select id, kind, happened_at::text, summary, changed_by_job, changed_for_user_id from activity order by id",
+		await lines(
+			"select id, kind, happened_at::time, summary, changed_by_job, changed_for_user_id from activity order by id",
 		),
 		[
-			[
-				id(40),
-				"email",
-				"2024-01-02 10:00:00+00",
-				"Email from Example Doctor: Example tour",
-				"mail_capture",
-				id(1),
-			],
-			[
-				id(43),
-				"email",
-				"2024-01-02 11:00:00+00",
-				"Email from Example Doctor: Example lease",
-				"old_system",
-				null,
-			],
-			[
-				id(46),
-				"email",
-				"2024-01-02 12:00:00+00",
-				`Email to ${DOCTOR}: Example question`,
-				"old_system",
-				null,
-			],
+			"40 email 10:00:00 Email from Example Doctor: Example tour mail_capture 01",
+			"43 email 11:00:00 Email from Example Doctor: Example lease old_system null",
+			`46 email 12:00:00 Email to ${DOCTOR}: Example question old_system null`,
+			`54 email 18:00:00 Email to ${DOCTOR}: Example offer old_system null`,
+			"57 email 19:00:00 Email from Example Doctor: Example visit old_system null",
+			"58 email 20:00:00 Email from Example Doctor: Example plan old_system null",
 		],
+		"one send to several records is one email, and so is mail whose sender's name was misread",
 	);
 	assert.deepEqual(
-		await rows(
+		await lines(
 			"select activity_id, message_id, sender, subject, body from email order by activity_id",
 		),
 		[
-			[
-				id(40),
-				"<Tour@example.test>",
-				DOCTOR,
-				"Example tour",
-				"Example preview",
-			],
-			[id(43), null, DOCTOR, "Example lease", "Example full lease text"],
-			[id(46), null, JOE, "Example question", "Example full question"],
+			`40 <Tour@example.test> ${DOCTOR} Example tour Example preview`,
+			`43 null ${DOCTOR} Example lease Example full lease text`,
+			`46 null ${JOE} Example question Example full question`,
+			`54 null ${JOE} Example offer Example offer`,
+			`57 <Visit@example.test> ${DOCTOR} Example visit `,
+			`58 null ${DOCTOR} Example plan `,
 		],
+		"the sender comes from any row of the email",
 	);
-	assert.deepEqual(
-		await rows(
+	const links = [
+		"40 30 null 2024-02-01 00:00:00+00",
+		"40 null 10 2024-02-01 00:00:00+00",
+		"40 null 11 2024-02-01 00:00:00+00",
+		"43 30 null 2024-02-01 00:00:00+00",
+		"43 null 11 2024-02-01 00:00:00+00",
+		"46 30 null 2024-02-01 00:00:00+00",
+		"54 30 null 2024-02-01 00:00:00+00",
+		"54 null 10 2024-02-01 00:00:00+00",
+		"57 null 10 2024-02-01 00:00:00+00",
+		"58 30 null 2024-02-01 00:00:00+00",
+		"58 null 11 2024-02-01 00:00:00+00",
+	];
+	const about = () =>
+		lines(
 			"select activity_id, deal_id, party_id, created_at::text from activity_about order by activity_id, deal_id, party_id",
-		),
-		[
-			[id(40), id(30), null, "2024-02-01 00:00:00+00"],
-			[id(40), null, id(10), "2024-02-01 00:00:00+00"],
-			[id(40), null, id(11), "2024-02-01 00:00:00+00"],
-			[id(43), id(30), null, "2024-02-01 00:00:00+00"],
-			[id(43), null, id(11), "2024-02-01 00:00:00+00"],
-			[id(46), id(30), null, "2024-02-01 00:00:00+00"],
-		],
+		);
+	assert.deepEqual(
+		await about(),
+		links,
+		"a mailbox that deleted its copy files nothing",
 	);
 	assert.deepEqual(
 		report.map(
@@ -176,9 +186,27 @@ test("stores each email once with all its records, its full text and its Message
 			`50 lead_id ${id(25)} lead_not_copied`,
 			`51 activity ${id(51)} full_text_without_its_email`,
 			"53 kind call mail_note_has_no_place",
+			"56 email_context deleted email_not_live",
 		],
 	);
 	const before = await everything();
 	assert.deepEqual(await run(), report, "a rerun lists the same corrections");
 	assert.deepEqual(await everything(), before, "a rerun changes no row");
+
+	await db.query(
+		`begin; select set_config('engine.job', 'old_system', true); ${later.map(insert).join("\n")} commit;`,
+	);
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(
+		await lines(
+			"select (select count(*) from activity) activities, (select count(*) from email) emails",
+		),
+		["6 6"],
+		"a row filed since never copies its email twice",
+	);
+	assert.deepEqual(
+		await about(),
+		links.toSpliced(4, 0, "43 null 10 2024-02-01 00:00:00+00"),
+		"it adds that row's record",
+	);
 });
