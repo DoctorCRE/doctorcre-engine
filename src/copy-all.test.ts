@@ -43,6 +43,7 @@ const order: [file: string, input?: string][] = [
 	["copy-critical-dates.sql"],
 	["copy-deal-files.sql"],
 	["copy-deal-file-text.sql"],
+	["copy-client-files.sql"],
 	[
 		"copy-commissions.sql",
 		`insert into commission_tier (user_id, from_deal, partner_user_id, closing_share)
@@ -143,6 +144,7 @@ insert into public.building_ownership (id, building_id, party_id, kind, source, 
 insert into public.premises (id, deal_id, label, created_by) values ('${id(43)}', '${id(30)}', 'Example suite', '${id(1)}');
 insert into public.premises_space values ('${id(43)}', '${id(41)}');
 insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by) values
+ ('${id(53)}', 'client', '${id(20)}', 'client/53.pdf', 'Example client file.pdf', 'application/pdf', '${"5".repeat(64)}', 1000, '${id(1)}'),
  ('${id(50)}', 'deal', '${id(30)}', 'leases/50.pdf', 'Example lease.pdf', 'application/pdf', '${"5".repeat(64)}', 1000, '${id(1)}');
 insert into public.lease (id, deal_id, client_id, premises_id, doc_attachment, expiration_on, created_by, created_at, updated_at) values
  ('${id(51)}', '${id(30)}', '${id(20)}', '${id(43)}', '${id(50)}', '2030-01-31', '${id(1)}', '2025-01-01', '2025-03-01');
@@ -296,7 +298,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
- lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
+ lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
@@ -326,6 +328,10 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 		await rows("select invoiced_on::text from commission_payment"),
 		[{ invoiced_on: "2025-03-01" }],
 		"the invoice email dated the payment today's row leaves undated",
+	);
+	assert.deepEqual(
+		await rows("select party_id, document_id from party_document"),
+		[{ party_id: id(10), document_id: id(53) }],
 	);
 	assert.deepEqual(first, corrections);
 });
