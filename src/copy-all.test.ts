@@ -293,7 +293,6 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 3 };
 // biome-ignore format: one row per correction
 const corrections = [
- ["copy-parties.sql", id(10), "org_id", id(16), "a national account has no place in the new database yet"],
  ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
  ["copy-markets.sql", id(22), "membership_details", '{"market": "example-bay", "source": "Example review", "office_presence": true, "service_coverage": null}', "no_typed_destination"],

@@ -246,7 +246,8 @@ where p.kind = 'person' and v.slug <> ''
 -- A person's company and their title there, the survivor's own first, at the record the company became.
 create temp table typed_company on commit drop as
 select s.id as old_id, s.record_id as person_id, s.copy_values, s.org_id, s.title as typed_title, p.kind, map.party_id as company_id,
-	company.kind as company_kind, nullif(regexp_replace(s.title, '^\s+|\s+$', '', 'g'), '') as title, s.rank
+	company.kind as company_kind, nullif(regexp_replace(s.title, '^\s+|\s+$', '', 'g'), '') as title, s.rank,
+	s.kind = 'org' and exists (select from public.client c where c.party_id = s.id and c.merged_into is null) as brand_client
 from chain s
 join party p on p.id = s.record_id
 left join outside_id map on map.source = 'old_system' and map.value = s.org_id::text
@@ -261,11 +262,12 @@ order by v.person_id, v.company_id, v.title is null, v.rank;
 
 insert into not_copied
 select old_id, 'org_id', org_id::text, case
-	-- A company's own company is its national account, which waits for that slice.
-	when kind <> 'person' then 'a national account has no place in the new database yet'
+	when kind <> 'person' then 'company links are only kept as client brands'
 	when company_id is null then 'its company is not copied'
 	else 'not a company' end
-from typed_company where org_id is not null and (kind <> 'person' or company_kind is distinct from 'company');
+from typed_company where org_id is not null and (kind <> 'person' or company_kind is distinct from 'company')
+	-- The brand copy owns a client company's org_id, including corrections when it cannot copy it.
+	and not (kind <> 'person' and brand_client);
 
 insert into not_copied
 select v.old_id, 'org_id', v.org_id::text, 'its record does not hold this company'

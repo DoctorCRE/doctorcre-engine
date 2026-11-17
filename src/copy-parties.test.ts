@@ -231,7 +231,7 @@ test("each value it does not copy is listed, with why", async () => {
 		[id(10), "state", "IL", "no place in the new database"],
 		[id(11), "email", "ask the front desk", "not an email address"],
 		[id(11), "npi", NPI, `also held by ${id(10)}`],
-		[id(11), "org_id", id(11), "a national account has no place in the new database yet"],
+		[id(11), "org_id", id(11), "company links are only kept as client brands"],
 		[id(11), "phone", "555-0100", "not a phone number"],
 		[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
 		[id(11), "specialty", "Dental", "only a person holds a specialty"],
@@ -258,6 +258,38 @@ test("each value it does not copy is listed, with why", async () => {
 		[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
 	]);
 });
+
+for (const client of ["unmerged", "merged", "none"]) {
+	test(`a company parent belongs to the brand copy only with an unmerged client: ${client}`, () =>
+		rolledBack(async () => {
+			const first = await copy(
+				oldParty(80, { kind: "org", org_id: id(11) }) +
+					(client === "none"
+						? ""
+						: `insert into public.client (id, party_id, merged_into, created_by, updated_by)
+						values ('${id(180)}', '${id(80)}', ${client === "merged" ? `'${id(44)}'` : "null"}, '${SYSTEM}', '${SYSTEM}');`),
+			);
+			assert.deepEqual(
+				first?.filter((row) => row[0] === id(80)),
+				client === "unmerged"
+					? []
+					: [
+							[
+								id(80),
+								"org_id",
+								id(11),
+								"company links are only kept as client brands",
+							],
+						],
+			);
+			assert.deepEqual(
+				await rows(`select * from party_company where person_id = '${id(80)}'`),
+				[],
+			);
+			await db.query("discard temp");
+			assert.deepEqual(await copy(), first);
+		}));
+}
 
 test("each row keeps when it was stored, and names the partner who last changed it, or the old system", async () => {
 	const stamp = `distinct created_at::text, changed_by_user_id, changed_by_job, changed_at::text`;
