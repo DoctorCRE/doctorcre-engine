@@ -788,6 +788,14 @@ Run `schema/copy-activity.sql` as the owner after `copy-parties.sql` and `copy-d
 - Listed and not copied: emails, and the notes the mail intake files with an email's full text or its links, even without email context (#365), deal notes of kind next step (#366), and the old kinds `text`, `analysis`, `task`, `loi`, `counter_sent`, `counter_received` and `lease_signed`, which have no kind yet. Listed but copied without the value: what a row says is owed, whether a call connected, and a detail that is a JSON object, which is a job's own record. `source`, `version` and `calendar_event_key` record how today's system captured the row and are dropped.
 - A rerun copies only rows not yet copied, and adds the links of records copied since, so an unchanged rerun changes nothing.
 
+## Copying today's preferences and Home marks
+
+Run `schema/copy-preferences.sql` as the owner after `copy-leads-clients.sql` and the deal next-steps copy (#366), in its own transaction with the new schema on `search_path`. It reads `public` and `ops`, follows "Moving today's rows across" under "Users' preferences and Home marks", and ends by listing in `not_copied` what it did not copy, keyed by the old actor.
+
+- A preference whose actor is not a user, whose zone the database does not know, or whose quiet hours start when they end waits whole, so no zone or quiet hours are invented. Today's row keeps no time, so its user is named at the time of the copy (decision 79).
+- A mark finds its next step by the next action's id, which both next-step copies keep, on the action's deal, or on the person or company its lead, client or vendor became. A step with that id on another record is not the action's copy. Until the deal copy has run, marks on a deal's next actions are listed as `next_step_not_copied`, and a rerun after it adds them. A mark also waits when its actor is not a user, its item is not a next action, the one it waits on was not copied, or its reason is blank. A mark is its user's, from its earliest to its latest change today.
+- A user's copied preferences and marks are never changed again, so an unchanged rerun changes nothing and a corrected row arrives on the next run.
+
 ## Copying today's deal next steps
 
 Run `schema/copy-deal-next-steps.sql` as the owner after the party, deal and activity copies, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`.
