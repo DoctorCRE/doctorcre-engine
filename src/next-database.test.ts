@@ -223,6 +223,11 @@ const newEmail = (activity: string, messageId = `<${activity}@example.com>`) =>
 	`insert into activity (id, kind, happened_at) values ('${activity}', 'email', now());
 	insert into email (activity_id, message_id, sender, subject, body)
 	values ('${activity}', '${messageId}', 'avery@example.com', 'Example', 'Example')`;
+// Only today's mail, copied by the owner, may lack its Message-ID.
+const emailWithoutId = (activity: string, subject: string, imported: boolean) =>
+	`insert into activity (id, kind, happened_at) values ('${activity}', 'email', '2026-03-01');
+	insert into email (activity_id, message_id, sender, subject, body${imported ? ", imported" : ""})
+	values ('${activity}', null, 'avery@example.com', '${subject}', 'Example'${imported ? ", true" : ""})`;
 const TERMS = [
 	"rent_per_sf_yr",
 	"nnn_per_sf_yr",
@@ -1363,6 +1368,11 @@ const RULES: Record<string, Case[]> = {
 				notGranted("activity_about"),
 			],
 			[`update email set activity_id = '${CALL}'`, notGranted("email")],
+			[
+				emailWithoutId(id(303), "Example", false),
+				"email_message_id_unless_imported",
+			],
+			[emailWithoutId(id(303), "Example", true), notGranted("email")],
 		],
 	"a next step is about exactly one record": [
 		[
@@ -2218,6 +2228,13 @@ const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
 const OWNER_RULES: Record<string, Case[]> = {
+	"an imported email without its Message-ID is stored once by its sender, sent time and subject":
+		[
+			[
+				`${emailWithoutId(id(303), "Example", true)}; ${emailWithoutId(id(304), " example ", true)}`,
+				"email_without_message_id_once",
+			],
+		],
 	"only a parked deal has a time it was parked, and a user who parked it only with that time":
 		[
 			[
@@ -2544,6 +2561,14 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	email: [
+		"activity_kind",
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"imported",
+	],
 	next_step: [
 		"changed_at",
 		"changed_by_job",

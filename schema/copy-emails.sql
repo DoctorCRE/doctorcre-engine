@@ -30,11 +30,22 @@ from public.activity a left join old_message_id m on m.activity_id = a.id left j
 cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.event_id) s
 where a.kind in ('email_in', 'email_out');
 
--- One email per Message-ID; a rerun keeps the row it copied, so a row filed since never starts a second copy.
+-- Without its Message-ID, a row matches by sender, the exact sent time and subject (owner ruling 2026-11-17).
+-- The subject ignores case and outer spaces, as today's intake does when it tells two emails apart.
+alter table old_email add match_key jsonb;
+update old_email set match_key = jsonb_build_array(sender, occurred_at, lower(btrim(subject))) where sender is not null;
+-- A row without one joins the email whose Message-ID its match finds, if it finds only one.
+update old_email o set message_id = k.message_id
+from (select match_key, min(message_id) as message_id from old_email where message_id is not null
+ group by match_key having count(distinct message_id) = 1) k
+where o.message_id is null and o.match_key = k.match_key;
+
+-- One email per Message-ID, else per match; a rerun keeps the row it copied, so a row filed since never starts a second copy.
 create temp table email_group on commit drop as
-select o.*, first_value(o.id) over (partition by o.message_id
+select o.*, first_value(o.id) over (partition by coalesce(to_jsonb(o.message_id), o.match_key)
   order by o.id in (select activity_id from email) desc, o.live desc, o.recorded_at, o.id) as email_id
-from old_email o where o.message_id is not null;
+from old_email o where o.message_id is not null
+ or o.match_key is not null and not exists (select from old_email k where k.match_key = o.match_key and k.message_id is not null);
 
 -- The intake files a preview first, then the full text as a note naming it; older notes match by time and subject.
 create temp table full_text on commit drop as
@@ -62,7 +73,9 @@ cross join lateral (values
  ('sender', g.sender, 'sender_unknown', g.id = e.id and e.email_sender is null),
  ('activity', g.id::text, 'about_nothing_copied', g.id = e.id and e.live_somewhere and not e.is_about)
 ) f(field, value, reason, listed) where f.listed;
-insert into not_copied select id, 'message_id', null, 'email_without_message_id' from old_email where message_id is null;
+insert into not_copied select id, case when match_key is null then 'sender' else 'message_id' end, null,
+ case when match_key is null then 'no_message_id_or_sender' else 'matches_several_message_ids' end
+from old_email where id not in (select id from email_group);
 insert into not_copied select l.id, l.field, l.value::text, replace(l.field, '_id', '') || '_not_copied'
 from old_link l join email_group g using (id) where g.live and l.deal_id is null and l.party_id is null;
 insert into not_copied select id, 'activity', id::text, 'full_text_without_its_email' from full_text where cardinality(emails) <> 1;
@@ -74,9 +87,11 @@ select * from mapped_email where email_sender is not null and live_somewhere and
 insert into activity (id, kind, happened_at, summary, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, 'email', occurred_at, summary, changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from ready_email on conflict (id) do nothing;
-insert into email (activity_id, message_id, sender, subject, body, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select id, message_id, email_sender::email_address, subject, body, changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
-from ready_email on conflict (activity_id) do nothing;
+insert into email (activity_id, message_id, sender, subject, body, imported, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+select id, message_id, email_sender::email_address, subject, body, true, changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
+from ready_email
+-- A row filed since can bring the Message-ID an email copied without one lacked.
+on conflict (activity_id) do update set message_id = excluded.message_id where email.message_id is null and excluded.message_id is not null;
 -- Each live row filed it to its records; links are retried, so a record copied since then gains its link.
 insert into activity_about (activity_id, deal_id, party_id, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (g.email_id, l.deal_id, l.party_id) g.email_id, l.deal_id, l.party_id, g.recorded_at,
