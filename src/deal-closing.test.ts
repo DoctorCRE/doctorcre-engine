@@ -132,7 +132,14 @@ test("closing saves preserve field order, nulls, raw values, events and replay",
 
 test("crossed edits rebase disjoint fields and refuse the same field without writing", () =>
 	withDeal(async (url, db) => {
-		await db.query("update deal set city='Example City' where id=$1", [D]);
+		await db.query(
+			"update deal set city='Example City',created_at='2020-01-01T00:00:00.123456Z' where id=$1",
+			[D],
+		);
+		await db.query(
+			"insert into event (actor_id,verb,subject_type,subject_id,field,cause,occurred_at,recorded_at) values ($1,'new-deal','deal',$2,'created','automation_job',now(),'2020-01-01T00:00:00.123456Z')",
+			[B, D],
+		);
 		await db.query(
 			"insert into event (actor_id,verb,subject_type,subject_id,field,new_value,cause,occurred_at,recorded_at) values ($1,'update-deal','deal',$2,'city','{\"city\":\"Example City\"}','automation_job',now(),clock_timestamp())",
 			[B, D],
@@ -179,7 +186,7 @@ test("crossed edits rebase disjoint fields and refuse the same field without wri
 		});
 		assert.equal(
 			(await db.query("select count(*) from event")).rows[0].count,
-			"2",
+			"3",
 		);
 	}));
 

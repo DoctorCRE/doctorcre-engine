@@ -104,6 +104,7 @@ async function versionGuard(
 		.forUpdate()
 		.executeTakeFirstOrThrow();
 	if (current.version === Number(base)) return {};
+	// The old driver bound creation time as a millisecond-precision Date.
 	const events = await tx
 		.selectFrom("event as e")
 		.innerJoin("actor as a", "a.id", "e.actor_id")
@@ -114,7 +115,7 @@ async function versionGuard(
 			),
 		)
 		.where("e.subject_id", "=", deal_id)
-		.where("e.recorded_at", ">", current.created_at)
+		.where("e.recorded_at", ">", new Date(current.created_at).toISOString())
 		.orderBy("e.recorded_at", "desc")
 		.limit(5)
 		.execute();
