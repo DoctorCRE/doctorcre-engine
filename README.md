@@ -126,8 +126,12 @@ passes a `Transaction<DB>` from `src/next-database.d.ts` to `run`. It pins
 `search_path` to `next, pg_temp` and the time zone to UTC. Reads use a repeatable-read,
 read-only snapshot under `engine_reader`. Saves use a read-committed transaction
 under `engine`, with the existing column grants. The supplied SQL-created login
-must belong to the selected role and have no other grants. No application route
-uses this entry point yet. Row 12 adds save stamps, retries and edit checks.
+must belong to the selected role. The reader's has no other grants; the writer's,
+`engine_business_writer`, keeps its old-table grants until the switch revokes them
+(decision 100). No application route uses this entry point yet. `runNextSave` in
+`src/next-save.ts` runs a save stamped with its partner or job, replays a retried
+save's answer, and `changeDeal` refuses a crossed deal edit and answers `rebased`
+over an unseen change to another field.
 The health probe appends `next_section_readable` after its existing fields.
 
 Each check also loads `schema/next.sql` into `next` in a copy of that restore and

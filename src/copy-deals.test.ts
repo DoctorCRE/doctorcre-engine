@@ -375,6 +375,7 @@ test("unmappable links and phase history are listed instead of lost", async () =
 			"existing_phase_conflict",
 			"current_phase_differs",
 			"lost_without_dated_reason",
+			"deal_has_another_client",
 		])
 			assert.ok(
 				refused.some((r) => r.reason === reason),
@@ -394,7 +395,7 @@ test("unmappable links and phase history are listed instead of lost", async () =
 					`select count(*)::int as n from deal_party where deal_id = '${id(10)}' and party_id = '${id(5)}'`,
 				)
 			)[0]?.n,
-			2,
+			1,
 		);
 		assert.deepEqual(
 			await rows(
@@ -453,15 +454,15 @@ test("shared attribution carries agent and mail sponsorship onto deals, clients 
 	}
 });
 
-test("a client without its required role is listed", async () => {
+test("a client without its required role is listed once", async () => {
 	await db.query("begin");
 	try {
 		await db.query(
 			`update public.client set party_id = '${id(4)}' where id = '${id(3)}'`,
 		);
-		assert.ok(
-			(await run()).some((row) => row.reason === "client_role_not_available"),
-		);
+		const reasons = (await run()).map((row) => row.reason);
+		assert.ok(reasons.includes("client_role_not_available"));
+		assert.ok(!reasons.includes("deal_has_another_client"));
 	} finally {
 		await db.query("rollback");
 	}

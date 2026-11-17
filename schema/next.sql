@@ -555,6 +555,8 @@ create constraint trigger lead_or_client_how_found after update of how_found on 
 alter table deal_party add client_role text generated always as (case when role = 'client' then role end) stored,
 	add constraint deal_party_client_is_a_client foreign key (party_id, client_role) references party_role
 		deferrable initially deferred;
+-- A deal is for one client, the business; its people are that client's contacts (owner, #594).
+alter table deal_party add constraint deal_party_one_client unique (deal_id, client_role);
 
 -- Earlier people and deal owners, as the old system recorded them. A native removal or handoff is change history instead.
 -- An unknown start reaches back without limit, so two of them for one person, role and deal overlap and are refused.
@@ -2275,8 +2277,6 @@ begin
 		or d.company_id = duplicate and s.company_id = survivor and s.person_id = d.person_id);
 	update offer o set from_party_id = survivor from deal_party s
 	where o.from_party_id = duplicate and s.deal_id = o.deal_id and s.party_id = survivor and s.role = o.from_role;
-	update lease l set party_id = survivor from deal_party s
-	where l.party_id = duplicate and s.deal_id = l.deal_id and s.party_id = survivor and s.role = 'client';
 	delete from deal_party d using deal_party s
 	where d.party_id = duplicate and s.party_id = survivor and s.deal_id = d.deal_id and s.role = d.role;
 	update deal_party set party_id = survivor where party_id = duplicate;
@@ -2543,6 +2543,16 @@ create table imported_change (
 create index imported_change_record on imported_change (table_name, record);
 create trigger stamp_imported_change before insert on imported_change
  for each row execute function stamp_change();
+
+-- A save's answer under its key, so a retry gets the same answer instead of saving twice.
+-- The hash covers who saved and what, so a key reused for another save is refused.
+create table save_receipt (
+	idempotency_key uuid primary key,
+	created_at timestamptz not null default now(),
+	verb text not null,
+	request_hash text not null,
+	answer jsonb not null check (jsonb_typeof(answer) = 'object')
+);
 
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable
