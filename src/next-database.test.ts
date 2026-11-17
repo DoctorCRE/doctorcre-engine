@@ -39,6 +39,7 @@ const TEAMMATE = id(21);
 const LEAD = id(660);
 
 const SEED = `
+insert into document_kind values ('loi', 'LOI'), ('lease', 'Lease'), ('amendment', 'Amendment'), ('invoice', 'Invoice'), ('other', 'Other');
 insert into role (slug, label, category_of) values
 	('client', 'Client', null), ('lead', 'Lead', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
 	('lender', 'Lender', 'vendor'), ('title', 'Title', 'vendor');
@@ -66,7 +67,7 @@ insert into phase (slug, label) values ('negotiation', 'Negotiating'), ('legal',
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
 insert into deal_kind values ('lease', 'Lease'), ('purchase', 'Purchase');
-insert into deal_reason values ('start_up', 'Start-up'), ('relocation', 'Relocation');
+insert into deal_reason values ('start_up', 'Start-up'), ('relocation', 'Relocation'), ('renewal', 'Renewal');
 insert into deal (id, name, kind, reason, owner_user_id) values
 	('${DEAL}', 'Example Dental Springfield Deal', 'lease', 'relocation', '${USER}'),
 	('${LENDER_DEAL}', 'Example Loan Deal', null, null, '${TEAMMATE}');
@@ -150,7 +151,15 @@ const rounds = ROUNDS.map(
 				id: id(200 + i),
 				name: `LOI round ${i + 1}.pdf`,
 				r2_key: `example/loi-${i + 1}.pdf`,
+				r2_bucket: "post_media",
 				content_type: null,
+				deal_id: null,
+				kind: null,
+				version: 1,
+				supersedes_id: null,
+				previous_version: null,
+				sha256: null,
+				bytes: null,
 				// The counter arrived as an attachment to the agent's email.
 				email_activity_id: i === 1 ? EMAIL : null,
 			},
@@ -454,10 +463,13 @@ const STAMPED = [
 	"activity_about",
 	"next_step",
 	"document",
+	"document_extraction",
+	"document_kind",
 	"email",
 	"offer",
 	"offer_document",
 	"lease",
+	"lease_version",
 	"lease_option",
 	"critical_date",
 	"social_account",
@@ -518,6 +530,7 @@ const STORED_AT = [
 	"offer_document",
 	"next_step",
 	"document",
+	"document_extraction",
 	"social_account",
 	"idea",
 	"design_template",
@@ -537,22 +550,27 @@ const SCHEMA = await readFile(
 
 type Case = [sql: string, refusal: Refusal];
 const LEASE = id(700);
-const newLease = (row: Record<string, string | number | null> = {}) =>
-	insert("lease", {
-		id: LEASE,
-		deal_id: DEAL,
-		property_id: PROPERTY,
-		version: 1,
-		offer_id: id(102),
-		document_id: PDF_FILE,
-		executed_on: "2026-04-01",
-		commencement_on: "2026-07-01",
-		expiration_on: "2033-06-30",
-		...row,
-	});
+const LEASE_RECORD = id(720);
+const newLease = (row: Record<string, string | number | null> = {}) => {
+	const { deal_id = DEAL, property_id = PROPERTY, ...version } = row;
+	const record =
+		property_id === PROPERTY && deal_id === DEAL ? LEASE_RECORD : id(721);
+	return `${insert("lease", { id: record, deal_id, property_id, party_id: CLIENT })} on conflict (id) do nothing;
+		${insert("lease_version", {
+			id: LEASE,
+			lease_id: record,
+			version: 1,
+			offer_id: id(102),
+			document_id: PDF_FILE,
+			executed_on: "2026-04-01",
+			commencement_on: "2026-07-01",
+			expiration_on: "2033-06-30",
+			...version,
+		})}`;
+};
 const newOption = (row: Record<string, string | number | null> = {}) =>
 	insert("lease_option", {
-		lease_id: LEASE,
+		lease_version_id: LEASE,
 		number: 1,
 		kind: "renewal",
 		notice_on: "2032-12-31",
@@ -582,6 +600,68 @@ const newLeadMove = (row: Record<string, string | null> = {}) =>
 		...row,
 	});
 const RULES: Record<string, Case[]> = {
+	"tours use meetings rather than a separate activity kind": [
+		[
+			insert("activity", { kind: "tour", happened_at: "2026-04-02T15:00:00Z" }),
+			"activity_kind_check",
+		],
+	],
+	"outside leases and renewal deals keep checked identities": [
+		[
+			`${newLease()}; ${insert("lease", { id: id(722), party_id: CLIENT, property_id: PROPERTY, deal_id: DEAL })}`,
+			"lease_deal_id_key",
+		],
+		[
+			`${newLease()}; update deal set reason = 'renewal', renews_lease_id = '${LEASE_RECORD}' where id = '${DEAL}'`,
+			"deal_renews_another_lease",
+		],
+		[
+			newLease({ lease_id: MISSING, offer_id: null }),
+			"lease_version_lease_id_fkey",
+		],
+		[
+			`${newLease()}; ${insert("deal", { name: "Example Incorrect Reason", owner_user_id: USER, reason: "start_up", renews_lease_id: LEASE_RECORD })}`,
+			"deal_renewal_names_lease",
+		],
+		[
+			insert("lease", {
+				party_id: CLIENT,
+				property_id: PROPERTY,
+				client_role: "vendor",
+			}),
+			"lease_client_role_check",
+		],
+		[
+			insert("lease", { party_id: MISSING, property_id: PROPERTY }),
+			"lease_party_id_fkey",
+		],
+		[
+			insert("lease", { party_id: CLIENT, property_id: MISSING }),
+			"lease_property_id_fkey",
+		],
+		[newLease({ deal_id: null }), "lease_from_accepted_offer"],
+		[
+			insert("lease", {
+				party_id: AGENT,
+				property_id: PROPERTY,
+				deal_id: DEAL,
+			}),
+			"lease_deal_id_party_id_client_role_fkey",
+		],
+		["update lease set party_id = null", notGranted("lease")],
+		["delete from lease", notGranted("lease")],
+		["truncate lease", notGranted("lease")],
+		["update deal set reason = 'renewal'", "deal_renewal_names_lease"],
+		[
+			insert("deal", {
+				name: "Example Renewal",
+				owner_user_id: USER,
+				reason: "renewal",
+				renews_lease_id: MISSING,
+			}),
+			"deal_renews_lease_id_fkey",
+		],
+	],
 	"critical dates start proposed and only a user confirms or resolves them": [
 		[newCriticalDate({ status: "open" }), "critical_date_starts_proposed"],
 		[
@@ -596,12 +676,12 @@ const RULES: Record<string, Case[]> = {
 		],
 		[newCriticalDate({ option_number: "1" }), "critical_date_option_on_lease"],
 		[
-			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, deal_id: LENDER_DEAL })}`,
-			"critical_date_lease_id_deal_id_fkey",
+			`${newLease()}; ${newCriticalDate({ lease_version_id: LEASE, deal_id: LENDER_DEAL })}`,
+			"critical_date_lease_on_deal",
 		],
 		[
-			`${newLease()}; ${newCriticalDate({ lease_id: LEASE, option_number: "1" })}`,
-			"critical_date_lease_id_option_number_fkey",
+			`${newLease()}; ${newCriticalDate({ lease_version_id: LEASE, option_number: "1" })}`,
+			"critical_date_lease_version_id_option_number_fkey",
 		],
 		[
 			`${newCriticalDate()}; update critical_date set status = 'open'; ${asJob("agent", USER)}; update critical_date set status = 'done', resolution_reason = 'Example completed'`,
@@ -640,30 +720,30 @@ const RULES: Record<string, Case[]> = {
 		["delete from critical_date", notGranted("critical_date")],
 	],
 	"leases preserve sourced terms and a consecutive history on their deal": [
-		[newLease({ version: 0 }), "lease_version_check"],
-		[newLease({ version: 2 }), "lease_deal_id_previous_version_fkey"],
+		[newLease({ version: 0 }), "lease_version_version_check"],
+		[newLease({ version: 2 }), "lease_version_lease_id_previous_version_fkey"],
 		[
 			newLease({ property_id: ELSEWHERE, offer_id: null }),
 			"lease_deal_id_property_id_fkey",
 		],
-		[newLease({ document_id: MISSING }), "lease_document_id_fkey"],
+		[newLease({ document_id: MISSING }), "lease_version_document_id_fkey"],
 		[
 			newLease({ document_id: null }),
 			{
 				code: "23502",
 				message:
-					'null value in column "document_id" of relation "lease" violates not-null constraint',
+					'null value in column "document_id" of relation "lease_version" violates not-null constraint',
 			},
 		],
 		[newLease({ offer_id: id(100) }), "lease_from_accepted_offer"],
 		[
-			`${newLease()}; insert into deal_property values ('${DEAL}', '${ELSEWHERE}');
-			${newLease({ id: id(701), version: 2, property_id: ELSEWHERE })}`,
-			"lease_offer_id_deal_id_property_id_fkey",
+			`insert into deal_property values ('${DEAL}', '${ELSEWHERE}');
+			${newLease({ property_id: ELSEWHERE })}`,
+			"lease_from_accepted_offer",
 		],
 		[
 			`${newLease()}; ${newLease({ id: id(701) })}`,
-			"lease_deal_id_version_key",
+			"lease_version_lease_id_version_key",
 		],
 		...[
 			"rent_per_sf_yr",
@@ -672,24 +752,32 @@ const RULES: Record<string, Case[]> = {
 			"free_rent_months",
 			"escalation_pct",
 			"rent_days_after_delivery",
-		].map((field): Case => [newLease({ [field]: -1 }), `lease_${field}_check`]),
-		[newLease({ term_months: 0 }), "lease_term_months_check"],
+		].map(
+			(field): Case => [
+				newLease({ [field]: -1 }),
+				`lease_version_${field}_check`,
+			],
+		),
+		[newLease({ term_months: 0 }), "lease_version_term_months_check"],
 		[newLease({ expiration_on: "2026-07-01" }), "lease_dates_in_order"],
 		[newLease({ executed_on: "2034-01-01" }), "lease_dates_in_order"],
 		[
 			newLease({ rent_starts_on: "2026-07-01", rent_days_after_delivery: 30 }),
 			"lease_rent_date_or_days",
 		],
-		[newLease({ expense_structure: " " }), "lease_expense_structure_check"],
+		[
+			newLease({ expense_structure: " " }),
+			"lease_version_expense_structure_check",
+		],
 		...[
-			"update lease set version = 2",
-			"delete from lease",
-			"truncate lease",
-		].map((sql): Case => [sql, notGranted("lease")]),
+			"update lease_version set version = 2",
+			"delete from lease_version",
+			"truncate lease_version",
+		].map((sql): Case => [sql, notGranted("lease_version")]),
 	],
 	"lease options have a kind, exact notice deadline and terms, and remain history":
 		[
-			[newOption(), "lease_option_lease_id_fkey"],
+			[newOption(), "lease_option_lease_version_id_fkey"],
 			[
 				`${newLease()}; ${newOption({ notice_on: "2040-01-01" })}`,
 				"lease_option_before_expiration",
@@ -1049,6 +1137,10 @@ const RULES: Record<string, Case[]> = {
 	],
 	"an activity is an email, call, meeting or note, and each about link names one record once":
 		[
+			[
+				insert("activity_about", { activity_id: CALL, property_id: MISSING }),
+				"activity_about_property_id_fkey",
+			],
 			[
 				"insert into activity (kind, happened_at) values ('fax', now())",
 				"activity_kind_check",
@@ -1773,6 +1865,12 @@ const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
 const OWNER_RULES: Record<string, Case[]> = {
+	"a renewal is separate from the deal that negotiated its source lease": [
+		[
+			`${newLease()}; update deal set reason = 'renewal', renews_lease_id = '${LEASE_RECORD}' where id = '${DEAL}'`,
+			"deal_renews_another_lease",
+		],
+	],
 	"historical critical date loads still require a whole confirmation": [
 		[
 			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ confirmed_by_user_id: USER })}`,
@@ -1915,13 +2013,15 @@ const CHANGEABLE: Record<string, string[]> = {
 		"parking_note",
 		"parking_reason",
 		"reason",
+		"renews_lease_id",
 	],
 	party_company: ["ended_on", "started_on", "title"],
 	party_email: ["is_primary", "label"],
 	party_phone: ["is_primary", "label"],
 	activity: ["from_party_id", "happened_at", "summary"],
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
-	document: ["name"],
+	document: ["bytes", "content_type", "deal_id", "kind", "name", "sha256"],
+	document_kind: ["label"],
 	offer: ["status"],
 	critical_date: ["resolution_reason", "status"],
 	social_account: ["handle", "platform_account_id"],
@@ -1941,7 +2041,13 @@ const DEFAULTED: Record<string, string[]> = {
 };
 const REMOVABLE = [
 	...STORED_AT.filter(
-		(table) => !["offer_document", "post_media"].includes(table),
+		(table) =>
+			![
+				"offer_document",
+				"post_media",
+				"document",
+				"document_extraction",
+			].includes(table),
 	),
 	"activity",
 	"email",
@@ -2053,6 +2159,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			kind: "lease",
 			reason: "relocation",
 			owner_user_id: USER,
+			renews_lease_id: null,
 			market_id: BAY,
 			closed_value: null,
 			parking_reason: null,
@@ -2296,6 +2403,7 @@ test("each insert, update and delete leaves history: the record, its fields from
 					owner_user_id: USER,
 					market_id: null,
 					closed_value: null,
+					renews_lease_id: null,
 					parking_reason: null,
 					parking_note: null,
 					needs_attention: false,
@@ -3922,14 +4030,17 @@ test("a lease amendment preserves earlier terms and options while the ending lis
 		);
 		assert.deepEqual(rows, [{ version: 2, expiration_on: "2034-06-30" }]);
 		assert.equal(
-			(await db.query(`select count(*) from lease where deal_id = '${DEAL}'`))
-				.rows[0].count,
+			(
+				await db.query(
+					`select count(*) from lease_version where lease_id = '${LEASE_RECORD}'`,
+				)
+			).rows[0].count,
 			"2",
 		);
 		assert.equal(
 			(
 				await db.query(
-					`select count(*) from lease_option where lease_id = '${LEASE}'`,
+					`select count(*) from lease_option where lease_version_id = '${LEASE}'`,
 				)
 			).rows[0].count,
 			"3",
@@ -3937,7 +4048,7 @@ test("a lease amendment preserves earlier terms and options while the ending lis
 		assert.equal(
 			(
 				await db.query(
-					`select changed_by_user_id from lease where id = '${LEASE}'`,
+					`select changed_by_user_id from lease_version where id = '${LEASE}'`,
 				)
 			).rows[0].changed_by_user_id,
 			USER,
@@ -3945,7 +4056,7 @@ test("a lease amendment preserves earlier terms and options while the ending lis
 		assert.equal(
 			(
 				await db.query(
-					"select count(*) from change where table_name in ('lease', 'lease_option')",
+					"select count(*) from change where table_name in ('lease_version', 'lease_option')",
 				)
 			).rows[0].count,
 			"5",
@@ -3977,7 +4088,8 @@ test("sourced options can be extracted later for a historical lease version", as
 			`${newLease()}; ${newLease({ id: id(701), version: 2, offer_id: null })}; ${newOption()}`,
 		);
 		assert.equal(
-			(await db.query(`select lease_id from lease_option`)).rows[0].lease_id,
+			(await db.query(`select lease_version_id from lease_option`)).rows[0]
+				.lease_version_id,
 			LEASE,
 		);
 	});
@@ -4345,3 +4457,366 @@ test("a merge collapses matching suggestions and keeps the removed proposal in h
 		);
 		assert.equal(pendingSteps1[0].count, "1");
 	}));
+
+const DEAL_FILE = id(8000);
+const dealFile = (row: Record<string, string | number | null> = {}) =>
+	insert("document", {
+		id: DEAL_FILE,
+		name: "Example lease.pdf",
+		r2_key: "example/deal-file-v1",
+		content_type: "application/pdf",
+		deal_id: DEAL,
+		kind: "lease",
+		sha256: "a".repeat(64),
+		bytes: 1024,
+		...row,
+	});
+const extraction = (row: Record<string, string | number | null> = {}) =>
+	insert("document_extraction", {
+		document_id: DEAL_FILE,
+		deal_id: DEAL,
+		extracted_at: "2026-04-01T12:00:00Z",
+		method: "text_layer",
+		extractor_version: "example.v1",
+		text_format_version: "page-text.v1",
+		status: "produced",
+		pages: '{"Example first page","Example second page"}',
+		receipt: '{"canonical":false}',
+		...row,
+	});
+
+// biome-ignore format: one row per refusal
+const FILE_REFUSALS = [
+	["unfiled kind", dealFile({ deal_id: null }), "document_deal_file_whole"],
+	[ "unfiled successor", dealFile({ deal_id: null, kind: null, version: 2, supersedes_id: id(200) }), "document_deal_file_whole", ],
+	[ "receipt-only pages", `${dealFile()}; ${extraction({ status: "receipt_only", pages: '{" "}' })}`, "document_extraction_status_matches_text", ],
+	[ "multidimensional pages", `${dealFile()}; ${extraction({ pages: '{{"Example"}}' })}`, "document_extraction_pages", ],
+	["missing deal", dealFile({ deal_id: MISSING }), "document_deal_id_fkey"],
+	["missing kind", dealFile({ kind: null }), "document_deal_file_whole"],
+	["blank kind", dealFile({ kind: " " }), "document_kind_fkey"],
+	["missing hash", dealFile({ sha256: null }), "document_deal_file_whole"],
+	["invalid hash", dealFile({ sha256: "invalid" }), "document_sha256_check"],
+	["missing size", dealFile({ bytes: null }), "document_deal_file_whole"],
+	["empty file", dealFile({ bytes: 0 }), "document_bytes_check"],
+	[ "missing type", dealFile({ content_type: null }), "document_deal_file_whole", ],
+	["blank type", dealFile({ content_type: " " }), "document_deal_file_whole"],
+	["blank key", dealFile({ r2_key: " " }), "document_r2_key_check"],
+	["zero version", dealFile({ version: 0 }), "document_version_check"],
+	[ "missing predecessor", dealFile({ version: 2 }), "document_version_has_predecessor", ],
+	[ "orphan predecessor", dealFile({ version: 2, supersedes_id: MISSING }), "document_previous_version", ],
+	[ "skipped version", `${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v3", version: 3, supersedes_id: DEAL_FILE })}`, "document_previous_version", ],
+	[ "other deal predecessor", `${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v2", version: 2, supersedes_id: DEAL_FILE, deal_id: LENDER_DEAL })}`, "document_previous_version", ],
+	[ "other kind predecessor", `${dealFile()}; ${dealFile({ id: id(8001), r2_key: "example/v2", version: 2, supersedes_id: DEAL_FILE, kind: "loi" })}`, "document_previous_version", ],
+	[ "reused key", `${dealFile()}; ${dealFile({ id: id(8001) })}`, "document_r2_bucket_r2_key_key", ],
+	[ "unattached extraction", extraction(), "document_extraction_document_id_deal_id_fkey", ],
+	[ "other deal extraction", `${dealFile()}; ${extraction({ deal_id: LENDER_DEAL })}`, "document_extraction_document_id_deal_id_fkey", ],
+	[ "blank method", `${dealFile()}; ${extraction({ method: " " })}`, "document_extraction_method_check", ],
+	[ "blank extractor", `${dealFile()}; ${extraction({ extractor_version: " " })}`, "document_extraction_extractor_version_check", ],
+	[ "blank model", `${dealFile()}; ${extraction({ model: " " })}`, "document_extraction_model_check", ],
+	[ "blank text format", `${dealFile()}; ${extraction({ text_format_version: " " })}`, "document_extraction_text_format_version_check", ],
+	[ "unknown status", `${dealFile()}; ${extraction({ status: "waiting" })}`, "document_extraction_status_check", ],
+	[ "produced without text", `${dealFile()}; ${extraction({ pages: "{}" })}`, "document_extraction_status_matches_text", ],
+	[ "no text with text", `${dealFile()}; ${extraction({ status: "no_text" })}`, "document_extraction_status_matches_text", ],
+	[ "unavailable with pages", `${dealFile()}; ${extraction({ status: "unavailable", pages: '{" "}' })}`, "document_extraction_status_matches_text", ],
+	[ "null page", `${dealFile()}; ${extraction({ pages: "{NULL}" })}`, "document_extraction_pages", ],
+	[ "invalid receipt", `${dealFile()}; ${extraction({ receipt: "[]" })}`, "document_extraction_receipt_check", ],
+] satisfies [string, string, string][];
+for (const [label, sql, refusal] of FILE_REFUSALS) {
+	test(`deal files refuse ${label}`, () =>
+		rolledBack(() => assert.rejects(db.query(sql), { constraint: refusal })));
+}
+
+test("deal file versions retain their bytes, ordered text and extraction evidence", () =>
+	rolledBack(async () => {
+		await db.query(`${dealFile()}; ${extraction()};
+			${dealFile({ id: id(8001), r2_key: "example/deal-file-v2", version: 2, supersedes_id: DEAL_FILE })};
+			${extraction({ document_id: id(8001), status: "no_text", pages: "{}" })};
+			${extraction({ method: "ocr", model: "example-model", status: "unavailable", pages: "{}" })}`);
+		const { rows } = await db.query(
+			`select d.version, d.r2_key, d.sha256, d.bytes, e.pages, e.status,
+			e.extracted_at::text, e.method, e.extractor_version, e.receipt, e.changed_by_user_id
+			from document d join document_extraction e on e.document_id = d.id
+			where d.deal_id = $1 order by d.version, e.method desc`,
+			[DEAL],
+		);
+		assert.equal(rows.length, 3);
+		assert.deepEqual(
+			rows.map((r) => [r.version, r.status, r.pages]),
+			[
+				[1, "produced", ["Example first page", "Example second page"]],
+				[1, "unavailable", []],
+				[2, "no_text", []],
+			],
+		);
+		assert.equal(rows[0].r2_key, "example/deal-file-v1");
+		assert.equal(rows[0].sha256, "a".repeat(64));
+		assert.equal(rows[0].bytes, "1024");
+		assert.equal(rows[0].extracted_at, "2026-04-01 12:00:00+00");
+		assert.equal(rows[0].method, "text_layer");
+		assert.equal(rows[0].extractor_version, "example.v1");
+		assert.deepEqual(rows[0].receipt, { canonical: false });
+		assert.equal(rows[0].changed_by_user_id, USER);
+		assert.equal(
+			(
+				await db.query(
+					"select count(*) from change where table_name = 'document_extraction'",
+				)
+			).rows[0].count,
+			"3",
+		);
+	}));
+
+test("the same extraction is stored once even without a model", () =>
+	rolledBack(async () => {
+		await db.query(`${dealFile()}; ${extraction()}`);
+		await assert.rejects(db.query(extraction()), { code: "23505" });
+	}));
+
+test("a fact extraction keeps its successful receipt without pretending it produced page text", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${dealFile()}; ${extraction({ status: "receipt_only", pages: "{}", text_format_version: "fact-receipt.v1" })}`,
+		);
+		assert.deepEqual(
+			(await db.query("select status, pages, receipt from document_extraction"))
+				.rows,
+			[{ status: "receipt_only", pages: [], receipt: { canonical: false } }],
+		);
+	}));
+
+test("receipt-only extraction requires a receipt", () =>
+	rolledBack(async () => {
+		await db.query(dealFile());
+		await assert.rejects(
+			db.query(
+				extraction({ status: "receipt_only", pages: "{}", receipt: null }),
+			),
+			{ constraint: "document_extraction_status_matches_text" },
+		);
+	}));
+
+for (const sql of [
+	"delete from document",
+	"update document set r2_key = 'example/overwrite'",
+	"update document set version = 2",
+	"update document_extraction set pages = '{}'",
+	"delete from document_extraction",
+	"truncate document_extraction",
+]) {
+	test(`file history refuses ${sql}`, () =>
+		rolledBack(() => assert.rejects(db.query(sql), { code: "42501" })));
+}
+
+for (const pages of [
+	"array_fill('Example'::text, array[1001])",
+	"array[repeat('x', 500001)]",
+]) {
+	test(`extraction refuses oversized pages from ${pages}`, () =>
+		rolledBack(async () => {
+			await db.query(`${dealFile()}; ${extraction()}`);
+			await assert.rejects(
+				db.query(
+					extraction({ extractor_version: "example.v2" }).replace(
+						`'{"Example first page","Example second page"}'`,
+						pages,
+					),
+				),
+				{ constraint: "document_extraction_pages" },
+			);
+		}));
+}
+
+test("a file version has one successor and independent files can share its kind", () =>
+	rolledBack(async () => {
+		await db.query(`${dealFile()};
+			${dealFile({ id: id(8001), r2_key: "example/v2", version: 2, supersedes_id: DEAL_FILE })};
+			${dealFile({ id: id(8002), r2_key: "example/independent" })}`);
+		await assert.rejects(
+			db.query(
+				dealFile({
+					id: id(8003),
+					r2_key: "example/fork",
+					version: 2,
+					supersedes_id: DEAL_FILE,
+				}),
+			),
+			{ constraint: "document_supersedes_id_key" },
+		);
+	}));
+
+test("a job's extracted text keeps its own stamp and the user it worked for", () =>
+	rolledBack(async () => {
+		await db.query(`${asJob("agent", USER)}; ${dealFile()}; ${extraction()}`);
+		const { rows } = await db.query(
+			"select changed_by_job, changed_by_user_id, changed_for_user_id from document_extraction",
+		);
+		assert.deepEqual(rows, [
+			{
+				changed_by_job: "agent",
+				changed_by_user_id: null,
+				changed_for_user_id: USER,
+			},
+		]);
+	}));
+
+test("legacy whitespace-only pages keep their no-text status in every locale", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${dealFile()}; ${extraction({ status: "no_text", pages: '{"\u00a0\u0085\u001c\u001d\u001e\u001f"}' })}`,
+		);
+	}));
+
+test("an email attachment is filed once without copying its R2 object", () =>
+	rolledBack(async () => {
+		await db.query(
+			`update document set deal_id = '${DEAL}', kind = 'loi', content_type = 'application/pdf', sha256 = '${"a".repeat(64)}', bytes = 1024 where id = '${id(201)}'`,
+		);
+		const { rows } = await db.query(
+			`select deal_id, kind, r2_key, email_activity_id from document where id = '${id(201)}'`,
+		);
+		assert.deepEqual(rows, [
+			{
+				deal_id: DEAL,
+				kind: "loi",
+				r2_key: "example/loi-2.pdf",
+				email_activity_id: EMAIL,
+			},
+		]);
+		await assert.rejects(
+			db.query(
+				`update document set deal_id = '${LENDER_DEAL}' where id = '${id(201)}'`,
+			),
+			{ constraint: "document_filed_once" },
+		);
+	}));
+
+test("two buckets may use the same key but stored file metadata cannot change", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${dealFile()}; ${dealFile({ id: id(8001), r2_bucket: "deal_documents" })}`,
+		);
+		await assert.rejects(
+			db.query(
+				`update document set sha256 = '${"b".repeat(64)}' where id = '${DEAL_FILE}'`,
+			),
+			{ constraint: "document_filed_once" },
+		);
+	}));
+
+for (const column of ["deal_id", "kind", "sha256", "bytes", "content_type"]) {
+	test(`filed ${column} never clears or changes`, () =>
+		rolledBack(async () => {
+			await db.query(dealFile());
+			await assert.rejects(
+				db.query(
+					`update document set ${column} = null where id = '${DEAL_FILE}'`,
+				),
+				{ constraint: "document_filed_once" },
+			);
+		}));
+}
+
+test("filing preserves known attachment metadata", () =>
+	rolledBack(async () => {
+		await db.query(dealFile({ deal_id: null, kind: null }));
+		await assert.rejects(
+			db.query(
+				`update document set deal_id = '${DEAL}', kind = 'lease', bytes = 2048 where id = '${DEAL_FILE}'`,
+			),
+			{ constraint: "document_filed_once" },
+		);
+	}));
+
+test("an outside lease has no brokerage deal and a renewal is its own deal", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			newLease({
+				deal_id: null,
+				offer_id: null,
+				executed_on: null,
+				rent_starts_on: "2020-01-01",
+				commencement_on: "2020-01-01",
+			}),
+		);
+		await db.query(`insert into deal (id, name, owner_user_id, reason, renews_lease_id)
+			values ('${id(730)}', 'Example Renewal', '${USER}', 'renewal', '${id(721)}'); select propose_critical_dates('${id(730)}')`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select party_id, property_id, deal_id, expiration_on::text from current_lease",
+				)
+			).rows,
+			[
+				{
+					party_id: CLIENT,
+					property_id: PROPERTY,
+					deal_id: null,
+					expiration_on: "2033-06-30",
+				},
+			],
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select deal_id, lease_version_id, kind from critical_date",
+				)
+			).rows,
+			[{ deal_id: id(730), lease_version_id: LEASE, kind: "lease_end" }],
+		);
+		await db.query(`update deal set reason = 'relocation', renews_lease_id = null where id = '${id(730)}';
+			update deal set reason = 'renewal', renews_lease_id = '${id(721)}' where id = '${id(730)}';
+			insert into deal_property (deal_id, property_id) values ('${id(730)}', '${PROPERTY}');
+			update party set how_found = 'referral' where id = '${AGENT}';
+			insert into party_role (party_id, role) values ('${AGENT}', 'client');
+			insert into deal_party (deal_id, party_id, role) values ('${id(730)}', '${AGENT}', 'client');
+			insert into lease (id, party_id, property_id, deal_id) values ('${id(731)}', '${AGENT}', '${PROPERTY}', '${id(730)}');
+			insert into lease_version (id, lease_id, version, document_id, expiration_on)
+			values ('${id(732)}', '${id(731)}', 1, '${PDF_FILE}', '2040-06-30'); ${CHECK_AT_COMMIT}`);
+		assert.deepEqual(
+			(await db.query("select lease_id, party_id from lease_ending")).rows,
+			[{ lease_id: id(731), party_id: AGENT }],
+		);
+	});
+});
+
+for (const alreadyClient of [false, true]) {
+	test(`a tenant merge preserves lease versions when the survivor is ${alreadyClient ? "already" : "not yet"} on the deal`, async () => {
+		await rolledBack(async () => {
+			await db.query(newLease());
+			if (alreadyClient)
+				await db.query(
+					`insert into deal_party (deal_id, party_id, role) values ('${DEAL}', '${LENDERS[0]}', 'client')`,
+				);
+			await db.query(
+				`select merge_party('${CLIENT}', '${LENDERS[0]}'); ${CHECK_AT_COMMIT}`,
+			);
+			assert.deepEqual(
+				(await db.query("select party_id, id from current_lease")).rows,
+				[{ party_id: LENDERS[0], id: LEASE }],
+			);
+		});
+	});
+}
+
+test("a completed tour appears once on its deal even when it visits several properties", async () => {
+	await rolledBack(async () => {
+		const tour = id(740);
+		await db.query(`insert into activity (id, kind, happened_at, from_party_id, summary)
+			values ('${tour}', 'meeting', '2026-04-02T15:00:00Z', '${CLIENT}', 'Example two-property tour');
+			insert into activity_about (activity_id, deal_id, property_id) values
+			('${tour}', '${DEAL}', null), ('${tour}', null, '${PROPERTY}'), ('${tour}', null, '${ELSEWHERE}')`);
+		assert.deepEqual(
+			(await readDeal()).activity.filter((a: { id: string }) => a.id === tour),
+			[
+				{
+					id: tour,
+					kind: "meeting",
+					happened_at: "2026-04-02T15:00:00+00:00",
+					from_party_id: CLIENT,
+					summary: "Example two-property tour",
+					email: null,
+				},
+			],
+		);
+	});
+});
