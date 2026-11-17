@@ -1,27 +1,12 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const sql = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const schema = await sql("next.sql");
-const attribution = await sql("copy-attribution.sql");
-const copy = await sql("copy-commissions.sql");
-const name = `copy_commissions_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-commissions.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (text: string) => (await db.query(text)).rows;
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	const result = await db.query(copy);
@@ -45,12 +30,7 @@ const payment = (
 	`('${id(n)}', '${id(deal)}', '${status}', ${amount}, ${dates}, '${created}', '${updated}', '${id(1)}', ${author === null ? "null" : `'${id(author)}'`})`;
 let report: pg.QueryResultRow[];
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'person', 'Example Other'), ('${id(6)}', 'company', 'Example Client');
  insert into app_user (id) values ('${id(1)}'), ('${id(2)}');
@@ -104,7 +84,7 @@ before(async () => {
  ].join(",")};
  commit;`);
 	await db.query("begin");
-	await db.query(await sql("copy-deals.sql"));
+	await db.query(await readSchema("copy-deals.sql"));
 	await db.query("commit");
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into deal (id, name, owner_user_id) values ('${id(99)}', 'Example mapped deal', '${id(1)}');
@@ -113,10 +93,7 @@ before(async () => {
 	report = await run();
 	await db.query("commit");
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("expected rows add to the estimate and other rows add to gross as separate dated payments", async () => {
 	assert.deepEqual(

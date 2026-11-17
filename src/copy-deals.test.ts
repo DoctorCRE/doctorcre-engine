@@ -1,34 +1,12 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const schema = await readFile(
-	new URL("../schema/next.sql", import.meta.url),
-	"utf8",
-);
-const attribution = await readFile(
-	new URL("../schema/copy-attribution.sql", import.meta.url),
-	"utf8",
-);
-const copy = await readFile(
-	new URL("../schema/copy-deals.sql", import.meta.url),
-	"utf8",
-);
-const name = `copy_deals_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-deals.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) => (await db.query(sql)).rows;
 // A run starts clear of the temp tables an earlier run in the same transaction left.
 const run = async (): Promise<pg.QueryResultRow[]> => {
@@ -41,12 +19,7 @@ const deal = (n: number, type = "lease") => `insert into public.deal
  values ('${id(n)}', '${id(3)}', 'Example deal ${n}', '${type}', 'negotiation', 'partner_one', '${id(1)}', '${id(1)}', '2025-01-01', '2025-02-01');`;
 let report: pg.QueryResultRow[];
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'company', 'Example Client'),
@@ -104,12 +77,7 @@ before(async () => {
  commit;`);
 	await db.query(`begin; create temp table copy_market_county (market_slug text not null, county_fips text not null) on commit drop;
 insert into copy_market_county values ('example-market', '01001');`);
-	await db.query(
-		await readFile(
-			new URL("../schema/copy-markets.sql", import.meta.url),
-			"utf8",
-		),
-	);
+	await db.query(await readSchema("copy-markets.sql"));
 	await db.query("commit; begin");
 	report = await run();
 	await db.query("commit");
@@ -121,10 +89,7 @@ insert into copy_market_county values ('example-market', '01001');`);
 		"no copier temp table outlives its transaction",
 	);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("types split into kind and reason, with startup renamed and other left unfiled", async () => {
 	const result = await rows(

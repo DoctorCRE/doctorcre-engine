@@ -1,27 +1,12 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const sql = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const schema = await sql("next.sql");
-const attribution = await sql("copy-attribution.sql");
-const copy = await sql("copy-critical-dates.sql");
-const name = `copy_dates_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-critical-dates.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (text: string) => (await db.query(text)).rows;
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	const result = await db.query(copy);
@@ -37,12 +22,7 @@ const resolved = (n: number, actor: number, status: string) =>
 	`('deal', '${id(10)}', 'status', '{"critical_date_id": "${id(n)}", "status": "${status}", "reason": "Example reason ${n}"}', '2025-03-0${n % 10}', '${id(actor)}', 'resolve-critical-date', 'human_stated')`;
 let report: pg.QueryResultRow[];
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
  insert into app_user values ('${id(1)}');
@@ -79,10 +59,7 @@ before(async () => {
 	report = await run();
 	await db.query("commit");
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("a partner's date stays confirmed by them, and an agent's date waits for a user", async () => {
 	// biome-ignore format: one row per copied date
