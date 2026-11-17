@@ -32,6 +32,23 @@ begin atomic
 		order by mutation_order desc limit 1));
 end;
 
+-- Setting or restoring a next step writes its note under the deal's lock, after its event's transaction starts and before it is recorded.
+-- A waiting transaction can start before an earlier one writes, so a note pairs only with an event when each is the other's nearest match.
+create or replace function copy_next_step_event()
+returns table (note_id uuid, event_id uuid)
+language sql stable
+begin atomic
+	select note_id, event_id from (
+	 select n.id as note_id, e.id as event_id,
+	  -- Each counts the candidates at least as near as this one, so a tie pairs nothing.
+	  count(*) over (partition by n.id order by e.recorded_at) as nearer_events,
+	  count(*) over (partition by e.id order by n.created_at desc) as nearer_notes
+	 from public.deal_note n join public.event e on e.subject_type = 'deal' and e.subject_id = n.deal_id and e.actor_id = n.actor_id
+	  and e.field = 'next_step' and e.new_value ->> 'next_step' = n.text and n.created_at between e.occurred_at and e.recorded_at
+	 where n.kind = 'next_step'
+	) m where nearer_events = 1 and nearer_notes = 1;
+end;
+
 -- Each old action's end state as its latest closing event proves it. A later keep or reopen leaves no proof.
 -- A cancellation needs one partner drop with its reason, on the row as that drop left it.
 create or replace function copy_action_end()

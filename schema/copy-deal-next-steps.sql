@@ -54,10 +54,8 @@ left join public.v_deal_current_action current on current.deal_id = n.deal_id
 left join public.actor actor on actor.slug = d.owner
 left join outside_id o on o.source = 'old_system' and o.value = actor.id::text
 left join app_user owner on owner.id = o.party_id
-cross join lateral copy_event_attribution(n.actor_id, (select e.id from public.event e
- where e.verb = 'add-deal-note' and e.subject_type = 'deal' and e.subject_id = n.deal_id
- and e.actor_id = n.actor_id and e.occurred_at = n.created_at and e.new_value ->> 'note' = n.text
- order by e.mutation_order desc limit 1)) a
+left join copy_next_step_event() event on event.note_id = n.id
+cross join lateral copy_event_attribution(n.actor_id, event.event_id) a
 union all
 select md5('old_system:deal:' || d.id || ':follow_up')::uuid, 'deal_date', d.id, null, null,
  'Imported deal follow-up', d.next_date, owner.id, null, null, null, null, null, d.created_at, d.updated_at, a.*, null
