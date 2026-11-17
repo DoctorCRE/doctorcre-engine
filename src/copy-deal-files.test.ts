@@ -98,7 +98,8 @@ before(async () => {
  ('${id(405)}', '${id(300)}', '${id(10)}', null, '${id(1)}', null, '${id(226)}', 'Example note A'),
  ('${id(406)}', '${id(303)}', '${id(10)}', null, '${id(1)}', null, '${id(226)}', 'Example note B'),
  ('${id(407)}', '${id(302)}', '${id(10)}', null, '${id(1)}', null, '${id(227)}', null),
- ('${id(408)}', '${id(300)}', null, null, '${id(1)}', null, '${id(223)}', null);
+ ('${id(408)}', '${id(300)}', null, null, '${id(1)}', null, '${id(223)}', null),
+ ('${id(409)}', '${id(301)}', '${id(10)}', null, '${id(1)}', null, '${id(218)}', 'Example source note');
  commit;`);
 	report = await run(mapping);
 });
@@ -221,6 +222,7 @@ test("generated files take their template's reviewed kind and keep the generated
 			{ source: "old_generated_document", value: id(400), deal_id: id(10) },
 			{ source: "old_generated_document", value: id(401), deal_id: id(10) },
 			{ source: "old_generated_document", value: id(407), deal_id: id(10) },
+			{ source: "old_generated_document", value: id(409), deal_id: id(10) },
 		],
 	);
 	assert.deepEqual(
@@ -244,6 +246,7 @@ test("a prepared file keeps its note as written, and a blank note stays empty", 
 			)
 		).map(Object.values),
 		[
+			[id(218), "Example source note"],
 			[id(220), "Example note"],
 			[id(221), "Example note"],
 			[id(222), null],

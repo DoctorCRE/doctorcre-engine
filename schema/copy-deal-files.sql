@@ -65,7 +65,8 @@ select c.id, c.created_at, c.name, 'deal_documents', c.r2_key, c.mime, c.sha256,
 from copyable c cross join lateral copy_attribution('attachment', c.id, c.author_id) a
 where not exists (select from document n where (n.r2_bucket, n.r2_key) = ('deal_documents', c.r2_key));
 -- A lease's source file was stored without its deal.
-update document n set deal_id = c.deal_id, kind = c.file_kind, content_type = c.mime, sha256 = c.sha256, bytes = c.bytes
+update document n set deal_id = c.deal_id, kind = c.file_kind, note = coalesce(n.note, c.file_note),
+ content_type = c.mime, sha256 = c.sha256, bytes = c.bytes
 from copyable c where (n.r2_bucket, n.r2_key) = ('deal_documents', c.r2_key) and n.deal_id is null;
 insert into not_copied select distinct n.id, 'kind', n.kind, 'kind_unclassified' from document n
 join candidate c on (n.r2_bucket, n.r2_key, n.deal_id) = ('deal_documents', c.r2_key, c.deal_id) where n.kind = 'other';
