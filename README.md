@@ -5,14 +5,47 @@ Engine for the DoctorCRE app. See `AGENTS.md` for how work happens here.
 Run `npm ci` once, then `npm run check` before every push. CI runs the same command.
 
 Database checks need a local, disposable PostgreSQL 18 server with `pgcrypto` and
-`pg_trgm`. The test user needs permission to create databases and extensions. For example, start `docker run --rm -p 127.0.0.1:5432:5432 -e
-POSTGRES_HOST_AUTH_METHOD=trust postgres:18`, then run `npm run check`.
-`TEST_DATABASE_URL` defaults to `postgres://postgres@127.0.0.1:5432/postgres`.
+`pg_trgm`. The test user needs permission to create databases and extensions.
+When builders run checks concurrently, give each check its own server. Separate
+databases on one server still share its connection limit (#322).
+
+With Docker running, paste this block from the worktree to run a check on its own
+throwaway server. Docker chooses a free loopback port. The subshell stops only
+its own container when the check exits, including on failure.
+
+```sh
+(
+	set -eu
+	postgres=$(docker run --rm -d -p 127.0.0.1::5432 \
+		-e POSTGRES_HOST_AUTH_METHOD=trust postgres:18)
+	trap 'docker stop "$postgres" >/dev/null' EXIT
+	ready=false
+	for attempt in $(seq 1 30); do
+		if docker exec "$postgres" pg_isready -h 127.0.0.1 -U postgres >/dev/null; then
+			ready=true
+			break
+		fi
+		sleep 1
+	done
+	if [ "$ready" != true ]; then
+		docker logs "$postgres"
+		exit 1
+	fi
+	TEST_DATABASE_URL="postgres://postgres@$(docker port "$postgres" 5432/tcp)/postgres" npm run check
+)
+```
+
+The readiness probe uses TCP because the image's initialization server accepts
+only Unix sockets. Each container has its own connection and lock limits.
+See Docker's [port publishing documentation](https://docs.docker.com/engine/network/port-publishing/).
+
+For a single check on an existing local throwaway server, `TEST_DATABASE_URL`
+defaults to `postgres://postgres@127.0.0.1:5432/postgres`.
 The loader accepts only loopback hosts without URL query parameters, creates a
-random database, and drops it in `finally`. Never point it at a shared server.
-One server serves every worktree, because each check makes and drops its own database.
-A check opens a little over one connection per CPU core, so a stock server's
-100 connections take four checks at once on an 18-core machine (#241).
+random database, and drops it in `finally`. Never point it at a server with
+business data. A check opens roughly one connection per CPU core, plus sessions
+for tests that exercise concurrent writes. More simultaneous checks need more
+connections, even though the snapshot helper closes its admin connections.
 
 Each check restores `schema/business.sql` once, generates ignored `src/database.d.ts`
 with `kysely-codegen`, and runs TypeScript and tests against that database.
