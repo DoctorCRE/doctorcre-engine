@@ -380,6 +380,17 @@ A direct user confirms a proposal to open, or drops it with a reason. Only a dir
 
 Today's `critical_date` rows keep their kinds, dates, sources and notes. `option_window` maps to `option_notice`, an unlisted kind to `other` with its original wording in the note. A date directly added by a user takes its confirmation from `created_by` and `created_at`; dates proposed by automation still need user confirmation. `cleared` maps to `done`. Resolved rows take their user, time and reason from the resolution event log; a legacy resolution without that evidence is listed for a partner to fix. The owner's load preserves known users and times with the transition and stamp triggers disabled, and lists missing evidence or decisions for a partner to fix rather than inventing confirmation. Today shows confirmed open dates; proposals stay in the confirmation queue. These reads follow in later slices.
 
+## Copying today's leases
+
+`schema/copy-leases.sql` runs after the deal copy, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public`, and ends with its `not_copied` list.
+
+- Each chain of old rows, where an amendment names the row it supersedes, becomes one lease. The lease keeps its first row's id and creation time, and each version keeps its own row's id and author, so a repeat leaves copied versions alone and adds only amendments not yet copied.
+- A lease names its deal when it has one, its client through the party map, and the one building its premises reach after building merges. On a deal, that client and building must already be on the copied deal. A lease negotiated elsewhere copies its building as a property.
+- A version needs its exact expiration and its stored source file. The file becomes a document in bucket `deal_documents` with its name, key, type, hash and size. It is not yet filed to a deal; the deal-file copy files it with its kind. A version that cannot copy holds back the later ones in its chain, listed as `earlier_version_not_copied`.
+- Executed and commencement dates copy only when known. Rent copies when quoted per square foot; a gross quote, TI, the escalator and the options note keep their wording in `other_terms`. No option row, escalation or rent start is inferred. Each options note is also listed as `option_terms_unparsed`, for a partner to enter each option with its notice date.
+- The evidence kind, reference and source wording, and a legacy-unverified status, have no column, so each copied version lists them. So does a lease whose deal or tenant is not copied, a deal with several chains, a tenant who is not the deal's client, a building that is missing, several or not on the deal, a version that changes its lease's deal, tenant or building, two amendments of one row, a version number the new lease already holds, a missing, deleted, incomplete or conflicting file, dates out of order, and a row whose chain has no first row.
+- Today's renewal deals name no source lease, so this copy links none; the deal copy lists them as `renewal_without_lease`.
+
 ## Tours as meetings
 
 A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal; the property links support a later property read. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
