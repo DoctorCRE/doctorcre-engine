@@ -13,6 +13,7 @@ type AccessEnv = {
 		// Each door is its own Access application, with its own audience.
 		ACCESS_AUD?: string;
 		INTAKE_ACCESS_AUD?: string;
+		JOBS_ACCESS_AUD?: string;
 	};
 };
 
@@ -38,7 +39,7 @@ function keysOf(team: string) {
 // A request that skips Access, such as one to a workers.dev or preview URL,
 // still reaches a door, so each door checks the token itself.
 export const accessDoor = (
-	door: "compare" | "intake",
+	door: "compare" | "intake" | "jobs",
 	audienceOf: (env: AccessEnv["Bindings"]) => string | undefined,
 ) =>
 	createMiddleware<AccessEnv>(async (c, next) => {

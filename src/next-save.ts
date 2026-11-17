@@ -64,6 +64,13 @@ async function sign(tx: Transaction<DB>, stamp: Stamp) {
 			tx,
 		);
 	}
-	if ("job" in stamp)
-		await sql`select set_config('engine.job', ${stamp.job}, true)`.execute(tx);
+	if ("job" in stamp) {
+		const job = await tx
+			.selectFrom("job")
+			.select("slug")
+			.where("slug", "=", stamp.job)
+			.executeTakeFirst();
+		if (!job) throw new SaveRefusal(new Refusal(403, "unknown_job"));
+		await sql`select set_config('engine.job', ${job.slug}, true)`.execute(tx);
+	}
 }

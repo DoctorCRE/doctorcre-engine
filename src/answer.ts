@@ -36,6 +36,12 @@ const HINTS = {
 	old_system_required:
 		"The engine does not finish this save. Send it to the old system unchanged.",
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
+	invalid_json: "Send the arguments as one JSON object.",
+	unknown_job: "Name a job the engine knows in the Engine-Job header.",
+	about_nothing:
+		"The email matches no record and names none, so nothing was stored.",
+	message_id_invalid:
+		"Send the Message-ID without angle brackets or surrounding spaces.",
 	unknown_owner: "Owner is one of joe, dell or claude.",
 	field_required:
 		"Supply the required field using the documented operation shape.",

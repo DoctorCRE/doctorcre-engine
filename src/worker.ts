@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 
+import { activityDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
 import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
@@ -16,18 +17,18 @@ import { dealUpdate } from "./deal-update.ts";
 import { deals } from "./deals/routes.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
+import { jobStamp, type NextDoorEnv } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { relationships } from "./relationships/routes.ts";
-import type { WriterEnv } from "./save.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 
-type WorkerEnv = WriterEnv &
+type WorkerEnv = NextDoorEnv &
 	CompareEnv &
 	IntakeEnv & {
 		Bindings: { CF_VERSION_METADATA: { id: string } };
@@ -46,6 +47,7 @@ app.get("/health", (c) =>
 const engine = new Hono<WorkerEnv>()
 	.get("/whoami", (c) => c.json(c.get("partner")))
 	.route("/", activity)
+	.route("/", activityDoor)
 	.route("/", calendar)
 	.route("/", directory)
 	.route("/", connection)
@@ -81,5 +83,13 @@ app.use(
 	accessDoor("intake", (env) => env.INTAKE_ACCESS_AUD),
 );
 app.route("/intake", intake);
+
+// The Studio's jobs save here and name themselves (decision 103).
+app.use(
+	"/jobs/*",
+	accessDoor("jobs", (env) => env.JOBS_ACCESS_AUD),
+	jobStamp,
+);
+app.route("/jobs", activityDoor);
 
 export default app;
