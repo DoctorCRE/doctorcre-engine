@@ -2389,6 +2389,8 @@ create table imported_change (
  id uuid primary key,
  table_name text not null check (table_name in ('party', 'deal', 'party_role', 'client', 'lease_version')),
  record jsonb not null check (jsonb_typeof(record) = 'object' and record <> '{}'::jsonb),
+ old_value_absent boolean not null,
+ new_value_absent boolean not null,
  field text not null check (field ~ '\S'),
  source_event jsonb not null check (jsonb_typeof(source_event) = 'object'
   and source_event ?& array['id', 'verb', 'cause', 'actor_id']

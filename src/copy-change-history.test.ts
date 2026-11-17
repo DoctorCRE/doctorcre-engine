@@ -155,6 +155,9 @@ test("copies field evidence for every supported record kind without replay or in
 			i === 2 ? "partner_one" : null,
 		);
 	await event(106, "party", 10, "npi", 3);
+	await db.query(
+		`update public.event set old_value = null, new_value = 'null'::jsonb where id = '${id(106)}'`,
+	);
 	await event(107, "party", 10, "name", 2);
 	await event(108, "party", 10, "name", 5, "partner_one");
 	await db.query(
@@ -191,6 +194,12 @@ test("copies field evidence for every supported record kind without replay or in
 			[null, "agent", null],
 			[null, "mail_capture", id(1)],
 		],
+	);
+	assert.deepEqual(
+		await rows(
+			`select old_value_absent, new_value_absent from imported_change where id = '${id(106)}'`,
+		),
+		[{ old_value_absent: true, new_value_absent: false }],
 	);
 	const imported = await rows("select * from imported_change order by id");
 	await db.query("set time zone 'America/Chicago'");

@@ -32,7 +32,7 @@ select e.id, e.field as old_field, f.table_name, f.field, to_jsonb(e) as source_
   when f.table_name = 'party' and p.id is not null then jsonb_build_object('id', p.id)
   when f.table_name = 'deal' and d.id is not null then jsonb_build_object('id', d.id)
   when f.table_name = 'lease_version' and l.id is not null then jsonb_build_object('id', l.id) end as record,
- e.occurred_at as changed_at, a.*,
+ e.occurred_at as changed_at, e.old_value is null as old_value_absent, e.new_value is null as new_value_absent, a.*,
  case when actor.id is null then 'unknown_actor'
   when a.changed_by_user_id is not null and u.id is null then 'user_not_copied'
   when e.sponsoring_human_slug is not null and sponsor.id is null then 'unknown_sponsor'
@@ -63,14 +63,14 @@ insert into not_copied
 select e.id, e.old_field, 'existing_history_conflicts'
 from history_event e join imported_change i using (id)
 where (i.table_name, i.record, i.field, i.source_event, i.changed_at,
- i.changed_by_user_id, i.changed_by_job, i.changed_for_user_id) is distinct from
+ i.changed_by_user_id, i.changed_by_job, i.changed_for_user_id, i.old_value_absent, i.new_value_absent) is distinct from
  (e.table_name, e.record, e.field, e.source_event, e.changed_at,
- e.changed_by_user_id, e.changed_by_job, e.changed_for_user_id);
+ e.changed_by_user_id, e.changed_by_job, e.changed_for_user_id, e.old_value_absent, e.new_value_absent);
 
 insert into imported_change (id, table_name, record, field, source_event, changed_at,
- changed_by_user_id, changed_by_job, changed_for_user_id)
+ changed_by_user_id, changed_by_job, changed_for_user_id, old_value_absent, new_value_absent)
 select id, table_name, record, field, source_event, changed_at,
- changed_by_user_id, changed_by_job, changed_for_user_id from history_event
+ changed_by_user_id, changed_by_job, changed_for_user_id, old_value_absent, new_value_absent from history_event
 where table_name is not null and record is not null and actor_problem is null
 on conflict (id) do nothing;
 alter table imported_change enable trigger stamp_imported_change;
