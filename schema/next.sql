@@ -414,14 +414,22 @@ create table deal (
 	parking_note text check (parking_note ~ '\S'),
 	-- A flag a user sets, never worked out from anything else.
 	needs_attention boolean not null default false,
-	constraint deal_parking_note_when_parked check (parking_note is null or parking_reason is not null)
+	-- Who last parked the deal and when, apart from its last change. A copied parker no user matches stays empty.
+	parked_at timestamptz,
+	parked_by_user_id uuid references app_user,
+	constraint deal_parking_note_when_parked check (parking_note is null or parking_reason is not null),
+	constraint deal_parked_stamps_when_parked check ((parking_reason is null) = (parked_at is null)
+		and (parked_by_user_id is null or parked_at is not null))
 );
 
 -- A job alone never parks, revives or flags a deal; one working for a user, such as the agent, does.
+-- As today, any change to a parked deal's reason or note stamps it again.
 create function deal_parked_or_flagged_by_a_user() returns trigger
 language plpgsql as $$
+declare
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
 begin
-	if nullif(current_setting('engine.user_id', true), '') is null
+	if acting_user is null
 		and (case tg_op
 			when 'INSERT' then new.parking_reason is not null or new.needs_attention
 			else (new.parking_reason, new.parking_note, new.needs_attention)
@@ -429,6 +437,10 @@ begin
 		end) then
 		raise exception 'a user parks, revives and flags a deal'
 			using errcode = 'check_violation', constraint = 'deal_parked_or_flagged_by_a_user';
+	end if;
+	if tg_op = 'INSERT' or (new.parking_reason, new.parking_note) is distinct from (old.parking_reason, old.parking_note) then
+		new.parked_at := case when new.parking_reason is not null then now() end;
+		new.parked_by_user_id := case when new.parking_reason is not null then acting_user end;
 	end if;
 	return new;
 end $$;

@@ -1003,7 +1003,7 @@ test("claims with uncopied authors or sponsors and blank notes wait for review",
 	}
 });
 
-test("parking reasons, trimmed notes and explicit attention flags copy without invented history", async () => {
+test("parking reasons, trimmed notes, parking stamps and explicit attention flags copy without invented history", async () => {
 	await db.query("begin");
 	try {
 		await db.query(`
@@ -1016,12 +1016,21 @@ test("parking reasons, trimmed notes and explicit attention flags copy without i
  ('${id(402)}'::uuid, 'other', E' \t\n ', true),
  ('${id(403)}'::uuid, 'other', 'Example other reason', false)) v(id, reason, note, attention)
  where public.deal.id = v.id;
+ insert into public.actor (id, slug, kind, display_name) values ('${id(200)}', 'codex', 'automation', 'Example agent');
+ update public.deal set parked_by = '${id(200)}' where id = '${id(403)}';
  update public.deal set attention = true where id = '${id(404)}';
  update public.deal set owner = null where id = '${id(406)}';`);
 		const first = await run();
+		const noPhaseHistory = (n: number) => ({
+			old_id: id(n),
+			field: "phase",
+			value: "negotiation",
+			reason: "no_phase_history",
+		});
 		assert.deepEqual(
 			await rows(
-				`select id, parking_reason, parking_note, needs_attention from deal where id >= '${id(400)}' order by id`,
+				`select id, parking_reason, parking_note, needs_attention, parked_at::text, parked_by_user_id
+ from deal where id >= '${id(400)}' order by id`,
 			),
 			[
 				{
@@ -1029,80 +1038,69 @@ test("parking reasons, trimmed notes and explicit attention flags copy without i
 					parking_reason: "client_paused",
 					parking_note: "Example pause",
 					needs_attention: true,
+					parked_at: "2025-01-15 00:00:00+00",
+					parked_by_user_id: id(1),
 				},
 				{
 					id: id(401),
 					parking_reason: "prospect_never_active",
 					parking_note: null,
 					needs_attention: false,
+					parked_at: "2025-01-15 00:00:00+00",
+					parked_by_user_id: id(1),
 				},
 				{
 					id: id(402),
 					parking_reason: "other",
 					parking_note: null,
 					needs_attention: true,
+					parked_at: "2025-01-15 00:00:00+00",
+					parked_by_user_id: id(1),
 				},
 				{
 					id: id(403),
 					parking_reason: "other",
 					parking_note: "Example other reason",
 					needs_attention: false,
+					parked_at: "2025-01-15 00:00:00+00",
+					parked_by_user_id: null,
 				},
 				{
 					id: id(404),
 					parking_reason: null,
 					parking_note: null,
 					needs_attention: true,
+					parked_at: null,
+					parked_by_user_id: null,
 				},
 				{
 					id: id(405),
 					parking_reason: null,
 					parking_note: null,
 					needs_attention: false,
+					parked_at: null,
+					parked_by_user_id: null,
 				},
 			],
 		);
 		assert.deepEqual(
 			first.filter((r) => r.old_id >= id(400)),
 			[
-				...[400, 401, 402, 403].flatMap((n) => [
-					{
-						old_id: id(n),
-						field: "parked_at",
-						value: "2025-01-15 00:00:00+00",
-						reason: "parking_history_not_copied",
-					},
-					{
-						old_id: id(n),
-						field: "parked_by",
-						value: id(1),
-						reason: "parking_history_not_copied",
-					},
-					{
-						old_id: id(n),
-						field: "phase",
-						value: "negotiation",
-						reason: "no_phase_history",
-					},
-				]),
-				...[404, 405].map((n) => ({
-					old_id: id(n),
-					field: "phase",
-					value: "negotiation",
-					reason: "no_phase_history",
-				})),
+				...[400, 401, 402].map(noPhaseHistory),
+				{
+					old_id: id(403),
+					field: "parked_by",
+					value: id(200),
+					reason: "parker_not_a_user",
+				},
+				...[403, 404, 405].map(noPhaseHistory),
 				{
 					old_id: id(406),
 					field: "deal",
 					value: id(406),
 					reason: "no_deal_owner",
 				},
-				{
-					old_id: id(406),
-					field: "phase",
-					value: "negotiation",
-					reason: "no_phase_history",
-				},
+				noPhaseHistory(406),
 			],
 		);
 		assert.deepEqual(
