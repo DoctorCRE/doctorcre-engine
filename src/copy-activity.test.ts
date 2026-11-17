@@ -97,7 +97,9 @@ before(async () => {
   select v, '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}' from unnest(array['${id(30)}', '${id(31)}']::uuid[]) v;
  insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
  insert into outside_id (source, value, deal_id) values ('old_system', '${id(30)}', '${id(30)}');
- insert into public.activity_kind (slug, label, is_contact) select s, s, true from unnest(array['call', 'tour', 'note', 'email_in', 'text', 'meeting']) s;
+ insert into public.activity_kind (slug, label, is_contact) select s, s, true from unnest(array['call', 'tour', 'note', 'email_in', 'meeting']) s;
+ insert into public.activity_kind (slug, label, is_contact) values ('text', 'Text', true), ('analysis', 'Analysis', false), ('loi', 'LOI', true),
+  ('counter_sent', 'Counter Sent', true), ('counter_received', 'Counter Received', true), ('lease_signed', 'Lease Signed', true), ('task', 'Task', false);
  insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id, client_id, lead_id, vendor_id, party_id,
   detail, owed, connected, email_context) values
   ${[
@@ -132,6 +134,17 @@ before(async () => {
 			{ deal: 30 },
 			"'https://example.com/listing', null, null, null",
 		),
+		activity(
+			54,
+			"analysis",
+			{ deal: 30 },
+			"'Example analysis detail', null, null, null",
+		),
+		activity(55, "loi", { deal: 30 }),
+		activity(56, "counter_sent", { deal: 30 }),
+		activity(57, "counter_received", { deal: 30 }),
+		activity(58, "lease_signed", { client: 20 }),
+		activity(59, "task", { deal: 30 }),
 	].join(",\n  ")};
  update public.activity set summary = 'Full text of email: Example subject' where id = '${id(49)}';
  update public.activity set summary = 'Links from matched email' where id = '${id(39)}';
@@ -152,7 +165,7 @@ after(async () => {
 	await asAdmin(`drop database "${name}" with (force)`);
 });
 
-test("copies calls, meetings, tours and notes with their records, listing what has no place", async () => {
+test("copies calls, meetings, tours and notes, and other kinds as notes that keep their word, listing what has no place", async () => {
 	const report = await run();
 	assert.deepEqual(
 		(
@@ -189,6 +202,16 @@ test("copies calls, meetings, tours and notes with their records, listing what h
 				null,
 				"agent",
 				id(1),
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(45),
+				"note",
+				"2024-01-01 00:00:00+00",
+				"Text\n\nExample text",
+				id(1),
+				null,
+				null,
 				"2024-03-01 00:00:00+00",
 			],
 			[
@@ -241,6 +264,56 @@ test("copies calls, meetings, tours and notes with their records, listing what h
 				null,
 				"2024-05-04 00:00:00+00",
 			],
+			[
+				id(54),
+				"note",
+				"2024-01-01 00:00:00+00",
+				"Analysis\n\nExample analysis\n\nExample analysis detail",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(55),
+				"note",
+				"2024-01-01 00:00:00+00",
+				"LOI\n\nExample loi",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(56),
+				"note",
+				"2024-01-02 00:00:00+00",
+				"Counter Sent\n\nExample counter_sent",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(57),
+				"note",
+				"2024-01-03 00:00:00+00",
+				"Counter Received\n\nExample counter_received",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(58),
+				"note",
+				"2024-01-04 00:00:00+00",
+				"Lease Signed\n\nExample lease_signed",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
 		],
 	);
 	const recorded = "2024-02-01 00:00:00+00";
@@ -249,17 +322,22 @@ test("copies calls, meetings, tours and notes with their records, listing what h
 		[id(40), null, id(10), recorded],
 		[id(41), null, id(11), recorded],
 		[id(42), null, id(14), recorded],
+		[id(45), id(30), null, recorded],
 		[id(47), id(30), null, recorded],
 		[id(48), null, id(10), recorded],
 		[id(50), id(30), null, "2024-05-01 00:00:00+00"],
 		[id(52), id(30), null, "2024-05-03 00:00:00+00"],
 		[id(53), id(30), null, "2024-05-04 00:00:00+00"],
+		[id(54), id(30), null, recorded],
+		[id(55), id(30), null, recorded],
+		[id(56), id(30), null, recorded],
+		[id(57), id(30), null, recorded],
+		[id(58), null, id(10), recorded],
 	]);
 	assert.deepEqual(reasons(report), [
 		"39 kind later_copy_365",
 		"43 kind later_copy_365",
 		"44 kind later_copy_365",
-		"45 kind kind_has_no_place",
 		"46 activity about_nothing_copied",
 		"46 deal_id deal_not_copied",
 		"47 connected connected_has_no_place",
@@ -269,6 +347,7 @@ test("copies calls, meetings, tours and notes with their records, listing what h
 		"49 kind later_copy_365",
 		"51 kind later_copy_366",
 		"53 changed_for_user_id agent_user_unknown",
+		"59 kind kind_has_no_place",
 	]);
 	assert.deepEqual(
 		await rows(
