@@ -183,7 +183,8 @@ insert into public.lead_contact_draft (id, lead_id, party_id, owner_id, subject,
  ('${id(87)}', '${id(21)}', '${id(14)}', '${id(1)}', 'Example subject', 'Example body', '2025-04-01', 'America/Chicago', '${id(1)}', '2025-01-01');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, created_by) values
  ('${id(88)}', 'lead', '${id(21)}', '${id(1)}', 'Example step', 'open', '${id(1)}'),
- ('${id(89)}', 'deal', '${id(30)}', '${id(1)}', 'Example deal step', 'open', '${id(1)}');
+ ('${id(89)}', 'deal', '${id(30)}', '${id(1)}', 'Example deal step', 'open', '${id(1)}'),
+ ('${id(96)}', 'vendor', '${id(22)}', '${id(1)}', 'Example vendor step', 'open', '${id(1)}');
 insert into ops.home_inbox_disposition (actor_id, item_id, disposition, source_version, material_version, updated_at) values
  ('${id(1)}', 'next_action:${id(89)}', 'settled', '1', 'm', '2026-10-04');
 insert into public.deal_invoice_email (id, evidence_ref, from_address, deal_name, client_name, property_address, occurred_at, email_date, created_by, status,
@@ -297,7 +298,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
- candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 4 };
+ candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
 const corrections = [
  ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
