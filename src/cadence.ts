@@ -64,29 +64,12 @@ async function subjects(
 				sql<null>`null`.as("owner_party_id"),
 			])
 			.execute();
-	if (collection === "leads")
-		return query
-			.where(({ not, exists, selectFrom }) =>
-				not(
-					exists(
-						selectFrom("party_role as client_role")
-							.whereRef("client_role.party_id", "=", "p.id")
-							.where("client_role.role", "=", "client"),
-					),
-				),
-			)
-			.leftJoin("app_user as u", "u.id", "r.owner_user_id")
-			.select([
-				"r.estimated_lease_on",
-				"u.slug as owner",
-				"u.id as owner_party_id",
-				sql<null>`null`.as("client_status"),
-			])
-			.execute();
+	const owner = collection === "leads" ? "r.owner_user_id" : "c.owner_user_id";
 	return query
 		.leftJoin("client as c", "c.party_id", "p.id")
 		.leftJoin("client_status as cs", "cs.party_id", "p.id")
-		.leftJoin("app_user as u", "u.id", "c.owner_user_id")
+		.leftJoin("app_user as u", "u.id", owner)
+		.$if(collection === "leads", (q) => q.select("r.estimated_lease_on"))
 		.select((eb) => [
 			eb
 				.case()

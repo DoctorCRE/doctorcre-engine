@@ -25,6 +25,7 @@ before(async () => {
 		insert into party_role (party_id, role) values
 		('${id(2)}', 'client'), ('${id(5)}', 'client'), ('${id(6)}', 'client'), ('${id(4)}', 'vendor');
 		insert into party_role (party_id, role, stage, owner_user_id, estimated_lease_on, lease_estimate_source) values
+		('${id(2)}', 'lead', 'new', null, '2027-06-01', 'Example lease estimate'),
 		('${id(3)}', 'lead', 'new', '${id(1)}', '2027-06-01', 'Example lease estimate'),
 		('${id(6)}', 'lead', 'new', '${id(1)}', '2027-06-01', 'Example lease estimate');
 		insert into client (party_id, status, owner_user_id) values
@@ -75,7 +76,7 @@ test("a stored cold client with an open deal answers cold", async () => {
 	]);
 });
 
-test("client paging keeps paused and derived statuses, and converted parties stay out of leads", async () => {
+test("converted parties appear in clients and leads with the same governing status", async () => {
 	const first = await items("collection=clients&limit=1");
 	assert.equal(first.next_cursor, id(2));
 	assert.deepEqual(
@@ -107,6 +108,16 @@ test("client paging keeps paused and derived statuses, and converted parties sta
 	assert.deepEqual(await items("collection=leads"), {
 		items: [
 			{
+				id: id(2),
+				name: "Example Clinic",
+				ref: "L-EX-1",
+				client_status: "cold",
+				owner: null,
+				owner_party_id: null,
+				old_ids: [{ value: id(102) }, { value: id(103) }],
+				estimated_lease_on: "2027-06-01",
+			},
+			{
 				id: id(3),
 				name: "Example Lead",
 				ref: null,
@@ -114,6 +125,16 @@ test("client paging keeps paused and derived statuses, and converted parties sta
 				owner: "alex",
 				owner_party_id: id(1),
 				old_ids: [{ value: id(104) }],
+				estimated_lease_on: "2027-06-01",
+			},
+			{
+				id: id(6),
+				name: "Example Converted Clinic",
+				ref: null,
+				client_status: "active_deal",
+				owner: "alex",
+				owner_party_id: id(1),
+				old_ids: [],
 				estimated_lease_on: "2027-06-01",
 			},
 		],
