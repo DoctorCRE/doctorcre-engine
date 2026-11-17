@@ -10,20 +10,20 @@ alter table space_need disable trigger record_change;
 
 create temp table old_need on commit drop as
 select 'space_search'::text as source_table, s.id, s.deal_id as old_deal_id, 'Space need'::text as name,
- s.created_at, s.created_at as updated_at, s.created_by as author_id, s.spec as criteria,
+ s.created_at, s.created_at as updated_at, s.created_by as author_id, s.created_by as creator_id, s.spec as criteria,
  s.spec -> 'min_sf' as minimum, s.spec -> 'max_sf' as maximum, s.spec -> 'max_rate_sf_yr' as rate,
  s.spec -> 'sub_types' as types, null::text as must_haves, null::uuid as vendor_id,
  null::text as source_ref, null::text as source_revision, null::text as applicability, null::jsonb as approval,
  null::text as refusal
 from public.space_search s
 union all
-select 'ops.deal_space_search', s.id, s.deal_id, s.name, s.updated_at, s.updated_at, null, s.criteria,
+select 'ops.deal_space_search', s.id, s.deal_id, s.name, s.updated_at, s.updated_at, null, null, s.criteria,
  s.criteria -> 'min_square_feet', s.criteria -> 'max_square_feet', null, s.criteria -> 'property_types',
  nullif(regexp_replace(s.requirements, '^\s+|\s+$', '', 'g'), ''), null, null, null, null, null,
  case when s.status = 'draft' then 'draft_needs_confirmation' end
 from ops.deal_space_search s
 union all
-select 'deal_client_need', n.id, n.deal_id, 'Client requirement', n.observed_at, n.updated_at, n.updated_by, '{}',
+select 'deal_client_need', n.id, n.deal_id, 'Client requirement', n.observed_at, n.updated_at, n.updated_by, n.created_by, '{}',
  null, null, null, null, n.description, v.party_id, n.source_ref, n.source_revision, n.applicability,
  jsonb_build_object('approved_by', n.approved_by, 'approved_at', n.approved_at,
  'approved_revision', n.approved_revision, 'approved_client_id', n.approved_client_id),
@@ -63,16 +63,23 @@ where types is not null and types <> 'null' and case when jsonb_typeof(types) = 
  jsonb_array_length(types) > 1 or exists (select from jsonb_array_elements(types) t
  where jsonb_typeof(t) <> 'string' or t #>> '{}' !~ '\S') else true end
 union all
+select n.id, v.field, v.value, 'blank_text' from old_need n
+cross join lateral (values ('name', name), ('must_haves', must_haves), ('source_ref', source_ref),
+ ('source_revision', source_revision), ('applicability', applicability)) v(field, value)
+where v.value is not null and v.value !~ '\S'
+union all
 select n.id, v.field, v.value::text, 'invalid_number' from old_need n
 cross join lateral (values ('min_sf', minimum, 'numeric(10,1)', false), ('max_sf', maximum, 'numeric(10,1)', false),
  ('max_rate_sf_yr', rate, 'numeric(10,2)', true)) v(field, value, target, zero_allowed)
 where v.value is not null and v.value <> 'null' and case
  when jsonb_typeof(v.value) <> 'number' or not pg_input_is_valid(v.value #>> '{}', v.target) then true
- else (v.value #>> '{}')::numeric < 0 or not v.zero_allowed and (v.value #>> '{}')::numeric(10,1) = 0 end;
+ else (v.value #>> '{}')::numeric <> case when v.zero_allowed then (v.value #>> '{}')::numeric(10,2)
+ else (v.value #>> '{}')::numeric(10,1) end or (v.value #>> '{}')::numeric < 0 or not v.zero_allowed and (v.value #>> '{}')::numeric(10,1) = 0 end;
 
 create temp table mapped_need on commit drop as
 select n.*, d.deal_id, vendor.party_id as mapped_vendor_id, a.*, geography.market_id, geography.specified,
  case when n.refusal is not null then n.refusal
+ when n.old_deal_id is null then 'deal_unassigned'
  when d.deal_id is null then 'deal_not_copied'
  when count(*) over (partition by n.id) > 1 then 'source_id_collision'
  when exists (select from search_problem p where p.id = n.id) then 'incomplete_search'
@@ -111,18 +118,23 @@ select id, created_at, deal_id, name, min_sf, max_sf, max_rate, types ->> 0,
  must_haves, mapped_vendor_id, source_ref, source_revision, applicability,
  updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from ready_need where not (coalesce(min_sf > max_sf, false)) returning *) select * from copied;
+-- Earlier edits may have deferred history checks waiting.
 set constraints all immediate;
 alter table change disable trigger stamp_change;
-insert into change (table_name, record, action, new_value, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select 'space_need', jsonb_build_object('id', id), 'insert',
- to_jsonb(n) - array['changed_at','changed_by_user_id','changed_by_job','changed_for_user_id'],
- changed_at, changed_by_user_id, changed_by_job, changed_for_user_id from copied_need n;
-
--- Approval is evidence from the old assertion, not a new approval by the importing job.
-insert into change (table_name, record, action, new_value, changed_by_user_id, changed_at)
-select 'space_need', jsonb_build_object('id', n.id), 'update', n.approval,
- (n.approval ->> 'approved_by')::uuid, (n.approval ->> 'approved_at')::timestamptz
-from ready_need n join copied_need s on s.id = n.id where n.approval is not null;
+-- Source creation and approval are history; the row itself keeps its latest update stamp.
+insert into change (table_name, record, action, old_value, new_value, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select 'space_need', jsonb_build_object('id', id), action, old_value, new_value, happened_at,
+ changed_by_user_id, changed_by_job, changed_for_user_id from (
+ select s.id, 'insert' as action, null::jsonb as old_value,
+ to_jsonb(s) - array['changed_at','changed_by_user_id','changed_by_job','changed_for_user_id'] as new_value,
+ s.created_at as happened_at, a.* from copied_need s join ready_need n on n.id = s.id
+ cross join lateral copy_attribution(n.source_table, n.id, n.creator_id) a
+ union all
+ select n.id, 'update', jsonb_build_object('approved_by', null, 'approved_at', null,
+ 'approved_revision', null, 'approved_client_id', null), n.approval,
+ (n.approval ->> 'approved_at')::timestamptz, (n.approval ->> 'approved_by')::uuid, null, null
+ from ready_need n join copied_need s on s.id = n.id where n.approval is not null
+) history order by happened_at, id, action;
 set constraints all immediate;
 alter table space_need enable trigger stamp_change;
 alter table space_need enable trigger record_change;

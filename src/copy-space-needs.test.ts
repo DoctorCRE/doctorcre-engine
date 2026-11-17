@@ -76,15 +76,8 @@ before(async () => {
  update public.deal_client_need set withdrawn = true where id = '${id(304)}';
  update public.deal_client_need set approved_revision=revision,approved_client_id='${id(3)}',approved_by='${id(1)}',approved_at='2025-01-02' where id in ('${id(302)}','${id(303)}','${id(304)}');
  commit;`);
-	await search(100, {
-		min_sf: 1000,
-		max_sf: 2000,
-		max_rate_sf_yr: 0,
-		sub_types: ["office"],
-		cities: [],
-		states: [],
-		statuses: ["available"],
-	});
+	// biome-ignore format: the complete old filter is one fixture
+	await search(100,{min_sf:1000,max_sf:2000,max_rate_sf_yr:0,sub_types:["office"],cities:[],states:[],statuses:["available"]});
 	await search(101, { max_sf: 3000, cities: null, states: [] });
 	await search(102, { sub_types: ["office", "retail"] });
 	await search(103, { mystery: { keep: "this" } });
@@ -95,15 +88,8 @@ before(async () => {
 	await db.query(
 		`update public.space_search set deal_id = null where id = '${id(107)}'`,
 	);
-	await saved(
-		200,
-		{
-			counties: ["Example County"],
-			property_types: ["office"],
-			min_square_feet: 1200,
-		},
-		"archived",
-	);
+	// biome-ignore format: the complete archived filter is one fixture
+	await saved(200,{counties:["Example County"],property_types:["office"],min_square_feet:1200},"archived");
 	await saved(201, { query: "near hospital" });
 	await saved(202, { entrance_verified: true });
 	await saved(203, {}, "draft");
@@ -118,38 +104,11 @@ after(async () => {
 	await asAdmin(`drop database "${name}" with (force)`);
 });
 test("searches keep bounds, unspecified filters and source authors; archived needs survive", async () => {
-	assert.deepEqual(
-		(
-			await rows(
-				"select id,deal_id,name,min_sf,max_sf,max_rate_sf_yr,space_type,market_id,must_haves from space_need where id < '00000000-0000-4000-8000-000000000300' order by id",
-			)
-		).map(Object.values),
-		[
-			[
-				id(100),
-				id(11),
-				"Space need",
-				"1000.0",
-				"2000.0",
-				"0.00",
-				"office",
-				null,
-				null,
-			],
-			[id(101), id(11), "Space need", null, "3000.0", null, null, null, null],
-			[
-				id(200),
-				id(11),
-				"Example search",
-				"1200.0",
-				null,
-				null,
-				"office",
-				id(20),
-				"Near transit",
-			],
-		],
-	);
+	// biome-ignore format: one row per source search
+	assert.deepEqual((await rows("select id,deal_id,name,min_sf,max_sf,max_rate_sf_yr,space_type,market_id,must_haves from space_need where id < '00000000-0000-4000-8000-000000000300' order by id")).map(Object.values), [
+ [id(100),id(11),"Space need","1000.0","2000.0","0.00","office",null,null],
+ [id(101),id(11),"Space need",null,"3000.0",null,null,null,null],
+ [id(200),id(11),"Example search","1200.0",null,null,"office",id(20),"Near transit"]]);
 	assert.deepEqual(
 		await rows(
 			`select created_at::text,changed_by_user_id from space_need where id='${id(100)}'`,
@@ -158,8 +117,9 @@ test("searches keep bounds, unspecified filters and source authors; archived nee
 	);
 });
 test("incomplete searches wait whole, preserving unknown values in the report", () => {
-	for (const n of [102, 103, 104, 105, 106, 107, 201, 202, 203])
-		assert.ok(reasons(report, n).length, `missing refusal ${n}`);
+	// biome-ignore format: source ids and exact refusal reasons
+	for (const [n, expected] of [[102,["incomplete_search","types_need_correction"]],[103,["unknown_key","incomplete_search"]],[104,["geography_needs_correction"]],[105,["geography_needs_correction"]],[106,["reversed_size"]],[107,["invalid_number","deal_unassigned"]],[201,["requirement_needs_review","incomplete_search"]],[202,["requirement_needs_review","incomplete_search"]],[203,["draft_needs_confirmation"]]] satisfies [number,string[]][])
+ assert.deepEqual(reasons(report,n).sort(),expected.sort());
 	assert.ok(
 		report.some(
 			(r) =>
@@ -170,35 +130,21 @@ test("incomplete searches wait whole, preserving unknown values in the report", 
 	);
 });
 test("only confirmed current allowed needs copy, with vendor provenance and approval history", async () => {
-	assert.deepEqual(
-		(
-			await rows(
-				`select vendor_id,source_ref,source_revision,applicability,must_haves from space_need where id='${id(300)}'`,
-			)
-		).map(Object.values),
-		[
-			[
-				id(2),
-				"Example source",
-				"v1",
-				"For this location",
-				"Example requirement",
-			],
-		],
-	);
-	assert.deepEqual(
-		(
-			await rows(
-				`select changed_by_user_id,changed_at::text,new_value->>'approved_revision' as revision from change where table_name='space_need' and action='update'`,
-			)
-		).map(Object.values),
-		[[id(1), "2025-01-02 00:00:00+00", "1"]],
-	);
+	// biome-ignore format: one row per source and approval event
+	assert.deepEqual((await rows(`select vendor_id,source_ref,source_revision,applicability,must_haves from space_need where id='${id(300)}'`)).map(Object.values), [[id(2),"Example source","v1","For this location","Example requirement"]]);
+	// biome-ignore format: chronological history must also have increasing history ids
+	assert.deepEqual((await rows(`select action,changed_by_user_id,changed_at::text from change where table_name='space_need' and record->>'id'='${id(300)}' order by id`)).map(Object.values), [["insert",id(1),"2025-01-01 00:00:00+00"],["update",id(1),"2025-01-02 00:00:00+00"]]);
 	assert.equal(
 		(await rows("select count(*)::int as count from space_need"))[0]?.count,
 		4,
 	);
-	for (const n of [301, 302, 303, 304]) assert.ok(reasons(report, n).length);
+	for (const [i, reason] of [
+		"pending_confirmation",
+		"stale_requirement",
+		"restricted_requirement",
+		"withdrawn_requirement",
+	].entries())
+		assert.deepEqual(reasons(report, 301 + i), [reason]);
 });
 test("reruns leave needs and their history unchanged", async () => {
 	const snapshot = async () => [
@@ -216,6 +162,7 @@ test("invalid numbers, shapes and ambiguous markets are listed without aborting"
 	try {
 		for (const [i, spec] of [
 			{ min_sf: -1 },
+			{ min_sf: 1000.06 },
 			{ min_sf: 0.01 },
 			{ cities: "Example City" },
 			{ max_rate_sf_yr: 1e12 },
@@ -234,11 +181,68 @@ test("invalid numbers, shapes and ambiguous markets are listed without aborting"
 			`create temp table copy_space_need_county (source_table text,old_id uuid,county_fips text) on commit drop; insert into copy_space_need_county values ('ops.deal_space_search','${id(410)}','99001'),('ops.deal_space_search','${id(410)}','99003');`,
 		);
 		const result = await run();
-		for (const n of [400, 401, 402, 403, 404, 405, 406, 407, 408, 410])
-			assert.ok(reasons(result, n).length);
+		for (let n = 400; n < 410; n++)
+			assert.ok(
+				reasons(result, n).includes(
+					n === 403
+						? "geography_filter_invalid"
+						: n === 408
+							? "types_need_correction"
+							: "invalid_number",
+				),
+			);
+		assert.deepEqual(reasons(result, 410), ["geography_needs_correction"]);
 		assert.deepEqual(
 			await rows(`select id from space_need where id >= '${id(400)}'`),
 			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("unmapped vendors, approval conflicts, blank text and source collisions wait; reviewed search geography copies", async () => {
+	await db.query("begin; select set_config('engine.job','old_system',true)");
+	try {
+		await db.query(`insert into public.actor (id,slug,kind,display_name) values ('${id(5)}','codex','automation','Example Agent');
+ insert into public.party (id,kind,name,created_by,updated_by) values ('${id(9)}','org','Other Example','${id(1)}','${id(1)}');
+ insert into public.client (id,party_id,created_by,updated_by) values ('${id(4)}','${id(9)}','${id(1)}','${id(1)}');
+ insert into public.vendor (id,party_id,category,created_by,updated_by) values ('${id(8)}','${id(9)}','Example','${id(1)}','${id(1)}');`);
+		// biome-ignore format: one corrected source field and exact refusal per case
+		const cases = [{vendor_id:id(8)},{approved_client_id:id(4)},{approved_by:id(5)},{description:"\n"},{source_ref:"\t"},{source_revision:"\n"},{applicability:"\t"}];
+		for (const [i, patch] of cases.entries())
+			await db.query(
+				`insert into public.deal_client_need select (jsonb_populate_record(null::public.deal_client_need,to_jsonb(n)||$1::jsonb)).* from public.deal_client_need n where id=$2`,
+				[JSON.stringify({ ...patch, id: id(500 + i) }), id(300)],
+			);
+		await saved(507, {});
+		await db.query(
+			`update ops.deal_space_search set name=' ' where id='${id(507)}'`,
+		);
+		await saved(508, {});
+		await search(508, {});
+		await search(509, { cities: ["Example City"], states: ["ZZ"] });
+		await db.query(
+			`create temp table copy_space_need_county (source_table text,old_id uuid,county_fips text) on commit drop; insert into copy_space_need_county values ('space_search','${id(509)}','99001'),('space_search','${id(509)}','99003');`,
+		);
+		const result = await run();
+		for (const [i, reason] of [
+			"vendor_not_copied",
+			"approval_client_differs",
+			"approval_needs_user",
+		].entries())
+			assert.deepEqual(reasons(result, 500 + i), [reason]);
+		for (let n = 503; n <= 507; n++)
+			assert.ok(reasons(result, n).includes("blank_text"));
+		assert.deepEqual(reasons(result, 508), [
+			"source_id_collision",
+			"source_id_collision",
+		]);
+		assert.deepEqual(
+			await rows(
+				`select id,market_id from space_need where id >= '${id(500)}'`,
+			),
+			[{ id: id(509), market_id: id(20) }],
 		);
 	} finally {
 		await db.query("rollback");
