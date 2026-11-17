@@ -83,6 +83,18 @@ function validated({ field, value, occurred_on }: JsonObject): Patch {
 	};
 }
 
+// The old system's field lock text, so saves from either system queue together.
+export async function lockFields(
+	tx: Saving["tx"],
+	deal_id: string,
+	fields: readonly string[],
+) {
+	for (const field of fields)
+		await sql`select pg_advisory_xact_lock(hashtextextended(${deal_id} || ':' || ${field}, 0))`.execute(
+			tx,
+		);
+}
+
 export async function preparePatch(saving: Saving, args: JsonObject) {
 	const change = validated(args);
 	const { tx, actor_id } = saving;
@@ -91,12 +103,11 @@ export async function preparePatch(saving: Saving, args: JsonObject) {
 	if ("error" in subject) throw new SaveRefusal(lookupRefusal(subject));
 	const deal_id = subject.id;
 	// A phase move can replace the next step, so its locks come first.
-	for (const locked of field === "phase"
-		? ["next_date", "next_step", field]
-		: [field])
-		await sql`select pg_advisory_xact_lock(hashtextextended(${deal_id} || ':' || ${locked}, 0))`.execute(
-			tx,
-		);
+	await lockFields(
+		tx,
+		deal_id,
+		field === "phase" ? ["next_date", "next_step", field] : [field],
+	);
 	const base = args.base_event_id ?? null;
 	if (
 		base &&

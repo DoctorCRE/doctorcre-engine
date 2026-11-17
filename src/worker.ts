@@ -14,6 +14,7 @@ import { dealField } from "./deal-field.ts";
 import { deals } from "./deals/routes.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
+import { nextStep } from "./next-step.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { relationships } from "./relationships/routes.ts";
@@ -50,6 +51,7 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", dealField)
 	.route("/", invoices)
 	.route("/", leads)
+	.route("/", nextStep)
 	.route("/", presence)
 	.route("/", relationships)
 	.route("/", search)
