@@ -6,6 +6,9 @@ import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
 const HINTS = {
+	not_mailbox_owner: "Use the mailbox owner identity.",
+	draft_changed: "Read the draft again before recording delivery.",
+	already_sent: "This draft already has a sent message.",
 	unauthenticated: "The authenticated actor could not be resolved.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
 	not_found: "The requested record was not found.",

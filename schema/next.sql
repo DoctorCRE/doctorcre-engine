@@ -1253,14 +1253,19 @@ begin
 		raise exception 'only its owner edits a reply draft, before it goes out'
 			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
 	end if;
-	-- As today's sender: only a try aborted before Send goes out again, and only one it could not confirm may be found sent.
+	if by_owner and not (old.status = 'pending' or old.status = 'failed' and new.status = 'approved'
+		and old.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid')) then
+		raise exception 'a reply draft is decided once and sent at most once'
+			using errcode = 'check_violation', constraint = 'reply_draft_sent_once';
+	end if;
+	-- Only a failure before Send may be approved again; an unconfirmed try may only be found sent.
 	-- A try keeps the recipients its owner approved.
 	if new.status in ('sent', 'failed') and (new.to_address, new.cc_address) is distinct from (old.to_address, old.cc_address)
 		or new.status = old.status and to_jsonb(new) - editable <> to_jsonb(old) - editable
 		or new.status <> old.status and not (case old.status
 			when 'pending' then new.status in ('approved', 'dismissed')
 			when 'approved' then new.status in ('sent', 'failed')
-			when 'failed' then new.status = 'approved' and old.failure_reason = 'aborted_before_dispatch'
+			when 'failed' then new.status = 'approved' and old.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid')
 				or new.status = 'sent' and old.failure_reason ~ '^unconfirmed_after_[0-9]+$'
 			else false end) then
 		raise exception 'a reply draft is decided once and sent at most once'
@@ -1384,7 +1389,7 @@ begin
 	select * into draft from reply_draft where id = coalesce(new.reply_draft_id, old.reply_draft_id);
 	if not (nullif(current_setting('engine.job', true), '') is null
 		and nullif(current_setting('engine.user_id', true), '')::uuid is not distinct from draft.owner_user_id
-		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason = 'aborted_before_dispatch')) then
+		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid'))) then
 		raise exception 'only its owner attaches files to a reply draft, before it goes out'
 			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
 	end if;
