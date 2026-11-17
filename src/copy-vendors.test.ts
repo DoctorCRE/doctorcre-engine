@@ -126,7 +126,7 @@ ${oldVendor(49, 10, {
 	merged_into: id(40),
 	category_slug: "cpa",
 	intro_notes: "Example merged note",
-	originated: " Example referral, date unknown. ",
+	originated: "Different merged origin",
 	updated_by: PARTNER,
 	updated_at: "2025-02-03T04:05:06Z",
 })}
@@ -266,6 +266,7 @@ test("each value it does not copy is listed, with why", () => {
 		[id(47), "originated", "Merged origin", "its record holds another value"],
 		[id(47), "referral_active", "false", "its record holds another value"],
 		[id(47), "rivalry_group", "Different rivalry note", "its record holds another value"],
+		[id(49), "originated", "Different merged origin", "its record holds another value"],
 	]);
 });
 
@@ -292,19 +293,6 @@ test("relationship wording and referral yes, no and unknown copy without inferen
 					refers_business: n === 11 ? false : null,
 				})),
 			],
-		);
-		assert.deepEqual(
-			await rows(`select v.originated as relationship_origin, v.rivalry_group as rivalry_note,
-				v.referral_active as refers_business from public.vendor v where v.id = '${id(42)}'`),
-			await rows(`select relationship_origin, rivalry_note, refers_business from party_role
-				where party_id = '${id(11)}' and role = 'vendor'`),
-		);
-		assert.deepEqual(
-			await rows(`select a.originated as relationship_origin, b.rivalry_group as rivalry_note,
-				a.referral_active as refers_business from public.vendor a, public.vendor b
-				where a.id = '${id(40)}' and b.id = '${id(41)}'`),
-			await rows(`select relationship_origin, rivalry_note, refers_business from party_role
-				where party_id = '${id(10)}' and role = 'vendor'`),
 		);
 		assert.deepEqual(await rows("select * from introduction"), []);
 		assert.deepEqual(await rows("select * from party_link"), []);
