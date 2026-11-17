@@ -897,7 +897,13 @@ create table offer (
 	offered_at timestamptz not null,
 	expires_on date,
 	status text not null default 'open'
-		check (status in ('open', 'countered', 'accepted', 'rejected', 'withdrawn', 'superseded')),
+		check (status in ('unknown', 'open', 'countered', 'accepted', 'rejected', 'withdrawn', 'superseded')),
+	import_source text check (import_source ~ '^[a-z][a-z0-9_]*$'),
+	import_id text check (import_id ~ '^\S(.*\S)?$'),
+	import_record jsonb,
+	constraint offer_import_whole check (num_nonnulls(import_source, import_id, import_record) in (0, 3)),
+	constraint offer_unknown_only_imported check (status <> 'unknown' or import_source is not null),
+	unique (import_source, import_id),
 	rent_per_sf_yr numeric(10, 2) check (rent_per_sf_yr >= 0),
 	nnn_per_sf_yr numeric(10, 2) check (nnn_per_sf_yr >= 0),
 	term_months integer check (term_months >= 0),
@@ -924,9 +930,10 @@ create unique index offer_one_accepted_per_deal on offer (deal_id) where status 
 create function offer_status_moves() returns trigger
 language plpgsql as $$
 begin
-	if not (old.status = 'open' and new.status <> 'superseded'
+	if not (old.status = 'unknown'
+		or old.status = 'open' and new.status not in ('unknown', 'superseded')
 		or old.status = 'accepted' and new.status = 'superseded') then
-		raise exception 'a round''s status moves only out of open, or from accepted to superseded'
+		raise exception 'a round''s status moves out of unknown or open, or from accepted to superseded'
 			using errcode = 'check_violation', constraint = 'offer_status_moves';
 	end if;
 	return new;
@@ -1183,7 +1190,7 @@ begin atomic
 			where dp.deal_id = d.id
 		),
 		'offers', (
-			select coalesce(jsonb_agg(to_jsonb(o) - 'deal_id' || jsonb_build_object('documents', (
+			select coalesce(jsonb_agg(to_jsonb(o) - array['deal_id', 'import_source', 'import_id', 'import_record'] || jsonb_build_object('documents', (
 				select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 				from offer_document od join document doc on doc.id = od.document_id
 				where od.offer_id = o.id
@@ -1995,6 +2002,11 @@ grant update (started_on, ended_on) on party_territory to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
 grant update (what, owner_party_id, due_on, done_at) on next_step to engine;
+-- Only the owner's import supplies provenance. A user's or job's new round has a known status.
+revoke insert on offer from engine;
+grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,
+	expires_on, status, rent_per_sf_yr, nnn_per_sf_yr, term_months, ti_per_sf, free_rent_months,
+	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms) on offer to engine;
 grant update (status) on offer to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
