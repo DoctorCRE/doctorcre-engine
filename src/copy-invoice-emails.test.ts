@@ -101,9 +101,9 @@ before(async () => {
 	}
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.event (id,actor_id,verb,subject_type,subject_id,field,old_value,new_value,cause,occurred_at) values
- ('${id(4023)}','${id(3)}','update-deal','deal','${id(23)}','phase','{"phase":"closed"}','{"phase":"closed"}','automation_job','2025-03-04'),
- ('${id(5023)}','${id(3)}','update-deal','deal','${id(23)}','invoiced_on','{"invoiced_on":"2025-03-01"}','{"invoiced_on":"2025-03-01"}','automation_job','2025-03-04');
- update public.deal_invoice_email set prior_phase='closed', prior_invoiced_on='2025-03-01', phase_event_id='${id(4023)}', invoice_event_id='${id(5023)}', applied_at='2025-03-04' where id='${id(214)}';
+ ('${id(4010)}','${id(3)}','update-deal','deal','${id(10)}','phase','{"phase":"closed"}','{"phase":"closed"}','automation_job','2025-03-04'),
+ ('${id(5010)}','${id(3)}','update-deal','deal','${id(10)}','invoiced_on','{"invoiced_on":"2025-03-01"}','{"invoiced_on":"2025-03-01"}','automation_job','2025-03-04');
+ update public.deal_invoice_email set deal_id='${id(10)}', deal_name='Example deal 10', prior_phase='closed', prior_invoiced_on='2025-03-01', phase_event_id='${id(4010)}', invoice_event_id='${id(5010)}', applied_at='2025-03-04' where id='${id(214)}';
  update public.deal_invoice_email set from_address = 'Example <bad@example.test>' where id = '${id(203)}';
  delete from outside_id where source = 'old_system' and value = '${id(14)}';
  delete from commission_payment where id in ('${id(115)}','${id(124)}'); update commission set gross = null where deal_id in ('${id(15)}','${id(24)}');
@@ -164,6 +164,11 @@ test("captured, applied and undone evidence retain facts, targets and original h
 			`select new_value ->> 'reason' as reason from change where table_name = 'invoice_email' and new_value ->> 'status' = 'applied' limit 1`,
 		),
 		[["Example invoice reason"]],
+	);
+	assert.deepEqual(
+		await values(`select new_value -> 'deal_id', new_value -> 'payment_id' from change
+ where table_name='invoice_email' and record='{"id":"${id(200)}"}' and action='insert'`),
+		[[null, null]],
 	);
 	const afterCopy = await snapshot();
 	assert.deepEqual(

@@ -56,6 +56,12 @@ begin
    if capture.occurred_at < i.occurred_at or i.applied_at < capture.occurred_at or i.undone_at < i.applied_at then
     raise check_violation using constraint = 'history_dates_disagree';
    end if;
+   if i.status <> 'captured' then
+    if exists (select from public.deal_invoice_email other where other.deal_id = i.deal_id
+     and other.email_date = i.email_date and other.status <> 'captured' and (other.applied_at,other.id) < (i.applied_at,i.id)) then
+     raise check_violation using constraint = 'duplicate_application';
+    end if;
+   end if;
    mapped_deal := null; payment := null; prior_at := null; payment_change := null;
    if i.deal_id is not null then
     select m.deal_id into mapped_deal from outside_id m join deal d on d.id = m.deal_id
@@ -69,10 +75,6 @@ begin
     if candidates <> 1 then raise check_violation using constraint = 'payment_not_identified'; end if;
    end if;
    if i.status <> 'captured' then
-    if exists (select from public.deal_invoice_email other where other.deal_id = i.deal_id
-     and other.email_date = i.email_date and other.status <> 'captured' and (other.applied_at,other.id) < (i.applied_at,i.id)) then
-     raise check_violation using constraint = 'duplicate_application';
-    end if;
     if current_date_value is distinct from (case when i.status = 'undone' then i.prior_invoiced_on else i.email_date end) then
      raise check_violation using constraint = 'invoice_dates_disagree';
     end if;
@@ -129,13 +131,14 @@ begin
     changed_by_user_id, changed_by_job, changed_for_user_id)
    select 'invoice_email', jsonb_build_object('id', i.id), 'insert',
     (payload - array['prior_phase_at','applied_phase_at','prior_invoiced_on','payment_change_id'])
-     || jsonb_build_object('status', 'captured', 'application_root_id', null), capture.occurred_at, a.*
+     || jsonb_build_object('status', 'captured', 'application_root_id', null,
+      'deal_id', case when i.status = 'captured' then mapped_deal end, 'payment_id', case when i.status = 'captured' then payment end), capture.occurred_at, a.*
    from copy_event_attribution(i.created_by, capture.id) a;
    if i.status <> 'captured' then
     insert into change (table_name, record, action, old_value, new_value, changed_at,
      changed_by_user_id, changed_by_job, changed_for_user_id)
     select 'invoice_email', jsonb_build_object('id', i.id), 'update', jsonb_build_object('status', 'captured'),
-     jsonb_build_object('status', 'applied', 'reason', i.reason, 'prior_phase_at', prior_at,
+     jsonb_build_object('status', 'applied', 'deal_id', mapped_deal, 'payment_id', payment, 'reason', i.reason, 'prior_phase_at', prior_at,
       'applied_phase_at', phase_event.occurred_at, 'prior_invoiced_on', i.prior_invoiced_on, 'payment_change_id', payment_change), i.applied_at, a.*
     from copy_event_attribution(i.applied_by, i.invoice_event_id) a;
    end if;
