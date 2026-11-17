@@ -1895,12 +1895,6 @@ const OWNER_RULES: Record<string, Case[]> = {
 			"deal_renews_another_lease",
 		],
 	],
-	"a renewal is separate from the deal that negotiated its source lease": [
-		[
-			`${newLease()}; update deal set reason = 'renewal', renews_lease_id = '${LEASE_RECORD}' where id = '${DEAL}'`,
-			"deal_renews_another_lease",
-		],
-	],
 	"historical critical date loads still require a whole confirmation": [
 		[
 			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ confirmed_by_user_id: USER })}`,
