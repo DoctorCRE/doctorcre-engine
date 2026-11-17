@@ -1,0 +1,299 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { after, before, test } from "node:test";
+import { URL } from "node:url";
+import pg from "pg";
+import { asAdmin } from "../scripts/test-database.ts";
+
+const id = (n: number) =>
+	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const sql = (file: string) =>
+	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
+const schema = await sql("next.sql");
+const attribution = await sql("copy-attribution.sql");
+const copy = await sql("copy-commissions.sql");
+const name = `copy_commissions_${randomUUID().replaceAll("-", "")}`;
+const url = new URL(
+	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
+);
+url.pathname = `/${name}`;
+const db = new pg.Client({
+	connectionString: url.href,
+	options: "-c search_path=next -c TimeZone=UTC",
+});
+const rows = async (text: string) => (await db.query(text)).rows;
+const run = async (): Promise<pg.QueryResultRow[]> => {
+	const result = await db.query(copy);
+	assert.ok(Array.isArray(result));
+	return result.at(-1)?.rows ?? [];
+};
+const reasons = (report: pg.QueryResultRow[], n: number) =>
+	report.filter((r) => r.old_id === id(n)).map((r) => r.reason);
+const payment = (
+	n: number,
+	deal: number,
+	status: string,
+	amount: string,
+	dates = "null, null, null",
+) =>
+	`('${id(n)}', '${id(deal)}', '${status}', ${amount}, ${dates}, '2025-01-01', '2025-02-01', '${id(1)}')`;
+let report: pg.QueryResultRow[];
+before(async () => {
+	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
+	await asAdmin(
+		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
+	);
+	await db.connect();
+	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'person', 'Example Other'), ('${id(6)}', 'company', 'Example Client');
+ insert into app_user (id) values ('${id(1)}'), ('${id(2)}');
+ insert into how_found values ('referral', 'Example referral');
+ update party set how_found = 'referral';
+ insert into role (slug, label) values ('client', 'Client');
+ insert into party_role (party_id, role) values ('${id(6)}', 'client');
+ insert into outside_id (source, value, party_id) values ('old_system', '${id(1)}', '${id(1)}'), ('old_system', '${id(2)}', '${id(2)}'), ('old_system', '${id(6)}', '${id(6)}');
+ insert into commission_tier (user_id, from_deal, partner_user_id, closing_share) values ('${id(1)}', 1, '${id(2)}', 0.6);
+ insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'), ('${id(2)}', 'partner_two', 'human', 'Example Other');
+ insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Active', true, 1);
+ insert into public.party (id, kind, name, created_by, updated_by) values ('${id(6)}', 'org', 'Example Client', '${id(1)}', '${id(1)}');
+ insert into public.client (id, party_id, created_by, updated_by) values ('${id(3)}', '${id(6)}', '${id(1)}', '${id(1)}');
+ insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Lease', 1);
+ insert into public.deal_phase (slug, label) values ('negotiation', 'Negotiation');
+ insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
+ select v, '${id(3)}', 'Example deal', 'lease', 'negotiation', 'partner_one', '${id(1)}', '${id(1)}'
+ from unnest(array[${Array.from({ length: 13 }, (_, i) => `'${id(10 + i)}'::uuid`).join(",")}]) v;
+ update public.deal set owner = 'partner_two' where id = '${id(16)}';
+ update public.deal set owner = null where id = '${id(21)}';
+ update public.deal set sf_commission_placeholder = 9876 where id = '${id(22)}';
+ insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by) values
+ ${[
+		payment(100, 10, "expected", "100"),
+		payment(101, 10, "expected", "200"),
+		payment(102, 10, "invoiced", "120", "'2025-01-01', '2025-02-01', null"),
+		payment(
+			103,
+			10,
+			"received",
+			"80",
+			"'2025-01-01', '2025-02-01', '2025-01-15'",
+		),
+		payment(110, 11, "expected", "75"),
+		payment(120, 12, "received", "20"),
+		payment(121, 12, "expected", "30"),
+		payment(130, 13, "invoiced", "0"),
+		payment(140, 14, "invoiced", "30", "'2025-02-01', '2025-01-01', null"),
+		payment(150, 15, "expected", "999999999999.99"),
+		payment(151, 15, "expected", "1"),
+		payment(160, 16, "invoiced", "40"),
+		payment(170, 17, "expected", "50", "'2025-01-01', null, null"),
+		payment(180, 18, "invoiced", "60"),
+		payment(200, 20, "expected", "90"),
+		payment(210, 21, "expected", "25"),
+ ].join(",")};
+ commit;`);
+	await db.query("begin");
+	await db.query(await sql("copy-deals.sql"));
+	await db.query("commit");
+	// A copied deal's mapping can point to a different id.
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into deal (id, name, owner_user_id) values ('${id(99)}', 'Example mapped deal', '${id(1)}');
+ update outside_id set deal_id = '${id(99)}' where source = 'old_system' and value = '${id(20)}'; commit;`);
+	await db.query("begin");
+	report = await run();
+	await db.query("commit");
+});
+after(async () => {
+	await db.end();
+	await asAdmin(`drop database "${name}" with (force)`);
+});
+
+test("expected rows add to the estimate and other rows add to gross as separate dated payments", async () => {
+	assert.deepEqual(
+		await rows(
+			`select expected, gross, closing_share, created_at::text, changed_at::text, changed_by_user_id from commission where deal_id = '${id(10)}'`,
+		),
+		[
+			{
+				expected: "300.00",
+				gross: "200.00",
+				closing_share: null,
+				created_at: "2025-01-01 00:00:00+00",
+				changed_at: "2025-02-01 00:00:00+00",
+				changed_by_user_id: id(1),
+			},
+		],
+	);
+	// biome-ignore format: one row per payment
+	assert.deepEqual((await rows(`select id, amount, invoiced_on::text, due_on::text, received_on::text, created_at::text, changed_at::text, changed_by_user_id from commission_payment where deal_id = '${id(10)}' order by id`)).map(Object.values), [
+ [id(102),'120.00','2025-01-01','2025-02-01',null,'2025-01-01 00:00:00+00','2025-02-01 00:00:00+00',id(1)],
+ [id(103),'80.00','2025-01-01','2025-02-01','2025-01-15','2025-01-01 00:00:00+00','2025-02-01 00:00:00+00',id(1)],
+ ]);
+	assert.deepEqual(
+		await rows(
+			"select m.deal_id from commission m join commission_payment p using (deal_id) group by m.deal_id, m.gross having sum(p.amount) <> m.gross",
+		),
+		[],
+	);
+});
+
+test("absent totals and unknown dates stay null; deals resolve through the deal copy", async () => {
+	assert.deepEqual(
+		(
+			await rows(
+				`select deal_id, expected, gross from commission where deal_id in ('${id(11)}', '${id(18)}', '${id(99)}') order by deal_id`,
+			)
+		).map(Object.values),
+		[
+			[id(11), "75.00", null],
+			[id(18), null, "60.00"],
+			[id(99), "90.00", null],
+		],
+	);
+	assert.deepEqual(
+		await rows(
+			`select invoiced_on, due_on, received_on from commission_payment where id = '${id(180)}'`,
+		),
+		[{ invoiced_on: null, due_on: null, received_on: null }],
+	);
+	assert.deepEqual(
+		await rows(`select * from commission where deal_id = '${id(22)}'`),
+		[],
+	);
+	assert.deepEqual(await rows("select * from commission_share"), []);
+	assert.equal((await rows("select * from commission_tier")).length, 1);
+	assert.deepEqual(reasons(report, 170), ["expected_date_has_no_destination"]);
+});
+
+test("unmappable rows are listed and their whole deal waits without aborting good deals", async () => {
+	for (const [n, reason] of [
+		[120, "received_without_date"],
+		[121, "another_row_on_deal_waits"],
+		[130, "nonpositive_amount"],
+		[140, "dates_out_of_order"],
+		[150, "amount_out_of_range"],
+		[151, "amount_out_of_range"],
+		[160, "ladder_not_entered"],
+		[210, "deal_not_copied"],
+	] as const)
+		assert.ok(reasons(report, n).includes(reason), `${n}: ${reason}`);
+	assert.deepEqual(
+		await rows(
+			`select * from commission where deal_id in (${[12, 13, 14, 15, 16, 21].map((n) => `'${id(n)}'`).join(",")})`,
+		),
+		[],
+	);
+});
+
+test("reruns change no rows or history and leave attribution triggers enabled", async () => {
+	const snapshot = async () => {
+		const all = [];
+		for (const t of [
+			"commission",
+			"commission_payment",
+			"commission_tier",
+			"commission_share",
+			"change",
+		])
+			all.push(await rows(`select * from ${t} order by 1`));
+		return all;
+	};
+	const before = await snapshot();
+	await db.query("begin");
+	const again = await run();
+	await db.query("commit");
+	assert.deepEqual(await snapshot(), before);
+	assert.deepEqual(again, report);
+	assert.equal(
+		(
+			await rows(
+				"select count(*)::int as n from pg_trigger where tgrelid in ('commission'::regclass,'commission_payment'::regclass) and tgname = 'stamp_change' and tgenabled = 'O'",
+			)
+		)[0]?.n,
+		2,
+	);
+});
+
+test("a dated receipt can be copied later and missing ladders remain user data", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.commission set received_on = '2025-03-01' where id = '${id(120)}'`,
+		);
+		await run();
+		assert.deepEqual(
+			await rows(
+				`select expected, gross from commission where deal_id = '${id(12)}'`,
+			),
+			[{ expected: "30.00", gross: "20.00" }],
+		);
+		assert.equal((await rows("select * from commission_tier")).length, 1);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("saved commissions, conflicting payment ids and changed old rows are reported without overwrites", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into commission (deal_id, gross) values ('${id(19)}', 100);
+ insert into commission_payment (id, deal_id, amount) values ('${id(120)}', '${id(19)}', 10);
+ update public.commission set received_on = '2025-03-01' where id = '${id(120)}';
+ update public.commission set gross_amount = 121 where id = '${id(102)}';
+ update commission set expected = 76 where deal_id = '${id(11)}';`);
+		await db.query("set constraints all immediate");
+		const refused = await run();
+		assert.ok(reasons(refused, 120).includes("payment_id_taken"));
+		assert.ok(reasons(refused, 102).includes("payment_id_taken"));
+		assert.ok(reasons(refused, 110).includes("existing_commission_conflict"));
+		assert.deepEqual(
+			await rows(
+				`select amount from commission_payment where id = '${id(102)}'`,
+			),
+			[{ amount: "120.00" }],
+		);
+		assert.deepEqual(
+			await rows(`select expected from commission where deal_id = '${id(11)}'`),
+			[{ expected: "76.00" }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("receipt order, gross overflow and unmapped authors are listed, with original attribution retained", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(7)}', 'example_missing', 'human', 'Example Missing');
+ insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by) values
+ ${payment(190, 19, "received", "10", "'2025-02-01', null, '2025-01-01'")};
+ update public.commission set updated_by = '${id(7)}' where id = '${id(160)}';
+ update public.commission set gross_amount = 999999999999.99 where id in ('${id(102)}','${id(103)}');`);
+		const refused = await run();
+		assert.ok(reasons(refused, 190).includes("dates_out_of_order"));
+		assert.ok(reasons(refused, 102).includes("amount_out_of_range"));
+		assert.ok(reasons(refused, 160).includes("author_not_copied"));
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("entering a ladder allows the waiting gross without inventing a split override", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(
+			`insert into commission_tier (user_id, from_deal, partner_user_id, closing_share) values ('${id(2)}', 1, '${id(1)}', 0.7)`,
+		);
+		await db.query("set constraints all immediate");
+		await run();
+		assert.deepEqual(
+			await rows(
+				`select gross, closing_share from commission where deal_id = '${id(16)}'`,
+			),
+			[{ gross: "40.00", closing_share: null }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
