@@ -62,14 +62,14 @@ after(async () => {
 	await asAdmin(`drop database "${name}" with (force)`);
 });
 const counties = `create temp table copy_market_county (market_slug text not null, county_fips text not null) on commit drop;
-insert into copy_market_county values ('example-bay', '01001'), ('example-bay', '01003'), ('example-bay', '01001');`;
+insert into copy_market_county values ('example-bay', '01001'), ('example-bay', '01003'), ('example-bay', '01001'), ('missing-slug', '01001');`;
 
 test("reviewed counties copy once, memberships follow merged party ids, and unknown geography is listed", async () => {
 	await db.query(`begin; ${counties}`);
 	try {
 		const report = await run();
-		assert.deepEqual(await rows("select name from market"), [
-			{ name: "Example Bay" },
+		assert.deepEqual(await rows("select id, name from market"), [
+			{ id: "3715b54e-b421-89eb-8c15-5b7642e420a5", name: "Example Bay" },
 		]);
 		assert.deepEqual(
 			await rows("select county_fips from market_county order by county_fips"),
@@ -104,6 +104,7 @@ test("reviewed counties copy once, memberships follow merged party ids, and unkn
 			],
 		);
 		for (const reason of [
+			"unknown_market_slug",
 			"counties_not_listed",
 			"regional_boundary_needs_drawing",
 			"text_territory_needs_drawing",
@@ -115,9 +116,12 @@ test("reviewed counties copy once, memberships follow merged party ids, and unkn
 				report.some((r) => r.reason === reason),
 				reason,
 			);
-		assert.equal(
-			(await rows("select id from market where name = 'Example Bay'")).length,
-			1,
+		assert.deepEqual(
+			await rows(`select bool_and(p.changed_by_user_id = '${id(1)}'
+ and p.changed_at = case when t.name = 'Around Example Bay' then '2025-01-01'::timestamptz else '2025-03-01'::timestamptz end
+ and p.created_at = case when t.name = 'Around Example Bay' then '2024-01-01'::timestamptz else '2025-03-01'::timestamptz end) as preserved
+from party_territory p join territory t on t.id = p.territory_id`),
+			[{ preserved: true }],
 		);
 	} finally {
 		await db.query("rollback");
@@ -151,6 +155,13 @@ test("a rerun leaves rows, timestamps and history unchanged", async () => {
 	await db.query(`begin; ${counties}`);
 	try {
 		await run();
+		await db.query(
+			"update party_territory set started_on = '2024-06-01'; delete from territory_piece",
+		);
+		assert.equal(
+			(await rows("select count(*)::int as n from market"))[0]?.n,
+			1,
+		);
 		const snapshot = () =>
 			rows(`select (select jsonb_agg(m) from market m) as markets,
 (select jsonb_agg(c) from market_county c) as counties, (select jsonb_agg(t) from territory t) as territories,
@@ -161,6 +172,24 @@ test("a rerun leaves rows, timestamps and history unchanged", async () => {
 			"drop table pg_temp.not_copied, pg_temp.old_market, pg_temp.old_membership, pg_temp.text_territory",
 		);
 		await run();
+		assert.deepEqual(await snapshot(), first);
+		await db.query(
+			"drop table pg_temp.not_copied, pg_temp.old_market, pg_temp.old_membership, pg_temp.text_territory; delete from copy_market_county",
+		);
+		const report = await run();
+		assert.ok(
+			!report.some((r) => r.old_id === "example-bay" && r.field === "boundary"),
+		);
+		assert.deepEqual(await snapshot(), first);
+		await db.query(
+			"drop table pg_temp.not_copied, pg_temp.old_market, pg_temp.old_membership, pg_temp.text_territory; insert into copy_market_county values ('example-bay', 'bad')",
+		);
+		assert.ok(
+			(await run()).some(
+				(r) =>
+					r.old_id === "example-bay" && r.reason === "market_already_copied",
+			),
+		);
 		assert.deepEqual(await snapshot(), first);
 	} finally {
 		await db.query("rollback");
@@ -185,6 +214,19 @@ delete from outside_id where source = 'old_system';`);
 			report.some((r) => r.old_id === id(4) && r.reason === "party_not_copied"),
 		);
 		assert.deepEqual(await rows("select * from party_territory"), []);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("a regional name does not conflict with a named market", async () => {
+	await db.query(`begin; ${counties}
+update public.vendor_market set name = 'Example Bay' where kind = 'regional';`);
+	try {
+		await run();
+		assert.deepEqual(await rows("select name from market"), [
+			{ name: "Example Bay" },
+		]);
 	} finally {
 		await db.query("rollback");
 	}

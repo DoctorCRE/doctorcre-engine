@@ -137,7 +137,7 @@ test("types split into kind and reason, with startup renamed and other left unfi
 test("deals preserve identity, times, owner, market and value, and client links use the old-id map", async () => {
 	// biome-ignore format: one row per imported deal
 	assert.deepEqual((await rows(`select name, owner_user_id, market_id, closed_value, created_at::text, changed_at::text, changed_by_user_id from deal where id = '${id(10)}'`)).map(Object.values), [
- ["Example deal 10", id(1), (await rows("select id from market where name = 'Example Market'"))[0]?.id, "1234.00", "2025-01-01 00:00:00+00", "2025-02-01 00:00:00+00", id(1)],
+ ["Example deal 10", id(1), "a21dfc2b-f197-e0af-15a5-9603db608073", "1234.00", "2025-01-01 00:00:00+00", "2025-02-01 00:00:00+00", id(1)],
  ]);
 	assert.deepEqual(
 		await rows(
