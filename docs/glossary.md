@@ -214,6 +214,33 @@ A tenant's agreement for a property, whether negotiated by the team or elsewhere
 **Lease option**:
 A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
 
+**Gross commission**:
+What the brokerage collects on a deal, recorded once. Every share and payment is a part of it.
+_Avoid_: fee, take (a user's part), commission amount on a payment
+_Database_: `commission.gross_amount` today, one row per invoice; `commission.gross` in the new database, one per deal.
+
+**Expected commission**:
+What an open deal is expected to bring, before its gross is known.
+_Database_: `commission` rows with status `expected` today; `commission.expected` in the new database.
+
+**Payment**:
+One part of a deal's gross as it is invoiced, falls due and is received, such as half at signing and half at move-in.
+_Avoid_: invoice (the email that brings it), installment
+_Database_: `commission` rows with status `invoiced` or `received` today; `commission_payment` in the new database.
+
+**Split**:
+Who gets what share of a deal's gross. Others are paid first: a referring agent, the brokerage, anyone else. The two users split what is left.
+_Avoid_: allocation, partner split
+_Database_: `commission_allocation` today, never filled; `commission_share` for the others and the view `commission_split` for everyone in the new database.
+
+**Closing user**:
+The user who closes a deal, its deal owner. Their ladder sets their part of what the others leave, and their partner takes the rest.
+
+**Ladder**:
+A user's tiers by their lifetime count of closed deals. Each tier starts at a count and runs until the next one, with the closing user's part, stepping down toward an even split. The count never resets. A single deal can override it. The real tiers are the partners' rows and never appear in this repo.
+_Avoid_: schedule, plan, tier table
+_New database_: `commission_tier`, keyed by the user and the count its tier starts from.
+
 **Tour**:
 A visit to properties. In the new database a completed tour is a meeting about the parties, with its deal and visited properties linked when known.
 
