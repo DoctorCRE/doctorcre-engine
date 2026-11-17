@@ -9,7 +9,7 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 create temp table old_suggestion on commit drop as
 select s.*, deal.deal_id, source.id as activity_id, source.kind as activity_kind, owner.id as owner,
  case when pg_input_is_valid(s.due_text, 'date') then s.due_text::date end as due_on,
- base.new_value ->> 'phase' as from_phase, phase.slug as known_phase,
+ base.new_value ->> 'phase' as from_phase,
  (select u.id from app_user u where u.id = decided.changed_by_user_id) as decider
 from (
  select c.id, c.session_id, c.kind as old_kind, c.payload ->> 'deal' as deal_ref, btrim(c.payload ->> 'text') as what,
@@ -31,7 +31,6 @@ left join public.actor assignee on assignee.slug = s.assignee
 left join outside_id o on o.source = 'old_system' and o.value = assignee.id::text
 left join app_user owner on owner.id = o.party_id
 left join public.event base on base.id::text = s.base_event and base.subject_id::text = s.deal_ref and base.field = 'phase'
-left join phase on phase.slug = s.to_phase
 cross join lateral copy_event_attribution(s.resolved_by, null) decided;
 
 -- An accepted next step is the copied step it made, or the one it was merged into, never a second one.
@@ -58,8 +57,10 @@ insert into not_copied select s.id, f.field, f.value, f.reason from suggestion s
  ('text', s.what, 'blank_next_step', s.kind = 'next_step' and coalesce(s.what, '') !~ '\S'),
  ('next_date', s.due_text, 'invalid_due_date', s.due_text is not null and s.due_on is null),
  ('assignee_slug', s.assignee, 'assignee_not_a_user', s.assignee is not null and s.owner is null),
- ('value', s.to_phase, 'phase_not_proposable', s.kind = 'phase_move' and (s.known_phase is null or s.to_phase = 'dead')),
+ ('value', s.to_phase, 'phase_not_proposable', s.kind = 'phase_move' and (s.to_phase = 'dead' or not exists (select from phase where slug = s.to_phase))),
  ('base_event_id', s.base_event, 'phase_before_call_unknown', s.kind = 'phase_move' and s.from_phase is null),
+ ('phase', s.from_phase, 'phase_before_call_unknown', s.kind = 'phase_move' and not exists (select from phase where slug = s.from_phase)
+  and s.from_phase is not null),
  ('value', s.to_phase, 'phase_unchanged', s.kind = 'phase_move' and s.from_phase = s.to_phase),
  ('resolved_by', s.resolved_by::text, 'decision_needs_user', s.status <> 'pending' and s.decider is null),
  ('resulting_ref', s.resulting_ref, 'next_step_not_copied', s.kind = 'next_step' and s.status = 'confirmed'
@@ -80,7 +81,8 @@ from suggestion s where not exists (select from not_copied n where n.old_id = s.
 insert into not_copied select r.old_id, 'proposal', r.id::text, 'existing_proposal_conflicts' from ready r
 where exists (select from proposal p where (p.id = r.id) <> ((p.activity_id, p.kind, p.deal_id, p.what, p.owner_party_id, p.due_on, p.from_phase, p.to_phase)
  is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase))
- or p.id = r.id and (p.evidence, p.status, p.decided_by_user_id, p.decided_at) is distinct from (r.evidence, r.status, r.decided_by_user_id, r.decided_at))
+ or p.id = r.id and (p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at)
+  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at))
  or exists (select from ready other where other.old_id <> r.old_id and (other.id = r.id
   or (other.activity_id, other.kind, other.deal_id, other.what, other.owner_party_id, other.due_on, other.from_phase, other.to_phase)
   is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase)));

@@ -179,16 +179,28 @@ test("an accepted suggestion whose deal item is copied later arrives on the next
  insert into next_step (id, what, deal_id) values ('${id(93)}', 'Example taken', '${id(30)}');
  update public.capture_post_call_candidate set action_description = 'Example changed' where id = '${id(71)}';
  update public.capture_candidate set status = 'skipped', resolved_by = '${id(1)}', resolved_at = '2024-01-11' where id = '${id(82)}';
+ update public.capture_post_call_candidate set created_at = '2024-01-02' where id = '${id(72)}';
+ insert into public.event (id, occurred_at, actor_id, verb, subject_type, subject_id, field, new_value, cause)
+  values ('${id(51)}', '2023-12-02', '${id(1)}', 'patch-deal-field', 'deal', '${id(30)}', 'phase', '{"phase": "unmapped"}', 'human_stated');
+ insert into public.capture_candidate (id, session_id, idempotency_key, batch_hash, item_index, kind, payload, evidence_quote, confidence,
+  status, resolved_by, resulting_ref, resolved_at, created_at) values
+  ${capture(89, "phase_move", { deal: id(30), field: "phase", value: "loi", base_event_id: id(51) })};
  commit;`);
 	const report = await run();
 	assert.ok(!report.some((r) => r.startsWith("#81 ")));
 	assert.ok(report.includes("#71 proposal #71 existing_proposal_conflicts"));
 	assert.ok(report.includes("#82 proposal #82 existing_proposal_conflicts"));
+	assert.ok(report.includes("#72 proposal #90 existing_proposal_conflicts"));
+	assert.ok(report.includes("#89 phase unmapped phase_before_call_unknown"));
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select id, status, what, due_on::text from proposal where id not in ('${id(80)}', '${id(90)}') order by id`), [
 		"#71 pending Example action 71 2024-02-01",
 		"#82 pending - -",
 		"#93 accepted Example taken 2024-02-01",
 	]);
+	assert.deepEqual(
+		await rows(`select created_at::text from proposal where id = '${id(90)}'`),
+		["2024-01-01 15:01:00+00"],
+	);
 	assert.deepEqual(await rows("select count(*) from next_step"), ["2"]);
 });
