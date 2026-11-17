@@ -637,7 +637,6 @@ create table lead_stage_move (
 	activity_id uuid references activity,
 	evidence_ref text check (evidence_ref ~ '\S'),
 	strength text not null check (strength in ('strong', 'weak')),
-	status text not null default 'proposed' check (status in ('proposed', 'applied')),
 	reason text check (reason ~ '\S'),
 	unique (party_id, from_stage, to_stage, activity_id),
 	constraint lead_stage_move_has_evidence check (to_stage = 'archived' or (activity_id is not null and evidence_ref is not null)),
@@ -652,14 +651,6 @@ create table lead_stage_move (
 create function apply_lead_stage_move() returns trigger
 language plpgsql as $$
 begin
-	if tg_op = 'UPDATE' and old.status = new.status then return null; end if;
-	if tg_op = 'UPDATE' and old.status = 'applied' then
-		raise exception 'an applied move stays applied; a correction is a new move'
-			using errcode = 'check_violation', constraint = 'lead_stage_move_final';
-	end if;
-	if new.status = 'proposed' then
-		return null;
-	end if;
 	if new.changed_by_job is not null and (new.strength = 'weak' or new.to_stage = 'archived') then
 		raise exception 'weak evidence and archiving wait for a direct user'
 			using errcode = 'check_violation', constraint = 'lead_stage_move_needs_user';
@@ -682,7 +673,7 @@ begin
 	return null;
 end $$;
 
-create trigger apply_lead_stage_move after insert or update of status on lead_stage_move
+create trigger apply_lead_stage_move after insert on lead_stage_move
 	for each row execute function apply_lead_stage_move();
 
 create function lead_stage_needs_evidence() returns trigger
@@ -693,7 +684,7 @@ begin
 	if (tg_op = 'UPDATE' and new.changed_by_job is not null and new.changed_for_user_id is null or new.stage = 'archived')
 		and not exists (select from lead_stage_move m
 			where m.party_id = new.party_id and m.from_stage = old.stage and m.to_stage = new.stage
-				and m.status = 'applied' and m.changed_at = now()
+				and m.changed_at = now()
 				and m.changed_by_user_id is not distinct from new.changed_by_user_id
 				and m.changed_by_job is not distinct from new.changed_by_job) then
 		raise exception 'a job stage move or an archive needs its applied evidence'
@@ -719,15 +710,180 @@ create table next_step (
 	constraint next_step_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1)
 );
 
+-- Suggestions from mail, calls and meetings share one decision queue, including weak lead moves.
+create table proposal (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move')),
+	activity_id uuid not null,
+	activity_kind text not null check (activity_kind in ('email', 'call', 'meeting')),
+	evidence text not null check (evidence ~ '\S'),
+	proposed_by_job text not null references job,
+	status text not null default 'pending' check (status in ('pending', 'accepted', 'dismissed')),
+	decided_by_user_id uuid references app_user,
+	decided_at timestamptz,
+	deal_id uuid references deal,
+	party_id uuid references party,
+	property_id uuid references property,
+	what text check (what ~ '\S'),
+	owner_party_id uuid references party,
+	due_on date,
+	from_phase text references phase,
+	to_phase text references phase,
+	lead_role text generated always as ('lead') stored,
+	from_stage text,
+	to_stage text,
+	how_found text references how_found,
+	strength text check (strength in ('strong', 'weak')),
+	reason text check (reason ~ '\S'),
+	foreign key (activity_id, activity_kind) references activity (id, kind),
+	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
+	foreign key (lead_role, from_stage) references stage (role, slug),
+	foreign key (lead_role, to_stage) references stage (role, slug),
+	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
+	constraint proposal_decision_whole check (
+		(status = 'pending' and decided_by_user_id is null and decided_at is null)
+		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
+	constraint proposal_payload check ((
+		(kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		or (kind = 'phase_move' and deal_id is not null and to_phase is not null
+			and from_phase is distinct from to_phase and (to_phase <> 'dead' or reason is not null)
+			and num_nonnulls(what, owner_party_id, due_on, from_stage, to_stage, how_found, strength) = 0)
+		or (kind = 'new_lead' and party_id is not null and to_stage = 'new' and how_found is not null
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, reason, strength) = 0)
+		or (kind = 'lead_stage_move' and strength is not null and party_id is not null and from_stage is not null and to_stage is not null
+			and from_stage <> to_stage and (to_stage <> 'archived' or reason is not null)
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, how_found) = 0)) is true)
+);
+
+create unique index proposal_source_payload_once on proposal
+	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found)
+	nulls not distinct;
+
+create function decide_proposal() returns trigger
+language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+	current_phase text;
+begin
+	if tg_op = 'INSERT' then
+		if new.status <> 'pending' or new.decided_by_user_id is not null or new.decided_at is not null
+			or acting_job is distinct from new.proposed_by_job then
+			raise exception 'a job creates a pending proposal' using errcode = 'check_violation', constraint = 'proposal_starts_pending';
+		end if;
+		return new;
+	end if;
+	if old.status <> 'pending' or new.status not in ('accepted', 'dismissed') then
+		raise exception 'a pending proposal is decided once' using errcode = 'check_violation', constraint = 'proposal_final';
+	end if;
+	if acting_job is not null or acting_user is null then
+		raise exception 'only a direct user decides a proposal' using errcode = 'check_violation', constraint = 'proposal_user_decides';
+	end if;
+	new.decided_by_user_id := acting_user;
+	new.decided_at := clock_timestamp();
+	if new.status = 'dismissed' then return new; end if;
+	case new.kind
+	when 'next_step' then
+		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id)
+		values (new.id, new.what, new.owner_party_id, new.due_on, new.deal_id, new.party_id, new.property_id);
+	when 'phase_move' then
+		-- Two acceptances cannot both pass the stale-phase check.
+		perform from deal where id = new.deal_id for update;
+		select phase into current_phase from deal_phase_change where deal_id = new.deal_id order by happened_at desc limit 1;
+		if current_phase is distinct from new.from_phase then
+			raise exception 'the deal has moved' using errcode = 'check_violation', constraint = 'proposal_current_phase';
+		end if;
+		insert into deal_phase_change (deal_id, happened_at, phase, reason)
+		values (new.deal_id, new.decided_at, new.to_phase, new.reason);
+	when 'new_lead' then
+		update party set how_found = coalesce(how_found, new.how_found) where id = new.party_id;
+		insert into party_role (party_id, role, stage) values (new.party_id, 'lead', new.to_stage);
+	when 'lead_stage_move' then
+		insert into lead_stage_move (id, party_id, from_stage, to_stage, activity_id, evidence_ref, strength, reason)
+		values (new.id, new.party_id, new.from_stage, new.to_stage, new.activity_id, new.evidence, new.strength, new.reason);
+	end case;
+	return new;
+end $$;
+
+create trigger decide_proposal before insert or update of status on proposal
+	for each row execute function decide_proposal();
+
 create table document (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	name text not null,
-	r2_key text not null,
+	r2_key text not null check (r2_key ~ '\S'),
+	r2_bucket text not null default 'post_media' check (r2_bucket in ('post_media', 'deal_documents')),
+	unique (r2_bucket, r2_key),
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
 	email_activity_id uuid references email,
 	unique (id, content_type)
+);
+
+create table document_kind (slug text primary key, label text not null);
+
+-- Deal files share documents with email attachments and post media; a replacement keeps the earlier bytes.
+alter table document
+	add deal_id uuid references deal,
+	add kind text references document_kind,
+	add version integer not null default 1 check (version >= 1),
+	add supersedes_id uuid unique,
+	add previous_version integer generated always as (nullif(version - 1, 0)) stored,
+	add sha256 text check (sha256 ~ '^[0-9a-f]{64}$'),
+	add bytes bigint check (bytes > 0),
+	add unique (id, deal_id),
+	add unique (id, deal_id, kind, version),
+	add constraint document_deal_file_whole check (
+		(deal_id is null and kind is null and version = 1 and supersedes_id is null)
+		or (deal_id is not null and kind is not null and content_type ~ '\S'
+			and content_type is not null and sha256 is not null and bytes is not null)),
+	add constraint document_version_has_predecessor check ((version = 1) = (supersedes_id is null)),
+	add constraint document_previous_version foreign key (supersedes_id, deal_id, kind, previous_version)
+		references document (id, deal_id, kind, version);
+
+create function document_filed_once() returns trigger
+language plpgsql as $$
+begin
+	if old.deal_id is not null or new.deal_id is null
+		or old.content_type is not null and new.content_type is distinct from old.content_type
+		or old.sha256 is not null and new.sha256 is distinct from old.sha256
+		or old.bytes is not null and new.bytes is distinct from old.bytes then
+		raise exception 'an attachment is filed to a deal once; stored file metadata never changes'
+			using errcode = 'check_violation', constraint = 'document_filed_once';
+	end if;
+	return new;
+end $$;
+
+create trigger document_filed_once before update on document
+	for each row when ((old.deal_id, old.kind, old.content_type, old.sha256, old.bytes)
+		is distinct from (new.deal_id, new.kind, new.content_type, new.sha256, new.bytes))
+	execute function document_filed_once();
+
+-- One completed attempt, including no text or failure, belongs to the exact stored file version.
+create table document_extraction (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	document_id uuid not null,
+	deal_id uuid not null,
+	extracted_at timestamptz not null,
+	method text not null check (method ~ '\S'),
+	extractor_version text not null check (extractor_version ~ '\S'),
+	model text check (model ~ '\S'),
+	text_format_version text not null check (text_format_version ~ '\S'),
+	status text not null check (status in ('produced', 'no_text', 'unavailable', 'receipt_only')),
+	pages text[] not null,
+	receipt jsonb check (jsonb_typeof(receipt) = 'object'),
+	foreign key (document_id, deal_id) references document (id, deal_id),
+	unique nulls not distinct (document_id, method, extractor_version, model, text_format_version),
+	constraint document_extraction_pages check (
+		case when coalesce(array_ndims(pages), 1) = 1 then array_position(pages, null) is null else false end
+		and cardinality(pages) <= 1000 and length(array_to_string(pages, '')) <= 500000),
+	constraint document_extraction_status_matches_text check (
+		(status = 'produced') = (translate(array_to_string(pages, ''), U&'\0009\000A\000B\000C\000D\001C\001D\001E\001F\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000', '') <> '')
+		and (status not in ('unavailable', 'receipt_only') or cardinality(pages) = 0)
+		and (status <> 'receipt_only' or receipt is not null))
 );
 
 create table offer (
@@ -814,13 +970,15 @@ create table space_need (
 	space_type text check (space_type ~ '\S'),
 	market_id uuid references market,
 	max_rate_sf_yr numeric(10, 2) check (max_rate_sf_yr >= 0 and max_rate_sf_yr <> 'NaN'::numeric),
-	vendor_id uuid references party,
+	vendor_id uuid,
+	vendor_role text not null default 'vendor' check (vendor_role = 'vendor'),
 	source_ref text check (source_ref ~ '\S'),
 	source_revision text check (source_revision ~ '\S'),
 	applicability text check (applicability ~ '\S'),
 	constraint space_need_vendor_source_whole check (num_nonnulls(vendor_id, source_ref, source_revision, applicability) in (0, 4)),
 	must_haves text check (must_haves ~ '\S'),
-	constraint space_need_size_in_order check (max_sf >= min_sf)
+	constraint space_need_size_in_order check (max_sf >= min_sf),
+	foreign key (vendor_id, vendor_role) references party_role on update cascade
 );
 
 create table suite (
@@ -1414,11 +1572,19 @@ begin
 	update national_account set party_id = survivor where party_id = duplicate
 		and exists (select from party_role where party_id = survivor and role = 'national_account');
 
+	delete from proposal d using proposal s
+	where d.party_id = duplicate and s.party_id = survivor
+		and (s.activity_id, s.kind, s.deal_id, s.property_id, s.from_phase, s.to_phase, s.from_stage, s.to_stage,
+			s.what, s.owner_party_id, s.due_on, s.how_found) is not distinct from
+			(d.activity_id, d.kind, d.deal_id, d.property_id, d.from_phase, d.to_phase, d.from_stage, d.to_stage,
+			d.what, d.owner_party_id, d.due_on, d.how_found);
 	delete from lead_stage_move d using lead_stage_move s
 	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
 		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
+	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
+	update space_need set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
 	-- Its stage, level and lead owner stay too, and the duplicate's fill any it lacks. A target on either holds.
@@ -1560,7 +1726,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'lead_stage_move', 'next_step', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -1695,7 +1861,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -1733,11 +1899,11 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, document, social_account, idea, design_template, introduction to engine;
+	activity_about, email, next_step, social_account, idea, design_template, introduction to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found to engine;
+grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found to engine;
 grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
@@ -1762,7 +1928,7 @@ grant update (status, client_type) on client to engine;
 grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
-grant update (status) on lead_stage_move to engine;
+grant update (status) on proposal to engine;
 
 
 
@@ -1770,6 +1936,7 @@ grant update (label) on lead_lane to engine;
 grant update (how_found_detail) on party to engine;
 grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) on party_role to engine;
 
+grant update (deal_id, kind, content_type, sha256, bytes) on document to engine;
 grant delete on suite, space_need, building_ownership to engine;
 grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
 grant update (name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id, must_haves, vendor_id, source_ref, source_revision, applicability) on space_need to engine;
