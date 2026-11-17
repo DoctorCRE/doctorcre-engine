@@ -10,25 +10,14 @@ create temp table old_call on commit drop as
 select s.id, coalesce(logged.id, s.id) as activity_id, logged.id is not null as is_logged,
  case when s.post_call then 'call' else 'meeting' end as kind, s.started_at as happened_at,
  s.created_at, s.state_at as changed_at, s.state, p.sha256 as recording, r.report_sha256,
- p.studio_status ->> 'state' as review_state,
- coalesce(nullif(concat_ws(E'\n\n', nullif(btrim(p.projection ->> 'summary'), ''),
-  (select 'Decisions:' || string_agg(E'\n- ' || btrim(d.value), '' order by d.n)
-   from jsonb_array_elements_text(p.projection -> 'decisions') with ordinality d(value, n) where d.value ~ '\S'),
-  (select 'Open questions:' || string_agg(E'\n- ' || btrim(q.value), '' order by q.n)
-   from jsonb_array_elements_text(p.projection -> 'open_questions') with ordinality q(value, n) where q.value ~ '\S')), ''),
-  case when logged.id is null then record.text end) as summary, record.records,
- a.*
+ p.studio_status ->> 'state' as review_state, t.summary, t.records, a.*
 from public.capture_session s
 left join public.phone_call_session p using (id)
 left join public.capture_post_call_report r on r.session_id = s.id
 -- Of several logged records, today's session screen shows the greatest.
 cross join lateral (select max(o.id::text)::uuid as id from public.capture_candidate c join public.activity o on o.id::text = c.resulting_ref
  where c.session_id = s.id and c.kind = 'meeting_record' and c.status = 'confirmed') logged
-cross join lateral (select count(*) as records, case when count(*) = 1 then max(concat_ws(E'\n\n',
-  case when c.payload ->> 'summary' ~ '\S' then c.payload ->> 'summary' end,
-  case when c.payload ->> 'detail' ~ '\S' then c.payload ->> 'detail' end)) end as text
- from public.capture_candidate c where c.session_id = s.id and c.kind = 'meeting_record' and c.status <> 'skipped'
-  and (c.payload ->> 'summary' ~ '\S' or c.payload ->> 'detail' ~ '\S')) record
+cross join lateral copy_capture_summary(s.id, logged.id is not null) t
 cross join lateral copy_attribution('capture_session', s.id, s.actor_id) a;
 
 -- A call is about each record its suggestions name; a client, lead or vendor is about its person or company.
