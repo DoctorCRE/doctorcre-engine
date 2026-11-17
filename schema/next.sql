@@ -460,7 +460,9 @@ create table outside_id (
 	value text not null check (value ~ '^\S(.*\S)?$'),
 	party_id uuid references party,
 	deal_id uuid references deal,
-	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id) = 1),
+	-- Today's system files one email as a row per record and mailbox; each row's id finds the email it became.
+	email_activity_id uuid,
+	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id, email_activity_id) = 1),
 	primary key (source, value)
 );
 
@@ -549,6 +551,24 @@ create constraint trigger lead_or_client_how_found after insert on party_role
 create constraint trigger lead_or_client_how_found after update of how_found on party
 	for each row when (old.how_found is not null and new.how_found is null)
 	execute function lead_or_client_how_found('id');
+
+-- Not recorded is only for records the old-system copy brought in; anyone added here says how they were found (owner, #604).
+create function how_found_not_recorded_only_imported() returns trigger
+language plpgsql as $$
+begin
+	-- Judged at commit on the saved row, so a later correction or merge in the same transaction counts.
+	if exists (select from party where id = new.id and how_found = 'not_recorded')
+		and not exists (select from outside_id where party_id = new.id and source = 'old_system') then
+		raise exception 'only a record copied from the old system may say how it was found was not recorded'
+			using errcode = 'check_violation', constraint = 'how_found_not_recorded_only_imported';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, so a person and their old-system id can be saved in either order.
+create constraint trigger how_found_not_recorded_only_imported after insert or update of how_found on party
+	initially deferred for each row when (new.how_found = 'not_recorded')
+	execute function how_found_not_recorded_only_imported();
 
 -- Someone is a client once a deal is opened for them, signed or not. The client role's row keeps when that was.
 -- Deferred, so the role and the deal can be saved in either order, and a merge can move both.
@@ -869,13 +889,34 @@ create table activity_about (
 create table email (
 	activity_id uuid primary key,
 	activity_kind text not null generated always as ('email') stored,
-	message_id text not null unique check (message_id = btrim(message_id)),
+	message_id text unique check (message_id = btrim(message_id)),
 	-- Matched to a person through party_email.
 	sender email_address not null,
 	subject text not null,
 	body text not null,
+	-- Set only by the owner's copy of today's mail, the one source that may lack the Message-ID.
+	imported boolean not null default false,
+	constraint email_message_id_unless_imported check (message_id is not null or imported),
 	foreign key (activity_id, activity_kind) references activity (id, kind)
 );
+
+alter table outside_id add foreign key (email_activity_id) references email;
+
+-- Without its Message-ID, an email is its sender, sent time and subject, so it is stored once.
+create function email_without_message_id_once() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from email e join activity a on a.id = e.activity_id join activity n on n.id = new.activity_id
+		where e.message_id is null and e.activity_id <> new.activity_id and e.sender = new.sender
+			and a.happened_at = n.happened_at and lower(e.subject) = lower(new.subject)) then
+		raise exception 'an email without its Message-ID is stored once'
+			using errcode = 'unique_violation', constraint = 'email_without_message_id_once';
+	end if;
+	return null;
+end $$;
+
+create trigger email_without_message_id_once after insert on email
+	for each row when (new.message_id is null) execute function email_without_message_id_once();
 
 create function email_about_a_record() returns trigger
 language plpgsql as $$
@@ -1693,7 +1734,7 @@ create function activity_entry(a activity) returns jsonb
 language sql stable
 begin atomic
 	select to_jsonb(a) || jsonb_build_object('email', (
-		select to_jsonb(e) - 'activity_id' - 'activity_kind' || jsonb_build_object('documents', (
+		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 			from document doc where doc.email_activity_id = e.activity_id
 		)) from email e where e.activity_id = a.id
@@ -2238,6 +2279,7 @@ declare
 	duplicate_npi text;
 	duplicate_how_found text;
 	duplicate_how_found_detail text;
+	duplicate_source_wins boolean;
 begin
 	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
 	perform from party where id in (duplicate, survivor) for update;
@@ -2390,9 +2432,13 @@ begin
 	end loop;
 
 	delete from party where id = duplicate returning npi, how_found, how_found_detail into duplicate_npi, duplicate_how_found, duplicate_how_found_detail;
+	-- A recorded source beats not recorded, as in the copy.
+	select how_found is null or how_found = 'not_recorded' and coalesce(duplicate_how_found, 'not_recorded') <> 'not_recorded'
+		into duplicate_source_wins from party where id = survivor;
 	update party set npi = coalesce(npi, duplicate_npi),
-		how_found_detail = coalesce(how_found_detail, case when how_found is null or how_found = duplicate_how_found
-			then duplicate_how_found_detail end), how_found = coalesce(how_found, duplicate_how_found)
+		how_found_detail = case when duplicate_source_wins then duplicate_how_found_detail
+			else coalesce(how_found_detail, case when how_found = duplicate_how_found then duplicate_how_found_detail end) end,
+		how_found = case when duplicate_source_wins then duplicate_how_found else how_found end
 	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
@@ -2924,6 +2970,8 @@ grant insert (id, deal_id, property_id, round, answers_round, from_party_id, fro
 	expires_on, status, rent_per_sf_yr, nnn_per_sf_yr, term_months, ti_per_sf, free_rent_months,
 	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms, submarket_condition) on offer to engine;
 grant update (status) on offer to engine;
+revoke insert on email from engine;
+grant insert (activity_id, message_id, sender, subject, body) on email to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;

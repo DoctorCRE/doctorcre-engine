@@ -40,7 +40,7 @@ _Avoid_: assignee, territory owner
 _Database_: `lead.owner_id` today; `party_role.owner_user_id` on the lead role in the new database.
 
 **How found**:
-How we found a lead or client, from a short list, such as referral, vendor, marketing post, public records or cold outreach.
+How we found a lead or client, from a short list: referral, vendor, marketing post, public records, cold outreach, own research, inbound, national account or corporate lead, or existing relationship. Not recorded is kept only for records copied from the old system.
 _Avoid_: source on its own, lane (a radar lane), referral source
 _Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database, with `party.how_found_detail` for attribution detail.
 

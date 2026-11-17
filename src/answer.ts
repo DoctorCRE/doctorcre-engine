@@ -36,6 +36,8 @@ const HINTS = {
 	old_system_required:
 		"The engine does not finish this save. Send it to the old system unchanged.",
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
+	invalid_json: "Send the arguments as one JSON object.",
+	unknown_job: "Name a job the engine knows in the Engine-Job header.",
 	unknown_owner: "Owner is one of joe, dell or claude.",
 	field_required:
 		"Supply the required field using the documented operation shape.",
@@ -62,7 +64,7 @@ export class Refusal {
 }
 
 export const refuse = (
-	c: Context<DatabaseEnv>,
+	c: Context,
 	refusal: Refusal,
 	correlation_id = crypto.randomUUID(),
 ) =>
