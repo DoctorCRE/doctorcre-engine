@@ -210,10 +210,9 @@ cross join lateral copy_attribution('negotiation_claim', c.id, c.created_by) a;
 create temp table claim_refusal on commit drop as
 select c.id, f.reason from mapped_claim c cross join lateral (values
  ('round_not_copied', c.offer_id is null),
- ('claim_type_not_available', not exists (select from claim_type t where t.slug = c.claim_type)),
  ('unsupported_claim_source', c.source <> 'stated'),
  ('unsupported_floor_basis', c.stated_floor is not null and c.stated_floor_basis not in ('usd_sf_yr', 'usd_sf_mo')),
- ('floor_out_of_range', c.floor_rent_per_sf_yr is not null and (c.floor_rent_per_sf_yr < 0.005 or c.floor_rent_per_sf_yr >= 99999999.995)),
+ ('floor_out_of_range', c.floor_rent_per_sf_yr is not null and c.floor_rent_per_sf_yr >= 99999999.995),
  ('blank_claim_text', c.quote is not null and c.quote !~ '\S' or c.note is not null and c.note !~ '\S'),
  ('claim_author_not_copied', c.changed_by_user_id is not null and not exists (select from app_user u where u.id = c.changed_by_user_id)),
  ('claim_sponsor_not_copied', c.changed_for_user_id is not null and not exists (select from app_user u where u.id = c.changed_for_user_id)),
