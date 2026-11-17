@@ -115,8 +115,16 @@ before(async () => {
   ${[
 		candidate(71, 60, "activity", { ref: id(21), kind: "note" }),
 		candidate(72, 61, "next_step", { deal: id(31) }),
-		candidate(73, 62, "meeting_record", { ref: id(30) }, 40),
+		candidate(
+			73,
+			62,
+			"meeting_record",
+			{ ref: id(30), summary: "Example logged" },
+			40,
+		),
 		candidate(77, 62, "activity", { ref: id(21) }),
+		candidate(83, 62, "meeting_record", { ref: id(30), summary: "Example" }),
+		candidate(84, 65, "meeting_record", { ref: id(30), detail: "Example" }, 48),
 		candidate(74, 63, "phase_move", { deal: "Example Deal" }),
 		candidate(75, 63, "phase_move", { deal: id(30) }),
 		candidate(
@@ -218,10 +226,13 @@ test("copies each call and meeting capture with its report, once, about the reco
 		`61 deal ${id(31)} deal_not_copied`,
 		`61 report_sha256 ${hash("c")} report_text_not_stored`,
 		"61 state failed capture_unfinished",
-		"63 deal Example Deal deal_not_copied",
+		`62 meeting_record ${id(83)} meeting_record_not_copied`,
+		`63 deal Example Deal deal_not_copied`,
+		`64 meeting_record ${id(78)} several_meeting_records`,
+		`64 meeting_record ${id(79)} several_meeting_records`,
 		`64 meeting_record ${id(80)} meeting_record_skipped`,
-		"64 meeting_record 2 several_meeting_records",
 		`65 activity ${id(41)} source_activity_not_copied`,
+		`65 meeting_record ${id(84)} meeting_record_not_copied`,
 		`65 ref ${id(31)} ref_not_copied`,
 	]);
 	assert.deepEqual(

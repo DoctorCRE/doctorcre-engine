@@ -52,16 +52,19 @@ insert into not_copied select c.id, f.field, f.value, f.reason from old_call c c
   and not exists (select from old_link l where l.id = c.id and (l.deal_id is not null or l.party_id is not null))),
  ('activity', c.activity_id::text, 'source_activity_not_copied', c.is_logged
   and not exists (select from activity a where a.id = c.activity_id)),
- ('meeting_record', c.records::text, 'several_meeting_records', not c.is_logged and c.records > 1),
  ('state', c.state, 'capture_unfinished', c.state <> 'done'),
  ('recording', c.recording, 'recording_not_copied', c.recording is not null),
  ('report_sha256', c.report_sha256, 'report_text_not_stored', c.report_sha256 is not null and c.summary is null),
  ('review_state', c.review_state, 'review_state_has_no_place', c.review_state is not null)
 ) f(field, value, reason, listed) where f.listed;
 insert into not_copied select id, field, value, replace(field, '_id', '') || '_not_copied' from old_link where deal_id is null and party_id is null;
-insert into not_copied select c.session_id, 'meeting_record', c.id::text, 'meeting_record_skipped'
+-- A meeting record's text is carried by its own logged activity or as the session's one summary; any other is listed.
+insert into not_copied select c.session_id, 'meeting_record', c.id::text, case when c.status = 'skipped' then 'meeting_record_skipped'
+ when o.is_logged then 'meeting_record_not_copied' else 'several_meeting_records' end
 from public.capture_candidate c join old_call o on o.id = c.session_id
-where c.kind = 'meeting_record' and c.status = 'skipped' and (c.payload ->> 'summary' ~ '\S' or c.payload ->> 'detail' ~ '\S');
+where c.kind = 'meeting_record' and (c.payload ->> 'summary' ~ '\S' or c.payload ->> 'detail' ~ '\S')
+ and not exists (select from public.activity a where a.id::text = c.resulting_ref)
+ and (c.status = 'skipped' or o.is_logged or o.records > 1);
 
 -- A logged meeting gains the links of its session's other suggestions once the activity copy has carried it.
 create temp table ready_call on commit drop as
