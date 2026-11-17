@@ -32,19 +32,20 @@ insert into stage (role, slug, label)
 select 'vendor', slug, label from public.vendor_stage where slug not in (select slug from original_stage)
 on conflict do nothing;
 
--- Each live vendor not copied before, at the record its party became. A merged-away vendor is today's tombstone,
--- whose values today's merge already gave its survivor.
+-- Each vendor not copied before, at the record its party became. Today's merge joins vendors of one party and leaves
+-- a value that conflicted on the merged-away one, so that one joins its survivor here, after the live ones.
 create temp table old_vendor on commit drop as
 select v.*, map.party_id as record_id,
 	exists (select from party_role r where r.party_id = map.party_id and r.role = 'vendor') as record_had_vendor,
-	row_number() over (partition by map.party_id order by v.party_id <> map.party_id, v.created_at, v.id) as rank,
+	row_number() over (partition by map.party_id
+		order by v.merged_into is not null, v.party_id <> map.party_id, v.created_at, v.id) as rank,
 	stage.slug as stage_slug, level.level, author.*
 from public.vendor v
 left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text
 left join stage on stage.role = 'vendor' and stage.slug = v.stage
 left join relationship_level level on level.level = v.relationship_level
 cross join lateral copy_attribution('vendor', v.id, v.updated_by) author
-where v.merged_into is null and not exists (select from outside_id where source = 'old_system' and value = v.id::text);
+where not exists (select from outside_id where source = 'old_system' and value = v.id::text);
 
 -- Today's rulings have no reason, and the new database keeps none without one, so a ruled vendor's record waits whole.
 -- Copying it without the ruling would put it back in play.
@@ -110,22 +111,25 @@ from copied v join party_role r on r.party_id = v.record_id and r.role = 'vendor
 where v.relationship_level is distinct from r.relationship_level and v.relationship_level is not null;
 
 -- Today's free-text category is what 0050 could not name, kept for a partner to give a category.
-insert into not_copied
-select id, 'category', category, 'not a vendor category' from copied where category_slug is null and category ~ '\S';
-
-insert into not_copied
-select id, 'trust_override', trust_override ->> 'tier', 'a hand-set rating, which the new database does not keep'
-from copied where trust_override is not null;
-
-insert into not_copied
-select v.id, f.field, f.value, 'no place in the new database'
-from copied v cross join lateral (values ('verticals', array_to_string(v.verticals, ', ')), ('owner_id', v.owner_id::text),
-	('referral_active', v.referral_active::text), ('territory', v.territory), ('offers', v.offers), ('seeking', v.seeking),
-	('rivalry_group', v.rivalry_group), ('originated', v.originated), ('enrich', v.enrich::text),
-	('out_of_market', nullif(v.out_of_market, false)::text), ('last_touch', v.last_touch::text), ('intro_notes', v.intro_notes),
-	('owner_label', v.owner_label), ('links_label', v.links_label), ('loan_programs', array_to_string(v.loan_programs, ', ')),
-	('deal_history_verified_at', v.deal_history_verified_at::text)) as f (field, value)
+create temp table unplaced on commit drop as
+select v.id, v.record_id, v.merged_into, f.field, f.value, f.reason
+from copied v cross join lateral (values ('category', case when v.category_slug is null then v.category end, 'not a vendor category'),
+	('trust_override', v.trust_override ->> 'tier', 'a hand-set rating, which the new database does not keep'),
+	('verticals', array_to_string(v.verticals, ', '), null), ('owner_id', v.owner_id::text, null),
+	('referral_active', v.referral_active::text, null), ('territory', v.territory, null), ('offers', v.offers, null),
+	('seeking', v.seeking, null), ('rivalry_group', v.rivalry_group, null), ('originated', v.originated, null),
+	('enrich', v.enrich::text, null), ('out_of_market', nullif(v.out_of_market, false)::text, null),
+	('last_touch', v.last_touch::text, null), ('intro_notes', v.intro_notes, null), ('owner_label', v.owner_label, null),
+	('links_label', v.links_label, null), ('loan_programs', array_to_string(v.loan_programs, ', '), null),
+	('deal_history_verified_at', v.deal_history_verified_at::text, null)) as f (field, value, reason)
 where f.value ~ '\S';
+
+-- A merged-away vendor's value that a live one of its record holds too was filled in by today's merge.
+insert into not_copied
+select id, field, value, coalesce(reason, 'no place in the new database')
+from unplaced v
+where merged_into is null or not exists (select from unplaced w
+	where w.record_id = v.record_id and w.merged_into is null and (w.field, w.value) = (v.field, v.value));
 
 -- A category waits on its vendor role, checked now, because a table with checks waiting cannot be altered.
 set constraints all immediate;

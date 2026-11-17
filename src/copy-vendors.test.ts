@@ -37,6 +37,18 @@ const oldVendor = (
 		values (${Object.values(full).map((value) => `'${value}'`)});`;
 };
 
+const ORIGINAL_STAGES = [
+	"prospect_uncontacted",
+	"unrated",
+	"target_not_yet_met",
+	"building_working_on_it",
+	"decent_relationship",
+	"important_strengthening",
+	"fully_aligned",
+	"avoid_not_a_good_partner",
+	"tabled_parked_drip_only",
+];
+
 // Old parties 10 to 19, of which 15 was merged into 10 and 18 into 17, and 16 was not copied.
 const SETUP = `begin;
 select set_config('engine.job', 'old_system', true);
@@ -52,7 +64,8 @@ insert into public.party (id, kind, name, created_by, updated_by)
 	select id, 'person', 'Example party', '${SYSTEM}', '${SYSTEM}' from unnest(array[${[10, 11, 15, 16, 17, 18, 19].map((n) => `'${id(n)}'::uuid`)}]) id;
 insert into public.vendor_category (slug, label, sort) values
 	('lender', 'Example lender', 10), ('gc', 'Example contractor', 50), ('cpa', 'Example accountant', 20);
-insert into public.vendor_stage (slug, label, sort) values ('prospect_uncontacted', 'Example original', 1), ('example', 'Example stage', 2);
+insert into public.vendor_stage (slug, label, sort) values ('example', 'Example stage', 0),
+	${ORIGINAL_STAGES.map((slug, i) => `('${slug}', 'Example original', ${i + 1})`)};
 insert into public.vendor_disposition (slug, label, workable, sort) values
 	('active', 'Example active', true, 10), ('parked', 'Example parked', false, 20), ('avoid', 'Example avoid', false, 30);
 insert into public.vendor_relationship_level (level, label, note) values (2, 'Example', 'Example'), (3, 'Example', 'Example'), (4, 'Example', 'Example');
@@ -81,7 +94,13 @@ ${oldVendor(43, 16)}
 ${oldVendor(44, 17, { disposition: "parked", category_slug: "cpa" })}
 ${oldVendor(45, 18, { vendor_ref: "V-0045" })}
 ${oldVendor(46, 19, { disposition: "avoid", is_target: "false" })}
-${oldVendor(47, 10, { merged_into: id(40), category_slug: "cpa" })}
+${oldVendor(47, 10, {
+	merged_into: id(40),
+	category_slug: "cpa",
+	stage: "avoid_not_a_good_partner",
+	territory: "Example territory",
+	offers: "Example offer",
+})}
 commit;`;
 
 const name = `copy_vendors_${randomUUID().replaceAll("-", "")}`;
@@ -163,6 +182,7 @@ test("a record's vendors become one vendor role with each category, and a ruled 
 	// biome-ignore format: one row per role
 	assert.deepEqual(await rows("select party_id, role, stage, relationship_level, disposition, is_target from party_role order by party_id, role"), [
 		{ party_id: id(10), role: "contractor", stage: null, relationship_level: null, disposition: null, is_target: false },
+		{ party_id: id(10), role: "cpa", stage: null, relationship_level: null, disposition: null, is_target: false },
 		{ party_id: id(10), role: "lender", stage: null, relationship_level: null, disposition: null, is_target: false },
 		{ party_id: id(10), role: "vendor", stage: "example", relationship_level: 2, disposition: null, is_target: true },
 		{ party_id: id(11), role: "vendor", stage: null, relationship_level: null, disposition: null, is_target: false },
@@ -187,10 +207,11 @@ test("a vendor role keeps when its vendor was stored and who last changed it", a
 
 test("each copied vendor's id and reference number lead to its record", async () => {
 	// biome-ignore format: one row per id
-	assert.deepEqual(await rows(`select source, value, party_id from outside_id where value in ('${id(40)}', '${id(41)}', '${id(42)}', 'V-0040', 'V-0041', 'P-0010') order by source, value`), [
+	assert.deepEqual(await rows(`select source, value, party_id from outside_id where value in ('${id(40)}', '${id(41)}', '${id(42)}', '${id(47)}', 'V-0040', 'V-0041', 'P-0010') order by source, value`), [
 		{ source: "old_system", value: id(40), party_id: id(10) },
 		{ source: "old_system", value: id(41), party_id: id(10) },
 		{ source: "old_system", value: id(42), party_id: id(11) },
+		{ source: "old_system", value: id(47), party_id: id(10) },
 		{ source: "old_system_ref", value: "P-0010", party_id: id(10) },
 		{ source: "old_system_ref", value: "V-0040", party_id: id(10) },
 		{ source: "old_system_ref", value: "V-0041", party_id: id(10) },
@@ -209,6 +230,7 @@ test("each value it does not copy is listed, with why", () => {
 		[id(42), "relationship_level", "4", "not a relationship level"],
 		[id(42), "vendor_ref", "P-0010", `also the id of ${id(10)}`],
 		...WAITING,
+		[id(47), "offers", "Example offer", "no place in the new database"],
 	]);
 });
 
