@@ -30,14 +30,18 @@ cross join lateral (select cur.command -> 'args' as args, cur.command ->> 'verb'
  case when cur.command ->> 'verb' = 'set-next-step' then 'text' else 'description' end as text_key) c
 -- Each verb reads only its own arguments; the old system never checked a command's args against its verb.
 cross join lateral (select cur.command ->> 'verb' as verb, c.args ->> case when c.deal_room then 'deal' else 'ref' end as ref,
- case when jsonb_typeof(c.args -> c.text_key) = 'string' then btrim(c.args ->> c.text_key) end as what,
+ -- The deal room trimmed its text as JavaScript does; set-next-action stored the description as given.
+ case when jsonb_typeof(c.args -> c.text_key) <> 'string' then null when not c.deal_room then c.args ->> c.text_key
+  else regexp_replace(c.args ->> c.text_key, '^[\s\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+|[\s\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$', '', 'g') end as what,
+ c.args ->> 'base_version' as base_version, c.deal_room and jsonb_typeof(c.args -> 'base_version') is distinct from 'number' as unversioned,
+ c.args ->> 'expected_action' as condition, not c.deal_room and c.args ? 'expected_action' as conditional,
  c.args ->> case when c.deal_room then 'next_date' else 'due_on' end as due_text,
  case when not c.deal_room then lower(btrim(c.args ->> 'owner')) end as owner_slug,
  -- The dispatch's own result names the step it made; that receipt expires after 30 days, the deal room's event does not.
- coalesce((select (t.response ->> 'next_action_id')::uuid from public.tool_call t
+ (select case when pg_input_is_valid(made, 'uuid') then made::uuid end from coalesce((select t.response ->> 'next_action_id' from public.tool_call t
   where t.idempotency_key = a.operation_key::text and t.verb = cur.command ->> 'verb'),
-  (select (e.new_value ->> 'next_action_id')::uuid from public.event e
-  where e.idempotency_key = a.operation_key::text and e.verb = 'set-next-step' and e.field = 'next_step' limit 1)) as made_id) s
+  (select e.new_value ->> 'next_action_id' from public.event e
+  where e.idempotency_key = a.operation_key::text and e.verb = 'set-next-step' and e.field = 'next_step' limit 1)) made) as made_id) s
 left join imported_change meeting on meeting.id = a.meeting_id and meeting.source_event ->> 'source_table' = 'ops.meeting'
 left join activity source on source.id = (meeting.record ->> 'id')::uuid
 left join outside_id target on target.source = 'old_system' and target.value = s.ref and (s.verb = 'set-next-action' or target.deal_id is not null)
@@ -51,7 +55,8 @@ insert into not_copied select s.old_id, f.field, f.value, f.reason from suggesti
 -- Imported history shares one id space across sources, so a revision id another copy holds waits.
 left join lateral (select e.id::text from action_edit e join imported_change i using (id)
  where (e.meeting_id, e.action_number) = (s.meeting_id, s.action_number)
- and (i.table_name, i.record) is distinct from ('proposal', jsonb_build_object('id', s.proposal_id)) limit 1) taken on true
+ and ((i.table_name, i.record) is distinct from ('proposal', jsonb_build_object('id', s.proposal_id))
+  or not exists (select from proposal p where p.id = s.proposal_id)) limit 1) taken on true
 cross join lateral (values
  ('command', s.verb, 'kind_has_no_suggestion', s.kind is null),
  ('revision', taken.id, 'existing_history_conflicts', taken.id is not null),
@@ -60,6 +65,9 @@ cross join lateral (values
  ('ref', s.ref, 'meeting_not_about_record', s.party_id is not null and s.activity_id is not null
   and not exists (select from activity_about b where (b.activity_id, b.party_id) = (s.activity_id, s.party_id))),
  ('summary', s.evidence, 'blank_evidence', s.evidence !~ '\S'),
+ -- The deal room refused a step without the version it was read at, and a conditional step has no place in the queue.
+ ('base_version', s.base_version, 'base_version_invalid', s.unversioned),
+ ('expected_action', s.condition, 'condition_has_no_place', s.conditional),
  (case when s.verb = 'set-next-step' then 'text' else 'description' end, s.what, 'blank_next_step', coalesce(s.what, '') !~ '\S'),
  (case when s.verb = 'set-next-step' then 'next_date' else 'due_on' end, s.due_text, 'invalid_due_date', s.due_text is not null and s.due_on is null),
  ('owner', s.owner_slug, 'owner_not_a_user', s.owner_slug is not null and s.owner is null),
