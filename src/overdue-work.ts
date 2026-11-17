@@ -4,7 +4,7 @@ import type { Saving } from "./save.ts";
 const PROMPT =
 	"Doc needs the new next step and date for this deal. Use set-next-step to record both.";
 
-const planStatus = (step?: string | null, date?: string | null) =>
+export const planStatus = (step?: string | null, date?: string | null) =>
 	!step || !date
 		? { next_step_required: true, prompt: PROMPT }
 		: { next_step_required: false };
