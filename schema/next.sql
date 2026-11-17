@@ -519,9 +519,11 @@ create table imported_deal_owner (
 	constraint imported_deal_owner_one_at_a_time exclude using gist (deal_id with =, tstzrange(started_at, ended_at) with &&)
 );
 
+-- Held per deal until the transaction ends, so a copied period and a rejoin cannot each pass alone and together break it.
 create function deal_party_rejoins_after_leaving() returns trigger
 language plpgsql as $$
 begin
+	perform pg_advisory_xact_lock(hashtextextended('deal_party ' || new.deal_id, 0));
 	if exists (select from deal_party p join imported_deal_party e using (deal_id, party_id, role)
 		where (p.deal_id, p.party_id, p.role) = (new.deal_id, new.party_id, new.role) and e.ended_at > p.created_at) then
 		raise exception 'someone is back on a deal only after they left it'
