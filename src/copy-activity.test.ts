@@ -218,7 +218,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 				id(47),
 				"call",
 				"2024-01-02 00:00:00+00",
-				"Example call",
+				"Example call\n\nInformation still missing\nExample figure",
 				id(1),
 				null,
 				null,
@@ -342,7 +342,6 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 		"46 deal_id deal_not_copied",
 		"47 detail structured_detail_not_copied",
 		"47 lead_id lead_not_copied",
-		"47 owed owed_has_no_place",
 		"49 kind later_copy_365",
 		"51 kind later_copy_366",
 		"53 changed_for_user_id agent_user_unknown",
@@ -401,7 +400,7 @@ test("keeps reached, attempt-only and unknown outcomes for calls and texts, with
 		activity(64, "text", { deal: 30 }, "null, null, false, null"),
 		activity(65, "text", { deal: 30 }),
  ].join(",\n")};
- update public.activity set summary = 'Spoke with the person' where id = '${id(62)}';`);
+ update public.activity set summary = '[connected] Spoke with the person' where id = '${id(62)}';`);
 	const outcomes = () =>
 		rows(`select id, kind, reached from activity
  where id between '${id(60)}' and '${id(65)}' order by id`);
@@ -418,13 +417,6 @@ test("keeps reached, attempt-only and unknown outcomes for calls and texts, with
 		[id(64), "note", false],
 		[id(65), "note", null],
 	]);
-	assert.deepEqual(
-		(
-			await rows(`select id, connected from public.activity
- where id between '${id(60)}' and '${id(65)}' order by id`)
-		).map(Object.values),
-		(await outcomes()).map((r) => [r.id, r.reached]),
-	);
 	const copied = await snapshot();
 	assert.deepEqual(await run(), report);
 	assert.deepEqual(await snapshot(), copied);
@@ -441,6 +433,60 @@ test("keeps reached, attempt-only and unknown outcomes for calls and texts, with
 	);
 	assert.deepEqual(await run(), report);
 	assert.deepEqual(await snapshot(), edited);
+	assert.deepEqual(
+		await rows("select jsonb_agg(c order by id) as all from change c"),
+		history,
+	);
+});
+
+test("keeps what is still missing under its label after the summary and detail, skipping mail and tasks", async () => {
+	await db.query(`insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary,
+ deal_id, client_id, lead_id, vendor_id, party_id, detail, owed, connected, email_context) values
+ ${[
+		activity(70, "call", { deal: 30 }),
+		activity(71, "call", { deal: 30 }, `null, E' \\n\\t', null, null`),
+		activity(
+			72,
+			"analysis",
+			{ deal: 30 },
+			`'Example analysis detail', E' Example figure\\n  Example name', null, null`,
+		),
+		activity(
+			73,
+			"email_in",
+			{ deal: 30 },
+			"null, 'Example figure', null, null",
+		),
+		activity(74, "note", { deal: 30 }, "null, 'Example figure', null, null"),
+		activity(75, "task", { deal: 30 }, "null, 'Example figure', null, null"),
+ ].join(",\n")};
+ update public.activity set summary = 'Full text of email: Example subject' where id = '${id(74)}';`);
+	const snapshot = () =>
+		rows(`select id, summary from activity
+ where id between '${id(70)}' and '${id(75)}' order by id`);
+	const report = await run();
+	assert.deepEqual(
+		reasons(report.filter((r) => r.old_id >= id(70) && r.old_id <= id(75))),
+		[
+			"73 kind later_copy_365",
+			"74 kind later_copy_365",
+			"75 kind kind_has_no_place",
+		],
+	);
+	const copied = await snapshot();
+	assert.deepEqual(copied.map(Object.values), [
+		[id(70), "Example call"],
+		[id(71), "Example call"],
+		[
+			id(72),
+			"Analysis\n\nExample analysis\n\nExample analysis detail\n\nInformation still missing\n Example figure\n  Example name",
+		],
+	]);
+	const history = await rows(
+		"select jsonb_agg(c order by id) as all from change c",
+	);
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(await snapshot(), copied);
 	assert.deepEqual(
 		await rows("select jsonb_agg(c order by id) as all from change c"),
 		history,
