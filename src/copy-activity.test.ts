@@ -125,12 +125,26 @@ before(async () => {
 			`'{"match": "exact"}', 'Example figure', false, null`,
 		),
 		activity(48, "meeting", { client: 20, vendor: 23 }),
+		activity(49, "note", { deal: 30 }),
+		activity(
+			39,
+			"note",
+			{ deal: 30 },
+			"'https://example.com/listing', null, null, null",
+		),
 	].join(",\n  ")};
+ update public.activity set summary = 'Full text of email: Example subject' where id = '${id(49)}';
+ update public.activity set summary = 'Links from matched email' where id = '${id(39)}';
  insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug)
   values ('${id(2)}', 'log-activity', 'party', '${id(13)}', '{"activity": "${id(42)}"}', 'automation_job', '2024-01-06', 'partner_one');
  insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
   ('${id(50)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2024-05-01'),
-  ('${id(51)}', '${id(30)}', 'next_step', 'Example next step', '${id(1)}', '2024-05-02');
+  ('${id(51)}', '${id(30)}', 'next_step', 'Example next step', '${id(1)}', '2024-05-02'),
+  ('${id(52)}', '${id(30)}', 'note', 'Example agent note', '${id(2)}', '2024-05-03'),
+  ('${id(53)}', '${id(30)}', 'note', 'Example unsigned note', '${id(2)}', '2024-05-04');
+ insert into public.event (actor_id, verb, subject_type, subject_id, field, new_value, cause, occurred_at, sponsoring_human_slug) values
+  ('${id(2)}', 'add-deal-note', 'deal', '${id(30)}', 'note', '{"note": "Example agent note"}', 'automation_job', '2024-05-03', 'partner_one'),
+  ('${id(2)}', 'add-deal-note', 'deal', '${id(30)}', 'note', '{"note": "Example other note"}', 'automation_job', '2024-05-04', 'partner_one');
  commit;`);
 });
 after(async () => {
@@ -207,6 +221,26 @@ test("copies calls, meetings, tours and notes with their records, listing what h
 				null,
 				"2024-05-01 00:00:00+00",
 			],
+			[
+				id(52),
+				"note",
+				"2024-05-03 00:00:00+00",
+				"Example agent note",
+				null,
+				"agent",
+				id(1),
+				"2024-05-03 00:00:00+00",
+			],
+			[
+				id(53),
+				"note",
+				"2024-05-04 00:00:00+00",
+				"Example unsigned note",
+				null,
+				"agent",
+				null,
+				"2024-05-04 00:00:00+00",
+			],
 		],
 	);
 	const recorded = "2024-02-01 00:00:00+00";
@@ -218,8 +252,11 @@ test("copies calls, meetings, tours and notes with their records, listing what h
 		[id(47), id(30), null, recorded],
 		[id(48), null, id(10), recorded],
 		[id(50), id(30), null, "2024-05-01 00:00:00+00"],
+		[id(52), id(30), null, "2024-05-03 00:00:00+00"],
+		[id(53), id(30), null, "2024-05-04 00:00:00+00"],
 	]);
 	assert.deepEqual(reasons(report), [
+		"39 kind later_copy_365",
 		"43 kind later_copy_365",
 		"44 kind later_copy_365",
 		"45 kind kind_has_no_place",
@@ -229,7 +266,9 @@ test("copies calls, meetings, tours and notes with their records, listing what h
 		"47 detail structured_detail_not_copied",
 		"47 lead_id lead_not_copied",
 		"47 owed owed_has_no_place",
+		"49 kind later_copy_365",
 		"51 kind later_copy_366",
+		"53 changed_for_user_id agent_user_unknown",
 	]);
 	assert.deepEqual(
 		await rows(

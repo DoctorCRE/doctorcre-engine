@@ -14,12 +14,19 @@ order by new_value ->> 'activity', mutation_order desc;
 create temp table old_activity on commit drop as
 select a.id, a.kind as old_kind, a.occurred_at as happened_at, a.recorded_at as created_at, a.updated_at as changed_at,
  a.summary, a.detail, a.owed, a.connected,
- a.kind in ('email_in', 'email_out') or a.email_context is not null as is_mail, s.*
+ -- The mail intake files an email's full text and its links as notes, sometimes without context.
+ a.kind in ('email_in', 'email_out') or a.email_context is not null
+  or a.kind = 'note' and (a.summary like 'Full text of email: %' or a.summary = 'Links from matched email') as is_mail, s.*
 from public.activity a left join activity_event e on e.activity_id = a.id
 cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.id) s
 union all
 select n.id, n.kind, n.created_at, n.created_at, n.created_at, n.text, null, null, null, false, s.*
-from public.deal_note n cross join lateral copy_attribution('deal_note', n.id, n.actor_id) s;
+from public.deal_note n
+-- Adding a note writes its event on the deal in the same transaction, so the times match.
+cross join lateral copy_event_attribution(n.actor_id, (select e.id from public.event e
+ where e.verb = 'add-deal-note' and e.subject_type = 'deal' and e.subject_id = n.deal_id
+  and e.actor_id = n.actor_id and e.occurred_at = n.created_at and e.new_value ->> 'note' = n.text
+ order by e.mutation_order desc limit 1)) s;
 
 -- A client, lead or vendor is about its person or company; merged-away ids reach their survivor through the map.
 create temp table old_link on commit drop as
@@ -51,7 +58,8 @@ insert into not_copied select a.id, f.field, f.value, f.reason from mapped_activ
  ('activity', a.id::text, 'about_nothing_copied', a.kind is not null and not a.is_about),
  ('owed', a.owed, 'owed_has_no_place', a.kind is not null and a.owed ~ '\S'),
  ('connected', a.connected::text, 'connected_has_no_place', a.kind is not null and a.connected is not null),
- ('detail', a.detail, 'structured_detail_not_copied', a.kind is not null and a.detail is json object)
+ ('detail', a.detail, 'structured_detail_not_copied', a.kind is not null and a.detail is json object),
+ ('changed_for_user_id', null, 'agent_user_unknown', a.kind is not null and a.changed_by_job = 'agent' and a.changed_for_user_id is null)
 ) f(field, value, reason, listed) where f.listed;
 insert into not_copied select l.id, l.field, l.value::text, replace(l.field, '_id', '') || '_not_copied'
 from old_link l join mapped_activity a using (id)
