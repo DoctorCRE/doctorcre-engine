@@ -10,9 +10,9 @@ const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const sql = (file: string) =>
 	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all(
-	["next.sql", "copy-attribution.sql", "copy-leases.sql"].map(sql),
-);
+const schema = await sql("next.sql");
+const attribution = await sql("copy-attribution.sql");
+const copy = await sql("copy-leases.sql");
 const name = `copy_leases_${randomUUID().replaceAll("-", "")}`;
 const url = new URL(
 	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
