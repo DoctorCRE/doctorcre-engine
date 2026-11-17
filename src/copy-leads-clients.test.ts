@@ -61,7 +61,7 @@ before(async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id,slug,kind,display_name) values ('${id(1)}','example_user','human','Example User');
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
- insert into app_user values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','nurture_drip','closed_lost','closed_won','active_deal','do_not_contact','engaged','other']) s;
@@ -664,7 +664,7 @@ test("conflicting client owners wait, a corrected conflict retries, and an exist
 			`${extraParties}
  insert into public.actor (id,slug,kind,display_name) values ('${id(2)}','example_second_user','human','Example second user'), ('${id(89)}','example_unmapped_user','human','Example unmapped user');
  insert into party (id,kind,name) values ('${id(2)}','person','Example second user');
- insert into app_user (id) values ('${id(2)}');
+ insert into app_user (id, slug) values ('${id(2)}', 'user-${id(2)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(2)}','${id(2)}');
  insert into public.client (id,party_id,status,acquisition_source,owner_id,created_by,updated_by) values
  ${(

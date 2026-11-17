@@ -33,7 +33,7 @@ before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
- insert into app_user values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into deal (id, name, owner_user_id) values ('${id(10)}', 'Example deal', '${id(1)}'), ('${id(11)}', 'Example other deal', '${id(1)}');
  insert into document (id, name, r2_bucket, r2_key, content_type, sha256, bytes) values
  ('${id(218)}', 'Example lease 218.pdf', 'deal_documents', 'files/218', 'application/pdf', '${sha(218)}', 218),

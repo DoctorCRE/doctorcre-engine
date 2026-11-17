@@ -24,7 +24,7 @@ before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values ('${id(1)}','example_user','human','Example User'), ('${id(2)}','example_job','automation','Example Job'), ('${id(3)}','example_missing_user','human','Example Missing User');
- insert into party (id,kind,name) values ('${id(1)}','person','Example User'); insert into app_user values ('${id(1)}');
+ insert into party (id,kind,name) values ('${id(1)}','person','Example User'); insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  insert into public.activity_kind (slug,label,is_contact) values ('call','Example call',true);
  insert into role (slug,label) values ('lead','Lead');

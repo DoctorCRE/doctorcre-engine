@@ -6,7 +6,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 
 - **`party`**: every person and company, once, each with its own id. `kind` is `person` or `company`. A person's `npi` is their individual NPI, and a company's its organization NPI. `how_found` says how a lead or client was found.
 - **`merged_party`**: what a merged-away duplicate leaves behind: its old id and the record it became. Nothing lists or shows it.
-- **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's facts will be columns here, or a child table keyed by the user, as they come.
+- **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id and the `slug` they sign in under. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's facts will be columns here, or a child table keyed by the user, as they come.
 - **`user_preference`**: a user's own settings and notification choices: their time zone, quiet hours and whether notifications reach their devices.
 - **`home_mark`**: a user's own mark on an item on their Home: snoozed until a time or settled, and whom it waits on and why.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.

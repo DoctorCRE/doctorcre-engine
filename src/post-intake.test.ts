@@ -44,7 +44,7 @@ before(async () => {
 		${await readFile(new URL("../schema/next.sql", import.meta.url), "utf8")}
 		select set_config('engine.user_id', '${USER}', false);
 		insert into party (id, kind, name) values ('${USER}', 'person', 'Jordan Example');
-		insert into app_user (id) values ('${USER}');
+		insert into app_user (id, slug) values ('${USER}', 'user-${USER}');
 		insert into social_account (id, platform, owner_party_id, handle, engine_publishes_from) values
 			('${LINKEDIN}', 'linkedin', '${USER}', 'jordan-example', '${ENGINE_FROM}'),
 			('${INSTAGRAM}', 'instagram', '${USER}', 'jordan.example', '${ENGINE_FROM}'),

@@ -236,7 +236,7 @@ const TERMS = [
 // Only the owner adds users.
 const USERS = `insert into party (id, kind, name) values
 	('${USER}', 'person', 'Jordan Example'), ('${TEAMMATE}', 'person', 'Riley Example');
-insert into app_user (id) values ('${USER}'), ('${TEAMMATE}')`;
+insert into app_user (id, slug) values ('${USER}', 'user-${USER}'), ('${TEAMMATE}', 'user-${TEAMMATE}')`;
 const asUser = (user: string) =>
 	`select set_config('engine.user_id', '${user}', true), set_config('engine.job', '', true)`;
 const asJob = (job: string, forUser = "") =>
@@ -2289,7 +2289,31 @@ const OWNER_RULES: Record<string, Case[]> = {
 		],
 	],
 	"a user is a person": [
-		[`insert into app_user (id) values ('${CLIENT}')`, "app_user_id_kind_fkey"],
+		[
+			`insert into app_user (id, slug) values ('${CLIENT}', 'user-${CLIENT}')`,
+			"app_user_id_kind_fkey",
+		],
+	],
+	"every user signs in under their own slug": [
+		[
+			`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into app_user (id) values ('${DUPLICATE}')`,
+			{
+				code: "23502",
+				message:
+					'null value in column "slug" of relation "app_user" violates not-null constraint',
+			},
+		],
+		[
+			`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into app_user (id, slug) values ('${DUPLICATE}', ' ')`,
+			"app_user_slug_check",
+		],
+		[
+			`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into app_user (id, slug) values ('${DUPLICATE}', 'user-${USER}')`,
+			"app_user_slug_key",
+		],
 	],
 	"a merged-away record points at a live one, so merges never chain": [
 		[
@@ -6760,7 +6784,7 @@ test("a user's ladder names one partner", () =>
 	asOwner([
 		[
 			`insert into party (id, kind, name) values ('${id(22)}', 'person', 'Casey Example');
-			insert into app_user (id) values ('${id(22)}');
+			insert into app_user (id, slug) values ('${id(22)}', 'user-${id(22)}');
 			insert into commission_tier values ('${USER}', 1, '${TEAMMATE}', 0.9), ('${USER}', 3, '${id(22)}', 0.7)`,
 			"commission_tier_one_partner",
 		],

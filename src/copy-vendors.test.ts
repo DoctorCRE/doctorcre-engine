@@ -46,7 +46,7 @@ const SETUP = `begin;
 select set_config('engine.job', 'old_system', true);
 insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Example User'), ('${id(10)}', 'company', 'Example Bank'),
 	('${id(11)}', 'person', 'Example Builder'), ('${id(17)}', 'company', 'Example Parked'), ('${id(19)}', 'person', 'Example Avoided');
-insert into app_user values ('${PARTNER}');
+insert into app_user (id, slug) values ('${PARTNER}', 'user-${PARTNER}');
 insert into outside_id (source, value, party_id) values ('old_system_ref', 'P-0010', '${id(10)}'),
 	${[1, 10, 11, 15, 17, 18, 19].map((n) => `('old_system', '${id(n)}', '${id({ 15: 10, 18: 17 }[n] ?? n)}')`)};
 insert into public.actor (id, slug, kind, display_name) values
@@ -743,7 +743,7 @@ test("introductions either way, and the deals a vendor worked or referred, are c
 // Party 12 is a second user, and 16 is the party that was not copied.
 const LINKS = `select set_config('engine.job', 'old_system', true);
 insert into party (id, kind, name) values ('${id(12)}', 'person', 'Example Second User');
-insert into app_user values ('${id(12)}');
+insert into app_user (id, slug) values ('${id(12)}', 'user-${id(12)}');
 insert into outside_id (source, value, party_id) values ('old_system', '${id(12)}', '${id(12)}');
 insert into public.party (id, kind, name, created_by, updated_by)
 	select id, 'person', 'Example', '${SYSTEM}', '${SYSTEM}' from unnest(array['${id(1)}'::uuid, '${id(12)}'::uuid]) id;

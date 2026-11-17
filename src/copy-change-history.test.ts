@@ -65,7 +65,7 @@ before(async () => {
  insert into how_found values ('referral','Referral');
  insert into party (id,kind,name,how_found) values ('${id(1)}','person','Example User',null),
  ('${id(10)}','person','Example Party','referral');
- insert into app_user (id) values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into role (slug,label) values ('lead','Lead'),('client','Client'),('vendor','Vendor');
  insert into stage values ('lead','new','New');
  insert into party_role (party_id,role,stage) values ('${id(10)}','lead','new'),('${id(10)}','client',null),('${id(10)}','vendor',null);

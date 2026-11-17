@@ -57,7 +57,7 @@ before(async () => {
  insert into public.deal_phase (slug, label) values ('loi', 'Example LOI');
  insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
   values ('${id(30)}', '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}');
- insert into app_user values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
  insert into outside_id (source, value, party_id, deal_id) values ('old_system', '${id(1)}', '${id(1)}', null),
   ('old_system', '${id(21)}', '${id(14)}', null), ('old_system', '${id(30)}', null, '${id(30)}');

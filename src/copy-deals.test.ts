@@ -24,7 +24,7 @@ before(async () => {
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'company', 'Example Client'),
  ('${id(4)}', 'person', 'Example Agent'), ('${id(5)}', 'person', 'Example Other');
- insert into app_user values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into how_found values ('referral', 'Example referral');
  update party set how_found = 'referral';
  insert into role (slug, label) values ('client', 'Example client');

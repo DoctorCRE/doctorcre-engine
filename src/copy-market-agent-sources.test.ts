@@ -37,7 +37,7 @@ before(async () => {
  insert into public.actor (id,slug,kind,display_name) values
  ('${id(1)}','partner_one','human','Example User'), ('${id(2)}','codex','automation','Example Job');
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
- insert into app_user values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Active',true,1);
  insert into public.party (id,kind,name,created_by,updated_by) values ('${id(3)}','org','Example Company','${id(1)}','${id(1)}');
  insert into public.party (id,kind,name,created_by,updated_by) values ('${id(5)}','person','Example Agent','${id(1)}','${id(1)}');

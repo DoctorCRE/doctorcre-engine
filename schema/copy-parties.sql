@@ -22,11 +22,11 @@ create temp table not_copied (old_id uuid not null, field text not null, value t
 
 -- Each partner becomes a person with a user row, under their actor's id, so a row they changed names them.
 create temp table partner on commit drop as
-select id, display_name from public.actor a
+select id, slug, display_name from public.actor a
 where kind = 'human' and not exists (select from outside_id where source = 'old_system' and value = a.id::text);
 
 insert into party (id, kind, name, changed_by_user_id, changed_at) select id, 'person', display_name, id, now() from partner;
-insert into app_user (id) select id from partner;
+insert into app_user (id, slug) select id, slug from partner;
 insert into outside_id (source, value, party_id) select 'old_system', id::text, id from partner;
 
 -- Keep every source record for corrections, including ones already mapped.
