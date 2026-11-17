@@ -405,6 +405,7 @@ test("a second run copies only what is new, finds a record merged since through 
 			${oldParty(29, { merged_into: id(17), contact_state: "do_not_contact", contact_state_reason: "Example stop" })}`;
 		const again = await copy(merged);
 		assert.ok(report);
+		// Merging 17 into 16 makes its vendor key belong to the record that already holds it.
 		assert.deepEqual(
 			again?.filter(
 				(row) => ![20, 21, 22, 23, 24, 28, 29].some((n) => row[0] === id(n)),
@@ -443,6 +444,43 @@ test("a second run copies only what is new, finds a record merged since through 
 			),
 			[{ slug: "ortho", label: "Orthodontics" }],
 		);
+	}));
+
+test("a late-merged title names the missing company link when its company was copied", () =>
+	rolledBack(async () => {
+		const first = await copy(
+			oldParty(70, {
+				merged_into: id(16),
+				org_id: id(11),
+				title: "Example Partner",
+			}),
+		);
+		assert.deepEqual(
+			first?.filter((row) => row[0] === id(70)),
+			[
+				[id(70), "org_id", id(11), "its record does not hold this company"],
+				[
+					id(70),
+					"title",
+					"Example Partner",
+					"its record does not hold this company",
+				],
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select id from party where id = '${id(11)}' and kind = 'company'`,
+			),
+			[{ id: id(11) }],
+		);
+		assert.deepEqual(
+			await rows(
+				`select * from party_company where person_id = '${id(16)}' and company_id = '${id(11)}'`,
+			),
+			[],
+		);
+		await db.query("discard temp");
+		assert.deepEqual(await copy(), first);
 	}));
 
 test("a rerun lists the full unchanged correction list without changing copied rows", () =>

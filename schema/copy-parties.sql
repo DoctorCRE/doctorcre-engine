@@ -62,7 +62,7 @@ left join outside_id m on m.source = 'old_system' and m.value = s.id::text
 left join outside_id survivor on survivor.source = 'old_system' and survivor.value = s.survivor_id::text
 where s.survivor_id in (select id from copied) or m.party_id is not null or survivor.party_id is not null;
 
--- Existing holders win; otherwise reporting retains the source's first claimant, even if it kept another number.
+-- NPPES issues a number once; holders keep it, and copy_values sorts first so only uncopied rows can claim it.
 create temp table npi_claim on commit drop as
 select s.id, s.record_id, s.copy_values, s.npi as typed, btrim(s.npi) as npi, s.rank,
 	pg_input_is_valid(btrim(s.npi), 'npi') as valid,
@@ -174,7 +174,6 @@ from chain where copy_values and contact_state in ('do_not_contact', 'paused') a
 	and (contact_state <> 'paused' or contact_state_until is not null)
 order by record_id, contact_state_until desc nulls first, rank;
 
-
 insert into not_copied
 select id, 'contact_state', concat_ws(' until ', contact_state, contact_state_until),
 	case when contact_state in ('do_not_contact', 'paused') and not coalesce(contact_state_reason ~ '\S', false) then 'do not contact without a reason'
@@ -273,11 +272,11 @@ select v.old_id, 'org_id', v.org_id::text, 'its record does not hold this compan
 from typed_company v where v.kind = 'person' and v.company_kind = 'company'
 	and not exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id);
 
-
 insert into not_copied
 select v.old_id, 'title', v.typed_title, case
 	when exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id)
 		then 'its record holds another title there'
+	when v.company_kind = 'company' then 'its record does not hold this company'
 	when v.org_id is not null then 'its company is not copied'
 	else 'a title without a company' end
 from typed_company v
@@ -294,7 +293,7 @@ where f.value ~ '\S';
 -- Today's import history and its own reference numbers become outside ids of the record each old one became.
 -- A source is lower-cased, with _ for each run of anything but letters and digits.
 create temp table typed_outside_id on commit drop as
-select v.old_id, v.field, v.typed, v.source, v.value, v.copy_value, map.party_id, case
+select v.old_id, v.field, v.typed, v.source, v.value, v.copy_values, map.party_id, case
 	when v.field = 'record_source' and v.source = 'dup_candidate' then 'a hint of a duplicate, not an id'
 	when v.kind not in ('party', 'vendor', 'lead', 'client') then 'no place in the new database'
 	when map.party_id is null then 'its record is not copied'
@@ -305,7 +304,7 @@ from (
 	select coalesce(o.party_id, r.entity_id) as old_id, 'record_source' as field, r.entity_type as kind,
 		concat_ws(' ', r.source_system, r.external_key) as typed,
 		btrim(regexp_replace(lower(r.source_system), '[^a-z0-9]+', '_', 'g'), '_') as source,
-		regexp_replace(r.external_key, '^\s+|\s+$', '', 'g') as value, o.party_id, true as copy_value
+		regexp_replace(r.external_key, '^\s+|\s+$', '', 'g') as value, o.party_id, true as copy_values
 	from public.record_source r
 	left join (
 		select 'party' as kind, id, id as party_id from public.party
@@ -324,7 +323,7 @@ left join outside_id map on map.source = 'old_system' and map.value = v.party_id
 insert into outside_id (source, value, party_id)
 select distinct on (source, value) source, value, party_id
 from typed_outside_id v
-where v.copy_value and reason is null and not exists (select from outside_id o where o.source = v.source and o.value = v.value)
+where v.copy_values and reason is null and not exists (select from outside_id o where o.source = v.source and o.value = v.value)
 order by source, value, old_id;
 
 insert into not_copied
