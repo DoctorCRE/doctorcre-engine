@@ -42,6 +42,7 @@ type HistoryEntry = {
 export type Saving = {
 	tx: Transaction<DB>;
 	actor_id: string;
+	partner: string;
 	record(entry: HistoryEntry): Promise<void>;
 };
 
@@ -122,6 +123,7 @@ export async function runSave(
 					{
 						tx,
 						actor_id: actor.id,
+						partner: save.partner,
 						record: async (entry) => {
 							await tx
 								.insertInto("event")

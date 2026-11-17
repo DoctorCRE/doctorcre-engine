@@ -3,6 +3,7 @@ import { sql } from "kysely";
 import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { preparePatch } from "./deal-field-base.ts";
+import { dropOverdueWork } from "./overdue-work.ts";
 import {
 	answerSave,
 	SaveRefusal,
@@ -11,7 +12,7 @@ import {
 } from "./save.ts";
 
 export const dealField = new Hono<WriterEnv>();
-const FIELDS = ["owner", "operating_state"];
+const FIELDS = ["phase", "owner", "operating_state"];
 
 dealField.post("/patch-deal-field", (c) =>
 	answerSave(
@@ -42,7 +43,7 @@ async function patch(saving: Saving, args: JsonObject) {
 	const { tx, actor_id, record } = saving;
 	const old = await tx
 		.selectFrom("deal")
-		.select("owner")
+		.select(["phase", "owner"])
 		.select(
 			sql<JsonObject>`jsonb_build_object('state',operating_state,'reason',parking_reason,'note',parking_note)`.as(
 				"parking",
@@ -50,7 +51,11 @@ async function patch(saving: Saving, args: JsonObject) {
 		)
 		.where("id", "=", deal_id)
 		.executeTakeFirstOrThrow();
-	const old_value = field === "owner" ? old.owner : old.parking;
+	const old_value = {
+		phase: old.phase,
+		owner: old.owner,
+		operating_state: old.parking,
+	}[field];
 	if (change.field === "owner") {
 		await tx
 			.updateTable("deal_participant")
@@ -77,7 +82,7 @@ async function patch(saving: Saving, args: JsonObject) {
 			.set({ owner: change.value, updated_by: actor_id })
 			.where("id", "=", deal_id)
 			.execute();
-	} else {
+	} else if (change.field === "operating_state") {
 		const { state, reason, note } = change.value;
 		await tx
 			.updateTable("deal")
@@ -89,6 +94,12 @@ async function patch(saving: Saving, args: JsonObject) {
 				parked_by: state === "parked" ? actor_id : null,
 				updated_by: actor_id,
 			})
+			.where("id", "=", deal_id)
+			.execute();
+	} else {
+		await tx
+			.updateTable("deal")
+			.set({ phase: change.value, updated_by: actor_id })
 			.where("id", "=", deal_id)
 			.execute();
 	}
@@ -105,6 +116,11 @@ async function patch(saving: Saving, args: JsonObject) {
 		...(typeof args.change_reason === "string" && {
 			agent_rationale: args.change_reason,
 		}),
+		// Noon in the business zone reads back as the stated day.
+		...(change.field === "phase" &&
+			change.occurred_on && {
+				occurred_at: `${change.occurred_on} 12:00 America/Chicago`,
+			}),
 	});
 	const committed = await tx
 		.selectFrom("event")
@@ -117,10 +133,15 @@ async function patch(saving: Saving, args: JsonObject) {
 		.orderBy("recorded_at", "desc")
 		.orderBy("id", "desc")
 		.executeTakeFirst();
+	const status =
+		change.field === "phase" && old_value !== change.value
+			? await dropOverdueWork(saving, deal_id)
+			: {};
 	return {
 		ok: true,
 		deal_id,
 		field,
+		...status,
 		old_value,
 		new_value: change.value,
 		event_id: committed?.id ?? null,

@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import { Refusal } from "./answer.ts";
+import { isCalendarDate } from "./calendar-date.ts";
 import { PARTNERS } from "./clients/read.ts";
 import type { JsonObject, JsonValue } from "./database.d.ts";
 import { lookupRefusal, resolveDeal } from "./deals/resolve.ts";
@@ -9,6 +10,7 @@ import { isArguments } from "./save-door.ts";
 const REASONS = ["prospect_never_active", "client_paused", "other"];
 
 export type Patch =
+	| { field: "phase"; value: string; occurred_on: string | null }
 	| { field: "owner"; value: string | null }
 	| {
 			field: "operating_state";
@@ -25,6 +27,20 @@ function refused(): never {
 }
 
 function validated({ field, value, occurred_on }: JsonObject): Patch {
+	if (field === "phase") {
+		if (typeof value !== "string" || !value.trim())
+			throw new SaveRefusal(
+				new Refusal(400, "invalid_field_value", { fields: ["field"] }),
+			);
+		if (occurred_on == null) return { field, value, occurred_on: null };
+		// The old writer compared against today's UTC date.
+		if (
+			!isCalendarDate(occurred_on) ||
+			occurred_on > new Date().toISOString().slice(0, 10)
+		)
+			refused();
+		return { field, value, occurred_on };
+	}
 	if (field === "owner") {
 		if (
 			value !== null &&
@@ -77,9 +93,13 @@ export async function preparePatch(saving: Saving, args: JsonObject) {
 	const subject = await resolveDeal(tx, String(args.deal));
 	if ("error" in subject) throw new SaveRefusal(lookupRefusal(subject));
 	const deal_id = subject.id;
-	await sql`select pg_advisory_xact_lock(hashtextextended(${deal_id} || ':' || ${field}, 0))`.execute(
-		tx,
-	);
+	// A phase move can replace the next step, so its locks come first.
+	for (const locked of field === "phase"
+		? ["next_date", "next_step", field]
+		: [field])
+		await sql`select pg_advisory_xact_lock(hashtextextended(${deal_id} || ':' || ${locked}, 0))`.execute(
+			tx,
+		);
 	const base = args.base_event_id || null;
 	if (
 		base &&
