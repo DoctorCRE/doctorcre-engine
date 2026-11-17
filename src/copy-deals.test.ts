@@ -251,13 +251,12 @@ test("rounds derive unique candidates, number across sides by creation then id, 
 				JSON.parse(r.value).name === "Example Building",
 		),
 	);
-	assert.equal(report.filter((r) => r.field === "negotiation_claim").length, 2);
-	for (const n of [120, 121])
-		assert.ok(
-			report.some(
-				(r) => r.old_id === id(n) && r.reason === "no_claim_destination",
-			),
-		);
+	assert.deepEqual(
+		report
+			.filter((r) => r.field === "negotiation_claim")
+			.map((r) => [r.old_id, r.reason]),
+		[[id(121), "round_not_copied"]],
+	);
 	assert.deepEqual(
 		await rows(`select import_record from offer where id = '${id(100)}'`),
 		await rows(
@@ -268,11 +267,18 @@ test("rounds derive unique candidates, number across sides by creation then id, 
 test("a repeat is idempotent and restores stamps after import", async () => {
 	const original = await rows("select * from deal order by id");
 	const offers = await rows("select * from offer order by id");
+	const claims = await rows(
+		"select * from offer_claim order by offer_id, claim_type",
+	);
 	await db.query("begin");
 	await run();
 	await db.query("commit");
 	assert.deepEqual(await rows("select * from deal order by id"), original);
 	assert.deepEqual(await rows("select * from offer order by id"), offers);
+	assert.deepEqual(
+		await rows("select * from offer_claim order by offer_id, claim_type"),
+		claims,
+	);
 	await db.query(
 		`begin; select set_config('engine.user_id', '${id(1)}', true); update deal set name = 'Example renamed' where id = '${id(10)}'`,
 	);
@@ -567,7 +573,7 @@ test("unknown can resolve to every real status, with normal acceptance and super
 test("building survivors keep full addresses and copied rows keep source authors and times", async () => {
 	await db.query("begin; select set_config('engine.job', 'old_system', true)");
 	try {
-		await db.query(`delete from offer; delete from deal_property; delete from property;
+		await db.query(`delete from offer_claim; delete from offer; delete from deal_property; delete from property;
  update public.building set city = 'Example City', state = 'TX', zip = '75000' where id = '${id(90)}';
  update public.building set merged_into = '${id(90)}' where id = '${id(91)}';
  delete from public.premises_space where premises_id = '${id(95)}' and space_id = '${id(92)}';`);
@@ -750,6 +756,195 @@ test("offer notes stay visible, a known submarket condition copies and any other
 				(o: { id: string; other_terms: string | null }) =>
 					o.id === id(107) && o.other_terms?.includes("Expenses capped"),
 			),
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("claims keep source words, authors and dates, convert only per-square-foot floors, and list unresolved facts", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.negotiation_claim_type (slug, label, falsifiable, reversal_test, sort, derived)
+ select slug, 'Example ' || slug, false, 'Example test', 10 + n, slug = 'deadline'
+ from unnest(array['annual', 'monthly', 'gross_month', 'gross_year', 'total', 'sf_total', 'inferred', 'blank', 'overflow', 'deadline']) with ordinality t(slug, n);
+ insert into public.negotiation_claim (id, round_id, claim_type, stated_floor, stated_floor_basis, quote, note, source, created_by, created_at) values
+ ('${id(300)}', '${id(100)}', 'annual', 31, 'usd_sf_yr', 'Example stated floor', 'Example note', 'stated', '${id(1)}', '2025-03-01'),
+ ('${id(301)}', '${id(100)}', 'monthly', 2.75, 'usd_sf_mo', null, null, 'stated', '${id(1)}', '2025-03-02');
+ insert into public.negotiation_claim (id, round_id, claim_type, stated_floor, stated_floor_basis, created_by)
+ select ('00000000-0000-4000-8000-' || lpad((302 + n)::text, 12, '0'))::uuid, '${id(100)}', slug, 100, basis, '${id(1)}'
+ from (values (0, 'gross_month', 'usd_mo_gross'), (1, 'gross_year', 'usd_yr_gross'), (2, 'total', 'usd_total'), (3, 'sf_total', 'usd_sf_total')) t(n, slug, basis);
+ insert into public.negotiation_claim (id, round_id, claim_type, quote, source, created_by, stated_floor, stated_floor_basis) values
+ ('${id(306)}', '${id(100)}', 'inferred', 'Example inference', 'inferred', '${id(1)}', null, null),
+ ('${id(307)}', '${id(100)}', 'blank', '  ', 'stated', '${id(1)}', null, null),
+ ('${id(308)}', '${id(100)}', 'overflow', null, 'stated', '${id(1)}', 99999999, 'usd_sf_mo');`);
+		const result = await run();
+		assert.deepEqual(
+			await rows(
+				`select claim_type, floor_rent_per_sf_yr, quote, note, created_at::text, changed_at::text, changed_by_user_id from offer_claim where claim_type in ('annual', 'monthly') order by claim_type`,
+			),
+			[
+				{
+					claim_type: "annual",
+					floor_rent_per_sf_yr: "31.00",
+					quote: "Example stated floor",
+					note: "Example note",
+					created_at: "2025-03-01 00:00:00+00",
+					changed_at: "2025-03-01 00:00:00+00",
+					changed_by_user_id: id(1),
+				},
+				{
+					claim_type: "monthly",
+					floor_rent_per_sf_yr: "33.00",
+					quote: null,
+					note: null,
+					created_at: "2025-03-02 00:00:00+00",
+					changed_at: "2025-03-02 00:00:00+00",
+					changed_by_user_id: id(1),
+				},
+			],
+		);
+		assert.deepEqual(
+			result
+				.filter((r) => r.field === "negotiation_claim" && r.old_id >= id(300))
+				.map((r) => [r.old_id, r.reason]),
+			[
+				...Array.from({ length: 4 }, (_, i) => [
+					id(302 + i),
+					"unsupported_floor_basis",
+				]),
+				[id(306), "unsupported_claim_source"],
+				[id(307), "blank_claim_text"],
+				[id(308), "floor_out_of_range"],
+			],
+		);
+		assert.deepEqual(
+			await rows("select slug from claim_type where slug = 'deadline'"),
+			[],
+		);
+		assert.equal(
+			(await rows("select label from claim_type where slug = 'annual'"))[0]
+				?.label,
+			"Example annual",
+		);
+		assert.equal(
+			(await rows("select count(*)::int as n from offer_claim"))[0]?.n,
+			3,
+		);
+		assert.ok(
+			result
+				.filter((r) => r.field === "negotiation_claim")
+				.every((r) => JSON.parse(r.value).round_id),
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("claim conflicts stay listed, later claims can copy, and imported offers resolve through their source map", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(200)}', 'codex', 'automation', 'Example agent');
+ insert into public.negotiation_claim (id, round_id, claim_type, created_by, created_at) values ('${id(310)}', '${id(101)}', 'example', '${id(200)}', '2025-04-01');
+ insert into public.event (actor_id, verb, subject_type, subject_id, cause, sponsoring_human_slug, occurred_at) values ('${id(200)}', 'example', 'negotiation_claim', '${id(310)}', 'human_stated', 'partner_one', '2025-04-01');
+ update public.negotiation_claim set quote = 'Example changed words' where id = '${id(120)}';`);
+		const result = await run();
+		assert.ok(
+			result.some(
+				(r) => r.old_id === id(120) && r.reason === "existing_claim_conflict",
+			),
+		);
+		assert.equal(
+			(
+				await rows(
+					`select quote from offer_claim where offer_id = '${id(100)}'`,
+				)
+			)[0]?.quote,
+			null,
+		);
+		assert.deepEqual(
+			await rows(
+				`select changed_by_user_id, changed_by_job, changed_for_user_id from offer_claim where offer_id = '${id(101)}'`,
+			),
+			[
+				{
+					changed_by_user_id: null,
+					changed_by_job: "agent",
+					changed_for_user_id: id(1),
+				},
+			],
+		);
+		await refused(
+			`insert into offer_claim (offer_id, claim_type) values ('${id(101)}', 'example')`,
+			"23505",
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("claims use import identity rather than an unrelated offer with the old round id", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by)
+ values ('${id(320)}', '${id(10)}', 9, 'tenant', '2025-04-01', '2025-04-01', '${id(1)}');
+ insert into public.negotiation_claim (id, round_id, claim_type, created_by) values ('${id(321)}', '${id(320)}', 'example', '${id(1)}');
+ insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at)
+ values ('${id(320)}', '${id(10)}', '${id(90)}', 20, '${id(2)}', 'client', now());`);
+		assert.ok(
+			(await run()).some(
+				(r) => r.old_id === id(321) && r.reason === "round_not_copied",
+			),
+		);
+		assert.deepEqual(
+			await rows(`select * from offer_claim where offer_id = '${id(320)}'`),
+			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.negotiation_claim (id, round_id, claim_type, created_by) values ('${id(322)}', '${id(101)}', 'example', '${id(1)}');
+ delete from offer where id = '${id(101)}';
+ insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at, import_source, import_id, import_record)
+ values ('${id(323)}', '${id(10)}', '${id(90)}', 3, '${id(4)}', 'property_owner', now(), 'old_system', '${id(101)}', '{}');`);
+		await run();
+		assert.deepEqual(
+			await rows(
+				`select offer_id from offer_claim where offer_id = '${id(323)}'`,
+			),
+			[{ offer_id: id(323) }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("claims with uncopied authors or sponsors and blank notes wait for review", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(330)}', 'partner_two', 'human', 'Example missing user'), ('${id(331)}', 'codex', 'automation', 'Example agent');
+ insert into public.negotiation_claim (id, round_id, claim_type, created_by, note) values
+ ('${id(332)}', '${id(101)}', 'example', '${id(330)}', null),
+ ('${id(333)}', '${id(105)}', 'example', '${id(331)}', ' ');
+ insert into public.event (actor_id, verb, subject_type, subject_id, cause, sponsoring_human_slug, occurred_at) values ('${id(331)}', 'example', 'negotiation_claim', '${id(333)}', 'human_stated', 'partner_two', '2025-04-01');`);
+		const result = await run();
+		assert.deepEqual(
+			result
+				.filter((r) => [id(332), id(333)].includes(r.old_id))
+				.map((r) => [r.old_id, r.reason]),
+			[
+				[id(332), "claim_author_not_copied"],
+				[id(333), "blank_claim_text"],
+				[id(333), "claim_sponsor_not_copied"],
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select * from offer_claim where offer_id in ('${id(101)}', '${id(105)}')`,
+			),
+			[],
 		);
 	} finally {
 		await db.query("rollback");
