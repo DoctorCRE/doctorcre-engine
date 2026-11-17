@@ -2869,3 +2869,18 @@ grant update (status, deal_id, payment_id) on invoice_email to engine;
 grant update (status, reason, promoted_party_id) on candidate to engine;
 
 grant update (source_row, name, qualification, estimated_lease_on, lease_estimate_source) on candidate to engine;
+
+-- Read logins inherit no save rights; neither application role owns schema objects.
+do $$ begin
+	begin
+		create role engine_reader nologin;
+	exception when duplicate_object or unique_violation then null;
+	end;
+	if exists (select from pg_roles where rolname = 'engine_reader'
+			and (rolsuper or rolbypassrls or rolcreaterole or rolcreatedb or rolreplication))
+		or exists (select from pg_auth_members where member = 'engine_reader'::regrole) then
+		raise exception 'role engine_reader holds rights beyond its grants';
+	end if;
+	execute format('grant usage on schema %1$I to engine_reader;
+		grant select on all tables in schema %1$I to engine_reader', current_schema());
+end $$;

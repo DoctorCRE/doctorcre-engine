@@ -56,6 +56,7 @@ for (const grant of [true, false])
 						isolation: "repeatable read",
 						time_zone: "UTC",
 						board_view_readable: grant,
+						next_section_readable: false,
 					},
 				});
 			}),
