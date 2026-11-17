@@ -5,8 +5,10 @@
 -- find their deals. The owner runs it in one transaction with search_path set to the new schema.
 -- It only reads today's tables in public, and ends by listing each value it did not copy, for a partner to fix there.
 -- outside_id maps each copied vendor's old id to its record, so a second run copies only vendors that are new.
+-- pg_temp.copy_vendor_ruling_reason supplies the reason a partner reviewed for a parked or avoided vendor, by old id.
 
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
+create temp table if not exists copy_vendor_ruling_reason (old_id uuid not null, reason text not null) on commit drop;
 
 -- Off until the end, so each row keeps who last changed it in today's system and when.
 alter table party_role disable trigger stamp_change;
@@ -49,32 +51,44 @@ select v.*, map.party_id as record_id,
 	row_number() over (partition by map.party_id
 		order by v.merged_into is not null, v.party_id <> map.party_id, v.created_at, v.id) as rank,
 	stage.slug as stage_slug, level.level, nullif(regexp_replace(v.offers, '^\s+|\s+$', '', 'g'), '') as typed_offers,
-	nullif(regexp_replace(v.seeking, '^\s+|\s+$', '', 'g'), '') as typed_seeking, author.*
+	nullif(regexp_replace(v.seeking, '^\s+|\s+$', '', 'g'), '') as typed_seeking, nullif(v.disposition, 'active') as ruling,
+	case when v.disposition <> 'active' then reviewed.reason end as ruling_reason, case
+	when v.disposition = 'active' then null
+	when v.disposition not in ('parked', 'avoid') then 'not a ruling'
+	when reviewed.reasons > 1 then 'its reviewed reasons conflict'
+	when reviewed.reason is null then 'a ruling without a reason' end as ruling_refusal, author.*
 from public.vendor v
 left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text
+cross join lateral (select count(distinct r.value) as reasons, min(r.value) as reason
+	from pg_temp.copy_vendor_ruling_reason c
+	cross join lateral (select nullif(regexp_replace(c.reason, '^\s+|\s+$', '', 'g'), '') as value) r
+	where c.old_id = v.id) reviewed
 left join stage on stage.role = 'vendor' and stage.slug = v.stage
 left join relationship_level level on level.level = v.relationship_level
 cross join lateral copy_attribution('vendor', v.id, v.updated_by) author
 where not exists (select from outside_id where source = 'old_system' and value = v.id::text);
 
--- Today's rulings have no reason, and the new database keeps none without one, so a ruled vendor's record waits whole.
--- Copying it without the ruling would put it back in play.
+-- Today's rulings have no reason, and the new database keeps none without one, so a ruled vendor's record waits whole
+-- until a partner reviews one. Copying it without the ruling would put it back in play.
 create temp table copied on commit drop as
 select * from old_vendor v
 where record_id is not null and not record_had_vendor
-	and not exists (select from old_vendor w where w.record_id = v.record_id and w.disposition <> 'active');
+	and not exists (select from old_vendor w where w.record_id = v.record_id and w.ruling_refusal is not null);
 
 -- One record's vendors are one vendor role, as merge_party would join them: the first stage and level, the record's
--- own vendor's first, then by when they were stored, and a target on any.
-insert into party_role (party_id, role, created_at, stage, relationship_level, is_target, offers, seeking, changed_by_user_id, changed_by_job,
-	changed_for_user_id, changed_at)
+-- own vendor's first, then by when they were stored, the strictest ruling with its reason, and a target on any unless
+-- it is avoided.
+insert into party_role (party_id, role, created_at, stage, relationship_level, disposition, disposition_reason, is_target, offers, seeking,
+	changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (record_id) record_id, 'vendor', created_at,
 	first_value(stage_slug) over (partition by record_id order by stage_slug is null, rank),
 	first_value(level) over (partition by record_id order by level is null, rank),
-	bool_or(is_target) over (partition by record_id),
+	first_value(ruling) over strictest, first_value(ruling_reason) over strictest,
+	bool_or(is_target) over (partition by record_id) and every(ruling is distinct from 'avoid') over (partition by record_id),
 	first_value(typed_offers) over (partition by record_id order by typed_offers is null, rank),
 	first_value(typed_seeking) over (partition by record_id order by typed_seeking is null, rank), changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from copied
+window strictest as (partition by record_id order by array_position(array['parked', 'avoid'], ruling) desc nulls last, rank)
 order by record_id, rank;
 
 insert into party_role (party_id, role, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
@@ -145,12 +159,23 @@ select id, 'vendor', vendor_ref, case
 	when record_had_vendor then 'its record holds a vendor role copied before'
 	else 'another vendor of its record waits for a ruling' end
 from old_vendor v
-where disposition = 'active' and not exists (select from copied c where c.id = v.id);
+where ruling_refusal is null and not exists (select from copied c where c.id = v.id);
+
+insert into not_copied select id, 'disposition', disposition, ruling_refusal from old_vendor where ruling_refusal is not null;
 
 insert into not_copied
-select id, 'disposition', disposition, case when disposition in ('parked', 'avoid') then 'a ruling without a reason'
-	else 'not a ruling' end
-from old_vendor where disposition <> 'active';
+select c.old_id, 'disposition_reason', c.reason, case when v.id is null then 'not a vendor' else 'not a parked or avoided vendor' end
+from pg_temp.copy_vendor_ruling_reason c left join public.vendor v on v.id = c.old_id
+where coalesce(v.disposition, '') not in ('parked', 'avoid');
+
+insert into not_copied
+select v.id, f.field, f.value, f.reason
+from copied v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
+cross join lateral (values
+	('disposition_reason', v.ruling_reason, case when v.ruling <> r.disposition then 'its record holds a stricter ruling'
+		when v.ruling_reason <> r.disposition_reason then 'its record holds another reason' end),
+	('is_target', 'true', case when v.is_target and r.disposition = 'avoid' then 'an avoided vendor cannot be a target' end)) f (field, value, reason)
+where f.reason is not null;
 
 insert into not_copied
 select v.id, 'stage', v.stage, 'its record holds another stage'
