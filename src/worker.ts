@@ -14,10 +14,11 @@ import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
+import { nextDeals } from "./deals/next-change.ts";
 import { deals } from "./deals/routes.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
-import { jobStamp, type NextDoorEnv } from "./next-door.ts";
+import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
@@ -28,7 +29,7 @@ import { today } from "./today/routes.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 
-type WorkerEnv = NextDoorEnv &
+type WorkerEnv = NextSaveEnv &
 	CompareEnv &
 	IntakeEnv & {
 		Bindings: { CF_VERSION_METADATA: { id: string } };
@@ -47,7 +48,6 @@ app.get("/health", (c) =>
 const engine = new Hono<WorkerEnv>()
 	.get("/whoami", (c) => c.json(c.get("partner")))
 	.route("/", activity)
-	.route("/", activityDoor)
 	.route("/", calendar)
 	.route("/", directory)
 	.route("/", connection)
@@ -65,8 +65,10 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", vendorMarkets)
 	.route("/", vendorMeetings);
 
-app.use("/api/engine/*", requireSession);
+app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
+app.route("/api/engine", nextDeals);
+app.route("/api/engine", activityDoor);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
 app.use(
@@ -84,12 +86,13 @@ app.use(
 );
 app.route("/intake", intake);
 
-// The Studio's jobs save here and name themselves (decision 103).
+// The old system's Studio jobs save here, each naming itself and the partner it works for.
 app.use(
 	"/jobs/*",
 	accessDoor("jobs", (env) => env.JOBS_ACCESS_AUD),
 	jobStamp,
 );
+app.route("/jobs", nextDeals);
 app.route("/jobs", activityDoor);
 
 export default app;

@@ -4,7 +4,7 @@ import { Refusal, unregisteredFields } from "../answer.ts";
 import { isInstant } from "../calendar-date.ts";
 import type { JsonObject, JsonValue } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
-import { answerNextSave, type NextDoorEnv } from "../next-door.ts";
+import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { SaveRefusal } from "../save.ts";
 import { isArguments } from "../save-door.ts";
 import { isUuid } from "../uuid.ts";
@@ -21,6 +21,7 @@ type Email = {
 	body: string;
 };
 type NewActivity = {
+	idempotency_key: JsonValue;
 	kind: string;
 	happened_at: string;
 	about: About[];
@@ -50,8 +51,7 @@ function settled<T extends object>(
 	parsed: T,
 	args: JsonObject,
 ): Settled<T> | Refusal {
-	const known = ["idempotency_key", ...Object.keys(parsed)];
-	const stray = unregisteredFields(Object.keys(args), known);
+	const stray = unregisteredFields(Object.keys(args), Object.keys(parsed));
 	if (stray) return stray;
 	if (isSettled(parsed)) return parsed;
 	const fields = Object.entries(parsed).flatMap(([name, value]) =>
@@ -100,10 +100,11 @@ function parseEmail(value: JsonValue): Email | undefined {
 }
 
 function parseActivity(args: JsonObject): NewActivity | Refusal {
-	const { kind, happened_at, about = [], reached = null, email = null } = args;
-	const { summary = null, from_party_id = null } = args;
+	const { idempotency_key, kind, happened_at, about = [], email = null } = args;
+	const { summary = null, from_party_id = null, reached = null } = args;
 	return settled(
 		{
+			idempotency_key,
 			kind: isText(kind) ? kind : undefined,
 			happened_at: isInstant(happened_at) ? happened_at : undefined,
 			about: kind === "email" ? parseAbout(about) : filed(about),
@@ -116,10 +117,10 @@ function parseActivity(args: JsonObject): NewActivity | Refusal {
 	);
 }
 
-function parseLinks(args: JsonObject) {
-	const { activity_id, about } = args;
+function parseLinks(activity_id: string, args: JsonObject) {
 	if (!isUuid(activity_id)) return new Refusal(404, "not_found");
-	return settled({ activity_id, about: filed(about) }, args);
+	const { idempotency_key, about } = args;
+	return settled({ idempotency_key, activity_id, about: filed(about) }, args);
 }
 
 // Refuses the whole save when a named record does not exist, naming each missing one.
@@ -154,7 +155,7 @@ async function link(tx: Transaction<DB>, activity_id: string, about: About[]) {
 
 async function insertActivity(
 	tx: Transaction<DB>,
-	{ about: _about, email, ...activity }: NewActivity,
+	{ idempotency_key: _key, about: _about, email, ...activity }: NewActivity,
 ) {
 	const { id } = await tx
 		.insertInto("activity")
@@ -242,19 +243,15 @@ async function addLinks(
 	return { activity_id, about: await link(tx, activity_id, about) };
 }
 
-export const activityDoor = new Hono<NextDoorEnv>()
+export const activityDoor = new Hono<NextSaveEnv>()
 	.post("/activities", (c) =>
-		answerNextSave(c, {
-			verb: "record-activity",
-			parse: parseActivity,
-			change: recordActivity,
-			status: 201,
-		}),
+		answerNextSave(c, "record-activity", parseActivity, recordActivity, 201),
 	)
 	.post("/activities/:activity_id/about", (c) =>
-		answerNextSave(c, {
-			verb: "add-activity-about",
-			parse: parseLinks,
-			change: addLinks,
-		}),
+		answerNextSave(
+			c,
+			"add-activity-about",
+			(body) => parseLinks(c.req.param("activity_id"), body),
+			addLinks,
+		),
 	);

@@ -97,6 +97,11 @@ export function readNextBoardDeals(
 			sql<null>`null`.as("invoiced_on"),
 			sql<null>`null`.as("closed_on"),
 			sql<null>`null`.as("outcome"),
+			// The seen_change_id a save sends back; a float8 reads as a number, a bigint as text.
+			sql<number>`(select coalesce(max(ch.id), 0)::float8 from change ch
+				where ch.table_name = 'deal' and ch.record = jsonb_build_object('id', d.id))`.as(
+				"seen",
+			),
 		])
 		.where("c.party_id", "is not", null)
 		.where((eb) =>

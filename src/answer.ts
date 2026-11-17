@@ -68,7 +68,7 @@ export class Refusal {
 }
 
 export const refuse = (
-	c: Context<DatabaseEnv>,
+	c: Context,
 	refusal: Refusal,
 	correlation_id = crypto.randomUUID(),
 ) =>

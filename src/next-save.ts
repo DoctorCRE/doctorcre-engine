@@ -71,6 +71,6 @@ async function sign(tx: Transaction<DB>, stamp: Stamp) {
 			.where("slug", "=", stamp.job)
 			.executeTakeFirst();
 		if (!job) throw new SaveRefusal(new Refusal(403, "unknown_job"));
-		await sql`select set_config('engine.job', ${job.slug}, true)`.execute(tx);
+		await sql`select set_config('engine.job', ${stamp.job}, true)`.execute(tx);
 	}
 }

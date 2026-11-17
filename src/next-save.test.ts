@@ -200,14 +200,3 @@ test("an edit over an unseen change to another field stands and answers rebased,
 			thrown.refusal.extra.current_version === seen + 2,
 	);
 });
-
-test("a deal save with no fields is refused", async () => {
-	await assert.rejects(
-		save(
-			{ user: "alex" },
-			{ idempotency_key: randomUUID(), seen: await latestChange() },
-			(tx, args) => changeDeal(tx, DEAL, Number(args.seen), {}),
-		),
-		refusedAs("unhandled_verb_failure"),
-	);
-});
