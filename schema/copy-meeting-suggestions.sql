@@ -13,7 +13,7 @@ from ops.meeting_action_revision r cross join lateral copy_event_attribution(r.p
 -- An action is its current revision; only a next-step command is a suggestion the queue holds.
 create temp table suggestion on commit drop as
 select a.*, cur.id as old_id, btrim(cur.summary) as evidence, cur.created_at, s.*, source.id as activity_id, source.kind as activity_kind,
- target.deal_id, target.party_id, owner.id as owner, case when pg_input_is_valid(s.due_text, 'date') then s.due_text::date end as due_on,
+ target.deal_id, target.party_id, owner.id as owner, case when s.due_text ~ '^\d{4}-\d{2}-\d{2}$' and pg_input_is_valid(s.due_text, 'date') then s.due_text::date end as due_on,
  case when s.verb in ('set-next-action', 'set-next-step') then 'next_step' end as kind,
  case when a.state in ('accepted', 'executed', 'delegated') then 'accepted' when a.state = 'declined' then 'dismissed' else 'pending' end as status,
  (select u.id from app_user u where u.id = decided.changed_by_user_id) as decider,
@@ -61,7 +61,7 @@ cross join lateral (values
   and not exists (select from activity_about b where (b.activity_id, b.party_id) = (s.activity_id, s.party_id))),
  ('summary', s.evidence, 'blank_evidence', s.evidence !~ '\S'),
  (case when s.verb = 'set-next-step' then 'text' else 'description' end, s.what, 'blank_next_step', coalesce(s.what, '') !~ '\S'),
- ('due_on', s.due_text, 'invalid_due_date', s.due_text is not null and s.due_on is null),
+ (case when s.verb = 'set-next-step' then 'next_date' else 'due_on' end, s.due_text, 'invalid_due_date', s.due_text is not null and s.due_on is null),
  ('owner', s.owner_slug, 'owner_not_a_user', s.owner_slug is not null and s.owner is null),
  ('proposed_by_actor', s.unknown_author::text, 'author_not_a_user', s.unknown_author is not null),
  ('decided_by_actor', s.decided_by_actor::text, 'decision_needs_user', s.status <> 'pending' and s.decider is null),
