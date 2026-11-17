@@ -491,6 +491,27 @@ create table introduction (
 	foreign key (vendor_id, vendor_role) references party_role on update cascade
 );
 
+-- Who knows whom, and who can introduce the team to whom: any two people or companies, dated.
+-- An introduction is one that happened with a vendor; a can_introduce link is one that might.
+create table party_link (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	kind text not null check (kind in ('knows', 'can_introduce')),
+	-- Who knows the other, or who can introduce the team to the other.
+	party_id uuid not null references party,
+	other_party_id uuid not null references party,
+	started_on date,
+	ended_on date,
+	note text check (note ~ '\S'),
+	constraint party_link_two_parties check (party_id <> other_party_id),
+	constraint party_link_ends_after_it_starts check (ended_on >= started_on),
+	unique nulls not distinct (party_id, other_party_id, kind, started_on)
+);
+
+-- Knowing goes both ways, so a knows link is stored once whichever party it names first.
+create unique index party_link_knows_once on party_link
+	(least(party_id, other_party_id), greatest(party_id, other_party_id), started_on) nulls not distinct where kind = 'knows';
+
 -- From deal history only: the deals a vendor worked in a vendor role, and the deals its introductions led to.
 create view vendor_track_record as
 with worked as (
@@ -637,7 +658,6 @@ create table lead_stage_move (
 	activity_id uuid references activity,
 	evidence_ref text check (evidence_ref ~ '\S'),
 	strength text not null check (strength in ('strong', 'weak')),
-	status text not null default 'proposed' check (status in ('proposed', 'applied')),
 	reason text check (reason ~ '\S'),
 	unique (party_id, from_stage, to_stage, activity_id),
 	constraint lead_stage_move_has_evidence check (to_stage = 'archived' or (activity_id is not null and evidence_ref is not null)),
@@ -652,14 +672,6 @@ create table lead_stage_move (
 create function apply_lead_stage_move() returns trigger
 language plpgsql as $$
 begin
-	if tg_op = 'UPDATE' and old.status = new.status then return null; end if;
-	if tg_op = 'UPDATE' and old.status = 'applied' then
-		raise exception 'an applied move stays applied; a correction is a new move'
-			using errcode = 'check_violation', constraint = 'lead_stage_move_final';
-	end if;
-	if new.status = 'proposed' then
-		return null;
-	end if;
 	if new.changed_by_job is not null and (new.strength = 'weak' or new.to_stage = 'archived') then
 		raise exception 'weak evidence and archiving wait for a direct user'
 			using errcode = 'check_violation', constraint = 'lead_stage_move_needs_user';
@@ -682,7 +694,7 @@ begin
 	return null;
 end $$;
 
-create trigger apply_lead_stage_move after insert or update of status on lead_stage_move
+create trigger apply_lead_stage_move after insert on lead_stage_move
 	for each row execute function apply_lead_stage_move();
 
 create function lead_stage_needs_evidence() returns trigger
@@ -693,7 +705,7 @@ begin
 	if (tg_op = 'UPDATE' and new.changed_by_job is not null and new.changed_for_user_id is null or new.stage = 'archived')
 		and not exists (select from lead_stage_move m
 			where m.party_id = new.party_id and m.from_stage = old.stage and m.to_stage = new.stage
-				and m.status = 'applied' and m.changed_at = now()
+				and m.changed_at = now()
 				and m.changed_by_user_id is not distinct from new.changed_by_user_id
 				and m.changed_by_job is not distinct from new.changed_by_job) then
 		raise exception 'a job stage move or an archive needs its applied evidence'
@@ -753,15 +765,180 @@ create table home_mark (
 	constraint home_mark_marks_something check (disposition is not null or waiting_on_party_id is not null)
 );
 
+-- Suggestions from mail, calls and meetings share one decision queue, including weak lead moves.
+create table proposal (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move')),
+	activity_id uuid not null,
+	activity_kind text not null check (activity_kind in ('email', 'call', 'meeting')),
+	evidence text not null check (evidence ~ '\S'),
+	proposed_by_job text not null references job,
+	status text not null default 'pending' check (status in ('pending', 'accepted', 'dismissed')),
+	decided_by_user_id uuid references app_user,
+	decided_at timestamptz,
+	deal_id uuid references deal,
+	party_id uuid references party,
+	property_id uuid references property,
+	what text check (what ~ '\S'),
+	owner_party_id uuid references party,
+	due_on date,
+	from_phase text references phase,
+	to_phase text references phase,
+	lead_role text generated always as ('lead') stored,
+	from_stage text,
+	to_stage text,
+	how_found text references how_found,
+	strength text check (strength in ('strong', 'weak')),
+	reason text check (reason ~ '\S'),
+	foreign key (activity_id, activity_kind) references activity (id, kind),
+	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
+	foreign key (lead_role, from_stage) references stage (role, slug),
+	foreign key (lead_role, to_stage) references stage (role, slug),
+	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
+	constraint proposal_decision_whole check (
+		(status = 'pending' and decided_by_user_id is null and decided_at is null)
+		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
+	constraint proposal_payload check ((
+		(kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		or (kind = 'phase_move' and deal_id is not null and to_phase is not null
+			and from_phase is distinct from to_phase and (to_phase <> 'dead' or reason is not null)
+			and num_nonnulls(what, owner_party_id, due_on, from_stage, to_stage, how_found, strength) = 0)
+		or (kind = 'new_lead' and party_id is not null and to_stage = 'new' and how_found is not null
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, reason, strength) = 0)
+		or (kind = 'lead_stage_move' and strength is not null and party_id is not null and from_stage is not null and to_stage is not null
+			and from_stage <> to_stage and (to_stage <> 'archived' or reason is not null)
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, how_found) = 0)) is true)
+);
+
+create unique index proposal_source_payload_once on proposal
+	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found)
+	nulls not distinct;
+
+create function decide_proposal() returns trigger
+language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+	current_phase text;
+begin
+	if tg_op = 'INSERT' then
+		if new.status <> 'pending' or new.decided_by_user_id is not null or new.decided_at is not null
+			or acting_job is distinct from new.proposed_by_job then
+			raise exception 'a job creates a pending proposal' using errcode = 'check_violation', constraint = 'proposal_starts_pending';
+		end if;
+		return new;
+	end if;
+	if old.status <> 'pending' or new.status not in ('accepted', 'dismissed') then
+		raise exception 'a pending proposal is decided once' using errcode = 'check_violation', constraint = 'proposal_final';
+	end if;
+	if acting_job is not null or acting_user is null then
+		raise exception 'only a direct user decides a proposal' using errcode = 'check_violation', constraint = 'proposal_user_decides';
+	end if;
+	new.decided_by_user_id := acting_user;
+	new.decided_at := clock_timestamp();
+	if new.status = 'dismissed' then return new; end if;
+	case new.kind
+	when 'next_step' then
+		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id)
+		values (new.id, new.what, new.owner_party_id, new.due_on, new.deal_id, new.party_id, new.property_id);
+	when 'phase_move' then
+		-- Two acceptances cannot both pass the stale-phase check.
+		perform from deal where id = new.deal_id for update;
+		select phase into current_phase from deal_phase_change where deal_id = new.deal_id order by happened_at desc limit 1;
+		if current_phase is distinct from new.from_phase then
+			raise exception 'the deal has moved' using errcode = 'check_violation', constraint = 'proposal_current_phase';
+		end if;
+		insert into deal_phase_change (deal_id, happened_at, phase, reason)
+		values (new.deal_id, new.decided_at, new.to_phase, new.reason);
+	when 'new_lead' then
+		update party set how_found = coalesce(how_found, new.how_found) where id = new.party_id;
+		insert into party_role (party_id, role, stage) values (new.party_id, 'lead', new.to_stage);
+	when 'lead_stage_move' then
+		insert into lead_stage_move (id, party_id, from_stage, to_stage, activity_id, evidence_ref, strength, reason)
+		values (new.id, new.party_id, new.from_stage, new.to_stage, new.activity_id, new.evidence, new.strength, new.reason);
+	end case;
+	return new;
+end $$;
+
+create trigger decide_proposal before insert or update of status on proposal
+	for each row execute function decide_proposal();
+
 create table document (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	name text not null,
-	r2_key text not null,
+	r2_key text not null check (r2_key ~ '\S'),
+	r2_bucket text not null default 'post_media' check (r2_bucket in ('post_media', 'deal_documents')),
+	unique (r2_bucket, r2_key),
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
 	email_activity_id uuid references email,
 	unique (id, content_type)
+);
+
+create table document_kind (slug text primary key, label text not null);
+
+-- Deal files share documents with email attachments and post media; a replacement keeps the earlier bytes.
+alter table document
+	add deal_id uuid references deal,
+	add kind text references document_kind,
+	add version integer not null default 1 check (version >= 1),
+	add supersedes_id uuid unique,
+	add previous_version integer generated always as (nullif(version - 1, 0)) stored,
+	add sha256 text check (sha256 ~ '^[0-9a-f]{64}$'),
+	add bytes bigint check (bytes > 0),
+	add unique (id, deal_id),
+	add unique (id, deal_id, kind, version),
+	add constraint document_deal_file_whole check (
+		(deal_id is null and kind is null and version = 1 and supersedes_id is null)
+		or (deal_id is not null and kind is not null and content_type ~ '\S'
+			and content_type is not null and sha256 is not null and bytes is not null)),
+	add constraint document_version_has_predecessor check ((version = 1) = (supersedes_id is null)),
+	add constraint document_previous_version foreign key (supersedes_id, deal_id, kind, previous_version)
+		references document (id, deal_id, kind, version);
+
+create function document_filed_once() returns trigger
+language plpgsql as $$
+begin
+	if old.deal_id is not null or new.deal_id is null
+		or old.content_type is not null and new.content_type is distinct from old.content_type
+		or old.sha256 is not null and new.sha256 is distinct from old.sha256
+		or old.bytes is not null and new.bytes is distinct from old.bytes then
+		raise exception 'an attachment is filed to a deal once; stored file metadata never changes'
+			using errcode = 'check_violation', constraint = 'document_filed_once';
+	end if;
+	return new;
+end $$;
+
+create trigger document_filed_once before update on document
+	for each row when ((old.deal_id, old.kind, old.content_type, old.sha256, old.bytes)
+		is distinct from (new.deal_id, new.kind, new.content_type, new.sha256, new.bytes))
+	execute function document_filed_once();
+
+-- One completed attempt, including no text or failure, belongs to the exact stored file version.
+create table document_extraction (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	document_id uuid not null,
+	deal_id uuid not null,
+	extracted_at timestamptz not null,
+	method text not null check (method ~ '\S'),
+	extractor_version text not null check (extractor_version ~ '\S'),
+	model text check (model ~ '\S'),
+	text_format_version text not null check (text_format_version ~ '\S'),
+	status text not null check (status in ('produced', 'no_text', 'unavailable', 'receipt_only')),
+	pages text[] not null,
+	receipt jsonb check (jsonb_typeof(receipt) = 'object'),
+	foreign key (document_id, deal_id) references document (id, deal_id),
+	unique nulls not distinct (document_id, method, extractor_version, model, text_format_version),
+	constraint document_extraction_pages check (
+		case when coalesce(array_ndims(pages), 1) = 1 then array_position(pages, null) is null else false end
+		and cardinality(pages) <= 1000 and length(array_to_string(pages, '')) <= 500000),
+	constraint document_extraction_status_matches_text check (
+		(status = 'produced') = (translate(array_to_string(pages, ''), U&'\0009\000A\000B\000C\000D\001C\001D\001E\001F\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000', '') <> '')
+		and (status not in ('unavailable', 'receipt_only') or cardinality(pages) = 0)
+		and (status <> 'receipt_only' or receipt is not null))
 );
 
 create table offer (
@@ -775,7 +952,13 @@ create table offer (
 	offered_at timestamptz not null,
 	expires_on date,
 	status text not null default 'open'
-		check (status in ('open', 'countered', 'accepted', 'rejected', 'withdrawn', 'superseded')),
+		check (status in ('unknown', 'open', 'countered', 'accepted', 'rejected', 'withdrawn', 'superseded')),
+	import_source text check (import_source ~ '^[a-z][a-z0-9_]*$'),
+	import_id text check (import_id ~ '^\S(.*\S)?$'),
+	import_record jsonb,
+	constraint offer_import_whole check (num_nonnulls(import_source, import_id, import_record) in (0, 3)),
+	constraint offer_unknown_only_imported check (status <> 'unknown' or import_source is not null),
+	unique (import_source, import_id),
 	rent_per_sf_yr numeric(10, 2) check (rent_per_sf_yr >= 0),
 	nnn_per_sf_yr numeric(10, 2) check (nnn_per_sf_yr >= 0),
 	term_months integer check (term_months >= 0),
@@ -802,9 +985,10 @@ create unique index offer_one_accepted_per_deal on offer (deal_id) where status 
 create function offer_status_moves() returns trigger
 language plpgsql as $$
 begin
-	if not (old.status = 'open' and new.status <> 'superseded'
+	if not (old.status = 'unknown'
+		or old.status = 'open' and new.status not in ('unknown', 'superseded')
 		or old.status = 'accepted' and new.status = 'superseded') then
-		raise exception 'a round''s status moves only out of open, or from accepted to superseded'
+		raise exception 'a round''s status moves out of unknown or open, or from accepted to superseded'
 			using errcode = 'check_violation', constraint = 'offer_status_moves';
 	end if;
 	return new;
@@ -838,6 +1022,73 @@ create table offer_document (
 	primary key (offer_id, document_id)
 );
 
+-- What a side can claim about its own position, such as best and final. Like roles, a label can be renamed.
+create table claim_type (
+	-- A deadline is the round's expires_on, never a claim.
+	slug text primary key check (slug <> 'deadline'),
+	label text not null
+);
+
+-- What the side that sent a round claimed in it. History, like its documents; a claim heard later is added later.
+create table offer_claim (
+	offer_id uuid not null references offer,
+	claim_type text not null references claim_type,
+	created_at timestamptz not null default now(),
+	-- The rent a side says it will not go past, when it differs from the round's own.
+	floor_rent_per_sf_yr numeric(10, 2) check (floor_rent_per_sf_yr > 0),
+	-- Their words, as near verbatim as heard.
+	quote text check (quote ~ '\S'),
+	note text check (note ~ '\S'),
+	primary key (offer_id, claim_type)
+);
+
+create table space_need (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references deal,
+	name text not null check (name ~ '\S'),
+	min_sf numeric(10, 1) check (min_sf > 0 and min_sf <> 'NaN'::numeric),
+	max_sf numeric(10, 1) check (max_sf > 0 and max_sf <> 'NaN'::numeric),
+	space_type text check (space_type ~ '\S'),
+	market_id uuid references market,
+	max_rate_sf_yr numeric(10, 2) check (max_rate_sf_yr >= 0 and max_rate_sf_yr <> 'NaN'::numeric),
+	vendor_id uuid,
+	vendor_role text not null default 'vendor' check (vendor_role = 'vendor'),
+	source_ref text check (source_ref ~ '\S'),
+	source_revision text check (source_revision ~ '\S'),
+	applicability text check (applicability ~ '\S'),
+	constraint space_need_vendor_source_whole check (num_nonnulls(vendor_id, source_ref, source_revision, applicability) in (0, 4)),
+	must_haves text check (must_haves ~ '\S'),
+	constraint space_need_size_in_order check (max_sf >= min_sf),
+	foreign key (vendor_id, vendor_role) references party_role on update cascade
+);
+
+create table suite (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	property_id uuid not null references property,
+	label text check (label = btrim(label) and label ~ '\S'),
+	floor integer,
+	area_sf numeric(10, 1) check (area_sf > 0 and area_sf <> 'NaN'::numeric),
+	area_basis text check (area_basis in ('rentable', 'usable', 'county_heated', 'listed_unverified')),
+	condition text check (condition ~ '\S'),
+	unique (property_id, label),
+	-- Carries the building into the signed lease link.
+	unique (id, property_id)
+);
+
+create table building_ownership (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	property_id uuid not null references property,
+	party_id uuid not null references party,
+	kind text not null check (kind in ('owner', 'landlord_rep', 'property_manager', 'listing_agent')),
+	started_on date,
+	ended_on date check (ended_on >= started_on),
+	source text not null check (source ~ '\S'),
+	unique nulls not distinct (property_id, party_id, kind, started_on)
+);
+
 create table lease (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -845,6 +1096,7 @@ create table lease (
 	property_id uuid not null references property,
 	deal_id uuid unique references deal,
 	client_role text not null default 'client' check (client_role = 'client'),
+	unique (id, property_id),
 	foreign key (deal_id, party_id, client_role) references deal_party on update cascade,
 	foreign key (deal_id, property_id) references deal_property
 );
@@ -891,8 +1143,21 @@ create table lease_version (
 	constraint lease_dates_in_order check (expiration_on > commencement_on and expiration_on >= executed_on),
 	constraint lease_rent_date_or_days check (num_nonnulls(rent_starts_on, rent_days_after_delivery) <= 1),
 	unique (lease_id, version),
+	unique (id, lease_id),
 	foreign key (lease_id, previous_version) references lease_version (lease_id, version),
 	foreign key (offer_id) references offer
+);
+
+create table lease_suite (
+	lease_version_id uuid not null,
+	lease_id uuid not null,
+	property_id uuid not null,
+	suite_id uuid not null,
+	created_at timestamptz not null default now(),
+	primary key (lease_version_id, suite_id),
+	foreign key (lease_version_id, lease_id) references lease_version (id, lease_id),
+	foreign key (lease_id, property_id) references lease (id, property_id),
+	foreign key (suite_id, property_id) references suite (id, property_id)
 );
 
 create function lease_from_accepted_offer() returns trigger
@@ -1061,10 +1326,14 @@ begin atomic
 			where dp.deal_id = d.id
 		),
 		'offers', (
-			select coalesce(jsonb_agg(to_jsonb(o) - 'deal_id' || jsonb_build_object('documents', (
+			select coalesce(jsonb_agg(to_jsonb(o) - array['deal_id', 'import_source', 'import_id', 'import_record'] || jsonb_build_object('documents', (
 				select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 				from offer_document od join document doc on doc.id = od.document_id
 				where od.offer_id = o.id
+			), 'claims', (
+				select coalesce(jsonb_agg(to_jsonb(c) - 'offer_id' order by c.claim_type), '[]')
+				from offer_claim c
+				where c.offer_id = o.id
 			)) order by o.round), '[]')
 			from offer o
 			where o.deal_id = d.id
@@ -1349,6 +1618,150 @@ end $$;
 create trigger measurement_after_publishing before insert on measurement
 	for each row execute function measurement_after_publishing();
 
+-- Commissions (walkthrough 4, topic E). Real shares and thresholds are the partners' rows, never in this repo.
+-- A deal's commission, once: what it is expected to bring while open, and the gross the brokerage collects.
+create table commission (
+	deal_id uuid primary key references deal,
+	created_at timestamptz not null default now(),
+	expected numeric(14, 2) check (expected > 0),
+	gross numeric(14, 2) check (gross > 0),
+	-- The closing user's part of what the others leave, on this deal only. None follows their ladder.
+	closing_share numeric(6, 5) check (closing_share between 0 and 1)
+);
+
+-- One part of the gross as it is invoiced and paid, such as half at signing and half at move-in.
+create table commission_payment (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references commission,
+	amount numeric(14, 2) not null check (amount > 0),
+	invoiced_on date,
+	due_on date,
+	received_on date,
+	constraint commission_payment_dates_in_order check (due_on >= invoiced_on and received_on >= invoiced_on)
+);
+
+-- What goes to others before the users split the rest: a referring agent, the brokerage, anyone else.
+create table commission_share (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references commission,
+	party_id uuid not null references party,
+	kind text not null check (kind in ('referral', 'brokerage', 'other')),
+	share numeric(6, 5) not null check (share > 0 and share <= 1)
+);
+
+-- A user's ladder: from their nth closed deal ever, they take closing_share of what each deal they close leaves,
+-- and their partner the rest. A tier runs until the next one starts, so tiers never overlap or leave a gap.
+create table commission_tier (
+	user_id uuid not null references app_user,
+	from_deal integer not null check (from_deal >= 1),
+	partner_user_id uuid not null references app_user,
+	-- Steps down toward an even split, never past it.
+	closing_share numeric(6, 5) not null check (closing_share between 0.5 and 1),
+	primary key (user_id, from_deal),
+	constraint commission_tier_another_user check (partner_user_id <> user_id),
+	constraint commission_tier_one_partner exclude using gist (user_id with =, partner_user_id with <>)
+);
+
+-- Deferred, so a lowered gross and a removed payment, or two changed shares, save in either order.
+-- Held per deal until the transaction ends, so two saves cannot each pass alone and together break it.
+create function commission_adds_up() returns trigger
+language plpgsql as $$
+begin
+	perform pg_advisory_xact_lock(hashtextextended('commission ' || new.deal_id, 0));
+	if (select sum(p.amount) > coalesce(min(m.gross), 0)
+			from commission m join commission_payment p using (deal_id) where m.deal_id = new.deal_id) then
+		raise exception 'payments never add up to more than the gross'
+			using errcode = 'check_violation', constraint = 'commission_payments_within_gross';
+	end if;
+	if (select sum(share) > 1 from commission_share where deal_id = new.deal_id) then
+		raise exception 'the others never take more than the whole commission'
+			using errcode = 'check_violation', constraint = 'commission_shares_within_whole';
+	end if;
+	return null;
+end $$;
+
+create constraint trigger commission_adds_up after update of gross on commission
+	initially deferred for each row execute function commission_adds_up();
+create constraint trigger commission_adds_up after insert or update on commission_payment
+	initially deferred for each row execute function commission_adds_up();
+create constraint trigger commission_adds_up after insert or update on commission_share
+	initially deferred for each row execute function commission_adds_up();
+
+-- Deferred, so a ladder's tiers can be replaced in any order. Held per user, like commission_adds_up.
+create function commission_ladder_holds() returns trigger
+language plpgsql as $$
+declare
+	ladder uuid;
+begin
+	if tg_table_name = 'commission_tier' then
+		ladder := coalesce(new.user_id, old.user_id);
+	elsif tg_table_name = 'deal' then
+		ladder := new.owner_user_id;
+	else
+		ladder := (select owner_user_id from deal where id = new.deal_id);
+	end if;
+	perform pg_advisory_xact_lock(hashtextextended('commission_tier ' || ladder, 0));
+	if (select min(from_deal) <> 1 from commission_tier where user_id = ladder)
+		or exists (select from (
+			select closing_share > lag(closing_share) over (order by from_deal) as steps_up
+			from commission_tier where user_id = ladder
+		) tiers where steps_up) then
+		raise exception 'a ladder starts at the first closed deal and never steps up'
+			using errcode = 'check_violation', constraint = 'commission_ladder_steps_down';
+	end if;
+	if not exists (select from commission_tier where user_id = ladder)
+		and exists (select from commission m join deal d on d.id = m.deal_id
+			where d.owner_user_id = ladder and m.gross is not null) then
+		raise exception 'a gross needs its closing user''s ladder, so its split names both users'
+			using errcode = 'check_violation', constraint = 'commission_split_names_both_users';
+	end if;
+	return null;
+end $$;
+
+create constraint trigger commission_ladder_holds after insert or update or delete on commission_tier
+	initially deferred for each row execute function commission_ladder_holds();
+create constraint trigger commission_ladder_holds after insert or update of gross on commission
+	initially deferred for each row execute function commission_ladder_holds();
+create constraint trigger commission_ladder_holds after update of owner_user_id on deal
+	initially deferred for each row execute function commission_ladder_holds();
+
+-- Everyone's share of each deal's commission and its amount. The users' come from here, never typed.
+-- A user's count of closed deals is lifetime, so it never resets.
+create view commission_split as
+with closed as (
+	select d.id as deal_id, row_number() over (partition by d.owner_user_id order by last.happened_at, d.id) as number
+	from deal d cross join lateral (
+		select phase, happened_at from deal_phase_change where deal_id = d.id order by happened_at desc limit 1
+	) last
+	where last.phase = 'closed'
+),
+users as (
+	select m.deal_id, d.owner_user_id, ladder.partner_user_id,
+		coalesce(m.closing_share, (
+			select t.closing_share from commission_tier t
+			where t.user_id = d.owner_user_id and t.from_deal <= closed.number order by t.from_deal desc limit 1
+		)) as closing_share,
+		1 - coalesce((select sum(share) from commission_share where deal_id = m.deal_id), 0) as left_share
+	from commission m
+	join deal d on d.id = m.deal_id
+	join lateral (select partner_user_id from commission_tier where user_id = d.owner_user_id limit 1) ladder on true
+	left join closed using (deal_id)
+),
+parts as (
+	select deal_id, party_id, kind, share, 0 as part, id from commission_share
+	union all
+	select deal_id, owner_user_id, 'closing_user', left_share * closing_share, 1, null from users
+	union all
+	select deal_id, partner_user_id, 'partner', left_share * (1 - closing_share), 2, null from users
+)
+-- Each amount is the cents its running share adds, so none is negative and together they are the gross.
+select p.deal_id, p.party_id, p.kind, p.share,
+	round(m.gross * sum(p.share) over running, 2) - round(m.gross * (sum(p.share) over running - p.share), 2) as amount
+from parts p join commission m using (deal_id)
+window running as (partition by p.deal_id order by p.part, p.id);
+
 -- Everything that points at the duplicate moves to the survivor, and the duplicate is removed (decision 39).
 -- It runs with the owner's rights, because it also moves history the engine never rewrites, such as rounds and outside ids.
 create function merge_party(duplicate uuid, survivor uuid) returns void
@@ -1389,11 +1802,27 @@ begin
 	update national_account set party_id = survivor where party_id = duplicate
 		and exists (select from party_role where party_id = survivor and role = 'national_account');
 
+	delete from proposal d using proposal s
+	where d.party_id = duplicate and s.party_id = survivor
+		and (s.activity_id, s.kind, s.deal_id, s.property_id, s.from_phase, s.to_phase, s.from_stage, s.to_stage,
+			s.what, s.owner_party_id, s.due_on, s.how_found) is not distinct from
+			(d.activity_id, d.kind, d.deal_id, d.property_id, d.from_phase, d.to_phase, d.from_stage, d.to_stage,
+			d.what, d.owner_party_id, d.due_on, d.how_found);
 	delete from lead_stage_move d using lead_stage_move s
 	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
 		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
+	-- A link between the two says nothing once they are one. Of two links that become one, the survivor's stays.
+	delete from party_link where duplicate in (party_id, other_party_id) and survivor in (party_id, other_party_id);
+	delete from party_link d using party_link s
+	where duplicate in (d.party_id, d.other_party_id) and survivor in (s.party_id, s.other_party_id)
+		and s.kind = d.kind and s.started_on is not distinct from d.started_on
+		and case d.party_id when duplicate then d.other_party_id else d.party_id end
+			= case s.party_id when survivor then s.other_party_id else s.party_id end
+		and (d.kind = 'knows' or (d.party_id = duplicate) = (s.party_id = survivor));
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
+	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
+	update space_need set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
 	-- Its stage, level and lead owner stay too, and the duplicate's fill any it lacks. A target on either holds.
@@ -1454,6 +1883,9 @@ begin
 	delete from party_territory d using party_territory s
 	where d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
 		and s.started_on is not distinct from d.started_on;
+	delete from building_ownership d using building_ownership s
+	where d.party_id = duplicate and s.party_id = survivor and s.property_id = d.property_id
+		and s.kind = d.kind and s.started_on is not distinct from d.started_on;
 
 	-- Profiles cascade with their roles before their direct party keys move.
 	update party_role set party_id = survivor where party_id = duplicate;
@@ -1531,10 +1963,11 @@ declare
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
-		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
+		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
+		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
+		'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -1667,7 +2100,7 @@ end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
 -- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -1705,13 +2138,14 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, home_mark, document, social_account, idea, design_template, introduction to engine;
+	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
-grant update (label) on table role, stage, phase, specialty, deal_kind, deal_reason, how_found to engine;
+grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
 grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
+grant update (started_on, ended_on, note) on party_link to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
 grant update (npi, how_found) on party to engine;
@@ -1724,6 +2158,11 @@ grant update (happened_at, from_party_id, summary) on activity to engine;
 grant update (what, owner_party_id, due_on, done_at) on next_step to engine;
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) on home_mark to engine;
+-- Only the owner's import supplies provenance. A user's or job's new round has a known status.
+revoke insert on offer from engine;
+grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,
+	expires_on, status, rent_per_sf_yr, nnn_per_sf_yr, term_months, ti_per_sf, free_rent_months,
+	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms) on offer to engine;
 grant update (status) on offer to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
@@ -1736,10 +2175,22 @@ grant update (status, client_type) on client to engine;
 grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
-grant update (status) on lead_stage_move to engine;
+grant update (status) on proposal to engine;
+
+grant update (expected, gross, closing_share) on commission to engine;
+grant update (amount, invoiced_on, due_on, received_on) on commission_payment to engine;
+grant update (share) on commission_share to engine;
+grant update (closing_share) on commission_tier to engine;
+grant delete on commission, commission_payment, commission_share, commission_tier to engine;
 
 
 
 grant update (label) on lead_lane to engine;
 grant update (how_found_detail) on party to engine;
 grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) on party_role to engine;
+
+grant update (deal_id, kind, content_type, sha256, bytes) on document to engine;
+grant delete on suite, space_need, building_ownership to engine;
+grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
+grant update (name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id, must_haves, vendor_id, source_ref, source_revision, applicability) on space_need to engine;
+grant update (started_on, ended_on, source) on building_ownership to engine;
