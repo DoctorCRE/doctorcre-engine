@@ -1,25 +1,12 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const sql = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const copy = await sql("copy-client-files.sql");
-const name = `copy_client_files_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-client-files.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (text: string) => (await db.query(text)).rows;
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	await db.query("begin");
@@ -37,14 +24,7 @@ const links = () =>
 	);
 let report: pg.QueryResultRow[];
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(
-		`create schema next; ${await sql("next.sql")}; ${await sql("copy-attribution.sql")}`,
-	);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'),
  ('${id(10)}', 'company', 'Example Client'), ('${id(11)}', 'company', 'Example Second'), ('${id(12)}', 'company', 'Example Survivor');
@@ -92,10 +72,7 @@ before(async () => {
  commit;`);
 	report = await run();
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("client and generated working and PDF files keep their bytes, times and author without a deal", async () => {
 	assert.deepEqual(
@@ -263,7 +240,7 @@ test("a rerun changes no files, links or history and keeps the correction list",
 test("client-only generated corrections appear once across the deal and client copiers", async () => {
 	await db.query("begin");
 	try {
-		const result = await db.query(await sql("copy-deal-files.sql"));
+		const result = await db.query(await readSchema("copy-deal-files.sql"));
 		assert.ok(Array.isArray(result));
 		const combined = [...(result.at(-1)?.rows ?? []), ...report];
 		assert.deepEqual(

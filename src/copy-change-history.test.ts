@@ -1,30 +1,15 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy, vendors] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-change-history.sql"),
-	read("copy-vendors.sql"),
+const [copy, vendors] = await Promise.all([
+	readSchema("copy-change-history.sql"),
+	readSchema("copy-vendors.sql"),
 ]);
-const name = `copy_history_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	await db.query("begin");
@@ -70,12 +55,7 @@ const snapshot = () =>
  union all select 'change',to_jsonb(c) from change c) v group by t) s`);
 
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  alter table public.event drop constraint event_sponsoring_human_slug_check;
  insert into public.actor (id,slug,kind,display_name) values
@@ -105,10 +85,7 @@ const baseline = async () => {
 	await event(100, "party", 11, "name");
 	await run();
 };
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("copies field evidence for every supported record kind without replay or invented snapshots", async () => {
 	const cases: [string, number, string, string, object, string][] = [

@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import { copyTest } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -12,19 +8,7 @@ const PARTNER = id(1);
 const AGENT = id(2);
 const MAIL = id(3);
 const SYSTEM = id(4);
-const attribution = await readFile(
-	new URL("../schema/copy-attribution.sql", import.meta.url),
-	"utf8",
-);
-const name = `copy_attribution_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next",
-});
+const { db, setup, cleanup } = copyTest();
 type Attribution = [string | null, string | null, string | null];
 const attributed = async (call: string, args: (string | null)[]) =>
 	(
@@ -43,12 +27,7 @@ const oldEvent = (
 ) =>
 	`('${id(n)}', '${actor}', 'example', 'deal', '${id(deal)}', '${field}', '${cause}', '2025-01-01', ${sponsor ? `'${sponsor}'` : "null"})`;
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${attribution}`);
+	await setup();
 	// Inserted in order, so each later row is a later mutation; partner_two has no actor.
 	await db.query(`insert into public.actor (id, slug, kind, display_name) values
  ('${PARTNER}', 'partner_one', 'human', 'Example User'), ('${AGENT}', 'codex', 'automation', 'Example agent'),
@@ -67,10 +46,7 @@ before(async () => {
 		oldEvent(19, AGENT, 53, "phase", "human_stated", null),
  ].join(",\n ")};`);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("one event is attributed by its own cause and sponsor, never a later one", async () => {
 	const cases: [string, string | null, number | null, Attribution][] = [
