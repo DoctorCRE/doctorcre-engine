@@ -633,12 +633,19 @@ for (const [projection, payload, title, duplicate, copiedSummary] of [
 		{
 			summary: " ",
 			decisions: [" Example decision ", " "],
-			open_questions: [" Example question "],
+			open_questions: [" Example question ", " "],
 		},
 		{ summary: "Example no notes" },
 		"Example no notes",
 		false,
 		"Decisions:\n- Example decision\n\nOpen questions:\n- Example question",
+	],
+	[
+		{ summary: "Example summary", open_questions: [" "] },
+		{ summary: "Example no notes" },
+		"Example no notes",
+		false,
+		"Example summary",
 	],
 	[
 		{ summary: " " },

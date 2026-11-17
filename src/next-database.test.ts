@@ -542,6 +542,7 @@ const STAMPED = [
 	"document",
 	"document_extraction",
 	"document_kind",
+	"party_document",
 	"email",
 	"offer",
 	"offer_document",
@@ -624,6 +625,7 @@ const STORED_AT = [
 	"home_mark",
 	"document",
 	"document_extraction",
+	"party_document",
 	"social_account",
 	"idea",
 	"design_template",
@@ -4337,6 +4339,7 @@ const COLLAPSED = [
 	"lead_stage_move_party_id_from_stage_to_stage_activity_id_key",
 	"national_account_pkey",
 	"party_company_person_id_company_id_started_on_key",
+	"party_document_pkey",
 	"party_email_address_party_id_key",
 	"party_email_one_primary",
 	"party_link_party_id_other_party_id_kind_started_on_key",
@@ -6482,6 +6485,124 @@ for (const [label, sql, refusal] of FILE_REFUSALS) {
 	test(`deal files refuse ${label}`, () =>
 		rolledBack(() => assert.rejects(db.query(sql), { constraint: refusal })));
 }
+
+const CLIENT_FILE = id(8100);
+const SECOND_CLIENT_FILE = id(8101);
+const FILE_DUPLICATE = id(8102);
+const clientFile = (row: Record<string, string | number | null> = {}) =>
+	insert("document", {
+		id: CLIENT_FILE,
+		name: "Example tour book.pdf",
+		r2_bucket: "deal_documents",
+		r2_key: "example/client-file",
+		content_type: "application/pdf",
+		sha256: "b".repeat(64),
+		bytes: 2048,
+		...row,
+	});
+const partyFile = (row: Record<string, string> = {}) =>
+	insert("party_document", {
+		party_id: CLIENT,
+		document_id: CLIENT_FILE,
+		...row,
+	});
+const partyFiles = async () =>
+	(
+		await db.query(
+			"select party_id, document_id from party_document order by document_id, party_id",
+		)
+	).rows.map((r) => [r.party_id, r.document_id]);
+
+// biome-ignore format: one row per refusal
+const PARTY_FILE_REFUSALS = [
+	["a missing party", `${clientFile()}; ${partyFile({ party_id: MISSING })}`, "party_document_party_id_fkey"],
+	["a missing file", partyFile(), "party_document_stored"],
+	["a file without its type", `${clientFile({ content_type: null })}; ${partyFile()}`, "party_document_stored"],
+	["a file with a blank type", `${clientFile({ content_type: " " })}; ${partyFile()}`, "party_document_stored"],
+	["a file without its hash", `${clientFile({ sha256: null })}; ${partyFile()}`, "party_document_stored"],
+	["a file without its size", `${clientFile({ bytes: null })}; ${partyFile()}`, "party_document_stored"],
+	["the same link twice", `${clientFile()}; ${partyFile()}; ${partyFile()}`, "party_document_pkey"],
+] satisfies [string, string, string][];
+for (const [label, sql, refusal] of PARTY_FILE_REFUSALS) {
+	test(`party files refuse ${label}`, () =>
+		rolledBack(() => assert.rejects(db.query(sql), { constraint: refusal })));
+}
+
+test("one stored file belongs to a client, another party and the client's deal at once", () =>
+	rolledBack(async () => {
+		await db.query(`${clientFile()}; ${partyFile()}; ${partyFile({ party_id: AGENT })};
+			update document set deal_id = '${DEAL}', kind = 'other' where id = '${CLIENT_FILE}'`);
+		assert.deepEqual(
+			(
+				await db.query("select id, deal_id from document where sha256 = $1", [
+					"b".repeat(64),
+				])
+			).rows,
+			[{ id: CLIENT_FILE, deal_id: DEAL }],
+		);
+		assert.deepEqual(await partyFiles(), [
+			[CLIENT, CLIENT_FILE],
+			[AGENT, CLIENT_FILE],
+		]);
+	}));
+
+test("removing a mistaken party link keeps its file, and history keeps who linked and removed it", () =>
+	rolledBack(async () => {
+		await db.query(`${clientFile()}; ${partyFile()};
+			${asUser(TEAMMATE)}; delete from party_document where party_id = '${CLIENT}'`);
+		assert.deepEqual(await partyFiles(), []);
+		assert.equal(
+			(
+				await db.query("select count(*) from document where id = $1", [
+					CLIENT_FILE,
+				])
+			).rows[0].count,
+			"1",
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select action, changed_by_user_id from change where table_name = 'party_document' order by id",
+				)
+			).rows,
+			[
+				{ action: "insert", changed_by_user_id: USER },
+				{ action: "delete", changed_by_user_id: TEAMMATE },
+			],
+		);
+	}));
+
+test("a merge keeps the survivor's link to a file both hold and moves the duplicate's other files", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name) values ('${FILE_DUPLICATE}', 'person', 'Example Duplicate');
+			${clientFile()}; ${clientFile({ id: SECOND_CLIENT_FILE, r2_key: "example/client-file-2" })};
+			${partyFile({ party_id: AGENT })}; ${partyFile({ party_id: FILE_DUPLICATE })};
+			${partyFile({ party_id: FILE_DUPLICATE, document_id: SECOND_CLIENT_FILE })};
+			select merge_party('${FILE_DUPLICATE}', '${AGENT}')`);
+		assert.deepEqual(await partyFiles(), [
+			[AGENT, CLIENT_FILE],
+			[AGENT, SECOND_CLIENT_FILE],
+		]);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select action, record from change
+					where table_name = 'party_document' and merge_of = $1 order by id`,
+					[FILE_DUPLICATE],
+				)
+			).rows,
+			[
+				{
+					action: "delete",
+					record: { party_id: FILE_DUPLICATE, document_id: CLIENT_FILE },
+				},
+				{
+					action: "update",
+					record: { party_id: FILE_DUPLICATE, document_id: SECOND_CLIENT_FILE },
+				},
+			],
+		);
+	}));
 
 test("deal file versions retain their bytes, ordered text and extraction evidence", () =>
 	rolledBack(async () => {
