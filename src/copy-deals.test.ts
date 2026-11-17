@@ -1388,6 +1388,40 @@ test("an importer-made owner followed by an agent handoff copies both periods", 
 	}
 });
 
+test("a refused non-user earlier owner does not knock out an overlapping valid owner period", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`insert into public.actor (id, slug, kind, display_name) values
+ ('${id(4)}', 'example_nonuser', 'human', 'Example nonuser');
+ insert into public.deal_participant (id, deal_id, actor_id, role, from_at, to_at, set_by) values
+ ('${id(760)}', '${id(10)}', '${id(4)}', 'lead', '2024-01-01', '2024-03-01', '${id(1)}'),
+ ('${id(761)}', '${id(10)}', '${id(1)}', 'lead', '2024-02-01', '2024-04-01', '${id(1)}');`);
+		const result = await run();
+		assert.deepEqual(
+			await rows(
+				"select id, deal_id, user_id, started_at::text, ended_at::text from imported_deal_owner order by id",
+			),
+			[
+				{
+					id: id(761),
+					deal_id: id(10),
+					user_id: id(1),
+					started_at: "2024-02-01 00:00:00+00",
+					ended_at: "2024-04-01 00:00:00+00",
+				},
+			],
+		);
+		assert.deepEqual(
+			result
+				.filter((r) => r.old_id === id(760) || r.old_id === id(761))
+				.map((r) => [r.old_id, r.reason]),
+			[[id(760), "owner_not_a_user"]],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("earlier people follow merges and owners keep only supported starts, with stable reruns", async () => {
 	await db.query("begin");
 	try {
