@@ -9,15 +9,21 @@ const planStatus = (step?: string | null, date?: string | null) =>
 		? { next_step_required: true, prompt: PROMPT }
 		: { next_step_required: false };
 
+export const notKept = (kept: readonly (string | null)[]) =>
+	sql<boolean>`not (id = any(${kept}::uuid[]))`;
+
 // The old writer's cleanup when a deal moves on: the partner's overdue next
 // steps and post-call actions are dropped, never checklist items or another
 // partner's, and a dropped current step hands the deal to the next open one.
+// Kept actions await an overdue assessment and are never dropped here.
 // Its partner-authority check always passes for a signed-in partner, so it is
 // not repeated. The caller holds the next_date and next_step locks.
 export async function dropOverdueWork(
 	{ tx, actor_id, partner, record }: Saving,
 	deal_id: string,
+	kept: readonly (string | null)[] = [],
 ) {
+	const unkept = notKept(kept);
 	const current = await tx
 		.selectFrom("deal as d")
 		.leftJoin("v_deal_room_board as b", "b.id", "d.id")
@@ -36,6 +42,7 @@ export async function dropOverdueWork(
 		.where("owner_id", "=", actor_id)
 		.where("status", "=", "open")
 		.where("item_title", "is", null)
+		.where(unkept)
 		.where(
 			sql<boolean>`((id=${current.action_id} and ${current.overdue}::boolean) or (id is distinct from ${current.action_id} and due_on < current_date))`,
 		)
@@ -53,6 +60,7 @@ export async function dropOverdueWork(
 		.where("status", "=", "open")
 		.where("item_title", "is", null)
 		.where("due_on", "<", sql<string>`current_date`)
+		.where(unkept)
 		.returning(["id", "description", "due_on"])
 		.execute();
 	const superseded_action_ids = [...dropped, ...postCall].map((a) => a.id);

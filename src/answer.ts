@@ -32,6 +32,7 @@ const HINTS = {
 	invalid_idempotency_key:
 		"Supply a UUID as idempotency_key and reuse it only for the same action.",
 	key_reuse: "Use a fresh idempotency_key for changed arguments.",
+	version_conflict: "Re-read the record and ask the human before retrying.",
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
 	unknown_owner: "Owner is one of joe, dell or claude.",
 	field_required:
