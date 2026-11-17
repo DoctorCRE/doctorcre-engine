@@ -1238,14 +1238,19 @@ begin
 		raise exception 'only its owner edits a reply draft, before it goes out'
 			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
 	end if;
-	-- As today's sender: only a try aborted before Send goes out again, and only one it could not confirm may be found sent.
+	if by_owner and not (old.status = 'pending' or old.status = 'failed' and new.status = 'approved'
+		and old.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid')) then
+		raise exception 'a reply draft is decided once and sent at most once'
+			using errcode = 'check_violation', constraint = 'reply_draft_sent_once';
+	end if;
+	-- Only a failure before Send may be approved again; an unconfirmed try may only be found sent.
 	-- A try keeps the recipients its owner approved.
 	if new.status in ('sent', 'failed') and (new.to_address, new.cc_address) is distinct from (old.to_address, old.cc_address)
 		or new.status = old.status and to_jsonb(new) - editable <> to_jsonb(old) - editable
 		or new.status <> old.status and not (case old.status
 			when 'pending' then new.status in ('approved', 'dismissed')
 			when 'approved' then new.status in ('sent', 'failed')
-			when 'failed' then new.status = 'approved' and old.failure_reason = 'aborted_before_dispatch'
+			when 'failed' then new.status = 'approved' and old.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid')
 				or new.status = 'sent' and old.failure_reason ~ '^unconfirmed_after_[0-9]+$'
 			else false end) then
 		raise exception 'a reply draft is decided once and sent at most once'
@@ -1308,9 +1313,16 @@ alter table document
 		references document (id, deal_id, kind, version);
 
 create unique index document_email_hash on document (email_activity_id, sha256)
-	where email_activity_id is not null and sha256 is not null;
-create unique index document_unemailed_hash on document (deal_id, sha256)
-	where email_activity_id is null and r2_key like 'sha256/%';
+	where deal_id is null and email_activity_id is not null and sha256 is not null;
+create unique index document_deal_hash on document (deal_id, sha256)
+	where r2_bucket = 'deal_documents' and r2_key like 'sha256/%';
+
+create table email_document (
+	email_activity_id uuid not null references email,
+	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
+	primary key (email_activity_id, document_id)
+);
 
 create function document_filed_once() returns trigger
 language plpgsql as $$
@@ -1376,7 +1388,7 @@ begin
 	select * into draft from reply_draft where id = coalesce(new.reply_draft_id, old.reply_draft_id);
 	if not (nullif(current_setting('engine.job', true), '') is null
 		and nullif(current_setting('engine.user_id', true), '')::uuid is not distinct from draft.owner_user_id
-		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason = 'aborted_before_dispatch')) then
+		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid'))) then
 		raise exception 'only its owner attaches files to a reply draft, before it goes out'
 			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
 	end if;
@@ -1784,6 +1796,7 @@ begin atomic
 		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 			from document doc where doc.email_activity_id = e.activity_id
+				or exists (select from email_document ed where ed.document_id = doc.id and ed.email_activity_id = e.activity_id)
 		)) from email e where e.activity_id = a.id
 	));
 end;
@@ -2553,7 +2566,7 @@ begin
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
 		'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'party_document',
+		'party_document', 'email_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'invoice_email', 'invoice_mailbox', 'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,

@@ -14,6 +14,7 @@ type Body = Record<string, unknown>;
 export function doorTest() {
 	const copy = copyTest();
 	const writer = `door_${randomUUID().replaceAll("-", "")}`;
+	const reader = `${writer}_reader`;
 	const access = generateKeyPair("RS256", { extractable: true });
 
 	const setup = async () => {
@@ -24,18 +25,20 @@ export function doorTest() {
 		);
 		await copy.setup();
 		await copy.db.query(
-			`create role ${writer} login; grant engine to ${writer}`,
+			`create role ${writer} login; grant engine to ${writer}; create role ${reader} login; grant engine_reader to ${reader}`,
 		);
 	};
 	const cleanup = async () => {
 		mock.restoreAll();
-		await copy.db.query(`drop owned by ${writer}; drop role ${writer}`);
+		await copy.db.query(
+			`drop owned by ${writer}, ${reader}; drop role ${writer}, ${reader}`,
+		);
 		await copy.cleanup();
 	};
 
-	const login = () => {
+	const login = (role = writer) => {
 		const url = new URL(copy.connectionString);
-		url.username = writer;
+		url.username = role;
 		return url.href;
 	};
 
@@ -76,6 +79,7 @@ export function doorTest() {
 			{
 				...bindings,
 				DATABASE_WRITER: { connectionString: login() },
+				DATABASE: { connectionString: login(reader) },
 				ACCESS_TEAM_DOMAIN: TEAM,
 				JOBS_ACCESS_AUD: AUDIENCE,
 				CARR: {
@@ -94,10 +98,11 @@ export function doorTest() {
 		caller: Caller,
 		path: string,
 		args: object,
+		method = "POST",
 	): Promise<[number, Body]> => {
 		const response = await request(caller, path, {
-			method: "POST",
-			body: JSON.stringify(args),
+			method,
+			...(method === "POST" && { body: JSON.stringify(args) }),
 		});
 		return [response.status, await response.json()];
 	};

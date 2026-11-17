@@ -50,10 +50,6 @@
 			],
 			"r2_buckets": [
 				{
-					"binding": "DEAL_DOCUMENTS",
-					"bucket_name": "carr-documents-staging"
-				},
-				{
 					"binding": "POST_MEDIA",
 					"bucket_name": "doctorcre-post-media-staging"
 				}

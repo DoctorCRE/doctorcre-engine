@@ -3,6 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { doorTest } from "./test-door.ts";
 
+Object.assign(globalThis, {
+	FixedLengthStream: class extends TransformStream {
+		constructor(_length: number) {
+			super();
+		}
+	},
+});
+
 const { db, setup, cleanup, request } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -28,10 +36,12 @@ const bucket = {
 	async put(
 		key: string,
 		stream: ReadableStream<Uint8Array>,
-		options: { httpMetadata: { contentType: string } },
+		options: { httpMetadata: { contentType: string }; sha256: string },
 	) {
 		if (files.has(key)) return null;
 		const data = new Uint8Array(await new Response(stream).arrayBuffer());
+		if (createHash("sha256").update(data).digest("hex") !== options.sha256)
+			throw new Error("R2 put failed: (10037) checksum mismatch");
 		files.set(key, { data, httpMetadata: options.httpMetadata });
 		return {};
 	},
@@ -120,6 +130,7 @@ test("files upload, attach and open through door 20", async (t) => {
 			assert.equal(files.size, 0);
 			for (const marker of [
 				"word/document.xml",
+				"word/document2.xml",
 				"xl/workbook.xml",
 				"ppt/presentation.xml",
 			]) {
@@ -145,7 +156,7 @@ test("files upload, attach and open through door 20", async (t) => {
 			assert.equal(
 				(await upload({ data: new TextEncoder().encode("%PDF-different") }))
 					.status,
-				422,
+				200,
 			);
 			assert.equal(files.size, 1);
 			assert.equal(
@@ -157,9 +168,46 @@ test("files upload, attach and open through door 20", async (t) => {
 	);
 
 	await t.test(
+		"concurrent first ties with different keys return one document",
+		async () => {
+			const fresh = new TextEncoder().encode("%PDF-concurrent");
+			const sha256 = createHash("sha256").update(fresh).digest("hex");
+			assert.equal((await upload({ data: fresh, hash: sha256 })).status, 201);
+			await db.query("begin; lock table document in share mode");
+			const pending = [
+				tie({ sha256, deal_id: id(2), kind: "other" }),
+				tie({ sha256, deal_id: id(2), kind: "other" }),
+			];
+			try {
+				let waiting = 0;
+				for (let attempts = 0; waiting < 2 && attempts < 1000; attempts++) {
+					await db.query("select pg_stat_clear_snapshot()");
+					const locks = await db.query(
+						"select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and usename like 'door_%'",
+					);
+					waiting = locks.rows[0].n;
+				}
+				assert.equal(waiting, 2);
+			} finally {
+				await db.query("rollback");
+			}
+			const responses = await Promise.all(pending);
+			const answers = await Promise.all(responses.map(json));
+			assert.ok(responses.every((r) => r.status === 201));
+			assert.equal(new Set(answers.map((a) => a.document_id)).size, 1);
+			assert.equal(answers.filter((a) => a.existing === false).length, 1);
+			files.delete(`sha256/${sha256}`);
+		},
+	);
+
+	await t.test(
 		"attachments converge by email and hash, file once, and open through both entrances",
 		async () => {
-			const args = { idempotency_key: randomUUID() };
+			const args = {
+				idempotency_key: randomUUID(),
+				deal_id: id(2),
+				kind: "other",
+			};
 			const first = await tie(args);
 			const answer = await json(first);
 			assert.equal(first.status, 201);
@@ -175,15 +223,36 @@ test("files upload, attach and open through door 20", async (t) => {
 			]);
 			for (const response of same)
 				assert.deepEqual(await json(response), { ...answer, existing: true });
-			const crossed = await tie({ deal_id: id(3), kind: "other" });
-			assert.deepEqual(
-				[crossed.status, (await json(crossed)).error],
-				[409, "filed_to_another_deal"],
-			);
+			const crossed = await json(await tie({ deal_id: id(3), kind: "other" }));
+			assert.notEqual(crossed.document_id, answer.document_id);
 			const second = await json(
-				await tie({ message_id: "Second@example.test" }),
+				await tie({
+					message_id: "Second@example.test",
+					deal_id: id(2),
+					kind: "other",
+				}),
 			);
-			assert.notEqual(second.document_id, answer.document_id);
+			assert.equal(second.document_id, answer.document_id);
+			assert.equal(
+				(await json(await tie({ message_id: "Second@example.test" })))
+					.document_id,
+				answer.document_id,
+			);
+			for (const email of [id(4), id(5)]) {
+				const result = await db.query(
+					"select activity_entry(a)->'email'->'documents' as documents from activity a where id = $1",
+					[email],
+				);
+				assert.ok(
+					result.rows[0].documents.some(
+						(d: { id: string }) => d.id === answer.document_id,
+					),
+				);
+			}
+			assert.equal(
+				(await request(caller, `documents/${answer.document_id}`, {})).status,
+				503,
+			);
 			assert.equal(files.size, 1);
 			for (const who of [caller, { user: "alex" }]) {
 				const opened = await request(
@@ -258,6 +327,31 @@ test("files upload, attach and open through door 20", async (t) => {
 					)
 				).status,
 				403,
+			);
+			assert.equal(
+				(
+					await request(caller, `files/${hash}`, {
+						method: "PUT",
+						headers: { "Content-Length": String(pdf.length) },
+						body: pdf,
+					})
+				).status,
+				503,
+			);
+			assert.equal(
+				(
+					await request(caller, "attachments", {
+						method: "POST",
+						body: JSON.stringify({
+							idempotency_key: randomUUID(),
+							sha256: hash,
+							name: "Example.pdf",
+							deal_id: id(2),
+							kind: "other",
+						}),
+					})
+				).status,
+				503,
 			);
 			const solo = await tie({
 				message_id: undefined,

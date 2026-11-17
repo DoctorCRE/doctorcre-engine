@@ -4,14 +4,11 @@ import { Refusal, refuse } from "./answer.ts";
 import { nextTransaction } from "./next-connection.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { signNextCaller } from "./next-save.ts";
-import { storeFile } from "./post-media.ts";
+import { MAX_FILE_BYTES, storeFile } from "./post-media.ts";
 import { fit, isText, isUuid, optional } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 
 type Bucket = Parameters<typeof storeFile>[0] & {
-	head(
-		key: string,
-	): Promise<{ size: number; httpMetadata?: { contentType?: string } } | null>;
 	get(key: string): Promise<{ body: ReadableStream<Uint8Array> } | null>;
 };
 export type AttachmentEnv = NextSaveEnv & {
@@ -28,7 +25,7 @@ const ATTACHMENT = {
 	kind: optional(isText),
 };
 
-async function read<T>(
+async function asCaller<T>(
 	c: Context<AttachmentEnv>,
 	run: Parameters<typeof nextTransaction<T>>[2],
 ) {
@@ -41,6 +38,13 @@ async function read<T>(
 	});
 }
 
+function encodeFilename(name: string) {
+	return encodeURIComponent(name).replace(
+		/['()*]/g,
+		(character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+	);
+}
+
 export const attachmentFiles = new Hono<AttachmentEnv>();
 attachmentFiles.onError((error, c) =>
 	error instanceof SaveRefusal
@@ -49,7 +53,7 @@ attachmentFiles.onError((error, c) =>
 );
 
 attachmentFiles.put("/files/:sha256", async (c) => {
-	await read(c, async () => undefined);
+	await asCaller(c, async () => undefined);
 	const sha256 = c.req.param("sha256");
 	if (!isHash(sha256))
 		return refuse(
@@ -60,24 +64,10 @@ attachmentFiles.put("/files/:sha256", async (c) => {
 	const body = c.req.raw.body;
 	if (!body || !Number.isSafeInteger(length) || length <= 0)
 		return refuse(c, new Refusal(411, "length_required"));
-	if (length > 25 * 1024 * 1024)
-		return refuse(c, new Refusal(422, "too_large"));
+	if (length > MAX_FILE_BYTES) return refuse(c, new Refusal(422, "too_large"));
 	const bucket = c.env.DEAL_DOCUMENTS;
 	if (!bucket) return refuse(c, new Refusal(503, "database_unavailable"));
-	let bytes = 0;
-	const counted = body.pipeThrough(
-		new TransformStream<Uint8Array, Uint8Array>({
-			transform(piece, controller) {
-				bytes += piece.length;
-				if (bytes > length) controller.error(new Error("length mismatch"));
-				else controller.enqueue(piece);
-			},
-			flush(controller) {
-				if (bytes !== length) controller.error(new Error("length mismatch"));
-			},
-		}),
-	);
-	const stored = await storeFile(bucket, sha256, counted, length);
+	const stored = await storeFile(bucket, sha256, body, length);
 	if ("refused" in stored && stored.refused !== "already_stored")
 		return refuse(
 			c,
@@ -99,7 +89,7 @@ attachmentFiles.put("/files/:sha256", async (c) => {
 attachmentFiles.get("/documents/:id", async (c) => {
 	const id = c.req.param("id");
 	if (!isUuid(id)) return refuse(c, new Refusal(404, "not_found"));
-	const document = await read(c, (tx) =>
+	const document = await asCaller(c, (tx) =>
 		tx
 			.selectFrom("document")
 			.select(["r2_bucket", "r2_key", "content_type", "name"])
@@ -111,12 +101,13 @@ attachmentFiles.get("/documents/:id", async (c) => {
 		document.r2_bucket === "deal_documents"
 			? c.env.DEAL_DOCUMENTS
 			: c.env.POST_MEDIA;
-	const file = await bucket?.get(document.r2_key);
+	if (!bucket) return refuse(c, new Refusal(503, "database_unavailable"));
+	const file = await bucket.get(document.r2_key);
 	if (!file) return refuse(c, new Refusal(404, "not_found"));
 	return new Response(file.body, {
 		headers: {
 			"Content-Type": document.content_type ?? "application/octet-stream",
-			"Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(document.name).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+			"Content-Disposition": `attachment; filename*=UTF-8''${encodeFilename(document.name)}`,
 			"X-Content-Type-Options": "nosniff",
 			"Cache-Control": "private, no-store",
 		},
@@ -140,6 +131,9 @@ export const attachments = new Hono<AttachmentEnv>().post("/attachments", (c) =>
 		},
 		async (tx, request) => {
 			const { sha256, name, deal_id, kind, message_id } = request;
+			const bucket = c.env.DEAL_DOCUMENTS;
+			if (!bucket)
+				throw new SaveRefusal(new Refusal(503, "database_unavailable"));
 			const email = message_id
 				? await tx
 						.selectFrom("email")
@@ -158,36 +152,39 @@ export const attachments = new Hono<AttachmentEnv>().post("/attachments", (c) =>
 					.executeTakeFirst())
 			)
 				throw new SaveRefusal(new Refusal(404, "not_found"));
-			await sql`select pg_advisory_xact_lock(hashtextextended(${`${email?.activity_id ?? deal_id}/${sha256}`}, 0))`.execute(
+			await sql`select pg_advisory_xact_lock(hashtextextended(${sha256}, 0))`.execute(
 				tx,
 			);
-			const prior = await tx
-				.selectFrom("document")
-				.select(["id", "deal_id"])
-				.where("sha256", "=", sha256)
-				.where(
-					"email_activity_id",
-					email ? "=" : "is",
-					email?.activity_id ?? null,
-				)
-				.$if(!email, (q) => q.where("deal_id", "=", deal_id ?? ""))
-				.executeTakeFirst();
-			if (prior) {
-				if (deal_id && prior.deal_id && prior.deal_id !== deal_id)
-					throw new SaveRefusal(
-						new Refusal(409, "filed_to_another_deal", {
-							deal_id: prior.deal_id,
-						}),
+			const { rows: matches } = await sql<{
+				id: string;
+				deal_id: string | null;
+			}>`
+    select id, deal_id from document where sha256 = ${sha256}
+     and (deal_id = ${deal_id ?? null}::uuid or
+      ((deal_id is null or ${deal_id ?? null}::uuid is null)
+       and (email_activity_id = ${email?.activity_id ?? null}::uuid or exists
+        (select from email_document where document_id = document.id
+         and email_activity_id = ${email?.activity_id ?? null}::uuid))))
+    order by deal_id desc nulls last limit 1`.execute(tx);
+			const prior = matches[0];
+			const linkEmail = async (document_id: string) => {
+				if (email)
+					await sql`insert into email_document (email_activity_id, document_id)
+     values (${email.activity_id}::uuid, ${document_id}::uuid) on conflict do nothing`.execute(
+						tx,
 					);
+			};
+			if (prior) {
 				if (deal_id && !prior.deal_id)
 					await tx
 						.updateTable("document")
 						.set({ deal_id, kind: kind ?? null })
 						.where("id", "=", prior.id)
 						.execute();
+				await linkEmail(prior.id);
 				return { document_id: prior.id, existing: true };
 			}
-			const file = await c.env.DEAL_DOCUMENTS?.head(`sha256/${sha256}`);
+			const file = await bucket.head(`sha256/${sha256}`);
 			if (!file?.httpMetadata?.contentType)
 				throw new SaveRefusal(new Refusal(409, "file_not_uploaded"));
 			const { rows } = await sql<{
@@ -198,6 +195,7 @@ export const attachments = new Hono<AttachmentEnv>().post("/attachments", (c) =>
 			);
 			const document = rows[0];
 			if (!document) throw new Error("document insert returned no row");
+			await linkEmail(document.id);
 			return { document_id: document.id, existing: false };
 		},
 		201,
