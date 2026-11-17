@@ -31,6 +31,7 @@ type NewActivity = {
 	from_party_id: string | null;
 	reached: boolean | null;
 	email: Email | null;
+	calendar_review_key?: string;
 };
 
 const optional = <T>(value: JsonValue, is: (value: unknown) => value is T) =>
@@ -129,6 +130,7 @@ function parseEmail(value: JsonValue): Email | undefined {
 function parseActivity(args: JsonObject): NewActivity | Refusal {
 	const { idempotency_key, kind, happened_at, about = [], email = null } = args;
 	const { summary = null, from_party_id = null, reached = null } = args;
+	const { calendar_review_key } = args;
 	return settled(
 		{
 			idempotency_key,
@@ -139,6 +141,15 @@ function parseActivity(args: JsonObject): NewActivity | Refusal {
 			from_party_id: optional(from_party_id, isUuid),
 			reached: kind === "call" ? optional(reached, isBoolean) : unused(reached),
 			email: kind === "email" ? parseEmail(email) : unused(email),
+			// Leave preexisting requests unchanged for receipt hashing.
+			...("calendar_review_key" in args && {
+				calendar_review_key:
+					kind === "meeting" &&
+					isText(calendar_review_key) &&
+					/^[a-f0-9]{16}$/.test(calendar_review_key)
+						? calendar_review_key
+						: undefined,
+			}),
 		},
 		args,
 	);
@@ -181,10 +192,41 @@ async function link(tx: Transaction<DB>, activity_id: string, about: About[]) {
 
 async function insertActivity(
 	tx: Transaction<DB>,
-	{ idempotency_key: _key, about: _about, email, ...activity }: NewActivity,
+	{
+		idempotency_key: _key,
+		about: _about,
+		email,
+		calendar_review_key,
+		...activity
+	}: NewActivity,
 ) {
-	const { id } = await tx
-		.insertInto("activity")
+	const insert = tx.insertInto("activity");
+	if (calendar_review_key !== undefined) {
+		const partner = sql<string>`nullif(current_setting('engine.user_id', true), '')::uuid`;
+		const saved = await insert
+			.values({
+				...activity,
+				...STAMPED,
+				calendar_review_key,
+				calendar_review_user_id: partner,
+			})
+			.onConflict((conflict) =>
+				conflict
+					.columns(["calendar_review_user_id", "calendar_review_key"])
+					.doNothing(),
+			)
+			.returning("id")
+			.executeTakeFirst();
+		if (saved) return { activity_id: saved.id, existing: false };
+		const stored = await tx
+			.selectFrom("activity")
+			.select("id")
+			.where("calendar_review_user_id", "=", partner)
+			.where("calendar_review_key", "=", calendar_review_key)
+			.executeTakeFirstOrThrow();
+		return { activity_id: stored.id, existing: true };
+	}
+	const { id } = await insert
 		.values({ ...activity, ...STAMPED })
 		.returning("id")
 		.executeTakeFirstOrThrow();
@@ -207,7 +249,7 @@ async function insertActivity(
 				)
 				.execute();
 	}
-	return id;
+	return { activity_id: id, existing: false };
 }
 
 // Links an email to every party, other than the users, whose address sent or
@@ -250,7 +292,7 @@ async function recordEmail(
 		activity.from_party_id ?? (another ? null : (from?.party_id ?? null));
 	const activity_id =
 		stored?.activity_id ??
-		(await insertActivity(tx, { ...activity, from_party_id }));
+		(await insertActivity(tx, { ...activity, from_party_id })).activity_id;
 	await sql`insert into email_mailbox (activity_id, user_id)
   select ${activity_id}, nullif(current_setting('engine.user_id', true), '')::uuid
   where nullif(current_setting('engine.user_id', true), '') is not null
@@ -268,9 +310,9 @@ async function recordEmail(
 async function recordActivity(tx: Transaction<DB>, activity: NewActivity) {
 	await requireRecords(tx, activity.about);
 	if (activity.email) return recordEmail(tx, activity, activity.email);
-	const activity_id = await insertActivity(tx, activity);
-	const about = await link(tx, activity_id, activity.about);
-	return { activity_id, existing: false, about, unmatched: [] };
+	const { activity_id, existing } = await insertActivity(tx, activity);
+	const about = await link(tx, activity_id, existing ? [] : activity.about);
+	return { activity_id, existing, about, unmatched: [] };
 }
 
 async function addLinks(
