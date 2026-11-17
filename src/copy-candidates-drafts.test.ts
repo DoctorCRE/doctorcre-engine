@@ -31,7 +31,7 @@ const run = async () => {
 	assert.ok(Array.isArray(result));
 	return result.at(-2)?.rows ?? [];
 };
-const [user, agent, sweep, helper] = [1, 2, 3, 4].map(id);
+const [user, agent, sweep, helper] = [id(1), id(2), id(3), id(4)] as const;
 // Old lead n is on party n - 10; leads 20 to 27 are copied, except 24, and 22 and 23 share a party.
 const copiedLeads = [20, 21, 22, 23, 25, 26, 27];
 const party = (lead: number) => id(lead === 23 ? 12 : lead - 10);
@@ -188,7 +188,7 @@ test("candidates keep their decision, its user and history, and refusals are lis
 			"49 | unreviewed | Example qualification | 2025-01-01 old_system",
 		],
 	);
-	const [[context]] = await rows(
+	const [context] = await lines(
 		`select source_row from candidate where id = '${id(40)}'`,
 	);
 	assert.deepEqual(context.row, { column: "Example 40" });
