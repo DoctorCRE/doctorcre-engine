@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { sql } from "kysely";
-import { Refusal } from "./answer.ts";
+import { isoMillis, Refusal } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject, JsonValue } from "./database.d.ts";
 import { lockFields } from "./deal-field-base.ts";
@@ -109,11 +109,7 @@ async function versionGuard(
 		.selectFrom("event as e")
 		.innerJoin("actor as a", "a.id", "e.actor_id")
 		.select(["a.slug as actor", "e.verb", "e.field"])
-		.select(
-			sql<string>`to_char(e.recorded_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`.as(
-				"recorded_at",
-			),
-		)
+		.select(isoMillis(sql.ref("e.recorded_at")).as("recorded_at"))
 		.where("e.subject_id", "=", deal_id)
 		.where("e.recorded_at", ">", new Date(current.created_at).toISOString())
 		.orderBy("e.recorded_at", "desc")
