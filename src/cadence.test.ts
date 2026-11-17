@@ -56,6 +56,21 @@ async function items(query: string) {
 	return body;
 }
 
+test("a stored cold client with an open deal answers cold", async () => {
+	const { items: clients } = await items("collection=clients&limit=1");
+	assert.deepEqual(clients, [
+		{
+			id: id(2),
+			name: "Example Clinic",
+			ref: "C-EX-1",
+			client_status: "cold",
+			owner: "alex",
+			owner_party_id: id(1),
+			old_ids: [{ value: id(102) }, { value: id(103) }],
+		},
+	]);
+});
+
 test("cadence reads deal names, governing derived status and owner identity, including deals without a client", async () => {
 	assert.deepEqual(await items("collection=deals"), {
 		items: [
