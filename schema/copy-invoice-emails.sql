@@ -5,6 +5,8 @@ alter table invoice_email disable trigger invoice_email_transition;
 alter table invoice_email disable trigger stamp_change;
 alter table invoice_email disable trigger record_change;
 alter table change disable trigger stamp_change;
+alter table commission_payment disable trigger stamp_change;
+alter table commission_payment disable trigger record_change;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 
 do $$
@@ -20,17 +22,22 @@ declare
  payment_change bigint;
  candidates integer;
  payload jsonb;
- saved jsonb;
+ saved invoice_email;
  failure text;
  phase_slug text;
  current_date_value date;
 begin
  for i in select * from public.deal_invoice_email order by occurred_at, id loop
   begin
-   select new_value -> 'import_record' into saved from change
-    where table_name = 'invoice_email' and record = jsonb_build_object('id', i.id) and action = 'insert';
+   select * into saved from jsonb_populate_record(null::invoice_email, (select new_value from change
+    where table_name = 'invoice_email' and record = jsonb_build_object('id', i.id) and action = 'insert'));
    if exists (select from invoice_email where id = i.id) then
-    if saved is distinct from to_jsonb(i) then
+    if (saved.id,saved.evidence_ref,saved.sender::text,saved.deal_name,saved.client_name,saved.property_address,saved.occurred_at,saved.email_date)
+     is distinct from (i.id,i.evidence_ref,i.from_address,i.deal_name,i.client_name,i.property_address,i.occurred_at,i.email_date)
+     or not exists (select from invoice_email where id = i.id and status = i.status)
+     or i.status <> 'captured' and not exists (select from change where table_name = 'invoice_email'
+      and record = jsonb_build_object('id', i.id) and changed_at = i.applied_at
+      and new_value ->> 'status' = 'applied' and new_value ->> 'reason' = i.reason) then
      insert into not_copied values (i.id, 'id', i.id::text, 'existing_evidence_conflicts');
     end if;
     continue;
@@ -57,11 +64,15 @@ begin
     select invoiced_on into current_date_value from public.deal where id = i.deal_id;
     select count(*), (array_agg(p.id))[1] into candidates, payment
      from commission_payment p join public.commission c on c.id = p.id and c.deal_id = i.deal_id and c.status <> 'expected'
-     where p.deal_id = mapped_deal and p.invoiced_on is not distinct from current_date_value
+     where p.deal_id = mapped_deal and (p.invoiced_on is null or p.invoiced_on is not distinct from current_date_value)
       and c.invoiced_on is not distinct from p.invoiced_on;
     if candidates <> 1 then raise check_violation using constraint = 'payment_not_identified'; end if;
    end if;
    if i.status <> 'captured' then
+    if exists (select from public.deal_invoice_email other where other.deal_id = i.deal_id
+     and other.email_date = i.email_date and other.status <> 'captured' and (other.applied_at,other.id) < (i.applied_at,i.id)) then
+     raise check_violation using constraint = 'duplicate_application';
+    end if;
     if current_date_value is distinct from (case when i.status = 'undone' then i.prior_invoiced_on else i.email_date end) then
      raise check_violation using constraint = 'invoice_dates_disagree';
     end if;
@@ -77,10 +88,6 @@ begin
      or not exists (select from deal_phase_change where deal_id = mapped_deal and happened_at = phase_event.occurred_at and phase = 'closed') then
      raise check_violation using constraint = 'application_evidence_missing';
     end if;
-    if exists (select from public.deal_invoice_email other where other.id <> i.id and other.deal_id = i.deal_id
-     and other.email_date = i.email_date and other.status <> 'captured') then
-     raise check_violation using constraint = 'duplicate_application';
-    end if;
    end if;
    -- Every historical actor must resolve before any history is written.
    for actor in
@@ -95,6 +102,11 @@ begin
      raise check_violation using constraint = 'actor_not_copied';
     end if;
    end loop;
+   if i.status = 'applied' then
+    update commission_payment p set invoiced_on = i.email_date, changed_at = invoice_event.occurred_at,
+     changed_by_user_id = a.changed_by_user_id, changed_by_job = a.changed_by_job, changed_for_user_id = a.changed_for_user_id
+    from copy_event_attribution(i.applied_by, i.invoice_event_id) a where p.id = payment and p.invoiced_on is null;
+   end if;
    if i.status <> 'captured' then
     insert into change (table_name, record, action, old_value, new_value, changed_at,
      changed_by_user_id, changed_by_job, changed_for_user_id)
@@ -117,7 +129,7 @@ begin
     changed_by_user_id, changed_by_job, changed_for_user_id)
    select 'invoice_email', jsonb_build_object('id', i.id), 'insert',
     (payload - array['prior_phase_at','applied_phase_at','prior_invoiced_on','payment_change_id'])
-     || jsonb_build_object('status', 'captured', 'import_record', to_jsonb(i)), capture.occurred_at, a.*
+     || jsonb_build_object('status', 'captured', 'application_root_id', null), capture.occurred_at, a.*
    from copy_event_attribution(i.created_by, capture.id) a;
    if i.status <> 'captured' then
     insert into change (table_name, record, action, old_value, new_value, changed_at,
@@ -130,6 +142,10 @@ begin
    if i.status = 'undone' then
     insert into change (table_name, record, action, old_value, new_value, changed_at,
      changed_by_user_id, changed_by_job, changed_for_user_id)
+    select 'commission_payment', jsonb_build_object('id', payment), 'update', jsonb_build_object('invoiced_on', i.email_date),
+     jsonb_build_object('invoiced_on', i.prior_invoiced_on), i.undone_at, a.* from copy_event_attribution(i.undone_by, null) a;
+    insert into change (table_name, record, action, old_value, new_value, changed_at,
+     changed_by_user_id, changed_by_job, changed_for_user_id)
     select 'invoice_email', jsonb_build_object('id', i.id), 'update', jsonb_build_object('status', 'applied'),
      jsonb_build_object('status', 'undone'), i.undone_at, a.* from copy_event_attribution(i.undone_by, null) a;
    end if;
@@ -139,9 +155,15 @@ begin
   end;
  end loop;
 end $$;
+insert into not_copied
+select d.id, 'invoiced_on', d.invoiced_on::text, 'invoice_date_not_reconciled' from public.deal d
+where d.invoiced_on is not null and not exists (select from outside_id m join commission_payment p on p.deal_id = m.deal_id
+ where m.source = 'old_system' and m.value = d.id::text and p.invoiced_on = d.invoiced_on);
 set constraints all immediate;
 alter table invoice_email enable trigger invoice_email_transition;
 alter table invoice_email enable trigger stamp_change;
 alter table invoice_email enable trigger record_change;
 alter table change enable trigger stamp_change;
+alter table commission_payment enable trigger stamp_change;
+alter table commission_payment enable trigger record_change;
 select * from not_copied order by old_id, field, reason;

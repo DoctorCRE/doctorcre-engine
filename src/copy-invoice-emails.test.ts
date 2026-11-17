@@ -23,6 +23,7 @@ const db = new pg.Client({
 	options: "-c search_path=next -c TimeZone=UTC",
 });
 const rows = async (text: string) => (await db.query(text)).rows;
+const values = async (text: string) => (await rows(text)).map(Object.values);
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	const result = await db.query(copy);
 	assert.ok(Array.isArray(result));
@@ -62,12 +63,13 @@ before(async () => {
  insert into public.client (id,party_id,created_by,updated_by) values ('${id(7)}','${id(6)}','${id(1)}','${id(1)}');
  insert into public.deal_type_ref (slug,label,sort) values ('lease','Lease',1);
  insert into public.deal_phase (slug,label) values ('negotiation','Negotiation'), ('closed','Closed'); commit;`);
-	for (let d = 10; d <= 23; d++) {
+	for (let d = 10; d <= 24; d++) {
 		const undone = d === 11;
+		const undated = undone || d === 10;
 		await db.query(`insert into public.deal (id,client_id,name,deal_type,phase,owner,created_by,updated_by,invoiced_on)
    values ('${id(d)}','${id(7)}','Example deal ${d}','lease','${undone ? "negotiation" : "closed"}','partner_one','${id(1)}','${id(1)}',${undone ? "null" : "'2025-03-01'"});
    insert into public.commission (id,deal_id,status,gross_amount,invoiced_on,received_on,created_by)
-   values ('${id(d + 100)}','${id(d)}','received',100,${undone ? "null" : "'2025-03-01'"},'2025-04-01','${id(1)}');
+   values ('${id(d + 100)}','${id(d)}','received',100,${undated ? "null" : "'2025-03-01'"},'2025-04-01','${id(1)}');
    insert into public.event (id,actor_id,verb,subject_type,subject_id,field,old_value,new_value,cause,occurred_at) values
    ('${id(d + 1000)}','${id(1)}','update-deal','deal','${id(d)}','phase',null,'{"phase":"negotiation"}','human_stated','2025-01-01'),
    ('${id(d + 2000)}','${id(3)}','update-deal','deal','${id(d)}','phase','{"phase":"negotiation"}','{"phase":"closed"}','automation_job','2025-03-02T12:00Z'),
@@ -98,9 +100,13 @@ before(async () => {
    '{"evidence_ref":"local-mail:example-${n}","email_date":"2025-03-01"}','ingest_email','2025-03-02T06:00Z','partner_one');`);
 	}
 	await db.query(`begin; select set_config('engine.job','old_system',true);
+ insert into public.event (id,actor_id,verb,subject_type,subject_id,field,old_value,new_value,cause,occurred_at) values
+ ('${id(4023)}','${id(3)}','update-deal','deal','${id(23)}','phase','{"phase":"closed"}','{"phase":"closed"}','automation_job','2025-03-04'),
+ ('${id(5023)}','${id(3)}','update-deal','deal','${id(23)}','invoiced_on','{"invoiced_on":"2025-03-01"}','{"invoiced_on":"2025-03-01"}','automation_job','2025-03-04');
+ update public.deal_invoice_email set prior_phase='closed', prior_invoiced_on='2025-03-01', phase_event_id='${id(4023)}', invoice_event_id='${id(5023)}', applied_at='2025-03-04' where id='${id(214)}';
  update public.deal_invoice_email set from_address = 'Example <bad@example.test>' where id = '${id(203)}';
  delete from outside_id where source = 'old_system' and value = '${id(14)}';
- delete from commission_payment where id = '${id(115)}'; update commission set gross = null where deal_id = '${id(15)}';
+ delete from commission_payment where id in ('${id(115)}','${id(124)}'); update commission set gross = null where deal_id in ('${id(15)}','${id(24)}');
  update public.deal set invoiced_on = '2025-02-01' where id = '${id(16)}';
  update public.event set new_value = '{"invoiced_on":"2025-02-01"}' where id = '${id(3017)}';
  delete from public.event where subject_id = '${id(208)}';
@@ -130,15 +136,14 @@ test("captured, applied and undone evidence retain facts, targets and original h
 		[],
 	);
 	assert.deepEqual(
-		(
-			await rows(
-				"select id,status,deal_id,payment_id from invoice_email order by id",
-			)
-		).map(Object.values),
+		await values(
+			"select id,status,deal_id,payment_id from invoice_email order by id",
+		),
 		[
 			[id(200), "applied", id(10), id(110)],
 			[id(201), "undone", id(11), id(111)],
 			[id(202), "captured", null, null],
+			[id(213), "applied", id(23), id(123)],
 		],
 	);
 	assert.deepEqual(
@@ -146,33 +151,42 @@ test("captured, applied and undone evidence retain facts, targets and original h
 		[{ created_at: "2025-03-02 06:00:00+00" }],
 	);
 	assert.deepEqual(
-		(
-			await rows(`select new_value ->> 'status', changed_at::text, changed_by_job, changed_for_user_id, changed_by_user_id from change
-  where table_name = 'invoice_email' and record = '{"id":"${id(201)}"}' order by id`)
-		).map(Object.values),
+		await values(`select new_value ->> 'status', changed_at::text, changed_by_job, changed_for_user_id, changed_by_user_id from change
+  where table_name = 'invoice_email' and record = '{"id":"${id(201)}"}' order by id`),
 		[
 			["captured", "2025-03-02 06:00:00+00", "mail_capture", id(1), null],
 			["applied", "2025-03-02 12:00:00+00", "mail_capture", id(1), null],
 			["undone", "2025-03-03 00:00:00+00", null, null, id(2)],
 		],
 	);
-	assert.equal(
-		(
-			await rows(
-				`select new_value ->> 'reason' as reason from change where table_name = 'invoice_email' and new_value ->> 'status' = 'applied' limit 1`,
-			)
-		)[0]?.reason,
-		"Example invoice reason",
+	assert.deepEqual(
+		await values(
+			`select new_value ->> 'reason' as reason from change where table_name = 'invoice_email' and new_value ->> 'status' = 'applied' limit 1`,
+		),
+		[["Example invoice reason"]],
 	);
 	const afterCopy = await snapshot();
-	assert.deepEqual(afterCopy[1], beforeCopy[1]);
+	assert.deepEqual(
+		afterCopy[1]?.filter((p) => p.id !== id(110)),
+		beforeCopy[1]?.filter((p) => p.id !== id(110)),
+	);
+	assert.deepEqual(
+		await values(
+			`select invoiced_on::text from commission_payment where id='${id(110)}'`,
+		),
+		[["2025-03-01"]],
+	);
+	assert.deepEqual(
+		await values(
+			`select new_value ->> 'invoiced_on' as restored from change where table_name='commission_payment' and record='{"id":"${id(111)}"}' order by id desc limit 1`,
+		),
+		[[null]],
+	);
 	assert.deepEqual(afterCopy[2], beforeCopy[2]);
 	assert.deepEqual(
-		(
-			await rows(
-				`select i.prior_phase_at::text,i.applied_phase_at::text,c.new_value from invoice_email i join change c on c.id=i.payment_change_id where i.id='${id(200)}'`,
-			)
-		).map(Object.values),
+		await values(
+			`select i.prior_phase_at::text,i.applied_phase_at::text,c.new_value from invoice_email i join change c on c.id=i.payment_change_id where i.id='${id(200)}'`,
+		),
 		[
 			[
 				"2025-01-01 00:00:00+00",
@@ -194,7 +208,7 @@ test("unresolved dates, source, actors, payments and duplicate historical closes
 		[210, "invoice_email_date_matches_time"],
 		[211, "actor_not_copied"],
 		[212, "payment_not_identified"],
-		[213, "duplicate_application"],
+		[24, "invoice_date_not_reconciled"],
 		[214, "duplicate_application"],
 	] as const)
 		assert.ok(
@@ -205,6 +219,7 @@ test("unresolved dates, source, actors, payments and duplicate historical closes
 test("reruns keep rows, stamps and history unchanged and report source conflicts", async () => {
 	const saved = await snapshot();
 	await db.query("begin");
+	await db.query("set local TimeZone = 'America/Chicago'");
 	const again = await run();
 	await db.query("commit");
 	assert.deepEqual(await snapshot(), saved);
@@ -231,23 +246,19 @@ test("imported applied evidence can still be undone by its user and a resend att
    values ('${id(900)}','local-mail:example-resend','billing@example.test','Example deal 10','2025-03-01','2025-03-01','${id(10)}','${id(110)}');
    update invoice_email set status = 'applied' where id = '${id(900)}';`);
 		assert.deepEqual(
-			(
-				await rows(
-					`select status,application_id from invoice_email where id='${id(900)}'`,
-				)
-			).map(Object.values),
+			await values(
+				`select status,application_id from invoice_email where id='${id(900)}'`,
+			),
 			[["attached", id(200)]],
 		);
 		await db.query(
 			`update invoice_email set status = 'undone' where id='${id(200)}'; set constraints all immediate;`,
 		);
-		assert.equal(
-			(
-				await rows(
-					`select invoiced_on from commission_payment where id='${id(110)}'`,
-				)
-			)[0]?.invoiced_on,
-			null,
+		assert.deepEqual(
+			await values(
+				`select invoiced_on from commission_payment where id='${id(110)}'`,
+			),
+			[[null]],
 		);
 	} finally {
 		await db.query("rollback");
