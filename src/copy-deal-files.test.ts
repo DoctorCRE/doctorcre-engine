@@ -10,8 +10,8 @@ const { db, setup, cleanup } = copyTest();
 const rows = async (text: string) => (await db.query(text)).rows;
 const mapping = `create temp table copy_template_kind (template_slug text primary key, kind text not null) on commit drop;
  insert into copy_template_kind values ('example-loi', 'loi'), ('example-bad', 'brochure'), ('example-invoice', 'invoice');`;
-const run = async (setup = ""): Promise<pg.QueryResultRow[]> => {
-	await db.query(`begin; ${setup}`);
+const run = async (fixtureSql = ""): Promise<pg.QueryResultRow[]> => {
+	await db.query(`begin; ${fixtureSql}`);
 	const result = await db.query(copy);
 	await db.query("commit");
 	assert.ok(Array.isArray(result));

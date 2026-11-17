@@ -1503,7 +1503,7 @@ test("earlier people follow merges and owners keep only supported starts, with s
 	}
 });
 
-for (const [label, setup, reason] of [
+for (const [label, fixtureSql, reason] of [
 	[
 		"overlapping people after a merge",
 		`insert into public.deal_participant (id, deal_id, party_id, role, from_at, to_at, set_by) values
@@ -1553,7 +1553,7 @@ for (const [label, setup, reason] of [
 			if (!label.startsWith("overlapping"))
 				await db.query(`insert into public.deal_participant (id, deal_id, party_id, role, from_at, to_at, set_by) values
  ('${id(710)}', '${id(10)}', '${id(4)}', 'support', '2024-03-01', '2024-02-01', '${id(1)}')`);
-			if (setup) await db.query(setup);
+			if (fixtureSql) await db.query(fixtureSql);
 			const first = await run();
 			assert.ok(
 				first.some((r) => r.old_id === id(710) && r.reason === reason),
