@@ -61,7 +61,6 @@ insert into not_copied select a.id, f.field, f.value, f.reason from mapped_activ
  ('kind', a.old_kind, 'kind_has_no_place', a.kind is null and not a.is_mail and a.old_kind <> 'next_step'),
  ('activity', a.id::text, 'about_nothing_copied', a.kind is not null and not a.is_about),
  ('owed', a.owed, 'owed_has_no_place', a.kind is not null and a.owed ~ '\S'),
- ('connected', a.connected::text, 'connected_has_no_place', a.kind is not null and a.connected is not null),
  ('detail', a.detail, 'structured_detail_not_copied', a.kind is not null and a.detail is json object),
  ('changed_for_user_id', null, 'agent_user_unknown', a.kind is not null and a.changed_by_job = 'agent' and a.changed_for_user_id is null)
 ) f(field, value, reason, listed) where f.listed;
@@ -70,8 +69,8 @@ from old_link l join mapped_activity a using (id)
 where a.kind is not null and l.deal_id is null and l.party_id is null;
 
 create temp table ready_activity on commit drop as select * from mapped_activity where kind is not null and is_about;
-insert into activity (id, kind, happened_at, summary, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select id, kind, happened_at, text, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at
+insert into activity (id, kind, happened_at, summary, reached, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+select id, kind, happened_at, text, connected, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at
 from ready_activity on conflict do nothing;
 -- Links are retried for activities copied earlier, so a record copied since then gains its link.
 insert into activity_about (activity_id, deal_id, party_id, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)

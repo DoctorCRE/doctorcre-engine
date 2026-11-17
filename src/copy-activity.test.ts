@@ -340,7 +340,6 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 		"44 kind later_copy_365",
 		"46 activity about_nothing_copied",
 		"46 deal_id deal_not_copied",
-		"47 connected connected_has_no_place",
 		"47 detail structured_detail_not_copied",
 		"47 lead_id lead_not_copied",
 		"47 owed owed_has_no_place",
@@ -388,5 +387,62 @@ test("a record copied later gains its activity and link on the next run", async 
 			[id(47), id(30), null],
 			[id(47), null, id(15)],
 		],
+	);
+});
+
+test("keeps reached, attempt-only and unknown outcomes for calls and texts, without overwriting later edits", async () => {
+	await db.query(`insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary,
+ deal_id, client_id, lead_id, vendor_id, party_id, detail, owed, connected, email_context) values
+ ${[
+		activity(60, "call", { deal: 30 }, "null, null, true, null"),
+		activity(61, "call", { deal: 30 }, "null, null, false, null"),
+		activity(62, "call", { deal: 30 }),
+		activity(63, "text", { deal: 30 }, "null, null, true, null"),
+		activity(64, "text", { deal: 30 }, "null, null, false, null"),
+		activity(65, "text", { deal: 30 }),
+ ].join(",\n")};
+ update public.activity set summary = 'Spoke with the person' where id = '${id(62)}';`);
+	const outcomes = () =>
+		rows(`select id, kind, reached from activity
+ where id between '${id(60)}' and '${id(65)}' order by id`);
+	const snapshot = () =>
+		rows(`select to_jsonb(a) as activity from activity a
+ where id between '${id(60)}' and '${id(65)}' order by id`);
+	const report = await run();
+	assert.ok(!report.some((r) => r.field === "connected"));
+	assert.deepEqual((await outcomes()).map(Object.values), [
+		[id(60), "call", true],
+		[id(61), "call", false],
+		[id(62), "call", null],
+		[id(63), "note", true],
+		[id(64), "note", false],
+		[id(65), "note", null],
+	]);
+	assert.deepEqual(
+		(
+			await rows(`select id, connected from public.activity
+ where id between '${id(60)}' and '${id(65)}' order by id`)
+		).map(Object.values),
+		(await outcomes()).map((r) => [r.id, r.reached]),
+	);
+	const copied = await snapshot();
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(await snapshot(), copied);
+	await db.query(`begin; select set_config('engine.user_id', '${id(1)}', true);
+ update activity set reached = case when reached is null then true when reached then false else null end
+ where id between '${id(60)}' and '${id(65)}'; commit;`);
+	const edited = await snapshot();
+	assert.deepEqual(
+		(await outcomes()).map((r) => r.reached),
+		[false, null, true, false, null, true],
+	);
+	const history = await rows(
+		"select jsonb_agg(c order by id) as all from change c",
+	);
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(await snapshot(), edited);
+	assert.deepEqual(
+		await rows("select jsonb_agg(c order by id) as all from change c"),
+		history,
 	);
 });
