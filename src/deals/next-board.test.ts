@@ -10,7 +10,8 @@ const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 // A national clinic location, a doctor, a dental group and a location that left its brand, each with an open deal,
-// one closed deal and one invoiced deal still in negotiation.
+// one closed deal, two invoiced deals still in negotiation, one with no commission, and an other-type deal with no
+// phase events.
 const OLD = `
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
@@ -35,7 +36,7 @@ insert into public.national_account_owner (account_client_id, owner_actor_id, se
 insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at) values
  ('example-bay', 'Example Bay', 'market', 'Example counties', 'Example review', '${id(1)}', '2025-01-01');
 insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2),
- ('relocation', 'Example relocation', 3);
+ ('relocation', 'Example relocation', 3), ('other', 'Example other', 4);
 insert into public.deal_phase (slug, label) values ('touring', 'Example touring'), ('negotiation', 'Example negotiation'),
  ('closed', 'Example closed');
 insert into public.deal_lane (slug, label, sort) values ('national', 'Example national', 1);
@@ -53,6 +54,9 @@ insert into public.deal (id, client_id, name, deal_type, phase, owner, city, inv
  '${id(1)}', '${id(1)}', '2025-01-06');
 insert into public.commission (id, deal_id, gross_amount, status, invoiced_on, created_by) values
  ('${id(50)}', '${id(35)}', 1000, 'invoiced', '2025-02-01', '${id(1)}');
+insert into public.deal (id, client_id, name, deal_type, phase, owner, invoiced_on, created_by, updated_by, created_at) values
+ ('${id(36)}', '${id(22)}', 'Example invoiced lease without commission', 'lease', 'negotiation', 'partner_one', '2025-02-02', '${id(1)}', '${id(1)}', '2025-01-07'),
+ ('${id(37)}', '${id(22)}', 'Example other office', 'other', 'touring', 'partner_one', null, '${id(1)}', '${id(1)}', '2025-01-08');
 insert into public.deal (id, client_id, name, deal_type, phase, owner, city, operating_state, parking_reason, parking_note, parked_at, parked_by,
  created_by, updated_by, created_at) values
  ('${id(32)}', '${id(22)}', 'Example dental move', 'relocation', 'negotiation', 'partner_one', 'Example Bay', 'parked', 'client_paused',
@@ -64,7 +68,8 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
  ('${id(43)}', 'deal', '${id(33)}', 'phase', null, '{"phase":"negotiation"}', '2024-06-02', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(44)}', 'deal', '${id(33)}', 'phase', '{"phase":"negotiation"}', '{"phase":"closed"}', '2024-09-01', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(45)}', 'deal', '${id(34)}', 'phase', null, '{"phase":"touring"}', '2025-01-06', '${id(1)}', 'update-deal', 'human_stated'),
- ('${id(46)}', 'deal', '${id(35)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-07', '${id(1)}', 'update-deal', 'human_stated');
+ ('${id(46)}', 'deal', '${id(35)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-07', '${id(1)}', 'update-deal', 'human_stated'),
+ ('${id(47)}', 'deal', '${id(36)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-08', '${id(1)}', 'update-deal', 'human_stated');
 update public.deal set closed_on = '2024-09-01' where id = '${id(33)}';
 `;
 
@@ -191,7 +196,7 @@ for (const scope of [
 	});
 }
 
-test("the comparison covers every open deal, owner, parking, national account and former brand", async () => {
+test("the comparison covers every open deal, owner, parking, national account, former brand and phase without events", async () => {
 	const deals = await nextTransaction(connectionString, "read", (tx) =>
 		readNextBoardDeals(tx, { workspace: "all", account: null }),
 	);
@@ -202,6 +207,7 @@ test("the comparison covers every open deal, owner, parking, national account an
 			["Example clinic lease", "partner_one", null, "partner_two"],
 			["Example dental move", "partner_one", "partner_two", null],
 			["Example former brand lease", "partner_one", null, null],
+			["Example other office", "partner_one", null, null],
 		],
 	);
 });

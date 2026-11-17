@@ -190,13 +190,17 @@ test("unresolved dates, source, actors, payments and duplicate historical closes
 		[210, "invoice_email_date_matches_time"],
 		[211, "actor_not_copied"],
 		[212, "payment_not_identified"],
-		[24, "invoice_date_not_reconciled"],
+		[16, "invoice_date_not_reconciled"],
 		[214, "duplicate_application"],
 	] as const)
 		assert.ok(
 			reasons(report, n).includes(reason),
 			`${n}: ${reason}: ${JSON.stringify(report)}`,
 		);
+	assert.ok(
+		!reasons(report, 24).includes("invoice_date_not_reconciled"),
+		"the deal copy kept the date with no payment to carry it",
+	);
 });
 test("reruns keep rows, stamps and history unchanged and report source conflicts", async () => {
 	const saved = await snapshot();

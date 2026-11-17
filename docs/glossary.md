@@ -136,7 +136,7 @@ _Engine_: `type` for the deal type; `short_name` for the name the board shows.
 _New database_: `deal`, where the type is two facts, its kind and its reason.
 
 **Deal kind**:
-What kind of transaction a deal is: lease, purchase, sale-leaseback or build-to-suit.
+What kind of transaction a deal is: lease, purchase, sale-leaseback, build-to-suit or other.
 _Avoid_: deal type, transaction type
 _Database_: part of `deal.deal_type` today; `deal.kind` and `deal_kind` in the new database.
 

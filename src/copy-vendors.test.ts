@@ -140,24 +140,13 @@ const rolledBack = async (check: () => Promise<void>) => {
 		await db.query("rollback");
 	}
 };
-const WAITING = [
-	[id(43), "vendor", null, "its record is not copied"],
-	[id(44), "disposition", "parked", "a ruling without a reason"],
-	[
-		id(45),
-		"vendor",
-		"V-0045",
-		"another vendor of its record waits for a ruling",
-	],
-	[id(46), "disposition", "avoid", "a ruling without a reason"],
-];
-let report: unknown;
+let report: unknown[][] = [];
 
 before(async () => {
 	await setup();
 	await db.query(SETUP);
 	await db.query("begin");
-	report = await copy();
+	report = (await copy()) ?? [];
 	await db.query("commit");
 });
 
@@ -238,7 +227,10 @@ test("each value it does not copy is listed, with why", () => {
 		[id(42), "category", "Misc", "not a vendor category"],
 		[id(42), "relationship_level", "4", "not a relationship level"],
 		[id(42), "vendor_ref", "P-0010", `also the id of ${id(10)}`],
-		...WAITING,
+		[id(43), "vendor", null, "its record is not copied"],
+		[id(44), "disposition", "parked", "a ruling without a reason"],
+		[id(45), "vendor", "V-0045", "another vendor of its record waits for a ruling"],
+		[id(46), "disposition", "avoid", "a ruling without a reason"],
 		[id(47), "offers", "Different offer", "its record holds another value"],
 		[id(47), "originated", "Merged origin", "its record holds another value"],
 		[id(47), "referral_active", "false", "its record holds another value"],
@@ -333,7 +325,7 @@ test("each nonblank vendor note is a note about its record, unless its surviving
 const COPIED_ROWS = `select to_jsonb(v) as row from vendor_vertical v union all select to_jsonb(p) from vendor_loan_program p
 	union all select to_jsonb(a) from activity a union all select to_jsonb(a) from activity_about a`;
 
-test("a second run changes nothing, lists again what still waits, and lists a vendor added to a copied record", () =>
+test("a second run changes nothing, lists the same corrections again, and lists a vendor added to a copied record", () =>
 	rolledBack(async () => {
 		const roles = await rows(
 			"select * from party_role order by party_id, role",
@@ -343,13 +335,9 @@ test("a second run changes nothing, lists again what still waits, and lists a ve
 		await db.query("discard temp");
 		// biome-ignore format: one vendor
 		assert.deepEqual(await copy(oldVendor(48, 10, { vendor_ref: "V-0048", intro_notes: "Example waiting note" })), [
-			...WAITING,
-			[
-				id(48),
-				"vendor",
-				"V-0048",
-				"its record holds a vendor role copied before",
-			],
+			...report.filter(([old]) => String(old) < id(48)),
+			[id(48), "vendor", "V-0048", "its record holds a vendor role copied before"],
+			...report.filter(([old]) => String(old) > id(48)),
 		]);
 		assert.deepEqual(
 			await rows("select * from party_role order by party_id, role"),
@@ -401,8 +389,9 @@ test("a ruled vendor comes across with its reviewed reason, the strictest on its
 			[46, "Example reason one"],
 			[99, "Example stray reason"],
 		);
+		const listed = await rulingRows(reasons);
 		// biome-ignore format: one row per value
-		assert.deepEqual(await rulingRows(reasons), [
+		assert.deepEqual(listed, [
 			[id(43), "vendor", null, "its record is not copied"],
 			[id(44), "disposition_reason", "Example parked reason", "its record holds a stricter ruling"],
 			[id(45), "is_target", "true", "an avoided vendor cannot be a target"],
@@ -434,12 +423,7 @@ test("a ruled vendor comes across with its reviewed reason, the strictest on its
 		const kept = await rows(copiedRows);
 		const history = await rows("select * from change order by id");
 		await db.query("discard temp");
-		// biome-ignore format: one row per value
-		assert.deepEqual(await rulingRows(reasons), [
-			[id(43), "vendor", null, "its record is not copied"],
-			[id(46), "disposition_reason", "Example reason one", "not a parked or avoided vendor"],
-			[id(99), "disposition_reason", "Example stray reason", "not a vendor"],
-		]);
+		assert.deepEqual(await rulingRows(reasons), listed);
 		assert.deepEqual(await rows(copiedRows), kept);
 		assert.deepEqual(await rows("select * from change order by id"), history);
 	}));
