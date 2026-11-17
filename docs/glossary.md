@@ -284,3 +284,7 @@ _Database_: `suite` in the new database; `space` today.
 **Building owner**:
 A person or company that owns a property, with dates when known. A building can have joint and former owners.
 _Database_: `building_ownership` in both databases. The table also keeps property managers and listing representatives under their own kinds.
+
+**Outreach draft**:
+A lead's prepared first-contact message. Approval never sends it. A user sends it from their mailbox.
+_New database_: `lead_contact_draft`, always human-send and never dispatchable. An edit clears approval and advances the revision.

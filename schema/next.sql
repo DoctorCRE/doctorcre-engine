@@ -472,6 +472,58 @@ alter table deal_party add client_role text generated always as (case when role 
 	add constraint deal_party_client_is_a_client foreign key (party_id, client_role) references party_role
 		deferrable initially deferred;
 
+-- Drafts record preparation and approval only. Sending stays in the user's mailbox.
+create table lead_contact_draft (
+	id uuid primary key default gen_random_uuid(),
+	party_id uuid not null unique references party,
+	role text not null generated always as ('lead') stored,
+	created_at timestamptz not null default now(),
+	owner_user_id uuid references app_user,
+	subject text not null check (subject ~ '\S'),
+	body text not null check (body ~ '\S'),
+	scheduled_for timestamptz not null,
+	time_zone text not null check (time_zone ~ '\S'),
+	revision integer not null default 1 check (revision >= 1),
+	approved boolean not null default false,
+	requires_human_send boolean not null default true check (requires_human_send),
+	dispatchable boolean not null default false check (not dispatchable),
+	foreign key (party_id, role) references party_role deferrable initially deferred
+);
+
+create function lead_contact_draft_review() returns trigger
+language plpgsql as $$
+begin
+	if (new.subject, new.body, new.owner_user_id, new.scheduled_for, new.time_zone, new.approved)
+		is not distinct from (old.subject, old.body, old.owner_user_id, old.scheduled_for, old.time_zone, old.approved) then
+		return new;
+	end if;
+	if nullif(current_setting('engine.user_id', true), '') is null then
+		raise exception 'a user edits or approves an outreach draft'
+			using errcode = 'check_violation', constraint = 'lead_contact_draft_user_approves';
+	end if;
+	perform from party p join party_role lead on lead.party_id = p.id
+	where p.id = new.party_id and lead.role = 'lead' and lead.stage = 'qualified' for update of p, lead;
+	if not found then
+		raise exception 'only a qualified lead has its outreach draft edited or approved'
+			using errcode = 'check_violation', constraint = 'lead_contact_draft_contactable';
+	end if;
+	-- Hold existing restrictions as well as the party against a new restriction while approving.
+	perform from do_not_contact where party_id = new.party_id for share;
+	if exists (select from active_do_not_contact where party_id = new.party_id) then
+		raise exception 'do not contact prevents editing or approving outreach'
+			using errcode = 'check_violation', constraint = 'lead_contact_draft_contactable';
+	end if;
+	if (new.subject, new.body, new.owner_user_id, new.scheduled_for, new.time_zone)
+		is distinct from (old.subject, old.body, old.owner_user_id, old.scheduled_for, old.time_zone) then
+		new.revision := old.revision + 1;
+		new.approved := false;
+	end if;
+	return new;
+end $$;
+
+create trigger lead_contact_draft_review before update on lead_contact_draft
+	for each row execute function lead_contact_draft_review();
+
 -- An introduction between a vendor and the team, made either way, and the deal it led to once there is one.
 create table introduction (
 	id uuid primary key default gen_random_uuid(),
@@ -1819,6 +1871,10 @@ begin
 		and case d.party_id when duplicate then d.other_party_id else d.party_id end
 			= case s.party_id when survivor then s.other_party_id else s.party_id end
 		and (d.kind = 'knows' or (d.party_id = duplicate) = (s.party_id = survivor));
+
+	delete from lead_contact_draft where party_id = duplicate
+		and exists (select from lead_contact_draft where party_id = survivor);
+
 	-- Moved first, because the duplicate's vendor role is removed next when the survivor holds one.
 	update introduction set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
@@ -1961,7 +2017,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
@@ -2183,6 +2239,8 @@ grant update (share) on commission_share to engine;
 grant update (closing_share) on commission_tier to engine;
 grant delete on commission, commission_payment, commission_share, commission_tier to engine;
 
+grant update (subject, body, owner_user_id, scheduled_for, time_zone, approved) on lead_contact_draft to engine;
+grant delete on lead_contact_draft to engine;
 
 
 grant update (label) on lead_lane to engine;
@@ -2194,3 +2252,6 @@ grant delete on suite, space_need, building_ownership to engine;
 grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
 grant update (name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id, must_haves, vendor_id, source_ref, source_revision, applicability) on space_need to engine;
 grant update (started_on, ended_on, source) on building_ownership to engine;
+
+revoke insert on lead_contact_draft from engine;
+grant insert (id, party_id, owner_user_id, subject, body, scheduled_for, time_zone) on lead_contact_draft to engine;
