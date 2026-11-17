@@ -169,10 +169,11 @@ where (r.kind = 'lead' or exists (select from client c where c.party_id = r.mapp
  and not exists (select from outside_id o where o.source = 'old_system' and o.value = r.id::text);
 
 -- Today's lead export shows next_action rows; lead.next_action_date is only a fallback for a lead without any.
+-- Actions of records copied earlier are retried, so a corrected or newer action still arrives.
 create temp table old_next_action on commit drop as
-select n.id, n.status, nullif(btrim(n.description), '') as what, n.description, n.due_on, n.hold_until, n.source_ref,
+select n.id, n.status, nullif(regexp_replace(n.description, '^\s+|\s+$', '', 'g'), '') as what, n.description, n.due_on, n.hold_until, n.source_ref,
  n.owner_id, u.id as owner, n.created_at, n.updated_at, r.mapped_id, a.*,
- exists (select from ready_relationship ready where ready.id = r.id) as ready
+ exists (select from outside_id copied where copied.source = 'old_system' and copied.value = r.id::text) as copied
 from public.next_action n join classified_relationship r on r.kind = n.subject_type and r.id = n.subject_id
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
@@ -182,7 +183,7 @@ insert into next_step (id, party_id, what, due_on, owner_party_id, done_at, crea
 select distinct on (mapped_id, what, due_on) * from (
  select id, mapped_id, what, due_on, owner, case when status = 'done' then updated_at end as done_at,
   created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
- from old_next_action where ready and what is not null and status in ('open', 'done')
+ from old_next_action where copied and what is not null and status in ('open', 'done')
  union all
  select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported lead follow-up', (fields ->> 'next_action_date')::date,
   owner, null, created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
@@ -208,7 +209,7 @@ cross join lateral (select case kind when 'lead' then 'registry_ref' else 'roste
 where fields ->> f.field ~ '\S';
 insert into outside_id (source, value, party_id)
 select distinct on (value) 'old_system_ref', value, mapped_id from relationship_ref t
-where exists (select from ready_relationship r where r.id = t.id)
+where exists (select from outside_id copied where copied.source = 'old_system' and copied.value = t.id::text)
  and not exists (select from outside_id o where o.source = 'old_system_ref' and o.value = t.value)
 order by value, id;
 insert into not_copied select t.id, t.field, t.ref, 'also the id of ' || o.party_id

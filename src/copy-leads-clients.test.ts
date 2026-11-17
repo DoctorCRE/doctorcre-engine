@@ -446,11 +446,11 @@ test("next actions, reference numbers and roster wording are copied once or list
  ('${id(103)}','${id(92)}','roster','franchise','Example client source','C-EX-1','${id(1)}','Example owner','Example contact','Example type','Example duplicate','Example specialty','inactive','${id(1)}','${id(1)}');
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,status,hold_until,source_ref,created_at,updated_at,created_by) values
  ('${id(110)}','lead','${id(100)}','${id(1)}','Call back','2027-01-05','open',null,null,'2025-01-01','2025-01-01','${id(1)}'),
- ('${id(111)}','lead','${id(101)}','${id(1)}',' Call back ','2027-01-05','open',null,null,'2025-02-01','2025-02-01','${id(1)}'),
+ ('${id(111)}','lead','${id(101)}','${id(1)}',E'\\t Call back\\n','2027-01-05','open',null,null,'2025-02-01','2025-02-01','${id(1)}'),
  ('${id(116)}','lead','${id(101)}','${id(1)}','Call back','2027-01-05','done',null,null,'2024-06-01','2024-07-01','${id(1)}'),
  ('${id(112)}','lead','${id(100)}','${id(1)}','Call back','2027-02-05','done',null,null,'2025-01-01','2025-06-01','${id(1)}'),
  ('${id(113)}','lead','${id(100)}','${id(1)}','Old plan',null,'dropped',null,null,'2025-01-01','2025-01-01','${id(1)}'),
- ('${id(114)}','lead','${id(100)}','${id(119)}','   ',null,'open',null,null,'2025-01-01','2025-01-01','${id(1)}'),
+ ('${id(114)}','lead','${id(100)}','${id(119)}',E'\\t\\n',null,'open',null,null,'2025-01-01','2025-01-01','${id(1)}'),
  ('${id(115)}','client','${id(103)}','${id(1)}','Send proposal','2027-04-01','open','2027-03-01','example-ref','2025-01-01','2025-01-01','${id(1)}');`;
 	const steps = () =>
 		rows(
@@ -522,7 +522,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 				"verbatim_label_not_stored",
 			],
 			[id(113), "status", "dropped", "closed_without_doing"],
-			[id(114), "description", "   ", "blank_next_action"],
+			[id(114), "description", "\t\n", "blank_next_action"],
 			[id(114), "owner_id", id(119), "owner_not_a_user"],
 			[id(115), "hold_until", "2027-03-01", "hold_has_no_place"],
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],
@@ -538,6 +538,19 @@ test("next actions, reference numbers and roster wording are copied once or list
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,created_by) values ('${id(117)}','lead','${id(104)}','${id(1)}','Call back','2027-01-05','${id(1)}');`);
 		await db.query(copy);
 		assert.deepEqual((await steps()).map(Object.values), copied);
+		const corrected = [
+			...copied.slice(0, 2),
+			[id(114), id(90), "Ask for plans", null, null, null],
+			copied[2],
+		];
+		for (const correction of [
+			`update public.next_action set description = 'Ask for plans' where id = '${id(114)}'`,
+			"",
+		]) {
+			await db.query(`${restart}; ${correction}`);
+			await db.query(copy);
+			assert.deepEqual((await steps()).map(Object.values), corrected);
+		}
 	} finally {
 		await db.query("rollback");
 	}
