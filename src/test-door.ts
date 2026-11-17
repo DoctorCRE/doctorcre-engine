@@ -102,7 +102,7 @@ export function doorTest() {
 	): Promise<[number, Body]> => {
 		const response = await request(caller, path, {
 			method,
-			...(method === "POST" && { body: JSON.stringify(args) }),
+			...(method !== "GET" && { body: JSON.stringify(args) }),
 		});
 		return [response.status, await response.json()];
 	};

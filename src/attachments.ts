@@ -3,7 +3,7 @@ import { sql } from "kysely";
 import { Refusal, refuse } from "./answer.ts";
 import { nextTransaction } from "./next-connection.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
-import { signNextCaller } from "./next-save.ts";
+import { stampNextSave } from "./next-save.ts";
 import { storeFile } from "./post-media.ts";
 import { fit, isText, isUuid, optional } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
@@ -33,7 +33,7 @@ async function asCaller<T>(
 	if (!database)
 		throw new SaveRefusal(new Refusal(503, "database_unavailable"));
 	return nextTransaction(database.connectionString, "save", async (tx) => {
-		await signNextCaller(tx, c.get("stamp"));
+		await stampNextSave(tx, c.get("stamp"));
 		return run(tx);
 	});
 }

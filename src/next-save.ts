@@ -27,7 +27,7 @@ export function runNextSave(
 	const { idempotency_key: _key, ...args } = save.args;
 	const request_hash = sortedHash({ verb: save.verb, stamp: save.stamp, args });
 	return nextTransaction(connectionString, "save", async (tx) => {
-		await signNextCaller(tx, save.stamp);
+		await stampNextSave(tx, save.stamp);
 		await sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`.execute(
 			tx,
 		);
@@ -51,7 +51,7 @@ export function runNextSave(
 	});
 }
 
-export async function signNextCaller(tx: Transaction<DB>, stamp: Stamp) {
+export async function stampNextSave(tx: Transaction<DB>, stamp: Stamp) {
 	const slug = "user" in stamp ? stamp.user : stamp.for_user;
 	if (slug !== undefined) {
 		const user = await tx
