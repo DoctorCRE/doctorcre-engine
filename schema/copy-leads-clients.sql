@@ -231,7 +231,6 @@ from public.client c join public.party p on p.id = c.party_id where c.merged_int
 insert into not_copied select account_client_id, 'national_account_owner', owner_actor_id::text, 'owner_start_date_required'
 from public.national_account_owner;
 insert into not_copied select id, 'client', merged_into::text, 'merged_client' from public.client where merged_into is not null;
-insert into not_copied select id, 'lead_stage_move', lead_id::text, 'later_copy_335' from public.lead_stage_move;
 set constraints all immediate;
 do $$ declare t text; begin
  foreach t in array array['party', 'party_role', 'client', 'national_account', 'activity', 'activity_about', 'next_step'] loop
