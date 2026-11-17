@@ -1505,6 +1505,66 @@ begin atomic
 	where d.id = wanted;
 end;
 
+create function everything_about_party(wanted uuid) returns jsonb
+language sql stable
+begin atomic
+	select jsonb_build_object(
+		'party', to_jsonb(p),
+		'emails', (
+			select coalesce(jsonb_agg(to_jsonb(e) - 'party_id' order by e.is_primary desc, e.address, e.id), '[]')
+			from party_email e where e.party_id = p.id
+		),
+		'phones', (
+			select coalesce(jsonb_agg(to_jsonb(n) - 'party_id'
+				order by n.is_primary desc, n.number, n.extension nulls last, n.id), '[]')
+			from party_phone n where n.party_id = p.id
+		),
+		'companies', (
+			select coalesce(jsonb_agg(to_jsonb(c) || jsonb_build_object('person', to_jsonb(person), 'company', to_jsonb(company))
+				order by c.started_on nulls last, c.id), '[]')
+			from party_company c join party person on person.id = c.person_id join party company on company.id = c.company_id
+			where p.id in (c.person_id, c.company_id)
+		),
+		'roles', (
+			select coalesce(jsonb_agg(to_jsonb(r) - 'party_id' || jsonb_build_object('client', (
+				select to_jsonb(c) - 'party_id' || jsonb_build_object('current_status', cs.status)
+				from client c join client_status cs using (party_id) where c.party_id = p.id and r.role = 'client'
+			)) order by r.role), '[]')
+			from party_role r where r.party_id = p.id
+		),
+		'deals', (
+			select coalesce(jsonb_agg(to_jsonb(d) || jsonb_build_object('role', dp.role)
+				order by d.name, d.id, dp.role), '[]')
+			from deal_party dp join deal d on d.id = dp.deal_id where dp.party_id = p.id
+		),
+		'links', (
+			select coalesce(jsonb_agg(to_jsonb(l) order by l.kind, l.started_on nulls last, l.id), '[]')
+			from party_link l where p.id in (l.party_id, l.other_party_id)
+		),
+		'activity', (
+			select coalesce(jsonb_agg(to_jsonb(a) || jsonb_build_object('email', (
+				select to_jsonb(e) - 'activity_id' - 'activity_kind' || jsonb_build_object('documents', (
+					select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
+					from document doc where doc.email_activity_id = e.activity_id
+				)) from email e where e.activity_id = a.id
+			)) order by a.happened_at, a.id), '[]')
+			from activity_about aa join activity a on a.id = aa.activity_id where aa.party_id = p.id
+		),
+		'next_steps', (
+			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id']
+				order by s.due_on nulls last, s.id), '[]')
+			from next_step s where s.party_id = p.id
+		),
+		'proposals', (
+			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id']
+				order by s.created_at, s.id), '[]')
+			from proposal s where s.party_id = p.id and s.status = 'pending'
+		)
+	)
+	from party p
+	where p.id = coalesce((select survivor_id from merged_party where id = wanted), wanted);
+end;
+
 -- "Account" alone means a national account (docs/glossary.md).
 create table social_account (
 	id uuid primary key default gen_random_uuid(),
