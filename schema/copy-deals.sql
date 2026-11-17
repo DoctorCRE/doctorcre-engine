@@ -48,6 +48,30 @@ select id, created_at, name, (select slug from deal_kind where slug = deal_type)
  changed_by_user_id, changed_by_job, changed_for_user_id, updated_at from old_deal where owner_user_id is not null;
 insert into outside_id (source, value, deal_id)
 select 'old_system', d.id::text, d.id from old_deal d join deal n on n.id = d.id;
+create temp table deal_outside_id on commit drop as
+select r.entity_id as old_id, concat_ws(' ', r.source_system, r.external_key) as typed,
+ btrim(regexp_replace(lower(r.source_system), '[^a-z0-9]+', '_', 'g'), '_') as source,
+ regexp_replace(r.external_key, '^\s+|\s+$', '', 'g') as value, m.deal_id
+from public.record_source r
+left join outside_id m on m.source = 'old_system' and m.value = r.entity_id::text
+where r.entity_type = 'deal';
+create temp table deal_outside_id_refusal on commit drop as
+select v.*, case
+ when source = 'dup_candidate' then 'a hint of a duplicate, not an id'
+ when deal_id is null then 'its record is not copied'
+ when source in ('old_system', 'old_system_ref') then 'a source the copy keeps for itself'
+ when source !~ '^[a-z][a-z0-9_]*$' or value !~ '\S' then 'not an outside id'
+ when (select count(distinct c.deal_id) from deal_outside_id c where (c.source, c.value) = (v.source, v.value)) > 1
+ then 'several deals claim this outside id'
+ when exists (select from outside_id o where (o.source, o.value) = (v.source, v.value) and o.deal_id is distinct from v.deal_id)
+ then 'another record holds this outside id'
+ end as reason from deal_outside_id v;
+insert into outside_id (source, value, deal_id)
+select distinct source, value, deal_id from deal_outside_id_refusal v
+where reason is null and not exists (select from outside_id o where (o.source, o.value) = (v.source, v.value));
+insert into not_copied
+select old_id, 'record_source', typed, reason from deal_outside_id_refusal where reason is not null;
+
 insert into not_copied
 select d.id, f.field, f.value, f.reason from old_deal d join deal n on n.id = d.id
 cross join lateral (values
@@ -62,6 +86,18 @@ insert into not_copied
 select d.id, f.field, f.value, 'parking_history_not_copied' from public.deal d
 cross join lateral (values ('parked_at', d.parked_at::text), ('parked_by', d.parked_by::text)) f(field, value)
 where f.value is not null;
+
+-- Lane is not copied: national follows from the location's brand membership on the day the deal opened.
+insert into not_copied
+select d.id, 'lane', d.lane, case when answer.unreviewed then 'brand_dates_not_reviewed' else 'lane_disagrees_with_account' end
+from public.deal d join deal n on n.id = d.id
+join public.client c on c.id = d.client_id join public.party p on p.id = c.party_id
+join outside_id m on m.source = 'old_system' and m.value = p.id::text
+cross join lateral (select p.kind = 'org' and p.org_id is not null
+ and not exists (select from client_brand b where b.location_id = m.party_id) as unreviewed,
+ exists (select from client_brand b join national_account a on a.party_id = b.brand_id where b.location_id = m.party_id
+ and daterange(b.started_on, b.ended_on) @> (n.created_at at time zone 'America/Chicago')::date) as national) answer
+where d.lane is not null and (answer.unreviewed or (d.lane = 'national') <> answer.national);
 
 create temp table old_link on commit drop as
 select d.id as deal_id, d.client_id as old_id, c.party_id, 'client' as role, false as vendor_role, d.created_at, d.updated_at,

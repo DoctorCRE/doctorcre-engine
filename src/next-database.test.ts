@@ -534,6 +534,8 @@ const STAMPED = [
 	"deal_phase_change",
 	"deal_property",
 	"deal_party",
+	"imported_deal_party",
+	"imported_deal_owner",
 	"activity",
 	"activity_about",
 	"next_step",
@@ -542,6 +544,7 @@ const STAMPED = [
 	"document",
 	"document_extraction",
 	"document_kind",
+	"party_document",
 	"email",
 	"offer",
 	"offer_document",
@@ -624,6 +627,7 @@ const STORED_AT = [
 	"home_mark",
 	"document",
 	"document_extraction",
+	"party_document",
 	"social_account",
 	"idea",
 	"design_template",
@@ -645,6 +649,26 @@ const SCHEMA = await readFile(
 type Case = [sql: string, refusal: Refusal];
 const LEASE = id(700);
 const LEASE_RECORD = id(720);
+// The old system's dates, all before the seeded people joined.
+const earlierParty = (row: Record<string, string | null> = {}) =>
+	insert("imported_deal_party", {
+		id: id(9600),
+		deal_id: DEAL,
+		party_id: AGENT,
+		role: "listing_agent",
+		started_at: "2025-01-01",
+		ended_at: "2025-06-01",
+		...row,
+	});
+const earlierOwner = (row: Record<string, string | null> = {}) =>
+	insert("imported_deal_owner", {
+		id: id(9610),
+		deal_id: DEAL,
+		user_id: TEAMMATE,
+		started_at: "2025-01-01",
+		ended_at: "2025-06-01",
+		...row,
+	});
 const newLease = (row: Record<string, string | number | null> = {}) => {
 	const { deal_id = DEAL, property_id = PROPERTY, ...version } = row;
 	const record =
@@ -2133,6 +2157,46 @@ const OWNER_RULES: Record<string, Case[]> = {
 			"deal_renews_another_lease",
 		],
 	],
+	"an earlier person on a deal left after joining, held the role once at a time and is back only after leaving":
+		[
+			[
+				earlierParty({ ended_at: "2025-01-01" }),
+				"imported_deal_party_ends_after_it_starts",
+			],
+			[
+				`${earlierParty()}; ${earlierParty({ id: id(9601), started_at: "2025-05-01", ended_at: "2025-09-01" })}`,
+				"imported_deal_party_once_at_a_time",
+			],
+			[
+				`${earlierParty({ started_at: null })}; ${earlierParty({ id: id(9601), started_at: null, ended_at: "2025-09-01" })}`,
+				"imported_deal_party_once_at_a_time",
+			],
+			[
+				earlierParty({ ended_at: "2999-01-01" }),
+				"deal_party_rejoins_after_leaving",
+			],
+			[
+				`${earlierParty({ party_id: DOCTOR })};
+			insert into deal_party (deal_id, party_id, role, created_at) values ('${DEAL}', '${DOCTOR}', 'listing_agent', '2025-03-01')`,
+				"deal_party_rejoins_after_leaving",
+			],
+			[
+				`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			${earlierParty()}; ${earlierParty({ id: id(9601), party_id: DUPLICATE })};
+			select merge_party('${DUPLICATE}', '${AGENT}')`,
+				"imported_deal_party_once_at_a_time",
+			],
+		],
+	"an earlier deal owner held the deal after starting, one owner at a time": [
+		[
+			earlierOwner({ ended_at: "2025-01-01" }),
+			"imported_deal_owner_ends_after_it_starts",
+		],
+		[
+			`${earlierOwner({ started_at: null })}; ${earlierOwner({ id: id(9611), user_id: USER })}`,
+			"imported_deal_owner_one_at_a_time",
+		],
+	],
 	"historical critical date loads still require a whole confirmation": [
 		[
 			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ confirmed_by_user_id: USER })}`,
@@ -3524,6 +3588,8 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			addable: ![
 				"invoice_mailbox",
 				"imported_change",
+				"imported_deal_party",
+				"imported_deal_owner",
 				"app_user",
 				"job",
 				"merged_party",
@@ -3707,6 +3773,64 @@ test("a deal's new deal owner is history: who held it before, who moved it and w
 			},
 		]);
 	}));
+
+test("earlier people and owners hand over back to back, in other roles meanwhile, and follow a merge", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query("begin");
+		await owner.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			${earlierParty({ started_at: null, ended_at: "2025-01-01" })};
+			${earlierParty({ id: id(9601), party_id: DUPLICATE })};
+			${earlierParty({ id: id(9602), role: "title", started_at: "2025-02-01" })};
+			${earlierOwner({ started_at: null })};
+			${earlierOwner({ id: id(9611), user_id: USER, started_at: "2025-06-01", ended_at: "2025-09-01" })};
+			select merge_party('${DUPLICATE}', '${AGENT}')`);
+		const { rows } = await owner.query(
+			"select id, party_id, role from imported_deal_party order by id",
+		);
+		assert.deepEqual(rows, [
+			{ id: id(9600), party_id: AGENT, role: "listing_agent" },
+			{ id: id(9601), party_id: AGENT, role: "listing_agent" },
+			{ id: id(9602), party_id: AGENT, role: "title" },
+		]);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
+	}
+});
+
+test("a rejoin saved while an earlier period is copied waits for the copy, then is refused", async () => {
+	const [copy, rejoin] = [await connect("none"), await connect()];
+	try {
+		const { pid } = (await rejoin.query("select pg_backend_pid() as pid"))
+			.rows[0];
+		await copy.query(`begin; ${earlierParty({ party_id: DOCTOR })}`);
+		await rejoin.query("begin");
+		let settled = false;
+		const waiting = rejoin
+			.query(
+				`insert into deal_party (deal_id, party_id, role, created_at) values ('${DEAL}', '${DOCTOR}', 'listing_agent', '2025-03-01')`,
+			)
+			.finally(() => {
+				settled = true;
+			});
+		const refused = assert.rejects(waiting, {
+			constraint: "deal_party_rejoins_after_leaving",
+		});
+		const blocked = async () =>
+			(await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [pid]))
+				.rows[0].blocked;
+		while (!settled && !(await blocked()));
+		await copy.query("commit");
+		await refused;
+	} finally {
+		await rejoin.query("rollback");
+		await copy.query(
+			`delete from imported_deal_party where id = '${id(9600)}'`,
+		);
+		await Promise.all([copy.end(), rejoin.end()]);
+	}
+});
 
 test("a parked deal stays in its phase and is revived to it, and history keeps who parked it, why and when", () =>
 	rolledBack(async () => {
@@ -4532,6 +4656,7 @@ const COLLAPSED = [
 	"lead_stage_move_party_id_from_stage_to_stage_activity_id_key",
 	"national_account_pkey",
 	"party_company_person_id_company_id_started_on_key",
+	"party_document_pkey",
 	"party_email_address_party_id_key",
 	"party_email_one_primary",
 	"party_link_party_id_other_party_id_kind_started_on_key",
@@ -6677,6 +6802,124 @@ for (const [label, sql, refusal] of FILE_REFUSALS) {
 	test(`deal files refuse ${label}`, () =>
 		rolledBack(() => assert.rejects(db.query(sql), { constraint: refusal })));
 }
+
+const CLIENT_FILE = id(8100);
+const SECOND_CLIENT_FILE = id(8101);
+const FILE_DUPLICATE = id(8102);
+const clientFile = (row: Record<string, string | number | null> = {}) =>
+	insert("document", {
+		id: CLIENT_FILE,
+		name: "Example tour book.pdf",
+		r2_bucket: "deal_documents",
+		r2_key: "example/client-file",
+		content_type: "application/pdf",
+		sha256: "b".repeat(64),
+		bytes: 2048,
+		...row,
+	});
+const partyFile = (row: Record<string, string> = {}) =>
+	insert("party_document", {
+		party_id: CLIENT,
+		document_id: CLIENT_FILE,
+		...row,
+	});
+const partyFiles = async () =>
+	(
+		await db.query(
+			"select party_id, document_id from party_document order by document_id, party_id",
+		)
+	).rows.map((r) => [r.party_id, r.document_id]);
+
+// biome-ignore format: one row per refusal
+const PARTY_FILE_REFUSALS = [
+	["a missing party", `${clientFile()}; ${partyFile({ party_id: MISSING })}`, "party_document_party_id_fkey"],
+	["a missing file", partyFile(), "party_document_stored"],
+	["a file without its type", `${clientFile({ content_type: null })}; ${partyFile()}`, "party_document_stored"],
+	["a file with a blank type", `${clientFile({ content_type: " " })}; ${partyFile()}`, "party_document_stored"],
+	["a file without its hash", `${clientFile({ sha256: null })}; ${partyFile()}`, "party_document_stored"],
+	["a file without its size", `${clientFile({ bytes: null })}; ${partyFile()}`, "party_document_stored"],
+	["the same link twice", `${clientFile()}; ${partyFile()}; ${partyFile()}`, "party_document_pkey"],
+] satisfies [string, string, string][];
+for (const [label, sql, refusal] of PARTY_FILE_REFUSALS) {
+	test(`party files refuse ${label}`, () =>
+		rolledBack(() => assert.rejects(db.query(sql), { constraint: refusal })));
+}
+
+test("one stored file belongs to a client, another party and the client's deal at once", () =>
+	rolledBack(async () => {
+		await db.query(`${clientFile()}; ${partyFile()}; ${partyFile({ party_id: AGENT })};
+			update document set deal_id = '${DEAL}', kind = 'other' where id = '${CLIENT_FILE}'`);
+		assert.deepEqual(
+			(
+				await db.query("select id, deal_id from document where sha256 = $1", [
+					"b".repeat(64),
+				])
+			).rows,
+			[{ id: CLIENT_FILE, deal_id: DEAL }],
+		);
+		assert.deepEqual(await partyFiles(), [
+			[CLIENT, CLIENT_FILE],
+			[AGENT, CLIENT_FILE],
+		]);
+	}));
+
+test("removing a mistaken party link keeps its file, and history keeps who linked and removed it", () =>
+	rolledBack(async () => {
+		await db.query(`${clientFile()}; ${partyFile()};
+			${asUser(TEAMMATE)}; delete from party_document where party_id = '${CLIENT}'`);
+		assert.deepEqual(await partyFiles(), []);
+		assert.equal(
+			(
+				await db.query("select count(*) from document where id = $1", [
+					CLIENT_FILE,
+				])
+			).rows[0].count,
+			"1",
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select action, changed_by_user_id from change where table_name = 'party_document' order by id",
+				)
+			).rows,
+			[
+				{ action: "insert", changed_by_user_id: USER },
+				{ action: "delete", changed_by_user_id: TEAMMATE },
+			],
+		);
+	}));
+
+test("a merge keeps the survivor's link to a file both hold and moves the duplicate's other files", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name) values ('${FILE_DUPLICATE}', 'person', 'Example Duplicate');
+			${clientFile()}; ${clientFile({ id: SECOND_CLIENT_FILE, r2_key: "example/client-file-2" })};
+			${partyFile({ party_id: AGENT })}; ${partyFile({ party_id: FILE_DUPLICATE })};
+			${partyFile({ party_id: FILE_DUPLICATE, document_id: SECOND_CLIENT_FILE })};
+			select merge_party('${FILE_DUPLICATE}', '${AGENT}')`);
+		assert.deepEqual(await partyFiles(), [
+			[AGENT, CLIENT_FILE],
+			[AGENT, SECOND_CLIENT_FILE],
+		]);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select action, record from change
+					where table_name = 'party_document' and merge_of = $1 order by id`,
+					[FILE_DUPLICATE],
+				)
+			).rows,
+			[
+				{
+					action: "delete",
+					record: { party_id: FILE_DUPLICATE, document_id: CLIENT_FILE },
+				},
+				{
+					action: "update",
+					record: { party_id: FILE_DUPLICATE, document_id: SECOND_CLIENT_FILE },
+				},
+			],
+		);
+	}));
 
 test("deal file versions retain their bytes, ordered text and extraction evidence", () =>
 	rolledBack(async () => {
