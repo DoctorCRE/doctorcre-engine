@@ -1,4 +1,4 @@
--- Owner transaction after copy-activity.sql and attribution, new schema on search_path. Only public and ops are read.
+-- Owner transaction after copy-activity.sql, copy-calls.sql and attribution, new schema on search_path. Only public and ops are read.
 set local time zone 'UTC';
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 create temp table if not exists copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop;
@@ -8,11 +8,26 @@ alter table activity disable trigger stamp_change;
 alter table activity disable trigger record_change;
 alter table imported_change disable trigger stamp_imported_change;
 
+create temp table captured_activity on commit drop as
+with captured as (
+ select s.id, s.started_at, (select max(a.id::text)::uuid from public.capture_candidate c
+  join public.activity a on a.id::text = c.resulting_ref
+  where c.session_id = s.id and c.kind = 'meeting_record' and c.status = 'confirmed') as logged_activity_id
+ from public.capture_session s
+) select id, started_at, coalesce(logged_activity_id, id) as activity_id
+from captured;
+
+create temp table meeting_source on commit drop as
+select id, occurred_at as happened_at, summary from public.activity where kind in ('meeting','tour')
+union
+select c.activity_id, c.started_at, a.summary from captured_activity c
+left join activity a on a.id = c.activity_id and a.kind in ('call','meeting');
+
 -- Neither native identity nor activation state identifies a business record or a logged activity.
 insert into not_copied
-select m.id, 'activity_id', a.id::text, 'possible_duplicate' from ops.meeting m join public.activity a
- on a.kind in ('meeting','tour') and (a.occurred_at between m.started_at - interval '24 hours' and m.started_at + interval '24 hours'
- or (a.occurred_at at time zone 'UTC')::date = (m.started_at at time zone 'America/Chicago')::date
+select distinct m.id, 'activity_id', a.id::text, 'possible_duplicate' from ops.meeting m join meeting_source a
+ on (a.happened_at between m.started_at - interval '24 hours' and m.started_at + interval '24 hours'
+ or (a.happened_at at time zone 'UTC')::date = (m.started_at at time zone 'America/Chicago')::date
  or a.summary = m.title)
 where not exists (select from pg_temp.copy_meeting_distinct x where (x.meeting_id,x.activity_id) = (m.id,a.id))
  and not exists (select from pg_temp.copy_meeting_activity x where x.meeting_id = m.id)
@@ -47,10 +62,11 @@ begin
    mapped := found or (saved.id is not null and saved.record <> jsonb_build_object('id', m.id));
    target := coalesce(target, (saved.record ->> 'id')::uuid, m.id);
    if mapped then
-    if not exists (select from public.activity where id = target and kind in ('meeting','tour')) then
+    if not exists (select from public.activity where id = target and kind in ('meeting','tour'))
+     and not exists (select from captured_activity where activity_id = target) then
      raise check_violation using constraint = 'mapping_not_a_logged_meeting';
     end if;
-    if not exists (select from activity where id = target and kind = 'meeting') then
+    if not exists (select from activity where id = target and kind in ('call','meeting')) then
      raise check_violation using constraint = 'mapped_activity_not_copied';
     end if;
    elsif exists (select from activity where id = target) and saved.id is null then
