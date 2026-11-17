@@ -236,7 +236,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", (t) =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -483,24 +483,28 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				reminders.items.map((r) => [r.item_kind, r.subject_name]),
 				[["critical_date", "Example Reader Deal"]],
 			);
-			await withAdmin(
-				(admin) =>
-					admin.query(`set session_replication_role = replica;
-						insert into actor (slug, kind, display_name) values ('partner_one', 'human', 'Example');
-						update party set email = 'client@example.test';
-						update client set roster_ref = 'C-0001';
-						update deal set owner = 'partner_one';
-						insert into deal_participant (deal_id, actor_id, role, set_by)
-							select deal.id, actor.id, 'lead', actor.id from deal, actor where actor.slug = 'partner_one';
-						insert into board_snapshot (organization_tenant_id, sponsoring_human_slug, board_id,
-							snapshot_json, updated_by_actor_id)
-						select 'carr-internal', 'partner_one', 'calendar-agenda', jsonb_build_object(
-							'schema', 'carr-calendar-agenda.v1', 'observed_at', now(), 'items', jsonb_build_array(
-								jsonb_build_object('start', now() + interval '1 hour', 'end', now() + interval '2 hours',
-									'title', 'Example', 'attendees', '[{"email": "client@example.test"}]'::jsonb))),
-							id from actor where slug = 'partner_one'`),
-				database,
-			);
+			const calendarNow = new Date("2026-03-08T07:30:00.000Z");
+			// The snapshot and reader share one clock, independent of Docker clock skew.
+			t.mock.timers.enable({ apis: ["Date"], now: calendarNow });
+			await withAdmin(async (admin) => {
+				await admin.query(`set session_replication_role = replica;
+					insert into actor (slug, kind, display_name) values ('partner_one', 'human', 'Example');
+					update party set email = 'client@example.test';
+					update client set roster_ref = 'C-0001';
+					update deal set owner = 'partner_one';
+					insert into deal_participant (deal_id, actor_id, role, set_by)
+						select deal.id, actor.id, 'lead', actor.id from deal, actor where actor.slug = 'partner_one'`);
+				await admin.query(
+					`insert into board_snapshot (organization_tenant_id, sponsoring_human_slug, board_id,
+						snapshot_json, updated_by_actor_id)
+					select 'carr-internal', 'partner_one', 'calendar-agenda', jsonb_build_object(
+						'schema', 'carr-calendar-agenda.v1', 'observed_at', $1::timestamptz, 'items', jsonb_build_array(
+							jsonb_build_object('start', $1::timestamptz + interval '1 hour', 'end', $1::timestamptz + interval '2 hours',
+								'title', 'Example', 'attendees', '[{"email": "client@example.test"}]'::jsonb))),
+						id from actor where slug = 'partner_one'`,
+					[calendarNow.toISOString()],
+				);
+			}, database);
 			const meetingPrep = () =>
 				readSnapshot(login, (db) => readMeetingPrep(db, "partner_one"));
 			const prepared = await meetingPrep();
