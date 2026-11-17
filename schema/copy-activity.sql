@@ -11,6 +11,19 @@ select distinct on (new_value ->> 'activity') (new_value ->> 'activity')::uuid a
 from public.event where verb = 'log-activity' and new_value ->> 'activity' ~ '^[0-9a-f-]{36}$'
 order by new_value ->> 'activity', mutation_order desc;
 
+-- Setting or restoring a next step writes its note under the deal's lock, after its event's transaction starts and before it is recorded.
+-- A waiting transaction can start before an earlier one writes, so a note pairs only with an event when each is the other's nearest match.
+create temp table next_step_event on commit drop as
+select note_id, event_id from (
+ select n.id as note_id, e.id as event_id,
+  -- Each counts the candidates at least as near as this one, so a tie pairs nothing.
+  count(*) over (partition by n.id order by e.recorded_at) as nearer_events,
+  count(*) over (partition by e.id order by n.created_at desc) as nearer_notes
+ from public.deal_note n join public.event e on e.subject_type = 'deal' and e.subject_id = n.deal_id and e.actor_id = n.actor_id
+  and e.field = 'next_step' and e.new_value ->> 'next_step' = n.text and n.created_at between e.occurred_at and e.recorded_at
+ where n.kind = 'next_step'
+) m where nearer_events = 1 and nearer_notes = 1;
+
 create temp table old_activity on commit drop as
 select a.id, a.kind as old_kind, a.occurred_at as happened_at, a.recorded_at as created_at, a.updated_at as changed_at,
  a.summary, a.detail, a.owed, a.connected,
@@ -20,13 +33,15 @@ select a.id, a.kind as old_kind, a.occurred_at as happened_at, a.recorded_at as 
 from public.activity a left join activity_event e on e.activity_id = a.id
 cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.id) s
 union all
-select n.id, n.kind, n.created_at, n.created_at, n.created_at, n.text, null, null, null, false, s.*
-from public.deal_note n
--- Adding a note writes its event on the deal in the same transaction, so the times match.
-cross join lateral copy_event_attribution(n.actor_id, (select e.id from public.event e
+-- A written next step is history only: it opens with its label and makes no next step.
+select n.id, n.kind, n.created_at, n.created_at, n.created_at,
+ concat(case when n.kind = 'next_step' then E'Recorded next step\n\n' end, n.text), null, null, null, false, s.*
+from public.deal_note n left join next_step_event p on p.note_id = n.id
+cross join lateral copy_event_attribution(n.actor_id, case n.kind when 'note' then (select e.id from public.event e
+ -- Adding a note writes its event in the same transaction, so the times match.
  where e.verb = 'add-deal-note' and e.subject_type = 'deal' and e.subject_id = n.deal_id
   and e.actor_id = n.actor_id and e.occurred_at = n.created_at and e.new_value ->> 'note' = n.text
- order by e.mutation_order desc limit 1)) s;
+ order by e.mutation_order desc limit 1) else p.event_id end) s;
 
 -- A client, lead or vendor is about its person or company; merged-away ids reach their survivor through the map.
 create temp table old_link on commit drop as
@@ -51,15 +66,14 @@ select a.*, case when a.is_mail then null else m.kind end as kind,
  exists (select from old_link l where l.id = a.id and (l.deal_id is not null or l.party_id is not null)) as is_about
 from old_activity a
 left join (values ('call', 'call', false), ('meeting', 'meeting', false), ('tour', 'meeting', false), ('note', 'note', false),
- ('text', 'note', true), ('analysis', 'note', true), ('loi', 'note', true),
+ ('next_step', 'note', false), ('text', 'note', true), ('analysis', 'note', true), ('loi', 'note', true),
  ('counter_sent', 'note', true), ('counter_received', 'note', true), ('lease_signed', 'note', true)) m(old_kind, kind, keeps_word) using (old_kind)
 -- A kind with no place of its own becomes a note that opens with its old label, so the partners' word survives.
 left join public.activity_kind k on k.slug = a.old_kind;
 
 insert into not_copied select a.id, f.field, f.value, f.reason from mapped_activity a cross join lateral (values
  ('kind', a.old_kind, 'later_copy_365', a.is_mail),
- ('kind', a.old_kind, 'later_copy_366', a.old_kind = 'next_step'),
- ('kind', a.old_kind, 'kind_has_no_place', a.kind is null and not a.is_mail and a.old_kind <> 'next_step'),
+ ('kind', a.old_kind, 'kind_has_no_place', a.kind is null and not a.is_mail),
  ('activity', a.id::text, 'about_nothing_copied', a.kind is not null and not a.is_about),
  ('detail', a.detail, 'structured_detail_not_copied', a.kind is not null and a.detail is json object),
  ('changed_for_user_id', null, 'agent_user_unknown', a.kind is not null and a.changed_by_job = 'agent' and a.changed_for_user_id is null)

@@ -310,11 +310,20 @@ test("post-call acceptance and outreach-completion events name their own author 
  [id(501),null,'agent',id(1)], [id(502),null,'agent',id(1)],
  ]);
 });
-test("the activity copy never also copies next-step notes or tasks", async () => {
-	assert.deepEqual(
-		(await rows("select id from activity order by id")).map((r) => r.id),
-		[id(205)],
-	);
+test("the activity copy keeps every next-step note as a recorded note beside the step it backs, and copies no task", async () => {
+	const recorded = (text: string) => `Recorded next step\n\n${text}`;
+	// biome-ignore format: one row per deal note
+	assert.deepEqual((await rows(`select a.id, a.summary, s.id is not null as backs_step
+ from activity a left join next_step s using (id) order by a.id`)).map(Object.values), [
+ [id(200), recorded("Example old note"), false],
+ [id(201), recorded("Example current note"), true],
+ [id(202), recorded("Example superseded"), false],
+ [id(203), recorded("Example hidden note"), false],
+ [id(204), recorded("Example undated note"), true],
+ [id(205), "Example ordinary note", false],
+ [id(206), recorded("Example finished plan note"), false],
+ [id(207), recorded("Example alongside checklist"), true],
+ ]);
 });
 
 test("vendor actions become next steps about the vendor's record, never about a deal", async () => {
