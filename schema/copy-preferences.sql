@@ -33,7 +33,11 @@ left join ops.home_inbox_disposition d on (d.actor_id, d.item_id) = (k.actor_id,
 left join ops.home_waiting w on (w.actor_id, w.item_id) = (k.actor_id, k.item_id) and w.identity_id is not null
 left join outside_id o on o.source = 'old_system' and o.value = k.actor_id::text
 left join app_user u on u.id = o.party_id
-left join next_step s on 'next_action:' || s.id = k.item_id
+left join public.next_action n on 'next_action:' || n.id = k.item_id
+left join outside_id subject on subject.source = 'old_system' and subject.value = n.subject_id::text
+-- A step with the action's id that belongs to another record is not the action's copy.
+left join next_step s on s.id = n.id
+ and case n.subject_type when 'deal' then s.deal_id = n.subject_id else s.party_id = subject.party_id end
 left join outside_id wo on wo.source = 'old_system' and wo.value = w.identity_id::text
 left join party waiting_on on waiting_on.id = wo.party_id
 where not exists (select from home_mark done where (done.user_id, done.next_step_id) = (u.id, s.id));

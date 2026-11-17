@@ -28,14 +28,15 @@ const db = new pg.Client({
 });
 const rows = async (sql: string) =>
 	(await db.query({ text: sql, rowMode: "array" })).rows;
-const run = async (sql = copy) => {
+const run = async (sql = copy, setup = "", keepOpen = false) => {
 	await db.query(
 		"begin; select set_config('engine.job','old_system',true); create temp table if not exists copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop; insert into copy_how_found values ('lead','Example referral','referral') on conflict do nothing",
 	);
 	try {
+		if (setup) await db.query(setup);
 		const result = await db.query(sql);
 		assert.ok(Array.isArray(result));
-		await db.query("commit");
+		if (!keepOpen) await db.query("commit");
 		return (result.at(-1)?.rows ?? []).map(Object.values);
 	} catch (error) {
 		await db.query("rollback");
@@ -43,7 +44,7 @@ const run = async (sql = copy) => {
 	}
 };
 const users = [1, 3, 4];
-const actions = [100, 101, 102, 103, 104, 105, 106, 107];
+const actions = [100, 101, 102, 103, 104, 105, 106, 107, 108];
 const marks = () =>
 	rows(
 		"select next_step_id, disposition, snoozed_until::text, waiting_on_party_id, waiting_reason, created_at::text, changed_at::text, changed_by_user_id, changed_by_job from home_mark order by next_step_id",
@@ -94,6 +95,7 @@ before(async () => {
  ('${id(1)}','${item(103)}','inbox',null,'1','m','2026-10-03'),
  ('${id(1)}','${item(104)}','settled',null,'1','m','2026-10-04'),
  ('${id(1)}','${item(105)}','settled',null,'1','m','2026-10-04'),
+ ('${id(1)}','${item(108)}','settled',null,'1','m','2026-10-04'),
  ('${id(1)}','capture_session:${id(200)}','settled',null,'1','m','2026-10-04'),
  ('${id(2)}','${item(101)}','settled',null,'1','m','2026-10-04');
  insert into ops.home_waiting (actor_id,item_id,identity_kind,identity_id,reason,evidence,version,updated_at) values
@@ -102,6 +104,7 @@ before(async () => {
  ('${id(1)}','${item(104)}',null,null,'Example cleared','["Example evidence"]',2,'2026-10-07'),
  ('${id(1)}','${item(106)}','party','${id(12)}','Example uncopied wait','["Example evidence"]',1,'2026-10-06'),
  ('${id(1)}','${item(107)}','party','${id(11)}','  ','["Example evidence"]',1,'2026-10-06');
+ insert into next_step (id,party_id,what) values ('${id(108)}','${id(11)}','Example other record');
  commit;`);
 	await run(leads);
 	report = await run();
@@ -185,6 +188,7 @@ test("snoozed, settled and waiting marks land on the next steps the earlier copi
 			[id(1), "identity_id", id(12), "waiting_on_not_copied"],
 			[id(1), "item_id", `capture_session:${id(200)}`, "waits_for_its_record"],
 			[id(1), "item_id", item(105), "next_step_not_copied"],
+			[id(1), "item_id", item(108), "next_step_not_copied"],
 			[id(1), "reason", "  ", "waiting_needs_reason"],
 		],
 	);
@@ -199,14 +203,20 @@ test("a rerun changes nothing, and picks up a mark once its next step is copied"
 		[await preferences(), await marks(), await rows(history)],
 		before,
 	);
-	await db.query(`begin; select set_config('engine.job','old_system',true);
- insert into next_step (id,party_id,what) values ('${id(105)}','${id(10)}','Example later step'); commit;`);
-	assert.deepEqual(
-		await run(),
-		report.filter(([, , value]) => value !== item(105)),
-	);
-	assert.deepEqual(
-		(await marks()).map(([step, disposition]) => [step, disposition]).at(-1),
-		[id(105), "settled"],
-	);
+	try {
+		assert.deepEqual(
+			await run(
+				copy,
+				`insert into next_step (id,party_id,what) values ('${id(105)}','${id(10)}','Example later step')`,
+				true,
+			),
+			report.filter(([, , value]) => value !== item(105)),
+		);
+		assert.deepEqual(
+			(await marks()).map(([step, disposition]) => [step, disposition]).at(-1),
+			[id(105), "settled"],
+		);
+	} finally {
+		await db.query("rollback");
+	}
 });
