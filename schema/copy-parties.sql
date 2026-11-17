@@ -29,8 +29,8 @@ insert into party (id, kind, name, changed_by_user_id, changed_at) select id, 'p
 insert into app_user (id) select id from partner;
 insert into outside_id (source, value, party_id) select 'old_system', id::text, id from partner;
 
--- Each old record not copied before, with the live record a chain of old merges ends in.
-create temp table old_party on commit drop as
+-- Keep every source record for corrections, including ones already mapped.
+create temp table source_party on commit drop as
 with recursive merged (id, survivor_id) as (
 	select id, id from public.party where merged_into is null
 	union all
@@ -43,7 +43,10 @@ from public.party p
 left join merged m using (id)
 cross join lateral copy_attribution('party', p.id, p.updated_by) author
 cross join lateral copy_attribution('party', p.id,
-	coalesce(p.contact_state_set_by, p.updated_by), 'contact_state') setter
+	coalesce(p.contact_state_set_by, p.updated_by), 'contact_state') setter;
+
+create temp table old_party on commit drop as
+select * from source_party p
 where not exists (select from outside_id where source = 'old_system' and value = p.id::text);
 
 create temp table copied on commit drop as
@@ -52,27 +55,36 @@ select * from old_party where survivor_id = id and deleted_at is null;
 -- Today's merge left a duplicate's values on it, so they come across to its survivor as merge_party would move them:
 -- the survivor's own first, then its duplicates' by when they were stored.
 create temp table chain on commit drop as
-select *, row_number() over (partition by survivor_id order by id <> survivor_id, created_at, id) as rank
-from old_party where survivor_id in (select id from copied);
+select s.*, coalesce(m.party_id, s.survivor_id) as record_id,
+	row_number() over (partition by s.survivor_id order by s.id <> s.survivor_id, s.created_at, s.id) as rank
+from source_party s left join outside_id m on m.source = 'old_system' and m.value = s.id::text
+where s.survivor_id in (select id from copied)
+	or exists (select from outside_id m where m.source = 'old_system' and m.value = s.id::text);
 
 -- NPPES issues a number once, so the record that first held it, here or in the new database, keeps it.
 create temp table npi_claim on commit drop as
-select s.id, s.survivor_id, s.npi as typed, btrim(s.npi) as npi, s.rank, pg_input_is_valid(btrim(s.npi), 'npi') as valid,
-	coalesce(held.id, first_value(s.survivor_id) over (partition by btrim(s.npi) order by s.created_at, s.id)) as holder
+select s.id, s.record_id, s.npi as typed, btrim(s.npi) as npi, s.rank, pg_input_is_valid(btrim(s.npi), 'npi') as valid,
+	coalesce(held.id, first_value(s.record_id) over (partition by btrim(s.npi) order by s.created_at, s.id)) as holder
 from chain s left join party held on held.npi = btrim(s.npi)
-where btrim(s.npi) <> '';
+where btrim(s.npi) <> '' and s.survivor_id in (select id from copied);
 
 insert into party (id, created_at, kind, name, npi, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, created_at, case kind when 'org' then 'company' else kind end, name,
-	(select npi from npi_claim c where c.survivor_id = p.id and c.valid and c.holder = p.id order by c.rank limit 1),
+	(select npi from npi_claim c where c.record_id = p.id and c.valid and c.holder = p.id order by c.rank limit 1),
 	changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from copied p;
+
+insert into npi_claim
+select s.id, s.record_id, s.npi, btrim(s.npi), s.rank, pg_input_is_valid(btrim(s.npi), 'npi'),
+	coalesce(held.id, s.record_id)
+from chain s left join party held on held.npi = btrim(s.npi)
+where btrim(s.npi) <> '' and s.survivor_id not in (select id from copied);
 
 insert into not_copied
 select c.id, 'npi', c.typed,
 	case when not c.valid then 'not an NPI' when c.holder <> p.id then 'also held by ' || c.holder
 		else 'its record holds another NPI' end
-from npi_claim c join party p on p.id = c.survivor_id
+from npi_claim c join party p on p.id = c.record_id
 where p.npi is distinct from c.npi;
 
 insert into outside_id (source, value, party_id) select 'old_system', id::text, id from copied;
@@ -98,7 +110,7 @@ create temp table typed_value on commit drop as
 select old_id, party_id, field, typed, stored, extension, label,
 	row_number() over (partition by party_id, field = 'email' order by rank, place) as place
 from (
-	select s.id as old_id, s.survivor_id as party_id, s.rank, 'email' as field, m.place, m.found[1] as typed,
+	select s.id as old_id, s.record_id as party_id, s.rank, 'email' as field, m.place, m.found[1] as typed,
 		case when pg_input_is_valid(lower(m.found[1]), 'email_address') then lower(m.found[1]) end as stored,
 		null as extension, 'work' as label
 	from chain s
@@ -106,7 +118,7 @@ from (
 	cross join lateral regexp_matches(s.email, '([^\s<>,;:"()/]+@[^\s<>,;:"()/]+)', 'g') with ordinality as m (found, place)
 	union all
 	-- Text that holds no address, or an @ no address took, is listed whole.
-	select s.id, s.survivor_id, s.rank, 'email', 0, s.email, null, null, null
+	select s.id, s.record_id, s.rank, 'email', 0, s.email, null, null, null
 	from chain s
 	where s.email ~ '\S' and (s.email !~ '@' or regexp_replace(s.email, '[^\s<>,;:"()/]+@[^\s<>,;:"()/]+', '', 'g') ~ '@')
 	union all
@@ -114,7 +126,7 @@ from (
 		case when pg_input_is_valid(number, 'phone_number') and coalesce(extension ~ '^[0-9]{1,6}$', true) then number end,
 		extension, label
 	from (
-		select s.id as old_id, s.survivor_id as party_id, s.rank, phone.field, phone.place, phone.typed, phone.label,
+		select s.id as old_id, s.record_id as party_id, s.rank, phone.field, phone.place, phone.typed, phone.label,
 			(regexp_match(phone.typed, '(?:x|ext\.?|extension|#)\s*([0-9]+)\s*$', 'i'))[1] as extension,
 			-- Ten digits, with or without a leading 1 and in any punctuation, are North American. Words, such as fax, are listed.
 			case
@@ -156,11 +168,11 @@ order by v.party_id, v.stored, v.extension, v.place;
 
 -- Keep the longest restriction, with an indefinite stop first.
 insert into do_not_contact (party_id, reason, until_date, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select distinct on (survivor_id) survivor_id, btrim(contact_state_reason), contact_state_until,
+select distinct on (record_id) record_id, btrim(contact_state_reason), contact_state_until,
 	coalesce(contact_state_set_at, updated_at), dnc_by_user_id, dnc_by_job, dnc_for_user_id, coalesce(contact_state_set_at, updated_at)
-from chain where contact_state in ('do_not_contact', 'paused') and contact_state_reason ~ '\S'
+from chain where record_id in (select id from copied) and contact_state in ('do_not_contact', 'paused') and contact_state_reason ~ '\S'
 	and (contact_state <> 'paused' or contact_state_until is not null)
-order by survivor_id, contact_state_until desc nulls first, rank;
+order by record_id, contact_state_until desc nulls first, rank;
 
 
 insert into not_copied
@@ -196,7 +208,7 @@ where r.stage is distinct from 'nurture';
 -- Each specialty typed, split at commas and semicolons. Spellings that differ only in case, spaces or punctuation
 -- are one specialty, labelled as first typed, and one already on the list keeps its label.
 create temp table typed_specialty on commit drop as
-select s.id as old_id, s.survivor_id as party_id, s.created_at, t.place, regexp_replace(t.typed, '^\s+|\s+$', '', 'g') as typed,
+select s.id as old_id, s.record_id as party_id, s.created_at, t.place, regexp_replace(t.typed, '^\s+|\s+$', '', 'g') as typed,
 	btrim(regexp_replace(lower(t.typed), '[^a-z0-9]+', '_', 'g'), '_') as slug
 from chain s cross join lateral regexp_split_to_table(s.specialty, '[,;]') with ordinality as t (typed, place)
 where t.typed ~ '\S';
@@ -215,15 +227,15 @@ where p.kind = 'person' and v.slug <> '';
 
 insert into not_copied
 select v.old_id, 'specialty', v.typed, case when v.slug = '' then 'not a specialty' else 'only a person holds a specialty' end
-from typed_specialty v join copied p on p.id = v.party_id
+from typed_specialty v join party p on p.id = v.party_id
 where p.kind <> 'person' or v.slug = '';
 
 -- A person's company and their title there, the survivor's own first, at the record the company became.
 create temp table typed_company on commit drop as
-select s.id as old_id, s.survivor_id as person_id, s.org_id, s.title as typed_title, p.kind, map.party_id as company_id,
+select s.id as old_id, s.record_id as person_id, s.org_id, s.title as typed_title, p.kind, map.party_id as company_id,
 	company.kind as company_kind, nullif(regexp_replace(s.title, '^\s+|\s+$', '', 'g'), '') as title, s.rank
 from chain s
-join copied p on p.id = s.survivor_id
+join party p on p.id = s.record_id
 left join outside_id map on map.source = 'old_system' and map.value = s.org_id::text
 left join party company on company.id = map.party_id;
 
@@ -285,7 +297,7 @@ from (
 	where r.entity_type not in ('deal', 'activity', 'event', 'loop_item')
 	union all
 	select id, 'ref', 'party', ref, 'old_system_ref', regexp_replace(ref, '^\s+|\s+$', '', 'g'), id
-	from old_party where ref ~ '\S'
+	from source_party where ref ~ '\S'
 ) as v
 left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text;
 
