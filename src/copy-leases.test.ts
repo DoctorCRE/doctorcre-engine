@@ -12,6 +12,7 @@ const sql = (file: string) =>
 	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
 const schema = await sql("next.sql");
 const attribution = await sql("copy-attribution.sql");
+const buildings = await sql("copy-buildings.sql");
 const copy = await sql("copy-leases.sql");
 const name = `copy_leases_${randomUUID().replaceAll("-", "")}`;
 const url = new URL(
@@ -23,8 +24,8 @@ const db = new pg.Client({
 	options: "-c search_path=next -c TimeZone=UTC",
 });
 const rows = async (text: string) => (await db.query(text)).rows;
-const run = async (): Promise<pg.QueryResultRow[]> => {
-	const result = await db.query(copy);
+const run = async (script = copy): Promise<pg.QueryResultRow[]> => {
+	const result = await db.query(script);
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
@@ -35,7 +36,7 @@ const file = (n: number) =>
 const sha = (n: number) => String(n).repeat(22).slice(0, 64);
 const lease = (n: number, columns: string, values: string) =>
 	`insert into public.lease (id, created_by, created_at, updated_at, ${columns}) values ('${id(n)}', '${id(1)}', '2025-01-01', '2025-03-01', ${values});`;
-let report: pg.QueryResultRow[];
+let copied: pg.QueryResultRow[];
 before(async () => {
 	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
 	await asAdmin(
@@ -86,9 +87,12 @@ before(async () => {
  ${lease(131, "client_id, premises_id, doc_attachment, expiration_on, supersedes_lease_id", `'${id(3)}', '${id(95)}', '${id(204)}', '2027-06-30', '${id(130)}'`)}
  update public.lease set supersedes_lease_id = '${id(131)}' where id = '${id(130)}';
  commit;`);
-	await db.query("begin");
-	report = await run();
-	await db.query("commit");
+	copied = [];
+	for (const script of [buildings, copy]) {
+		await db.query("begin");
+		copied.push(...(await run(script)));
+		await db.query("commit");
+	}
 });
 after(async () => {
 	await db.end();
@@ -131,8 +135,8 @@ test("a deal's amendment chain becomes one lease with consecutive versions on it
 			},
 		],
 	);
-	assert.deepEqual(reasons(report, 102), ["no_source_file"]);
-	assert.deepEqual(reasons(report, 103), ["earlier_version_not_copied"]);
+	assert.deepEqual(reasons(copied, 102), ["no_source_file"]);
+	assert.deepEqual(reasons(copied, 103), ["earlier_version_not_copied"]);
 });
 
 test("known dates and per-foot rent copy; other wording stays in other terms and nothing is inferred", async () => {
@@ -143,7 +147,7 @@ test("known dates and per-foot rent copy; other wording stays in other terms and
  ]);
 	assert.deepEqual(await rows("select * from lease_option"), []);
 	assert.deepEqual(
-		report.filter((r) => r.old_id === id(100)).map((r) => [r.field, r.reason]),
+		copied.filter((r) => r.old_id === id(100)).map((r) => [r.field, r.reason]),
 		[
 			["evidence", "no_typed_destination"],
 			["options_note", "option_terms_unparsed"],
@@ -199,7 +203,7 @@ test("a lease negotiated elsewhere names only its tenant and building, and its e
 	);
 });
 
-test("each copied version covers its premises' spaces as suites, and a label shared in one building waits", async () => {
+test("each copied version links the suites its premises cover, and a suite that waits holds back its link", async () => {
 	// biome-ignore format: one row per suite
 	assert.deepEqual((await rows("select id, property_id, label, floor, area_sf, area_basis, condition from suite order by id")).map(Object.values), [
  [id(92), id(90), "Suite 100", 1, "1200.0", "rentable", "Shell"],
@@ -218,20 +222,20 @@ test("each copied version covers its premises' spaces as suites, and a label sha
 			[id(101), id(160)],
 		],
 	);
-	assert.deepEqual(reasons(report, 93), [
-		"suite_not_copied",
+	assert.deepEqual(reasons(copied, 93), [
 		"duplicate_suite_label",
+		"suite_not_copied",
 	]);
 });
 
 test("leases that cannot map are listed with a reason, never invented", async () => {
-	assert.ok(reasons(report, 111).includes("several_properties"));
-	assert.ok(reasons(report, 112).includes("dates_out_of_order"));
-	assert.ok(reasons(report, 120).includes("deal_not_copied"));
-	assert.ok(reasons(report, 121).includes("no_expiration"));
-	assert.ok(reasons(report, 121).includes("property_not_on_deal"));
-	assert.deepEqual(reasons(report, 130), ["no_first_version"]);
-	assert.deepEqual(reasons(report, 131), ["no_first_version"]);
+	assert.ok(reasons(copied, 111).includes("several_properties"));
+	assert.ok(reasons(copied, 112).includes("dates_out_of_order"));
+	assert.ok(reasons(copied, 120).includes("deal_not_copied"));
+	assert.ok(reasons(copied, 121).includes("no_expiration"));
+	assert.ok(reasons(copied, 121).includes("property_not_on_deal"));
+	assert.deepEqual(reasons(copied, 130), ["no_first_version"]);
+	assert.deepEqual(reasons(copied, 131), ["no_first_version"]);
 	assert.deepEqual(
 		await rows(
 			`select id from lease where id not in ('${id(100)}', '${id(110)}')`,
@@ -363,10 +367,6 @@ test("a refused lease gets no suites, even when its ids match a lease already in
 			),
 			[],
 		);
-		assert.deepEqual(
-			await rows(`select id from suite where id = '${id(171)}'`),
-			[],
-		);
 	} finally {
 		await db.query("rollback");
 	}
@@ -386,6 +386,24 @@ test("an amendment moved to another building is not linked to a suite there that
 			await rows(
 				`select lease_version_id from lease_suite where suite_id = '${id(180)}'`,
 			),
+			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("a lease whose building is not yet a property waits for the building copy", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`insert into public.building (id, address, created_by, updated_by) values ('${id(175)}', '600 Example Way', '${id(1)}', '${id(1)}');
+ insert into public.space (id, building_id, created_by, updated_by) values ('${id(176)}', '${id(175)}', '${id(1)}', '${id(1)}');
+ insert into public.premises (id, label, created_by) values ('${id(177)}', 'Example', '${id(1)}');
+ insert into public.premises_space values ('${id(177)}', '${id(176)}');
+ ${lease(147, "client_id, premises_id, doc_attachment, expiration_on", `'${id(3)}', '${id(177)}', '${id(204)}', '2027-06-30'`)}`);
+		assert.deepEqual(reasons(await run(), 147), ["property_not_copied"]);
+		assert.deepEqual(
+			await rows(`select id from lease where id = '${id(147)}'`),
 			[],
 		);
 	} finally {
