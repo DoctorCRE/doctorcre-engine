@@ -8,6 +8,8 @@ alter table market_county disable trigger stamp_change;
 alter table territory disable trigger stamp_change;
 alter table territory_piece disable trigger stamp_change;
 alter table party_territory disable trigger stamp_change;
+alter table party_territory_review disable trigger stamp_change;
+alter table party_territory_review disable trigger review_stamp;
 
 -- Names are not identities: the source slug gives imports stable ids without widening outside_id.
 create temp table old_market on commit drop as
@@ -57,7 +59,7 @@ select territory_id, id, reviewed_at, reviewed_at, changed_by_user_id, changed_b
 from old_market where refusal is null and not copied on conflict do nothing;
 
 create temp table old_membership on commit drop as
-select v.vendor_id, v.market_slug, v.reviewed_at, o.party_id, m.territory_id, m.refusal, a.*
+select v.vendor_id, v.market_slug, v.office_presence, v.service_coverage, v.source, v.reviewed_at, o.party_id, m.territory_id, m.refusal, a.*
 from public.vendor_market_membership v join old_market m on m.slug = v.market_slug
 join public.vendor vendor on vendor.id = v.vendor_id
 left join outside_id o on o.source = 'old_system' and o.value = vendor.party_id::text
@@ -70,6 +72,27 @@ order by party_id, territory_id, reviewed_at, vendor_id on conflict do nothing;
 insert into not_copied select vendor_id::text, 'market_membership', market_slug,
  case when party_id is null then 'party_not_copied' else refusal end from old_membership
 where party_id is null or not exists (select from territory t where t.id = territory_id);
+
+create temp table old_membership_review on commit drop as
+select distinct on (m.party_id, m.territory_id) m.*,
+ exists (select from old_membership other where other.party_id = m.party_id and other.territory_id = m.territory_id
+ and (other.office_presence, other.service_coverage, other.source)
+ is distinct from (m.office_presence, m.service_coverage, m.source)) as disagrees
+from old_membership m
+order by m.party_id, m.territory_id, m.reviewed_at, m.vendor_id;
+insert into party_territory_review (party_territory_id, has_office, coverage, source,
+ reviewed_by_user_id, reviewed_by_job, reviewed_for_user_id, reviewed_at,
+ created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select p.id, m.office_presence, m.service_coverage, m.source,
+ m.changed_by_user_id, m.changed_by_job, m.changed_for_user_id, m.reviewed_at,
+ m.reviewed_at, m.reviewed_at, m.changed_by_user_id, m.changed_by_job, m.changed_for_user_id
+from old_membership_review m join party_territory p
+ on p.id = md5('old_system:market_membership:' || m.market_slug || ':' || m.vendor_id)::uuid
+where not m.disagrees on conflict do nothing;
+insert into not_copied select m.vendor_id::text, 'membership_details',
+ jsonb_build_object('market', m.market_slug, 'office_presence', m.office_presence,
+ 'service_coverage', m.service_coverage, 'source', m.source)::text, 'membership_reviews_disagree'
+from old_membership m join old_membership_review r using (party_id, territory_id) where r.disagrees;
 
 create temp table text_territory on commit drop as
 select v.*, md5('old_system:vendor_territory:' || v.id)::uuid as territory_id, o.party_id as mapped_party_id, a.*
@@ -86,9 +109,6 @@ insert into not_copied select id::text, 'territory', territory,
  case when mapped_party_id is null then 'party_not_copied' else 'text_territory_needs_drawing' end from text_territory;
 
 insert into not_copied select slug, 'source', source, 'no_typed_destination' from public.vendor_market;
-insert into not_copied select vendor_id::text, 'membership_details',
- jsonb_build_object('market', market_slug, 'office_presence', office_presence, 'service_coverage', service_coverage, 'source', source)::text,
- 'no_typed_destination' from public.vendor_market_membership;
 insert into not_copied select market_slug, 'market_key', key, 'no_alias_destination' from public.vendor_market_key;
 insert into not_copied select market_slug, 'regional_reference', to_jsonb(r)::text, 'reference_is_not_a_boundary'
 from public.vendor_market_regional_reference r;
@@ -100,4 +120,6 @@ alter table market_county enable trigger stamp_change;
 alter table territory enable trigger stamp_change;
 alter table territory_piece enable trigger stamp_change;
 alter table party_territory enable trigger stamp_change;
+alter table party_territory_review enable trigger stamp_change;
+alter table party_territory_review enable trigger review_stamp;
 select * from not_copied order by old_id, field, value, reason;
