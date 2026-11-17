@@ -40,6 +40,7 @@ type HistoryEntry = {
 };
 
 export type Saving = {
+	idempotency_key: string;
 	partner: string;
 	tx: Transaction<DB>;
 	actor_id: string;
@@ -124,6 +125,7 @@ export async function runSave(
 						tx,
 						actor_id: actor.id,
 						partner: save.partner,
+						idempotency_key: key,
 						record: async (entry) => {
 							await tx
 								.insertInto("event")

@@ -10,6 +10,7 @@ import {
 	oldReads,
 } from "./compare-door.ts";
 import { connection } from "./connection.ts";
+import { dealField } from "./deal-field.ts";
 import { deals } from "./deals/routes.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
@@ -46,6 +47,7 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", directory)
 	.route("/", connection)
 	.route("/", deals)
+	.route("/", dealField)
 	.route("/", invoices)
 	.route("/", leads)
 	.route("/", presence)
