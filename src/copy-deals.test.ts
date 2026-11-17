@@ -1106,3 +1106,66 @@ test("parking reasons, trimmed notes and explicit attention flags copy without i
 		await db.query("rollback");
 	}
 });
+
+test("a verified market agent joins the deal and a name-only agent waits for review", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`
+ ${[410, 411, 412, 413].map((n) => deal(n)).join("\n")}
+ update public.deal set owner = null where id = '${id(413)}';
+ insert into public.party (id, kind, name, created_by, updated_by) values ('${id(7)}', 'person', 'Example uncopied agent', '${id(1)}', '${id(1)}');
+ insert into public.deal_market_assignment (deal_id, agent_name, agent_party_id, market, source, set_by, set_at) values
+ ('${id(410)}', 'Example Agent', '${id(4)}', 'Example Market', 'Example source', '${id(1)}', '2025-03-01'),
+ ('${id(411)}', 'Example Agent', null, 'Example Market', 'Example source', '${id(1)}', '2025-03-01'),
+ ('${id(412)}', 'Example uncopied agent', '${id(7)}', null, 'Example source', '${id(1)}', '2025-03-01'),
+ ('${id(413)}', 'Example Agent', '${id(4)}', null, 'Example source', '${id(1)}', '2025-03-01');`);
+		const first = await run();
+		const agents = `select deal_id, party_id, created_at::text, changed_at::text, changed_by_user_id
+ from deal_party where role = 'market_agent' order by deal_id`;
+		assert.deepEqual((await rows(agents)).map(Object.values), [
+			[
+				id(410),
+				id(4),
+				"2025-03-01 00:00:00+00",
+				"2025-03-01 00:00:00+00",
+				id(1),
+			],
+		]);
+		const listed = (r: pg.QueryResultRow[]) =>
+			r.filter((row) => row.old_id >= id(410) && row.field !== "phase");
+		assert.deepEqual(listed(first), [
+			{
+				old_id: id(411),
+				field: "market_agent",
+				value: "Example Agent",
+				reason: "agent_not_verified",
+			},
+			{
+				old_id: id(412),
+				field: "deal_party",
+				value: `${id(412)} ${id(7)} market_agent`,
+				reason: "party_not_copied",
+			},
+			{
+				old_id: id(413),
+				field: "deal",
+				value: id(413),
+				reason: "no_deal_owner",
+			},
+			{
+				old_id: id(413),
+				field: "deal_party",
+				value: `${id(413)} ${id(4)} market_agent`,
+				reason: "deal_not_copied",
+			},
+		]);
+		const copied = await rows(agents);
+		await db.query(`drop table pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
+ pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
+ pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
+		assert.deepEqual(listed(await run()), listed(first));
+		assert.deepEqual(await rows(agents), copied);
+	} finally {
+		await db.query("rollback");
+	}
+});
