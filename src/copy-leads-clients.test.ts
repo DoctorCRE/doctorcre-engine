@@ -382,6 +382,52 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 	}
 });
 
+test("a lead or client with no source copies as not recorded, waits while another source needs mapping, and a recorded source replaces it", async () => {
+	const setup = `${extraParties}
+ insert into public.lead (id,party_id,stage,source_type,created_by,updated_by) values
+ ('${id(83)}','${id(80)}','new',null,'${id(1)}','${id(1)}'),
+ ('${id(86)}','${id(81)}','new','Example referral','${id(1)}','${id(1)}'),
+ ('${id(87)}','${id(82)}','new','Unmapped lead source','${id(1)}','${id(1)}');
+ insert into public.client (id,party_id,status,client_type,acquisition_source,created_by,updated_by) values
+ ('${id(84)}','${id(81)}','roster','franchise','  ','${id(1)}','${id(1)}'),
+ ('${id(85)}','${id(82)}','roster','franchise',null,'${id(1)}','${id(1)}');`;
+	const answer = () =>
+		rows(
+			`select id,how_found,(select count(*)::int from party_role where party_id = p.id) as roles from party p
+			where id in ('${id(80)}','${id(81)}','${id(82)}') order by id`,
+		);
+	try {
+		const listed = await run(setup, true);
+		assert.deepEqual(await answer(), [
+			{ id: id(80), how_found: "not_recorded", roles: 1 },
+			{ id: id(81), how_found: "referral", roles: 2 },
+			{ id: id(82), how_found: null, roles: 0 },
+		]);
+		assert.ok(
+			!listed.some(
+				(r) =>
+					[id(84), id(86)].includes(r.old_id) &&
+					["sources_disagree", "existing_source_differs"].includes(r.reason),
+			),
+		);
+		for (const [held, reason] of [
+			[id(85), "waits_for_other_source"],
+			[id(87), "source_needs_mapping"],
+		])
+			assert.ok(listed.some((r) => r.old_id === held && r.reason === reason));
+		await freshCopy(
+			"insert into copy_how_found values ('lead','Unmapped lead source','vendor')",
+		);
+		assert.deepEqual((await answer())[2], {
+			id: id(82),
+			how_found: "vendor",
+			roles: 2,
+		});
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("person accounts and older duplicates wait, and refused rows stay retryable even with an existing role", async () => {
 	const setup = `${extraParties}
  insert into public.client (id,party_id,status,client_type,acquisition_source,created_by,updated_by) values ('${id(85)}','${id(80)}','roster','national_account','Example client source','${id(1)}','${id(1)}');
