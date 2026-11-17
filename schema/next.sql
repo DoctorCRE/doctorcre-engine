@@ -1916,22 +1916,33 @@ create table invoice_email (
 	occurred_at timestamptz not null,
 	-- Preserve the sender's calendar date, including its offset, rather than the session's zone.
 	email_date date not null,
-	status text not null default 'captured' check (status in ('captured', 'applied', 'undone')),
+	status text not null default 'captured' check (status in ('captured', 'applied', 'undone', 'attached')),
 	deal_id uuid references deal,
 	payment_id uuid,
 	prior_phase_at timestamptz,
 	applied_phase_at timestamptz,
 	prior_invoiced_on date,
 	payment_change_id bigint,
+	application_id uuid,
+	application_root_id uuid generated always as (case when status in ('applied', 'undone') then id end) stored,
+	unique (application_root_id, deal_id, payment_id, email_date),
+	foreign key (application_id, deal_id, payment_id, email_date)
+		references invoice_email (application_root_id, deal_id, payment_id, email_date),
+	constraint invoice_email_attachment_whole check ((status = 'attached') = (application_id is not null)
+		and (status <> 'attached' or (deal_id is not null
+			and num_nonnulls(prior_phase_at, applied_phase_at, prior_invoiced_on, payment_change_id) = 0))),
 	foreign key (payment_id, deal_id) references commission_payment (id, deal_id),
 	foreign key (deal_id, prior_phase_at) references deal_phase_change,
 	foreign key (deal_id, applied_phase_at) references deal_phase_change,
 	constraint invoice_email_date_matches_time check (isfinite(occurred_at) and isfinite(email_date)
 		and abs(email_date - (occurred_at at time zone 'UTC')::date) <= 1),
 	constraint invoice_email_target_whole check ((deal_id is null) = (payment_id is null)),
-	constraint invoice_email_applied_whole check (status = 'captured' or
+	constraint invoice_email_applied_whole check (status in ('captured', 'attached') or
 		(deal_id is not null and prior_phase_at is not null and applied_phase_at is not null and payment_change_id is not null))
 );
+
+create unique index invoice_email_one_application on invoice_email (deal_id, payment_id, email_date)
+	where status in ('applied', 'undone');
 
 create view deal_invoiced as
 select deal_id, min(invoiced_on) as invoiced_on from commission_payment group by deal_id;
@@ -1980,6 +1991,13 @@ begin
 			or (select count(*) from commission_payment where deal_id = new.deal_id
 				and (invoiced_on is null or invoiced_on = new.email_date)) <> 1) then
 			raise exception 'a doubtful invoice waits for a user' using errcode = 'check_violation', constraint = 'invoice_email_needs_user';
+		end if;
+		select id into new.application_id from invoice_email
+		where deal_id = new.deal_id and payment_id = new.payment_id and email_date = new.email_date
+			and status in ('applied', 'undone');
+		if found then
+			new.status := 'attached';
+			return new;
 		end if;
 		new.prior_phase_at := latest.happened_at;
 		new.prior_invoiced_on := payment.invoiced_on;
