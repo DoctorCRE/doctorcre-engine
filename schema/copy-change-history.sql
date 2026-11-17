@@ -10,6 +10,7 @@ select * from (values
  ('deal', 'deal', 'won_value', 'closed_value'),
  ('deal', 'deal', 'parking_reason', 'parking_reason'), ('deal', 'deal', 'parking_note', 'parking_note'),
  ('deal', 'deal', 'needs_attention', 'needs_attention'),
+ ('deal', 'deal', 'operating_state', 'parking_reason'), ('deal', 'deal', 'attention', 'needs_attention'),
  ('lead', 'party_role', 'stage', 'stage'), ('lead', 'party_role', 'owner', 'owner_user_id'),
  ('lead', 'party_role', 'owner_id', 'owner_user_id'), ('lead', 'party_role', 'lane', 'lane'),
  ('lead', 'party_role', 'segment', 'segment'), ('lead', 'party_role', 'est_lease_event', 'estimated_lease_on'),
@@ -23,8 +24,29 @@ select * from (values
  ('lease', 'lease_version', 'opex_structure', 'expense_structure')
 ) f(subject, table_name, old_field, field);
 
+-- The Deal Room writer wraps both values in the old field name.
+create temp table deal_history_payload on commit drop as
+select e.id, bool_and(coalesce(
+ jsonb_typeof(v.payload) = 'object' and v.payload - e.field = '{}'::jsonb and
+ case when e.field = 'attention' then jsonb_typeof(v.payload -> e.field) = 'boolean'
+ else jsonb_typeof(v.payload -> e.field) = 'object'
+  and (v.payload -> e.field) ?& array['state', 'reason', 'note']
+  and (v.payload -> e.field) - array['state', 'reason', 'note'] = '{}'::jsonb
+  and case v.payload #>> '{operating_state,state}'
+   when 'active' then v.payload #> '{operating_state,reason}' = 'null'::jsonb
+    and v.payload #> '{operating_state,note}' = 'null'::jsonb
+   when 'parked' then v.payload #>> '{operating_state,reason}' in ('prospect_never_active', 'client_paused', 'other')
+    and jsonb_typeof(v.payload #> '{operating_state,note}') in ('string', 'null')
+   else false end
+ end, false)) as known_shape,
+ bool_or(jsonb_typeof(v.payload #> '{operating_state,note}') = 'string') as has_note
+from public.event e cross join lateral (values (e.old_value), (e.new_value)) v(payload)
+where e.subject_type = 'deal' and e.field in ('operating_state', 'attention')
+group by e.id;
+
 create temp table history_event on commit drop as
-select e.id, e.field as old_field, f.table_name, f.field, to_jsonb(e) as source_event,
+select e.id, e.field as old_field, f.table_name,
+ case when e.field = 'operating_state' and payload.has_note then 'parking_note' else f.field end as field, to_jsonb(e) as source_event,
  case when f.table_name = 'party_role' and r.party_id is not null
    then jsonb_build_object('party_id', r.party_id, 'role', r.role)
   when f.table_name = 'client' and c.party_id is not null then jsonb_build_object('party_id', c.party_id)
@@ -36,8 +58,10 @@ select e.id, e.field as old_field, f.table_name, f.field, to_jsonb(e) as source_
   when a.changed_by_user_id is not null and u.id is null then 'user_not_copied'
   when a.changed_by_job in ('agent', 'mail_capture') and e.sponsoring_human_slug is not null and sponsor.id is null then 'unknown_sponsor'
   when a.changed_for_user_id is not null and su.id is null then 'sponsor_not_copied' end as actor_problem,
+ payload.known_shape = false as unknown_payload,
  a.changed_by_job = 'agent' and e.sponsoring_human_slug is null as unknown_agent_user
 from public.event e
+left join deal_history_payload payload on payload.id = e.id
 left join history_field f on (f.subject, f.old_field) = (e.subject_type, e.field)
 left join outside_id m on m.source = 'old_system' and m.value = e.subject_id::text
 left join party p on p.id = m.party_id
@@ -56,6 +80,7 @@ select id, old_field, problem from history_event
 cross join lateral (values
  (case when table_name is null then 'field_has_no_mapping' end),
  (case when table_name is not null and record is null then 'record_not_copied' end),
+ (case when unknown_payload then 'payload_shape_unknown' end),
  (actor_problem), (case when unknown_agent_user then 'agent_user_unknown' end)
 ) p(problem) where problem is not null;
 insert into listed
@@ -73,6 +98,7 @@ insert into imported_change (id, table_name, record, field, source_event, change
 select id, table_name, record, field, source_event, changed_at,
  changed_by_user_id, changed_by_job, changed_for_user_id, old_value_absent, new_value_absent from history_event
 where table_name is not null and record is not null and actor_problem is null
+ and not coalesce(unknown_payload, false)
 on conflict (id) do nothing;
 alter table imported_change enable trigger stamp_imported_change;
 select * from listed order by old_id, field, reason;
