@@ -246,3 +246,46 @@ test("a later run adds an amendment once its source file is known", async () => 
 		await db.query("rollback");
 	}
 });
+
+test("values the new columns cannot hold, unresolved buildings and taken ids are listed without aborting the copy", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by) values ${[205, 206].map(file).join(", ")};
+ update public.attachment set mime = ' ' where id = '${id(205)}';
+ insert into document (name, r2_bucket, r2_key, content_type, sha256, bytes) values ('Example', 'deal_documents', 'leases/206.pdf', 'text/plain', '${sha(206)}', 7);
+ insert into public.building (id, address, merged_into, created_by, updated_by) values ('${id(99)}', '300 Example Way', '${id(99)}', '${id(1)}', '${id(1)}');
+ insert into public.space (id, building_id, created_by, updated_by) values ('${id(98)}', '${id(99)}', '${id(1)}', '${id(1)}');
+ insert into public.premises (id, label, created_by) values ('${id(97)}', 'Example', '${id(1)}');
+ insert into public.premises_space values ('${id(97)}', '${id(93)}'), ('${id(97)}', '${id(98)}');
+ insert into lease (id, party_id, property_id) values ('${id(144)}', '${id(2)}', '${id(90)}');
+ insert into lease_version (id, lease_id, version, document_id, expiration_on) values ('${id(145)}', '${id(144)}', 1, '${id(200)}', '2027-06-30');
+ ${lease(140, "client_id, premises_id, doc_attachment, expiration_on", `'${id(3)}', '${id(95)}', '${id(205)}', '2027-06-30'`)}
+ ${lease(141, "client_id, premises_id, doc_attachment, expiration_on, rate_amount, rate_basis, opex_structure", `'${id(3)}', '${id(95)}', '${id(204)}', '2027-06-30', 100000000, 'usd_sf_yr', E'\\t'`)}
+ ${lease(142, "client_id, premises_id, doc_attachment, expiration_on", `'${id(3)}', '${id(97)}', '${id(204)}', '2027-06-30'`)}
+ ${lease(143, "client_id, premises_id, doc_attachment, expiration_on", `'${id(3)}', '${id(95)}', '${id(206)}', '2027-06-30'`)}
+ ${["144", "145"].map((n) => lease(Number(n), "client_id, premises_id, doc_attachment, expiration_on", `'${id(3)}', '${id(95)}', '${id(204)}', '2027-06-30'`)).join("\n")}`);
+		const refused = await run();
+		assert.deepEqual(reasons(refused, 140), ["source_file_incomplete"]);
+		assert.deepEqual(reasons(refused, 142), ["building_merge_unresolved"]);
+		assert.deepEqual(reasons(refused, 143), ["source_file_conflict"]);
+		assert.deepEqual(reasons(refused, 144), [
+			"lease_id_taken",
+			"version_number_taken",
+		]);
+		assert.deepEqual(reasons(refused, 145), ["version_id_taken"]);
+		assert.deepEqual(
+			await rows(
+				`select rent_per_sf_yr, expense_structure, other_terms from lease_version where id = '${id(141)}'`,
+			),
+			[
+				{
+					rent_per_sf_yr: null,
+					expense_structure: null,
+					other_terms: "Rent: 100000000.00 usd_sf_yr",
+				},
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
