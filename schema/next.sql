@@ -1139,7 +1139,7 @@ create table home_mark (
 create table proposal (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
-	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move')),
+	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move', 'file_to_deal', 'possible_new_deal')),
 	activity_id uuid not null,
 	activity_kind text not null check (activity_kind in ('email', 'call', 'meeting')),
 	evidence text not null check (evidence ~ '\S'),
@@ -1165,12 +1165,18 @@ create table proposal (
 	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
 	foreign key (lead_role, from_stage) references stage (role, slug),
 	foreign key (lead_role, to_stage) references stage (role, slug),
-	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
+	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = case when kind = 'possible_new_deal' then 0 else 1 end),
+	filed_deal_id uuid references deal,
+	filing_reason text check (filing_reason ~ '\S'),
+	constraint proposal_filing_decision check ((filed_deal_id is null and filing_reason is null) or (status = 'accepted' and kind in ('file_to_deal', 'possible_new_deal'))),
 	constraint proposal_decision_whole check (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
 		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
 	constraint proposal_payload check ((
-		(kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		(kind in ('file_to_deal', 'possible_new_deal') and activity_kind = 'email'
+			and (kind <> 'file_to_deal' or deal_id is not null)
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		or (kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'phase_move' and deal_id is not null and to_phase is not null
 			and from_phase is distinct from to_phase and (to_phase <> 'dead' or reason is not null)
 			and num_nonnulls(what, owner_party_id, due_on, from_stage, to_stage, how_found, strength) = 0)
@@ -1221,6 +1227,20 @@ begin
 		end if;
 		insert into deal_phase_change (deal_id, happened_at, phase, reason)
 		values (new.deal_id, new.decided_at, new.to_phase, new.reason);
+	when 'file_to_deal', 'possible_new_deal' then
+		new.filed_deal_id := coalesce(new.filed_deal_id, new.deal_id);
+		perform from deal where id = new.filed_deal_id for update;
+		select phase into current_phase from deal_phase_change where deal_id = new.filed_deal_id order by happened_at desc limit 1;
+		if new.filed_deal_id is null or current_phase in ('closed', 'dead') then
+			raise exception 'filing needs an open deal' using errcode = 'check_violation', constraint = 'proposal_filing_open_deal';
+		end if;
+		if new.filing_reason is null and (exists (select from activity_about where activity_id = new.activity_id
+			and deal_id <> new.filed_deal_id) or not exists (select from deal_party d join activity_about a on a.party_id = d.party_id
+			where d.deal_id = new.filed_deal_id and d.role = 'client' and a.activity_id = new.activity_id)) then
+			raise exception 'a corrected filing needs a reason' using errcode = 'check_violation', constraint = 'proposal_filing_reason';
+		end if;
+		delete from activity_about where activity_id = new.activity_id and deal_id <> new.filed_deal_id;
+		insert into activity_about (activity_id, deal_id) values (new.activity_id, new.filed_deal_id) on conflict do nothing;
 	when 'new_lead' then
 		update party set how_found = coalesce(how_found, new.how_found) where id = new.party_id;
 		insert into party_role (party_id, role, stage) values (new.party_id, 'lead', new.to_stage);
@@ -1231,7 +1251,7 @@ begin
 	return new;
 end $$;
 
-create trigger decide_proposal before insert or update of status on proposal
+create trigger decide_proposal before insert or update of status, filed_deal_id, filing_reason on proposal
 	for each row execute function decide_proposal();
 
 -- A job's reply to one email, which its owner's mailbox sends. An outreach draft is apart: a user sends it by hand.
@@ -3075,7 +3095,7 @@ grant update (status, client_type) on client to engine;
 grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
-grant update (status) on proposal to engine;
+grant update (status, filed_deal_id, filing_reason) on proposal to engine;
 grant update (subject, body, status, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason)
 	on reply_draft to engine;
 

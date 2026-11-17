@@ -6,6 +6,10 @@ import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
 const HINTS = {
+	phase_not_eligible:
+		"The quote does not support a move from the current phase.",
+	already_decided: "This suggestion has already been decided.",
+	user_decides: "A partner must decide this suggestion directly.",
 	not_mailbox_owner: "Use the mailbox owner identity.",
 	draft_changed: "Read the draft again before recording delivery.",
 	already_sent: "This draft already has a sent message.",
