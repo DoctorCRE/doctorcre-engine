@@ -37,7 +37,7 @@ const payment = (
 	amount: string,
 	dates = "null, null, null",
 ) =>
-	`('${id(n)}', '${id(deal)}', '${status}', ${amount}, ${dates}, '2025-01-01', '2025-02-01', '${id(1)}')`;
+	`('${id(n)}', '${id(deal)}', '${status}', ${amount}, ${dates}, '${n === 100 ? "2024-12-01" : "2025-01-01"}', '${n === 103 ? "2025-03-01" : "2025-02-01"}', '${id(1)}', ${n === 103 ? `'${id(2)}'` : "null"})`;
 let report: pg.QueryResultRow[];
 before(async () => {
 	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
@@ -67,7 +67,7 @@ before(async () => {
  update public.deal set owner = 'partner_two' where id = '${id(16)}';
  update public.deal set owner = null where id = '${id(21)}';
  update public.deal set sf_commission_placeholder = 9876 where id = '${id(22)}';
- insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by) values
+ insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by, updated_by) values
  ${[
 		payment(100, 10, "expected", "100"),
 		payment(101, 10, "expected", "200"),
@@ -96,7 +96,6 @@ before(async () => {
 	await db.query("begin");
 	await db.query(await sql("copy-deals.sql"));
 	await db.query("commit");
-	// A copied deal's mapping can point to a different id.
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into deal (id, name, owner_user_id) values ('${id(99)}', 'Example mapped deal', '${id(1)}');
  update outside_id set deal_id = '${id(99)}' where source = 'old_system' and value = '${id(20)}'; commit;`);
@@ -119,16 +118,16 @@ test("expected rows add to the estimate and other rows add to gross as separate 
 				expected: "300.00",
 				gross: "200.00",
 				closing_share: null,
-				created_at: "2025-01-01 00:00:00+00",
-				changed_at: "2025-02-01 00:00:00+00",
-				changed_by_user_id: id(1),
+				created_at: "2024-12-01 00:00:00+00",
+				changed_at: "2025-03-01 00:00:00+00",
+				changed_by_user_id: id(2),
 			},
 		],
 	);
 	// biome-ignore format: one row per payment
 	assert.deepEqual((await rows(`select id, amount, invoiced_on::text, due_on::text, received_on::text, created_at::text, changed_at::text, changed_by_user_id from commission_payment where deal_id = '${id(10)}' order by id`)).map(Object.values), [
  [id(102),'120.00','2025-01-01','2025-02-01',null,'2025-01-01 00:00:00+00','2025-02-01 00:00:00+00',id(1)],
- [id(103),'80.00','2025-01-01','2025-02-01','2025-01-15','2025-01-01 00:00:00+00','2025-02-01 00:00:00+00',id(1)],
+ [id(103),'80.00','2025-01-01','2025-02-01','2025-01-15','2025-01-01 00:00:00+00','2025-03-01 00:00:00+00',id(2)],
  ]);
 	assert.deepEqual(
 		await rows(
@@ -266,7 +265,7 @@ test("receipt order, gross overflow and unmapped authors are listed, with origin
 	await db.query("begin; select set_config('engine.job', 'old_system', true)");
 	try {
 		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(7)}', 'example_missing', 'human', 'Example Missing');
- insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by) values
+ insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by, updated_by) values
  ${payment(190, 19, "received", "10", "'2025-02-01', null, '2025-01-01'")};
  update public.commission set updated_by = '${id(7)}' where id = '${id(160)}';
  update public.commission set gross_amount = 999999999999.99 where id in ('${id(102)}','${id(103)}');`);
