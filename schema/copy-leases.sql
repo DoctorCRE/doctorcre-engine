@@ -1,11 +1,9 @@
--- Load copy-attribution.sql after next.sql first. Run after copy-deals.sql, in a separate transaction, with search_path set to the new schema.
+-- Load copy-attribution.sql after next.sql first. Run after copy-deals.sql and copy-buildings.sql, in a separate transaction, with search_path set to the new schema.
 -- Only reads public. A lease keeps its first old row's id and each version its own, so a repeat adds only new amendments.
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
-alter table property disable trigger stamp_change;
 alter table document disable trigger stamp_change;
 alter table lease disable trigger stamp_change;
 alter table lease_version disable trigger stamp_change;
-alter table suite disable trigger stamp_change;
 alter table lease_suite disable trigger stamp_change;
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
@@ -59,6 +57,8 @@ cross join lateral (values
  ('premises_id', v.premises_id::text, 'no_property', v.properties = 0),
  ('premises_id', v.premises_id::text, 'several_properties', v.properties > 1),
  ('premises_id', v.premises_id::text, 'building_merge_unresolved', v.unresolved > 0),
+ ('premises_id', v.premises_id::text, 'property_not_copied', v.properties = 1
+  and not exists (select from property p where p.id = v.property_id)),
  ('premises_id', v.premises_id::text, 'property_not_on_deal', d.id is not null and v.properties = 1
   and not exists (select from deal_property p where (p.deal_id, p.property_id) = (v.deal_id, v.property_id))),
  ('supersedes_lease_id', v.supersedes_lease_id::text, 'version_changes_lease',
@@ -90,17 +90,6 @@ create temp table copyable on commit drop as
 select * from old_version v where not v.copied
  and not exists (select from version_refusal r where r.lease_id = v.lease_id and r.new_version <= v.new_version);
 
--- A lease negotiated elsewhere names a building no deal copied.
-insert into property (id, address, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select b.id, concat_ws(', ', b.address, nullif(b.city, ''), nullif(b.state, ''), nullif(b.zip, '')),
- b.created_at, b.updated_at, a.* from public.building b
-cross join lateral copy_attribution('building', b.id, b.updated_by) a
-where exists (select from copyable c where c.property_id = b.id) on conflict (id) do nothing;
-insert into not_copied
-select b.id, 'property', remaining.value::text, 'unmapped_building_fields' from public.building b
-cross join lateral (select jsonb_strip_nulls(to_jsonb(b) - array['id', 'address', 'city', 'state', 'zip',
- 'created_at', 'created_by', 'updated_at', 'updated_by', 'merged_into', 'version']) as value) remaining
-where remaining.value <> '{}'::jsonb and exists (select from copyable c where c.property_id = b.id and c.deal_id is null);
 -- Filed to its deal later, by the deal-file copy, which knows each file's kind.
 insert into document (id, created_at, name, r2_bucket, r2_key, content_type, sha256, bytes,
  changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
@@ -126,7 +115,7 @@ select v.id, v.created_at, v.lease_id, v.new_version, n.id, v.executed_on, v.com
  v.updated_at, v.changed_by_user_id, v.changed_by_job, v.changed_for_user_id
 from copyable v join document n on (n.r2_bucket, n.r2_key) = ('deal_documents', v.r2_key);
 
--- Every copied version still on its lease covers the spaces its premises link, each a suite in its lease's building.
+-- Every copied version still on its lease links the suites its premises cover in its lease's building.
 create temp table version_space on commit drop as
 select n.id as lease_version_id, n.lease_id, l.property_id, ps.space_id, m.id as space_property_id,
  n.created_at, n.changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id
@@ -134,25 +123,6 @@ from old_version v join lease_version n on (n.id, n.lease_id, n.version) = (v.id
 join lease l on l.id = n.lease_id join public.premises_space ps on ps.premises_id = v.premises_id
 join public.space s on s.id = ps.space_id left join building_map m on m.old_id = s.building_id
 where not exists (select from version_refusal r where r.lease_id = v.lease_id and r.new_version <= v.new_version);
-create temp table old_suite on commit drop as
-select s.*, m.id as property_id, case when btrim(s.suite) ~ '\S' then btrim(s.suite) end as label, a.*
-from public.space s join building_map m on m.old_id = s.building_id
-cross join lateral copy_attribution('space', s.id, s.updated_by) a
-where s.id in (select space_id from version_space where space_property_id = property_id)
- and not exists (select from suite n where (n.id, n.property_id) = (s.id, m.id));
-create temp table suite_refusal on commit drop as
-select s.id, f.field, f.value, f.reason from old_suite s cross join lateral (values
- ('id', s.id::text, 'suite_id_taken', exists (select from suite n where n.id = s.id)),
- ('suite', s.label, 'duplicate_suite_label', exists (select from suite n where (n.property_id, n.label) = (s.property_id, s.label))
-  or exists (select from public.space o join building_map m on m.old_id = o.building_id
-  where m.id = s.property_id and btrim(o.suite) = s.label and o.id <> s.id))) f(field, value, reason, refused)
-where f.refused;
-insert into not_copied select * from suite_refusal;
-insert into suite (id, created_at, property_id, label, floor, area_sf, area_basis, condition,
- changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select id, created_at, property_id, label, floor, area_amount, area_basis, case when condition ~ '\S' then condition end,
- updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
-from old_suite s where not exists (select from suite_refusal r where r.id = s.id);
 insert into lease_suite (lease_version_id, lease_id, property_id, suite_id, created_at,
  changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select v.lease_version_id, v.lease_id, v.property_id, v.space_id, v.created_at,
@@ -171,10 +141,8 @@ from old_version l join lease_version n on (n.id, n.lease_id, n.version) = (l.id
 cross join lateral (select jsonb_strip_nulls(jsonb_build_object('source', l.source, 'evidence_kind', l.evidence_kind,
  'evidence_ref', l.evidence_ref, 'status', case when l.status = 'legacy_unverified' then l.status end)) as value) f
 where f.value <> '{}'::jsonb;
-alter table property enable trigger stamp_change;
 alter table document enable trigger stamp_change;
 alter table lease enable trigger stamp_change;
 alter table lease_version enable trigger stamp_change;
-alter table suite enable trigger stamp_change;
 alter table lease_suite enable trigger stamp_change;
 select * from not_copied order by old_id, field, value, reason;
