@@ -38,7 +38,7 @@ const search = (n: number, spec: object, deal = id(10)) =>
 	);
 const saved = (n: number, criteria: object, status = "saved") =>
 	db.query(
-		`insert into ops.deal_space_search (id, deal_id, name, criteria, requirements, status, updated_at) values ($1,$2,'Example search',$3,'Near transit',$4,'2025-02-01')`,
+		`insert into ops.deal_space_search (id, organization_tenant_id, deal_id, name, criteria, requirements, status, updated_at) values ($1,'example-tenant',$2,'Example search',$3,'Near transit',$4,'2025-02-01')`,
 		[id(n), id(10), JSON.stringify(criteria), status],
 	);
 before(async () => {
@@ -67,7 +67,6 @@ before(async () => {
  insert into public.deal_type_ref (slug,label,sort) values ('lease','Example lease',1);
  insert into public.deal_phase (slug,label) values ('closed','Example closed');
  insert into public.deal (id,client_id,name,deal_type,phase,created_by,updated_by) values ('${id(10)}','${id(3)}','Example deal','lease','closed','${id(1)}','${id(1)}');
- create table ops.deal_space_search (id uuid primary key, deal_id uuid, name text, criteria jsonb, requirements text, status text, updated_at timestamptz);
  insert into public.deal_client_need (id,deal_id,vendor_id,description,applicability,source_ref,source_revision,observed_at,fresh_until,restriction,withdrawn,revision,approved_revision,approved_client_id,approved_by,approved_at,created_by,updated_by,updated_at) select v, '${id(10)}','${id(7)}','Example requirement','For this location','Example source','v1','2025-01-01','2099-01-01','allowed',false,1,1,'${id(3)}','${id(1)}','2025-01-02','${id(1)}','${id(1)}','2025-02-01'
  from unnest(array['${id(300)}'::uuid,'${id(301)}'::uuid,'${id(302)}'::uuid,'${id(303)}'::uuid,'${id(304)}'::uuid]) v;
  update public.deal_client_need set approved_revision = null, approved_client_id = null, approved_by = null, approved_at = null where id = '${id(301)}';
