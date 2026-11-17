@@ -178,7 +178,7 @@ const rolledBack = async (check: () => Promise<void>) => {
 		await db.query("rollback");
 	}
 };
-let report: unknown;
+let report: Awaited<ReturnType<typeof copy>>;
 
 before(async () => {
 	await admin.connect();
@@ -396,32 +396,37 @@ test("a second run copies only what is new, finds a record merged since through 
 	rolledBack(async () => {
 		const merged = `select set_config('engine.user_id', '${PARTNER}', true), merge_party('${id(17)}', '${id(16)}');
 			update specialty set label = 'Orthodontics' where slug = 'ortho';
-			${oldParty(20, { merged_into: id(17), email: "late@example.com" })}
+			${oldParty(20, { merged_into: id(17), email: "late@example.com", city: "Example City" })}
 			${oldParty(21, { npi: ` ${NPI} `, specialty: "ORTHO", ref: "P-0021" })}
 			${oldParty(22, { merged_into: id(17), specialty: "Example" })}
 			${oldParty(23, { merged_into: id(17), org_id: id(11) })}
 			${oldParty(24, { merged_into: id(17), notes_path: "notes/example-24.md" })}
-			${oldParty(28, { merged_into: id(17), title: "Example title" })}`;
+			${oldParty(28, { merged_into: id(17), title: "Example title" })}
+			${oldParty(29, { merged_into: id(17), contact_state: "do_not_contact", contact_state_reason: "Example stop" })}`;
+		const again = await copy(merged);
+		assert.ok(report);
+		// Merging 17 into 16 makes its vendor key belong to the record that already holds it.
+		assert.deepEqual(
+			again?.filter(
+				(row) => ![20, 21, 22, 23, 24, 28, 29].some((n) => row[0] === id(n)),
+			),
+			report.filter(
+				(row) => !(row[0] === id(17) && row[2] === "Vendors XLSX V-EX-001"),
+			),
+		);
 		// biome-ignore format: one row per value
-		assert.deepEqual(await copy(merged), [
-			[id(11), "record_source", "Old System X-EX-2", "a source the copy keeps for itself"],
-			[id(12), "record_source", "2024 import X-EX-1", "not an outside id"],
-			[id(12), "record_source", "client-roster-2  ", "not an outside id"],
-			[id(12), "record_source", "dup_candidate C-EX-001:C-EX-002", "a hint of a duplicate, not an id"],
-			[id(14), "party", "Example 14", "deleted"],
-			[id(14), "record_source", "lead-registry L-EX-001", "its record is not copied"],
-			[id(15), "party", "Example 15", "merged into a record not copied"],
-			[id(16), "record_source", "example-contacts K-EX-1", "no place in the new database"],
-			[id(17), "contact_state", "nurture", "its record has no lead role"],
-			[id(17), "record_source", "lead-registry L-EX-017", "its record is not copied"],
-			[id(20), "party", "Example 20", "merged into a record copied before, so of its values only its outside ids are copied"],
+		assert.deepEqual(again?.filter((row) => [20, 21, 22, 23, 24, 28, 29].some((n) => row[0] === id(n))), [
+			[id(20), "city", "Example City", "no place in the new database"],
+			[id(20), "email", "late@example.com", "its record does not hold this value"],
 			[id(21), "npi", ` ${NPI} `, `also held by ${id(10)}`],
-			[id(22), "party", "Example 22", "merged into a record copied before, so of its values only its outside ids are copied"],
-			[id(23), "party", "Example 23", "merged into a record copied before, so of its values only its outside ids are copied"],
-			[id(24), "party", "Example 24", "merged into a record copied before, so of its values only its outside ids are copied"],
-			[id(28), "party", "Example 28", "merged into a record copied before, so of its values only its outside ids are copied"],
-			[id(30), "record_source", "vendors.xlsx V-EX-030", "its record is not copied"],
+			[id(22), "specialty", "Example", "its record does not hold this specialty"],
+			[id(23), "org_id", id(11), "its record does not hold this company"],
+			[id(24), "notes_path", "notes/example-24.md", "no place in the new database"],
+			[id(28), "title", "Example title", "a title without a company"],
+			[id(29), "contact_state", "do_not_contact", "its record does not hold this restriction"],
 		]);
+		await db.query("discard temp");
+		assert.deepEqual(await copy(), again);
 		assert.deepEqual(
 			await rows(
 				`select value, party_id from outside_id where value in ('${id(17)}', '${id(20)}', '${id(21)}', 'P-0021') order by value`,
@@ -439,6 +444,136 @@ test("a second run copies only what is new, finds a record merged since through 
 			),
 			[{ slug: "ortho", label: "Orthodontics" }],
 		);
+	}));
+
+test("a late-merged title names the missing company link when its company was copied", () =>
+	rolledBack(async () => {
+		const first = await copy(
+			oldParty(70, {
+				merged_into: id(16),
+				org_id: id(11),
+				title: "Example Partner",
+			}),
+		);
+		assert.deepEqual(
+			first?.filter((row) => row[0] === id(70)),
+			[
+				[id(70), "org_id", id(11), "its record does not hold this company"],
+				[
+					id(70),
+					"title",
+					"Example Partner",
+					"its record does not hold this company",
+				],
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select id from party where id = '${id(11)}' and kind = 'company'`,
+			),
+			[{ id: id(11) }],
+		);
+		assert.deepEqual(
+			await rows(
+				`select * from party_company where person_id = '${id(16)}' and company_id = '${id(11)}'`,
+			),
+			[],
+		);
+		await db.query("discard temp");
+		assert.deepEqual(await copy(), first);
+	}));
+
+test("a rerun lists the full unchanged correction list without changing copied rows", () =>
+	rolledBack(async () => {
+		const saved = async () => {
+			const state = [];
+			for (const table of [
+				"party",
+				"app_user",
+				"party_email",
+				"party_phone",
+				"do_not_contact",
+				"party_role",
+				"specialty",
+				"party_specialty",
+				"party_company",
+				"outside_id",
+				"change",
+			])
+				state.push(
+					await rows(`select * from ${table} t order by to_jsonb(t)::text`),
+				);
+			return state;
+		};
+		const before = await saved();
+		assert.deepEqual(await copy(), report);
+		await db.query("discard temp");
+		assert.deepEqual(await copy(), report);
+		assert.deepEqual(await saved(), before);
+	}));
+
+test("previously copied source claims cannot take an NPI from a newly copied survivor", () =>
+	rolledBack(async () => {
+		await copy(
+			oldParty(61, { npi: "9000000049" }) +
+				oldParty(60, {
+					merged_into: id(61),
+					npi: "9000000023",
+					created_at: "2020-01-01",
+				}),
+		);
+		await db.query("discard temp");
+		const copied = await copy(
+			oldParty(62, { npi: "9000000023" }) +
+				`update public.party set merged_into = '${id(62)}' where id = '${id(61)}';`,
+		);
+		assert.deepEqual(
+			await rows(`select npi from party where id = '${id(62)}'`),
+			[{ npi: "9000000023" }],
+		);
+		await db.query("discard temp");
+		assert.deepEqual(await copy(), copied);
+	}));
+
+test("an unassigned competing NPI keeps the same correction reason on a rerun", () =>
+	rolledBack(async () => {
+		const first = await copy(
+			oldParty(50, { npi: "9000000049", created_at: "2020-01-01" }) +
+				oldParty(51, {
+					merged_into: id(50),
+					npi: "9000000023",
+					created_at: "2020-01-02",
+				}) +
+				oldParty(52, { npi: "9000000023", created_at: "2020-01-03" }),
+		);
+		assert.ok(
+			first?.some(
+				(row) => row[0] === id(52) && row[3] === `also held by ${id(50)}`,
+			),
+		);
+		await db.query("discard temp");
+		assert.deepEqual(await copy(), first);
+	}));
+
+test("a mapped record relists a changed reference without copying it again", () =>
+	rolledBack(async () => {
+		const first = await copy(
+			`update public.party set ref = 'P-EX-CHANGED' where id = '${id(10)}';`,
+		);
+		assert.ok(
+			first?.some(
+				(row) =>
+					row[0] === id(10) &&
+					row[1] === "ref" &&
+					row[3] === "its record does not hold this outside id",
+			),
+		);
+		assert.deepEqual(
+			await rows("select * from outside_id where value = 'P-EX-CHANGED'"),
+			[],
+		);
+		await db.query("discard temp");
+		assert.deepEqual(await copy(), first);
 	}));
 
 test("after the copy, a change is stamped with who made it again", () =>
