@@ -2470,7 +2470,6 @@ const CHANGEABLE: Record<string, string[]> = {
 	next_step: [
 		"done_at",
 		"due_on",
-		"hold_until",
 		"owner_party_id",
 		"resolution",
 		"resolution_reason",
@@ -2500,6 +2499,7 @@ const DEFAULTED: Record<string, string[]> = {
 		"changed_by_job",
 		"changed_by_user_id",
 		"changed_for_user_id",
+		"hold_until",
 		"resolution_event_id",
 		"status",
 	],
@@ -3130,23 +3130,29 @@ test("ended next steps retain evidence and stay off Home even with marks", async
 
 test("a held step stays off Home until its hold day in Central time and stays on its deal", async () => {
 	await rolledBack(async () => {
-		const today = "(now() at time zone 'America/Chicago')::date";
-		await db.query(`update next_step set hold_until = ${today} + 1 where id = '${id(400)}';
-			update next_step set hold_until = ${today} where id = '${id(402)}'`);
-		// At every hour, one of these zones is on a different day from Central time.
-		for (const zone of ["Pacific/Kiritimati", "Etc/GMT+12"]) {
-			await db.query(`set local time zone '${zone}'`);
+		const definition: string = (
+			await db.query("select pg_get_viewdef('home_next_step') as sql")
+		).rows[0].sql;
+		// Each instant is late on a Central day while UTC is already on the next one.
+		for (const [instant, centralDay] of [
+			["2001-01-16 05:30Z", "2001-01-15"],
+			["2001-07-16 04:30Z", "2001-07-15"],
+		] as const) {
+			await db.query(`set local role none;
+				update next_step set hold_until = date '${centralDay}' + 1 where id = '${id(400)}';
+				update next_step set hold_until = '${centralDay}' where id = '${id(402)}';
+				set local role engine`);
+			const home = definition.replaceAll("now()", `'${instant}'::timestamptz`);
 			assert.deepEqual(
-				(await db.query("select id from home_next_step")).rows,
-				[{ id: id(402) }],
-				zone,
+				(await db.query<{ id: string }>(home)).rows.map((r) => r.id),
+				[id(402)],
+				instant,
 			);
 		}
 		const held = (await readDeal()).next_steps.find(
 			(s: { id: string }) => s.id === id(400),
 		);
-		const tomorrow = await db.query(`select (${today} + 1)::text as day`);
-		assert.equal(held.hold_until, tomorrow.rows[0].day);
+		assert.equal(held.hold_until, "2001-07-16");
 	});
 });
 
