@@ -161,6 +161,7 @@ test("copies field evidence for every supported record kind without replay or in
 	);
 	await event(107, "party", 10, "name", 2);
 	await event(108, "party", 10, "name", 5, "partner_one");
+	await event(109, "party", 10, "name", 1, "missing");
 	await db.query(
 		`update public.event set cause = 'ingest_email' where id = '${id(108)}'`,
 	);
@@ -201,6 +202,14 @@ test("copies field evidence for every supported record kind without replay or in
 			`select old_value_absent, new_value_absent from imported_change where id = '${id(106)}'`,
 		),
 		[{ old_value_absent: true, new_value_absent: false }],
+	);
+	assert.equal(
+		(
+			await rows(
+				`select changed_by_user_id from imported_change where id = '${id(109)}'`,
+			)
+		)[0].changed_by_user_id,
+		id(1),
 	);
 	const imported = await rows("select * from imported_change order by id");
 	await db.query("set time zone 'America/Chicago'");
@@ -343,4 +352,11 @@ test("an owner erase removes imported words and cannot be undone by a copy or re
 		erased,
 	);
 	assert.deepEqual(await rows("select * from change order by id"), history);
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ insert into party_role (party_id,role) values ('${id(10)}','vendor'); commit`);
+	assert.deepEqual(await run(), []);
+	assert.deepEqual(
+		await rows("select * from imported_change order by id"),
+		erased,
+	);
 });
