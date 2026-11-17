@@ -1,15 +1,9 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
 
 // The order "Running the copies" in docs/new-database.md names, with the inputs the owner supplies to each.
 const order: [file: string, input?: string][] = [
@@ -218,17 +212,9 @@ insert into ops.meeting_action_revision values ('${id(112)}', '${id(110)}', 1, 1
  '{"verb": "set-next-action", "args": {"ref": "${id(30)}", "description": "Example planning step"}}', 'tentative_discussion', 'participant', '${id(1)}', '2023-01-01 02:00Z');
 `;
 
-const name = `copy_all_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) => (await db.query(sql)).rows;
-const scripts = await Promise.all(order.map(([file]) => read(file)));
+const scripts = await Promise.all(order.map(([file]) => readSchema(file)));
 
 // Each copy runs in its own owner transaction and ends with its correction list.
 // A copy that runs twice in the order lists, the second time, what still waits after the copies between.
@@ -266,23 +252,11 @@ const everything = async () => {
 
 let first: unknown[][];
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	const [schema, attribution] = await Promise.all([
-		read("next.sql"),
-		read("copy-attribution.sql"),
-	]);
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; ${OLD} commit;`);
 	first = await runAll();
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 const counts = async () =>
 	Object.fromEntries(
