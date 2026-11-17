@@ -671,7 +671,7 @@ test("round collisions, ambiguous roles and untyped terms are listed without abo
 });
 
 test("merge loops terminate and list each affected building once, only for copied deals", async () => {
-	await db.query("begin; set local statement_timeout = '2s'");
+	await db.query("begin");
 	try {
 		await db.query(`update public.building set merged_into = '${id(91)}' where id = '${id(90)}';
  update public.building set merged_into = '${id(90)}' where id = '${id(91)}';
@@ -679,6 +679,15 @@ test("merge loops terminate and list each affected building once, only for copie
  insert into public.space (id, building_id, created_by, updated_by) values ('${id(98)}', '${id(89)}', '${id(1)}', '${id(1)}');
  insert into public.premises (id, deal_id, label, created_by) values ('${id(96)}', '${id(10)}', 'Example duplicate', '${id(1)}'), ('${id(97)}', '${id(22)}', 'Example refused', '${id(1)}');
  insert into public.premises_space values ('${id(96)}', '${id(92)}'), ('${id(97)}', '${id(98)}');`);
+		const chain = copy.match(
+			/create temp table building_map on commit drop as\n(with recursive chain as \([\s\S]*?\n\))/,
+		)?.[1];
+		assert.ok(chain);
+		// Three starts and two merge steps exhaust these loops; a sixth row means a revisit.
+		assert.equal(
+			(await rows(`${chain} select old_id, id from chain limit 6`)).length,
+			5,
+		);
 		assert.deepEqual(
 			(await run())
 				.filter((r) => r.reason === "building_merge_unresolved")
