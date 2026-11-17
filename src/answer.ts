@@ -33,6 +33,8 @@ const HINTS = {
 		"Supply a UUID as idempotency_key and reuse it only for the same action.",
 	key_reuse: "Use a fresh idempotency_key for changed arguments.",
 	version_conflict: "Re-read the record and ask the human before retrying.",
+	old_system_required:
+		"The engine does not finish this save. Send it to the old system unchanged.",
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
 	unknown_owner: "Owner is one of joe, dell or claude.",
 	field_required:
@@ -45,7 +47,7 @@ const HINTS = {
 };
 
 export class Refusal {
-	readonly status: 400 | 403 | 404 | 409 | 422 | 500 | 503;
+	readonly status: 400 | 403 | 404 | 409 | 422 | 500 | 501 | 503;
 	readonly error: keyof typeof HINTS;
 	readonly extra: Record<string, unknown>;
 	constructor(

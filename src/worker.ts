@@ -12,6 +12,7 @@ import {
 import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
+import { dealUpdate } from "./deal-update.ts";
 import { deals } from "./deals/routes.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
@@ -51,6 +52,7 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", deals)
 	.route("/", dealField)
 	.route("/", dealClosing)
+	.route("/", dealUpdate)
 	.route("/", invoices)
 	.route("/", leads)
 	.route("/", nextStep)
