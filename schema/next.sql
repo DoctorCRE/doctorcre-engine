@@ -1139,7 +1139,7 @@ create table home_mark (
 create table proposal (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
-	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move')),
+	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move', 'file_to_deal', 'possible_new_deal')),
 	activity_id uuid not null,
 	activity_kind text not null check (activity_kind in ('email', 'call', 'meeting')),
 	evidence text not null check (evidence ~ '\S'),
@@ -1165,12 +1165,18 @@ create table proposal (
 	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
 	foreign key (lead_role, from_stage) references stage (role, slug),
 	foreign key (lead_role, to_stage) references stage (role, slug),
-	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
+	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = case when kind = 'possible_new_deal' then 0 else 1 end),
+	filed_deal_id uuid references deal,
+	filing_reason text check (filing_reason ~ '\S'),
+	constraint proposal_filing_decision check ((filed_deal_id is null and filing_reason is null) or (status = 'accepted' and kind in ('file_to_deal', 'possible_new_deal'))),
 	constraint proposal_decision_whole check (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
 		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
 	constraint proposal_payload check ((
-		(kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		(kind in ('file_to_deal', 'possible_new_deal') and activity_kind = 'email'
+			and (kind <> 'file_to_deal' or deal_id is not null)
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		or (kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'phase_move' and deal_id is not null and to_phase is not null
 			and from_phase is distinct from to_phase and (to_phase <> 'dead' or reason is not null)
 			and num_nonnulls(what, owner_party_id, due_on, from_stage, to_stage, how_found, strength) = 0)
@@ -1221,6 +1227,20 @@ begin
 		end if;
 		insert into deal_phase_change (deal_id, happened_at, phase, reason)
 		values (new.deal_id, new.decided_at, new.to_phase, new.reason);
+	when 'file_to_deal', 'possible_new_deal' then
+		new.filed_deal_id := coalesce(new.filed_deal_id, new.deal_id);
+		perform from deal where id = new.filed_deal_id for update;
+		select phase into current_phase from deal_phase_change where deal_id = new.filed_deal_id order by happened_at desc limit 1;
+		if new.filed_deal_id is null or current_phase in ('closed', 'dead') then
+			raise exception 'filing needs an open deal' using errcode = 'check_violation', constraint = 'proposal_filing_open_deal';
+		end if;
+		if new.filing_reason is null and (exists (select from activity_about where activity_id = new.activity_id
+			and deal_id <> new.filed_deal_id) or not exists (select from deal_party d join activity_about a on a.party_id = d.party_id
+			where d.deal_id = new.filed_deal_id and d.role = 'client' and a.activity_id = new.activity_id)) then
+			raise exception 'a corrected filing needs a reason' using errcode = 'check_violation', constraint = 'proposal_filing_reason';
+		end if;
+		delete from activity_about where activity_id = new.activity_id and deal_id <> new.filed_deal_id;
+		insert into activity_about (activity_id, deal_id) values (new.activity_id, new.filed_deal_id) on conflict do nothing;
 	when 'new_lead' then
 		update party set how_found = coalesce(how_found, new.how_found) where id = new.party_id;
 		insert into party_role (party_id, role, stage) values (new.party_id, 'lead', new.to_stage);
@@ -1231,7 +1251,7 @@ begin
 	return new;
 end $$;
 
-create trigger decide_proposal before insert or update of status on proposal
+create trigger decide_proposal before insert or update of status, filed_deal_id, filing_reason on proposal
 	for each row execute function decide_proposal();
 
 -- A job's reply to one email, which its owner's mailbox sends. An outreach draft is apart: a user sends it by hand.
@@ -1327,14 +1347,15 @@ create table document (
 	name text not null,
 	r2_key text not null check (r2_key ~ '\S'),
 	r2_bucket text not null default 'post_media' check (r2_bucket in ('post_media', 'deal_documents')),
-	unique (r2_bucket, r2_key),
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
-	email_activity_id uuid references email,
 	-- A partner's note on a prepared file.
 	note text check (note ~ '\S'),
 	unique (id, content_type)
 );
+
+create unique index document_r2_bucket_r2_key_key on document (r2_bucket, r2_key)
+	where r2_bucket <> 'deal_documents' or r2_key not like 'sha256/%';
 
 create table document_kind (slug text primary key, label text not null);
 
@@ -1356,6 +1377,16 @@ alter table document
 	add constraint document_version_has_predecessor check ((version = 1) = (supersedes_id is null)),
 	add constraint document_previous_version foreign key (supersedes_id, deal_id, kind, previous_version)
 		references document (id, deal_id, kind, version);
+
+create unique index document_deal_hash on document (deal_id, sha256)
+	where r2_bucket = 'deal_documents' and r2_key like 'sha256/%';
+
+create table email_document (
+	email_activity_id uuid not null references email,
+	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
+	primary key (email_activity_id, document_id)
+);
 
 create function document_filed_once() returns trigger
 language plpgsql as $$
@@ -1828,7 +1859,8 @@ begin atomic
 	select to_jsonb(a) - 'calendar_review_key' - 'calendar_review_user_id' || jsonb_build_object('email', (
 		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
-			from document doc where doc.email_activity_id = e.activity_id
+			from email_document ed join document doc on doc.id = ed.document_id
+			where ed.email_activity_id = e.activity_id
 		)) from email e where e.activity_id = a.id
 	));
 end;
@@ -2598,7 +2630,7 @@ begin
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'party_document',
+		'party_document', 'email_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'invoice_email', 'invoice_mailbox', 'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -3075,7 +3107,7 @@ grant update (status, client_type) on client to engine;
 grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
-grant update (status) on proposal to engine;
+grant update (status, filed_deal_id, filing_reason) on proposal to engine;
 grant update (subject, body, status, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason)
 	on reply_draft to engine;
 

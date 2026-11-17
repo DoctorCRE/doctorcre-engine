@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { filedEmails } from "./activity/filed-emails.ts";
 import { activityDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
+import { attachmentFiles, attachments } from "./attachments.ts";
 import { cadence } from "./cadence.ts";
 import { calendarDismissal, nextAgenda } from "./calendar/next-agenda.ts";
 import { calendar } from "./calendar/routes.ts";
@@ -26,8 +27,10 @@ import { nextStep } from "./next-step.ts";
 import { nextSteps } from "./next-steps.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
+import { proposalDecisions, proposalJobs } from "./proposals.ts";
 import { relationships } from "./relationships/routes.ts";
 import { replyJobs, replySubmissions } from "./reply-drafts.ts";
+import { routerQueue } from "./router-queue.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
@@ -74,9 +77,11 @@ app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", nextSteps);
+app.route("/api/engine", proposalDecisions);
 app.route("/api/engine", nextAgenda);
 app.route("/api/engine", calendarDismissal);
 app.route("/api/engine", activityDoor);
+app.route("/api/engine", attachmentFiles);
 app.route("/api/engine", replySubmissions);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
@@ -104,9 +109,13 @@ app.use(
 app.route("/jobs", cadence);
 app.route("/jobs", nextDeals);
 app.route("/jobs", nextSteps);
+app.route("/jobs", proposalJobs);
+app.route("/jobs", routerQueue);
 app.route("/jobs", nextAgenda);
 app.route("/jobs", activityDoor);
 app.route("/jobs", filedEmails);
+app.route("/jobs", attachmentFiles);
+app.route("/jobs", attachments);
 app.route("/jobs", replyJobs);
 
 export default app;

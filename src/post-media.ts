@@ -154,6 +154,29 @@ function judge(
 	return refused ? { refused } : { type };
 }
 
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+function judgeFile(
+	head: Uint8Array,
+): { type: string } | { refused: "unsupported_file" } {
+	if (ascii(head, 0, 5) === "%PDF-") return { type: "application/pdf" };
+	if (startsWith(head, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
+		return { type: "application/x-ole-storage" };
+	if (startsWith(head, [0x50, 0x4b, 3, 4])) {
+		const contents = latin1.decode(head);
+		for (const [entry, type] of [
+			["word/", "wordprocessingml.document"],
+			["xl/", "spreadsheetml.sheet"],
+			["ppt/", "presentationml.presentation"],
+		] as const)
+			if (contents.includes(entry))
+				return {
+					type: `application/vnd.openxmlformats-officedocument.${type}`,
+				};
+	}
+	return { refused: "unsupported_file" };
+}
+
 function mediaKey(documentId: string) {
 	if (!UUID.test(documentId)) throw new Error("a media key is a document id");
 	return documentId;
@@ -236,6 +259,64 @@ export async function storeMedia(
 		if (refused) return { refused };
 		throw error;
 	}
+}
+
+export async function storeFile(
+	bucket: {
+		head(key: string): Promise<{
+			size: number;
+			httpMetadata?: { contentType?: string };
+		} | null>;
+		put(
+			key: string,
+			body: ReadableStream<Uint8Array>,
+			options: {
+				httpMetadata: { contentType: string };
+				onlyIf: { etagDoesNotMatch: "*" };
+				sha256: string;
+			},
+		): Promise<object | null>;
+	},
+	sha256: string,
+	body: ReadableStream<Uint8Array>,
+	length: number,
+): Promise<
+	| { type: string | undefined; bytes: number; existing: boolean }
+	| { refused: "too_large" | "unsupported_file" | "sha256_mismatch" }
+> {
+	if (length > MAX_FILE_BYTES) return { refused: "too_large" };
+	const key = `sha256/${sha256}`;
+	let file = await bucket.head(key);
+	if (!file) {
+		const reader = body.getReader();
+		const head = await readHead(reader);
+		const judged = judgeFile(head);
+		if ("refused" in judged) return judged;
+		try {
+			const stored = await bucket.put(
+				key,
+				rejoined(head, reader).pipeThrough(new FixedLengthStream(length)),
+				{
+					httpMetadata: { contentType: judged.type },
+					onlyIf: { etagDoesNotMatch: "*" },
+					sha256,
+				},
+			);
+			if (stored) return { type: judged.type, bytes: length, existing: false };
+		} catch (error) {
+			// R2 code 10037 means the checksum did not match.
+			if (error instanceof Error && error.message.includes("10037"))
+				return { refused: "sha256_mismatch" };
+			throw error;
+		}
+		file = await bucket.head(key);
+		if (!file) throw new Error("R2 did not return the stored file");
+	}
+	return {
+		type: file.httpMetadata?.contentType,
+		bytes: file.size,
+		existing: true,
+	};
 }
 
 export type MediaSigner = {

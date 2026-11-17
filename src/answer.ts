@@ -6,6 +6,16 @@ import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
 const HINTS = {
+	phase_not_eligible:
+		"The quote does not support a move from the current phase.",
+	already_decided: "This suggestion has already been decided.",
+	user_decides: "A partner must decide this suggestion directly.",
+	length_required: "Supply the file length.",
+	too_large: "Use a smaller file.",
+	sha256_mismatch: "Use the hash of the uploaded bytes.",
+	unsupported_file: "Use a supported file type.",
+	email_not_stored: "Store the email before attaching its file.",
+	file_not_uploaded: "Upload the file before attaching it.",
 	not_mailbox_owner: "Use the mailbox owner identity.",
 	draft_changed: "Read the draft again before recording delivery.",
 	already_sent: "This draft already has a sent message.",
@@ -61,7 +71,7 @@ const HINTS = {
 };
 
 export class Refusal {
-	readonly status: 400 | 403 | 404 | 409 | 422 | 500 | 501 | 503;
+	readonly status: 400 | 403 | 404 | 409 | 411 | 422 | 500 | 501 | 503;
 	readonly error: keyof typeof HINTS;
 	readonly extra: Record<string, unknown>;
 	constructor(
