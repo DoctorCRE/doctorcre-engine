@@ -4,6 +4,7 @@ import { test } from "node:test";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
 import { PARTNERS } from "./clients/read.ts";
+import type { JsonValue } from "./database.d.ts";
 import { preparePatch } from "./deal-field-base.ts";
 import { runSave, SaveRefusal } from "./save.ts";
 
@@ -22,10 +23,7 @@ insert into deal (id,client_id,name,deal_type,phase,created_by,updated_by) value
 insert into participant_role (slug,label,side) values ('lead','Example','actor');
 insert into deal_participant (deal_id,actor_id,role,set_by) values ('${D}','${A}','lead','${A}');`;
 
-const save = (
-	url: string,
-	args: Record<string, import("./database.d.ts").JsonValue>,
-) =>
+const save = (url: string, args: Record<string, JsonValue>) =>
 	runSave(
 		url,
 		{
@@ -106,9 +104,12 @@ test("field bases validate exact cells and store the old conflict answer without
 					base_event_id: event,
 				},
 				{ occurred_on: "2020-01-01" },
-				{ value: "wrong" },
 				{ field: "operating_state", value: { state: "parked" } },
 				{ field: "operating_state", value: { state: "active", note: "x" } },
+				{
+					field: "operating_state",
+					value: { state: "active", reason: "other" },
+				},
 				{
 					field: "operating_state",
 					value: { state: "parked", reason: "other", note: "x".repeat(501) },
@@ -116,7 +117,41 @@ test("field bases validate exact cells and store the old conflict answer without
 			]) {
 				await assert.rejects(
 					save(url, { ...args, idempotency_key: randomUUID(), ...extra }),
-					SaveRefusal,
+					(error: unknown) => {
+						assert.ok(error instanceof SaveRefusal);
+						assert.deepEqual(
+							{ ...error.refusal },
+							{
+								status: 400,
+								error: "unhandled_verb_failure",
+								extra: {},
+							},
+						);
+						return true;
+					},
+				);
+			}
+			for (const extra of [
+				{ value: "wrong" },
+				{ value: 42 },
+				{ field: "operating_state", value: null },
+				{ field: "operating_state", value: [] },
+				{ field: "operating_state", value: { state: "wrong" } },
+			]) {
+				await assert.rejects(
+					save(url, { ...args, idempotency_key: randomUUID(), ...extra }),
+					(error: unknown) => {
+						assert.ok(error instanceof SaveRefusal);
+						assert.deepEqual(
+							{ ...error.refusal },
+							{
+								status: 400,
+								error: "database_refused_the_statement",
+								extra: {},
+							},
+						);
+						return true;
+					},
 				);
 			}
 			const disjoint = await save(url, {
@@ -155,7 +190,7 @@ test("crossed edits need only the existing writer column grants", () =>
 			);
 			await db.query(`create role ${role} login noinherit`);
 			await db.query(
-				`grant select on actor,event,deal,deal_conflict,v_ref_index to ${role}`,
+				`grant select on actor,event,deal_conflict,v_ref_index to ${role}`,
 			);
 			await db.query(
 				`grant select (idempotency_key,request_hash,response,created_at) on tool_call to ${role}`,
