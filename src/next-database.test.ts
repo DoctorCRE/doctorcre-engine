@@ -6310,6 +6310,7 @@ const UNDO_INVOICE = `update invoice_email set status = 'undone' where id = '${I
 
 // biome-ignore format: one row per refusal
 const INVOICE_REFUSALS: Case[] = [
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set invoiced_on = '2026-04-02' where id = '${INVOICE_PAYMENT}'; ${payment({id: id(983), invoiced_on: '2026-04-01'})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
 	...['evidence_ref', 'deal_name', 'client_name', 'property_address'].map((field): Case => [`${INVOICE_SETUP}; ${invoiceEmail({[field]: ' '})}`, `invoice_email_${field}_check`]),
 	[`${INVOICE_SETUP}; ${invoiceEmail({email_date: '2026-03-01'})}`, 'invoice_email_date_matches_time'],
 	[`${INVOICE_SETUP}; ${invoiceEmail({occurred_at: '-infinity'})}`, 'invoice_email_date_matches_time'],
@@ -6477,15 +6478,9 @@ for (const [name, held, job, blocks] of [
 		true,
 	],
 	[
-		"automatic matches hold membership facts",
+		"automatic invoice decisions do not lock unrelated parties",
 		`insert into party (kind, name) values ('company', 'Unrelated Example')`,
 		true,
-		true,
-	],
-	[
-		"user invoice decisions do not lock unrelated parties",
-		`insert into party (kind, name) values ('company', 'Unrelated Example')`,
-		false,
 		false,
 	],
 ] satisfies [string, string, boolean, boolean][]) {
@@ -6521,3 +6516,85 @@ for (const [name, held, job, blocks] of [
 		}
 	});
 }
+
+for (const status of ["applied", "undone"]) {
+	test(`imported ${status} invoices require every undo reference`, () =>
+		asOwner(
+			["prior_phase_at", "applied_phase_at", "payment_change_id"].map(
+				(field): Case => [
+					`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE};
+			alter table invoice_email disable trigger invoice_email_transition;
+			update invoice_email set status = '${status}', ${field} = null where id = '${INVOICE}'`,
+					"invoice_email_applied_whole",
+				],
+			),
+		));
+}
+
+test("the selected payment stays locked between the undo snapshot and date update", async () => {
+	const owner = await connect("none");
+	const writer = await connect();
+	const deal = id(984);
+	const paymentId = id(985);
+	try {
+		await owner.query(`insert into phase values ('closed', 'Closed') on conflict do nothing;
+			insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Payment Lock Deal', '${TEAMMATE}');
+			insert into commission (deal_id, gross) values ('${deal}', 1000);
+			${payment({ id: paymentId, deal_id: deal, amount: 500 })};
+			insert into deal_phase_change values ('${deal}', '2026-03-01', 'legal', 'Example prior phase');
+			${invoiceEmail({ deal_id: deal, payment_id: paymentId })};
+			create function pause_invoice_test() returns trigger language plpgsql as $$
+			begin perform pg_advisory_xact_lock(324980); return new; end $$;
+			create trigger pause_invoice_test before insert on deal_phase_change
+			for each row when (new.deal_id = '${deal}' and new.phase = 'closed') execute function pause_invoice_test()`);
+		await db.query("select pg_advisory_lock(324980)");
+		await writer.query("begin");
+		const writerPid = (await writer.query("select pg_backend_pid() as pid"))
+			.rows[0].pid;
+		const ownerPid = (await owner.query("select pg_backend_pid() as pid"))
+			.rows[0].pid;
+		let applied = false;
+		const applying = writer.query(APPLY_INVOICE).finally(() => {
+			applied = true;
+		});
+		let paused = false;
+		while (!applied && !paused)
+			paused = (
+				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+					writerPid,
+				])
+			).rows[0].blocked;
+		let edited = false;
+		const editing = owner
+			.query(
+				`update commission_payment set invoiced_on = '2026-03-31' where id = '${paymentId}'`,
+			)
+			.finally(() => {
+				edited = true;
+			});
+		let blocked = false;
+		while (!edited && !blocked)
+			blocked = (
+				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+					ownerPid,
+				])
+			).rows[0].blocked;
+		await db.query("select pg_advisory_unlock(324980)");
+		await applying;
+		await writer.query("rollback");
+		await editing;
+		assert.equal(paused, true);
+		assert.equal(blocked, true);
+	} finally {
+		await db.query("select pg_advisory_unlock(324980)");
+		await writer.query("rollback");
+		await owner.query(`drop trigger if exists pause_invoice_test on deal_phase_change;
+			drop function if exists pause_invoice_test();
+			delete from invoice_email where deal_id = '${deal}';
+			delete from deal_phase_change where deal_id = '${deal}';
+			delete from commission_payment where deal_id = '${deal}';
+			delete from commission where deal_id = '${deal}'; delete from deal where id = '${deal}'`);
+		await writer.end();
+		await owner.end();
+	}
+});

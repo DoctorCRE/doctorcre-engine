@@ -1909,7 +1909,7 @@ create table invoice_email (
 		and abs(email_date - (occurred_at at time zone 'UTC')::date) <= 1),
 	constraint invoice_email_target_whole check ((deal_id is null) = (payment_id is null)),
 	constraint invoice_email_applied_whole check (status = 'captured' or
-		(deal_id is not null and applied_phase_at is not null))
+		(deal_id is not null and prior_phase_at is not null and applied_phase_at is not null and payment_change_id is not null))
 );
 
 create view deal_invoiced as
@@ -1927,18 +1927,12 @@ declare
 	direct_user boolean := nullif(current_setting('engine.user_id', true), '') is not null
 		and nullif(current_setting('engine.job', true), '') is null;
 begin
-	if tg_op = 'INSERT' then return new; end if;
 	if old.status <> 'captured' and (new.deal_id, new.payment_id) is distinct from (old.deal_id, old.payment_id) then
 		raise exception 'an applied invoice keeps its target' using errcode = 'check_violation', constraint = 'invoice_email_keeps_target';
 	end if;
 	if old.status = 'captured' and new.status = 'captured' then return new; end if;
 	if not (old.status = 'captured' and new.status = 'applied' or old.status = 'applied' and new.status = 'undone' and direct_user) then
 		raise exception 'an invoice applies once and only a user undoes it' using errcode = 'check_violation', constraint = 'invoice_email_status_moves';
-	end if;
-	-- Matching facts and payment candidates stay fixed; user decisions and undo need only their own deal.
-	if new.status = 'applied' and not direct_user then
-		lock table party, property, deal_party, deal_property, deal in share mode;
-		lock table commission_payment in share row exclusive mode;
 	end if;
 	-- FOR UPDATE conflicts with the phase foreign key's KEY SHARE, so every phase writer takes turns with undo.
 	perform from deal where id = new.deal_id for update;
@@ -1977,7 +1971,6 @@ begin
 			and record = jsonb_build_object('id', new.payment_id) and (new_value ? 'invoiced_on');
 	else
 		if latest.happened_at is distinct from old.applied_phase_at
-			or payment.invoiced_on is distinct from old.email_date
 			or old.payment_change_id is distinct from (select max(id) from change where table_name = 'commission_payment'
 				and record = jsonb_build_object('id', new.payment_id) and new_value ? 'invoiced_on') then
 			raise exception 'newer work prevents undo' using errcode = 'check_violation', constraint = 'invoice_email_undo_current';
@@ -1990,7 +1983,7 @@ begin
 	return new;
 end $$;
 
-create trigger invoice_email_transition before insert or update on invoice_email
+create trigger invoice_email_transition before update on invoice_email
 	for each row execute function invoice_email_transition();
 
 -- Everything that points at the duplicate moves to the survivor, and the duplicate is removed (decision 39).
@@ -2165,6 +2158,8 @@ create table change (
 );
 
 alter table invoice_email add foreign key (payment_change_id) references change;
+create index change_payment_invoice_date on change (record, id desc)
+	where table_name = 'commission_payment' and new_value ? 'invoiced_on';
 
 -- The owner's rights, so the engine's login writes history only by changing a row.
 create function record_change() returns trigger
