@@ -65,25 +65,31 @@ before(async () => {
  insert into deal (id, name, owner_user_id) values ('${id(10)}', 'Example deal', '${id(1)}');
  insert into document_kind values ('other', 'Other');
  insert into document (id, name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind) values
- ${[20, 21, 23, 26].map((n) => file(n)).join(", ")}, ${file(24, null)};
+ ${[20, 21, 23, 26, 27, 28, 29].map((n) => file(n)).join(", ")}, ${file(24, null)};
  insert into document_extraction (id, document_id, deal_id, extracted_at, method, extractor_version, text_format_version, status, pages) values
  ('${id(46)}', '${id(23)}', '${id(10)}', '2025-05-01', 'text_layer', 'engine.v1', 'page-text.v2', 'produced', '{"Example engine page"}'),
- ('${id(50)}', '${id(26)}', '${id(10)}', '2025-05-01', 'text_layer', 'page-text.v1', 'page-text.v1', 'produced', '{"Example other page"}');
+ ('${id(50)}', '${id(26)}', '${id(10)}', '2025-05-01', 'text_layer', 'page-text.v1', 'page-text.v1', 'produced', '{"Example other page"}'),
+ ('${id(51)}', '${id(27)}', '${id(10)}', '2026-01-01', 'text_layer', 'page-text.v1', 'page-text.v1', 'produced', '{"Example same page"}');
+ insert into document_extraction (id, document_id, deal_id, extracted_at, method, extractor_version, text_format_version, status, pages, receipt) values
+ ('${id(47)}', '${id(20)}', '${id(10)}', '2025-04-02', 'legacy_fact_receipt', 'facts.v5', 'fact-receipt.v1', 'receipt_only', '{}',
+  '{"contract": {"extractor_version": "facts.v5"}, "receipt": {"abstentions": [], "example": 47}}');
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
  ('${id(2)}', 'claude', 'automation', 'Example agent');
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by) values
- ${[20, 21, 22, 23, 24, 25, 26].map((n) => attachment(n)).join(", ")};
+ ${[20, 21, 22, 23, 24, 25, 26, 27, 28, 29].map((n) => attachment(n)).join(", ")};
  update public.attachment set deleted_at = '2025-03-01' where id = '${id(25)}';
  insert into ops.deal_document_text (document_ref, entity_ref, content_hash, text_format_version, status, pages, text_hash, created_at) values
  ${text(20, "produced", ["Example page one", "", "Example page three"])}, ${text(21, "no_text", ["", " "])},
  ${text(22, "produced", ["Example uncopied page"])}, ${text(23, "unavailable", [])},
  ${text(23, "produced", ["Example stale page"], sha(99))}, ${text(24, "produced", ["Example lease page"])},
- ${text(25, "produced", ["Example deleted page"])}, ${text(26, "produced", ["Example different page"])};
+ ${text(25, "produced", ["Example deleted page"])}, ${text(26, "produced", ["Example different page"])},
+ ${text(27, "produced", ["Example same page"])}, ('${id(28)}', '${id(10)}', '${sha(28)}', 'page-text.v1', 'produced', '[123]', 'example-digest', '2025-03-01'),
+ ${text(29, "no_text", ["Example page"])};
  insert into ops.deal_extraction_job (id, organization_tenant_id, actor_id, entity_ref, document_ref, contract, content_hash, receipt, recorded_at) values
  ${job(40, 20, { extractor_version: "facts.v2", model: "example-model" }, 2)}, ${job(41, 20, { extractor_version: "facts.v1" })},
  ${job(42, 20, { extractor_version: "facts.v3" }, 1, sha(99))}, ${job(43, 20, { model: "example-model" })},
  ${job(44, 21, { extractor_version: "facts.v1" })}, ${job(45, 21, { extractor_version: "facts.v1" })},
- ${job(46, 20, { extractor_version: "facts.v4" })};
+ ${job(46, 20, { extractor_version: "facts.v4" })}, ${job(47, 20, { extractor_version: "facts.v5" })};
  commit;`);
 	report = await run();
 });
@@ -94,7 +100,8 @@ after(async () => {
 
 test("page texts become text-layer attempts on their file, keeping pages, status, format and time", async () => {
 	const copied = (await attempts()).filter(
-		(a) => a.method === "text_layer" && ![id(46), id(50)].includes(a.id),
+		(a) =>
+			a.method === "text_layer" && ![id(46), id(50), id(51)].includes(a.id),
 	);
 	assert.deepEqual(
 		copied.map(({ id: _, ...a }) => a),
@@ -156,7 +163,7 @@ test("page texts become text-layer attempts on their file, keeping pages, status
 
 test("fact jobs become receipt-only attempts keeping their id, actor, time, contract and receipt", async () => {
 	const receipts = (await attempts()).filter(
-		(a) => a.method === "legacy_fact_receipt",
+		(a) => a.method === "legacy_fact_receipt" && a.id !== id(47),
 	);
 	assert.deepEqual(
 		receipts.map((a) => [
@@ -215,6 +222,12 @@ test("texts and jobs that cannot find their file or identity are listed, never g
 		["attachment_deleted", "2025-03-01 00:00:00+00"],
 	]);
 	assert.deepEqual(listed(report, 26), [["extraction_conflict", id(26)]]);
+	assert.deepEqual(listed(report, 27), [["extraction_conflict", id(27)]]);
+	assert.deepEqual(listed(report, 28), [["pages_not_text", null]]);
+	assert.deepEqual(listed(report, 29), [
+		["text_refused", "document_extraction_status_matches_text"],
+	]);
+	assert.deepEqual(listed(report, 47), [["extraction_conflict", id(47)]]);
 	assert.deepEqual(listed(report, 42), [["hash_mismatch", sha(99)]]);
 	assert.deepEqual(listed(report, 43), [["contract_incomplete", null]]);
 	assert.deepEqual(listed(report, 44), [["extraction_conflict", id(44)]]);
@@ -229,11 +242,13 @@ test("texts and jobs that cannot find their file or identity are listed, never g
 		[
 			[id(20), "legacy_fact_receipt", "facts.v1", null],
 			[id(20), "legacy_fact_receipt", "facts.v2", null],
+			[id(20), "legacy_fact_receipt", "facts.v5", null],
 			[id(20), "text_layer", "page-text.v1", "Example page one"],
 			[id(21), "text_layer", "page-text.v1", ""],
 			[id(23), "text_layer", "engine.v1", "Example engine page"],
 			[id(23), "text_layer", "page-text.v1", null],
 			[id(26), "text_layer", "page-text.v1", "Example other page"],
+			[id(27), "text_layer", "page-text.v1", "Example same page"],
 		],
 	);
 });
