@@ -65,10 +65,12 @@ before(async () => {
  from unnest(array['${id(10)}'::uuid, '${id(11)}'::uuid, '${id(12)}'::uuid]) v;
  insert into public.building (id, address, city, state, zip, created_by, updated_by, updated_at) values
  ('${id(90)}', '100 Example Way', '', '', '', '${id(1)}', '${id(1)}', '2025-01-01'), ('${id(91)}', '200 Example Way', 'Example City', 'TX', '75000', '${id(1)}', '${id(1)}', '2025-01-02');
- insert into public.space (id, building_id, created_by, updated_by) values ('${id(92)}', '${id(90)}', '${id(1)}', '${id(1)}'), ('${id(93)}', '${id(91)}', '${id(1)}', '${id(1)}');
+ insert into public.space (id, building_id, suite, created_by, updated_by) values ('${id(92)}', '${id(90)}', ' Suite 100 ', '${id(1)}', '${id(1)}'),
+ ('${id(160)}', '${id(90)}', null, '${id(1)}', '${id(1)}'), ('${id(93)}', '${id(91)}', 'B1', '${id(1)}', '${id(1)}'), ('${id(163)}', '${id(91)}', 'B1', '${id(1)}', '${id(1)}');
+ update public.space set floor = 1, area_amount = 1200, area_basis = 'rentable', condition = 'Shell' where id = '${id(92)}';
  insert into public.premises (id, deal_id, label, created_by) values ('${id(94)}', '${id(10)}', 'Example', '${id(1)}'),
  ('${id(95)}', null, 'Example', '${id(1)}'), ('${id(96)}', null, 'Example', '${id(1)}');
- insert into public.premises_space values ('${id(94)}', '${id(92)}'), ('${id(95)}', '${id(93)}'), ('${id(96)}', '${id(92)}'), ('${id(96)}', '${id(93)}');
+ insert into public.premises_space values ('${id(94)}', '${id(92)}'), ('${id(94)}', '${id(160)}'), ('${id(95)}', '${id(93)}'), ('${id(96)}', '${id(92)}'), ('${id(96)}', '${id(93)}');
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by) values
  ${[200, 201, 202, 203, 204].map(file).join(", ")};
  ${lease(100, "deal_id, client_id, premises_id, doc_attachment, executed_on, commencement_on, expiration_on, rate_amount, rate_basis, term_months, ti_amount, free_rent_months, escalator, options_note, opex_structure, evidence_kind, evidence_ref, status, source", `'${id(10)}', '${id(3)}', '${id(94)}', '${id(200)}', '2024-12-01', '2025-02-01', '2030-01-31', 2, 'usd_sf_mo', 60, 20, 2, '3% each year', 'Two five-year renewals', 'NNN', 'executed_lease', 'Example lease file', 'superseded', 'stated'`)}
@@ -197,6 +199,31 @@ test("a lease negotiated elsewhere names only its tenant and building, and its e
 	);
 });
 
+test("each copied version covers its premises' spaces as suites, and a label shared in one building waits", async () => {
+	// biome-ignore format: one row per suite
+	assert.deepEqual((await rows("select id, property_id, label, floor, area_sf, area_basis, condition from suite order by id")).map(Object.values), [
+ [id(92), id(90), "Suite 100", 1, "1200.0", "rentable", "Shell"],
+ [id(160), id(90), null, null, null, null, null],
+ ]);
+	assert.deepEqual(
+		(
+			await rows(
+				"select lease_version_id, suite_id from lease_suite order by 1, 2",
+			)
+		).map(Object.values),
+		[
+			[id(100), id(92)],
+			[id(100), id(160)],
+			[id(101), id(92)],
+			[id(101), id(160)],
+		],
+	);
+	assert.deepEqual(reasons(report, 93), [
+		"suite_not_copied",
+		"duplicate_suite_label",
+	]);
+});
+
 test("leases that cannot map are listed with a reason, never invented", async () => {
 	assert.ok(reasons(report, 111).includes("several_properties"));
 	assert.ok(reasons(report, 112).includes("dates_out_of_order"));
@@ -214,7 +241,15 @@ test("leases that cannot map are listed with a reason, never invented", async ()
 });
 
 test("a repeat changes nothing", async () => {
-	const tables = ["lease", "lease_version", "document", "property", "change"];
+	const tables = [
+		"lease",
+		"lease_version",
+		"document",
+		"property",
+		"suite",
+		"lease_suite",
+		"change",
+	];
 	const snapshot = async () => {
 		const all = [];
 		for (const t of tables)
