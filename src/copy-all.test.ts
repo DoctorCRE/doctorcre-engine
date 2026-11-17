@@ -291,7 +291,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, lead_stage_move: 1, proposal: 4,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, email_document: 1, lead_stage_move: 1, proposal: 4,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
 const corrections = [
@@ -333,10 +333,8 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 		"a step suggested from a row of an email copied without a Message-ID cites that email",
 	);
 	assert.deepEqual(
-		await rows(
-			"select id, email_activity_id from document where email_activity_id is not null",
-		),
-		[{ id: id(52), email_activity_id: id(120) }],
+		await rows("select document_id, email_activity_id from email_document"),
+		[{ document_id: id(52), email_activity_id: id(120) }],
 		"a file names the email without a Message-ID it arrived with",
 	);
 	assert.deepEqual(first, corrections);

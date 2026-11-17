@@ -1347,14 +1347,15 @@ create table document (
 	name text not null,
 	r2_key text not null check (r2_key ~ '\S'),
 	r2_bucket text not null default 'post_media' check (r2_bucket in ('post_media', 'deal_documents')),
-	unique (r2_bucket, r2_key),
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
-	email_activity_id uuid references email,
 	-- A partner's note on a prepared file.
 	note text check (note ~ '\S'),
 	unique (id, content_type)
 );
+
+create unique index document_r2_bucket_r2_key_key on document (r2_bucket, r2_key)
+	where r2_bucket <> 'deal_documents' or r2_key not like 'sha256/%';
 
 create table document_kind (slug text primary key, label text not null);
 
@@ -1376,6 +1377,16 @@ alter table document
 	add constraint document_version_has_predecessor check ((version = 1) = (supersedes_id is null)),
 	add constraint document_previous_version foreign key (supersedes_id, deal_id, kind, previous_version)
 		references document (id, deal_id, kind, version);
+
+create unique index document_deal_hash on document (deal_id, sha256)
+	where r2_bucket = 'deal_documents' and r2_key like 'sha256/%';
+
+create table email_document (
+	email_activity_id uuid not null references email,
+	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
+	primary key (email_activity_id, document_id)
+);
 
 create function document_filed_once() returns trigger
 language plpgsql as $$
@@ -1848,7 +1859,8 @@ begin atomic
 	select to_jsonb(a) - 'calendar_review_key' - 'calendar_review_user_id' || jsonb_build_object('email', (
 		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
-			from document doc where doc.email_activity_id = e.activity_id
+			from email_document ed join document doc on doc.id = ed.document_id
+			where ed.email_activity_id = e.activity_id
 		)) from email e where e.activity_id = a.id
 	));
 end;
@@ -2618,7 +2630,7 @@ begin
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'party_document',
+		'party_document', 'email_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'invoice_email', 'invoice_mailbox', 'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,

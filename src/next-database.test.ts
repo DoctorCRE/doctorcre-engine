@@ -173,8 +173,6 @@ const rounds = ROUNDS.map(
 				previous_version: null,
 				sha256: null,
 				bytes: null,
-				// The counter arrived as an attachment to the agent's email.
-				email_activity_id: i === 1 ? EMAIL : null,
 				note: null,
 			},
 		],
@@ -560,6 +558,7 @@ const STAMPED = [
 	"document_extraction",
 	"document_kind",
 	"party_document",
+	"email_document",
 	"email",
 	"offer",
 	"offer_document",
@@ -1363,8 +1362,8 @@ const RULES: Record<string, Case[]> = {
 				"email_activity_id_activity_kind_fkey",
 			],
 			[
-				`insert into document (name, r2_key, email_activity_id) values ('Example.pdf', 'example/x.pdf', '${CALL}')`,
-				"document_email_activity_id_fkey",
+				`insert into email_document (email_activity_id, document_id) values ('${CALL}', '${id(201)}')`,
+				"email_document_email_activity_id_fkey",
 			],
 			[`${newEmail(id(303))}; ${CHECK_AT_COMMIT}`, "email_about_a_record"],
 			[
@@ -2757,8 +2756,8 @@ before(async () => {
 		);
 		for (const document of documents)
 			await db.query(
-				`with saved as (insert into document (id, name, r2_key, email_activity_id)
-					select id, name, r2_key, email_activity_id
+				`with saved as (insert into document (id, name, r2_key)
+					select id, name, r2_key
 					from jsonb_populate_record(null::document, $1) returning id)
 				insert into offer_document select $2, id from saved`,
 				[document, round.id],
@@ -2774,6 +2773,10 @@ before(async () => {
 				round.answers_round,
 			]);
 	}
+	await db.query(
+		"insert into email_document (email_activity_id, document_id) values ($1, $2)",
+		[EMAIL, id(201)],
+	);
 	await db.query("update offer set status = 'accepted' where round = 3");
 });
 
@@ -3130,9 +3133,11 @@ test("party activity is explicit, chronological and once per item with ordered e
 			insert into activity_about (activity_id, party_id) values
 			('${id(9061)}', '${SUBJECT}'), ('${id(9060)}', '${SUBJECT}');
 			insert into activity_about (activity_id, deal_id) values ('${id(9061)}', '${DEAL}');
-			insert into document (id, name, r2_key, email_activity_id) values
-			('${id(9064)}', 'Example file', 'party-read/second', '${id(9061)}'),
-			('${id(9063)}', 'Example file', 'party-read/first', '${id(9061)}')`);
+			insert into document (id, name, r2_key) values
+			('${id(9064)}', 'Example file', 'party-read/second'),
+			('${id(9063)}', 'Example file', 'party-read/first');
+			insert into email_document (email_activity_id, document_id) values
+			('${id(9061)}', '${id(9064)}'), ('${id(9061)}', '${id(9063)}')`);
 		const activity = (await readParty()).activity;
 		assert.deepEqual(
 			activity.map((a: { id: string }) => a.id),
@@ -7531,7 +7536,6 @@ for (const [field, value, code] of [
 	["created_at", "now() - interval '1 day'", "42501"],
 	["r2_key", "'example/changed'", "42501"],
 	["r2_bucket", "'deal_documents'", "42501"],
-	["email_activity_id", `'${EMAIL}'`, "42501"],
 	["version", "2", "42501"],
 	["supersedes_id", `'${id(8001)}'`, "42501"],
 ]) {
@@ -7914,7 +7918,7 @@ test("an email attachment is filed once without copying its R2 object", () =>
 			`update document set deal_id = '${DEAL}', kind = 'loi', content_type = 'application/pdf', sha256 = '${"a".repeat(64)}', bytes = 1024 where id = '${id(201)}'`,
 		);
 		const { rows } = await db.query(
-			`select deal_id, kind, r2_key, email_activity_id from document where id = '${id(201)}'`,
+			`select deal_id, kind, r2_key, email_activity_id from document join email_document on document_id = id where id = '${id(201)}'`,
 		);
 		assert.deepEqual(rows, [
 			{

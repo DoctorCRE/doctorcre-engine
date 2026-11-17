@@ -25,7 +25,10 @@ export function doorTest() {
 		);
 		await copy.setup();
 		await copy.db.query(
-			`create role ${writer} login; grant engine to ${writer}; create role ${reader} login; grant engine_reader to ${reader}`,
+			`create role ${writer} login; grant engine to ${writer}`,
+		);
+		await copy.db.query(
+			`create role ${reader} login; grant engine_reader to ${reader}`,
 		);
 	};
 	const cleanup = async () => {
@@ -63,22 +66,21 @@ export function doorTest() {
 		};
 	};
 
-	// A save at `path` under the caller's entrance, answered with its status and body.
-	const save = async (
+	const request = async (
 		caller: Caller,
 		path: string,
-		args: object,
-		method = "POST",
-	): Promise<[number, Body]> => {
+		init: RequestInit,
+		bindings: object = {},
+	): Promise<Response> => {
 		const user = "user" in caller ? caller.user : undefined;
 		const response = await worker.request(
 			`https://engine.example.test/${user ? "api/engine" : "jobs"}/${path}`,
 			{
-				method,
-				headers: await headers(caller),
-				...(method !== "GET" && { body: JSON.stringify(args) }),
+				...init,
+				headers: { ...(await headers(caller)), ...init.headers },
 			},
 			{
+				...bindings,
 				DATABASE_WRITER: { connectionString: login() },
 				DATABASE: { connectionString: login(reader) },
 				ACCESS_TEAM_DOMAIN: TEAM,
@@ -92,8 +94,20 @@ export function doorTest() {
 				},
 			},
 		);
-		return [response.status, await response.json()];
+		return response;
 	};
 
-	return { db: copy.db, setup, cleanup, save };
+	const save = async (
+		caller: Caller,
+		path: string,
+		args: object,
+		method = "POST",
+	): Promise<[number, Body]> => {
+		const response = await request(caller, path, {
+			method,
+			...(method !== "GET" && { body: JSON.stringify(args) }),
+		});
+		return [response.status, await response.json()];
+	};
+	return { db: copy.db, setup, cleanup, save, request };
 }
