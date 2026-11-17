@@ -21,8 +21,7 @@ function serverUrl() {
 	return url;
 }
 
-// A check runs a test process per CPU against a server shared by every
-// worktree, so no admin connection stays open while tests run (#241).
+// Parallel test processes need the connection slots while tests run (#241).
 export async function asAdmin(...statements: string[]) {
 	const url = serverUrl();
 	const admin = new pg.Client({ connectionString: url.href });
