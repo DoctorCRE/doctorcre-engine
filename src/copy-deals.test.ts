@@ -1135,30 +1135,21 @@ test("a verified market agent joins the deal and a name-only agent waits for rev
 				id(1),
 			],
 		]);
-		const source = (n: number) => ({
-			old_id: id(n),
-			field: "market_agent_source",
-			value: "Example source",
-			reason: "no_typed_destination",
-		});
 		const listed = (r: pg.QueryResultRow[]) =>
 			r.filter((row) => row.old_id >= id(410) && row.field !== "phase");
 		assert.deepEqual(listed(first), [
-			source(410),
 			{
 				old_id: id(411),
 				field: "market_agent",
 				value: "Example Agent",
 				reason: "agent_not_verified",
 			},
-			source(411),
 			{
 				old_id: id(412),
 				field: "deal_party",
 				value: `${id(412)} ${id(7)} market_agent`,
 				reason: "party_not_copied",
 			},
-			source(412),
 			{
 				old_id: id(413),
 				field: "deal",
@@ -1171,7 +1162,6 @@ test("a verified market agent joins the deal and a name-only agent waits for rev
 				value: `${id(413)} ${id(4)} market_agent`,
 				reason: "deal_not_copied",
 			},
-			source(413),
 		]);
 		const copied = await rows(agents);
 		assert.deepEqual(listed(await run()), listed(first));

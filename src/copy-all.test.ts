@@ -38,6 +38,7 @@ const order: [file: string, input?: string][] = [
 	["copy-vendors.sql"],
 	["copy-buildings.sql"],
 	["copy-deals.sql"],
+	["copy-market-agent-sources.sql"],
 	["copy-vendors.sql"],
 	["copy-leases.sql"],
 	["copy-critical-dates.sql"],
