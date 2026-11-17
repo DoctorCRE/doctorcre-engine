@@ -2540,6 +2540,7 @@ test("a person with no links returns every empty list; a missing id returns null
 				how_found_detail: null,
 			},
 			do_not_contact: null,
+			outreach_draft: null,
 			brands: [],
 			national_account_owners: [],
 			leases: [],
@@ -2547,8 +2548,13 @@ test("a person with no links returns every empty list; a missing id returns null
 			phones: [],
 			companies: [],
 			roles: [],
+			specialties: [],
+			territories: [],
+			vendor_verticals: [],
+			vendor_loan_programs: [],
 			deals: [],
 			links: [],
+			introductions: [],
 			activity: [],
 			next_steps: [],
 			proposals: [],
@@ -2930,6 +2936,126 @@ test("party leases include signed versions, documents, suites and options with h
 		);
 		await db.query(`select merge_party('${SUBJECT}', '${AGENT}')`);
 		assert.deepEqual((await readParty()).leases, allLeases);
+	});
+});
+
+test("party specialties sort by slug and exclude another person's", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_specialty (person_id, specialty) values
+			('${SUBJECT}', 'orthodontics'), ('${SUBJECT}', 'general_dentistry')`);
+		const specialties = (await readParty()).specialties;
+		assert.deepEqual(specialties, [
+			{ specialty: "general_dentistry" },
+			{ specialty: "orthodontics" },
+		]);
+		assert.deepEqual((await readParty(DOCTOR)).specialties, [
+			{ specialty: "general_dentistry" },
+		]);
+	});
+});
+
+test("party territories keep dated history and each territory's ordered pieces", async () => {
+	await withParty(async () => {
+		await db.query(`insert into territory (id, name) values ('${id(9180)}', 'Example reach');
+			insert into territory_piece (id, territory_id, state_fips, market_id, base_latitude, base_longitude, miles) values
+			('${id(9181)}', '${id(9180)}', null, null, 10, -150, 5),
+			('${id(9182)}', '${id(9180)}', null, '${BAY}', null, null, null),
+			('${id(9183)}', '${id(9180)}', '91', null, null, null, null),
+			('${id(9184)}', '${id(9180)}', null, null, 10, -150, 2);
+			insert into party_territory (id, party_id, territory_id, started_on, ended_on) values
+			('${id(9170)}', '${SUBJECT}', '${id(9180)}', null, null),
+			('${id(9171)}', '${SUBJECT}', '${HOME}', '2024-01-01', null),
+			('${id(9172)}', '${SUBJECT}', '${STATEWIDE}', '2023-01-01', '2023-12-31')`);
+		const territories = (await readParty()).territories;
+		assert.deepEqual(
+			territories.map((t: { id: string }) => t.id),
+			[id(9172), id(9171), id(9170)],
+		);
+		assert.equal(territories[0].ended_on, "2023-12-31");
+		assert.equal(territories[0].territory.name, "Example State");
+		assert.equal(territories[0].party_id, undefined);
+		const pieces = territories[2].territory.pieces;
+		assert.deepEqual(
+			pieces.map((piece: { id: string }) => piece.id),
+			[id(9183), id(9182), id(9184), id(9181)],
+		);
+		assert.equal(pieces[1].market.name, "Example Bay");
+		assert.equal(pieces[2].market, null);
+		assert.equal(pieces[2].territory_id, undefined);
+	});
+});
+
+test("vendor verticals and loan programs sort by name and exclude another vendor's", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_role (party_id, role) values ('${COMPANY}', 'vendor');
+			insert into vendor_vertical (party_id, vertical) values
+			('${COMPANY}', 'Lending'), ('${COMPANY}', 'Appraisal'), ('${VENDOR}', 'Title');
+			insert into vendor_loan_program (party_id, loan_program) values
+			('${COMPANY}', 'Example term loan'), ('${COMPANY}', 'Example equipment loan'), ('${VENDOR}', 'Example other loan')`);
+		const vendor = await readParty(COMPANY);
+		assert.deepEqual(vendor.vendor_verticals, [
+			{ vertical: "Appraisal" },
+			{ vertical: "Lending" },
+		]);
+		assert.deepEqual(vendor.vendor_loan_programs, [
+			{ loan_program: "Example equipment loan" },
+			{ loan_program: "Example term loan" },
+		]);
+	});
+});
+
+test("party introductions read from either end with the other party, undated last", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_role (party_id, role) values ('${COMPANY}', 'vendor');
+			insert into introduction (id, vendor_id, made_by, introduced_by_user_id, introduced_party_id, introduced_on) values
+			('${id(9191)}', '${COMPANY}', 'vendor', null, '${SUBJECT}', '2025-01-01'),
+			('${id(9190)}', '${VENDOR}', 'team', '${USER}', '${SUBJECT}', null),
+			('${id(9192)}', '${COMPANY}', 'vendor', null, '${CLIENT}', '2024-01-01')`);
+		const introductions = (await readParty()).introductions;
+		assert.deepEqual(
+			introductions.map((i: { id: string }) => i.id),
+			[id(9191), id(9190)],
+		);
+		assert.equal(introductions[0].party.id, COMPANY);
+		assert.equal(introductions[1].party.id, VENDOR);
+		assert.equal(introductions[1].introduced_by_user_id, USER);
+		assert.equal(introductions[1].vendor_role, undefined);
+		const made = (await readParty(COMPANY)).introductions;
+		assert.deepEqual(
+			made.map((i: { id: string; party: { id: string } }) => [
+				i.id,
+				i.party.id,
+			]),
+			[
+				[id(9192), CLIENT],
+				[id(9191), SUBJECT],
+			],
+		);
+		await db.query(`select merge_party('${SUBJECT}', '${AGENT}')`);
+		assert.deepEqual(
+			(await readParty()).introductions,
+			introductions.map((i: object) => ({ ...i, introduced_party_id: AGENT })),
+		);
+	});
+});
+
+test("a lead's outreach draft comes back without its fixed send flags", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_role (party_id, role, stage) values ('${SUBJECT}', 'lead', 'qualified');
+			insert into lead_contact_draft (party_id, owner_user_id, subject, body, scheduled_for, time_zone) values
+			('${SUBJECT}', '${USER}', 'Example subject', 'Example body', '2030-01-01T15:00:00Z', 'America/Chicago')`);
+		const { id: draftId, ...draft } = (await readParty()).outreach_draft;
+		assert.ok(draftId);
+		assert.deepEqual(draft, {
+			owner_user_id: USER,
+			subject: "Example subject",
+			body: "Example body",
+			scheduled_for: "2030-01-01T15:00:00+00:00",
+			time_zone: "America/Chicago",
+			revision: 1,
+			approved: false,
+		});
+		assert.equal((await readParty(COMPANY)).outreach_draft, null);
 	});
 });
 
