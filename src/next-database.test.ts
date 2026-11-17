@@ -2336,6 +2336,8 @@ const CHANGEABLE: Record<string, string[]> = {
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
 	invoice_email: [
+		"application_id",
+		"application_root_id",
 		"applied_phase_at",
 		"changed_at",
 		"changed_by_job",
@@ -6310,7 +6312,16 @@ const invoiceEmail = (row: Record<string, string | null> = {}) =>
 		payment_id: INVOICE_PAYMENT,
 		...row,
 	});
-const INVOICE_SETUP = `${COMMISSION}; ${payment({ id: INVOICE_PAYMENT })}; insert into phase values ('closed', 'Closed')`;
+const INVOICE_SETUP = `${COMMISSION}; ${payment({ id: INVOICE_PAYMENT })}; insert into phase values ('closed', 'Closed') on conflict do nothing`;
+const RESEND = id(990);
+const resendEmail = (row: Record<string, string | null> = {}) =>
+	invoiceEmail({
+		id: RESEND,
+		evidence_ref: "local-mail:example-resend",
+		...row,
+	});
+const APPLY_RESEND = `update invoice_email set status = 'applied' where id = '${RESEND}'`;
+
 const APPLY_INVOICE = `update invoice_email set status = 'applied' where id = '${INVOICE}'`;
 const UNDO_INVOICE = `update invoice_email set status = 'undone' where id = '${INVOICE}'`;
 
@@ -6342,6 +6353,17 @@ const INVOICE_REFUSALS: Case[] = [
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; update commission_payment set invoiced_on = '2026-04-02'; update commission_payment set invoiced_on = '2026-04-01'; ${UNDO_INVOICE}`, "invoice_email_undo_current"],
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; delete from invoice_email`, notGranted("invoice_email")],
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; update invoice_email set email_date = '2026-04-02'`, notGranted("invoice_email")],
+	...[
+		{sender: "stranger@example.net"}, {deal_name: "Example Unrelated Deal"},
+		{client_name: "Example Other Client"},
+	].map((row): Case => [`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture")}; ${APPLY_INVOICE}; ${resendEmail(row)}; ${APPLY_RESEND}`, "invoice_email_needs_user"]),
+	...[
+		"update invoice_email set status = 'undone'",
+		"update invoice_email set status = 'applied'",
+		"update invoice_email set deal_id = null, payment_id = null",
+	].map((sql): Case => [`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${resendEmail()}; ${APPLY_RESEND}; ${sql} where id = '${RESEND}'`,
+		sql.includes("deal_id") ? "invoice_email_keeps_target" : "invoice_email_status_moves"]),
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update invoice_email set application_id = '${RESEND}'`, notGranted("invoice_email")],
 	["insert into invoice_mailbox (address) values ('other@example.com')", notGranted("invoice_mailbox")],
 ];
 
@@ -6696,3 +6718,198 @@ test("invoice matching and payment checks cannot straddle a user's transaction",
 		await owner.end();
 	}
 });
+
+for (const [label, actor] of [
+	["user", asUser(USER)],
+	["job", asJob("mail_capture")],
+]) {
+	test(`resent invoice evidence attaches without changing the original close for a ${label}`, async () => {
+		await rolledBack(async () => {
+			await db.query(`${INVOICE_SETUP}; ${invoiceEmail()}; ${actor}; ${APPLY_INVOICE};
+				${resendEmail()}; ${APPLY_RESEND}; ${CHECK_AT_COMMIT}`);
+			assert.deepEqual(
+				(
+					await db.query(`select status, application_id, evidence_ref,
+				prior_phase_at, applied_phase_at, payment_change_id from invoice_email where id = '${RESEND}'`)
+				).rows,
+				[
+					{
+						status: "attached",
+						application_id: INVOICE,
+						evidence_ref: "local-mail:example-resend",
+						prior_phase_at: null,
+						applied_phase_at: null,
+						payment_change_id: null,
+					},
+				],
+			);
+			assert.equal(
+				(
+					await db.query(
+						`select count(*) from deal_phase_change where deal_id = '${DEAL}' and phase = 'closed'`,
+					)
+				).rows[0].count,
+				"1",
+			);
+			await db.query(`${asUser(USER)}; ${UNDO_INVOICE}; ${CHECK_AT_COMMIT}`);
+			assert.equal(
+				(
+					await db.query(
+						`select invoiced_on from commission_payment where id = '${INVOICE_PAYMENT}'`,
+					)
+				).rows[0].invoiced_on,
+				null,
+			);
+			assert.equal(
+				(
+					await db.query(
+						`select phase from deal_phase_change where deal_id = '${DEAL}' order by happened_at desc limit 1`,
+					)
+				).rows[0].phase,
+				"legal",
+			);
+			await db.query(`${resendEmail({ id: id(991), evidence_ref: "local-mail:after-undo" })};
+				${actor}; update invoice_email set status = 'applied' where id = '${id(991)}'; ${CHECK_AT_COMMIT}`);
+			assert.deepEqual(
+				(
+					await db.query(
+						`select status, application_id from invoice_email where id = '${id(991)}'`,
+					)
+				).rows,
+				[{ status: "attached", application_id: INVOICE }],
+			);
+			assert.equal(
+				(
+					await db.query(
+						`select count(*) from deal_phase_change where deal_id = '${DEAL}'`,
+					)
+				).rows[0].count,
+				"4",
+			);
+		});
+	});
+}
+
+test("concurrent invoice captures keep both sources and one undoable application", async () => {
+	const owner = await connect("none");
+	const first = await connect();
+	const second = await connect();
+	const deal = id(992);
+	const paymentId = id(993);
+	try {
+		await owner.query(`insert into phase values ('closed', 'Closed') on conflict do nothing;
+			insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Resend Deal', '${TEAMMATE}');
+			insert into deal_party values ('${deal}', '${CLIENT}', 'client');
+			insert into commission (deal_id, gross) values ('${deal}', 1000);
+			${payment({ id: paymentId, deal_id: deal, amount: 500 })};
+			insert into deal_phase_change values ('${deal}', '2026-03-01', 'legal', 'Example prior phase');
+			${invoiceEmail({ deal_id: deal, payment_id: paymentId, deal_name: "Example Resend Deal" })}`);
+		await first.query(`begin; ${asJob("mail_capture")}; ${APPLY_INVOICE}`);
+		await second.query(`begin; ${asJob("mail_capture")}`);
+		const { pid } = (await second.query("select pg_backend_pid() as pid"))
+			.rows[0];
+		let settled = false;
+		const applying = second
+			.query(
+				`${resendEmail({ deal_id: deal, payment_id: paymentId, deal_name: "Example Resend Deal" })}; ${APPLY_RESEND}`,
+			)
+			.finally(() => {
+				settled = true;
+			});
+		let blocked = false;
+		while (!settled && !blocked)
+			blocked = (
+				await owner.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+					pid,
+				])
+			).rows[0].blocked;
+		await first.query("commit");
+		await applying;
+		await second.query("commit");
+		assert.equal(blocked, true);
+		assert.deepEqual(
+			(
+				await owner.query(`select status, application_id from invoice_email
+			where deal_id = '${deal}' order by id`)
+			).rows,
+			[
+				{ status: "applied", application_id: null },
+				{ status: "attached", application_id: INVOICE },
+			],
+		);
+		assert.equal(
+			(
+				await owner.query(
+					`select count(*) from deal_phase_change where deal_id = '${deal}' and phase = 'closed'`,
+				)
+			).rows[0].count,
+			"1",
+		);
+		await first.query(`${asUser(USER)}; ${UNDO_INVOICE}`);
+		assert.equal(
+			(
+				await owner.query(
+					`select invoiced_on from commission_payment where id = '${paymentId}'`,
+				)
+			).rows[0].invoiced_on,
+			null,
+		);
+		assert.equal(
+			(
+				await owner.query(
+					`select phase from deal_phase_change where deal_id = '${deal}' order by happened_at desc limit 1`,
+				)
+			).rows[0].phase,
+			"legal",
+		);
+	} finally {
+		await first.query("rollback");
+		await second.query("rollback");
+		await owner.query(`delete from invoice_email where deal_id = '${deal}';
+			delete from deal_phase_change where deal_id = '${deal}';
+			delete from commission_payment where deal_id = '${deal}';
+			delete from commission where deal_id = '${deal}';
+			delete from deal_party where deal_id = '${deal}'; delete from deal where id = '${deal}'`);
+		await first.end();
+		await second.end();
+		await owner.end();
+	}
+});
+
+test("imported resends must reference one original application with the same target and date", () =>
+	asOwner([
+		[
+			`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${resendEmail()};
+			alter table invoice_email disable trigger invoice_email_transition;
+			update invoice_email set status = 'applied',
+				prior_phase_at = (select prior_phase_at from invoice_email where id = '${INVOICE}'),
+				applied_phase_at = (select applied_phase_at from invoice_email where id = '${INVOICE}'),
+				payment_change_id = (select payment_change_id from invoice_email where id = '${INVOICE}')
+			where id = '${RESEND}'`,
+			"invoice_email_one_application",
+		],
+		...[
+			{ status: "attached" },
+			{ status: "captured", application_id: INVOICE },
+			{
+				status: "attached",
+				application_id: INVOICE,
+				prior_invoiced_on: "2026-03-01",
+			},
+		].map(
+			(row): Case => [
+				`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${resendEmail(row)}`,
+				"invoice_email_attachment_whole",
+			],
+		),
+		...[
+			{ application_id: RESEND },
+			{ application_id: INVOICE, email_date: "2026-04-02" },
+		].map(
+			(row): Case => [
+				`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE};
+			${resendEmail({ status: "attached", ...row })}`,
+				"invoice_email_application_id_deal_id_payment_id_email_date_fkey",
+			],
+		),
+	]));
