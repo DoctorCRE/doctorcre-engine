@@ -12,12 +12,12 @@ const [leads, copy] = await Promise.all([
 const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) =>
 	(await db.query({ text: sql, rowMode: "array" })).rows;
-const run = async (sql = copy, setup = "", keepOpen = false) => {
+const run = async (sql = copy, fixtureSql = "", keepOpen = false) => {
 	await db.query(
 		"begin; select set_config('engine.job','old_system',true); create temp table if not exists copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop; insert into copy_how_found values ('lead','Example referral','referral') on conflict do nothing",
 	);
 	try {
-		if (setup) await db.query(setup);
+		if (fixtureSql) await db.query(fixtureSql);
 		const result = await db.query(sql);
 		assert.ok(Array.isArray(result));
 		if (!keepOpen) await db.query("commit");

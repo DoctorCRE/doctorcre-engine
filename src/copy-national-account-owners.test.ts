@@ -26,9 +26,9 @@ const run = async (
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
-const transaction = async (setup: string, check: () => Promise<void>) => {
+const transaction = async (fixtureSql: string, check: () => Promise<void>) => {
 	await db.query(`begin; select set_config('engine.job','old_system',true);
- ${setup}`);
+ ${fixtureSql}`);
 	try {
 		await check();
 	} finally {
