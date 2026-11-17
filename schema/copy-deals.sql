@@ -139,12 +139,20 @@ from mapped_link l join deal d on d.id = l.deal_id
 where l.mapped_party_id is not null and l.slug is not null
  and exists (select from imported_deal_party p where (p.deal_id, p.party_id, p.role) = (l.deal_id, l.mapped_party_id, l.role)
  and p.ended_at > l.created_at);
+-- A deal has one client, so a client changed in today's system since the last copy is listed, never added beside it.
+create temp table second_client on commit drop as
+select l.old_id, l.deal_id, l.party_id, l.mapped_party_id from mapped_link l
+where l.role = 'client' and exists (select from deal_party p
+ where p.deal_id = l.deal_id and p.role = 'client' and p.party_id <> l.mapped_party_id);
+insert into not_copied
+select old_id, 'deal_party', concat_ws(' ', deal_id, party_id, 'client'), 'deal_has_another_client' from second_client;
 insert into deal_party (deal_id, party_id, role, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select distinct on (l.deal_id, l.mapped_party_id, l.role) l.deal_id, l.mapped_party_id, l.role,
  l.created_at, l.updated_at, l.changed_by_user_id, l.changed_by_job, l.changed_for_user_id from mapped_link l join deal d on d.id = l.deal_id
 where l.mapped_party_id is not null and l.slug is not null
  and not exists (select from imported_deal_party p where (p.deal_id, p.party_id, p.role) = (l.deal_id, l.mapped_party_id, l.role)
  and p.ended_at > l.created_at)
+ and not exists (select from second_client c where (c.deal_id, c.mapped_party_id) = (l.deal_id, l.mapped_party_id) and l.role = 'client')
  and not exists (select from deal_party p where (p.deal_id, p.party_id, p.role) = (l.deal_id, l.mapped_party_id, l.role))
 order by l.deal_id, l.mapped_party_id, l.role, l.created_at, l.old_id;
 insert into not_copied

@@ -330,6 +330,7 @@ test("unmappable links and phase history are listed instead of lost", async () =
 			"existing_phase_conflict",
 			"current_phase_differs",
 			"lost_without_dated_reason",
+			"deal_has_another_client",
 		])
 			assert.ok(
 				refused.some((r) => r.reason === reason),
@@ -349,7 +350,7 @@ test("unmappable links and phase history are listed instead of lost", async () =
 					`select count(*)::int as n from deal_party where deal_id = '${id(10)}' and party_id = '${id(5)}'`,
 				)
 			)[0]?.n,
-			2,
+			1,
 		);
 		assert.deepEqual(
 			await rows(

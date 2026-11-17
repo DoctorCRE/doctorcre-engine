@@ -179,7 +179,7 @@ export async function answerSave<F extends Fields>(
 	}
 }
 
-function idempotencyKey(args: JsonObject): string {
+export function idempotencyKey(args: JsonObject): string {
 	const key = args.idempotency_key;
 	if (!key) throw new SaveRefusal(new Refusal(400, "missing_idempotency_key"));
 	if (typeof key !== "string" || !UUID.test(key))
@@ -247,7 +247,10 @@ function requestHash(
 		...principal
 	}: Stamp,
 ): string {
-	const manifest = { version: "doctorcre-engine-save.v1", principal, args };
+	return sortedHash({ version: "doctorcre-engine-save.v1", principal, args });
+}
+
+export function sortedHash(manifest: JsonObject): string {
 	const sorted = JSON.stringify(manifest, (_, value: unknown) =>
 		value && typeof value === "object" && !Array.isArray(value)
 			? Object.fromEntries(

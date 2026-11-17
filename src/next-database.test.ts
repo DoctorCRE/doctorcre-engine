@@ -981,7 +981,7 @@ const RULES: Record<string, Case[]> = {
 		],
 	"a link to a record that does not exist is refused": [
 		[
-			`insert into deal_party values ('${DEAL}', '${MISSING}', 'client')`,
+			`insert into deal_party values ('${LENDER_DEAL}', '${MISSING}', 'client')`,
 			"deal_party_party_id_fkey",
 		],
 		[newPost({ idea_id: MISSING }), "post_idea_id_fkey"],
@@ -2166,12 +2166,19 @@ const RULES: Record<string, Case[]> = {
 	],
 	"someone a deal is opened for is a client": [
 		[
-			`insert into deal_party values ('${DEAL}', '${LEAD}', 'client'); ${CHECK_AT_COMMIT}`,
+			`insert into deal_party values ('${LENDER_DEAL}', '${LEAD}', 'client'); ${CHECK_AT_COMMIT}`,
 			"deal_party_client_is_a_client",
 		],
 		[
 			`delete from party_role where party_id = '${CLIENT}' and role = 'client'; ${CHECK_AT_COMMIT}`,
 			"deal_party_client_is_a_client",
+		],
+	],
+	"a deal is for one client, the business": [
+		[
+			`insert into party_role values ('${DOCTOR}', 'client');
+			insert into deal_party values ('${DEAL}', '${DOCTOR}', 'client')`,
+			"deal_party_one_client",
 		],
 	],
 	"history is never added, rewritten or removed by hand": [
@@ -3001,7 +3008,7 @@ test("party roles retain lead stage and owner and the client profile", async () 
 		assert.equal(roles[0].client.role, undefined);
 		assert.equal(roles[0].client.current_status, "engaged");
 		await db.query(`insert into deal_party (deal_id, party_id, role)
-			values ('${DEAL}', '${SUBJECT}', 'client')`);
+			values ('${LENDER_DEAL}', '${SUBJECT}', 'client')`);
 		const client = (await readParty()).roles[0].client;
 		assert.equal(client.status, "engaged");
 		assert.equal(client.current_status, "active_deal");
@@ -7821,24 +7828,18 @@ test("an outside lease has no brokerage deal and a renewal is its own deal", asy
 	});
 });
 
-for (const alreadyClient of [false, true]) {
-	test(`a tenant merge preserves lease versions when the survivor is ${alreadyClient ? "already" : "not yet"} on the deal`, async () => {
-		await rolledBack(async () => {
-			await db.query(newLease());
-			if (alreadyClient)
-				await db.query(
-					`insert into deal_party (deal_id, party_id, role) values ('${DEAL}', '${LENDERS[0]}', 'client')`,
-				);
-			await db.query(
-				`select merge_party('${CLIENT}', '${LENDERS[0]}'); ${CHECK_AT_COMMIT}`,
-			);
-			assert.deepEqual(
-				(await db.query("select party_id, id from current_lease")).rows,
-				[{ party_id: LENDERS[0], id: LEASE }],
-			);
-		});
+test("a tenant merge preserves lease versions", async () => {
+	await rolledBack(async () => {
+		await db.query(newLease());
+		await db.query(
+			`select merge_party('${CLIENT}', '${LENDERS[0]}'); ${CHECK_AT_COMMIT}`,
+		);
+		assert.deepEqual(
+			(await db.query("select party_id, id from current_lease")).rows,
+			[{ party_id: LENDERS[0], id: LEASE }],
+		);
 	});
-}
+});
 
 test("a completed tour appears once on its deal even when it visits several properties", async () => {
 	await rolledBack(async () => {
