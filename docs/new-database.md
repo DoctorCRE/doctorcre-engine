@@ -794,6 +794,17 @@ Run `schema/copy-activity.sql` as the owner after `copy-parties.sql` and `copy-d
 - Listed and not copied: emails, and the notes the mail intake files with an email's full text or its links, even without email context (#365), deal notes of kind next step (#366), and the old kinds `text`, `analysis`, `task`, `loi`, `counter_sent`, `counter_received` and `lease_signed`, which have no kind yet. Listed but copied without the value: what a row says is owed, whether a call connected, and a detail that is a JSON object, which is a job's own record. `source`, `version` and `calendar_event_key` record how today's system captured the row and are dropped.
 - A rerun copies only rows not yet copied, and adds the links of records copied since, so an unchanged rerun changes nothing.
 
+## Copying today's calls
+
+Run `schema/copy-calls.sql` as the owner after `copy-activity.sql`, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`. It is the source activity the call suggestions copy needs (decision 83).
+
+- Each `capture_session` becomes one activity with the session's id, a call when it ran the post-call workflow and a meeting otherwise. Its time is when recording started, and it is signed by the session's actor at its last state change, so a partner's phone import names that user and a recording device names `old_system`. A `phone_call_session` shares the session's id, so a phone call is one activity.
+- The summary is the phone report's summary, then its decisions and open questions as lists after a blank line. Other sessions stored no report text, only `capture_post_call_report`'s hash, so their summary is empty and the hash is listed.
+- A meeting capture with a confirmed meeting record that names an existing activity is that activity, which the activity copy carries. It is not copied again, and the suggestions copy uses that activity as its source.
+- A call is about each deal, person or company its suggestions name: a post-call suggestion's deal, and a capture suggestion's deal or record when it is an id. A client, lead or vendor is about its person or company. A name or a record not yet copied is listed, and a call about nothing copied waits.
+- Listed and copied without the value: an unfinished or failed session, the recording's hash, since the audio is not stored, and the Call Studio review state. Device, nonce, token, expiry, consent time, file facts and the outcome review are capture machinery and are dropped.
+- A rerun copies only sessions not yet copied, and adds the links of records copied since, so an unchanged rerun changes nothing.
+
 ## Copying today's preferences and Home marks
 
 Run `schema/copy-preferences.sql` as the owner after `copy-leads-clients.sql` and the deal next-steps copy (#366), in its own transaction with the new schema on `search_path`. It reads `public` and `ops`, follows "Moving today's rows across" under "Users' preferences and Home marks", and ends by listing in `not_copied` what it did not copy, keyed by the old actor.
