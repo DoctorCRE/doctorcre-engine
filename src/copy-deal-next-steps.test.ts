@@ -71,6 +71,9 @@ before(async () => {
 		[101, 10, 1, "Example done", "done", "null"],
 		[102, 10, 2, "Example dropped", "dropped", "null"],
 		[103, 10, 1, "Example expired", "expired", "null"],
+		[107, 10, 1, "Example expired alongside", "expired", "null"],
+		[112, 10, 1, "Example dropped twice", "dropped", "null"],
+		[113, 10, 1, "Example changed after drop", "dropped", "null"],
 		[104, 15, 1, "  ", "open", "null"],
 		[105, 17, 1, "Example missing deal", "open", "null"],
 		[106, 10, 2, "Example unknown owner", "open", "null"],
@@ -140,6 +143,18 @@ before(async () => {
  insert into public.event (subject_type,subject_id,new_value,actor_id,verb,cause,sponsoring_human_slug,occurred_at) values
  ('deal','${id(10)}','{"next_action_id":"${id(501)}"}','${id(2)}','resolve-post-call-candidate','automation_job','partner_one','2025-01-01'),
  ('deal','${id(10)}','{"completed_post_call_action_ids":["${id(502)}"]}','${id(2)}','log-outreach','automation_job','partner_one','2025-02-02');
+ update public.next_action set version=2 where id in ('${id(112)}','${id(113)}');
+ insert into public.event (id,subject_type,subject_id,field,new_value,human_quote,actor_id,verb,cause,occurred_at) values
+ ('${id(600)}','deal','${id(10)}','status','{"next_action_id":"${id(101)}","status":"done","version":2}',null,'${id(1)}','complete-one-action','human_stated','2025-01-15'),
+ ('${id(601)}','deal','${id(10)}','status','{"next_action_id":"${id(102)}","status":"dropped","version":1,"reason":"Example no longer needed"}','Example no longer needed','${id(1)}','drop-action','human_stated','2025-01-20'),
+ ('${id(602)}','clear_the_deck','${id(602)}',null,'{"kind":"next_action","action":"drop","rows":[{"id":"${id(103)}","status":"open"},{"id":"${id(107)}","status":"open"},{"id":"${id(123)}","status":"open"}]}',null,'${id(1)}','clear-the-deck-apply','human_stated','2025-01-25'),
+ ('${id(603)}','clear_the_deck','${id(603)}',null,'{"kind":"next_action","action":"keep","rows":[{"id":"${id(123)}","status":"expired"}]}',null,'${id(1)}','clear-the-deck-apply','human_stated','2025-01-26'),
+ ('${id(604)}','vendor','${id(60)}','status','{"next_action_id":"${id(121)}","status":"done","version":2}',null,'${id(1)}','complete-one-action','human_stated','2025-01-15'),
+ ('${id(605)}','vendor','${id(60)}','status','{"action_id":"${id(121)}","status":"open","completion_event_id":"${id(604)}"}',null,'${id(1)}','reopen-one-action','human_stated','2025-01-16'),
+ ('${id(606)}','deal','${id(10)}','status','{"next_action_id":"${id(112)}","status":"dropped","version":1,"reason":"Example first"}','Example first','${id(1)}','drop-action','human_stated','2025-01-20'),
+ ('${id(607)}','deal','${id(10)}','status','{"next_action_id":"${id(112)}","status":"dropped","version":2,"reason":"Example second"}','Example second','${id(1)}','drop-action','human_stated','2025-01-21'),
+ ('${id(608)}','deal','${id(10)}','status','{"next_action_id":"${id(113)}","status":"dropped","version":1,"reason":"Example stale"}','Example stale','${id(1)}','drop-action','human_stated','2025-01-20'),
+ ('${id(609)}','deal','${id(13)}','deal_item','{"item_id":"${id(108)}","status":"done"}',null,'${id(1)}','complete-deal-item','human_stated','2025-01-18');
  commit;`);
 	await db.query(`begin; ${await sql("copy-activity.sql")}; commit`);
 	report = await copyOnce();
@@ -153,7 +168,7 @@ test("actions keep their own due dates and done time, never the deal date", asyn
 	// biome-ignore format: one row per source action
 	assert.deepEqual((await rows(`select id, due_on::text, done_at::text, owner_party_id, created_at::text from next_step where id in ('${id(100)}','${id(101)}','${id(106)}') order by id`)).map(Object.values), [
  [id(100), "2026-02-01", null, id(1), "2025-01-01 00:00:00+00"],
- [id(101), null, "2025-02-01 00:00:00+00", id(1), "2025-01-01 00:00:00+00"],
+ [id(101), null, "2025-01-15 00:00:00+00", id(1), "2025-01-01 00:00:00+00"],
  [id(106), null, null, null, "2025-01-01 00:00:00+00"],
  ]);
 	assert.deepEqual(
@@ -185,7 +200,7 @@ test("fallbacks agree with today's board for completed plans and checklist items
  ]);
 	assert.deepEqual(
 		await rows(
-			`select id from next_step where deal_id='${id(13)}' and done_at is null`,
+			`select id from next_step where deal_id='${id(13)}' and status = 'open'`,
 		),
 		[],
 	);
@@ -212,7 +227,7 @@ test("post-call actions keep explicit completion times and list dropped or unmap
  [id(501),null,null,'2025-01-01 00:00:00+00','2025-02-01 00:00:00+00'],
  [id(502),'2025-02-01','2025-02-02 00:00:00+00','2025-01-01 00:00:00+00','2025-02-03 00:00:00+00'],
  ]);
-	assert.deepEqual(reasons(report, 503), ["closed_without_doing"]);
+	assert.deepEqual(reasons(report, 503), ["cancellation_reason_missing"]);
 	assert.deepEqual(reasons(report, 504), [
 		"deal_not_copied",
 		"owner_not_a_user",
@@ -226,22 +241,6 @@ test("unmappable values are listed and refused rows never appear", async () => {
 		"display_title_not_copied",
 		"reference_not_copied",
 	]);
-	assert.deepEqual(reasons(report, 102), [
-		"owner_not_a_user",
-		"closed_without_doing",
-	]);
-	assert.deepEqual(reasons(report, 103), ["closed_without_doing"]);
-	assert.deepEqual(
-		report.filter((r) => r.old_id === id(103)),
-		[
-			{
-				old_id: id(103),
-				field: "status",
-				value: "expired",
-				reason: "closed_without_doing",
-			},
-		],
-	);
 	assert.deepEqual(reasons(report, 104), ["blank_next_step"]);
 	assert.deepEqual(reasons(report, 105), ["deal_not_copied"]);
 	assert.deepEqual(reasons(report, 106), [
@@ -251,10 +250,45 @@ test("unmappable values are listed and refused rows never appear", async () => {
 	assert.deepEqual(reasons(report, 10), []);
 	assert.deepEqual(
 		await rows(
-			`select id from next_step where id in ('${id(102)}','${id(103)}','${id(104)}','${id(105)}','${id(202)}','${id(203)}','${id(205)}')`,
+			`select id from next_step where id in ('${id(104)}','${id(105)}','${id(112)}','${id(113)}','${id(202)}','${id(203)}','${id(205)}')`,
 		),
 		[],
 	);
+});
+test("ended actions keep only the end state, reason, time and event their old closing event proves", async () => {
+	// biome-ignore format: one row per ended action
+	assert.deepEqual((await rows(`select id,status,done_at::text,resolved_at::text,resolution_reason,resolution_event_id from next_step where status <> 'open' and id between '${id(100)}' and '${id(599)}' order by id`)).map(Object.values), [
+ [id(101),'done','2025-01-15 00:00:00+00',null,null,null],
+ [id(102),'cancelled',null,'2025-01-20 00:00:00+00','Example no longer needed',id(601)],
+ [id(103),'expired',null,'2025-01-25 00:00:00+00',null,id(602)],
+ [id(107),'expired',null,'2025-01-25 00:00:00+00',null,id(602)],
+ [id(108),'done','2025-01-18 00:00:00+00',null,null,null],
+ [id(110),'done',null,null,null,null],
+ [id(121),'done',null,null,null,null],
+ [id(123),'expired',null,null,null,null],
+ [id(502),'done','2025-02-02 00:00:00+00',null,null,null],
+ ]);
+	assert.deepEqual(reasons(report, 102), ["owner_not_a_user"]);
+	for (const n of [103, 107]) assert.deepEqual(reasons(report, n), []);
+	assert.deepEqual(
+		report.filter((r) => [112, 113].map(id).includes(r.old_id)),
+		[
+			{
+				old_id: id(112),
+				field: "status",
+				value: "dropped",
+				reason: "cancellation_evidence_conflict",
+			},
+			{
+				old_id: id(113),
+				field: "status",
+				value: "dropped",
+				reason: "cancellation_evidence_conflict",
+			},
+		],
+	);
+	// biome-ignore format: ended and open actions on Home
+	assert.deepEqual((await rows(`select id from home_next_step where id in (${[100, 101, 102, 103, 107, 121, 123, 502].map((n) => `'${id(n)}'`).join(",")})`)).map((r) => r.id), [id(100)]);
 });
 test("unattached dates and unknown agent sponsors are reported with their values", () => {
 	const listed = report.filter(
@@ -287,12 +321,13 @@ test("vendor actions become next steps about the vendor's record, never about a 
 	// biome-ignore format: one row per vendor action
 	assert.deepEqual((await rows(`select id, deal_id, party_id, due_on::text, done_at::text, owner_party_id, changed_by_user_id from next_step where id between '${id(120)}' and '${id(125)}' order by id`)).map(Object.values), [
  [id(120), null, id(61), "2026-05-01", null, id(1), id(1)],
- [id(121), null, id(61), null, "2025-02-01 00:00:00+00", id(1), id(1)],
+ [id(121), null, id(61), null, null, id(1), id(1)],
+ [id(123), null, id(61), null, null, id(1), id(1)],
  [id(124), null, id(61), null, null, id(1), id(1)],
  ]);
 	for (const n of [120, 121]) assert.deepEqual(reasons(report, n), []);
-	for (const n of [122, 123])
-		assert.deepEqual(reasons(report, n), ["closed_without_doing"]);
+	assert.deepEqual(reasons(report, 122), ["cancellation_reason_missing"]);
+	assert.deepEqual(reasons(report, 123), ["expiry_unproven"]);
 	assert.deepEqual(reasons(report, 124), ["hold_has_no_place"]);
 	assert.deepEqual(
 		report.filter((r) => r.old_id === id(125)),
