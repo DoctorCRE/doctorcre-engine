@@ -1514,8 +1514,8 @@ begin atomic
 	select jsonb_build_object(
 		'party', to_jsonb(p),
 		'do_not_contact', (
-			select to_jsonb(r) - 'party_id' || jsonb_build_object('active', r.until_date is null or r.until_date >= current_date)
-			from do_not_contact r where r.party_id = p.id
+			select to_jsonb(r) - 'party_id' || jsonb_build_object('active', a.party_id is not null)
+			from do_not_contact r left join active_do_not_contact a using (party_id) where r.party_id = p.id
 		),
 		'brands', (
 			select coalesce(jsonb_agg(to_jsonb(b) - array['location_kind', 'brand_kind']

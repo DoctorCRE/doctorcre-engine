@@ -2821,14 +2821,14 @@ test("party brand memberships show both ends, dated history and start-date id or
 		await db.query(`insert into party_role (party_id, role) values ('${COMPANY}', 'client');
 			insert into client (party_id) values ('${COMPANY}'), ('${CLIENT}');
 			insert into client_brand (id, location_id, brand_id, started_on, ended_on) values
-			('${id(9102)}', '${COMPANY}', '${BROKERAGES[0]}', '2021-01-01', null),
-			('${id(9101)}', '${COMPANY}', '${BROKERAGES[1]}', '2020-01-01', '2021-01-01');
+			('${id(9101)}', '${COMPANY}', '${BROKERAGES[0]}', '2021-01-01', null),
+			('${id(9102)}', '${COMPANY}', '${BROKERAGES[1]}', '2020-01-01', '2021-01-01');
 			insert into client_brand (id, location_id, brand_id, started_on) values
 			('${id(9100)}', '${CLIENT}', '${BROKERAGES[0]}', '2021-01-01')`);
 		const brands = (await readParty(COMPANY)).brands;
 		assert.deepEqual(
 			brands.map((b: { id: string }) => b.id),
-			[id(9101), id(9102)],
+			[id(9102), id(9101)],
 		);
 		assert.equal(brands[0].ended_on, "2021-01-01");
 		assert.equal(brands[1].party.id, BROKERAGES[0]);
@@ -2837,7 +2837,7 @@ test("party brand memberships show both ends, dated history and start-date id or
 		const locations = (await readParty(BROKERAGES[0])).brands;
 		assert.deepEqual(
 			locations.map((b: { id: string }) => b.id),
-			[id(9100), id(9102)],
+			[id(9100), id(9101)],
 		);
 		assert.equal(locations[1].party.id, COMPANY);
 		assert.deepEqual((await readParty()).brands, []);
@@ -2851,13 +2851,13 @@ test("national account ownership reads both ends and preserves former owners in 
 			('${COMPANY}', 'national_account'), ('${BROKERAGES[0]}', 'national_account');
 			insert into national_account (party_id) values ('${COMPANY}'), ('${BROKERAGES[0]}');
 			insert into national_account_owner (id, account_id, owner_id, started_on, ended_on) values
-			('${id(9112)}', '${COMPANY}', '${SUBJECT}', '2021-01-01', null),
-			('${id(9111)}', '${COMPANY}', '${AGENT}', '2020-01-01', '2021-01-01'),
+			('${id(9111)}', '${COMPANY}', '${SUBJECT}', '2021-01-01', null),
+			('${id(9112)}', '${COMPANY}', '${AGENT}', '2020-01-01', '2021-01-01'),
 			('${id(9110)}', '${BROKERAGES[0]}', '${SUBJECT}', '2021-01-01', null)`);
 		const owners = (await readParty(COMPANY)).national_account_owners;
 		assert.deepEqual(
 			owners.map((o: { id: string }) => o.id),
-			[id(9111), id(9112)],
+			[id(9112), id(9111)],
 		);
 		assert.equal(owners[0].ended_on, "2021-01-01");
 		assert.equal(owners[1].party.id, SUBJECT);
@@ -2865,7 +2865,7 @@ test("national account ownership reads both ends and preserves former owners in 
 		const accounts = (await readParty()).national_account_owners;
 		assert.deepEqual(
 			accounts.map((o: { id: string }) => o.id),
-			[id(9110), id(9112)],
+			[id(9110), id(9111)],
 		);
 		assert.equal(accounts[1].party.id, COMPANY);
 		assert.deepEqual((await readParty(CLIENT)).national_account_owners, []);
@@ -2920,8 +2920,16 @@ test("party leases include signed versions, documents, suites and options with h
 			(await readParty(COMPANY)).leases.map((l: { id: string }) => l.id),
 			[id(9122)],
 		);
+		await db.query(`update property set address = '200 Example Way' where id = '${PROPERTY}';
+			insert into property (id, address) values ('${id(9160)}', '100 Example Way');
+			insert into lease (id, party_id, property_id) values ('${id(9123)}', '${SUBJECT}', '${id(9160)}')`);
+		const allLeases = (await readParty()).leases;
+		assert.deepEqual(
+			allLeases.map((l: { id: string }) => l.id),
+			[id(9123), id(9120), id(9121)],
+		);
 		await db.query(`select merge_party('${SUBJECT}', '${AGENT}')`);
-		assert.deepEqual((await readParty()).leases, leases);
+		assert.deepEqual((await readParty()).leases, allLeases);
 	});
 });
 
