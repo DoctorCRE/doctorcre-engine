@@ -1349,15 +1349,15 @@ The suggestion kinds:
 - **Stamp.** The user, or `cadence`, `mail_capture`, `call_capture` or `agent` for a partner.
 - **Refusals.** `422 database_refused_the_statement { rule }` for a checklist item of the wrong shape (`next_step_item_shape`), a cancel without a reason, or a step about two records; `404 not_found` for the step or its record.
 
-### 18. Cadence inputs
+#### Cadence inputs
 
-`GET /jobs/cadence?collection=deals|clients|leads|vendors|next_steps&after=&limit=` is read-only, for the registered job `cadence` behind the jobs Access door. `limit` defaults to 100, at most 500; `after` is the last returned id, exclusive. For `next_steps`, `status=open|done` is required. Each collection sorts by id and answers `{ items, next_cursor }`, with null cursor at the end. Bad paging or collection values are `400 invalid_field_value`; another or unregistered job is `403 unknown_job`.
+`GET /jobs/cadence?collection=clients|leads|vendors|next_steps&after=&limit=` is read-only and requires the registered `cadence` job behind the jobs Access door. For `next_steps`, set `status=open|done`. Each collection answers `{ items, next_cursor }` in id order. `after` excludes the last id already read, and the final cursor is null. `limit` defaults to 100 and accepts 1 through 500. Invalid queries return `400 invalid_field_value`. Another or unregistered job gets `403 unknown_job`.
 
-- Deals answer `{ id, name, ref, client_status, owner, owner_party_id }`. `ref` is null, as the old cadence reads it. The governing status is the current derived status of the deal's client, or null when none is linked. `owner` is the owner's user slug and `owner_party_id` their party id.
-- Clients, leads and vendors answer the same fields plus `old_ids`, the `old_system` outside ids that map to this party, each `{ value }`. Their `id` is the party id, so door 18 takes it as `party_id`; deals use `deal_id`. `ref` is the first retained `old_system_ref` with the role's C-, L- or V- prefix, falling back to another retained reference, or null. Leads also answer `estimated_lease_on` as a date or null. A converted lead and its client are one party; that party's own derived client status governs both. Vendors always answer null client status and null owner fields: the vendor relationship owner waits on an owner ruling, and is never inferred.
-- Open next steps answer `{ id, deal_id, party_id, property_id, owner_party_id }`, including held steps. Done steps also answer `{ description, done_at }`. The three record keys name exactly one record. `done_at` is the actual completion instant or null; callers must skip undated completions, never substitute the last edit or copy time. Cancelled and expired steps are excluded. Party steps belong to each cadence subject role that party holds.
+- Subjects answer `{ id, name, ref, client_status, owner, owner_party_id, old_ids }`. Use the subject's `id` as `party_id` in door 18. `old_ids` lists `old_system` outside ids as `{ value }`. `ref` is the first retained `old_system_ref` with the collection's C-, L- or V- prefix, or null. `owner` is the owner's user slug.
+- Clients answer their stored `cold` or `paused` status when set, and their derived status otherwise. Leads answer `estimated_lease_on` as a date or null and have null `client_status`. A party with a client role stays in the client collection even if it keeps a lead role in its history. Vendors answer null for client status and both owner fields.
+- Open party steps answer `{ id, party_id, owner_party_id }`, including held steps. Done party steps also answer `{ description, done_at }`. Skip completions with a null `done_at`.
 
-Rules, lookback and their configuration stay on the old side. No job row is added by this door; only the owner provisions `cadence`.
+Rules and lookback stay on the old side. Only the owner provisions the `cadence` job.
 
 ### What can start when this merges
 
