@@ -9,7 +9,6 @@ import { stampNextSave } from "../next-save.ts";
 import { fit, isInstant, isText, isUuid, optional } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
 import { isArguments } from "../save-door.ts";
-import { storedSnapshot } from "./snapshot.ts";
 
 export const nextAgenda = new Hono<NextSaveEnv>();
 const isKey = (key: unknown): key is string =>
@@ -88,16 +87,21 @@ nextAgenda.put("/calendar/agenda", async (c) => {
 });
 
 nextAgenda.get("/calendar/agenda", async (c) => {
-	const writer = c.env.DATABASE_WRITER;
-	if (!writer) return refuse(c, new Refusal(503, "database_unavailable"));
-	return nextTransaction(writer.connectionString, "save", async (tx) => {
+	const reader = c.env.DATABASE;
+	if (!reader) return refuse(c, new Refusal(503, "database_unavailable"));
+	return nextTransaction(reader.connectionString, "read", async (tx) => {
 		await stampNextSave(tx, c.get("stamp"));
-		const stamp = c.get("stamp");
-		const snapshot = await storedSnapshot(
-			tx,
-			"user" in stamp ? stamp.user : (stamp.for_user ?? ""),
-		);
-		return c.json(snapshot ?? null);
+		const result = await sql<{ snapshot: unknown }>`
+			select a.snapshot::jsonb || jsonb_build_object(
+				'dismissed', (select coalesce(jsonb_agg(d.key order by d.key), '[]')
+					from calendar_review_dismissal d where d.user_id = a.user_id
+					and a.snapshot::jsonb -> 'follow_up_reviews' @> jsonb_build_array(jsonb_build_object('key', d.key))),
+				'confirmed', (select coalesce(jsonb_agg(m.calendar_review_key order by m.calendar_review_key), '[]')
+					from activity m where m.calendar_review_user_id = a.user_id
+					and a.snapshot::jsonb -> 'follow_up_reviews' @> jsonb_build_array(jsonb_build_object('key', m.calendar_review_key)))) as snapshot
+			from calendar_agenda a
+			where a.user_id = current_setting('engine.user_id')::uuid`.execute(tx);
+		return c.json(result.rows[0]?.snapshot ?? null);
 	});
 });
 
