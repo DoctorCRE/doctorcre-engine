@@ -5557,6 +5557,188 @@ const extraction = (row: Record<string, string | number | null> = {}) =>
 		...row,
 	});
 
+test("a user classifies an other deal file once and history records who and when", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${asJob("old_system")}; ${dealFile({ kind: "other" })}; ${extraction()}`,
+		);
+		const before = (
+			await db.query(`select * from document where id = '${DEAL_FILE}'`)
+		).rows[0];
+		await db.query(
+			`${asUser(TEAMMATE)}; update document set kind = 'lease' where id = '${DEAL_FILE}'`,
+		);
+		const after = (
+			await db.query(`select * from document where id = '${DEAL_FILE}'`)
+		).rows[0];
+		assert.deepEqual(unstamped(after), { ...unstamped(before), kind: "lease" });
+		assert.equal(after.created_at.getTime(), before.created_at.getTime());
+		assert.equal(after.changed_by_user_id, TEAMMATE);
+		assert.equal(after.changed_by_job, null);
+		assert.equal(after.changed_for_user_id, null);
+		const { rows } =
+			await db.query(`select old_value, new_value, changed_by_user_id,
+			changed_by_job, changed_at = now() as at_save
+			from change where table_name = 'document' and record = jsonb_build_object('id', '${DEAL_FILE}'::text) and action = 'update'`);
+		assert.deepEqual(rows, [
+			{
+				old_value: { kind: "other" },
+				new_value: { kind: "lease" },
+				changed_by_user_id: TEAMMATE,
+				changed_by_job: null,
+				at_save: true,
+			},
+		]);
+		assert.equal(
+			(await db.query("select count(*) from document_extraction")).rows[0]
+				.count,
+			"1",
+		);
+		await assert.rejects(
+			db.query(`update document set kind = 'loi' where id = '${DEAL_FILE}'`),
+			{ constraint: "document_filed_once" },
+		);
+	}));
+
+for (const forUser of ["", USER]) {
+	test(`a job cannot classify a deal file${forUser ? " even for a user" : ""}`, () =>
+		rolledBack(async () => {
+			await db.query(
+				`${dealFile({ kind: "other" })}; ${asJob("agent", forUser)}`,
+			);
+			await assert.rejects(
+				db.query(
+					`update document set kind = 'lease' where id = '${DEAL_FILE}'`,
+				),
+				{ constraint: "document_filed_once" },
+			);
+		}));
+}
+
+test("an unchanged other kind writes no history and still permits classification", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${dealFile({ kind: "other" })}; update document set kind = 'other' where id = '${DEAL_FILE}'`,
+		);
+		assert.equal(
+			(
+				await db.query(
+					"select count(*) from change where table_name = 'document' and action = 'update'",
+				)
+			).rows[0].count,
+			"0",
+		);
+		await db.query(
+			`update document set kind = 'lease' where id = '${DEAL_FILE}'; update document set name = 'Example renamed.pdf' where id = '${DEAL_FILE}'`,
+		);
+		assert.equal(
+			(await db.query(`select name from document where id = '${DEAL_FILE}'`))
+				.rows[0].name,
+			"Example renamed.pdf",
+		);
+	}));
+
+for (const kind of ["loi", "other"]) {
+	test(`a real deal file kind never changes to ${kind}`, () =>
+		rolledBack(async () => {
+			await db.query(dealFile());
+			await assert.rejects(
+				db.query(
+					`update document set kind = '${kind}' where id = '${DEAL_FILE}'`,
+				),
+				{ constraint: "document_filed_once" },
+			);
+		}));
+}
+
+// biome-ignore format: one refusal per row
+for (const [field, value, code] of [
+	["name", "'Changed example.pdf'", "23514"],
+	["deal_id", `'${LENDER_DEAL}'`, "23514"],
+	["content_type", "'text/plain'", "23514"],
+	["sha256", `'${"b".repeat(64)}'`, "23514"],
+	["bytes", "2048", "23514"],
+	["id", `'${id(8002)}'`, "42501"],
+	["created_at", "now() - interval '1 day'", "42501"],
+	["r2_key", "'example/changed'", "42501"],
+	["r2_bucket", "'deal_documents'", "42501"],
+	["email_activity_id", `'${EMAIL}'`, "42501"],
+	["version", "2", "42501"],
+	["supersedes_id", `'${id(8001)}'`, "42501"],
+]) {
+	test(`classification keeps the deal file's ${field} fixed`, () =>
+		rolledBack(async () => {
+			await db.query(dealFile({ kind: "other" }));
+			await assert.rejects(
+				db.query(`update document set kind = 'lease', ${field} = ${value} where id = '${DEAL_FILE}'`),
+				{ code, ...(code === "23514" ? { constraint: "document_filed_once" } : {}) },
+			);
+		}));
+}
+
+for (const kind of ["null", "'missing'", "''"]) {
+	test(`classification refuses kind ${kind}`, () =>
+		rolledBack(async () => {
+			await db.query(dealFile({ kind: "other" }));
+			await assert.rejects(
+				db.query(
+					`update document set kind = ${kind} where id = '${DEAL_FILE}'`,
+				),
+				{
+					constraint:
+						kind === "null" ? "document_filed_once" : "document_kind_fkey",
+				},
+			);
+		}));
+}
+
+for (const version of [1, 2]) {
+	test(`an other chain refuses classification of version ${version} alone`, () =>
+		rolledBack(async () => {
+			await db.query(`${dealFile({ kind: "other" })};
+				${dealFile({ id: id(8001), r2_key: "example/v2", kind: "other", version: 2, supersedes_id: DEAL_FILE })}`);
+			await assert.rejects(
+				db.query(
+					`update document set kind = 'lease' where deal_id = '${DEAL}' and version = ${version}`,
+				),
+				{ constraint: "document_previous_version" },
+			);
+		}));
+}
+
+test("a user classifies every version of an other chain in one update", () =>
+	rolledBack(async () => {
+		await db.query(`${dealFile({ kind: "other" })};
+			${dealFile({ id: id(8001), r2_key: "example/v2", kind: "other", version: 2, supersedes_id: DEAL_FILE })}`);
+		await db.query(
+			`${asUser(TEAMMATE)}; update document set kind = 'lease' where deal_id = '${DEAL}'`,
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select version, kind from document where deal_id = '${DEAL}' order by version`,
+				)
+			).rows,
+			[
+				{ version: 1, kind: "lease" },
+				{ version: 2, kind: "lease" },
+			],
+		);
+		const { rows } =
+			await db.query(`select record, old_value, new_value, changed_by_user_id, changed_at = now() as at_save
+			from change where table_name = 'document' and action = 'update' order by record ->> 'id'`);
+		assert.deepEqual(
+			rows,
+			[DEAL_FILE, id(8001)].map((id) => ({
+				record: { id },
+				old_value: { kind: "other" },
+				new_value: { kind: "lease" },
+				changed_by_user_id: TEAMMATE,
+				at_save: true,
+			})),
+		);
+	}));
+
 // biome-ignore format: one row per refusal
 const FILE_REFUSALS = [
 	["unfiled kind", dealFile({ deal_id: null }), "document_deal_file_whole"],
