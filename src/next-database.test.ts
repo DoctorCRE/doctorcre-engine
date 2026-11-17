@@ -490,6 +490,8 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"email_mailbox",
+	"email_recipient",
 	"invoice_email",
 	"invoice_mailbox",
 	"vendor_vertical",
@@ -3806,6 +3808,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				email: {
 					message_id: "<counter-2@example.com>",
 					sender: "avery@example.com",
+					sender_name: null,
 					subject: "Counter to your LOI",
 					body: "Our counter is attached.",
 					documents: [rounds[1]?.documents[0]],

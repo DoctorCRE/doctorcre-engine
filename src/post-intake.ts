@@ -1,8 +1,9 @@
 import { type Context, Hono } from "hono";
 import pg from "pg";
+import { isInstant } from "./calendar-date.ts";
 import { storeMedia } from "./post-media.ts";
 import { DATABASE_UNAVAILABLE } from "./reader.ts";
-import { UUID } from "./uuid.ts";
+import { isUuid } from "./uuid.ts";
 
 export type IntakeEnv = {
 	Bindings: {
@@ -42,8 +43,6 @@ const POST = `select jsonb_build_object(
 		from post_media m where m.post_id = p.id), '[]')
 ) as post from post p`;
 
-const isUuid = (value: unknown): value is string =>
-	typeof value === "string" && UUID.test(value);
 // JavaScript rolls 2027-02-30 into March, so a date must read back as written.
 function calendarDay(date: string) {
 	const day = new Date(`${date}T00:00:00Z`);
@@ -53,11 +52,6 @@ function calendarDay(date: string) {
 		? day
 		: undefined;
 }
-const isInstant = (value: unknown): value is string =>
-	typeof value === "string" &&
-	/T.*(Z|[+-]\d\d:\d\d)$/.test(value) &&
-	calendarDay(value.slice(0, 10)) !== undefined &&
-	!Number.isNaN(Date.parse(value));
 
 function parsePost(body: unknown): NewPost | undefined {
 	if (typeof body !== "object" || body === null) return undefined;
