@@ -285,11 +285,12 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 17. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
 18. `copy-activity.sql`: needs parties and deals.
 19. `copy-calls.sql`: needs the activity a logged meeting already is.
-20. `copy-lead-stage-moves.sql`: needs the activity each move cites.
-21. `copy-deal-next-steps.sql`: needs deals and activity.
-22. `copy-call-suggestions.sql`: needs the calls and the next steps an accepted suggestion made.
-23. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
-24. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
+20. `copy-meetings.sql`: needs logged activities, with reviewed reuse or distinct-pair inputs when needed.
+21. `copy-lead-stage-moves.sql`: needs the activity each move cites.
+22. `copy-deal-next-steps.sql`: needs deals and activity.
+23. `copy-call-suggestions.sql`: needs the calls and the next steps an accepted suggestion made.
+24. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
+25. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
 Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
 
@@ -894,3 +895,11 @@ An old event is evidence of a command, sometimes one field and sometimes a parti
 The final report lists event ids, fields and reason codes, never payloads. Missing copied records, unknown actors, humans without users, unknown or uncopied sponsors, unsupported fields and conflicting existing imports all wait listed. A registered agent with no recorded sponsor keeps that unknown sponsor and is listed too. Such an event can still copy because no sponsor is invented. Repeating an identical import writes nothing. A changed source or a newly resolved destination for an existing import is listed as a conflict, leaving that history intact. The engine may read imported history but cannot add, rewrite or remove it. Serving a combined feed remains a later slice.
 
 An owner's `erase_change` request also covers matching imported records. It removes the old and new payloads for a selected destination field, plus every matching event's quote and rationale because those free-text explanations may repeat the words. Other event payloads, keys, verbs, causes, authors and times remain. `erased_fields` records which fields were erased, so a repeated erase adds no history and a copy never restores the words. This extends decision 49's existing owner ruling to the second history table.
+
+## Copying today's meeting notes
+
+Run `schema/copy-meetings.sql` after attribution, `copy-activity.sql` and `copy-calls.sql`, in a separate owner transaction with the new schema on `search_path`. It reads `ops.meeting`, `ops.meeting_note` and today's public activity and actor tables. One meeting activity holds the title and the latest revision of each note, numbered in note order. Imported history retains each source note id, revision, author and time, with before and after summaries. Its `import-meeting-edit` verb and `old_system_import` cause label the conversion, not a recovered user command. Meeting mode, native capture identity, end state, streams, leases, client instances and action tables do not move. No sender or business-record link is inferred from the activating user.
+
+The old meeting tables have no activity link. Optionally supply `pg_temp.copy_meeting_activity(meeting_id uuid primary key, activity_id uuid not null unique)` in the transaction, mapping an ops meeting to its reviewed public meeting or tour activity. That activity must already be copied. Its id, time and existing record links remain; its logged summary follows the meeting title before the current notes. Without a mapping, a time within 24 hours, an equal title, or a source UTC date matching the meeting's Chicago date identify candidate pairs only. The date comparison covers evening meetings whose hand-logged date became UTC midnight. Every such pair is listed as `possible_duplicate`, and the meeting waits. To clear a false match, supply that pair in optional `pg_temp.copy_meeting_distinct(meeting_id uuid, activity_id uuid, primary key (meeting_id, activity_id))`. Every remaining candidate must be reviewed before a separate activity copies. Other meetings keep their ops id. A copied meeting with no known record links is listed as `about_nothing_copied`. A reused logged activity retains a newer last-change time and its author stamp. This coordinator choice on #396 is open to an owner ruling.
+
+Unknown authors, invalid or conflicting mappings, reversed revision chronology and conflicting imported history wait listed. An agent without a known sponsor keeps the agent stamp and is listed. Reruns preserve current rows, native history and imported edits, including later user changes. New source revisions on an already-copied meeting wait as `meeting_changed_since_copy` rather than overwrite it. PostgreSQL transaction controls and JSONB, then the existing pg test driver, cover this copy without another dependency.

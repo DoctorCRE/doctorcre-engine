@@ -52,6 +52,7 @@ const order: [file: string, input?: string][] = [
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
 	["copy-calls.sql"],
+	["copy-meetings.sql"],
 	["copy-lead-stage-moves.sql"],
 	["copy-deal-next-steps.sql"],
 	["copy-call-suggestions.sql"],
@@ -61,6 +62,12 @@ const order: [file: string, input?: string][] = [
 
 // One made-up snapshot of today's system: two partners and a clinic client leasing a suite, with its vendor and a lead.
 const OLD = `
+create table ops.meeting (id uuid primary key, title text not null, started_by_actor uuid not null references public.actor,
+ started_at timestamptz not null, ended_at timestamptz, ended_by_actor uuid references public.actor);
+create table ops.meeting_note (id uuid primary key, meeting_id uuid not null references ops.meeting,
+ note_number integer not null, revision integer not null, body text not null,
+ author_actor uuid not null references public.actor, created_at timestamptz not null, unique (meeting_id,note_number,revision));
+
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
  ('${id(2)}', 'partner_two', 'human', 'Example Partner Two'),
@@ -196,6 +203,8 @@ insert into public.phone_call_session (id, owner_id, sha256, byte_count, duratio
  values ('${id(95)}', '${id(1)}', '${"7".repeat(64)}', 1000, 60, 'audio/mp4', '2025-01-06', '2025-01-06', '{"summary": "Example call summary", "decisions": [], "open_questions": []}');
 insert into public.capture_post_call_candidate (session_id, idempotency_key, batch_hash, item_index, kind, deal_id, assignee_slug, action_description, evidence_quote, confidence)
  values ('${id(95)}', 'key-95', 'batch', 0, 'assigned_action', '${id(30)}', 'partner_one', 'Example action', 'Example quote', 0.9);
+insert into ops.meeting values ('${id(110)}','Example planning meeting','${id(1)}','2023-01-01',null,null);
+insert into ops.meeting_note values ('${id(111)}','${id(110)}',1,1,'Example planning note','${id(1)}','2023-01-01 01:00Z');
 `;
 
 const name = `copy_all_${randomUUID().replaceAll("-", "")}`;
@@ -280,8 +289,8 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 4, activity_about: 5, lead_stage_move: 1, proposal: 2,
- candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 1 };
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 2,
+ candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 3 };
 // biome-ignore format: one row per correction
 const corrections = [
  ["copy-parties.sql", id(10), "org_id", id(16), "a national account has no place in the new database yet"],
@@ -294,6 +303,7 @@ const corrections = [
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
+ ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(35), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(36), "phase", "field_has_no_mapping"],
