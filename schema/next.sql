@@ -947,6 +947,7 @@ create table next_step (
 	what text not null,
 	owner_party_id uuid references party,
 	due_on date,
+	hold_until date,
 	done_at timestamptz,
 	resolution text check (resolution in ('done', 'cancelled', 'expired')),
 	resolved_at timestamptz,
@@ -963,8 +964,10 @@ create table next_step (
 	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
 
+-- A hold ends on the partners' day in Central time, as today's system ends it.
 create view home_next_step with (security_invoker = true) as
-	select * from next_step where status = 'open';
+	select * from next_step where status = 'open'
+		and (hold_until is null or hold_until <= (now() at time zone 'America/Chicago')::date);
 
 -- Each user's own preferences. A user without a row has chosen nothing yet.
 create function is_time_zone(zone text) returns boolean
@@ -2778,12 +2781,12 @@ grant update (started_on, ended_on) on party_territory to engine;
 grant update (has_office, coverage, source) on party_territory_review to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
-grant update (what, owner_party_id, due_on, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
+grant update (what, owner_party_id, due_on, hold_until, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) on home_mark to engine;
 -- Only the owner's import supplies the old event that closed a step.
 revoke insert on next_step from engine;
-grant insert (id, created_at, what, owner_party_id, due_on, done_at, resolution, resolved_at,
+grant insert (id, created_at, what, owner_party_id, due_on, hold_until, done_at, resolution, resolved_at,
 	resolution_reason, deal_id, party_id, property_id) on next_step to engine;
 -- Only the owner's import supplies provenance. A user's or job's new round has a known status.
 revoke insert on offer from engine;

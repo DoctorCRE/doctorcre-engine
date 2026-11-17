@@ -240,7 +240,6 @@ test("post-call actions keep explicit completion times and list dropped or unmap
 });
 test("unmappable values are listed and refused rows never appear", async () => {
 	assert.deepEqual(reasons(report, 100), [
-		"hold_has_no_place",
 		"display_bullets_not_copied",
 		"display_title_not_copied",
 		"reference_not_copied",
@@ -443,6 +442,20 @@ test("the activity copy keeps every next-step note as a recorded note beside the
  ]);
 });
 
+test("deal and vendor holds copy as the step's hold date", async () => {
+	assert.deepEqual(
+		(
+			await rows(
+				"select id, hold_until::text from next_step where hold_until is not null order by id",
+			)
+		).map(Object.values),
+		[
+			[id(100), "2026-04-01"],
+			[id(124), "2026-06-01"],
+		],
+	);
+});
+
 test("vendor actions become next steps about the vendor's record, never about a deal", async () => {
 	// biome-ignore format: one row per vendor action
 	assert.deepEqual((await rows(`select id, deal_id, party_id, due_on::text, done_at::text, owner_party_id, changed_by_user_id from next_step where id between '${id(120)}' and '${id(125)}' order by id`)).map(Object.values), [
@@ -454,7 +467,7 @@ test("vendor actions become next steps about the vendor's record, never about a 
 	for (const n of [120, 121]) assert.deepEqual(reasons(report, n), []);
 	assert.deepEqual(reasons(report, 122), ["cancellation_reason_missing"]);
 	assert.deepEqual(reasons(report, 123), ["expiry_unproven"]);
-	assert.deepEqual(reasons(report, 124), ["hold_has_no_place"]);
+	assert.deepEqual(reasons(report, 124), []);
 	assert.deepEqual(
 		report.filter((r) => r.old_id === id(125)),
 		[

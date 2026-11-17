@@ -180,14 +180,14 @@ left join copy_action_end() e on e.id = n.id
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
 cross join lateral copy_attribution('next_action', n.id, coalesce(n.updated_by, n.created_by)) a;
-insert into next_step (id, party_id, what, due_on, owner_party_id, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
+insert into next_step (id, party_id, what, due_on, hold_until, owner_party_id, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
  created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select distinct on (mapped_id, what, due_on) * from (
- select id, mapped_id, what, due_on, owner, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
+ select id, mapped_id, what, due_on, hold_until, owner, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
   created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
  from old_next_action where copied and what is not null and refusal is null
  union all
- select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported lead follow-up', (fields ->> 'next_action_date')::date,
+ select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported lead follow-up', (fields ->> 'next_action_date')::date, null,
   owner, null, null, null, null, null, created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
  from ready_relationship r where kind = 'lead' and fields ->> 'next_action_date' is not null
   and not exists (select from public.next_action n where n.subject_type = 'lead' and n.subject_id = r.id)
@@ -200,7 +200,6 @@ cross join lateral (values
  ('status', n.status, n.refusal, n.refusal is not null),
  ('resolution_event_id', null, 'expiry_unproven', n.resolution = 'expired' and not n.proven),
  ('owner_id', n.owner_id::text, 'owner_not_a_user', n.owner is null),
- ('hold_until', n.hold_until::text, 'hold_has_no_place', n.hold_until is not null),
  ('source_ref', n.source_ref, 'reference_not_copied', n.source_ref ~ '\S')
 ) f(field, value, reason, refused) where f.refused;
 

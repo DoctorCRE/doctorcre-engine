@@ -2470,6 +2470,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	next_step: [
 		"done_at",
 		"due_on",
+		"hold_until",
 		"owner_party_id",
 		"resolution",
 		"resolution_reason",
@@ -3127,6 +3128,28 @@ test("ended next steps retain evidence and stay off Home even with marks", async
 	});
 });
 
+test("a held step stays off Home until its hold day in Central time and stays on its deal", async () => {
+	await rolledBack(async () => {
+		const today = "(now() at time zone 'America/Chicago')::date";
+		await db.query(`update next_step set hold_until = ${today} + 1 where id = '${id(400)}';
+			update next_step set hold_until = ${today} where id = '${id(402)}'`);
+		// At every hour, one of these zones is on a different day from Central time.
+		for (const zone of ["Pacific/Kiritimati", "Etc/GMT+12"]) {
+			await db.query(`set local time zone '${zone}'`);
+			assert.deepEqual(
+				(await db.query("select id from home_next_step")).rows,
+				[{ id: id(402) }],
+				zone,
+			);
+		}
+		const held = (await readDeal()).next_steps.find(
+			(s: { id: string }) => s.id === id(400),
+		);
+		const tomorrow = await db.query(`select (${today} + 1)::text as day`);
+		assert.equal(held.hold_until, tomorrow.rows[0].day);
+	});
+});
+
 test("next-step end states reject contradictory times, reasons and evidence", async () => {
 	const invalid: Case[] = [
 		["resolution = 'other'", "next_step_resolution_check"],
@@ -3653,6 +3676,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				what: "Send the signed LOI",
 				owner_party_id: CLIENT,
 				due_on: "2026-03-13",
+				hold_until: null,
 				done_at: "2026-03-13T18:00:00+00:00",
 				resolution: "done",
 				resolved_at: null,
@@ -3665,6 +3689,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				what: "Start the lease draft",
 				owner_party_id: null,
 				due_on: "2026-03-20",
+				hold_until: null,
 				done_at: null,
 				resolution: null,
 				resolved_at: null,
