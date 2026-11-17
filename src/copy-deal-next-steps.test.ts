@@ -62,7 +62,7 @@ before(async () => {
  insert into public.deal_phase (slug, label) values ('closed', 'Example closed');
  insert into public.deal (id, client_id, name, deal_type, phase, owner, next_date, created_by, updated_by)
  select v, '${id(3)}', 'Example deal', 'lease', 'closed', 'partner_one', '2026-03-01', '${id(1)}', '${id(1)}'
- from unnest(array[${Array.from({ length: 8 }, (_, i) => `'${id(10 + i)}'::uuid`).join(",")}]) v;
+ from unnest(array[${Array.from({ length: 9 }, (_, i) => `'${id(10 + i)}'::uuid`).join(",")}]) v;
  insert into deal (id, name, owner_user_id) select id, name, '${id(1)}' from public.deal where id <> '${id(17)}';
  insert into outside_id (source, value, deal_id) select 'old_system', id::text, id from deal;
  insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, due_on, created_at, updated_at, created_by) values
@@ -74,21 +74,31 @@ before(async () => {
 		[104, 15, 1, "  ", "open", "null"],
 		[105, 17, 1, "Example missing deal", "open", "null"],
 		[106, 10, 2, "Example unknown owner", "open", "null"],
+		[108, 13, 1, "Example completed plan", "done", "null"],
+		[109, 16, 1, "Example checklist", "open", "null"],
+		[110, 11, 1, "Example earlier completed plan", "done", "null"],
+		[111, 14, 1, "Example pending assessment", "open", "null"],
  ]
 		.map(
 			([n, d, o, text, status, due]) =>
-				`('${id(Number(n))}', 'deal', '${id(Number(d))}', '${id(Number(o))}', '${text}', '${status}', ${due}, '2025-01-01', '2025-02-01', '${id(1)}')`,
+				`('${id(Number(n))}', 'deal', '${id(Number(d))}', '${id(Number(o))}', '${text}', '${status}', ${due}, '2025-01-01', '${n === 110 ? "2025-01-01" : "2025-02-01"}', '${id(1)}')`,
 		)
 		.join(",")};
  update public.next_action set hold_until='2026-04-01', source_ref='example:source', item_title='Example display', item_bullets='["Example bullet"]' where id='${id(100)}';
+ update public.next_action set item_title='Example checklist', source_ref='example:checklist' where id='${id(109)}';
  insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(200)}','${id(11)}','next_step','Example old note','${id(1)}','2025-01-01'),
  ('${id(201)}','${id(11)}','next_step','Example current note','${id(2)}','2025-02-01'),
  ('${id(202)}','${id(12)}','next_step','Example superseded','${id(1)}','2025-01-01'),
  ('${id(203)}','${id(10)}','next_step','Example hidden note','${id(1)}','2025-01-01'),
  ('${id(204)}','${id(14)}','next_step','Example undated note','${id(1)}','2025-01-01'),
- ('${id(205)}','${id(11)}','note','Example ordinary note','${id(1)}','2025-01-01');
+ ('${id(205)}','${id(11)}','note','Example ordinary note','${id(1)}','2025-01-01'),
+ ('${id(206)}','${id(13)}','next_step','Example finished plan note','${id(1)}','2025-01-01'),
+ ('${id(207)}','${id(16)}','next_step','Example alongside checklist','${id(1)}','2025-01-01');
+ insert into public.event (subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at) values
+ ('deal','${id(14)}','overdue_assessment_pending','{"candidate_kind":"next_step","actions":[{"id":"${id(111)}","source":"next_action"}]}','${id(1)}','example-assessment','human_stated','2025-01-01');
  update public.deal set next_date=null where id='${id(14)}';
+ update public.deal set next_date='2026-02-01' where id='${id(10)}';
  insert into public.event (subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause, sponsoring_human_slug) values
  ('deal','${id(12)}','next_step','{"superseded_action_ids":[]}', '2025-02-01','2025-02-01','${id(1)}','replace-step','human_stated',null),
  ('deal','${id(11)}','note','{"note":"Example current note"}', '2025-02-01','2025-02-01','${id(2)}','add-deal-note','automation_job','partner_one');
@@ -104,6 +114,16 @@ before(async () => {
  insert into outside_id (source,value,party_id) values ('old_system','${id(6)}','${id(7)}');
  insert into public.event (subject_type, subject_id, new_value, actor_id, verb, cause, sponsoring_human_slug, occurred_at)
  values ('deal','${id(10)}','{"activity":"${id(300)}"}','${id(2)}','log-activity','automation_job','partner_one','2025-01-01');
+ insert into public.capture_session (id,nonce,device_id,actor_id,mode,started_at,consent_announced_at,session_token_hash,expires_at,state_at)
+ values ('${id(400)}','example-nonce','example-device','${id(1)}','meeting','2025-01-01','2025-01-01','example-hash','2025-01-02','2025-01-01');
+ insert into public.capture_post_call_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,deal_id,assignee_slug,action_description,evidence_quote,confidence)
+ select v,'${id(400)}',v::text,'example-batch', row_number() over () - 1,'assigned_action','${id(10)}','partner_one','Example post-call action','Example evidence',1
+ from unnest(array['${id(401)}','${id(402)}','${id(403)}','${id(404)}']::uuid[]) v;
+ insert into public.capture_post_call_action (id,candidate_id,deal_id,owner_id,description,accepted_by,accepted_at,status,due_on,completed_at,updated_at) values
+ ('${id(501)}','${id(401)}','${id(10)}','${id(1)}','Example post-call open','${id(1)}','2025-01-01','open',null,null,'2025-02-01'),
+ ('${id(502)}','${id(402)}','${id(10)}','${id(1)}','Example post-call done','${id(1)}','2025-01-01','done','2025-02-01','2025-02-02','2025-02-03'),
+ ('${id(503)}','${id(403)}','${id(10)}','${id(1)}','Example post-call dropped','${id(1)}','2025-01-01','dropped',null,null,'2025-02-01'),
+ ('${id(504)}','${id(404)}','${id(17)}','${id(2)}','Example post-call missing deal','${id(1)}','2025-01-01','open',null,null,'2025-02-01');
  commit;`);
 	await db.query(`begin; ${await sql("copy-activity.sql")}; commit`);
 	report = await copyOnce();
@@ -128,75 +148,60 @@ test("actions keep their own due dates and done time, never the deal date", asyn
 	);
 });
 test("the board fallback keeps only the newest unsuperseded note and its date", async () => {
-	assert.deepEqual(
-		(
-			await rows(
-				`select id,what,due_on::text,done_at,changed_by_job,changed_for_user_id from next_step where id between '${id(200)}' and '${id(205)}' order by id`,
-			)
-		).map(Object.values),
-		[
-			[id(201), "Example current note", "2026-03-01", null, "agent", id(1)],
-			[id(204), "Example undated note", null, null, null, null],
-		],
+	// biome-ignore format: one row per fallback note
+	assert.deepEqual((await rows(`select id,what,due_on::text,done_at,changed_by_job,changed_for_user_id from next_step where id between '${id(200)}' and '${id(207)}' order by id`)).map(Object.values), [
+ [id(201), "Example current note", "2026-03-01", null, "agent", id(1)],
+ [id(204), "Example undated note", null, null, null, null],
+ [id(207), "Example alongside checklist", "2026-03-01", null, null, null],
+ ]);
+	const fallback = await rows(
+		"select id from next_step where what='Imported deal follow-up'",
 	);
-	assert.equal(
-		(
-			await rows(
-				"select count(*) from next_step where what='Imported deal follow-up'",
-			)
-		)[0]?.count,
-		"2",
-	);
+	assert.equal(fallback.length, 1);
 	assert.deepEqual(reasons(report, 200), ["older_next_step_note"]);
 	assert.deepEqual(reasons(report, 202), ["superseded_note"]);
 	assert.deepEqual(reasons(report, 203), ["note_hidden_by_action"]);
 });
-test("tasks become undated next steps with one mapped record, preserving detail and sponsorship", async () => {
+test("fallbacks agree with today's board for completed plans and checklist items", async () => {
+	// biome-ignore format: one row per board case
+	assert.deepEqual((await rows(`select id,next_step,next_date::text from public.v_deal_room_board where id in ('${id(13)}','${id(16)}') order by id`)).map(Object.values), [
+ [id(13),null,null], [id(16),'Example alongside checklist','2026-03-01'],
+ ]);
 	assert.deepEqual(
-		(
-			await rows(
-				`select id,what,deal_id,party_id,due_on,done_at,owner_party_id,changed_by_job,changed_for_user_id from next_step where id >= '${id(300)}' and what like 'Example%' order by id`,
-			)
-		).map(Object.values),
-		[
-			[
-				id(300),
-				"Example task\n\nExample details",
-				id(10),
-				null,
-				null,
-				null,
-				null,
-				"agent",
-				id(1),
-			],
-			[
-				id(303),
-				"Example structured",
-				id(10),
-				null,
-				null,
-				null,
-				null,
-				null,
-				null,
-			],
-			[
-				id(304),
-				"Example party task",
-				null,
-				id(7),
-				null,
-				null,
-				null,
-				null,
-				null,
-			],
-		],
+		await rows(
+			`select id from next_step where deal_id='${id(13)}' and done_at is null`,
+		),
+		[],
 	);
-	assert.deepEqual(reasons(report, 301), ["task_needs_one_record"]);
-	assert.deepEqual(reasons(report, 302), ["task_needs_one_record"]);
-	assert.deepEqual(reasons(report, 303), ["structured_detail_not_copied"]);
+	assert.equal(
+		(
+			await rows(`select due_on::text from next_step where deal_id='${id(18)}'`)
+		)[0]?.due_on,
+		"2026-03-01",
+	);
+});
+test("logged task history waits for an owner ruling without creating open work", async () => {
+	for (const n of [300, 301, 302, 303, 304])
+		assert.deepEqual(reasons(report, n), ["task_kind_unconfirmed"]);
+	assert.deepEqual(
+		await rows(
+			`select id from next_step where id between '${id(300)}' and '${id(304)}'`,
+		),
+		[],
+	);
+});
+test("post-call actions keep explicit completion times and list dropped or unmapped rows", async () => {
+	// biome-ignore format: one row per post-call action
+	assert.deepEqual((await rows(`select id,due_on::text,done_at::text,created_at::text,changed_at::text from next_step where id in ('${id(501)}','${id(502)}') order by id`)).map(Object.values), [
+ [id(501),null,null,'2025-01-01 00:00:00+00','2025-02-01 00:00:00+00'],
+ [id(502),'2025-02-01','2025-02-02 00:00:00+00','2025-01-01 00:00:00+00','2025-02-03 00:00:00+00'],
+ ]);
+	assert.deepEqual(reasons(report, 503), ["closed_without_doing"]);
+	assert.deepEqual(reasons(report, 504), [
+		"deal_not_copied",
+		"owner_not_a_user",
+	]);
+	assert.deepEqual(reasons(report, 206), ["plan_already_done"]);
 });
 test("unmappable values are listed and refused rows never appear", async () => {
 	assert.deepEqual(reasons(report, 100), [
@@ -205,17 +210,26 @@ test("unmappable values are listed and refused rows never appear", async () => {
 		"display_title_not_copied",
 		"reference_not_copied",
 	]);
-	for (const n of [102, 103])
-		assert.deepEqual(
-			reasons(report, n),
-			n === 102
-				? ["owner_not_a_user", "closed_without_doing"]
-				: ["closed_without_doing"],
-		);
+	assert.deepEqual(reasons(report, 102), [
+		"owner_not_a_user",
+		"closed_without_doing",
+	]);
+	assert.deepEqual(reasons(report, 103), ["closed_without_doing"]);
+	assert.deepEqual(
+		report.filter((r) => r.old_id === id(103)),
+		[
+			{
+				old_id: id(103),
+				field: "status",
+				value: "expired",
+				reason: "closed_without_doing",
+			},
+		],
+	);
 	assert.deepEqual(reasons(report, 104), ["blank_next_step"]);
 	assert.deepEqual(reasons(report, 105), ["deal_not_copied"]);
 	assert.deepEqual(reasons(report, 106), ["owner_not_a_user"]);
-	assert.deepEqual(reasons(report, 10), ["date_without_fallback"]);
+	assert.deepEqual(reasons(report, 10), []);
 	assert.deepEqual(
 		await rows(
 			`select id from next_step where id in ('${id(102)}','${id(103)}','${id(104)}','${id(105)}','${id(202)}','${id(203)}','${id(205)}')`,
