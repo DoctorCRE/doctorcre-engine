@@ -924,11 +924,11 @@ test("claims use import identity rather than an unrelated offer with the old rou
 test("claims with uncopied authors or sponsors and blank notes wait for review", async () => {
 	await db.query("begin; select set_config('engine.job', 'old_system', true)");
 	try {
-		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(330)}', 'example-missing', 'human', 'Example missing user'), ('${id(331)}', 'codex', 'automation', 'Example agent');
+		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(330)}', 'partner_two', 'human', 'Example missing user'), ('${id(331)}', 'codex', 'automation', 'Example agent');
  insert into public.negotiation_claim (id, round_id, claim_type, created_by, note) values
  ('${id(332)}', '${id(101)}', 'example', '${id(330)}', null),
  ('${id(333)}', '${id(105)}', 'example', '${id(331)}', ' ');
- insert into public.event (actor_id, verb, subject_type, subject_id, cause, sponsoring_human_slug, occurred_at) values ('${id(331)}', 'example', 'negotiation_claim', '${id(333)}', 'human_stated', 'example-missing', '2025-04-01');`);
+ insert into public.event (actor_id, verb, subject_type, subject_id, cause, sponsoring_human_slug, occurred_at) values ('${id(331)}', 'example', 'negotiation_claim', '${id(333)}', 'human_stated', 'partner_two', '2025-04-01');`);
 		const result = await run();
 		assert.deepEqual(
 			result
