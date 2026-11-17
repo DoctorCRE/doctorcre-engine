@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { lead, leadCopyTest } from "./test-lead-copy.ts";
 import {
 	assertCompletionDates,
 	completionEvents,
@@ -12,22 +9,20 @@ import {
 	stepsAndHistory,
 } from "./test-step-completions.ts";
 
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-leads-clients.sql"),
-]);
-const name = `copy_relationships_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
+const { db, copy, setup, cleanup } = await leadCopyTest(
+	"copy-leads-clients.sql",
+	[
+		["new", "new"],
+		["qualified", "qualified"],
+		["nurture_drip", "nurture_drip"],
+		["closed_lost", "closed_lost"],
+		["closed_won", "closed_won"],
+		["active_deal", "active_deal"],
+		["do_not_contact", "do_not_contact"],
+		["engaged", "engaged"],
+		["other", "other"],
+	],
 );
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
 const rows = async (sql: string) => (await db.query(sql)).rows;
 // A copy starts clear of every temp table, so it supplies the source mappings again before sql.
 const freshCopy = async (sql = ""): Promise<pg.QueryResultRow[]> => {
@@ -64,19 +59,12 @@ const run = async (
 };
 let report: pg.QueryResultRow[];
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id,slug,kind,display_name) values ('${id(1)}','example_user','human','Example User');
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
  insert into app_user values ('${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
- insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
- insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','nurture_drip','closed_lost','closed_won','active_deal','do_not_contact','engaged','other']) s;
  insert into public.client_status (slug,label) select s,s from unnest(array['roster','active_deal','past_client','cold','prospect']) s;
  insert into public.client_type (slug,label) values ('franchise','Example franchise'),('national_account','Example account'), ('group','Example group'), ('other','Example unknown');
  insert into public.lead_lane (slug,label) values ('example_lane','Example lane');
@@ -106,14 +94,13 @@ before(async () => {
 		"engaged",
 	].entries()) {
 		await db.query(
-			`insert into public.lead (id,party_id,stage,source_type,created_by,updated_by) values ($1,$2,$3,$4,$5,$5)`,
-			[
-				id(51 + i),
-				id(14 + i),
+			lead({
+				leadId: id(51 + i),
+				partyId: id(14 + i),
+				actorId: id(1),
 				stage,
-				i === 4 ? "Unmapped source" : "Example referral",
-				id(1),
-			],
+				source: i === 4 ? "Unmapped source" : "Example referral",
+			}),
 		);
 	}
 	await db.query(
@@ -137,10 +124,7 @@ before(async () => {
  update party set changed_at = '2030-01-01' where id = '${id(10)}'; alter table party enable trigger stamp_change; commit;`);
 	report = await run();
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("roles, profiles, details and estimates follow the old records without inventing missing facts", async () => {
 	assert.deepEqual(

@@ -1,29 +1,17 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { lead, leadCopyTest } from "./test-lead-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-leads-clients.sql"),
-]);
-const name = `copy_restrictions_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
+const { db, copy, setup, cleanup } = await leadCopyTest(
+	"copy-leads-clients.sql",
+	[
+		["new", "New"],
+		["do_not_contact", "Do not contact"],
+	],
 );
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (input = ""): Promise<pg.QueryResultRow[]> => {
 	const result = await db.query(`discard temp;
@@ -42,36 +30,22 @@ const snapshot = () =>
  (select jsonb_agg(c order by id) from change c) as history`);
 
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values ('${id(1)}','example_user','human','Example User');
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
  insert into app_user values ('${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
- insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
- insert into public.lead_stage (slug,label) values ('new','New'),('do_not_contact','Do not contact');
- insert into public.party (id,kind,name,created_by,updated_by)
- values ('${id(10)}','person','Example person','${id(1)}','${id(1)}');
  commit;`);
 	await db.query(`begin; select set_config('engine.job','old_system',true);
- insert into public.party (id,kind,name,created_by,updated_by) values ('${id(11)}','person','Example duplicate','${id(1)}','${id(1)}');
+ ${lead({ leadId: id(30), partyId: id(10), actorId: id(1), stage: "do_not_contact", name: "Example person", source: "Example referral", suppressed: true, createdAt: "2024-01-01", updatedAt: "2025-01-01" })}
+ ${lead({ leadId: id(31), partyId: id(11), actorId: id(1), name: "Example duplicate", source: "Example referral", suppressed: true, createdAt: "2024-02-01", updatedAt: "2025-02-01" })}
+ ${lead({ leadId: id(32), partyId: id(10), actorId: id(1), source: "Example referral", createdAt: "2024-03-01", updatedAt: "2025-03-01" })}
  insert into party (id,kind,name) values ('${id(20)}','person','Example survivor');
  insert into outside_id (source,value,party_id) values ('old_system','${id(10)}','${id(20)}'),('old_system','${id(11)}','${id(20)}');
- insert into public.lead (id,party_id,stage,suppressed,source_type,created_by,updated_by,created_at,updated_at) values
- ('${id(30)}','${id(10)}','do_not_contact',true,'Example referral','${id(1)}','${id(1)}','2024-01-01','2025-01-01'),
- ('${id(31)}','${id(11)}','new',true,'Example referral','${id(1)}','${id(1)}','2024-02-01','2025-02-01'),
- ('${id(32)}','${id(10)}','new',false,'Example referral','${id(1)}','${id(1)}','2024-03-01','2025-03-01');
  commit;`);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database if exists "${name}" with (force)`);
-});
+after(cleanup);
 
 test("without reviewed input suppression still waits for reasons", async () => {
 	await db.query("begin");
