@@ -4383,6 +4383,33 @@ test("a parked deal stays in its phase and is revived to it, keeps who last park
 		]);
 	}));
 
+test("a parked deal is stamped again when its reason or note changes, and not when its name or flag does", () =>
+	rolledBack(async () => {
+		const parkedEarlier = `set local role none;
+			update deal set parked_at = '2025-01-01T00:00:00Z' where id = '${DEAL}';
+			set local role engine`;
+		const parkedAt = async () =>
+			(
+				await db.query(
+					`select parked_at = now() as now, parked_at = '2025-01-01T00:00:00Z' as earlier from deal where id = '${DEAL}'`,
+				)
+			).rows[0];
+		await db.query(`${asUser(USER)};
+			update deal set parking_reason = 'client_paused', parking_note = 'Example pause' where id = '${DEAL}';
+			${parkedEarlier};
+			update deal set name = 'Example renamed' where id = '${DEAL}';
+			update deal set needs_attention = true where id = '${DEAL}'`);
+		assert.deepEqual(await parkedAt(), { now: false, earlier: true });
+		for (const change of [
+			"parking_note = 'Example longer pause'",
+			"parking_reason = 'other'",
+		]) {
+			await db.query(`${parkedEarlier};
+				update deal set ${change} where id = '${DEAL}'`);
+			assert.deepEqual(await parkedAt(), { now: true, earlier: false }, change);
+		}
+	}));
+
 test("a user, or an agent working for one, flags a deal as needing attention, and a job alone still renames it", () =>
 	rolledBack(async () => {
 		await db.query(
