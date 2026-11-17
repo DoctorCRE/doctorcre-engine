@@ -934,8 +934,8 @@ An old event is evidence of a command, sometimes one field and sometimes a parti
 | Old subject | New record and key                     | Supported old fields                                                                                        |
 | ----------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | party       | `party`, `id`                          | name, kind, npi                                                                                             |
-| deal        | `deal`, `id`                           | name, owner, won_value, operating_state, attention, parking_reason, parking_note, needs_attention           |
-| lead        | `party_role`, party_id and role lead   | stage, owner, owner_id, lane, segment, est_lease_event                                                      |
+| deal        | `deal`, `id`                           | name, owner, won_value, city, operating_state, attention, parking_reason, parking_note, needs_attention     |
+| lead        | `party_role`, party_id and role lead   | stage, owner, owner_id, lane, segment, est_lease_event, event_source, event_confidence                      |
 | client      | `client`, party_id                     | status, client_type                                                                                         |
 | vendor      | `party_role`, party_id and role vendor | stage, relationship_level, is_target, offers, seeking, disposition                                          |
 | lease       | `lease_version`, id                    | executed_on, commencement_on, expiration_on, rate_norm_sf_yr, term_months, free_rent_months, opex_structure |
