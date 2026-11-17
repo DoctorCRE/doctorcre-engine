@@ -14,7 +14,7 @@ type Body = Record<string, unknown>;
 export function doorTest() {
 	const copy = copyTest();
 	const writer = `door_${randomUUID().replaceAll("-", "")}`;
-	const reader = `reader_${randomUUID().replaceAll("-", "")}`;
+	const reader = `${writer}_reader`;
 	const access = generateKeyPair("RS256", { extractable: true });
 
 	const setup = async () => {
@@ -25,8 +25,7 @@ export function doorTest() {
 		);
 		await copy.setup();
 		await copy.db.query(
-			`create role ${writer} login; grant engine to ${writer};
-			create role ${reader} login; grant engine_reader to ${reader}`,
+			`create role ${writer} login; grant engine to ${writer}; create role ${reader} login; grant engine_reader to ${reader}`,
 		);
 	};
 	const cleanup = async () => {

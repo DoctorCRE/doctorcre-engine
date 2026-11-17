@@ -924,12 +924,27 @@ create table email (
 	message_id text unique check (message_id = btrim(message_id)),
 	-- Matched to a person through party_email.
 	sender email_address not null,
+	sender_name text,
 	subject text not null,
 	body text not null,
 	-- Set only by the owner's copy of today's mail, the one source that may lack the Message-ID.
 	imported boolean not null default false,
 	constraint email_message_id_unless_imported check (message_id is not null or imported),
 	foreign key (activity_id, activity_kind) references activity (id, kind)
+);
+
+create table email_recipient (
+	activity_id uuid not null references email,
+	position integer not null check (position >= 0),
+	address email_address not null,
+	kind text not null check (kind in ('to', 'cc')),
+	primary key (activity_id, position)
+);
+
+create table email_mailbox (
+	activity_id uuid not null references email,
+	user_id uuid not null references app_user,
+	primary key (activity_id, user_id)
 );
 
 alter table outside_id add foreign key (email_activity_id) references email;
@@ -1270,14 +1285,19 @@ begin
 		raise exception 'only its owner edits a reply draft, before it goes out'
 			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
 	end if;
-	-- As today's sender: only a try aborted before Send goes out again, and only one it could not confirm may be found sent.
+	if by_owner and not (old.status = 'pending' or old.status = 'failed' and new.status = 'approved'
+		and old.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid')) then
+		raise exception 'a reply draft is decided once and sent at most once'
+			using errcode = 'check_violation', constraint = 'reply_draft_sent_once';
+	end if;
+	-- Only a failure before Send may be approved again; an unconfirmed try may only be found sent.
 	-- A try keeps the recipients its owner approved.
 	if new.status in ('sent', 'failed') and (new.to_address, new.cc_address) is distinct from (old.to_address, old.cc_address)
 		or new.status = old.status and to_jsonb(new) - editable <> to_jsonb(old) - editable
 		or new.status <> old.status and not (case old.status
 			when 'pending' then new.status in ('approved', 'dismissed')
 			when 'approved' then new.status in ('sent', 'failed')
-			when 'failed' then new.status = 'approved' and old.failure_reason = 'aborted_before_dispatch'
+			when 'failed' then new.status = 'approved' and old.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid')
 				or new.status = 'sent' and old.failure_reason ~ '^unconfirmed_after_[0-9]+$'
 			else false end) then
 		raise exception 'a reply draft is decided once and sent at most once'
@@ -1401,7 +1421,7 @@ begin
 	select * into draft from reply_draft where id = coalesce(new.reply_draft_id, old.reply_draft_id);
 	if not (nullif(current_setting('engine.job', true), '') is null
 		and nullif(current_setting('engine.user_id', true), '')::uuid is not distinct from draft.owner_user_id
-		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason = 'aborted_before_dispatch')) then
+		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason in ('aborted_before_dispatch', 'submission_recipients_invalid'))) then
 		raise exception 'only its owner attaches files to a reply draft, before it goes out'
 			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
 	end if;
@@ -2576,7 +2596,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
-		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
@@ -3043,7 +3063,7 @@ grant insert (id, deal_id, property_id, round, answers_round, from_party_id, fro
 	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms, submarket_condition) on offer to engine;
 grant update (status) on offer to engine;
 revoke insert on email from engine;
-grant insert (activity_id, message_id, sender, subject, body) on email to engine;
+grant insert (activity_id, message_id, sender, sender_name, subject, body) on email to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;
