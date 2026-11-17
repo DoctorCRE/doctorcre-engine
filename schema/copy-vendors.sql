@@ -170,13 +170,13 @@ select l.*, made.vendor_id, made.user_id, introduced.party_id as introduced_part
 end as reason
 from (
 	select l.id, l.id as old_id, 'party_link' as field, l.kind as value, l.from_party, l.to_party, l.via_party, l.occurred_on, l.note,
-		l.created_at, l.created_by, null::uuid as old_deal_id, null::uuid as deal_id
+		l.created_at, l.created_by, l.from_party as event_party, null::uuid as old_deal_id, null::uuid as deal_id
 	from public.party_link l
 	where l.kind in ('introduced', 'referred', 'intro', 'intro_received', 'referral')
 		and not exists (select from public.party_link_deal d where d.link_id = l.id)
 	union all
 	select md5(d.link_id::text || d.deal_id::text)::uuid, d.link_id, 'party_link_deal', d.deal_id::text, null, l.to_party, d.referred_by,
-		d.occurred_on, d.note, d.created_at, d.created_by, d.deal_id, deal.deal_id
+		d.occurred_on, d.note, d.created_at, d.created_by, d.referred_by, d.deal_id, deal.deal_id
 	from public.party_link_deal d
 	join public.party_link l on l.id = d.link_id
 	left join outside_id deal on deal.source = 'old_system' and deal.value = d.deal_id::text
@@ -204,12 +204,13 @@ cross join lateral (
 ) as introduced
 where not exists (select from introduction i where i.id = l.id);
 
+-- Today's link writer records a link as an event of the party it is from, and a referral on a deal of its referrer.
 insert into introduction (id, created_at, vendor_id, made_by, introduced_by_user_id, introduced_party_id, introduced_on,
 	deal_id, note, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select i.id, i.created_at, i.vendor_id, case when i.user_id is null then 'vendor' else 'team' end, i.user_id,
 	i.introduced_party_id, i.occurred_on, i.deal_id, nullif(regexp_replace(i.note, '^\s+|\s+$', '', 'g'), ''), a.changed_by_user_id, a.changed_by_job,
 	a.changed_for_user_id, i.created_at
-from typed_introduction i cross join lateral copy_attribution('party_link', i.id, i.created_by) a
+from typed_introduction i cross join lateral copy_attribution('party', i.event_party, i.created_by) a
 where i.reason is null;
 
 insert into not_copied select old_id, field, value, reason from typed_introduction where reason is not null;
@@ -218,13 +219,13 @@ insert into not_copied select old_id, field, value, reason from typed_introducti
 -- on that deal already is.
 insert into introduction (id, created_at, vendor_id, made_by, introduced_party_id, introduced_on, deal_id, note,
 	changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select distinct on (vendor_id, deal_id) md5(vendor_id::text || old_deal_id::text)::uuid, updated_at, party_id, 'vendor',
+select distinct on (party_id, deal_id) md5(vendor_id::text || old_deal_id::text)::uuid, updated_at, party_id, 'vendor',
 	client_id, (occurred_at at time zone 'America/Chicago')::date, deal_id, nullif(regexp_replace(evidence_ref, '^\s+|\s+$', '', 'g'), ''),
 	changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from evidence e
 where kind = 'referred' and deal_id is not null and client_id <> party_id
 	and not exists (select from introduction i where (i.vendor_id, i.deal_id, i.made_by) = (e.party_id, e.deal_id, 'vendor'))
-order by vendor_id, deal_id, occurred_at;
+order by party_id, deal_id, occurred_at, vendor_id;
 
 insert into not_copied
 select vendor_id, 'deal_evidence', concat_ws(' ', kind, old_deal_id), case

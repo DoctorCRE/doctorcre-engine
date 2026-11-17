@@ -293,12 +293,16 @@ insert into public.party_link_kind (slug, label, sort) values
 	('knows', 'Example', 1), ('introduced', 'Example', 2), ('intro', 'Example', 3), ('referral', 'Example', 4), ('referred', 'Example', 5);
 ${link(50, 20, 1, "introduced", 10)} ${link(51, 11, 20, "intro", 1)} ${link(52, 10, 20, "referral")} ${link(53, 10, 20, "referred")}
 ${link(54, 10, 20, "knows", 11)} ${link(55, 20, 11, "introduced", 17)} ${link(56, 16, 20, "introduced", 10)} ${link(57, 20, 1, "intro", 1)}
+insert into public.actor (id, slug, kind, display_name) values ('${id(3)}', 'codex', 'automation', 'Example agent');
+update public.party_link set created_by = '${id(3)}' where id = '${id(51)}';
+insert into public.event (actor_id, verb, subject_type, subject_id, cause, occurred_at, sponsoring_human_slug)
+	values ('${id(3)}', 'link-parties', 'party', '${id(11)}', 'human_stated', now(), 'partner_one');
 insert into public.party_link_deal (link_id, deal_id, referred_by, note, created_by)
 	values ('${id(52)}', '${id(70)}', '${id(10)}', 'Example deal referral', '${PARTNER}');
 alter table public.vendor disable trigger vendor_touch;
 ${evidence(40, ["worked", 70], ["worked", 71], ["referred", 72], ["referred", 70], ["example", 70])}
 ${evidence(42, ["worked", 70], ["referred", 72])}
-${evidence(41, ["referred", 20])}
+${evidence(41, ["referred", 20], ["referred", 72])}
 ${evidence(47, ["worked", 72])}`;
 const DEAL_FIELDS = ["deal_evidence", "party_link", "party_link_deal"];
 
@@ -335,6 +339,18 @@ test("introductions either way, and the deals a vendor worked or referred, are c
 			[id(56), "party_link", "introduced", "a party it links is not copied"],
 			[id(57), "party_link", "intro", "no single copied vendor on either side"],
 		]);
+		assert.deepEqual(
+			await rows(
+				`select changed_by_user_id, changed_by_job, changed_for_user_id from introduction where id = '${id(51)}'`,
+			),
+			[
+				{
+					changed_by_user_id: null,
+					changed_by_job: "agent",
+					changed_for_user_id: PARTNER,
+				},
+			],
+		);
 		const history = await rows("select * from change order by id");
 		await db.query("discard temp");
 		assert.deepEqual(
