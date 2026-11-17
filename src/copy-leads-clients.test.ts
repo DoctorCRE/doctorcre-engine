@@ -611,7 +611,7 @@ test("a first client copy records only its insert with the agreed owner", async 
 		await run(
 			`${extraParties}
  insert into public.client (id,party_id,status,acquisition_source,owner_id,created_by,updated_by,created_at,updated_at) values
- ('${id(900)}','${id(80)}','roster','Example client source','${id(1)}','${id(1)}','${id(1)}','2020-01-01','2024-01-01'),
+ ('${id(900)}','${id(80)}','prospect','Example client source','${id(1)}','${id(1)}','${id(1)}','2020-01-01','2024-01-01'),
  ('${id(901)}','${id(80)}','roster','Example client source',null,'${id(1)}','${id(1)}','2020-01-01','2025-01-01');`,
 			true,
 		);
@@ -632,7 +632,8 @@ test("client responsibility maps known users, retries unknown owners, and leaves
 			`
  insert into public.actor (id,slug,kind,display_name) values ('${id(89)}','example_unknown_owner','human','Example unknown user');
  update public.client set owner_id = '${id(1)}', owner_label = 'Example display label' where id = '${id(40)}';
- update public.client set owner_id = '${id(89)}' where id = '${id(41)}';
+ insert into public.client (id,party_id,status,acquisition_source,owner_id,created_by,updated_by,created_at,updated_at) values
+ ('${id(901)}','${id(11)}','prospect','Example client source','${id(89)}','${id(1)}','${id(1)}','2020-01-01','2024-01-01');
  update public.client set owner_label = 'Example User' where id = '${id(42)}';`,
 			true,
 		);
@@ -644,7 +645,7 @@ test("client responsibility maps known users, retries unknown owners, and leaves
 		]);
 		assert.ok(
 			waiting.some(
-				(r) => r.old_id === id(41) && r.reason === "owner_not_a_user",
+				(r) => r.old_id === id(901) && r.reason === "owner_not_a_user",
 			),
 		);
 		assert.ok(

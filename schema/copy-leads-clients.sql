@@ -214,7 +214,6 @@ where (r.kind = 'lead' or exists (select from client c where c.party_id = r.mapp
  and not exists (select from outside_id o where o.source = 'old_system' and o.value = r.id::text);
 
 update client c set owner_user_id = r.owner from client_owner r
-join outside_id copied on copied.source = 'old_system' and copied.value = r.id::text and copied.party_id = r.mapped_id
 where c.party_id = r.mapped_id and c.owner_user_id is null and r.owner is not null and r.owner_refusal is null;
 insert into not_copied select r.id, 'owner_id', r.fields ->> 'owner_id', r.owner_refusal
 from client_owner r
