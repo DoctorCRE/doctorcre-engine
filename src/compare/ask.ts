@@ -124,9 +124,6 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 		case "board":
 			return mirrored("/deals", "deal-room-board", {
 				workspace: ask.workspace,
-				...(ask.account_client_id !== undefined && {
-					account_client_id: ask.account_client_id,
-				}),
 			});
 		case "deal":
 			return {

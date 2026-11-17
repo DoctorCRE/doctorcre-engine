@@ -1424,7 +1424,6 @@ test("compares filtered client fit, Search activity at 20 and the cursorless fir
 
 test("samples each app filter once from old first answers, and compares the filtered answers without printing arguments", async () => {
 	const expected: Ask[] = [
-		{ read: "board", workspace: "all", account_client_id: c1 },
 		{ read: "client fit", vertical: "Made-up Fit" },
 		{ read: "client fit", city: "Made-up Fit City" },
 		{ read: "territory", vertical: "Made-up Specialty" },
@@ -1436,15 +1435,6 @@ test("samples each app filter once from old first answers, and compares the filt
 		expected.some((e) => JSON.stringify(e) === JSON.stringify(ask));
 	const old = (ask: Ask) => {
 		switch (ask.read) {
-			case "board":
-				return {
-					...board(),
-					accounts: [
-						{ account_client_id: null },
-						{ account_client_id: c1 },
-						{ account_client_id: c2 },
-					],
-				};
 			case "client fit":
 				return {
 					profiles: [
@@ -1493,8 +1483,6 @@ test("samples each app filter once from old first answers, and compares the filt
 test("missing or malformed old samples add no filter asks, even when the engine has samples", async () => {
 	const engine = (ask: Ask) => {
 		switch (ask.read) {
-			case "board":
-				return { ...board(), accounts: [{ account_client_id: c1 }] };
 			case "client fit":
 				return { profiles: [{ vertical: "Made-up", city: "Made-up" }] };
 			case "lead board":
@@ -1510,15 +1498,10 @@ test("missing or malformed old samples add no filter asks, even when the engine 
 	const { run } = await runWith(engine);
 	assert.equal(run.outcomes.length, 30);
 	const malformed = (ask: Ask) =>
-		[
-			"board",
-			"client fit",
-			"lead board",
-			"territory",
-			"vendor markets",
-		].includes(ask.read)
+		["client fit", "lead board", "territory", "vendor markets"].includes(
+			ask.read,
+		)
 			? {
-					accounts: [{ account_client_id: "invalid" }],
 					profiles: null,
 					leads: [{ specialty: 7 }],
 					submarkets: [{ city: " ", state: false }],
@@ -1526,5 +1509,5 @@ test("missing or malformed old samples add no filter asks, even when the engine 
 				}
 			: answer(ask);
 	const invalid = await runWith(engine, malformed);
-	assert.equal(invalid.run.outcomes.length, 25);
+	assert.equal(invalid.run.outcomes.length, 28);
 });

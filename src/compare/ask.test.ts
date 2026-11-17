@@ -770,12 +770,6 @@ test("compares just the cursorless first feed page even when it is full", async 
 
 test("mirrors each app filter in engine query text and old tool arguments", async () => {
 	const cases: { ask: Ask; path: string; name: string; args: object }[] = [
-		{
-			ask: { read: "board", workspace: "all", account_client_id: client },
-			path: "/deals",
-			name: "deal-room-board",
-			args: { workspace: "all", account_client_id: client },
-		},
 		...["vertical", "city"].map((field) => ({
 			ask: { read: "client fit", [field]: "Made-up & 50%" } as const,
 			path: "/client-fit",

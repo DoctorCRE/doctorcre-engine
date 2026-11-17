@@ -40,7 +40,7 @@ import {
 export class StopRun extends Error {}
 
 export type Ask =
-	| { read: "board"; workspace: Workspace; account_client_id?: string }
+	| { read: "board"; workspace: Workspace }
 	| { read: "deal"; deal: string }
 	| { read: "client fit"; state?: string; vertical?: string; city?: string }
 	| { read: "capture queue" }
@@ -260,32 +260,18 @@ export async function compareDeals(
 			ask.vertical === undefined &&
 			ask.city === undefined
 		) {
-			const profiles =
-				isRecord(old) && Array.isArray(old.profiles) ? old.profiles : [];
-			const profile = profiles.find(
-				(p) => isRecord(p) && typeof p.state === "string" && p.state.trim(),
-			);
-			const state =
-				isRecord(profile) && typeof profile.state === "string"
-					? profile.state
-					: "ZZ";
-			enqueue({ read: "client fit", state });
+			enqueue({
+				read: "client fit",
+				state: firstText(old, "profiles", "state") ?? "ZZ",
+			});
 			for (const field of ["vertical", "city"] as const) {
 				const value = firstText(old, "profiles", field);
 				if (value !== undefined)
 					enqueue({ read: "client fit", [field]: value });
 			}
 		}
-		if (
-			ask.read === "board" &&
-			ask.workspace === "all" &&
-			ask.account_client_id === undefined
-		) {
-			const account_client_id = firstText(old, "accounts", "account_client_id");
-			if (account_client_id !== undefined && UUID.test(account_client_id))
-				enqueue({ read: "board", workspace: "all", account_client_id });
-		}
 		if (ask.read === "lead board") {
+			// The territory answer has no vertical, so sample it from the Leads board.
 			const vertical = firstText(old, "leads", "specialty");
 			if (vertical !== undefined) enqueue({ read: "territory", vertical });
 		}
