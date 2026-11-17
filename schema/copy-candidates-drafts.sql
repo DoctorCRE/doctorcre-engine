@@ -70,6 +70,14 @@ select 'lead_contact_draft', id, 'update', '{"approved": false}', '{"approved": 
 	approved_at, approved_by_user_id, approved_by_job, approved_for_user_id
 from ready_draft where approved_at is not null;
 
+-- Clear the deck records each drop as one batch event naming the candidates it expired.
+create temp table deck_drop on commit drop as
+select distinct on (r ->> 'id') (r ->> 'id')::uuid as candidate_id, e.id, e.actor_id, e.occurred_at
+from public.event e cross join jsonb_array_elements(e.new_value -> 'rows') r
+where e.subject_type = 'clear_the_deck' and e.verb = 'clear-the-deck-apply'
+	and e.new_value ->> 'kind' = 'candidate' and e.new_value ->> 'action' = 'drop'
+order by r ->> 'id', e.mutation_order desc;
+
 -- Promotion and email confirmation record their decision as a status event; a decline names its user on the row.
 create temp table old_candidate on commit drop as
 select p.*, case p.status when 'pool' then 'unreviewed' when 'suppressed_dup' then 'suppressed'
@@ -77,7 +85,7 @@ select p.*, case p.status when 'pool' then 'unreviewed' when 'suppressed_dup' th
 	case p.status when 'declined' then case when p.decline_reason ~ '\S' then p.decline_reason end
 		when 'suppressed_dup' then case when p.dup_basis ~ '\S' then p.dup_basis end when 'expired' then 'Expired by Clear the deck' end as reason,
 	l.party_id as lead_party_id, e.id as event_id, e.new_value as event_value,
-	case p.status when 'declined' then p.declined_at when 'expired' then coalesce(e.occurred_at, p.updated_at)
+	case p.status when 'declined' then p.declined_at when 'expired' then coalesce(x.occurred_at, p.updated_at)
 		else e.occurred_at end as decided_at,
 	made.changed_by_user_id as made_by_user_id, made.changed_by_job as made_by_job, made.changed_for_user_id as made_for_user_id,
 	decided.changed_by_user_id as decided_by_user_id, decided.changed_by_job as decided_by_job,
@@ -87,9 +95,12 @@ from public.candidate_pool p
 left join copied_lead l on l.old_id = p.promoted_lead_id::text
 left join lateral (select * from public.event e where e.subject_type = 'candidate_pool' and e.subject_id = p.id
 	and e.field = 'status' and e.new_value ->> 'status' = p.status order by e.mutation_order desc limit 1) e on true
-cross join lateral copy_event_attribution(p.created_by, null) made
+left join deck_drop x on x.candidate_id = p.id
+-- The creating transaction's own event, such as mail capture's proposal, names its job and sponsor.
+cross join lateral copy_event_attribution(p.created_by, (select e.id from public.event e where e.subject_type = 'candidate_pool'
+	and e.subject_id = p.id and e.actor_id = p.created_by and e.recorded_at = p.created_at order by e.mutation_order limit 1)) made
 cross join lateral copy_event_attribution(case p.status when 'declined' then p.declined_by
-	when 'expired' then coalesce(e.actor_id, p.updated_by) else e.actor_id end, e.id) decided
+	when 'expired' then coalesce(x.actor_id, p.updated_by) else e.actor_id end, case when p.status = 'expired' then x.id else e.id end) decided
 cross join lateral copy_event_attribution(p.confirmed_by, null) confirmed;
 
 insert into not_copied

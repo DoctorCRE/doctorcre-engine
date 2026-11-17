@@ -138,6 +138,10 @@ before(async () => {
  ${candidate(52, "pool", { source: "Example pool " })}
  ${candidate(53, "pool", { source_key: "key-53" })}
  ${candidate(54, "promoted", { promoted_lead_id: id(22) })} ${statusEvent(54, helper, "promoted")}
+ ${candidate(55, "pool")} ${candidate(56, "expired", { updated_by: agent })}
+ insert into public.event (occurred_at,recorded_at,actor_id,verb,subject_type,subject_id,new_value,cause,sponsoring_human_slug) values
+  ('2025-01-01','2025-01-01','${sweep}','propose-email-lead','candidate_pool','${id(55)}','{}','ingest_email','partner_one'),
+  ('2025-02-06','2025-02-06','${agent}','clear-the-deck-apply','clear_the_deck','${id(98)}','{"kind": "candidate", "action": "drop", "rows": [{"id": "${id(56)}"}]}','human_stated','partner_one');
  commit;`);
 	report = await run();
 });
@@ -186,6 +190,8 @@ test("candidates keep their decision, its user and history, and refusals are lis
 			"43 | suppressed | Example duplicate | Example qualification | 2025-01-01 old_system",
 			"44 | suppressed | Expired by Clear the deck | Example qualification | 2025-02-04 user 01",
 			"49 | unreviewed | Example qualification | 2025-01-01 old_system",
+			"55 | unreviewed | Example qualification | 2025-01-01 mail_capture for 01",
+			"56 | suppressed | Expired by Clear the deck | Example qualification | 2025-02-06 agent for 01",
 		],
 	);
 	const [context] = await lines(
