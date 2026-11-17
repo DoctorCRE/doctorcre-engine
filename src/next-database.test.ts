@@ -6339,7 +6339,7 @@ const INVOICE_REFUSALS: Case[] = [
 	["insert into invoice_mailbox (address) values ('other@example.com')", notGranted("invoice_mailbox")],
 ];
 
-test("invoice evidence and guarded application obey rules 91 to 94", async () => {
+test("invoice evidence and guarded application obey rules 92 to 95", async () => {
 	for (const [sql, refusal] of INVOICE_REFUSALS)
 		await rolledBack(() => assert.rejects(db.query(sql), expected(refusal)));
 });
