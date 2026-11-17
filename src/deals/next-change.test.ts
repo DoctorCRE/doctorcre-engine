@@ -1,28 +1,16 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { after, before, mock, test } from "node:test";
-import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import { copyTest } from "../test-copy.ts";
-import worker from "../worker.ts";
+import { after, before, test } from "node:test";
+import { type Caller, doorTest } from "../test-door.ts";
 
-const { db, setup, cleanup, connectionString } = copyTest();
-const writer = `deal_changes_${randomUUID().replaceAll("-", "")}`;
+const { db, setup, cleanup, save: saveAt } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const [ALEX, BLAIR] = [id(1), id(2)];
-const TEAM = "https://example.cloudflareaccess.com";
-const AUDIENCE = "made-up-jobs-audience";
-const access = await generateKeyPair("RS256", { extractable: true });
 
 before(async () => {
-	mock.method(globalThis, "fetch", async () =>
-		Response.json({
-			keys: [{ ...(await exportJWK(access.publicKey)), kid: "made-up-kid" }],
-		}),
-	);
 	await setup();
-	await db.query(`create role ${writer} login; grant engine to ${writer};
-		begin; select set_config('engine.job', 'old_system', true);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${ALEX}', 'person', 'Alex Example'), ('${BLAIR}', 'person', 'Blair Example');
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
 		insert into phase values ('touring', 'Touring'), ('negotiation', 'Negotiation'), ('dead', 'Dead');
@@ -33,64 +21,10 @@ before(async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into deal_phase_change select id, '2026-01-05T15:00:00Z', 'touring', null from deal; commit;`);
 });
-after(async () => {
-	mock.restoreAll();
-	await db.query(`drop owned by ${writer}; drop role ${writer}`);
-	await cleanup();
-});
+after(cleanup);
 
-const login = () => {
-	const url = new URL(connectionString);
-	url.username = writer;
-	return url.href;
-};
-
-type Caller = { user: string } | { job: string; for_user?: string };
-type Body = Record<string, unknown>;
-
-async function save(
-	caller: Caller,
-	deal: string,
-	args: object,
-): Promise<[number, Body]> {
-	const user = "user" in caller ? caller.user : undefined;
-	const token = await new SignJWT({})
-		.setProtectedHeader({ alg: "RS256", kid: "made-up-kid" })
-		.setIssuer(TEAM)
-		.setAudience(AUDIENCE)
-		.setExpirationTime("5 minutes")
-		.sign(access.privateKey);
-	const headers: Record<string, string> =
-		"job" in caller
-			? {
-					"Cf-Access-Jwt-Assertion": token,
-					"Engine-Job": caller.job,
-					...(caller.for_user && { "Engine-For-User": caller.for_user }),
-				}
-			: {
-					Cookie: "__Host-dealroom_session=example",
-					Origin: "https://engine.example.test",
-					"Sec-Fetch-Site": "same-origin",
-					"x-carr-csrf": "example",
-				};
-	const response = await worker.request(
-		`https://engine.example.test/${user ? "api/engine" : "jobs"}/deals/${deal}/changes`,
-		{ method: "POST", headers, body: JSON.stringify(args) },
-		{
-			DATABASE_WRITER: { connectionString: login() },
-			ACCESS_TEAM_DOMAIN: TEAM,
-			JOBS_ACCESS_AUD: AUDIENCE,
-			CARR: {
-				fetch: async () =>
-					Response.json({
-						actor: { slug: user, display: user },
-						csrf_token: "example",
-					}),
-			},
-		},
-	);
-	return [response.status, await response.json()];
-}
+const save = (caller: Caller, deal: string, args: object) =>
+	saveAt(caller, `deals/${deal}/changes`, args);
 
 const seen = async (deal: string) =>
 	Number(
