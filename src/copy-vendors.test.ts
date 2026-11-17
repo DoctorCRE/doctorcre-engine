@@ -234,3 +234,88 @@ test("a second run changes nothing, lists again what still waits, and lists a ve
 		);
 		assert.deepEqual(await rows("select * from change order by id"), history);
 	}));
+
+const link = (
+	n: number,
+	from: number,
+	to: number,
+	kind: string,
+	via?: number,
+) =>
+	`insert into public.party_link (id, from_party, to_party, kind, source, created_by, created_at, via_party, occurred_on, note)
+		values ('${id(n)}', '${id(from)}', '${id(to)}', '${kind}', 'example', '${PARTNER}', '2025-03-04T00:00:00Z',
+		${via ? `'${id(via)}'` : "null"}, '2025-03-01', ' Example note ${n} ');`;
+const evidence = (vendor: number, ...entries: [string, number][]) =>
+	`update public.vendor set deal_evidence = '${JSON.stringify(
+		entries.map(([role, deal]) => ({
+			deal_id: id(deal),
+			role,
+			occurred_at: "2025-04-01T02:00:00Z",
+			evidence_ref: `Example ${role}`,
+		})),
+	)}' where id = '${id(vendor)}';`;
+// Old deals 70 and 72 were copied, 71 was not, and each is the deal of client 60, who is record 20.
+const DEALS = `select set_config('engine.job', 'old_system', true);
+insert into party (id, kind, name) values ('${id(20)}', 'person', 'Example Client');
+insert into deal (id, name, owner_user_id) values ('${id(70)}', 'Example deal', '${PARTNER}'), ('${id(72)}', 'Example deal', '${PARTNER}');
+insert into outside_id (source, value, party_id, deal_id) values ('old_system', '${id(20)}', '${id(20)}', null),
+	('old_system', '${id(70)}', null, '${id(70)}'), ('old_system', '${id(72)}', null, '${id(72)}');
+insert into public.party (id, kind, name, created_by, updated_by) values ('${id(1)}', 'person', 'Example', '${SYSTEM}', '${SYSTEM}'),
+	('${id(20)}', 'person', 'Example', '${SYSTEM}', '${SYSTEM}');
+insert into public.client (id, party_id, created_by, updated_by) values ('${id(60)}', '${id(20)}', '${SYSTEM}', '${SYSTEM}');
+insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
+insert into public.deal_phase (slug, label) values ('negotiation', 'Example negotiation');
+insert into public.deal (id, client_id, name, deal_type, phase, created_by, updated_by)
+	select deal, '${id(60)}', 'Example deal', 'lease', 'negotiation', '${SYSTEM}', '${SYSTEM}' from unnest(array['${id(70)}'::uuid, '${id(72)}'::uuid]) deal;
+insert into public.party_link_kind (slug, label, sort) values
+	('knows', 'Example', 1), ('introduced', 'Example', 2), ('intro', 'Example', 3), ('referral', 'Example', 4), ('referred', 'Example', 5);
+${link(50, 20, 1, "introduced", 10)} ${link(51, 11, 20, "intro", 1)} ${link(52, 10, 20, "referral")} ${link(53, 10, 20, "referred")}
+${link(54, 10, 20, "knows", 11)} ${link(55, 20, 11, "introduced", 17)} ${link(56, 16, 20, "introduced", 10)} ${link(57, 20, 1, "intro", 1)}
+insert into public.party_link_deal (link_id, deal_id, referred_by, note, created_by)
+	values ('${id(52)}', '${id(70)}', '${id(10)}', 'Example deal referral', '${PARTNER}');
+alter table public.vendor disable trigger vendor_touch;
+${evidence(40, ["worked", 70], ["worked", 71], ["referred", 72], ["referred", 70], ["example", 70])}
+${evidence(42, ["worked", 70], ["referred", 72])}
+${evidence(41, ["referred", 20])}`;
+const DEAL_FIELDS = ["deal_evidence", "party_link", "party_link_deal"];
+
+test("introductions either way, and the deals a vendor worked or referred, are copied, or listed with why", () =>
+	rolledBack(async () => {
+		const listed = (await copy(DEALS))?.filter((row) =>
+			DEAL_FIELDS.includes(row[1] as string),
+		);
+		// biome-ignore format: one row per introduction
+		assert.deepEqual(await rows("select vendor_id, made_by, introduced_by_user_id, introduced_party_id, introduced_on::text, deal_id, note from introduction order by vendor_id, made_by, deal_id"), [
+			{ vendor_id: id(10), made_by: "vendor", introduced_by_user_id: null, introduced_party_id: id(20), introduced_on: null, deal_id: id(70), note: "Example deal referral" },
+			{ vendor_id: id(10), made_by: "vendor", introduced_by_user_id: null, introduced_party_id: id(20), introduced_on: "2025-03-31", deal_id: id(72), note: "Example referred" },
+			{ vendor_id: id(10), made_by: "vendor", introduced_by_user_id: null, introduced_party_id: id(20), introduced_on: "2025-03-01", deal_id: null, note: "Example note 50" },
+			{ vendor_id: id(11), made_by: "team", introduced_by_user_id: PARTNER, introduced_party_id: id(20), introduced_on: "2025-03-01", deal_id: null, note: "Example note 51" },
+			{ vendor_id: id(11), made_by: "vendor", introduced_by_user_id: null, introduced_party_id: id(20), introduced_on: "2025-03-31", deal_id: id(72), note: "Example referred" },
+		]);
+		assert.deepEqual(
+			await rows(
+				"select deal_id, party_id, role from deal_party order by party_id",
+			),
+			[
+				{ deal_id: id(70), party_id: id(10), role: "contractor" },
+				{ deal_id: id(70), party_id: id(11), role: "vendor" },
+			],
+		);
+		// biome-ignore format: one row per value
+		assert.deepEqual(listed, [
+			[id(40), "deal_evidence", `example ${id(70)}`, "neither worked nor referred"],
+			[id(40), "deal_evidence", `worked ${id(71)}`, "its deal is not copied"],
+			[id(41), "deal_evidence", `referred ${id(20)}`, "its deal is not copied"],
+			[id(53), "party_link", "referred", "who made it is not recorded"],
+			[id(55), "party_link", "introduced", "made by neither a copied vendor nor a user"],
+			[id(56), "party_link", "introduced", "a party it links is not copied"],
+			[id(57), "party_link", "intro", "no single copied vendor on either side"],
+		]);
+		const history = await rows("select * from change order by id");
+		await db.query("discard temp");
+		assert.deepEqual(
+			(await copy())?.filter((row) => DEAL_FIELDS.includes(row[1] as string)),
+			listed,
+		);
+		assert.deepEqual(await rows("select * from change order by id"), history);
+	}));

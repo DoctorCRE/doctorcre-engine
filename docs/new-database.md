@@ -602,7 +602,7 @@ Moving today's rows across:
 
 ## Copying today's vendors
 
-`schema/copy-vendors.sql` copies today's vendors as "Vendors" above says. The owner runs it after the party copy and before the deal copy, which finds the vendor roles, in its own transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list. Introductions and worked deals follow in #343.
+`schema/copy-vendors.sql` copies today's vendors as "Vendors" above says. The owner runs it after the party copy and before the deal copy, which finds the vendor roles, and again after the deal copy, so introductions and worked deals find their deals. Each run is its own transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list.
 
 - A vendor's party, found through the party copy's old-id map, takes the vendor role with the vendor's stage, level and target flag, and a role for its category. `outside_id` maps the vendor's old id to that record, so a second run copies only vendors it does not map yet. Its `vendor_ref` becomes an outside id under `old_system_ref`, as a party's `ref` does, unless another record holds it.
 - Each `vendor_category` row is a vendor category, with `gc` as contractor, beside the roles of `deal_vendor_assignment`. Each `vendor_stage` row but the nine original stages is a vendor stage. A role or stage already in the new database keeps its label.
@@ -610,6 +610,8 @@ Moving today's rows across:
 - A merged-away vendor is today's tombstone, whose values today's merge already gave its survivor, so it is not copied.
 - A parked or avoided vendor has no reason today, so all of its record's vendors wait and are listed. So is a vendor whose party is not copied.
 - These are listed too: an uncategorized vendor's free-text `category`, a level the new list lacks, `trust_override`, and each value of `verticals`, `owner_id`, `referral_active`, `territory`, `offers`, `seeking`, `rivalry_group`, `originated`, `enrich`, `last_touch`, `intro_notes`, `owner_label`, `links_label`, `loan_programs` and `deal_history_verified_at`, and `out_of_market` when set.
+- Each worked deal in a copied vendor's `deal_evidence` puts the vendor on the deal, in its category, or as a vendor when it has none. Each referred deal there is an introduction of the deal's client, made by the vendor, with that deal and its date in Central time. Each run revisits every copied vendor's evidence, and adds only what is missing. Evidence of another kind, or whose deal is not copied, is listed.
+- Each introduction follows "Vendors" above, and keeps its old id, date and note. A `party_link_deal` row is the introduction of its link's other end, who is that deal's client, as today's referral binding checks, so a link with deals is copied through them and not again on its own. A referred deal in a vendor's evidence that a referral already holds is not copied twice. One whose parties are not all copied, whose maker is missing or is neither a copied vendor nor a user, with no single copied vendor on a side, or whose introduced party cannot be told, is listed.
 
 ## Copying today's deals
 
