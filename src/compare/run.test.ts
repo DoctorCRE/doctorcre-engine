@@ -475,6 +475,39 @@ test("the change feed reports a differing event field by path and event ID, an e
 		assert.ok(!text.includes(value), `${value} reached the report`);
 });
 
+test("a difference confined to the cursorless first feed page fails the run while the recent walk matches", async () => {
+	const firstPage = Array.from({ length: 200 }, (_, n) => event(1000 + n));
+	const old = (ask: Ask) =>
+		ask.read === "feed" && ask.start === undefined
+			? feed(firstPage)
+			: answer(ask);
+	const { run } = await runWith(
+		(ask) =>
+			ask.read === "feed" && ask.start === undefined
+				? feed([
+						event(1000, { new_value: "made-up-difference" }),
+						...firstPage.slice(1),
+					])
+				: old(ask),
+		old,
+	);
+	assert.deepEqual(
+		run.outcomes.filter((o) => o.ask.read === "feed").map((o) => o.result),
+		["matched", "different"],
+	);
+	assert.deepEqual(
+		run.outcomes.filter((o) => o.result !== "matched").map((o) => o.ask),
+		[{ read: "feed" }],
+	);
+	assert.equal(exitCode(run), 1);
+	const text = report("made-up", run);
+	assert.match(text, /\nchange feed +2 +1 +0 +0 +1 +0 +0\n/);
+	assert.ok(
+		text.includes(`feed.events[].new_value  value differs  1  ${uuid(1000)}`),
+	);
+	assert.doesNotMatch(text, /made-up-difference|made-up-cursor/);
+});
+
 test("no value, free-form key or non-ID text from either answer reaches the report", async () => {
 	const markers: string[] = [];
 	const m = (name: string) => {
