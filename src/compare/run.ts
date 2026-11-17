@@ -42,21 +42,21 @@ export class StopRun extends Error {}
 export type Ask =
 	| { read: "board"; workspace: Workspace }
 	| { read: "deal"; deal: string }
-	| { read: "client fit"; state?: string }
+	| { read: "client fit"; state?: string; vertical?: string; city?: string }
 	| { read: "capture queue" }
 	| { read: "feed"; start?: string }
 	| { read: "find"; query: string }
 	| { read: "lead board" }
 	| { read: "lead"; lead: string }
 	| { read: "quiet follow-ups" }
-	| { read: "territory" }
+	| { read: "territory"; vertical?: string; city?: string; state?: string }
 	| { read: "reasons to reach out" }
 	| { read: "invoices" }
 	| { read: "client list" }
 	| { read: "client"; client: string }
 	| { read: "vendor list" }
 	| { read: "vendor"; vendor: string }
-	| { read: "vendor markets" }
+	| { read: "vendor markets"; market?: string }
 	| { read: "relationships" }
 	// `record` identifies the deal, client or vendor whose name is asked.
 	| { read: "recent activity"; name: string; record: string; limit?: 20 }
@@ -86,6 +86,15 @@ function dealsOn(board: unknown) {
 		const list = board[key];
 		return Array.isArray(list) ? list.filter(isRecord) : [];
 	});
+}
+
+function firstText(answer: unknown, list: string, field: string) {
+	const rows =
+		isRecord(answer) && Array.isArray(answer[list]) ? answer[list] : [];
+	for (const row of rows)
+		if (isRecord(row) && typeof row[field] === "string" && row[field].trim())
+			return row[field];
+	return undefined;
 }
 
 type Read = { shape: ReadShape; prefix: string; label?: string };
@@ -245,18 +254,42 @@ export async function compareDeals(
 			return run;
 		}
 		const [first, old, second] = answers;
-		if (ask.read === "client fit" && ask.state === undefined) {
-			const profiles =
-				isRecord(old) && Array.isArray(old.profiles) ? old.profiles : [];
-			const profile = profiles.find(
-				(p) => isRecord(p) && typeof p.state === "string" && p.state.trim(),
-			);
-			const state =
-				isRecord(profile) && typeof profile.state === "string"
-					? profile.state
-					: "ZZ";
-			enqueue({ read: "client fit", state });
+		if (
+			ask.read === "client fit" &&
+			ask.state === undefined &&
+			ask.vertical === undefined &&
+			ask.city === undefined
+		) {
+			enqueue({
+				read: "client fit",
+				state: firstText(old, "profiles", "state") ?? "ZZ",
+			});
+			for (const field of ["vertical", "city"] as const) {
+				const value = firstText(old, "profiles", field);
+				if (value !== undefined)
+					enqueue({ read: "client fit", [field]: value });
+			}
 		}
+		if (ask.read === "lead board") {
+			// The territory answer has no vertical, so sample it from the Leads board.
+			const vertical = firstText(old, "leads", "specialty");
+			if (vertical !== undefined) enqueue({ read: "territory", vertical });
+		}
+		if (
+			ask.read === "territory" &&
+			ask.vertical === undefined &&
+			ask.city === undefined &&
+			ask.state === undefined
+		)
+			for (const field of ["city", "state"] as const) {
+				const value = firstText(old, "submarkets", field);
+				if (value !== undefined) enqueue({ read: "territory", [field]: value });
+			}
+		if (ask.read === "vendor markets" && ask.market === undefined) {
+			const market = firstText(old, "markets", "slug");
+			if (market !== undefined) enqueue({ read: "vendor markets", market });
+		}
+
 		if (ask.read === "board")
 			for (const { id, client_name } of dealsOn(old)) {
 				if (
