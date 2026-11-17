@@ -52,7 +52,12 @@ begin atomic
 			union all
 			select coalesce(e.new_value ->> 'next_action_id', e.new_value ->> 'item_id', e.new_value ->> 'action_id'), 'done',
 				e.id, e.occurred_at, e.mutation_order, null, null, e.verb <> 'reopen-one-action'
-			from public.event e where e.verb in ('complete-one-action', 'complete-deal-item', 'reopen-one-action')) e
+			from public.event e where e.verb in ('complete-one-action', 'complete-deal-item', 'reopen-one-action')
+			union all
+			select case e.verb when 'log-outreach' then e.new_value ->> 'completed' else e.new_value ->> 'next_action_id' end,
+				'done', e.id, e.occurred_at, e.mutation_order, null, null, true
+			from public.event e where e.verb = 'log-outreach'
+				or (e.verb = 'complete-action' and e.new_value ->> 'status' = 'done')) e
 		order by e.action_id, e.resolution, e.mutation_order desc
 	), action as (
 		select n.id, n.status, n.version, null::timestamptz as completed_at from public.next_action n

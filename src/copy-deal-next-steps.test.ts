@@ -142,7 +142,7 @@ before(async () => {
  ('${id(504)}','${id(404)}','${id(17)}','${id(2)}','Example post-call missing deal','${id(1)}','2025-01-01','open',null,null,'2025-02-01');
  insert into public.event (subject_type,subject_id,new_value,actor_id,verb,cause,sponsoring_human_slug,occurred_at) values
  ('deal','${id(10)}','{"next_action_id":"${id(501)}"}','${id(2)}','resolve-post-call-candidate','automation_job','partner_one','2025-01-01'),
- ('deal','${id(10)}','{"completed_post_call_action_ids":["${id(502)}"]}','${id(2)}','log-outreach','automation_job','partner_one','2025-02-02');
+ ('deal','${id(10)}','{"completed":"${id(502)}","completed_post_call_action_ids":["${id(502)}"]}','${id(2)}','log-outreach','automation_job','partner_one','2025-02-04');
  update public.next_action set version=2 where id in ('${id(112)}','${id(113)}');
  insert into public.event (id,subject_type,subject_id,field,new_value,human_quote,actor_id,verb,cause,occurred_at) values
  ('${id(600)}','deal','${id(10)}','status','{"next_action_id":"${id(101)}","status":"done","version":2}',null,'${id(1)}','complete-one-action','human_stated','2025-01-15'),
@@ -401,3 +401,59 @@ test("the record constraint and stamp still apply after copying", async () => {
 	);
 	await db.query("rollback");
 });
+
+for (const [subject, record] of [
+	["deal", 10],
+	["vendor", 60],
+] as const) {
+	test(`${subject} completion events date only the named done actions and survive reruns`, async () => {
+		await db.query("begin; select set_config('engine.job','old_system',true)");
+		try {
+			const fixture = `
+ update public.next_action set status='done' where subject_type='${subject}' and subject_id='${id(record)}' and owner_id='${id(1)}' and status='open';
+ insert into public.next_action (id,subject_type,subject_id,owner_id,description,status,created_at,updated_at,created_by)
+ select v.id, '${subject}', '${id(record)}', '${id(1)}', 'Example completion ' || v.id,
+ case when v.n = 806 then 'open' else 'done' end, '2025-01-01', '2025-04-01', '${id(1)}'
+ from (select n, ('00000000-0000-4000-8000-' || lpad(n::text,12,'0'))::uuid as id from generate_series(800,808) n) v;
+ insert into public.event (subject_type,subject_id,new_value,actor_id,verb,cause,occurred_at) values
+ ('${subject}','${id(record)}','{"next_action_id":"${id(800)}","status":"done"}','${id(1)}','complete-action','human_stated','2025-01-10'),
+ ('${subject}','${id(record)}','{"completed":"${id(801)}","next_action":"${id(806)}"}','${id(1)}','log-outreach','human_stated','2025-01-11'),
+ ('${subject}','${id(record)}','{"next_action_id":"${id(803)}","status":"done"}','${id(1)}','complete-action','human_stated','2025-01-12'),
+ ('${subject}','${id(record)}','{"action_id":"${id(803)}","status":"open"}','${id(1)}','reopen-one-action','human_stated','2025-01-13'),
+ ('${subject}','${id(record)}','{"completed":"${id(804)}"}','${id(1)}','log-outreach','human_stated','2025-01-20'),
+ ('${subject}','${id(record)}','{"action_id":"${id(804)}","status":"open"}','${id(1)}','reopen-one-action','human_stated','2025-01-21'),
+ ('${subject}','${id(record)}','{"next_action_id":"${id(804)}","status":"done"}','${id(1)}','complete-action','human_stated','2025-01-14'),
+ ('${subject}','${id(record)}','{"completed":null,"next_action":"${id(805)}"}','${id(1)}','log-outreach','human_stated','2025-01-15'),
+ ('${subject}','${id(record)}','{"completed":"${id(807)}"}','${id(1)}','log-outreach','human_stated','2025-01-16'),
+ ('${subject}','${id(record)}','{"action_id":"${id(807)}","status":"open"}','${id(1)}','reopen-one-action','human_stated','2025-01-17'),
+ ('${subject}','${id(record)}','{"next_action_id":"${id(808)}","status":"open"}','${id(1)}','complete-action','human_stated','2025-01-18');`;
+			await db.query(fixture);
+			await run();
+			const answer = () =>
+				rows(
+					`select id,status,done_at::text from next_step where id between '${id(800)}' and '${id(808)}' order by id`,
+				);
+			assert.deepEqual((await answer()).map(Object.values), [
+				[id(800), "done", "2025-01-10 00:00:00+00"],
+				[id(801), "done", "2025-01-11 00:00:00+00"],
+				[id(802), "done", null],
+				[id(803), "done", null],
+				[id(804), "done", "2025-01-14 00:00:00+00"],
+				[id(805), "done", null],
+				[id(806), "open", null],
+				[id(807), "done", null],
+				[id(808), "done", null],
+			]);
+			const snapshot = () =>
+				rows(
+					`select jsonb_agg(s order by id) as steps, (select jsonb_agg(c order by id) from change c) as history from next_step s`,
+				);
+			const before = await snapshot();
+			await db.query("discard temp");
+			await run();
+			assert.deepEqual(await snapshot(), before);
+		} finally {
+			await db.query("rollback");
+		}
+	});
+}
