@@ -25,8 +25,9 @@ const db = new pg.Client({
 	options: "-c search_path=next -c TimeZone=UTC",
 });
 const rows = async (sql: string) => (await db.query(sql)).rows;
-const run = async (): Promise<pg.QueryResultRow[]> => {
-	const result = await db.query(copy);
+// A run starts clear of every temp table, so it takes the reviewed counties each time.
+const run = async (input = ""): Promise<pg.QueryResultRow[]> => {
+	const result = await db.query(`discard temp; ${input} ${copy}`);
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
@@ -61,13 +62,15 @@ after(async () => {
 	await db.end();
 	await asAdmin(`drop database "${name}" with (force)`);
 });
-const counties = `create temp table copy_market_county (market_slug text not null, county_fips text not null) on commit drop;
+const countyTable =
+	"create temp table copy_market_county (market_slug text not null, county_fips text not null) on commit drop;";
+const counties = `${countyTable}
 insert into copy_market_county values ('example-bay', '01001'), ('example-bay', '01003'), ('example-bay', '01001'), ('missing-slug', '01001');`;
 
 test("reviewed counties copy once, memberships follow merged party ids, and unknown geography is listed", async () => {
-	await db.query(`begin; ${counties}`);
+	await db.query("begin");
 	try {
-		const report = await run();
+		const report = await run(counties);
 		assert.deepEqual(await rows("select id, name from market"), [
 			{ id: "3715b54e-b421-89eb-8c15-5b7642e420a5", name: "Example Bay" },
 		]);
@@ -133,9 +136,9 @@ test("without a complete valid county list no market or market piece is invented
 		"",
 		`${counties} insert into copy_market_county values ('example-bay', 'bad');`,
 	]) {
-		await db.query(`begin; ${input}`);
+		await db.query("begin");
 		try {
-			const report = await run();
+			const report = await run(input);
 			assert.deepEqual(await rows("select * from market"), []);
 			assert.deepEqual(await rows("select * from territory_piece"), []);
 			assert.ok(
@@ -152,9 +155,9 @@ test("without a complete valid county list no market or market piece is invented
 });
 
 test("a rerun leaves rows, timestamps and history unchanged", async () => {
-	await db.query(`begin; ${counties}`);
+	await db.query("begin");
 	try {
-		await run();
+		await run(counties);
 		await db.query(
 			"update party_territory set started_on = '2024-06-01'; delete from territory_piece",
 		);
@@ -168,24 +171,19 @@ test("a rerun leaves rows, timestamps and history unchanged", async () => {
 (select jsonb_agg(p) from territory_piece p) as pieces, (select jsonb_agg(p) from party_territory p) as links,
 (select count(*)::int from change) as history`);
 		const first = await snapshot();
-		await db.query(
-			"drop table pg_temp.not_copied, pg_temp.old_market, pg_temp.old_membership, pg_temp.text_territory",
-		);
-		await run();
+		await run(counties);
 		assert.deepEqual(await snapshot(), first);
-		await db.query(
-			"drop table pg_temp.not_copied, pg_temp.old_market, pg_temp.old_membership, pg_temp.text_territory; delete from copy_market_county",
-		);
 		const report = await run();
 		assert.ok(
 			!report.some((r) => r.old_id === "example-bay" && r.field === "boundary"),
 		);
 		assert.deepEqual(await snapshot(), first);
-		await db.query(
-			"drop table pg_temp.not_copied, pg_temp.old_market, pg_temp.old_membership, pg_temp.text_territory; insert into copy_market_county values ('example-bay', 'bad')",
-		);
 		assert.ok(
-			(await run()).some(
+			(
+				await run(
+					`${countyTable} insert into copy_market_county values ('example-bay', 'bad');`,
+				)
+			).some(
 				(r) =>
 					r.old_id === "example-bay" && r.reason === "market_already_copied",
 			),
@@ -197,13 +195,13 @@ test("a rerun leaves rows, timestamps and history unchanged", async () => {
 });
 
 test("name clashes and missing parties are reported without choosing a match", async () => {
-	await db.query(`begin; ${counties}
+	await db.query(`begin;
 insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at)
 values ('example-clash', 'Example Bay', 'market', 'Example boundary', 'Example source', '${id(1)}', '2025-01-01');
 select set_config('engine.job', 'old_system', true);
 delete from outside_id where source = 'old_system';`);
 	try {
-		const report = await run();
+		const report = await run(counties);
 		assert.ok(
 			report.some(
 				(r) =>
@@ -220,10 +218,11 @@ delete from outside_id where source = 'old_system';`);
 });
 
 test("a regional name does not conflict with a named market", async () => {
-	await db.query(`begin; ${counties}
-update public.vendor_market set name = 'Example Bay' where kind = 'regional';`);
+	await db.query(
+		"begin; update public.vendor_market set name = 'Example Bay' where kind = 'regional'",
+	);
 	try {
-		await run();
+		await run(counties);
 		assert.deepEqual(await rows("select name from market"), [
 			{ name: "Example Bay" },
 		]);

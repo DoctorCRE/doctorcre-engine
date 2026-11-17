@@ -111,6 +111,13 @@ insert into copy_market_county values ('example-market', '01001');`);
 	await db.query("commit; begin");
 	report = await run();
 	await db.query("commit");
+	assert.deepEqual(
+		await rows(
+			"select relname from pg_class where relnamespace = pg_my_temp_schema()",
+		),
+		[],
+		"no copier temp table outlives its transaction",
+	);
 });
 after(async () => {
 	await db.end();

@@ -25,19 +25,34 @@ const db = new pg.Client({
 	options: "-c search_path=next -c TimeZone=UTC",
 });
 const rows = async (sql: string) => (await db.query(sql)).rows;
+// A copy starts clear of every temp table, so it supplies the source mappings again before sql.
+const freshCopy = async (sql = ""): Promise<pg.QueryResultRow[]> => {
+	const result =
+		await db.query(`discard temp; create temp table copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop;
+ insert into copy_how_found values ('lead','Example referral','referral'), ('client','Example client source','vendor'), ('candidate_pool','Example pool','public_records');
+ ${sql}; ${copy}`);
+	assert.ok(Array.isArray(result));
+	return result.at(-1)?.rows ?? [];
+};
 const run = async (
 	setup = "",
 	keepOpen = false,
 ): Promise<pg.QueryResultRow[]> => {
-	await db.query(
-		"begin; select set_config('engine.job','old_system',true); create temp table copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop; insert into copy_how_found values ('lead','Example referral','referral'), ('client','Example client source','vendor'), ('candidate_pool','Example pool','public_records');",
-	);
+	await db.query("begin; select set_config('engine.job','old_system',true)");
 	try {
-		if (setup) await db.query(`${setup}; set constraints all immediate`);
-		const result = await db.query(copy);
-		assert.ok(Array.isArray(result));
-		if (!keepOpen) await db.query("commit");
-		return result.at(-1)?.rows ?? [];
+		const report = await freshCopy(
+			setup && `${setup}; set constraints all immediate`,
+		);
+		if (keepOpen) return report;
+		await db.query("commit");
+		assert.deepEqual(
+			await rows(
+				"select relname from pg_class where relnamespace = pg_my_temp_schema()",
+			),
+			[],
+			"no copier temp table outlives its transaction",
+		);
+		return report;
 	} catch (error) {
 		await db.query("rollback");
 		throw error;
@@ -332,10 +347,7 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 					r.reason === "sources_disagree",
 			),
 		);
-		await db.query(
-			`drop table not_copied,old_relationship,relationship_source,mapped_source,waiting_client_source,examined_relationship,classified_relationship,ready_relationship,relationship_note,old_next_action,relationship_ref; ${mapping}`,
-		);
-		await db.query(copy);
+		await freshCopy(mapping);
 		staged = await answer();
 		assert.deepEqual(staged, [
 			{
@@ -411,9 +423,9 @@ test("person accounts and older duplicates wait, and refused rows stay retryable
 			),
 			[],
 		);
-		await db.query(`drop table not_copied,old_relationship,relationship_source,mapped_source,waiting_client_source,examined_relationship,classified_relationship,ready_relationship,relationship_note,old_next_action,relationship_ref;
-  update public.lead set stage='new' where id in ('${id(87)}','${id(88)}');`);
-		await db.query(copy);
+		await freshCopy(
+			`update public.lead set stage='new' where id in ('${id(87)}','${id(88)}')`,
+		);
 		assert.deepEqual(
 			await rows(
 				`select summary from activity where summary in ('Older waiting note','Retryable note') order by summary`,
@@ -463,7 +475,6 @@ test("next actions, reference numbers and roster wording are copied once or list
 					!/several_records|client_owner/.test(r.reason),
 			)
 			.map((r) => [r.old_id, r.field, r.value, r.reason]);
-	const restart = `drop table not_copied,old_relationship,relationship_source,mapped_source,waiting_client_source,examined_relationship,classified_relationship,ready_relationship,relationship_note,old_next_action,relationship_ref`;
 	try {
 		const report = await run(setup, true);
 		const copied = [
@@ -526,15 +537,10 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],
 		];
 		assert.deepEqual(listed(report), expected);
-		await db.query(restart);
-		const again = await db.query(copy);
-		assert.ok(Array.isArray(again));
-		assert.deepEqual(listed(again.at(-1)?.rows ?? []), expected);
+		assert.deepEqual(listed(await freshCopy()), expected);
 		assert.deepEqual((await steps()).map(Object.values), copied);
-		await db.query(`${restart};
- insert into public.lead (id,party_id,stage,source_type,created_at,updated_at,created_by,updated_by) values ('${id(104)}','${id(90)}','new','Example referral','2025-04-01','2025-04-01','${id(1)}','${id(1)}');
+		await freshCopy(`insert into public.lead (id,party_id,stage,source_type,created_at,updated_at,created_by,updated_by) values ('${id(104)}','${id(90)}','new','Example referral','2025-04-01','2025-04-01','${id(1)}','${id(1)}');
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,created_at,created_by) values ('${id(117)}','lead','${id(104)}','${id(1)}','Call back','2027-01-05','2020-01-01','${id(1)}');`);
-		await db.query(copy);
 		assert.deepEqual((await steps()).map(Object.values), copied);
 		const corrected = [
 			...copied.slice(0, 2),
@@ -545,8 +551,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 			`update public.next_action set description = 'Ask for plans' where id = '${id(114)}'`,
 			"",
 		]) {
-			await db.query(`${restart}; ${correction}`);
-			await db.query(copy);
+			await freshCopy(correction);
 			assert.deepEqual((await steps()).map(Object.values), corrected);
 		}
 	} finally {
