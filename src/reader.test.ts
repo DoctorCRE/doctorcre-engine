@@ -7,7 +7,6 @@ import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
 import { readRecentActivity } from "./activity/read.ts";
 import { readMeetingPrep } from "./calendar/meeting-prep.ts";
-import { seedAgenda } from "./calendar/test-agenda.ts";
 import { readClient, readClientList } from "./clients/read.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
@@ -36,6 +35,7 @@ import { readVendor, readVendorList } from "./vendors/read.ts";
 const readable = [
 	"activity",
 	"actor",
+	"board_snapshot",
 	"client",
 	"client_status",
 	"client_type",
@@ -236,7 +236,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", () =>
+test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", (t) =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -483,32 +483,26 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				reminders.items.map((r) => [r.item_kind, r.subject_name]),
 				[["critical_date", "Example Reader Deal"]],
 			);
-			await withAdmin(
-				(admin) =>
-					admin.query(`set session_replication_role = replica;
-						insert into actor (slug, kind, display_name) values ('partner_one', 'human', 'Example');
-						update party set email = 'client@example.test';
-						update client set roster_ref = 'C-0001';
-						update deal set owner = 'partner_one';
-						insert into deal_participant (deal_id, actor_id, role, set_by)
-							select deal.id, actor.id, 'lead', actor.id from deal, actor where actor.slug = 'partner_one';`),
-				database,
-			);
+			const calendarNow = new Date("2026-03-08T07:30:00.000Z");
+			// The snapshot and reader share one clock, independent of Docker clock skew.
+			t.mock.timers.enable({ apis: ["Date"], now: calendarNow });
 			await withAdmin(async (admin) => {
-				await seedAgenda(admin, {
-					schema: "carr-calendar-agenda.v1",
-					observed_at: new Date().toISOString(),
-					items: [
-						{
-							start: new Date(Date.now() + 3600000).toISOString(),
-							end: new Date(Date.now() + 7200000).toISOString(),
-							title: "Example",
-							attendees: [{ email: "client@example.test" }],
-						},
-					],
-				});
+				await admin.query(`set session_replication_role = replica;
+					insert into actor (slug, kind, display_name) values ('partner_one', 'human', 'Example');
+					update party set email = 'client@example.test';
+					update client set roster_ref = 'C-0001';
+					update deal set owner = 'partner_one';
+					insert into deal_participant (deal_id, actor_id, role, set_by)
+						select deal.id, actor.id, 'lead', actor.id from deal, actor where actor.slug = 'partner_one'`);
 				await admin.query(
-					`grant usage on schema next to ${name}; grant select on all tables in schema next to ${name}`,
+					`insert into board_snapshot (organization_tenant_id, sponsoring_human_slug, board_id,
+						snapshot_json, updated_by_actor_id)
+					select 'carr-internal', 'partner_one', 'calendar-agenda', jsonb_build_object(
+						'schema', 'carr-calendar-agenda.v1', 'observed_at', $1::timestamptz, 'items', jsonb_build_array(
+							jsonb_build_object('start', $1::timestamptz + interval '1 hour', 'end', $1::timestamptz + interval '2 hours',
+								'title', 'Example', 'attendees', '[{"email": "client@example.test"}]'::jsonb))),
+						id from actor where slug = 'partner_one'`,
+					[calendarNow.toISOString()],
 				);
 			}, database);
 			const meetingPrep = () =>
@@ -546,7 +540,7 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 			// A refused read still answers.
 			await withAdmin(
 				(admin) =>
-					admin.query(`REVOKE SELECT ON next.calendar_agenda FROM ${name}`),
+					admin.query(`REVOKE SELECT ON public.board_snapshot FROM ${name}`),
 				database,
 			);
 			assert.deepEqual(await meetingPrep(), {
