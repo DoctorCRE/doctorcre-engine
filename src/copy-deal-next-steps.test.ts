@@ -87,6 +87,22 @@ before(async () => {
  update public.next_action set hold_until='2026-04-01', source_ref='example:source', item_title='Example display', item_bullets='["Example bullet"]' where id='${id(100)}';
  update public.next_action set item_title='Example checklist', source_ref='example:checklist' where id='${id(109)}';
  update public.next_action set created_by='${id(2)}' where id='${id(106)}';
+ insert into party (id, kind, name) values ('${id(61)}', 'company', 'Example Vendor');
+ insert into outside_id (source, value, party_id) values ('old_system', '${id(60)}', '${id(61)}'), ('old_system', '${id(62)}', '${id(61)}');
+ insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, due_on, hold_until, created_at, updated_at, created_by) values
+ ${[
+		[120, 60, "Example vendor open", "open", "'2026-05-01'", "null"],
+		[121, 60, "Example vendor done", "done", "null", "null"],
+		[122, 60, "Example vendor dropped", "dropped", "null", "null"],
+		[123, 60, "Example vendor expired", "expired", "null", "null"],
+		[124, 62, "Example merged vendor hold", "open", "null", "'2026-06-01'"],
+		[125, 63, "Example uncopied vendor", "open", "null", "null"],
+ ]
+		.map(
+			([n, v, text, status, due, hold]) =>
+				`('${id(Number(n))}', 'vendor', '${id(Number(v))}', '${id(1)}', '${text}', '${status}', ${due}, ${hold}, '2025-01-01', '2025-02-01', '${id(1)}')`,
+		)
+		.join(",")};
  insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(200)}','${id(11)}','next_step','Example old note','${id(1)}','2025-01-01'),
  ('${id(201)}','${id(11)}','next_step','Example current note','${id(2)}','2025-02-01'),
@@ -267,7 +283,31 @@ test("the activity copy never also copies next-step notes or tasks", async () =>
 	);
 });
 
-test("reruns preserve every row and history entry, and retry a deal copied later", async () => {
+test("vendor actions become next steps about the vendor's record, never about a deal", async () => {
+	// biome-ignore format: one row per vendor action
+	assert.deepEqual((await rows(`select id, deal_id, party_id, due_on::text, done_at::text, owner_party_id, changed_by_user_id from next_step where id between '${id(120)}' and '${id(125)}' order by id`)).map(Object.values), [
+ [id(120), null, id(61), "2026-05-01", null, id(1), id(1)],
+ [id(121), null, id(61), null, "2025-02-01 00:00:00+00", id(1), id(1)],
+ [id(124), null, id(61), null, null, id(1), id(1)],
+ ]);
+	for (const n of [120, 121]) assert.deepEqual(reasons(report, n), []);
+	for (const n of [122, 123])
+		assert.deepEqual(reasons(report, n), ["closed_without_doing"]);
+	assert.deepEqual(reasons(report, 124), ["hold_has_no_place"]);
+	assert.deepEqual(
+		report.filter((r) => r.old_id === id(125)),
+		[
+			{
+				old_id: id(125),
+				field: "vendor_id",
+				value: id(63),
+				reason: "vendor_not_copied",
+			},
+		],
+	);
+});
+
+test("reruns preserve every row and history entry, and retry a deal or vendor copied later", async () => {
 	const snapshot = async () => [
 		await rows("select * from next_step order by id"),
 		await rows("select * from change order by id"),
@@ -282,6 +322,15 @@ test("reruns preserve every row and history entry, and retry a deal copied later
 	assert.equal(
 		(await rows(`select what from next_step where id='${id(105)}'`))[0]?.what,
 		"Example missing deal",
+	);
+	await db.query(
+		`begin; select set_config('engine.job','old_system',true); insert into outside_id (source,value,party_id) values ('old_system','${id(63)}','${id(61)}'); commit`,
+	);
+	await copyOnce();
+	assert.equal(
+		(await rows(`select party_id from next_step where id='${id(125)}'`))[0]
+			?.party_id,
+		id(61),
 	);
 });
 test("an id on another record is listed without changing its row", async () => {

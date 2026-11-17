@@ -287,7 +287,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 19. `copy-calls.sql`: needs the activity a logged meeting already is.
 20. `copy-meetings.sql`: needs logged activities, with reviewed reuse or distinct-pair inputs when needed.
 21. `copy-lead-stage-moves.sql`: needs the activity each move cites.
-22. `copy-deal-next-steps.sql`: needs deals and activity.
+22. `copy-deal-next-steps.sql`: needs vendors, deals and activity.
 23. `copy-call-suggestions.sql`: needs the calls and the next steps an accepted suggestion made.
 24. `copy-meeting-suggestions.sql`: needs the meetings and the next steps an accepted action made.
 25. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
@@ -866,11 +866,13 @@ Run `schema/copy-preferences.sql` as the owner after `copy-leads-clients.sql` an
 - A mark finds its next step by the next action's id, which both next-step copies keep, on the action's deal, or on the person or company its lead, client or vendor became. A step with that id on another record is not the action's copy. Until the deal copy has run, marks on a deal's next actions are listed as `next_step_not_copied`, and a rerun after it adds them. A mark also waits when its actor is not a user, its item is not a next action, the one it waits on was not copied, or its reason is blank. A mark is its user's, from its earliest to its latest change today.
 - A user's copied preferences and marks are never changed again, so an unchanged rerun changes nothing and a corrected row arrives on the next run.
 
-## Copying today's deal next steps
+## Copying today's deal and vendor next steps
 
-Run `schema/copy-deal-next-steps.sql` as the owner after the party, deal and activity copies, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`.
+Run `schema/copy-deal-next-steps.sql` as the owner after the party, vendor, deal and activity copies, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`.
 
 Deal next actions keep their ids, descriptions, owners and nullable due dates. As in the lead copy, done actions use their last change time as `done_at`; dropped and expired actions stay listed. Unknown owners stay empty and listed. Holds, source references and display titles and bullets have no destination and are listed.
+
+Vendor next actions follow the same rules, as next steps about the person or company the vendor became, never about a deal. A merged-away vendor's actions reach its survivor. An action whose vendor is not copied, such as one waiting for a ruling's reason, is listed as `vendor_not_copied`, and a later run retries it.
 
 The board's current-action view decides whether the newest unsuperseded note copies as a fallback. Checklist items and pending assessments do not hide a note; a current done plan suppresses it and its date. Older, superseded and hidden notes stay listed without an invented completion. A newer note can replace a completed plan. The fallback takes `deal.next_date`, including null, and the deal's mapped owner. A deal with a date but no actions or next-step notes gets an `Imported deal follow-up`, with a stable id derived from its deal id. A date matching an open action's due date needs no report; otherwise a date without a fallback is listed.
 
