@@ -534,6 +534,8 @@ const STAMPED = [
 	"deal_phase_change",
 	"deal_property",
 	"deal_party",
+	"imported_deal_party",
+	"imported_deal_owner",
 	"activity",
 	"activity_about",
 	"next_step",
@@ -645,6 +647,26 @@ const SCHEMA = await readFile(
 type Case = [sql: string, refusal: Refusal];
 const LEASE = id(700);
 const LEASE_RECORD = id(720);
+// The old system's dates, all before the seeded people joined.
+const earlierParty = (row: Record<string, string | null> = {}) =>
+	insert("imported_deal_party", {
+		id: id(9600),
+		deal_id: DEAL,
+		party_id: AGENT,
+		role: "listing_agent",
+		started_at: "2025-01-01",
+		ended_at: "2025-06-01",
+		...row,
+	});
+const earlierOwner = (row: Record<string, string | null> = {}) =>
+	insert("imported_deal_owner", {
+		id: id(9610),
+		deal_id: DEAL,
+		user_id: TEAMMATE,
+		started_at: "2025-01-01",
+		ended_at: "2025-06-01",
+		...row,
+	});
 const newLease = (row: Record<string, string | number | null> = {}) => {
 	const { deal_id = DEAL, property_id = PROPERTY, ...version } = row;
 	const record =
@@ -2133,6 +2155,46 @@ const OWNER_RULES: Record<string, Case[]> = {
 			"deal_renews_another_lease",
 		],
 	],
+	"an earlier person on a deal left after joining, held the role once at a time and is back only after leaving":
+		[
+			[
+				earlierParty({ ended_at: "2025-01-01" }),
+				"imported_deal_party_ends_after_it_starts",
+			],
+			[
+				`${earlierParty()}; ${earlierParty({ id: id(9601), started_at: "2025-05-01", ended_at: "2025-09-01" })}`,
+				"imported_deal_party_once_at_a_time",
+			],
+			[
+				`${earlierParty({ started_at: null })}; ${earlierParty({ id: id(9601), started_at: null, ended_at: "2025-09-01" })}`,
+				"imported_deal_party_once_at_a_time",
+			],
+			[
+				earlierParty({ ended_at: "2999-01-01" }),
+				"deal_party_rejoins_after_leaving",
+			],
+			[
+				`${earlierParty({ party_id: DOCTOR })};
+			insert into deal_party (deal_id, party_id, role, created_at) values ('${DEAL}', '${DOCTOR}', 'listing_agent', '2025-03-01')`,
+				"deal_party_rejoins_after_leaving",
+			],
+			[
+				`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			${earlierParty()}; ${earlierParty({ id: id(9601), party_id: DUPLICATE })};
+			select merge_party('${DUPLICATE}', '${AGENT}')`,
+				"imported_deal_party_once_at_a_time",
+			],
+		],
+	"an earlier deal owner held the deal after starting, one owner at a time": [
+		[
+			earlierOwner({ ended_at: "2025-01-01" }),
+			"imported_deal_owner_ends_after_it_starts",
+		],
+		[
+			`${earlierOwner({ started_at: null })}; ${earlierOwner({ id: id(9611), user_id: USER })}`,
+			"imported_deal_owner_one_at_a_time",
+		],
+	],
 	"historical critical date loads still require a whole confirmation": [
 		[
 			`alter table critical_date disable trigger critical_date_transition; ${newCriticalDate({ confirmed_by_user_id: USER })}`,
@@ -3329,6 +3391,8 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			addable: ![
 				"invoice_mailbox",
 				"imported_change",
+				"imported_deal_party",
+				"imported_deal_owner",
 				"app_user",
 				"job",
 				"merged_party",
@@ -3512,6 +3576,31 @@ test("a deal's new deal owner is history: who held it before, who moved it and w
 			},
 		]);
 	}));
+
+test("earlier people and owners hand over back to back, in other roles meanwhile, and follow a merge", async () => {
+	const owner = await connect("none");
+	try {
+		await owner.query("begin");
+		await owner.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			${earlierParty({ started_at: null, ended_at: "2025-01-01" })};
+			${earlierParty({ id: id(9601), party_id: DUPLICATE })};
+			${earlierParty({ id: id(9602), role: "title", started_at: "2025-02-01" })};
+			${earlierOwner({ started_at: null })};
+			${earlierOwner({ id: id(9611), user_id: USER, started_at: "2025-06-01", ended_at: "2025-09-01" })};
+			select merge_party('${DUPLICATE}', '${AGENT}')`);
+		const { rows } = await owner.query(
+			"select id, party_id, role from imported_deal_party order by id",
+		);
+		assert.deepEqual(rows, [
+			{ id: id(9600), party_id: AGENT, role: "listing_agent" },
+			{ id: id(9601), party_id: AGENT, role: "listing_agent" },
+			{ id: id(9602), party_id: AGENT, role: "title" },
+		]);
+	} finally {
+		await owner.query("rollback");
+		await owner.end();
+	}
+});
 
 test("a parked deal stays in its phase and is revived to it, and history keeps who parked it, why and when", () =>
 	rolledBack(async () => {

@@ -84,6 +84,7 @@ Each link is one row. No record holds a list or a column per role.
 - **`party_link`**: who knows whom, or who can introduce the team to whom, between any two people or companies, with the dates it started and ended.
 - **`party_territory`**: who serves a territory, with the dates they started and stopped. A user serves as their person.
 - **`deal_party`**: who is on a deal, in which role. The client, the listing agent and each vendor are rows here.
+- **`imported_deal_party`** and **`imported_deal_owner`**: who was on a deal and left, and who owned it before, as today's system recorded them, each with when it started and ended.
 - **`deal_property`**: the properties a deal is considering.
 - **`offer_document`**: the documents of each round.
 - **`activity_about`**: each deal, person or company, or property an activity concerns.
@@ -526,6 +527,18 @@ A deal records what kind of transaction it is and why the client is taking space
 
 Every deal has exactly one deal owner, a user, in `owner_user_id`. A second user can still be on the deal in another role. A new deal owner is an update of that column, so change history keeps who held the deal before, who moved it and when, with no dated table of its own. Who held a deal on a given day is the latest change to `owner_user_id` at or before it.
 
+Someone who leaves a deal in the new database is a removed `deal_party` row, and a new deal owner is a changed `owner_user_id`, so change history keeps both. Today's system keeps them as dated rows instead. It keeps when each person joined and left a deal, and closes one `lead` row and opens the next when the deal owner changes. Those earlier periods have their own tables, which only the owner's copy fills. `imported_deal_party` keeps a person or company, their role and the deal. `imported_deal_owner` keeps the user who owned the deal. Each row keeps the old row's id, when the period started and when it ended. A period ends after it starts. An empty start means the old row cannot say when it started.
+
+The owner change events already copy into `imported_change`, with who moved the deal, when and why. An earlier owner period keeps only who held the deal and over what span, so the copy never turns a `lead` row into a change or an event into a period. Who held a deal before the copy is the period covering that time. When no period covers it, the owner change events are the evidence.
+
+These tables hold what today's system recorded, not a complete history. A deal with no row may still have had earlier people, and an old start date can be when the row was stored rather than when the work began. Periods that cannot be placed are refused, and the copy lists them for correction in today's system:
+
+- One person in one role on one deal holds one period at a time. Two periods that share a moment are refused. So are two periods with empty starts, since neither can be placed before the other.
+- A deal has one earlier owner at a time.
+- Someone back on a deal rejoined no earlier than their last period ended, so the current `deal_party` row's `created_at` is at or after that end. A merge that would break either rule is refused, as a merge of overlapping brand memberships is.
+
+The engine reads these tables but cannot add, change or remove them, as with `imported_change`. A merge moves their parties to the survivor. A test proves each rule.
+
 A deal names its market from the `market` list, which can be set when the deal opens, before any property is chosen, and stays empty until known. A closed deal records its value, such as the total lease value or the purchase price, in `closed_value`, which is empty until known and never zero. Nothing requires it at the move to closed, because the mail job closes a deal when its invoice arrives and the invoice does not carry it, so the value is left for a user to fill in.
 
 A parked deal is not active work for now, and says why in `parking_reason`: the client paused, the prospect was never active, or another reason, with an optional note. No reason means the deal is active, as no disposition means a vendor is. Parking is not a phase and never changes one, so reviving a deal, which clears its reason and note, leaves it in the phase it was in. Who parked a deal and when is the latest change to its `parking_reason` in change history, so the deal holds no date or user of its own for it, and the same history keeps every earlier parking and revival.
@@ -537,7 +550,7 @@ National is never stored. A deal is national exactly when its client is a locati
 Moving today's rows across:
 
 - `deal_type` splits in two. `lease`, `purchase`, `sale_leaseback` and `build_to_suit` become the kind, with no reason. `relocation`, `expansion` and `additional_office` become the reason of the same slug, and `startup` the reason `start_up`, each with no kind until a user sets it. `renewal` becomes that reason only with its source lease linked; otherwise leave the reason unknown and list the missing source for a user. `other` sets neither, and the deal is listed with its imported type for a user to file.
-- `deal.owner`, a partner's slug, becomes that partner's user as the deal owner. A closed or lost deal with none takes its open `deal_participant` row with role `lead`. A deal with neither is listed. Earlier deal owners, from the closed `lead` rows, come across later into change history, dated when each changed, with the old `event` rows.
+- `deal.owner`, a partner's slug, becomes that partner's user as the deal owner. A closed or lost deal with none takes its open `deal_participant` row with role `lead`. A deal with neither is listed. Earlier deal owners, from the closed `lead` rows, come across into `imported_deal_owner` (see above). Ended participants come across into `imported_deal_party`.
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
 - `won_value` becomes `closed_value`. `sf_commission_placeholder` is not copied (see "Commissions").
 - `lane` is not copied. A deal whose old lane disagrees with its client's national account is listed once #275 lands.
