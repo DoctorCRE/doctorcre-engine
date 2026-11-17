@@ -279,7 +279,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 8. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
 9. `copy-deals.sql`, then `copy-market-agent-sources.sql` in its own transaction.
 10. `copy-vendors.sql` again: introductions and worked deals find their deals.
-11. `copy-leases.sql`: needs its deal, client and building.
+11. `copy-leases.sql`: needs its deal, client and building. Then `copy-lease-options.sql` takes reviewed options for copied versions, before critical dates.
 12. `copy-critical-dates.sql`.
 13. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
 14. `copy-deal-file-text.sql`: needs the deal files. Then `copy-client-files.sql` reuses stored files and links client-only files through the party map.
@@ -467,6 +467,10 @@ Today's `critical_date` rows keep their kinds, dates, sources and notes. `option
 - The reference and source wording, a legacy-unverified status, and evidence kinds the deal-file copy does not map have no destination, so each copied version lists them. So does a lease whose deal or tenant is not copied, a deal with several chains, a tenant who is not the deal's client, a building that is missing, several, not on the deal or lost in a merge loop, a version that changes its lease's deal, tenant or building, two amendments of one row, a lease or version id the new database holds for something else, a version number the new lease already holds, a missing, deleted or incomplete file, a file whose key holds different bytes, size or type, dates out of order, and a row whose chain has no first row.
 - Today's renewal deals name no source lease, so this copy links none; the deal copy lists them as `renewal_without_lease`.
 - Each copied version links the suites its premises cover in its lease's building; a version a lease refusal holds back links none. A space the building copy has not made a suite there, including one that copy lists, waits as `suite_not_copied`, and a later run adds the link once its suite copies.
+
+`schema/copy-lease-options.sql` runs in a separate owner transaction after the lease copy, with the new schema on `search_path` and `copy-attribution.sql` loaded. Before running it, create `pg_temp.copy_lease_option(old_id uuid not null, number integer, kind text, notice_on date, terms text)` with `on commit drop`. Keep the private input outside this repo. `old_id` is the old lease row's id, which identifies its copied version. Each reviewed version supplies its complete option set. Dates and terms come only from that review, never from prose.
+
+Identical repeated reviews collapse. Different reviews for the same version and number are listed as `option_reviews_conflict`. A missing old lease or copied version, a number outside 1 through 32767, an unknown kind, missing notice, notice after expiration, blank terms, an uncopied author or sponsor, or a number already holding different terms is listed instead of inserted. Accepted rows keep the old version's creation time and last author and time. Reruns preserve rows, stamps and history; a changed review is listed as a conflict with the existing option. Without input, nothing copies and the report matches the lease copy's `option_terms_unparsed` entries. The lease copy continues to preserve and list all option prose, even when this separate copy accepts a review. No critical date is confirmed by either copy; the option can feed `propose_critical_dates` later.
 
 ## Copying today's buildings, suites and owners
 

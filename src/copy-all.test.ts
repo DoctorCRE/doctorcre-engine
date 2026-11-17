@@ -41,6 +41,11 @@ const order: [file: string, input?: string][] = [
 	["copy-market-agent-sources.sql"],
 	["copy-vendors.sql"],
 	["copy-leases.sql"],
+	[
+		"copy-lease-options.sql",
+		`create temp table copy_lease_option (old_id uuid not null, number integer, kind text, notice_on date, terms text) on commit drop;
+ insert into copy_lease_option values ('${id(51)}', 1, 'renewal', '2029-06-30', 'Example reviewed renewal');`,
+	],
 	["copy-critical-dates.sql"],
 	["copy-deal-files.sql"],
 	["copy-deal-file-text.sql"],
@@ -299,7 +304,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
- lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
+ lease_version: 1, lease_option: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
@@ -334,6 +339,27 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 		[{ party_id: id(10), document_id: id(53) }],
 	);
 	assert.deepEqual(first, corrections);
+});
+
+test("the reviewed lease option feeds an exact notice proposal that still needs confirmation", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`select propose_critical_dates('${id(30)}')`);
+		assert.deepEqual(
+			await rows(`select lease_version_id, option_number, due_on::text, status
+   from critical_date where kind = 'option_notice'`),
+			[
+				{
+					lease_version_id: id(51),
+					option_number: 1,
+					due_on: "2029-06-30",
+					status: "proposed",
+				},
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
 });
 
 test("running every copy again changes no row or change history and lists the same corrections", async () => {
