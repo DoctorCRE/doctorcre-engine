@@ -69,14 +69,15 @@ before(async () => {
  from unnest(array['${id(10)}'::uuid, '${id(11)}'::uuid, '${id(12)}'::uuid]) v;
  insert into ops.deal_deliverable (id, organization_tenant_id, deal_id, filename, mime, bytes, sha256, object_key, created_by, created_at, finalized_at, state, version, visibility) values
  ${deliverable(200, "deliverables/example-tenant/10/200")}, ${deliverable(201, "deliverables/example-tenant/10/201", "started")},
- ${deliverable(202, "files/202")}, ${deliverable(215, "files/216")};
+ ${deliverable(202, "files/202")}, ${deliverable(215, "files/216")}, ${deliverable(228, "files/228")},
+ ${deliverable(229, "deliverables/example-tenant/10/229")};
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_by) values
- ${[202, 210, 211, 218, 219, 220, 221, 222, 226, 227].map((n) => attachment(n)).join(", ")},
+ ${[202, 210, 211, 218, 219, 220, 221, 222, 226, 227, 228, 229].map((n) => attachment(n)).join(", ")},
  ${attachment(212, 12)}, ${attachment(216)}, ${attachment(223, 3, "client")}, ${attachment(225, 11)};
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by) values
  ('${id(217)}', 'deal', '${id(10)}', 'files/217', 'Example file 217.pdf', ' ', 'not-a-hash', 217, '${id(1)}'),
  ('${id(224)}', 'deal', '${id(10)}', 'files/224', 'Example file 224.pdf', 'application/pdf', '${sha(224)}', 224, '${id(1)}');
- update public.attachment set deleted_at = '2025-03-01' where id = '${id(211)}';
+ update public.attachment set deleted_at = '2025-03-01' where id in ('${id(211)}', '${id(228)}');
  insert into public.doc_template (id, slug, name, source_path, template_version, field_map, created_by) values
  ('${id(300)}', 'example-loi', 'Example LOI', 'templates/loi', '1', '{}', '${id(1)}'),
  ('${id(301)}', 'example-unmapped', 'Example letter', 'templates/letter', '1', '{}', '${id(1)}'),
@@ -210,6 +211,11 @@ test("files that cannot map are listed with a reason and not stored, never guess
 	assert.deepEqual(reasons(report, 217), ["file_incomplete"]);
 	assert.deepEqual(reasons(report, 219), ["file_conflict"]);
 	assert.deepEqual(reasons(report, 224), ["document_id_taken"]);
+	assert.deepEqual(reasons(report, 228), ["attachment_deleted"]);
+	assert.deepEqual(
+		report.filter((r) => r.old_id === id(229)).map((r) => [r.reason, r.value]),
+		[["document_id_taken", id(229)]],
+	);
 	assert.deepEqual(reasons(report, 225), ["file_conflict"]);
 	assert.deepEqual(
 		report.filter((r) => r.old_id === id(226)).map((r) => [r.reason, r.value]),
@@ -225,7 +231,7 @@ test("files that cannot map are listed with a reason and not stored, never guess
 	assert.deepEqual(reasons(report, 403), ["no_file"]);
 	assert.deepEqual(
 		await rows(
-			`select deal_id from document where r2_key in ('files/212', 'files/216', 'files/217', 'files/224', 'files/225', 'files/226')`,
+			`select deal_id from document where r2_key in ('files/212', 'files/216', 'files/217', 'files/224', 'files/225', 'files/226', 'files/228', 'files/229') or id = '${id(229)}'`,
 		),
 		[],
 	);

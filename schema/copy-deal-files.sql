@@ -11,11 +11,13 @@ insert into not_copied select t.id, 'slug', t.slug, 'unknown_kind' from public.d
 join copy_template_kind m on m.template_slug = t.slug where m.kind not in (select slug from document_kind);
 
 -- A deliverable's version counts its sharing changes, not replacements, so each file is its own first version.
+-- A finalized document upload is also its attachment, so deleting the attachment removes the upload too.
 create temp table candidate on commit drop as
 select f.*, exists (select from deal n where n.id = f.deal_id) as deal_copied from (
  select v.id, v.deal_id, v.object_key as r2_key, v.filename as name, v.mime, v.sha256, v.bytes,
   v.created_at, v.finalized_at as changed_at, a.id as author_id, null as kind
  from ops.deal_deliverable v left join public.actor a on a.slug = v.created_by where v.state = 'finalized'
+  and not exists (select from public.attachment d where d.r2_key = v.object_key and d.deleted_at is not null)
  union all
  select id, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_at, created_by, null
  from public.attachment where subject_type = 'deal' and deleted_at is null
@@ -39,8 +41,8 @@ cross join lateral (values
   or (coalesce(n.deal_id, c.deal_id), coalesce(n.content_type, c.mime), coalesce(n.sha256, c.sha256), coalesce(n.bytes, c.bytes))
   is distinct from (c.deal_id, c.mime, c.sha256, c.bytes)),
  ('kind', c.kind, 'several_kinds', exists (select from candidate o where o.r2_key = c.r2_key and o.kind <> c.kind)),
- ('id', c.id::text, 'document_id_taken', exists (select from document o where o.id = c.id
-  and (o.r2_bucket, o.r2_key) is distinct from ('deal_documents', c.r2_key)))) f(field, value, reason, refused)
+ ('id', c.id::text, 'document_id_taken', exists (select from candidate o where o.id = c.id and o.r2_key <> c.r2_key)
+  or exists (select from document o where o.id = c.id and (o.r2_bucket, o.r2_key) is distinct from ('deal_documents', c.r2_key)))) f(field, value, reason, refused)
 where f.refused;
 insert into not_copied select distinct id, field, value, reason from file_refusal;
 create temp table copyable on commit drop as

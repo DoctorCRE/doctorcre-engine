@@ -416,7 +416,7 @@ Today's `critical_date` rows keep their kinds, dates, sources and notes. `option
 - Every file is its own first version. A deliverable's `version` counts its sharing changes, not replacements, and no old row names a predecessor.
 - Before loading the script, optionally create `pg_temp.copy_template_kind (template_slug text primary key, kind text not null) on commit drop` with reviewed template slugs, kept outside this repo. A generated file takes its template's kind; every other file is `other` and listed as `kind_unclassified`. A kind not on the list is listed as `unknown_kind`, and its files are `other`.
 - A generated document with a filed file keeps its id as an outside id under `old_generated_document` on its deal. Its note is listed as `generated_note`.
-- Unfinished uploads, expiry and sharing are dropped. Listed, not copied: a deleted attachment, a generated pointer to one, a generated document with no deal or no file, a file whose deal is not copied, one missing its type, hash or size, rows of one key that disagree on deal, type, hash or size, or with a stored file there, two template kinds for one file, an id another file holds, and a generated id another deal holds.
+- Unfinished uploads, expiry and sharing are dropped. Listed, not copied: a deleted attachment, with any upload or generated pointer to it, a generated document with no deal or no file, a file whose deal is not copied, one missing its type, hash or size, rows of one key that disagree on deal, type, hash or size, or with a stored file there, two template kinds for one file, an id another file holds, and a generated id another deal holds.
 
 ## Tours as meetings
 
