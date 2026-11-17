@@ -100,6 +100,11 @@ A vendor introducing someone to the team, or the team introducing someone to a v
 _Avoid_: intro, link, referral (on its own)
 _Database_: `party_link` and `party_link_deal` today, with `via_party` naming who made it; `introduction` in the new database, with `introduced_by_user_id` for a team's.
 
+**Knows** and **can introduce**:
+That one person or company knows another, or could introduce the team to another. Neither has happened the way an introduction has, and neither needs a vendor.
+_Avoid_: introduction, intro, connection
+_Database_: `party_link` of kind `knows` or `can_introduce` today, and `party_link` of the same two kinds in the new database.
+
 **Track record**:
 What a vendor's deals show: the deals it worked, how they ended, and the deals its introductions led to. It is read from deal history, never set by hand.
 _Avoid_: rating, trust tier, score
@@ -214,6 +219,33 @@ A tenant's agreement for a property, whether negotiated by the team or elsewhere
 **Lease option**:
 A renewal, expansion or early termination right in one lease version, with its exact notice deadline and terms.
 
+**Gross commission**:
+What the brokerage collects on a deal, recorded once. Every share and payment is a part of it.
+_Avoid_: fee, take (a user's part), commission amount on a payment
+_Database_: `commission.gross_amount` today, one row per invoice; `commission.gross` in the new database, one per deal.
+
+**Expected commission**:
+What an open deal is expected to bring, before its gross is known.
+_Database_: `commission` rows with status `expected` today; `commission.expected` in the new database.
+
+**Payment**:
+One part of a deal's gross as it is invoiced, falls due and is received, such as half at signing and half at move-in.
+_Avoid_: invoice (the email that brings it), installment
+_Database_: `commission` rows with status `invoiced` or `received` today; `commission_payment` in the new database.
+
+**Split**:
+Who gets what share of a deal's gross. Others are paid first: a referring agent, the brokerage, anyone else. The two users split what is left.
+_Avoid_: allocation, partner split
+_Database_: `commission_allocation` today, never filled; `commission_share` for the others and the view `commission_split` for everyone in the new database.
+
+**Closing user**:
+The user who closes a deal, its deal owner. Their ladder sets their part of what the others leave, and their partner takes the rest.
+
+**Ladder**:
+A user's tiers by their lifetime count of closed deals. Each tier starts at a count and runs until the next one, with the closing user's part, stepping down toward an even split. The count never resets. A single deal can override it. The real tiers are the partners' rows and never appear in this repo.
+_Avoid_: schedule, plan, tier table
+_New database_: `commission_tier`, keyed by the user and the count its tier starts from.
+
 **Tour**:
 A visit to properties. In the new database a completed tour is a meeting about the parties, with its deal and visited properties linked when known.
 
@@ -240,6 +272,18 @@ _New database_: `party_role.lane` on the lead role, from `lead_lane`.
 **Estimated lease date**:
 A lead's expected lease event, with its source and optional confidence. It is an estimate, not an executed lease ending.
 _New database_: `party_role.estimated_lease_on`, `lease_estimate_source` and `lease_estimate_confidence` on the lead role.
+
+**Space need**:
+A client's requirements on a deal, such as size, space type, market and must-haves. A deal may have several named alternatives.
+_Database_: `space_need` in the new database; today's `space_search`, `ops.deal_space_search` and approved requirements in `deal_client_need` supply its mapping.
+
+**Suite**:
+Space within a building, with a label, floor and area when known. A lease can name a suite in its property.
+_Database_: `suite` in the new database; `space` today.
+
+**Building owner**:
+A person or company that owns a property, with dates when known. A building can have joint and former owners.
+_Database_: `building_ownership` in both databases. The table also keeps property managers and listing representatives under their own kinds.
 
 **Outreach draft**:
 A lead's prepared first-contact message. Approval never sends it. A user sends it from their mailbox.

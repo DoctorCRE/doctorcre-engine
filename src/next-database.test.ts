@@ -64,6 +64,8 @@ insert into party_email (party_id, address, label, is_primary) values
 insert into party_phone (party_id, number, extension, label, is_primary) values
 	('${AGENT}', '+12175550100', '12', 'work', true), ('${AGENT}', '+12175550101', null, 'mobile', false);
 insert into phase (slug, label) values ('negotiation', 'Negotiating'), ('legal', 'Legal'), ('dead', 'Dead');
+insert into claim_type values
+	('finality', 'Best and final'), ('authority', 'Authority limit'), ('competing_interest', 'Competing interest');
 insert into property (id, address) values
 	('${PROPERTY}', '100 Example Way, Springfield'), ('${ELSEWHERE}', '200 Example Way, Springfield');
 insert into deal_kind values ('lease', 'Lease'), ('purchase', 'Purchase');
@@ -89,6 +91,12 @@ insert into next_step (id, what, owner_party_id, due_on, done_at, deal_id, party
 	('${id(400)}', 'Start the lease draft', null, '2026-03-20', null, '${DEAL}', null),
 	('${id(401)}', 'Send the signed LOI', '${CLIENT}', '2026-03-13', '2026-03-13T18:00:00+00:00', '${DEAL}', null),
 	('${id(402)}', 'Ask about a second location', null, null, null, null, '${CLIENT}');
+-- Quiet hours may run past midnight.
+insert into user_preference (user_id, time_zone, quiet_from, quiet_until, push_to_device) values
+	('${USER}', 'America/Chicago', '21:00', '07:00', true);
+insert into home_mark (user_id, next_step_id, disposition, snoozed_until, waiting_on_party_id, waiting_reason) values
+	('${USER}', '${id(400)}', 'snoozed', '2026-03-21T14:00:00+00:00', null, null),
+	('${TEAMMATE}', '${id(400)}', null, null, '${CLIENT}', 'Example: waiting on the signed LOI');
 `;
 const phases = [
 	{
@@ -164,6 +172,24 @@ const rounds = ROUNDS.map(
 				email_activity_id: i === 1 ? EMAIL : null,
 			},
 		],
+		// The landlord's counter claims a floor below its own rent, and another tenant.
+		claims:
+			i === 1
+				? [
+						{
+							claim_type: "authority",
+							floor_rent_per_sf_yr: 34,
+							quote: "The owner will not go below 34",
+							note: null,
+						},
+						{
+							claim_type: "competing_interest",
+							floor_rent_per_sf_yr: null,
+							quote: "Another tenant is looking at the space",
+							note: "Said on the call, not in the counter",
+						},
+					]
+				: [],
 	}),
 );
 
@@ -179,6 +205,12 @@ const offer = (
 	values ('${DEAL}', ${round}, ${answers}, '${from}', '${role}', now(), ${Object.values(row).map((value) => `'${value}'`)})`;
 };
 const NEXT_ROUND = offer(4, 3, AGENT, "listing_agent");
+const newClaim = (row: Record<string, string | number>) =>
+	insert("offer_claim", {
+		offer_id: id(101),
+		claim_type: "finality",
+		...row,
+	});
 // Runs the checks commit would run, inside a transaction the test still rolls back.
 // Later statements in the transaction are then checked as they run.
 const CHECK_AT_COMMIT = "set constraints all immediate";
@@ -320,6 +352,9 @@ insert into party_role (party_id, role, stage, relationship_level) values
 	('${VENDOR}', 'vendor', 'warm', 1), ('${VENDOR}', 'title', null, null);
 insert into introduction (id, vendor_id, made_by, introduced_party_id, introduced_on, deal_id) values
 	('${INTRODUCTION}', '${VENDOR}', 'vendor', '${CLIENT}', '2026-02-02', '${DEAL}');
+insert into party_link (kind, party_id, other_party_id, started_on, note) values
+	('knows', '${AGENT}', '${DOCTOR}', '2024-05-01', 'Example: trained together'),
+	('can_introduce', '${VENDOR}', '${DOCTOR}', null, null);
 `;
 const LEAD_SEED = `
 insert into lead_lane (slug, label) values ('renewal_radar', 'Renewal radar'), ('new_entity', 'New entity');
@@ -330,12 +365,33 @@ insert into party (id, kind, name, how_found) values ('${LEAD}', 'person', 'Dr. 
 insert into party_role (party_id, role, stage, owner_user_id) values ('${LEAD}', 'lead', 'nurture', '${TEAMMATE}');
 insert into activity_about (activity_id, party_id) values ('${CALL}', '${LEAD}'), ('${NOTE}', '${LEAD}');
 `;
+// Made up, so two sessions can race on one commission and one ladder.
+const COMMISSION_SEED = `
+insert into commission_tier (user_id, from_deal, partner_user_id, closing_share) values
+	('${TEAMMATE}', 1, '${USER}', 0.8), ('${TEAMMATE}', 3, '${USER}', 0.6);
+insert into commission (deal_id, gross) values ('${LENDER_DEAL}', 1000);
+`;
 const newIntroduction = (row: Record<string, string | null>) =>
 	insert("introduction", {
 		vendor_id: VENDOR,
 		made_by: "team",
 		introduced_by_user_id: USER,
 		introduced_party_id: CLIENT,
+		...row,
+	});
+const newMark = (row: Record<string, string | null>) =>
+	insert("home_mark", {
+		user_id: USER,
+		next_step_id: id(402),
+		disposition: "settled",
+		...row,
+	});
+const newLink = (row: Record<string, string | null>) =>
+	insert("party_link", {
+		kind: "knows",
+		party_id: DOCTOR,
+		other_party_id: AGENT,
+		started_on: "2024-05-01",
 		...row,
 	});
 const insert = (table: string, row: Record<string, string | number | null>) =>
@@ -423,8 +479,16 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"commission",
+	"commission_payment",
+	"commission_share",
+	"commission_tier",
 	"lead_contact_draft",
 	"proposal",
+	"lease_suite",
+	"suite",
+	"space_need",
+	"building_ownership",
 	"lead_lane",
 	"client_type",
 	"client",
@@ -457,18 +521,23 @@ const STAMPED = [
 	"party_territory",
 	"deal",
 	"introduction",
+	"party_link",
 	"deal_phase_change",
 	"deal_property",
 	"deal_party",
 	"activity",
 	"activity_about",
 	"next_step",
+	"user_preference",
+	"home_mark",
 	"document",
 	"document_extraction",
 	"document_kind",
 	"email",
 	"offer",
 	"offer_document",
+	"claim_type",
+	"offer_claim",
 	"lease",
 	"lease_version",
 	"lease_option",
@@ -507,6 +576,13 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"lease_suite",
+	"suite",
+	"space_need",
+	"building_ownership",
+	"commission",
+	"commission_payment",
+	"commission_share",
 	"lead_contact_draft",
 	"client",
 	"national_account",
@@ -530,7 +606,10 @@ const STORED_AT = [
 	"deal_party",
 	"activity_about",
 	"offer_document",
+	"offer_claim",
 	"next_step",
+	"user_preference",
+	"home_mark",
 	"document",
 	"document_extraction",
 	"social_account",
@@ -538,6 +617,7 @@ const STORED_AT = [
 	"design_template",
 	"post_media",
 	"introduction",
+	"party_link",
 ];
 
 // A constraint's name, or the error PostgreSQL raises.
@@ -1248,6 +1328,27 @@ const RULES: Record<string, Case[]> = {
 			"offer_one_accepted_per_deal",
 		],
 	],
+	"a claim is on a round, of a listed type, once per round, and like the round is never rewritten or removed":
+		[
+			[newClaim({ offer_id: MISSING }), "offer_claim_offer_id_fkey"],
+			[newClaim({ claim_type: "unknown" }), "offer_claim_claim_type_fkey"],
+			[
+				"insert into claim_type values ('deadline', 'Deadline')",
+				"claim_type_slug_check",
+			],
+			[newClaim({ claim_type: "authority" }), "offer_claim_pkey"],
+			[
+				newClaim({ floor_rent_per_sf_yr: 0 }),
+				"offer_claim_floor_rent_per_sf_yr_check",
+			],
+			[newClaim({ quote: " \n" }), "offer_claim_quote_check"],
+			[newClaim({ note: "" }), "offer_claim_note_check"],
+			...[
+				"update offer_claim set quote = 'Example'",
+				"delete from offer_claim",
+				"truncate offer_claim",
+			].map((sql): Case => [sql, notGranted("offer_claim")]),
+		],
 	"a round's status moves only out of open, or from accepted to superseded": [
 		[
 			"update offer set status = 'accepted' where round = 1",
@@ -1799,6 +1900,106 @@ const RULES: Record<string, Case[]> = {
 				"introduction_of_someone_else",
 			],
 		],
+	"a user's preferences are one row, in a known time zone, with quiet hours that start and end":
+		[
+			[
+				`update user_preference set time_zone = 'Example/Nowhere'`,
+				"time_zone_known",
+			],
+			[
+				"update user_preference set quiet_until = null",
+				"user_preference_quiet_hours",
+			],
+			[
+				"update user_preference set quiet_from = null",
+				"user_preference_quiet_hours",
+			],
+			[
+				"update user_preference set quiet_until = quiet_from",
+				"user_preference_quiet_hours",
+			],
+			[
+				`insert into user_preference (user_id, time_zone) values ('${USER}', 'UTC')`,
+				"user_preference_pkey",
+			],
+			[
+				`insert into user_preference (user_id, time_zone) values ('${CLIENT}', 'UTC')`,
+				"user_preference_user_id_fkey",
+			],
+			["delete from user_preference", notGranted("user_preference")],
+		],
+	"a Home mark is one user's, on one item, snoozed until a time or settled, and waiting on someone for a reason":
+		[
+			[newMark({ disposition: "done" }), "home_mark_disposition_check"],
+			[newMark({ disposition: "snoozed" }), "home_mark_snoozed_until"],
+			[
+				newMark({ snoozed_until: "2026-03-21T14:00:00+00:00" }),
+				"home_mark_snoozed_until",
+			],
+			[
+				newMark({
+					disposition: null,
+					snoozed_until: "2026-03-21T14:00:00+00:00",
+					waiting_on_party_id: CLIENT,
+					waiting_reason: "Example",
+				}),
+				"home_mark_snoozed_until",
+			],
+			[
+				newMark({ waiting_on_party_id: CLIENT }),
+				"home_mark_waiting_has_a_reason",
+			],
+			[
+				newMark({ waiting_reason: "Example" }),
+				"home_mark_waiting_has_a_reason",
+			],
+			[
+				newMark({ waiting_on_party_id: CLIENT, waiting_reason: " " }),
+				"home_mark_waiting_reason_check",
+			],
+			[newMark({ disposition: null }), "home_mark_marks_something"],
+			[newMark({ next_step_id: id(400) }), "home_mark_pkey"],
+			[newMark({ user_id: CLIENT }), "home_mark_user_id_fkey"],
+			[newMark({ next_step_id: MISSING }), "home_mark_next_step_id_fkey"],
+			[
+				`delete from next_step where id = '${id(400)}'`,
+				"home_mark_next_step_id_fkey",
+			],
+			[
+				`update home_mark set next_step_id = '${id(402)}'`,
+				notGranted("home_mark"),
+			],
+		],
+	"a knows or can-introduce link joins two different records, ends no earlier than it starts, and is stored once":
+		[
+			[newLink({ kind: "introduced" }), "party_link_kind_check"],
+			[newLink({ other_party_id: DOCTOR }), "party_link_two_parties"],
+			[newLink({ party_id: MISSING }), "party_link_party_id_fkey"],
+			[newLink({ other_party_id: MISSING }), "party_link_other_party_id_fkey"],
+			[
+				newLink({ kind: "can_introduce", ended_on: "2024-01-01" }),
+				"party_link_ends_after_it_starts",
+			],
+			[newLink({ note: " " }), "party_link_note_check"],
+			[
+				newLink({ party_id: AGENT, other_party_id: DOCTOR }),
+				"party_link_party_id_other_party_id_kind_started_on_key",
+			],
+			[newLink({}), "party_link_knows_once"],
+			[
+				newLink({
+					kind: "can_introduce",
+					party_id: VENDOR,
+					started_on: null,
+					other_party_id: DOCTOR,
+				}),
+				"party_link_party_id_other_party_id_kind_started_on_key",
+			],
+			[
+				`update party_link set other_party_id = '${CLIENT}'`,
+				notGranted("party_link"),
+			],
+		],
 	"a lead has a stage, and only a lead has an owner, who is a user": [
 		[
 			"update party_role set stage = null where role = 'lead'",
@@ -1993,6 +2194,21 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	suite: ["area_basis", "area_sf", "condition", "floor", "label"],
+	space_need: [
+		"applicability",
+		"market_id",
+		"max_rate_sf_yr",
+		"max_sf",
+		"min_sf",
+		"must_haves",
+		"name",
+		"source_ref",
+		"source_revision",
+		"space_type",
+		"vendor_id",
+	],
+	building_ownership: ["ended_on", "source", "started_on"],
 	lead_contact_draft: [
 		"approved",
 		"body",
@@ -2008,10 +2224,15 @@ const CHANGEABLE: Record<string, string[]> = {
 	national_account_owner: ["ended_on", "started_on"],
 
 	proposal: ["status"],
+	commission: ["closing_share", "expected", "gross"],
+	commission_payment: ["amount", "due_on", "invoiced_on", "received_on"],
+	commission_share: ["share"],
+	commission_tier: ["closing_share"],
 	role: ["label"],
 	do_not_contact: ["until_date"],
 	stage: ["label"],
 	how_found: ["label"],
+	claim_type: ["label"],
 	party_role: [
 		"disposition",
 		"disposition_reason",
@@ -2026,6 +2247,7 @@ const CHANGEABLE: Record<string, string[]> = {
 		"stage",
 	],
 	introduction: ["deal_id", "introduced_on", "note"],
+	party_link: ["ended_on", "note", "started_on"],
 	phase: ["label"],
 	deal_kind: ["label"],
 	deal_reason: ["label"],
@@ -2052,6 +2274,13 @@ const CHANGEABLE: Record<string, string[]> = {
 	party_phone: ["is_primary", "label"],
 	activity: ["from_party_id", "happened_at", "summary"],
 	next_step: ["done_at", "due_on", "owner_party_id", "what"],
+	user_preference: ["push_to_device", "quiet_from", "quiet_until", "time_zone"],
+	home_mark: [
+		"disposition",
+		"snoozed_until",
+		"waiting_on_party_id",
+		"waiting_reason",
+	],
 	document: ["bytes", "content_type", "deal_id", "kind", "name", "sha256"],
 	document_kind: ["label"],
 	offer: ["status"],
@@ -2063,6 +2292,15 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	offer: [
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"import_id",
+		"import_record",
+		"import_source",
+	],
 	lead_contact_draft: [
 		"approved",
 		"changed_at",
@@ -2088,14 +2326,18 @@ const REMOVABLE = [
 	...STORED_AT.filter(
 		(table) =>
 			![
+				"lease_suite",
 				"offer_document",
+				"offer_claim",
 				"post_media",
 				"document",
 				"document_extraction",
+				"user_preference",
 			].includes(table),
 	),
 	"activity",
 	"email",
+	"commission_tier",
 ];
 
 // Each case runs in a transaction it rolls back, so a broken rule leaves nothing behind.
@@ -2168,11 +2410,13 @@ before(async () => {
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
 	await db.query(
-		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED}`,
+		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED} ${COMMISSION_SEED}`,
 	);
-	for (const { documents, ...round } of rounds) {
+	for (const { documents, claims, ...round } of rounds) {
+		const columns = Object.keys(round).join(", ");
 		await db.query(
-			"insert into offer select * from jsonb_populate_record(null::offer, $1)",
+			`insert into offer (${columns}, deal_id)
+			 select ${columns}, deal_id from jsonb_populate_record(null::offer, $1)`,
 			[{ ...round, deal_id: DEAL, status: "open" }],
 		);
 		for (const document of documents)
@@ -2182,6 +2426,12 @@ before(async () => {
 					from jsonb_populate_record(null::document, $1) returning id)
 				insert into offer_document select $2, id from saved`,
 				[document, round.id],
+			);
+		for (const claim of claims)
+			await db.query(
+				`insert into offer_claim (offer_id, claim_type, floor_rent_per_sf_yr, quote, note)
+				select $2, claim_type, floor_rent_per_sf_yr, quote, note from jsonb_populate_record(null::offer_claim, $1)`,
+				[claim, round.id],
 			);
 		if (round.answers_round)
 			await db.query("update offer set status = 'countered' where round = $1", [
@@ -2663,6 +2913,114 @@ test("a merge moves a vendor's introductions, keeps avoid and clears target, and
 					["title", null, null, null, null, false],
 					["vendor", "warm", 1, "avoid", "Example: slow to close", false],
 				],
+			},
+		]);
+	}));
+
+test("a link either way round is two links only for can introduce, and a merge keeps one link and drops one between the two", () =>
+	rolledBack(async () => {
+		await db.query(`${newLink({ kind: "can_introduce", started_on: null })};
+			insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into party_link (kind, party_id, other_party_id, started_on) values
+				('knows', '${DOCTOR}', '${DUPLICATE}', '2024-05-01'), ('knows', '${DUPLICATE}', '${AGENT}', null),
+				('can_introduce', '${DUPLICATE}', '${CLIENT}', null);
+			select merge_party('${DUPLICATE}', '${AGENT}')`);
+		const { rows } = await db.query(
+			"select kind, party_id, other_party_id, started_on::text from party_link order by kind, party_id, other_party_id",
+		);
+		assert.deepEqual(rows, [
+			{
+				kind: "can_introduce",
+				party_id: AGENT,
+				other_party_id: CLIENT,
+				started_on: null,
+			},
+			{
+				kind: "can_introduce",
+				party_id: DOCTOR,
+				other_party_id: AGENT,
+				started_on: null,
+			},
+			{
+				kind: "can_introduce",
+				party_id: VENDOR,
+				other_party_id: DOCTOR,
+				started_on: null,
+			},
+			{
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: DOCTOR,
+				started_on: "2024-05-01",
+			},
+		]);
+	}));
+
+test("a merge collapses only the same link on the same start date, keeping the survivor's row, and keeps can introduce's direction", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
+			insert into party_link (id, kind, party_id, other_party_id, started_on, note) values
+				('${id(800)}', 'can_introduce', '${AGENT}', '${CLIENT}', null, 'Example: survivor'),
+				('${id(801)}', 'can_introduce', '${DUPLICATE}', '${CLIENT}', null, 'Example: duplicate'),
+				('${id(802)}', 'can_introduce', '${AGENT}', '${LENDERS[0]}', null, null),
+				('${id(803)}', 'can_introduce', '${LENDERS[0]}', '${DUPLICATE}', null, null),
+				('${id(804)}', 'knows', '${AGENT}', '${BROKERAGES[0]}', null, 'Example: survivor'),
+				('${id(805)}', 'knows', '${BROKERAGES[0]}', '${DUPLICATE}', null, 'Example: duplicate'),
+				('${id(806)}', 'knows', '${AGENT}', '${BROKERAGES[1]}', '2020-01-06', null),
+				('${id(807)}', 'knows', '${DUPLICATE}', '${BROKERAGES[1]}', '2021-01-04', null);
+			select merge_party('${DUPLICATE}', '${AGENT}')`);
+		const { rows } = await db.query(
+			`select id, kind, party_id, other_party_id, started_on::text, note from party_link
+			where id between '${id(800)}' and '${id(807)}' order by id`,
+		);
+		assert.deepEqual(rows, [
+			{
+				id: id(800),
+				kind: "can_introduce",
+				party_id: AGENT,
+				other_party_id: CLIENT,
+				started_on: null,
+				note: "Example: survivor",
+			},
+			{
+				id: id(802),
+				kind: "can_introduce",
+				party_id: AGENT,
+				other_party_id: LENDERS[0],
+				started_on: null,
+				note: null,
+			},
+			{
+				id: id(803),
+				kind: "can_introduce",
+				party_id: LENDERS[0],
+				other_party_id: AGENT,
+				started_on: null,
+				note: null,
+			},
+			{
+				id: id(804),
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: BROKERAGES[0],
+				started_on: null,
+				note: "Example: survivor",
+			},
+			{
+				id: id(806),
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: BROKERAGES[1],
+				started_on: "2020-01-06",
+				note: null,
+			},
+			{
+				id: id(807),
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: BROKERAGES[1],
+				started_on: "2021-01-04",
+				note: null,
 			},
 		]);
 	}));
@@ -3207,6 +3565,7 @@ const COLLAPSED = [
 	"activity_about_activity_id_deal_id_party_id_property_id_key",
 	"activity_about_activity_party_key",
 	"app_user_pkey",
+	"building_ownership_property_id_party_id_kind_started_on_key",
 	"deal_party_pkey",
 	"do_not_contact_pkey",
 	"lead_contact_draft_party_id_key",
@@ -3215,6 +3574,7 @@ const COLLAPSED = [
 	"party_company_person_id_company_id_started_on_key",
 	"party_email_address_party_id_key",
 	"party_email_one_primary",
+	"party_link_party_id_other_party_id_kind_started_on_key",
 	"party_phone_number_extension_party_id_key",
 	"party_phone_one_primary",
 	"party_role_pkey",
@@ -4370,6 +4730,208 @@ test("distinct manually sourced deadlines may share their kind and day", async (
 	});
 });
 
+const payment = (row: Record<string, string | number>) =>
+	insert("commission_payment", { deal_id: DEAL, amount: 5000, ...row });
+const share = (row: Record<string, string | number>) =>
+	insert("commission_share", {
+		deal_id: DEAL,
+		party_id: AGENT,
+		kind: "referral",
+		...row,
+	});
+const tiers = (...rows: [number, number][]) =>
+	`insert into commission_tier (user_id, from_deal, partner_user_id, closing_share) values ${rows
+		.map(([from, closing]) => `('${USER}', ${from}, '${TEAMMATE}', ${closing})`)
+		.join(", ")}`;
+// Made up, and each count a broken rule could give lands on a different tier.
+const LADDER = tiers([1, 0.9], [3, 0.7], [4, 0.6]);
+const COMMISSION = `${LADDER}; insert into commission (deal_id, gross) values ('${DEAL}', 10000)`;
+
+// biome-ignore format: one row per refusal
+const COMMISSION_REFUSALS: Record<string, Case[]> = {
+	"a deal's commission is recorded once, and its expected and gross amounts and any override are in range": [
+		[`${COMMISSION}; insert into commission (deal_id) values ('${DEAL}')`, "commission_pkey"],
+		[`insert into commission (deal_id) values ('${MISSING}')`, "commission_deal_id_fkey"],
+		[`insert into commission (deal_id, expected) values ('${DEAL}', 0)`, "commission_expected_check"],
+		[`insert into commission (deal_id, gross) values ('${DEAL}', -1)`, "commission_gross_check"],
+		[`insert into commission (deal_id, closing_share) values ('${DEAL}', 1.1)`, "commission_closing_share_check"],
+	],
+	"a payment is part of a deal's gross, more than zero, invoiced before it is due or received": [
+		[payment({}), "commission_payment_deal_id_fkey"],
+		[`${COMMISSION}; ${payment({ amount: 0 })}`, "commission_payment_amount_check"],
+		[`${COMMISSION}; ${payment({ invoiced_on: "2026-05-01", due_on: "2026-04-30" })}`, "commission_payment_dates_in_order"],
+		[`${COMMISSION}; ${payment({ invoiced_on: "2026-05-01", received_on: "2026-04-30" })}`, "commission_payment_dates_in_order"],
+	],
+	"payments never add up to more than the gross, checked when the change is saved": [
+		[`${COMMISSION}; ${payment({ amount: 6000 })}; ${payment({})}; ${CHECK_AT_COMMIT}`, "commission_payments_within_gross"],
+		[`insert into commission (deal_id, expected) values ('${DEAL}', 10000); ${payment({})}; ${CHECK_AT_COMMIT}`, "commission_payments_within_gross"],
+		[`${COMMISSION}; ${payment({})}; update commission set gross = 4000; ${CHECK_AT_COMMIT}`, "commission_payments_within_gross"],
+	],
+	"others' shares go to a person or company, by kind, and never add up to more than the whole": [
+		[`${COMMISSION}; ${share({ kind: "house", share: 0.1 })}`, "commission_share_kind_check"],
+		[`${COMMISSION}; ${share({ share: 0 })}`, "commission_share_share_check"],
+		[`${COMMISSION}; ${share({ party_id: MISSING, share: 0.1 })}`, "commission_share_party_id_fkey"],
+		[`${COMMISSION}; ${share({ share: 0.6 })}; ${share({ party_id: `${BROKERAGES[0]}`, kind: "brokerage", share: 0.5 })}; ${CHECK_AT_COMMIT}`, "commission_shares_within_whole"],
+	],
+	"a ladder is a user's, with another user as partner, and starts at the first closed deal, stepping down toward even": [
+		[tiers([0, 0.9]), "commission_tier_from_deal_check"],
+		[tiers([1, 0.4]), "commission_tier_closing_share_check"],
+		[`${tiers([1, 0.9])}; ${tiers([1, 0.8])}`, "commission_tier_pkey"],
+		[`insert into commission_tier values ('${USER}', 1, '${USER}', 0.9)`, "commission_tier_another_user"],
+		[`insert into commission_tier values ('${USER}', 1, '${AGENT}', 0.9)`, "commission_tier_partner_user_id_fkey"],
+		[`${tiers([2, 0.9])}; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
+		[`${tiers([1, 0.7], [3, 0.9])}; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
+		[`${LADDER}; delete from commission_tier where user_id = '${USER}' and from_deal = 1; ${CHECK_AT_COMMIT}`, "commission_ladder_steps_down"],
+	],
+	"a gross needs its closing user's ladder, so its split names both users": [
+		[`insert into commission (deal_id, gross) values ('${DEAL}', 10000); ${CHECK_AT_COMMIT}`, "commission_split_names_both_users"],
+		[`insert into commission (deal_id, gross, closing_share) values ('${DEAL}', 10000, 0.6); ${CHECK_AT_COMMIT}`, "commission_split_names_both_users"],
+		[`delete from commission_tier where user_id = '${TEAMMATE}'; ${CHECK_AT_COMMIT}`, "commission_split_names_both_users"],
+		[`update deal set owner_user_id = '${USER}' where id = '${LENDER_DEAL}'; ${CHECK_AT_COMMIT}`, "commission_split_names_both_users"],
+	],
+};
+
+for (const [rule, cases] of Object.entries(COMMISSION_REFUSALS))
+	test(rule, async () => {
+		for (const [sql, refusal] of cases)
+			await rolledBack(() => assert.rejects(db.query(sql), expected(refusal)));
+	});
+
+test("a user's ladder names one partner", () =>
+	asOwner([
+		[
+			`insert into party (id, kind, name) values ('${id(22)}', 'person', 'Casey Example');
+			insert into app_user (id) values ('${id(22)}');
+			insert into commission_tier values ('${USER}', 1, '${TEAMMATE}', 0.9), ('${USER}', 3, '${id(22)}', 0.7)`,
+			"commission_tier_one_partner",
+		],
+	]));
+
+const FIRST = id(750);
+const SECOND = id(751);
+const DIED = id(752);
+const TEAMMATES = id(753);
+const THIRD = id(754);
+const CLOSED_DEALS = `
+insert into phase values ('closed', 'Closed');
+insert into deal (id, name, owner_user_id) values
+	('${FIRST}', 'Example First Deal', '${USER}'), ('${SECOND}', 'Example Second Deal', '${USER}'),
+	('${DIED}', 'Example Reopened Deal', '${USER}'), ('${TEAMMATES}', 'Example Teammate Deal', '${TEAMMATE}'),
+	('${THIRD}', 'Example Third Deal', '${USER}');
+insert into deal_phase_change values
+	('${FIRST}', '2019-03-01T15:00:00+00:00', 'closed', null), ('${SECOND}', '2019-09-01T15:00:00+00:00', 'closed', null),
+	('${DIED}', '2025-01-01T15:00:00+00:00', 'closed', null), ('${DIED}', '2025-06-01T15:00:00+00:00', 'dead', 'Example fell through'),
+	('${TEAMMATES}', '2025-03-01T15:00:00+00:00', 'closed', null), ('${THIRD}', '2026-02-01T15:00:00+00:00', 'closed', null);
+`;
+const split = async (deal: string) =>
+	(
+		await db.query(
+			"select kind, party_id, share::float8 as share, amount::text as amount from commission_split where deal_id = $1 order by share desc nulls last, kind",
+			[deal],
+		)
+	).rows;
+
+test("each user's share comes from their ladder, by their lifetime count of closed deals, after the others' shares", () =>
+	rolledBack(async () => {
+		await db.query(`${LADDER}; ${CLOSED_DEALS};
+			insert into commission (deal_id, gross) values ('${THIRD}', 10000);
+			insert into commission_share (deal_id, party_id, kind, share) values
+				('${THIRD}', '${AGENT}', 'referral', 0.25), ('${THIRD}', '${BROKERAGES[0]}', 'brokerage', 0.1);
+			insert into commission_payment (deal_id, amount, invoiced_on, due_on, received_on) values
+				('${THIRD}', 5000, '2026-02-01', '2026-03-01', '2026-02-20'), ('${THIRD}', 5000, '2026-06-01', '2026-07-01', null);
+			${CHECK_AT_COMMIT}`);
+		assert.deepEqual(await split(THIRD), [
+			{ kind: "closing_user", party_id: USER, share: 0.455, amount: "4550.00" },
+			{ kind: "referral", party_id: AGENT, share: 0.25, amount: "2500.00" },
+			{ kind: "partner", party_id: TEAMMATE, share: 0.195, amount: "1950.00" },
+			{
+				kind: "brokerage",
+				party_id: BROKERAGES[0],
+				share: 0.1,
+				amount: "1000.00",
+			},
+		]);
+	}));
+
+test("a deal's own split overrides the ladder, and the amounts add up to the gross to the cent", () =>
+	rolledBack(async () => {
+		await db.query(`${LADDER}; ${CLOSED_DEALS};
+			insert into commission (deal_id, gross, closing_share) values ('${THIRD}', 100.01, 0.5)`);
+		assert.deepEqual(await split(THIRD), [
+			{ kind: "closing_user", party_id: USER, share: 0.5, amount: "50.01" },
+			{ kind: "partner", party_id: TEAMMATE, share: 0.5, amount: "50.00" },
+		]);
+	}));
+
+test("an open deal carries its expected commission, and its users' shares wait for it to close", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${LADDER}; insert into commission (deal_id, expected) values ('${DEAL}', 8000)`,
+		);
+		assert.deepEqual(await split(DEAL), [
+			{ kind: "closing_user", party_id: USER, share: null, amount: null },
+			{ kind: "partner", party_id: TEAMMATE, share: null, amount: null },
+		]);
+	}));
+
+test("rounding never makes an amount negative, and the amounts still add up to the gross", () =>
+	rolledBack(async () => {
+		await db.query(`${LADDER};
+			insert into commission (deal_id, gross, closing_share) values ('${DEAL}', 0.01, 0.5);
+			${share({ id: id(760), share: 0.5 })};
+			${share({ id: id(761), party_id: `${BROKERAGES[0]}`, kind: "brokerage", share: 0.5 })}`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select kind, amount::text as amount from commission_split where deal_id = $1 order by amount desc, kind",
+					[DEAL],
+				)
+			).rows,
+			[
+				{ kind: "referral", amount: "0.01" },
+				{ kind: "brokerage", amount: "0.00" },
+				{ kind: "closing_user", amount: "0.00" },
+				{ kind: "partner", amount: "0.00" },
+			],
+		);
+	}));
+
+// Each save passes alone; together they would break the rule, so the second waits for the first.
+for (const [what, first, second] of [
+	[
+		"payments on one gross",
+		payment({ deal_id: LENDER_DEAL, amount: 600 }),
+		payment({ deal_id: LENDER_DEAL, amount: 600 }),
+	],
+	[
+		"others' shares of one commission",
+		share({ deal_id: LENDER_DEAL, share: 0.6 }),
+		share({ deal_id: LENDER_DEAL, share: 0.6 }),
+	],
+	[
+		"tiers of one ladder",
+		`update commission_tier set closing_share = 0.65 where user_id = '${TEAMMATE}' and from_deal = 1`,
+		`update commission_tier set closing_share = 0.7 where user_id = '${TEAMMATE}' and from_deal = 3`,
+	],
+])
+	test(`${what} are checked one save at a time`, async () => {
+		const sessions = [await connect(), await connect()] as const;
+		try {
+			await sessions[0].query(`begin; ${first}; ${CHECK_AT_COMMIT}`);
+			await sessions[1].query(
+				`begin; set local lock_timeout = '100ms'; ${second}`,
+			);
+			await assert.rejects(sessions[1].query(CHECK_AT_COMMIT), {
+				code: "55P03",
+			});
+		} finally {
+			for (const session of sessions) {
+				await session.query("rollback");
+				await session.end();
+			}
+		}
+	});
+
 const PROPOSAL = id(900);
 const newProposal = (row: Record<string, string | null> = {}) =>
 	`${asJob("mail_capture", USER)}; ${insert("proposal", {
@@ -5016,3 +5578,408 @@ test("a completed tour appears once on its deal even when it visits several prop
 		);
 	});
 });
+
+const SUITE = id(800);
+const SPACE_NEED = id(801);
+const leaseSuite = (suite: string, property = PROPERTY) =>
+	insert("lease_suite", {
+		lease_version_id: LEASE,
+		lease_id: LEASE_RECORD,
+		property_id: property,
+		suite_id: suite,
+	});
+const SPACE_SEED = `
+insert into suite (id, property_id, label, floor, area_sf, area_basis)
+values ('${SUITE}', '${PROPERTY}', '101', 1, 2400, 'rentable');
+insert into space_need (id, deal_id, name, min_sf, max_sf, space_type, must_haves)
+values ('${SPACE_NEED}', '${DEAL}', 'Example search', 2000, 3000, 'medical', 'Ground floor');
+insert into building_ownership (property_id, party_id, kind, started_on, ended_on, source)
+values ('${PROPERTY}', '${BROKERAGES[0]}', 'owner', '2020-01-01', '2025-12-31', 'Example deed'),
+('${PROPERTY}', '${BROKERAGES[1]}', 'owner', '2026-01-01', null, 'Example deed');`;
+
+for (const [name, sql, refusal] of [
+	[
+		"reversed size range",
+		`update space_need set min_sf = 4000`,
+		"space_need_size_in_order",
+	],
+	[
+		"negative minimum",
+		`update space_need set min_sf = -1`,
+		"space_need_min_sf_check",
+	],
+	[
+		"zero maximum",
+		`update space_need set max_sf = 0`,
+		"space_need_max_sf_check",
+	],
+	[
+		"unknown market",
+		`update space_need set market_id = '${MISSING}'`,
+		"space_need_market_id_fkey",
+	],
+	[
+		"unknown deal",
+		`insert into space_need (deal_id, name) values ('${MISSING}', 'Example')`,
+		"space_need_deal_id_fkey",
+	],
+	[
+		"blank must-have",
+		`update space_need set must_haves = ' '`,
+		"space_need_must_haves_check",
+	],
+	[
+		"blank type",
+		`update space_need set space_type = ' '`,
+		"space_need_space_type_check",
+	],
+	["blank name", `update space_need set name = ' '`, "space_need_name_check"],
+	[
+		"duplicate suite",
+		`insert into suite (property_id, label) values ('${PROPERTY}', '101')`,
+		"suite_property_id_label_key",
+	],
+	["blank suite", `update suite set label = ' '`, "suite_label_check"],
+	["zero suite area", `update suite set area_sf = 0`, "suite_area_sf_check"],
+	[
+		"unknown area basis",
+		`update suite set area_basis = 'guess'`,
+		"suite_area_basis_check",
+	],
+	[
+		"unknown property",
+		`insert into suite (property_id) values ('${MISSING}')`,
+		"suite_property_id_fkey",
+	],
+	[
+		"reversed ownership dates",
+		`update building_ownership set ended_on = '2010-01-01'`,
+		"building_ownership_check",
+	],
+	[
+		"unknown owner",
+		`insert into building_ownership (property_id, party_id, kind, source) values ('${PROPERTY}', '${MISSING}', 'owner', 'Example')`,
+		"building_ownership_party_id_fkey",
+	],
+	[
+		"unknown ownership kind",
+		`insert into building_ownership (property_id, party_id, kind, source) values ('${PROPERTY}', '${CLIENT}', 'other', 'Example')`,
+		"building_ownership_kind_check",
+	],
+	[
+		"blank ownership source",
+		`update building_ownership set source = ' '`,
+		"building_ownership_source_check",
+	],
+	[
+		"duplicate ownership",
+		`insert into building_ownership (property_id, party_id, kind, started_on, source) values ('${PROPERTY}', '${BROKERAGES[0]}', 'owner', '2020-01-01', 'Example')`,
+		"building_ownership_property_id_party_id_kind_started_on_key",
+	],
+	[
+		"lease suite in another building",
+		`insert into suite (id, property_id) values ('${id(802)}', '${ELSEWHERE}'); ${newLease()}; ${leaseSuite(id(802))}`,
+		"lease_suite_suite_id_property_id_fkey",
+	],
+	[
+		"missing lease suite",
+		`${newLease()}; ${leaseSuite(MISSING)}`,
+		"lease_suite_suite_id_property_id_fkey",
+	],
+] satisfies [string, string, string][]) {
+	test(`space records refuse ${name}`, () =>
+		rolledBack(async () => {
+			await db.query(SPACE_SEED);
+			await assert.rejects(db.query(sql), { constraint: refusal });
+		}));
+}
+
+test("space needs keep typed criteria and suites join leases only within their property", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED};
+		update space_need set market_id = '${BAY}' where id = '${SPACE_NEED}';
+		${newLease()}; ${leaseSuite(SUITE)}`);
+		const { rows } =
+			await db.query(`select n.min_sf, n.max_sf, n.space_type, n.must_haves, m.name,
+		s.label, s.area_sf, ls.suite_id, n.changed_by_user_id
+		from space_need n join market m on m.id = n.market_id
+		join lease l on l.deal_id = n.deal_id join lease_version v on v.lease_id = l.id join lease_suite ls on ls.lease_version_id = v.id join suite s on s.id = ls.suite_id`);
+		assert.deepEqual(rows, [
+			{
+				min_sf: "2000.0",
+				max_sf: "3000.0",
+				space_type: "medical",
+				must_haves: "Ground floor",
+				name: "Example Bay",
+				label: "101",
+				area_sf: "2400.0",
+				suite_id: SUITE,
+				changed_by_user_id: USER,
+			},
+		]);
+		await assert.rejects(db.query(`delete from suite where id = '${SUITE}'`), {
+			constraint: "lease_suite_suite_id_property_id_fkey",
+		});
+	}));
+
+test("ownership keeps former and joint owners, and a merge preserves the survivor's duplicate link", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED};
+		insert into building_ownership (property_id, party_id, kind, started_on, source)
+		values ('${PROPERTY}', '${LENDERS[0]}', 'owner', '2026-01-01', 'Example joint owner');
+		select merge_party('${BROKERAGES[0]}', '${BROKERAGES[1]}')`);
+		const { rows } =
+			await db.query(`select party_id, started_on::text, ended_on::text
+		from building_ownership order by started_on, party_id`);
+		assert.equal(rows.length, 3);
+		assert.deepEqual(rows[0], {
+			party_id: BROKERAGES[1],
+			started_on: "2020-01-01",
+			ended_on: "2025-12-31",
+		});
+		await db.query(`insert into building_ownership (property_id, party_id, kind, started_on, source)
+		values ('${PROPERTY}', '${LENDERS[0]}', 'owner', '2020-01-01', 'Example duplicate');
+		select merge_party('${LENDERS[0]}', '${BROKERAGES[1]}')`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select source from building_ownership order by started_on",
+				)
+			).rows,
+			[{ source: "Example deed" }, { source: "Example deed" }],
+		);
+	}));
+
+test("unknown space facts stay unknown, alternatives and same labels in other buildings are allowed", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED};
+		insert into suite (property_id, label) values ('${ELSEWHERE}', '101'), ('${PROPERTY}', null), ('${PROPERTY}', null);
+		insert into space_need (deal_id, name, max_sf) values ('${DEAL}', 'Example alternative', 1500);
+		insert into space_need (deal_id, name, min_sf) values ('${DEAL}', 'Example larger alternative', 3000);
+		insert into building_ownership (property_id, party_id, kind, source)
+		values ('${ELSEWHERE}', '${CLIENT}', 'owner', 'Example undated source');`);
+		assert.equal((await db.query("select * from suite")).rowCount, 4);
+		assert.equal((await db.query("select * from space_need")).rowCount, 3);
+		await assert.rejects(
+			db.query(`insert into building_ownership (property_id, party_id, kind, source)
+		values ('${ELSEWHERE}', '${CLIENT}', 'owner', 'Example repeated source')`),
+			{
+				constraint:
+					"building_ownership_property_id_party_id_kind_started_on_key",
+			},
+		);
+	}));
+
+test("space edits carry job attribution and retain their prior values in history", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED}; ${asJob("agent", TEAMMATE)};
+		update suite set area_sf = 2500 where id = '${SUITE}';
+		update space_need set must_haves = 'Example parking' where id = '${SPACE_NEED}';
+		update building_ownership set source = 'Example corrected source';`);
+		const { rows } =
+			await db.query(`select table_name, changed_by_job, changed_for_user_id,
+		old_value is not null as keeps_before from change where action = 'update'
+		and table_name in ('suite', 'space_need', 'building_ownership') order by table_name`);
+		assert.deepEqual(
+			rows.map((r) => [
+				r.table_name,
+				r.changed_by_job,
+				r.changed_for_user_id,
+				r.keeps_before,
+			]),
+			["building_ownership", "building_ownership", "space_need", "suite"].map(
+				(table) => [table, "agent", TEAMMATE, true],
+			),
+		);
+	}));
+
+for (const [sql, constraint] of [
+	["update space_need set min_sf = 'NaN'", "space_need_min_sf_check"],
+	["update space_need set max_sf = 'NaN'", "space_need_max_sf_check"],
+	["update suite set area_sf = 'NaN'", "suite_area_sf_check"],
+	[
+		"update space_need set max_rate_sf_yr = -1",
+		"space_need_max_rate_sf_yr_check",
+	],
+	[
+		"update space_need set max_rate_sf_yr = 'NaN'",
+		"space_need_max_rate_sf_yr_check",
+	],
+	[
+		"update space_need set source_ref = 'Example partial source'",
+		"space_need_vendor_source_whole",
+	],
+	[
+		`${newLease()}; ${leaseSuite(SUITE, ELSEWHERE)}`,
+		"lease_suite_lease_id_property_id_fkey",
+	],
+	[
+		`${newLease()}; ${leaseSuite(SUITE)}; ${leaseSuite(SUITE)}`,
+		"lease_suite_pkey",
+	],
+] satisfies [string, string][]) {
+	test(`space records enforce ${constraint}: ${sql}`, () =>
+		rolledBack(async () => {
+			await db.query(SPACE_SEED);
+			await assert.rejects(db.query(sql), { constraint });
+		}));
+}
+
+test("one signed lease covers several suites and keeps its links as history", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED}; ${newLease()}; ${leaseSuite(SUITE)};
+		insert into suite (id, property_id, label) values ('${id(802)}', '${PROPERTY}', '102');
+		${leaseSuite(id(802))};`);
+		assert.deepEqual(
+			(await db.query("select suite_id from lease_suite order by suite_id"))
+				.rows,
+			[{ suite_id: SUITE }, { suite_id: id(802) }],
+		);
+		await assert.rejects(
+			db.query("delete from lease_suite"),
+			notGranted("lease_suite"),
+		);
+	}));
+
+test("a vendor requirement keeps structured provenance and the rent ceiling remains typed", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED}; insert into party_role (party_id, role) values ('${LENDERS[0]}', 'vendor');
+		update space_need set max_rate_sf_yr = 40,
+		vendor_id = '${LENDERS[0]}', source_ref = 'example-source', source_revision = 'v1',
+		applicability = 'Example location' where id = '${SPACE_NEED}'`);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select max_rate_sf_yr, vendor_id, source_ref, source_revision, applicability from space_need`,
+				)
+			).rows,
+			[
+				{
+					max_rate_sf_yr: "40.00",
+					vendor_id: LENDERS[0],
+					source_ref: "example-source",
+					source_revision: "v1",
+					applicability: "Example location",
+				},
+			],
+		);
+	}));
+
+test("suite premises belong to each signed version and cannot name another lease identity", () =>
+	rolledBack(async () => {
+		await db.query(`${SPACE_SEED}; ${newLease()}; ${leaseSuite(SUITE)};
+			${newLease({ id: id(803), version: 2, offer_id: null })};
+			insert into lease_suite (lease_version_id, lease_id, property_id, suite_id)
+			values ('${id(803)}', '${LEASE_RECORD}', '${PROPERTY}', '${SUITE}');
+			insert into lease (id, party_id, property_id) values ('${id(804)}', '${CLIENT}', '${PROPERTY}');
+			insert into suite (id, property_id, label) values ('${id(805)}', '${PROPERTY}', '103')`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select lease_version_id, suite_id from lease_suite order by lease_version_id",
+				)
+			).rows,
+			[
+				{ lease_version_id: LEASE, suite_id: SUITE },
+				{ lease_version_id: id(803), suite_id: SUITE },
+			],
+		);
+		await assert.rejects(
+			db.query(`insert into lease_suite (lease_version_id, lease_id, property_id, suite_id)
+			values ('${LEASE}', '${id(804)}', '${PROPERTY}', '${id(805)}')`),
+			{ constraint: "lease_suite_lease_version_id_lease_id_fkey" },
+		);
+	}));
+
+const NEED_VENDOR = `update space_need set vendor_id = '${VENDOR}', source_ref = 'example-source',
+	source_revision = 'v1', applicability = 'Example location' where id = '${SPACE_NEED}'`;
+for (const [name, sql, constraint] of [
+	[
+		"padded suite label",
+		"update suite set label = ' 101'",
+		"suite_label_check",
+	],
+	[
+		"blank suite condition",
+		"update suite set condition = ' '",
+		"suite_condition_check",
+	],
+	[
+		"blank vendor source",
+		`${NEED_VENDOR}; update space_need set source_ref = ' '`,
+		"space_need_source_ref_check",
+	],
+	[
+		"blank vendor revision",
+		`${NEED_VENDOR}; update space_need set source_revision = ' '`,
+		"space_need_source_revision_check",
+	],
+	[
+		"blank vendor applicability",
+		`${NEED_VENDOR}; update space_need set applicability = ' '`,
+		"space_need_applicability_check",
+	],
+	[
+		"missing ownership property",
+		`insert into building_ownership (property_id, party_id, kind, source) values ('${MISSING}', '${CLIENT}', 'owner', 'Example deed')`,
+		"building_ownership_property_id_fkey",
+	],
+	[
+		"missing vendor party",
+		`${NEED_VENDOR}; update space_need set vendor_id = '${MISSING}'`,
+		"space_need_vendor_id_vendor_role_fkey",
+	],
+	[
+		"party without vendor role",
+		`${NEED_VENDOR}; update space_need set vendor_id = '${AGENT}'`,
+		"space_need_vendor_id_vendor_role_fkey",
+	],
+	[
+		"another role used as vendor",
+		`insert into space_need (deal_id, name, vendor_id, vendor_role, source_ref, source_revision, applicability)
+		values ('${DEAL}', 'Example need', '${AGENT}', 'listing_agent', 'example-source', 'v1', 'Example location')`,
+		"space_need_vendor_role_check",
+	],
+	[
+		"removing referenced vendor role",
+		`insert into party_role (party_id, role) values ('${LENDERS[0]}', 'vendor'); ${NEED_VENDOR};
+		update space_need set vendor_id = '${LENDERS[0]}'; delete from party_role where party_id = '${LENDERS[0]}' and role = 'vendor'`,
+		"space_need_vendor_id_vendor_role_fkey",
+	],
+] satisfies [string, string, string][]) {
+	test(`space records refuse ${name}`, () =>
+		rolledBack(async () => {
+			await db.query(SPACE_SEED);
+			await assert.rejects(db.query(sql), { constraint });
+		}));
+}
+
+for (const survivorIsVendor of [false, true]) {
+	test(`a space need follows a merged vendor when its survivor ${survivorIsVendor ? "already holds" : "gains"} the vendor role`, () =>
+		rolledBack(async () => {
+			await db.query(`${SPACE_SEED}; insert into party_role (party_id, role) values ('${LENDERS[0]}', 'vendor');
+			${NEED_VENDOR}; update space_need set vendor_id = '${LENDERS[0]}'`);
+			if (survivorIsVendor)
+				await db.query(
+					`insert into party_role (party_id, role) values ('${LENDERS[1]}', 'vendor')`,
+				);
+			await db.query(
+				`select merge_party('${LENDERS[0]}', '${LENDERS[1]}'); ${CHECK_AT_COMMIT}`,
+			);
+			assert.deepEqual(
+				(
+					await db.query(
+						"select vendor_id, source_ref, source_revision, applicability from space_need",
+					)
+				).rows,
+				[
+					{
+						vendor_id: LENDERS[1],
+						source_ref: "example-source",
+						source_revision: "v1",
+						applicability: "Example location",
+					},
+				],
+			);
+		}));
+}
