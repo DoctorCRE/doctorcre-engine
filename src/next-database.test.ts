@@ -2558,10 +2558,141 @@ test("a person with no links returns every empty list; a missing id returns null
 			activity: [],
 			next_steps: [],
 			proposals: [],
+			history: unstamped(
+				(
+					await db.query(
+						"select to_jsonb(c) as entry from change c where table_name = 'party' and record = jsonb_build_object('id', $1::uuid)",
+						[SUBJECT],
+					)
+				).rows.map((row) => row.entry),
+			),
+			imported_history: [],
 		});
 		assert.equal(await readParty(MISSING), null);
 	});
 });
+
+test("party history keeps complete native and imported rows in time and id order, excluding children", () =>
+	withParty(async () => {
+		await db.query(`set constraints all immediate;
+			set local role none;
+			delete from change where table_name = 'party' and record = '{"id":"${SUBJECT}"}';
+			alter table change disable trigger stamp_change;
+			alter table imported_change disable trigger stamp_imported_change`);
+		const native = [];
+		const imported = [];
+		for (const [n, day] of [
+			[9402, 2],
+			[9401, 1],
+			[9400, 2],
+		] as const) {
+			native.push(
+				(
+					await db.query(
+						`insert into change
+				(id, table_name, record, action, old_value, new_value, changed_by_job, changed_at)
+				overriding system value values ($1, 'party', $2, 'update', '{"name":"Example Before"}',
+				'{"name":"Example After"}', 'old_system', $3) returning to_jsonb(change) as entry`,
+						[n, { id: SUBJECT }, `2026-01-0${day}T00:00:00Z`],
+					)
+				).rows[0].entry,
+			);
+			const event = {
+				id: id(n),
+				verb: "rename",
+				cause: "human",
+				actor_id: "example-actor",
+				old_value: null,
+				new_value: "Example After",
+				mutation_order: n,
+				occurred_at: `2020-01-0${day}T00:00:00Z`,
+				extra: { kept: true },
+			};
+			imported.push(
+				(
+					await db.query(
+						`insert into imported_change
+				(id, table_name, record, old_value_absent, new_value_absent, field, source_event, changed_by_job, changed_at)
+				values ($1, 'party', $2, false, false, 'name', $3, 'old_system', $4)
+				returning to_jsonb(imported_change) as entry`,
+						[id(n), { id: SUBJECT }, event, event.occurred_at],
+					)
+				).rows[0].entry,
+			);
+		}
+		await db.query(`insert into imported_change
+			(id, table_name, record, old_value_absent, new_value_absent, field, source_event, changed_by_job, changed_at)
+			select '${id(9403)}', 'party_role', record, true, true, 'stage',
+				source_event || '{"id":"${id(9403)}"}', 'old_system', changed_at from imported_change where id = '${id(9400)}';
+			alter table change enable trigger stamp_change;
+			alter table imported_change enable trigger stamp_imported_change;
+			set local role engine;
+			insert into party_email (party_id, address, label) values ('${SUBJECT}', 'history@example.com', 'work')`);
+		const result = (
+			await db.query("select everything_about_party($1) as value", [SUBJECT])
+		).rows[0].value;
+		assert.deepEqual(result.history, [native[1], native[2], native[0]]);
+		assert.deepEqual(result.imported_history, [
+			imported[1],
+			imported[2],
+			imported[0],
+		]);
+	}));
+
+test("party history follows every merged duplicate, including an earlier merge, from either id", () =>
+	withParty(async () => {
+		await db.query(`insert into party (id, kind, name) values
+			('${id(9410)}', 'person', 'Example Duplicate'), ('${id(9411)}', 'person', 'Example Earlier');
+			set local role none;
+			insert into imported_change (id, table_name, record, old_value_absent, new_value_absent, field, source_event)
+			values ('${id(9412)}', 'party', '{"id":"${id(9411)}"}', true, false, 'name',
+				'{"id":"${id(9412)}", "verb":"rename", "cause":"human", "actor_id":"example-actor", "new_value":"Example Earlier"}');
+			set local role engine;
+			select merge_party('${id(9411)}', '${id(9410)}');
+			select merge_party('${id(9410)}', '${SUBJECT}')`);
+		const expected = (
+			await db.query(`select to_jsonb(c) as entry from change c where table_name = 'party'
+			and record in ('{"id":"${SUBJECT}"}', '{"id":"${id(9410)}"}', '{"id":"${id(9411)}"}')
+			order by id`)
+		).rows.map((row) => row.entry);
+		assert.equal(expected.length, 5);
+		const imported = (
+			await db.query(
+				"select to_jsonb(c) as entry from imported_change c where id = $1",
+				[id(9412)],
+			)
+		).rows[0].entry;
+		for (const wanted of [SUBJECT, id(9410), id(9411)]) {
+			const result = (
+				await db.query("select everything_about_party($1) as value", [wanted])
+			).rows[0].value;
+			assert.deepEqual(result.history, expected);
+			assert.deepEqual(result.imported_history, [imported]);
+		}
+	}));
+
+test("a party without recorded history returns both empty history lists", () =>
+	withParty(async () => {
+		await db.query(`set local role none;
+			delete from change where table_name = 'party' and record = '{"id":"${SUBJECT}"}';
+			set local role engine`);
+		const result = await readParty();
+		assert.deepEqual(result.history, []);
+		assert.deepEqual(result.imported_history, []);
+	}));
+
+test("party change lookup uses the table and record index", () =>
+	rolledBack(async () => {
+		await db.query("set local enable_seqscan = off");
+		const { rows } = await db.query(
+			`explain select * from change
+			where table_name = 'party' and record = jsonb_build_object('id', $1::uuid)`,
+			[SUBJECT],
+		);
+		const plan = rows.map((row) => row["QUERY PLAN"]).join("\n");
+		assert.match(plan, /change_record/);
+		assert.match(plan, /Index Cond:.*table_name.*record/);
+	}));
 
 test("party emails put primary first and exclude another person's addresses", async () => {
 	await withParty(async () => {
