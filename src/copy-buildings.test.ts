@@ -58,6 +58,8 @@ before(async () => {
  ('${id(91)}', '200 Example Way', '', '', '', null, '2024-01-01', '${id(1)}', '${id(1)}', '2024-02-01'),
  ('${id(92)}', '300 Example Way', '', '', '', null, '2024-01-01', '${id(1)}', '${id(1)}', '2024-02-01'),
  ('${id(93)}', '400 Example Way', '', '', '', null, '2024-01-01', '${id(1)}', '${id(1)}', '2024-02-01');
+ update public.building set class = ' ', sub_type = 'medical_dental', year_built = 1998, stories = 3,
+ status = 'existing', status_source = 'Example county record' where id = '${id(90)}';
  update public.building set merged_into = '${id(90)}' where id = '${id(91)}';
  update public.building set merged_into = id where id = '${id(92)}';
  insert into public.space (id, building_id, suite, floor, area_amount, area_basis, condition, created_at, created_by, updated_by) values
@@ -105,9 +107,31 @@ test("a building with suites or owners becomes a property at its surviving addre
 			},
 		],
 	);
+});
+
+test("a property keeps its building's name, class, type, year built and stories, a blank one stays unknown, and only its construction status is listed", async () => {
+	assert.deepEqual(
+		await rows(
+			"select name, building_class, building_type, year_built, stories from property",
+		),
+		[
+			{
+				name: "Example Tower",
+				building_class: null,
+				building_type: "medical_dental",
+				year_built: 1998,
+				stories: 3,
+			},
+		],
+	);
 	assert.deepEqual(
 		report.filter((r) => r.old_id === id(90)).map((r) => [r.reason, r.value]),
-		[["unmapped_building_fields", '{"name": "Example Tower"}']],
+		[
+			[
+				"unmapped_building_fields",
+				'{"status": "existing", "status_source": "Example county record"}',
+			],
+		],
 	);
 });
 

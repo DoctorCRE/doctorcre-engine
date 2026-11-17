@@ -224,6 +224,45 @@ test("copies field evidence for every supported record kind without replay or in
 	assert.deepEqual(await snapshot(), before);
 });
 
+test("copies market and estimate evidence unchanged on rerun", async () => {
+	const cases = [
+		["deal", 20, "city", "deal", { id: id(20) }, "market_id"],
+		[
+			"lead",
+			12,
+			"event_source",
+			"party_role",
+			{ party_id: id(10), role: "lead" },
+			"lease_estimate_source",
+		],
+		[
+			"lead",
+			12,
+			"event_confidence",
+			"party_role",
+			{ party_id: id(10), role: "lead" },
+			"lease_estimate_confidence",
+		],
+	] as const;
+	for (const [i, [subject, subjectId, field]] of cases.entries())
+		await event(150 + i, subject, subjectId, field);
+	assert.deepEqual(await run(), []);
+	for (const [i, [, , , table, record, field]] of cases.entries()) {
+		assert.deepEqual(
+			await rows(`select table_name, record, field,
+ source_event = (select to_jsonb(e) from public.event e where e.id = i.id) as exact
+ from imported_change i where id = '${id(150 + i)}'`),
+			[{ table_name: table, record, field, exact: true }],
+		);
+	}
+	const imported = await rows("select * from imported_change order by id");
+	assert.deepEqual(await run(), []);
+	assert.deepEqual(
+		await rows("select * from imported_change order by id"),
+		imported,
+	);
+});
+
 test("lists unsupported shapes, missing records and unresolved actors; retries preserve conflicting imports", async () => {
 	await baseline();
 	await event(120, "party", 10, "score");

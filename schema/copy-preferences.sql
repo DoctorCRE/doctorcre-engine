@@ -22,30 +22,40 @@ insert into user_preference (user_id, time_zone, quiet_from, quiet_until, push_t
 select user_id, timezone, quiet_hours_start, quiet_hours_end, device_opt_in, user_id, now() from old_preference p
 where not exists (select from preference_refusal r where r.actor = p.actor);
 
--- An inbox disposition and a cleared waiting are no mark. Today's item id for a next action is its id, which the copies keep.
+-- Both action copies keep their ids; inherited v2 dispositions use the old Home's exact-id precedence.
 create temp table old_mark on commit drop as
-select k.actor_id, k.item_id, d.disposition, d.snoozed_until, w.identity_id, w.reason,
+select k.actor_id, k.item_id, nullif(d.disposition, 'inbox') as disposition, d.snoozed_until, w.identity_id, w.reason,
  least(d.updated_at, w.updated_at) as created_at, greatest(d.updated_at, w.updated_at) as changed_at,
  u.id as user_id, s.id as next_step_id, waiting_on.id as waiting_on_party_id
 from (select actor_id, item_id from ops.home_inbox_disposition where disposition <> 'inbox'
+ and (v2_item_id is null or item_id like 'next_action:%' or item_id like 'capture_post_call_action:%')
+ union select actor_id, v2_item_id from ops.home_inbox_disposition where disposition <> 'inbox' and v2_item_id is not null
  union select actor_id, item_id from ops.home_waiting where identity_id is not null) k
-left join ops.home_inbox_disposition d on (d.actor_id, d.item_id) = (k.actor_id, k.item_id) and d.disposition <> 'inbox'
+left join lateral (
+ select d.disposition, d.snoozed_until, case when d.disposition <> 'inbox' then d.updated_at end as updated_at
+ from ops.home_inbox_disposition d where d.actor_id = k.actor_id
+ and (d.item_id = k.item_id or d.v2_item_id = k.item_id)
+ order by (d.item_id = k.item_id) desc, d.updated_at desc, d.item_id limit 1
+) d on true
 left join ops.home_waiting w on (w.actor_id, w.item_id) = (k.actor_id, k.item_id) and w.identity_id is not null
 left join outside_id o on o.source = 'old_system' and o.value = k.actor_id::text
 left join app_user u on u.id = o.party_id
 left join public.next_action n on 'next_action:' || n.id = k.item_id
+left join public.capture_post_call_action a on 'capture_post_call_action:' || a.id = k.item_id
 left join outside_id subject on subject.source = 'old_system' and subject.value = n.subject_id::text
 -- A step with the action's id that belongs to another record is not the action's copy.
-left join next_step s on s.id = n.id
- and case n.subject_type when 'deal' then s.deal_id = n.subject_id else s.party_id = subject.party_id end
+left join next_step s on s.id = coalesce(n.id, a.id)
+ and case when a.id is not null then s.deal_id = a.deal_id
+ when n.subject_type = 'deal' then s.deal_id = n.subject_id else s.party_id = subject.party_id end
 left join outside_id wo on wo.source = 'old_system' and wo.value = w.identity_id::text
 left join party waiting_on on waiting_on.id = wo.party_id
-where not exists (select from home_mark done where (done.user_id, done.next_step_id) = (u.id, s.id));
+where (d.disposition <> 'inbox' or w.identity_id is not null)
+ and not exists (select from home_mark done where (done.user_id, done.next_step_id) = (u.id, s.id));
 create temp table mark_refusal on commit drop as
 select m.actor_id, m.item_id, f.field, f.value, f.reason from old_mark m cross join lateral (values
  ('actor_id', m.actor_id::text, 'actor_not_a_user', m.user_id is null),
- ('item_id', m.item_id, 'waits_for_its_record', m.item_id not like 'next_action:%'),
- ('item_id', m.item_id, 'next_step_not_copied', m.item_id like 'next_action:%' and m.next_step_id is null),
+ ('item_id', m.item_id, 'waits_for_its_record', m.item_id not like 'next_action:%' and m.item_id not like 'capture_post_call_action:%'),
+ ('item_id', m.item_id, 'next_step_not_copied', (m.item_id like 'next_action:%' or m.item_id like 'capture_post_call_action:%') and m.next_step_id is null),
  ('identity_id', m.identity_id::text, 'waiting_on_not_copied', m.identity_id is not null and m.waiting_on_party_id is null),
  ('reason', m.reason, 'waiting_needs_reason', m.identity_id is not null and m.reason !~ '\S')
 ) f(field, value, reason, refused) where f.refused;

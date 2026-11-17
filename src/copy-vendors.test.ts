@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { URL } from "node:url";
@@ -88,6 +88,7 @@ ${oldVendor(40, 10, {
 	last_touch: "2025-01-01",
 	deal_history_verified_at: "2025-01-01",
 	out_of_market: "true",
+	intro_notes: " Example vendor note ",
 	trust_override: `{"tier": "Proven", "recorded_by": "partner_one", "reason": "Example reason", "recorded_at": "2025-01-01"}`,
 })}
 ${oldVendor(41, 15, {
@@ -99,6 +100,7 @@ ${oldVendor(41, 15, {
 	verticals: `{dental,medical," dental ","\tdental","dental\n",NULL," "}`,
 	seeking: "Conflicting request",
 	loan_programs: "{Example financing,Example equipment}",
+	intro_notes: " \t",
 })}
 ${oldVendor(42, 11, { vendor_ref: "P-0010", category: "Misc", relationship_level: "4", enrich: "true" })}
 ${oldVendor(43, 16)}
@@ -112,6 +114,14 @@ ${oldVendor(47, 10, {
 	territory: "Example territory",
 	offers: "Different offer",
 	verticals: "{medical,vet}",
+	intro_notes: " Example vendor note ",
+})}
+${oldVendor(49, 10, {
+	merged_into: id(40),
+	category_slug: "cpa",
+	intro_notes: "Example merged note",
+	updated_by: PARTNER,
+	updated_at: "2025-02-03T04:05:06Z",
 })}
 commit;`;
 
@@ -249,17 +259,38 @@ test("each value it does not copy is listed, with why", () => {
 	]);
 });
 
+const noteId = (vendor: number) => {
+	const hex = createHash("md5")
+		.update(`old_system:vendor:${id(vendor)}:intro_notes`)
+		.digest("hex");
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
+test("each nonblank vendor note is a note about its record, unless its surviving vendor holds it too", async () => {
+	// biome-ignore format: one row per note
+	assert.deepEqual(await rows(`select a.id, a.kind, a.happened_at::text, a.summary, about.party_id, about.created_at::text,
+		a.changed_by_user_id, a.changed_by_job, a.changed_at::text from activity a join activity_about about on about.activity_id = a.id
+		order by a.happened_at`), [
+		{ id: noteId(40), kind: "note", happened_at: "2025-01-02 03:04:05+00", summary: " Example vendor note ", party_id: id(10),
+			created_at: "2025-01-02 03:04:05+00", changed_by_user_id: PARTNER, changed_by_job: null, changed_at: "2025-01-02 03:04:05+00" },
+		{ id: noteId(49), kind: "note", happened_at: "2025-02-03 04:05:06+00", summary: "Example merged note", party_id: id(10),
+			created_at: "2025-02-03 04:05:06+00", changed_by_user_id: PARTNER, changed_by_job: null, changed_at: "2025-02-03 04:05:06+00" },
+	]);
+});
+
+const COPIED_ROWS = `select to_jsonb(v) as row from vendor_vertical v union all select to_jsonb(p) from vendor_loan_program p
+	union all select to_jsonb(a) from activity a union all select to_jsonb(a) from activity_about a`;
+
 test("a second run changes nothing, lists again what still waits, and lists a vendor added to a copied record", () =>
 	rolledBack(async () => {
 		const roles = await rows(
 			"select * from party_role order by party_id, role",
 		);
 		const history = await rows("select * from change order by id");
-		const lists = await rows(
-			"select to_jsonb(v) as row from vendor_vertical v union all select to_jsonb(p) from vendor_loan_program p",
-		);
+		const lists = await rows(COPIED_ROWS);
 		await db.query("discard temp");
-		assert.deepEqual(await copy(oldVendor(48, 10, { vendor_ref: "V-0048" })), [
+		// biome-ignore format: one vendor
+		assert.deepEqual(await copy(oldVendor(48, 10, { vendor_ref: "V-0048", intro_notes: "Example waiting note" })), [
 			...WAITING,
 			[
 				id(48),
@@ -273,12 +304,7 @@ test("a second run changes nothing, lists again what still waits, and lists a ve
 			roles,
 		);
 		assert.deepEqual(await rows("select * from change order by id"), history);
-		assert.deepEqual(
-			await rows(
-				"select to_jsonb(v) as row from vendor_vertical v union all select to_jsonb(p) from vendor_loan_program p",
-			),
-			lists,
-		);
+		assert.deepEqual(await rows(COPIED_ROWS), lists);
 	}));
 
 test("vendor capabilities keep text and union lists without inventing a vocabulary", async () => {

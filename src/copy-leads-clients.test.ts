@@ -461,10 +461,18 @@ test("next actions, reference numbers and roster wording are copied once or list
  ('${id(112)}','lead','${id(100)}','${id(1)}','Call back','2027-02-05','done',null,null,'2025-01-01','2025-06-01','${id(1)}'),
  ('${id(113)}','lead','${id(100)}','${id(1)}','Old plan',null,'dropped',null,null,'2025-01-01','2025-01-01','${id(1)}'),
  ('${id(114)}','lead','${id(100)}','${id(119)}',E'\\t\\n',null,'open',null,null,'2025-01-01','2025-01-01','${id(1)}'),
- ('${id(115)}','client','${id(103)}','${id(1)}','Send proposal','2027-04-01','open','2027-03-01','example-ref','2025-01-01','2025-01-01','${id(1)}');`;
+ ('${id(115)}','client','${id(103)}','${id(1)}','Send proposal','2027-04-01','open','2027-03-01','example-ref','2025-01-01','2025-01-01','${id(1)}'),
+ ('${id(105)}','client','${id(103)}','${id(1)}','Example lapsed',null,'expired',null,null,'2025-01-01','2025-01-01','${id(1)}'),
+ ('${id(106)}','lead','${id(100)}','${id(1)}','Example replaced',null,'dropped',null,null,'2025-01-01','2025-01-01','${id(1)}'),
+ ('${id(107)}','lead','${id(100)}','${id(1)}','Example finished',null,'done',null,null,'2025-01-01','2025-08-01','${id(1)}'),
+ ('${id(118)}','lead','${id(100)}','${id(1)}','Example expired',null,'expired',null,null,'2025-01-01','2025-01-01','${id(1)}');
+ insert into public.event (id,subject_type,subject_id,field,new_value,human_quote,actor_id,verb,cause,occurred_at) values
+ ('${id(600)}','lead','${id(100)}','status','{"next_action_id":"${id(112)}","status":"done","version":1}',null,'${id(1)}','complete-one-action','human_stated','2025-05-15'),
+ ('${id(601)}','lead','${id(100)}','status','{"next_action_id":"${id(113)}","status":"dropped","version":1,"reason":"Example no longer needed"}','Example no longer needed','${id(1)}','drop-action','human_stated','2025-02-01'),
+ ('${id(602)}','clear_the_deck','${id(602)}',null,'{"kind":"next_action","action":"drop","rows":[{"id":"${id(118)}","status":"open"}]}',null,'${id(1)}','clear-the-deck-apply','human_stated','2025-03-01');`;
 	const steps = () =>
 		rows(
-			`select id,party_id,what,due_on::text,owner_party_id,done_at::text from next_step where party_id in ('${id(90)}','${id(91)}','${id(92)}') order by party_id,due_on`,
+			`select id,party_id,what,due_on::text,owner_party_id,done_at::text from next_step where party_id in ('${id(90)}','${id(91)}','${id(92)}') order by party_id,due_on,id`,
 		);
 	const listed = (report: pg.QueryResultRow[]) =>
 		report
@@ -477,19 +485,25 @@ test("next actions, reference numbers and roster wording are copied once or list
 			.map((r) => [r.old_id, r.field, r.value, r.reason]);
 	try {
 		const report = await run(setup, true);
+		// biome-ignore format: one row per copied action
 		const copied = [
 			[id(110), id(90), "Call back", "2027-01-05", id(1), null],
-			[
-				id(112),
-				id(90),
-				"Call back",
-				"2027-02-05",
-				id(1),
-				"2025-06-01 00:00:00+00",
-			],
+			[id(112), id(90), "Call back", "2027-02-05", id(1), "2025-05-15 00:00:00+00"],
+			[id(107), id(90), "Example finished", null, id(1), null],
+			[id(113), id(90), "Old plan", null, id(1), null],
+			[id(118), id(90), "Example expired", null, id(1), null],
 			[id(115), id(92), "Send proposal", "2027-04-01", id(1), null],
+			[id(105), id(92), "Example lapsed", null, id(1), null],
 		];
 		assert.deepEqual((await steps()).map(Object.values), copied);
+		// biome-ignore format: one row per ended action
+		assert.deepEqual((await rows(`select id,status,resolved_at::text,resolution_reason,resolution_event_id from next_step where party_id in ('${id(90)}','${id(92)}') and status <> 'open' order by id`)).map(Object.values), [
+			[id(105), "expired", null, null, null],
+			[id(107), "done", null, null, null],
+			[id(112), "done", null, null, null],
+			[id(113), "cancelled", "2025-02-01 00:00:00+00", "Example no longer needed", id(601)],
+			[id(118), "expired", "2025-03-01 00:00:00+00", null, id(602)],
+		]);
 		assert.deepEqual(
 			(
 				await rows(
@@ -530,7 +544,8 @@ test("next actions, reference numbers and roster wording are copied once or list
 				"Example specialty",
 				"verbatim_label_not_stored",
 			],
-			[id(113), "status", "dropped", "closed_without_doing"],
+			[id(105), "resolution_event_id", null, "expiry_unproven"],
+			[id(106), "status", "dropped", "cancellation_reason_missing"],
 			[id(114), "description", "\t\n", "blank_next_action"],
 			[id(114), "owner_id", id(119), "owner_not_a_user"],
 			[id(115), "hold_until", "2027-03-01", "hold_has_no_place"],
@@ -543,9 +558,9 @@ test("next actions, reference numbers and roster wording are copied once or list
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,created_at,created_by) values ('${id(117)}','lead','${id(104)}','${id(1)}','Call back','2027-01-05','2020-01-01','${id(1)}');`);
 		assert.deepEqual((await steps()).map(Object.values), copied);
 		const corrected = [
-			...copied.slice(0, 2),
+			...copied.slice(0, 4),
 			[id(114), id(90), "Ask for plans", null, null, null],
-			copied[2],
+			...copied.slice(4),
 		];
 		for (const correction of [
 			`update public.next_action set description = 'Ask for plans' where id = '${id(114)}'`,

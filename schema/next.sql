@@ -268,6 +268,12 @@ create table property (
 	county_fips county_fips,
 	latitude latitude,
 	longitude longitude,
+	name text check (name ~ '\S'),
+	-- Free text, as the old system kept them.
+	building_class text check (building_class ~ '\S'),
+	building_type text check (building_type ~ '\S'),
+	year_built integer check (year_built between 1800 and 2100),
+	stories integer check (stories between 1 and 60),
 	constraint property_point_whole check (num_nonnulls(latitude, longitude) <> 1)
 );
 
@@ -946,8 +952,7 @@ create table next_step (
 	resolved_at timestamptz,
 	resolution_reason text check (resolution_reason is null or btrim(resolution_reason) <> ''),
 	resolution_event_id uuid,
-	status text generated always as
-		(coalesce(resolution, case when done_at is not null then 'done' else 'open' end)) stored,
+	status text generated always as (coalesce(resolution, 'open')) stored,
 	deal_id uuid references deal,
 	party_id uuid references party,
 	property_id uuid references property,
@@ -2757,7 +2762,7 @@ grant update (name) on party, market, territory, deal, document, design_template
 grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
 grant update (npi, how_found) on party to engine;
 grant update (until_date) on do_not_contact to engine;
-grant update (address, county_fips, latitude, longitude) on property to engine;
+grant update (address, county_fips, latitude, longitude, name, building_class, building_type, year_built, stories) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
 grant update (started_on, ended_on) on party_territory to engine;
 grant update (has_office, coverage, source) on party_territory_review to engine;

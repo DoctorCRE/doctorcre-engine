@@ -97,15 +97,18 @@ cross join lateral (select p.kind = 'org' and p.org_id is not null
  and daterange(b.started_on, b.ended_on) @> (n.created_at at time zone 'America/Chicago')::date) as national) answer
 where d.lane is not null and (answer.unreviewed or (d.lane = 'national') <> answer.national);
 
+create temp table old_participant on commit drop as
+select p.*, case p.role when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else p.role end as mapped_role from public.deal_participant p;
+
 create temp table old_link on commit drop as
 select d.id as deal_id, d.client_id as old_id, c.party_id, 'client' as role, false as vendor_role, d.created_at, d.updated_at,
  a.*
 from public.deal d join public.client c on c.id = d.client_id cross join lateral copy_attribution('deal', d.id, coalesce(d.updated_by, d.created_by)) a
 union all
 select p.deal_id, p.id, coalesce(p.party_id, p.actor_id),
- case p.role when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else p.role end, p.role in ('lender', 'attorney', 'other_vendor'), p.from_at, p.from_at,
+ p.mapped_role, p.role in ('lender', 'attorney', 'other_vendor'), p.from_at, p.from_at,
  a.*
-from public.deal_participant p cross join lateral copy_attribution('deal', p.deal_id, p.set_by) a
+from old_participant p cross join lateral copy_attribution('deal', p.deal_id, p.set_by) a
 where p.role <> 'lead' and p.to_at is null
 union all
 select v.deal_id, v.party_id, v.party_id, v.role, true, v.updated_at, v.updated_at,
@@ -122,10 +125,22 @@ select l.*, m.party_id as mapped_party_id, r.slug from old_link l
 left join outside_id m on m.source = 'old_system' and m.value = l.party_id::text
 left join role r on r.slug = l.role and (not l.vendor_role or r.category_of = 'vendor')
  and (l.role <> 'client' or exists (select from party_role pr where pr.party_id = m.party_id and pr.role = 'client'));
+-- Use the same lock as the rejoin trigger before checking existing history.
+select pg_advisory_xact_lock(hashtextextended(format('deal_party %s %s %s', deal_id, mapped_party_id, role), 0))
+from (select distinct deal_id, mapped_party_id, role from mapped_link
+ where mapped_party_id is not null order by deal_id, mapped_party_id, role) links;
+insert into not_copied
+select l.old_id, 'deal_party', concat_ws(' ', l.deal_id, l.party_id, l.role), 'current_membership_overlaps_history'
+from mapped_link l join deal d on d.id = l.deal_id
+where l.mapped_party_id is not null and l.slug is not null
+ and exists (select from imported_deal_party p where (p.deal_id, p.party_id, p.role) = (l.deal_id, l.mapped_party_id, l.role)
+ and p.ended_at > l.created_at);
 insert into deal_party (deal_id, party_id, role, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select distinct on (l.deal_id, l.mapped_party_id, l.role) l.deal_id, l.mapped_party_id, l.role,
  l.created_at, l.updated_at, l.changed_by_user_id, l.changed_by_job, l.changed_for_user_id from mapped_link l join deal d on d.id = l.deal_id
 where l.mapped_party_id is not null and l.slug is not null
+ and not exists (select from imported_deal_party p where (p.deal_id, p.party_id, p.role) = (l.deal_id, l.mapped_party_id, l.role)
+ and p.ended_at > l.created_at)
  and not exists (select from deal_party p where (p.deal_id, p.party_id, p.role) = (l.deal_id, l.mapped_party_id, l.role))
 order by l.deal_id, l.mapped_party_id, l.role, l.created_at, l.old_id;
 insert into not_copied
@@ -136,8 +151,67 @@ where d.id is null or l.mapped_party_id is null or l.slug is null;
 -- A stated name is never matched to a person; only a verified party link names the agent.
 insert into not_copied select deal_id, 'market_agent', agent_name, 'agent_not_verified'
 from public.deal_market_assignment where agent_party_id is null;
-insert into not_copied select id, 'deal_participant', role, 'ended_participant_history'
-from public.deal_participant where to_at is not null;
+create temp table old_membership on commit drop as
+select p.id, p.deal_id, m.party_id, p.role = 'lead' as owner,
+ p.mapped_role as role,
+ -- The bulk importer used storage time, not a known start of work.
+ case when a.kind <> 'system' then p.from_at end as started_at, p.to_at as ended_at,
+ case when d.id is null then 'deal_not_copied'
+ when m.party_id is null then 'party_not_copied'
+ when p.role = 'lead' and u.id is null then 'owner_not_a_user'
+ when p.role <> 'lead' and r.slug is null then 'role_not_available' end as refusal
+from old_participant p
+left join deal d on d.id = p.deal_id
+left join outside_id m on m.source = 'old_system' and m.value = coalesce(p.party_id, p.actor_id)::text
+left join app_user u on u.id = m.party_id
+left join public.actor a on a.id = p.set_by
+left join role r on r.slug = p.mapped_role
+ and (p.role not in ('lender', 'attorney', 'other_vendor') or r.category_of = 'vendor')
+where p.to_at is not null;
+do $$
+declare
+ p record;
+ refusal text;
+begin
+ for p in select * from old_membership order by deal_id, party_id, role, id loop
+  refusal := p.refusal;
+  if refusal is null then
+   if (p.owner and exists (select from imported_deal_party where id = p.id))
+    or (not p.owner and exists (select from imported_deal_owner where id = p.id)) then
+    refusal := 'existing_period_conflict';
+   elsif p.started_at >= p.ended_at then
+    refusal := 'period_ends_before_it_starts';
+   elsif exists (select from old_membership q where q.id <> p.id and q.deal_id = p.deal_id
+    and q.owner = p.owner and (p.owner or (q.party_id, q.role) = (p.party_id, p.role))
+    and q.refusal is null
+    and case when q.started_at is null or q.started_at < q.ended_at
+     then tstzrange(q.started_at, q.ended_at) && tstzrange(p.started_at, p.ended_at) else false end) then
+    refusal := 'overlapping_source_periods';
+   elsif (p.owner and exists (select from imported_deal_owner where id = p.id
+    and (deal_id, user_id, started_at, ended_at) is distinct from (p.deal_id, p.party_id, p.started_at, p.ended_at)))
+    or (not p.owner and exists (select from imported_deal_party where id = p.id
+    and (deal_id, party_id, role, started_at, ended_at) is distinct from (p.deal_id, p.party_id, p.role, p.started_at, p.ended_at))) then
+    refusal := 'existing_period_conflict';
+   elsif not exists (select from imported_deal_owner where id = p.id)
+    and not exists (select from imported_deal_party where id = p.id) then
+    begin
+     if p.owner then
+      insert into imported_deal_owner (id, deal_id, user_id, started_at, ended_at)
+      values (p.id, p.deal_id, p.party_id, p.started_at, p.ended_at);
+     else
+      insert into imported_deal_party (id, deal_id, party_id, role, started_at, ended_at)
+      values (p.id, p.deal_id, p.party_id, p.role, p.started_at, p.ended_at);
+     end if;
+    exception when exclusion_violation or check_violation or unique_violation then
+     get stacked diagnostics refusal = constraint_name;
+    end;
+   end if;
+  end if;
+  if refusal is not null then
+   insert into not_copied values (p.id, 'deal_participant', p.role, refusal);
+  end if;
+ end loop;
+end $$;
 
 create temp table old_phase on commit drop as
 select e.id as old_id, e.subject_id as deal_id, e.occurred_at as happened_at, case when e.field = 'outcome' then 'dead' else e.new_value ->> 'phase' end as phase,
