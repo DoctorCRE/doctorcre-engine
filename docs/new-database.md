@@ -1161,3 +1161,153 @@ Exact counts from production on 2026-11-17, aggregate only.
 | 33     | Search, directory, lead, invoice, client-fit, capture-queue and relationship reads use the new schema, before 31                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 34     | Closing anniversaries, vendor client needs, saved deal searches, the command center, deal reviews and the other deal screens read the new schema through the engine, and the app calls it, before 31                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | 35     | Overdue steps a deal update or call may have finished are held in the engine as a suggestion that the step is done, linked to the update. The partner resolves or dismisses each on Home; resolving completes the step in one stamped save, and moves the deal's date only when that step was the deal's current one, never for a call suggestion's hold. Only an automatic resolution has an undo, a new stamped save with a concurrent-edit check from the new schema's change history; a partner's own resolve has none. The held-step read is already ported in `src/next-step.ts`. A model judges them only if the owner reopens #575. Before 31 |
+
+## Doors the old system calls
+
+These are the engine requests old-system programs 26, 27 and 28 will make, fixed before either side is built so both can be built at once. Where the engine side is unbuilt, this is the shape it implements. Old callers were read at `carr-system` `e5966a7`, which already keeps each email's Message-ID (slice 2).
+
+### What every door shares
+
+- **Two entrances.** The app and a partner's own calls use `/api/engine/...` with the partner's session, so the save is stamped with that user. Studio jobs use `/jobs/...`, behind one Cloudflare Access service token for the Studio, like `/intake/*` (decision 103), and name themselves in two headers: `Engine-Job: <job slug>` and, when the job works for a partner, `Engine-For-User: <user slug>`. `runNextSave` turns either into its `Stamp`. A door listed under one entrance only refuses the other with 404.
+- **Saves.** Every save is a JSON `POST` with `idempotency_key`, a UUID the caller makes once per intended change and reuses on every retry, for example a UUIDv5 of the source and the change. A retry gets the first answer back with `replayed: true` and changes nothing. The same key with other arguments or another stamp is `409 key_reuse`.
+- **Refusals.** A refusal is `{ error, correlation_id, hint, ...details }`. Every door can answer `400 invalid_json`, `400 missing_required { fields }`, `400 invalid_field_value { fields }`, `401 unauthorized`, `403 unknown_job`, `422 actor_not_provisioned`, `422 database_refused_the_statement { rule }` with the constraint's name when a database rule refuses, and `503 database_unavailable`. A `5xx` is retried with the same key; a `4xx` is not, except where a door says so.
+- **Ids.** Deals and activities keep their old ids in the copy, so ids a caller already holds still work. Parties, people and users are named by new ids or, for a user, by `app_user.slug`.
+
+Jobs that stamp these saves: `mail_capture` for intake, the router and the outbox, each working for the mailbox's partner; `lead_stage` for the nightly lead stages; `cadence` and `call_capture` for the nightly cadence and call capture, which the owner adds (see the list at the end); `agent` for the assistant, working for its partner.
+
+### 19. Email and activity in
+
+`POST /jobs/activities` and `POST /api/engine/activities`
+
+| Field                   | Type                                                       | Required                                                                    |
+| ----------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `idempotency_key`       | UUID                                                       | yes                                                                         |
+| `kind`                  | `email`, `call`, `meeting` or `note`                       | yes                                                                         |
+| `happened_at`           | instant with zone                                          | yes                                                                         |
+| `about`                 | list of `{ deal_id }`, `{ party_id }` or `{ property_id }` | yes for a call, meeting or note; for an email, added to the matched parties |
+| `summary`               | text                                                       | no; an email shows its subject                                              |
+| `from_party_id`         | UUID                                                       | no; an email's comes from its sender                                        |
+| `reached`               | boolean or null                                            | no; calls only                                                              |
+| `calendar_review_key`   | 16 hex characters                                          | no; a meeting confirmed from a calendar review (25)                         |
+| `email.message_id`      | the Message-ID header, without angle brackets, case kept   | yes for an email                                                            |
+| `email.sender`          | address                                                    | yes for an email                                                            |
+| `email.recipients`      | list of `{ address, kind: to or cc }`                      | yes for an email, may be empty                                              |
+| `email.subject`         | text, may be empty                                         | yes for an email                                                            |
+| `email.body`            | the new text only, quoted history removed                  | yes for an email                                                            |
+| `email.conversation_id` | the mailbox's thread id                                    | no; owner list                                                              |
+
+- **Links.** The engine links an email to every party whose `party_email` matches its sender or a recipient, other than the users, plus `about`. The sender's party becomes `from_party_id`. An email whose sender is a user's address is outgoing; no direction field is sent. The caller no longer matches addresses itself, so its contact list never goes stale.
+- **Retry and second mailbox.** `message_id` is unique. A second request for a stored Message-ID, from a retry with a new key or from the other partner's mailbox, adds any new links and answers the stored activity with `existing: true`; the first body stays. Intake sends an email once its full text decodes, or with its preview when the wait for full text expires, so today's "Full text of email" follow-up note retires.
+- **Stamp.** A job's email is `mail_capture` for the mailbox's partner. Nothing is edited here, so there is no version check.
+- **Answer.** `201 { activity_id, existing, about: [...], unmatched: [addresses] }`. `unmatched` lists sender and recipient addresses no party has, so intake can still find new leads.
+- **Refusals.** `422 about_nothing` when an email matches no record and names none: nothing is stored and the caller marks it done. `422 message_id_invalid` for a blank or space-padded id. `404 not_found { about }` for a named record that does not exist.
+
+`POST /jobs/activities/{activity_id}/about` and `POST /api/engine/activities/{activity_id}/about` add links to a stored activity: `{ idempotency_key, about }`. The router uses it to file a reply to the deal its thread is filed to. A link already there is kept, not refused. Answer `{ activity_id, about }`, the full list. `404 not_found` for an unknown activity.
+
+The "Links from matched email" note stays an ordinary note through this door, about the deal, keyed by email and deal. Flagged mail becomes a deal checklist item through door 18, and the sent copy of a reply arrives as an outgoing email here, so the outbox's own activity log retires.
+
+### 20. Attachments upload and open
+
+| Route                                                       | Request                                                                                                                                                     | Answer                                                                          |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `PUT /jobs/files/{sha256}` and `/api/engine/files/{sha256}` | the file's bytes, `Content-Length` required                                                                                                                 | `{ sha256, content_type, bytes }`; `201` when stored, `200` when already stored |
+| `POST /jobs/attachments`                                    | `idempotency_key`; `sha256`; `name`; `message_id` and `deal_id`, at least one; `kind`, a `document_kind` slug, required with `deal_id`, `other` from intake | `201 { document_id, existing }`                                                 |
+| `GET /jobs/documents/{id}` and `/api/engine/documents/{id}` | none                                                                                                                                                        | the bytes, with the stored type and the file name                               |
+
+- The upload checks the bytes against the path's SHA-256, reads the type from the bytes as post media does, and stores to the `deal_documents` bucket under a key made from the hash. A file no row names is kept and never read, so an upload with no attachment request costs nothing.
+- The attachment converges on the email and the hash: the same file on the same email answers the stored document with `existing: true`. A file sent with no deal and filed later gains its deal once, as `document_filed_once` allows. Stamp: `mail_capture` for the mailbox's partner, or the user.
+- Refusals: upload `411 length_required`, `422 sha256_mismatch`, `422 unsupported_file`, `422 too_large`; attachment `409 email_not_stored`, retried after the email is sent, `409 file_not_uploaded`, `409 filed_to_another_deal { deal_id }`, `404 not_found` for the deal; open `404 not_found`.
+
+A partner's own deal file uses the same upload and then `POST /api/engine/deals/{deal_id}/documents` with `{ idempotency_key, sha256, name, kind, supersedes_id? }`; that door belongs to the app's step 29.
+
+### 21. Suggestions stored and decided
+
+| Route                                        | Who       | Request                                                                                                                          |
+| -------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /jobs/router-queue?days=&after=&limit=` | job       | emails stored in the last `days` (1 to 7, default 3) that happened in the last 30 days, oldest first                             |
+| `POST /jobs/proposals`                       | job       | `idempotency_key`, `kind`, `activity_id`, `evidence`, one of `deal_id`, `party_id` or `property_id`, and the kind's fields below |
+| `POST /api/engine/proposals/{id}/decision`   | user only | `idempotency_key`, `decision` (`accept` or `dismiss`), `edits` for a next step                                                   |
+
+The queue answers `{ emails: [{ activity_id, message_id, happened_at, sender, outgoing, subject, body, about, conversation_id, thread: [{ activity_id, deal_id, happened_at }] }], open_deals: [{ deal_id, name, phase, kind, client_party_id }], next_cursor }`. `thread` holds earlier emails filed to a deal in the same conversation or the last 30 days, as today's router reads them.
+
+| `kind`            | Fields                                                                  | Accepting creates                                                     |
+| ----------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `next_step`       | `what`; `owner_party_id`, `due_on` optional                             | the next step, with the proposal's id                                 |
+| `phase_move`      | `deal_id`, `from_phase`, `to_phase`; `reason` required for dead         | the phase change                                                      |
+| `new_lead`        | `party_id`, `how_found`                                                 | the lead role at New                                                  |
+| `lead_stage_move` | `party_id`, `from_stage`, `to_stage`, `strength`; `reason` for archived | the applied stage evidence                                            |
+| `file_to_deal`    | `deal_id`                                                               | the email's link to the deal (slice 7)                                |
+| `new_deal`        | `name`; `client_party_id` optional                                      | a deal owned by the deciding user, linked to the email (slices 7, 17) |
+
+- **Store.** The router stamps `mail_capture` and call capture `call_capture`; the database refuses a proposal whose job differs from the stamp. The same source and payload converge on the stored proposal, answered `200 { proposal_id, status, existing: true }`, so a dismissed suggestion is never made again. A new one answers `201 { proposal_id, status: "pending" }`. Refusals: `422 database_refused_the_statement { rule }` for a payload the kind does not allow or a party the activity is not about, and `404 not_found { activity_id }`.
+- **Decide.** Only a direct partner decides, once. `edits` (`what`, `owner_party_id`, `due_on`) change the accepted next step in the same transaction, so history shows the suggestion and the edit and the suggestion itself never changes. Answer `{ proposal_id, status, decided_at, created: { next_step_id | deal_id | activity_id } }`. Refusals: `409 already_decided { status, decided_by }`; `409 version_conflict { current_phase }` or `{ current_stage }` when the deal or lead moved since the suggestion, leaving it pending; `403 user_decides` from a job; `404 not_found`.
+- Snoozing a suggestion is a Home mark (slices 10, 24). Email summaries wait for slice 4's decision and have no door yet.
+
+### 22. Reply drafts and their delivery
+
+| Route                                           | Who                                      | Request                                                                                                                             | Answer                                                                                                                                          |
+| ----------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /jobs/reply-drafts`                       | `mail_capture` for the mailbox's partner | `idempotency_key`, `activity_id` of the email answered, `to`, `cc`, `subject`, `body`, `evidence`                                   | `201 { draft_id, version: 1 }`                                                                                                                  |
+| `POST /api/engine/reply-drafts/{id}/submission` | the mailbox's partner                    | `idempotency_key`, `version`, `to`, `cc`, `subject`, `body`, `document_ids`                                                         | `{ draft_id, version, sha256, status: "approved" }`                                                                                             |
+| `GET /jobs/reply-drafts?after=&limit=`          | `mail_capture` for that partner          | none                                                                                                                                | `{ owner, drafts: [{ draft_id, version, to, cc, subject, body, sha256, document_ids }], next_cursor }`, approved drafts with no recorded `sent` |
+| `POST /jobs/reply-drafts/{id}/delivery`         | `mail_capture` for that partner          | `idempotency_key`, `version`, `sha256`, `status` (`sent` or `failed`), `sent_item_id` and `sent_at` when sent, `reason` when failed | `{ draft_id, version, status }`                                                                                                                 |
+
+- **Never twice.** A draft is sent at one version. The outbox keys its send and receipt on draft id and version, as today, and checks the Sent folder before sending anything the list still shows. The engine records one `sent` per version: the same `sent_item_id` again converges, a `failed` may later become `sent`, and `sent` never becomes `failed`. The sent mail itself arrives through door 19.
+- **Checks.** `version` and `sha256` must match what was approved. `409 draft_changed { version }` when a partner edited or withdrew it since the outbox read it; `409 already_sent { sent_item_id }` for a different sent item; `403 not_mailbox_owner` when the stamp's partner is not the draft's; `409 version_conflict { version }` on a stale submission. Attachments are documents, fetched through door 20.
+
+### 25. Calendar agenda, review dismissals and meeting confirmations
+
+| Route                                                         | Who                                       | Request                                                                                    | Answer                                                            |
+| ------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `PUT /jobs/calendar/agenda`                                   | `mail_capture` for the calendar's partner | today's agenda snapshot: `schema`, `observed_at`, `items`, `follow_up_reviews`, `warnings` | `{ observed_at }`                                                 |
+| `GET /jobs/calendar/agenda` and `/api/engine/calendar/agenda` | job for a partner, or the user            | none                                                                                       | the stored snapshot, with `dismissed` and `confirmed` review keys |
+| `POST /api/engine/calendar/reviews/{key}/dismissal`           | user only                                 | `idempotency_key`                                                                          | `{ key, dismissed_at }`                                           |
+
+- The agenda is one row per partner, replaced whole, with no idempotency key: storing the same or a newer `observed_at` replaces it, and an older one is `409 agenda_superseded { observed_at }`, which the caller drops. A snapshot over 2 MB is `422 agenda_too_large`, as today.
+- A dismissal converges on partner and key: a second answers the first. `404 review_not_found` when the key is not among the partner's current reviews.
+- "It happened" is a meeting through door 19 with `calendar_review_key`. One meeting per partner and key: a second answers the stored one with `existing: true`.
+- The engine's agenda readers (calendar, today, meeting prep, vendor meetings) read the new row instead of `board_snapshot`.
+
+### 16. Deal fields and phase moves
+
+`POST /jobs/deals/{deal_id}/changes` and `POST /api/engine/deals/{deal_id}/changes`
+
+| Field             | Type                                                                                                                                   | Required            |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `idempotency_key` | UUID                                                                                                                                   | yes                 |
+| `seen_change_id`  | integer: the deal's latest change the caller read, 0 for none                                                                          | yes                 |
+| `fields`          | any of `name`, `kind`, `reason`, `owner` (user slug), `market_id`, `closed_value`, `parking_reason`, `parking_note`, `needs_attention` | `fields` or `phase` |
+| `phase`           | `{ from, to, on?, reason? }`: the phase the caller saw, the new one, a date in Central time, and a reason, required for dead           | `fields` or `phase` |
+
+- `changeDeal` applies `fields` with its rule: a later change to one of the same fields is `409 version_conflict { current_version }`; a later change to other fields stands and the answer is `{ deal_id, rebased: true, intervening_change_ids }`, so the caller re-reads. A phase move is refused `409 version_conflict { current_phase }` when the deal's phase is not `from`, as accepting a phase suggestion checks it, under the same row lock.
+- Answer: `{ deal_id, change_id }`, or the rebased answer, plus `phase_changed_at` for a move.
+- Stamp: the user, or a job for a partner. A job alone may not park, revive or flag a deal: `422 database_refused_the_statement { rule: "deal_parked_or_flagged_by_a_user" }`. `404 not_found` for an unknown deal; `400 unknown_owner`.
+- Callers: the nightly lead stages' invoice closes (`lead_stage`), call capture's automatic phase moves (`call_capture`, with today's confidence bar, which moves into the engine in slice 35), the assistant (`agent`) and the app.
+
+### 18. Next steps
+
+| Route                              | Request                                                                                                                                                                                     | Answer                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `POST .../next-steps`              | `idempotency_key`; one of `deal_id`, `party_id`, `property_id`; `what`; `owner_party_id`, `due_on`, `hold_until` optional; `item: { title, bullets, source_ref }` for a deal checklist item | `201 { next_step_id, change_id }`                   |
+| `POST .../next-steps/{id}/changes` | `idempotency_key`, `seen_change_id`, any of `what`, `owner_party_id`, `due_on`, `hold_until`, `item_bullets`                                                                                | `{ next_step_id, change_id }` or the rebased answer |
+| `POST .../next-steps/{id}/end`     | `idempotency_key`, `resolution` (`done` or `cancelled`), `done_at` optional, `reason` required for cancelled                                                                                | `{ next_step_id, status }`                          |
+| `POST .../next-steps/{id}/reopen`  | `idempotency_key`                                                                                                                                                                           | `{ next_step_id, status: "open" }`                  |
+
+`...` is `/jobs` or `/api/engine`.
+
+- **Retry.** The cadence keys each step on its rule, record and due date, intake keys a flag's item on mailbox, message and state, and call capture keys on the call and its suggestion, so a rerun converges on the first step.
+- **Concurrent edits.** A change uses `seen_change_id` on the step's change history with the deal rule above. Ending or reopening has no version: ending an ended step is `409 step_ended { status }`, which the caller counts as closed elsewhere, as intake does today, and reopening an open one is `409 step_open`.
+- **Stamp.** The user, or `cadence`, `mail_capture`, `call_capture` or `agent` for a partner.
+- **Refusals.** `422 database_refused_the_statement { rule }` for a checklist item of the wrong shape (`next_step_item_shape`), a cancel without a reason, or a step about two records; `404 not_found` for the step or its record.
+
+### What can start when this merges
+
+- Program 26, mail intake: email and activity (19), attachments (20) and the agenda (25).
+- Program 27, the router and reply send: suggestions (21) and reply delivery (22). Its lead suggestions for unknown senders still need the candidate door, which is not fixed here.
+- Program 28: the nightly cadence (18), the nightly lead stages (16), call capture (16, 18, 21) and the assistant's step and activity saves (18, 19). The nightly checklist reminders queue Home updates, which wait for slice 9, and the morning brief reads door 25's agenda.
+
+### Owner decisions
+
+1. May an email keep its mailbox's conversation id? The router uses it to file a reply to the deal its thread is filed to. Recommended yes; without it, thread filing falls back to the last 30 days by sender.
+2. May the assistant accept or dismiss a suggestion when a partner asks it to? It dismissed 9 in the last 30 days; the new database lets only a partner decide directly. Recommended no: the assistant asks the partner instead.
+3. Add the jobs `cadence` (nightly next steps) and `call_capture` (call suggestions and their automatic steps); only the owner adds a job.
