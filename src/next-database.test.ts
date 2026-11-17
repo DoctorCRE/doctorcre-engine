@@ -3674,6 +3674,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			},
 		],
 		critical_dates: [],
+		critical_date_proposals: [],
 		earlier_parties: [],
 		earlier_owners: [],
 		imported_history: [],
@@ -3728,6 +3729,59 @@ test("a deal read lists only its confirmed open critical dates, by due date then
 			(await datesOn(LENDER_DEAL)).map((date: { id: string }) => date.id),
 			[id(719)],
 		);
+	}));
+
+test("a deal read lists only its proposed critical dates, by due date then id", () =>
+	rolledBack(async () => {
+		const dated = (n: number, due_on: string, deal_id = DEAL) =>
+			newCriticalDate({ id: id(n), due_on, deal_id });
+		const resolve = (n: number, status: string) =>
+			`update critical_date set status = '${status}', resolution_reason = 'Example reason' where id = '${id(n)}'`;
+		await db.query(`${dated(722, "2026-06-01")}; ${dated(721, "2026-06-01")}; ${dated(723, "2026-05-01")};
+			${dated(724, "2026-04-01")}; ${dated(725, "2026-04-01")}; ${dated(726, "2026-04-01")};
+			${dated(727, "2026-04-01")}; ${dated(728, "2026-04-01")};
+			${dated(729, "2026-04-01", LENDER_DEAL)};
+			update critical_date set status = 'open' where id in ('${id(724)}', '${id(725)}', '${id(726)}', '${id(728)}');
+			${resolve(725, "done")}; ${resolve(726, "passed")}; ${resolve(727, "dropped")}; ${resolve(728, "dropped")}`);
+		const proposalsOn = async (deal: string) =>
+			unstamped(
+				(
+					await db.query(
+						"select everything_about_deal($1) -> 'critical_date_proposals' as dates",
+						[deal],
+					)
+				).rows[0].dates,
+			);
+		const dates = await proposalsOn(DEAL);
+		assert.deepEqual(
+			dates.map((date: { id: string }) => date.id),
+			[id(723), id(721), id(722)],
+		);
+		assert.deepEqual(dates[0], {
+			id: id(723),
+			kind: "due_diligence",
+			due_on: "2026-05-01",
+			source: "Example signed agreement",
+			offer_id: null,
+			lease_version_id: null,
+			option_number: null,
+			document_id: null,
+			note: null,
+			status: "proposed",
+			confirmed_by_user_id: null,
+			confirmed_at: null,
+			resolved_by_user_id: null,
+			resolved_at: null,
+			resolution_reason: null,
+		});
+		assert.deepEqual(
+			(await proposalsOn(LENDER_DEAL)).map((date: { id: string }) => date.id),
+			[id(729)],
+		);
+		await db.query(
+			`update critical_date set status = 'open' where id = '${id(729)}'`,
+		);
+		assert.deepEqual(await proposalsOn(LENDER_DEAL), []);
 	}));
 
 test("a deal read lists who was on it and who owned it before, in the order they left", () =>
