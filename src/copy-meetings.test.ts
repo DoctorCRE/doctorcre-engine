@@ -34,7 +34,7 @@ const run = async (input = "", script = copy): Promise<unknown[][]> => {
 	try {
 		if (input)
 			await db.query(
-				`create temp table copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop; create temp table copy_meeting_distinct (meeting_id uuid, activity_id uuid, primary key (meeting_id,activity_id)) on commit drop; ${input}`,
+				`create temp table copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop; create temp table copy_meeting_distinct (meeting_id uuid, activity_id uuid, primary key (meeting_id,activity_id)) on commit drop; create temp table copy_meeting_about (meeting_id uuid not null, deal_id uuid, party_id uuid, property_id uuid) on commit drop; ${input}`,
 			);
 		const result = await db.query(script);
 		assert.ok(Array.isArray(result));
@@ -176,6 +176,81 @@ test("a reviewed tour mapping reuses the copied activity and links, and survives
 	await run("", activityCopy);
 	await run();
 	assert.deepEqual(await snapshot(), before);
+});
+
+const about = (...links: string[]) =>
+	`insert into copy_meeting_about values ${links.join(",")}`;
+const linksOf = (activity: number) =>
+	rows(
+		`select deal_id,party_id,property_id,changed_by_user_id,changed_by_job from activity_about where activity_id = '${id(activity)}' order by deal_id,party_id,property_id`,
+	);
+const meetingText = () =>
+	rows(
+		"select jsonb_agg(a order by id) from activity a union all select jsonb_agg(i order by id) from imported_change i",
+	);
+
+test("reviewed links show a meeting on its records; bad links are listed and a later review adds links without rewriting notes", async () => {
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ insert into deal (id,name,owner_user_id) values ('${id(30)}','Example Deal','${id(1)}');
+ insert into property (id,address) values ('${id(40)}','100 Example Way'); commit;`);
+	await run();
+	const text = await meetingText();
+	const links = about(
+		`('${id(10)}','${id(30)}',null,null)`,
+		`('${id(10)}',null,'${id(1)}',null)`,
+		`('${id(10)}',null,'${id(1)}',null)`,
+		`('${id(10)}',null,null,'${id(40)}')`,
+		`('${id(11)}','${id(30)}',null,null)`,
+		`('${id(13)}','${id(31)}',null,null)`,
+		`('${id(13)}',null,null,'${id(41)}')`,
+		`('${id(13)}','${id(30)}','${id(1)}',null)`,
+		`('${id(13)}',null,null,null)`,
+		`('${id(99)}',null,'${id(1)}',null)`,
+	);
+	const report = await run(links);
+	assert.deepEqual(
+		report,
+		expected(
+			[10],
+			[id(13), "activity_about", null, "link_needs_one_record"],
+			[id(13), "activity_about", id(31), "deal_not_copied"],
+			[id(13), "activity_about", id(41), "property_not_copied"],
+			[id(13), "activity_about", `${id(30)} ${id(1)}`, "link_needs_one_record"],
+			[id(99), "activity_about", id(1), "meeting_not_found"],
+		),
+	);
+	// biome-ignore format: one row per link
+	assert.deepEqual(await linksOf(10), [
+ [id(30), null, null, null, "old_system"],
+ [null, id(1), null, null, "old_system"],
+ [null, null, id(40), null, "old_system"],
+ ]);
+	assert.deepEqual(await linksOf(13), []);
+	assert.deepEqual(await meetingText(), text);
+	const before = await snapshot();
+	assert.deepEqual(await run(links), report);
+	assert.deepEqual(await snapshot(), before);
+	const linked = await linksOf(10);
+
+	await run(about(`('${id(13)}','${id(30)}',null,null)`));
+	assert.deepEqual(await linksOf(13), [
+		[id(30), null, null, null, "old_system"],
+	]);
+	assert.deepEqual(await linksOf(10), linked);
+	assert.deepEqual(await meetingText(), text);
+	assert.deepEqual(await run(), expected([10, 13]));
+});
+
+test("a reviewed link on a mapped meeting keeps the logged activity's links", async () => {
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ insert into deal (id,name,owner_user_id) values ('${id(30)}','Example Deal','${id(1)}'); commit;`);
+	const logged = await linksOf(50);
+	assert.equal(logged.length, 1);
+	await run(`${mapping}; ${about(`('${id(11)}','${id(30)}',null,null)`)}`);
+	assert.deepEqual(await linksOf(50), [
+		[id(30), null, null, null, "old_system"],
+		...logged,
+	]);
 });
 
 test("invalid mappings and changed source history are listed without rewriting copied records", async () => {

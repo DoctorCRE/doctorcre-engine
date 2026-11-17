@@ -3,6 +3,7 @@ set local time zone 'UTC';
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 create temp table if not exists copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop;
 create temp table if not exists copy_meeting_distinct (meeting_id uuid, activity_id uuid, primary key (meeting_id, activity_id)) on commit drop;
+create temp table if not exists copy_meeting_about (meeting_id uuid not null, deal_id uuid, party_id uuid, property_id uuid) on commit drop;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 alter table activity disable trigger stamp_change;
 alter table activity disable trigger record_change;
@@ -33,6 +34,18 @@ select distinct m.id, 'activity_id', a.id::text, 'possible_duplicate' from ops.m
 where not exists (select from pg_temp.copy_meeting_distinct x where (x.meeting_id,x.activity_id) = (m.id,a.id))
  and not exists (select from pg_temp.copy_meeting_activity x where x.meeting_id = m.id)
  and not exists (select from imported_change i where i.id = m.id and i.source_event ->> 'source_table' = 'ops.meeting');
+
+-- Old meetings name no record, so each link is one a partner reviewed and must name a record already in the new database.
+create temp table meeting_about on commit drop as
+select l.*, case when num_nonnulls(l.deal_id, l.party_id, l.property_id) <> 1 then 'link_needs_one_record'
+ when not exists (select from ops.meeting m where m.id = l.meeting_id) then 'meeting_not_found'
+ when not exists (select from deal d where d.id = l.deal_id) and not exists (select from party p where p.id = l.party_id)
+  and not exists (select from property p where p.id = l.property_id)
+  then case when l.deal_id is not null then 'deal' when l.party_id is not null then 'party' else 'property' end || '_not_copied'
+ end as problem
+from (select distinct * from pg_temp.copy_meeting_about) l;
+insert into not_copied select meeting_id, 'activity_about', nullif(concat_ws(' ', deal_id, party_id, property_id), ''), problem
+from meeting_about where problem is not null;
 
 create temp table meeting_edit on commit drop as
 select n.*, row_number() over (partition by meeting_id order by created_at, note_number, revision, id) as position
@@ -138,6 +151,9 @@ begin
     end if;
     insert into imported_change select * from meeting_history order by changed_at, id;
    end if;
+   insert into activity_about (activity_id, deal_id, party_id, property_id)
+    select target, deal_id, party_id, property_id from meeting_about where meeting_id = m.id and problem is null
+    on conflict do nothing;
    insert into not_copied select m.id, 'activity', target::text, 'about_nothing_copied'
     where not exists (select from activity_about where activity_id = target);
    insert into not_copied select h.id, 'changed_for_user_id', null, 'agent_user_unknown'
