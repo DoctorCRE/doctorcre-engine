@@ -1,0 +1,260 @@
+import { Hono } from "hono";
+import { sql, type Transaction } from "kysely";
+import { Refusal, refuse } from "./answer.ts";
+import { isCalendarDate } from "./calendar-date.ts";
+import type { JsonObject } from "./database.d.ts";
+import type { DB } from "./next-database.d.ts";
+import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
+import {
+	clearable,
+	fit,
+	fitting,
+	isText,
+	isUuid,
+	optional,
+} from "./request-shape.ts";
+import { SaveRefusal } from "./save.ts";
+import { isArguments } from "./save-door.ts";
+
+const kinds = [
+	"next_step",
+	"phase_move",
+	"new_lead",
+	"lead_stage_move",
+	"file_to_deal",
+	"possible_new_deal",
+] as const;
+const shape = {
+	idempotency_key: isUuid,
+	kind: (v: unknown): v is (typeof kinds)[number] => kinds.some((k) => k === v),
+	activity_id: isUuid,
+	evidence: isText,
+	deal_id: optional(isUuid),
+	party_id: optional(isUuid),
+	property_id: optional(isUuid),
+	what: optional(isText),
+	owner_party_id: optional(isUuid),
+	due_on: optional(isCalendarDate),
+	how_found: optional(isText),
+	from_stage: optional(isText),
+	to_stage: optional(isText),
+	strength: optional(
+		(v: unknown): v is "strong" | "weak" => v === "strong" || v === "weak",
+	),
+	reason: optional(isText),
+};
+const edits = {
+	what: optional(isText),
+	owner_party_id: clearable(isUuid),
+	due_on: clearable(isCalendarDate),
+};
+const decision = {
+	idempotency_key: isUuid,
+	decision: (v: unknown): v is "accept" | "dismiss" =>
+		v === "accept" || v === "dismiss",
+	edits: optional(fitting(edits)),
+	deal_id: optional(isUuid),
+	reason: optional(isText),
+};
+const fail = (
+	status: 404 | 409 | 422,
+	error: Refusal["error"],
+	extra: JsonObject = {},
+): never => {
+	throw new SaveRefusal(new Refusal(status, error, extra));
+};
+
+// A quote advances only one milestone, using the deal's present phase and kind.
+function phaseMove(phase: string | null, kind: string | null, quote: string) {
+	const loi = /\b(?:l\.?o\.?i\b\.?|letter of intent\b)/i.test(quote);
+	const signed = /\b(signed|executed)\b/i.test(quote);
+	if (
+		phase === "research" &&
+		/\btours?\b/i.test(quote) &&
+		/\b(scheduled|confirmed|set)\b/i.test(quote)
+	)
+		return "site_selection";
+	if (phase === "site_selection" && loi) return "negotiation";
+	const lease = kind === "lease" && !loi && /\blease\b/i.test(quote);
+	if (
+		phase === "negotiation" &&
+		((loi && signed) ||
+			(lease &&
+				/\b(sent|issued|circulated|out for (legal )?review)\b/i.test(quote)))
+	)
+		return "legal";
+	if (phase === "legal" && lease && signed) return "closing";
+	return null;
+}
+async function dealNow(tx: Transaction<DB>, id: string) {
+	const deal = await tx
+		.selectFrom("deal")
+		.select("kind")
+		.where("id", "=", id)
+		.forUpdate()
+		.executeTakeFirst();
+	if (!deal) return fail(404, "not_found");
+	const phase = await tx
+		.selectFrom("deal_phase_change")
+		.select("phase")
+		.where("deal_id", "=", id)
+		.orderBy("happened_at", "desc")
+		.executeTakeFirst();
+	return { kind: deal.kind, phase: phase?.phase ?? null };
+}
+
+export const proposalJobs = new Hono<NextSaveEnv>()
+	.post("/proposals", async (c) => {
+		const response = await answerNextSave(
+			c,
+			"proposal-store",
+			(b) =>
+				fit(b, shape, ["idempotency_key", "kind", "activity_id", "evidence"]),
+			async (tx, r) => {
+				const activity = await tx
+					.selectFrom("activity")
+					.select("kind")
+					.where("id", "=", r.activity_id)
+					.executeTakeFirst();
+				if (!activity)
+					return fail(404, "not_found", { activity_id: r.activity_id });
+				let from: string | null = null,
+					to: string | null = null;
+				if (r.kind === "phase_move" && r.deal_id) {
+					const d = await dealNow(tx, r.deal_id);
+					from = d.phase;
+					to = phaseMove(from, d.kind, r.evidence);
+					if (!to) return fail(422, "phase_not_eligible");
+				}
+				const { rows } = await sql<{
+					id: string;
+					status: string;
+					existing: boolean;
+				}>`
+   insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, party_id, property_id,
+    what, owner_party_id, due_on, from_phase, to_phase, how_found, from_stage, to_stage, strength, reason)
+   values (${r.kind}, ${r.activity_id}::uuid, ${activity.kind}, ${r.evidence}, current_setting('engine.job'),
+    ${r.deal_id ?? null}::uuid, ${r.party_id ?? null}::uuid, ${r.property_id ?? null}::uuid,
+    ${r.what ?? null}, ${r.owner_party_id ?? null}::uuid, ${r.due_on ?? null}::date, ${from}, ${to},
+    ${r.how_found ?? null}, ${r.from_stage ?? null}, ${r.kind === "new_lead" ? "new" : (r.to_stage ?? null)}, ${r.strength ?? null}, ${r.reason ?? null})
+   on conflict do nothing returning id, status, false as existing`.execute(tx);
+				if (rows[0]) return { proposal_id: rows[0].id, status: rows[0].status };
+				const prior = await tx
+					.selectFrom("proposal")
+					.select(["id", "status"])
+					.where("activity_id", "=", r.activity_id)
+					.where("kind", "=", r.kind)
+					.where(sql<boolean>`deal_id is not distinct from ${r.deal_id ?? null}::uuid and party_id is not distinct from ${r.party_id ?? null}::uuid
+    and property_id is not distinct from ${r.property_id ?? null}::uuid and from_phase is not distinct from ${from} and to_phase is not distinct from ${to}
+    and what is not distinct from ${r.what ?? null} and owner_party_id is not distinct from ${r.owner_party_id ?? null}::uuid
+    and due_on is not distinct from ${r.due_on ?? null}::date and how_found is not distinct from ${r.how_found ?? null}
+    and from_stage is not distinct from ${r.from_stage ?? null} and to_stage is not distinct from ${r.kind === "new_lead" ? "new" : (r.to_stage ?? null)}`)
+					.executeTakeFirstOrThrow();
+				return { proposal_id: prior.id, status: prior.status, existing: true };
+			},
+			201,
+		);
+		const body = await response.clone().json();
+		return isArguments(body) && body.existing
+			? new Response(response.body, { status: 200, headers: response.headers })
+			: response;
+	})
+	.post("/proposals/:id/decision", (c) =>
+		refuse(c, new Refusal(403, "user_decides")),
+	);
+
+export const proposalDecisions = new Hono<NextSaveEnv>().post(
+	"/proposals/:id/decision",
+	(c) =>
+		answerNextSave(
+			c,
+			"proposal-decide",
+			(b) => {
+				const proposal_id = c.req.param("id");
+				if (!isUuid(proposal_id)) return new Refusal(404, "not_found");
+				const parsed = fit(b, decision, ["idempotency_key", "decision"]);
+				return parsed instanceof Refusal ? parsed : { ...parsed, proposal_id };
+			},
+			async (tx, r) => {
+				const p = await tx
+					.selectFrom("proposal")
+					.selectAll()
+					.where("id", "=", r.proposal_id)
+					.forUpdate()
+					.executeTakeFirst();
+				if (!p) return fail(404, "not_found");
+				if (p.status !== "pending")
+					return fail(409, "already_decided", {
+						status: p.status,
+						decided_by: p.decided_by_user_id,
+					});
+				if (
+					(r.edits && p.kind !== "next_step") ||
+					((r.deal_id || r.reason) &&
+						!["file_to_deal", "possible_new_deal"].includes(p.kind))
+				)
+					return fail(422, "invalid_field_value");
+				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
+					const d = await dealNow(tx, p.deal_id);
+					if (
+						d.phase !== p.from_phase ||
+						phaseMove(d.phase, d.kind, p.evidence) !== p.to_phase
+					)
+						return fail(409, "version_conflict", { current_phase: d.phase });
+				}
+				if (
+					r.decision === "accept" &&
+					p.kind === "lead_stage_move" &&
+					p.party_id
+				) {
+					const lead = await tx
+						.selectFrom("party_role")
+						.select("stage")
+						.where("party_id", "=", p.party_id)
+						.where("role", "=", "lead")
+						.forUpdate()
+						.executeTakeFirst();
+					if (lead?.stage !== p.from_stage)
+						return fail(409, "version_conflict", {
+							current_stage: lead?.stage ?? null,
+						});
+				}
+				if (
+					r.decision === "accept" &&
+					["file_to_deal", "possible_new_deal"].includes(p.kind) &&
+					(r.deal_id ?? p.deal_id)
+				) {
+					await dealNow(tx, r.deal_id ?? p.deal_id ?? "");
+				}
+
+				const { rows } = await sql<{
+					status: string;
+					decided_at: string;
+					filed_deal_id: string | null;
+				}>`update proposal
+   set status = ${r.decision === "accept" ? "accepted" : "dismissed"}, filed_deal_id = ${r.decision === "accept" ? (r.deal_id ?? null) : null}::uuid,
+    filing_reason = ${r.decision === "accept" ? (r.reason ?? null) : null} where id = ${p.id}::uuid
+   returning status, decided_at::text, filed_deal_id`.execute(tx);
+				if (r.decision === "accept" && r.edits && Object.keys(r.edits).length)
+					await tx
+						.updateTable("next_step")
+						.set(r.edits)
+						.where("id", "=", p.id)
+						.execute();
+				const created =
+					r.decision === "dismiss"
+						? {}
+						: p.kind === "next_step"
+							? { next_step_id: p.id }
+							: p.kind === "phase_move"
+								? { deal_id: p.deal_id }
+								: { activity_id: p.activity_id };
+				return {
+					proposal_id: p.id,
+					status: rows[0]?.status ?? null,
+					decided_at: rows[0]?.decided_at ?? null,
+					created,
+				};
+			},
+		),
+);

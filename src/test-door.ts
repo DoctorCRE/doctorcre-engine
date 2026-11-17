@@ -24,7 +24,7 @@ export function doorTest() {
 		);
 		await copy.setup();
 		await copy.db.query(
-			`create role ${writer} login; grant engine to ${writer}`,
+			`create role ${writer} login; grant engine, engine_reader to ${writer}`,
 		);
 	};
 	const cleanup = async () => {
@@ -65,16 +65,18 @@ export function doorTest() {
 		caller: Caller,
 		path: string,
 		args: object,
+		method: "POST" | "GET" = "POST",
 	): Promise<[number, Body]> => {
 		const user = "user" in caller ? caller.user : undefined;
 		const response = await worker.request(
 			`https://engine.example.test/${user ? "api/engine" : "jobs"}/${path}`,
 			{
-				method: "POST",
+				method,
 				headers: await headers(caller),
-				body: JSON.stringify(args),
+				...(method === "POST" && { body: JSON.stringify(args) }),
 			},
 			{
+				DATABASE: { connectionString: login() },
 				DATABASE_WRITER: { connectionString: login() },
 				ACCESS_TEAM_DOMAIN: TEAM,
 				JOBS_ACCESS_AUD: AUDIENCE,

@@ -6,6 +6,10 @@ import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
 const HINTS = {
+	phase_not_eligible:
+		"The quote does not support a move from the current phase.",
+	already_decided: "This suggestion has already been decided.",
+	user_decides: "A partner must decide this suggestion directly.",
 	unauthenticated: "The authenticated actor could not be resolved.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
 	not_found: "The requested record was not found.",
