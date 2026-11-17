@@ -493,6 +493,50 @@ alter table deal_party add client_role text generated always as (case when role 
 	add constraint deal_party_client_is_a_client foreign key (party_id, client_role) references party_role
 		deferrable initially deferred;
 
+-- Earlier people and deal owners, as the old system recorded them. A native removal or handoff is change history instead.
+-- An unknown start reaches back without limit, so two of them for one person, role and deal overlap and are refused.
+create extension if not exists btree_gist;
+create table imported_deal_party (
+	id uuid primary key,
+	deal_id uuid not null references deal,
+	party_id uuid not null references party,
+	role text not null references role,
+	started_at timestamptz,
+	ended_at timestamptz not null,
+	constraint imported_deal_party_ends_after_it_starts check (ended_at > started_at),
+	constraint imported_deal_party_once_at_a_time
+		exclude using gist (deal_id with =, party_id with =, role with =, tstzrange(started_at, ended_at) with &&)
+);
+
+-- Who moved the deal and why stay in its imported owner changes; this keeps only who held it, from when to when.
+create table imported_deal_owner (
+	id uuid primary key,
+	deal_id uuid not null references deal,
+	user_id uuid not null references app_user,
+	started_at timestamptz,
+	ended_at timestamptz not null,
+	constraint imported_deal_owner_ends_after_it_starts check (ended_at > started_at),
+	constraint imported_deal_owner_one_at_a_time exclude using gist (deal_id with =, tstzrange(started_at, ended_at) with &&)
+);
+
+-- Held per person, role and deal until the transaction ends, so a copied period and a rejoin cannot each pass alone and together break it.
+create function deal_party_rejoins_after_leaving() returns trigger
+language plpgsql as $$
+begin
+	perform pg_advisory_xact_lock(hashtextextended(format('deal_party %s %s %s', new.deal_id, new.party_id, new.role), 0));
+	if exists (select from deal_party p join imported_deal_party e using (deal_id, party_id, role)
+		where (p.deal_id, p.party_id, p.role) = (new.deal_id, new.party_id, new.role) and e.ended_at > p.created_at) then
+		raise exception 'someone is back on a deal only after they left it'
+			using errcode = 'check_violation', constraint = 'deal_party_rejoins_after_leaving';
+	end if;
+	return null;
+end $$;
+
+create constraint trigger deal_party_rejoins_after_leaving after insert or update on deal_party
+	for each row execute function deal_party_rejoins_after_leaving();
+create constraint trigger deal_party_rejoins_after_leaving after insert or update on imported_deal_party
+	for each row execute function deal_party_rejoins_after_leaving();
+
 -- Drafts record preparation and approval only. Sending stays in the user's mailbox.
 create table lead_contact_draft (
 	id uuid primary key default gen_random_uuid(),
@@ -669,7 +713,6 @@ where v.role = 'vendor'
 group by v.party_id;
 
 -- Clients and national accounts (walkthrough 4, topic B).
-create extension if not exists btree_gist;
 create table client_type (
 	slug text primary key,
 	label text not null
@@ -2279,7 +2322,7 @@ declare
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
-		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
+		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
@@ -2581,8 +2624,8 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change, imported_change) is never removed.
+-- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, imported_deal_party, imported_deal_owner, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
+-- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change, imported_change, imported_deal_party, imported_deal_owner) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;
@@ -2609,6 +2652,8 @@ revoke insert on app_user, job from engine;
 revoke insert on merged_party from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change, imported_change from engine;
+-- The old system's earlier people and owners are corrected there and copied again.
+revoke insert on imported_deal_party, imported_deal_owner from engine;
 -- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
 revoke execute on function record_change from public;
 revoke execute on function merge_party from public;
