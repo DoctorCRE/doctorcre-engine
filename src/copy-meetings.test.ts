@@ -116,31 +116,14 @@ afterEach(async () => {
 test("current summaries keep note order; imported edits keep source ids, authors, times and replaced text", async () => {
 	const report = await run();
 	assert.deepEqual(report, baseline);
-	assert.deepEqual(
-		await rows(
-			`select id,kind,summary,happened_at::text,changed_at::text,changed_by_user_id,from_party_id from activity where id in ('${id(10)}','${id(13)}') order by id`,
-		),
-		[
-			[
-				id(10),
-				"meeting",
-				"Example discussion\n\nNote 1\nExample corrected\n\nNote 2\nExample second note",
-				"2025-01-01 00:00:00+00",
-				"2025-01-01 03:00:00+00",
-				id(1),
-				null,
-			],
-			[
-				id(13),
-				"meeting",
-				"Example no notes",
-				"2025-01-04 00:00:00+00",
-				"2025-01-04 00:00:00+00",
-				id(1),
-				null,
-			],
-		],
+	const current = await rows(
+		`select id,kind,summary,happened_at::text,changed_at::text,changed_by_user_id,from_party_id from activity where id in ('${id(10)}','${id(13)}') order by id`,
 	);
+	// biome-ignore format: one row per meeting
+	assert.deepEqual(current, [
+ [id(10), "meeting", "Example discussion\n\nNote 1\nExample corrected\n\nNote 2\nExample second note", "2025-01-01 00:00:00+00", "2025-01-01 03:00:00+00", id(1), null],
+ [id(13), "meeting", "Example no notes", "2025-01-04 00:00:00+00", "2025-01-04 00:00:00+00", id(1), null],
+ ]);
 	const history = await rows(
 		`select id,source_event->'old_value'->>'summary',source_event->'new_value'->>'summary',source_event->>'source_table',source_event->>'revision',changed_by_user_id,changed_by_job,changed_at::text from imported_change where record = '{"id":"${id(10)}"}' order by changed_at`,
 	);
