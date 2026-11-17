@@ -12,6 +12,7 @@ const A = "00000000-0000-4000-8000-000000000001";
 const B = "00000000-0000-4000-8000-000000000002";
 const D = "00000000-0000-4000-8000-000000000003";
 const C = "00000000-0000-4000-8000-000000000004";
+const E = "00000000-0000-4000-8000-000000000005";
 const seed = `insert into actor (id,slug,kind,display_name) values
 ('${A}','partner_one','human','Example Partner'),('${B}','${PARTNERS[0]}','human','Other Example');
 insert into contact_state (slug,label,contactable,sort) values ('active','Example',true,1);
@@ -19,7 +20,7 @@ insert into deal_type_ref (slug,label,sort) values ('example','Example',1);
 insert into deal_phase (slug,label) values ('example','Example');
 with p as (insert into party (kind,name,created_by,updated_by) values ('org','Example Clinic','${A}','${A}') returning id)
 insert into client (id,party_id,created_by,updated_by) select '${C}',id,'${A}','${A}' from p;
-insert into deal (id,client_id,name,deal_type,phase,created_by,updated_by) values ('${D}','${C}','Example Deal','example','example','${A}','${A}');
+insert into deal (id,client_id,name,deal_type,phase,created_by,updated_by) values ('${D}','${C}','Example Deal','example','example','${A}','${A}'), ('${E}','${C}','Another Example Deal','example','example','${A}','${A}');
 insert into participant_role (slug,label,side) values ('lead','Example','actor');
 insert into deal_participant (deal_id,actor_id,role,set_by) values ('${D}','${A}','lead','${A}');`;
 
@@ -47,7 +48,7 @@ test("field bases validate exact cells and store the old conflict answer without
 			const event = randomUUID();
 			await db.query(
 				"insert into event (id,actor_id,verb,subject_type,subject_id,field,new_value,cause,occurred_at) values ($1,$2,'patch-deal-field','deal',$3,'owner','{\"owner\":null}','automation_job',now())",
-				[event, A, D],
+				[event, B, D],
 			);
 			const args = {
 				idempotency_key: randomUUID(),
@@ -57,8 +58,20 @@ test("field bases validate exact cells and store the old conflict answer without
 				base_event_id: null,
 			};
 			const answer = await save(url, args);
-			const made = (await db.query("select id,status from deal_conflict"))
-				.rows[0];
+			const made = (
+				await db.query(
+					"select id,status,value_a,actor_a,event_a,value_b,actor_b from deal_conflict",
+				)
+			).rows[0];
+			assert.deepEqual(made, {
+				id: made.id,
+				status: "open",
+				value_a: null,
+				actor_a: B,
+				event_a: event,
+				value_b: PARTNERS[0],
+				actor_b: A,
+			});
 			assert.equal(
 				JSON.stringify(answer),
 				JSON.stringify({
@@ -69,7 +82,7 @@ test("field bases validate exact cells and store the old conflict answer without
 						deal_id: D,
 						field: "owner",
 						value_a: null,
-						actor_a: "partner_one",
+						actor_a: PARTNERS[0],
 						event_a: event,
 						value_b: PARTNERS[0],
 						actor_b: "partner_one",
@@ -96,7 +109,13 @@ test("field bases validate exact cells and store the old conflict answer without
 				base_event_id: event,
 			});
 			assert.equal(fresh.ok, true);
+			const otherDealEvent = randomUUID();
+			await db.query(
+				"insert into event (id,actor_id,verb,subject_type,subject_id,field,new_value,cause,occurred_at) values ($1,$2,'patch-deal-field','deal',$3,'owner','{\"owner\":null}','automation_job',now())",
+				[otherDealEvent, B, E],
+			);
 			for (const extra of [
+				{ base_event_id: otherDealEvent },
 				{ base_event_id: randomUUID() },
 				{
 					field: "operating_state",
@@ -105,6 +124,10 @@ test("field bases validate exact cells and store the old conflict answer without
 				},
 				{ occurred_on: "2020-01-01" },
 				{ field: "operating_state", value: { state: "parked" } },
+				{
+					field: "operating_state",
+					value: { state: "parked", reason: "bogus" },
+				},
 				{ field: "operating_state", value: { state: "active", note: "x" } },
 				{
 					field: "operating_state",
@@ -165,12 +188,13 @@ test("field bases validate exact cells and store the old conflict answer without
 				value: { state: "parked", reason: "other", note: null },
 			});
 			assert.equal(
-				(await db.query("select owner from deal")).rows[0].owner,
+				(await db.query("select owner from deal where id = $1", [D])).rows[0]
+					.owner,
 				null,
 			);
 			assert.equal(
 				(await db.query("select count(*) from event")).rows[0].count,
-				"2",
+				"3",
 			);
 		} finally {
 			await db.end();
