@@ -95,8 +95,8 @@ before(async () => {
  ('${id(402)}', '${id(300)}', null, '${id(3)}', '${id(1)}', null, '${id(223)}', null),
  ('${id(403)}', '${id(300)}', '${id(10)}', null, '${id(1)}', null, null, null),
  ('${id(404)}', '${id(300)}', '${id(10)}', null, '${id(1)}', null, '${id(225)}', null),
- ('${id(405)}', '${id(300)}', '${id(10)}', null, '${id(1)}', null, '${id(226)}', null),
- ('${id(406)}', '${id(303)}', '${id(10)}', null, '${id(1)}', null, '${id(226)}', null),
+ ('${id(405)}', '${id(300)}', '${id(10)}', null, '${id(1)}', null, '${id(226)}', 'Example note A'),
+ ('${id(406)}', '${id(303)}', '${id(10)}', null, '${id(1)}', null, '${id(226)}', 'Example note B'),
  ('${id(407)}', '${id(302)}', '${id(10)}', null, '${id(1)}', null, '${id(227)}', null),
  ('${id(408)}', '${id(300)}', null, null, '${id(1)}', null, '${id(223)}', null);
  commit;`);
@@ -236,6 +236,21 @@ test("generated files take their template's reviewed kind and keep the generated
 	);
 });
 
+test("a prepared file keeps its note as written, and a blank note stays empty", async () => {
+	assert.deepEqual(
+		(
+			await rows(
+				`select id, note from document where deal_id = '${id(10)}' and (note is not null or id = '${id(222)}') order by id`,
+			)
+		).map(Object.values),
+		[
+			[id(220), "Example note"],
+			[id(221), "Example note"],
+			[id(222), null],
+		],
+	);
+});
+
 test("files that cannot map are listed with a reason and not stored, never guessed", async () => {
 	assert.deepEqual(reasons(report, 211), ["attachment_deleted"]);
 	assert.deepEqual(reasons(report, 212), ["deal_not_copied"]);
@@ -255,10 +270,12 @@ test("files that cannot map are listed with a reason and not stored, never guess
 		[
 			["several_kinds", "invoice"],
 			["several_kinds", "loi"],
+			["several_notes", "Example note A"],
+			["several_notes", "Example note B"],
 		],
 	);
 	assert.deepEqual(reasons(report, 302), ["unknown_kind"]);
-	assert.deepEqual(reasons(report, 400), ["generated_note"]);
+	assert.deepEqual(reasons(report, 400), []);
 	assert.deepEqual(reasons(report, 401), ["file_deleted"]);
 	assert.deepEqual(reasons(report, 402), []);
 	assert.deepEqual(reasons(report, 408), ["no_deal"]);

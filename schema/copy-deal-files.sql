@@ -15,21 +15,22 @@ join copy_template_kind m on m.template_slug = t.slug where m.kind not in (selec
 create temp table candidate on commit drop as
 select f.*, exists (select from deal n where n.id = f.deal_id) as deal_copied from (
  select v.id, v.deal_id, v.object_key as r2_key, v.filename as name, v.mime, v.sha256, v.bytes,
-  v.created_at, v.finalized_at as changed_at, a.id as author_id, null as kind
+  v.created_at, v.finalized_at as changed_at, a.id as author_id, null as kind, null as note
  from ops.deal_deliverable v left join public.actor a on a.slug = v.created_by where v.state = 'finalized'
   and not exists (select from public.attachment d where d.r2_key = v.object_key and d.deleted_at is not null)
  union all
- select id, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_at, created_by, null
+ select id, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_at, created_by, null, null
  from public.attachment where subject_type = 'deal' and deleted_at is null
  union all
- select a.id, g.deal_id, a.r2_key, a.filename, a.mime, a.sha256, a.bytes, a.created_at, a.created_at, a.created_by, m.kind
+ select a.id, g.deal_id, a.r2_key, a.filename, a.mime, a.sha256, a.bytes, a.created_at, a.created_at, a.created_by, m.kind,
+  case when g.note ~ '\S' then g.note end
  from public.document g join public.attachment a on a.id in (g.working_attachment, g.pdf_attachment) and a.deleted_at is null
  left join public.doc_template t on t.id = g.template_id
  left join copy_template_kind m on m.template_slug = t.slug and m.kind in (select slug from document_kind)
  where g.deal_id is not null
  union all
  select a.id, l.deal_id, a.r2_key, a.filename, a.mime, a.sha256, a.bytes, a.created_at, a.created_at, a.created_by,
-  case l.evidence_kind when 'executed_lease' then 'lease' when 'lease_amendment' then 'amendment' when 'lease_abstract' then 'other' end
+  case l.evidence_kind when 'executed_lease' then 'lease' when 'lease_amendment' then 'amendment' when 'lease_abstract' then 'other' end, null
  from public.lease l join public.attachment a on a.id = l.doc_attachment and a.deleted_at is null
  where l.deal_id is not null
 ) f;
@@ -46,19 +47,21 @@ cross join lateral (values
   or (coalesce(n.deal_id, c.deal_id), coalesce(n.content_type, c.mime), coalesce(n.sha256, c.sha256), coalesce(n.bytes, c.bytes))
   is distinct from (c.deal_id, c.mime, c.sha256, c.bytes)),
  ('kind', c.kind, 'several_kinds', exists (select from candidate o where o.r2_key = c.r2_key and o.kind <> c.kind)),
+ ('note', c.note, 'several_notes', exists (select from candidate o where o.r2_key = c.r2_key and o.note <> c.note)),
  ('id', c.id::text, 'document_id_taken', exists (select from candidate o where o.id = c.id and o.r2_key <> c.r2_key)
   or exists (select from document o where o.id = c.id and (o.r2_bucket, o.r2_key) is distinct from ('deal_documents', c.r2_key)))) f(field, value, reason, refused)
 where f.refused;
 insert into not_copied select distinct id, field, value, reason from file_refusal;
 create temp table copyable on commit drop as
-select distinct on (c.r2_key) c.*, coalesce(max(c.kind) over (partition by c.r2_key), 'other') as file_kind
+select distinct on (c.r2_key) c.*, coalesce(max(c.kind) over (partition by c.r2_key), 'other') as file_kind,
+ max(c.note) over (partition by c.r2_key) as file_note
 from candidate c where not exists (select from file_refusal r where r.r2_key = c.r2_key)
 
 order by c.r2_key, c.created_at, c.id;
 
-insert into document (id, created_at, name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind,
+insert into document (id, created_at, name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind, note,
  changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select c.id, c.created_at, c.name, 'deal_documents', c.r2_key, c.mime, c.sha256, c.bytes, c.deal_id, c.file_kind, c.changed_at, a.*
+select c.id, c.created_at, c.name, 'deal_documents', c.r2_key, c.mime, c.sha256, c.bytes, c.deal_id, c.file_kind, c.file_note, c.changed_at, a.*
 from copyable c cross join lateral copy_attribution('attachment', c.id, c.author_id) a
 where not exists (select from document n where (n.r2_bucket, n.r2_key) = ('deal_documents', c.r2_key));
 -- A lease's source file was stored without its deal.
@@ -82,8 +85,7 @@ cross join lateral (values
  ('pdf_attachment', p.id::text, 'file_deleted', p.deleted_at is not null),
  ('id', g.id::text, 'no_file', w.id is null and p.id is null),
  ('id', g.id::text, 'outside_id_taken', exists (select from outside_id o
-  where (o.source, o.value) = ('old_generated_document', g.id::text) and o.deal_id is distinct from g.deal_id)),
- ('note', g.note, 'generated_note', g.note ~ '\S')) f(field, value, reason, refused)
+  where (o.source, o.value) = ('old_generated_document', g.id::text) and o.deal_id is distinct from g.deal_id))) f(field, value, reason, refused)
 where (g.deal_id is not null or g.client_id is null) and f.refused;
 alter table document enable trigger stamp_change;
 select * from not_copied order by old_id, field, value, reason;
