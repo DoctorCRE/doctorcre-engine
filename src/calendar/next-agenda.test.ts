@@ -88,7 +88,7 @@ test("dismissals converge, replay, survive replacement and belong to their partn
 	);
 	await put({ ...agenda("2026-01-08T15:00:00Z"), follow_up_reviews: [] });
 	assert.deepEqual(await dismiss(), first);
-	assert.deepEqual((await get())[1].dismissed, [key]);
+	assert.deepEqual((await get())[1].dismissed, []);
 	assert.equal((await dismiss(key, randomUUID(), job))[0], 404);
 });
 
@@ -151,4 +151,17 @@ test("one meeting per partner and review key is enforced and reported as confirm
 	assert.deepEqual((await get())[1].confirmed, [key]);
 	await put(agenda(), { job: "mail_capture", for_user: "blair" });
 	assert.deepEqual((await get({ user: "blair" }))[1].confirmed, [key]);
+	assert.equal((await dismiss())[0], 200);
+	const other = "fedcba9876543210";
+	await insert("meeting", blair, other);
+	await put({ ...agenda(), follow_up_reviews: [{ key: other }] });
+	for (const caller of [job, { user: "alex" }]) {
+		const [, stored] = await get(caller);
+		assert.deepEqual(stored.confirmed, []);
+		assert.deepEqual(stored.dismissed, []);
+	}
+	await put(agenda());
+	const [, restored] = await get();
+	assert.deepEqual(restored.dismissed, [key]);
+	assert.deepEqual(restored.confirmed, [key]);
 });
