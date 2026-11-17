@@ -65,7 +65,7 @@ before(async () => {
  insert into public.deal_type_ref (slug, label, sort) select s, s, 1 from unnest(array['lease','purchase','sale_leaseback','build_to_suit','startup','relocation','expansion','renewal','additional_office','other']) s;
  insert into public.deal_phase (slug, label) values ('negotiation', 'Example negotiation'), ('closed', 'Example closed');
  insert into public.participant_role (slug, label) values ('listing_side', 'Example listing agent'), ('lead', 'Example owner'), ('landlord_side', 'Example landlord'), ('lender', 'Example lender'), ('attorney', 'Example attorney'), ('other_vendor', 'Example vendor'), ('support', 'Example support');
- insert into market (id, name) values ('${id(7)}', 'Example Market');
+ insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at) values ('example-market', 'Example Market', 'market', 'Example counties', 'Example review', '${id(1)}', '2025-01-01');
  ${["lease", "purchase", "sale_leaseback", "build_to_suit", "startup", "relocation", "expansion", "renewal", "additional_office", "other"].map((t, i) => deal(10 + i, t)).join("\n")}
  ${deal(20)} ${deal(21)}
  ${deal(22)} ${deal(23)} ${deal(24)} ${deal(25)} ${deal(26)} ${deal(27)}
@@ -99,7 +99,15 @@ before(async () => {
  insert into public.negotiation_claim (id, round_id, claim_type, created_by) values ('${id(120)}', '${id(100)}', 'example', '${id(1)}'), ('${id(121)}', '${id(102)}', 'example', '${id(1)}');
  update public.negotiation_round set rate_amount = 2, rate_basis = 'usd_sf_mo', term_months = 60, ti_amount = 20, ti_basis = 'usd_sf', free_rent_months = 2, note = 'Example original terms' where id = '${id(100)}';
  commit;`);
-	await db.query("begin");
+	await db.query(`begin; create temp table copy_market_county (market_slug text not null, county_fips text not null) on commit drop;
+insert into copy_market_county values ('example-market', '01001');`);
+	await db.query(
+		await readFile(
+			new URL("../schema/copy-markets.sql", import.meta.url),
+			"utf8",
+		),
+	);
+	await db.query("commit; begin");
 	report = await run();
 	await db.query("commit");
 });
@@ -129,7 +137,7 @@ test("types split into kind and reason, with startup renamed and other left unfi
 test("deals preserve identity, times, owner, market and value, and client links use the old-id map", async () => {
 	// biome-ignore format: one row per imported deal
 	assert.deepEqual((await rows(`select name, owner_user_id, market_id, closed_value, created_at::text, changed_at::text, changed_by_user_id from deal where id = '${id(10)}'`)).map(Object.values), [
- ["Example deal 10", id(1), id(7), "1234.00", "2025-01-01 00:00:00+00", "2025-02-01 00:00:00+00", id(1)],
+ ["Example deal 10", id(1), (await rows("select id from market where name = 'Example Market'"))[0]?.id, "1234.00", "2025-01-01 00:00:00+00", "2025-02-01 00:00:00+00", id(1)],
  ]);
 	assert.deepEqual(
 		await rows(

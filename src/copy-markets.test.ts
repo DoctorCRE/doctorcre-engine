@@ -1,0 +1,191 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { after, before, test } from "node:test";
+import { URL } from "node:url";
+import pg from "pg";
+import { asAdmin } from "../scripts/test-database.ts";
+
+const id = (n: number) =>
+	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const read = (file: string) =>
+	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
+const [schema, attribution, copy] = await Promise.all([
+	read("next.sql"),
+	read("copy-attribution.sql"),
+	read("copy-markets.sql"),
+]);
+const name = `copy_markets_${randomUUID().replaceAll("-", "")}`;
+const url = new URL(
+	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
+);
+url.pathname = `/${name}`;
+const db = new pg.Client({
+	connectionString: url.href,
+	options: "-c search_path=next -c TimeZone=UTC",
+});
+const rows = async (sql: string) => (await db.query(sql)).rows;
+const run = async (): Promise<pg.QueryResultRow[]> => {
+	const result = await db.query(copy);
+	assert.ok(Array.isArray(result));
+	return result.at(-1)?.rows ?? [];
+};
+before(async () => {
+	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
+	await asAdmin(
+		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
+	);
+	await db.connect();
+	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'example_user', 'human', 'Example User');
+insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'company', 'Example Vendor');
+insert into app_user (id) values ('${id(1)}');
+insert into outside_id (source, value, party_id) values ('old_system', '${id(3)}', '${id(2)}');
+insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
+insert into public.party (id, kind, name, created_by, updated_by) values ('${id(3)}', 'org', 'Example Old Vendor', '${id(1)}', '${id(1)}');
+insert into public.vendor_category (slug, label, sort) values ('example', 'Example', 1);
+insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Example active', true, 1);
+insert into public.vendor (id, party_id, category, territory, created_by, updated_by, created_at, updated_at)
+values ('${id(4)}', '${id(3)}', 'example', 'Around Example Bay', '${id(1)}', '${id(1)}', '2024-01-01', '2025-01-01');
+insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at) values
+('example-bay', 'Example Bay', 'market', 'A county boundary in words', 'Example review', '${id(1)}', '2025-02-01'),
+('example-unknown', 'Example Unknown', 'market', 'Not drawn', 'Example review', '${id(1)}', '2025-02-01'),
+('example-region', 'Example Region', 'regional', 'Several areas', 'Example review', '${id(1)}', '2025-02-01');
+insert into public.vendor_market_membership (market_slug, vendor_id, office_presence, source, reviewed_by, reviewed_at)
+select slug, '${id(4)}', true, 'Example review', '${id(1)}', '2025-03-01' from public.vendor_market;
+insert into public.submarket_condition values ('example', 'Example tightness', 0, 'Example note', 1);
+commit;`);
+});
+after(async () => {
+	await db.end();
+	await asAdmin(`drop database "${name}" with (force)`);
+});
+const counties = `create temp table copy_market_county (market_slug text not null, county_fips text not null) on commit drop;
+insert into copy_market_county values ('example-bay', '01001'), ('example-bay', '01003'), ('example-bay', '01001');`;
+
+test("reviewed counties copy once, memberships follow merged party ids, and unknown geography is listed", async () => {
+	await db.query(`begin; ${counties}`);
+	try {
+		const report = await run();
+		assert.deepEqual(await rows("select name from market"), [
+			{ name: "Example Bay" },
+		]);
+		assert.deepEqual(
+			await rows("select county_fips from market_county order by county_fips"),
+			[{ county_fips: "01001" }, { county_fips: "01003" }],
+		);
+		assert.deepEqual(
+			await rows(
+				`select t.name, count(p.id)::int as pieces from territory t left join territory_piece p on p.territory_id = t.id group by t.name order by t.name`,
+			),
+			[
+				{ name: "Around Example Bay", pieces: 0 },
+				{ name: "Example Bay", pieces: 1 },
+				{ name: "Example Region", pieces: 0 },
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				"select distinct party_id, started_on, ended_on from party_territory",
+			),
+			[{ party_id: id(2), started_on: null, ended_on: null }],
+		);
+		assert.deepEqual(
+			await rows(
+				"select changed_by_user_id, created_at::text, changed_at::text from market",
+			),
+			[
+				{
+					changed_by_user_id: id(1),
+					created_at: "2025-02-01 00:00:00+00",
+					changed_at: "2025-02-01 00:00:00+00",
+				},
+			],
+		);
+		for (const reason of [
+			"counties_not_listed",
+			"regional_boundary_needs_drawing",
+			"text_territory_needs_drawing",
+			"not_geography",
+			"no_alias_destination",
+			"no_typed_destination",
+		])
+			assert.ok(
+				report.some((r) => r.reason === reason),
+				reason,
+			);
+		assert.equal(
+			(await rows("select id from market where name = 'Example Bay'")).length,
+			1,
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("without a complete valid county list no market or market piece is invented", async () => {
+	for (const input of [
+		"",
+		`${counties} insert into copy_market_county values ('example-bay', 'bad');`,
+	]) {
+		await db.query(`begin; ${input}`);
+		try {
+			const report = await run();
+			assert.deepEqual(await rows("select * from market"), []);
+			assert.deepEqual(await rows("select * from territory_piece"), []);
+			assert.ok(
+				report.some(
+					(r) =>
+						r.old_id === "example-bay" &&
+						r.reason === (input ? "invalid_county" : "counties_not_listed"),
+				),
+			);
+		} finally {
+			await db.query("rollback");
+		}
+	}
+});
+
+test("a rerun leaves rows, timestamps and history unchanged", async () => {
+	await db.query(`begin; ${counties}`);
+	try {
+		await run();
+		const snapshot = () =>
+			rows(`select (select jsonb_agg(m) from market m) as markets,
+(select jsonb_agg(c) from market_county c) as counties, (select jsonb_agg(t) from territory t) as territories,
+(select jsonb_agg(p) from territory_piece p) as pieces, (select jsonb_agg(p) from party_territory p) as links,
+(select count(*)::int from change) as history`);
+		const first = await snapshot();
+		await db.query(
+			"drop table pg_temp.not_copied, pg_temp.old_market, pg_temp.old_membership, pg_temp.text_territory",
+		);
+		await run();
+		assert.deepEqual(await snapshot(), first);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("name clashes and missing parties are reported without choosing a match", async () => {
+	await db.query(`begin; ${counties}
+insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at)
+values ('example-clash', 'Example Bay', 'market', 'Example boundary', 'Example source', '${id(1)}', '2025-01-01');
+select set_config('engine.job', 'old_system', true);
+delete from outside_id where source = 'old_system';`);
+	try {
+		const report = await run();
+		assert.ok(
+			report.some(
+				(r) =>
+					r.old_id === "example-bay" && r.reason === "duplicate_market_name",
+			),
+		);
+		assert.ok(
+			report.some((r) => r.old_id === id(4) && r.reason === "party_not_copied"),
+		);
+		assert.deepEqual(await rows("select * from party_territory"), []);
+	} finally {
+		await db.query("rollback");
+	}
+});
