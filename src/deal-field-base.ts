@@ -6,9 +6,11 @@ import { lookupRefusal, resolveDeal } from "./deals/resolve.ts";
 import { SaveRefusal, type Saving } from "./save.ts";
 import { isArguments } from "./save-door.ts";
 
-const REASONS = ["prospect_never_active", "client_paused", "other"];
-const isReason = (value: JsonValue | undefined): value is string =>
-	typeof value === "string" && REASONS.includes(value);
+const REASONS = ["prospect_never_active", "client_paused", "other"] as const;
+const isReason = (
+	value: JsonValue | undefined,
+): value is (typeof REASONS)[number] =>
+	REASONS.some((reason) => reason === value);
 
 export type Patch =
 	| { field: "owner"; value: string | null }
@@ -16,7 +18,7 @@ export type Patch =
 			field: "operating_state";
 			value: {
 				state: "active" | "parked";
-				reason: string | null;
+				reason: (typeof REASONS)[number] | null;
 				note: string | null;
 			};
 	  };
@@ -61,11 +63,8 @@ function validated({ field, value, occurred_on }: JsonObject): Patch {
 		field,
 		value: {
 			state: value.state,
-			reason: value.state === "parked" ? reason : null,
-			note:
-				value.state === "parked" && typeof value.note === "string"
-					? value.note.trim() || null
-					: null,
+			reason,
+			note: typeof value.note === "string" ? value.note.trim() || null : null,
 		},
 	};
 }
