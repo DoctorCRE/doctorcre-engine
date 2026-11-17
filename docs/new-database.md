@@ -270,25 +270,26 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 2. `copy-markets.sql`, with `copy_market_county`: the deal copy matches a deal's market by name.
 3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role.
 4. `copy-national-account-owners.sql`, with `copy_account_owner_date`: needs the national accounts and mapped human owners.
-5. `copy-candidates-drafts.sql`: drafts and candidates find their leads.
-6. `copy-vendors.sql`: the deal copy finds the vendor roles.
-7. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
-8. `copy-deals.sql`.
-9. `copy-vendors.sql` again: introductions and worked deals find their deals.
-10. `copy-leases.sql`: needs its deal, client and building.
-11. `copy-critical-dates.sql`.
-12. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
-13. `copy-deal-file-text.sql`: needs the deal files.
-14. `copy-commissions.sql`, after the partners enter their ladders.
-15. `copy-invoice-emails.sql`: needs the deals and their payments.
-16. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
-17. `copy-activity.sql`: needs parties and deals.
-18. `copy-calls.sql`: needs the activity a logged meeting already is.
-19. `copy-lead-stage-moves.sql`: needs the activity each move cites.
-20. `copy-deal-next-steps.sql`: needs deals and activity.
-21. `copy-call-suggestions.sql`: needs the calls and the next steps an accepted suggestion made.
-22. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
-23. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
+5. `copy-client-brands.sql`, with `copy_client_brand_date`: needs the client locations and their brand companies.
+6. `copy-candidates-drafts.sql`: drafts and candidates find their leads.
+7. `copy-vendors.sql`: the deal copy finds the vendor roles.
+8. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
+9. `copy-deals.sql`.
+10. `copy-vendors.sql` again: introductions and worked deals find their deals.
+11. `copy-leases.sql`: needs its deal, client and building.
+12. `copy-critical-dates.sql`.
+13. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
+14. `copy-deal-file-text.sql`: needs the deal files.
+15. `copy-commissions.sql`, after the partners enter their ladders.
+16. `copy-invoice-emails.sql`: needs the deals and their payments.
+17. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
+18. `copy-activity.sql`: needs parties and deals.
+19. `copy-calls.sql`: needs the activity a logged meeting already is.
+20. `copy-lead-stage-moves.sql`: needs the activity each move cites.
+21. `copy-deal-next-steps.sql`: needs deals and activity.
+22. `copy-call-suggestions.sql`: needs the calls and the next steps an accepted suggestion made.
+23. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
+24. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
 Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
 
@@ -329,6 +330,8 @@ Moving today's rows across:
 Run `schema/copy-national-account-owners.sql` after the party, client and attribution copies, in one owner transaction with the new schema on `search_path`. Before running it, create temporary `copy_account_owner_date (account_client_id uuid primary key, started_on date not null) on commit drop` and insert the partners' reviewed first known dates. An absent date stays listed; `set_at` is retained as the row's storage and change time, never used as its start. Overlaps with copied ownership or between accounts mapped to one company stay listed together. Accepted rows keep a stable import id and reruns leave them unchanged, including stamps and history.
 
 Today's required actor foreign key permits only human, automation and system actors, so only human owners mapped to people are copied; outside people can be owners through later engine writes. Automation, system and unmapped human owners stay listed for the partners.
+
+Run `schema/copy-client-brands.sql` the same way, after the national account owner copy. Before running it, create temporary `copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop` with the partners' reviewed first known date for each old client whose company names a brand in `org_id`. A location without a date stays listed. The membership's stored and changed time is when its org_id was set, never its start. Overlapping memberships of one location, a location that is its own brand, a brand that is not a company and uncopied records stay listed. A person's org_id is untouched, since the party copy made it their company. Accepted rows keep a stable import id and reruns leave them unchanged.
 
 ## Deal files and extracted text
 
