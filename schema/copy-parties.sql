@@ -66,7 +66,6 @@ where s.survivor_id in (select id from copied) or m.party_id is not null or surv
 create temp table npi_claim on commit drop as
 select s.id, s.record_id, s.copy_values, s.npi as typed, btrim(s.npi) as npi, s.rank,
 	pg_input_is_valid(btrim(s.npi), 'npi') as valid,
-	coalesce(held.id, first_value(s.record_id) over (partition by btrim(s.npi) order by s.created_at, s.id)) as holder,
 	coalesce(held.id, first_value(s.survivor_id) over
 		(partition by btrim(s.npi) order by s.copy_values desc, s.created_at, s.id)) as copy_holder
 from chain s left join party held on held.npi = btrim(s.npi)
@@ -80,8 +79,9 @@ from copied p;
 
 insert into not_copied
 select c.id, 'npi', c.typed,
-	case when not c.valid then 'not an NPI' when coalesce(held.id, c.holder) <> p.id then 'also held by ' || coalesce(held.id, c.holder)
-		else 'its record holds another NPI' end
+	case when not c.valid then 'not an NPI' when held.id is not null then 'also held by ' || held.id
+		when p.npi is not null then 'its record holds another NPI'
+		else 'no record holds this NPI' end
 from npi_claim c join party p on p.id = c.record_id
 left join party held on held.npi = c.npi
 where p.npi is distinct from c.npi;
