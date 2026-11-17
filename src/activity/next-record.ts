@@ -193,15 +193,6 @@ async function link(tx: Transaction<DB>, activity_id: string, about: About[]) {
 	return rows.map((row) => row.link);
 }
 
-async function insertActivity(tx: Transaction<DB>, activity: ActivityFields) {
-	const { id } = await tx
-		.insertInto("activity")
-		.values({ ...activity, ...STAMPED })
-		.returning("id")
-		.executeTakeFirstOrThrow();
-	return id;
-}
-
 async function insertMeeting(
 	tx: Transaction<DB>,
 	activity: ActivityFields,
@@ -232,27 +223,36 @@ async function insertMeeting(
 	return { activity_id: stored.id, existing: true };
 }
 
-async function insertEmail(
+async function insertActivity(
 	tx: Transaction<DB>,
-	id: string,
-	{ recipients, ...stored }: Email,
+	activity: ActivityFields,
+	email?: Email,
 ) {
-	await sql`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
-   values (${id}, ${stored.message_id}, ${stored.conversation_id ?? null}, ${stored.sender}, ${stored.sender_name}, ${stored.subject}, ${stored.body})`.execute(
-		tx,
-	);
-	if (recipients.length)
-		await tx
-			.insertInto("email_recipient")
-			.values(
-				recipients.map((recipient, position) => ({
-					activity_id: id,
-					position,
-					...recipient,
-					...STAMPED,
-				})),
-			)
-			.execute();
+	const { id } = await tx
+		.insertInto("activity")
+		.values({ ...activity, ...STAMPED })
+		.returning("id")
+		.executeTakeFirstOrThrow();
+	if (email) {
+		const { recipients, ...stored } = email;
+		await sql`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
+	   values (${id}, ${stored.message_id}, ${stored.conversation_id ?? null}, ${stored.sender}, ${stored.sender_name}, ${stored.subject}, ${stored.body})`.execute(
+			tx,
+		);
+		if (recipients.length)
+			await tx
+				.insertInto("email_recipient")
+				.values(
+					recipients.map((recipient, position) => ({
+						activity_id: id,
+						position,
+						...recipient,
+						...STAMPED,
+					})),
+				)
+				.execute();
+	}
+	return id;
 }
 
 // Links an email to every party, other than the users, whose address sent or
@@ -295,11 +295,9 @@ async function recordEmail(
 	const [from, another] = owners.filter((owner) => owner.address === sender);
 	const from_party_id =
 		activity.from_party_id ?? (another ? null : (from?.party_id ?? null));
-	let activity_id = stored?.activity_id;
-	if (activity_id === undefined) {
-		activity_id = await insertActivity(tx, { ...activity, from_party_id });
-		await insertEmail(tx, activity_id, email);
-	}
+	const activity_id =
+		stored?.activity_id ??
+		(await insertActivity(tx, { ...activity, from_party_id }, email));
 	await sql`insert into email_mailbox (activity_id, user_id)
   select ${activity_id}, ${ACTING_USER} where ${ACTING_USER} is not null
   on conflict do nothing`.execute(tx);
