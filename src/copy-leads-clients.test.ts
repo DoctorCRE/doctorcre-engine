@@ -218,7 +218,6 @@ test("unresolved facts remain listed on every rerun and copied rows and stamps s
 		"source_needs_mapping",
 		"restriction_needs_reason",
 		"brand_start_date_required",
-		"owner_start_date_required",
 		"file_not_copied",
 		"contact_activity_copy_required",
 		"owner_label_only",
