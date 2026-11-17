@@ -41,6 +41,7 @@ const order: [file: string, input?: string][] = [
 	["copy-invoice-emails.sql"],
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
+	["copy-calls.sql"],
 	["copy-lead-stage-moves.sql"],
 	["copy-deal-next-steps.sql"],
 	["copy-preferences.sql"],
@@ -178,6 +179,12 @@ insert into ops.notification_preference (actor, device_opt_in, quiet_hours_start
  ('${id(1)}', true, '22:00', '06:00', 'America/Chicago', 1);
 insert into ops.home_waiting (actor_id, item_id, identity_kind, identity_id, reason, evidence, version, updated_at) values
  ('${id(1)}', 'next_action:${id(88)}', 'party', '${id(14)}', 'Example reply', '["Example evidence"]', 1, '2026-10-05');
+insert into public.capture_session (id, nonce, device_id, actor_id, mode, started_at, consent_announced_at, session_token_hash, expires_at, state, state_at, post_call)
+ values ('${id(95)}', 'nonce-95', 'phone-import', '${id(1)}', 'meeting', '2025-01-06', '2025-01-06', 'token-95', '2025-02-06', 'done', '2025-01-06', true);
+insert into public.phone_call_session (id, owner_id, sha256, byte_count, duration_seconds, mime_type, started_at, consent_announced_at, projection)
+ values ('${id(95)}', '${id(1)}', '${"7".repeat(64)}', 1000, 60, 'audio/mp4', '2025-01-06', '2025-01-06', '{"summary": "Example call summary", "decisions": [], "open_questions": []}');
+insert into public.capture_post_call_candidate (session_id, idempotency_key, batch_hash, item_index, kind, deal_id, assignee_slug, action_description, evidence_quote, confidence)
+ values ('${id(95)}', 'key-95', 'batch', 0, 'assigned_action', '${id(30)}', 'partner_one', 'Example action', 'Example quote', 0.9);
 `;
 
 const name = `copy_all_${randomUUID().replaceAll("-", "")}`;
@@ -262,7 +269,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 3, activity_about: 4, lead_stage_move: 1, proposal: 1,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 4, activity_about: 5, lead_stage_move: 1, proposal: 1,
  candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 1 };
 // The party copy lists a copied record's leftover values on its first run only (#392).
 // biome-ignore format: one row per correction
@@ -278,6 +285,7 @@ const corrections = [
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
+ ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(35), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(36), "phase", "field_has_no_mapping"],
