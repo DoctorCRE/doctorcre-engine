@@ -26,9 +26,12 @@ select a.*, cur.id as old_id, btrim(cur.summary) as evidence, cur.created_at, s.
 from ops.meeting_action a
 join ops.meeting_action_revision cur on (cur.meeting_id, cur.action_number, cur.revision) = (a.meeting_id, a.action_number, a.current_revision)
 join ops.meeting_action_revision first on (first.meeting_id, first.action_number, first.revision) = (a.meeting_id, a.action_number, 1)
-cross join lateral (select cur.command ->> 'verb' as verb, btrim(coalesce(cur.command #>> '{args,description}', cur.command #>> '{args,text}')) as what,
- cur.command -> 'args' ->> case cur.command ->> 'verb' when 'set-next-step' then 'deal' else 'ref' end as ref,
- coalesce(cur.command #>> '{args,due_on}', cur.command #>> '{args,next_date}') as due_text, lower(btrim(cur.command #>> '{args,owner}')) as owner_slug,
+cross join lateral (select cur.command -> 'args' as args, cur.command ->> 'verb' = 'set-next-step' as deal_room) c
+-- Each verb reads only its own arguments; the old system never checked a command's args against its verb.
+cross join lateral (select cur.command ->> 'verb' as verb, c.args ->> case when c.deal_room then 'deal' else 'ref' end as ref,
+ btrim(c.args ->> case when c.deal_room then 'text' else 'description' end) as what,
+ c.args ->> case when c.deal_room then 'next_date' else 'due_on' end as due_text,
+ case when not c.deal_room then lower(btrim(c.args ->> 'owner')) end as owner_slug,
  -- The dispatch's own result names the step it made; that receipt expires after 30 days, the deal room's event does not.
  coalesce((select (t.response ->> 'next_action_id')::uuid from public.tool_call t
   where t.idempotency_key = a.operation_key::text and t.verb = cur.command ->> 'verb'),
@@ -43,14 +46,20 @@ left join app_user owner on owner.id = o.party_id
 left join next_step made on made.id = s.made_id and (made.deal_id, made.party_id) is not distinct from (target.deal_id, target.party_id)
 cross join lateral copy_event_attribution(a.decided_by_actor, null) decided;
 
-insert into not_copied select s.old_id, f.field, f.value, f.reason from suggestion s cross join lateral (values
+insert into not_copied select s.old_id, f.field, f.value, f.reason from suggestion s
+-- Imported history shares one id space across sources, so a revision id another copy holds waits.
+left join lateral (select e.id::text from action_edit e join imported_change i using (id)
+ where (e.meeting_id, e.action_number) = (s.meeting_id, s.action_number)
+ and (i.table_name, i.record) is distinct from ('proposal', jsonb_build_object('id', s.proposal_id)) limit 1) taken on true
+cross join lateral (values
  ('command', s.verb, 'kind_has_no_suggestion', s.kind is null),
+ ('revision', taken.id, 'existing_history_conflicts', taken.id is not null),
  ('meeting_id', s.meeting_id::text, 'meeting_not_copied', s.activity_id is null),
  ('ref', s.ref, 'record_not_copied', s.deal_id is null and s.party_id is null),
  ('ref', s.ref, 'meeting_not_about_record', s.party_id is not null and s.activity_id is not null
   and not exists (select from activity_about b where (b.activity_id, b.party_id) = (s.activity_id, s.party_id))),
  ('summary', s.evidence, 'blank_evidence', s.evidence !~ '\S'),
- ('description', s.what, 'blank_next_step', coalesce(s.what, '') !~ '\S'),
+ (case when s.verb = 'set-next-step' then 'text' else 'description' end, s.what, 'blank_next_step', coalesce(s.what, '') !~ '\S'),
  ('due_on', s.due_text, 'invalid_due_date', s.due_text is not null and s.due_on is null),
  ('owner', s.owner_slug, 'owner_not_a_user', s.owner_slug is not null and s.owner is null),
  ('proposed_by_actor', s.unknown_author::text, 'author_not_a_user', s.unknown_author is not null),

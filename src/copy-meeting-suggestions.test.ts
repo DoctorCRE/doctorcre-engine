@@ -80,6 +80,9 @@ before(async () => {
  insert into imported_change (id, table_name, record, field, source_event, old_value_absent, new_value_absent, changed_by_job, changed_at)
   values ('${id(50)}', 'activity', '{"id": "${id(60)}"}', 'summary', '{"id": "${id(50)}", "verb": "import-meeting-edit", "cause": "old_system_import",
   "actor_id": "${id(1)}", "source_table": "ops.meeting"}', true, false, 'old_system', '2024-01-01 15:00');
+ insert into imported_change (id, table_name, record, field, source_event, old_value_absent, new_value_absent, changed_by_job, changed_at)
+  values ('${id(115)}', 'activity', '{"id": "${id(60)}"}', 'summary', '{"id": "${id(115)}", "verb": "import-meeting-edit", "cause": "old_system_import",
+  "actor_id": "${id(1)}", "source_table": "ops.meeting_note"}', false, false, 'old_system', '2024-01-01 16:00');
  insert into next_step (id, what, deal_id) values ('${id(90)}', 'Example made', '${id(30)}');
  create table ops.meeting_action (meeting_id uuid, action_number integer, state text not null, current_revision integer not null,
   decided_revision integer, decided_by_actor uuid, decided_at timestamptz, disposition text, assignee_actor uuid, operation_key uuid,
@@ -90,7 +93,7 @@ before(async () => {
  insert into ops.meeting_action values ${[
 		head(1, "proposed"), head(2, "delegated"), head(3, "accepted"), head(4, "declined"), head(5, "executed"),
 		head(6, "proposed"), head(7, "proposed"), head(8, "proposed"), head(9, "proposed", 1, 51), head(10, "proposed"),
-		head(11, "declined", 2), head(12, "proposed"),
+		head(11, "declined", 2), head(12, "proposed"), head(13, "proposed"), head(14, "proposed"), head(15, "proposed"),
 	].join(", ")};
  insert into ops.meeting_action_revision values ${[
 		revision(1, step("Example first")),
@@ -99,8 +102,10 @@ before(async () => {
 		revision(6, null), revision(7, { verb: "update-deal", args: { ref: id(30) } }), revision(8, step("Example elsewhere", id(31))),
 		revision(9, step("Example uncopied meeting"), 51), revision(10, step("Example prospect", id(21))),
 		revision(11, step("Example other decider")), revision(12, step("Example other owner", id(30), "partner_two")),
+		revision(13, { verb: "set-next-step", args: { deal: id(30), text: "Example step text", description: "Example ignored", due_on: "2024-05-01" } }),
+		revision(14, { verb: "set-next-action", args: { ref: id(30), text: "Example wrong argument" } }), revision(15, step("Example taken id")),
 	].join(",\n  ")};
- insert into ops.meeting_action_revision values ('${id(113)}', '${id(50)}', 1, 2, 'Example summary revised', '${JSON.stringify(step("Example revised", id(30), "partner_one"))}',
+ insert into ops.meeting_action_revision values ('${id(120)}', '${id(50)}', 1, 2, 'Example summary revised', '${JSON.stringify(step("Example revised", id(30), "partner_one"))}',
   'explicit_instruction', 'processing', '${id(3)}', '2024-01-02');
  update ops.meeting_action set current_revision = 2 where action_number = 1;
  insert into ops.meeting_action_decision_request values ${[request(2), request(3), request(4, "decline"), request(11, "decline", 2)].join(", ")};
@@ -123,6 +128,7 @@ test("copies each meeting suggestion with its decision and revisions, keeps the 
 		"#90 next_step #60 meeting Example summary 2 old_system accepted #1 2024-01-10 00:00:00+00 #30 Example made - - #1 - 2024-01-01 15:02:00+00",
 		"#101 next_step #60 meeting Example summary revised old_system pending - - #30 Example revised #1 2024-02-01 - old_system 2024-01-02 00:00:00+00",
 		"#104 next_step #60 meeting Example summary 4 old_system dismissed #1 2024-01-10 00:00:00+00 #30 Example declined - 2024-02-01 #1 - 2024-01-01 15:04:00+00",
+		"#113 next_step #60 meeting Example summary 13 old_system pending - - #30 Example step text - - - old_system 2024-01-01 15:13:00+00",
 	]);
 	assert.deepEqual(await rows("select id from next_step"), ["#90"]);
 	// biome-ignore format: one row per line
@@ -133,6 +139,7 @@ test("copies each meeting suggestion with its decision and revisions, keeps the 
 		"#101 insert pending - old_system 2024-01-02 00:00:00+00",
 		"#104 insert pending - old_system 2024-01-01 15:04:00+00",
 		"#104 update dismissed #1 - 2024-01-10 00:00:00+00",
+		"#113 insert pending - old_system 2024-01-01 15:13:00+00",
 	]);
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select id, record ->> 'id' as proposal, source_event #>> '{old_value,evidence}' as before, source_event #>> '{new_value,evidence}' as after,
@@ -140,8 +147,9 @@ test("copies each meeting suggestion with its decision and revisions, keeps the 
   from imported_change where table_name = 'proposal' order by record ->> 'id', changed_at`), [
 		"#102 #90 - Example summary 2 - tentative_discussion #1 - 2024-01-01 15:02:00+00",
 		"#101 #101 - Example summary 1 Example first tentative_discussion #1 - 2024-01-01 15:01:00+00",
-		"#113 #101 Example summary 1 Example summary revised Example revised explicit_instruction - agent 2024-01-02 00:00:00+00",
+		"#120 #101 Example summary 1 Example summary revised Example revised explicit_instruction - agent 2024-01-02 00:00:00+00",
 		"#104 #104 - Example summary 4 Example declined tentative_discussion #1 - 2024-01-01 15:04:00+00",
+		"#113 #113 - Example summary 13 Example ignored tentative_discussion #1 - 2024-01-01 15:13:00+00",
 	]);
 	assert.deepEqual(report, [
 		"#102 assignee_actor #2 delegation_has_no_place",
@@ -155,7 +163,9 @@ test("copies each meeting suggestion with its decision and revisions, keeps the 
 		"#110 ref #21 meeting_not_about_record",
 		"#111 decided_by_actor #2 decision_needs_user",
 		"#112 owner partner_two owner_not_a_user",
-		"#113 changed_for_user_id - agent_user_unknown",
+		"#114 description - blank_next_step",
+		"#115 revision #115 existing_history_conflicts",
+		"#120 changed_for_user_id - agent_user_unknown",
 	]);
 	assert.deepEqual(
 		await rows(
@@ -172,12 +182,12 @@ test("copies each meeting suggestion with its decision and revisions, keeps the 
 
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into next_step (id, what, deal_id) values ('${id(91)}', 'Example dispatched', '${id(30)}');
- insert into ops.meeting_action_revision values ('${id(114)}', '${id(50)}', 1, 3, 'Example summary later', '${JSON.stringify(step("Example later"))}', 'tentative_discussion', 'participant', '${id(1)}', '2024-01-03');
+ insert into ops.meeting_action_revision values ('${id(121)}', '${id(50)}', 1, 3, 'Example summary later', '${JSON.stringify(step("Example later"))}', 'tentative_discussion', 'participant', '${id(1)}', '2024-01-03');
  update ops.meeting_action set current_revision = 3 where action_number = 1;
  commit;`);
 	const later = await run();
 	assert.ok(!later.some((r) => r.startsWith("#103 ")));
-	assert.ok(later.includes("#114 proposal #101 existing_proposal_conflicts"));
+	assert.ok(later.includes("#121 proposal #101 existing_proposal_conflicts"));
 	assert.deepEqual(
 		await rows(
 			`select id, status, what from proposal where id in ('${id(91)}', '${id(101)}') order by id`,
