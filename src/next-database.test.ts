@@ -2211,6 +2211,17 @@ const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
 const OWNER_RULES: Record<string, Case[]> = {
+	"only a parked deal has a time it was parked, and a user who parked it only with that time":
+		[
+			[
+				`update deal set parked_at = now() where id = '${DEAL}'`,
+				"deal_parked_stamps_when_parked",
+			],
+			[
+				`update deal set parked_by_user_id = '${USER}' where id = '${DEAL}'`,
+				"deal_parked_stamps_when_parked",
+			],
+		],
 	"loaded outreach drafts still cannot send themselves": [
 		[
 			newLeadDraft({ requires_human_send: "false" }),
@@ -3660,6 +3671,8 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			parking_reason: null,
 			parking_note: null,
 			needs_attention: false,
+			parked_at: null,
+			parked_by_user_id: null,
 		},
 		phases,
 		properties: [
@@ -4193,6 +4206,8 @@ test("each insert, update and delete leaves history: the record, its fields from
 					parking_reason: null,
 					parking_note: null,
 					needs_attention: false,
+					parked_at: null,
+					parked_by_user_id: null,
 				},
 				...by(TEAMMATE, null),
 			},
@@ -4297,30 +4312,105 @@ test("a rejoin saved while an earlier period is copied waits for the copy, then 
 	}
 });
 
-test("a parked deal stays in its phase and is revived to it, and history keeps who parked it, why and when", () =>
+test("a parked deal stays in its phase and is revived to it, keeps who last parked it and when, and history keeps each", () =>
 	rolledBack(async () => {
+		const parkedBy = async () =>
+			(
+				await db.query(
+					`select parked_by_user_id, parked_at = now() as now from deal where id = '${DEAL}'`,
+				)
+			).rows[0];
 		await db.query(`${asUser(TEAMMATE)};
-			update deal set parking_reason = 'client_paused', parking_note = 'Example pause' where id = '${DEAL}';
-			${asUser(USER)}; update deal set parking_reason = null, parking_note = null where id = '${DEAL}'`);
+			update deal set parking_reason = 'client_paused', parking_note = 'Example pause' where id = '${DEAL}'`);
+		assert.deepEqual(await parkedBy(), {
+			parked_by_user_id: TEAMMATE,
+			now: true,
+		});
+		await db.query(`${asJob("agent", USER)};
+			update deal set needs_attention = true where id = '${DEAL}';
+			update deal set parking_note = 'Example longer pause' where id = '${DEAL}'`);
+		assert.deepEqual(await parkedBy(), { parked_by_user_id: USER, now: true });
+		await db.query(`${asUser(USER)};
+			update deal set parking_reason = null, parking_note = null where id = '${DEAL}'`);
+		assert.deepEqual(await parkedBy(), { parked_by_user_id: null, now: null });
 		assert.deepEqual((await readDeal()).phases, phases);
+		const now = (await db.query("select to_jsonb(now()) as now")).rows[0].now;
 		const parked = {
 			parking_reason: "client_paused",
 			parking_note: "Example pause",
+			parked_at: now,
+			parked_by_user_id: TEAMMATE,
 		};
-		const active = { parking_reason: null, parking_note: null };
-		const by = (user: string) => ({
+		const active = {
+			parking_reason: null,
+			parking_note: null,
+			parked_at: null,
+			parked_by_user_id: null,
+		};
+		const by = (user: string, job: string | null = null) => ({
 			table_name: "deal",
 			record: { id: DEAL },
 			action: "update",
-			changed_by_user_id: user,
-			changed_by_job: null,
-			changed_for_user_id: null,
+			changed_by_user_id: job ? null : user,
+			changed_by_job: job,
+			changed_for_user_id: job ? user : null,
 			merge_of: null,
 		});
 		assert.deepEqual(await history(), [
 			{ ...by(TEAMMATE), old_value: active, new_value: parked },
-			{ ...by(USER), old_value: parked, new_value: active },
+			{
+				...by(USER, "agent"),
+				old_value: { needs_attention: false },
+				new_value: { needs_attention: true },
+			},
+			{
+				...by(USER, "agent"),
+				old_value: {
+					parking_note: "Example pause",
+					parked_by_user_id: TEAMMATE,
+				},
+				new_value: {
+					parking_note: "Example longer pause",
+					parked_by_user_id: USER,
+				},
+			},
+			{
+				...by(USER),
+				old_value: {
+					...parked,
+					parking_note: "Example longer pause",
+					parked_by_user_id: USER,
+				},
+				new_value: active,
+			},
 		]);
+	}));
+
+test("a parked deal is stamped again when its reason or note changes, and not when its name or flag does", () =>
+	rolledBack(async () => {
+		const parkedEarlier = `set local role none;
+			update deal set parked_at = '2025-01-01T00:00:00Z' where id = '${DEAL}';
+			set local role engine`;
+		const parkedAt = async () =>
+			(
+				await db.query(
+					`select parked_at = now() as now, parked_at = '2025-01-01T00:00:00Z' as earlier from deal where id = '${DEAL}'`,
+				)
+			).rows[0];
+		await db.query(`${asUser(USER)};
+			update deal set parking_reason = 'client_paused', parking_note = 'Example pause' where id = '${DEAL}';
+			${parkedEarlier};
+			update deal set name = 'Example renamed' where id = '${DEAL}';
+			update deal set needs_attention = true where id = '${DEAL}'`);
+		assert.deepEqual(await parkedAt(), { now: false, earlier: true });
+		for (const change of [
+			"parking_note = 'Example longer pause'",
+			"parking_reason = 'other'",
+		]) {
+			await db.query(`${parkedEarlier};
+				update deal set ${change} where id = '${DEAL}'`);
+			assert.deepEqual(await parkedAt(), { now: true, earlier: false }, change);
+		}
 	}));
 
 test("a user, or an agent working for one, flags a deal as needing attention, and a job alone still renames it", () =>
