@@ -58,13 +58,13 @@ holds about 2,100 locks and many at once exhaust the server's lock table (#237).
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
 query typing and is reserved here for catalog inspection, trigger controls and
 test rows in `ops` tables, which the generated types leave out.
-The snapshot contains 113 empty tables, 60 views, 7 sequences and 33 triggers.
+The snapshot contains 115 empty tables, 60 views, 7 sequences and 33 triggers.
 Its reviewed literals use fictional partners, tenants and domains. SQL comments
 and psql transport directives are removed, except comments inside function
 bodies, which production stores and the drift command compares. Of the old process schema it keeps
 only the four tables behind the client portal link and the document checklist,
-and the deal deliverables the deal-file copy reads,
-without their triggers. The rest of that schema, its triggers on public tables and two
+and the deal deliverables, page text and extraction jobs the deal-file copies read,
+without their triggers or a job's link to its fact batch. The rest of that schema, its triggers on public tables and two
 dependent public views are excluded.
 
 To compare a catalog outside CI, set `SCHEMA_DATABASE_URL` in the environment and

@@ -19,26 +19,33 @@ select record_id, sum(gross_amount) filter (where status = 'expected') as expect
 from old_commission where record_id is not null group by record_id;
 
 create temp table refusal on commit drop as
-select c.id, c.record_id, f.reason from old_commission c
+select c.id, c.record_id, f.field, f.value, f.reason from old_commission c
 left join commission_total t on t.record_id = c.record_id
 cross join lateral (values
- ('deal_not_copied', c.record_id is null),
- ('nonpositive_amount', c.gross_amount <= 0),
- ('amount_out_of_range', t.expected > 999999999999.99 or t.gross > 999999999999.99),
- ('status_disagrees_with_dates', c.status = 'invoiced' and (c.invoiced_on is null or c.received_on is not null)),
- ('received_without_date', c.status = 'received' and c.received_on is null),
- ('dates_out_of_order', c.status <> 'expected' and (c.due_on < c.invoiced_on or c.received_on < c.invoiced_on)),
- ('ladder_not_entered', t.gross is not null and not exists (select from commission_tier where user_id = c.owner_user_id)),
- ('author_not_copied', c.changed_by_user_id is not null and not exists (select from app_user where id = c.changed_by_user_id)
-  or c.changed_for_user_id is not null and not exists (select from app_user where id = c.changed_for_user_id)),
- ('payment_id_taken', c.status <> 'expected' and exists (select from commission_payment p where p.id = c.id
+ ('deal_id', c.deal_id::text, 'deal_not_copied', c.record_id is null),
+ ('gross_amount', c.gross_amount::text, 'nonpositive_amount', c.gross_amount <= 0),
+ ('expected_total', t.expected::text, 'amount_out_of_range', t.expected > 999999999999.99),
+ ('gross_total', t.gross::text, 'amount_out_of_range', t.gross > 999999999999.99),
+ ('invoiced_on', null, 'status_disagrees_with_dates', c.status = 'invoiced' and c.invoiced_on is null),
+ ('received_on', c.received_on::text, 'status_disagrees_with_dates', c.status = 'invoiced' and c.received_on is not null),
+ ('received_on', null, 'received_without_date', c.status = 'received' and c.received_on is null),
+ ('due_on', concat_ws(' ', c.invoiced_on, c.due_on), 'dates_out_of_order', c.status <> 'expected' and c.due_on < c.invoiced_on),
+ ('received_on', concat_ws(' ', c.invoiced_on, c.received_on), 'dates_out_of_order',
+  c.status <> 'expected' and c.received_on < c.invoiced_on),
+ ('owner_user_id', c.owner_user_id::text, 'ladder_not_entered',
+  t.gross is not null and not exists (select from commission_tier where user_id = c.owner_user_id)),
+ ('author_id', c.changed_by_user_id::text, 'author_not_copied',
+  c.changed_by_user_id is not null and not exists (select from app_user where id = c.changed_by_user_id)),
+ ('sponsor_id', c.changed_for_user_id::text, 'author_not_copied',
+  c.changed_for_user_id is not null and not exists (select from app_user where id = c.changed_for_user_id)),
+ ('id', c.id::text, 'payment_id_taken', c.status <> 'expected' and exists (select from commission_payment p where p.id = c.id
   and (p.deal_id, p.amount, p.invoiced_on, p.due_on, p.received_on)
-  is distinct from (c.record_id, c.gross_amount, c.invoiced_on, c.due_on, c.received_on)))) f(reason, refused)
+  is distinct from (c.record_id, c.gross_amount, c.invoiced_on, c.due_on, c.received_on)))) f(field, value, reason, refused)
 where f.refused;
 
 -- Never overwrite a saved commission, including one a user changed after a copy.
 insert into refusal
-select c.id, c.record_id, 'existing_commission_conflict'
+select c.id, c.record_id, 'deal_id', c.deal_id::text, 'existing_commission_conflict'
 from old_commission c join commission_total t on t.record_id = c.record_id join commission n on n.deal_id = c.record_id
 where (n.expected, n.gross) is distinct from (t.expected, t.gross)
  or exists (select from old_commission o where o.record_id = c.record_id and o.status <> 'expected'
@@ -61,15 +68,7 @@ select c.id, c.record_id, c.gross_amount, c.invoiced_on, c.due_on, c.received_on
  c.updated_at, c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id
 from old_commission c join copied t on t.record_id = c.record_id where c.status <> 'expected';
 
-insert into not_copied
-select c.id, case r.reason when 'deal_not_copied' then 'deal_id' when 'nonpositive_amount' then 'gross_amount'
- when 'received_without_date' then 'received_on' when 'dates_out_of_order' then 'dates'
- when 'status_disagrees_with_dates' then 'status' else 'commission' end,
- jsonb_build_object('deal_id', c.deal_id, 'status', c.status, 'gross_amount', c.gross_amount,
-  'expected_total', t.expected, 'gross_total', t.gross, 'owner_user_id', c.owner_user_id,
-  'author_id', coalesce(c.updated_by, c.created_by), 'sponsor_id', c.changed_for_user_id,
-  'invoiced_on', c.invoiced_on, 'due_on', c.due_on, 'received_on', c.received_on)::text, r.reason
-from refusal r join old_commission c on c.id = r.id left join commission_total t on t.record_id = c.record_id;
+insert into not_copied select id, field, value, reason from refusal;
 insert into not_copied
 select c.id, 'deal_id', c.deal_id::text, 'another_row_on_deal_waits' from old_commission c
 where exists (select from refusal r where r.record_id = c.record_id) and not exists (select from refusal r where r.id = c.id);
@@ -80,4 +79,4 @@ where status = 'expected' and f.value is not null;
 set constraints all immediate;
 alter table commission enable trigger stamp_change;
 alter table commission_payment enable trigger stamp_change;
-select * from not_copied order by old_id, field, reason;
+select * from not_copied order by old_id, field, value, reason;
