@@ -483,6 +483,8 @@ const compared = async (client = db) =>
 const STAMPED = [
 	"invoice_email",
 	"invoice_mailbox",
+	"vendor_vertical",
+	"vendor_loan_program",
 	"commission",
 	"commission_payment",
 	"commission_share",
@@ -582,6 +584,8 @@ const notGranted = (table: string) => ({
 });
 const STORED_AT = [
 	"invoice_email",
+	"vendor_vertical",
+	"vendor_loan_program",
 	"lease_suite",
 	"suite",
 	"space_need",
@@ -2278,8 +2282,10 @@ const CHANGEABLE: Record<string, string[]> = {
 		"lane",
 		"lease_estimate_confidence",
 		"lease_estimate_source",
+		"offers",
 		"owner_user_id",
 		"relationship_level",
+		"seeking",
 		"segment",
 		"stage",
 	],

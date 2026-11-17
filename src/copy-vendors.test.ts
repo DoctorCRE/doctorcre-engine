@@ -78,7 +78,16 @@ ${oldVendor(40, 10, {
 	updated_by: PARTNER,
 	updated_at: "2025-01-02T03:04:05Z",
 	territory: "Example territory",
-	out_of_market: "false",
+	offers: " Example offer ",
+	seeking: "Example introductions",
+	loan_programs: `{Example financing,"\tExample financing\n"}`,
+	owner_id: PARTNER,
+	referral_active: "true",
+	owner_label: "Example import label",
+	links_label: "Example link label",
+	last_touch: "2025-01-01",
+	deal_history_verified_at: "2025-01-01",
+	out_of_market: "true",
 	trust_override: `{"tier": "Proven", "recorded_by": "partner_one", "reason": "Example reason", "recorded_at": "2025-01-01"}`,
 })}
 ${oldVendor(41, 15, {
@@ -87,7 +96,9 @@ ${oldVendor(41, 15, {
 	stage: "prospect_uncontacted",
 	relationship_level: "3",
 	is_target: "true",
-	verticals: "{dental,medical}",
+	verticals: `{dental,medical," dental ","\tdental","dental\n",NULL," "}`,
+	seeking: "Conflicting request",
+	loan_programs: "{Example financing,Example equipment}",
 })}
 ${oldVendor(42, 11, { vendor_ref: "P-0010", category: "Misc", relationship_level: "4", enrich: "true" })}
 ${oldVendor(43, 16)}
@@ -99,7 +110,8 @@ ${oldVendor(47, 10, {
 	category_slug: "cpa",
 	stage: "avoid_not_a_good_partner",
 	territory: "Example territory",
-	offers: "Example offer",
+	offers: "Different offer",
+	verticals: "{medical,vet}",
 })}
 commit;`;
 
@@ -221,16 +233,19 @@ test("each copied vendor's id and reference number lead to its record", async ()
 test("each value it does not copy is listed, with why", () => {
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
-		[id(40), "territory", "Example territory", "no place in the new database"],
+		[id(40), "out_of_market", "true", "no place in the new database"],
+		[id(40), "owner_id", PARTNER, "relationship owner awaits an owner ruling"],
+		[id(40), "referral_active", "true", "no place in the new database"],
 		[id(40), "trust_override", "Proven", "a hand-set rating, which the new database does not keep"],
 		[id(41), "relationship_level", "3", "its record holds another level"],
-		[id(41), "verticals", "dental, medical", "no place in the new database"],
+		[id(41), "seeking", "Conflicting request", "its record holds another value"],
+		[id(41), "verticals", " ", "blank or null list entry"],
+		[id(41), "verticals", null, "blank or null list entry"],
 		[id(42), "category", "Misc", "not a vendor category"],
-		[id(42), "enrich", "true", "no place in the new database"],
 		[id(42), "relationship_level", "4", "not a relationship level"],
 		[id(42), "vendor_ref", "P-0010", `also the id of ${id(10)}`],
 		...WAITING,
-		[id(47), "offers", "Example offer", "no place in the new database"],
+		[id(47), "offers", "Different offer", "its record holds another value"],
 	]);
 });
 
@@ -240,6 +255,9 @@ test("a second run changes nothing, lists again what still waits, and lists a ve
 			"select * from party_role order by party_id, role",
 		);
 		const history = await rows("select * from change order by id");
+		const lists = await rows(
+			"select to_jsonb(v) as row from vendor_vertical v union all select to_jsonb(p) from vendor_loan_program p",
+		);
 		await db.query("discard temp");
 		assert.deepEqual(await copy(oldVendor(48, 10, { vendor_ref: "V-0048" })), [
 			...WAITING,
@@ -255,6 +273,160 @@ test("a second run changes nothing, lists again what still waits, and lists a ve
 			roles,
 		);
 		assert.deepEqual(await rows("select * from change order by id"), history);
+		assert.deepEqual(
+			await rows(
+				"select to_jsonb(v) as row from vendor_vertical v union all select to_jsonb(p) from vendor_loan_program p",
+			),
+			lists,
+		);
+	}));
+
+test("vendor capabilities keep text and union lists without inventing a vocabulary", async () => {
+	assert.deepEqual(
+		await rows(
+			`select offers, seeking from party_role where party_id = '${id(10)}' and role = 'vendor'`,
+		),
+		[{ offers: "Example offer", seeking: "Example introductions" }],
+	);
+	assert.deepEqual(
+		await rows("select vertical from vendor_vertical order by vertical"),
+		["dental", "medical", "vet"].map((vertical) => ({ vertical })),
+	);
+	assert.deepEqual(
+		await rows(
+			"select loan_program from vendor_loan_program order by loan_program",
+		),
+		["Example equipment", "Example financing"].map((loan_program) => ({
+			loan_program,
+		})),
+	);
+	assert.deepEqual(
+		await rows(`select created_at::text, changed_at::text, changed_by_user_id, changed_by_job
+		from vendor_loan_program where loan_program = 'Example financing'`),
+		[
+			{
+				created_at: "2024-01-02 03:04:05+00",
+				changed_at: "2025-01-02 03:04:05+00",
+				changed_by_user_id: PARTNER,
+				changed_by_job: null,
+			},
+		],
+	);
+});
+
+for (const [sql, code] of [
+	[
+		`update party_role set offers = 'Example' where role = 'contractor'`,
+		"23514",
+	],
+	[
+		`update party_role set seeking = 'Example' where role = 'contractor'`,
+		"23514",
+	],
+	[`update party_role set offers = E' \n' where role = 'vendor'`, "23514"],
+	[`update party_role set seeking = ' ' where role = 'vendor'`, "23514"],
+	...(["vendor_vertical", "vendor_loan_program"] as const).flatMap(
+		(table): [string, string][] => {
+			const column = table === "vendor_vertical" ? "vertical" : "loan_program";
+			return [
+				[
+					`insert into ${table} (party_id, ${column}) values ('${id(1)}', 'Example')`,
+					"23503",
+				],
+				[
+					`insert into ${table} (party_id, role, ${column}) values ('${id(10)}', 'contractor', 'Example')`,
+					"23514",
+				],
+				[
+					`insert into ${table} (party_id, ${column}) values ('${id(10)}', ' ')`,
+					"23514",
+				],
+				[
+					`insert into ${table} (party_id, ${column}) values ('${id(10)}', ' Example ')`,
+					"23514",
+				],
+				[
+					`insert into ${table} (party_id, ${column}) values ('${id(10)}', E'\\tExample')`,
+					"23514",
+				],
+				[
+					`insert into ${table} (party_id, ${column}) values ('${id(10)}', E'Example\\n')`,
+					"23514",
+				],
+				[
+					`insert into ${table} (party_id, ${column}) values ('${id(10)}', null)`,
+					"23502",
+				],
+				[
+					`insert into ${table} (party_id, ${column}) select party_id, ${column} from ${table} limit 1`,
+					"23505",
+				],
+			];
+		},
+	),
+] satisfies [string, string][]) {
+	test(`vendor capability constraints refuse ${sql}`, () =>
+		rolledBack(async () => {
+			await db.query(`set local role engine; select set_config('engine.user_id', '${PARTNER}', true);
+			select set_config('engine.job', '', true);`);
+			await assert.rejects(db.query(sql), { code });
+		}));
+}
+
+test("users edit vendor text and add or remove stamped list entries; reruns keep them", () =>
+	rolledBack(async () => {
+		await db.query(`set local role engine; select set_config('engine.user_id', '${PARTNER}', true);
+		select set_config('engine.job', '', true);
+		update party_role set offers = 'Revised offer' where party_id = '${id(10)}' and role = 'vendor';
+		insert into vendor_vertical (party_id, vertical) values ('${id(10)}', 'Example new vertical');
+		delete from vendor_vertical where vertical = 'vet';`);
+		assert.deepEqual(
+			await rows(
+				"select changed_by_user_id, changed_by_job from vendor_vertical where vertical = 'Example new vertical'",
+			),
+			[{ changed_by_user_id: PARTNER, changed_by_job: null }],
+		);
+		await db.query("reset role; set constraints all immediate; discard temp");
+		const before = await rows(
+			"select * from vendor_vertical order by vertical",
+		);
+		await copy();
+		assert.deepEqual(
+			await rows("select * from vendor_vertical order by vertical"),
+			before,
+		);
+		assert.deepEqual(
+			await rows(
+				`select offers from party_role where party_id = '${id(10)}' and role = 'vendor'`,
+			),
+			[{ offers: "Revised offer" }],
+		);
+	}));
+
+test("merging vendor roles keeps survivor text, fills empty text and unions capabilities", () =>
+	rolledBack(async () => {
+		await db.query(`select set_config('engine.user_id', '${PARTNER}', true); select set_config('engine.job', '', true);
+		update party set kind = 'company' where id = '${id(11)}';
+		update party_role set offers = 'Other offer', seeking = 'Other request' where party_id = '${id(11)}';
+		update party_role set seeking = null where party_id = '${id(10)}' and role = 'vendor';
+		insert into vendor_vertical (party_id, vertical) values ('${id(11)}', 'dental'), ('${id(11)}', 'Example new');
+		insert into vendor_loan_program (party_id, loan_program) values ('${id(11)}', 'Example financing'), ('${id(11)}', 'Example new');
+		set local role engine;
+		select merge_party('${id(11)}', '${id(10)}'); set constraints all immediate;`);
+		assert.deepEqual(
+			await rows(
+				`select offers, seeking from party_role where party_id = '${id(10)}' and role = 'vendor'`,
+			),
+			[{ offers: "Example offer", seeking: "Other request" }],
+		);
+		assert.equal((await rows("select * from vendor_vertical")).length, 4);
+		assert.equal((await rows("select * from vendor_loan_program")).length, 3);
+		assert.deepEqual(
+			await rows(
+				`select party_id from vendor_vertical where party_id <> '${id(10)}'`,
+			),
+			[],
+		);
 	}));
 
 const link = (
