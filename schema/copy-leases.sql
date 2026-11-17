@@ -78,7 +78,8 @@ cross join lateral (values
  ('id', v.id::text, 'version_id_taken', exists (select from lease_version n where n.id = v.id)),
  ('version', v.new_version::text, 'version_number_taken',
   exists (select from lease_version n where (n.lease_id, n.version) = (v.lease_id, v.new_version)))) f(field, value, reason, refused)
-where f.refused and not v.copied;
+-- A copied lease whose deal, tenant or building has since changed is listed, not passed over.
+where f.refused and (not v.copied or f.reason = 'lease_id_taken');
 insert into not_copied select id, field, value, reason from version_refusal;
 insert into not_copied select v.id, 'supersedes_lease_id', v.supersedes_lease_id::text, 'earlier_version_not_copied' from old_version v
 where not exists (select from version_refusal r where r.id = v.id)

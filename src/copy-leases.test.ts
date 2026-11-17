@@ -289,3 +289,20 @@ test("values the new columns cannot hold, unresolved buildings and taken ids are
 		await db.query("rollback");
 	}
 });
+
+test("a copied lease whose building later changes is listed and left as it was", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.lease set premises_id = '${id(94)}' where id = '${id(110)}'`,
+		);
+		const again = await run();
+		assert.ok(reasons(again, 110).includes("lease_id_taken"));
+		assert.deepEqual(
+			await rows(`select property_id from lease where id = '${id(110)}'`),
+			[{ property_id: id(91) }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
