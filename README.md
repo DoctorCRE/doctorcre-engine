@@ -15,8 +15,9 @@ With Colima stopped, use
 `colima start --cpu 6 --memory 8`. A 2 GB VM can OOM-kill PostgreSQL under this load.
 
 With Docker running, paste this block from the worktree to run a check on its own
-throwaway server. Docker chooses a free loopback port. The subshell stops only
-its own container when the check exits, including on failure or interruption.
+throwaway server. Docker chooses a free loopback port. The subshell removes only
+its own container and its data volume when the check exits, including on failure
+or interruption.
 
 ```sh
 (
@@ -24,7 +25,7 @@ its own container when the check exits, including on failure or interruption.
 	postgres=$(docker run -d -p 127.0.0.1::5432 \
 		-e POSTGRES_HOST_AUTH_METHOD=trust postgres:18 \
 		-c max_locks_per_transaction=256)
-	trap 'docker rm -f "$postgres" >/dev/null' EXIT
+	trap 'docker rm -f -v "$postgres" >/dev/null' EXIT
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
 	ready=false
