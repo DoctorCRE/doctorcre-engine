@@ -66,6 +66,7 @@ export interface AppUser {
 	created_at: Generated<string>;
 	id: string;
 	kind: Generated<string>;
+	slug: string | null;
 }
 
 export interface BuildingOwnership {

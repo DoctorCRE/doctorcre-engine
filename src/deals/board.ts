@@ -21,7 +21,7 @@ type BoardInputs = {
 	workspace?: Workspace | null;
 	account_client_id?: string | null;
 };
-type Scope = { workspace: Workspace; account: string | null };
+export type Scope = { workspace: Workspace; account: string | null };
 
 const EDITABLE_FIELDS = [
 	"phase",
