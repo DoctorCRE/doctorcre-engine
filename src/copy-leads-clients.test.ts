@@ -120,61 +120,92 @@ after(async () => {
 	await asAdmin(`drop database "${name}" with (force)`);
 });
 
-test("roles use earliest creation and latest lead details without turning a doctor into their practice", async () => {
-	assert.deepEqual(
-		(
-			await rows(
-				`select stage, owner_user_id, lane, segment, estimated_lease_on::text, lease_estimate_source, lease_estimate_confidence, created_at::text, changed_by_user_id from party_role where party_id = '${id(10)}' and role = 'lead'`,
-			)
-		).map(Object.values),
+test("roles, profiles, details and estimates follow the old records without inventing missing facts", async () => {
+	const expected: [string, unknown[][]][] = [
 		[
+			`select stage,owner_user_id,lane,segment,estimated_lease_on::text,lease_estimate_source,lease_estimate_confidence,created_at::text,changed_by_user_id from party_role where party_id = '${id(10)}' and role = 'lead'`,
 			[
-				"qualified",
-				id(1),
-				"example_lane",
-				"Example segment",
-				"2027-01-01",
-				"Example lease source",
-				"high",
-				"2023-01-01 00:00:00+00",
-				id(1),
+				[
+					"qualified",
+					id(1),
+					"example_lane",
+					"Example segment",
+					"2027-01-01",
+					"Example lease source",
+					"high",
+					"2023-01-01 00:00:00+00",
+					id(1),
+				],
 			],
 		],
-	);
-	assert.deepEqual(
-		await rows(
-			`select how_found,how_found_detail from party where id = '${id(10)}'`,
-		),
-		[{ how_found: "vendor", how_found_detail: "Example client detail" }],
-	);
-	assert.ok(report.some((r) => r.reason === "sources_disagree"));
-	assert.ok(report.some((r) => r.reason === "several_records_on_one_party"));
-	assert.equal((await rows("select count(*)::int as n from client"))[0]?.n, 4);
-	assert.deepEqual(await rows("select status from client order by party_id"), [
-		{ status: "roster" },
-		{ status: "roster" },
-		{ status: "cold" },
-		{ status: "roster" },
-	]);
-	assert.deepEqual(await rows("select party_id from national_account"), [
-		{ party_id: id(12) },
-	]);
-});
-test("legacy stages map exactly and missing facts are listed without invented contact or dates", async () => {
-	assert.deepEqual(
-		await rows(
-			`select stage from party_role where role = 'lead' and party_id between '${id(13)}' and '${id(19)}' order by party_id`,
-		),
 		[
-			"archived",
-			"nurture",
-			"nurture",
-			"opportunity",
-			"opportunity",
-			"engaged",
-		].map((stage) => ({ stage })),
+			`select how_found,how_found_detail,changed_at::text from party where id = '${id(10)}'`,
+			[["vendor", "Example client detail", "2030-01-01 00:00:00+00"]],
+		],
+		[
+			"select status from client order by party_id",
+			[["roster"], ["roster"], ["cold"], ["roster"]],
+		],
+		["select party_id from national_account", [[id(12)]]],
+		[
+			`select stage from party_role where role = 'lead' and party_id between '${id(13)}' and '${id(19)}' order by party_id`,
+			[
+				["archived"],
+				["nurture"],
+				["nurture"],
+				["opportunity"],
+				["opportunity"],
+				["engaged"],
+			],
+		],
+		[
+			"select summary from activity order by summary",
+			[["Example lead detail"], ["Example note"], ["Unrelated source detail"]],
+		],
+		[
+			"select what,due_on::text,owner_party_id from next_step",
+			[["Imported lead follow-up", "2026-12-01", id(1)]],
+		],
+		[`select how_found_detail from party where id = '${id(12)}'`, [[null]]],
+		[
+			`select client_type from client where party_id = '${id(21)}'`,
+			[["group_practice"]],
+		],
+		[
+			`select how_found,how_found_detail from party where id = '${id(25)}'`,
+			[["public_records", "Pool detail"]],
+		],
+		[
+			`select lease_estimate_source from party_role where party_id = '${id(25)}'`,
+			[["Example basis"]],
+		],
+	];
+	for (const [sql, result] of expected)
+		assert.deepEqual((await rows(sql)).map(Object.values), result, sql);
+	for (const table of [
+		"client_brand",
+		"national_account_owner",
+		"do_not_contact",
+	])
+		assert.deepEqual(await rows(`select * from ${table}`), []);
+	for (const table of ["party_role", "activity_about", "next_step"])
+		assert.deepEqual(
+			await rows(
+				`select * from ${table} where party_id between '${id(22)}' and '${id(24)}'`,
+			),
+			[],
+		);
+	assert.deepEqual(
+		await rows(
+			`select tgname from pg_trigger where tgrelid in (select oid from pg_class where relnamespace = 'next'::regnamespace) and tgname in ('stamp_change','lead_stage_needs_evidence') and tgenabled <> 'O'`,
+		),
+		[],
 	);
+});
+test("unresolved facts remain listed on every rerun and copied rows and stamps stay unchanged", async () => {
 	for (const reason of [
+		"sources_disagree",
+		"several_records_on_one_party",
 		"source_needs_mapping",
 		"restriction_needs_reason",
 		"brand_start_date_required",
@@ -194,29 +225,6 @@ test("legacy stages map exactly and missing facts are listed without invented co
 			report.some((r) => r.reason === reason),
 			reason,
 		);
-	assert.deepEqual(await rows("select * from client_brand"), []);
-	assert.deepEqual(await rows("select * from national_account_owner"), []);
-	assert.deepEqual(await rows("select * from do_not_contact"), []);
-	assert.deepEqual(
-		await rows("select summary from activity order by summary"),
-		[
-			{ summary: "Example lead detail" },
-			{ summary: "Example note" },
-			{ summary: "Unrelated source detail" },
-		],
-	);
-	assert.deepEqual(
-		await rows("select what,due_on::text,owner_party_id from next_step"),
-		[
-			{
-				what: "Imported lead follow-up",
-				due_on: "2026-12-01",
-				owner_party_id: id(1),
-			},
-		],
-	);
-});
-test("rerunning changes no copied row, stamp, activity or follow-up", async () => {
 	const snapshot = () =>
 		rows(
 			`select jsonb_build_object('parties',(select jsonb_agg(p order by id) from party p),'roles',(select jsonb_agg(r order by party_id,role) from party_role r),'notes',(select jsonb_agg(a order by id) from activity a),'steps',(select jsonb_agg(s order by id) from next_step s),'profiles',(select jsonb_agg(c order by party_id) from client c),'history',(select jsonb_agg(c order by id) from change c)) as snapshot`,
@@ -225,7 +233,6 @@ test("rerunning changes no copied row, stamp, activity or follow-up", async () =
 	assert.deepEqual(await run(), report);
 	assert.deepEqual(await snapshot(), original);
 });
-
 test("a correction can supply a missing source without changing already copied leads", async () => {
 	await run(
 		`update public.lead set source_type = 'Example referral' where id = '${id(55)}'`,
@@ -238,57 +245,13 @@ test("a correction can supply a missing source without changing already copied l
 			),
 			[{ stage: "new", owner_user_id: null }],
 		);
-		assert.equal(
-			(
-				await rows(
-					`select count(*)::int as n from party_role where party_id = '${id(11)}' and role = 'lead'`,
-				)
-			)[0]?.n,
-			0,
+		assert.deepEqual(
+			await rows(
+				`select * from party_role where party_id = '${id(11)}' and role = 'lead'`,
+			),
+			[],
 		);
 	} finally {
 		await db.query("rollback");
 	}
-});
-
-test("group profiles map, refused records stay out, and pool estimates keep their source", async () => {
-	assert.deepEqual(
-		await rows(`select how_found_detail from party where id = '${id(12)}'`),
-		[{ how_found_detail: null }],
-	);
-	assert.deepEqual(
-		await rows(`select client_type from client where party_id = '${id(21)}'`),
-		[{ client_type: "group_practice" }],
-	);
-	for (const table of ["party_role", "activity_about", "next_step"])
-		assert.deepEqual(
-			await rows(
-				`select * from ${table} where party_id between '${id(22)}' and '${id(24)}'`,
-			),
-			[],
-		);
-	assert.deepEqual(
-		await rows(
-			`select how_found,how_found_detail from party where id = '${id(25)}'`,
-		),
-		[{ how_found: "public_records", how_found_detail: "Pool detail" }],
-	);
-	assert.deepEqual(
-		await rows(
-			`select lease_estimate_source from party_role where party_id = '${id(25)}'`,
-		),
-		[{ lease_estimate_source: "Example basis" }],
-	);
-	assert.deepEqual(
-		await rows(
-			`select changed_at::text as preserved from party where id = '${id(10)}'`,
-		),
-		[{ preserved: "2030-01-01 00:00:00+00" }],
-	);
-	assert.deepEqual(
-		await rows(
-			`select tgname from pg_trigger where tgrelid in (select oid from pg_class where relnamespace = 'next'::regnamespace) and tgname in ('stamp_change','lead_stage_needs_evidence') and tgenabled <> 'O'`,
-		),
-		[],
-	);
 });
