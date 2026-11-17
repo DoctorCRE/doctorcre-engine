@@ -360,3 +360,132 @@ test("an owner erase removes imported words and cannot be undone by a copy or re
 		erased,
 	);
 });
+
+test("copies Deal Room parking, revival, note and attention evidence without replay", async () => {
+	const active = { state: "active", reason: null, note: null };
+	const parked = { state: "parked", reason: "client_paused", note: null };
+	const noted = { ...parked, note: "Example parking note" };
+	const cases = [
+		["operating_state", active, parked, "parking_reason"],
+		["operating_state", parked, active, "parking_reason"],
+		["operating_state", parked, noted, "parking_note"],
+		["operating_state", noted, parked, "parking_note"],
+		["operating_state", noted, active, "parking_note"],
+		["operating_state", active, { ...noted, reason: "other" }, "parking_note"],
+		[
+			"operating_state",
+			parked,
+			{ ...parked, reason: "prospect_never_active" },
+			"parking_reason",
+		],
+		["operating_state", noted, { ...noted, reason: "other" }, "parking_note"],
+		["attention", false, true, "needs_attention"],
+		["attention", true, false, "needs_attention"],
+	] satisfies [string, object | boolean, object | boolean, string][];
+	for (const [i, [field, oldValue, newValue]] of cases.entries()) {
+		await event(200 + i, "deal", 20, field, 2, "partner_one");
+		await db.query(
+			"update public.event set old_value = $1, new_value = $2 where id = $3",
+			[{ [field]: oldValue }, { [field]: newValue }, id(200 + i)],
+		);
+	}
+	const before = await snapshot();
+	assert.deepEqual(await run(), []);
+	for (const [i, [, , , field]] of cases.entries()) {
+		assert.deepEqual(
+			await rows(`select table_name, record, field, changed_at::text, changed_by_job, changed_for_user_id,
+ changed_by_user_id, old_value_absent, new_value_absent,
+ source_event = (select to_jsonb(e) from public.event e where e.id = i.id) as exact
+ from imported_change i where id = '${id(200 + i)}'`),
+			[
+				{
+					table_name: "deal",
+					record: { id: id(20) },
+					field,
+					changed_at: "2024-01-01 00:00:00+00",
+					changed_by_job: "agent",
+					changed_for_user_id: id(1),
+					changed_by_user_id: null,
+					old_value_absent: false,
+					new_value_absent: false,
+					exact: true,
+				},
+			],
+		);
+	}
+	const imported = await rows("select * from imported_change order by id");
+	assert.deepEqual(await run(), []);
+	assert.deepEqual(
+		await rows("select * from imported_change order by id"),
+		imported,
+	);
+	assert.deepEqual(await snapshot(), before);
+});
+
+test("lists unknown Deal Room payloads on either side instead of guessing", async () => {
+	const active = {
+		operating_state: { state: "active", reason: null, note: null },
+	};
+	const malformed = [
+		null,
+		"null",
+		JSON.stringify("active"),
+		JSON.stringify({}),
+		JSON.stringify({ operating_state: "parked" }),
+		JSON.stringify({
+			operating_state: { state: "unknown", reason: null, note: null },
+		}),
+		JSON.stringify({
+			operating_state: { state: "active", reason: "other", note: null },
+		}),
+		JSON.stringify({
+			operating_state: { state: "active", reason: null, note: "Example" },
+		}),
+		JSON.stringify({
+			operating_state: { state: "parked", reason: "unknown", note: null },
+		}),
+		JSON.stringify({
+			operating_state: { state: "parked", reason: "other", note: 3 },
+		}),
+		JSON.stringify({ operating_state: { state: "parked", reason: "other" } }),
+		JSON.stringify({
+			operating_state: { ...active.operating_state, extra: true },
+		}),
+		JSON.stringify({ ...active, extra: true }),
+	];
+	const cases = [
+		...malformed.map((value) => ({
+			field: "operating_state",
+			valid: JSON.stringify(active),
+			value,
+		})),
+		...[
+			null,
+			"null",
+			"true",
+			"{}",
+			'{"attention":null}',
+			'{"attention":"false"}',
+			'{"attention":false,"extra":true}',
+		].map((value) => ({
+			field: "attention",
+			valid: '{"attention":false}',
+			value,
+		})),
+	];
+	const expected = [];
+	for (const [i, { field, valid, value }] of cases.entries()) {
+		for (const side of [0, 1]) {
+			const n = 300 + i * 2 + side;
+			await event(n, "deal", 20, field);
+			await db.query(
+				"update public.event set old_value = $1::jsonb, new_value = $2::jsonb where id = $3",
+				side === 0 ? [value, valid, id(n)] : [valid, value, id(n)],
+			);
+			expected.push({ old_id: id(n), field, reason: "payload_shape_unknown" });
+		}
+	}
+	assert.deepEqual(await run(), expected);
+	assert.deepEqual(await rows("select id from imported_change"), []);
+	assert.deepEqual(await run(), expected);
+});
