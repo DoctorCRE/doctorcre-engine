@@ -481,6 +481,8 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"invoice_email",
+	"invoice_mailbox",
 	"vendor_vertical",
 	"vendor_loan_program",
 	"commission",
@@ -581,6 +583,7 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"invoice_email",
 	"vendor_vertical",
 	"vendor_loan_program",
 	"lease_suite",
@@ -2221,6 +2224,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	invoice_email: ["deal_id", "payment_id", "status"],
 	suite: ["area_basis", "area_sf", "condition", "floor", "label"],
 	space_need: [
 		"applicability",
@@ -2331,6 +2335,17 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	invoice_email: [
+		"applied_phase_at",
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"payment_change_id",
+		"prior_invoiced_on",
+		"prior_phase_at",
+		"status",
+	],
 	offer: [
 		"changed_at",
 		"changed_by_job",
@@ -2365,6 +2380,7 @@ const REMOVABLE = [
 	...STORED_AT.filter(
 		(table) =>
 			![
+				"invoice_email",
 				"lease_suite",
 				"offer_document",
 				"offer_claim",
@@ -2448,6 +2464,9 @@ before(async () => {
 	db = await connect("none");
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
+	await db.query(
+		"insert into invoice_mailbox (address) values ('invoices@example.com')",
+	);
 	await db.query(
 		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED} ${COMMISSION_SEED}`,
 	);
@@ -2603,6 +2622,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			table,
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
+				"invoice_mailbox",
 				"app_user",
 				"job",
 				"merged_party",
@@ -6274,3 +6294,405 @@ for (const survivorIsVendor of [false, true]) {
 			);
 		}));
 }
+
+const INVOICE = id(980);
+const INVOICE_PAYMENT = id(981);
+const invoiceEmail = (row: Record<string, string | null> = {}) =>
+	insert("invoice_email", {
+		id: INVOICE,
+		evidence_ref: "local-mail:example-invoice",
+		sender: "invoices@example.com",
+		deal_name: " example DENTAL Springfield deal ",
+		client_name: " Example DENTAL Group ",
+		occurred_at: "2026-04-01T23:30:00-05:00",
+		email_date: "2026-04-01",
+		deal_id: DEAL,
+		payment_id: INVOICE_PAYMENT,
+		...row,
+	});
+const INVOICE_SETUP = `${COMMISSION}; ${payment({ id: INVOICE_PAYMENT })}; insert into phase values ('closed', 'Closed')`;
+const APPLY_INVOICE = `update invoice_email set status = 'applied' where id = '${INVOICE}'`;
+const UNDO_INVOICE = `update invoice_email set status = 'undone' where id = '${INVOICE}'`;
+
+// biome-ignore format: one row per refusal
+const INVOICE_REFUSALS: Case[] = [
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set invoiced_on = '2026-04-02' where id = '${INVOICE_PAYMENT}'; ${payment({id: id(983), invoiced_on: '2026-04-01'})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
+	...['evidence_ref', 'deal_name', 'client_name', 'property_address'].map((field): Case => [`${INVOICE_SETUP}; ${invoiceEmail({[field]: ' '})}`, `invoice_email_${field}_check`]),
+	[`${INVOICE_SETUP}; ${invoiceEmail({email_date: '2026-03-01'})}`, 'invoice_email_date_matches_time'],
+	[`${INVOICE_SETUP}; ${invoiceEmail({occurred_at: '-infinity'})}`, 'invoice_email_date_matches_time'],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${payment({id: id(983)})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${payment({id: id(983), invoiced_on: '2026-03-01'})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
+	[`${payment({id: INVOICE_PAYMENT, deal_id: LENDER_DEAL, amount: 500})}; ${invoiceEmail({deal_id: LENDER_DEAL})}; ${APPLY_INVOICE}`, 'invoice_email_needs_prior_phase'],
+	[`${INVOICE_SETUP}; insert into invoice_email (status) values ('applied')`, notGranted('invoice_email')],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${invoiceEmail({id: id(982)})}`, "invoice_email_evidence_ref_key"],
+	[`${INVOICE_SETUP}; ${invoiceEmail({deal_id: LENDER_DEAL})}`, "invoice_email_payment_id_deal_id_fkey"],
+	[`${INVOICE_SETUP}; ${invoiceEmail({payment_id: null})}`, "invoice_email_target_whole"],
+	[`${INVOICE_SETUP}; ${invoiceEmail({deal_id: null, payment_id: null})}; ${APPLY_INVOICE}`, "invoice_email_needs_payment"],
+	...[
+		{sender: "unknown@example.com"}, {client_name: "Other Example"}, {client_name: null},
+		{property_address: "Wrong example address"}, {deal_name: "Other Example Deal"},
+		{occurred_at: "2999-04-01T00:00:00Z", email_date: "2999-04-01"},
+	].map((row): Case => [`${INVOICE_SETUP}; ${invoiceEmail(row)}; ${asJob("mail_capture", USER)}; ${APPLY_INVOICE}`, "invoice_email_needs_user"]),
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set invoiced_on = '2026-03-31' where id = '${INVOICE_PAYMENT}'; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, "invoice_email_needs_user"],
+	[`${INVOICE_SETUP}; insert into deal (id, name, owner_user_id) values ('${id(982)}', 'Example Dental Springfield Deal', '${USER}'); insert into deal_party values ('${id(982)}', '${CLIENT}', 'client'); ${invoiceEmail()}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, "invoice_email_needs_user"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${APPLY_INVOICE}`, "invoice_email_status_moves"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${asJob("agent", USER)}; ${UNDO_INVOICE}`, "invoice_email_status_moves"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; update invoice_email set deal_id = null, payment_id = null`, "invoice_email_keeps_target"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; insert into deal_phase_change values ('${DEAL}', '2999-01-01', 'legal', 'Example newer move'); ${UNDO_INVOICE}`, "invoice_email_undo_current"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; update commission_payment set invoiced_on = '2026-04-02'; update commission_payment set invoiced_on = '2026-04-01'; ${UNDO_INVOICE}`, "invoice_email_undo_current"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; delete from invoice_email`, notGranted("invoice_email")],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update invoice_email set email_date = '2026-04-02'`, notGranted("invoice_email")],
+	["insert into invoice_mailbox (address) values ('other@example.com')", notGranted("invoice_mailbox")],
+];
+
+test("invoice evidence and guarded application obey rules 92 to 95", async () => {
+	for (const [sql, refusal] of INVOICE_REFUSALS)
+		await rolledBack(() => assert.rejects(db.query(sql), expected(refusal)));
+});
+
+test("a trusted invoice closes its deal, dates one payment once, and a user undoes it", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture", USER)}; ${APPLY_INVOICE}; ${CHECK_AT_COMMIT}`,
+		);
+		assert.deepEqual(
+			(
+				await db.query(`select d.invoiced_on::text, p.received_on, i.status, i.changed_by_job,
+			i.changed_for_user_id from deal_invoiced d join commission_payment p using (deal_id)
+			join invoice_email i on i.payment_id = p.id where p.id = '${INVOICE_PAYMENT}'`)
+			).rows,
+			[
+				{
+					invoiced_on: "2026-04-01",
+					received_on: null,
+					status: "applied",
+					changed_by_job: "mail_capture",
+					changed_for_user_id: USER,
+				},
+			],
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select phase from deal_phase_change where deal_id = '${DEAL}' order by happened_at desc limit 1`,
+				)
+			).rows[0].phase,
+			"closed",
+		);
+		await db.query(`${asUser(USER)}; ${UNDO_INVOICE}; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select invoiced_on from deal_invoiced where deal_id = '${DEAL}'`,
+				)
+			).rows[0].invoiced_on,
+			null,
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select phase from deal_phase_change where deal_id = '${DEAL}' order by happened_at desc limit 1`,
+				)
+			).rows[0].phase,
+			"legal",
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select count(*) from change where table_name = 'invoice_email'`,
+				)
+			).rows[0].count,
+			"3",
+		);
+	});
+});
+
+test("a direct user resolves doubtful evidence and undo restores the payment's prior date", async () => {
+	await rolledBack(async () => {
+		await db.query(`${INVOICE_SETUP}; update commission_payment set invoiced_on = '2026-03-31' where id = '${INVOICE_PAYMENT}';
+			${invoiceEmail({ client_name: "Uncertain Example" })}; ${APPLY_INVOICE}; ${UNDO_INVOICE}; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select invoiced_on::text from deal_invoiced where deal_id = '${DEAL}'`,
+				)
+			).rows[0].invoiced_on,
+			"2026-03-31",
+		);
+	});
+});
+
+test("a user dates a later payment and the deal reads its earliest invoice", async () => {
+	await rolledBack(async () => {
+		await db.query(`${INVOICE_SETUP}; ${payment({ id: id(983), invoiced_on: "2026-03-01" })};
+			${invoiceEmail({ client_name: null, property_address: "  100 EXAMPLE Way,   Springfield ", deal_name: " example DENTAL Springfield deal " })};
+			${asUser(USER)}; ${APPLY_INVOICE}; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select invoiced_on::text from deal_invoiced where deal_id = '${DEAL}'`,
+				)
+			).rows[0].invoiced_on,
+			"2026-03-01",
+		);
+		await db.query(`${asUser(USER)}; ${UNDO_INVOICE}; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select invoiced_on::text from deal_invoiced where deal_id = '${DEAL}'`,
+				)
+			).rows[0].invoiced_on,
+			"2026-03-01",
+		);
+	});
+});
+
+test("an invoice cannot partly close a deal when its payment refuses the date", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set due_on = '2026-03-31' where id = '${INVOICE_PAYMENT}'; savepoint applying`,
+		);
+		await assert.rejects(
+			db.query(APPLY_INVOICE),
+			expected("commission_payment_dates_in_order"),
+		);
+		await db.query("rollback to applying");
+		assert.equal(
+			(
+				await db.query(
+					`select status from invoice_email where id = '${INVOICE}'`,
+				)
+			).rows[0].status,
+			"captured",
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select phase from deal_phase_change where deal_id = '${DEAL}' order by happened_at desc limit 1`,
+				)
+			).rows[0].phase,
+			"legal",
+		);
+	});
+});
+
+for (const [name, held, job, blocks] of [
+	[
+		"phase writers serialize with invoice application",
+		`insert into deal_phase_change values ('${DEAL}', '2026-03-21', 'legal', 'Example manual move')`,
+		false,
+		true,
+	],
+	[
+		"automatic invoice decisions do not lock unrelated parties",
+		`insert into party (kind, name) values ('company', 'Unrelated Example')`,
+		true,
+		false,
+	],
+] satisfies [string, string, boolean, boolean][]) {
+	test(name, async () => {
+		const holder = await connect();
+		const writer = await connect();
+		try {
+			await holder.query(`begin; ${held}`);
+			await writer.query(
+				`begin; ${INVOICE_SETUP}; ${invoiceEmail()}; ${job ? asJob("mail_capture") : asUser(USER)}`,
+			);
+			const { pid } = (await writer.query("select pg_backend_pid() as pid"))
+				.rows[0];
+			let settled = false;
+			const applying = writer.query(APPLY_INVOICE).finally(() => {
+				settled = true;
+			});
+			let blocked = false;
+			while (!settled && !blocked)
+				blocked = (
+					await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+						pid,
+					])
+				).rows[0].blocked;
+			await holder.query("rollback");
+			await applying;
+			assert.equal(blocked, blocks);
+		} finally {
+			await holder.query("rollback");
+			await writer.query("rollback");
+			await holder.end();
+			await writer.end();
+		}
+	});
+}
+
+for (const status of ["applied", "undone"]) {
+	test(`imported ${status} invoices require every undo reference`, () =>
+		asOwner(
+			["prior_phase_at", "applied_phase_at", "payment_change_id"].map(
+				(field): Case => [
+					`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE};
+			alter table invoice_email disable trigger invoice_email_transition;
+			update invoice_email set status = '${status}', ${field} = null where id = '${INVOICE}'`,
+					"invoice_email_applied_whole",
+				],
+			),
+		));
+}
+
+test("the selected payment stays locked between the undo snapshot and date update", async () => {
+	const owner = await connect("none");
+	const writer = await connect();
+	const deal = id(984);
+	const paymentId = id(985);
+	try {
+		await owner.query(`insert into phase values ('closed', 'Closed') on conflict do nothing;
+			insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Payment Lock Deal', '${TEAMMATE}');
+			insert into commission (deal_id, gross) values ('${deal}', 1000);
+			${payment({ id: paymentId, deal_id: deal, amount: 500 })};
+			insert into deal_phase_change values ('${deal}', '2026-03-01', 'legal', 'Example prior phase');
+			${invoiceEmail({ deal_id: deal, payment_id: paymentId })};
+			create function pause_invoice_test() returns trigger language plpgsql as $$
+			begin perform pg_advisory_xact_lock(324980); return new; end $$;
+			create trigger pause_invoice_test before insert on deal_phase_change
+			for each row when (new.deal_id = '${deal}' and new.phase = 'closed') execute function pause_invoice_test()`);
+		await db.query("select pg_advisory_lock(324980)");
+		await writer.query("begin");
+		const writerPid = (await writer.query("select pg_backend_pid() as pid"))
+			.rows[0].pid;
+		const ownerPid = (await owner.query("select pg_backend_pid() as pid"))
+			.rows[0].pid;
+		let applied = false;
+		const applying = writer.query(APPLY_INVOICE).finally(() => {
+			applied = true;
+		});
+		let paused = false;
+		while (!applied && !paused)
+			paused = (
+				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+					writerPid,
+				])
+			).rows[0].blocked;
+		let edited = false;
+		const editing = owner
+			.query(
+				`update commission_payment set invoiced_on = '2026-03-31' where id = '${paymentId}'`,
+			)
+			.finally(() => {
+				edited = true;
+			});
+		let blocked = false;
+		while (!edited && !blocked)
+			blocked = (
+				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+					ownerPid,
+				])
+			).rows[0].blocked;
+		await db.query("select pg_advisory_unlock(324980)");
+		await applying;
+		await writer.query("commit");
+		await editing;
+		await assert.rejects(
+			writer.query(UNDO_INVOICE),
+			expected("invoice_email_undo_current"),
+		);
+		assert.equal(
+			(
+				await owner.query(
+					`select invoiced_on::text from commission_payment where id = '${paymentId}'`,
+				)
+			).rows[0].invoiced_on,
+			"2026-03-31",
+		);
+		assert.equal(paused, true);
+		assert.equal(blocked, true);
+	} finally {
+		await db.query("select pg_advisory_unlock(324980)");
+		await writer.query("rollback");
+		await owner.query(`drop trigger if exists pause_invoice_test on deal_phase_change;
+			drop function if exists pause_invoice_test();
+			delete from invoice_email where deal_id = '${deal}';
+			delete from deal_phase_change where deal_id = '${deal}';
+			delete from commission_payment where deal_id = '${deal}';
+			delete from commission where deal_id = '${deal}'; delete from deal where id = '${deal}'`);
+		await writer.end();
+		await owner.end();
+	}
+});
+
+test("invoice matching and payment checks cannot straddle a user's transaction", async () => {
+	const owner = await connect("none");
+	const writer = await connect();
+	const client = id(986);
+	const deal = id(987);
+	const selected = id(988);
+	const other = id(989);
+	try {
+		await owner.query(`insert into phase values ('closed', 'Closed') on conflict do nothing;
+			insert into party (id, kind, name, how_found) values ('${client}', 'company', 'Example Invoice Client', 'referral');
+			insert into party_role (party_id, role) values ('${client}', 'client');
+			insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Snapshot Deal', '${TEAMMATE}');
+			insert into deal_party (deal_id, party_id, role) values ('${deal}', '${client}', 'client');
+			insert into commission (deal_id, gross) values ('${deal}', 1000);
+			${payment({ id: selected, deal_id: deal, amount: 500 })};
+			${payment({ id: other, deal_id: deal, amount: 500, invoiced_on: "2026-03-01" })};
+			insert into deal_phase_change values ('${deal}', '2026-03-01', 'legal', 'Example prior phase');
+			${invoiceEmail({ deal_id: deal, payment_id: selected, deal_name: "Example Snapshot Deal", client_name: "Example Invoice Client" })};
+			create function pause_mailbox_test() returns boolean language plpgsql as $$
+			begin perform pg_advisory_xact_lock(324989); return true; end $$;
+			alter table invoice_mailbox enable row level security;
+			create policy pause_mailbox_test on invoice_mailbox for select to engine using (pause_mailbox_test())`);
+		await db.query("select pg_advisory_lock(324989)");
+		await writer.query(`begin; ${asJob("mail_capture")}`);
+		const { pid } = (await writer.query("select pg_backend_pid() as pid"))
+			.rows[0];
+		let settled = false;
+		const applying = assert
+			.rejects(
+				writer.query(APPLY_INVOICE),
+				expected("invoice_email_needs_user"),
+			)
+			.finally(() => {
+				settled = true;
+			});
+		let paused = false;
+		while (!settled && !paused)
+			paused = (
+				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [pid])
+			).rows[0].blocked;
+		await owner.query(`begin;
+			update party set name = 'Renamed Example Client' where id = '${client}';
+			delete from commission_payment where id = '${other}'; commit`);
+		await db.query("select pg_advisory_unlock(324989)");
+		await applying;
+		await writer.query("rollback");
+		assert.equal(paused, true);
+		assert.equal(
+			(
+				await owner.query(
+					`select status from invoice_email where id = '${INVOICE}'`,
+				)
+			).rows[0].status,
+			"captured",
+		);
+		assert.equal(
+			(
+				await owner.query(
+					`select invoiced_on from commission_payment where id = '${selected}'`,
+				)
+			).rows[0].invoiced_on,
+			null,
+		);
+	} finally {
+		await db.query("select pg_advisory_unlock(324989)");
+		await writer.query("rollback");
+		await owner.query(`rollback; drop policy if exists pause_mailbox_test on invoice_mailbox;
+			alter table invoice_mailbox disable row level security;
+			drop function if exists pause_mailbox_test();
+			delete from invoice_email where deal_id = '${deal}';
+			delete from deal_phase_change where deal_id = '${deal}';
+			delete from commission_payment where deal_id = '${deal}';
+			delete from commission where deal_id = '${deal}'; delete from deal_party where deal_id = '${deal}';
+			delete from deal where id = '${deal}';
+			delete from party_role where party_id = '${client}'; delete from party where id = '${client}'`);
+		await writer.end();
+		await owner.end();
+	}
+});
