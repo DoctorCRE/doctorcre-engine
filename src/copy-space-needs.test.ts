@@ -260,6 +260,7 @@ test("client assertions credit their creator and wait only when observed after a
 		await need(601, { observed_at: "2025-01-03" });
 		await need(602, { observed_at: "2025-01-02" });
 		const result = await run();
+		assert.deepEqual(reasons(result, 600), []);
 		assert.deepEqual(reasons(result, 601), ["observed_after_approval"]);
 		assert.deepEqual(reasons(result, 602), []);
 		// biome-ignore format: one row per history event
