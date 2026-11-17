@@ -872,8 +872,40 @@ create table activity (
 	from_party_id uuid references party,
 	reached boolean,
 	summary text,
+	calendar_review_key text check (calendar_review_key ~ '^[a-f0-9]{16}$'),
+	calendar_review_user_id uuid references app_user,
+	constraint activity_calendar_review check ((calendar_review_key is null) = (calendar_review_user_id is null)
+		and (calendar_review_key is null or kind = 'meeting')),
+	unique (calendar_review_user_id, calendar_review_key),
 	unique (id, kind)
 );
+
+create table calendar_agenda (
+	user_id uuid primary key references app_user,
+	observed_at timestamptz not null,
+	snapshot json not null,
+	constraint calendar_agenda_size check (length(snapshot::text) +
+		length(regexp_replace(snapshot::text, '[^\U00010000-\U0010FFFF]', '', 'g')) <= 262144)
+);
+
+create table calendar_review_dismissal (
+	user_id uuid not null references app_user,
+	key text not null check (key ~ '^[a-f0-9]{16}$'),
+	dismissed_at timestamptz not null default now(),
+	primary key (user_id, key)
+);
+
+create function calendar_agenda_monotonic() returns trigger
+language plpgsql as $$
+begin
+	if new.observed_at < old.observed_at then
+		raise exception 'agenda is older than the stored observation'
+			using errcode = 'check_violation', constraint = 'calendar_agenda_monotonic';
+	end if;
+	return new;
+end $$;
+create trigger calendar_agenda_monotonic before update on calendar_agenda
+	for each row execute function calendar_agenda_monotonic();
 
 create table activity_about (
 	activity_id uuid not null references activity,
@@ -1773,7 +1805,7 @@ end;
 create function activity_entry(a activity) returns jsonb
 language sql stable
 begin atomic
-	select to_jsonb(a) || jsonb_build_object('email', (
+	select to_jsonb(a) - 'calendar_review_key' - 'calendar_review_user_id' || jsonb_build_object('email', (
 		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 			from document doc where doc.email_activity_id = e.activity_id
@@ -2544,7 +2576,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
-		'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
@@ -3067,3 +3099,5 @@ do $$ begin
 	execute format('grant usage on schema %1$I to engine_reader;
 		grant select on all tables in schema %1$I to engine_reader', current_schema());
 end $$;
+
+grant update (observed_at, snapshot) on calendar_agenda to engine;

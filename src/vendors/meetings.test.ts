@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import pg from "pg";
 import { withSnapshot } from "../../scripts/test-database.ts";
+import { seedAgenda } from "../calendar/test-agenda.ts";
 import { readSnapshot } from "../reader.ts";
 import worker from "../worker.ts";
 import { readVendorMeetings } from "./meetings.ts";
@@ -71,9 +72,6 @@ const SNAPSHOT = JSON.stringify({
 		attendees: [{ email }],
 	})),
 });
-const withMeeting = `insert into board_snapshot (organization_tenant_id, sponsoring_human_slug,
-	board_id, snapshot_json, updated_by_actor_id)
-	values ('carr-internal', 'partner_one', 'calendar-agenda', '${SNAPSHOT}', '${ACTOR}')`;
 
 type Answer = {
 	total: number;
@@ -108,7 +106,13 @@ test("suggested people come with the partner's meetings their email attends", ()
 		]);
 		assert.equal(unplanned.calendar.scheduling.reason, "source_unavailable");
 
-		await run(url, withMeeting);
+		const agenda = new pg.Client({ connectionString: url });
+		await agenda.connect();
+		try {
+			await seedAgenda(agenda, JSON.parse(SNAPSHOT));
+		} finally {
+			await agenda.end();
+		}
 		const zero = "00000000-0000-0000-0000-000000000000";
 		const suggested = await readSnapshot(url, (db) =>
 			readVendorMeetings(db, "partner_one", {

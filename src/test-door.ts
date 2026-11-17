@@ -65,14 +65,15 @@ export function doorTest() {
 		caller: Caller,
 		path: string,
 		args: object,
+		method = "POST",
 	): Promise<[number, Body]> => {
 		const user = "user" in caller ? caller.user : undefined;
 		const response = await worker.request(
 			`https://engine.example.test/${user ? "api/engine" : "jobs"}/${path}`,
 			{
-				method: "POST",
+				method,
 				headers: await headers(caller),
-				body: JSON.stringify(args),
+				...(method !== "GET" && { body: JSON.stringify(args) }),
 			},
 			{
 				DATABASE_WRITER: { connectionString: login() },

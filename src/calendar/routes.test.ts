@@ -4,6 +4,7 @@ import pg from "pg";
 import { withSnapshot } from "../../scripts/test-database.ts";
 import worker from "../worker.ts";
 import type { readMeetingPrep } from "./meeting-prep.ts";
+import { seedAgenda } from "./test-agenda.ts";
 
 type Prepared = Extract<
 	Awaited<ReturnType<typeof readMeetingPrep>>,
@@ -109,13 +110,7 @@ test("attendee emails suggest the partner's first thousand open deals with their
 		await db.connect();
 		try {
 			await db.query(seed);
-			await db.query(
-				`insert into board_snapshot (organization_tenant_id, sponsoring_human_slug,
-					board_id, snapshot_json, updated_by_actor_id)
-				select 'carr-internal', 'partner_one', 'calendar-agenda', $1, id
-				from actor where slug = 'partner_one'`,
-				[snapshot],
-			);
+			await seedAgenda(db, snapshot);
 		} finally {
 			await db.end();
 		}
