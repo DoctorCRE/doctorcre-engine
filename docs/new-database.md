@@ -778,6 +778,12 @@ A draft or candidate finds its lead on the party the lead copy recorded. Its his
 
 A draft waits when its lead was not copied, several drafts map to one party, the party already has another draft, its owner is not a user, its subject, body or time zone is blank, or its approval names no user. A candidate waits when it is an email confirmation without a lead, its source or key is blank or untrimmed, another candidate holds its source and key, its name or qualification is blank, a decline or duplicate has no reason, a promotion or decline has no recoverable user, or its promoted lead was not copied. An estimate without a source, a source without an estimate and a confirmation without a user are listed, and the candidate copies without them.
 
+## Copying today's invoice emails
+
+Run `schema/copy-invoice-emails.sql` after the deal and commission copies and the attribution helper, in its own owner transaction with the new schema on `search_path`. It only reads `public`. Capture events supply the storage time and original actor; application and undo keep their times, actors and reason in explicit change history. The load disables transition, stamp and automatic history triggers for this transaction, following decision 73. It never replays a phase move. When invoice evidence identifies one undated payment, it moves the old deal invoice date onto that payment with the original event stamp. A different payment date is never overwritten.
+
+A targeted invoice needs exactly one copied payment whose source ledger date is unknown or agrees with today's deal date. Applied invoices require that date to equal the email date; undone invoices require the restored prior date. Phase and invoice events must describe that deal's close and invoice date, with the prior phase present in copied history. Missing capture evidence, actors, deals, payments or phase history, invalid facts, conflicting saved evidence and duplicate historical applications are listed by invoice id for correction. The earliest application for a deal and date copies; later historical applications are listed rather than rewritten as resends. Unreconciled old deal dates are listed even when no invoice email exists. Reruns compare typed facts and application history, preserve copied rows and history across time zones, and list source conflicts. Undone invoices retain payment restore history. PostgreSQL's transaction controls and the existing `pg` test harness handle the copy without a new dependency.
+
 ## Copying today's activity
 
 Run `schema/copy-activity.sql` as the owner after `copy-parties.sql` and `copy-deals.sql`, and before `copy-lead-stage-moves.sql`, in its own transaction with the new schema on `search_path`. It only reads `public` and ends by listing in `not_copied` what it did not copy.
@@ -787,6 +793,14 @@ Run `schema/copy-activity.sql` as the owner after `copy-parties.sql` and `copy-d
 - A deal note of kind note becomes a note about its deal, at its time, signed from its `add-deal-note` event on the deal, which has the same text and time. An agent's activity or note whose partner is unknown is copied as the agent's and listed.
 - Listed and not copied: emails, and the notes the mail intake files with an email's full text or its links, even without email context (#365), deal notes of kind next step (#366), and the old kinds `text`, `analysis`, `task`, `loi`, `counter_sent`, `counter_received` and `lease_signed`, which have no kind yet. Listed but copied without the value: what a row says is owed, whether a call connected, and a detail that is a JSON object, which is a job's own record. `source`, `version` and `calendar_event_key` record how today's system captured the row and are dropped.
 - A rerun copies only rows not yet copied, and adds the links of records copied since, so an unchanged rerun changes nothing.
+
+## Copying today's preferences and Home marks
+
+Run `schema/copy-preferences.sql` as the owner after `copy-leads-clients.sql` and the deal next-steps copy (#366), in its own transaction with the new schema on `search_path`. It reads `public` and `ops`, follows "Moving today's rows across" under "Users' preferences and Home marks", and ends by listing in `not_copied` what it did not copy, keyed by the old actor.
+
+- A preference whose actor is not a user, whose zone the database does not know, or whose quiet hours start when they end waits whole, so no zone or quiet hours are invented. Today's row keeps no time, so its user is named at the time of the copy (decision 79).
+- A mark finds its next step by the next action's id, which both next-step copies keep, on the action's deal, or on the person or company its lead, client or vendor became. A step with that id on another record is not the action's copy. Until the deal copy has run, marks on a deal's next actions are listed as `next_step_not_copied`, and a rerun after it adds them. A mark also waits when its actor is not a user, its item is not a next action, the one it waits on was not copied, or its reason is blank. A mark is its user's, from its earliest to its latest change today.
+- A user's copied preferences and marks are never changed again, so an unchanged rerun changes nothing and a corrected row arrives on the next run.
 
 ## Copying today's change history
 
