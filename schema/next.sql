@@ -769,6 +769,7 @@ create table client (
 	created_at timestamptz not null default now(),
 	status text not null default 'roster' check (status in ('roster', 'cold', 'engaged', 'paused')),
 	client_type text references client_type,
+	owner_user_id uuid references app_user,
 	foreign key (party_id, role) references party_role on update cascade
 );
 
