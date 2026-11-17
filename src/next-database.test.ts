@@ -764,6 +764,10 @@ const newCandidate = (row: Record<string, string | null> = {}) =>
 		qualification: "Example lease window",
 		...row,
 	});
+const buildingFact = (column: string, value: string | number): Case => [
+	`update property set ${column} = ${value} where id = '${IN_REACH}'`,
+	`property_${column}_check`,
+];
 const RULES: Record<string, Case[]> = {
 	"tours use meetings rather than a separate activity kind": [
 		[
@@ -1807,6 +1811,16 @@ const RULES: Record<string, Case[]> = {
 			"latitude_range",
 		],
 	],
+	"a building's known name, class and type are never blank, and its year built and stories stay in the old ranges":
+		[
+			buildingFact("name", "' '"),
+			buildingFact("building_class", "''"),
+			buildingFact("building_type", "' '"),
+			buildingFact("year_built", 1799),
+			buildingFact("year_built", 2101),
+			buildingFact("stories", 0),
+			buildingFact("stories", 61),
+		],
 	"a market's and a territory's name is never blank, and a market's is used once":
 		[
 			["insert into market (name) values (' ')", "market_name_check"],
@@ -2422,7 +2436,17 @@ const CHANGEABLE: Record<string, string[]> = {
 	deal_reason: ["label"],
 	specialty: ["label"],
 	party: ["how_found", "how_found_detail", "name", "npi"],
-	property: ["address", "county_fips", "latitude", "longitude"],
+	property: [
+		"address",
+		"building_class",
+		"building_type",
+		"county_fips",
+		"latitude",
+		"longitude",
+		"name",
+		"stories",
+		"year_built",
+	],
 	market: ["name"],
 	territory: ["name"],
 	party_territory: ["ended_on", "started_on"],
@@ -3560,6 +3584,11 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				county_fips: null,
 				latitude: null,
 				longitude: null,
+				name: null,
+				building_class: null,
+				building_type: null,
+				year_built: null,
+				stories: null,
 			},
 		],
 		parties: [

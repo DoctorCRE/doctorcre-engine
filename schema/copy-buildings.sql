@@ -18,15 +18,18 @@ with recursive chain as (
 create temp table held_building on commit drop as
 select distinct m.id from building_map m join (select building_id from public.space
  union select building_id from public.building_ownership) o on o.building_id = m.old_id;
-insert into property (id, address, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+insert into property (id, address, name, building_class, building_type, year_built, stories,
+ created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select b.id, concat_ws(', ', b.address, nullif(b.city, ''), nullif(b.state, ''), nullif(b.zip, '')),
+ case when b.name ~ '\S' then b.name end, case when b.class ~ '\S' then b.class end,
+ case when b.sub_type ~ '\S' then b.sub_type end, b.year_built, b.stories,
  b.created_at, b.updated_at, a.* from public.building b join held_building h on h.id = b.id
 cross join lateral copy_attribution('building', b.id, b.updated_by) a
 on conflict (id) do nothing;
 insert into not_copied
 select b.id, 'property', remaining.value::text, 'unmapped_building_fields' from public.building b join held_building h on h.id = b.id
 cross join lateral (select jsonb_strip_nulls(to_jsonb(b) - array['id', 'address', 'city', 'state', 'zip',
- 'created_at', 'created_by', 'updated_at', 'updated_by', 'merged_into', 'version']) as value) remaining
+ 'name', 'class', 'sub_type', 'year_built', 'stories', 'created_at', 'created_by', 'updated_at', 'updated_by', 'merged_into', 'version']) as value) remaining
 where remaining.value <> '{}'::jsonb;
 
 create temp table old_suite on commit drop as

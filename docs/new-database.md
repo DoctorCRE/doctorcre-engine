@@ -18,7 +18,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`how_found`**: the short list of how a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
 - **`relationship_level`**: the four levels of how well the team knows a vendor, from 0, Prospective, to 3, Core.
 - **`introduction`**: one introduction between a vendor and the team, made either way, and the deal it led to.
-- **`property`**: a building, by address, with its county and its point on the map once geocoded.
+- **`property`**: a building, by address, with its county and its point on the map once geocoded, and its name, class, type, year built and stories when known.
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
 - **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, and whether it needs attention.
@@ -195,6 +195,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 96. A job attaches only evidence passing rule 94; doubtful resends wait for a direct user. Resent evidence for the same deal, payment and invoice date attaches to the single original application, even after undo. It has no application snapshots and writes no second close or payment date. Its link names an applied or undone original with the same identity and cannot be rewritten by the engine.
 
 97. A direct user may classify a filed document from `other` to a real kind once. Every other stored field stays fixed during classification. Jobs, including those working for a user, cannot classify; real kinds never change through this path. Change history records the kind change, user and save time.
+98. A property's known name, class and type are never blank. A known year built is from 1800 to 2100 and known stories from 1 to 60, the old system's ranges.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -471,7 +472,7 @@ Today's `critical_date` rows keep their kinds, dates, sources and notes. `option
 
 `schema/copy-buildings.sql` runs after the party copy and before the lease copy, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public`, and ends with its `not_copied` list. It is the one place today's spaces become suites, so the lease copy only links them.
 
-- A building that has a space or an owner, after building merges, becomes a property with its id and full address, as the deal copy makes one. A building with neither is not copied. Fields with no destination are listed as `unmapped_building_fields`.
+- A building that has a space or an owner, after building merges, becomes a property with its id and full address, as the deal copy makes one, and with its name, class, type (`sub_type`), year built and stories. A blank name, class or type stays unknown. A building with neither a space nor an owner is not copied. Its construction status (existing, under construction or proposed), that status's source and its parcel have no destination and are listed as `unmapped_building_fields`.
 - Every space becomes a suite in its building's surviving property with its id, creation time, floor, area, area basis and condition. Its label is trimmed, and a blank one stays unknown. A label another space or suite in the same building uses, an id the new database holds in another building, and a building lost in a merge loop are listed.
 - Every ownership becomes a `building_ownership` row with its id, creation time, kind and source, its party through the party map, and `from_on` and `to_on` as its start and end. Unknown dates stay unknown, and joint owners stay separate rows. A party not copied, a building lost in a merge loop, an end before its start, a blank source, and two links with the same property, party, kind and start, after merges, are listed. So is an id the new database holds for another link.
 - A repeat leaves copied suites and links as users left them, and adds only rows corrected since.
