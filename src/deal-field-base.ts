@@ -102,7 +102,7 @@ export async function preparePatch(saving: Saving, args: JsonObject) {
 		.where("e.subject_id", "=", deal_id)
 		.where("e.field", "=", field)
 		.where(
-			sql<boolean>`${base}::uuid is null or (e.recorded_at, e.id) > (select b.recorded_at, b.id from event b where b.id=${base}::uuid)`,
+			sql<boolean>`(${base}::uuid is null or (e.recorded_at, e.id) > (select b.recorded_at, b.id from event b where b.id=${base}::uuid))`,
 		)
 		.orderBy("e.recorded_at", "desc")
 		.orderBy("e.id", "desc")

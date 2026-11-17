@@ -88,6 +88,10 @@ test("field bases validate exact cells and store the old conflict answer without
 				(await db.query("select count(*) from deal_conflict")).rows[0].count,
 				"1",
 			);
+			await db.query(
+				"insert into event (actor_id,verb,subject_type,subject_id,field,new_value,cause,occurred_at,recorded_at) values ($1,'patch-deal-field','deal',$2,'attention','{\"attention\":true}','automation_job',now(),clock_timestamp())",
+				[A, D],
+			);
 			const fresh = await save(url, {
 				...args,
 				idempotency_key: randomUUID(),
@@ -131,7 +135,7 @@ test("field bases validate exact cells and store the old conflict answer without
 			);
 			assert.equal(
 				(await db.query("select count(*) from event")).rows[0].count,
-				"1",
+				"2",
 			);
 		} finally {
 			await db.end();
