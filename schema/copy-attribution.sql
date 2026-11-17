@@ -120,3 +120,32 @@ begin atomic
 	select btrim(regexp_replace(lower(source_system), '[^a-z0-9]+', '_', 'g'), '_'),
 		regexp_replace(external_key, '^\s+|\s+$', '', 'g');
 end;
+
+-- Logging an activity today writes an event on the record it is about, naming the activity.
+create or replace function copy_activity_event()
+returns table (activity_id uuid, event_id uuid)
+language sql stable
+begin atomic
+	select distinct on (new_value ->> 'activity') (new_value ->> 'activity')::uuid, id
+	from public.event where verb = 'log-activity' and new_value ->> 'activity' ~ '^[0-9a-f-]{36}$'
+	order by new_value ->> 'activity', mutation_order desc;
+end;
+
+-- A client, lead or vendor is about its person or company; merged-away ids reach their survivor through the map.
+create or replace function copy_activity_link()
+returns table (id uuid, field text, value uuid, deal_id uuid, party_id uuid)
+language sql stable
+begin atomic
+	select k.id, k.field, k.value, o.deal_id, o.party_id
+	from (
+		select a.id, f.field, f.value, f.lookup from public.activity a
+		left join public.client c on c.id = a.client_id
+		left join public.lead l on l.id = a.lead_id
+		left join public.vendor v on v.id = a.vendor_id
+		cross join lateral (values ('deal_id', a.deal_id, a.deal_id), ('client_id', a.client_id, c.party_id),
+			('lead_id', a.lead_id, l.party_id), ('vendor_id', a.vendor_id, v.party_id), ('party_id', a.party_id, a.party_id)) f(field, value, lookup)
+		where f.value is not null
+		union all
+		select id, 'deal_id', deal_id, deal_id from public.deal_note
+	) k left join outside_id o on o.source = 'old_system' and o.value = k.lookup::text;
+end;

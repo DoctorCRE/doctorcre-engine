@@ -861,7 +861,8 @@ create table activity_about (
 create table email (
 	activity_id uuid primary key,
 	activity_kind text not null generated always as ('email') stored,
-	message_id text not null unique check (message_id = btrim(message_id)),
+	-- Empty for mail whose header was never kept, such as older mail copied from today's system.
+	message_id text unique check (message_id = btrim(message_id)),
 	-- Matched to a person through party_email.
 	sender email_address not null,
 	subject text not null,

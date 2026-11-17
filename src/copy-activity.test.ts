@@ -107,12 +107,6 @@ before(async () => {
 		activity(48, "meeting", { client: 20, vendor: 23 }),
 		activity(49, "note", { deal: 30 }),
 		activity(
-			39,
-			"note",
-			{ deal: 30 },
-			"'https://example.com/listing', null, null, null",
-		),
-		activity(
 			54,
 			"analysis",
 			{ deal: 30 },
@@ -125,7 +119,8 @@ before(async () => {
 		activity(59, "task", { deal: 30 }),
 	].join(",\n  ")};
  update public.activity set summary = 'Full text of email: Example subject' where id = '${id(49)}';
- update public.activity set summary = 'Links from matched email' where id = '${id(39)}';
+ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id, detail) values
+  ('${id(39)}', 'note', '2024-01-03', '2024-02-01', '2024-03-01', '${id(1)}', 'Links from matched email', '${id(30)}', 'https://example.com/listing');
  insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug)
   values ('${id(2)}', 'log-activity', 'party', '${id(13)}', '{"activity": "${id(42)}"}', 'automation_job', '2024-01-06', 'partner_one');
  insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
@@ -149,6 +144,16 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 			)
 		).map(Object.values),
 		[
+			[
+				id(39),
+				"note",
+				"2024-01-03 00:00:00+00",
+				"Links from matched email\n\nhttps://example.com/listing",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
 			[
 				id(40),
 				"call",
@@ -303,6 +308,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 	);
 	const recorded = "2024-02-01 00:00:00+00";
 	assert.deepEqual((await about()).map(Object.values), [
+		[id(39), id(30), null, recorded],
 		[id(40), id(30), null, recorded],
 		[id(40), null, id(10), recorded],
 		[id(41), null, id(11), recorded],
@@ -321,14 +327,10 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 		[id(58), null, id(10), recorded],
 	]);
 	assert.deepEqual(reasons(report), [
-		"39 kind later_copy_365",
-		"43 kind later_copy_365",
-		"44 kind later_copy_365",
 		"46 activity about_nothing_copied",
 		"46 deal_id deal_not_copied",
 		"47 detail structured_detail_not_copied",
 		"47 lead_id lead_not_copied",
-		"49 kind later_copy_365",
 		"53 changed_for_user_id agent_user_unknown",
 		"59 kind kind_has_no_place",
 	]);
@@ -452,11 +454,7 @@ test("keeps what is still missing under its label after the summary and detail, 
 	const report = await run();
 	assert.deepEqual(
 		reasons(report.filter((r) => r.old_id >= id(70) && r.old_id <= id(75))),
-		[
-			"73 kind later_copy_365",
-			"74 kind later_copy_365",
-			"75 kind kind_has_no_place",
-		],
+		["75 kind kind_has_no_place"],
 	);
 	const copied = await snapshot();
 	assert.deepEqual(copied.map(Object.values), [

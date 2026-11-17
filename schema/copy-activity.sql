@@ -5,20 +5,16 @@ alter table activity disable trigger stamp_change;
 alter table activity_about disable trigger stamp_change;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 
--- Logging an activity today writes an event on the record it is about, naming the activity.
-create temp table activity_event on commit drop as
-select distinct on (new_value ->> 'activity') (new_value ->> 'activity')::uuid as activity_id, id
-from public.event where verb = 'log-activity' and new_value ->> 'activity' ~ '^[0-9a-f-]{36}$'
-order by new_value ->> 'activity', mutation_order desc;
+create temp table activity_event on commit drop as select * from copy_activity_event();
 
 create temp table old_activity on commit drop as
 select a.id, a.kind as old_kind, a.occurred_at as happened_at, a.recorded_at as created_at, a.updated_at as changed_at,
  a.summary, a.detail, a.owed, a.connected,
- -- The mail intake files an email's full text and its links as notes, sometimes without context.
+ -- The mail intake files an email's full text as a note, sometimes without context; copy-emails.sql copies it.
  a.kind in ('email_in', 'email_out') or a.email_context is not null
-  or a.kind = 'note' and (a.summary like 'Full text of email: %' or a.summary = 'Links from matched email') as is_mail, s.*
+  or a.kind = 'note' and a.summary like 'Full text of email: %' as is_mail, s.*
 from public.activity a left join activity_event e on e.activity_id = a.id
-cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.id) s
+cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.event_id) s
 union all
 -- A written next step is history only: it opens with its label and makes no next step.
 select n.id, n.kind, n.created_at, n.created_at, n.created_at,
@@ -30,20 +26,7 @@ cross join lateral copy_event_attribution(n.actor_id, case n.kind when 'note' th
   and e.actor_id = n.actor_id and e.occurred_at = n.created_at and e.new_value ->> 'note' = n.text
  order by e.mutation_order desc limit 1) else p.event_id end) s;
 
--- A client, lead or vendor is about its person or company; merged-away ids reach their survivor through the map.
-create temp table old_link on commit drop as
-select k.id, k.field, k.value, o.deal_id, o.party_id
-from (
- select a.id, f.field, f.value, f.lookup from public.activity a
- left join public.client c on c.id = a.client_id
- left join public.lead l on l.id = a.lead_id
- left join public.vendor v on v.id = a.vendor_id
- cross join lateral (values ('deal_id', a.deal_id, a.deal_id), ('client_id', a.client_id, c.party_id),
-  ('lead_id', a.lead_id, l.party_id), ('vendor_id', a.vendor_id, v.party_id), ('party_id', a.party_id, a.party_id)) f(field, value, lookup)
- where f.value is not null
- union all
- select id, 'deal_id', deal_id, deal_id from public.deal_note
-) k left join outside_id o on o.source = 'old_system' and o.value = k.lookup::text;
+create temp table old_link on commit drop as select * from copy_activity_link();
 
 create temp table mapped_activity on commit drop as
 select a.*, case when a.is_mail then null else m.kind end as kind,
@@ -59,7 +42,6 @@ left join (values ('call', 'call', false), ('meeting', 'meeting', false), ('tour
 left join public.activity_kind k on k.slug = a.old_kind;
 
 insert into not_copied select a.id, f.field, f.value, f.reason from mapped_activity a cross join lateral (values
- ('kind', a.old_kind, 'later_copy_365', a.is_mail),
  ('kind', a.old_kind, 'kind_has_no_place', a.kind is null and not a.is_mail),
  ('activity', a.id::text, 'about_nothing_copied', a.kind is not null and not a.is_about),
  ('detail', a.detail, 'structured_detail_not_copied', a.kind is not null and a.detail is json object),

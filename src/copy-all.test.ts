@@ -47,6 +47,7 @@ const order: [file: string, input?: string][] = [
 	["copy-invoice-emails.sql"],
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
+	["copy-emails.sql"],
 	["copy-calls.sql"],
 	["copy-meetings.sql"],
 	["copy-lead-stage-moves.sql"],
@@ -159,13 +160,17 @@ insert into public.attachment (id, subject_type, subject_id, r2_key, filename, m
  ('${id(52)}', 'deal', '${id(30)}', 'files/52.pdf', 'Example plan.pdf', 'application/pdf', '${"6".repeat(64)}', 2000, '${id(1)}');
 insert into ops.deal_document_text (document_ref, entity_ref, content_hash, text_format_version, status, pages, text_hash, created_at) values
  ('${id(52)}', '${id(30)}', '${"6".repeat(64)}', 'page-text.v1', 'produced', '["Example page"]', 'example-digest', '2025-03-01');
-insert into public.activity_kind (slug, label, is_contact) values ('call', 'Example call', true);
+insert into public.activity_kind (slug, label, is_contact) values ('call', 'Example call', true), ('email_in', 'Example email', true);
 insert into public.lead_stage (slug, label) values ('new', 'Example new'), ('outreach_active', 'Example outreach');
 insert into public.lead_lane (slug, label) values ('example_lane', 'Example lane');
 update public.lead set lane = 'example_lane';
 insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id, client_id, lead_id) values
  ('${id(82)}', 'call', '2025-01-03', '2025-01-03', '2025-01-03', '${id(1)}', 'Example call', '${id(30)}', '${id(20)}', null),
  ('${id(83)}', 'call', '2025-01-05', '2025-01-05', '2025-01-05', '${id(1)}', 'Example prospect call', null, null, '${id(21)}');
+insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, detail, email_source, deal_id, client_id)
+ select v, 'email_in', '2025-01-06', '2025-01-06', '2025-01-06', '${id(3)}', 'Email from Example Doctor: Example tour', 'Example email text',
+  '{"mailbox_owner": "partner_one", "sender_email": "doctor@example.com"}', d, c
+ from (values ('${id(120)}'::uuid, '${id(30)}'::uuid, null::uuid), ('${id(121)}', null, '${id(20)}')) f(v, d, c);
 insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(84)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2025-01-04');
 insert into public.event (id, actor_id, verb, subject_type, subject_id, field, old_value, new_value, cause, occurred_at) values
@@ -274,7 +279,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, lead_stage_move: 1, proposal: 3,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
 const corrections = [
