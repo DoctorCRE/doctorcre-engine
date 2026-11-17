@@ -1035,6 +1035,13 @@ alter table document
 create function document_filed_once() returns trigger
 language plpgsql as $$
 begin
+	-- Generated columns have no NEW value yet; the stamp runs after this trigger.
+	if old.deal_id is not null and old.kind = 'other' and new.kind <> 'other'
+		and nullif(current_setting('engine.job', true), '') is null
+		and nullif(current_setting('engine.user_id', true), '') is not null
+		and to_jsonb(new) - array['kind', 'previous_version'] = to_jsonb(old) - array['kind', 'previous_version'] then
+		return new;
+	end if;
 	if old.deal_id is not null or new.deal_id is null
 		or old.content_type is not null and new.content_type is distinct from old.content_type
 		or old.sha256 is not null and new.sha256 is distinct from old.sha256

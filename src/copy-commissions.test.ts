@@ -28,8 +28,10 @@ const run = async (): Promise<pg.QueryResultRow[]> => {
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
-const reasons = (report: pg.QueryResultRow[], n: number) =>
-	report.filter((r) => r.old_id === id(n)).map((r) => r.reason);
+const lines = (report: pg.QueryResultRow[], n: number) =>
+	report
+		.filter((r) => r.old_id === id(n))
+		.map((r) => [r.field, r.value, r.reason]);
 const payment = (
 	n: number,
 	deal: number,
@@ -88,7 +90,7 @@ before(async () => {
 		payment(110, 11, "expected", "75"),
 		payment(120, 12, "received", "20"),
 		payment(121, 12, "expected", "30"),
-		payment(130, 13, "invoiced", "0"),
+		payment(130, 13, "invoiced", "0", "'2025-01-01', null, null"),
 		payment(140, 14, "invoiced", "30", "'2025-02-01', '2025-01-01', null"),
 		payment(150, 15, "expected", "999999999999.99"),
 		payment(151, 15, "expected", "1"),
@@ -170,25 +172,26 @@ test("absent totals and unknown due dates stay null; deals resolve through the d
 	);
 	assert.deepEqual(await rows("select * from commission_share"), []);
 	assert.equal((await rows("select * from commission_tier")).length, 1);
-	assert.deepEqual(reasons(report, 170), ["expected_date_has_no_destination"]);
+	assert.deepEqual(lines(report, 170), [
+		["invoiced_on", "2025-01-01", "expected_date_has_no_destination"],
+	]);
 });
 
-test("unmappable rows are listed and their whole deal waits without aborting good deals", async () => {
-	assert.equal(report.find((r) => r.old_id === id(190))?.field, "status");
-	assert.match(report.find((r) => r.old_id === id(190))?.value, /2025-01-20/);
-	for (const [n, reason] of [
-		[120, "received_without_date"],
-		[121, "another_row_on_deal_waits"],
-		[130, "nonpositive_amount"],
-		[140, "dates_out_of_order"],
-		[150, "amount_out_of_range"],
-		[151, "amount_out_of_range"],
-		[160, "ladder_not_entered"],
-		[210, "deal_not_copied"],
-		[190, "status_disagrees_with_dates"],
-		[191, "status_disagrees_with_dates"],
+test("unmappable rows are listed with the field and value to correct, and their whole deal waits without aborting good deals", async () => {
+	// biome-ignore format: one report line per row
+	for (const [n, line] of [
+		[120, ["received_on", null, "received_without_date"]],
+		[121, ["deal_id", id(12), "another_row_on_deal_waits"]],
+		[130, ["gross_amount", "0.00", "nonpositive_amount"]],
+		[140, ["due_on", "2025-02-01 2025-01-01", "dates_out_of_order"]],
+		[150, ["expected_total", "1000000000000.99", "amount_out_of_range"]],
+		[151, ["expected_total", "1000000000000.99", "amount_out_of_range"]],
+		[160, ["owner_user_id", id(2), "ladder_not_entered"]],
+		[210, ["deal_id", id(21), "deal_not_copied"]],
+		[190, ["received_on", "2025-01-20", "status_disagrees_with_dates"]],
+		[191, ["invoiced_on", null, "status_disagrees_with_dates"]],
 	] as const)
-		assert.ok(reasons(report, n).includes(reason), `${n}: ${reason}`);
+		assert.deepEqual(lines(report, n), [line], `${n}`);
 	assert.deepEqual(
 		await rows(
 			`select * from commission where deal_id in (${[12, 13, 14, 15, 16, 19, 21].map((n) => `'${id(n)}'`).join(",")})`,
@@ -255,9 +258,16 @@ test("saved commissions, conflicting payment ids and changed old rows are report
  update commission set expected = 76 where deal_id = '${id(11)}';`);
 		await db.query("set constraints all immediate");
 		const refused = await run();
-		assert.ok(reasons(refused, 120).includes("payment_id_taken"));
-		assert.ok(reasons(refused, 102).includes("payment_id_taken"));
-		assert.ok(reasons(refused, 110).includes("existing_commission_conflict"));
+		assert.deepEqual(lines(refused, 120), [
+			["id", id(120), "payment_id_taken"],
+		]);
+		assert.deepEqual(lines(refused, 102), [
+			["deal_id", id(10), "existing_commission_conflict"],
+			["id", id(102), "payment_id_taken"],
+		]);
+		assert.deepEqual(lines(refused, 110), [
+			["deal_id", id(11), "existing_commission_conflict"],
+		]);
 		assert.deepEqual(
 			await rows(
 				`select amount from commission_payment where id = '${id(102)}'`,
@@ -273,18 +283,36 @@ test("saved commissions, conflicting payment ids and changed old rows are report
 	}
 });
 
-test("receipt order, gross overflow and unmapped authors are listed, with original attribution retained", async () => {
+test("receipt order, gross overflow and unmapped authors and sponsors are listed with the field and value to correct", async () => {
 	await db.query("begin; select set_config('engine.job', 'old_system', true)");
 	try {
-		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(7)}', 'example_missing', 'human', 'Example Missing');
+		// Sponsors are partner slugs, so partner_two moves to an actor that has no user.
+		await db.query(`update public.deal set owner = null where id = '${id(16)}';
+ update public.actor set slug = 'example_former' where id = '${id(2)}';
+ insert into public.actor (id, slug, kind, display_name) values ('${id(7)}', 'partner_two', 'human', 'Example Missing'), ('${id(8)}', 'codex', 'automation', 'Example agent');
+ insert into public.event (actor_id, verb, subject_type, subject_id, cause, occurred_at, sponsoring_human_slug) values
+ ('${id(8)}', 'example-edit', 'commission', '${id(180)}', 'human_stated', '2025-02-01', 'partner_two');
+ update public.commission set updated_by = '${id(8)}' where id = '${id(180)}';
  insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, due_on, received_on, created_at, updated_at, created_by, updated_by) values
  ${payment(192, 19, "received", "10", "'2025-02-01', null, '2025-01-01'")};
  update public.commission set updated_by = '${id(7)}' where id = '${id(160)}';
  update public.commission set gross_amount = 999999999999.99 where id in ('${id(102)}','${id(103)}');`);
 		const refused = await run();
-		assert.ok(reasons(refused, 192).includes("dates_out_of_order"));
-		assert.ok(reasons(refused, 102).includes("amount_out_of_range"));
-		assert.ok(reasons(refused, 160).includes("author_not_copied"));
+		assert.deepEqual(lines(refused, 192), [
+			["received_on", "2025-02-01 2025-01-01", "dates_out_of_order"],
+		]);
+		assert.deepEqual(lines(refused, 102), [
+			["deal_id", id(10), "existing_commission_conflict"],
+			["gross_total", "1999999999999.98", "amount_out_of_range"],
+			["id", id(102), "payment_id_taken"],
+		]);
+		assert.deepEqual(lines(refused, 160), [
+			["author_id", id(7), "author_not_copied"],
+			["owner_user_id", id(2), "ladder_not_entered"],
+		]);
+		assert.deepEqual(lines(refused, 180), [
+			["sponsor_id", id(7), "author_not_copied"],
+		]);
 	} finally {
 		await db.query("rollback");
 	}
