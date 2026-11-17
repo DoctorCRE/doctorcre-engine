@@ -90,14 +90,9 @@ from public.deal_participant where to_at is not null;
 create temp table old_phase on commit drop as
 select e.id as old_id, e.subject_id as deal_id, e.occurred_at as happened_at, case when e.field = 'outcome' then 'dead' else e.new_value ->> 'phase' end as phase,
  coalesce(nullif(e.human_quote, ''), nullif(e.agent_rationale, '')) as reason,
- a.changed_by_user_id, job.slug as changed_by_job,
- case when job.slug in ('agent', 'mail_capture') then sponsor.id end as changed_for_user_id
+ a.*
 -- History takes its own event's cause and sponsor, rather than a later change to the same deal.
-from public.event e cross join lateral copy_attribution('event', e.id, e.actor_id) a
-left join public.actor actor on actor.id = e.actor_id
-cross join lateral (select case when a.changed_by_job = 'old_system' and actor.kind = 'automation'
- and e.cause = 'ingest_email' then 'mail_capture' else a.changed_by_job end as slug) job
-left join public.actor sponsor on sponsor.slug = e.sponsoring_human_slug and sponsor.kind = 'human'
+from public.event e cross join lateral copy_event_attribution(e.actor_id, e.id) a
 where e.subject_type = 'deal' and (e.field = 'phase' and e.old_value ->> 'phase' is distinct from e.new_value ->> 'phase'
  or e.field = 'outcome' and e.new_value ->> 'outcome' = 'lost');
 insert into not_copied select d.id, 'phase', d.phase, 'no_phase_history' from public.deal d
