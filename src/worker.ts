@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 
+import { filedEmails } from "./activity/filed-emails.ts";
 import { activityDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
 import { calendar } from "./calendar/routes.ts";
@@ -97,5 +98,6 @@ app.use(
 app.route("/jobs", nextDeals);
 app.route("/jobs", nextSteps);
 app.route("/jobs", activityDoor);
+app.route("/jobs", filedEmails);
 
 export default app;

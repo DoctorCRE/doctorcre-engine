@@ -16,7 +16,8 @@ type About =
 type Email = {
 	message_id: string;
 	sender: string;
-	recipients: string[];
+	sender_name: string | null;
+	recipients: { address: string; kind: "to" | "cc" }[];
 	subject: string;
 	body: string;
 };
@@ -78,24 +79,43 @@ function parseAbout(value: unknown): About[] | undefined {
 const filed = (value: unknown) =>
 	Array.isArray(value) && value.length ? parseAbout(value) : undefined;
 
-const recipient = (value: JsonValue) =>
-	isArguments(value) && isText(value.address)
-		? address(value.address)
+function recipient(value: JsonValue): Email["recipients"][number] | undefined {
+	if (!isArguments(value) || !isText(value.address)) return undefined;
+	const { kind } = value;
+	return kind === "to" || kind === "cc"
+		? { address: address(value.address), kind }
 		: undefined;
+}
 
 function parseEmail(value: JsonValue): Email | undefined {
 	if (!isArguments(value)) return undefined;
-	const { message_id, sender, recipients, subject, body, ...rest } = value;
+	const {
+		message_id,
+		sender,
+		sender_name = null,
+		recipients,
+		subject,
+		body,
+		...rest
+	} = value;
 	const to = Array.isArray(recipients)
 		? recipients.map(recipient)
 		: [undefined];
 	return !Object.keys(rest).length &&
-		to.every(isText) &&
+		to.every((item) => item !== undefined) &&
+		(sender_name === null || isText(sender_name)) &&
 		isText(message_id) &&
 		isText(sender) &&
 		isText(subject) &&
 		isText(body)
-		? { message_id, sender: address(sender), recipients: to, subject, body }
+		? {
+				message_id,
+				sender: address(sender),
+				sender_name,
+				recipients: to,
+				subject,
+				body,
+			}
 		: undefined;
 }
 
@@ -163,11 +183,23 @@ async function insertActivity(
 		.returning("id")
 		.executeTakeFirstOrThrow();
 	if (email) {
-		const { recipients: _recipients, ...stored } = email;
-		await tx
-			.insertInto("email")
-			.values({ activity_id: id, ...stored, ...STAMPED })
-			.execute();
+		const { recipients, ...stored } = email;
+		await sql`insert into email (activity_id, message_id, sender, sender_name, subject, body)
+   values (${id}, ${stored.message_id}, ${stored.sender}, ${stored.sender_name}, ${stored.subject}, ${stored.body})`.execute(
+			tx,
+		);
+		if (recipients.length)
+			await tx
+				.insertInto("email_recipient")
+				.values(
+					recipients.map((recipient, position) => ({
+						activity_id: id,
+						position,
+						...recipient,
+						...STAMPED,
+					})),
+				)
+				.execute();
 	}
 	return id;
 }
@@ -181,7 +213,9 @@ async function recordEmail(
 ) {
 	if (!message_id || message_id !== message_id.trim())
 		throw new SaveRefusal(new Refusal(422, "message_id_invalid"));
-	const addresses = [...new Set([sender, ...recipients])];
+	const addresses = [
+		...new Set([sender, ...recipients.map((recipient) => recipient.address)]),
+	];
 	const owners = await tx
 		.selectFrom("party_email")
 		.leftJoin("app_user", "app_user.id", "party_email.party_id")
@@ -211,6 +245,10 @@ async function recordEmail(
 	const activity_id =
 		stored?.activity_id ??
 		(await insertActivity(tx, { ...activity, from_party_id }));
+	await sql`insert into email_mailbox (activity_id, user_id)
+  select ${activity_id}, nullif(current_setting('engine.user_id', true), '')::uuid
+  where nullif(current_setting('engine.user_id', true), '') is not null
+  on conflict do nothing`.execute(tx);
 	return {
 		activity_id,
 		existing: stored !== undefined,

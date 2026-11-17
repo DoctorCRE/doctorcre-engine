@@ -892,12 +892,27 @@ create table email (
 	message_id text unique check (message_id = btrim(message_id)),
 	-- Matched to a person through party_email.
 	sender email_address not null,
+	sender_name text,
 	subject text not null,
 	body text not null,
 	-- Set only by the owner's copy of today's mail, the one source that may lack the Message-ID.
 	imported boolean not null default false,
 	constraint email_message_id_unless_imported check (message_id is not null or imported),
 	foreign key (activity_id, activity_kind) references activity (id, kind)
+);
+
+create table email_recipient (
+	activity_id uuid not null references email,
+	position integer not null check (position >= 0),
+	address email_address not null,
+	kind text not null check (kind in ('to', 'cc')),
+	primary key (activity_id, position)
+);
+
+create table email_mailbox (
+	activity_id uuid not null references email,
+	user_id uuid not null references app_user,
+	primary key (activity_id, user_id)
 );
 
 alter table outside_id add foreign key (email_activity_id) references email;
@@ -2544,7 +2559,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
-		'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
@@ -3011,7 +3026,7 @@ grant insert (id, deal_id, property_id, round, answers_round, from_party_id, fro
 	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms, submarket_condition) on offer to engine;
 grant update (status) on offer to engine;
 revoke insert on email from engine;
-grant insert (activity_id, message_id, sender, subject, body) on email to engine;
+grant insert (activity_id, message_id, sender, sender_name, subject, body) on email to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;

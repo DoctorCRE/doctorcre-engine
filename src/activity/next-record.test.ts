@@ -9,7 +9,7 @@ const { db, setup, cleanup, connectionString } = copyTest();
 const writer = `activity_door_${randomUUID().replaceAll("-", "")}`;
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const [JOE, CASEY, DEAL, MISSING] = [id(1), id(2), id(3), id(4)];
+const [JOE, CASEY, DEAL, MISSING, DELL] = [id(1), id(2), id(3), id(4), id(5)];
 const ORIGIN = "https://engine.example.test";
 const TEAM = "https://example.cloudflareaccess.com";
 const access = await generateKeyPair("RS256", { extractable: true });
@@ -20,10 +20,10 @@ before(async () => {
 		Response.json({ keys: [{ ...key, kid: "made-up-kid" }] }),
 	);
 	await setup();
-	await db.query(`create role ${writer} login; grant engine to ${writer};
+	await db.query(`create role ${writer} login; grant engine, engine_reader to ${writer};
 		begin; select set_config('engine.job', 'old_system', true);
-		insert into party (id, kind, name) values ('${JOE}', 'person', 'Joe Example'), ('${CASEY}', 'person', 'Casey Example');
-		insert into app_user (id, slug) values ('${JOE}', 'joe');
+		insert into party (id, kind, name) values ('${JOE}', 'person', 'Joe Example'), ('${CASEY}', 'person', 'Casey Example'), ('${DELL}', 'person', 'Dell Example');
+		insert into app_user (id, slug) values ('${JOE}', 'joe'), ('${DELL}', 'dell');
 		insert into party_email (party_id, address, label) values
 			('${JOE}', 'joe@example.com', 'work'), ('${CASEY}', 'casey@example.com', 'work');
 		insert into deal (id, name, owner_user_id) values ('${DEAL}', 'Example Deal', '${JOE}'); commit;`);
@@ -35,17 +35,22 @@ after(async () => {
 });
 
 type Answer = { status: number; body: Record<string, unknown> };
-async function ask(path: string, body: object, headers: object) {
+async function ask(path: string, body: object | undefined, headers: object) {
 	const url = new URL(connectionString);
 	url.username = writer;
 	const session = { actor: { slug: "joe", display: "Joe" }, csrf_token: "x" };
 	const response = await app.request(
 		`${ORIGIN}${path}`,
-		{ method: "POST", headers: { ...headers }, body: JSON.stringify(body) },
+		{
+			method: body === undefined ? "GET" : "POST",
+			headers: { ...headers },
+			body: JSON.stringify(body),
+		},
 		{
 			ACCESS_TEAM_DOMAIN: TEAM,
 			JOBS_ACCESS_AUD: "made-up-jobs",
 			DATABASE_WRITER: { connectionString: url.href },
+			DATABASE: { connectionString: url.href },
 			CARR: { fetch: async () => Response.json(session) },
 		},
 	);
@@ -229,4 +234,129 @@ test("a job names itself and a partner the engine knows", async () => {
 	const pat = { ...MAIL_CAPTURE, "Engine-For-User": "pat" };
 	await refused(viaJob(note(), pat), 422, "actor_not_provisioned");
 	assert.equal((await ask("/jobs/activities", note(), {})).status, 401);
+});
+
+const otherMailbox = { ...MAIL_CAPTURE, "Engine-For-User": "dell" };
+
+test("sender name and ordered to/cc recipients survive a second mailbox copy", async () => {
+	const message = mail("router-facts@example.com", {
+		sender_name: "Casey Display",
+	});
+	const first = await viaJob(message);
+	const second = await viaJob(
+		mail("router-facts@example.com", {
+			sender_name: "Changed",
+			subject: "Changed",
+			body: "Changed",
+			recipients: [],
+		}),
+		otherMailbox,
+	);
+	assert.equal(second.body.activity_id, first.body.activity_id);
+	assert.equal(second.body.existing, true);
+	const { rows } = await db.query(
+		`select sender, sender_name, subject, body from email where activity_id = $1`,
+		[first.body.activity_id],
+	);
+	assert.deepEqual(rows, [
+		{
+			sender: "casey@example.com",
+			sender_name: "Casey Display",
+			subject: "Example subject",
+			body: "Example body",
+		},
+	]);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select address, kind from email_recipient where activity_id = $1 order by position`,
+				[first.body.activity_id],
+			)
+		).rows,
+		message.email.recipients,
+	);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select user_id from email_mailbox where activity_id = $1 order by user_id`,
+				[first.body.activity_id],
+			)
+		).rows,
+		[{ user_id: JOE }, { user_id: DELL }],
+	);
+	await refused(
+		viaJob(
+			mail("invalid-kind@example.com", {
+				recipients: [{ address: "joe@example.com", kind: "bcc" }],
+			}),
+		),
+		400,
+		"invalid_field_value",
+		{ fields: ["email"] },
+	);
+});
+
+async function filedEmails(query: string, job = otherMailbox) {
+	return ask(`/jobs/filed-emails${query}`, undefined, {
+		"Cf-Access-Jwt-Assertion": await new SignJWT({})
+			.setProtectedHeader({ alg: "RS256", kid: "made-up-kid" })
+			.setIssuer(TEAM)
+			.setAudience("made-up-jobs")
+			.setExpirationTime("5 minutes")
+			.sign(access.privateKey),
+		...job,
+	});
+}
+
+test("filed mail pages by id without an age limit and only for its mailbox", async () => {
+	const expected = [];
+	for (const outgoing of [false, true]) {
+		const { body } = await viaJob(
+			mail(
+				`filed-${outgoing}@example.com`,
+				{ sender: outgoing ? "joe@example.com" : "casey@example.com" },
+				{ happened_at: "2001-01-01T00:00:00Z", about: [{ deal_id: DEAL }] },
+			),
+			otherMailbox,
+		);
+		expected.push({
+			activity_id: body.activity_id,
+			deal_ids: [DEAL],
+			outgoing,
+			body: "Example body",
+			happened_at: "2001-01-01T00:00:00.000Z",
+		});
+	}
+	await viaJob(
+		mail("other-mailbox@example.com", {}, { about: [{ deal_id: DEAL }] }),
+	);
+	await viaJob(mail("no-deal@example.com"), otherMailbox);
+	expected.sort((a, b) =>
+		String(a.activity_id).localeCompare(String(b.activity_id)),
+	);
+	const first = await filedEmails("?after=&limit=1");
+	assert.equal(first.status, 200);
+	assert.deepEqual(first.body, {
+		emails: [expected[0]],
+		next_cursor: expected[0]?.activity_id,
+	});
+	const second = await filedEmails(`?after=${first.body.next_cursor}&limit=1`);
+	assert.deepEqual(second.body, { emails: [expected[1]], next_cursor: null });
+	assert.deepEqual(
+		(await filedEmails(`?after=${expected[1]?.activity_id}&limit=1`)).body,
+		{ emails: [], next_cursor: null },
+	);
+	for (const query of ["?after=bad", "?limit=0", "?limit=1.5"])
+		assert.equal((await filedEmails(query)).status, 400);
+	assert.equal(
+		(await filedEmails("", { ...otherMailbox, "Engine-For-User": "unknown" }))
+			.status,
+		422,
+	);
+	assert.equal(
+		(await filedEmails("", { ...otherMailbox, "Engine-Job": "unknown" }))
+			.status,
+		403,
+	);
+	assert.equal((await ask("/jobs/filed-emails", undefined, {})).status, 401);
 });
