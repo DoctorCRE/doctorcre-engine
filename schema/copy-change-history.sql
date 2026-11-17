@@ -16,6 +16,7 @@ select * from (values
  ('lead', 'party_role', 'segment', 'segment'), ('lead', 'party_role', 'est_lease_event', 'estimated_lease_on'),
  ('lead', 'party_role', 'event_source', 'lease_estimate_source'),
  ('lead', 'party_role', 'event_confidence', 'lease_estimate_confidence'),
+ ('lead', 'activity', 'notes', 'summary'),
  ('client', 'client', 'status', 'status'), ('client', 'client', 'client_type', 'client_type'),
  ('vendor', 'party_role', 'stage', 'stage'), ('vendor', 'party_role', 'relationship_level', 'relationship_level'),
  ('vendor', 'party_role', 'is_target', 'is_target'), ('vendor', 'party_role', 'offers', 'offers'),
@@ -74,7 +75,7 @@ left join party_role r on r.party_id = m.party_id and r.role = e.subject_type
 left join client c on c.party_id = m.party_id
 left join lease_version l on l.id = e.subject_id and e.subject_type = 'lease'
 left join activity note on f.table_name = 'activity'
- and note.id = md5('old_system:vendor:' || e.subject_id || ':intro_notes')::uuid and note.kind = 'note'
+ and note.id = md5('old_system:' || e.subject_type || ':' || e.subject_id || ':' || e.field)::uuid and note.kind = 'note'
  and exists (select from activity_about about where about.activity_id = note.id and about.party_id = m.party_id)
 left join public.actor actor on actor.id = e.actor_id
 left join public.actor sponsor on sponsor.slug = e.sponsoring_human_slug and sponsor.kind = 'human'

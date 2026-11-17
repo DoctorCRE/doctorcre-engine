@@ -10,11 +10,12 @@ const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const read = (f: string) =>
 	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy, vendors] = await Promise.all([
+const [schema, attribution, copy, vendors, relationships] = await Promise.all([
 	read("next.sql"),
 	read("copy-attribution.sql"),
 	read("copy-change-history.sql"),
 	read("copy-vendors.sql"),
+	read("copy-leads-clients.sql"),
 ]);
 const name = `copy_history_${randomUUID().replaceAll("-", "")}`;
 const url = new URL(
@@ -384,6 +385,136 @@ test("vendor history waits for the exact note and its copied party", async () =>
 	assert.deepEqual(await run(), []);
 	assert.deepEqual(await rows("select id,field from imported_change"), [
 		{ id: id(510), field: "summary" },
+	]);
+	const imported = await rows("select * from imported_change");
+	assert.deepEqual(await run(), []);
+	assert.deepEqual(await rows("select * from imported_change"), imported);
+});
+
+test("lead note history follows exactly the copied notes without changing their wording", async () => {
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ insert into party (id,kind,name,how_found) values ('${id(90)}','person','Example Lead','referral'),
+ ('${id(91)}','person','Example Unmapped Lead',null);
+ insert into outside_id (source,value,party_id) values ('old_system','${id(90)}','${id(90)}'),
+ ('old_system','${id(91)}','${id(91)}');
+ insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,10) on conflict do nothing;
+ insert into public.lead_stage (slug,label) values ('new','Example new');
+ insert into public.party (id,kind,name,created_by,updated_by)
+ values ('${id(90)}','person','Example Lead','${id(1)}','${id(1)}'),
+ ('${id(91)}','person','Example Unmapped Lead','${id(1)}','${id(1)}');
+ insert into public.lead (id,party_id,stage,notes,created_by,updated_by)
+ values ('${id(80)}','${id(90)}','new','Current note','${id(1)}','${id(1)}'),
+ ('${id(81)}','${id(90)}','new','Different note','${id(1)}','${id(1)}'),
+ ('${id(82)}','${id(90)}','new','  ','${id(1)}','${id(1)}'),
+ ('${id(83)}','${id(91)}','new','Uncopied note','${id(1)}','${id(1)}');
+ set constraints all immediate; ${relationships} commit;`);
+
+	for (const [i, lead] of [80, 80, 81, 82, 83, 84].entries()) {
+		await event(
+			600 + i,
+			"lead",
+			lead,
+			"notes",
+			i === 1 ? 2 : 1,
+			i === 1 ? "partner_one" : null,
+		);
+		await db.query(
+			`update public.event set verb = 'update-lead', old_value = $1, new_value = $2,
+ occurred_at = '2023-01-01'::timestamptz + $3 * interval '1 day' where id = $4`,
+			[
+				{ notes: `Earlier wording ${i}` },
+				{ notes: i === 1 ? null : `Later wording ${i}` },
+				i,
+				id(600 + i),
+			],
+		);
+	}
+	const notes = () => rows("select * from activity order by id");
+	const before = await notes();
+	const history = await snapshot();
+	const missing = [603, 604, 605].map((n) => ({
+		old_id: id(n),
+		field: "notes",
+		reason: "record_not_copied",
+	}));
+	assert.deepEqual(await run(), missing);
+	for (const [i, lead] of [80, 80, 81].entries()) {
+		assert.deepEqual(
+			await rows(`select table_name, record = jsonb_build_object('id',
+ md5('old_system:lead:' || '${id(lead)}' || ':notes')::uuid) as exact_record,
+ field, source_event = (select to_jsonb(e) from public.event e where e.id = i.id) as exact_event,
+ changed_at = (select occurred_at from public.event e where e.id = i.id) as exact_time,
+ changed_by_user_id, changed_by_job, changed_for_user_id
+ from imported_change i where id = '${id(600 + i)}'`),
+			[
+				{
+					table_name: "activity",
+					exact_record: true,
+					field: "summary",
+					exact_event: true,
+					exact_time: true,
+					changed_by_user_id: i === 1 ? null : id(1),
+					changed_by_job: i === 1 ? "agent" : null,
+					changed_for_user_id: i === 1 ? id(1) : null,
+				},
+			],
+		);
+	}
+	assert.equal(
+		(await rows("select count(*)::int n from imported_change"))[0].n,
+		3,
+	);
+	const imported = await rows("select * from imported_change order by id");
+	assert.deepEqual(await run(), missing);
+	assert.deepEqual(
+		await rows("select * from imported_change order by id"),
+		imported,
+	);
+	assert.deepEqual(await notes(), before);
+	assert.deepEqual(await snapshot(), history);
+	await db.query(`update public.event set new_value = '{"notes":"Conflicting wording"}' where id = '${id(600)}';
+ update public.event set subject_id = '${id(81)}' where id = '${id(601)}'`);
+	assert.deepEqual(await run(), [
+		...[600, 601].map((n) => ({
+			old_id: id(n),
+			field: "notes",
+			reason: "existing_history_conflicts",
+		})),
+		...missing,
+	]);
+	assert.deepEqual(
+		await rows("select * from imported_change order by id"),
+		imported,
+	);
+	assert.deepEqual(await notes(), before);
+	assert.deepEqual(await snapshot(), history);
+});
+
+test("lead history waits for the exact note and its copied party", async () => {
+	await event(610, "lead", 12, "notes");
+	const missing = [
+		{ old_id: id(610), field: "notes", reason: "record_not_copied" },
+	];
+	assert.deepEqual(await run(), missing);
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ insert into activity (id,kind,happened_at,summary)
+ values (md5('old_system:lead:${id(12)}:notes')::uuid,'call','2024-01-01','Example current text');
+ insert into activity_about (activity_id,party_id)
+ values (md5('old_system:lead:${id(12)}:notes')::uuid,'${id(10)}'); commit;`);
+	assert.deepEqual(await run(), missing);
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ update activity set kind = 'note' where id = md5('old_system:lead:${id(12)}:notes')::uuid;
+ delete from activity_about where activity_id = md5('old_system:lead:${id(12)}:notes')::uuid;
+ insert into activity_about (activity_id,party_id)
+ values (md5('old_system:lead:${id(12)}:notes')::uuid,'${id(1)}'); commit;`);
+	assert.deepEqual(await run(), missing);
+	assert.deepEqual(await rows("select id from imported_change"), []);
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ insert into activity_about (activity_id,party_id)
+ values (md5('old_system:lead:${id(12)}:notes')::uuid,'${id(10)}'); commit;`);
+	assert.deepEqual(await run(), []);
+	assert.deepEqual(await rows("select id,field from imported_change"), [
+		{ id: id(610), field: "summary" },
 	]);
 	const imported = await rows("select * from imported_change");
 	assert.deepEqual(await run(), []);
