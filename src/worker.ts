@@ -25,6 +25,7 @@ import { presence } from "./presence.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
 import { relationships } from "./relationships/routes.ts";
 import { routerQueue } from "./router-queue.ts";
+import { replyJobs, replySubmissions } from "./reply-drafts.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
@@ -72,6 +73,7 @@ app.route("/api/engine", engine);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", nextSteps);
 app.route("/api/engine", proposalDecisions);
+app.route("/api/engine", replySubmissions);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
 app.use(
@@ -99,5 +101,6 @@ app.route("/jobs", nextDeals);
 app.route("/jobs", nextSteps);
 app.route("/jobs", proposalJobs);
 app.route("/jobs", routerQueue);
+app.route("/jobs", replyJobs);
 
 export default app;
