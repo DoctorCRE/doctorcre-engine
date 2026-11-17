@@ -2481,7 +2481,7 @@ end;
 -- Imported field events retain their source shape instead of claiming complete native snapshots.
 create table imported_change (
  id uuid primary key,
- table_name text not null check (table_name in ('party', 'deal', 'party_role', 'client', 'lease_version', 'activity', 'proposal')),
+ table_name text not null check (table_name in ('party', 'deal', 'party_role', 'client', 'activity', 'proposal')),
  record jsonb not null check (jsonb_typeof(record) = 'object' and record <> '{}'::jsonb),
  erased_fields text[] not null default '{}',
  old_value_absent boolean not null,

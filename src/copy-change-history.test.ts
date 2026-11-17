@@ -450,6 +450,7 @@ test("history constraints and privileges hold and a failed load restores its tri
 		"record = '{}'",
 		"source_event = '{}'",
 		"table_name = 'unknown'",
+		"table_name = 'lease_version'",
 	]) {
 		await db.query("begin");
 		await assert.rejects(
