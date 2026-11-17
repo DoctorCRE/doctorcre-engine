@@ -130,13 +130,34 @@ create table party_role (
 	disposition_reason text check (disposition_reason ~ '\S'),
 	-- We want to meet this one.
 	is_target boolean not null default false,
+	offers text check (offers ~ '\S'),
+	seeking text check (seeking ~ '\S'),
 	primary key (party_id, role),
 	foreign key (role, stage) references stage,
 	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor'),
 	constraint party_role_disposition_on_vendor check (disposition is null or role = 'vendor'),
 	constraint party_role_ruling_has_a_reason check ((disposition is null) = (disposition_reason is null)),
 	constraint party_role_target_on_vendor check (not is_target or role = 'vendor'),
-	constraint party_role_avoid_not_target check (not is_target or disposition is distinct from 'avoid')
+	constraint party_role_avoid_not_target check (not is_target or disposition is distinct from 'avoid'),
+	constraint party_role_capabilities_on_vendor check (role = 'vendor' or num_nonnulls(offers, seeking) = 0)
+);
+
+create table vendor_vertical (
+	party_id uuid not null,
+	role text not null default 'vendor' check (role = 'vendor'),
+	vertical text not null check (vertical = regexp_replace(vertical, '^\s+|\s+$', '', 'g') and vertical ~ '\S'),
+	created_at timestamptz not null default now(),
+	primary key (party_id, vertical),
+	foreign key (party_id, role) references party_role on update cascade
+);
+
+create table vendor_loan_program (
+	party_id uuid not null,
+	role text not null default 'vendor' check (role = 'vendor'),
+	loan_program text not null check (loan_program = regexp_replace(loan_program, '^\s+|\s+$', '', 'g') and loan_program ~ '\S'),
+	created_at timestamptz not null default now(),
+	primary key (party_id, loan_program),
+	foreign key (party_id, role) references party_role on update cascade
 );
 
 create function party_role_category_of_a_vendor() returns trigger
@@ -1948,6 +1969,7 @@ begin
 	-- The stricter ruling stays with its reason, so a merge never puts an avoided vendor back in play.
 	update party_role s set stage = coalesce(s.stage, d.stage),
 		relationship_level = coalesce(s.relationship_level, d.relationship_level),
+		offers = coalesce(s.offers, d.offers), seeking = coalesce(s.seeking, d.seeking),
 		(disposition, disposition_reason) = (
 			select ruling, reason
 			from (values (s.disposition, s.disposition_reason, 1), (d.disposition, d.disposition_reason, 2)) r (ruling, reason, side)
@@ -1960,6 +1982,14 @@ begin
 		lease_estimate_confidence = case when s.estimated_lease_on is null then d.lease_estimate_confidence else s.lease_estimate_confidence end,
 		estimated_lease_on = coalesce(s.estimated_lease_on, d.estimated_lease_on)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
+	delete from vendor_vertical d using vendor_vertical s
+	where d.party_id = duplicate and s.party_id = survivor and d.vertical = s.vertical;
+	update vendor_vertical set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'vendor');
+	delete from vendor_loan_program d using vendor_loan_program s
+	where d.party_id = duplicate and s.party_id = survivor and d.loan_program = s.loan_program;
+	update vendor_loan_program set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'vendor');
 	delete from party_role d using party_role s
 	where d.party_id = duplicate and s.party_id = survivor and s.role = d.role;
 	-- A primary on a shared address or number stays primary when the survivor has none.
@@ -2080,7 +2110,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
@@ -2255,14 +2285,14 @@ grant execute on function merge_party to engine;
 revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
-grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
+grant delete on vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
 	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
-grant update (stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
+grant update (offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (started_on, ended_on, note) on party_link to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;

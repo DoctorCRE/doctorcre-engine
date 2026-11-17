@@ -9,6 +9,8 @@ select set_config('engine.job', 'old_system', true), set_config('engine.user_id'
 
 -- Off until the end, so each row keeps who last changed it in today's system and when.
 alter table party_role disable trigger stamp_change;
+alter table vendor_vertical disable trigger stamp_change;
+alter table vendor_loan_program disable trigger stamp_change;
 alter table deal_party disable trigger stamp_change;
 alter table introduction disable trigger stamp_change;
 
@@ -42,7 +44,8 @@ select v.*, map.party_id as record_id,
 	exists (select from party_role r where r.party_id = map.party_id and r.role = 'vendor') as record_had_vendor,
 	row_number() over (partition by map.party_id
 		order by v.merged_into is not null, v.party_id <> map.party_id, v.created_at, v.id) as rank,
-	stage.slug as stage_slug, level.level, author.*
+	stage.slug as stage_slug, level.level, nullif(regexp_replace(v.offers, '^\s+|\s+$', '', 'g'), '') as typed_offers,
+	nullif(regexp_replace(v.seeking, '^\s+|\s+$', '', 'g'), '') as typed_seeking, author.*
 from public.vendor v
 left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text
 left join stage on stage.role = 'vendor' and stage.slug = v.stage
@@ -59,12 +62,14 @@ where record_id is not null and not record_had_vendor
 
 -- One record's vendors are one vendor role, as merge_party would join them: the first stage and level, the record's
 -- own vendor's first, then by when they were stored, and a target on any.
-insert into party_role (party_id, role, created_at, stage, relationship_level, is_target, changed_by_user_id, changed_by_job,
+insert into party_role (party_id, role, created_at, stage, relationship_level, is_target, offers, seeking, changed_by_user_id, changed_by_job,
 	changed_for_user_id, changed_at)
 select distinct on (record_id) record_id, 'vendor', created_at,
 	first_value(stage_slug) over (partition by record_id order by stage_slug is null, rank),
 	first_value(level) over (partition by record_id order by level is null, rank),
-	bool_or(is_target) over (partition by record_id), changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
+	bool_or(is_target) over (partition by record_id),
+	first_value(typed_offers) over (partition by record_id order by typed_offers is null, rank),
+	first_value(typed_seeking) over (partition by record_id order by typed_seeking is null, rank), changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from copied
 order by record_id, rank;
 
@@ -73,6 +78,32 @@ select distinct on (record_id, role) record_id, role, created_at, changed_by_use
 from copied cross join lateral (select case category_slug when 'gc' then 'contractor' else category_slug end as role) category
 where role is not null
 order by record_id, role, rank;
+
+insert into vendor_vertical (party_id, vertical, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select distinct on (record_id, regexp_replace(value, '^\s+|\s+$', '', 'g')) record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), created_at, updated_at,
+	changed_by_user_id, changed_by_job, changed_for_user_id
+from copied cross join lateral unnest(verticals) value where value ~ '\S'
+order by record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), rank;
+
+insert into not_copied
+select id, 'verticals', value, 'blank or null list entry'
+from copied cross join lateral unnest(verticals) value where value is null or value !~ '\S';
+
+insert into vendor_loan_program (party_id, loan_program, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select distinct on (record_id, regexp_replace(value, '^\s+|\s+$', '', 'g')) record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), created_at, updated_at,
+	changed_by_user_id, changed_by_job, changed_for_user_id
+from copied cross join lateral unnest(loan_programs) value where value ~ '\S'
+order by record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), rank;
+
+insert into not_copied
+select id, 'loan_programs', value, 'blank or null list entry'
+from copied cross join lateral unnest(loan_programs) value where value is null or value !~ '\S';
+
+insert into not_copied
+select v.id, f.field, f.value, 'its record holds another value'
+from copied v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
+cross join lateral (values ('offers', v.typed_offers, r.offers), ('seeking', v.typed_seeking, r.seeking)) f(field, value, stored)
+where f.value is not null and f.value <> f.stored;
 
 insert into outside_id (source, value, party_id) select 'old_system', id::text, record_id from copied;
 
@@ -118,13 +149,9 @@ create temp table unplaced on commit drop as
 select v.id, v.record_id, v.merged_into, f.field, f.value, f.reason
 from copied v cross join lateral (values ('category', case when v.category_slug is null then v.category end, 'not a vendor category'),
 	('trust_override', v.trust_override ->> 'tier', 'a hand-set rating, which the new database does not keep'),
-	('verticals', array_to_string(v.verticals, ', '), null), ('owner_id', v.owner_id::text, null),
-	('referral_active', v.referral_active::text, null), ('territory', v.territory, null), ('offers', v.offers, null),
-	('seeking', v.seeking, null), ('rivalry_group', v.rivalry_group, null), ('originated', v.originated, null),
-	('enrich', v.enrich::text, null), ('out_of_market', nullif(v.out_of_market, false)::text, null),
-	('last_touch', v.last_touch::text, null), ('intro_notes', v.intro_notes, null), ('owner_label', v.owner_label, null),
-	('links_label', v.links_label, null), ('loan_programs', array_to_string(v.loan_programs, ', '), null),
-	('deal_history_verified_at', v.deal_history_verified_at::text, null)) as f (field, value, reason)
+	('owner_id', v.owner_id::text, 'relationship owner awaits an owner ruling'), ('rivalry_group', v.rivalry_group, null), ('originated', v.originated, null),
+	('referral_active', v.referral_active::text, null),
+	('out_of_market', nullif(v.out_of_market, false)::text, null), ('intro_notes', v.intro_notes, null)) as f (field, value, reason)
 where f.value ~ '\S';
 
 -- A merged-away vendor's value that a live one of its record holds too was filled in by today's merge.
@@ -244,6 +271,8 @@ where coalesce(kind, '') not in ('worked', 'referred') or kind = 'worked' and de
 -- A category waits on its vendor role, checked now, because a table with checks waiting cannot be altered.
 set constraints all immediate;
 alter table party_role enable trigger stamp_change;
+alter table vendor_vertical enable trigger stamp_change;
+alter table vendor_loan_program enable trigger stamp_change;
 alter table deal_party enable trigger stamp_change;
 alter table introduction enable trigger stamp_change;
 

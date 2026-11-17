@@ -335,7 +335,7 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 			),
 		);
 		await db.query(
-			`drop table not_copied,old_relationship,relationship_source,mapped_source,waiting_client_source,examined_relationship,classified_relationship,ready_relationship,relationship_note; ${mapping}`,
+			`drop table not_copied,old_relationship,relationship_source,mapped_source,waiting_client_source,examined_relationship,classified_relationship,ready_relationship,relationship_note,old_next_action,relationship_ref; ${mapping}`,
 		);
 		await db.query(copy);
 		staged = await answer();
@@ -413,7 +413,7 @@ test("person accounts and older duplicates wait, and refused rows stay retryable
 			),
 			[],
 		);
-		await db.query(`drop table not_copied,old_relationship,relationship_source,mapped_source,waiting_client_source,examined_relationship,classified_relationship,ready_relationship,relationship_note;
+		await db.query(`drop table not_copied,old_relationship,relationship_source,mapped_source,waiting_client_source,examined_relationship,classified_relationship,ready_relationship,relationship_note,old_next_action,relationship_ref;
   update public.lead set stage='new' where id in ('${id(87)}','${id(88)}');`);
 		await db.query(copy);
 		assert.deepEqual(
@@ -422,6 +422,135 @@ test("person accounts and older duplicates wait, and refused rows stay retryable
 			),
 			[{ summary: "Older waiting note" }, { summary: "Retryable note" }],
 		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("next actions, reference numbers and roster wording are copied once or listed, never invented", async () => {
+	const setup = `${[90, 91, 92]
+		.map(
+			(
+				n,
+			) => `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n)}','person','Example party ${n}','${id(1)}','${id(1)}');
+ insert into party (id,kind,name) values ('${id(n)}','person','Example party ${n}');
+ insert into outside_id (source,value,party_id) values ('old_system','${id(n)}','${id(n)}');`,
+		)
+		.join("\n")}
+ insert into public.actor (id,slug,kind,display_name) values ('${id(119)}','example_bot','automation','Example bot');
+ insert into public.lead (id,party_id,stage,source_type,registry_ref,next_action_date,created_at,updated_at,created_by,updated_by) values
+ ('${id(100)}','${id(90)}','new','Example referral',' L-EX-1 ','2027-03-01','2025-01-01','2025-03-01','${id(1)}','${id(1)}'),
+ ('${id(101)}','${id(90)}','new','Example referral','L-EX-2',null,'2024-01-01','2024-01-01','${id(1)}','${id(1)}'),
+ ('${id(102)}','${id(91)}','new','Example referral','L-EX-1',null,'2025-01-01','2025-01-01','${id(1)}','${id(1)}');
+ insert into public.client (id,party_id,status,client_type,acquisition_source,roster_ref,owner_id,owner_label,contact_label,deal_type_label,possible_duplicate_label,specialty_type_label,prospect_engagement_status,created_by,updated_by) values
+ ('${id(103)}','${id(92)}','roster','franchise','Example client source','C-EX-1','${id(1)}','Example owner','Example contact','Example type','Example duplicate','Example specialty','inactive','${id(1)}','${id(1)}');
+ insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,status,hold_until,source_ref,created_at,updated_at,created_by) values
+ ('${id(110)}','lead','${id(100)}','${id(1)}','Call back','2027-01-05','open',null,null,'2025-01-01','2025-01-01','${id(1)}'),
+ ('${id(111)}','lead','${id(101)}','${id(1)}',E'\\t Call back\\n','2027-01-05','open',null,null,'2025-02-01','2025-02-01','${id(1)}'),
+ ('${id(116)}','lead','${id(101)}','${id(1)}','Call back','2027-01-05','done',null,null,'2024-06-01','2024-07-01','${id(1)}'),
+ ('${id(112)}','lead','${id(100)}','${id(1)}','Call back','2027-02-05','done',null,null,'2025-01-01','2025-06-01','${id(1)}'),
+ ('${id(113)}','lead','${id(100)}','${id(1)}','Old plan',null,'dropped',null,null,'2025-01-01','2025-01-01','${id(1)}'),
+ ('${id(114)}','lead','${id(100)}','${id(119)}',E'\\t\\n',null,'open',null,null,'2025-01-01','2025-01-01','${id(1)}'),
+ ('${id(115)}','client','${id(103)}','${id(1)}','Send proposal','2027-04-01','open','2027-03-01','example-ref','2025-01-01','2025-01-01','${id(1)}');`;
+	const steps = () =>
+		rows(
+			`select id,party_id,what,due_on::text,owner_party_id,done_at::text from next_step where party_id in ('${id(90)}','${id(91)}','${id(92)}') order by party_id,due_on`,
+		);
+	const listed = (report: pg.QueryResultRow[]) =>
+		report
+			.filter(
+				(r) =>
+					r.old_id >= id(100) &&
+					r.old_id <= id(119) &&
+					!/several_records|client_owner/.test(r.reason),
+			)
+			.map((r) => [r.old_id, r.field, r.value, r.reason]);
+	const restart = `drop table not_copied,old_relationship,relationship_source,mapped_source,waiting_client_source,examined_relationship,classified_relationship,ready_relationship,relationship_note,old_next_action,relationship_ref`;
+	try {
+		const report = await run(setup, true);
+		const copied = [
+			[id(110), id(90), "Call back", "2027-01-05", id(1), null],
+			[
+				id(112),
+				id(90),
+				"Call back",
+				"2027-02-05",
+				id(1),
+				"2025-06-01 00:00:00+00",
+			],
+			[id(115), id(92), "Send proposal", "2027-04-01", id(1), null],
+		];
+		assert.deepEqual((await steps()).map(Object.values), copied);
+		assert.deepEqual(
+			(
+				await rows(
+					`select value,party_id from outside_id where source = 'old_system_ref' and value like '_-EX-%' order by value`,
+				)
+			).map(Object.values),
+			[
+				["C-EX-1", id(92)],
+				["L-EX-1", id(90)],
+				["L-EX-2", id(90)],
+			],
+		);
+		const expected = [
+			[id(102), "registry_ref", "L-EX-1", `also the id of ${id(90)}`],
+			[
+				id(103),
+				"contact_label",
+				"Example contact",
+				"verbatim_label_not_stored",
+			],
+			[id(103), "deal_type_label", "Example type", "verbatim_label_not_stored"],
+			[id(103), "owner_label", "Example owner", "verbatim_label_not_stored"],
+			[
+				id(103),
+				"possible_duplicate_label",
+				"Example duplicate",
+				"verbatim_label_not_stored",
+			],
+			[
+				id(103),
+				"prospect_engagement_status",
+				"inactive",
+				"engagement_status_not_stored",
+			],
+			[
+				id(103),
+				"specialty_type_label",
+				"Example specialty",
+				"verbatim_label_not_stored",
+			],
+			[id(113), "status", "dropped", "closed_without_doing"],
+			[id(114), "description", "\t\n", "blank_next_action"],
+			[id(114), "owner_id", id(119), "owner_not_a_user"],
+			[id(115), "hold_until", "2027-03-01", "hold_has_no_place"],
+			[id(115), "source_ref", "example-ref", "reference_not_copied"],
+		];
+		assert.deepEqual(listed(report), expected);
+		await db.query(restart);
+		const again = await db.query(copy);
+		assert.ok(Array.isArray(again));
+		assert.deepEqual(listed(again.at(-1)?.rows ?? []), expected);
+		assert.deepEqual((await steps()).map(Object.values), copied);
+		await db.query(`${restart};
+ insert into public.lead (id,party_id,stage,source_type,created_at,updated_at,created_by,updated_by) values ('${id(104)}','${id(90)}','new','Example referral','2025-04-01','2025-04-01','${id(1)}','${id(1)}');
+ insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,created_at,created_by) values ('${id(117)}','lead','${id(104)}','${id(1)}','Call back','2027-01-05','2020-01-01','${id(1)}');`);
+		await db.query(copy);
+		assert.deepEqual((await steps()).map(Object.values), copied);
+		const corrected = [
+			...copied.slice(0, 2),
+			[id(114), id(90), "Ask for plans", null, null, null],
+			copied[2],
+		];
+		for (const correction of [
+			`update public.next_action set description = 'Ask for plans' where id = '${id(114)}'`,
+			"",
+		]) {
+			await db.query(`${restart}; ${correction}`);
+			await db.query(copy);
+			assert.deepEqual((await steps()).map(Object.values), corrected);
+		}
 	} finally {
 		await db.query("rollback");
 	}
