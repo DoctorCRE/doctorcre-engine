@@ -283,6 +283,21 @@ test("saved commissions, conflicting payment ids and changed old rows are report
 	}
 });
 
+test("a saved invoice date no invoice email explains is listed once today's row loses it", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.commission set invoiced_on = null where id = '${id(103)}'`,
+		);
+		assert.deepEqual(lines(await run(), 103), [
+			["deal_id", id(10), "existing_commission_conflict"],
+			["id", id(103), "payment_id_taken"],
+		]);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("receipt order, gross overflow and unmapped authors and sponsors are listed with the field and value to correct", async () => {
 	await db.query("begin; select set_config('engine.job', 'old_system', true)");
 	try {
