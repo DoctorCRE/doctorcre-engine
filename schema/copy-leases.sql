@@ -126,17 +126,19 @@ select v.id, v.created_at, v.lease_id, v.new_version, n.id, v.executed_on, v.com
  v.updated_at, v.changed_by_user_id, v.changed_by_job, v.changed_for_user_id
 from copyable v join document n on (n.r2_bucket, n.r2_key) = ('deal_documents', v.r2_key);
 
--- Every copied version covers the spaces its premises link, each a suite in its lease's building.
+-- Every copied version still on its lease covers the spaces its premises link, each a suite in its lease's building.
 create temp table version_space on commit drop as
-select n.id as lease_version_id, n.lease_id, l.property_id, ps.space_id,
+select n.id as lease_version_id, n.lease_id, l.property_id, ps.space_id, m.id as space_property_id,
  n.created_at, n.changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id
 from old_version v join lease_version n on (n.id, n.lease_id, n.version) = (v.id, v.lease_id, v.new_version)
-join lease l on l.id = n.lease_id join public.premises_space ps on ps.premises_id = v.premises_id;
+join lease l on l.id = n.lease_id join public.premises_space ps on ps.premises_id = v.premises_id
+join public.space s on s.id = ps.space_id left join building_map m on m.old_id = s.building_id
+where not exists (select from version_refusal r where r.lease_id = v.lease_id and r.new_version <= v.new_version);
 create temp table old_suite on commit drop as
 select s.*, m.id as property_id, case when btrim(s.suite) ~ '\S' then btrim(s.suite) end as label, a.*
 from public.space s join building_map m on m.old_id = s.building_id
 cross join lateral copy_attribution('space', s.id, s.updated_by) a
-where s.id in (select space_id from version_space)
+where s.id in (select space_id from version_space where space_property_id = property_id)
  and not exists (select from suite n where (n.id, n.property_id) = (s.id, m.id));
 create temp table suite_refusal on commit drop as
 select s.id, f.field, f.value, f.reason from old_suite s cross join lateral (values

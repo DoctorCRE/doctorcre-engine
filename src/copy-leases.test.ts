@@ -341,3 +341,33 @@ test("a copied lease whose building later changes is listed and left as it was",
 		await db.query("rollback");
 	}
 });
+
+test("a refused lease gets no suites, even when its ids match a lease already in the new database", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into party (id, kind, name) values ('${id(7)}', 'company', 'Example Other');
+ insert into lease (id, party_id, property_id) values ('${id(146)}', '${id(7)}', '${id(90)}');
+ insert into lease_version (id, lease_id, version, document_id, expiration_on) values ('${id(146)}', '${id(146)}', 1, '${id(200)}', '2027-06-30');
+ insert into public.building (id, address, created_by, updated_by) values ('${id(170)}', '400 Example Way', '${id(1)}', '${id(1)}');
+ insert into public.space (id, building_id, suite, created_by, updated_by) values ('${id(171)}', '${id(170)}', 'C1', '${id(1)}', '${id(1)}');
+ insert into public.premises (id, label, created_by) values ('${id(172)}', 'Example', '${id(1)}');
+ insert into public.premises_space values ('${id(172)}', '${id(171)}');
+ update public.lease set premises_id = '${id(172)}' where id = '${id(110)}';
+ ${lease(146, "client_id, premises_id, doc_attachment, expiration_on", `'${id(3)}', '${id(94)}', '${id(204)}', '2027-06-30'`)}`);
+		const refused = await run();
+		assert.ok(reasons(refused, 110).includes("lease_id_taken"));
+		assert.ok(reasons(refused, 146).includes("lease_id_taken"));
+		assert.deepEqual(
+			await rows(
+				`select lease_version_id, suite_id from lease_suite where lease_version_id in ('${id(110)}', '${id(146)}') or suite_id = '${id(171)}'`,
+			),
+			[],
+		);
+		assert.deepEqual(
+			await rows(`select id from suite where id = '${id(171)}'`),
+			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
