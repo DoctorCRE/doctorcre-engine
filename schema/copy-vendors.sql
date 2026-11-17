@@ -1,6 +1,6 @@
 -- Copies today's vendors into the new database: each one's vendor role, with its stage, relationship level and
--- target flag, its categories as roles, its introductions and the deals it worked, and who knows or can introduce
--- whom. Run it after schema/copy-parties.sql
+-- target flag, its categories as roles, its notes, its introductions and the deals it worked, and who knows or can
+-- introduce whom. Run it after schema/copy-parties.sql
 -- and before schema/copy-deals.sql, which finds the vendor roles, and again after it, so introductions and worked deals
 -- find their deals. The owner runs it in one transaction with search_path set to the new schema.
 -- It only reads today's tables in public, and ends by listing each value it did not copy, for a partner to fix there.
@@ -15,6 +15,8 @@ alter table vendor_loan_program disable trigger stamp_change;
 alter table deal_party disable trigger stamp_change;
 alter table introduction disable trigger stamp_change;
 alter table party_link disable trigger stamp_change;
+alter table activity disable trigger stamp_change;
+alter table activity_about disable trigger stamp_change;
 
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
@@ -109,6 +111,21 @@ where f.value is not null and f.value <> f.stored;
 
 insert into outside_id (source, value, party_id) select 'old_system', id::text, record_id from copied;
 
+-- A merged-away vendor's note that its survivor holds too was filled in by today's merge.
+create temp table vendor_note on commit drop as
+select md5('old_system:vendor:' || id || ':intro_notes')::uuid as activity_id, record_id, intro_notes, updated_at,
+	changed_by_user_id, changed_by_job, changed_for_user_id
+from copied v
+where intro_notes ~ '\S' and not exists (select from public.vendor s where s.id = v.merged_into and s.intro_notes = v.intro_notes);
+
+insert into activity (id, kind, happened_at, summary, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select activity_id, 'note', updated_at, intro_notes, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+from vendor_note;
+
+insert into activity_about (activity_id, party_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select activity_id, record_id, updated_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+from vendor_note;
+
 create temp table typed_ref on commit drop as
 select id, vendor_ref, record_id, regexp_replace(vendor_ref, '^\s+|\s+$', '', 'g') as value from copied where vendor_ref ~ '\S';
 
@@ -153,7 +170,7 @@ from copied v cross join lateral (values ('category', case when v.category_slug 
 	('trust_override', v.trust_override ->> 'tier', 'a hand-set rating, which the new database does not keep'),
 	('owner_id', v.owner_id::text, 'relationship owner awaits an owner ruling'), ('rivalry_group', v.rivalry_group, null), ('originated', v.originated, null),
 	('referral_active', v.referral_active::text, null),
-	('out_of_market', nullif(v.out_of_market, false)::text, null), ('intro_notes', v.intro_notes, null)) as f (field, value, reason)
+	('out_of_market', nullif(v.out_of_market, false)::text, null)) as f (field, value, reason)
 where f.value ~ '\S';
 
 -- A merged-away vendor's value that a live one of its record holds too was filled in by today's merge.
@@ -319,5 +336,7 @@ alter table vendor_loan_program enable trigger stamp_change;
 alter table deal_party enable trigger stamp_change;
 alter table introduction enable trigger stamp_change;
 alter table party_link enable trigger stamp_change;
+alter table activity enable trigger stamp_change;
+alter table activity_about enable trigger stamp_change;
 
 select * from not_copied order by old_id, field, value;
