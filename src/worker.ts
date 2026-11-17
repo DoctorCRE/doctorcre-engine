@@ -13,21 +13,22 @@ import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
+import { nextDeals } from "./deals/next-change.ts";
 import { deals } from "./deals/routes.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
+import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { relationships } from "./relationships/routes.ts";
-import type { WriterEnv } from "./save.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 
-type WorkerEnv = WriterEnv &
+type WorkerEnv = NextSaveEnv &
 	CompareEnv &
 	IntakeEnv & {
 		Bindings: { CF_VERSION_METADATA: { id: string } };
@@ -63,8 +64,9 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", vendorMarkets)
 	.route("/", vendorMeetings);
 
-app.use("/api/engine/*", requireSession);
+app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
+app.route("/api/engine", nextDeals);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
 app.use(
@@ -81,5 +83,13 @@ app.use(
 	accessDoor("intake", (env) => env.INTAKE_ACCESS_AUD),
 );
 app.route("/intake", intake);
+
+// The old system's Studio jobs save here, each naming itself and the partner it works for.
+app.use(
+	"/jobs/*",
+	accessDoor("jobs", (env) => env.JOBS_ACCESS_AUD),
+	jobStamp,
+);
+app.route("/jobs", nextDeals);
 
 export default app;
