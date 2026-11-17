@@ -535,7 +535,7 @@ test("previously copied source claims cannot take an NPI from a newly copied sur
 		assert.deepEqual(await copy(), copied);
 	}));
 
-test("an unassigned competing NPI keeps the same correction reason on a rerun", () =>
+test("an unassigned competing NPI never names a record holding another NPI, including on reruns", () =>
 	rolledBack(async () => {
 		const first = await copy(
 			oldParty(50, { npi: "9000000049", created_at: "2020-01-01" }) +
@@ -546,10 +546,21 @@ test("an unassigned competing NPI keeps the same correction reason on a rerun", 
 				}) +
 				oldParty(52, { npi: "9000000023", created_at: "2020-01-03" }),
 		);
-		assert.ok(
-			first?.some(
-				(row) => row[0] === id(52) && row[3] === `also held by ${id(50)}`,
+		assert.deepEqual(
+			first?.filter((row) => [id(51), id(52)].includes(String(row[0]))),
+			[
+				[id(51), "npi", "9000000023", "its record holds another NPI"],
+				[id(52), "npi", "9000000023", "no record holds this NPI"],
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select id, npi from party where id in ('${id(50)}', '${id(52)}') order by id`,
 			),
+			[
+				{ id: id(50), npi: "9000000049" },
+				{ id: id(52), npi: null },
+			],
 		);
 		await db.query("discard temp");
 		assert.deepEqual(await copy(), first);
