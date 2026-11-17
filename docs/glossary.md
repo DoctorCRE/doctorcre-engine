@@ -193,6 +193,7 @@ A date in the deal or its lease that must not be missed, such as a due-diligence
 _Avoid_: deadline, milestone, key date
 _Database_: `critical_date`; `v_deal_room_critical_date`.
 _Engine_: `critical_dates`.
+_New database_: a partner's drop is `dropped` on `critical_date` and `cancelled` on `next_step`; both end the item without completing it.
 
 **Parked**:
 A deal that is not active work for now, with a reason. Parking keeps the deal; reviving it makes it active again. A paused deal is parked.

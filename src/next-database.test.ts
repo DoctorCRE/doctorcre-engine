@@ -2329,7 +2329,6 @@ const CHANGEABLE: Record<string, string[]> = {
 		"owner_party_id",
 		"resolution",
 		"resolution_reason",
-		"resolution_source",
 		"resolved_at",
 		"what",
 	],
@@ -2351,6 +2350,14 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	next_step: [
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"resolution_event_id",
+		"status",
+	],
 	invoice_email: [
 		"application_id",
 		"application_root_id",
@@ -2918,11 +2925,13 @@ test("party next steps retain completed steps, sort due dates with id ties and l
 
 test("ended next steps retain evidence and stay off Home even with marks", async () => {
 	await rolledBack(async () => {
-		await db.query(`update next_step set resolution = 'cancelled',
+		await db.query(`set local role none;
+			update next_step set resolution = 'cancelled',
 			resolved_at = '2026-03-21T10:00:00Z', resolution_reason = 'No longer needed',
-			resolution_source = 'public.event:example-drop' where id = '${id(400)}';
-			update next_step set resolution = 'expired', resolution_source = 'public.event:example-expiry'
-			where id = '${id(402)}'`);
+			resolution_event_id = '${id(9400)}' where id = '${id(400)}';
+			update next_step set resolution = 'expired', resolution_event_id = '${id(9401)}'
+			where id = '${id(402)}';
+			set local role engine`);
 		const cancelled = (await readDeal()).next_steps.find(
 			(s: { id: string }) => s.id === id(400),
 		);
@@ -2930,14 +2939,14 @@ test("ended next steps retain evidence and stay off Home even with marks", async
 		assert.equal(cancelled.done_at, null);
 		assert.equal(cancelled.resolved_at, "2026-03-21T10:00:00+00:00");
 		assert.equal(cancelled.resolution_reason, "No longer needed");
-		assert.equal(cancelled.resolution_source, "public.event:example-drop");
+		assert.equal(cancelled.resolution_event_id, id(9400));
 		const expired = (
 			await db.query("select * from next_step where id = $1", [id(402)])
 		).rows[0];
 		assert.equal(expired.status, "expired");
 		assert.equal(expired.resolved_at, null);
 		assert.equal(expired.done_at, null);
-		assert.equal(expired.resolution_source, "public.event:example-expiry");
+		assert.equal(expired.resolution_event_id, id(9401));
 		const party = (
 			await db.query("select everything_about_party($1) as party", [CLIENT])
 		).rows[0].party;
@@ -2964,7 +2973,9 @@ test("ended next steps retain evidence and stay off Home even with marks", async
 			null,
 		);
 		await db.query(
-			`update next_step set resolution = null, resolution_source = null where id = '${id(402)}'`,
+			`set local role none;
+			update next_step set resolution = null, resolution_event_id = null where id = '${id(402)}';
+			set local role engine`,
 		);
 		assert.deepEqual((await db.query("select id from home_next_step")).rows, [
 			{ id: id(402) },
@@ -2996,20 +3007,54 @@ test("next-step end states reject contradictory times, reasons and evidence", as
 		],
 		["resolved_at = now()", "next_step_resolution_time"],
 		["resolution = 'done', resolved_at = now()", "next_step_resolution_time"],
-		["resolution_source = 'example'", "next_step_resolution_source"],
-		[
-			"resolution = 'expired', resolution_source = ' '",
-			"next_step_resolution_source_check",
-		],
+		[`resolution_event_id = '${id(9400)}'`, "next_step_resolution_event"],
 	];
 	for (const [fields, refusal] of invalid) {
 		await rolledBack(async () => {
 			await assert.rejects(
-				db.query(`update next_step set ${fields} where id = '${id(400)}'`),
+				db.query(`set local role none;
+					update next_step set ${fields} where id = '${id(400)}'`),
 				expected(refusal),
 			);
 		});
 	}
+});
+
+test("only the owner's import supplies a next step's closing event", async () => {
+	for (const statement of [
+		`insert into next_step (what, deal_id, resolution, resolution_event_id)
+		 values ('Example expired step', '${DEAL}', 'expired', '${id(9401)}')`,
+		`update next_step set resolution = 'expired', resolution_event_id = '${id(9401)}'
+		 where id = '${id(400)}'`,
+	]) {
+		await rolledBack(async () => {
+			await assert.rejects(db.query(statement), { code: "42501" });
+		});
+	}
+	await rolledBack(async () => {
+		await db.query(`set local role none;
+			insert into next_step (what, deal_id, resolution, resolution_event_id) values
+			('First expired step', '${DEAL}', 'expired', '${id(9401)}'),
+			('Second expired step', '${DEAL}', 'expired', '${id(9401)}');
+			set local role engine`);
+		assert.equal(
+			(
+				await db.query(
+					"select id from next_step where resolution_event_id = $1",
+					[id(9401)],
+				)
+			).rowCount,
+			2,
+		);
+	});
+	await rolledBack(async () => {
+		await db.query("set local role none");
+		await assert.rejects(
+			db.query(`update next_step set resolution = 'expired', resolution_event_id = 'not-an-event-id'
+				where id = '${id(400)}'`),
+			{ code: "22P02" },
+		);
+	});
 });
 
 test("party proposals include only pending suggestions in creation order with id ties", async () => {
@@ -3394,7 +3439,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				resolution: null,
 				resolved_at: null,
 				resolution_reason: null,
-				resolution_source: null,
+				resolution_event_id: null,
 				status: "done",
 			},
 			{
@@ -3406,7 +3451,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				resolution: null,
 				resolved_at: null,
 				resolution_reason: null,
-				resolution_source: null,
+				resolution_event_id: null,
 				status: "open",
 			},
 		],

@@ -862,7 +862,7 @@ create table next_step (
 	resolution text check (resolution in ('done', 'cancelled', 'expired')),
 	resolved_at timestamptz,
 	resolution_reason text check (resolution_reason is null or btrim(resolution_reason) <> ''),
-	resolution_source text check (resolution_source is null or btrim(resolution_source) <> ''),
+	resolution_event_id uuid,
 	status text generated always as
 		(coalesce(resolution, case when done_at is not null then 'done' else 'open' end)) stored,
 	deal_id uuid references deal,
@@ -872,7 +872,7 @@ create table next_step (
 	constraint next_step_done_time check (done_at is null or status = 'done'),
 	constraint next_step_resolution_time check (resolved_at is null or status in ('cancelled', 'expired')),
 	constraint next_step_cancellation_reason check ((status = 'cancelled') = (resolution_reason is not null)),
-	constraint next_step_resolution_source check (resolution_source is null or status <> 'open')
+	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
 
 create view home_next_step as
@@ -2624,9 +2624,13 @@ grant update (title, started_on, ended_on) on party_company to engine;
 grant update (started_on, ended_on) on party_territory to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
-grant update (what, owner_party_id, due_on, done_at, resolution, resolved_at, resolution_reason, resolution_source) on next_step to engine;
+grant update (what, owner_party_id, due_on, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) on home_mark to engine;
+-- Only the owner's import supplies the old event that closed a step.
+revoke insert on next_step from engine;
+grant insert (id, created_at, what, owner_party_id, due_on, done_at, resolution, resolved_at,
+	resolution_reason, deal_id, party_id, property_id) on next_step to engine;
 -- Only the owner's import supplies provenance. A user's or job's new round has a known status.
 revoke insert on offer from engine;
 grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,
