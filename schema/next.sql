@@ -1057,6 +1057,29 @@ create trigger document_filed_once before update on document
 		is distinct from (new.deal_id, new.kind, new.content_type, new.sha256, new.bytes))
 	execute function document_filed_once();
 
+-- A party's own files, such as a client's before any deal. One stored file may belong to several parties and a deal.
+create table party_document (
+	party_id uuid not null references party,
+	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
+	primary key (party_id, document_id)
+);
+
+-- Stored metadata never changes once known, so checking it on insert holds for good.
+create function party_document_stored() returns trigger
+language plpgsql as $$
+begin
+	if not exists (select from document
+		where id = new.document_id and content_type ~ '\S' and sha256 is not null and bytes is not null) then
+		raise exception 'a party file is a stored file with its type, hash and size'
+			using errcode = 'check_violation', constraint = 'party_document_stored';
+	end if;
+	return new;
+end $$;
+
+create trigger party_document_stored before insert on party_document
+	for each row execute function party_document_stored();
+
 -- One completed attempt, including no text or failure, belongs to the exact stored file version.
 create table document_extraction (
 	id uuid primary key default gen_random_uuid(),
@@ -2171,6 +2194,8 @@ begin
 	delete from building_ownership d using building_ownership s
 	where d.party_id = duplicate and s.party_id = survivor and s.property_id = d.property_id
 		and s.kind = d.kind and s.started_on is not distinct from d.started_on;
+	delete from party_document d using party_document s
+	where d.party_id = duplicate and s.party_id = survivor and s.document_id = d.document_id;
 
 	-- Profiles cascade with their roles before their direct party keys move.
 	update party_role set party_id = survivor where party_id = duplicate;
@@ -2257,6 +2282,7 @@ begin
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
+		'party_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'invoice_email', 'invoice_mailbox', 'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -2648,6 +2674,8 @@ grant update (how_found_detail) on party to engine;
 grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_confidence, segment) on party_role to engine;
 
 grant update (deal_id, kind, content_type, sha256, bytes) on document to engine;
+-- A mistaken party link is removed; its file stays.
+grant delete on party_document to engine;
 grant delete on suite, space_need, building_ownership to engine;
 grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
 grant update (name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id, must_haves, vendor_id, source_ref, source_revision, applicability) on space_need to engine;
