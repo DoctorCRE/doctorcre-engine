@@ -56,6 +56,7 @@ const order: [file: string, input?: string][] = [
 	["copy-lead-stage-moves.sql"],
 	["copy-deal-next-steps.sql"],
 	["copy-call-suggestions.sql"],
+	["copy-meeting-suggestions.sql"],
 	["copy-preferences.sql"],
 	["copy-change-history.sql"],
 ];
@@ -67,6 +68,12 @@ create table ops.meeting (id uuid primary key, title text not null, started_by_a
 create table ops.meeting_note (id uuid primary key, meeting_id uuid not null references ops.meeting,
  note_number integer not null, revision integer not null, body text not null,
  author_actor uuid not null references public.actor, created_at timestamptz not null, unique (meeting_id,note_number,revision));
+create table ops.meeting_action (meeting_id uuid, action_number integer, state text not null, current_revision integer not null,
+ decided_revision integer, decided_by_actor uuid, decided_at timestamptz, disposition text, assignee_actor uuid, operation_key uuid,
+ primary key (meeting_id, action_number));
+create table ops.meeting_action_revision (id uuid primary key, meeting_id uuid not null, action_number integer not null, revision integer not null,
+ summary text not null, command jsonb, basis text not null, source text not null, proposed_by_actor uuid not null, created_at timestamptz not null);
+create table ops.meeting_action_decision_request (idempotency_key uuid primary key, request jsonb not null);
 
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
@@ -205,6 +212,9 @@ insert into public.capture_post_call_candidate (session_id, idempotency_key, bat
  values ('${id(95)}', 'key-95', 'batch', 0, 'assigned_action', '${id(30)}', 'partner_one', 'Example action', 'Example quote', 0.9);
 insert into ops.meeting values ('${id(110)}','Example planning meeting','${id(1)}','2023-01-01',null,null);
 insert into ops.meeting_note values ('${id(111)}','${id(110)}',1,1,'Example planning note','${id(1)}','2023-01-01 01:00Z');
+insert into ops.meeting_action values ('${id(110)}', 1, 'proposed', 1, null, null, null, null, null, null);
+insert into ops.meeting_action_revision values ('${id(112)}', '${id(110)}', 1, 1, 'Example planning action',
+ '{"verb": "set-next-action", "args": {"ref": "${id(30)}", "description": "Example planning step"}}', 'tentative_discussion', 'participant', '${id(1)}', '2023-01-01 02:00Z');
 `;
 
 const name = `copy_all_${randomUUID().replaceAll("-", "")}`;
@@ -289,8 +299,8 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 2,
- candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 3 };
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
+ candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 4 };
 // biome-ignore format: one row per correction
 const corrections = [
  ["copy-parties.sql", id(10), "org_id", id(16), "a national account has no place in the new database yet"],
