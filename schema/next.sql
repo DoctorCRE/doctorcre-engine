@@ -1517,6 +1517,10 @@ begin atomic
 			select to_jsonb(r) - 'party_id' || jsonb_build_object('active', a.party_id is not null)
 			from do_not_contact r left join active_do_not_contact a using (party_id) where r.party_id = p.id
 		),
+		'outreach_draft', (
+			select to_jsonb(d) - array['party_id', 'role', 'requires_human_send', 'dispatchable']
+			from lead_contact_draft d where d.party_id = p.id
+		),
 		'brands', (
 			select coalesce(jsonb_agg(to_jsonb(b) - array['location_kind', 'brand_kind']
 				|| jsonb_build_object('party', to_jsonb(other)) order by b.started_on, b.id), '[]')
@@ -1568,6 +1572,27 @@ begin atomic
 			)) order by r.role), '[]')
 			from party_role r where r.party_id = p.id
 		),
+		'specialties', (
+			select coalesce(jsonb_agg(to_jsonb(s) - array['person_id', 'person_kind'] order by s.specialty), '[]')
+			from party_specialty s where s.person_id = p.id
+		),
+		'territories', (
+			select coalesce(jsonb_agg(to_jsonb(pt) - 'party_id' || jsonb_build_object('territory', to_jsonb(t) || jsonb_build_object(
+				'pieces', (
+					select coalesce(jsonb_agg(to_jsonb(piece) - 'territory_id' || jsonb_build_object('market', to_jsonb(m))
+						order by piece.state_fips nulls last, m.name nulls last, piece.miles nulls last, piece.id), '[]')
+					from territory_piece piece left join market m on m.id = piece.market_id where piece.territory_id = t.id
+				))) order by pt.started_on nulls last, pt.id), '[]')
+			from party_territory pt join territory t on t.id = pt.territory_id where pt.party_id = p.id
+		),
+		'vendor_verticals', (
+			select coalesce(jsonb_agg(to_jsonb(v) - array['party_id', 'role'] order by v.vertical), '[]')
+			from vendor_vertical v where v.party_id = p.id
+		),
+		'vendor_loan_programs', (
+			select coalesce(jsonb_agg(to_jsonb(l) - array['party_id', 'role'] order by l.loan_program), '[]')
+			from vendor_loan_program l where l.party_id = p.id
+		),
 		'deals', (
 			select coalesce(jsonb_agg(to_jsonb(d) || jsonb_build_object('role', dp.role)
 				order by d.name, d.id, dp.role), '[]')
@@ -1577,6 +1602,12 @@ begin atomic
 			select coalesce(jsonb_agg(to_jsonb(l) || jsonb_build_object('party', to_jsonb(other)) order by l.kind, l.started_on nulls last, l.id), '[]')
 			from party_link l join party other on other.id = case when l.party_id = p.id then l.other_party_id else l.party_id end
 			where p.id in (l.party_id, l.other_party_id)
+		),
+		'introductions', (
+			select coalesce(jsonb_agg(to_jsonb(i) - 'vendor_role' || jsonb_build_object('party', to_jsonb(other))
+				order by i.introduced_on nulls last, i.id), '[]')
+			from introduction i join party other on other.id = case when i.vendor_id = p.id then i.introduced_party_id else i.vendor_id end
+			where p.id in (i.vendor_id, i.introduced_party_id)
 		),
 		'activity', (
 			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
