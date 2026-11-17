@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 import {
 	assertCompletionDates,
 	completionEvents,
@@ -12,20 +9,8 @@ import {
 	stepsAndHistory,
 } from "./test-step-completions.ts";
 
-const sql = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const schema = await sql("next.sql");
-const attribution = await sql("copy-attribution.sql");
-const copy = await sql("copy-deal-next-steps.sql");
-const name = `copy_steps_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-deal-next-steps.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (text: string) => (await db.query(text)).rows;
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	const result = await db.query(copy);
@@ -47,12 +32,7 @@ const copyOnce = async () => {
 	}
 };
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
  insert into app_user (id) values ('${id(1)}');
@@ -160,13 +140,10 @@ before(async () => {
  ('${id(608)}','deal','${id(10)}','status','{"next_action_id":"${id(113)}","status":"dropped","version":1,"reason":"Example stale"}','Example stale','${id(1)}','drop-action','human_stated','2025-01-20'),
  ('${id(609)}','deal','${id(13)}','deal_item','{"item_id":"${id(108)}","status":"done"}',null,'${id(1)}','complete-deal-item','human_stated','2025-01-18');
  commit;`);
-	await db.query(`begin; ${await sql("copy-activity.sql")}; commit`);
+	await db.query(`begin; ${await readSchema("copy-activity.sql")}; commit`);
 	report = await copyOnce();
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("actions keep their own due dates and done time, never the deal date", async () => {
 	// biome-ignore format: one row per source action

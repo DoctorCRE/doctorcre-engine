@@ -1,27 +1,12 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const sql = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const schema = await sql("next.sql");
-const attribution = await sql("copy-attribution.sql");
-const copy = await sql("copy-invoice-emails.sql");
-const name = `copy_invoice_emails_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-invoice-emails.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (text: string) => (await db.query(text)).rows;
 const values = async (text: string) => (await rows(text)).map(Object.values);
 const run = async (): Promise<pg.QueryResultRow[]> => {
@@ -45,12 +30,7 @@ const snapshot = async () => {
 let report: pg.QueryResultRow[];
 let beforeCopy: pg.QueryResultRow[][];
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}','person','Example User'), ('${id(2)}','person','Example Partner');
  insert into app_user values ('${id(1)}'), ('${id(2)}');
@@ -81,7 +61,7 @@ before(async () => {
 	}
 	for (const script of ["copy-deals.sql", "copy-commissions.sql"]) {
 		await db.query("begin");
-		await db.query(await sql(script));
+		await db.query(await readSchema(script));
 		await db.query("commit");
 	}
 	for (let n = 200; n <= 214; n++) {
@@ -123,10 +103,7 @@ before(async () => {
 	report = await run();
 	await db.query("commit");
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("captured, applied and undone evidence retain facts, targets and original history without replaying moves", async () => {
 	assert.deepEqual(
