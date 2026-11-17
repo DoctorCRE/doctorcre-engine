@@ -469,9 +469,11 @@ test("reviewed distinct capture pairs permit a separate meeting without changing
 	assert.deepEqual(await snapshot(), before);
 });
 
-test("a capture's confirmed old activity link retains the logged identity rather than adding its session id", async () => {
+test("a confirmed capture link wins over a prior session-id copy", async () => {
+	await capture(60, false);
+	await run("", callsCopy);
+	await capture(50, false);
 	for (const n of [50, 60]) {
-		await capture(n, false);
 		await db.query(`update public.capture_candidate set status = 'confirmed', resolved_by = '${id(1)}',
  resulting_ref = '${id(50)}', resolved_at = '2025-01-10' where session_id = '${id(n)}'`);
 	}
@@ -481,7 +483,13 @@ test("a capture's confirmed old activity link retains the logged identity rather
 	assert.deepEqual(await run(), baseline);
 	assert.deepEqual(
 		await rows(`select id from activity where id = '${id(60)}'`),
-		[],
+		[[id(60)]],
+	);
+	assert.deepEqual(
+		await run(
+			`insert into copy_meeting_activity values ('${id(11)}','${id(60)}')`,
+		),
+		expected([11], [id(11), "meeting", id(11), "mapping_not_a_logged_meeting"]),
 	);
 	assert.deepEqual(
 		await run(mapping),

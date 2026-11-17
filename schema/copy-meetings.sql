@@ -8,10 +8,16 @@ alter table activity disable trigger stamp_change;
 alter table activity disable trigger record_change;
 alter table imported_change disable trigger stamp_imported_change;
 
+create temp table captured_activity on commit drop as
+select s.id, coalesce((select max(a.id::text)::uuid from public.capture_candidate c
+ join public.activity a on a.id::text = c.resulting_ref
+ where c.session_id = s.id and c.kind = 'meeting_record' and c.status = 'confirmed'), s.id) as activity_id
+from public.capture_session s;
+
 create temp table meeting_source on commit drop as
 select id, occurred_at as happened_at, summary from public.activity where kind in ('meeting','tour')
 union
-select a.id, a.happened_at, a.summary from activity a join public.capture_session c on c.id = a.id
+select a.id, a.happened_at, a.summary from activity a join captured_activity c on c.activity_id = a.id
 where a.kind in ('call','meeting') and not exists
  (select from public.activity p where p.id = a.id and p.kind in ('meeting','tour'));
 
@@ -55,7 +61,7 @@ begin
    target := coalesce(target, (saved.record ->> 'id')::uuid, m.id);
    if mapped then
     if not exists (select from public.activity where id = target and kind in ('meeting','tour'))
-     and not exists (select from public.capture_session where id = target) then
+     and not exists (select from captured_activity where activity_id = target) then
      raise check_violation using constraint = 'mapping_not_a_logged_meeting';
     end if;
     if not exists (select from activity where id = target and kind in ('call','meeting')) then
