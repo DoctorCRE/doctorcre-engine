@@ -46,7 +46,8 @@ from (
 create temp table mapped_activity on commit drop as
 select a.*, case when a.is_mail then null else m.kind end as kind,
  nullif(concat_ws(E'\n\n', case when m.keeps_word then k.label end, case when a.summary ~ '\S' then a.summary end,
-  case when a.detail ~ '\S' and a.detail is not json object then a.detail end), '') as text,
+  case when a.detail ~ '\S' and a.detail is not json object then a.detail end,
+  case when a.owed ~ '\S' then E'Information still missing\n' || a.owed end), '') as text,
  exists (select from old_link l where l.id = a.id and (l.deal_id is not null or l.party_id is not null)) as is_about
 from old_activity a
 left join (values ('call', 'call', false), ('meeting', 'meeting', false), ('tour', 'meeting', false), ('note', 'note', false),
@@ -60,7 +61,6 @@ insert into not_copied select a.id, f.field, f.value, f.reason from mapped_activ
  ('kind', a.old_kind, 'later_copy_366', a.old_kind = 'next_step'),
  ('kind', a.old_kind, 'kind_has_no_place', a.kind is null and not a.is_mail and a.old_kind <> 'next_step'),
  ('activity', a.id::text, 'about_nothing_copied', a.kind is not null and not a.is_about),
- ('owed', a.owed, 'owed_has_no_place', a.kind is not null and a.owed ~ '\S'),
  ('detail', a.detail, 'structured_detail_not_copied', a.kind is not null and a.detail is json object),
  ('changed_for_user_id', null, 'agent_user_unknown', a.kind is not null and a.changed_by_job = 'agent' and a.changed_for_user_id is null)
 ) f(field, value, reason, listed) where f.listed;
