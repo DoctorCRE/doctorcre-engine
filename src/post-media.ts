@@ -168,7 +168,7 @@ function judgeFile(
 			["word/", "wordprocessingml.document"],
 			["xl/", "spreadsheetml.sheet"],
 			["ppt/", "presentationml.presentation"],
-		])
+		] as const)
 			if (contents.includes(entry))
 				return {
 					type: `application/vnd.openxmlformats-officedocument.${type}`,

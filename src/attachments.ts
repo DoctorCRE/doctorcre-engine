@@ -146,37 +146,25 @@ export const attachments = new Hono<AttachmentEnv>().post("/attachments", (c) =>
 				.where("sha256", "=", sha256)
 				.limit(1)
 				.executeTakeFirst();
-			const linkEmail = async (document_id: string) => {
-				if (email)
-					await tx
-						.insertInto("email_document")
-						.values({ email_activity_id: email.activity_id, document_id })
-						.onConflict((conflict) => conflict.doNothing())
-						.execute();
-			};
-			if (prior) {
-				await linkEmail(prior.id);
-				return { document_id: prior.id, existing: true };
+			let document = prior;
+			if (!document) {
+				const key = `sha256/${sha256}`;
+				const file = await bucket.head(key);
+				if (!file?.httpMetadata?.contentType)
+					throw new SaveRefusal(new Refusal(409, "file_not_uploaded"));
+				const { rows } = await sql<{ id: string }>`
+					insert into document (name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind)
+					values (${name}, 'deal_documents', ${key}, ${file.httpMetadata.contentType}, ${sha256}, ${file.size}, ${deal_id}, ${kind})
+					returning id`.execute(tx);
+				document = rows[0];
+				if (!document) throw new Error("document insert returned no row");
 			}
-			const file = await bucket.head(`sha256/${sha256}`);
-			if (!file?.httpMetadata?.contentType)
-				throw new SaveRefusal(new Refusal(409, "file_not_uploaded"));
-			const document = await tx
-				.insertInto("document")
-				.values({
-					name,
-					r2_bucket: "deal_documents",
-					r2_key: `sha256/${sha256}`,
-					content_type: file.httpMetadata.contentType,
-					sha256,
-					bytes: file.size,
-					deal_id,
-					kind,
-				})
-				.returning("id")
-				.executeTakeFirstOrThrow();
-			await linkEmail(document.id);
-			return { document_id: document.id, existing: false };
+			if (email)
+				await sql`insert into email_document (email_activity_id, document_id)
+					values (${email.activity_id}, ${document.id}) on conflict do nothing`.execute(
+					tx,
+				);
+			return { document_id: document.id, existing: prior !== undefined };
 		},
 		201,
 	),
