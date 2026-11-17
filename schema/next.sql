@@ -1478,6 +1478,150 @@ end $$;
 create trigger measurement_after_publishing before insert on measurement
 	for each row execute function measurement_after_publishing();
 
+-- Commissions (walkthrough 4, topic E). Real shares and thresholds are the partners' rows, never in this repo.
+-- A deal's commission, once: what it is expected to bring while open, and the gross the brokerage collects.
+create table commission (
+	deal_id uuid primary key references deal,
+	created_at timestamptz not null default now(),
+	expected numeric(14, 2) check (expected > 0),
+	gross numeric(14, 2) check (gross > 0),
+	-- The closing user's part of what the others leave, on this deal only. None follows their ladder.
+	closing_share numeric(6, 5) check (closing_share between 0 and 1)
+);
+
+-- One part of the gross as it is invoiced and paid, such as half at signing and half at move-in.
+create table commission_payment (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references commission,
+	amount numeric(14, 2) not null check (amount > 0),
+	invoiced_on date,
+	due_on date,
+	received_on date,
+	constraint commission_payment_dates_in_order check (due_on >= invoiced_on and received_on >= invoiced_on)
+);
+
+-- What goes to others before the users split the rest: a referring agent, the brokerage, anyone else.
+create table commission_share (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references commission,
+	party_id uuid not null references party,
+	kind text not null check (kind in ('referral', 'brokerage', 'other')),
+	share numeric(6, 5) not null check (share > 0 and share <= 1)
+);
+
+-- A user's ladder: from their nth closed deal ever, they take closing_share of what each deal they close leaves,
+-- and their partner the rest. A tier runs until the next one starts, so tiers never overlap or leave a gap.
+create table commission_tier (
+	user_id uuid not null references app_user,
+	from_deal integer not null check (from_deal >= 1),
+	partner_user_id uuid not null references app_user,
+	-- Steps down toward an even split, never past it.
+	closing_share numeric(6, 5) not null check (closing_share between 0.5 and 1),
+	primary key (user_id, from_deal),
+	constraint commission_tier_another_user check (partner_user_id <> user_id),
+	constraint commission_tier_one_partner exclude using gist (user_id with =, partner_user_id with <>)
+);
+
+-- Deferred, so a lowered gross and a removed payment, or two changed shares, save in either order.
+-- Held per deal until the transaction ends, so two saves cannot each pass alone and together break it.
+create function commission_adds_up() returns trigger
+language plpgsql as $$
+begin
+	perform pg_advisory_xact_lock(hashtextextended('commission ' || new.deal_id, 0));
+	if (select sum(p.amount) > coalesce(min(m.gross), 0)
+			from commission m join commission_payment p using (deal_id) where m.deal_id = new.deal_id) then
+		raise exception 'payments never add up to more than the gross'
+			using errcode = 'check_violation', constraint = 'commission_payments_within_gross';
+	end if;
+	if (select sum(share) > 1 from commission_share where deal_id = new.deal_id) then
+		raise exception 'the others never take more than the whole commission'
+			using errcode = 'check_violation', constraint = 'commission_shares_within_whole';
+	end if;
+	return null;
+end $$;
+
+create constraint trigger commission_adds_up after update of gross on commission
+	initially deferred for each row execute function commission_adds_up();
+create constraint trigger commission_adds_up after insert or update on commission_payment
+	initially deferred for each row execute function commission_adds_up();
+create constraint trigger commission_adds_up after insert or update on commission_share
+	initially deferred for each row execute function commission_adds_up();
+
+-- Deferred, so a ladder's tiers can be replaced in any order. Held per user, like commission_adds_up.
+create function commission_ladder_holds() returns trigger
+language plpgsql as $$
+declare
+	ladder uuid;
+begin
+	if tg_table_name = 'commission_tier' then
+		ladder := coalesce(new.user_id, old.user_id);
+	elsif tg_table_name = 'deal' then
+		ladder := new.owner_user_id;
+	else
+		ladder := (select owner_user_id from deal where id = new.deal_id);
+	end if;
+	perform pg_advisory_xact_lock(hashtextextended('commission_tier ' || ladder, 0));
+	if (select min(from_deal) <> 1 from commission_tier where user_id = ladder)
+		or exists (select from (
+			select closing_share > lag(closing_share) over (order by from_deal) as steps_up
+			from commission_tier where user_id = ladder
+		) tiers where steps_up) then
+		raise exception 'a ladder starts at the first closed deal and never steps up'
+			using errcode = 'check_violation', constraint = 'commission_ladder_steps_down';
+	end if;
+	if not exists (select from commission_tier where user_id = ladder)
+		and exists (select from commission m join deal d on d.id = m.deal_id
+			where d.owner_user_id = ladder and m.gross is not null) then
+		raise exception 'a gross needs its closing user''s ladder, so its split names both users'
+			using errcode = 'check_violation', constraint = 'commission_split_names_both_users';
+	end if;
+	return null;
+end $$;
+
+create constraint trigger commission_ladder_holds after insert or update or delete on commission_tier
+	initially deferred for each row execute function commission_ladder_holds();
+create constraint trigger commission_ladder_holds after insert or update of gross on commission
+	initially deferred for each row execute function commission_ladder_holds();
+create constraint trigger commission_ladder_holds after update of owner_user_id on deal
+	initially deferred for each row execute function commission_ladder_holds();
+
+-- Everyone's share of each deal's commission and its amount. The users' come from here, never typed.
+-- A user's count of closed deals is lifetime, so it never resets.
+create view commission_split as
+with closed as (
+	select d.id as deal_id, row_number() over (partition by d.owner_user_id order by last.happened_at, d.id) as number
+	from deal d cross join lateral (
+		select phase, happened_at from deal_phase_change where deal_id = d.id order by happened_at desc limit 1
+	) last
+	where last.phase = 'closed'
+),
+users as (
+	select m.deal_id, d.owner_user_id, ladder.partner_user_id,
+		coalesce(m.closing_share, (
+			select t.closing_share from commission_tier t
+			where t.user_id = d.owner_user_id and t.from_deal <= closed.number order by t.from_deal desc limit 1
+		)) as closing_share,
+		1 - coalesce((select sum(share) from commission_share where deal_id = m.deal_id), 0) as left_share
+	from commission m
+	join deal d on d.id = m.deal_id
+	join lateral (select partner_user_id from commission_tier where user_id = d.owner_user_id limit 1) ladder on true
+	left join closed using (deal_id)
+),
+parts as (
+	select deal_id, party_id, kind, share, 0 as part, id from commission_share
+	union all
+	select deal_id, owner_user_id, 'closing_user', left_share * closing_share, 1, null from users
+	union all
+	select deal_id, partner_user_id, 'partner', left_share * (1 - closing_share), 2, null from users
+)
+-- Each amount is the cents its running share adds, so none is negative and together they are the gross.
+select p.deal_id, p.party_id, p.kind, p.share,
+	round(m.gross * sum(p.share) over running, 2) - round(m.gross * (sum(p.share) over running - p.share), 2) as amount
+from parts p join commission m using (deal_id)
+window running as (partition by p.deal_id order by p.part, p.id);
+
 -- Everything that points at the duplicate moves to the survivor, and the duplicate is removed (decision 39).
 -- It runs with the owner's rights, because it also moves history the engine never rewrites, such as rounds and outside ids.
 create function merge_party(duplicate uuid, survivor uuid) returns void
@@ -1669,7 +1813,8 @@ begin
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
-		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
+		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
+		'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -1875,6 +2020,12 @@ grant update (started_on, ended_on) on client_brand, national_account_owner to e
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
 grant update (status) on proposal to engine;
+
+grant update (expected, gross, closing_share) on commission to engine;
+grant update (amount, invoiced_on, due_on, received_on) on commission_payment to engine;
+grant update (share) on commission_share to engine;
+grant update (closing_share) on commission_tier to engine;
+grant delete on commission, commission_payment, commission_share, commission_tier to engine;
 
 
 
