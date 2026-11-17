@@ -8,17 +8,14 @@ const ENDED_PHASES = ["closed", "invoiced", "dead"];
 const covers = (from: Expression<string>, to: Expression<string | null>) =>
 	sql<boolean>`daterange(${from}, ${to}) @> (now() at time zone 'America/Chicago')::date`;
 
-// Fields come in today's board answer's key order.
-export function readNextBoardDeals(
-	db: Transaction<DB>,
-	{ workspace, account }: Scope,
-) {
-	return db
+// What the board and the deal page both show of a deal. A deal can have no client yet.
+export const selectNextDeals = (db: Transaction<DB>) =>
+	db
 		.selectFrom("deal as d")
-		.innerJoin("deal_party as c", (join) =>
+		.leftJoin("deal_party as c", (join) =>
 			join.onRef("c.deal_id", "=", "d.id").on("c.role", "=", "client"),
 		)
-		.innerJoin("party as cp", "cp.id", "c.party_id")
+		.leftJoin("party as cp", "cp.id", "c.party_id")
 		.innerJoin("app_user as owner", "owner.id", "d.owner_user_id")
 		.leftJoin("app_user as parker", "parker.id", "d.parked_by_user_id")
 		.leftJoinLateral(
@@ -87,12 +84,21 @@ export function readNextBoardDeals(
 				.as("operating_state"),
 			"d.parking_reason",
 			"d.parking_note",
+			asText(eb.ref("d.parked_at")).as("parked_at"),
+			"parker.slug as parked_by",
+		]);
+
+export function readNextBoardDeals(
+	db: Transaction<DB>,
+	{ workspace, account }: Scope,
+) {
+	return selectNextDeals(db)
+		.select([
 			sql<null>`null`.as("invoiced_on"),
 			sql<null>`null`.as("closed_on"),
 			sql<null>`null`.as("outcome"),
-			asText(eb.ref("d.parked_at")).as("parked_at"),
-			"parker.slug as parked_by",
 		])
+		.where("c.party_id", "is not", null)
 		.where((eb) =>
 			eb.or([eb("p.phase", "is", null), eb("p.phase", "not in", ENDED_PHASES)]),
 		)
