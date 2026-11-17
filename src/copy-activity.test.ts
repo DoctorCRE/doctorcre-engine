@@ -245,6 +245,16 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 				"2024-05-01 00:00:00+00",
 			],
 			[
+				id(51),
+				"note",
+				"2024-05-02 00:00:00+00",
+				"Recorded next step\n\nExample next step",
+				id(1),
+				null,
+				null,
+				"2024-05-02 00:00:00+00",
+			],
+			[
 				id(52),
 				"note",
 				"2024-05-03 00:00:00+00",
@@ -326,6 +336,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 		[id(47), id(30), null, recorded],
 		[id(48), null, id(10), recorded],
 		[id(50), id(30), null, "2024-05-01 00:00:00+00"],
+		[id(51), id(30), null, "2024-05-02 00:00:00+00"],
 		[id(52), id(30), null, "2024-05-03 00:00:00+00"],
 		[id(53), id(30), null, "2024-05-04 00:00:00+00"],
 		[id(54), id(30), null, recorded],
@@ -343,7 +354,6 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 		"47 detail structured_detail_not_copied",
 		"47 lead_id lead_not_copied",
 		"49 kind later_copy_365",
-		"51 kind later_copy_366",
 		"53 changed_for_user_id agent_user_unknown",
 		"59 kind kind_has_no_place",
 	]);
@@ -482,6 +492,90 @@ test("keeps what is still missing under its label after the summary and detail, 
 			"Analysis\n\nExample analysis\n\nExample analysis detail\n\nInformation still missing\n Example figure\n  Example name",
 		],
 	]);
+	const history = await rows(
+		"select jsonb_agg(c order by id) as all from change c",
+	);
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(await snapshot(), copied);
+	assert.deepEqual(
+		await rows("select jsonb_agg(c order by id) as all from change c"),
+		history,
+	);
+});
+
+test("keeps every written next step as a recorded note about its deal, making no next step", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
+  values ('${id(32)}', '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}');
+ insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
+  ('${id(80)}', '${id(30)}', 'next_step', 'Example older step', '${id(1)}', '2024-06-01'),
+  ('${id(81)}', '${id(30)}', 'next_step', 'Example superseded step', '${id(2)}', '2024-06-02 00:00:01'),
+  ('${id(82)}', '${id(30)}', 'next_step', 'Example current step', '${id(1)}', '2024-06-04'),
+  ('${id(83)}', '${id(32)}', 'next_step', 'Example step', '${id(1)}', '2024-06-05'),
+  ('${id(84)}', '${id(30)}', 'next_step', 'Example agent step', '${id(2)}', '2024-06-06');
+ insert into public.event (actor_id, verb, subject_type, subject_id, field, new_value, cause, occurred_at, recorded_at, sponsoring_human_slug) values
+  ('${id(2)}', 'set-next-step', 'deal', '${id(30)}', 'next_step', '{"next_step": "Example superseded step"}', 'automation_job', '2024-06-02', '2024-06-02 00:00:02', 'partner_one'),
+  ('${id(1)}', 'update-deal', 'deal', '${id(30)}', 'next_step', '{"next_step": null, "superseded_action_ids": []}', 'human_stated', '2024-06-03', '2024-06-03', null),
+  ('${id(2)}', 'set-next-step', 'deal', '${id(30)}', 'next_step', '{"next_step": "Example agent step"}', 'automation_job', '2024-06-05', '2024-06-05', 'partner_one');
+ commit;`);
+	const snapshot = () =>
+		rows(`select id, kind, happened_at::text, summary, changed_by_user_id, changed_by_job, changed_for_user_id
+ from activity where id between '${id(80)}' and '${id(84)}' order by id`);
+	const report = await run();
+	assert.deepEqual(
+		reasons(report.filter((r) => r.old_id >= id(80) && r.old_id <= id(84))),
+		[
+			"83 activity about_nothing_copied",
+			"83 deal_id deal_not_copied",
+			"84 changed_for_user_id agent_user_unknown",
+		],
+	);
+	const copied = await snapshot();
+	assert.deepEqual(copied.map(Object.values), [
+		[
+			id(80),
+			"note",
+			"2024-06-01 00:00:00+00",
+			"Recorded next step\n\nExample older step",
+			id(1),
+			null,
+			null,
+		],
+		[
+			id(81),
+			"note",
+			"2024-06-02 00:00:01+00",
+			"Recorded next step\n\nExample superseded step",
+			null,
+			"agent",
+			id(1),
+		],
+		[
+			id(82),
+			"note",
+			"2024-06-04 00:00:00+00",
+			"Recorded next step\n\nExample current step",
+			id(1),
+			null,
+			null,
+		],
+		[
+			id(84),
+			"note",
+			"2024-06-06 00:00:00+00",
+			"Recorded next step\n\nExample agent step",
+			null,
+			"agent",
+			null,
+		],
+	]);
+	assert.deepEqual(
+		(await about())
+			.filter((r) => r.activity_id >= id(80) && r.activity_id <= id(84))
+			.map((r) => [r.activity_id, r.deal_id]),
+		[id(80), id(81), id(82), id(84)].map((n) => [n, id(30)]),
+	);
+	assert.deepEqual(await rows("select id from next_step"), []);
 	const history = await rows(
 		"select jsonb_agg(c order by id) as all from change c",
 	);
