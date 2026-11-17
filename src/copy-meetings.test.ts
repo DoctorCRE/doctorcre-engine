@@ -216,14 +216,26 @@ test("invalid mappings and changed source history are listed without rewriting c
 
 test("database constraints and engine grants still protect imported meeting history", async () => {
 	await run();
-	for (const statement of [
-		`update imported_change set table_name = 'not_a_record' where id = '${id(10)}'`,
-		`update imported_change set source_event = '{}' where id = '${id(10)}'`,
-		`update imported_change set changed_by_job = 'agent' where id = '${id(10)}'`,
-		`set local role engine; delete from imported_change where id = '${id(10)}'`,
+	for (const [statement, code] of [
+		[
+			`update imported_change set table_name = 'not_a_record' where id = '${id(10)}'`,
+			"23514",
+		],
+		[
+			`update imported_change set source_event = '{}' where id = '${id(10)}'`,
+			"23514",
+		],
+		[
+			`update imported_change set changed_by_job = 'agent' where id = '${id(10)}'`,
+			"23514",
+		],
+		[
+			`set local role engine; delete from imported_change where id = '${id(10)}'`,
+			"42501",
+		],
 	]) {
 		await db.query("begin");
-		await assert.rejects(db.query(statement));
+		await assert.rejects(db.query(statement ?? ""), { code });
 		await db.query("rollback");
 	}
 	assert.deepEqual(
@@ -309,6 +321,7 @@ test("a 24-hour window lists every candidate despite different titles and times;
 test("date-only times, Chicago midnight and distant equal titles all wait for review", async () => {
 	for (const [started, logged, title] of [
 		["2025-04-05 15:00Z", "2025-04-05 00:00Z", "Example date-only entry"],
+		["2025-04-06 00:30Z", "2025-04-05 00:00Z", "Example date-only evening"],
 		[
 			"2025-04-05 05:20Z",
 			"2025-04-05 04:40Z",
@@ -344,5 +357,18 @@ test("a reused activity with an older stamp advances to the last note's author a
 			`select changed_at::text,changed_by_user_id,changed_by_job from activity where id = '${id(50)}'`,
 		),
 		[["2025-01-10 01:00:00+00", id(1), null]],
+	);
+});
+
+test("an unrelated activity with the meeting id waits without losing its summary", async () => {
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ insert into activity (id,kind,happened_at,summary) values ('${id(13)}','note','2024-01-01','Example separate note'); commit`);
+	assert.deepEqual(
+		await run(),
+		expected([13], [id(13), "meeting", id(13), "activity_id_taken"]),
+	);
+	assert.deepEqual(
+		await rows(`select kind,summary from activity where id = '${id(13)}'`),
+		[["note", "Example separate note"]],
 	);
 });

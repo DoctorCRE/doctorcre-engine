@@ -11,7 +11,9 @@ alter table imported_change disable trigger stamp_imported_change;
 -- Neither native identity nor activation state identifies a business record or a logged activity.
 insert into not_copied
 select m.id, 'activity_id', a.id::text, 'possible_duplicate' from ops.meeting m join public.activity a
- on a.kind in ('meeting','tour') and (a.occurred_at between m.started_at - interval '24 hours' and m.started_at + interval '24 hours' or a.summary = m.title)
+ on a.kind in ('meeting','tour') and (a.occurred_at between m.started_at - interval '24 hours' and m.started_at + interval '24 hours'
+ or (a.occurred_at at time zone 'UTC')::date = (m.started_at at time zone 'America/Chicago')::date
+ or a.summary = m.title)
 where not exists (select from pg_temp.copy_meeting_distinct x where (x.meeting_id,x.activity_id) = (m.id,a.id))
  and not exists (select from pg_temp.copy_meeting_activity x where x.meeting_id = m.id)
  and not exists (select from imported_change i where i.id = m.id and i.source_event ->> 'source_table' = 'ops.meeting');
@@ -42,12 +44,8 @@ begin
    end if;
    select * into saved from imported_change where id = m.id;
    select x.activity_id into target from pg_temp.copy_meeting_activity x where x.meeting_id = m.id;
-   mapped := found or saved.id is not null and saved.record <> jsonb_build_object('id', m.id);
+   mapped := found or (saved.id is not null and saved.record <> jsonb_build_object('id', m.id));
    target := coalesce(target, (saved.record ->> 'id')::uuid, m.id);
-   if saved.id is not null and (saved.table_name <> 'activity' or saved.source_event ->> 'source_table' is distinct from 'ops.meeting'
-    or saved.record <> jsonb_build_object('id', target)) then
-    raise check_violation using constraint = 'meeting_identity_conflict';
-   end if;
    if mapped then
     if not exists (select from public.activity where id = target and kind in ('meeting','tour')) then
      raise check_violation using constraint = 'mapping_not_a_logged_meeting';
@@ -62,9 +60,9 @@ begin
     and i.id <> m.id and i.source_event ->> 'source_table' = 'ops.meeting') then
     raise check_violation using constraint = 'activity_already_has_meeting';
    end if;
-   if exists (select from meeting_edit e where e.meeting_id = m.id and (e.created_at < m.started_at or exists
+   if exists (select from meeting_edit e where e.meeting_id = m.id and exists
     (select from meeting_edit p where p.meeting_id = m.id and p.note_number = e.note_number
-     and p.revision < e.revision and p.position >= e.position))) then
+     and p.revision < e.revision and p.position >= e.position)) then
     raise check_violation using constraint = 'note_history_out_of_order';
    end if;
    summary_before := case when saved.id is not null then saved.source_event -> 'old_value' ->> 'summary'
