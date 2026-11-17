@@ -22,14 +22,16 @@ type Email = {
 	subject: string;
 	body: string;
 };
-type NewActivity = {
-	idempotency_key: JsonValue;
+type ActivityFields = {
 	kind: string;
 	happened_at: string;
-	about: About[];
 	summary: string | null;
 	from_party_id: string | null;
 	reached: boolean | null;
+};
+type NewActivity = ActivityFields & {
+	idempotency_key: JsonValue;
+	about: About[];
 	email: Email | null;
 	calendar_review_key?: string;
 };
@@ -44,6 +46,7 @@ const unused = (value: JsonValue) => (value === null ? null : undefined);
 const address = (value: string) => value.trim().toLowerCase();
 // stamp_change sets it; the generated type asks only because it has no default.
 const STAMPED = { changed_at: sql<string>`now()` };
+const ACTING_USER = sql<string>`nullif(current_setting('engine.user_id', true), '')::uuid`;
 
 type Settled<T> = { [K in keyof T]: Exclude<T[K], undefined> };
 const isSettled = <T extends object>(parsed: T): parsed is Settled<T> =>
@@ -190,75 +193,77 @@ async function link(tx: Transaction<DB>, activity_id: string, about: About[]) {
 	return rows.map((row) => row.link);
 }
 
-async function insertActivity(
-	tx: Transaction<DB>,
-	{
-		idempotency_key: _key,
-		about: _about,
-		email,
-		calendar_review_key,
-		...activity
-	}: NewActivity,
-) {
-	const insert = tx.insertInto("activity");
-	if (calendar_review_key !== undefined) {
-		const partner = sql<string>`nullif(current_setting('engine.user_id', true), '')::uuid`;
-		const saved = await insert
-			.values({
-				...activity,
-				...STAMPED,
-				calendar_review_key,
-				calendar_review_user_id: partner,
-			})
-			.onConflict((conflict) =>
-				conflict
-					.columns(["calendar_review_user_id", "calendar_review_key"])
-					.doNothing(),
-			)
-			.returning("id")
-			.executeTakeFirst();
-		if (saved) return { activity_id: saved.id, existing: false };
-		const stored = await tx
-			.selectFrom("activity")
-			.select("id")
-			.where("calendar_review_user_id", "=", partner)
-			.where("calendar_review_key", "=", calendar_review_key)
-			.executeTakeFirstOrThrow();
-		return { activity_id: stored.id, existing: true };
-	}
-	const { id } = await insert
+async function insertActivity(tx: Transaction<DB>, activity: ActivityFields) {
+	const { id } = await tx
+		.insertInto("activity")
 		.values({ ...activity, ...STAMPED })
 		.returning("id")
 		.executeTakeFirstOrThrow();
-	if (email) {
-		const { recipients, ...stored } = email;
-		await sql`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
+	return id;
+}
+
+async function insertMeeting(
+	tx: Transaction<DB>,
+	activity: ActivityFields,
+	calendar_review_key: string,
+) {
+	const saved = await tx
+		.insertInto("activity")
+		.values({
+			...activity,
+			...STAMPED,
+			calendar_review_key,
+			calendar_review_user_id: ACTING_USER,
+		})
+		.onConflict((conflict) =>
+			conflict
+				.columns(["calendar_review_user_id", "calendar_review_key"])
+				.doNothing(),
+		)
+		.returning("id")
+		.executeTakeFirst();
+	if (saved) return { activity_id: saved.id, existing: false };
+	const stored = await tx
+		.selectFrom("activity")
+		.select("id")
+		.where("calendar_review_user_id", "=", ACTING_USER)
+		.where("calendar_review_key", "=", calendar_review_key)
+		.executeTakeFirstOrThrow();
+	return { activity_id: stored.id, existing: true };
+}
+
+async function insertEmail(
+	tx: Transaction<DB>,
+	id: string,
+	{ recipients, ...stored }: Email,
+) {
+	await sql`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
    values (${id}, ${stored.message_id}, ${stored.conversation_id ?? null}, ${stored.sender}, ${stored.sender_name}, ${stored.subject}, ${stored.body})`.execute(
-			tx,
-		);
-		if (recipients.length)
-			await tx
-				.insertInto("email_recipient")
-				.values(
-					recipients.map((recipient, position) => ({
-						activity_id: id,
-						position,
-						...recipient,
-						...STAMPED,
-					})),
-				)
-				.execute();
-	}
-	return { activity_id: id, existing: false };
+		tx,
+	);
+	if (recipients.length)
+		await tx
+			.insertInto("email_recipient")
+			.values(
+				recipients.map((recipient, position) => ({
+					activity_id: id,
+					position,
+					...recipient,
+					...STAMPED,
+				})),
+			)
+			.execute();
 }
 
 // Links an email to every party, other than the users, whose address sent or
 // received it. A second copy of a stored email only adds its new links.
 async function recordEmail(
 	tx: Transaction<DB>,
-	activity: NewActivity,
-	{ message_id, sender, recipients }: Email,
+	activity: ActivityFields,
+	records: About[],
+	email: Email,
 ) {
+	const { message_id, sender, recipients } = email;
 	if (!message_id || message_id !== message_id.trim())
 		throw new SaveRefusal(new Refusal(422, "message_id_invalid"));
 	const addresses = [
@@ -274,7 +279,7 @@ async function recordEmail(
 		...owners.flatMap(({ party_id, user_id }) =>
 			user_id ? [] : [{ party_id }],
 		),
-		...activity.about,
+		...records,
 	];
 	// Queues the other mailbox's copy of this email behind this one.
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`email ${message_id}`}, 0))`.execute(
@@ -290,12 +295,13 @@ async function recordEmail(
 	const [from, another] = owners.filter((owner) => owner.address === sender);
 	const from_party_id =
 		activity.from_party_id ?? (another ? null : (from?.party_id ?? null));
-	const activity_id =
-		stored?.activity_id ??
-		(await insertActivity(tx, { ...activity, from_party_id })).activity_id;
+	let activity_id = stored?.activity_id;
+	if (activity_id === undefined) {
+		activity_id = await insertActivity(tx, { ...activity, from_party_id });
+		await insertEmail(tx, activity_id, email);
+	}
 	await sql`insert into email_mailbox (activity_id, user_id)
-  select ${activity_id}, nullif(current_setting('engine.user_id', true), '')::uuid
-  where nullif(current_setting('engine.user_id', true), '') is not null
+  select ${activity_id}, ${ACTING_USER} where ${ACTING_USER} is not null
   on conflict do nothing`.execute(tx);
 	return {
 		activity_id,
@@ -307,12 +313,28 @@ async function recordEmail(
 	};
 }
 
-async function recordActivity(tx: Transaction<DB>, activity: NewActivity) {
-	await requireRecords(tx, activity.about);
-	if (activity.email) return recordEmail(tx, activity, activity.email);
-	const { activity_id, existing } = await insertActivity(tx, activity);
-	const about = await link(tx, activity_id, existing ? [] : activity.about);
-	return { activity_id, existing, about, unmatched: [] };
+async function recordActivity(
+	tx: Transaction<DB>,
+	{
+		idempotency_key: _key,
+		about,
+		email,
+		calendar_review_key,
+		...activity
+	}: NewActivity,
+) {
+	await requireRecords(tx, about);
+	if (email) return recordEmail(tx, activity, about, email);
+	const { activity_id, existing } =
+		calendar_review_key === undefined
+			? { activity_id: await insertActivity(tx, activity), existing: false }
+			: await insertMeeting(tx, activity, calendar_review_key);
+	return {
+		activity_id,
+		existing,
+		about: await link(tx, activity_id, existing ? [] : about),
+		unmatched: [],
+	};
 }
 
 async function addLinks(
