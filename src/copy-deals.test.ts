@@ -1083,7 +1083,7 @@ test("parking reasons, trimmed notes and explicit attention flags copy without i
 		const copied = await rows(
 			`select * from deal where id >= '${id(400)}' order by id`,
 		);
-		await db.query(`drop table pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
+		await db.query(`drop table pg_temp.deal_outside_id, pg_temp.deal_outside_id_refusal, pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
  pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
  pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
 		assert.deepEqual(
@@ -1176,11 +1176,134 @@ test("a verified market agent joins the deal and a name-only agent waits for rev
 			source(413),
 		]);
 		const copied = await rows(agents);
-		await db.query(`drop table pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
+		await db.query(`drop table pg_temp.deal_outside_id, pg_temp.deal_outside_id_refusal, pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
  pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
  pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
 		assert.deepEqual(listed(await run()), listed(first));
 		assert.deepEqual(await rows(agents), copied);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("deal outside ids normalize sources and keys, report collisions, and stay unchanged on rerun", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+ ${deal(420)}
+ insert into public.record_source (entity_type, entity_id, source_system, external_key) values
+ ('deal', '${id(420)}', 'Example Deals', 'D-New Copy'),
+ ('deal', '${id(10)}', ' Example.Deals! ', E' \tD-Example-1\n'),
+ ('deal', '${id(10)}', 'example-deals', 'D-Example-1'),
+ ('deal', '${id(10)}', 'Example Deals', 'D-Example-2'),
+ ('deal', '${id(11)}', 'Example Deals', 'D-Conflict'),
+ ('deal', '${id(12)}', 'example.deals', ' D-Conflict '),
+ ('deal', '${id(13)}', 'Example Deals', 'D-Held'),
+ ('deal', '${id(14)}', 'Example Deals', 'D-Party'),
+ ('deal', '${id(10)}', 'Old System', 'D-Reserved'),
+ ('deal', '${id(10)}', 'old-system-ref', 'D-Reserved'),
+ ('deal', '${id(10)}', 'dup.candidate', 'D-Hint'),
+ ('deal', '${id(10)}', '2025 import', 'D-Invalid'),
+ ('deal', '${id(10)}', '!!!', 'D-Invalid'),
+ ('deal', '${id(10)}', 'Example Deals', E' \t\n'),
+ ('deal', '${id(22)}', 'Example Deals', 'D-Missing'),
+ ('deal', '${id(999)}', 'Example Deals', 'D-Orphan'),
+ ('activity', '${id(10)}', 'Example Activity', 'A-Skipped');
+ insert into outside_id (source, value, deal_id) values ('example_deals', 'D-Held', '${id(15)}');
+ insert into outside_id (source, value, party_id) values ('example_deals', 'D-Party', '${id(2)}');`);
+		const first = await run();
+		assert.deepEqual(
+			await rows(
+				"select source, value, deal_id, party_id from outside_id where source = 'example_deals' order by value",
+			),
+			[
+				{
+					source: "example_deals",
+					value: "D-Example-1",
+					deal_id: id(10),
+					party_id: null,
+				},
+				{
+					source: "example_deals",
+					value: "D-Example-2",
+					deal_id: id(10),
+					party_id: null,
+				},
+				{
+					source: "example_deals",
+					value: "D-Held",
+					deal_id: id(15),
+					party_id: null,
+				},
+				{
+					source: "example_deals",
+					value: "D-New Copy",
+					deal_id: id(420),
+					party_id: null,
+				},
+				{
+					source: "example_deals",
+					value: "D-Party",
+					deal_id: null,
+					party_id: id(2),
+				},
+			],
+		);
+		assert.deepEqual(
+			first
+				.filter((r) => r.field === "record_source")
+				.map((r) => [r.old_id, r.value, r.reason])
+				.sort(),
+			[
+				[id(10), "!!! D-Invalid", "not an outside id"],
+				[id(10), "2025 import D-Invalid", "not an outside id"],
+				[id(10), "Example Deals  \t\n", "not an outside id"],
+				[id(10), "Old System D-Reserved", "a source the copy keeps for itself"],
+				[id(10), "dup.candidate D-Hint", "a hint of a duplicate, not an id"],
+				[
+					id(10),
+					"old-system-ref D-Reserved",
+					"a source the copy keeps for itself",
+				],
+				[
+					id(11),
+					"Example Deals D-Conflict",
+					"several deals claim this outside id",
+				],
+				[
+					id(12),
+					"example.deals  D-Conflict ",
+					"several deals claim this outside id",
+				],
+				[
+					id(13),
+					"Example Deals D-Held",
+					"another record holds this outside id",
+				],
+				[
+					id(14),
+					"Example Deals D-Party",
+					"another record holds this outside id",
+				],
+				[id(22), "Example Deals D-Missing", "its record is not copied"],
+				[id(999), "Example Deals D-Orphan", "its record is not copied"],
+			].sort(),
+		);
+		assert.deepEqual(
+			await rows("select * from outside_id where source = 'example_activity'"),
+			[],
+		);
+		const ids = await rows("select * from outside_id order by source, value");
+		const history = await rows("select * from change order by id");
+		await db.query(`drop table pg_temp.deal_outside_id, pg_temp.deal_outside_id_refusal, pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
+ pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
+ pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
+		assert.deepEqual(await run(), first);
+		assert.deepEqual(
+			await rows("select * from outside_id order by source, value"),
+			ids,
+		);
+		assert.deepEqual(await rows("select * from change order by id"), history);
 	} finally {
 		await db.query("rollback");
 	}
