@@ -875,7 +875,7 @@ create table next_step (
 	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
 
-create view home_next_step as
+create view home_next_step with (security_invoker = true) as
 	select * from next_step where status = 'open';
 
 -- Each user's own preferences. A user without a row has chosen nothing yet.

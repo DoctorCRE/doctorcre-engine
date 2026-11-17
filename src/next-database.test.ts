@@ -3057,6 +3057,41 @@ test("only the owner's import supplies a next step's closing event", async () =>
 	});
 });
 
+test("the Home view refuses an engine insert with a closing event", async () => {
+	await rolledBack(async () => {
+		await db.query(asJob("agent"));
+		await assert.rejects(
+			db.query(`insert into home_next_step (what, party_id, resolution, resolution_event_id)
+				values ('Example expired step', '${CLIENT}', 'expired', '${id(9401)}')`),
+			{ code: "42501" },
+		);
+	});
+});
+
+test("the engine can insert and read an open step through the Home view", async () => {
+	await rolledBack(async () => {
+		await db.query(asJob("agent"));
+		const saved = await db.query(`insert into home_next_step (what, party_id)
+			values ('Example open step', '${CLIENT}') returning id`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select what, party_id, status, resolution_event_id from home_next_step where id = $1",
+					[saved.rows[0].id],
+				)
+			).rows,
+			[
+				{
+					what: "Example open step",
+					party_id: CLIENT,
+					status: "open",
+					resolution_event_id: null,
+				},
+			],
+		);
+	});
+});
+
 test("party proposals include only pending suggestions in creation order with id ties", async () => {
 	await withParty(async () => {
 		await db.query(`insert into activity_about (activity_id, party_id) values ('${CALL}', '${SUBJECT}');
