@@ -10,11 +10,12 @@ const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const read = (f: string) =>
 	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy, activityCopy] = await Promise.all([
+const [schema, attribution, copy, activityCopy, callsCopy] = await Promise.all([
 	read("next.sql"),
 	read("copy-attribution.sql"),
 	read("copy-meetings.sql"),
 	read("copy-activity.sql"),
+	read("copy-calls.sql"),
 ]);
 const name = `copy_meetings_${randomUUID().replaceAll("-", "")}`;
 const url = new URL(
@@ -28,12 +29,12 @@ const connection = {
 let db: pg.Client;
 const rows = async (text: string) =>
 	(await db.query({ text, rowMode: "array" })).rows;
-const run = async (mapping = "", script = copy): Promise<unknown[][]> => {
+const run = async (input = "", script = copy): Promise<unknown[][]> => {
 	await db.query("begin");
 	try {
-		if (mapping)
+		if (input)
 			await db.query(
-				`create temp table copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop; create temp table copy_meeting_distinct (meeting_id uuid, activity_id uuid, primary key (meeting_id,activity_id)) on commit drop; ${mapping}`,
+				`create temp table copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop; create temp table copy_meeting_distinct (meeting_id uuid, activity_id uuid, primary key (meeting_id,activity_id)) on commit drop; ${input}`,
 			);
 		const result = await db.query(script);
 		assert.ok(Array.isArray(result));
@@ -370,5 +371,142 @@ test("an unrelated activity with the meeting id waits without losing its summary
 	assert.deepEqual(
 		await rows(`select kind,summary from activity where id = '${id(13)}'`),
 		[["note", "Example separate note"]],
+	);
+});
+
+const capture = async (
+	n: number,
+	postCall: boolean,
+	started = "2025-01-10",
+	summary = `Example capture ${n}`,
+) =>
+	db.query(`insert into public.capture_session (id,nonce,device_id,actor_id,mode,started_at,consent_announced_at,session_token_hash,expires_at,state,state_at,created_at,post_call)
+ values ('${id(n)}','example-${n}','example-device','${id(1)}','meeting','${started}','${started}','example-token-${n}','2025-02-10','done','${started}','${started}',${postCall});
+ insert into public.capture_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,payload,evidence_quote,confidence)
+ values ('${id(n + 100)}','${id(n)}','example-${n}','example-batch',0,'meeting_record','{"ref":"${id(1)}","summary":"${summary}"}','Example evidence',0.9)`);
+
+test("capture-sourced calls and meetings wait as candidates, and reviewed reuse survives both copy reruns", async () => {
+	await capture(60, true);
+	await capture(61, false);
+	await capture(62, false, "2024-10-01", "Example visit");
+	assert.deepEqual(await run("", callsCopy), []);
+	assert.deepEqual(
+		await run(),
+		expected(
+			[],
+			...[60, 61, 62].map((n) => [
+				id(11),
+				"activity_id",
+				id(n),
+				"possible_duplicate",
+			]),
+		),
+	);
+	const report = await run(
+		`insert into copy_meeting_activity values ('${id(11)}','${id(60)}')`,
+	);
+	assert.deepEqual(
+		report,
+		baseline.filter((r) => r[0] !== id(11)),
+	);
+	assert.deepEqual(
+		await rows(
+			`select id,kind,summary from activity where id in ('${id(11)}','${id(60)}')`,
+		),
+		[
+			[
+				id(60),
+				"call",
+				"Example visit\n\nExample capture 60\n\nNote 1\nExample visit note",
+			],
+		],
+	);
+	assert.deepEqual(
+		await rows(
+			`select party_id from activity_about where activity_id = '${id(60)}'`,
+		),
+		[[id(1)]],
+	);
+	const before = await snapshot();
+	await run("", callsCopy);
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(await snapshot(), before);
+});
+
+test("reviewed distinct capture pairs permit a separate meeting without changing the captured activity", async () => {
+	await capture(60, false, "2025-01-09");
+	await db.query(
+		`update ops.meeting set started_at = '2025-01-10 01:00Z' where id = '${id(11)}'`,
+	);
+	await run("", callsCopy);
+	assert.deepEqual(
+		await run(),
+		expected([], [id(11), "activity_id", id(60), "possible_duplicate"]),
+	);
+	const captured = await rows(`select * from activity where id = '${id(60)}'`);
+	const report = await run(
+		`insert into copy_meeting_distinct values ${[50, 51, 60].map((n) => `('${id(11)}','${id(n)}')`).join(",")}`,
+	);
+	assert.deepEqual(
+		report,
+		expected([11], [id(11), "activity", id(11), "about_nothing_copied"]),
+	);
+	assert.deepEqual(
+		await rows(`select * from activity where id = '${id(60)}'`),
+		captured,
+	);
+	assert.deepEqual(
+		await rows(
+			`select id,kind from activity where id in ('${id(11)}','${id(60)}') order by id`,
+		),
+		[
+			[id(11), "meeting"],
+			[id(60), "meeting"],
+		],
+	);
+	const before = await snapshot();
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(await snapshot(), before);
+});
+
+test("a capture's confirmed old activity link retains the logged identity rather than adding its session id", async () => {
+	for (const n of [50, 60]) {
+		await capture(n, false);
+		await db.query(`update public.capture_candidate set status = 'confirmed', resolved_by = '${id(1)}',
+ resulting_ref = '${id(50)}', resolved_at = '2025-01-10' where session_id = '${id(n)}'`);
+	}
+	await db.query(`begin; select set_config('engine.user_id','${id(1)}',true);
+ update activity set summary = 'Example edited visit' where id = '${id(50)}'; commit`);
+	assert.deepEqual(await run("", callsCopy), []);
+	assert.deepEqual(await run(), baseline);
+	assert.deepEqual(
+		await rows(`select id from activity where id = '${id(60)}'`),
+		[],
+	);
+	assert.deepEqual(
+		await run(mapping),
+		baseline.filter((r) => r[0] !== id(11)),
+	);
+	const before = await snapshot();
+	await run("", callsCopy);
+	await run();
+	assert.deepEqual(await snapshot(), before);
+});
+
+test("a reviewed capture mapping waits until the call copy provides its activity", async () => {
+	await capture(60, false);
+	const input = `insert into copy_meeting_activity values ('${id(11)}','${id(60)}')`;
+	assert.deepEqual(
+		await run(input),
+		expected([11], [id(11), "meeting", id(11), "mapped_activity_not_copied"]),
+	);
+	await run("", callsCopy);
+	assert.deepEqual(
+		await run(input),
+		baseline.filter((r) => r[0] !== id(11)),
+	);
+	assert.deepEqual(
+		await rows(`select id from activity where id in ('${id(11)}','${id(60)}')`),
+		[[id(60)]],
 	);
 });
