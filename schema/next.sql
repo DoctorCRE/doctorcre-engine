@@ -1109,6 +1109,8 @@ create table document (
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
 	email_activity_id uuid references email,
+	-- A partner's note on a prepared file.
+	note text check (note ~ '\S'),
 	unique (id, content_type)
 );
 

@@ -174,6 +174,7 @@ const rounds = ROUNDS.map(
 				bytes: null,
 				// The counter arrived as an attachment to the agent's email.
 				email_activity_id: i === 1 ? EMAIL : null,
+				note: null,
 			},
 		],
 		// The landlord's counter claims a floor below its own rent, and another tenant.
@@ -7222,6 +7223,7 @@ const FILE_REFUSALS = [
 	[ "missing type", dealFile({ content_type: null }), "document_deal_file_whole", ],
 	["blank type", dealFile({ content_type: " " }), "document_deal_file_whole"],
 	["blank key", dealFile({ r2_key: " " }), "document_r2_key_check"],
+	["blank note", dealFile({ note: " " }), "document_note_check"],
 	["zero version", dealFile({ version: 0 }), "document_version_check"],
 	[ "missing predecessor", dealFile({ version: 2 }), "document_version_has_predecessor", ],
 	[ "orphan predecessor", dealFile({ version: 2, supersedes_id: MISSING }), "document_previous_version", ],
