@@ -28,7 +28,8 @@ const list = (query = "", caller: Caller = job) =>
 async function draft(n: number) {
 	const [status, body] = await post("reply-drafts", {
 		activity_id: id(n),
-		...mail,
+		subject: mail.subject,
+		body: mail.body,
 		evidence: "Please reply",
 	});
 	assert.equal(status, 201);
@@ -57,9 +58,14 @@ test("a draft is stored once per email and owner, submissions freeze the known U
 	const args = {
 		idempotency_key: randomUUID(),
 		activity_id: id(10),
-		...mail,
+		subject: mail.subject,
+		body: mail.body,
 		evidence: "Please reply",
 	};
+	assert.equal(
+		(await post("reply-drafts", { ...args, to: mail.to, cc: mail.cc }))[0],
+		400,
+	);
 	const first = await save(job, "reply-drafts", args);
 	assert.equal(first[0], 201);
 	assert.deepEqual(await save(job, "reply-drafts", args), [
@@ -88,8 +94,11 @@ test("a draft is stored once per email and owner, submissions freeze the known U
 		"9f665f453cf3e2ac4d37cab25bfdd63100f427151bd8378e3fa42d77af60b17f",
 	);
 	assert.equal(a.version, 2);
-	assert.deepEqual((await submit(d))[1].version, 2);
-	assert.equal((await submit(d))[1].error, "version_conflict");
+	const [conflict, refusal] = await submit(d);
+	assert.deepEqual(
+		[conflict, refusal.error, refusal.version],
+		[409, "version_conflict", 2],
+	);
 	const box = (await list())[1];
 	assert.equal(box.owner, "alex");
 	assert.ok(Array.isArray(box.drafts));
@@ -263,5 +272,70 @@ test("attachments freeze with approval and a crossed submission cannot replace t
 		box.drafts.find((r: { draft_id: unknown }) => r.draft_id === d)
 			.document_ids,
 		docs,
+	);
+});
+
+test("an approved draft refuses approval at its current version and still records its receipt", async () => {
+	const { d, a } = await approved(19);
+	const [status, refusal] = await submit(d, { version: 2 });
+	assert.deepEqual(
+		[status, refusal.error, refusal.rule],
+		[422, "database_refused_the_statement", "reply_draft_sent_once"],
+	);
+	assert.deepEqual(
+		await post(`reply-drafts/${d}/delivery`, {
+			version: a.version,
+			sha256: a.sha256,
+			status: "sent",
+			sent_item_id: "example-sent-19",
+			sent_at: "2026-01-01T12:00:00Z",
+		}),
+		[200, { draft_id: d, version: 2, status: "sent" }],
+	);
+});
+
+test("an invalid-recipient failure can be approved with corrected recipients and sent", async () => {
+	const d = await draft(20);
+	const [status, a] = await submit(d, { cc: "wrong@example.com" });
+	assert.equal(status, 200);
+	const path = `reply-drafts/${d}/delivery`;
+	assert.equal(
+		(
+			await post(path, {
+				version: 2,
+				sha256: a.sha256,
+				status: "failed",
+				reason: "submission_recipients_invalid",
+			})
+		)[0],
+		200,
+	);
+	const [again, corrected] = await submit(d, {
+		version: 2,
+		document_ids: [id(50)],
+	});
+	assert.equal(again, 200);
+	assert.equal(corrected.version, 3);
+	const box = (await list())[1];
+	assert.ok(Array.isArray(box.drafts));
+	assert.deepEqual(
+		box.drafts.find((r: { draft_id: unknown }) => r.draft_id === d),
+		{
+			draft_id: d,
+			version: 3,
+			...mail,
+			sha256: corrected.sha256,
+			document_ids: [id(50)],
+		},
+	);
+	assert.deepEqual(
+		await post(path, {
+			version: 3,
+			sha256: corrected.sha256,
+			status: "sent",
+			sent_item_id: "example-sent-20",
+			sent_at: "2026-01-01T12:00:00Z",
+		}),
+		[200, { draft_id: d, version: 3, status: "sent" }],
 	);
 });

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { type Context, Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { Refusal, refuse } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { nextTransaction } from "./next-connection.ts";
@@ -16,7 +17,7 @@ import {
 } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 
-const text = { to: isText, cc: isText, subject: isText, body: isText };
+const text = { subject: isText, body: isText };
 const create = {
 	idempotency_key: isUuid,
 	activity_id: isUuid,
@@ -24,6 +25,8 @@ const create = {
 	evidence: isText,
 };
 const submission = {
+	to: isText,
+	cc: isText,
 	idempotency_key: isUuid,
 	version: isChangeId,
 	...text,
@@ -155,8 +158,6 @@ export const replyJobs = new Hono<NextSaveEnv>()
 				fit(body, create, [
 					"idempotency_key",
 					"activity_id",
-					"to",
-					"cc",
 					"subject",
 					"body",
 					"evidence",
@@ -270,6 +271,15 @@ export const replyJobs = new Hono<NextSaveEnv>()
 					let query = tx
 						.selectFrom("reply_draft")
 						.selectAll()
+						.select((eb) =>
+							jsonArrayFrom(
+								eb
+									.selectFrom("reply_draft_document")
+									.select("document_id")
+									.whereRef("reply_draft_id", "=", "reply_draft.id")
+									.orderBy("document_id"),
+							).as("documents"),
+						)
 						.where("owner_user_id", "=", user.id)
 						.where("status", "=", unconfirmed ? "failed" : "approved");
 					if (unconfirmed)
@@ -282,25 +292,16 @@ export const replyJobs = new Hono<NextSaveEnv>()
 						.limit(Number(limit) + 1)
 						.execute();
 					const page = rows.slice(0, Number(limit));
-					const drafts = await Promise.all(
-						page.map(async (d) => ({
-							draft_id: d.id,
-							version: d.revision,
-							to: d.to_address,
-							cc: d.cc_address,
-							subject: d.subject,
-							body: d.body,
-							sha256: digest(d),
-							document_ids: (
-								await tx
-									.selectFrom("reply_draft_document")
-									.select("document_id")
-									.where("reply_draft_id", "=", d.id)
-									.orderBy("document_id")
-									.execute()
-							).map((r) => r.document_id),
-						})),
-					);
+					const drafts = page.map((d) => ({
+						draft_id: d.id,
+						version: d.revision,
+						to: d.to_address,
+						cc: d.cc_address,
+						subject: d.subject,
+						body: d.body,
+						sha256: digest(d),
+						document_ids: d.documents.map((r) => r.document_id),
+					}));
 					return {
 						owner: user.slug,
 						drafts,
