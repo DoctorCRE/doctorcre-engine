@@ -653,6 +653,12 @@ Moving today's rows across:
 - `sf_commission_placeholder` is not copied. Today's rule already keeps it out of every money figure.
 - Today's fixed share per lane, in a report script, is replaced by each user's ladder. The partners enter their ladders themselves.
 
+## Copying today's commissions
+
+After `copy-deals.sql`, load the partners' ladders, then run `schema/copy-commissions.sql` as the owner in its own transaction with the new schema on `search_path`. Load `copy-attribution.sql` first. Resolve deals through their `old_system` outside ids. Expected rows add to `expected`; all other rows become payments with their original ids and dates, and add to `gross`. An absent total stays null. No allocation, placeholder, share or ladder is copied.
+
+Keep the final report for correction in the old system. A deal waits whole for an unmapped deal or author, missing ladder, nonpositive amount, overflowing total, undated receipt, invoiced status without an invoice date or with a received date, conflicting saved row or payment dates outside the database's order. Dates on expected rows are listed because they have no destination. The aggregate keeps the earliest creation time and latest row's author and change time, breaking ties by id; payments retain their own attribution and times. Reruns leave saved commissions and payments unchanged, including their change history, and list conflicts instead of overwriting them.
+
 ## Later slices
 
 "Everything about this person." The rest of leads (#286). Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
