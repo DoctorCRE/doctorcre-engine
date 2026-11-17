@@ -34,6 +34,9 @@ select e.* from copy_action_end() e join old_action n using (id);
 create temp table step_candidate on commit drop as
 select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
  regexp_replace(n.description, '^\s+|\s+$', '', 'g') as what, n.due_on, n.hold_until, u.id as owner,
+ case when n.source = 'capture_post_call_action' then n.item_title end as item_title,
+ case when n.source = 'capture_post_call_action' then n.item_bullets else '[]'::jsonb end as item_bullets,
+ case when n.source = 'capture_post_call_action' then n.source_ref end as source_ref,
  e.resolution, e.done_at, e.resolved_at, e.resolution_reason, e.resolution_event_id,
  n.created_at, n.updated_at as changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id, e.refusal
 from old_action n
@@ -43,7 +46,7 @@ left join outside_id vendor on vendor.source = 'old_system' and vendor.value = n
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
 union all
-select n.id, 'deal_note', n.deal_id, null, null, n.text, d.next_date, null, owner.id, null, null, null, null, null,
+select n.id, 'deal_note', n.deal_id, null, null, n.text, d.next_date, null, owner.id, null, '[]'::jsonb, null, null, null, null, null, null,
  n.created_at, n.created_at, a.*,
  case when n.superseded then 'superseded_note' when n.rank <> 1 then 'older_next_step_note'
  when current.status = 'done' then 'plan_already_done'
@@ -58,7 +61,7 @@ left join copy_next_step_event() event on event.note_id = n.id
 cross join lateral copy_event_attribution(n.actor_id, event.event_id) a
 union all
 select md5('old_system:deal:' || d.id || ':follow_up')::uuid, 'deal_date', d.id, null, null,
- 'Imported deal follow-up', d.next_date, null, owner.id, null, null, null, null, null, d.created_at, d.updated_at, a.*, null
+ 'Imported deal follow-up', d.next_date, null, owner.id, null, '[]'::jsonb, null, null, null, null, null, null, d.created_at, d.updated_at, a.*, null
 from public.deal d
 left join public.actor actor on actor.slug = d.owner
 left join outside_id o on o.source = 'old_system' and o.value = actor.id::text
@@ -79,9 +82,9 @@ select s.id, f.field, f.value, f.reason from step_candidate s cross join lateral
   and (n.deal_id, n.party_id) is distinct from (s.deal_id, s.party_id)))
 ) f(field, value, reason, refused) where f.refused;
 insert into not_copied select * from step_refusal;
-insert into next_step (id, deal_id, party_id, what, due_on, hold_until, owner_party_id, resolution, done_at, resolved_at,
+insert into next_step (id, deal_id, party_id, what, due_on, hold_until, owner_party_id, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
  resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select id, deal_id, party_id, what, due_on, hold_until, owner, resolution, done_at, resolved_at,
+select id, deal_id, party_id, what, due_on, hold_until, owner, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
  resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id from step_candidate s
 where not exists (select from step_refusal r where r.id = s.id) on conflict do nothing;
 
@@ -91,7 +94,7 @@ cross join lateral (values
  ('source_ref', n.source_ref, 'reference_not_copied', n.source_ref ~ '\S'),
  ('item_title', n.item_title, 'display_title_not_copied', n.item_title is not null),
  ('item_bullets', n.item_bullets::text, 'display_bullets_not_copied', n.item_bullets <> '[]'::jsonb)
-) f(field, value, reason, listed) where f.listed;
+) f(field, value, reason, listed) where f.listed and (f.field = 'owner_id' or n.source = 'next_action');
 insert into not_copied select d.id, 'next_date', d.next_date::text, 'date_without_fallback'
 from public.deal d where d.next_date is not null
  and not exists (select from old_action a where a.deal_id = d.id and a.due_on = d.next_date and a.status = 'open')
