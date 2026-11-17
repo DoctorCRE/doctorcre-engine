@@ -500,6 +500,12 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(105), id(92), "Example lapsed", null, id(1), null],
 		];
 		assert.deepEqual((await steps()).map(Object.values), copied);
+		assert.deepEqual(
+			await rows(
+				"select id, hold_until::text from next_step where hold_until is not null",
+			),
+			[{ id: id(115), hold_until: "2027-03-01" }],
+		);
 		// biome-ignore format: one row per ended action
 		assert.deepEqual((await rows(`select id,status,resolved_at::text,resolution_reason,resolution_event_id from next_step where party_id in ('${id(90)}','${id(92)}') and status <> 'open' order by id`)).map(Object.values), [
 			[id(105), "expired", null, null, null],
@@ -552,7 +558,6 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(106), "status", "dropped", "cancellation_reason_missing"],
 			[id(114), "description", "\t\n", "blank_next_action"],
 			[id(114), "owner_id", id(119), "owner_not_a_user"],
-			[id(115), "hold_until", "2027-03-01", "hold_has_no_place"],
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],
 		];
 		assert.deepEqual(listed(report), expected);

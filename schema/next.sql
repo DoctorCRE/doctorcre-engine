@@ -947,6 +947,7 @@ create table next_step (
 	what text not null,
 	owner_party_id uuid references party,
 	due_on date,
+	hold_until date,
 	done_at timestamptz,
 	resolution text check (resolution in ('done', 'cancelled', 'expired')),
 	resolved_at timestamptz,
@@ -963,8 +964,10 @@ create table next_step (
 	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
 
+-- A hold ends on the partners' day in Central time, as today's system ends it.
 create view home_next_step with (security_invoker = true) as
-	select * from next_step where status = 'open';
+	select * from next_step where status = 'open'
+		and (hold_until is null or hold_until <= (now() at time zone 'America/Chicago')::date);
 
 -- Each user's own preferences. A user without a row has chosen nothing yet.
 create function is_time_zone(zone text) returns boolean

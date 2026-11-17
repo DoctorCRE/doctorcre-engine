@@ -2500,6 +2500,7 @@ const DEFAULTED: Record<string, string[]> = {
 		"changed_by_job",
 		"changed_by_user_id",
 		"changed_for_user_id",
+		"hold_until",
 		"resolution_event_id",
 		"status",
 	],
@@ -3128,6 +3129,34 @@ test("ended next steps retain evidence and stay off Home even with marks", async
 	});
 });
 
+test("a held step stays off Home until its hold day in Central time and stays on its deal", async () => {
+	await rolledBack(async () => {
+		const definition: string = (
+			await db.query("select pg_get_viewdef('home_next_step') as sql")
+		).rows[0].sql;
+		// Each instant is late on a Central day while UTC is already on the next one.
+		for (const [instant, centralDay] of [
+			["2001-01-16 05:30Z", "2001-01-15"],
+			["2001-07-16 04:30Z", "2001-07-15"],
+		] as const) {
+			await db.query(`set local role none;
+				update next_step set hold_until = date '${centralDay}' + 1 where id = '${id(400)}';
+				update next_step set hold_until = '${centralDay}' where id = '${id(402)}';
+				set local role engine`);
+			const home = definition.replaceAll("now()", `'${instant}'::timestamptz`);
+			assert.deepEqual(
+				(await db.query<{ id: string }>(home)).rows.map((r) => r.id),
+				[id(402)],
+				instant,
+			);
+		}
+		const held = (await readDeal()).next_steps.find(
+			(s: { id: string }) => s.id === id(400),
+		);
+		assert.equal(held.hold_until, "2001-07-16");
+	});
+});
+
 test("next-step end states reject contradictory times, reasons and evidence", async () => {
 	const invalid: Case[] = [
 		["resolution = 'other'", "next_step_resolution_check"],
@@ -3654,6 +3683,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				what: "Send the signed LOI",
 				owner_party_id: CLIENT,
 				due_on: "2026-03-13",
+				hold_until: null,
 				done_at: "2026-03-13T18:00:00+00:00",
 				resolution: "done",
 				resolved_at: null,
@@ -3666,6 +3696,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				what: "Start the lease draft",
 				owner_party_id: null,
 				due_on: "2026-03-20",
+				hold_until: null,
 				done_at: null,
 				resolution: null,
 				resolved_at: null,
