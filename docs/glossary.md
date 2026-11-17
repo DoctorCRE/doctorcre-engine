@@ -294,6 +294,10 @@ _Database_: `building_ownership` in both databases. The table also keeps propert
 A lead's prepared first-contact message. Approval never sends it. A user sends it from their mailbox.
 _New database_: `lead_contact_draft`, always human-send and never dispatchable. An edit clears approval and advances the revision.
 
+**Reply draft**:
+A job's reply to one email, which its owner reviews, edits and approves, and which their mailbox then sends at most once.
+_New database_: `reply_draft`, with its delivery status: pending, dismissed, approved, sent or failed. Apart from outreach drafts.
+
 **Candidate**:
 An unreviewed sweep or public-record result kept outside the working contact list. A user promotes it to a lead, or declines it with a reason.
 _New database_: `candidate`, retaining source context and qualification after promotion. A suppressed candidate waits for user review.

@@ -501,6 +501,8 @@ const STAMPED = [
 	"lead_contact_draft",
 	"candidate",
 	"proposal",
+	"reply_draft",
+	"reply_draft_document",
 	"lease_suite",
 	"suite",
 	"space_need",
@@ -616,6 +618,7 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"reply_draft_document",
 	"invoice_email",
 	"vendor_vertical",
 	"vendor_loan_program",
@@ -2482,6 +2485,17 @@ const CHANGEABLE: Record<string, string[]> = {
 	national_account_owner: ["ended_on", "started_on"],
 
 	proposal: ["status"],
+	reply_draft: [
+		"body",
+		"cc_address",
+		"dismiss_reason",
+		"failure_reason",
+		"sent_at",
+		"sent_item_id",
+		"status",
+		"subject",
+		"to_address",
+	],
 	commission: ["closing_share", "expected", "gross"],
 	commission_payment: ["amount", "due_on", "invoiced_on", "received_on"],
 	commission_share: ["share"],
@@ -7032,6 +7046,112 @@ for (const [label, sql, refusal] of SHARED_PROPOSAL_REFUSALS) {
 			await assert.rejects(db.query(sql), expected(refusal));
 		}));
 }
+
+const REPLY = id(950);
+const newReply = (row: Record<string, string> = {}) =>
+	`${asJob("mail_capture")}; ${insert("reply_draft", {
+		id: REPLY,
+		email_activity_id: EMAIL,
+		owner_user_id: USER,
+		proposed_by_job: "mail_capture",
+		evidence: "Example asks when we can talk",
+		subject: "Re: Counter to your LOI",
+		body: "Thanks, we will review the counter.",
+		...row,
+	})}`;
+const reply = (who: string, change: string, draft = REPLY) =>
+	`${who}; update reply_draft set ${change} where id = '${draft}'`;
+const OWNER = asUser(USER);
+const OWNERS_MAILBOX = asJob("mail_capture", USER);
+const APPROVE =
+	"status = 'approved', to_address = 'avery@example.com', cc_address = 'riley@example.com'";
+const SEND =
+	"status = 'sent', sent_at = now(), sent_item_id = 'example-sent-1'";
+// Today's sender's reasons: an abort before Send, a Send it could not confirm, and one that settles nothing.
+const ABORTED = "aborted_before_dispatch";
+const UNCONFIRMED = "unconfirmed_after_3";
+const FAIL = (reason: string) =>
+	`status = 'failed', failure_reason = '${reason}'`;
+const CLEAR_FAILURE = "failure_reason = null";
+const ATTACHMENT = id(953);
+const attach = (who: string) =>
+	`${OWNER}; ${insert("document", { id: ATTACHMENT, name: "Example plan.pdf", r2_key: "example/reply-attachment" })};
+	${who}; ${insert("reply_draft_document", { reply_draft_id: REPLY, document_id: ATTACHMENT })}`;
+const approved = `${newReply()}; ${reply(OWNER, APPROVE)}`;
+const SECOND_REPLY = `${newEmail(id(952))}; insert into activity_about (activity_id, deal_id) values ('${id(952)}', '${DEAL}');
+	${newReply({ id: id(951), email_activity_id: id(952) })}`;
+
+// biome-ignore format: one refusal case per row
+const REPLY_DRAFT_REFUSALS: [string, string, Refusal][] = [
+	["a user drafting", `${OWNER}; ${insert("reply_draft", { email_activity_id: EMAIL, owner_user_id: USER, proposed_by_job: "mail_capture", evidence: "Example", subject: "Re: Example", body: "Example" })}`, "reply_draft_starts_pending"],
+	["a draft that starts approved", newReply({ status: "approved", to_address: "avery@example.com", cc_address: "riley@example.com" }), "reply_draft_starts_pending"],
+	["a blank body", newReply({ body: " " }), "reply_draft_body_check"],
+	["a second draft of one reply", `${newReply()}; ${newReply({ id: id(951) })}`, "reply_draft_email_activity_id_owner_user_id_key"],
+	["another user's edit", `${newReply()}; ${reply(asUser(TEAMMATE), "body = 'Example'")}`, "reply_draft_owner_edits"],
+	["an edit after approval", `${approved}; ${reply(OWNER, "body = 'Example'")}`, "reply_draft_owner_edits"],
+	["another user's approval", `${newReply()}; ${reply(asUser(TEAMMATE), APPROVE)}`, "reply_draft_owner_decides"],
+	["an agent's approval", `${newReply()}; ${reply(asJob("agent", USER), APPROVE)}`, "reply_draft_owner_decides"],
+	["an approval without its recipients", `${newReply()}; ${reply(OWNER, "status = 'approved'")}`, "reply_draft_delivery_facts"],
+	["a dismissal without a reason", `${newReply()}; ${reply(OWNER, "status = 'dismissed'")}`, "reply_draft_delivery_facts"],
+	["a send before approval", `${newReply()}; ${reply(OWNERS_MAILBOX, SEND)}`, "reply_draft_sent_once"],
+	["a user recording a send", `${approved}; ${reply(OWNER, SEND)}`, "reply_draft_owner_decides"],
+	["another user's mailbox recording a send", `${approved}; ${reply(asJob("mail_capture", TEAMMATE), SEND)}`, "reply_draft_owner_decides"],
+	["a second send", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${reply(OWNERS_MAILBOX, "sent_item_id = 'example-sent-2'")}`, "reply_draft_sent_once"],
+	["approving a sent draft again", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${reply(OWNER, "status = 'approved', sent_at = null, sent_item_id = null")}`, "reply_draft_sent_once"],
+	...[UNCONFIRMED, "invalid_submission", "failed:abort_cleanup_failed"].map((reason): [string, string, Refusal] =>
+		[`approving again after ${reason}`, `${approved}; ${reply(OWNERS_MAILBOX, FAIL(reason))}; ${reply(OWNER, `status = 'approved', ${CLEAR_FAILURE}`)}`, "reply_draft_sent_once"]),
+	...[ABORTED, "invalid_submission", "failed:abort_cleanup_failed"].map((reason): [string, string, Refusal] =>
+		[`a send recorded after ${reason}`, `${approved}; ${reply(OWNERS_MAILBOX, FAIL(reason))}; ${reply(OWNERS_MAILBOX, `${SEND}, ${CLEAR_FAILURE}`)}`, "reply_draft_sent_once"]),
+	["a send that changes the recipient", `${approved}; ${reply(OWNERS_MAILBOX, `${SEND}, to_address = 'other@example.com'`)}`, "reply_draft_sent_once"],
+	["a failure that changes the copy", `${approved}; ${reply(OWNERS_MAILBOX, `${FAIL(ABORTED)}, cc_address = 'other@example.com'`)}`, "reply_draft_sent_once"],
+	["a job's attachment", `${newReply()}; ${attach(OWNERS_MAILBOX)}`, "reply_draft_owner_edits"],
+	["an attachment after approval", `${approved}; ${attach(OWNER)}`, "reply_draft_owner_edits"],
+	["approving a dismissed draft", `${newReply()}; ${reply(OWNER, "status = 'dismissed', dismiss_reason = 'Example'")}; ${reply(OWNER, `${APPROVE}, dismiss_reason = null`)}`, "reply_draft_sent_once"],
+	["one sent message settling two drafts", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${SECOND_REPLY}; ${reply(OWNER, APPROVE, id(951))}; ${reply(OWNERS_MAILBOX, SEND, id(951))}`, "reply_draft_sent_item_id_key"],
+	["erase", `${newReply()}; delete from reply_draft`, notGranted("reply_draft")],
+];
+for (const [label, sql, refusal] of REPLY_DRAFT_REFUSALS) {
+	test(`reply drafts refuse ${label}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+
+test("a reply draft goes out once: the owner edits and approves it, and the owner's mailbox records each try", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${newReply()}; ${newReply({ id: id(954), body: "Example second store" })} on conflict (email_activity_id, owner_user_id) do nothing;
+			${reply(OWNER, "body = 'Thanks, Tuesday works.'")}; ${attach(OWNER)}; ${reply(OWNER, APPROVE)};
+			${reply(OWNERS_MAILBOX, FAIL(ABORTED))}; ${reply(OWNER, `${APPROVE}, ${CLEAR_FAILURE}, body = 'Thanks, Wednesday works.'`)};
+			${reply(OWNERS_MAILBOX, SEND)}; ${SECOND_REPLY}; ${reply(OWNER, APPROVE, id(951))}; ${reply(OWNERS_MAILBOX, FAIL(UNCONFIRMED), id(951))};
+			${reply(OWNERS_MAILBOX, `status = 'sent', sent_at = now(), sent_item_id = 'example-sent-2', ${CLEAR_FAILURE}`, id(951))}`,
+		);
+		const { rows } = await db.query({
+			text: `select id, body, revision, status, decided_at is not null, to_address, sent_item_id from reply_draft order by id`,
+			rowMode: "array",
+		});
+		// biome-ignore format: one draft per row
+		assert.deepEqual(rows, [
+			[REPLY, "Thanks, Wednesday works.", 4, "sent", true, "avery@example.com", "example-sent-1"],
+			[id(951), "Thanks, we will review the counter.", 2, "sent", true, "avery@example.com", "example-sent-2"],
+		]);
+		const { rows: attached } = await db.query(
+			"select reply_draft_id, document_id from reply_draft_document",
+		);
+		assert.deepEqual(attached, [
+			{ reply_draft_id: REPLY, document_id: ATTACHMENT },
+		]);
+		const { rows: history } = await db.query({
+			text: `select new_value ->> 'status', changed_by_user_id, changed_by_job, changed_for_user_id
+				from change where table_name = 'reply_draft' and record ->> 'id' = '${REPLY}' order by id`,
+			rowMode: "array",
+		});
+		// biome-ignore format: one change per row
+		assert.deepEqual(history, [
+			["pending", null, "mail_capture", null], [null, USER, null, null], ["approved", USER, null, null],
+			["failed", null, "mail_capture", USER], ["approved", USER, null, null], ["sent", null, "mail_capture", USER],
+		]);
+	}));
 
 test("acceptance creates one next step and keeps both actors, dismissal creates nothing", () =>
 	rolledBack(async () => {

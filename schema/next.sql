@@ -1176,6 +1176,88 @@ end $$;
 create trigger decide_proposal before insert or update of status on proposal
 	for each row execute function decide_proposal();
 
+-- A job's reply to one email, which its owner's mailbox sends. An outreach draft is apart: a user sends it by hand.
+create table reply_draft (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	email_activity_id uuid not null references email,
+	owner_user_id uuid not null references app_user,
+	proposed_by_job text not null references job,
+	evidence text not null check (evidence ~ '\S'),
+	subject text not null check (subject ~ '\S' and length(subject) <= 998),
+	body text not null check (body ~ '\S'),
+	-- The outbox keys each send on it, so every change its owner makes advances it and a recorded try never does.
+	revision integer not null default 1 check (revision >= 1),
+	status text not null default 'pending' check (status in ('pending', 'dismissed', 'approved', 'sent', 'failed')),
+	decided_at timestamptz,
+	dismiss_reason text check (dismiss_reason ~ '\S'),
+	to_address email_address,
+	cc_address email_address,
+	sent_at timestamptz,
+	-- The sending mailbox's id for the message, so one sent message settles one draft.
+	sent_item_id text unique check (sent_item_id ~ '\S'),
+	failure_reason text check (failure_reason ~ '\S'),
+	unique (email_activity_id, owner_user_id),
+	constraint reply_draft_delivery_facts check ((
+		status = 'pending' and num_nonnulls(decided_at, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason) = 0
+		or status = 'dismissed' and num_nonnulls(decided_at, dismiss_reason) = 2
+			and num_nonnulls(to_address, cc_address, sent_at, sent_item_id, failure_reason) = 0
+		or status in ('approved', 'sent', 'failed') and num_nonnulls(decided_at, to_address, cc_address) = 3 and dismiss_reason is null
+			and (status = 'sent') = (sent_at is not null) and (status = 'sent') = (sent_item_id is not null)
+			and (status = 'failed') = (failure_reason is not null)) is true)
+);
+
+create function reply_draft_delivery() returns trigger
+language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+	by_owner boolean := acting_job is null and acting_user is not distinct from new.owner_user_id;
+	editable constant text[] := array['subject', 'body', 'revision', 'changed_by_user_id', 'changed_by_job', 'changed_for_user_id', 'changed_at'];
+begin
+	if tg_op = 'INSERT' then
+		if new.status <> 'pending' or new.revision <> 1 or acting_job is distinct from new.proposed_by_job then
+			raise exception 'a job drafts a pending reply' using errcode = 'check_violation', constraint = 'reply_draft_starts_pending';
+		end if;
+		return new;
+	end if;
+	new.revision := old.revision + by_owner::integer;
+	if (new.subject, new.body) is distinct from (old.subject, old.body)
+		and not (by_owner and (old.status, new.status) in (('pending', 'pending'), ('pending', 'approved'), ('failed', 'approved'))) then
+		raise exception 'only its owner edits a reply draft, before it goes out'
+			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
+	end if;
+	-- As today's sender: only a try aborted before Send goes out again, and only one it could not confirm may be found sent.
+	-- A try keeps the recipients its owner approved.
+	if new.status in ('sent', 'failed') and (new.to_address, new.cc_address) is distinct from (old.to_address, old.cc_address)
+		or new.status = old.status and to_jsonb(new) - editable <> to_jsonb(old) - editable
+		or new.status <> old.status and not (case old.status
+			when 'pending' then new.status in ('approved', 'dismissed')
+			when 'approved' then new.status in ('sent', 'failed')
+			when 'failed' then new.status = 'approved' and old.failure_reason = 'aborted_before_dispatch'
+				or new.status = 'sent' and old.failure_reason ~ '^unconfirmed_after_[0-9]+$'
+			else false end) then
+		raise exception 'a reply draft is decided once and sent at most once'
+			using errcode = 'check_violation', constraint = 'reply_draft_sent_once';
+	end if;
+	if new.status = old.status then
+		return new;
+	end if;
+	if (case when new.status in ('sent', 'failed') then acting_job is null or acting_user is distinct from new.owner_user_id
+		when new.status = 'dismissed' then acting_job is null and not by_owner
+		else not by_owner end) then
+		raise exception 'its owner decides a reply draft, and a job working for the owner records its delivery'
+			using errcode = 'check_violation', constraint = 'reply_draft_owner_decides';
+	end if;
+	if new.status in ('approved', 'dismissed') then
+		new.decided_at := now();
+	end if;
+	return new;
+end $$;
+
+create trigger reply_draft_delivery before insert or update on reply_draft
+	for each row execute function reply_draft_delivery();
+
 create table document (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -1259,6 +1341,32 @@ end $$;
 
 create trigger party_document_stored before insert on party_document
 	for each row execute function party_document_stored();
+
+-- A reply draft's attachments are part of what its owner approves, so they change only while its text may.
+create table reply_draft_document (
+	reply_draft_id uuid not null references reply_draft,
+	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
+	primary key (reply_draft_id, document_id)
+);
+
+create function reply_draft_document_owner_edits() returns trigger
+language plpgsql as $$
+declare
+	draft reply_draft;
+begin
+	select * into draft from reply_draft where id = coalesce(new.reply_draft_id, old.reply_draft_id);
+	if not (nullif(current_setting('engine.job', true), '') is null
+		and nullif(current_setting('engine.user_id', true), '')::uuid is not distinct from draft.owner_user_id
+		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason = 'aborted_before_dispatch')) then
+		raise exception 'only its owner attaches files to a reply draft, before it goes out'
+			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
+	end if;
+	return coalesce(new, old);
+end $$;
+
+create trigger reply_draft_document_owner_edits before insert or delete on reply_draft_document
+	for each row execute function reply_draft_document_owner_edits();
 
 -- One completed attempt, including no text or failure, belongs to the exact stored file version.
 create table document_extraction (
@@ -2425,7 +2533,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
-		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
@@ -2905,6 +3013,8 @@ grant update (started_on, ended_on) on client_brand, national_account_owner to e
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
 grant update (status) on proposal to engine;
+grant update (subject, body, status, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason)
+	on reply_draft to engine;
 
 grant update (expected, gross, closing_share) on commission to engine;
 grant update (amount, invoiced_on, due_on, received_on) on commission_payment to engine;
@@ -2922,7 +3032,7 @@ grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_co
 
 grant update (deal_id, kind, content_type, sha256, bytes) on document to engine;
 -- A mistaken party link is removed; its file stays.
-grant delete on party_document to engine;
+grant delete on party_document, reply_draft_document to engine;
 grant delete on suite, space_need, building_ownership to engine;
 grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
 grant update (name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id, must_haves, vendor_id, source_ref, source_revision, applicability) on space_need to engine;
