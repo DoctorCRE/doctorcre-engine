@@ -162,15 +162,67 @@ from relationship_note on conflict do nothing;
 insert into activity_about (activity_id, party_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select activity_id, mapped_id, updated_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from relationship_note on conflict do nothing;
-insert into next_step (id, party_id, what, due_on, owner_party_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported lead follow-up',
- (fields ->> 'next_action_date')::date, owner, created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
-from ready_relationship where kind = 'lead' and fields ->> 'next_action_date' is not null on conflict do nothing;
 insert into outside_id (source, value, party_id)
 select 'old_system', r.id::text, r.mapped_id from ready_relationship r
 join party_role pr on pr.party_id = r.mapped_id and pr.role = r.kind
 where (r.kind = 'lead' or exists (select from client c where c.party_id = r.mapped_id))
  and not exists (select from outside_id o where o.source = 'old_system' and o.value = r.id::text);
+
+-- Today's lead export shows next_action rows; lead.next_action_date is only a fallback for a lead without any.
+create temp table old_next_action on commit drop as
+select n.id, n.status, nullif(btrim(n.description), '') as what, n.description, n.due_on, n.hold_until, n.source_ref,
+ n.owner_id, u.id as owner, n.created_at, n.updated_at, r.mapped_id, a.*,
+ exists (select from ready_relationship ready where ready.id = r.id) as ready
+from public.next_action n join classified_relationship r on r.kind = n.subject_type and r.id = n.subject_id
+left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
+left join app_user u on u.id = o.party_id
+cross join lateral copy_attribution('next_action', n.id, coalesce(n.updated_by, n.created_by)) a;
+-- Completing an action today touches the row, so its last change is when it was done.
+insert into next_step (id, party_id, what, due_on, owner_party_id, done_at, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select distinct on (mapped_id, what, due_on) * from (
+ select id, mapped_id, what, due_on, owner, case when status = 'done' then updated_at end as done_at,
+  created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+ from old_next_action where ready and what is not null and status in ('open', 'done')
+ union all
+ select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported lead follow-up', (fields ->> 'next_action_date')::date,
+  owner, null, created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+ from ready_relationship r where kind = 'lead' and fields ->> 'next_action_date' is not null
+  and not exists (select from public.next_action n where n.subject_type = 'lead' and n.subject_id = r.id)
+) s where not exists (select from next_step done where done.party_id = s.mapped_id and done.what = s.what and done.due_on is not distinct from s.due_on)
+order by mapped_id, what, due_on, done_at is not null, created_at, id
+on conflict do nothing;
+insert into not_copied select n.id, f.field, f.value, f.reason from old_next_action n
+cross join lateral (values
+ ('description', n.description, 'blank_next_action', n.what is null),
+ ('status', n.status, 'closed_without_doing', n.status not in ('open', 'done')),
+ ('owner_id', n.owner_id::text, 'owner_not_a_user', n.owner is null),
+ ('hold_until', n.hold_until::text, 'hold_has_no_place', n.hold_until is not null),
+ ('source_ref', n.source_ref, 'reference_not_copied', n.source_ref ~ '\S')
+) f(field, value, reason, refused) where f.refused;
+
+-- A lead's registry number and a client's roster number are import history, as a party's ref is.
+create temp table relationship_ref on commit drop as
+select r.id, r.mapped_id, f.field, fields ->> f.field as ref, regexp_replace(fields ->> f.field, '^\s+|\s+$', '', 'g') as value
+from classified_relationship r
+cross join lateral (select case kind when 'lead' then 'registry_ref' else 'roster_ref' end as field) f
+where fields ->> f.field ~ '\S';
+insert into outside_id (source, value, party_id)
+select distinct on (value) 'old_system_ref', value, mapped_id from relationship_ref t
+where exists (select from ready_relationship r where r.id = t.id)
+ and not exists (select from outside_id o where o.source = 'old_system_ref' and o.value = t.value)
+order by value, id;
+insert into not_copied select t.id, t.field, t.ref, 'also the id of ' || o.party_id
+from relationship_ref t join outside_id o on o.source = 'old_system_ref' and o.value = t.value
+where o.party_id <> t.mapped_id;
+
+-- The roster's own wording and the prospect engagement flag are for a partner to read, not new facts.
+insert into not_copied select r.id, f.field, fields ->> f.field, f.reason from classified_relationship r
+cross join lateral (values ('contact_label', 'verbatim_label_not_stored', true), ('deal_type_label', 'verbatim_label_not_stored', true),
+ ('possible_duplicate_label', 'verbatim_label_not_stored', true), ('specialty_type_label', 'verbatim_label_not_stored', true),
+ ('owner_label', 'verbatim_label_not_stored', fields ->> 'owner_id' is not null),
+ ('prospect_engagement_status', 'engagement_status_not_stored',
+  fields ->> 'status' = 'prospect' or fields ->> 'prospect_engagement_status' <> 'active')
+) f(field, reason, listed) where kind = 'client' and f.listed and fields ->> f.field ~ '\S';
 
 -- Neither today's org_id nor set_at establishes when brand membership or account ownership began.
 insert into not_copied select c.id, 'org_id', p.org_id::text, 'brand_start_date_required'
