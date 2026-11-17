@@ -28,7 +28,7 @@ select c.n, f.field, f.value, f.reason from attempt c cross join lateral (values
  ('content_hash', c.content_hash, 'hash_mismatch', c.content_hash <> c.sha256),
  ('contract', c.extractor_version, 'contract_incomplete',
   not (coalesce(c.extractor_version ~ '\S', false) and coalesce(c.model ~ '\S', true))),
- ('pages', null, 'pages_not_text', jsonb_path_exists(c.old_pages, '$[*] ? (@.type() != "string")'))) f(field, value, reason, refused)
+ ('pages', null, 'pages_not_text', jsonb_path_exists(c.old_pages, 'strict $[*] ? (@.type() != "string")'))) f(field, value, reason, refused)
 where f.refused;
 
 -- A file holds one attempt per method, extractor, model and format. Old jobs without a model could repeat one.
