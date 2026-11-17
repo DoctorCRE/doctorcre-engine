@@ -12,7 +12,8 @@
 		"fix": "biome check --write",
 		"schema:drift": "node scripts/schema-drift.ts",
 		"compare": "node scripts/compare-deals.ts",
-		"types:db": "kysely-codegen --dialect postgres --include-pattern \"public.*\" --date-parser string --type-mapping '{\"timestamp\":\"string\",\"timestamptz\":\"string\"}' --out-file src/database.d.ts"
+		"types:db": "kysely-codegen --dialect postgres --include-pattern \"public.*\" --date-parser string --type-mapping '{\"timestamp\":\"string\",\"timestamptz\":\"string\"}' --out-file src/database.d.ts",
+		"types:next": "kysely-codegen --dialect postgres --include-pattern \"next.*\" --default-schema next --date-parser string --type-mapping '{\"timestamp\":\"string\",\"timestamptz\":\"string\"}' --out-file src/next-database.d.ts"
 	},
 	"dependencies": {
 		"aws4fetch": "1.0.20",

@@ -1,5 +1,31 @@
 import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { URL } from "node:url";
+import pg from "pg";
 import { NoDatabase, withSnapshot } from "./test-database.ts";
+
+function npmRun(script: string, env: NodeJS.ProcessEnv) {
+	const result = spawnSync("npm", ["run", script], { env, stdio: "inherit" });
+	if (result.error) throw result.error;
+	if (result.status !== 0) throw new Error(`npm run ${script} failed`);
+}
+
+async function loadNextSection(url: string) {
+	const db = new pg.Client({
+		connectionString: url,
+		options: "-c search_path=next",
+	});
+	await db.connect();
+	try {
+		const schema = await readFile(
+			new URL("../schema/next.sql", import.meta.url),
+			"utf8",
+		);
+		await db.query(`create schema next; ${schema}`);
+	} finally {
+		await db.end();
+	}
+}
 
 // Nothing connects to the outer snapshot, so it can serve as the template.
 await withSnapshot((_, snapshot) =>
@@ -10,15 +36,14 @@ await withSnapshot((_, snapshot) =>
 			TEST_DATABASE_URL: url,
 			TEST_SNAPSHOT: snapshot,
 		};
-		for (const [command, args] of [
-			["npm", ["run", "types:db"]],
-			["npm", ["run", "types"]],
-			["npm", ["run", "test"]],
-		] as const) {
-			const result = spawnSync(command, args, { env, stdio: "inherit" });
-			if (result.error) throw result.error;
-			if (result.status !== 0) throw new Error(`${command} failed`);
-		}
+		npmRun("types:db", env);
+		// Tests add the new section to their own copies, so the snapshot must not hold it.
+		await withSnapshot(async (nextUrl) => {
+			await loadNextSection(nextUrl);
+			npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
+		}, snapshot);
+		npmRun("types", env);
+		npmRun("test", env);
 	}, snapshot),
 ).catch((error: unknown) => {
 	if (!(error instanceof NoDatabase)) throw error;
