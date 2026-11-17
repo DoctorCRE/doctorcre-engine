@@ -130,15 +130,6 @@ must belong to the selected role and have no other grants. No application route
 uses this entry point yet. Row 12 adds save stamps, retries and edit checks.
 The health probe appends `next_section_readable` after its existing fields.
 
-The checked-in new-section types use the installed `kysely-codegen`. To regenerate,
-load `schema/next.sql` into `next` in a disposable local database, with `next` on
-`search_path`, then run this command with `DATABASE_URL` pointing at that database.
-Then run `npm run fix` to format the generated file.
-No production connection is needed.
-
-```sh
-node_modules/.bin/kysely-codegen --dialect postgres --include-pattern 'next.*' \
-	--default-schema next --date-parser string \
-	--type-mapping '{"timestamp":"string","timestamptz":"string"}' \
-	--out-file src/next-database.d.ts
-```
+Each check also loads `schema/next.sql` into `next` in a copy of that restore and
+generates ignored `src/next-database.d.ts` from it with `npm run types:next`, so a
+column change in the schema reaches the code's types on the next check.
