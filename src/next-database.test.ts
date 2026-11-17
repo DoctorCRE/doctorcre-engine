@@ -2513,6 +2513,282 @@ after(async () => {
 	await asAdmin(`drop database "${name}" with (force)`);
 });
 
+const SUBJECT = id(9000);
+const COMPANY = id(9001);
+const readParty = async (wanted = SUBJECT) =>
+	unstamped(
+		(await db.query("select everything_about_party($1) as party", [wanted]))
+			.rows[0].party,
+	);
+const withParty = (run: () => Promise<unknown>) =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values
+			('${SUBJECT}', 'person', 'Example Reader', 'referral'),
+			('${COMPANY}', 'company', 'Example Company', 'referral')`);
+		await run();
+	});
+
+test("a person with no links returns every empty list; a missing id matches the deal read", async () => {
+	await withParty(async () => {
+		assert.deepEqual(await readParty(), {
+			party: {
+				id: SUBJECT,
+				kind: "person",
+				name: "Example Reader",
+				npi: null,
+				how_found: "referral",
+				how_found_detail: null,
+			},
+			emails: [],
+			phones: [],
+			companies: [],
+			roles: [],
+			deals: [],
+			links: [],
+			activity: [],
+			next_steps: [],
+			proposals: [],
+		});
+		const missing = await db.query("select everything_about_deal($1) as deal", [
+			MISSING,
+		]);
+		assert.equal(await readParty(MISSING), null);
+		assert.equal(await readParty(MISSING), missing.rows[0].deal);
+	});
+});
+
+test("party emails put primary first and exclude another person's addresses", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_email (id, party_id, address, label, is_primary) values
+			('${id(9012)}', '${SUBJECT}', 'z@example.com', 'work', true),
+			('${id(9011)}', '${SUBJECT}', 'b@example.com', 'personal', false),
+			('${id(9010)}', '${SUBJECT}', 'a@example.com', 'work', false)`);
+		assert.deepEqual((await readParty()).emails, [
+			{
+				id: id(9012),
+				address: "z@example.com",
+				label: "work",
+				is_primary: true,
+			},
+			{
+				id: id(9010),
+				address: "a@example.com",
+				label: "work",
+				is_primary: false,
+			},
+			{
+				id: id(9011),
+				address: "b@example.com",
+				label: "personal",
+				is_primary: false,
+			},
+		]);
+	});
+});
+
+test("party phones sort by primary, number and extension with absent extensions last", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_phone (id, party_id, number, extension, label, is_primary) values
+			('${id(9022)}', '${SUBJECT}', '+12175550199', null, 'mobile', true),
+			('${id(9021)}', '${SUBJECT}', '+12175550198', null, 'work', false),
+			('${id(9020)}', '${SUBJECT}', '+12175550198', '12', 'work', false)`);
+		assert.deepEqual((await readParty()).phones, [
+			{
+				id: id(9022),
+				number: "+12175550199",
+				extension: null,
+				label: "mobile",
+				is_primary: true,
+			},
+			{
+				id: id(9020),
+				number: "+12175550198",
+				extension: "12",
+				label: "work",
+				is_primary: false,
+			},
+			{
+				id: id(9021),
+				number: "+12175550198",
+				extension: null,
+				label: "work",
+				is_primary: false,
+			},
+		]);
+	});
+});
+
+test("company memberships read from either end with dated history and id ties", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_company (id, person_id, company_id, title, started_on, ended_on) values
+			('${id(9032)}', '${SUBJECT}', '${COMPANY}', 'Current', null, null),
+			('${id(9031)}', '${SUBJECT}', '${COMPANY}', 'Former', '2020-01-01', '2021-01-01'),
+			('${id(9030)}', '${SUBJECT}', '${BROKERAGES[0]}', 'Other', '2020-01-01', null)`);
+		const memberships = (await readParty()).companies;
+		assert.deepEqual(
+			memberships.map((c: { id: string }) => c.id),
+			[id(9030), id(9031), id(9032)],
+		);
+		assert.equal(memberships[1].title, "Former");
+		assert.equal(memberships[1].ended_on, "2021-01-01");
+		assert.equal(memberships[1].person.name, "Example Reader");
+		assert.equal(memberships[1].company.name, "Example Company");
+		assert.deepEqual(
+			(await readParty(COMPANY)).companies,
+			memberships.slice(1),
+		);
+	});
+});
+
+test("party roles retain lead stage and owner and the client profile", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_role (party_id, role, stage, owner_user_id) values
+			('${SUBJECT}', 'lead', 'qualified', '${USER}'), ('${SUBJECT}', 'client', null, null);
+			insert into client (party_id, status) values ('${SUBJECT}', 'engaged')`);
+		const roles = (await readParty()).roles;
+		assert.deepEqual(
+			roles.map((r: { role: string }) => r.role),
+			["client", "lead"],
+		);
+		assert.equal(roles[0].client.status, "engaged");
+		assert.equal(roles[0].client.current_status, "engaged");
+		await db.query(`insert into deal_party (deal_id, party_id, role)
+			values ('${DEAL}', '${SUBJECT}', 'client')`);
+		const client = (await readParty()).roles[0].client;
+		assert.equal(client.status, "engaged");
+		assert.equal(client.current_status, "active_deal");
+		assert.equal(roles[1].stage, "qualified");
+		assert.equal(roles[1].owner_user_id, USER);
+		assert.equal(roles[1].client, null);
+	});
+});
+
+test("party deals retain multiple roles and sort equal names by id then role", async () => {
+	await withParty(async () => {
+		await db.query(`insert into deal (id, name, owner_user_id) values
+			('${id(9041)}', 'Example work', '${USER}'), ('${id(9040)}', 'Example work', '${USER}');
+			insert into deal_party (deal_id, party_id, role) values
+			('${id(9041)}', '${SUBJECT}', 'listing_agent'),
+			('${id(9040)}', '${SUBJECT}', 'listing_agent'), ('${id(9040)}', '${SUBJECT}', 'vendor')`);
+		assert.deepEqual(
+			(await readParty()).deals.map((d: { id: string; role: string }) => [
+				d.id,
+				d.role,
+			]),
+			[
+				[id(9040), "listing_agent"],
+				[id(9040), "vendor"],
+				[id(9041), "listing_agent"],
+			],
+		);
+	});
+});
+
+test("party relationships include incoming and outgoing links, with direction and history", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_link (id, kind, party_id, other_party_id, started_on, ended_on) values
+			('${id(9052)}', 'knows', '${SUBJECT}', '${COMPANY}', null, null),
+			('${id(9051)}', 'can_introduce', '${SUBJECT}', '${AGENT}', '2020-01-01', '2021-01-01'),
+			('${id(9050)}', 'can_introduce', '${COMPANY}', '${SUBJECT}', '2020-01-01', null)`);
+		const links = (await readParty()).links;
+		assert.deepEqual(
+			links.map((l: { id: string }) => l.id),
+			[id(9050), id(9051), id(9052)],
+		);
+		assert.equal(links[0].party_id, COMPANY);
+		assert.equal(links[0].other_party_id, SUBJECT);
+		assert.equal(links[1].ended_on, "2021-01-01");
+		assert.deepEqual((await readParty(COMPANY)).links, [links[0], links[2]]);
+	});
+});
+
+test("party activity is explicit, chronological and once per item with ordered email attachments", async () => {
+	await withParty(async () => {
+		await db.query(`insert into activity (id, kind, happened_at, from_party_id) values
+			('${id(9062)}', 'call', '2020-01-02', '${SUBJECT}'),
+			('${id(9061)}', 'email', '2020-01-01', null), ('${id(9060)}', 'note', '2020-01-01', null);
+			insert into email (activity_id, message_id, sender, subject, body) values
+			('${id(9061)}', '<party-read@example.com>', 'reader@example.com', 'Example subject', 'Example body');
+			insert into activity_about (activity_id, party_id) values
+			('${id(9061)}', '${SUBJECT}'), ('${id(9060)}', '${SUBJECT}');
+			insert into activity_about (activity_id, deal_id) values ('${id(9061)}', '${DEAL}');
+			insert into document (id, name, r2_key, email_activity_id) values
+			('${id(9064)}', 'Example file', 'party-read/second', '${id(9061)}'),
+			('${id(9063)}', 'Example file', 'party-read/first', '${id(9061)}')`);
+		const activity = (await readParty()).activity;
+		assert.deepEqual(
+			activity.map((a: { id: string }) => a.id),
+			[id(9060), id(9061)],
+		);
+		assert.equal(activity[0].email, null);
+		assert.equal(activity[1].email.body, "Example body");
+		assert.deepEqual(
+			activity[1].email.documents.map((d: { id: string }) => d.id),
+			[id(9063), id(9064)],
+		);
+		await db.query(`delete from activity_about where party_id = '${SUBJECT}' and activity_id = '${id(9061)}';
+			insert into activity (id, kind, happened_at) values ('${id(9065)}', 'email', '2020-01-03');
+			insert into email (activity_id, message_id, sender, subject, body) values
+			('${id(9065)}', '<empty-party-read@example.com>', 'reader@example.com', 'No files', 'Example body');
+			insert into activity_about (activity_id, party_id) values ('${id(9065)}', '${SUBJECT}')`);
+		assert.deepEqual((await readParty()).activity[1].email.documents, []);
+	});
+});
+
+test("party next steps retain completed steps, sort due dates with id ties and leave undated last", async () => {
+	await withParty(async () => {
+		await db.query(`insert into next_step (id, what, party_id, due_on, done_at) values
+			('${id(9072)}', 'Undated', '${SUBJECT}', null, null),
+			('${id(9071)}', 'Open', '${SUBJECT}', '2020-01-01', null),
+			('${id(9070)}', 'Done', '${SUBJECT}', '2020-01-01', '2020-01-01')`);
+		const steps = (await readParty()).next_steps;
+		assert.deepEqual(
+			steps.map((s: { id: string }) => s.id),
+			[id(9070), id(9071), id(9072)],
+		);
+		assert.equal(steps[0].done_at, "2020-01-01T00:00:00+00:00");
+		assert.equal(steps[2].due_on, null);
+		assert.equal(steps[0].party_id, undefined);
+	});
+});
+
+test("party proposals include only pending suggestions in creation order with id ties", async () => {
+	await withParty(async () => {
+		await db.query(`insert into activity_about (activity_id, party_id) values ('${CALL}', '${SUBJECT}');
+			select set_config('engine.job', 'agent', true);
+			insert into proposal (id, created_at, kind, activity_id, activity_kind, evidence, proposed_by_job, party_id, what) values
+			('${id(9082)}', '2020-01-02', 'next_step', '${CALL}', 'call', 'Example evidence', 'agent', '${SUBJECT}', 'Later'),
+			('${id(9081)}', '2020-01-01', 'next_step', '${CALL}', 'call', 'Example evidence', 'agent', '${SUBJECT}', 'Second'),
+			('${id(9080)}', '2020-01-01', 'next_step', '${CALL}', 'call', 'Example evidence', 'agent', '${SUBJECT}', 'First');
+			select set_config('engine.job', '', true);
+			update proposal set status = 'dismissed' where id = '${id(9082)}'`);
+		const proposals = (await readParty()).proposals;
+		assert.deepEqual(
+			proposals.map((s: { id: string }) => s.id),
+			[id(9080), id(9081)],
+		);
+		assert.equal(proposals[0].evidence, "Example evidence");
+		assert.equal(proposals[0].what, "First");
+	});
+});
+
+test("a merged-away party reads its survivor including moved links after another merge", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party (id, kind, name) values ('${id(9090)}', 'person', 'Example Duplicate');
+			insert into party_email (party_id, address, label) values ('${id(9090)}', 'duplicate@example.com', 'work');
+			select merge_party('${id(9090)}', '${SUBJECT}');
+			select merge_party('${SUBJECT}', '${AGENT}')`);
+		assert.deepEqual(await readParty(id(9090)), await readParty(AGENT));
+		assert.deepEqual(await readParty(), await readParty(AGENT));
+		assert.equal((await readParty()).party.id, AGENT);
+		assert.ok(
+			(await readParty()).emails.some(
+				(e: { address: string }) => e.address === "duplicate@example.com",
+			),
+		);
+	});
+});
+
 test("everything about the LOI deal comes back in one read, each list in order", async () => {
 	assert.deepEqual(await readDeal(), {
 		deal: {

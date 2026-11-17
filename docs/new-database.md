@@ -369,6 +369,8 @@ Each round can also record how tight its submarket was when it was sent, in `sub
 
 `everything_about_deal` returns a deal's phase changes in order, its properties, its people with their roles, its rounds in order with their documents and claims, its activity in time order with each email and its attachments, and its next steps by due date, in one read. The property reaches the deal through `deal_property`, and the client and the listing agent through `deal_party`.
 
+`everything_about_party` returns `party` and nine lists: `emails`, `phones`, `companies` (dated person/company links with both records), `roles` (stage and lead owner, with the client profile and derived `current_status` on the client role), `deals` (one entry per role), `links` (knows and can-introduce in either direction, with their endpoints intact), `activity` (explicit party links only, with each email and its attachment `documents`), `next_steps` and pending `proposals`. A merged-away id reads its survivor; a missing id returns SQL null, like the deal read. Every list is `[]` when empty. Emails and phones put primary first, then address or number and extension; company links sort by start date, roles by slug, deals by name and id then role, relationship links by kind and start date, activity by time, next steps by due date and proposals by creation time. Nullable dates sort last and ids break ties wherever rows have ids. Dated history and completed next steps remain visible. This core read does not expand leases, territories, specialties, do-not-contact, introductions, brand memberships or change history.
+
 ## Owner decision: unusual one-off terms
 
 Some LOIs carry a term no other deal has, such as an exclusive-use clause. There are two ways to keep it:
