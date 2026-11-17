@@ -2302,6 +2302,7 @@ declare
 	removed change;
 	source_table regclass;
 	still_present boolean;
+	erased boolean;
 begin
 	select * into strict removed from change where id = removed_change_id and action = 'delete';
 	select c.oid into strict source_table from pg_class c
@@ -2326,7 +2327,12 @@ begin
 	update change set old_value = old_value - fields, new_value = new_value - fields
 	where table_name = removed.table_name and record = removed.record and action <> 'erase'
 		and (old_value ?| fields or new_value ?| fields);
-	if found then
+	erased := found;
+	update imported_change set source_event = source_event - array['human_quote', 'agent_rationale']
+		- case when field = any(fields) then array['old_value', 'new_value'] else '{}'::text[] end,
+		erased_fields = array(select distinct f from unnest(erased_fields || fields) f order by f)
+	where table_name = removed.table_name and record = removed.record and not erased_fields @> fields;
+	if found or erased then
 		insert into change (table_name, record, action, new_value)
 		values (removed.table_name, removed.record, 'erase', jsonb_build_object('fields', fields));
 	end if;
@@ -2389,6 +2395,7 @@ create table imported_change (
  id uuid primary key,
  table_name text not null check (table_name in ('party', 'deal', 'party_role', 'client', 'lease_version')),
  record jsonb not null check (jsonb_typeof(record) = 'object' and record <> '{}'::jsonb),
+ erased_fields text[] not null default '{}',
  old_value_absent boolean not null,
  new_value_absent boolean not null,
  field text not null check (field ~ '\S'),
@@ -2408,8 +2415,8 @@ create trigger stamp_imported_change before insert on imported_change
  for each row execute function stamp_change();
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but app_user, job, merged_party, change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change) is never removed.
+-- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
+-- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change, imported_change) is never removed.
 do $$ begin
 	begin
 		create role engine nologin;

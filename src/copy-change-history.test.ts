@@ -104,7 +104,8 @@ before(async () => {
 });
 beforeEach(async () => {
 	await db.query(`begin; select set_config('engine.job','old_system',true); delete from imported_change; delete from public.event;
- delete from outside_id where source = 'old_system' and value = '${id(99)}'; commit`);
+ delete from outside_id where source = 'old_system' and value = '${id(99)}';
+ insert into party_role (party_id,role) values ('${id(10)}','vendor') on conflict do nothing; commit`);
 });
 const baseline = async () => {
 	await event(100, "party", 11, "name");
@@ -203,7 +204,9 @@ test("copies field evidence for every supported record kind without replay or in
 	);
 	const imported = await rows("select * from imported_change order by id");
 	await db.query("set time zone 'America/Chicago'");
-	await run();
+	assert.deepEqual(await run(), [
+		{ old_id: id(107), field: "name", reason: "agent_user_unknown" },
+	]);
 	await db.query("set time zone 'UTC'");
 	assert.deepEqual(
 		await rows("select * from imported_change order by id"),
@@ -302,4 +305,42 @@ test("history constraints and privileges hold and a failed load restores its tri
  and tgname = 'stamp_imported_change'`),
 		[{ tgenabled: "O" }],
 	);
+});
+
+test("an owner erase removes imported words and cannot be undone by a copy or repeated erase", async () => {
+	await event(140, "vendor", 14, "offers");
+	await event(141, "vendor", 14, "seeking");
+	await db.query(`update public.event set human_quote = 'Example private words', agent_rationale = 'Example private reasoning'
+ where id in ('${id(140)}','${id(141)}')`);
+	await run();
+	const before = await rows(
+		"select id,changed_at,changed_by_user_id from imported_change order by id",
+	);
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ delete from party_role where party_id = '${id(10)}' and role = 'vendor';
+ select erase_change((select max(id) from change where table_name = 'party_role' and action = 'delete'), array['offers']); commit`);
+	assert.deepEqual(
+		await rows(`select source_event ? 'old_value' as old,source_event ? 'new_value' as new,
+ source_event ? 'human_quote' as quote,source_event ? 'agent_rationale' as rationale from imported_change order by id`),
+		[
+			{ old: false, new: false, quote: false, rationale: false },
+			{ old: true, new: true, quote: false, rationale: false },
+		],
+	);
+	assert.deepEqual(
+		await rows(
+			"select id,changed_at,changed_by_user_id from imported_change order by id",
+		),
+		before,
+	);
+	const erased = await rows("select * from imported_change order by id");
+	const history = await rows("select * from change order by id");
+	await run();
+	await db.query(`begin; select set_config('engine.job','old_system',true);
+ select erase_change((select max(id) from change where table_name = 'party_role' and action = 'delete'), array['offers']); commit`);
+	assert.deepEqual(
+		await rows("select * from imported_change order by id"),
+		erased,
+	);
+	assert.deepEqual(await rows("select * from change order by id"), history);
 });

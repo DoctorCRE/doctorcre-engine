@@ -2,10 +2,9 @@
 -- Public is read-only. No native history or current business row is changed.
 set local time zone 'UTC';
 alter table imported_change disable trigger stamp_imported_change;
-create temp table not_copied (old_id uuid, field text, reason text) on commit drop;
-create temp table history_field (subject text, old_field text, table_name text, field text) on commit drop;
-insert into history_field
-select subject, old_field, table_name, field from (values
+create temp table listed (old_id uuid, field text, reason text) on commit drop;
+create temp table history_field on commit drop as
+select * from (values
  ('party', 'party', 'name', 'name'), ('party', 'party', 'kind', 'kind'), ('party', 'party', 'npi', 'npi'),
  ('deal', 'deal', 'name', 'name'), ('deal', 'deal', 'owner', 'owner_user_id'),
  ('deal', 'deal', 'won_value', 'closed_value'),
@@ -35,7 +34,7 @@ select e.id, e.field as old_field, f.table_name, f.field, to_jsonb(e) as source_
  e.occurred_at as changed_at, e.old_value is null as old_value_absent, e.new_value is null as new_value_absent, a.*,
  case when actor.id is null then 'unknown_actor'
   when a.changed_by_user_id is not null and u.id is null then 'user_not_copied'
-  when e.sponsoring_human_slug is not null and sponsor.id is null then 'unknown_sponsor'
+  when a.changed_by_job in ('agent', 'mail_capture') and e.sponsoring_human_slug is not null and sponsor.id is null then 'unknown_sponsor'
   when a.changed_for_user_id is not null and su.id is null then 'sponsor_not_copied' end as actor_problem,
  a.changed_by_job = 'agent' and e.sponsoring_human_slug is null as unknown_agent_user
 from public.event e
@@ -52,19 +51,21 @@ cross join lateral copy_event_attribution(e.actor_id, e.id) a
 left join app_user u on u.id = a.changed_by_user_id
 left join app_user su on su.id = a.changed_for_user_id;
 
-insert into not_copied
+insert into listed
 select id, old_field, problem from history_event
 cross join lateral (values
  (case when table_name is null then 'field_has_no_mapping' end),
  (case when table_name is not null and record is null then 'record_not_copied' end),
  (actor_problem), (case when unknown_agent_user then 'agent_user_unknown' end)
 ) p(problem) where problem is not null;
-insert into not_copied
+insert into listed
 select e.id, e.old_field, 'existing_history_conflicts'
 from history_event e join imported_change i using (id)
 where (i.table_name, i.record, i.field, i.source_event, i.changed_at,
  i.changed_by_user_id, i.changed_by_job, i.changed_for_user_id, i.old_value_absent, i.new_value_absent) is distinct from
- (e.table_name, e.record, e.field, e.source_event, e.changed_at,
+ (e.table_name, e.record, e.field,
+ case when cardinality(i.erased_fields) = 0 then e.source_event else e.source_event - array['human_quote', 'agent_rationale']
+  - case when e.field = any(i.erased_fields) then array['old_value', 'new_value'] else '{}'::text[] end end, e.changed_at,
  e.changed_by_user_id, e.changed_by_job, e.changed_for_user_id, e.old_value_absent, e.new_value_absent);
 
 insert into imported_change (id, table_name, record, field, source_event, changed_at,
@@ -74,4 +75,4 @@ select id, table_name, record, field, source_event, changed_at,
 where table_name is not null and record is not null and actor_problem is null
 on conflict (id) do nothing;
 alter table imported_change enable trigger stamp_imported_change;
-select * from not_copied order by old_id, field, reason;
+select * from listed order by old_id, field, reason;
