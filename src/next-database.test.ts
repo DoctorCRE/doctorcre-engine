@@ -502,6 +502,7 @@ const STAMPED = [
 	"candidate",
 	"proposal",
 	"reply_draft",
+	"reply_draft_document",
 	"lease_suite",
 	"suite",
 	"space_need",
@@ -617,6 +618,7 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"reply_draft_document",
 	"invoice_email",
 	"vendor_vertical",
 	"vendor_loan_program",
@@ -2488,7 +2490,6 @@ const CHANGEABLE: Record<string, string[]> = {
 		"cc_address",
 		"dismiss_reason",
 		"failure_reason",
-		"may_have_sent",
 		"sent_at",
 		"sent_item_id",
 		"status",
@@ -7066,9 +7067,16 @@ const APPROVE =
 	"status = 'approved', to_address = 'avery@example.com', cc_address = 'riley@example.com'";
 const SEND =
 	"status = 'sent', sent_at = now(), sent_item_id = 'example-sent-1'";
-const FAIL = (mayHaveSent: boolean) =>
-	`status = 'failed', failure_reason = 'Example failure', may_have_sent = ${mayHaveSent}`;
-const CLEAR_FAILURE = "failure_reason = null, may_have_sent = null";
+// Today's sender's reasons: an abort before Send, a Send it could not confirm, and one that settles nothing.
+const ABORTED = "aborted_before_dispatch";
+const UNCONFIRMED = "unconfirmed_after_3";
+const FAIL = (reason: string) =>
+	`status = 'failed', failure_reason = '${reason}'`;
+const CLEAR_FAILURE = "failure_reason = null";
+const ATTACHMENT = id(953);
+const attach = (who: string) =>
+	`${OWNER}; ${insert("document", { id: ATTACHMENT, name: "Example plan.pdf", r2_key: "example/reply-attachment" })};
+	${who}; ${insert("reply_draft_document", { reply_draft_id: REPLY, document_id: ATTACHMENT })}`;
 const approved = `${newReply()}; ${reply(OWNER, APPROVE)}`;
 const SECOND_REPLY = `${newEmail(id(952))}; insert into activity_about (activity_id, deal_id) values ('${id(952)}', '${DEAL}');
 	${newReply({ id: id(951), email_activity_id: id(952) })}`;
@@ -7090,8 +7098,14 @@ const REPLY_DRAFT_REFUSALS: [string, string, Refusal][] = [
 	["another user's mailbox recording a send", `${approved}; ${reply(asJob("mail_capture", TEAMMATE), SEND)}`, "reply_draft_owner_decides"],
 	["a second send", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${reply(OWNERS_MAILBOX, "sent_item_id = 'example-sent-2'")}`, "reply_draft_sent_once"],
 	["approving a sent draft again", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${reply(OWNER, "status = 'approved', sent_at = null, sent_item_id = null")}`, "reply_draft_sent_once"],
-	["approving again after a failure that may have sent", `${approved}; ${reply(OWNERS_MAILBOX, FAIL(true))}; ${reply(OWNER, `status = 'approved', ${CLEAR_FAILURE}`)}`, "reply_draft_sent_once"],
-	["a send recorded after a failure that never left", `${approved}; ${reply(OWNERS_MAILBOX, FAIL(false))}; ${reply(OWNERS_MAILBOX, `${SEND}, ${CLEAR_FAILURE}`)}`, "reply_draft_sent_once"],
+	...[UNCONFIRMED, "invalid_submission", "failed:abort_cleanup_failed"].map((reason): [string, string, Refusal] =>
+		[`approving again after ${reason}`, `${approved}; ${reply(OWNERS_MAILBOX, FAIL(reason))}; ${reply(OWNER, `status = 'approved', ${CLEAR_FAILURE}`)}`, "reply_draft_sent_once"]),
+	...[ABORTED, "invalid_submission", "failed:abort_cleanup_failed"].map((reason): [string, string, Refusal] =>
+		[`a send recorded after ${reason}`, `${approved}; ${reply(OWNERS_MAILBOX, FAIL(reason))}; ${reply(OWNERS_MAILBOX, `${SEND}, ${CLEAR_FAILURE}`)}`, "reply_draft_sent_once"]),
+	["a send that changes the recipient", `${approved}; ${reply(OWNERS_MAILBOX, `${SEND}, to_address = 'other@example.com'`)}`, "reply_draft_sent_once"],
+	["a failure that changes the copy", `${approved}; ${reply(OWNERS_MAILBOX, `${FAIL(ABORTED)}, cc_address = 'other@example.com'`)}`, "reply_draft_sent_once"],
+	["a job's attachment", `${newReply()}; ${attach(OWNERS_MAILBOX)}`, "reply_draft_owner_edits"],
+	["an attachment after approval", `${approved}; ${attach(OWNER)}`, "reply_draft_owner_edits"],
 	["approving a dismissed draft", `${newReply()}; ${reply(OWNER, "status = 'dismissed', dismiss_reason = 'Example'")}; ${reply(OWNER, `${APPROVE}, dismiss_reason = null`)}`, "reply_draft_sent_once"],
 	["one sent message settling two drafts", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${SECOND_REPLY}; ${reply(OWNER, APPROVE, id(951))}; ${reply(OWNERS_MAILBOX, SEND, id(951))}`, "reply_draft_sent_item_id_key"],
 	["erase", `${newReply()}; delete from reply_draft`, notGranted("reply_draft")],
@@ -7106,9 +7120,10 @@ for (const [label, sql, refusal] of REPLY_DRAFT_REFUSALS) {
 test("a reply draft goes out once: the owner edits and approves it, and the owner's mailbox records each try", () =>
 	rolledBack(async () => {
 		await db.query(
-			`${newReply()}; ${reply(OWNER, "body = 'Thanks, Tuesday works.'")}; ${reply(OWNER, APPROVE)};
-			${reply(OWNERS_MAILBOX, FAIL(false))}; ${reply(OWNER, `${APPROVE}, ${CLEAR_FAILURE}, body = 'Thanks, Wednesday works.'`)};
-			${reply(OWNERS_MAILBOX, SEND)}; ${SECOND_REPLY}; ${reply(OWNER, APPROVE, id(951))}; ${reply(OWNERS_MAILBOX, FAIL(true), id(951))};
+			`${newReply()}; ${newReply({ id: id(954), body: "Example second store" })} on conflict (email_activity_id, owner_user_id) do nothing;
+			${reply(OWNER, "body = 'Thanks, Tuesday works.'")}; ${attach(OWNER)}; ${reply(OWNER, APPROVE)};
+			${reply(OWNERS_MAILBOX, FAIL(ABORTED))}; ${reply(OWNER, `${APPROVE}, ${CLEAR_FAILURE}, body = 'Thanks, Wednesday works.'`)};
+			${reply(OWNERS_MAILBOX, SEND)}; ${SECOND_REPLY}; ${reply(OWNER, APPROVE, id(951))}; ${reply(OWNERS_MAILBOX, FAIL(UNCONFIRMED), id(951))};
 			${reply(OWNERS_MAILBOX, `status = 'sent', sent_at = now(), sent_item_id = 'example-sent-2', ${CLEAR_FAILURE}`, id(951))}`,
 		);
 		const { rows } = await db.query({
@@ -7117,8 +7132,14 @@ test("a reply draft goes out once: the owner edits and approves it, and the owne
 		});
 		// biome-ignore format: one draft per row
 		assert.deepEqual(rows, [
-			[REPLY, "Thanks, Wednesday works.", 3, "sent", true, "avery@example.com", "example-sent-1"],
-			[id(951), "Thanks, we will review the counter.", 1, "sent", true, "avery@example.com", "example-sent-2"],
+			[REPLY, "Thanks, Wednesday works.", 4, "sent", true, "avery@example.com", "example-sent-1"],
+			[id(951), "Thanks, we will review the counter.", 2, "sent", true, "avery@example.com", "example-sent-2"],
+		]);
+		const { rows: attached } = await db.query(
+			"select reply_draft_id, document_id from reply_draft_document",
+		);
+		assert.deepEqual(attached, [
+			{ reply_draft_id: REPLY, document_id: ATTACHMENT },
 		]);
 		const { rows: history } = await db.query({
 			text: `select new_value ->> 'status', changed_by_user_id, changed_by_job, changed_for_user_id

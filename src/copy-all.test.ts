@@ -295,7 +295,6 @@ const corrections = [
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
- ["copy-reply-drafts.sql", id(122), "activity_id", id(120), "email_not_copied"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],

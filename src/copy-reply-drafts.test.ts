@@ -97,12 +97,12 @@ test("copies each reply draft with its decision and failed try, and on a rerun a
 	const report = await run();
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select id, email_activity_id, owner_user_id, status, subject, body, decided_at::text, dismiss_reason, to_address, cc_address,
-  failure_reason, may_have_sent, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at::text from reply_draft order by id`), [
-		"#70 #40 #01 pending Re: Example tour Example drafted reply - - - - - - - old_system - 2024-01-01 15:00:00+00",
-		"#71 #42 #01 dismissed Re: Example tour Example drafted reply 2024-01-02 00:00:00+00 Example answered by phone - - - - #01 - - 2024-01-02 00:00:00+00",
-		"#72 #44 #01 failed Re: Example tour Example approved reply 2024-01-02 00:00:00+00 - doctor@example.com partner.two@example.com aborted_before_dispatch false - old_system #01 2024-01-03 00:00:00+00",
-		"#73 #45 #01 failed Re: Example tour Example approved reply 2024-01-02 00:00:00+00 - doctor@example.com partner.two@example.com unconfirmed_after_3 true - old_system #01 2024-01-03 00:00:00+00",
-		"#78 #47 #01 dismissed Re: Example tour Example drafted reply 2024-01-02 00:00:00+00 Example expired - - - - - old_system - 2024-01-02 00:00:00+00",
+  failure_reason, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at::text from reply_draft order by id`), [
+		"#70 #40 #01 pending Re: Example tour Example drafted reply - - - - - - old_system - 2024-01-01 15:00:00+00",
+		"#71 #42 #01 dismissed Re: Example tour Example drafted reply 2024-01-02 00:00:00+00 Example answered by phone - - - #01 - - 2024-01-02 00:00:00+00",
+		"#72 #44 #01 failed Re: Example tour Example approved reply 2024-01-02 00:00:00+00 - doctor@example.com partner.two@example.com aborted_before_dispatch - old_system #01 2024-01-03 00:00:00+00",
+		"#73 #45 #01 failed Re: Example tour Example approved reply 2024-01-02 00:00:00+00 - doctor@example.com partner.two@example.com unconfirmed_after_3 - old_system #01 2024-01-03 00:00:00+00",
+		"#78 #47 #01 dismissed Re: Example tour Example drafted reply 2024-01-02 00:00:00+00 Example expired - - - - old_system - 2024-01-02 00:00:00+00",
 	]);
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select record ->> 'id' as id, action, new_value ->> 'status' as status, changed_by_user_id, changed_by_job, changed_for_user_id,
@@ -126,7 +126,7 @@ test("copies each reply draft with its decision and failed try, and on a rerun a
 		"#76 owner partner_two owner_not_a_user",
 		"#80 reply_draft #80 existing_draft_conflicts",
 		"#81 reply_draft #81 existing_draft_conflicts",
-		`#82 submitted_email [{"path": "/example/plan.pdf", "size": 1, "sha256": "example"}] attachments_have_no_place`,
+		`#82 submitted_email [{"path": "/example/plan.pdf", "size": 1, "sha256": "example"}] attachment_not_a_document`,
 	]);
 	assert.deepEqual(
 		await rows(
