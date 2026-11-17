@@ -479,6 +479,8 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"invoice_email",
+	"invoice_mailbox",
 	"commission",
 	"commission_payment",
 	"commission_share",
@@ -576,6 +578,7 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"invoice_email",
 	"lease_suite",
 	"suite",
 	"space_need",
@@ -2194,6 +2197,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	invoice_email: ["deal_id", "payment_id", "status"],
 	suite: ["area_basis", "area_sf", "condition", "floor", "label"],
 	space_need: [
 		"applicability",
@@ -2292,6 +2296,17 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	invoice_email: [
+		"applied_phase_at",
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"payment_change_id",
+		"prior_invoiced_on",
+		"prior_phase_at",
+		"status",
+	],
 	offer: [
 		"changed_at",
 		"changed_by_job",
@@ -2326,6 +2341,7 @@ const REMOVABLE = [
 	...STORED_AT.filter(
 		(table) =>
 			![
+				"invoice_email",
 				"lease_suite",
 				"offer_document",
 				"offer_claim",
@@ -2409,6 +2425,9 @@ before(async () => {
 	db = await connect("none");
 	await db.query(`create schema next; ${SCHEMA}`);
 	await db.query(USERS);
+	await db.query(
+		"insert into invoice_mailbox (address) values ('invoices@example.com')",
+	);
 	await db.query(
 		`set role engine; ${SEED} ${MARKETING_SEED} ${TERRITORY_SEED} ${VENDOR_SEED} ${LEAD_SEED} ${COMMISSION_SEED}`,
 	);
@@ -2564,6 +2583,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			table,
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
+				"invoice_mailbox",
 				"app_user",
 				"job",
 				"merged_party",
@@ -5983,3 +6003,176 @@ for (const survivorIsVendor of [false, true]) {
 			);
 		}));
 }
+
+const INVOICE = id(980);
+const INVOICE_PAYMENT = id(981);
+const invoiceEmail = (row: Record<string, string | null> = {}) =>
+	insert("invoice_email", {
+		id: INVOICE,
+		evidence_ref: "local-mail:example-invoice",
+		sender: "invoices@example.com",
+		deal_name: "Example Dental Springfield Deal",
+		client_name: "Example Dental Group",
+		occurred_at: "2026-04-01T23:30:00-05:00",
+		email_date: "2026-04-01",
+		deal_id: DEAL,
+		payment_id: INVOICE_PAYMENT,
+		...row,
+	});
+const INVOICE_SETUP = `${COMMISSION}; ${payment({ id: INVOICE_PAYMENT })}; insert into phase values ('closed', 'Closed')`;
+const APPLY_INVOICE = `update invoice_email set status = 'applied' where id = '${INVOICE}'`;
+const UNDO_INVOICE = `update invoice_email set status = 'undone' where id = '${INVOICE}'`;
+
+// biome-ignore format: one row per refusal
+const INVOICE_REFUSALS: Case[] = [
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${invoiceEmail({id: id(982)})}`, "invoice_email_evidence_ref_key"],
+	[`${INVOICE_SETUP}; ${invoiceEmail({deal_id: LENDER_DEAL})}`, "invoice_email_payment_id_deal_id_fkey"],
+	[`${INVOICE_SETUP}; ${invoiceEmail({payment_id: null})}`, "invoice_email_target_whole"],
+	[`${INVOICE_SETUP}; ${invoiceEmail({deal_id: null, payment_id: null})}; ${APPLY_INVOICE}`, "invoice_email_needs_payment"],
+	...[
+		{sender: "unknown@example.com"}, {client_name: "Other Example"}, {client_name: null},
+		{property_address: "Wrong example address"}, {deal_name: "Other Example Deal"},
+		{occurred_at: "2999-04-01T00:00:00Z", email_date: "2999-04-01"},
+	].map((row): Case => [`${INVOICE_SETUP}; ${invoiceEmail(row)}; ${asJob("mail_capture", USER)}; ${APPLY_INVOICE}`, "invoice_email_needs_user"]),
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set invoiced_on = '2026-03-31' where id = '${INVOICE_PAYMENT}'; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, "invoice_email_needs_user"],
+	[`${INVOICE_SETUP}; insert into deal (id, name, owner_user_id) values ('${id(982)}', 'Example Dental Springfield Deal', '${USER}'); insert into deal_party values ('${id(982)}', '${CLIENT}', 'client'); ${invoiceEmail()}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, "invoice_email_needs_user"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${APPLY_INVOICE}`, "invoice_email_status_moves"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${asJob("agent", USER)}; ${UNDO_INVOICE}`, "invoice_email_status_moves"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; update invoice_email set deal_id = null, payment_id = null`, "invoice_email_keeps_target"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; insert into deal_phase_change values ('${DEAL}', '2999-01-01', 'legal', 'Example newer move'); ${UNDO_INVOICE}`, "invoice_email_undo_current"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; update commission_payment set invoiced_on = '2026-04-02'; update commission_payment set invoiced_on = '2026-04-01'; ${UNDO_INVOICE}`, "invoice_email_undo_current"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; delete from invoice_email`, notGranted("invoice_email")],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update invoice_email set email_date = '2026-04-02'`, notGranted("invoice_email")],
+	["insert into invoice_mailbox (address) values ('other@example.com')", notGranted("invoice_mailbox")],
+];
+
+test("invoice evidence and guarded application obey rules 89 to 92", async () => {
+	for (const [sql, refusal] of INVOICE_REFUSALS)
+		await rolledBack(() => assert.rejects(db.query(sql), expected(refusal)));
+});
+
+test("a trusted invoice closes its deal, dates one payment once, and a user undoes it", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture", USER)}; ${APPLY_INVOICE}; ${CHECK_AT_COMMIT}`,
+		);
+		assert.deepEqual(
+			(
+				await db.query(`select d.invoiced_on::text, p.received_on, i.status, i.changed_by_job,
+			i.changed_for_user_id from deal_invoiced d join commission_payment p using (deal_id)
+			join invoice_email i on i.payment_id = p.id where p.id = '${INVOICE_PAYMENT}'`)
+			).rows,
+			[
+				{
+					invoiced_on: "2026-04-01",
+					received_on: null,
+					status: "applied",
+					changed_by_job: "mail_capture",
+					changed_for_user_id: USER,
+				},
+			],
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select phase from deal_phase_change where deal_id = '${DEAL}' order by happened_at desc limit 1`,
+				)
+			).rows[0].phase,
+			"closed",
+		);
+		await db.query(`${asUser(USER)}; ${UNDO_INVOICE}; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select invoiced_on from deal_invoiced where deal_id = '${DEAL}'`,
+				)
+			).rows[0].invoiced_on,
+			null,
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select phase from deal_phase_change where deal_id = '${DEAL}' order by happened_at desc limit 1`,
+				)
+			).rows[0].phase,
+			"legal",
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select count(*) from change where table_name = 'invoice_email'`,
+				)
+			).rows[0].count,
+			"3",
+		);
+	});
+});
+
+test("a direct user resolves doubtful evidence and undo restores the payment's prior date", async () => {
+	await rolledBack(async () => {
+		await db.query(`${INVOICE_SETUP}; update commission_payment set invoiced_on = '2026-03-31' where id = '${INVOICE_PAYMENT}';
+			${invoiceEmail({ client_name: "Uncertain Example" })}; ${APPLY_INVOICE}; ${UNDO_INVOICE}; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select invoiced_on::text from deal_invoiced where deal_id = '${DEAL}'`,
+				)
+			).rows[0].invoiced_on,
+			"2026-03-31",
+		);
+	});
+});
+
+test("a normalized property match dates an installment and the deal reads its earliest invoice", async () => {
+	await rolledBack(async () => {
+		await db.query(`${INVOICE_SETUP}; ${payment({ id: id(983), invoiced_on: "2026-03-01" })};
+			${invoiceEmail({ client_name: null, property_address: "  100 EXAMPLE Way,   Springfield ", deal_name: " example DENTAL Springfield deal " })};
+			${asJob("mail_capture")}; ${APPLY_INVOICE}; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select invoiced_on::text from deal_invoiced where deal_id = '${DEAL}'`,
+				)
+			).rows[0].invoiced_on,
+			"2026-03-01",
+		);
+		await db.query(`${asUser(USER)}; ${UNDO_INVOICE}; ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query(
+					`select invoiced_on::text from deal_invoiced where deal_id = '${DEAL}'`,
+				)
+			).rows[0].invoiced_on,
+			"2026-03-01",
+		);
+	});
+});
+
+test("an invoice cannot partly close a deal when its payment refuses the date", async () => {
+	await rolledBack(async () => {
+		await db.query(
+			`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set due_on = '2026-03-31' where id = '${INVOICE_PAYMENT}'; savepoint applying`,
+		);
+		await assert.rejects(
+			db.query(APPLY_INVOICE),
+			expected("commission_payment_dates_in_order"),
+		);
+		await db.query("rollback to applying");
+		assert.equal(
+			(
+				await db.query(
+					`select status from invoice_email where id = '${INVOICE}'`,
+				)
+			).rows[0].status,
+			"captured",
+		);
+		assert.equal(
+			(
+				await db.query(
+					`select phase from deal_phase_change where deal_id = '${DEAL}' order by happened_at desc limit 1`,
+				)
+			).rows[0].phase,
+			"legal",
+		);
+	});
+});

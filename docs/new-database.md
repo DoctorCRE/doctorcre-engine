@@ -180,6 +180,11 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 87. A user has one preferences row, in a time zone the database knows. Quiet hours have a start and a different end, or neither. A Home mark is one per user and item, is snoozed with a time, settled or neither, waits on someone only with a nonblank reason, and marks something. A next step with a mark is not removed until its marks are.
 88. An outreach draft belongs to a lead and is never dispatchable or allowed to send itself. It starts unapproved; a user or an agent working for one approves it. Changing its content, owner or intended time clears approval and advances its revision.
 
+89. Invoice evidence is stored once by reference, with a sender, nonblank deal name, finite timestamp and sender-local date within one day of its UTC date. A selected payment belongs to the selected deal. Evidence and application snapshots cannot be rewritten or removed by the engine; only the owner configures trusted invoice senders.
+90. An invoice starts captured. Applying it requires a payment and a prior deal phase, records the prior phase and payment invoice date, closes the deal and dates that payment atomically. The deal's invoiced date is the earliest payment invoiced date, never another stored value. Receipt of money is separate.
+91. A job applies only a trusted sender's nonfuture invoice matching exactly one deal by normalized name plus client or property, with no contradictory supplied fact or payment invoice date. Every doubtful or multiple match waits captured for a direct user, including jobs working for a user.
+92. An invoice applies once; only a direct user undoes an applied invoice once. Undo restores its prior phase and payment invoice date only while its phase is still latest and no newer invoice-date change exists, including a date changed away and back. Phase writes and invoice operations lock their deal, and evidence, application and undo retain stamps and change history.
+
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
 ## Who may change what
@@ -586,14 +591,14 @@ The split pays others first. Each `commission_share` gives a referring agent, th
 Moving today's rows across:
 
 - Each deal's `commission` rows become one `commission` row. A row with status `expected` adds its `gross_amount` to the expected commission. Every other row becomes a payment of its `gross_amount`, with its `invoiced_on`, `due_on` and `received_on`, and the payments add up to the gross. A `received` row with no `received_on` is listed for a user to date.
-- `deal.invoiced_on` stays with the invoices found in email, a later slice.
+- `deal.invoiced_on` maps through the invoice-email reconciliation below, never to a second editable date.
 - `commission_allocation` has no rows, so nothing comes across. Its `referral_fee`, `house` and `other` kinds would be the referral, brokerage and other shares, and `partner_split` is the ladder.
 - `sf_commission_placeholder` is not copied. Today's rule already keeps it out of every money figure.
 - Today's fixed share per lane, in a report script, is replaced by each user's ladder. The partners enter their ladders themselves.
 
 ## Later slices
 
-"Everything about this person." The rest of leads (#286). Invoices found in email. Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+"Everything about this person." The rest of leads (#286). Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
 
 ## Copying today's deals
 
@@ -627,3 +632,13 @@ Today's rows map as follows. The eventual copier must list unresolved values for
 Both search formats preserve unknown keys in the correction list and refuse to copy an incompletely mapped search. Empty type or geography filters mean unspecified, not an invented value. These mappings are a specification for a later copier, not an implemented import.
 
 Existing stamp attribution rules apply to these rows. `parcel` and `availability` are excluded by the owner's coverage ruling on #196. No listing or availability table is added.
+
+## Invoices found in email
+
+`invoice_email` keeps derived invoice facts, not another email body. Its unique `evidence_ref` resolves to the source in the mailbox, as today's local-mail reference does. Captured evidence may have no target yet. A selected `payment_id` must belong to its `deal_id`. The mail job cannot infer money from these facts, which contain no amount; an unknown payment waits for a user to identify or create it under the existing commission constraints. `invoice_mailbox` is the owner's trusted-sender list. The engine reads it but cannot change it.
+
+A job moves captured to applied only for an exact normalized deal-name match corroborated by the client name or full property address. Every supplied corroborating field must agree, exactly one deal must match, the sender must be trusted and dates nonfuture, and an existing payment invoice date must agree. A direct user resolves doubtful matches by selecting the target and applying. Matching facts and membership are locked through application. No sender values are seeded here.
+
+Application appends closed phase history and sets only the selected payment's `invoiced_on`. Its previous phase and date are saved for undo. A deal without phase history needs a user to establish its prior phase first. `deal_invoiced` reads the earliest payment invoice date, including manually dated payments; later installments keep their own dates. Receiving an invoice never sets `received_on`. A user moves applied to undone to restore the previous phase and date. Newer phase work or any newer invoice-date change refuses undo. Correcting other payment fields does not block it. No evidence is deleted or reapplied; stamps and change history record capture, application and undo.
+
+Moving today's `deal_invoice_email` rows across preserves id, evidence_ref, from_address as sender, deal_name, client_name, property_address, occurred_at and email_date. Captured stays captured. Applied and undone retain their states and their original application and undo actors and times in change history. Map deal_id through the deal copy, identify the commission payment without guessing an amount, and map phase_event_id and invoice_event_id to copied phase history and payment change history. Prior phase and invoice date become the snapshots. Load history through the owner's import with transition and stamp triggers disabled, without replaying closes or undo. Missing payment, phase, source or actor evidence is listed by record id for a user, never fabricated. Reconcile the old deal date with commission payment dates: attach it to an identified payment only when evidence proves it, list disagreements or dates without a payment, and never overwrite a different date silently. Undone records keep the restored date from current payments. This is the mapping specification; the copier and live mail job follow separately.

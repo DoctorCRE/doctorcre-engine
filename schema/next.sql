@@ -1814,6 +1814,133 @@ select p.deal_id, p.party_id, p.kind, p.share,
 from parts p join commission m using (deal_id)
 window running as (partition by p.deal_id order by p.part, p.id);
 
+-- Invoice emails. Captured facts do not claim that a commission has been received.
+create table invoice_mailbox (
+	address email_address primary key
+);
+
+alter table commission_payment add unique (id, deal_id);
+
+create table invoice_email (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	evidence_ref text not null unique check (evidence_ref ~ '\S'),
+	sender email_address not null,
+	deal_name text not null check (deal_name ~ '\S'),
+	client_name text check (client_name ~ '\S'),
+	property_address text check (property_address ~ '\S'),
+	occurred_at timestamptz not null,
+	-- Preserve the sender's calendar date, including its offset, rather than the session's zone.
+	email_date date not null,
+	status text not null default 'captured' check (status in ('captured', 'applied', 'undone')),
+	deal_id uuid references deal,
+	payment_id uuid,
+	prior_phase_at timestamptz,
+	applied_phase_at timestamptz,
+	prior_invoiced_on date,
+	payment_change_id bigint,
+	foreign key (payment_id, deal_id) references commission_payment (id, deal_id),
+	foreign key (deal_id, prior_phase_at) references deal_phase_change,
+	foreign key (deal_id, applied_phase_at) references deal_phase_change,
+	constraint invoice_email_date_matches_time check (isfinite(occurred_at) and isfinite(email_date)
+		and abs(email_date - (occurred_at at time zone 'UTC')::date) <= 1),
+	constraint invoice_email_target_whole check ((deal_id is null) = (payment_id is null)),
+	constraint invoice_email_applied_whole check (status = 'captured' or
+		(deal_id is not null and applied_phase_at is not null))
+);
+
+create view deal_invoiced as
+select deal_id, min(invoiced_on) as invoiced_on from commission_payment group by deal_id;
+
+create function invoice_name(value text) returns text
+language sql immutable return lower(regexp_replace(btrim(value), '\s+', ' ', 'g'));
+
+-- All phase writers hold the deal, including manual moves racing an invoice undo.
+create function lock_phase_deal() returns trigger
+language plpgsql as $$
+begin
+	perform from deal where id = new.deal_id for update;
+	return new;
+end $$;
+create trigger lock_phase_deal before insert on deal_phase_change
+	for each row execute function lock_phase_deal();
+
+create function invoice_email_transition() returns trigger
+language plpgsql as $$
+declare
+	latest deal_phase_change;
+	payment commission_payment;
+	matches uuid[];
+	direct_user boolean := nullif(current_setting('engine.user_id', true), '') is not null
+		and nullif(current_setting('engine.job', true), '') is null;
+begin
+	if tg_op = 'INSERT' then
+		if new.status <> 'captured' then
+			raise exception 'an invoice starts captured' using errcode = 'check_violation', constraint = 'invoice_email_starts_captured';
+		end if;
+		return new;
+	end if;
+	if old.status <> 'captured' and (new.deal_id, new.payment_id) is distinct from (old.deal_id, old.payment_id) then
+		raise exception 'an applied invoice keeps its target' using errcode = 'check_violation', constraint = 'invoice_email_keeps_target';
+	end if;
+	if old.status = 'captured' and new.status = 'captured' then return new; end if;
+	if not (old.status = 'captured' and new.status = 'applied' or old.status = 'applied' and new.status = 'undone' and direct_user) then
+		raise exception 'an invoice applies once and only a user undoes it' using errcode = 'check_violation', constraint = 'invoice_email_status_moves';
+	end if;
+	-- Membership and matching facts cannot change between counting matches and closing.
+	lock table deal, deal_party, deal_property, party, property in share mode;
+	perform from deal where id = new.deal_id for update;
+	select * into latest from deal_phase_change where deal_id = new.deal_id order by happened_at desc limit 1;
+	select * into payment from commission_payment where id = new.payment_id for update;
+	if new.status = 'applied' then
+		if new.deal_id is null then
+			raise exception 'an invoice needs its payment' using errcode = 'check_violation', constraint = 'invoice_email_needs_payment';
+		end if;
+		if latest.happened_at is null then
+			raise exception 'an invoice needs the previous phase for undo' using errcode = 'check_violation', constraint = 'invoice_email_needs_prior_phase';
+		end if;
+		select array_agg(d.id) into matches from deal d
+		where invoice_name(d.name) = invoice_name(new.deal_name)
+			and (new.client_name is not null or new.property_address is not null)
+			and (new.client_name is null or exists (select from deal_party dp join party p on p.id = dp.party_id
+				where dp.deal_id = d.id and dp.role = 'client' and invoice_name(p.name) = invoice_name(new.client_name)))
+			and (new.property_address is null or exists (select from deal_property dp join property p on p.id = dp.property_id
+				where dp.deal_id = d.id and invoice_name(p.address) = invoice_name(new.property_address)));
+		perform from invoice_mailbox where address = new.sender;
+		if not direct_user and (not found or matches is distinct from array[new.deal_id]
+			or new.occurred_at > clock_timestamp() or new.email_date > current_date
+			or payment.invoiced_on is not null and payment.invoiced_on <> new.email_date) then
+			raise exception 'a doubtful invoice waits for a user' using errcode = 'check_violation', constraint = 'invoice_email_needs_user';
+		end if;
+		new.prior_phase_at := latest.happened_at;
+		new.prior_invoiced_on := payment.invoiced_on;
+		new.applied_phase_at := greatest(clock_timestamp(), latest.happened_at + interval '1 microsecond');
+		insert into deal_phase_change (deal_id, happened_at, phase, reason)
+		values (new.deal_id, new.applied_phase_at, 'closed', 'Invoice received');
+		update commission_payment set invoiced_on = new.email_date where id = new.payment_id;
+		select max(id) into new.payment_change_id from change where table_name = 'commission_payment'
+			and record = jsonb_build_object('id', new.payment_id) and (new_value ? 'invoiced_on');
+	else
+		if latest.happened_at is distinct from old.applied_phase_at
+			or payment.invoiced_on is distinct from old.email_date
+			or old.payment_change_id is distinct from (select max(id) from change where table_name = 'commission_payment'
+				and record = jsonb_build_object('id', new.payment_id) and new_value ? 'invoiced_on') then
+			raise exception 'newer work prevents undo' using errcode = 'check_violation', constraint = 'invoice_email_undo_current';
+		end if;
+		if old.prior_phase_at is null then
+			raise exception 'undo needs a previous phase' using errcode = 'check_violation', constraint = 'invoice_email_undo_prior_phase';
+		end if;
+		insert into deal_phase_change (deal_id, happened_at, phase, reason)
+		select deal_id, greatest(clock_timestamp(), latest.happened_at + interval '1 microsecond'), phase, 'Invoice close undone'
+		from deal_phase_change where deal_id = old.deal_id and happened_at = old.prior_phase_at;
+		update commission_payment set invoiced_on = old.prior_invoiced_on where id = old.payment_id;
+	end if;
+	return new;
+end $$;
+
+create trigger invoice_email_transition before insert or update on invoice_email
+	for each row execute function invoice_email_transition();
+
 -- Everything that points at the duplicate moves to the survivor, and the duplicate is removed (decision 39).
 -- It runs with the owner's rights, because it also moves history the engine never rewrites, such as rounds and outside ids.
 create function merge_party(duplicate uuid, survivor uuid) returns void
@@ -2023,7 +2150,7 @@ begin
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
-		'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
+		'invoice_email', 'invoice_mailbox', 'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
 				add changed_by_job text references job,
 				add changed_for_user_id uuid references app_user,
@@ -2255,3 +2382,9 @@ grant update (started_on, ended_on, source) on building_ownership to engine;
 
 revoke insert on lead_contact_draft from engine;
 grant insert (id, party_id, owner_user_id, subject, body, scheduled_for, time_zone) on lead_contact_draft to engine;
+
+-- The owner chooses trusted senders; captured evidence and application snapshots are never supplied as applied history.
+revoke insert on invoice_mailbox, invoice_email from engine;
+grant insert (id, created_at, evidence_ref, sender, deal_name, client_name, property_address, occurred_at, email_date, deal_id, payment_id)
+	on invoice_email to engine;
+grant update (status, deal_id, payment_id) on invoice_email to engine;
