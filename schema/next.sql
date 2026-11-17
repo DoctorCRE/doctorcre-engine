@@ -1539,55 +1539,6 @@ begin atomic
 	));
 end;
 
-create function everything_about_deal(wanted uuid) returns jsonb
-language sql stable
-begin atomic
-	select jsonb_build_object(
-		'deal', to_jsonb(d),
-		'phases', (
-			select coalesce(jsonb_agg(to_jsonb(c) - 'deal_id' order by c.happened_at), '[]')
-			from deal_phase_change c
-			where c.deal_id = d.id
-		),
-		'properties', (
-			select coalesce(jsonb_agg(to_jsonb(p) order by p.address), '[]')
-			from deal_property dp join property p on p.id = dp.property_id
-			where dp.deal_id = d.id
-		),
-		'parties', (
-			select coalesce(jsonb_agg(to_jsonb(p) || jsonb_build_object('role', dp.role) order by dp.role, p.name), '[]')
-			from deal_party dp join party p on p.id = dp.party_id
-			where dp.deal_id = d.id
-		),
-		'offers', (
-			select coalesce(jsonb_agg(to_jsonb(o) - array['deal_id', 'import_source', 'import_id', 'import_record'] || jsonb_build_object('documents', (
-				select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
-				from offer_document od join document doc on doc.id = od.document_id
-				where od.offer_id = o.id
-			), 'claims', (
-				select coalesce(jsonb_agg(to_jsonb(c) - 'offer_id' order by c.claim_type), '[]')
-				from offer_claim c
-				where c.offer_id = o.id
-			)) order by o.round), '[]')
-			from offer o
-			where o.deal_id = d.id
-		),
-		'activity', (
-			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
-			from activity_about aa join activity a on a.id = aa.activity_id
-			where aa.deal_id = d.id
-		),
-		'next_steps', (
-			select coalesce(jsonb_agg(to_jsonb(s) - 'deal_id' - 'party_id' - 'property_id'
-				order by s.due_on nulls last, s.id), '[]')
-			from next_step s
-			where s.deal_id = d.id
-		)
-	)
-	from deal d
-	where d.id = wanted;
-end;
-
 -- "Account" alone means a national account (docs/glossary.md).
 create table social_account (
 	id uuid primary key default gen_random_uuid(),
@@ -2297,6 +2248,7 @@ create table change (
 );
 
 create index change_record on change (table_name, record);
+create index change_deal_party on change (((record ->> 'deal_id')::uuid)) where table_name = 'deal_party';
 
 alter table invoice_email add foreign key (payment_change_id) references change;
 create index change_payment_invoice_date on change (record, id desc)
@@ -2501,6 +2453,77 @@ create table imported_change (
 create index imported_change_record on imported_change (table_name, record);
 create trigger stamp_imported_change before insert on imported_change
  for each row execute function stamp_change();
+
+create function everything_about_deal(wanted uuid) returns jsonb
+language sql stable
+begin atomic
+	select jsonb_build_object(
+		'deal', to_jsonb(d),
+		'phases', (
+			select coalesce(jsonb_agg(to_jsonb(c) - 'deal_id' order by c.happened_at), '[]')
+			from deal_phase_change c
+			where c.deal_id = d.id
+		),
+		'properties', (
+			select coalesce(jsonb_agg(to_jsonb(p) order by p.address), '[]')
+			from deal_property dp join property p on p.id = dp.property_id
+			where dp.deal_id = d.id
+		),
+		'parties', (
+			select coalesce(jsonb_agg(to_jsonb(p) || jsonb_build_object('role', dp.role) order by dp.role, p.name), '[]')
+			from deal_party dp join party p on p.id = dp.party_id
+			where dp.deal_id = d.id
+		),
+		'offers', (
+			select coalesce(jsonb_agg(to_jsonb(o) - array['deal_id', 'import_source', 'import_id', 'import_record'] || jsonb_build_object('documents', (
+				select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
+				from offer_document od join document doc on doc.id = od.document_id
+				where od.offer_id = o.id
+			), 'claims', (
+				select coalesce(jsonb_agg(to_jsonb(c) - 'offer_id' order by c.claim_type), '[]')
+				from offer_claim c
+				where c.offer_id = o.id
+			)) order by o.round), '[]')
+			from offer o
+			where o.deal_id = d.id
+		),
+		'activity', (
+			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
+			from activity_about aa join activity a on a.id = aa.activity_id
+			where aa.deal_id = d.id
+		),
+		'next_steps', (
+			select coalesce(jsonb_agg(to_jsonb(s) - 'deal_id' - 'party_id' - 'property_id'
+				order by s.due_on nulls last, s.id), '[]')
+			from next_step s
+			where s.deal_id = d.id
+		),
+		'earlier_parties', (
+			select coalesce(jsonb_agg(to_jsonb(e) - 'deal_id' || jsonb_build_object('party', to_jsonb(p))
+				order by e.ended_at, e.id), '[]')
+			from imported_deal_party e join party p on p.id = e.party_id
+			where e.deal_id = d.id
+		),
+		'earlier_owners', (
+			select coalesce(jsonb_agg(to_jsonb(o) - 'deal_id' order by o.ended_at, o.id), '[]')
+			from imported_deal_owner o
+			where o.deal_id = d.id
+		),
+		'history', (
+			select coalesce(jsonb_agg(to_jsonb(c) order by c.changed_at, c.id), '[]')
+			from change c
+			where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
+				or c.table_name = 'deal_party' and (c.record ->> 'deal_id')::uuid = d.id
+		),
+		'imported_history', (
+			select coalesce(jsonb_agg(to_jsonb(c) order by c.changed_at, c.id), '[]')
+			from imported_change c
+			where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
+		)
+	)
+	from deal d
+	where d.id = wanted;
+end;
 
 create function everything_about_party(wanted uuid) returns jsonb
 language sql stable

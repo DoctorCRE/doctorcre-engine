@@ -3459,7 +3459,29 @@ test("a merged-away party reads its survivor including moved links after another
 });
 
 test("everything about the LOI deal comes back in one read, each list in order", async () => {
-	assert.deepEqual(await readDeal(), {
+	const { history, ...deal } = await readDeal();
+	assert.deepEqual(
+		history.map((c: { table_name: string; action: string; record: object }) => [
+			c.table_name,
+			c.action,
+			c.record,
+		]),
+		[
+			["deal", "insert", { id: DEAL }],
+			[
+				"deal_party",
+				"insert",
+				{ deal_id: DEAL, party_id: CLIENT, role: "client" },
+			],
+			[
+				"deal_party",
+				"insert",
+				{ deal_id: DEAL, party_id: AGENT, role: "listing_agent" },
+			],
+			["deal", "update", { id: DEAL }],
+		],
+	);
+	assert.deepEqual(deal, {
 		deal: {
 			id: DEAL,
 			name: "Example Dental Springfield Deal",
@@ -3556,8 +3578,189 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				status: "open",
 			},
 		],
+		earlier_parties: [],
+		earlier_owners: [],
+		imported_history: [],
 	});
 });
+
+test("a deal read lists who was on it and who owned it before, in the order they left", () =>
+	rolledBack(async () => {
+		await db.query(`set local role none;
+			${earlierParty()};
+			${earlierParty({ id: id(9601), party_id: CLIENT, role: "client", started_at: null, ended_at: "2024-03-01" })};
+			${earlierParty({ id: id(9602), deal_id: LENDER_DEAL })};
+			${earlierOwner()};
+			${earlierOwner({ id: id(9611), user_id: USER, started_at: null, ended_at: "2025-01-01" })};
+			${earlierOwner({ id: id(9612), deal_id: LENDER_DEAL })};
+			set local role engine`);
+		const deal = await readDeal();
+		const party = (wanted: string) => {
+			const { role: _, ...found } = deal.parties.find(
+				(p: { id: string }) => p.id === wanted,
+			);
+			return found;
+		};
+		assert.deepEqual(deal.earlier_parties, [
+			{
+				id: id(9601),
+				party_id: CLIENT,
+				role: "client",
+				started_at: null,
+				ended_at: "2024-03-01T00:00:00+00:00",
+				party: party(CLIENT),
+			},
+			{
+				id: id(9600),
+				party_id: AGENT,
+				role: "listing_agent",
+				started_at: "2025-01-01T00:00:00+00:00",
+				ended_at: "2025-06-01T00:00:00+00:00",
+				party: party(AGENT),
+			},
+		]);
+		assert.deepEqual(deal.earlier_owners, [
+			{
+				id: id(9611),
+				user_id: USER,
+				started_at: null,
+				ended_at: "2025-01-01T00:00:00+00:00",
+			},
+			{
+				id: id(9610),
+				user_id: TEAMMATE,
+				started_at: "2025-01-01T00:00:00+00:00",
+				ended_at: "2025-06-01T00:00:00+00:00",
+			},
+		]);
+	}));
+
+test("a deal's history keeps complete native and imported rows in time and id order, excluding other deals and children", () =>
+	rolledBack(async () => {
+		await db.query(`set constraints all immediate;
+			set local role none;
+			delete from change where (table_name, record) = ('deal', '{"id":"${DEAL}"}')
+				or table_name = 'deal_party' and record ->> 'deal_id' = '${DEAL}';
+			alter table change disable trigger stamp_change;
+			alter table imported_change disable trigger stamp_imported_change`);
+		const recorded = async (
+			n: number,
+			day: number,
+			table: string,
+			record: object,
+		) =>
+			(
+				await db.query(
+					`insert into change (id, table_name, record, action, old_value, changed_by_job, changed_at)
+					overriding system value values ($1, $2, $3, 'delete', '{"example":true}', 'old_system', $4)
+					returning to_jsonb(change) as entry`,
+					[n, table, record, `2026-01-0${day}T00:00:00Z`],
+				)
+			).rows[0].entry;
+		const imported = async (n: number, day: number, deal = DEAL) =>
+			(
+				await db.query(
+					`insert into imported_change
+					(id, table_name, record, old_value_absent, new_value_absent, field, source_event, changed_by_job, changed_at)
+					values ($1, 'deal', $2, false, false, 'owner', $3, 'old_system', $4)
+					returning to_jsonb(imported_change) as entry`,
+					[
+						id(n),
+						{ id: deal },
+						{
+							id: id(n),
+							verb: "set-lead",
+							cause: "human",
+							actor_id: "example-actor",
+						},
+						`2020-01-0${day}T00:00:00Z`,
+					],
+				)
+			).rows[0].entry;
+		const agent = { party_id: AGENT, role: "listing_agent" };
+		const history = [
+			await recorded(9702, 2, "deal", { id: DEAL }),
+			await recorded(9701, 1, "deal_party", { deal_id: DEAL, ...agent }),
+			await recorded(9700, 2, "deal", { id: DEAL }),
+		];
+		const importedHistory = [
+			await imported(9712, 2),
+			await imported(9711, 1),
+			await imported(9710, 2),
+		];
+		await recorded(9703, 1, "deal_party", { deal_id: LENDER_DEAL, ...agent });
+		await recorded(9704, 1, "deal_property", {
+			deal_id: DEAL,
+			property_id: PROPERTY,
+		});
+		await recorded(9705, 1, "deal", { id: LENDER_DEAL });
+		await imported(9713, 1, LENDER_DEAL);
+		await db.query(`alter table change enable trigger stamp_change;
+			alter table imported_change enable trigger stamp_imported_change;
+			set local role engine`);
+		const result = (
+			await db.query("select everything_about_deal($1) as value", [DEAL])
+		).rows[0].value;
+		assert.deepEqual(result.history, [history[1], history[2], history[0]]);
+		assert.deepEqual(result.imported_history, [
+			importedHistory[1],
+			importedHistory[2],
+			importedHistory[0],
+		]);
+	}));
+
+test("a native owner handoff and a native removal show in the deal's history", () =>
+	rolledBack(async () => {
+		await db.query(`update deal set owner_user_id = '${TEAMMATE}' where id = '${DEAL}';
+			insert into deal_party values ('${DEAL}', '${LENDERS[0]}', 'lender');
+			delete from deal_party where (deal_id, party_id) = ('${DEAL}', '${LENDERS[0]}')`);
+		const lender = { deal_id: DEAL, party_id: LENDERS[0], role: "lender" };
+		assert.deepEqual(
+			(await readDeal()).history
+				.slice(-3)
+				.map(
+					({ id: _, merge_of: __, ...change }: Record<string, unknown>) =>
+						change,
+				),
+			[
+				{
+					table_name: "deal",
+					record: { id: DEAL },
+					action: "update",
+					old_value: { owner_user_id: USER },
+					new_value: { owner_user_id: TEAMMATE },
+				},
+				{
+					table_name: "deal_party",
+					record: lender,
+					action: "insert",
+					old_value: null,
+					new_value: { ...lender, client_role: null },
+				},
+				{
+					table_name: "deal_party",
+					record: lender,
+					action: "delete",
+					old_value: { ...lender, client_role: null },
+					new_value: null,
+				},
+			],
+		);
+	}));
+
+test("a deal's people history lookup uses its own index", () =>
+	rolledBack(async () => {
+		await db.query("set local enable_seqscan = off");
+		const { rows } = await db.query(
+			`explain select * from change
+			where table_name = 'deal_party' and (record ->> 'deal_id')::uuid = $1`,
+			[DEAL],
+		);
+		assert.match(
+			rows.map((row) => row["QUERY PLAN"]).join("\n"),
+			/change_deal_party/,
+		);
+	}));
 
 for (const [rule, cases] of Object.entries(RULES))
 	test(rule, async () => {
