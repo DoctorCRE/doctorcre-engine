@@ -40,9 +40,9 @@ type HistoryEntry = {
 };
 
 export type Saving = {
+	partner: string;
 	tx: Transaction<DB>;
 	actor_id: string;
-	partner: string;
 	record(entry: HistoryEntry): Promise<void>;
 };
 

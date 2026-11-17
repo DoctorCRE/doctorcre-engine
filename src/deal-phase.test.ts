@@ -212,7 +212,7 @@ test("a phase move refuses blank phases and bad start dates, then takes the next
 			await db.query(seed);
 			const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
 			for (const [extra, error, more] of [
-				[{ value: " " }, "invalid_field_value", { fields: ["field"] }],
+				[{ value: " " }, "database_refused_the_statement", {}],
 				[{ occurred_on: tomorrow.slice(0, 10) }, "unhandled_verb_failure", {}],
 				[{ occurred_on: "2026-02-30" }, "unhandled_verb_failure", {}],
 			] as const) {

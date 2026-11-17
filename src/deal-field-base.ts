@@ -8,6 +8,8 @@ import { SaveRefusal, type Saving } from "./save.ts";
 import { isArguments } from "./save-door.ts";
 
 const REASONS = ["prospect_never_active", "client_paused", "other"];
+const isReason = (value: JsonValue | undefined): value is string =>
+	typeof value === "string" && REASONS.includes(value);
 
 export type Patch =
 	| { field: "phase"; value: string; occurred_on: string | null }
@@ -26,12 +28,14 @@ function refused(): never {
 	throw new SaveRefusal(new Refusal(400, "unhandled_verb_failure"));
 }
 
+// The old error named the cell, not an input name, so it fell back to this general answer.
+function invalidValue(): never {
+	throw new SaveRefusal(new Refusal(400, "database_refused_the_statement"));
+}
+
 function validated({ field, value, occurred_on }: JsonObject): Patch {
 	if (field === "phase") {
-		if (typeof value !== "string" || !value.trim())
-			throw new SaveRefusal(
-				new Refusal(400, "invalid_field_value", { fields: ["field"] }),
-			);
+		if (typeof value !== "string" || !value.trim()) invalidValue();
 		if (occurred_on == null) return { field, value, occurred_on: null };
 		// The old writer compared against today's UTC date.
 		if (
@@ -46,9 +50,7 @@ function validated({ field, value, occurred_on }: JsonObject): Patch {
 			value !== null &&
 			(typeof value !== "string" || !PARTNERS.some((p) => p === value))
 		)
-			throw new SaveRefusal(
-				new Refusal(400, "invalid_field_value", { fields: ["field"] }),
-			);
+			invalidValue();
 		if (occurred_on != null) refused();
 		return { field, value };
 	}
@@ -57,14 +59,9 @@ function validated({ field, value, occurred_on }: JsonObject): Patch {
 		!isArguments(value) ||
 		(value.state !== "active" && value.state !== "parked")
 	)
-		throw new SaveRefusal(
-			new Refusal(400, "invalid_field_value", { fields: ["field"] }),
-		);
-	if (
-		value.state === "parked" &&
-		(typeof value.reason !== "string" || !REASONS.includes(value.reason))
-	)
-		refused();
+		invalidValue();
+	const reason = isReason(value.reason) ? value.reason : null;
+	if (value.state === "parked" && reason === null) refused();
 	if (value.state === "active" && (value.reason != null || value.note != null))
 		refused();
 	if (
@@ -77,7 +74,7 @@ function validated({ field, value, occurred_on }: JsonObject): Patch {
 		field,
 		value: {
 			state: value.state,
-			reason: value.state === "parked" ? String(value.reason) : null,
+			reason: value.state === "parked" ? reason : null,
 			note:
 				value.state === "parked" && typeof value.note === "string"
 					? value.note.trim() || null
@@ -100,7 +97,7 @@ export async function preparePatch(saving: Saving, args: JsonObject) {
 		await sql`select pg_advisory_xact_lock(hashtextextended(${deal_id} || ':' || ${locked}, 0))`.execute(
 			tx,
 		);
-	const base = args.base_event_id || null;
+	const base = args.base_event_id ?? null;
 	if (
 		base &&
 		!(await tx
@@ -142,11 +139,6 @@ export async function preparePatch(saving: Saving, args: JsonObject) {
 			})
 			.returning(["id", "status"])
 			.executeTakeFirstOrThrow();
-		const partner = await tx
-			.selectFrom("actor")
-			.select("slug")
-			.where("id", "=", actor_id)
-			.executeTakeFirstOrThrow();
 		return {
 			ok: false,
 			conflict: {
@@ -158,7 +150,7 @@ export async function preparePatch(saving: Saving, args: JsonObject) {
 				actor_a: newer.slug,
 				event_a: newer.id,
 				value_b: args.value,
-				actor_b: partner.slug,
+				actor_b: saving.partner,
 			},
 		};
 	}
