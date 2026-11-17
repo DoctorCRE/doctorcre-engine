@@ -380,6 +380,16 @@ A direct user confirms a proposal to open, or drops it with a reason. Only a dir
 
 Today's `critical_date` rows keep their kinds, dates, sources and notes. `option_window` maps to `option_notice`, an unlisted kind to `other` with its original wording in the note. A date directly added by a user takes its confirmation from `created_by` and `created_at`; dates proposed by automation still need user confirmation. `cleared` maps to `done`. Resolved rows take their user, time and reason from the resolution event log; a legacy resolution without that evidence is listed for a partner to fix. The owner's load preserves known users and times with the transition and stamp triggers disabled, and lists missing evidence or decisions for a partner to fix rather than inventing confirmation. Today shows confirmed open dates; proposals stay in the confirmation queue. These reads follow in later slices.
 
+## Copying today's critical dates
+
+`schema/copy-critical-dates.sql` runs after the deal copy, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public`, and ends with its `not_copied` list. Dates keep their ids, kinds, due dates, sources and notes, so a repeat leaves copied dates alone.
+
+- `option_window` becomes `option_notice`. A kind not on the list becomes `other`, with `Kind:` and its old wording first in the note.
+- A date a partner added is confirmed by that partner at its creation time. A date an agent or job added loads as proposed, waiting for a user.
+- A resolved date takes its user, time and reason from its latest `status` event on the deal naming that date and status. `cleared` becomes `done`. A done or passed date also needs a partner's confirmation.
+- Listed, not copied: a date whose deal is not copied, a blank source, a resolution with no event or no reason, a resolution by an agent or job, a done or passed date no partner confirmed, and an id the new database holds on another deal.
+- The transition and stamp triggers are off during the load and on again after it.
+
 ## Tours as meetings
 
 A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal; the property links support a later property read. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
