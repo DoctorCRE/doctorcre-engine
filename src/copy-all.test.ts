@@ -24,6 +24,16 @@ const order: [file: string, input?: string][] = [
 		`create temp table copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop;
  insert into copy_how_found values ('lead', 'Example referral', 'referral'), ('client', 'Example referral', 'referral');`,
 	],
+	[
+		"copy-national-account-owners.sql",
+		`create temp table copy_account_owner_date (account_client_id uuid primary key, started_on date not null) on commit drop;
+ insert into copy_account_owner_date values ('${id(23)}', '2024-03-01');`,
+	],
+	[
+		"copy-client-brands.sql",
+		`create temp table copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop;
+ insert into copy_client_brand_date values ('${id(20)}', '2024-01-01');`,
+	],
 	["copy-candidates-drafts.sql"],
 	["copy-vendors.sql"],
 	["copy-buildings.sql"],
@@ -44,6 +54,7 @@ const order: [file: string, input?: string][] = [
 	["copy-calls.sql"],
 	["copy-lead-stage-moves.sql"],
 	["copy-deal-next-steps.sql"],
+	["copy-call-suggestions.sql"],
 	["copy-preferences.sql"],
 	["copy-change-history.sql"],
 ];
@@ -69,6 +80,7 @@ update public.party set contact_state = 'do_not_contact', contact_state_reason =
  contact_state_set_by = '${id(1)}', contact_state_set_at = '2024-03-01' where id = '${id(13)}';
 insert into public.party (id, kind, name, created_by, updated_by, created_at, updated_at) values
  ('${id(16)}', 'org', 'Example National Brand', '${id(1)}', '${id(1)}', '2024-01-06', '2024-02-06');
+update public.party set org_id = '${id(16)}' where id = '${id(10)}';
 insert into public.client_type (slug, label) values ('national_account', 'Example account');
 insert into public.client_status (slug, label) values ('active_deal', 'Example active deal');
 insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by, created_at) values
@@ -264,20 +276,20 @@ const counts = async () =>
 // Each table a copy writes holds what the snapshot gave it, so no copy passes by copying nothing.
 // biome-ignore format: one entry per copied table
 const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1,
- specialty: 1, do_not_contact: 1, client: 2, national_account: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
+ specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 4, activity_about: 5, lead_stage_move: 1, proposal: 1,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 4, activity_about: 5, lead_stage_move: 1, proposal: 2,
  candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 1 };
 // biome-ignore format: one row per correction
 const corrections = [
+ ["copy-parties.sql", id(10), "org_id", id(16), "a national account has no place in the new database yet"],
  ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
  ["copy-markets.sql", id(22), "membership_details", '{"market": "example-bay", "source": "Example review", "office_presence": true, "service_coverage": null}', "no_typed_destination"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
  ["copy-markets.sql", "example-bay", "source", "Example review", "no_typed_destination"],
- ["copy-leads-clients.sql", id(23), "national_account_owner", id(1), "owner_start_date_required"],
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
