@@ -738,7 +738,7 @@ test("offer notes stay visible, a known submarket condition copies and any other
 					other_terms:
 						"Escalator: 3% yearly\nOptions: One renewal\nOperating costs: Expenses capped\nNote: Example general note",
 					submarket_condition: null,
-					offered_at: "2025-03-01 00:00:00+00",
+					offered_at: "2025-03-01 06:00:00+00",
 				},
 				{
 					other_terms: null,
@@ -877,6 +877,74 @@ test("claim conflicts stay listed, later claims can copy, and imported offers re
 		await refused(
 			`insert into offer_claim (offer_id, claim_type) values ('${id(101)}', 'example')`,
 			"23505",
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("claims use import identity rather than an unrelated offer with the old round id", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by)
+ values ('${id(320)}', '${id(10)}', 9, 'tenant', '2025-04-01', '2025-04-01', '${id(1)}');
+ insert into public.negotiation_claim (id, round_id, claim_type, created_by) values ('${id(321)}', '${id(320)}', 'example', '${id(1)}');
+ insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at)
+ values ('${id(320)}', '${id(10)}', '${id(90)}', 20, '${id(2)}', 'client', now());`);
+		assert.ok(
+			(await run()).some(
+				(r) => r.old_id === id(321) && r.reason === "round_not_copied",
+			),
+		);
+		assert.deepEqual(
+			await rows(`select * from offer_claim where offer_id = '${id(320)}'`),
+			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.negotiation_claim (id, round_id, claim_type, created_by) values ('${id(322)}', '${id(101)}', 'example', '${id(1)}');
+ delete from offer where id = '${id(101)}';
+ insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at, import_source, import_id, import_record)
+ values ('${id(323)}', '${id(10)}', '${id(90)}', 3, '${id(4)}', 'property_owner', now(), 'old_system', '${id(101)}', '{}');`);
+		await run();
+		assert.deepEqual(
+			await rows(
+				`select offer_id from offer_claim where offer_id = '${id(323)}'`,
+			),
+			[{ offer_id: id(323) }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("claims with uncopied authors or sponsors and blank notes wait for review", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into public.actor (id, slug, kind, display_name) values ('${id(330)}', 'example-missing', 'human', 'Example missing user'), ('${id(331)}', 'codex', 'automation', 'Example agent');
+ insert into public.negotiation_claim (id, round_id, claim_type, created_by, note) values
+ ('${id(332)}', '${id(101)}', 'example', '${id(330)}', null),
+ ('${id(333)}', '${id(105)}', 'example', '${id(331)}', ' ');
+ insert into public.event (actor_id, verb, subject_type, subject_id, cause, sponsoring_human_slug, occurred_at) values ('${id(331)}', 'example', 'negotiation_claim', '${id(333)}', 'human_stated', 'example-missing', '2025-04-01');`);
+		const result = await run();
+		assert.deepEqual(
+			result
+				.filter((r) => [id(332), id(333)].includes(r.old_id))
+				.map((r) => [r.old_id, r.reason]),
+			[
+				[id(332), "claim_author_not_copied"],
+				[id(333), "blank_claim_text"],
+				[id(333), "claim_sponsor_not_copied"],
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select * from offer_claim where offer_id in ('${id(101)}', '${id(105)}')`,
+			),
+			[],
 		);
 	} finally {
 		await db.query("rollback");

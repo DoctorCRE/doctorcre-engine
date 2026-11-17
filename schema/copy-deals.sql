@@ -216,6 +216,7 @@ select c.id, f.reason from mapped_claim c cross join lateral (values
  ('floor_out_of_range', c.floor_rent_per_sf_yr is not null and (c.floor_rent_per_sf_yr < 0.005 or c.floor_rent_per_sf_yr >= 99999999.995)),
  ('blank_claim_text', c.quote is not null and c.quote !~ '\S' or c.note is not null and c.note !~ '\S'),
  ('claim_author_not_copied', c.changed_by_user_id is not null and not exists (select from app_user u where u.id = c.changed_by_user_id)),
+ ('claim_sponsor_not_copied', c.changed_for_user_id is not null and not exists (select from app_user u where u.id = c.changed_for_user_id)),
  ('existing_claim_conflict', exists (select from offer_claim n where (n.offer_id, n.claim_type) = (c.offer_id, c.claim_type)
  and (n.floor_rent_per_sf_yr, n.quote, n.note, n.created_at, n.changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id)
  is distinct from (c.floor_rent_per_sf_yr, c.quote, c.note, c.created_at, c.created_at, c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id)))
