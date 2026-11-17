@@ -286,8 +286,9 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 18. `copy-calls.sql`: needs the activity a logged meeting already is.
 19. `copy-lead-stage-moves.sql`: needs the activity each move cites.
 20. `copy-deal-next-steps.sql`: needs deals and activity.
-21. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
-22. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
+21. `copy-call-suggestions.sql`: needs the calls and the next steps an accepted suggestion made.
+22. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
+23. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
 Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
 
@@ -838,6 +839,17 @@ Run `schema/copy-calls.sql` as the owner after `copy-activity.sql`, in its own t
 - A call is about each deal, person or company its suggestions name: a post-call suggestion's deal, and a capture suggestion's deal or record when it is an id. A client, lead or vendor is about its person or company. A name or a record not yet copied is listed, and a call about nothing copied waits.
 - Listed and copied without the value: an unfinished or failed session, the recording's hash, since the audio is not stored, and the Call Studio review state. Device, nonce, token, expiry, consent time, file facts and the outcome review are capture machinery and are dropped.
 - A rerun copies only sessions not yet copied, and adds the links of records copied since, so an unchanged rerun changes nothing.
+
+## Copying today's call suggestions
+
+Run `schema/copy-call-suggestions.sql` as the owner after `copy-calls.sql` and `copy-deal-next-steps.sql`, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied` (decision 86).
+
+- A `capture_candidate` next step or phase move and a `capture_post_call_candidate` assigned action become a `proposal` on their deal, cited from the call or logged meeting `copy-calls.sql` made of their session, with their quote as evidence. Pending, confirmed and skipped become pending, accepted and dismissed. The old system's call capture proposed each one, so it is proposed by `old_system` at its creation time; the deciding user and time are today's resolver and resolution time. Change history holds the pending insert and, when decided, the decision.
+- An assigned action's owner is its assignee's user. A phase move goes from the phase its deal had before the call, read from the base event capture recorded, to its stated phase.
+- An accepted next step is not made again. Its proposal takes the id of the copied next step it made, found by its result or by the deal items and post-call action that name it, as acceptance would have. A step another suggestion made, or merged into, stays that suggestion's.
+- Listed and not copied: new deals, activity notes and email drafts, which are no suggestion kind; an applied suggestion that was undone; a deal or source activity not copied; blank evidence or text; an invalid due date; an assignee or resolver who is not a user; a phase move to an unknown or dead phase, to its current phase, or without its prior phase; an accepted next step whose step was not copied, made several steps, or shares one; and a suggestion that changed since it was copied or has another's payload. Meeting records are the session's activity and are left to `copy-calls.sql`.
+- Listed but copied without the value: a resolution note, a phase move's start date and a follow-up's contact. Confidence is capture machinery and is dropped.
+- A rerun leaves copied proposals and history as they were, and copies a suggestion whose deal, activity or next step was copied since.
 
 ## Copying today's preferences and Home marks
 

@@ -49,6 +49,7 @@ const order: [file: string, input?: string][] = [
 	["copy-calls.sql"],
 	["copy-lead-stage-moves.sql"],
 	["copy-deal-next-steps.sql"],
+	["copy-call-suggestions.sql"],
 	["copy-preferences.sql"],
 	["copy-change-history.sql"],
 ];
@@ -273,7 +274,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 4, activity_about: 5, lead_stage_move: 1, proposal: 1,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 4, activity_about: 5, lead_stage_move: 1, proposal: 2,
  candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 1 };
 // The party copy lists a copied record's leftover values on its first run only (#392).
 // biome-ignore format: one row per correction
