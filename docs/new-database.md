@@ -1213,23 +1213,23 @@ Jobs that stamp these saves: `mail_capture` for intake, the router and the outbo
 
 `POST /jobs/activities` and `POST /api/engine/activities`
 
-| Field                   | Type                                                       | Required                                                                    |
-| ----------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `idempotency_key`       | UUID                                                       | yes                                                                         |
-| `kind`                  | `email`, `call`, `meeting` or `note`                       | yes                                                                         |
-| `happened_at`           | instant with zone                                          | yes                                                                         |
-| `about`                 | list of `{ deal_id }`, `{ party_id }` or `{ property_id }` | yes for a call, meeting or note; for an email, added to the matched parties |
-| `summary`               | text                                                       | no; an email shows its subject                                              |
-| `from_party_id`         | UUID                                                       | no; an email's comes from its sender                                        |
-| `reached`               | boolean or null                                            | no; calls only                                                              |
-| `calendar_review_key`   | 16 hex characters                                          | no; a meeting confirmed from a calendar review (25)                         |
+| Field                   | Type                                                              | Required                                                                    |
+| ----------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `idempotency_key`       | UUID                                                              | yes                                                                         |
+| `kind`                  | `email`, `call`, `meeting` or `note`                              | yes                                                                         |
+| `happened_at`           | instant with zone                                                 | yes                                                                         |
+| `about`                 | list of `{ deal_id }`, `{ party_id }` or `{ property_id }`        | yes for a call, meeting or note; for an email, added to the matched parties |
+| `summary`               | text                                                              | no; an email shows its subject                                              |
+| `from_party_id`         | UUID                                                              | no; an email's comes from its sender                                        |
+| `reached`               | boolean or null                                                   | no; calls only                                                              |
+| `calendar_review_key`   | 16 hex characters                                                 | no; a meeting confirmed from a calendar review (25)                         |
 | `email.message_id`      | the nonblank Message-ID header, without angle brackets, case kept | yes for an email                                                            |
-| `email.sender`          | address                                                    | yes for an email                                                            |
-| `email.sender_name`     | the display name, as intake reads it                       | no                                                                          |
-| `email.recipients`      | list of `{ address, kind: to or cc }`                      | yes for an email, may be empty                                              |
-| `email.subject`         | text, may be empty                                         | yes for an email                                                            |
-| `email.body`            | the new text only, quoted history removed                  | yes for an email                                                            |
-| `email.conversation_id` | nonblank Outlook conversation id, case kept                | no                                                                          |
+| `email.sender`          | address                                                           | yes for an email                                                            |
+| `email.sender_name`     | the display name, as intake reads it                              | no                                                                          |
+| `email.recipients`      | list of `{ address, kind: to or cc }`                             | yes for an email, may be empty                                              |
+| `email.subject`         | text, may be empty                                                | yes for an email                                                            |
+| `email.body`            | the new text only, quoted history removed                         | yes for an email                                                            |
+| `email.conversation_id` | nonblank Outlook conversation id, case kept                       | no                                                                          |
 
 - **Links.** The engine links an email to every party whose `party_email` matches its sender or a recipient, other than the users, plus `about`. The sender's party becomes `from_party_id`. An email whose sender is a user's address is outgoing; no direction field is sent. The caller no longer matches addresses itself, so its contact list never goes stale.
 - **Retry and second mailbox.** `message_id` is unique. A second request for a stored Message-ID, from a retry with a new key or from the other partner's mailbox, adds any new links and answers the stored activity with `existing: true`; the first email's body and conversation id stay. Intake sends an email once its full text decodes, or with its preview when the wait for full text expires, so today's "Full text of email" follow-up note retires.
@@ -1262,7 +1262,7 @@ A partner's own deal file uses the same upload and then `POST /api/engine/deals/
 
 | Route                                        | Who       | Request                                                                                                                                                         |
 | -------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /jobs/router-queue?days=&after=&limit=` | job       | emails whose row in the job's partner's mailbox was stored in the last `days` (1 to 7, default 3) and that happened in the last 30 days, oldest first                             |
+| `GET /jobs/router-queue?days=&after=&limit=` | job       | emails whose row in the job's partner's mailbox was stored in the last `days` (1 to 7, default 3) and that happened in the last 30 days, oldest first           |
 | `POST /jobs/proposals`                       | job       | `idempotency_key`, `kind`, `activity_id`, `evidence`, one of `deal_id`, `party_id` or `property_id` (none for `possible_new_deal`), and the kind's fields below |
 | `POST /api/engine/proposals/{id}/decision`   | user only | `idempotency_key`, `decision` (`accept` or `dismiss`), `edits` for a next step, `deal_id` and `reason` for a filing suggestion                                  |
 
