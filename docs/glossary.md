@@ -241,6 +241,9 @@ A user's tiers by their lifetime count of closed deals. Each tier starts at a co
 _Avoid_: schedule, plan, tier table
 _New database_: `commission_tier`, keyed by the user and the count its tier starts from.
 
+**Tour**:
+A visit to properties. In the new database a completed tour is a meeting about the parties, with its deal and visited properties linked when known.
+
 ## Clients in the new database
 
 **Client status** is active deal when a client has open work, past client after closed work when none is open, and otherwise its manual roster, cold, engaged or paused status. `client_status` derives it; `client.status` holds only the manual value.
