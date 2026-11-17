@@ -1,29 +1,11 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-national-account-owners.sql"),
-]);
-const name = `copy_account_owners_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
-);
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
+const copy = await readSchema("copy-national-account-owners.sql");
+const { db, setup, cleanup } = copyTest();
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const owner = (
 	account: number,
@@ -44,9 +26,9 @@ const run = async (
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
-const transaction = async (setup: string, check: () => Promise<void>) => {
+const transaction = async (fixtureSql: string, check: () => Promise<void>) => {
 	await db.query(`begin; select set_config('engine.job','old_system',true);
- ${setup}`);
+ ${fixtureSql}`);
 	try {
 		await check();
 	} finally {
@@ -54,12 +36,7 @@ const transaction = async (setup: string, check: () => Promise<void>) => {
 	}
 };
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values
  ('${id(1)}','partner_one','human','Example Human'),
@@ -86,10 +63,7 @@ before(async () => {
  insert into outside_id (source,value,party_id) values ('old_system','${id(5)}','${id(10)}');
  commit;`);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("a reviewed first date copies the human owner's person and preserves the setter and storage time", async () => {
 	await transaction(owner(40), async () => {
