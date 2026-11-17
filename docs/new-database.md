@@ -955,17 +955,16 @@ Following the coordinator's ruling on #363, every activity of kind `task` stays 
 
 An old event is evidence of a command, sometimes one field and sometimes a partial creation payload. It cannot honestly become a native `change` insert with a whole new row. Each supported field event instead becomes one `imported_change`, keyed by its old event id, with its complete original event in `source_event`. The `old_value_absent` and `new_value_absent` flags distinguish SQL null from JSON null. The source retains old and new values, actor id, occurred and recorded times, mutation order, verb, cause, sponsor and other provenance. The attribution helper supplies the user or job and sponsor, using that event alone; `changed_at` is its `occurred_at`. No old values are reinterpreted as current values.
 
-| Old subject | New record and key                     | Supported old fields                                                                                        |
-| ----------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| party       | `party`, `id`                          | name, kind, npi                                                                                             |
-| deal        | `deal`, `id`                           | name, owner, won_value, city, operating_state, attention, parking_reason, parking_note, needs_attention     |
-| lead        | `party_role`, party_id and role lead   | stage, owner, owner_id, lane, segment, est_lease_event, event_source, event_confidence                      |
-| client      | `client`, party_id                     | status, client_type                                                                                         |
-| vendor      | `party_role`, party_id and role vendor | stage, relationship_level, is_target, offers, seeking, disposition                                          |
-| vendor      | `activity`, id                         | intro_notes → summary                                                                                       |
-| lease       | `lease_version`, id                    | executed_on, commencement_on, expiration_on, rate_norm_sf_yr, term_months, free_rent_months, opex_structure |
+| Old subject | New record and key                     | Supported old fields                                                                   |
+| ----------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
+| party       | `party`, `id`                          | name, npi                                                                              |
+| deal        | `deal`, `id`                           | owner, won_value, city, operating_state, attention                                     |
+| lead        | `party_role`, party_id and role lead   | stage, owner, owner_id, lane, segment, est_lease_event, event_source, event_confidence |
+| client      | `client`, party_id                     | status, client_type                                                                    |
+| vendor      | `party_role`, party_id and role vendor | stage, offers, seeking                                                                 |
+| vendor      | `activity`, id                         | intro_notes → summary                                                                  |
 
-`outside_id` with source `old_system` resolves party, deal, lead, client and vendor ids, including merged-away ids. Roles and clients must actually exist after resolution. Lease versions keep their old lease row ids, including amendments. Destination field names are explicit in the script; they describe where the fact belongs, without claiming the old payload has the new format. Events without a field, commands about child records, phase changes, removed fields and other subject types wait listed. Their mappings need their own design, rather than a guess from a verb or payload.
+`outside_id` with source `old_system` resolves party, deal, lead, client and vendor ids, including merged-away ids. Roles and clients must actually exist after resolution. A field is mapped only when an old writer records it. Destination field names are explicit in the script; they describe where the fact belongs, without claiming the old payload has the new format. Events without a field, commands about child records, phase changes, removed fields and other subject types wait listed. Their mappings need their own design, rather than a guess from a verb or payload.
 
 Vendor `intro_notes` events point to the note activity created by `copy-vendors.sql`, using `md5('old_system:vendor:' || subject_id || ':intro_notes')::uuid`, and map to `summary`. The activity must be a note about the vendor's copied party. Each event keeps its own author and time, including earlier wording and cleared text; current note text stays unchanged. Blank notes and merged-away notes whose text the survivor holds have no separate activity and wait listed as `record_not_copied`. Their history is never redirected to the survivor's note. Existing imports with different destinations or source events wait as `existing_history_conflicts`.
 

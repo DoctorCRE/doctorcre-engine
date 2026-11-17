@@ -5,11 +5,8 @@ alter table imported_change disable trigger stamp_imported_change;
 create temp table listed (old_id uuid, field text, reason text) on commit drop;
 create temp table history_field on commit drop as
 select * from (values
- ('party', 'party', 'name', 'name'), ('party', 'party', 'kind', 'kind'), ('party', 'party', 'npi', 'npi'),
- ('deal', 'deal', 'name', 'name'), ('deal', 'deal', 'owner', 'owner_user_id'),
+ ('party', 'party', 'name', 'name'), ('party', 'party', 'npi', 'npi'), ('deal', 'deal', 'owner', 'owner_user_id'),
  ('deal', 'deal', 'won_value', 'closed_value'), ('deal', 'deal', 'city', 'market_id'),
- ('deal', 'deal', 'parking_reason', 'parking_reason'), ('deal', 'deal', 'parking_note', 'parking_note'),
- ('deal', 'deal', 'needs_attention', 'needs_attention'),
  ('deal', 'deal', 'operating_state', 'parking_reason'), ('deal', 'deal', 'attention', 'needs_attention'),
  ('lead', 'party_role', 'stage', 'stage'), ('lead', 'party_role', 'owner', 'owner_user_id'),
  ('lead', 'party_role', 'owner_id', 'owner_user_id'), ('lead', 'party_role', 'lane', 'lane'),
@@ -17,14 +14,8 @@ select * from (values
  ('lead', 'party_role', 'event_source', 'lease_estimate_source'),
  ('lead', 'party_role', 'event_confidence', 'lease_estimate_confidence'),
  ('client', 'client', 'status', 'status'), ('client', 'client', 'client_type', 'client_type'),
- ('vendor', 'party_role', 'stage', 'stage'), ('vendor', 'party_role', 'relationship_level', 'relationship_level'),
- ('vendor', 'party_role', 'is_target', 'is_target'), ('vendor', 'party_role', 'offers', 'offers'),
- ('vendor', 'activity', 'intro_notes', 'summary'),
- ('vendor', 'party_role', 'seeking', 'seeking'), ('vendor', 'party_role', 'disposition', 'disposition'),
- ('lease', 'lease_version', 'executed_on', 'executed_on'), ('lease', 'lease_version', 'commencement_on', 'commencement_on'),
- ('lease', 'lease_version', 'expiration_on', 'expiration_on'), ('lease', 'lease_version', 'rate_norm_sf_yr', 'rent_per_sf_yr'),
- ('lease', 'lease_version', 'term_months', 'term_months'), ('lease', 'lease_version', 'free_rent_months', 'free_rent_months'),
- ('lease', 'lease_version', 'opex_structure', 'expense_structure')
+ ('vendor', 'party_role', 'stage', 'stage'), ('vendor', 'party_role', 'offers', 'offers'),
+ ('vendor', 'party_role', 'seeking', 'seeking'), ('vendor', 'activity', 'intro_notes', 'summary')
 ) f(subject, table_name, old_field, field);
 
 -- The Deal Room writer wraps both values in the old field name.
@@ -55,8 +46,7 @@ select e.id, e.field as old_field, f.table_name,
   when f.table_name = 'client' and c.party_id is not null then jsonb_build_object('party_id', c.party_id)
   when f.table_name = 'party' and p.id is not null then jsonb_build_object('id', p.id)
   when f.table_name = 'deal' and d.id is not null then jsonb_build_object('id', d.id)
-  when f.table_name = 'activity' and note.id is not null then jsonb_build_object('id', note.id)
-  when f.table_name = 'lease_version' and l.id is not null then jsonb_build_object('id', l.id) end as record,
+  when f.table_name = 'activity' and note.id is not null then jsonb_build_object('id', note.id) end as record,
  e.occurred_at as changed_at, e.old_value is null as old_value_absent, e.new_value is null as new_value_absent, a.*,
  case when actor.id is null then 'unknown_actor'
   when a.changed_by_user_id is not null and u.id is null then 'user_not_copied'
@@ -72,7 +62,6 @@ left join party p on p.id = m.party_id
 left join deal d on d.id = m.deal_id
 left join party_role r on r.party_id = m.party_id and r.role = e.subject_type
 left join client c on c.party_id = m.party_id
-left join lease_version l on l.id = e.subject_id and e.subject_type = 'lease'
 left join activity note on f.table_name = 'activity'
  and note.id = md5('old_system:vendor:' || e.subject_id || ':intro_notes')::uuid and note.kind = 'note'
  and exists (select from activity_about about where about.activity_id = note.id and about.party_id = m.party_id)
