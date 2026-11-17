@@ -408,6 +408,16 @@ Today's `critical_date` rows keep their kinds, dates, sources and notes. `option
 - Listed, not copied: a date whose deal is not copied, a blank source, a resolution with no event or no reason, a resolution by an agent or job, a done or passed date no partner confirmed, and an id the new database holds on another deal.
 - The transition and stamp triggers are off during the load and on again after it.
 
+## Copying today's deal files
+
+`schema/copy-deal-files.sql` runs after the deal and lease copies, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public` and `ops`, moves no bytes in R2, and ends with its `not_copied` list. It loads the six document kinds first.
+
+- Finalized deliverables, live deal attachments and the live working and PDF files of generated documents become deal files in bucket `deal_documents`, keeping their ids, names, keys, types, hashes, sizes and times. Rows naming one key are one file: the earliest supplies its id and name. A lease's source file already stored there is filed to its deal. A repeat with the same template list leaves filed files alone.
+- Every file is its own first version. A deliverable's `version` counts its sharing changes, not replacements, and no old row names a predecessor.
+- Before loading the script, optionally create `pg_temp.copy_template_kind (template_slug text primary key, kind text not null) on commit drop` with reviewed template slugs, kept outside this repo. A generated file takes its template's kind; every other file is `other` and listed as `kind_unclassified`. A kind not on the list is listed as `unknown_kind`, and its files are `other`.
+- A generated document with a filed file keeps its id as an outside id under `old_generated_document` on its deal. Its note is listed as `generated_note`.
+- Unfinished uploads, expiry and sharing are dropped. Listed, not copied: a deleted attachment, a generated pointer to one, a generated document with no deal or no file, a file whose deal is not copied, one missing its type, hash or size, rows of one key that disagree on deal, type, hash or size, or with a stored file there, two template kinds for one file, an id another file holds, and a generated id another deal holds.
+
 ## Tours as meetings
 
 A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal; the property links support a later property read. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
