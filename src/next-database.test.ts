@@ -1382,6 +1382,8 @@ const RULES: Record<string, Case[]> = {
 				"email_message_id_unless_imported",
 			],
 			[emailWithoutId(id(303), "Example", true), notGranted("email")],
+			[newEmail(id(303), ""), "email_message_id_not_blank"],
+			[newEmail(id(303), "\t"), "email_message_id_not_blank"],
 		],
 	"a next step is about exactly one record": [
 		[
