@@ -93,7 +93,7 @@ before(async () => {
  insert into ops.meeting_action values ${[
 		head(1, "proposed"), head(2, "delegated"), head(3, "accepted"), head(4, "declined"), head(5, "executed"),
 		head(6, "proposed"), head(7, "proposed"), head(8, "proposed"), head(9, "proposed", 1, 51), head(10, "proposed"),
-		head(11, "declined", 2), head(12, "proposed"), head(13, "proposed"), head(14, "proposed"), head(15, "proposed"),
+		head(11, "declined", 2), head(12, "proposed"), head(13, "proposed"), head(14, "proposed"), head(15, "proposed"), head(16, "proposed"),
 	].join(", ")};
  insert into ops.meeting_action_revision values ${[
 		revision(1, step("Example first")),
@@ -104,6 +104,7 @@ before(async () => {
 		revision(11, step("Example other decider")), revision(12, step("Example other owner", id(30), "partner_two")),
 		revision(13, { verb: "set-next-step", args: { deal: id(30), text: "Example step text", description: "Example ignored", due_on: "2024-05-01" } }),
 		revision(14, { verb: "set-next-action", args: { ref: id(30), text: "Example wrong argument" } }), revision(15, step("Example taken id")),
+		revision(16, { verb: "set-next-step", args: { deal: id(30), text: 42 } }),
 	].join(",\n  ")};
  insert into ops.meeting_action_revision values ('${id(120)}', '${id(50)}', 1, 2, 'Example summary revised', '${JSON.stringify(step("Example revised", id(30), "partner_one"))}',
   'explicit_instruction', 'processing', '${id(3)}', '2024-01-02');
@@ -165,6 +166,7 @@ test("copies each meeting suggestion with its decision and revisions, keeps the 
 		"#112 owner partner_two owner_not_a_user",
 		"#114 description - blank_next_step",
 		"#115 revision #115 existing_history_conflicts",
+		"#116 text - blank_next_step",
 		"#120 changed_for_user_id - agent_user_unknown",
 	]);
 	assert.deepEqual(

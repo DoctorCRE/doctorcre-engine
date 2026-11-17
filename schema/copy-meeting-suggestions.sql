@@ -26,10 +26,11 @@ select a.*, cur.id as old_id, btrim(cur.summary) as evidence, cur.created_at, s.
 from ops.meeting_action a
 join ops.meeting_action_revision cur on (cur.meeting_id, cur.action_number, cur.revision) = (a.meeting_id, a.action_number, a.current_revision)
 join ops.meeting_action_revision first on (first.meeting_id, first.action_number, first.revision) = (a.meeting_id, a.action_number, 1)
-cross join lateral (select cur.command -> 'args' as args, cur.command ->> 'verb' = 'set-next-step' as deal_room) c
+cross join lateral (select cur.command -> 'args' as args, cur.command ->> 'verb' = 'set-next-step' as deal_room,
+ case when cur.command ->> 'verb' = 'set-next-step' then 'text' else 'description' end as text_key) c
 -- Each verb reads only its own arguments; the old system never checked a command's args against its verb.
 cross join lateral (select cur.command ->> 'verb' as verb, c.args ->> case when c.deal_room then 'deal' else 'ref' end as ref,
- btrim(c.args ->> case when c.deal_room then 'text' else 'description' end) as what,
+ case when jsonb_typeof(c.args -> c.text_key) = 'string' then btrim(c.args ->> c.text_key) end as what,
  c.args ->> case when c.deal_room then 'next_date' else 'due_on' end as due_text,
  case when not c.deal_room then lower(btrim(c.args ->> 'owner')) end as owner_slug,
  -- The dispatch's own result names the step it made; that receipt expires after 30 days, the deal room's event does not.
