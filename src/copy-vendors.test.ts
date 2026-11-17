@@ -593,7 +593,7 @@ test("who knows or can introduce whom is copied, and a link with no place is lis
 		await db.query("discard temp");
 		assert.deepEqual(
 			(await copy())?.filter((row) => LINK_FIELDS.includes(row[1] as string)),
-			listed?.filter((row) => row[1] === "party_link"),
+			listed,
 		);
 		assert.deepEqual(await rows(LINK_ROWS), links);
 		assert.deepEqual(await rows("select * from change order by id"), history);

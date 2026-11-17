@@ -309,7 +309,7 @@ select id, 'party_link', kind, coalesce(reason, 'the same link is kept already')
 from typed_link l where reason is not null or not exists (select from party_link n where n.id = l.id);
 
 insert into not_copied
-select id, 'via_party', via_party::text, 'a knows link has no broker' from typed_link where kind = 'knows' and via_party is not null;
+select id, 'via_party', via_party::text, 'a knows link has no broker' from public.party_link where kind = 'knows' and via_party is not null;
 
 -- A category waits on its vendor role, checked now, because a table with checks waiting cannot be altered.
 set constraints all immediate;
