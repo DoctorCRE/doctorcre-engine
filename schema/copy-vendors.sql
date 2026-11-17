@@ -205,13 +205,16 @@ cross join lateral (
 where not exists (select from introduction i where i.id = l.id);
 
 -- Today's link writer records a link as an event of the party it is from, and a referral on a deal of its referrer.
+-- Referrals by vendors merged into one record, on one deal, are one introduction, the first stored.
 insert into introduction (id, created_at, vendor_id, made_by, introduced_by_user_id, introduced_party_id, introduced_on,
 	deal_id, note, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select i.id, i.created_at, i.vendor_id, case when i.user_id is null then 'vendor' else 'team' end, i.user_id,
+select distinct on (i.vendor_id, i.deal_id, case when i.deal_id is null then i.id end) i.id, i.created_at, i.vendor_id, case when i.user_id is null then 'vendor' else 'team' end, i.user_id,
 	i.introduced_party_id, i.occurred_on, i.deal_id, nullif(regexp_replace(i.note, '^\s+|\s+$', '', 'g'), ''), a.changed_by_user_id, a.changed_by_job,
 	a.changed_for_user_id, i.created_at
 from typed_introduction i cross join lateral copy_attribution('party', i.event_party, i.created_by) a
-where i.reason is null;
+where i.reason is null and (i.deal_id is null
+	or not exists (select from introduction x where (x.vendor_id, x.deal_id, x.made_by) = (i.vendor_id, i.deal_id, 'vendor')))
+order by i.vendor_id, i.deal_id, case when i.deal_id is null then i.id end, i.created_at, i.old_id;
 
 insert into not_copied select old_id, field, value, reason from typed_introduction where reason is not null;
 

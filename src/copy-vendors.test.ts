@@ -297,8 +297,10 @@ insert into public.actor (id, slug, kind, display_name) values ('${id(3)}', 'cod
 update public.party_link set created_by = '${id(3)}' where id = '${id(51)}';
 insert into public.event (actor_id, verb, subject_type, subject_id, cause, occurred_at, sponsoring_human_slug)
 	values ('${id(3)}', 'link-parties', 'party', '${id(11)}', 'human_stated', now(), 'partner_one');
-insert into public.party_link_deal (link_id, deal_id, referred_by, note, created_by)
-	values ('${id(52)}', '${id(70)}', '${id(10)}', 'Example deal referral', '${PARTNER}');
+${link(58, 1, 20, "referred", 15)}
+insert into public.party_link_deal (link_id, deal_id, referred_by, note, created_by, created_at) values
+	('${id(52)}', '${id(70)}', '${id(10)}', 'Example deal referral', '${PARTNER}', '2025-05-01'),
+	('${id(58)}', '${id(70)}', '${id(15)}', 'Example merged referral', '${PARTNER}', '2025-06-01');
 alter table public.vendor disable trigger vendor_touch;
 ${evidence(40, ["worked", 70], ["worked", 71], ["referred", 72], ["referred", 70], ["example", 70])}
 ${evidence(42, ["worked", 70], ["referred", 72])}
