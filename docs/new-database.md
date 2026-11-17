@@ -280,7 +280,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 11. `copy-leases.sql`: needs its deal, client and building.
 12. `copy-critical-dates.sql`.
 13. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
-14. `copy-deal-file-text.sql`: needs the deal files.
+14. `copy-deal-file-text.sql`: needs the deal files. Then `copy-client-files.sql` reuses stored files and links client-only files through the party map.
 15. `copy-commissions.sql`, after the partners enter their ladders.
 16. `copy-invoice-emails.sql`: needs the deals and their payments.
 17. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
@@ -369,7 +369,9 @@ The old system files a generated document to its client when no deal exists (car
 
 A party file has no kind. Kinds and versions stay deal-file facts until the owner asks for kinds on client files.
 
-Moving today's rows across, in the copy that follows this design:
+`schema/copy-client-files.sql` runs after the party and deal-file copies in its own owner transaction, after `copy-attribution.sql`. It only reads `public`, moves no bytes, and ends with a correction list. A rerun leaves files, links and history unchanged. Generated notes remain in the correction list.
+
+Moving today's rows across:
 
 - A live `attachment` whose subject is a client becomes a document in bucket `deal_documents`, keeping its id, name, key, type, hash, size and time, linked to the client's party through the party map, including a merged-away client's survivor. Rows naming one key are one file, as in the deal-file copy.
 - A generated `document` with a client and no deal links its surviving working and PDF files the same way. One with neither file, a deleted attachment, a client that did not copy, and rows of one key that disagree on type, hash or size are listed, not linked.
