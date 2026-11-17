@@ -64,7 +64,9 @@ before(async () => {
  insert into public.actor (id,slug,kind,display_name) values ${[1, 2, 3, 4].map((n) => `('${id(n)}','example_${n}','human','Example User ${n}')`).join(",")};
  ${users
 		.map(
-			(n) => `insert into party (id,kind,name) values ('${id(n)}','person','Example User ${n}');
+			(
+				n,
+			) => `insert into party (id,kind,name) values ('${id(n)}','person','Example User ${n}');
  insert into app_user values ('${id(n)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(n)}','${id(n)}');`,
 		)
@@ -115,7 +117,11 @@ test("each user's settings become their preferences, and unknown zones and equal
 	]);
 	assert.deepEqual(
 		report.filter(([, , , reason]) =>
-			["actor_not_a_user", "unknown_time_zone", "quiet_hours_start_equals_end"].includes(reason as string),
+			[
+				"actor_not_a_user",
+				"unknown_time_zone",
+				"quiet_hours_start_equals_end",
+			].includes(reason as string),
 		),
 		[
 			[id(2), "actor", id(2), "actor_not_a_user"],
@@ -128,11 +134,50 @@ test("each user's settings become their preferences, and unknown zones and equal
 
 test("snoozed, settled and waiting marks land on the next steps the earlier copies made", async () => {
 	assert.deepEqual(await marks(), [
-		[id(100), "snoozed", "2026-12-01 00:00:00+00", id(11), "Example landlord reply",
-			"2026-10-01 00:00:00+00", "2026-10-05 00:00:00+00", id(1), null],
-		[id(101), "settled", null, null, null, "2026-10-02 00:00:00+00", "2026-10-02 00:00:00+00", id(1), null],
-		[id(102), null, null, id(3), "Example partner review", "2026-10-06 00:00:00+00", "2026-10-06 00:00:00+00", id(1), null],
-		[id(104), "settled", null, null, null, "2026-10-04 00:00:00+00", "2026-10-04 00:00:00+00", id(1), null],
+		[
+			id(100),
+			"snoozed",
+			"2026-12-01 00:00:00+00",
+			id(11),
+			"Example landlord reply",
+			"2026-10-01 00:00:00+00",
+			"2026-10-05 00:00:00+00",
+			id(1),
+			null,
+		],
+		[
+			id(101),
+			"settled",
+			null,
+			null,
+			null,
+			"2026-10-02 00:00:00+00",
+			"2026-10-02 00:00:00+00",
+			id(1),
+			null,
+		],
+		[
+			id(102),
+			null,
+			null,
+			id(3),
+			"Example partner review",
+			"2026-10-06 00:00:00+00",
+			"2026-10-06 00:00:00+00",
+			id(1),
+			null,
+		],
+		[
+			id(104),
+			"settled",
+			null,
+			null,
+			null,
+			"2026-10-04 00:00:00+00",
+			"2026-10-04 00:00:00+00",
+			id(1),
+			null,
+		],
 	]);
 	assert.deepEqual(
 		report.filter(([old]) => old === id(1)),
@@ -146,15 +191,22 @@ test("snoozed, settled and waiting marks land on the next steps the earlier copi
 });
 
 test("a rerun changes nothing, and picks up a mark once its next step is copied", async () => {
-	const history = "select count(*) from change where table_name in ('user_preference', 'home_mark')";
+	const history =
+		"select count(*) from change where table_name in ('user_preference', 'home_mark')";
 	const before = [await preferences(), await marks(), await rows(history)];
 	assert.deepEqual(await run(), report);
-	assert.deepEqual([await preferences(), await marks(), await rows(history)], before);
+	assert.deepEqual(
+		[await preferences(), await marks(), await rows(history)],
+		before,
+	);
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into next_step (id,party_id,what) values ('${id(105)}','${id(10)}','Example later step'); commit;`);
 	assert.deepEqual(
 		await run(),
 		report.filter(([, , value]) => value !== item(105)),
 	);
-	assert.deepEqual((await marks()).map(([step, disposition]) => [step, disposition]).at(-1), [id(105), "settled"]);
+	assert.deepEqual(
+		(await marks()).map(([step, disposition]) => [step, disposition]).at(-1),
+		[id(105), "settled"],
+	);
 });
