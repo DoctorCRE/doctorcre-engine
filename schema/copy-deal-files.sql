@@ -79,6 +79,6 @@ cross join lateral (values
  ('id', g.id::text, 'outside_id_taken', exists (select from outside_id o
   where (o.source, o.value) = ('old_generated_document', g.id::text) and o.deal_id is distinct from g.deal_id)),
  ('note', g.note, 'generated_note', g.note ~ '\S')) f(field, value, reason, refused)
-where f.refused;
+where (g.deal_id is not null or g.client_id is null) and f.refused;
 alter table document enable trigger stamp_change;
 select * from not_copied order by old_id, field, value, reason;
