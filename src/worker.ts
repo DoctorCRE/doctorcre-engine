@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { filedEmails } from "./activity/filed-emails.ts";
 import { activityDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
+import { calendarDismissal, nextAgenda } from "./calendar/next-agenda.ts";
 import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
 import {
@@ -75,6 +76,8 @@ app.route("/api/engine", engine);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", nextSteps);
 app.route("/api/engine", proposalDecisions);
+app.route("/api/engine", nextAgenda);
+app.route("/api/engine", calendarDismissal);
 app.route("/api/engine", activityDoor);
 app.route("/api/engine", replySubmissions);
 
@@ -104,6 +107,7 @@ app.route("/jobs", nextDeals);
 app.route("/jobs", nextSteps);
 app.route("/jobs", proposalJobs);
 app.route("/jobs", routerQueue);
+app.route("/jobs", nextAgenda);
 app.route("/jobs", activityDoor);
 app.route("/jobs", filedEmails);
 app.route("/jobs", replyJobs);

@@ -76,7 +76,7 @@ export function doorTest() {
 			{
 				method,
 				headers: await headers(caller),
-				...(method === "POST" && { body: JSON.stringify(args) }),
+				...(method !== "GET" && { body: JSON.stringify(args) }),
 			},
 			{
 				DATABASE_WRITER: { connectionString: login() },
