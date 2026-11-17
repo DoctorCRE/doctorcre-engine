@@ -550,6 +550,22 @@ create constraint trigger lead_or_client_how_found after update of how_found on 
 	for each row when (old.how_found is not null and new.how_found is null)
 	execute function lead_or_client_how_found('id');
 
+-- Not recorded is only for records the old-system copy brought in; anyone added here says how they were found (owner, #604).
+create function how_found_not_recorded_only_imported() returns trigger
+language plpgsql as $$
+begin
+	if not exists (select from outside_id where party_id = new.id and source = 'old_system') then
+		raise exception 'only a record copied from the old system may say how it was found was not recorded'
+			using errcode = 'check_violation', constraint = 'how_found_not_recorded_only_imported';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, so a person and their old-system id can be saved in either order. A merge moves the id with the source.
+create constraint trigger how_found_not_recorded_only_imported after insert or update of how_found on party
+	initially deferred for each row when (new.how_found = 'not_recorded')
+	execute function how_found_not_recorded_only_imported();
+
 -- Someone is a client once a deal is opened for them, signed or not. The client role's row keeps when that was.
 -- Deferred, so the role and the deal can be saved in either order, and a merge can move both.
 alter table deal_party add client_role text generated always as (case when role = 'client' then role end) stored,

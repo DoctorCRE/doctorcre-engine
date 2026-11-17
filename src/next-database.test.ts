@@ -45,7 +45,8 @@ insert into document_kind values ('loi', 'LOI'), ('lease', 'Lease'), ('amendment
 insert into role (slug, label, category_of) values
 	('client', 'Client', null), ('lead', 'Lead', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
 	('lender', 'Lender', 'vendor'), ('title', 'Title', 'vendor');
-insert into how_found values ('referral', 'Referral'), ('vendor', 'Vendor'), ('public_records', 'Public records');
+insert into how_found values ('referral', 'Referral'), ('vendor', 'Vendor'), ('public_records', 'Public records'),
+	('not_recorded', 'Not recorded before this system');
 insert into party (id, kind, name, npi, how_found) values
 	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}', 'referral'),
 	('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}', null);
@@ -2165,6 +2166,17 @@ const RULES: Record<string, Case[]> = {
 			"party_how_found_fkey",
 		],
 	],
+	"only a record copied from the old system may say how it was found was not recorded":
+		[
+			[
+				`insert into party (id, kind, name, how_found) values ('${id(661)}', 'person', 'Example', 'not_recorded'); ${CHECK_AT_COMMIT}`,
+				"how_found_not_recorded_only_imported",
+			],
+			[
+				`update party set how_found = 'not_recorded' where id = '${CLIENT}'; ${CHECK_AT_COMMIT}`,
+				"how_found_not_recorded_only_imported",
+			],
+		],
 	"someone a deal is opened for is a client": [
 		[
 			`insert into deal_party values ('${LENDER_DEAL}', '${LEAD}', 'client'); ${CHECK_AT_COMMIT}`,

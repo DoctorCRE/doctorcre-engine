@@ -1,5 +1,6 @@
 -- Run after copy-parties.sql and copy-attribution.sql in one owner transaction in the new schema.
 -- The owner supplies exact free-text source mappings in pg_temp.copy_how_found before running this file.
+-- A lead or client with no source at all is copied as not recorded, which a recorded source later replaces.
 create temp table if not exists copy_how_found (old_type text, source text, how_found text,
  primary key (old_type, source)) on commit drop;
 -- Supply partner-reviewed suppression reasons keyed by old lead id; private rows stay outside this repo.
@@ -14,7 +15,9 @@ alter table party_role disable trigger lead_stage_needs_evidence;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('national_account', 'National account') on conflict do nothing;
 insert into how_found (slug, label) values ('referral', 'Referral'), ('vendor', 'Vendor'),
- ('marketing_post', 'Marketing post'), ('public_records', 'Public records'), ('cold_outreach', 'Cold outreach') on conflict do nothing;
+ ('marketing_post', 'Marketing post'), ('public_records', 'Public records'), ('cold_outreach', 'Cold outreach'),
+ ('own_research', 'Own research'), ('inbound', 'Inbound'), ('national_account', 'National account or corporate lead'),
+ ('existing_relationship', 'Existing relationship'), ('not_recorded', 'Not recorded before this system') on conflict do nothing;
 insert into stage (role, slug, label) select 'lead', s, initcap(replace(s, '_', ' '))
 from unnest(array['new','qualified','outreach_active','engaged','nurture','opportunity','archived']) s on conflict do nothing;
 insert into lead_lane (slug, label) select slug, label from public.lead_lane on conflict do nothing;
@@ -41,7 +44,8 @@ select r.*, case when kind = 'client' then fields ->> 'acquisition_source' when 
  case when kind = 'client' then 'client' when fields ->> 'source_type' = 'prospect-pool' then 'candidate_pool' else 'lead' end as source_kind
 from old_relationship r;
 create temp table mapped_source on commit drop as
-select r.*, f.slug as mapped_source from relationship_source r
+select r.*, coalesce(f.slug, case when r.source_kind <> 'candidate_pool' and coalesce(r.typed_source, '') !~ '\S'
+ then 'not_recorded' end) as mapped_source from relationship_source r
 left join pg_temp.copy_how_found h on h.old_type = r.source_kind and h.source = r.typed_source
 left join how_found f on f.slug = h.how_found;
 insert into not_copied select id, 'how_found', typed_source, 'source_needs_mapping'
@@ -54,12 +58,12 @@ insert into not_copied select id, kind, party_id::text,
 from old_relationship where mapped_id is null or copies > 1;
 insert into not_copied
 select s.id, 'how_found', s.typed_source, 'sources_disagree' from mapped_source s
-where s.mapped_source is not null and exists (select from mapped_source other where other.mapped_id = s.mapped_id
- and other.mapped_source is not null and other.mapped_source <> s.mapped_source);
+where s.mapped_source <> 'not_recorded' and exists (select from mapped_source other where other.mapped_id = s.mapped_id
+ and other.mapped_source <> 'not_recorded' and other.mapped_source <> s.mapped_source);
 create temp table waiting_client_source on commit drop as
 select distinct mapped_id from mapped_source where kind = 'client' and typed_source ~ '\S' and mapped_source is null;
 
--- Client testimony takes precedence; an existing mapped fact is never overwritten.
+-- A recorded source beats not recorded, then client testimony takes precedence; an existing mapped fact is never overwritten.
 update party p set how_found = s.mapped_source, how_found_detail = coalesce(nullif(btrim(s.fields ->> 'acquisition_detail'), ''),
  (select nullif(btrim(l.fields ->> 'source_detail'), '') from mapped_source l
   where l.mapped_id = s.mapped_id and l.kind = 'lead' and l.mapped_source = s.mapped_source and l.fields ->> 'source_detail' ~ '\S'
@@ -69,12 +73,12 @@ update party p set how_found = s.mapped_source, how_found_detail = coalesce(null
  changed_for_user_id = case when s.updated_at > p.changed_at then s.changed_for_user_id else p.changed_for_user_id end,
  changed_at = greatest(p.changed_at, s.updated_at)
 from (select distinct on (mapped_id) * from mapped_source where mapped_source is not null
- order by mapped_id, kind = 'client' desc, updated_at desc, id) s
-where p.id = s.mapped_id and p.how_found is null
+ order by mapped_id, mapped_source = 'not_recorded', kind = 'client' desc, updated_at desc, id) s
+where p.id = s.mapped_id and (p.how_found is null or p.how_found = 'not_recorded' and s.mapped_source <> 'not_recorded')
  and not exists (select from waiting_client_source w where w.mapped_id = p.id);
 insert into not_copied select s.id, 'how_found', s.typed_source, 'existing_source_differs'
 from mapped_source s join party p on p.id = s.mapped_id
-where s.mapped_source is not null and p.how_found is not null and p.how_found <> s.mapped_source;
+where s.mapped_source <> 'not_recorded' and p.how_found <> s.mapped_source;
 create temp table examined_relationship on commit drop as
 select r.*, p.how_found, p.how_found_detail,
  case fields ->> 'client_type' when 'group' then 'group_practice' else fields ->> 'client_type' end as mapped_type,
