@@ -694,6 +694,12 @@ Both search formats preserve unknown keys in the correction list and refuse to c
 
 Existing stamp attribution rules apply to these rows. `parcel` and `availability` are excluded by the owner's coverage ruling on #196. No listing or availability table is added.
 
+## Copying today's space needs
+
+Run `schema/copy-space-needs.sql` as the owner in a separate transaction after the attribution helper and the market, deal and vendor copies, with the new schema on `search_path`. It reads today's `public` and `ops` tables only. For each nonempty geography filter, supply `pg_temp.copy_space_need_county(source_table text, old_id uuid, county_fips text)` in that transaction with the complete, owner-reviewed county set for that search. Use `space_search` or `ops.deal_space_search` as source_table. A partial or ambiguous market match waits; no geography filter means no market. The script does not infer counties from city or county names.
+
+The correction list retains unknown keys and blocks incomplete searches, multiple space types, invalid bounds, draft criteria and requirements still expressed through query or entrance verification. Availability and execution state are excluded. Saved and archived searches remain requirements. Each approved, current, allowed, unwithdrawn client assertion copies separately, with vendor provenance and its approval author, date, revision and client in imported change history. Missing deal or vendor mappings wait. Existing need ids leave copied rows and history unchanged on reruns. Suites and building owners are copied separately (#362).
+
 ## Invoices found in email
 
 `invoice_email` keeps derived invoice facts, not another email body. Its unique `evidence_ref` resolves to the source in the mailbox, as today's local-mail reference does. Captured evidence may have no target yet. A selected `payment_id` must belong to its `deal_id`. The mail job cannot infer money from these facts, which contain no amount; an unknown payment waits for a user to identify or create it under the existing commission constraints. `invoice_mailbox` is the owner's trusted-sender list. The engine reads it but cannot change it.
