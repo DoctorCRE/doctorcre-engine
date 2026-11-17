@@ -5664,12 +5664,14 @@ for (const [field, value, code] of [
 	["email_activity_id", `'${EMAIL}'`, "42501"],
 	["version", "2", "42501"],
 	["supersedes_id", `'${id(8001)}'`, "42501"],
-] ) {
+]) {
 	test(`classification keeps the deal file's ${field} fixed`, () =>
 		rolledBack(async () => {
 			await db.query(dealFile({ kind: "other" }));
-			await assert.rejects(db.query(`update document set kind = 'lease', ${field} = ${value} where id = '${DEAL_FILE}'`),
-				{ code, ...(code === "23514" ? { constraint: "document_filed_once" } : {}) });
+			await assert.rejects(
+				db.query(`update document set kind = 'lease', ${field} = ${value} where id = '${DEAL_FILE}'`),
+				{ code, ...(code === "23514" ? { constraint: "document_filed_once" } : {}) },
+			);
 		}));
 }
 
@@ -5681,9 +5683,60 @@ for (const kind of ["null", "'missing'", "''"]) {
 				db.query(
 					`update document set kind = ${kind} where id = '${DEAL_FILE}'`,
 				),
+				{
+					constraint:
+						kind === "null" ? "document_filed_once" : "document_kind_fkey",
+				},
 			);
 		}));
 }
+
+for (const version of [1, 2]) {
+	test(`an other chain refuses classification of version ${version} alone`, () =>
+		rolledBack(async () => {
+			await db.query(`${dealFile({ kind: "other" })};
+				${dealFile({ id: id(8001), r2_key: "example/v2", kind: "other", version: 2, supersedes_id: DEAL_FILE })}`);
+			await assert.rejects(
+				db.query(
+					`update document set kind = 'lease' where deal_id = '${DEAL}' and version = ${version}`,
+				),
+				{ constraint: "document_previous_version" },
+			);
+		}));
+}
+
+test("a user classifies every version of an other chain in one update", () =>
+	rolledBack(async () => {
+		await db.query(`${dealFile({ kind: "other" })};
+			${dealFile({ id: id(8001), r2_key: "example/v2", kind: "other", version: 2, supersedes_id: DEAL_FILE })}`);
+		await db.query(
+			`${asUser(TEAMMATE)}; update document set kind = 'lease' where deal_id = '${DEAL}'`,
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select version, kind from document where deal_id = '${DEAL}' order by version`,
+				)
+			).rows,
+			[
+				{ version: 1, kind: "lease" },
+				{ version: 2, kind: "lease" },
+			],
+		);
+		const { rows } =
+			await db.query(`select record, old_value, new_value, changed_by_user_id, changed_at = now() as at_save
+			from change where table_name = 'document' and action = 'update' order by record ->> 'id'`);
+		assert.deepEqual(
+			rows,
+			[DEAL_FILE, id(8001)].map((id) => ({
+				record: { id },
+				old_value: { kind: "other" },
+				new_value: { kind: "lease" },
+				changed_by_user_id: TEAMMATE,
+				at_save: true,
+			})),
+		);
+	}));
 
 // biome-ignore format: one row per refusal
 const FILE_REFUSALS = [
