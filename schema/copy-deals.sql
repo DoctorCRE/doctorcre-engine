@@ -7,6 +7,7 @@ alter table deal_phase_change disable trigger stamp_change;
 alter table property disable trigger stamp_change;
 alter table deal_property disable trigger stamp_change;
 alter table offer disable trigger stamp_change;
+alter table offer_claim disable trigger stamp_change;
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 insert into deal_kind (slug, label) values ('lease', 'Lease'), ('purchase', 'Purchase'),
  ('sale_leaseback', 'Sale-leaseback'), ('build_to_suit', 'Build-to-suit') on conflict do nothing;
@@ -197,8 +198,37 @@ cross join lateral (values
  ('ti_amount', r.ti_amount::text, r.ti_amount is not null and (r.ti_basis is distinct from 'usd_sf' or r.ti_amount < 0)),
  ('submarket_condition', r.submarket_condition, r.submarket_condition not in ('soft', 'balanced', 'tight'))) f(field, value, refused)
 where f.refused;
+insert into claim_type (slug, label)
+select slug, label from public.negotiation_claim_type where slug <> 'deadline' on conflict do nothing;
+create temp table mapped_claim on commit drop as
+select c.*, o.id as offer_id,
+ case c.stated_floor_basis when 'usd_sf_yr' then c.stated_floor
+ when 'usd_sf_mo' then c.stated_floor * 12 end as floor_rent_per_sf_yr,
+ a.* from public.negotiation_claim c
+left join offer o on o.import_source = 'old_system' and o.import_id = c.round_id::text
+cross join lateral copy_attribution('negotiation_claim', c.id, c.created_by) a;
+create temp table claim_refusal on commit drop as
+select c.id, f.reason from mapped_claim c cross join lateral (values
+ ('round_not_copied', c.offer_id is null),
+ ('claim_type_not_available', not exists (select from claim_type t where t.slug = c.claim_type)),
+ ('unsupported_claim_source', c.source <> 'stated'),
+ ('unsupported_floor_basis', c.stated_floor is not null and c.stated_floor_basis not in ('usd_sf_yr', 'usd_sf_mo')),
+ ('floor_out_of_range', c.floor_rent_per_sf_yr is not null and (c.floor_rent_per_sf_yr < 0.005 or c.floor_rent_per_sf_yr >= 99999999.995)),
+ ('blank_claim_text', c.quote is not null and c.quote !~ '\S' or c.note is not null and c.note !~ '\S'),
+ ('claim_author_not_copied', c.changed_by_user_id is not null and not exists (select from app_user u where u.id = c.changed_by_user_id)),
+ ('existing_claim_conflict', exists (select from offer_claim n where (n.offer_id, n.claim_type) = (c.offer_id, c.claim_type)
+ and (n.floor_rent_per_sf_yr, n.quote, n.note, n.created_at, n.changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id)
+ is distinct from (c.floor_rent_per_sf_yr, c.quote, c.note, c.created_at, c.created_at, c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id)))
+ ) f(reason, refused) where f.refused;
+insert into offer_claim (offer_id, claim_type, floor_rent_per_sf_yr, quote, note, created_at, changed_at,
+ changed_by_user_id, changed_by_job, changed_for_user_id)
+select c.offer_id, c.claim_type, c.floor_rent_per_sf_yr, c.quote, c.note, c.created_at, c.created_at,
+ c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id from mapped_claim c
+where not exists (select from claim_refusal r where r.id = c.id)
+ and not exists (select from offer_claim n where (n.offer_id, n.claim_type) = (c.offer_id, c.claim_type));
 insert into not_copied
-select c.id, 'negotiation_claim', c.round_id::text, 'no_claim_destination' from public.negotiation_claim c;
+select c.id, 'negotiation_claim', to_jsonb(original)::text, r.reason from mapped_claim c
+join public.negotiation_claim original on original.id = c.id join claim_refusal r on r.id = c.id;
 set constraints all immediate;
 alter table deal enable trigger stamp_change;
 alter table deal_party enable trigger stamp_change;
@@ -206,4 +236,5 @@ alter table deal_phase_change enable trigger stamp_change;
 alter table property enable trigger stamp_change;
 alter table deal_property enable trigger stamp_change;
 alter table offer enable trigger stamp_change;
+alter table offer_claim enable trigger stamp_change;
 select * from not_copied order by old_id, field, value, reason;
