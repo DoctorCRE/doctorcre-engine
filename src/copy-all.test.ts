@@ -297,7 +297,7 @@ const counts = async () =>
 // biome-ignore format: one entry per copied table
 const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1,
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
- territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
+ territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
@@ -306,7 +306,6 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
 const corrections = [
  ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
- ["copy-markets.sql", id(22), "membership_details", '{"market": "example-bay", "source": "Example review", "office_presence": true, "service_coverage": null}', "no_typed_destination"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
  ["copy-markets.sql", "example-bay", "source", "Example review", "no_typed_destination"],
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
