@@ -137,7 +137,6 @@ for (const { name, readable, setup, cleanup } of [
 		name: "a reader login",
 		readable: true,
 		setup: async () => login(reader),
-		cleanup: async () => {},
 	},
 	{
 		name: "a reader login without table access",
@@ -163,7 +162,6 @@ for (const { name, readable, setup, cleanup } of [
 			}
 			return login(directReader);
 		},
-		cleanup: async () => {},
 	},
 ]) {
 	test(`the probe preserves the old fields and reports new-section reachability for ${name}`, async () => {
@@ -195,7 +193,7 @@ for (const { name, readable, setup, cleanup } of [
 				}),
 			);
 		} finally {
-			await cleanup();
+			await cleanup?.();
 		}
 	});
 }
