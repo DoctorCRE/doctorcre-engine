@@ -86,6 +86,7 @@ before(async () => {
 		.join(",")};
  update public.next_action set hold_until='2026-04-01', source_ref='example:source', item_title='Example display', item_bullets='["Example bullet"]' where id='${id(100)}';
  update public.next_action set item_title='Example checklist', source_ref='example:checklist' where id='${id(109)}';
+ update public.next_action set created_by='${id(2)}' where id='${id(106)}';
  insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(200)}','${id(11)}','next_step','Example old note','${id(1)}','2025-01-01'),
  ('${id(201)}','${id(11)}','next_step','Example current note','${id(2)}','2025-02-01'),
@@ -110,10 +111,6 @@ before(async () => {
  ('${id(303)}','task','2025-01-01','2025-02-01','${id(1)}','Example structured','{"example":true}','${id(10)}',null),
  ('${id(304)}','task','2025-01-01','2025-02-01','${id(1)}','Example party task',null,null,'${id(6)}');
  update public.activity set client_id='${id(3)}' where id='${id(301)}';
- insert into party (id,kind,name) values ('${id(7)}','company','Example surviving company');
- insert into outside_id (source,value,party_id) values ('old_system','${id(6)}','${id(7)}');
- insert into public.event (subject_type, subject_id, new_value, actor_id, verb, cause, sponsoring_human_slug, occurred_at)
- values ('deal','${id(10)}','{"activity":"${id(300)}"}','${id(2)}','log-activity','automation_job','partner_one','2025-01-01');
  insert into public.capture_session (id,nonce,device_id,actor_id,mode,started_at,consent_announced_at,session_token_hash,expires_at,state_at)
  values ('${id(400)}','example-nonce','example-device','${id(1)}','meeting','2025-01-01','2025-01-01','example-hash','2025-01-02','2025-01-01');
  insert into public.capture_post_call_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,deal_id,assignee_slug,action_description,evidence_quote,confidence)
@@ -124,6 +121,9 @@ before(async () => {
  ('${id(502)}','${id(402)}','${id(10)}','${id(1)}','Example post-call done','${id(1)}','2025-01-01','done','2025-02-01','2025-02-02','2025-02-03'),
  ('${id(503)}','${id(403)}','${id(10)}','${id(1)}','Example post-call dropped','${id(1)}','2025-01-01','dropped',null,null,'2025-02-01'),
  ('${id(504)}','${id(404)}','${id(17)}','${id(2)}','Example post-call missing deal','${id(1)}','2025-01-01','open',null,null,'2025-02-01');
+ insert into public.event (subject_type,subject_id,new_value,actor_id,verb,cause,sponsoring_human_slug,occurred_at) values
+ ('deal','${id(10)}','{"next_action_id":"${id(501)}"}','${id(2)}','resolve-post-call-candidate','automation_job','partner_one','2025-01-01'),
+ ('deal','${id(10)}','{"completed_post_call_action_ids":["${id(502)}"]}','${id(2)}','log-outreach','automation_job','partner_one','2025-02-02');
  commit;`);
 	await db.query(`begin; ${await sql("copy-activity.sql")}; commit`);
 	report = await copyOnce();
@@ -228,7 +228,10 @@ test("unmappable values are listed and refused rows never appear", async () => {
 	);
 	assert.deepEqual(reasons(report, 104), ["blank_next_step"]);
 	assert.deepEqual(reasons(report, 105), ["deal_not_copied"]);
-	assert.deepEqual(reasons(report, 106), ["owner_not_a_user"]);
+	assert.deepEqual(reasons(report, 106), [
+		"agent_user_unknown",
+		"owner_not_a_user",
+	]);
 	assert.deepEqual(reasons(report, 10), []);
 	assert.deepEqual(
 		await rows(
@@ -236,6 +239,26 @@ test("unmappable values are listed and refused rows never appear", async () => {
 		),
 		[],
 	);
+});
+test("unattached dates and unknown agent sponsors are reported with their values", () => {
+	const listed = report.filter(
+		(r) =>
+			r.old_id === id(15) ||
+			r.old_id === id(202) ||
+			(r.old_id === id(106) && r.reason === "agent_user_unknown"),
+	);
+	// biome-ignore format: one row per correction
+	assert.deepEqual(listed.map(Object.values), [
+ [id(15),'next_date','2026-03-01','date_without_fallback'],
+ [id(106),'changed_for_user_id',null,'agent_user_unknown'],
+ [id(202),'text','Example superseded','superseded_note'],
+ ]);
+});
+test("post-call acceptance and outreach-completion events name their own author and sponsor", async () => {
+	// biome-ignore format: one row per event form
+	assert.deepEqual((await rows(`select id,changed_by_user_id,changed_by_job,changed_for_user_id from next_step where id in ('${id(501)}','${id(502)}') order by id`)).map(Object.values), [
+ [id(501),null,'agent',id(1)], [id(502),null,'agent',id(1)],
+ ]);
 });
 test("the activity copy never also copies next-step notes or tasks", async () => {
 	assert.deepEqual(

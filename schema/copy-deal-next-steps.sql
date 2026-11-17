@@ -23,7 +23,8 @@ select n.id, 'capture_post_call_action', n.deal_id, n.description, n.status, n.d
 from public.capture_post_call_action n
 left join lateral (select e.id, e.actor_id from public.event e
  where e.subject_type = 'deal' and e.subject_id = n.deal_id
- and (e.new_value ->> 'next_action_id' = n.id::text or e.new_value ->> 'post_call_action_id' = n.id::text)
+ and (e.new_value ->> 'next_action_id' = n.id::text or e.new_value ->> 'post_call_action_id' = n.id::text
+  or e.verb = 'log-outreach' and e.new_value -> 'completed_post_call_action_ids' ? n.id::text)
  order by e.mutation_order desc limit 1) event on true
 cross join lateral copy_event_attribution(coalesce(event.actor_id, n.accepted_by), event.id) a;
 
@@ -64,8 +65,8 @@ where d.next_date is not null
 
 create temp table step_refusal on commit drop as
 select s.id, f.field, f.value, f.reason from step_candidate s cross join lateral (values
- (case when s.refusal = 'closed_without_doing' then 'status' else 'source' end,
- case when s.refusal = 'closed_without_doing' then (select status from old_action a where a.id = s.id) else s.source end, s.refusal, s.refusal is not null),
+ (case when s.refusal = 'closed_without_doing' then 'status' when s.source = 'deal_note' then 'text' else 'source' end,
+ case when s.refusal = 'closed_without_doing' then (select status from old_action a where a.id = s.id) when s.source = 'deal_note' then s.what else s.source end, s.refusal, s.refusal is not null),
  ('what', s.what, 'blank_next_step', s.what !~ '\S'),
  ('deal_id', s.deal_id::text, 'deal_not_copied', s.deal_id is not null and not exists (select from deal d where d.id = s.deal_id)),
  ('id', s.id::text, 'id_taken', exists (select from next_step n where n.id = s.id
