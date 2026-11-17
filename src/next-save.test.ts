@@ -164,3 +164,30 @@ test("a crossed edit is refused, and an edit to another field stands", async () 
 	);
 	assert.equal(flagged.change_id, seen + 2);
 });
+
+test("a save over an unseen change to another field answers rebased, so the next save re-reads", async () => {
+	const seen = await latestChange();
+	await save(
+		{ user: "blair" },
+		{ idempotency_key: randomUUID(), seen, owner: "casey" },
+		handOver,
+	);
+	const flagged = await save(
+		{ user: "alex" },
+		{ idempotency_key: randomUUID(), seen, flag: true },
+		flag,
+	);
+	assert.deepEqual(flagged, {
+		deal_id: DEAL,
+		rebased: true,
+		intervening_change_ids: [seen + 1],
+	});
+	await assert.rejects(
+		save(
+			{ user: "alex" },
+			{ idempotency_key: randomUUID(), seen, owner: "alex" },
+			handOver,
+		),
+		refusedAs("version_conflict"),
+	);
+});
