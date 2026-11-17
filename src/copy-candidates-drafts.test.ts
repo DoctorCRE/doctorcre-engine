@@ -1,29 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { leadCopyTest } from "./test-lead-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-candidates-drafts.sql"),
-]);
-const name = `copy_candidates_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
+const { db, copy, setup, cleanup } = await leadCopyTest(
+	"copy-candidates-drafts.sql",
 );
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
 const rows = async (sql: string) =>
 	(await db.query(sql)).rows.map(Object.values);
 const run = async () => {
@@ -78,12 +62,7 @@ const statusEvent = (
 let report: pg.QueryResultRow[];
 
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values ('${user}','partner_one','human','Example User'),
   ('${agent}','claude','automation','Example agent'), ('${sweep}','example_sweep','automation','Example sweep'),
@@ -95,7 +74,6 @@ before(async () => {
  insert into role (slug,label) values ('lead','Lead');
  insert into stage (role,slug,label) values ('lead','new','New');
  insert into public.lead_stage (slug,label) values ('new','New');
- insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  ${[20, 21, 22, 23, 24, 25, 26, 27]
 		.map(
 			(
@@ -145,10 +123,7 @@ before(async () => {
  commit;`);
 	report = await run();
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 // Each row as one line: its values, then when it last changed and by whom.
 const who = `changed_at::date || ' ' || coalesce(changed_by_job || coalesce(' for ' || right(changed_for_user_id::text, 2), ''), 'user ' || right(changed_by_user_id::text, 2))`;

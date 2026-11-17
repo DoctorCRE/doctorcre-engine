@@ -1,29 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { leadCopyTest } from "./test-lead-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (f: string) =>
-	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-lead-stage-moves.sql"),
-]);
-const name = `copy_moves_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
+const { db, copy, setup, cleanup } = await leadCopyTest(
+	"copy-lead-stage-moves.sql",
 );
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (): Promise<pg.QueryResultRow[]> => {
 	await db.query("begin");
@@ -38,16 +22,10 @@ const run = async (): Promise<pg.QueryResultRow[]> => {
 	}
 };
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values ('${id(1)}','example_user','human','Example User'), ('${id(2)}','example_job','automation','Example Job'), ('${id(3)}','example_missing_user','human','Example Missing User');
  insert into party (id,kind,name) values ('${id(1)}','person','Example User'); insert into app_user values ('${id(1)}');
- insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  insert into public.activity_kind (slug,label,is_contact) values ('call','Example call',true);
  insert into role (slug,label) values ('lead','Lead');
  insert into how_found (slug,label) values ('referral','Example referral');
@@ -83,10 +61,7 @@ before(async () => {
  delete from activity_about where activity_id='${id(55)}'; delete from activity where id='${id(55)}';
  delete from app_user where id='${id(3)}'; commit;`);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database "${name}" with (force)`);
-});
+after(cleanup);
 
 test("copies evidence, pending proposals and creation, approval and undo history without replaying stages", async () => {
 	const before = await rows("select * from party_role order by party_id");

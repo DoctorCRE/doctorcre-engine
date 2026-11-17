@@ -1,29 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
-import { URL } from "node:url";
-import pg from "pg";
-import { asAdmin } from "../scripts/test-database.ts";
+import type pg from "pg";
+import { leadCopyTest } from "./test-lead-copy.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const read = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
-	read("next.sql"),
-	read("copy-attribution.sql"),
-	read("copy-leads-clients.sql"),
-]);
-const name = `copy_restrictions_${randomUUID().replaceAll("-", "")}`;
-const url = new URL(
-	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
+const { db, copy, setup, cleanup } = await leadCopyTest(
+	"copy-leads-clients.sql",
 );
-url.pathname = `/${name}`;
-const db = new pg.Client({
-	connectionString: url.href,
-	options: "-c search_path=next -c TimeZone=UTC",
-});
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const run = async (input = ""): Promise<pg.QueryResultRow[]> => {
 	const result = await db.query(`discard temp;
@@ -42,18 +26,12 @@ const snapshot = () =>
  (select jsonb_agg(c order by id) from change c) as history`);
 
 before(async () => {
-	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-	await asAdmin(
-		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
-	);
-	await db.connect();
-	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values ('${id(1)}','example_user','human','Example User');
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
  insert into app_user values ('${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
- insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  insert into public.lead_stage (slug,label) values ('new','New'),('do_not_contact','Do not contact');
  insert into public.party (id,kind,name,created_by,updated_by)
  values ('${id(10)}','person','Example person','${id(1)}','${id(1)}');
@@ -68,10 +46,7 @@ before(async () => {
  ('${id(32)}','${id(10)}','new',false,'Example referral','${id(1)}','${id(1)}','2024-03-01','2025-03-01');
  commit;`);
 });
-after(async () => {
-	await db.end();
-	await asAdmin(`drop database if exists "${name}" with (force)`);
-});
+after(cleanup);
 
 test("without reviewed input suppression still waits for reasons", async () => {
 	await db.query("begin");
