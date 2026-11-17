@@ -262,6 +262,30 @@ An NPI is checked for shape: ten digits, the last a Luhn check digit over the pr
 
 Old reference ids, such as Salesforce ids and roster numbers, are kept in `outside_id` only to trace where a record came from. Nobody types or searches for them, so they are not party or deal columns. A source and value are stored once, so a repeated import finds the record it already made. Only a merge changes a row, so its stamp names the job or user that imported it, or the one that last merged it, and when.
 
+## Running the copies
+
+Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schema. Then run each copy as the owner, in its own transaction with the new schema on `search_path`, in this order. Each copy finds what an earlier one made through `outside_id`, so a copy run too early lists its rows as waiting instead of copying them.
+
+1. `copy-parties.sql`: every other copy finds its people and companies, and the partners as users, through this map.
+2. `copy-markets.sql`, with `copy_market_county`: the deal copy matches a deal's market by name.
+3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role.
+4. `copy-candidates-drafts.sql`: drafts and candidates find their leads.
+5. `copy-vendors.sql`: the deal copy finds the vendor roles.
+6. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
+7. `copy-deals.sql`.
+8. `copy-vendors.sql` again: introductions and worked deals find their deals.
+9. `copy-leases.sql`: needs its deal, client and building.
+10. `copy-critical-dates.sql`.
+11. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
+12. `copy-deal-file-text.sql`: needs the deal files.
+13. `copy-commissions.sql`, after the partners enter their ladders.
+14. `copy-space-needs.sql`, with `copy_space_need_county`: needs markets, deals and vendors.
+15. `copy-activity.sql`: needs parties and deals.
+16. `copy-lead-stage-moves.sql`: needs the activity each move cites.
+17. `copy-preferences.sql`: needs the next steps the lead and deal copies make.
+
+Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot. The copies of deal next steps (#386), invoice emails (#387) and change history (#385) join this order as they land.
+
 ## Copying today's people and companies
 
 `schema/copy-parties.sql` copies today's parties into the new database, with their emails, phone numbers, NPIs, do not contact, specialties and outside ids, and each person's company and title there. The owner runs it in one transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list: each old record or value it left behind, as typed, and why, for a partner to fix in today's system before the real run.
