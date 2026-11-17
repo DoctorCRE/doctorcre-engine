@@ -691,7 +691,7 @@ for (const [projection, payload, title, duplicate, copiedSummary] of [
 test("several source meeting records stay listed by the call copy and supply no guessed title", async () => {
 	await capture(60, false, "2024-10-01", "Example no notes");
 	await db.query(`insert into public.capture_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,payload,evidence_quote,confidence)
- values ('${id(161)}','${id(60)}','example-other','example-batch',1,'meeting_record','{"ref":"${id(1)}","summary":"Example other"}','Example evidence',0.9)`);
+ values ('${id(161)}','${id(60)}','example-other','example-batch',1,'meeting_record','{"ref":"${id(1)}","summary":"Example alpha"}','Example evidence',0.9)`);
 	assert.deepEqual(await run(), baseline);
 	assert.deepEqual(await run("", callsCopy), [
 		[id(60), "meeting_record", id(160), "several_meeting_records"],
@@ -734,5 +734,26 @@ test("a reviewed distant source-title pair permits a separate meeting before its
 	);
 	const before = await snapshot();
 	assert.deepEqual(await run(input), baseline);
+	assert.deepEqual(await snapshot(), before);
+});
+
+test("blank meeting records do not make the one recoverable source title ambiguous", async () => {
+	await capture(60, false, "2024-10-01", "Example no notes");
+	await db.query(`insert into public.capture_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,payload,evidence_quote,confidence)
+ values ('${id(161)}','${id(60)}','example-blank','example-batch',1,'meeting_record','{"summary":"   ","detail":"   "}','Example evidence',0.9)`);
+	const waiting = expected(
+		[13],
+		[id(13), "activity_id", id(60), "possible_duplicate"],
+	);
+	assert.deepEqual(await run(), waiting);
+	assert.deepEqual(await run("", callsCopy), []);
+	assert.deepEqual(
+		await rows(`select summary from activity where id = '${id(60)}'`),
+		[["Example no notes"]],
+	);
+	assert.deepEqual(await run(), waiting);
+	const before = await snapshot();
+	await run("", callsCopy);
+	assert.deepEqual(await run(), waiting);
 	assert.deepEqual(await snapshot(), before);
 });
