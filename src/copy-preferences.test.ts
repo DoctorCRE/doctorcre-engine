@@ -220,3 +220,144 @@ test("a rerun changes nothing, and picks up a mark once its next step is copied"
 		await db.query("rollback");
 	}
 });
+
+test("call follow-ups and inherited v2 marks keep the old Home's identity and precedence on reruns", async () => {
+	const callItem = (n: number) => `capture_post_call_action:${id(n)}`;
+	const originalMarks = await marks();
+	const setup = `
+ insert into public.client (id,party_id,created_by,updated_by) values ('${id(40)}','${id(10)}','${id(1)}','${id(1)}');
+ insert into public.deal_type_ref (slug,label,sort) values ('lease','Example lease',1);
+ insert into public.deal_phase (slug,label) values ('closed','Example closed');
+ insert into public.deal (id,client_id,name,deal_type,phase,created_by,updated_by)
+ values ('${id(50)}','${id(40)}','Example deal','lease','closed','${id(1)}','${id(1)}');
+ insert into deal (id,name,owner_user_id) values ('${id(50)}','Example deal','${id(1)}');
+ insert into public.capture_session (id,nonce,device_id,actor_id,mode,started_at,consent_announced_at,session_token_hash,expires_at,state_at)
+ values ('${id(400)}','example-nonce','example-device','${id(1)}','meeting','2025-01-01','2025-01-01','example-hash','2025-01-02','2025-01-01');
+ insert into public.capture_post_call_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,deal_id,assignee_slug,action_description,evidence_quote,confidence)
+ select v,'${id(400)}',v::text,'example-batch',row_number() over () - 1,'assigned_action','${id(50)}','partner_one','Example follow-up','Example evidence',1
+ from unnest(array[${[501, 502, 503, 504, 505].map((n) => `'${id(n)}'::uuid`).join(",")}]) v;
+ insert into public.capture_post_call_action (id,candidate_id,deal_id,owner_id,description,accepted_by)
+ select id,id,deal_id,'${id(1)}',action_description,'${id(1)}' from public.capture_post_call_candidate;
+ insert into next_step (id,deal_id,what)
+ select id,deal_id,description from public.capture_post_call_action where id in ('${id(501)}','${id(502)}','${id(503)}');
+ insert into next_step (id,party_id,what) values ('${id(505)}','${id(10)}','Example wrong record');
+ insert into public.next_action (id,subject_type,subject_id,owner_id,description,status,created_by)
+ select v,'lead','${id(30)}','${id(1)}','Example inherited step','done','${id(1)}'
+ from unnest(array[${[110, 111, 112].map((n) => `'${id(n)}'::uuid`).join(",")}]) v;
+ insert into next_step (id,party_id,what) select id,'${id(10)}',description from public.next_action where id in ('${id(110)}','${id(111)}','${id(112)}');
+ insert into ops.home_inbox_disposition (actor_id,item_id,v2_item_id,disposition,snoozed_until,source_version,material_version,updated_at) values
+ ('${id(1)}','${callItem(501)}',null,'snoozed','2026-12-01','1','m','2026-10-01'),
+ ('${id(1)}','${callItem(502)}',null,'settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','${callItem(504)}',null,'settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','${callItem(505)}',null,'settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','${callItem(506)}',null,'settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','legacy:503','${callItem(503)}','settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','legacy:110','${item(110)}','settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','legacy:111','${item(111)}','settled',null,'1','m','2026-10-03'),
+ ('${id(1)}','${item(111)}',null,'inbox',null,'1','m','2026-10-01'),
+ ('${id(1)}','legacy:112a','${item(112)}','snoozed','2026-12-01','1','m','2026-10-01'),
+ ('${id(1)}','legacy:112b','${item(112)}','settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','legacy:112c','${item(112)}','snoozed','2026-12-01','1','m','2026-10-02'),
+ ('${id(1)}','legacy:113','${item(113)}','settled',null,'1','m','2026-10-02');
+ insert into ops.home_waiting (actor_id,item_id,identity_kind,identity_id,reason,evidence,version,updated_at) values
+ ('${id(1)}','${callItem(501)}','party','${id(11)}','Example reply','[]',1,'2026-10-05'),
+ ('${id(1)}','${callItem(503)}','actor','${id(3)}','Example review','[]',1,'2026-10-06'),
+ ('${id(1)}','${item(110)}','party','${id(11)}','Example inherited wait','[]',1,'2026-10-05');`;
+	try {
+		const firstReport = await run(copy, setup, true);
+		assert.deepEqual(firstReport, [
+			...report.slice(0, 1),
+			...[504, 505, 506].map((n) => [
+				id(1),
+				"item_id",
+				callItem(n),
+				"next_step_not_copied",
+			]),
+			...report.slice(1, 4),
+			[id(1), "item_id", item(113), "next_step_not_copied"],
+			...report.slice(4),
+		]);
+		const addedMarks = (await marks()).filter(
+			([step]) => !originalMarks.some(([original]) => original === step),
+		);
+		assert.deepEqual(addedMarks, [
+			[
+				id(110),
+				"settled",
+				null,
+				id(11),
+				"Example inherited wait",
+				"2026-10-02 00:00:00+00",
+				"2026-10-05 00:00:00+00",
+				id(1),
+				null,
+			],
+			[
+				id(112),
+				"settled",
+				null,
+				null,
+				null,
+				"2026-10-02 00:00:00+00",
+				"2026-10-02 00:00:00+00",
+				id(1),
+				null,
+			],
+			[
+				id(501),
+				"snoozed",
+				"2026-12-01 00:00:00+00",
+				id(11),
+				"Example reply",
+				"2026-10-01 00:00:00+00",
+				"2026-10-05 00:00:00+00",
+				id(1),
+				null,
+			],
+			[
+				id(502),
+				"settled",
+				null,
+				null,
+				null,
+				"2026-10-02 00:00:00+00",
+				"2026-10-02 00:00:00+00",
+				id(1),
+				null,
+			],
+			[
+				id(503),
+				"settled",
+				null,
+				id(3),
+				"Example review",
+				"2026-10-02 00:00:00+00",
+				"2026-10-06 00:00:00+00",
+				id(1),
+				null,
+			],
+		]);
+		const state = async () => [
+			await marks(),
+			await rows("select count(*) from change"),
+		];
+		const beforeRerun = await state();
+		await db.query("discard temp");
+		const rerun = await db.query(copy);
+		assert.ok(Array.isArray(rerun));
+		assert.deepEqual(rerun.at(-1)?.rows.map(Object.values), firstReport);
+		assert.deepEqual(await state(), beforeRerun);
+		await db.query(
+			`insert into next_step (id,deal_id,what) values ('${id(504)}','${id(50)}','Example later copy'); discard temp`,
+		);
+		const corrected = await db.query(copy);
+		assert.ok(Array.isArray(corrected));
+		assert.deepEqual(
+			corrected.at(-1)?.rows.map(Object.values),
+			firstReport.filter(([, , value]) => value !== callItem(504)),
+		);
+		assert.deepEqual((await marks()).at(-1)?.slice(0, 2), [id(504), "settled"]);
+	} finally {
+		await db.query("rollback");
+	}
+});
