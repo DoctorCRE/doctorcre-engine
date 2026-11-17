@@ -22,7 +22,7 @@ insert into phase (slug, label) select slug, label from public.deal_phase on con
 insert into phase (slug, label) values ('dead', 'Dead') on conflict do nothing;
 
 create temp table old_deal on commit drop as
-select d.*, u.id as owner_user_id, m.id as market_id,
+select d.*, u.id as owner_user_id, m.id as market_id, parker.id as parked_by_user_id,
  coalesce(nullif(btrim(d.city), ''), nullif(btrim(a.market), '')) as typed_market,
  author.*
 from public.deal d
@@ -34,17 +34,20 @@ left join public.actor owner on owner.slug = d.owner or (d.owner is null and (d.
  and 1 = (select count(*) from public.deal_participant q where q.deal_id = d.id and q.role = 'lead' and q.to_at is null)))
 left join outside_id owner_map on owner_map.source = 'old_system' and owner_map.value = owner.id::text
 left join app_user u on u.id = owner_map.party_id
+left join outside_id parker_map on parker_map.source = 'old_system' and parker_map.value = d.parked_by::text
+left join app_user parker on parker.id = parker_map.party_id
 cross join lateral copy_attribution('deal', d.id, coalesce(d.updated_by, d.created_by)) author
 where not exists (select from outside_id o where o.source = 'old_system' and o.value = d.id::text);
 insert into not_copied select id, 'deal', id::text, 'no_deal_owner' from old_deal where owner_user_id is null;
 insert into deal (id, created_at, name, kind, reason, owner_user_id, market_id, closed_value,
- parking_reason, parking_note, needs_attention,
+ parking_reason, parking_note, needs_attention, parked_at, parked_by_user_id,
  changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, created_at, name, (select slug from deal_kind where slug = deal_type),
  (select slug from deal_reason where slug = case deal_type when 'startup' then 'start_up' when 'renewal' then null else deal_type end),
  owner_user_id, market_id, case when won_value > 0 then won_value end,
  case when operating_state = 'parked' then parking_reason end,
  case when operating_state = 'parked' then nullif(regexp_replace(parking_note, '^\s+|\s+$', '', 'g'), '') end, attention,
+ case when operating_state = 'parked' then parked_at end, case when operating_state = 'parked' then parked_by_user_id end,
  changed_by_user_id, changed_by_job, changed_for_user_id, updated_at from old_deal where owner_user_id is not null;
 insert into outside_id (source, value, deal_id)
 select 'old_system', d.id::text, d.id from old_deal d join deal n on n.id = d.id;
@@ -80,10 +83,10 @@ cross join lateral (values
  ('won_value', d.won_value::text, 'nonpositive_value', d.won_value <= 0)) f(field, value, reason, refused)
 where f.refused;
 
+-- Only a copy leaves a parked deal without its parker; the engine's own parking always names one.
 insert into not_copied
-select d.id, f.field, f.value, 'parking_history_not_copied' from public.deal d
-cross join lateral (values ('parked_at', d.parked_at::text), ('parked_by', d.parked_by::text)) f(field, value)
-where f.value is not null;
+select d.id, 'parked_by', d.parked_by::text, 'parker_not_a_user' from public.deal d join deal n on n.id = d.id
+where n.parked_at is not null and n.parked_by_user_id is null;
 
 -- Lane is not copied: national follows from the location's brand membership on the day the deal opened.
 insert into not_copied
