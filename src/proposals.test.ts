@@ -6,18 +6,30 @@ import { doorTest } from "./test-door.ts";
 const { db, setup, cleanup, save } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const [USER, CLIENT, DEAL, EMAIL, OTHER] = [id(1), id(2), id(3), id(4), id(5)];
+const [USER, CLIENT, DEAL, EMAIL, OTHER, PARTNER, IMPORTED] = [
+	id(1),
+	id(2),
+	id(3),
+	id(4),
+	id(5),
+	id(6),
+	id(7),
+];
 const job = { job: "mail_capture", for_user: "alex" };
 before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
- insert into how_found (slug, label) values ('inbound', 'Inbound');
+ insert into how_found (slug, label) values ('inbound', 'Inbound'), ('not_recorded', 'Not recorded');
  insert into role (slug, label) values ('client', 'Client'), ('lead', 'Lead');
  insert into stage (role, slug, label) values ('lead', 'new', 'New'), ('lead', 'qualified', 'Qualified');
  insert into deal_kind (slug, label) values ('lease', 'Lease'), ('purchase', 'Purchase');
  insert into phase (slug, label) values ('research', 'Research'), ('site_selection', 'Site Selection'), ('negotiation', 'Negotiating'), ('legal', 'Legal'), ('closing', 'Closing');
  insert into party (id, kind, name, how_found) values ('${USER}', 'person', 'Alex Example', null), ('${CLIENT}', 'company', 'Example Clinic', 'inbound');
  insert into app_user (id, slug) values ('${USER}', 'alex');
+ insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Casey Example');
+ insert into app_user (id, slug) values ('${PARTNER}', 'casey');
+ insert into party (id, kind, name, how_found, how_found_detail) values ('${IMPORTED}', 'person', 'Imported Example', 'not_recorded', 'Legacy import note');
+ insert into outside_id (source, value, party_id) values ('old_system', 'example-import', '${IMPORTED}');
  insert into party_role (party_id, role) values ('${CLIENT}', 'client');
  insert into party_email (party_id, address, label) values ('${USER}', 'alex@example.test', 'work'), ('${CLIENT}', 'clinic@example.test', 'work');
  insert into deal (id, name, kind, owner_user_id) values ('${DEAL}', 'Example Deal', 'lease', '${USER}'), ('${OTHER}', 'Other Example', 'purchase', '${USER}');
@@ -45,6 +57,211 @@ const decide = (p: unknown, args: object) =>
 		decision: "accept",
 		...args,
 	});
+
+const emailLead = (address: string) => ({
+	idempotency_key: randomUUID(),
+	address,
+	display_name: "Dr. Example",
+	summary: "Asked about opening a dental office.",
+	first_seen_at: "2026-11-05T17:00:00Z",
+	message_ref: "example-mail-reference",
+	applies_to: "new_matter",
+	confidence: 0.9,
+	evidence_quote: "I am opening a dental office.",
+});
+const suggestSender = (request: object, caller = job) =>
+	save(caller, "proposals/email-lead", request);
+const contact = (address: string) =>
+	db.query(
+		`select p.id, p.name, p.how_found, r.stage, r.owner_user_id
+		from party_email e join party p on p.id = e.party_id
+		left join party_role r on r.party_id = p.id and r.role = 'lead'
+		where e.address = $1`,
+		[address],
+	);
+
+test("mail capture stores an unknown sender once and the mailbox owner accepts it as one lead", async () => {
+	const address = "dentist@example.test";
+	const request = emailLead(address.toUpperCase());
+	const [stored, proposal] = await suggestSender(request);
+	assert.equal(stored, 201);
+	assert.equal(proposal.status, "pending");
+	assert.deepEqual(await suggestSender(request), [
+		201,
+		{ ...proposal, replayed: true },
+	]);
+	assert.deepEqual(
+		await suggestSender({
+			...request,
+			idempotency_key: randomUUID(),
+			address,
+			message_ref: "later-mail",
+		}),
+		[200, { ...proposal, existing: true }],
+	);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select c.status, c.name, c.qualification, c.source_row, p.activity_id
+		from proposal p join candidate c on c.id = p.candidate_id where p.id = $1`,
+				[proposal.proposal_id],
+			)
+		).rows,
+		[
+			{
+				status: "unreviewed",
+				name: request.display_name,
+				qualification: request.summary,
+				source_row: {
+					address,
+					message_ref: request.message_ref,
+					first_seen_at: request.first_seen_at,
+					reading: {
+						applies_to: request.applies_to,
+						confidence: request.confidence,
+						evidence_quote: request.evidence_quote,
+					},
+				},
+				activity_id: null,
+			},
+		],
+	);
+	assert.equal((await contact(address)).rowCount, 0);
+	assert.equal(
+		(
+			await save(
+				{ user: "casey" },
+				`proposals/${proposal.proposal_id}/decision`,
+				{
+					idempotency_key: randomUUID(),
+					decision: "accept",
+				},
+			)
+		)[0],
+		404,
+	);
+	const key = randomUUID();
+	const [accepted, answer] = await decide(proposal.proposal_id, {
+		idempotency_key: key,
+	});
+	assert.equal(accepted, 200);
+	assert.equal(answer.status, "accepted");
+	const [lead] = (await contact(address)).rows;
+	assert.deepEqual(lead, {
+		id: lead.id,
+		name: request.display_name,
+		how_found: "inbound",
+		stage: "new",
+		owner_user_id: USER,
+	});
+	assert.deepEqual(answer.created, { party_id: lead.id });
+	assert.deepEqual(
+		await decide(proposal.proposal_id, { idempotency_key: key }),
+		[200, { ...answer, replayed: true }],
+	);
+	assert.equal(
+		(await decide(proposal.proposal_id, {}))[1].error,
+		"already_decided",
+	);
+	assert.equal((await contact(address)).rowCount, 1);
+	assert.equal((await suggestSender(emailLead(address)))[1].status, "accepted");
+});
+
+test("a dismissed sender stays dismissed without creating a contact", async () => {
+	const address = "dismissed@example.test";
+	const [, p] = await suggestSender(emailLead(address));
+	const [status, decision] = await decide(p.proposal_id, {
+		decision: "dismiss",
+	});
+	assert.equal(status, 200);
+	assert.equal(decision.status, "dismissed");
+	assert.deepEqual(decision.created, {});
+	assert.deepEqual(await suggestSender(emailLead(address)), [
+		200,
+		{
+			proposal_id: p.proposal_id,
+			status: "dismissed",
+			existing: true,
+		},
+	]);
+	assert.equal(
+		(
+			await db.query(
+				"select status from candidate where source_row->>'address' = $1",
+				[address],
+			)
+		).rows[0].status,
+		"declined",
+	);
+	assert.equal((await contact(address)).rowCount, 0);
+});
+
+test("two mailboxes can suggest the same sender, but only one acceptance creates the lead", async () => {
+	const address = "shared-sender@example.test";
+	const [first, p] = await suggestSender(emailLead(address));
+	const [second, other] = await suggestSender(emailLead(address), {
+		...job,
+		for_user: "casey",
+	});
+	assert.equal(first, 201);
+	assert.equal(second, 201);
+	const results = await Promise.all([
+		decide(p.proposal_id, {}),
+		save({ user: "casey" }, `proposals/${other.proposal_id}/decision`, {
+			idempotency_key: randomUUID(),
+			decision: "accept",
+		}),
+	]);
+	assert.deepEqual(results.map(([code]) => code).sort(), [200, 422]);
+	assert.equal(
+		results.find(([code]) => code === 422)?.[1].rule,
+		"email_lead_sender_known",
+	);
+	assert.equal((await contact(address)).rowCount, 1);
+});
+
+test("a known sender gets no new suggestion", async () => {
+	assert.deepEqual(await suggestSender(emailLead("clinic@example.test")), [
+		200,
+		{ status: "known_party" },
+	]);
+});
+
+test("a copied candidate keeps its place when intake proposes the same sender again", async () => {
+	const candidate = id(9);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into candidate (id, source, source_key, source_row, name, qualification)
+		values ('${candidate}', 'outlook-intake', 'email-sha256:alex:5dc7d19c68a369e06408a0be0edcda795d8df1225bdaa66f6a57fb803fd836b6',
+			'{}', 'Copied Example', 'Inbound email'); commit;`);
+	assert.deepEqual(
+		await suggestSender(emailLead("copied-sender@example.test")),
+		[200, { candidate_id: candidate, status: "already_queued" }],
+	);
+});
+
+test("accepting a new lead replaces an imported not-recorded how-found value", async () => {
+	const activity = id(8);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${activity}', 'call', '2026-11-05T17:00:00Z');
+		insert into activity_about (activity_id, party_id) values ('${activity}', '${IMPORTED}'); commit;`);
+	const [stored, p] = await propose({
+		kind: "new_lead",
+		activity_id: activity,
+		party_id: IMPORTED,
+		how_found: "inbound",
+	});
+	assert.equal(stored, 201);
+	assert.equal((await decide(p.proposal_id, {}))[0], 200);
+	assert.deepEqual(
+		(
+			await db.query(
+				"select how_found, how_found_detail from party where id = $1",
+				[IMPORTED],
+			)
+		).rows,
+		[{ how_found: "inbound", how_found_detail: null }],
+	);
+});
 
 test("suggestions converge across retries, edits create a step without changing its proposal, and only a user decides once", async () => {
 	const args = {
