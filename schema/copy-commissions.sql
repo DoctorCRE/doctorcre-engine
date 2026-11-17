@@ -38,9 +38,10 @@ cross join lateral (values
   c.changed_by_user_id is not null and not exists (select from app_user where id = c.changed_by_user_id)),
  ('sponsor_id', c.changed_for_user_id::text, 'author_not_copied',
   c.changed_for_user_id is not null and not exists (select from app_user where id = c.changed_for_user_id)),
+-- The invoice-email copy dates a payment today's row leaves undated, so that saved date still matches.
  ('id', c.id::text, 'payment_id_taken', c.status <> 'expected' and exists (select from commission_payment p where p.id = c.id
   and (p.deal_id, p.amount, p.invoiced_on, p.due_on, p.received_on)
-  is distinct from (c.record_id, c.gross_amount, c.invoiced_on, c.due_on, c.received_on)))) f(field, value, reason, refused)
+  is distinct from (c.record_id, c.gross_amount, coalesce(c.invoiced_on, p.invoiced_on), c.due_on, c.received_on)))) f(field, value, reason, refused)
 where f.refused;
 
 -- Never overwrite a saved commission, including one a user changed after a copy.
@@ -50,7 +51,7 @@ from old_commission c join commission_total t on t.record_id = c.record_id join 
 where (n.expected, n.gross) is distinct from (t.expected, t.gross)
  or exists (select from old_commission o where o.record_id = c.record_id and o.status <> 'expected'
   and not exists (select from commission_payment p where (p.id, p.deal_id, p.amount, p.invoiced_on, p.due_on, p.received_on)
-   is not distinct from (o.id, o.record_id, o.gross_amount, o.invoiced_on, o.due_on, o.received_on)))
+   is not distinct from (o.id, o.record_id, o.gross_amount, coalesce(o.invoiced_on, p.invoiced_on), o.due_on, o.received_on)))
  or exists (select from commission_payment p where p.deal_id = c.record_id
   and not exists (select from old_commission o where o.record_id = c.record_id and o.status <> 'expected' and o.id = p.id));
 
