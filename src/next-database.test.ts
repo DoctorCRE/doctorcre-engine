@@ -6288,8 +6288,8 @@ const invoiceEmail = (row: Record<string, string | null> = {}) =>
 		id: INVOICE,
 		evidence_ref: "local-mail:example-invoice",
 		sender: "invoices@example.com",
-		deal_name: "Example Dental Springfield Deal",
-		client_name: "Example Dental Group",
+		deal_name: " example DENTAL Springfield deal ",
+		client_name: " Example DENTAL Group ",
 		occurred_at: "2026-04-01T23:30:00-05:00",
 		email_date: "2026-04-01",
 		deal_id: DEAL,
@@ -6302,6 +6302,13 @@ const UNDO_INVOICE = `update invoice_email set status = 'undone' where id = '${I
 
 // biome-ignore format: one row per refusal
 const INVOICE_REFUSALS: Case[] = [
+	...['evidence_ref', 'deal_name', 'client_name', 'property_address'].map((field): Case => [`${INVOICE_SETUP}; ${invoiceEmail({[field]: ' '})}`, `invoice_email_${field}_check`]),
+	[`${INVOICE_SETUP}; ${invoiceEmail({email_date: '2026-03-01'})}`, 'invoice_email_date_matches_time'],
+	[`${INVOICE_SETUP}; ${invoiceEmail({occurred_at: '-infinity'})}`, 'invoice_email_date_matches_time'],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${payment({id: id(983)})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${payment({id: id(983), invoiced_on: '2026-03-01'})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
+	[`${payment({id: INVOICE_PAYMENT, deal_id: LENDER_DEAL, amount: 500})}; ${invoiceEmail({deal_id: LENDER_DEAL})}; ${APPLY_INVOICE}`, 'invoice_email_needs_prior_phase'],
+	[`${INVOICE_SETUP}; insert into invoice_email (status) values ('applied')`, notGranted('invoice_email')],
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${invoiceEmail({id: id(982)})}`, "invoice_email_evidence_ref_key"],
 	[`${INVOICE_SETUP}; ${invoiceEmail({deal_id: LENDER_DEAL})}`, "invoice_email_payment_id_deal_id_fkey"],
 	[`${INVOICE_SETUP}; ${invoiceEmail({payment_id: null})}`, "invoice_email_target_whole"],
@@ -6400,11 +6407,11 @@ test("a direct user resolves doubtful evidence and undo restores the payment's p
 	});
 });
 
-test("a normalized property match dates an installment and the deal reads its earliest invoice", async () => {
+test("a user dates a later payment and the deal reads its earliest invoice", async () => {
 	await rolledBack(async () => {
 		await db.query(`${INVOICE_SETUP}; ${payment({ id: id(983), invoiced_on: "2026-03-01" })};
 			${invoiceEmail({ client_name: null, property_address: "  100 EXAMPLE Way,   Springfield ", deal_name: " example DENTAL Springfield deal " })};
-			${asJob("mail_capture")}; ${APPLY_INVOICE}; ${CHECK_AT_COMMIT}`);
+			${asUser(USER)}; ${APPLY_INVOICE}; ${CHECK_AT_COMMIT}`);
 		assert.equal(
 			(
 				await db.query(
@@ -6453,3 +6460,56 @@ test("an invoice cannot partly close a deal when its payment refuses the date", 
 		);
 	});
 });
+
+for (const [name, held, job, blocks] of [
+	[
+		"phase writers serialize with invoice application",
+		`insert into deal_phase_change values ('${DEAL}', '2026-03-21', 'legal', 'Example manual move')`,
+		false,
+		true,
+	],
+	[
+		"automatic matches hold membership facts",
+		`insert into party (kind, name) values ('company', 'Unrelated Example')`,
+		true,
+		true,
+	],
+	[
+		"user invoice decisions do not lock unrelated parties",
+		`insert into party (kind, name) values ('company', 'Unrelated Example')`,
+		false,
+		false,
+	],
+] satisfies [string, string, boolean, boolean][]) {
+	test(name, async () => {
+		const holder = await connect();
+		const writer = await connect();
+		try {
+			await holder.query(`begin; ${held}`);
+			await writer.query(
+				`begin; ${INVOICE_SETUP}; ${invoiceEmail()}; ${job ? asJob("mail_capture") : asUser(USER)}`,
+			);
+			const { pid } = (await writer.query("select pg_backend_pid() as pid"))
+				.rows[0];
+			let settled = false;
+			const applying = writer.query(APPLY_INVOICE).finally(() => {
+				settled = true;
+			});
+			let blocked = false;
+			while (!settled && !blocked)
+				blocked = (
+					await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+						pid,
+					])
+				).rows[0].blocked;
+			await holder.query("rollback");
+			await applying;
+			assert.equal(blocked, blocks);
+		} finally {
+			await holder.query("rollback");
+			await writer.query("rollback");
+			await holder.end();
+			await writer.end();
+		}
+	});
+}

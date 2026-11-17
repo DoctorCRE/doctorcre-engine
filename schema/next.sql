@@ -1916,16 +1916,6 @@ select deal_id, min(invoiced_on) as invoiced_on from commission_payment group by
 create function invoice_name(value text) returns text
 language sql immutable return lower(regexp_replace(btrim(value), '\s+', ' ', 'g'));
 
--- All phase writers hold the deal, including manual moves racing an invoice undo.
-create function lock_phase_deal() returns trigger
-language plpgsql as $$
-begin
-	perform from deal where id = new.deal_id for update;
-	return new;
-end $$;
-create trigger lock_phase_deal before insert on deal_phase_change
-	for each row execute function lock_phase_deal();
-
 create function invoice_email_transition() returns trigger
 language plpgsql as $$
 declare
@@ -1935,12 +1925,7 @@ declare
 	direct_user boolean := nullif(current_setting('engine.user_id', true), '') is not null
 		and nullif(current_setting('engine.job', true), '') is null;
 begin
-	if tg_op = 'INSERT' then
-		if new.status <> 'captured' then
-			raise exception 'an invoice starts captured' using errcode = 'check_violation', constraint = 'invoice_email_starts_captured';
-		end if;
-		return new;
-	end if;
+	if tg_op = 'INSERT' then return new; end if;
 	if old.status <> 'captured' and (new.deal_id, new.payment_id) is distinct from (old.deal_id, old.payment_id) then
 		raise exception 'an applied invoice keeps its target' using errcode = 'check_violation', constraint = 'invoice_email_keeps_target';
 	end if;
@@ -1948,8 +1933,12 @@ begin
 	if not (old.status = 'captured' and new.status = 'applied' or old.status = 'applied' and new.status = 'undone' and direct_user) then
 		raise exception 'an invoice applies once and only a user undoes it' using errcode = 'check_violation', constraint = 'invoice_email_status_moves';
 	end if;
-	-- Membership and matching facts cannot change between counting matches and closing.
-	lock table deal, deal_party, deal_property, party, property in share mode;
+	-- Matching facts and payment candidates stay fixed; user decisions and undo need only their own deal.
+	if new.status = 'applied' and not direct_user then
+		lock table party, property, deal_party, deal_property, deal in share mode;
+		lock table commission_payment in share row exclusive mode;
+	end if;
+	-- FOR UPDATE conflicts with the phase foreign key's KEY SHARE, so every phase writer takes turns with undo.
 	perform from deal where id = new.deal_id for update;
 	select * into latest from deal_phase_change where deal_id = new.deal_id order by happened_at desc limit 1;
 	select * into payment from commission_payment where id = new.payment_id for update;
@@ -1970,7 +1959,10 @@ begin
 		perform from invoice_mailbox where address = new.sender;
 		if not direct_user and (not found or matches is distinct from array[new.deal_id]
 			or new.occurred_at > clock_timestamp() or new.email_date > current_date
-			or payment.invoiced_on is not null and payment.invoiced_on <> new.email_date) then
+			or payment.invoiced_on is not null and payment.invoiced_on <> new.email_date
+			or exists (select from deal_invoiced where deal_id = new.deal_id and invoiced_on <> new.email_date)
+			or (select count(*) from commission_payment where deal_id = new.deal_id
+				and (invoiced_on is null or invoiced_on = new.email_date)) <> 1) then
 			raise exception 'a doubtful invoice waits for a user' using errcode = 'check_violation', constraint = 'invoice_email_needs_user';
 		end if;
 		new.prior_phase_at := latest.happened_at;
@@ -1987,9 +1979,6 @@ begin
 			or old.payment_change_id is distinct from (select max(id) from change where table_name = 'commission_payment'
 				and record = jsonb_build_object('id', new.payment_id) and new_value ? 'invoiced_on') then
 			raise exception 'newer work prevents undo' using errcode = 'check_violation', constraint = 'invoice_email_undo_current';
-		end if;
-		if old.prior_phase_at is null then
-			raise exception 'undo needs a previous phase' using errcode = 'check_violation', constraint = 'invoice_email_undo_prior_phase';
 		end if;
 		insert into deal_phase_change (deal_id, happened_at, phase, reason)
 		select deal_id, greatest(clock_timestamp(), latest.happened_at + interval '1 microsecond'), phase, 'Invoice close undone'
@@ -2172,6 +2161,8 @@ create table change (
 	-- The duplicate whose merge made this change.
 	merge_of uuid references merged_party
 );
+
+alter table invoice_email add foreign key (payment_change_id) references change;
 
 -- The owner's rights, so the engine's login writes history only by changing a row.
 create function record_change() returns trigger
