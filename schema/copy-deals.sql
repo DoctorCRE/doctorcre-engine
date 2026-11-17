@@ -14,7 +14,7 @@ insert into deal_kind (slug, label) values ('lease', 'Lease'), ('purchase', 'Pur
  ('sale_leaseback', 'Sale-leaseback'), ('build_to_suit', 'Build-to-suit') on conflict do nothing;
 insert into deal_reason (slug, label) values ('start_up', 'Start-up'), ('relocation', 'Relocation'),
  ('expansion', 'Expansion'), ('renewal', 'Renewal'), ('additional_office', 'Additional office') on conflict do nothing;
-insert into role (slug, label) values ('client', 'Client') on conflict do nothing;
+insert into role (slug, label) values ('client', 'Client'), ('market_agent', 'Market agent') on conflict do nothing;
 insert into role (slug, label)
 select case slug when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else slug end, label
 from public.participant_role where slug in ('client', 'client_contact', 'support', 'referring_agent', 'listing_side', 'landlord_side', 'investor', 'capital_partner') on conflict do nothing;
@@ -77,7 +77,12 @@ union all
 select v.deal_id, v.party_id, v.party_id, v.role, true, v.updated_at, v.updated_at,
  a.*
 from public.deal_vendor_assignment v cross join lateral copy_attribution('deal', v.deal_id, v.updated_by, 'vendor_assignment') a
-where v.active;
+where v.active
+union all
+select m.deal_id, m.deal_id, m.agent_party_id, 'market_agent', false, m.set_at, m.set_at,
+ a.*
+from public.deal_market_assignment m cross join lateral copy_attribution('deal', m.deal_id, m.set_by, 'market_agent') a
+where m.agent_party_id is not null;
 create temp table mapped_link on commit drop as
 select l.*, m.party_id as mapped_party_id, r.slug from old_link l
 left join outside_id m on m.source = 'old_system' and m.value = l.party_id::text
@@ -94,6 +99,11 @@ select l.old_id, 'deal_party', concat_ws(' ', l.deal_id, l.party_id, l.role), ca
  when l.mapped_party_id is null then 'party_not_copied' when l.role = 'client' then 'client_role_not_available' else 'role_not_available' end
 from mapped_link l left join deal d on d.id = l.deal_id
 where d.id is null or l.mapped_party_id is null or l.slug is null;
+-- A stated name is never matched to a person; only a verified party link names the agent.
+insert into not_copied select deal_id, 'market_agent', agent_name, 'agent_not_verified'
+from public.deal_market_assignment where agent_party_id is null;
+insert into not_copied select deal_id, 'market_agent_source', source, 'no_typed_destination'
+from public.deal_market_assignment;
 insert into not_copied select id, 'deal_participant', role, 'ended_participant_history'
 from public.deal_participant where to_at is not null;
 
