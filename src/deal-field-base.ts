@@ -12,8 +12,13 @@ const isReason = (
 ): value is (typeof REASONS)[number] =>
 	REASONS.some((reason) => reason === value);
 
+const isOwner = (
+	value: JsonValue | undefined,
+): value is (typeof PARTNERS)[number] =>
+	PARTNERS.some((partner) => partner === value);
+
 export type Patch =
-	| { field: "owner"; value: string | null }
+	| { field: "owner"; value: (typeof PARTNERS)[number] | null }
 	| {
 			field: "operating_state";
 			value: {
@@ -35,11 +40,7 @@ function invalidValue(): never {
 
 function validated({ field, value, occurred_on }: JsonObject): Patch {
 	if (field === "owner") {
-		if (
-			value !== null &&
-			(typeof value !== "string" || !PARTNERS.some((p) => p === value))
-		)
-			invalidValue();
+		if (value !== null && !isOwner(value)) invalidValue();
 		if (occurred_on != null) refused();
 		return { field, value };
 	}

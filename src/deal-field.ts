@@ -66,8 +66,6 @@ async function patch(saving: Saving, args: JsonObject) {
 		.where("subject_id", "=", deal_id)
 		.where("field", "=", field)
 		.where("idempotency_key", "=", idempotency_key)
-		.orderBy("recorded_at", "desc")
-		.orderBy("id", "desc")
 		.executeTakeFirstOrThrow();
 	return {
 		ok: true,
