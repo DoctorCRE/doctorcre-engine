@@ -554,14 +554,16 @@ create constraint trigger lead_or_client_how_found after update of how_found on 
 create function how_found_not_recorded_only_imported() returns trigger
 language plpgsql as $$
 begin
-	if not exists (select from outside_id where party_id = new.id and source = 'old_system') then
+	-- Judged at commit on the saved row, so a later correction or merge in the same transaction counts.
+	if exists (select from party where id = new.id and how_found = 'not_recorded')
+		and not exists (select from outside_id where party_id = new.id and source = 'old_system') then
 		raise exception 'only a record copied from the old system may say how it was found was not recorded'
 			using errcode = 'check_violation', constraint = 'how_found_not_recorded_only_imported';
 	end if;
 	return null;
 end $$;
 
--- Deferred, so a person and their old-system id can be saved in either order. A merge moves the id with the source.
+-- Deferred, so a person and their old-system id can be saved in either order.
 create constraint trigger how_found_not_recorded_only_imported after insert or update of how_found on party
 	initially deferred for each row when (new.how_found = 'not_recorded')
 	execute function how_found_not_recorded_only_imported();
@@ -2175,6 +2177,7 @@ declare
 	duplicate_npi text;
 	duplicate_how_found text;
 	duplicate_how_found_detail text;
+	duplicate_source_wins boolean;
 begin
 	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
 	perform from party where id in (duplicate, survivor) for update;
@@ -2327,9 +2330,13 @@ begin
 	end loop;
 
 	delete from party where id = duplicate returning npi, how_found, how_found_detail into duplicate_npi, duplicate_how_found, duplicate_how_found_detail;
+	-- A recorded source beats not recorded, as in the copy.
+	select how_found is null or how_found = 'not_recorded' and coalesce(duplicate_how_found, 'not_recorded') <> 'not_recorded'
+		into duplicate_source_wins from party where id = survivor;
 	update party set npi = coalesce(npi, duplicate_npi),
-		how_found_detail = coalesce(how_found_detail, case when how_found is null or how_found = duplicate_how_found
-			then duplicate_how_found_detail end), how_found = coalesce(how_found, duplicate_how_found)
+		how_found_detail = case when duplicate_source_wins then duplicate_how_found_detail
+			else coalesce(how_found_detail, case when how_found = duplicate_how_found then duplicate_how_found_detail end) end,
+		how_found = case when duplicate_source_wins then duplicate_how_found else how_found end
 	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;

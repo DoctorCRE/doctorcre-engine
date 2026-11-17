@@ -75,6 +75,11 @@ update party p set how_found = s.mapped_source, how_found_detail = coalesce(null
 from (select distinct on (mapped_id) * from mapped_source where mapped_source is not null
  order by mapped_id, mapped_source = 'not_recorded', kind = 'client' desc, updated_at desc, id) s
 where p.id = s.mapped_id and (p.how_found is null or p.how_found = 'not_recorded' and s.mapped_source <> 'not_recorded')
+ and not exists (select from waiting_client_source w where w.mapped_id = p.id)
+ -- Not recorded would be a guess while another of the party's sources still needs mapping.
+ and (s.mapped_source <> 'not_recorded' or not exists (select from mapped_source u where u.mapped_id = p.id and u.mapped_source is null));
+insert into not_copied select s.id, 'how_found', s.typed_source, 'waits_for_other_source'
+from mapped_source s join party p on p.id = s.mapped_id where s.mapped_source = 'not_recorded' and p.how_found is null
  and not exists (select from waiting_client_source w where w.mapped_id = p.id);
 insert into not_copied select s.id, 'how_found', s.typed_source, 'existing_source_differs'
 from mapped_source s join party p on p.id = s.mapped_id

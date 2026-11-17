@@ -4765,6 +4765,35 @@ test("a merge keeps the survivor's lead owner and how it was found, filled from 
 		]);
 	}));
 
+test("not recorded is judged on the saved party, after a correction or a merge in the same save", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values
+				('${id(663)}', 'person', 'Example Corrected', 'not_recorded'), ('${DUPLICATE}', 'person', 'Example Imported', 'not_recorded');
+			insert into outside_id (source, value, party_id) values ('old_system', '${id(664)}', '${DUPLICATE}');
+			update party set how_found = 'referral' where id = '${id(663)}';
+			select merge_party('${DUPLICATE}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+		const { rows } =
+			await db.query(`select (select how_found from party where id = '${id(663)}') as corrected,
+			(select how_found from party where id = '${LEAD}') as survivor`);
+		assert.deepEqual(rows, [
+			{ corrected: "referral", survivor: "public_records" },
+		]);
+	}));
+
+test("a merge keeps a recorded source and its detail over not recorded", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Imported', 'not_recorded');
+			insert into outside_id (source, value, party_id) values ('old_system', '${id(664)}', '${OLD}');
+			insert into party (id, kind, name, how_found, how_found_detail) values ('${DUPLICATE}', 'person', 'Example Other', 'vendor', 'Example vendor');
+			select merge_party('${DUPLICATE}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		const { rows } = await db.query(
+			`select how_found, how_found_detail from party where id = '${OLD}'`,
+		);
+		assert.deepEqual(rows, [
+			{ how_found: "vendor", how_found_detail: "Example vendor" },
+		]);
+	}));
+
 test("an email's sender is matched to its people through their email rows", async () => {
 	const { rows } = await db.query(
 		"select party_id from email join party_email on address = sender where activity_id = $1",

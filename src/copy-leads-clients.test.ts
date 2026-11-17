@@ -382,7 +382,7 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 	}
 });
 
-test("a lead or client with no source copies as not recorded until a recorded source replaces it", async () => {
+test("a lead or client with no source copies as not recorded, waits while another source needs mapping, and a recorded source replaces it", async () => {
 	const setup = `${extraParties}
  insert into public.lead (id,party_id,stage,source_type,created_by,updated_by) values
  ('${id(83)}','${id(80)}','new',null,'${id(1)}','${id(1)}'),
@@ -401,7 +401,7 @@ test("a lead or client with no source copies as not recorded until a recorded so
 		assert.deepEqual(await answer(), [
 			{ id: id(80), how_found: "not_recorded", roles: 1 },
 			{ id: id(81), how_found: "referral", roles: 2 },
-			{ id: id(82), how_found: "not_recorded", roles: 2 },
+			{ id: id(82), how_found: null, roles: 0 },
 		]);
 		assert.ok(
 			!listed.some(
@@ -410,11 +410,11 @@ test("a lead or client with no source copies as not recorded until a recorded so
 					["sources_disagree", "existing_source_differs"].includes(r.reason),
 			),
 		);
-		assert.ok(
-			listed.some(
-				(r) => r.old_id === id(87) && r.reason === "source_needs_mapping",
-			),
-		);
+		for (const [held, reason] of [
+			[id(85), "waits_for_other_source"],
+			[id(87), "source_needs_mapping"],
+		])
+			assert.ok(listed.some((r) => r.old_id === held && r.reason === reason));
 		await freshCopy(
 			"insert into copy_how_found values ('lead','Unmapped lead source','vendor')",
 		);
