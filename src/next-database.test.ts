@@ -490,6 +490,8 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"calendar_agenda",
+	"calendar_review_dismissal",
 	"email_mailbox",
 	"email_recipient",
 	"invoice_email",
@@ -2446,6 +2448,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	calendar_agenda: ["observed_at", "snapshot"],
 	invoice_email: ["deal_id", "payment_id", "status"],
 	suite: ["area_basis", "area_sf", "condition", "floor", "label"],
 	space_need: [
