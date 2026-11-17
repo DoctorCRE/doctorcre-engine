@@ -1,3 +1,4 @@
+import { Hono } from "hono";
 import { sql } from "kysely";
 import { isoMillis, Refusal } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
@@ -6,7 +7,41 @@ import { lockFields } from "./deal-field-base.ts";
 import { lookupRefusal, resolveDeal } from "./deals/resolve.ts";
 import { appendNextStep } from "./next-step.ts";
 import { planStatus } from "./overdue-work.ts";
-import { type Change, SaveRefusal, type Saving } from "./save.ts";
+import {
+	answerSave,
+	type Change,
+	SaveRefusal,
+	type Saving,
+	type WriterEnv,
+} from "./save.ts";
+
+export const dealUpdate = new Hono<WriterEnv>();
+
+dealUpdate.post("/add-deal-note", (c) =>
+	answerSave(
+		c,
+		{
+			verb: "add-deal-note",
+			fields: {
+				idempotency_key: {},
+				deal: {},
+				text: {},
+				next_step: {},
+				next_date: {},
+			},
+			required: ["idempotency_key", "deal", "text"],
+		},
+		updateUnlessOverdue,
+	),
+);
+
+// The engine lacks the old after-commit overdue check (decision 96), so it rolls back.
+const updateUnlessOverdue: Change = async (saving, args) => {
+	const answer = await addDealUpdate(saving, args);
+	if ("overdue_assessment" in answer)
+		throw new SaveRefusal(new Refusal(501, "old_system_required"));
+	return answer;
+};
 
 type OpenWork = {
 	id: string;
