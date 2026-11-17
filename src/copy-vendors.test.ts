@@ -533,3 +533,91 @@ test("introductions either way, and the deals a vendor worked or referred, are c
 		);
 		assert.deepEqual(await rows("select * from change order by id"), history);
 	}));
+
+// Party 12 is a second user, and 16 is the party that was not copied.
+const LINKS = `select set_config('engine.job', 'old_system', true);
+insert into party (id, kind, name) values ('${id(12)}', 'person', 'Example Second User');
+insert into app_user values ('${id(12)}');
+insert into outside_id (source, value, party_id) values ('old_system', '${id(12)}', '${id(12)}');
+insert into public.party (id, kind, name, created_by, updated_by)
+	select id, 'person', 'Example', '${SYSTEM}', '${SYSTEM}' from unnest(array['${id(1)}'::uuid, '${id(12)}'::uuid]) id;
+insert into public.party_link_kind (slug, label, sort) values ('knows', 'Example', 1), ('can_introduce', 'Example', 2),
+	('works_with', 'Example', 3), ('intro_requested', 'Example', 4), ('example_kind', 'Example', 5);
+${link(80, 10, 11, "knows")} ${link(81, 11, 10, "knows")} ${link(82, 10, 15, "knows")} ${link(83, 10, 16, "knows")}
+${link(84, 17, 11, "can_introduce")} ${link(85, 1, 11, "can_introduce", 10)} ${link(86, 11, 17, "can_introduce", 10)}
+${link(87, 1, 12, "can_introduce", 10)} ${link(88, 11, 1, "can_introduce", 16)} ${link(89, 10, 11, "works_with")}
+${link(90, 11, 10, "intro_requested")} ${link(91, 10, 11, "example_kind")} ${link(92, 17, 19, "knows", 11)}`;
+const LINK_FIELDS = ["party_link", "via_party"];
+const LINK_ROWS = `select id, kind, party_id, other_party_id, started_on::text, ended_on, note, created_at::text,
+	changed_by_user_id, changed_by_job, changed_at::text from party_link order by id`;
+const copiedLink = (n: number, kind: string, from: number, to: number) => ({
+	id: id(n),
+	kind,
+	party_id: id(from),
+	other_party_id: id(to),
+	started_on: "2025-03-01",
+	ended_on: null,
+	note: `Example note ${n}`,
+	created_at: "2025-03-04 00:00:00+00",
+	changed_by_user_id: PARTNER,
+	changed_by_job: null,
+	changed_at: "2025-03-04 00:00:00+00",
+});
+
+test("who knows or can introduce whom is copied, and a link with no place is listed with why", () =>
+	rolledBack(async () => {
+		const listed = (await copy(LINKS))?.filter((row) =>
+			LINK_FIELDS.includes(row[1] as string),
+		);
+		assert.deepEqual(await rows(LINK_ROWS), [
+			copiedLink(80, "knows", 10, 11),
+			copiedLink(84, "can_introduce", 17, 11),
+			copiedLink(85, "can_introduce", 10, 11),
+			copiedLink(92, "knows", 17, 19),
+		]);
+		// biome-ignore format: one row per value
+		assert.deepEqual(listed, [
+			[id(81), "party_link", "knows", "the same link is kept already"],
+			[id(82), "party_link", "knows", "it links a record to itself"],
+			[id(83), "party_link", "knows", "a party it links is not copied"],
+			[id(86), "party_link", "can_introduce", "neither end is a user"],
+			[id(87), "party_link", "can_introduce", "both ends are users"],
+			[id(88), "party_link", "can_introduce", "a party it links is not copied"],
+			[id(89), "party_link", "works_with", "outside the owner's ruling"],
+			[id(90), "party_link", "intro_requested", "outside the owner's ruling"],
+			[id(91), "party_link", "example_kind", "not a kind of link"],
+			[id(92), "via_party", id(11), "a knows link has no broker"],
+		]);
+		const links = await rows(LINK_ROWS);
+		const history = await rows("select * from change order by id");
+		await db.query("discard temp");
+		assert.deepEqual(
+			(await copy())?.filter((row) => LINK_FIELDS.includes(row[1] as string)),
+			listed,
+		);
+		assert.deepEqual(await rows(LINK_ROWS), links);
+		assert.deepEqual(await rows("select * from change order by id"), history);
+	}));
+
+for (const [sql, code] of [
+	[
+		`insert into party_link (kind, party_id, other_party_id, started_on) values ('knows', '${id(11)}', '${id(10)}', '2025-03-01')`,
+		"23505",
+	],
+	[
+		`insert into party_link (kind, party_id, other_party_id, started_on) values ('can_introduce', '${id(17)}', '${id(11)}', '2025-03-01')`,
+		"23505",
+	],
+	[
+		`update party_link set ended_on = '2025-02-28' where id = '${id(80)}'`,
+		"23514",
+	],
+] satisfies [string, string][]) {
+	test(`a copied link is guarded: ${sql}`, () =>
+		rolledBack(async () => {
+			await copy(LINKS);
+			await db.query(`set constraints all immediate; set local role engine;
+			select set_config('engine.user_id', '${PARTNER}', true); select set_config('engine.job', '', true);`);
+			await assert.rejects(db.query(sql), { code });
+		}));
+}
