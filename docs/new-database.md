@@ -289,8 +289,9 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 21. `copy-lead-stage-moves.sql`: needs the activity each move cites.
 22. `copy-deal-next-steps.sql`: needs deals and activity.
 23. `copy-call-suggestions.sql`: needs the calls and the next steps an accepted suggestion made.
-24. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
-25. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
+24. `copy-meeting-suggestions.sql`: needs the meetings and the next steps an accepted action made.
+25. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
+26. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
 Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
 
@@ -903,3 +904,14 @@ Run `schema/copy-meetings.sql` after attribution, `copy-activity.sql` and `copy-
 The old meeting tables have no activity link. Optionally supply `pg_temp.copy_meeting_activity(meeting_id uuid primary key, activity_id uuid not null unique)` in the transaction, mapping an ops meeting to its reviewed public meeting or tour activity. That activity must already be copied. Its id, time and existing record links remain; its logged summary follows the meeting title before the current notes. Without a mapping, a time within 24 hours, an equal title, or a source UTC date matching the meeting's Chicago date identify candidate pairs only. The date comparison covers evening meetings whose hand-logged date became UTC midnight. Every such pair is listed as `possible_duplicate`, and the meeting waits. To clear a false match, supply that pair in optional `pg_temp.copy_meeting_distinct(meeting_id uuid, activity_id uuid, primary key (meeting_id, activity_id))`. Every remaining candidate must be reviewed before a separate activity copies. Other meetings keep their ops id. A copied meeting with no known record links is listed as `about_nothing_copied`. A reused logged activity retains a newer last-change time and its author stamp. This coordinator choice on #396 is open to an owner ruling.
 
 Unknown authors, invalid or conflicting mappings, reversed revision chronology and conflicting imported history wait listed. An agent without a known sponsor keeps the agent stamp and is listed. Reruns preserve current rows, native history and imported edits, including later user changes. New source revisions on an already-copied meeting wait as `meeting_changed_since_copy` rather than overwrite it. PostgreSQL transaction controls and JSONB, then the existing pg test driver, cover this copy without another dependency.
+
+## Copying today's meeting suggestions
+
+Run `schema/copy-meeting-suggestions.sql` as the owner after `copy-meetings.sql` and the next-step copies, in its own transaction with the new schema on `search_path` and attribution loaded. It reads `public` and `ops` and ends with `not_copied` (decision 88).
+
+- An `ops.meeting_action` whose current revision names a `set-next-action` or `set-next-step` command becomes a next-step `proposal` on the deal, person or company its command names, cited from the activity `copy-meetings.sql` made of its meeting, with the revision's summary as evidence. Proposed, accepted, executed and delegated, and declined become pending, accepted and dismissed. It is proposed by `old_system` at its current revision's time.
+- A decision copies only with the partner's matching `ops.meeting_action_decision_request`, its deciding user and time. An explicit instruction accepted itself with no request, so it is listed.
+- An accepted action is the step it made, never a second one: its proposal takes the id its dispatch's `tool_call` or deal-room event names, when that step was copied. Otherwise it takes its first revision's id.
+- Every revision becomes imported history of the proposal, as decision 81 describes, with its summary before and after, command, basis, author and time.
+- Listed and not copied: actions with no command or another verb, a meeting, record or made step not copied, a party the meeting is not about, blank text, an invalid due date, an owner, author or decider who is not a user, and an action that changed since it was copied or has another's payload. Listed but copied: a delegate and an agent's unknown sponsor.
+- A rerun leaves copied proposals and history as they were, and copies an action whose meeting, record or step was copied since.
