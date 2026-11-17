@@ -138,7 +138,9 @@ insert into not_copied select l.id, 'options_note', l.options_note, 'option_term
 from old_version l join lease_version n on (n.id, n.lease_id, n.version) = (l.id, l.lease_id, l.new_version) where l.options_note ~ '\S';
 insert into not_copied select l.id, 'evidence', f.value::text, 'no_typed_destination'
 from old_version l join lease_version n on (n.id, n.lease_id, n.version) = (l.id, l.lease_id, l.new_version)
-cross join lateral (select jsonb_strip_nulls(jsonb_build_object('source', l.source, 'evidence_kind', l.evidence_kind,
+cross join lateral (select jsonb_strip_nulls(jsonb_build_object('source', l.source, 'evidence_kind',
+ -- The deal-file copier applies these kind mappings.
+ case when l.deal_id is null or l.evidence_kind not in ('executed_lease', 'lease_amendment') then l.evidence_kind end,
  'evidence_ref', l.evidence_ref, 'status', case when l.status = 'legacy_unverified' then l.status end)) as value) f
 where f.value <> '{}'::jsonb;
 alter table document enable trigger stamp_change;

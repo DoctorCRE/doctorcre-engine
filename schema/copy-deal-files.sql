@@ -27,6 +27,11 @@ select f.*, exists (select from deal n where n.id = f.deal_id) as deal_copied fr
  left join public.doc_template t on t.id = g.template_id
  left join copy_template_kind m on m.template_slug = t.slug and m.kind in (select slug from document_kind)
  where g.deal_id is not null
+ union all
+ select a.id, l.deal_id, a.r2_key, a.filename, a.mime, a.sha256, a.bytes, a.created_at, a.created_at, a.created_by,
+  case l.evidence_kind when 'executed_lease' then 'lease' when 'lease_amendment' then 'amendment' when 'lease_abstract' then 'other' end
+ from public.lease l join public.attachment a on a.id = l.doc_attachment and a.deleted_at is null
+ where l.deal_id is not null
 ) f;
 
 -- Old rows naming one key are one file, so they must agree with each other and with a file already stored there.
