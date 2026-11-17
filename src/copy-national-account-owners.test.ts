@@ -179,13 +179,20 @@ test("all incoming overlaps on one mapped account wait, while unrelated ownershi
 			date(42) +
 			`update outside_id set party_id='${id(10)}' where value='${id(41)}';`,
 		async () => {
-			assert.deepEqual(
-				(await run()).map((r) => [r.old_id, r.reason]),
-				[
-					[id(40), "owner_dates_overlap"],
-					[id(41), "owner_dates_overlap"],
-				],
-			);
+			assert.deepEqual(await run(), [
+				{
+					old_id: id(40),
+					field: "started_on",
+					value: "2024-03-01",
+					reason: "owner_dates_overlap",
+				},
+				{
+					old_id: id(41),
+					field: "started_on",
+					value: "2025-01-01",
+					reason: "owner_dates_overlap",
+				},
+			]);
 			assert.deepEqual(
 				await rows("select account_id from national_account_owner"),
 				[{ account_id: id(12) }],
@@ -246,28 +253,33 @@ test("a human owner's mapped person is used even when its id differs from the ac
 	);
 });
 
-test("an agent setter keeps the sponsor from the client's account_owner event", async () => {
-	await transaction(
-		`${owner(40)}${date(40)}
+for (const event of [
+	{ verb: "set-account-owner", field: "'account_owner'" },
+	{ verb: "create-national-account", field: "null" },
+]) {
+	test(`an agent setter keeps the sponsor from ${event.verb}`, async () => {
+		await transaction(
+			`${owner(40)}${date(40)}
  insert into public.actor (id,slug,kind,display_name) values ('${id(7)}','codex','automation','Example agent');
  update public.national_account_owner set set_by='${id(7)}';
  insert into public.event (id,actor_id,verb,subject_type,subject_id,field,new_value,cause,occurred_at,sponsoring_human_slug) values
- ('${id(70)}','${id(7)}','set-account-owner','client','${id(40)}','account_owner','{}','human_stated','2025-06-01','partner_one'),
+ ('${id(70)}','${id(7)}','${event.verb}','client','${id(40)}',${event.field},'{}','human_stated','2025-06-01','partner_one'),
  ('${id(71)}','${id(7)}','update-client','client','${id(40)}','notes','{}','human_stated','2025-07-01',null);`,
-		async () => {
-			assert.deepEqual(await run(), []);
-			assert.deepEqual(
-				await rows(
-					"select changed_by_user_id,changed_by_job,changed_for_user_id from national_account_owner",
-				),
-				[
-					{
-						changed_by_user_id: null,
-						changed_by_job: "agent",
-						changed_for_user_id: id(1),
-					},
-				],
-			);
-		},
-	);
-});
+			async () => {
+				assert.deepEqual(await run(), []);
+				assert.deepEqual(
+					await rows(
+						"select changed_by_user_id,changed_by_job,changed_for_user_id from national_account_owner",
+					),
+					[
+						{
+							changed_by_user_id: null,
+							changed_by_job: "agent",
+							changed_for_user_id: id(1),
+						},
+					],
+				);
+			},
+		);
+	});
+}

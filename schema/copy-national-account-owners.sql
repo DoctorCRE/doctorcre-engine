@@ -21,7 +21,10 @@ left join outside_id account_map on account_map.source = 'old_system' and accoun
 left join national_account account on account.party_id = account_map.party_id
 left join outside_id owner_map on owner_map.source = 'old_system' and owner_map.value = o.owner_actor_id::text
 left join party person on person.id = owner_map.party_id and person.kind = 'person' and actor.kind = 'human'
-cross join lateral copy_attribution('client', o.account_client_id, o.set_by, 'account_owner') author
+cross join lateral copy_event_attribution(o.set_by, (
+ select e.id from public.event e where e.subject_type = 'client' and e.subject_id = o.account_client_id
+  and (e.field = 'account_owner' or e.verb = 'create-national-account')
+ order by e.mutation_order desc limit 1)) author
 where not exists (select from national_account_owner done
  where done.id = md5('old_system:national_account_owner:' || o.account_client_id)::uuid);
 
@@ -42,8 +45,10 @@ from examined_account_owner where reason is null;
 
 insert into not_copied
 select account_client_id, case reason when 'owner_start_date_required' then 'started_on'
+ when 'owner_dates_overlap' then 'started_on'
  when 'account_not_copied' then 'account_client_id' else 'owner_actor_id' end,
- case reason when 'owner_start_date_required' then null when 'account_not_copied' then account_client_id::text
+ case reason when 'owner_start_date_required' then null when 'owner_dates_overlap' then started_on::text
+ when 'account_not_copied' then account_client_id::text
  else owner_actor_id::text end, reason
 from examined_account_owner where reason is not null;
 
