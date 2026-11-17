@@ -40,7 +40,7 @@ _Avoid_: assignee, territory owner
 _Database_: `lead.owner_id` today; `party_role.owner_user_id` on the lead role in the new database.
 
 **How found**:
-How we found a lead or client, from a short list, such as referral, vendor, marketing post, public records or cold outreach.
+How we found a lead or client, from a short list: referral, vendor, marketing post, public records, cold outreach, own research, inbound, national account or corporate lead, or existing relationship. Not recorded is kept only for records copied from the old system.
 _Avoid_: source on its own, lane (a radar lane), referral source
 _Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referral Source") today, both free text; `party.how_found` and `how_found` in the new database, with `party.how_found_detail` for attribution detail.
 
@@ -293,6 +293,10 @@ _Database_: `building_ownership` in both databases. The table also keeps propert
 **Outreach draft**:
 A lead's prepared first-contact message. Approval never sends it. A user sends it from their mailbox.
 _New database_: `lead_contact_draft`, always human-send and never dispatchable. An edit clears approval and advances the revision.
+
+**Reply draft**:
+A job's reply to one email, which its owner reviews, edits and approves, and which their mailbox then sends at most once.
+_New database_: `reply_draft`, with its delivery status: pending, dismissed, approved, sent or failed. Apart from outreach drafts.
 
 **Candidate**:
 An unreviewed sweep or public-record result kept outside the working contact list. A user promotes it to a lead, or declines it with a reason.

@@ -460,7 +460,9 @@ create table outside_id (
 	value text not null check (value ~ '^\S(.*\S)?$'),
 	party_id uuid references party,
 	deal_id uuid references deal,
-	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id) = 1),
+	-- Today's system files one email as a row per record and mailbox; each row's id finds the email it became.
+	email_activity_id uuid,
+	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id, email_activity_id) = 1),
 	primary key (source, value)
 );
 
@@ -549,6 +551,24 @@ create constraint trigger lead_or_client_how_found after insert on party_role
 create constraint trigger lead_or_client_how_found after update of how_found on party
 	for each row when (old.how_found is not null and new.how_found is null)
 	execute function lead_or_client_how_found('id');
+
+-- Not recorded is only for records the old-system copy brought in; anyone added here says how they were found (owner, #604).
+create function how_found_not_recorded_only_imported() returns trigger
+language plpgsql as $$
+begin
+	-- Judged at commit on the saved row, so a later correction or merge in the same transaction counts.
+	if exists (select from party where id = new.id and how_found = 'not_recorded')
+		and not exists (select from outside_id where party_id = new.id and source = 'old_system') then
+		raise exception 'only a record copied from the old system may say how it was found was not recorded'
+			using errcode = 'check_violation', constraint = 'how_found_not_recorded_only_imported';
+	end if;
+	return null;
+end $$;
+
+-- Deferred, so a person and their old-system id can be saved in either order.
+create constraint trigger how_found_not_recorded_only_imported after insert or update of how_found on party
+	initially deferred for each row when (new.how_found = 'not_recorded')
+	execute function how_found_not_recorded_only_imported();
 
 -- Someone is a client once a deal is opened for them, signed or not. The client role's row keeps when that was.
 -- Deferred, so the role and the deal can be saved in either order, and a merge can move both.
@@ -869,13 +889,34 @@ create table activity_about (
 create table email (
 	activity_id uuid primary key,
 	activity_kind text not null generated always as ('email') stored,
-	message_id text not null unique check (message_id = btrim(message_id)),
+	message_id text unique check (message_id = btrim(message_id)),
 	-- Matched to a person through party_email.
 	sender email_address not null,
 	subject text not null,
 	body text not null,
+	-- Set only by the owner's copy of today's mail, the one source that may lack the Message-ID.
+	imported boolean not null default false,
+	constraint email_message_id_unless_imported check (message_id is not null or imported),
 	foreign key (activity_id, activity_kind) references activity (id, kind)
 );
+
+alter table outside_id add foreign key (email_activity_id) references email;
+
+-- Without its Message-ID, an email is its sender, sent time and subject, so it is stored once.
+create function email_without_message_id_once() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from email e join activity a on a.id = e.activity_id join activity n on n.id = new.activity_id
+		where e.message_id is null and e.activity_id <> new.activity_id and e.sender = new.sender
+			and a.happened_at = n.happened_at and lower(e.subject) = lower(new.subject)) then
+		raise exception 'an email without its Message-ID is stored once'
+			using errcode = 'unique_violation', constraint = 'email_without_message_id_once';
+	end if;
+	return null;
+end $$;
+
+create trigger email_without_message_id_once after insert on email
+	for each row when (new.message_id is null) execute function email_without_message_id_once();
 
 create function email_about_a_record() returns trigger
 language plpgsql as $$
@@ -996,6 +1037,17 @@ create table next_step (
 	constraint next_step_cancellation_reason check ((status = 'cancelled') = (resolution_reason is not null)),
 	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
+
+-- A reopened step forgets the old event that closed it; its history keeps it.
+create function next_step_reopened() returns trigger
+language plpgsql as $$
+begin
+	new.resolution_event_id := null;
+	return new;
+end $$;
+
+create trigger next_step_reopened before update of resolution on next_step
+	for each row when (new.resolution is null) execute function next_step_reopened();
 
 -- A hold ends on the partners' day in Central time, as today's system ends it.
 create view home_next_step with (security_invoker = true) as
@@ -1135,6 +1187,88 @@ end $$;
 create trigger decide_proposal before insert or update of status on proposal
 	for each row execute function decide_proposal();
 
+-- A job's reply to one email, which its owner's mailbox sends. An outreach draft is apart: a user sends it by hand.
+create table reply_draft (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	email_activity_id uuid not null references email,
+	owner_user_id uuid not null references app_user,
+	proposed_by_job text not null references job,
+	evidence text not null check (evidence ~ '\S'),
+	subject text not null check (subject ~ '\S' and length(subject) <= 998),
+	body text not null check (body ~ '\S'),
+	-- The outbox keys each send on it, so every change its owner makes advances it and a recorded try never does.
+	revision integer not null default 1 check (revision >= 1),
+	status text not null default 'pending' check (status in ('pending', 'dismissed', 'approved', 'sent', 'failed')),
+	decided_at timestamptz,
+	dismiss_reason text check (dismiss_reason ~ '\S'),
+	to_address email_address,
+	cc_address email_address,
+	sent_at timestamptz,
+	-- The sending mailbox's id for the message, so one sent message settles one draft.
+	sent_item_id text unique check (sent_item_id ~ '\S'),
+	failure_reason text check (failure_reason ~ '\S'),
+	unique (email_activity_id, owner_user_id),
+	constraint reply_draft_delivery_facts check ((
+		status = 'pending' and num_nonnulls(decided_at, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason) = 0
+		or status = 'dismissed' and num_nonnulls(decided_at, dismiss_reason) = 2
+			and num_nonnulls(to_address, cc_address, sent_at, sent_item_id, failure_reason) = 0
+		or status in ('approved', 'sent', 'failed') and num_nonnulls(decided_at, to_address, cc_address) = 3 and dismiss_reason is null
+			and (status = 'sent') = (sent_at is not null) and (status = 'sent') = (sent_item_id is not null)
+			and (status = 'failed') = (failure_reason is not null)) is true)
+);
+
+create function reply_draft_delivery() returns trigger
+language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+	by_owner boolean := acting_job is null and acting_user is not distinct from new.owner_user_id;
+	editable constant text[] := array['subject', 'body', 'revision', 'changed_by_user_id', 'changed_by_job', 'changed_for_user_id', 'changed_at'];
+begin
+	if tg_op = 'INSERT' then
+		if new.status <> 'pending' or new.revision <> 1 or acting_job is distinct from new.proposed_by_job then
+			raise exception 'a job drafts a pending reply' using errcode = 'check_violation', constraint = 'reply_draft_starts_pending';
+		end if;
+		return new;
+	end if;
+	new.revision := old.revision + by_owner::integer;
+	if (new.subject, new.body) is distinct from (old.subject, old.body)
+		and not (by_owner and (old.status, new.status) in (('pending', 'pending'), ('pending', 'approved'), ('failed', 'approved'))) then
+		raise exception 'only its owner edits a reply draft, before it goes out'
+			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
+	end if;
+	-- As today's sender: only a try aborted before Send goes out again, and only one it could not confirm may be found sent.
+	-- A try keeps the recipients its owner approved.
+	if new.status in ('sent', 'failed') and (new.to_address, new.cc_address) is distinct from (old.to_address, old.cc_address)
+		or new.status = old.status and to_jsonb(new) - editable <> to_jsonb(old) - editable
+		or new.status <> old.status and not (case old.status
+			when 'pending' then new.status in ('approved', 'dismissed')
+			when 'approved' then new.status in ('sent', 'failed')
+			when 'failed' then new.status = 'approved' and old.failure_reason = 'aborted_before_dispatch'
+				or new.status = 'sent' and old.failure_reason ~ '^unconfirmed_after_[0-9]+$'
+			else false end) then
+		raise exception 'a reply draft is decided once and sent at most once'
+			using errcode = 'check_violation', constraint = 'reply_draft_sent_once';
+	end if;
+	if new.status = old.status then
+		return new;
+	end if;
+	if (case when new.status in ('sent', 'failed') then acting_job is null or acting_user is distinct from new.owner_user_id
+		when new.status = 'dismissed' then acting_job is null and not by_owner
+		else not by_owner end) then
+		raise exception 'its owner decides a reply draft, and a job working for the owner records its delivery'
+			using errcode = 'check_violation', constraint = 'reply_draft_owner_decides';
+	end if;
+	if new.status in ('approved', 'dismissed') then
+		new.decided_at := now();
+	end if;
+	return new;
+end $$;
+
+create trigger reply_draft_delivery before insert or update on reply_draft
+	for each row execute function reply_draft_delivery();
+
 create table document (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -1218,6 +1352,32 @@ end $$;
 
 create trigger party_document_stored before insert on party_document
 	for each row execute function party_document_stored();
+
+-- A reply draft's attachments are part of what its owner approves, so they change only while its text may.
+create table reply_draft_document (
+	reply_draft_id uuid not null references reply_draft,
+	document_id uuid not null references document,
+	created_at timestamptz not null default now(),
+	primary key (reply_draft_id, document_id)
+);
+
+create function reply_draft_document_owner_edits() returns trigger
+language plpgsql as $$
+declare
+	draft reply_draft;
+begin
+	select * into draft from reply_draft where id = coalesce(new.reply_draft_id, old.reply_draft_id);
+	if not (nullif(current_setting('engine.job', true), '') is null
+		and nullif(current_setting('engine.user_id', true), '')::uuid is not distinct from draft.owner_user_id
+		and (draft.status = 'pending' or draft.status = 'failed' and draft.failure_reason = 'aborted_before_dispatch')) then
+		raise exception 'only its owner attaches files to a reply draft, before it goes out'
+			using errcode = 'check_violation', constraint = 'reply_draft_owner_edits';
+	end if;
+	return coalesce(new, old);
+end $$;
+
+create trigger reply_draft_document_owner_edits before insert or delete on reply_draft_document
+	for each row execute function reply_draft_document_owner_edits();
 
 -- One completed attempt, including no text or failure, belongs to the exact stored file version.
 create table document_extraction (
@@ -1614,7 +1774,7 @@ create function activity_entry(a activity) returns jsonb
 language sql stable
 begin atomic
 	select to_jsonb(a) || jsonb_build_object('email', (
-		select to_jsonb(e) - 'activity_id' - 'activity_kind' || jsonb_build_object('documents', (
+		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 			from document doc where doc.email_activity_id = e.activity_id
 		)) from email e where e.activity_id = a.id
@@ -2159,6 +2319,7 @@ declare
 	duplicate_npi text;
 	duplicate_how_found text;
 	duplicate_how_found_detail text;
+	duplicate_source_wins boolean;
 begin
 	-- Held, so until this merge ends nothing new points at either record and another merge of either waits.
 	perform from party where id in (duplicate, survivor) for update;
@@ -2311,9 +2472,13 @@ begin
 	end loop;
 
 	delete from party where id = duplicate returning npi, how_found, how_found_detail into duplicate_npi, duplicate_how_found, duplicate_how_found_detail;
+	-- A recorded source beats not recorded, as in the copy.
+	select how_found is null or how_found = 'not_recorded' and coalesce(duplicate_how_found, 'not_recorded') <> 'not_recorded'
+		into duplicate_source_wins from party where id = survivor;
 	update party set npi = coalesce(npi, duplicate_npi),
-		how_found_detail = coalesce(how_found_detail, case when how_found is null or how_found = duplicate_how_found
-			then duplicate_how_found_detail end), how_found = coalesce(how_found, duplicate_how_found)
+		how_found_detail = case when duplicate_source_wins then duplicate_how_found_detail
+			else coalesce(how_found_detail, case when how_found = duplicate_how_found then duplicate_how_found_detail end) end,
+		how_found = case when duplicate_source_wins then duplicate_how_found else how_found end
 	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
@@ -2379,7 +2544,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
-		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
@@ -2832,19 +2997,21 @@ grant update (started_on, ended_on) on party_territory to engine;
 grant update (has_office, coverage, source) on party_territory_review to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
-grant update (what, owner_party_id, due_on, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
+grant update (what, owner_party_id, due_on, hold_until, item_bullets, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) on home_mark to engine;
 -- Only the owner's import supplies the old event that closed a step.
 revoke insert on next_step from engine;
-grant insert (id, created_at, what, owner_party_id, due_on, done_at, resolution, resolved_at,
-	resolution_reason, deal_id, party_id, property_id) on next_step to engine;
+grant insert (id, created_at, what, owner_party_id, due_on, hold_until, item_title, item_bullets, source_ref,
+	done_at, resolution, resolved_at, resolution_reason, deal_id, party_id, property_id) on next_step to engine;
 -- Only the owner's import supplies provenance. A user's or job's new round has a known status.
 revoke insert on offer from engine;
 grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,
 	expires_on, status, rent_per_sf_yr, nnn_per_sf_yr, term_months, ti_per_sf, free_rent_months,
 	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms, submarket_condition) on offer to engine;
 grant update (status) on offer to engine;
+revoke insert on email from engine;
+grant insert (activity_id, message_id, sender, subject, body) on email to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;
@@ -2857,6 +3024,8 @@ grant update (started_on, ended_on) on client_brand, national_account_owner to e
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
 grant update (status) on proposal to engine;
+grant update (subject, body, status, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason)
+	on reply_draft to engine;
 
 grant update (expected, gross, closing_share) on commission to engine;
 grant update (amount, invoiced_on, due_on, received_on) on commission_payment to engine;
@@ -2874,7 +3043,7 @@ grant update (lane, estimated_lease_on, lease_estimate_source, lease_estimate_co
 
 grant update (deal_id, kind, content_type, sha256, bytes) on document to engine;
 -- A mistaken party link is removed; its file stays.
-grant delete on party_document to engine;
+grant delete on party_document, reply_draft_document to engine;
 grant delete on suite, space_need, building_ownership to engine;
 grant update (label, floor, area_sf, area_basis, condition) on suite to engine;
 grant update (name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id, must_haves, vendor_id, source_ref, source_revision, applicability) on space_need to engine;

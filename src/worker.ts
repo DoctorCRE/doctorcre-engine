@@ -20,6 +20,7 @@ import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
 import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
+import { nextSteps } from "./next-steps.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { relationships } from "./relationships/routes.ts";
@@ -68,6 +69,7 @@ const engine = new Hono<WorkerEnv>()
 app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
 app.route("/api/engine", nextDeals);
+app.route("/api/engine", nextSteps);
 app.route("/api/engine", activityDoor);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
@@ -93,6 +95,7 @@ app.use(
 	jobStamp,
 );
 app.route("/jobs", nextDeals);
+app.route("/jobs", nextSteps);
 app.route("/jobs", activityDoor);
 
 export default app;

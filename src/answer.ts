@@ -38,6 +38,8 @@ const HINTS = {
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
 	invalid_json: "Send the arguments as one JSON object.",
 	unknown_job: "Name a job the engine knows in the Engine-Job header.",
+	step_ended: "The step was ended elsewhere; count it as closed.",
+	step_open: "The step is already open.",
 	about_nothing:
 		"The email matches no record and names none, so nothing was stored.",
 	message_id_invalid:

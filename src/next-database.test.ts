@@ -45,7 +45,8 @@ insert into document_kind values ('loi', 'LOI'), ('lease', 'Lease'), ('amendment
 insert into role (slug, label, category_of) values
 	('client', 'Client', null), ('lead', 'Lead', null), ('listing_agent', 'Listing agent', null), ('vendor', 'Vendor', null),
 	('lender', 'Lender', 'vendor'), ('title', 'Title', 'vendor');
-insert into how_found values ('referral', 'Referral'), ('vendor', 'Vendor'), ('public_records', 'Public records');
+insert into how_found values ('referral', 'Referral'), ('vendor', 'Vendor'), ('public_records', 'Public records'),
+	('not_recorded', 'Not recorded before this system');
 insert into party (id, kind, name, npi, how_found) values
 	('${CLIENT}', 'company', 'Example Dental Group', '${NPIS[0]}', 'referral'),
 	('${DOCTOR}', 'person', 'Dr. Example', '${NPIS[1]}', null);
@@ -223,6 +224,11 @@ const newEmail = (activity: string, messageId = `<${activity}@example.com>`) =>
 	`insert into activity (id, kind, happened_at) values ('${activity}', 'email', now());
 	insert into email (activity_id, message_id, sender, subject, body)
 	values ('${activity}', '${messageId}', 'avery@example.com', 'Example', 'Example')`;
+// Only today's mail, copied by the owner, may lack its Message-ID.
+const emailWithoutId = (activity: string, subject: string, imported: boolean) =>
+	`insert into activity (id, kind, happened_at) values ('${activity}', 'email', '2026-03-01');
+	insert into email (activity_id, message_id, sender, subject, body${imported ? ", imported" : ""})
+	values ('${activity}', null, 'avery@example.com', '${subject}', 'Example'${imported ? ", true" : ""})`;
 const TERMS = [
 	"rent_per_sf_yr",
 	"nnn_per_sf_yr",
@@ -495,6 +501,8 @@ const STAMPED = [
 	"lead_contact_draft",
 	"candidate",
 	"proposal",
+	"reply_draft",
+	"reply_draft_document",
 	"lease_suite",
 	"suite",
 	"space_need",
@@ -610,6 +618,7 @@ const notGranted = (table: string) => ({
 	message: `permission denied for table ${table}`,
 });
 const STORED_AT = [
+	"reply_draft_document",
 	"invoice_email",
 	"vendor_vertical",
 	"vendor_loan_program",
@@ -1364,6 +1373,11 @@ const RULES: Record<string, Case[]> = {
 				notGranted("activity_about"),
 			],
 			[`update email set activity_id = '${CALL}'`, notGranted("email")],
+			[
+				emailWithoutId(id(303), "Example", false),
+				"email_message_id_unless_imported",
+			],
+			[emailWithoutId(id(303), "Example", true), notGranted("email")],
 		],
 	"a next step is about exactly one record": [
 		[
@@ -2165,6 +2179,17 @@ const RULES: Record<string, Case[]> = {
 			"party_how_found_fkey",
 		],
 	],
+	"only a record copied from the old system may say how it was found was not recorded":
+		[
+			[
+				`insert into party (id, kind, name, how_found) values ('${id(661)}', 'person', 'Example', 'not_recorded'); ${CHECK_AT_COMMIT}`,
+				"how_found_not_recorded_only_imported",
+			],
+			[
+				`update party set how_found = 'not_recorded' where id = '${CLIENT}'; ${CHECK_AT_COMMIT}`,
+				"how_found_not_recorded_only_imported",
+			],
+		],
 	"someone a deal is opened for is a client": [
 		[
 			`insert into deal_party values ('${LENDER_DEAL}', '${LEAD}', 'client'); ${CHECK_AT_COMMIT}`,
@@ -2219,6 +2244,13 @@ const RELOAD = `create schema again; set local search_path = again; ${SCHEMA}`;
 const TOO_MUCH = { message: "role engine holds rights beyond its grants" };
 // Rules on paths only the schema's owner can take.
 const OWNER_RULES: Record<string, Case[]> = {
+	"an imported email without its Message-ID is stored once by its sender, sent time and subject":
+		[
+			[
+				`${emailWithoutId(id(303), "Example", true)}; ${emailWithoutId(id(304), "example", true)}`,
+				"email_without_message_id_once",
+			],
+		],
 	"only a parked deal has a time it was parked, and a user who parked it only with that time":
 		[
 			[
@@ -2453,6 +2485,17 @@ const CHANGEABLE: Record<string, string[]> = {
 	national_account_owner: ["ended_on", "started_on"],
 
 	proposal: ["status"],
+	reply_draft: [
+		"body",
+		"cc_address",
+		"dismiss_reason",
+		"failure_reason",
+		"sent_at",
+		"sent_item_id",
+		"status",
+		"subject",
+		"to_address",
+	],
 	commission: ["closing_share", "expected", "gross"],
 	commission_payment: ["amount", "due_on", "invoiced_on", "received_on"],
 	commission_share: ["share"],
@@ -2521,6 +2564,8 @@ const CHANGEABLE: Record<string, string[]> = {
 	next_step: [
 		"done_at",
 		"due_on",
+		"hold_until",
+		"item_bullets",
 		"owner_party_id",
 		"resolution",
 		"resolution_reason",
@@ -2545,16 +2590,20 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	email: [
+		"activity_kind",
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"imported",
+	],
 	next_step: [
 		"changed_at",
 		"changed_by_job",
 		"changed_by_user_id",
 		"changed_for_user_id",
-		"hold_until",
-		"item_bullets",
-		"item_title",
 		"resolution_event_id",
-		"source_ref",
 		"status",
 	],
 	invoice_email: [
@@ -4750,6 +4799,35 @@ test("a merge keeps the survivor's lead owner and how it was found, filled from 
 				],
 				deals: [LENDER_DEAL],
 			},
+		]);
+	}));
+
+test("not recorded is judged on the saved party, after a correction or a merge in the same save", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values
+				('${id(663)}', 'person', 'Example Corrected', 'not_recorded'), ('${DUPLICATE}', 'person', 'Example Imported', 'not_recorded');
+			insert into outside_id (source, value, party_id) values ('old_system', '${id(664)}', '${DUPLICATE}');
+			update party set how_found = 'referral' where id = '${id(663)}';
+			select merge_party('${DUPLICATE}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+		const { rows } =
+			await db.query(`select (select how_found from party where id = '${id(663)}') as corrected,
+			(select how_found from party where id = '${LEAD}') as survivor`);
+		assert.deepEqual(rows, [
+			{ corrected: "referral", survivor: "public_records" },
+		]);
+	}));
+
+test("a merge keeps a recorded source and its detail over not recorded", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values ('${OLD}', 'person', 'Example Imported', 'not_recorded');
+			insert into outside_id (source, value, party_id) values ('old_system', '${id(664)}', '${OLD}');
+			insert into party (id, kind, name, how_found, how_found_detail) values ('${DUPLICATE}', 'person', 'Example Other', 'vendor', 'Example vendor');
+			select merge_party('${DUPLICATE}', '${OLD}'); ${CHECK_AT_COMMIT}`);
+		const { rows } = await db.query(
+			`select how_found, how_found_detail from party where id = '${OLD}'`,
+		);
+		assert.deepEqual(rows, [
+			{ how_found: "vendor", how_found_detail: "Example vendor" },
 		]);
 	}));
 
@@ -6966,6 +7044,112 @@ for (const [label, sql, refusal] of SHARED_PROPOSAL_REFUSALS) {
 			await assert.rejects(db.query(sql), expected(refusal));
 		}));
 }
+
+const REPLY = id(950);
+const newReply = (row: Record<string, string> = {}) =>
+	`${asJob("mail_capture")}; ${insert("reply_draft", {
+		id: REPLY,
+		email_activity_id: EMAIL,
+		owner_user_id: USER,
+		proposed_by_job: "mail_capture",
+		evidence: "Example asks when we can talk",
+		subject: "Re: Counter to your LOI",
+		body: "Thanks, we will review the counter.",
+		...row,
+	})}`;
+const reply = (who: string, change: string, draft = REPLY) =>
+	`${who}; update reply_draft set ${change} where id = '${draft}'`;
+const OWNER = asUser(USER);
+const OWNERS_MAILBOX = asJob("mail_capture", USER);
+const APPROVE =
+	"status = 'approved', to_address = 'avery@example.com', cc_address = 'riley@example.com'";
+const SEND =
+	"status = 'sent', sent_at = now(), sent_item_id = 'example-sent-1'";
+// Today's sender's reasons: an abort before Send, a Send it could not confirm, and one that settles nothing.
+const ABORTED = "aborted_before_dispatch";
+const UNCONFIRMED = "unconfirmed_after_3";
+const FAIL = (reason: string) =>
+	`status = 'failed', failure_reason = '${reason}'`;
+const CLEAR_FAILURE = "failure_reason = null";
+const ATTACHMENT = id(953);
+const attach = (who: string) =>
+	`${OWNER}; ${insert("document", { id: ATTACHMENT, name: "Example plan.pdf", r2_key: "example/reply-attachment" })};
+	${who}; ${insert("reply_draft_document", { reply_draft_id: REPLY, document_id: ATTACHMENT })}`;
+const approved = `${newReply()}; ${reply(OWNER, APPROVE)}`;
+const SECOND_REPLY = `${newEmail(id(952))}; insert into activity_about (activity_id, deal_id) values ('${id(952)}', '${DEAL}');
+	${newReply({ id: id(951), email_activity_id: id(952) })}`;
+
+// biome-ignore format: one refusal case per row
+const REPLY_DRAFT_REFUSALS: [string, string, Refusal][] = [
+	["a user drafting", `${OWNER}; ${insert("reply_draft", { email_activity_id: EMAIL, owner_user_id: USER, proposed_by_job: "mail_capture", evidence: "Example", subject: "Re: Example", body: "Example" })}`, "reply_draft_starts_pending"],
+	["a draft that starts approved", newReply({ status: "approved", to_address: "avery@example.com", cc_address: "riley@example.com" }), "reply_draft_starts_pending"],
+	["a blank body", newReply({ body: " " }), "reply_draft_body_check"],
+	["a second draft of one reply", `${newReply()}; ${newReply({ id: id(951) })}`, "reply_draft_email_activity_id_owner_user_id_key"],
+	["another user's edit", `${newReply()}; ${reply(asUser(TEAMMATE), "body = 'Example'")}`, "reply_draft_owner_edits"],
+	["an edit after approval", `${approved}; ${reply(OWNER, "body = 'Example'")}`, "reply_draft_owner_edits"],
+	["another user's approval", `${newReply()}; ${reply(asUser(TEAMMATE), APPROVE)}`, "reply_draft_owner_decides"],
+	["an agent's approval", `${newReply()}; ${reply(asJob("agent", USER), APPROVE)}`, "reply_draft_owner_decides"],
+	["an approval without its recipients", `${newReply()}; ${reply(OWNER, "status = 'approved'")}`, "reply_draft_delivery_facts"],
+	["a dismissal without a reason", `${newReply()}; ${reply(OWNER, "status = 'dismissed'")}`, "reply_draft_delivery_facts"],
+	["a send before approval", `${newReply()}; ${reply(OWNERS_MAILBOX, SEND)}`, "reply_draft_sent_once"],
+	["a user recording a send", `${approved}; ${reply(OWNER, SEND)}`, "reply_draft_owner_decides"],
+	["another user's mailbox recording a send", `${approved}; ${reply(asJob("mail_capture", TEAMMATE), SEND)}`, "reply_draft_owner_decides"],
+	["a second send", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${reply(OWNERS_MAILBOX, "sent_item_id = 'example-sent-2'")}`, "reply_draft_sent_once"],
+	["approving a sent draft again", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${reply(OWNER, "status = 'approved', sent_at = null, sent_item_id = null")}`, "reply_draft_sent_once"],
+	...[UNCONFIRMED, "invalid_submission", "failed:abort_cleanup_failed"].map((reason): [string, string, Refusal] =>
+		[`approving again after ${reason}`, `${approved}; ${reply(OWNERS_MAILBOX, FAIL(reason))}; ${reply(OWNER, `status = 'approved', ${CLEAR_FAILURE}`)}`, "reply_draft_sent_once"]),
+	...[ABORTED, "invalid_submission", "failed:abort_cleanup_failed"].map((reason): [string, string, Refusal] =>
+		[`a send recorded after ${reason}`, `${approved}; ${reply(OWNERS_MAILBOX, FAIL(reason))}; ${reply(OWNERS_MAILBOX, `${SEND}, ${CLEAR_FAILURE}`)}`, "reply_draft_sent_once"]),
+	["a send that changes the recipient", `${approved}; ${reply(OWNERS_MAILBOX, `${SEND}, to_address = 'other@example.com'`)}`, "reply_draft_sent_once"],
+	["a failure that changes the copy", `${approved}; ${reply(OWNERS_MAILBOX, `${FAIL(ABORTED)}, cc_address = 'other@example.com'`)}`, "reply_draft_sent_once"],
+	["a job's attachment", `${newReply()}; ${attach(OWNERS_MAILBOX)}`, "reply_draft_owner_edits"],
+	["an attachment after approval", `${approved}; ${attach(OWNER)}`, "reply_draft_owner_edits"],
+	["approving a dismissed draft", `${newReply()}; ${reply(OWNER, "status = 'dismissed', dismiss_reason = 'Example'")}; ${reply(OWNER, `${APPROVE}, dismiss_reason = null`)}`, "reply_draft_sent_once"],
+	["one sent message settling two drafts", `${approved}; ${reply(OWNERS_MAILBOX, SEND)}; ${SECOND_REPLY}; ${reply(OWNER, APPROVE, id(951))}; ${reply(OWNERS_MAILBOX, SEND, id(951))}`, "reply_draft_sent_item_id_key"],
+	["erase", `${newReply()}; delete from reply_draft`, notGranted("reply_draft")],
+];
+for (const [label, sql, refusal] of REPLY_DRAFT_REFUSALS) {
+	test(`reply drafts refuse ${label}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+
+test("a reply draft goes out once: the owner edits and approves it, and the owner's mailbox records each try", () =>
+	rolledBack(async () => {
+		await db.query(
+			`${newReply()}; ${newReply({ id: id(954), body: "Example second store" })} on conflict (email_activity_id, owner_user_id) do nothing;
+			${reply(OWNER, "body = 'Thanks, Tuesday works.'")}; ${attach(OWNER)}; ${reply(OWNER, APPROVE)};
+			${reply(OWNERS_MAILBOX, FAIL(ABORTED))}; ${reply(OWNER, `${APPROVE}, ${CLEAR_FAILURE}, body = 'Thanks, Wednesday works.'`)};
+			${reply(OWNERS_MAILBOX, SEND)}; ${SECOND_REPLY}; ${reply(OWNER, APPROVE, id(951))}; ${reply(OWNERS_MAILBOX, FAIL(UNCONFIRMED), id(951))};
+			${reply(OWNERS_MAILBOX, `status = 'sent', sent_at = now(), sent_item_id = 'example-sent-2', ${CLEAR_FAILURE}`, id(951))}`,
+		);
+		const { rows } = await db.query({
+			text: `select id, body, revision, status, decided_at is not null, to_address, sent_item_id from reply_draft order by id`,
+			rowMode: "array",
+		});
+		// biome-ignore format: one draft per row
+		assert.deepEqual(rows, [
+			[REPLY, "Thanks, Wednesday works.", 4, "sent", true, "avery@example.com", "example-sent-1"],
+			[id(951), "Thanks, we will review the counter.", 2, "sent", true, "avery@example.com", "example-sent-2"],
+		]);
+		const { rows: attached } = await db.query(
+			"select reply_draft_id, document_id from reply_draft_document",
+		);
+		assert.deepEqual(attached, [
+			{ reply_draft_id: REPLY, document_id: ATTACHMENT },
+		]);
+		const { rows: history } = await db.query({
+			text: `select new_value ->> 'status', changed_by_user_id, changed_by_job, changed_for_user_id
+				from change where table_name = 'reply_draft' and record ->> 'id' = '${REPLY}' order by id`,
+			rowMode: "array",
+		});
+		// biome-ignore format: one change per row
+		assert.deepEqual(history, [
+			["pending", null, "mail_capture", null], [null, USER, null, null], ["approved", USER, null, null],
+			["failed", null, "mail_capture", USER], ["approved", USER, null, null], ["sent", null, "mail_capture", USER],
+		]);
+	}));
 
 test("acceptance creates one next step and keeps both actors, dismissal creates nothing", () =>
 	rolledBack(async () => {
