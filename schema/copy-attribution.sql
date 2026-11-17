@@ -51,3 +51,11 @@ begin atomic
 			and (c.payload ->> 'summary' ~ '\S' or c.payload ->> 'detail' ~ '\S')) record
 	left join public.phone_call_session p on p.id = capture_session_id;
 end;
+
+create or replace function copy_outside_id(source_system text, external_key text)
+returns table (source text, value text)
+language sql immutable
+begin atomic
+	select btrim(regexp_replace(lower(source_system), '[^a-z0-9]+', '_', 'g'), '_'),
+		regexp_replace(external_key, '^\s+|\s+$', '', 'g');
+end;

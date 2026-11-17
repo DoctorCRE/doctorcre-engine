@@ -430,6 +430,17 @@ test("today's import history and reference numbers are outside ids of the record
 	]);
 });
 
+test("every copy folds an outside source to lower-case words joined by _ and trims only the space around its key", async () => {
+	assert.deepEqual(
+		await rows(`select k.* from (values ('  Vendors.XLSX ', E' \\tV-EX  1\\n'), ('--Lead  Registry 2--', 'L-EX-1'))
+		as r (source_system, external_key) cross join lateral copy_outside_id(source_system, external_key) k`),
+		[
+			{ source: "vendors_xlsx", value: "V-EX  1" },
+			{ source: "lead_registry_2", value: "L-EX-1" },
+		],
+	);
+});
+
 test("a second run copies only what is new, finds a record merged since through the map, and lists again what it left", () =>
 	rolledBack(async () => {
 		const merged = `select set_config('engine.user_id', '${PARTNER}', true), merge_party('${id(17)}', '${id(16)}');
