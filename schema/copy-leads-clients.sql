@@ -2,9 +2,11 @@
 -- The owner supplies exact free-text source mappings in pg_temp.copy_how_found before running this file.
 create temp table if not exists copy_how_found (old_type text, source text, how_found text,
  primary key (old_type, source)) on commit drop;
+-- Supply partner-reviewed suppression reasons keyed by old lead id; private rows stay outside this repo.
+create temp table if not exists copy_lead_restriction (old_id uuid not null, reason text) on commit drop;
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 do $$ declare t text; begin
- foreach t in array array['party', 'party_role', 'client', 'national_account', 'activity', 'activity_about', 'next_step'] loop
+ foreach t in array array['party', 'do_not_contact', 'party_role', 'client', 'national_account', 'activity', 'activity_about', 'next_step'] loop
   execute format('alter table %I disable trigger stamp_change', t);
  end loop;
 end $$;
@@ -133,10 +135,41 @@ cross join lateral (select case refusal when 'unknown_stage' then 'stage'
  when 'unknown_client_status' then 'status' when 'client_source_needs_mapping' then 'how_found'
  else 'client_type' end as field) f
 where refusal is not null and refusal <> 'source_needs_mapping';
+create temp table lead_restriction on commit drop as
+select r.*, review.reason, review.reasons, review.blank_reason
+from classified_relationship r
+cross join lateral (
+ select min(regexp_replace(c.reason, '^\s+|\s+$', '', 'g')) as reason,
+ count(distinct regexp_replace(c.reason, '^\s+|\s+$', '', 'g')) as reasons,
+ bool_or(c.reason is null or c.reason !~ '\S') as blank_reason
+ from pg_temp.copy_lead_restriction c where c.old_id = r.id
+) review
+where r.kind = 'lead' and ((r.fields ->> 'suppressed')::boolean or r.fields ->> 'stage' = 'do_not_contact');
+create temp table examined_lead_restriction on commit drop as
+select r.*, case
+ when reasons = 0 or blank_reason then 'restriction_needs_reason'
+ when reasons > 1 or exists (select from lead_restriction other
+  where other.mapped_id = r.mapped_id and other.id <> r.id
+   and other.reasons > 0 and not other.blank_reason and (other.reasons > 1 or other.reason <> r.reason))
+ then 'restriction_conflicts'
+ when exists (select from do_not_contact held where held.party_id = r.mapped_id
+  and (held.reason <> r.reason or held.until_date is not null)) then 'restriction_conflicts'
+ end as restriction_refusal
+from lead_restriction r;
+insert into do_not_contact (party_id, reason, created_at, changed_at,
+ changed_by_user_id, changed_by_job, changed_for_user_id)
+select distinct on (mapped_id) mapped_id, reason, updated_at, updated_at,
+ changed_by_user_id, changed_by_job, changed_for_user_id
+from examined_lead_restriction where restriction_refusal is null
+order by mapped_id, updated_at desc, id
+on conflict do nothing;
+insert into not_copied
+select id, 'do_not_contact', fields ->> 'stage', restriction_refusal
+from examined_lead_restriction where restriction_refusal is not null;
+
 insert into not_copied
 select r.id, f.field, f.value, f.reason from classified_relationship r
 cross join lateral (values
- ('do_not_contact', fields ->> 'stage', 'restriction_needs_reason', kind = 'lead' and ((fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact')),
  ('owner_id', fields ->> 'owner_id', 'owner_not_a_user', kind = 'lead' and fields ->> 'owner_id' is not null and owner is null),
  ('owner_id', fields ->> 'owner_id', 'client_owner_has_no_target', kind = 'client' and fields ->> 'owner_id' is not null),
  ('owner_label', fields ->> 'owner_label', 'owner_label_only', fields ->> 'owner_id' is null and fields ->> 'owner_label' ~ '\S'),
@@ -231,7 +264,7 @@ cross join lateral (values ('contact_label', 'verbatim_label_not_stored', true),
 insert into not_copied select id, 'client', merged_into::text, 'merged_client' from public.client where merged_into is not null;
 set constraints all immediate;
 do $$ declare t text; begin
- foreach t in array array['party', 'party_role', 'client', 'national_account', 'activity', 'activity_about', 'next_step'] loop
+ foreach t in array array['party', 'do_not_contact', 'party_role', 'client', 'national_account', 'activity', 'activity_about', 'next_step'] loop
   execute format('alter table %I enable trigger stamp_change', t);
  end loop;
 end $$;
