@@ -80,14 +80,14 @@ ${oldVendor(40, 10, {
 	territory: "Example territory",
 	offers: " Example offer ",
 	seeking: "Example introductions",
-	loan_programs: "{Example financing,Example financing}",
+	loan_programs: `{Example financing,"\tExample financing\n"}`,
 	owner_id: PARTNER,
 	referral_active: "true",
 	owner_label: "Example import label",
 	links_label: "Example link label",
 	last_touch: "2025-01-01",
 	deal_history_verified_at: "2025-01-01",
-	out_of_market: "false",
+	out_of_market: "true",
 	trust_override: `{"tier": "Proven", "recorded_by": "partner_one", "reason": "Example reason", "recorded_at": "2025-01-01"}`,
 })}
 ${oldVendor(41, 15, {
@@ -96,7 +96,7 @@ ${oldVendor(41, 15, {
 	stage: "prospect_uncontacted",
 	relationship_level: "3",
 	is_target: "true",
-	verticals: `{dental,medical,dental,NULL," "}`,
+	verticals: `{dental,medical," dental ","\tdental","dental\n",NULL," "}`,
 	seeking: "Conflicting request",
 	loan_programs: "{Example financing,Example equipment}",
 })}
@@ -233,7 +233,9 @@ test("each copied vendor's id and reference number lead to its record", async ()
 test("each value it does not copy is listed, with why", () => {
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
+		[id(40), "out_of_market", "true", "no place in the new database"],
 		[id(40), "owner_id", PARTNER, "relationship owner awaits an owner ruling"],
+		[id(40), "referral_active", "true", "no place in the new database"],
 		[id(40), "trust_override", "Proven", "a hand-set rating, which the new database does not keep"],
 		[id(41), "relationship_level", "3", "its record holds another level"],
 		[id(41), "seeking", "Conflicting request", "its record holds another value"],
@@ -341,6 +343,14 @@ for (const [sql, code] of [
 				],
 				[
 					`insert into ${table} (party_id, ${column}) values ('${id(10)}', ' Example ')`,
+					"23514",
+				],
+				[
+					`insert into ${table} (party_id, ${column}) values ('${id(10)}', E'\\tExample')`,
+					"23514",
+				],
+				[
+					`insert into ${table} (party_id, ${column}) values ('${id(10)}', E'Example\\n')`,
 					"23514",
 				],
 				[

@@ -80,20 +80,20 @@ where role is not null
 order by record_id, role, rank;
 
 insert into vendor_vertical (party_id, vertical, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select distinct on (record_id, btrim(value)) record_id, btrim(value), created_at, updated_at,
+select distinct on (record_id, regexp_replace(value, '^\s+|\s+$', '', 'g')) record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), created_at, updated_at,
 	changed_by_user_id, changed_by_job, changed_for_user_id
 from copied cross join lateral unnest(verticals) value where value ~ '\S'
-order by record_id, btrim(value), rank;
+order by record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), rank;
 
 insert into not_copied
 select id, 'verticals', value, 'blank or null list entry'
 from copied cross join lateral unnest(verticals) value where value is null or value !~ '\S';
 
 insert into vendor_loan_program (party_id, loan_program, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select distinct on (record_id, btrim(value)) record_id, btrim(value), created_at, updated_at,
+select distinct on (record_id, regexp_replace(value, '^\s+|\s+$', '', 'g')) record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), created_at, updated_at,
 	changed_by_user_id, changed_by_job, changed_for_user_id
 from copied cross join lateral unnest(loan_programs) value where value ~ '\S'
-order by record_id, btrim(value), rank;
+order by record_id, regexp_replace(value, '^\s+|\s+$', '', 'g'), rank;
 
 insert into not_copied
 select id, 'loan_programs', value, 'blank or null list entry'
@@ -150,7 +150,8 @@ select v.id, v.record_id, v.merged_into, f.field, f.value, f.reason
 from copied v cross join lateral (values ('category', case when v.category_slug is null then v.category end, 'not a vendor category'),
 	('trust_override', v.trust_override ->> 'tier', 'a hand-set rating, which the new database does not keep'),
 	('owner_id', v.owner_id::text, 'relationship owner awaits an owner ruling'), ('rivalry_group', v.rivalry_group, null), ('originated', v.originated, null),
-	('intro_notes', v.intro_notes, null)) as f (field, value, reason)
+	('referral_active', v.referral_active::text, null),
+	('out_of_market', nullif(v.out_of_market, false)::text, null), ('intro_notes', v.intro_notes, null)) as f (field, value, reason)
 where f.value ~ '\S';
 
 -- A merged-away vendor's value that a live one of its record holds too was filled in by today's merge.

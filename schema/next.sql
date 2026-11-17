@@ -130,24 +130,22 @@ create table party_role (
 	disposition_reason text check (disposition_reason ~ '\S'),
 	-- We want to meet this one.
 	is_target boolean not null default false,
+	offers text check (offers ~ '\S'),
+	seeking text check (seeking ~ '\S'),
 	primary key (party_id, role),
 	foreign key (role, stage) references stage,
 	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor'),
 	constraint party_role_disposition_on_vendor check (disposition is null or role = 'vendor'),
 	constraint party_role_ruling_has_a_reason check ((disposition is null) = (disposition_reason is null)),
 	constraint party_role_target_on_vendor check (not is_target or role = 'vendor'),
-	constraint party_role_avoid_not_target check (not is_target or disposition is distinct from 'avoid')
+	constraint party_role_avoid_not_target check (not is_target or disposition is distinct from 'avoid'),
+	constraint party_role_capabilities_on_vendor check (role = 'vendor' or num_nonnulls(offers, seeking) = 0)
 );
-
--- Vendor capabilities belong to the vendor role, not its individual categories.
-alter table party_role add offers text check (offers ~ '\S'),
-	add seeking text check (seeking ~ '\S'),
-	add constraint party_role_capabilities_on_vendor check (role = 'vendor' or num_nonnulls(offers, seeking) = 0);
 
 create table vendor_vertical (
 	party_id uuid not null,
 	role text not null default 'vendor' check (role = 'vendor'),
-	vertical text not null check (vertical = btrim(vertical) and vertical ~ '\S'),
+	vertical text not null check (vertical = regexp_replace(vertical, '^\s+|\s+$', '', 'g') and vertical ~ '\S'),
 	created_at timestamptz not null default now(),
 	primary key (party_id, vertical),
 	foreign key (party_id, role) references party_role on update cascade
@@ -156,7 +154,7 @@ create table vendor_vertical (
 create table vendor_loan_program (
 	party_id uuid not null,
 	role text not null default 'vendor' check (role = 'vendor'),
-	loan_program text not null check (loan_program = btrim(loan_program) and loan_program ~ '\S'),
+	loan_program text not null check (loan_program = regexp_replace(loan_program, '^\s+|\s+$', '', 'g') and loan_program ~ '\S'),
 	created_at timestamptz not null default now(),
 	primary key (party_id, loan_program),
 	foreign key (party_id, role) references party_role on update cascade
@@ -2287,7 +2285,7 @@ grant execute on function merge_party to engine;
 revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
-grant delete on party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
+grant delete on vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, deal, party_role, party_company, deal_property, deal_party, activity,
 	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link to engine;
 
@@ -2354,5 +2352,3 @@ grant insert (id, party_id, owner_user_id, subject, body, scheduled_for, time_zo
 grant update (status, reason, promoted_party_id) on candidate to engine;
 
 grant update (source_row, name, qualification, estimated_lease_on, lease_estimate_source) on candidate to engine;
-
-grant delete on vendor_vertical, vendor_loan_program to engine;
