@@ -3602,6 +3602,39 @@ test("earlier people and owners hand over back to back, in other roles meanwhile
 	}
 });
 
+test("a rejoin saved while an earlier period is copied waits for the copy, then is refused", async () => {
+	const [copy, rejoin] = [await connect("none"), await connect()];
+	try {
+		const { pid } = (await rejoin.query("select pg_backend_pid() as pid"))
+			.rows[0];
+		await copy.query(`begin; ${earlierParty({ party_id: DOCTOR })}`);
+		await rejoin.query("begin");
+		let settled = false;
+		const waiting = rejoin
+			.query(
+				`insert into deal_party (deal_id, party_id, role, created_at) values ('${DEAL}', '${DOCTOR}', 'listing_agent', '2025-03-01')`,
+			)
+			.finally(() => {
+				settled = true;
+			});
+		const refused = assert.rejects(waiting, {
+			constraint: "deal_party_rejoins_after_leaving",
+		});
+		const blocked = async () =>
+			(await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [pid]))
+				.rows[0].blocked;
+		while (!settled && !(await blocked()));
+		await copy.query("commit");
+		await refused;
+	} finally {
+		await rejoin.query("rollback");
+		await copy.query(
+			`delete from imported_deal_party where id = '${id(9600)}'`,
+		);
+		await Promise.all([copy.end(), rejoin.end()]);
+	}
+});
+
 test("a parked deal stays in its phase and is revived to it, and history keeps who parked it, why and when", () =>
 	rolledBack(async () => {
 		await db.query(`${asUser(TEAMMATE)};
