@@ -10,6 +10,7 @@ import worker from "./worker.ts";
 const { db, setup, cleanup, connectionString } = copyTest();
 const reader = `next_read_${randomUUID().replaceAll("-", "")}`;
 const writer = `next_save_${randomUUID().replaceAll("-", "")}`;
+const directReader = `next_direct_${randomUUID().replaceAll("-", "")}`;
 const person = "00000000-0000-4000-8000-000000000586";
 const login = (name: string) => {
 	const url = new URL(connectionString);
@@ -21,13 +22,16 @@ before(async () => {
 	await setup();
 	await db.query(`create role ${reader} login; grant engine_reader to ${reader};
 		create role ${writer} login; grant engine to ${writer};
+		create role ${directReader} login;
+		grant usage on schema next to ${directReader};
+		grant select on next.deal to ${directReader};
 		begin; select set_config('engine.user_id', '${person}', true);
 		insert into party (id, kind, name) values ('${person}', 'person', 'Example User');
 		insert into app_user (id) values ('${person}'); commit;`);
 });
 after(async () => {
 	await db.query(
-		`drop owned by ${reader}, ${writer}; drop role ${reader}, ${writer}`,
+		`drop owned by ${reader}, ${writer}, ${directReader}; drop role ${reader}, ${writer}, ${directReader}`,
 	);
 	await cleanup();
 });
@@ -67,6 +71,10 @@ test("new-section reads are typed, read-only UTC snapshots without old-table fal
 test("new-section saves commit and roll back as one transaction", async () => {
 	const rename = (name: string) =>
 		nextTransaction(login(writer), "save", async (tx) => {
+			assert.deepEqual(
+				(await sql`select current_user as role`.execute(tx)).rows,
+				[{ role: "engine" }],
+			);
 			await sql`select set_config('engine.user_id', ${person}, true)`.execute(
 				tx,
 			);
@@ -125,15 +133,28 @@ for (const [name, role] of [
 }
 
 test("the probe appends new-section reachability and preserves the old fields", async () => {
-	for (const readable of [true, false]) {
-		if (!readable)
+	for (const [name, readable] of [
+		[reader, true],
+		[reader, false],
+		[directReader, false],
+	] as const) {
+		if (name === directReader) {
+			const client = new pg.Client({ connectionString: login(name) });
+			await client.connect();
+			try {
+				await client.query("select 1 from next.deal limit 1");
+			} finally {
+				await client.end();
+			}
+		}
+		if (name === reader && !readable)
 			await db.query("revoke select on next.deal from engine_reader");
 		try {
 			const response = await worker.request(
 				"https://app.example.test/api/engine/database",
 				{ headers: { Cookie: "__Host-dealroom_session=made-up-session" } },
 				{
-					DATABASE: { connectionString: login(reader) },
+					DATABASE: { connectionString: login(name) },
 					CARR: {
 						fetch: async () =>
 							Response.json({

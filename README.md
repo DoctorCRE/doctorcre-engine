@@ -133,6 +133,7 @@ The health probe appends `next_section_readable` after its existing fields.
 The checked-in new-section types use the installed `kysely-codegen`. To regenerate,
 load `schema/next.sql` into `next` in a disposable local database, with `next` on
 `search_path`, then run this command with `DATABASE_URL` pointing at that database.
+Then run `npm run fix` to format the generated file.
 No production connection is needed.
 
 ```sh

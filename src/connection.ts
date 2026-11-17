@@ -37,6 +37,7 @@ connection.get("/database", async (c) => {
 				await sql`savepoint next_section`.execute(db);
 				let next_section_readable = true;
 				try {
+					await sql`set local role engine_reader`.execute(db);
 					await sql`select 1 from next.deal limit 1`.execute(db);
 				} catch {
 					next_section_readable = false;
