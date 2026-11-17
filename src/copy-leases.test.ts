@@ -371,3 +371,24 @@ test("a refused lease gets no suites, even when its ids match a lease already in
 		await db.query("rollback");
 	}
 });
+
+test("an amendment moved to another building is not linked to a suite there that shares its space's id", async () => {
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await db.query(`insert into suite (id, property_id, label) values ('${id(180)}', '${id(90)}', 'Example new suite');
+ insert into public.space (id, building_id, suite, created_by, updated_by) values ('${id(180)}', '${id(91)}', 'D1', '${id(1)}', '${id(1)}');
+ insert into public.premises (id, label, created_by) values ('${id(181)}', 'Example', '${id(1)}');
+ insert into public.premises_space values ('${id(181)}', '${id(180)}');
+ update public.lease set premises_id = '${id(181)}' where id = '${id(101)}';`);
+		const refused = await run();
+		assert.ok(reasons(refused, 180).includes("suite_not_copied"));
+		assert.deepEqual(
+			await rows(
+				`select lease_version_id from lease_suite where suite_id = '${id(180)}'`,
+			),
+			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});

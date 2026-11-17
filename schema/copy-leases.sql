@@ -157,9 +157,11 @@ insert into lease_suite (lease_version_id, lease_id, property_id, suite_id, crea
  changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select v.lease_version_id, v.lease_id, v.property_id, v.space_id, v.created_at,
  v.changed_at, v.changed_by_user_id, v.changed_by_job, v.changed_for_user_id
-from version_space v join suite s on (s.id, s.property_id) = (v.space_id, v.property_id) on conflict do nothing;
+from version_space v join suite s on (s.id, s.property_id) = (v.space_id, v.property_id)
+where v.space_property_id = v.property_id on conflict do nothing;
 insert into not_copied select v.space_id, 'lease_suite', v.lease_version_id::text, 'suite_not_copied' from version_space v
-where not exists (select from suite s where (s.id, s.property_id) = (v.space_id, v.property_id));
+where v.space_property_id is distinct from v.property_id
+ or not exists (select from suite s where (s.id, s.property_id) = (v.space_id, v.property_id));
 
 -- Each option needs its own kind, terms and notice date before it can be an option row.
 insert into not_copied select l.id, 'options_note', l.options_note, 'option_terms_unparsed'
