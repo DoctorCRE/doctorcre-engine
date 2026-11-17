@@ -29,6 +29,16 @@ const db = new pg.Client({
 	options: "-c search_path=next -c TimeZone=UTC",
 });
 const rows = async (sql: string) => (await db.query(sql)).rows;
+const clients = async () => {
+	const copied = await rows(
+		"select party_id, owner_user_id, changed_at, changed_by_user_id from client order by party_id",
+	);
+	return {
+		owners: copied.map((r) => [r.party_id, r.owner_user_id]),
+		stamps: copied.map((r) => [r.party_id, r.changed_at, r.changed_by_user_id]),
+	};
+};
+const history = () => rows("select * from change order by id");
 // A copy starts clear of every temp table, so it supplies the source mappings again before sql.
 const freshCopy = async (sql = ""): Promise<pg.QueryResultRow[]> => {
 	const result =
@@ -596,6 +606,26 @@ for (const [subject, record] of [
 	});
 }
 
+test("a first client copy records only its insert with the agreed owner", async () => {
+	try {
+		await run(
+			`${extraParties}
+ insert into public.client (id,party_id,status,acquisition_source,owner_id,created_by,updated_by,created_at,updated_at) values
+ ('${id(900)}','${id(80)}','roster','Example client source','${id(1)}','${id(1)}','${id(1)}','2020-01-01','2024-01-01'),
+ ('${id(901)}','${id(80)}','roster','Example client source',null,'${id(1)}','${id(1)}','2020-01-01','2025-01-01');`,
+			true,
+		);
+		assert.deepEqual(
+			await rows(
+				`select action, new_value ->> 'owner_user_id' as owner from change where table_name = 'client' and record = jsonb_build_object('party_id', '${id(80)}'::text) order by id`,
+			),
+			[{ action: "insert", owner: id(1) }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("client responsibility maps known users, retries unknown owners, and leaves account ownership alone", async () => {
 	try {
 		const waiting = await run(
@@ -606,9 +636,7 @@ test("client responsibility maps known users, retries unknown owners, and leaves
  update public.client set owner_label = 'Example User' where id = '${id(42)}';`,
 			true,
 		);
-		const owners = () =>
-			rows("select party_id, owner_user_id from client order by party_id");
-		assert.deepEqual((await owners()).map(Object.values), [
+		assert.deepEqual((await clients()).owners, [
 			[id(10), id(1)],
 			[id(11), null],
 			[id(12), null],
@@ -625,32 +653,25 @@ test("client responsibility maps known users, retries unknown owners, and leaves
 			),
 		);
 		assert.deepEqual(await rows("select * from national_account_owner"), []);
-		const stamps = await rows(
-			"select party_id, changed_at, changed_by_user_id from client order by party_id",
-		);
-		const history = () => rows("select * from change order by id");
+
+		const stamps = (await clients()).stamps;
 		const beforeRerun = await history();
 		assert.deepEqual(await freshCopy(), waiting);
 		assert.deepEqual(await history(), beforeRerun);
 		await freshCopy(
 			`insert into outside_id (source,value,party_id) values ('old_system','${id(89)}','${id(1)}')`,
 		);
-		assert.deepEqual((await owners()).map(Object.values), [
+		assert.deepEqual((await clients()).owners, [
 			[id(10), id(1)],
 			[id(11), id(1)],
 			[id(12), null],
 			[id(21), null],
 		]);
-		assert.deepEqual(
-			await rows(
-				"select party_id, changed_at, changed_by_user_id from client order by party_id",
-			),
-			stamps,
-		);
+		assert.deepEqual((await clients()).stamps, stamps);
 		const afterCorrection = await history();
 		await freshCopy();
 		assert.deepEqual(await history(), afterCorrection);
-		assert.equal((await owners())[1]?.owner_user_id, id(1));
+		assert.equal((await clients()).owners[1]?.[1], id(1));
 	} finally {
 		await db.query("rollback");
 	}
@@ -690,34 +711,47 @@ test("conflicting client owners wait, a corrected conflict retries, and an exist
 		assert.deepEqual(reasons(waiting, 901), ["client_owners_disagree"]);
 		assert.deepEqual(reasons(waiting, 902), ["client_owners_disagree"]);
 		assert.deepEqual(reasons(waiting, 903), ["owner_not_a_user"]);
-		const owners = () =>
-			rows(
-				`select owner_user_id from client where party_id between '${id(80)}' and '${id(82)}' order by party_id`,
-			);
-		assert.deepEqual((await owners()).map(Object.values), [
-			[null],
-			[null],
-			[id(1)],
-		]);
+		assert.deepEqual(reasons(waiting, 904), []);
+		assert.deepEqual(reasons(waiting, 905), []);
+		assert.deepEqual(
+			(await clients()).owners.filter(
+				([party]) => party >= id(80) && party <= id(82),
+			),
+			[
+				[id(80), null],
+				[id(81), null],
+				[id(82), id(1)],
+			],
+		);
 		assert.deepEqual(await freshCopy(), waiting);
 		await freshCopy(
 			`update public.client set owner_id = '${id(1)}' where id = '${id(901)}'`,
 		);
-		assert.deepEqual((await owners()).map(Object.values), [
-			[id(1)],
-			[null],
-			[id(1)],
-		]);
+		assert.deepEqual(
+			(await clients()).owners.filter(
+				([party]) => party >= id(80) && party <= id(82),
+			),
+			[
+				[id(80), id(1)],
+				[id(81), null],
+				[id(82), id(1)],
+			],
+		);
 		const conflict = await freshCopy(
 			`update public.client set owner_id = '${id(2)}' where id in ('${id(900)}','${id(901)}')`,
 		);
 		assert.deepEqual(reasons(conflict, 900), ["existing_client_owner_differs"]);
 		assert.deepEqual(reasons(conflict, 901), ["existing_client_owner_differs"]);
-		assert.deepEqual((await owners()).map(Object.values), [
-			[id(1)],
-			[null],
-			[id(1)],
-		]);
+		assert.deepEqual(
+			(await clients()).owners.filter(
+				([party]) => party >= id(80) && party <= id(82),
+			),
+			[
+				[id(80), id(1)],
+				[id(81), null],
+				[id(82), id(1)],
+			],
+		);
 	} finally {
 		await db.query("rollback");
 	}

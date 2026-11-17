@@ -114,10 +114,23 @@ select mapped_id, kind, case when kind = 'lead' then mapped_stage end, case when
  first_created, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from ready_relationship r where rank = 1
 on conflict do nothing;
-insert into client (party_id, status, client_type, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+-- Client responsibility is independent of national-account ownership; labels never identify users.
+create temp table client_owner on commit drop as
+select r.*, case
+ when r.owner is null then null
+ when exists (select from examined_relationship other where other.kind = 'client' and other.mapped_id = r.mapped_id
+  and (other.owner is distinct from r.owner) and (other.fields ->> 'owner_id' is not null or other.fields ->> 'owner_label' ~ '\S'))
+ then 'client_owners_disagree'
+ when c.owner_user_id <> r.owner then 'existing_client_owner_differs'
+ end as owner_refusal
+from examined_relationship r left join client c on c.party_id = r.mapped_id
+where r.kind = 'client';
+insert into client (party_id, status, client_type, owner_user_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select mapped_id, case when fields ->> 'status' in ('roster','cold','engaged','paused') then fields ->> 'status' else 'roster' end,
- (select slug from client_type where slug = mapped_type), first_created, updated_at,
- changed_by_user_id, changed_by_job, changed_for_user_id from ready_relationship where kind = 'client' and rank = 1 on conflict do nothing;
+ (select slug from client_type where slug = mapped_type),
+ (select distinct owner from client_owner o where o.mapped_id = r.mapped_id and o.owner is not null and o.owner_refusal is null),
+ first_created, updated_at,
+ changed_by_user_id, changed_by_job, changed_for_user_id from ready_relationship r where kind = 'client' and rank = 1 on conflict do nothing;
 insert into party_role (party_id, role, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select r.mapped_id, 'national_account', r.first_created, r.updated_at, r.changed_by_user_id, r.changed_by_job, r.changed_for_user_id
 from ready_relationship r join party p on p.id = r.mapped_id
@@ -200,23 +213,13 @@ join party_role pr on pr.party_id = r.mapped_id and pr.role = r.kind
 where (r.kind = 'lead' or exists (select from client c where c.party_id = r.mapped_id))
  and not exists (select from outside_id o where o.source = 'old_system' and o.value = r.id::text);
 
--- Client responsibility is independent of national-account ownership; labels never identify users.
-create temp table client_owner on commit drop as
-select r.*, case
- when fields ->> 'owner_id' is not null and owner is null then 'owner_not_a_user'
- when fields ->> 'owner_id' is null and fields ->> 'owner_label' ~ '\S' then 'owner_label_only'
- when exists (select from examined_relationship other where other.kind = 'client' and other.mapped_id = r.mapped_id
-  and (other.owner is distinct from r.owner) and (other.fields ->> 'owner_id' is not null or other.fields ->> 'owner_label' ~ '\S'))
- then 'client_owners_disagree'
- when c.owner_user_id is not null and owner is not null and c.owner_user_id <> owner then 'existing_client_owner_differs'
- end as owner_refusal
-from examined_relationship r join client c on c.party_id = r.mapped_id
-join outside_id copied on copied.source = 'old_system' and copied.value = r.id::text and copied.party_id = c.party_id
-where r.kind = 'client';
 update client c set owner_user_id = r.owner from client_owner r
+join outside_id copied on copied.source = 'old_system' and copied.value = r.id::text and copied.party_id = r.mapped_id
 where c.party_id = r.mapped_id and c.owner_user_id is null and r.owner is not null and r.owner_refusal is null;
-insert into not_copied select id, 'owner_id', fields ->> 'owner_id', owner_refusal
-from client_owner where owner_refusal is not null and owner_refusal not in ('owner_label_only', 'owner_not_a_user');
+insert into not_copied select r.id, 'owner_id', r.fields ->> 'owner_id', r.owner_refusal
+from client_owner r
+join outside_id copied on copied.source = 'old_system' and copied.value = r.id::text and copied.party_id = r.mapped_id
+where r.owner_refusal is not null;
 
 -- Today's lead export shows next_action rows; lead.next_action_date is only a fallback for a lead without any.
 -- Actions of records copied earlier are retried, so a corrected or newer action still arrives.
