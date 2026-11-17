@@ -927,7 +927,7 @@ Run `schema/copy-deal-next-steps.sql` as the owner after the party, vendor, deal
 
 Deal next actions keep their ids, descriptions, owners and nullable due dates. Each copies with its end state, taken only from the old event that closed it, and never from a last edit or the copy time:
 
-- A done action is done at its latest `complete-one-action` or `complete-deal-item` event, unless a `reopen-one-action` names that completion; otherwise it is done with no completion time.
+- A done action takes the time of its latest completion evidence, ordered by mutation order. `complete-one-action`, `complete-deal-item` and `complete-action` name the finished action. `log-outreach` names only the first finished action in `new_value.completed`; its `next_action` is the new step, and other finished next actions keep no time. A later `reopen-one-action` removes that proof. Without proof, completion time stays null. A post-call action's explicit `completed_at` still takes precedence.
 - A dropped action is cancelled with the reason, time and id of its `drop-action` event when it has exactly one, with a reason, and the row's version is still the one that drop left. Other drops, such as an overdue plan replaced by a newer one, carry no reason and stay listed as `cancellation_reason_missing`; several drops or a row changed since are listed as `cancellation_evidence_conflict`.
 - An expired action is expired. When Clear the deck's latest decision on it is the drop that expired it, the step keeps that event's id and time, and one deck event can close several steps; a later keep, or no event, leaves both empty and lists `expiry_unproven`.
 
