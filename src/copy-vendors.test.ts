@@ -326,8 +326,7 @@ test("a ruled vendor comes across with its reviewed reason, the strictest on its
 	rolledBack(async () => {
 		await db.query(`alter table public.vendor disable trigger vendor_touch;
 		update public.vendor set intro_notes = 'Example parked note' where id = '${id(44)}';
-		update public.vendor set disposition = 'avoid' where id = '${id(45)}';
-		update public.vendor set is_target = true where id = '${id(46)}';
+		update public.vendor set disposition = 'avoid', is_target = true where id = '${id(45)}';
 		insert into public.party_link_kind (slug, label, sort) values ('introduced', 'Example', 1);
 		${link(93, 17, 11, "introduced", 17)}`);
 		// biome-ignore format: one row per value
@@ -340,28 +339,29 @@ test("a ruled vendor comes across with its reviewed reason, the strictest on its
 		]);
 		assert.deepEqual(await rows(RULED), []);
 
-		await db.query("discard temp");
+		await db.query(
+			`discard temp; update public.vendor set disposition = 'active' where id = '${id(46)}'`,
+		);
 		const reasons = reviewed(
 			[44, " Example parked reason "],
 			[44, "Example parked reason"],
 			[45, "Example avoid reason"],
 			[46, "Example reason one"],
-			[42, "Example stray reason"],
 			[99, "Example stray reason"],
 		);
 		// biome-ignore format: one row per value
 		assert.deepEqual(await rulingRows(reasons), [
-			[id(42), "disposition_reason", "Example stray reason", "not a parked or avoided vendor"],
 			[id(43), "vendor", null, "its record is not copied"],
 			[id(44), "disposition_reason", "Example parked reason", "its record holds a stricter ruling"],
-			[id(46), "is_target", "true", "an avoided vendor cannot be a target"],
+			[id(45), "is_target", "true", "an avoided vendor cannot be a target"],
+			[id(46), "disposition_reason", "Example reason one", "not a parked or avoided vendor"],
 			[id(99), "disposition_reason", "Example stray reason", "not a vendor"],
 		]);
 		// biome-ignore format: one row per role
 		assert.deepEqual(await rows(RULED), [
 			{ party_id: id(17), role: "cpa", disposition: null, disposition_reason: null, is_target: false },
 			{ party_id: id(17), role: "vendor", disposition: "avoid", disposition_reason: "Example avoid reason", is_target: false },
-			{ party_id: id(19), role: "vendor", disposition: "avoid", disposition_reason: "Example reason one", is_target: false },
+			{ party_id: id(19), role: "vendor", disposition: null, disposition_reason: null, is_target: false },
 		]);
 		assert.deepEqual(
 			await rows(
@@ -384,8 +384,8 @@ test("a ruled vendor comes across with its reviewed reason, the strictest on its
 		await db.query("discard temp");
 		// biome-ignore format: one row per value
 		assert.deepEqual(await rulingRows(reasons), [
-			[id(42), "disposition_reason", "Example stray reason", "not a parked or avoided vendor"],
 			[id(43), "vendor", null, "its record is not copied"],
+			[id(46), "disposition_reason", "Example reason one", "not a parked or avoided vendor"],
 			[id(99), "disposition_reason", "Example stray reason", "not a vendor"],
 		]);
 		assert.deepEqual(await rows(copiedRows), kept);
@@ -588,7 +588,8 @@ alter table public.vendor disable trigger vendor_touch;
 ${evidence(40, ["worked", 70], ["worked", 71], ["referred", 72], ["referred", 70], ["example", 70])}
 ${evidence(42, ["worked", 70], ["referred", 72])}
 ${evidence(41, ["referred", 20], ["referred", 72])}
-${evidence(47, ["worked", 72])}`;
+${evidence(47, ["worked", 72])}
+${evidence(44, ["worked", 70])}`;
 const DEAL_FIELDS = ["deal_evidence", "party_link", "party_link_deal"];
 
 test("introductions either way, and the deals a vendor worked or referred, are copied, or listed with why", () =>
@@ -643,6 +644,20 @@ test("introductions either way, and the deals a vendor worked or referred, are c
 			listed,
 		);
 		assert.deepEqual(await rows("select * from change order by id"), history);
+
+		const released = `select to_jsonb(p) from deal_party p union all select to_jsonb(c) from change c`;
+		await db.query("discard temp");
+		await copy(reviewed([44, "Example parked reason"]));
+		assert.deepEqual(
+			await rows(
+				`select deal_id, role from deal_party where party_id = '${id(17)}'`,
+			),
+			[{ deal_id: id(70), role: "cpa" }],
+		);
+		const kept = await rows(released);
+		await db.query("discard temp");
+		await copy(reviewed([44, "Example parked reason"]));
+		assert.deepEqual(await rows(released), kept);
 	}));
 
 // Party 12 is a second user, and 16 is the party that was not copied.

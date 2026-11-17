@@ -52,7 +52,7 @@ select v.*, map.party_id as record_id,
 		order by v.merged_into is not null, v.party_id <> map.party_id, v.created_at, v.id) as rank,
 	stage.slug as stage_slug, level.level, nullif(regexp_replace(v.offers, '^\s+|\s+$', '', 'g'), '') as typed_offers,
 	nullif(regexp_replace(v.seeking, '^\s+|\s+$', '', 'g'), '') as typed_seeking, nullif(v.disposition, 'active') as ruling,
-	reviewed.reason as ruling_reason, case
+	case when v.disposition <> 'active' then reviewed.reason end as ruling_reason, case
 	when v.disposition = 'active' then null
 	when v.disposition not in ('parked', 'avoid') then 'not a ruling'
 	when reviewed.reasons > 1 then 'its reviewed reasons conflict'
