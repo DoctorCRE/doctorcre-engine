@@ -44,7 +44,8 @@ its own container when the check exits, including on failure or interruption.
 ```
 
 The readiness probe uses TCP because the image's initialization server accepts
-only Unix sockets. The larger lock table fits concurrent schema changes in the tests.
+only Unix sockets. PostgreSQL's default of 64 locks runs out at default test
+parallelism on 18 cores; 256 also holds with every test file running at once (#420).
 See Docker's [port publishing documentation](https://docs.docker.com/engine/network/port-publishing/).
 
 For a single check on an existing local throwaway server, `TEST_DATABASE_URL`
