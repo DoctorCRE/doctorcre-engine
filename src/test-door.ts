@@ -60,21 +60,21 @@ export function doorTest() {
 		};
 	};
 
-	// A save at `path` under the caller's entrance, answered with its status and body.
-	const save = async (
+	const request = async (
 		caller: Caller,
 		path: string,
-		args: object,
-	): Promise<[number, Body]> => {
+		init: RequestInit,
+		bindings: object = {},
+	): Promise<Response> => {
 		const user = "user" in caller ? caller.user : undefined;
 		const response = await worker.request(
 			`https://engine.example.test/${user ? "api/engine" : "jobs"}/${path}`,
 			{
-				method: "POST",
-				headers: await headers(caller),
-				body: JSON.stringify(args),
+				...init,
+				headers: { ...(await headers(caller)), ...init.headers },
 			},
 			{
+				...bindings,
 				DATABASE_WRITER: { connectionString: login() },
 				ACCESS_TEAM_DOMAIN: TEAM,
 				JOBS_ACCESS_AUD: AUDIENCE,
@@ -87,8 +87,19 @@ export function doorTest() {
 				},
 			},
 		);
-		return [response.status, await response.json()];
+		return response;
 	};
 
-	return { db: copy.db, setup, cleanup, save };
+	const save = async (
+		caller: Caller,
+		path: string,
+		args: object,
+	): Promise<[number, Body]> => {
+		const response = await request(caller, path, {
+			method: "POST",
+			body: JSON.stringify(args),
+		});
+		return [response.status, await response.json()];
+	};
+	return { db: copy.db, setup, cleanup, save, request };
 }

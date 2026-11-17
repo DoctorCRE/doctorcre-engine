@@ -1275,7 +1275,6 @@ create table document (
 	name text not null,
 	r2_key text not null check (r2_key ~ '\S'),
 	r2_bucket text not null default 'post_media' check (r2_bucket in ('post_media', 'deal_documents')),
-	unique (r2_bucket, r2_key),
 	-- Read from the file's own bytes when it is stored.
 	content_type text,
 	email_activity_id uuid references email,
@@ -1283,6 +1282,9 @@ create table document (
 	note text check (note ~ '\S'),
 	unique (id, content_type)
 );
+
+create unique index document_r2_bucket_r2_key_key on document (r2_bucket, r2_key)
+	where r2_bucket <> 'deal_documents' or r2_key not like 'sha256/%';
 
 create table document_kind (slug text primary key, label text not null);
 
@@ -1304,6 +1306,11 @@ alter table document
 	add constraint document_version_has_predecessor check ((version = 1) = (supersedes_id is null)),
 	add constraint document_previous_version foreign key (supersedes_id, deal_id, kind, previous_version)
 		references document (id, deal_id, kind, version);
+
+create unique index document_email_hash on document (email_activity_id, sha256)
+	where email_activity_id is not null and sha256 is not null;
+create unique index document_unemailed_hash on document (deal_id, sha256)
+	where email_activity_id is null and r2_key like 'sha256/%';
 
 create function document_filed_once() returns trigger
 language plpgsql as $$

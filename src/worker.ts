@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-
 import { activity } from "./activity/routes.ts";
+import { attachmentFiles, attachments } from "./attachments.ts";
 import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
 import {
@@ -69,6 +69,7 @@ app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", nextSteps);
+app.route("/api/engine", attachmentFiles);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
 app.use(
@@ -94,5 +95,7 @@ app.use(
 );
 app.route("/jobs", nextDeals);
 app.route("/jobs", nextSteps);
+app.route("/jobs", attachmentFiles);
+app.route("/jobs", attachments);
 
 export default app;

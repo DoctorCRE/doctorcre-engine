@@ -6,6 +6,13 @@ import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
 const HINTS = {
+	length_required: "Supply the file length.",
+	too_large: "Use a smaller file.",
+	sha256_mismatch: "Use the hash of the uploaded bytes.",
+	unsupported_file: "Use a supported file type.",
+	email_not_stored: "Store the email before attaching its file.",
+	file_not_uploaded: "Upload the file before attaching it.",
+	filed_to_another_deal: "This attachment is already filed to another deal.",
 	unauthenticated: "The authenticated actor could not be resolved.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
 	not_found: "The requested record was not found.",
@@ -51,7 +58,7 @@ const HINTS = {
 };
 
 export class Refusal {
-	readonly status: 400 | 403 | 404 | 409 | 422 | 500 | 501 | 503;
+	readonly status: 400 | 403 | 404 | 409 | 411 | 422 | 500 | 501 | 503;
 	readonly error: keyof typeof HINTS;
 	readonly extra: Record<string, unknown>;
 	constructor(

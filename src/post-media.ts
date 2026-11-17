@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { UUID } from "./uuid.ts";
 
@@ -9,7 +10,8 @@ type Refusal =
 	| "too_large"
 	| "too_many_pixels"
 	| "too_many_pages"
-	| "already_stored";
+	| "already_stored"
+	| "sha256_mismatch";
 type Rule = {
 	is(head: Uint8Array): boolean;
 	minBytes?: number;
@@ -154,6 +156,29 @@ function judge(
 	return refused ? { refused } : { type };
 }
 
+function judgeFile(
+	head: Uint8Array,
+	length: number,
+): { type: string } | { refused: Refusal } {
+	if (length > 25 * 1024 * 1024) return { refused: "too_large" };
+	if (ascii(head, 0, 5) === "%PDF-") return { type: "application/pdf" };
+	if (startsWith(head, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
+		return { type: "application/x-ole-storage" };
+	if (startsWith(head, [0x50, 0x4b, 3, 4])) {
+		const contents = latin1.decode(head);
+		for (const [entry, type] of [
+			["word/document.xml", "wordprocessingml.document"],
+			["xl/workbook.xml", "spreadsheetml.sheet"],
+			["ppt/presentation.xml", "presentationml.presentation"],
+		])
+			if (entry && contents.includes(entry))
+				return {
+					type: `application/vnd.openxmlformats-officedocument.${type}`,
+				};
+	}
+	return { refused: "unsupported_file" };
+}
+
 function mediaKey(documentId: string) {
 	if (!UUID.test(documentId)) throw new Error("a media key is a document id");
 	return documentId;
@@ -191,52 +216,84 @@ const rejoined = (
 // The file's own bytes decide its type; a name or extension is never trusted.
 // The file streams to storage, so a large one is never held whole. The caller
 // holds the body to its declared length.
-export async function storeMedia(
+async function store(
 	bucket: {
 		put(
 			key: string,
 			value: ReadableStream<Uint8Array>,
 			options: {
-				httpMetadata: { contentType: MediaType };
+				httpMetadata: { contentType: string };
 				onlyIf: { etagDoesNotMatch: "*" };
 			},
 		): Promise<object | null>;
 		delete(key: string): Promise<void>;
 	},
-	documentId: string,
+	key: string,
 	body: ReadableStream<Uint8Array>,
 	length: number,
-): Promise<{ key: string; type: MediaType } | { refused: Refusal }> {
-	const key = mediaKey(documentId);
+	expectedHash?: string,
+): Promise<{ key: string; type: string } | { refused: Refusal }> {
 	const reader = body.getReader();
 	const head = await readHead(reader);
-	const judged = judge(head, length);
+	const media = expectedHash ? undefined : judge(head, length);
+	const judged = media ?? judgeFile(head, length);
 	if ("refused" in judged) return judged;
 	const { type } = judged;
-	const watch = MEDIA[type].watch?.();
-	const file = rejoined(head, reader);
+	const watch =
+		media && "type" in media ? MEDIA[media.type].watch?.() : undefined;
+	const hash = expectedHash ? createHash("sha256") : undefined;
+	let mismatch = false;
+	const file = rejoined(head, reader).pipeThrough(
+		new TransformStream<Uint8Array, Uint8Array>({
+			transform(piece, controller) {
+				hash?.update(piece);
+				controller.enqueue(piece);
+			},
+			flush(controller) {
+				if (expectedHash && hash?.digest("hex") !== expectedHash) {
+					mismatch = true;
+					controller.error(new Error("sha256_mismatch"));
+				}
+			},
+		}),
+	);
 	try {
 		// R2 answers null when the precondition fails, so a file is never replaced.
-		const stored = await bucket.put(
-			key,
-			watch ? file.pipeThrough(watch.stream) : file,
-			{
-				httpMetadata: { contentType: type },
-				onlyIf: { etagDoesNotMatch: "*" },
-			},
-		);
-		if (stored === null) return { refused: "already_stored" };
+		const upload = watch ? file.pipeThrough(watch.stream) : file;
+		const stored = await bucket.put(key, upload, {
+			httpMetadata: { contentType: type },
+			onlyIf: { etagDoesNotMatch: "*" },
+		});
+		if (stored === null) {
+			if (expectedHash) await upload.pipeTo(new WritableStream());
+			return { refused: "already_stored" };
+		}
 		// The last pages are counted only after every byte has gone to R2.
 		const refused = watch?.refused();
 		if (!refused) return { key, type };
 		await bucket.delete(key);
 		return { refused };
 	} catch (error) {
+		if (mismatch) return { refused: "sha256_mismatch" };
 		const refused = watch?.refused();
 		if (refused) return { refused };
 		throw error;
 	}
 }
+
+export const storeMedia = async (
+	bucket: Parameters<typeof store>[0],
+	documentId: string,
+	body: ReadableStream<Uint8Array>,
+	length: number,
+) => store(bucket, mediaKey(documentId), body, length);
+
+export const storeFile = (
+	bucket: Parameters<typeof store>[0],
+	sha256: string,
+	body: ReadableStream<Uint8Array>,
+	length: number,
+) => store(bucket, `sha256/${sha256}`, body, length, sha256);
 
 export type MediaSigner = {
 	R2_ACCOUNT_ID: string;
