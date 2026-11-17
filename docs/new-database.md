@@ -33,8 +33,9 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`lease_version`**: one sourced set of signed terms, with consecutive versions for amendments.
 - **`lease_option`**: one option in a lease version, with its notice deadline and terms.
 - **`critical_date`**: a proposed deadline, with its user confirmation and resolution.
-- **`document`**: a file, as its name, its key in object storage (Cloudflare R2) and its type, read from the file's own bytes when the engine stores it. The file itself is never in the database. An email attachment names the email it arrived with.
+- **`document`**: a file, as its name, its key in object storage (Cloudflare R2) and its type, read from the file's own bytes when the engine stores it. The file itself is never in the database.
 - **`party_document`**: a file that belongs to a person or company, such as a client's before any deal.
+- **`email_document`**: one link for each email a file came with.
 - **`activity`**: something that happened: an email, a call, a meeting or a note, with when, who it came from and a summary.
 - **`email`**: the email behind an email activity.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
@@ -111,7 +112,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 12. A person-at-company link joins a person to a company, ends no earlier than it starts, and is stored once.
 13. A deal's phase changes are never rewritten or removed, each phase comes from the list, and a move to dead says why.
 14. An activity is an email, a call, a meeting or a note. Each `activity_about` row names exactly one deal, party or property, and is stored once.
-15. An email's Message-ID is stored once, is never blank, and never has spaces around it. Only an email the owner's copy of today's mail marks imported may lack it, and then its sender, sent time and subject are stored once. An email belongs to an email activity, and an attachment names an email. An email is about at least one record, checked when the change is saved, so an email about nothing is refused and so is removing, moving or emptying away its last link.
+15. An email's Message-ID is stored once, is never blank, and never has spaces around it. Only an email the owner's copy of today's mail marks imported may lack it, and then its sender, sent time and subject are stored once. An email belongs to an email activity, and each email and file are linked only once. An email is about at least one record, checked when the change is saved, so an email about nothing is refused and so is removing, moving or emptying away its last link.
 16. A next step is about exactly one deal, party or property.
 17. A social account is on a known platform, its handle is never empty or only whitespace, and a handle is used once per platform, in any case. Its platform account id is never blank, is used once per platform, and never changes once someone has signed in as it.
 18. A post is on its account's platform, in a format that platform offers, and is scheduled, publishing, published, failed or cancelled. Only a published post has the platform's post id and its publish time, and that id is stored once per account. A failed or cancelled post says why, and no other post has a reason.
@@ -344,7 +345,7 @@ Run `schema/copy-client-brands.sql` the same way, after the national account own
 
 ## Deal files and extracted text
 
-Deal files extend the shared `document` table. `deal_id` identifies the deal and `kind` describes the file, such as `loi`, `lease`, `amendment`, `invoice` or `other`. `document_kind` is a short list with labels a user may rename, like deal kinds. Several independent files may have the same kind. Email attachments and post media still use this table without a deal or kind.
+Deal files extend the shared `document` table. `deal_id` identifies the deal and `kind` describes the file, such as `loi`, `lease`, `amendment`, `invoice` or `other`. `document_kind` is a short list with labels a user may rename, like deal kinds. Several independent files may have the same kind. Party files and post media can use this table without a deal or kind.
 
 A stored deal file has its bucket and R2 key, content type, SHA-256 hash and byte count. The bytes remain in R2. `r2_bucket` is a configured bucket alias. `post_media`, the default for existing intake, means the POST_MEDIA binding in the current environment; `deal_documents` means the legacy `carr-documents` bucket. The pair of bucket and key identifies one file, so identical keys in different buckets do not collide. Each replacement is a new document with the next `version` and `supersedes_id` pointing at its predecessor on the same deal and kind. Independent files start at version 1. A unique predecessor prevents two replacements of one version. The engine may rename a document. An existing attachment may be filed to a deal once, supplying its kind and any missing content type, hash and size together. Known metadata must stay unchanged. Apart from the one-time classification below, the database refuses later changes to these fields, removal of its deal, or changes to its lineage or storage location. Existing offer links and lease source documents use these same rows.
 
@@ -920,8 +921,8 @@ Run `schema/copy-emails.sql` as the owner right after `copy-activity.sql`, in it
 Run `schema/copy-attachment-emails.sql` as the owner right after `copy-emails.sql`, in its own transaction with the new schema on `search_path`. It only reads `public` and `ops`, and ends with `not_copied`.
 
 - Today's intake marks each attachment it files to a deal with an `attach-deal-file` event, and names the email of an outside sender's attachment in an `ops.requirement_reply_proposal`. A partner's own mail names none.
-- The deal file that attachment became names the email the proposal's row became, as `outside_id` maps it. A file sent again on a later email keeps the earliest email that copied.
-- Listed and not copied: an emailed file no proposal names an email for, as `email_unknown`, and each email a proposal names that did not copy, as `email_not_copied`, while the file has no copied email. A rerun links a file whose email was copied since and leaves a linked file alone.
+- The copy links each deal file to every copied email its proposals name, using the `outside_id` map. The file keeps its original stamp.
+- Listed and not copied: an emailed file no proposal names an email for, as `email_unknown`, and each email a proposal names that did not copy, as `email_not_copied`, while the file has no copied email. A rerun adds links to emails copied since and keeps existing links.
 
 ## Reply drafts
 
@@ -1245,15 +1246,15 @@ The "Links from matched email" note stays an ordinary note through this door, ab
 
 ### 20. Attachments upload and open
 
-| Route                                                       | Request                                                                                                                                                     | Answer                                                                          |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `PUT /jobs/files/{sha256}` and `/api/engine/files/{sha256}` | the file's bytes, `Content-Length` required                                                                                                                 | `{ sha256, content_type, bytes }`; `201` when stored, `200` when already stored |
-| `POST /jobs/attachments`                                    | `idempotency_key`; `sha256`; `name`; `message_id` and `deal_id`, at least one; `kind`, a `document_kind` slug, required with `deal_id`, `other` from intake | `201 { document_id, existing }`                                                 |
-| `GET /jobs/documents/{id}` and `/api/engine/documents/{id}` | none                                                                                                                                                        | the bytes, with the stored type and the file name                               |
+| Route                                                       | Request                                                                                                                     | Answer                                                                          |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `PUT /jobs/files/{sha256}` and `/api/engine/files/{sha256}` | the file's bytes, `Content-Length` required                                                                                 | `{ sha256, content_type, bytes }`; `201` when stored, `200` when already stored |
+| `POST /jobs/attachments`                                    | `idempotency_key`; `sha256`; `name`; `deal_id`; `kind`, a `document_kind` slug (`other` from intake); optional `message_id` | `201 { document_id, existing }`                                                 |
+| `GET /jobs/documents/{id}` and `/api/engine/documents/{id}` | none                                                                                                                        | the bytes, with the stored type and the file name                               |
 
 - The upload checks the bytes against the path's SHA-256, reads the type from the bytes as post media does, and stores to the `deal_documents` bucket under a key made from the hash. A file no row names is kept and never read, so an upload with no attachment request costs nothing.
-- The attachment converges on the email and the hash: the same file on the same email answers the stored document with `existing: true`. A file sent with no deal and filed later gains its deal once, as `document_filed_once` allows. Stamp: `mail_capture` for the mailbox's partner, or the user.
-- Refusals: upload `411 length_required`, `422 sha256_mismatch`, `422 unsupported_file`, `422 too_large`; attachment `409 email_not_stored`, retried after the email is sent, `409 file_not_uploaded`, `409 filed_to_another_deal { deal_id }`, `404 not_found` for the deal; open `404 not_found`.
+- The attachment converges on the deal and hash. The same bytes on two emails of one deal are one deal file linked to both emails; different deals have separate filings. The same file again answers the stored document with `existing: true`. Stamp: `mail_capture` for the mailbox's partner, or the user.
+- Refusals: upload `411 length_required`, `422 sha256_mismatch`, `422 unsupported_file`, `422 too_large`; attachment `409 email_not_stored`, retried after the email is sent, `409 file_not_uploaded`, `404 not_found` for the deal; open `404 not_found`. A missing bucket binding answers `503 database_unavailable`.
 
 A partner's own deal file uses the same upload and then `POST /api/engine/deals/{deal_id}/documents` with `{ idempotency_key, sha256, name, kind, supersedes_id? }`; that door belongs to the app's step 29.
 

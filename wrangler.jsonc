@@ -25,7 +25,8 @@
 		{ "binding": "DATABASE", "id": "371e07c33382489c9ffc401a05f2358e" }
 	],
 	"r2_buckets": [
-		{ "binding": "POST_MEDIA", "bucket_name": "doctorcre-post-media" }
+		{ "binding": "POST_MEDIA", "bucket_name": "doctorcre-post-media" },
+		{ "binding": "DEAL_DOCUMENTS", "bucket_name": "carr-documents" }
 	],
 	"vars": { "POST_MEDIA_BUCKET": "doctorcre-post-media" },
 	"env": {

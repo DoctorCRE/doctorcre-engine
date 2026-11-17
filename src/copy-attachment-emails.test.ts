@@ -15,10 +15,7 @@ const run = async (): Promise<pg.QueryResultRow[]> => {
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
-const links = () =>
-	rows(
-		"select id, email_activity_id, changed_at::text from document order by id",
-	);
+const stamps = () => rows("select id, changed_at from document order by id");
 
 // Attachments 20 to 27 and the deal files they became; 23 is a partner's own upload, and 26 became file 36.
 // Old email rows 40 to 45 and the email each became: 40 and 41 are one email in two mailboxes, 42 never copied, and 45 had no Message-ID.
@@ -32,6 +29,7 @@ const became: [row: number, email: number][] = [
 // Reply proposals: attachment, old email row, filed day.
 const proposals: [attachment: number, email: number, day: number][] = [
 	[20, 40, 1],
+	[20, 41, 2],
 	[22, 42, 1],
 	[24, 42, 1],
 	[24, 43, 2],
@@ -80,26 +78,24 @@ before(async () => {
 });
 after(cleanup);
 
-test("a file names the first copied email it arrived with and lists each emailed file whose email cannot be found", async () => {
-	const before = await links();
+test("a copied file shows on every email it arrived with", async () => {
+	const before = await stamps();
 	const report = await run();
 	assert.deepEqual(
-		(await links()).map((d) => [d.id, d.email_activity_id]),
+		await rows(`select a.id, array(select d->>'id'
+		 from jsonb_array_elements(activity_entry(a)->'email'->'documents') d) as documents
+		 from activity a order by a.id`),
 		[
-			[id(20), id(41)],
-			[id(21), null],
-			[id(22), null],
-			[id(23), null],
-			[id(24), id(43)],
-			[id(25), id(44)],
-			[id(27), id(45)],
-			[id(36), id(44)],
+			{ id: id(41), documents: [id(20), id(24)] },
+			{ id: id(43), documents: [id(24)] },
+			{ id: id(44), documents: [id(25), id(36)] },
+			{ id: id(45), documents: [id(27)] },
 		],
 	);
 	assert.deepEqual(
-		(await links()).map((d) => d.changed_at),
-		before.map((d) => d.changed_at),
-		"the link is the file's own, so its stamp stays",
+		await stamps(),
+		before,
+		"copying email links preserves the file's stamp",
 	);
 	assert.deepEqual(
 		report.map((r) => Object.values(r)),
@@ -108,24 +104,9 @@ test("a file names the first copied email it arrived with and lists each emailed
 			[id(22), "activity_id", id(42), "email_not_copied"],
 		],
 	);
-});
-
-test("a second run changes nothing and lists the same files", async () => {
-	const before = await rows(
-		"select (select jsonb_agg(d order by id) from document d), (select count(*) from change)",
-	);
-	const again = await run();
-	assert.deepEqual(
-		await rows(
-			"select (select jsonb_agg(d order by id) from document d), (select count(*) from change)",
-		),
-		before,
-	);
-	assert.deepEqual(
-		again.map((r) => Object.values(r)),
-		[
-			[id(21), "email", null, "email_unknown"],
-			[id(22), "activity_id", id(42), "email_not_copied"],
-		],
-	);
+	const linkHistory =
+		"select * from email_document order by email_activity_id, document_id";
+	const first = await rows(linkHistory);
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(await rows(linkHistory), first);
 });
