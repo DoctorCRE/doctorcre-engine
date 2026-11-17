@@ -10,9 +10,10 @@ const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const read = (f: string) =>
 	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
-const [schema, attribution, copy] = await Promise.all([
+const [schema, attribution, activityCopy, copy] = await Promise.all([
 	read("next.sql"),
 	read("copy-attribution.sql"),
+	read("copy-activity.sql"),
 	read("copy-calls.sql"),
 ]);
 const name = `copy_calls_${randomUUID().replaceAll("-", "")}`;
@@ -25,10 +26,10 @@ const db = new pg.Client({
 	options: "-c search_path=next -c TimeZone=UTC",
 });
 const rows = async (sql: string) => (await db.query(sql)).rows;
-const run = async (): Promise<pg.QueryResultRow[]> => {
+const runCopy = async (sql: string): Promise<pg.QueryResultRow[]> => {
 	await db.query("begin");
 	try {
-		const results = await db.query(copy);
+		const results = await db.query(sql);
 		assert.ok(Array.isArray(results));
 		await db.query("commit");
 		return results.at(-1)?.rows ?? [];
@@ -36,6 +37,10 @@ const run = async (): Promise<pg.QueryResultRow[]> => {
 		await db.query("rollback");
 		throw error;
 	}
+};
+const run = async () => {
+	await runCopy(activityCopy);
+	return runCopy(copy);
 };
 const reasons = (report: pg.QueryResultRow[]) =>
 	report.map((r) => `${r.old_id.slice(-2)} ${r.field} ${r.value} ${r.reason}`);
@@ -49,10 +54,15 @@ const candidate = (
 	session: number,
 	kind: string,
 	payload: object,
-	resulting?: number,
+	resolved?: number | "skipped",
 ) =>
-	`('${id(n)}', '${id(session)}', 'key-${n}', 'batch', ${n}, '${kind}', '${JSON.stringify(payload)}', 'Example quote', 0.9,
-  ${resulting ? `'confirmed', '${id(1)}', '${id(resulting)}', '2024-01-10'` : "'pending', null, null, null"})`;
+	`('${id(n)}', '${id(session)}', 'key-${n}', 'batch', ${n}, '${kind}', '${JSON.stringify(payload)}', 'Example quote', 0.9, ${
+		resolved === undefined
+			? "'pending', null, null, null"
+			: resolved === "skipped"
+				? `'skipped', '${id(1)}', null, '2024-01-10'`
+				: `'confirmed', '${id(1)}', '${id(resolved)}', '2024-01-10'`
+	})`;
 
 before(async () => {
 	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
@@ -79,7 +89,9 @@ before(async () => {
  insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
  insert into outside_id (source, value, deal_id) values ('old_system', '${id(30)}', '${id(30)}');
  insert into public.activity_kind (slug, label, is_contact) values ('meeting', 'meeting', true);
- insert into public.activity (id, kind, occurred_at, actor_id, summary, deal_id) values ('${id(40)}', 'meeting', '2024-01-03', '${id(1)}', 'Example meeting', '${id(30)}');
+ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id) values
+  ('${id(40)}', 'meeting', '2024-01-03', '2024-01-03', '2024-01-03', '${id(1)}', 'Example meeting', '${id(30)}'),
+  ('${id(41)}', 'meeting', '2024-01-06', '2024-01-06', '2024-01-06', '${id(1)}', 'Example later meeting', '${id(31)}');
  insert into public.capture_session (id, nonce, device_id, actor_id, mode, started_at, consent_announced_at, session_token_hash,
   expires_at, state, state_at, created_at, post_call) values
   ${[
@@ -87,6 +99,8 @@ before(async () => {
 		session(61, 2, true, "failed"),
 		session(62, 2, false, "done"),
 		session(63, 2, false, "done"),
+		session(64, 2, false, "done"),
+		session(65, 2, false, "done"),
 	].join(",\n  ")};
  insert into public.phone_call_session (id, owner_id, sha256, byte_count, duration_seconds, mime_type, started_at, consent_announced_at, projection, studio_status)
   values ('${id(60)}', '${id(1)}', '${hash("a")}', 1000, 60, 'audio/mp4', '2024-01-01 15:00', '2024-01-01 15:00',
@@ -102,9 +116,27 @@ before(async () => {
 		candidate(71, 60, "activity", { ref: id(21), kind: "note" }),
 		candidate(72, 61, "next_step", { deal: id(31) }),
 		candidate(73, 62, "meeting_record", { ref: id(30) }, 40),
+		candidate(77, 62, "activity", { ref: id(21) }),
 		candidate(74, 63, "phase_move", { deal: "Example Deal" }),
 		candidate(75, 63, "phase_move", { deal: id(30) }),
-		candidate(76, 63, "meeting_record", { ref: id(30) }, 49),
+		candidate(
+			76,
+			63,
+			"meeting_record",
+			{ ref: id(30), summary: "Example record", detail: "Example detail" },
+			49,
+		),
+		candidate(78, 64, "meeting_record", { ref: id(30), summary: "Example" }),
+		candidate(79, 64, "meeting_record", { ref: id(30), detail: "Example" }),
+		candidate(
+			80,
+			64,
+			"meeting_record",
+			{ ref: id(30), summary: "Example" },
+			"skipped",
+		),
+		candidate(81, 65, "meeting_record", { ref: id(31) }, 41),
+		candidate(82, 65, "phase_move", { deal: id(30) }),
 	].join(",\n  ")};
  commit;`);
 });
@@ -123,6 +155,16 @@ test("copies each call and meeting capture with its report, once, about the reco
 		).map(Object.values),
 		[
 			[
+				id(40),
+				"meeting",
+				"2024-01-03 00:00:00+00",
+				"Example meeting",
+				id(1),
+				null,
+				null,
+				"2024-01-03 00:00:00+00",
+			],
+			[
 				id(60),
 				"call",
 				"2024-01-01 15:00:00+00",
@@ -136,11 +178,21 @@ test("copies each call and meeting capture with its report, once, about the reco
 				id(63),
 				"meeting",
 				"2024-01-04 15:00:00+00",
-				null,
+				"Example record\n\nExample detail",
 				null,
 				"old_system",
 				null,
 				"2024-01-04 16:00:00+00",
+			],
+			[
+				id(64),
+				"meeting",
+				"2024-01-05 15:00:00+00",
+				null,
+				null,
+				"old_system",
+				null,
+				"2024-01-05 16:00:00+00",
 			],
 		],
 	);
@@ -151,9 +203,12 @@ test("copies each call and meeting capture with its report, once, about the reco
 			)
 		).map(Object.values),
 		[
+			[id(40), id(30), null, "2024-01-03 00:00:00+00"],
+			[id(40), null, id(11), "2024-01-03 15:01:00+00"],
 			[id(60), id(30), null, "2024-01-01 15:01:00+00"],
 			[id(60), null, id(11), "2024-01-01 15:01:00+00"],
 			[id(63), id(30), null, "2024-01-04 15:01:00+00"],
+			[id(64), id(30), null, "2024-01-05 15:01:00+00"],
 		],
 	);
 	assert.deepEqual(reasons(report), [
@@ -164,6 +219,10 @@ test("copies each call and meeting capture with its report, once, about the reco
 		`61 report_sha256 ${hash("c")} report_text_not_stored`,
 		"61 state failed capture_unfinished",
 		"63 deal Example Deal deal_not_copied",
+		`64 meeting_record ${id(80)} meeting_record_skipped`,
+		"64 meeting_record 2 several_meeting_records",
+		`65 activity ${id(41)} source_activity_not_copied`,
+		`65 ref ${id(31)} ref_not_copied`,
 	]);
 	assert.deepEqual(
 		await rows(
@@ -182,13 +241,23 @@ test("copies each call and meeting capture with its report, once, about the reco
 	);
 });
 
-test("a call about a record copied later arrives on the next run", async () => {
+test("a call about a record copied later, and a logged meeting copied later, arrive on the next run", async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into deal (id, name, owner_user_id) values ('${id(31)}', 'Example Deal', '${id(1)}');
  insert into outside_id (source, value, deal_id) values ('old_system', '${id(31)}', '${id(31)}');
  commit;`);
 	const report = await run();
-	assert.ok(!reasons(report).some((r) => r.includes("about_nothing_copied")));
+	assert.ok(
+		!reasons(report).some((r) => /about_nothing|source_activity/.test(r)),
+	);
+	assert.deepEqual(
+		(
+			await rows(
+				`select deal_id from activity_about where activity_id = '${id(41)}' order by deal_id`,
+			)
+		).map((r) => r.deal_id),
+		[id(30), id(31)],
+	);
 	assert.deepEqual(
 		(
 			await rows(
