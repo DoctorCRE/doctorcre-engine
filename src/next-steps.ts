@@ -15,15 +15,28 @@ import {
 	isChangeId,
 	isInstant,
 	isText,
-	isTexts,
 	isUuid,
 	optional,
+	orNull,
 	type Shape,
 } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 import { latestChange, seenAnswer, unseenChanges } from "./seen-change.ts";
 
 const RECORDS = ["deal_id", "party_id", "property_id"] as const;
+
+const BULLET_KINDS = ["promised", "call", "suggestion", "status"] as const;
+// A bullet is text, or the dated fact the old system writes and the copy keeps.
+const FACT = {
+	date: orNull(isCalendarDate),
+	kind: (value: unknown): value is (typeof BULLET_KINDS)[number] =>
+		BULLET_KINDS.some((kind) => kind === value),
+	text: isText,
+};
+type Bullet = string | Fitted<typeof FACT>;
+const isBullets: Check<Bullet[]> = (value): value is Bullet[] =>
+	Array.isArray(value) &&
+	value.every((bullet) => isText(bullet) || fitting(FACT)(bullet));
 
 // The database checks the rest: an item only on a deal, a reason only for a cancel.
 const STEP_FIELDS = {
@@ -41,7 +54,7 @@ const NEW_STEP = {
 	...STEP_FIELDS,
 	what: isText,
 	item: optional(
-		fitting({ title: isText, bullets: isTexts, source_ref: isText }),
+		fitting({ title: isText, bullets: isBullets, source_ref: isText }),
 	),
 };
 
@@ -49,7 +62,7 @@ const STEP_CHANGES = {
 	idempotency_key: isUuid,
 	seen_change_id: isChangeId,
 	...STEP_FIELDS,
-	item_bullets: optional(isTexts),
+	item_bullets: optional(isBullets),
 };
 const STEP_CHANGED = [
 	"what",

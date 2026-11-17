@@ -24,8 +24,6 @@ export const isAmount: Check<number> = (value): value is number =>
 	typeof value === "number" && Number.isFinite(value);
 export const isBoolean: Check<boolean> = (value): value is boolean =>
 	typeof value === "boolean";
-export const isTexts: Check<string[]> = (value): value is string[] =>
-	Array.isArray(value) && value.every(isText);
 // A moment with its zone, such as 2026-01-05T15:00:00Z.
 export const isInstant: Check<string> = (value): value is string =>
 	typeof value === "string" &&
