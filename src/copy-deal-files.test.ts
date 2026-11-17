@@ -91,7 +91,8 @@ before(async () => {
  ('${id(404)}', '${id(300)}', '${id(10)}', null, '${id(1)}', null, '${id(225)}', null),
  ('${id(405)}', '${id(300)}', '${id(10)}', null, '${id(1)}', null, '${id(226)}', null),
  ('${id(406)}', '${id(303)}', '${id(10)}', null, '${id(1)}', null, '${id(226)}', null),
- ('${id(407)}', '${id(302)}', '${id(10)}', null, '${id(1)}', null, '${id(227)}', null);
+ ('${id(407)}', '${id(302)}', '${id(10)}', null, '${id(1)}', null, '${id(227)}', null),
+ ('${id(408)}', '${id(300)}', null, null, '${id(1)}', null, '${id(223)}', null);
  commit;`);
 	report = await run(mapping);
 });
@@ -227,7 +228,8 @@ test("files that cannot map are listed with a reason and not stored, never guess
 	assert.deepEqual(reasons(report, 302), ["unknown_kind"]);
 	assert.deepEqual(reasons(report, 400), ["generated_note"]);
 	assert.deepEqual(reasons(report, 401), ["file_deleted"]);
-	assert.deepEqual(reasons(report, 402), ["no_deal"]);
+	assert.deepEqual(reasons(report, 402), []);
+	assert.deepEqual(reasons(report, 408), ["no_deal"]);
 	assert.deepEqual(reasons(report, 403), ["no_file"]);
 	assert.deepEqual(
 		await rows(

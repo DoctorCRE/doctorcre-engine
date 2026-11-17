@@ -293,7 +293,6 @@ from chain s cross join lateral (values ('city', s.city), ('state', s.state), ('
 where f.value ~ '\S';
 
 -- Today's import history and its own reference numbers become outside ids of the record each old one became.
--- A source is lower-cased, with _ for each run of anything but letters and digits.
 create temp table typed_outside_id on commit drop as
 select v.old_id, v.field, v.typed, v.source, v.value, v.copy_values, map.party_id, case
 	when v.field = 'record_source' and v.source = 'dup_candidate' then 'a hint of a duplicate, not an id'
@@ -304,10 +303,9 @@ select v.old_id, v.field, v.typed, v.source, v.value, v.copy_values, map.party_i
 end as reason
 from (
 	select coalesce(o.party_id, r.entity_id) as old_id, 'record_source' as field, r.entity_type as kind,
-		concat_ws(' ', r.source_system, r.external_key) as typed,
-		btrim(regexp_replace(lower(r.source_system), '[^a-z0-9]+', '_', 'g'), '_') as source,
-		regexp_replace(r.external_key, '^\s+|\s+$', '', 'g') as value, o.party_id, true as copy_values
+		concat_ws(' ', r.source_system, r.external_key) as typed, k.source, k.value, o.party_id, true as copy_values
 	from public.record_source r
+	cross join lateral copy_outside_id(r.source_system, r.external_key) k
 	left join (
 		select 'party' as kind, id, id as party_id from public.party
 		union all select 'vendor', id, party_id from public.vendor

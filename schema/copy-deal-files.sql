@@ -72,13 +72,13 @@ on conflict do nothing;
 insert into not_copied select g.id, f.field, f.value, f.reason from public.document g
 left join public.attachment w on w.id = g.working_attachment left join public.attachment p on p.id = g.pdf_attachment
 cross join lateral (values
- ('client_id', g.client_id::text, 'no_deal', g.deal_id is null),
+ ('client_id', g.client_id::text, 'no_deal', g.deal_id is null and g.client_id is null),
  ('working_attachment', w.id::text, 'file_deleted', w.deleted_at is not null),
  ('pdf_attachment', p.id::text, 'file_deleted', p.deleted_at is not null),
  ('id', g.id::text, 'no_file', w.id is null and p.id is null),
  ('id', g.id::text, 'outside_id_taken', exists (select from outside_id o
   where (o.source, o.value) = ('old_generated_document', g.id::text) and o.deal_id is distinct from g.deal_id)),
  ('note', g.note, 'generated_note', g.note ~ '\S')) f(field, value, reason, refused)
-where f.refused;
+where (g.deal_id is not null or g.client_id is null) and f.refused;
 alter table document enable trigger stamp_change;
 select * from not_copied order by old_id, field, value, reason;

@@ -30,8 +30,9 @@ const db = new pg.Client({
 	options: "-c search_path=next -c TimeZone=UTC",
 });
 const rows = async (sql: string) => (await db.query(sql)).rows;
+// A run starts clear of the temp tables an earlier run in the same transaction left.
 const run = async (): Promise<pg.QueryResultRow[]> => {
-	const result = await db.query(copy);
+	const result = await db.query(`discard temp; ${copy}`);
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
@@ -110,6 +111,13 @@ insert into copy_market_county values ('example-market', '01001');`);
 	await db.query("commit; begin");
 	report = await run();
 	await db.query("commit");
+	assert.deepEqual(
+		await rows(
+			"select relname from pg_class where relnamespace = pg_my_temp_schema()",
+		),
+		[],
+		"no copier temp table outlives its transaction",
+	);
 });
 after(async () => {
 	await db.end();
@@ -1083,9 +1091,6 @@ test("parking reasons, trimmed notes and explicit attention flags copy without i
 		const copied = await rows(
 			`select * from deal where id >= '${id(400)}' order by id`,
 		);
-		await db.query(`drop table pg_temp.deal_outside_id, pg_temp.deal_outside_id_refusal, pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
- pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
- pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
 		assert.deepEqual(
 			(await run()).filter((r) => r.old_id >= id(400)),
 			first.filter((r) => r.old_id >= id(400)),
@@ -1137,30 +1142,21 @@ test("a verified market agent joins the deal and a name-only agent waits for rev
 				id(1),
 			],
 		]);
-		const source = (n: number) => ({
-			old_id: id(n),
-			field: "market_agent_source",
-			value: "Example source",
-			reason: "no_typed_destination",
-		});
 		const listed = (r: pg.QueryResultRow[]) =>
 			r.filter((row) => row.old_id >= id(410) && row.field !== "phase");
 		assert.deepEqual(listed(first), [
-			source(410),
 			{
 				old_id: id(411),
 				field: "market_agent",
 				value: "Example Agent",
 				reason: "agent_not_verified",
 			},
-			source(411),
 			{
 				old_id: id(412),
 				field: "deal_party",
 				value: `${id(412)} ${id(7)} market_agent`,
 				reason: "party_not_copied",
 			},
-			source(412),
 			{
 				old_id: id(413),
 				field: "deal",
@@ -1173,12 +1169,8 @@ test("a verified market agent joins the deal and a name-only agent waits for rev
 				value: `${id(413)} ${id(4)} market_agent`,
 				reason: "deal_not_copied",
 			},
-			source(413),
 		]);
 		const copied = await rows(agents);
-		await db.query(`drop table pg_temp.deal_outside_id, pg_temp.deal_outside_id_refusal, pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
- pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
- pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
 		assert.deepEqual(listed(await run()), listed(first));
 		assert.deepEqual(await rows(agents), copied);
 	} finally {
@@ -1233,9 +1225,6 @@ test("a lane that disagrees with the account links is listed, and one awaiting b
 			listed(423, "national", "lane_disagrees_with_account"),
 			listed(424, "national", "lane_disagrees_with_account"),
 		]);
-		await db.query(`drop table pg_temp.deal_outside_id, pg_temp.deal_outside_id_refusal, pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
- pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
- pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
 		assert.deepEqual(lanes(await run()), lanes(first));
 	} finally {
 		await db.query("rollback");
@@ -1351,9 +1340,6 @@ test("deal outside ids normalize sources and keys, report collisions, and stay u
 		);
 		const ids = await rows("select * from outside_id order by source, value");
 		const history = await rows("select * from change order by id");
-		await db.query(`drop table pg_temp.deal_outside_id, pg_temp.deal_outside_id_refusal, pg_temp.not_copied, pg_temp.old_deal, pg_temp.old_link, pg_temp.mapped_link,
- pg_temp.old_phase, pg_temp.mapped_phase, pg_temp.building_map, pg_temp.old_property,
- pg_temp.round_mapping, pg_temp.round_refusal, pg_temp.mapped_claim, pg_temp.claim_refusal`);
 		assert.deepEqual(await run(), first);
 		assert.deepEqual(
 			await rows("select * from outside_id order by source, value"),

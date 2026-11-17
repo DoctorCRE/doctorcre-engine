@@ -49,10 +49,8 @@ select id, created_at, name, (select slug from deal_kind where slug = deal_type)
 insert into outside_id (source, value, deal_id)
 select 'old_system', d.id::text, d.id from old_deal d join deal n on n.id = d.id;
 create temp table deal_outside_id on commit drop as
-select r.entity_id as old_id, concat_ws(' ', r.source_system, r.external_key) as typed,
- btrim(regexp_replace(lower(r.source_system), '[^a-z0-9]+', '_', 'g'), '_') as source,
- regexp_replace(r.external_key, '^\s+|\s+$', '', 'g') as value, m.deal_id
-from public.record_source r
+select r.entity_id as old_id, concat_ws(' ', r.source_system, r.external_key) as typed, k.source, k.value, m.deal_id
+from public.record_source r cross join lateral copy_outside_id(r.source_system, r.external_key) k
 left join outside_id m on m.source = 'old_system' and m.value = r.entity_id::text
 where r.entity_type = 'deal';
 create temp table deal_outside_id_refusal on commit drop as
@@ -138,8 +136,6 @@ where d.id is null or l.mapped_party_id is null or l.slug is null;
 -- A stated name is never matched to a person; only a verified party link names the agent.
 insert into not_copied select deal_id, 'market_agent', agent_name, 'agent_not_verified'
 from public.deal_market_assignment where agent_party_id is null;
-insert into not_copied select deal_id, 'market_agent_source', source, 'no_typed_destination'
-from public.deal_market_assignment;
 insert into not_copied select id, 'deal_participant', role, 'ended_participant_history'
 from public.deal_participant where to_at is not null;
 

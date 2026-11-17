@@ -2443,7 +2443,15 @@ const CHANGEABLE: Record<string, string[]> = {
 	party_email: ["is_primary", "label"],
 	party_phone: ["is_primary", "label"],
 	activity: ["from_party_id", "happened_at", "summary"],
-	next_step: ["done_at", "due_on", "owner_party_id", "what"],
+	next_step: [
+		"done_at",
+		"due_on",
+		"owner_party_id",
+		"resolution",
+		"resolution_reason",
+		"resolved_at",
+		"what",
+	],
 	user_preference: ["push_to_device", "quiet_from", "quiet_until", "time_zone"],
 	home_mark: [
 		"disposition",
@@ -2462,6 +2470,14 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	next_step: [
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"resolution_event_id",
+		"status",
+	],
 	invoice_email: [
 		"application_id",
 		"application_root_id",
@@ -3027,6 +3043,175 @@ test("party next steps retain completed steps, sort due dates with id ties and l
 	});
 });
 
+test("ended next steps retain evidence and stay off Home even with marks", async () => {
+	await rolledBack(async () => {
+		await db.query(`set local role none;
+			update next_step set resolution = 'cancelled',
+			resolved_at = '2026-03-21T10:00:00Z', resolution_reason = 'No longer needed',
+			resolution_event_id = '${id(9400)}' where id = '${id(400)}';
+			update next_step set resolution = 'expired', resolution_event_id = '${id(9401)}'
+			where id = '${id(402)}';
+			set local role engine`);
+		const cancelled = (await readDeal()).next_steps.find(
+			(s: { id: string }) => s.id === id(400),
+		);
+		assert.equal(cancelled.status, "cancelled");
+		assert.equal(cancelled.done_at, null);
+		assert.equal(cancelled.resolved_at, "2026-03-21T10:00:00+00:00");
+		assert.equal(cancelled.resolution_reason, "No longer needed");
+		assert.equal(cancelled.resolution_event_id, id(9400));
+		const expired = (
+			await db.query("select * from next_step where id = $1", [id(402)])
+		).rows[0];
+		assert.equal(expired.status, "expired");
+		assert.equal(expired.resolved_at, null);
+		assert.equal(expired.done_at, null);
+		assert.equal(expired.resolution_event_id, id(9401));
+		const party = (
+			await db.query("select everything_about_party($1) as party", [CLIENT])
+		).rows[0].party;
+		assert.equal(
+			party.next_steps.find((step: { id: string }) => step.id === id(402))
+				.status,
+			"expired",
+		);
+		assert.equal((await db.query("select * from home_next_step")).rowCount, 0);
+		assert.equal(
+			(
+				await db.query("select * from home_mark where next_step_id = $1", [
+					id(400),
+				])
+			).rowCount,
+			2,
+		);
+		await db.query(
+			`update next_step set resolution = 'done' where id = '${id(402)}'`,
+		);
+		assert.equal(
+			(await db.query("select done_at from next_step where id = $1", [id(402)]))
+				.rows[0].done_at,
+			null,
+		);
+		await db.query(
+			`set local role none;
+			update next_step set resolution = null, resolution_event_id = null where id = '${id(402)}';
+			set local role engine`,
+		);
+		assert.deepEqual((await db.query("select id from home_next_step")).rows, [
+			{ id: id(402) },
+		]);
+	});
+});
+
+test("next-step end states reject contradictory times, reasons and evidence", async () => {
+	const invalid: Case[] = [
+		["resolution = 'other'", "next_step_resolution_check"],
+		["resolution = 'cancelled'", "next_step_cancellation_reason"],
+		[
+			"resolution = 'cancelled', resolution_reason = ' '",
+			"next_step_resolution_reason_check",
+		],
+		[
+			"resolution = 'expired', resolution_reason = 'Not needed'",
+			"next_step_cancellation_reason",
+		],
+		["resolution_reason = 'Not needed'", "next_step_cancellation_reason"],
+		[
+			"resolution = 'done', resolution_reason = 'Not needed'",
+			"next_step_cancellation_reason",
+		],
+		["resolution = 'expired', done_at = now()", "next_step_done_time"],
+		[
+			"resolution = 'cancelled', resolution_reason = 'Not needed', done_at = now()",
+			"next_step_done_time",
+		],
+		["resolved_at = now()", "next_step_resolution_time"],
+		["resolution = 'done', resolved_at = now()", "next_step_resolution_time"],
+		[`resolution_event_id = '${id(9400)}'`, "next_step_resolution_event"],
+	];
+	for (const [fields, refusal] of invalid) {
+		await rolledBack(async () => {
+			await assert.rejects(
+				db.query(`set local role none;
+					update next_step set ${fields} where id = '${id(400)}'`),
+				expected(refusal),
+			);
+		});
+	}
+});
+
+test("only the owner's import supplies a next step's closing event", async () => {
+	for (const statement of [
+		`insert into next_step (what, deal_id, resolution, resolution_event_id)
+		 values ('Example expired step', '${DEAL}', 'expired', '${id(9401)}')`,
+		`update next_step set resolution = 'expired', resolution_event_id = '${id(9401)}'
+		 where id = '${id(400)}'`,
+	]) {
+		await rolledBack(async () => {
+			await assert.rejects(db.query(statement), { code: "42501" });
+		});
+	}
+	await rolledBack(async () => {
+		await db.query(`set local role none;
+			insert into next_step (what, deal_id, resolution, resolution_event_id) values
+			('First expired step', '${DEAL}', 'expired', '${id(9401)}'),
+			('Second expired step', '${DEAL}', 'expired', '${id(9401)}');
+			set local role engine`);
+		assert.equal(
+			(
+				await db.query(
+					"select id from next_step where resolution_event_id = $1",
+					[id(9401)],
+				)
+			).rowCount,
+			2,
+		);
+	});
+	await rolledBack(async () => {
+		await db.query("set local role none");
+		await assert.rejects(
+			db.query(`update next_step set resolution = 'expired', resolution_event_id = 'not-an-event-id'
+				where id = '${id(400)}'`),
+			{ code: "22P02" },
+		);
+	});
+});
+
+test("the Home view refuses an engine insert with a closing event", async () => {
+	await rolledBack(async () => {
+		await db.query(asJob("agent"));
+		await assert.rejects(
+			db.query(`insert into home_next_step (what, party_id, resolution, resolution_event_id)
+				values ('Example expired step', '${CLIENT}', 'expired', '${id(9401)}')`),
+			{ code: "42501" },
+		);
+	});
+});
+
+test("the engine can insert and read an open step through the Home view", async () => {
+	await rolledBack(async () => {
+		await db.query(asJob("agent"));
+		const saved = await db.query(`insert into home_next_step (what, party_id)
+			values ('Example open step', '${CLIENT}') returning id`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select what, party_id, status, resolution_event_id from home_next_step where id = $1",
+					[saved.rows[0].id],
+				)
+			).rows,
+			[
+				{
+					what: "Example open step",
+					party_id: CLIENT,
+					status: "open",
+					resolution_event_id: null,
+				},
+			],
+		);
+	});
+});
+
 test("party proposals include only pending suggestions in creation order with id ties", async () => {
 	await withParty(async () => {
 		await db.query(`insert into activity_about (activity_id, party_id) values ('${CALL}', '${SUBJECT}');
@@ -3330,7 +3515,29 @@ test("a merged-away party reads its survivor including moved links after another
 });
 
 test("everything about the LOI deal comes back in one read, each list in order", async () => {
-	assert.deepEqual(await readDeal(), {
+	const { history, ...deal } = await readDeal();
+	assert.deepEqual(
+		history.map((c: { table_name: string; action: string; record: object }) => [
+			c.table_name,
+			c.action,
+			c.record,
+		]),
+		[
+			["deal", "insert", { id: DEAL }],
+			[
+				"deal_party",
+				"insert",
+				{ deal_id: DEAL, party_id: CLIENT, role: "client" },
+			],
+			[
+				"deal_party",
+				"insert",
+				{ deal_id: DEAL, party_id: AGENT, role: "listing_agent" },
+			],
+			["deal", "update", { id: DEAL }],
+		],
+	);
+	assert.deepEqual(deal, {
 		deal: {
 			id: DEAL,
 			name: "Example Dental Springfield Deal",
@@ -3379,6 +3586,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			{
 				id: EMAIL,
 				kind: "email",
+				reached: null,
 				happened_at: "2026-03-09T14:00:00+00:00",
 				from_party_id: AGENT,
 				summary: null,
@@ -3396,6 +3604,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				happened_at: "2026-03-10T16:00:00+00:00",
 				from_party_id: CLIENT,
 				summary: "Example asks for a shorter term",
+				reached: null,
 				email: null,
 			},
 		],
@@ -3406,6 +3615,11 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				owner_party_id: CLIENT,
 				due_on: "2026-03-13",
 				done_at: "2026-03-13T18:00:00+00:00",
+				resolution: null,
+				resolved_at: null,
+				resolution_reason: null,
+				resolution_event_id: null,
+				status: "done",
 			},
 			{
 				id: id(400),
@@ -3413,10 +3627,196 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				owner_party_id: null,
 				due_on: "2026-03-20",
 				done_at: null,
+				resolution: null,
+				resolved_at: null,
+				resolution_reason: null,
+				resolution_event_id: null,
+				status: "open",
 			},
 		],
+		earlier_parties: [],
+		earlier_owners: [],
+		imported_history: [],
 	});
 });
+
+test("a deal read lists who was on it and who owned it before, in the order they left", () =>
+	rolledBack(async () => {
+		await db.query(`set local role none;
+			${earlierParty()};
+			${earlierParty({ id: id(9601), party_id: CLIENT, role: "client", started_at: null, ended_at: "2024-03-01" })};
+			${earlierParty({ id: id(9602), deal_id: LENDER_DEAL })};
+			${earlierOwner()};
+			${earlierOwner({ id: id(9611), user_id: USER, started_at: null, ended_at: "2025-01-01" })};
+			${earlierOwner({ id: id(9612), deal_id: LENDER_DEAL })};
+			set local role engine`);
+		const deal = await readDeal();
+		const party = (wanted: string) => {
+			const { role: _, ...found } = deal.parties.find(
+				(p: { id: string }) => p.id === wanted,
+			);
+			return found;
+		};
+		assert.deepEqual(deal.earlier_parties, [
+			{
+				id: id(9601),
+				party_id: CLIENT,
+				role: "client",
+				started_at: null,
+				ended_at: "2024-03-01T00:00:00+00:00",
+				party: party(CLIENT),
+			},
+			{
+				id: id(9600),
+				party_id: AGENT,
+				role: "listing_agent",
+				started_at: "2025-01-01T00:00:00+00:00",
+				ended_at: "2025-06-01T00:00:00+00:00",
+				party: party(AGENT),
+			},
+		]);
+		assert.deepEqual(deal.earlier_owners, [
+			{
+				id: id(9611),
+				user_id: USER,
+				started_at: null,
+				ended_at: "2025-01-01T00:00:00+00:00",
+			},
+			{
+				id: id(9610),
+				user_id: TEAMMATE,
+				started_at: "2025-01-01T00:00:00+00:00",
+				ended_at: "2025-06-01T00:00:00+00:00",
+			},
+		]);
+	}));
+
+test("a deal's history keeps complete native and imported rows in time and id order, excluding other deals and children", () =>
+	rolledBack(async () => {
+		await db.query(`set constraints all immediate;
+			set local role none;
+			delete from change where (table_name, record) = ('deal', '{"id":"${DEAL}"}')
+				or table_name = 'deal_party' and record ->> 'deal_id' = '${DEAL}';
+			alter table change disable trigger stamp_change;
+			alter table imported_change disable trigger stamp_imported_change`);
+		const recorded = async (
+			n: number,
+			day: number,
+			table: string,
+			record: object,
+		) =>
+			(
+				await db.query(
+					`insert into change (id, table_name, record, action, old_value, changed_by_job, changed_at)
+					overriding system value values ($1, $2, $3, 'delete', '{"example":true}', 'old_system', $4)
+					returning to_jsonb(change) as entry`,
+					[n, table, record, `2026-01-0${day}T00:00:00Z`],
+				)
+			).rows[0].entry;
+		const imported = async (n: number, day: number, deal = DEAL) =>
+			(
+				await db.query(
+					`insert into imported_change
+					(id, table_name, record, old_value_absent, new_value_absent, field, source_event, changed_by_job, changed_at)
+					values ($1, 'deal', $2, false, false, 'owner', $3, 'old_system', $4)
+					returning to_jsonb(imported_change) as entry`,
+					[
+						id(n),
+						{ id: deal },
+						{
+							id: id(n),
+							verb: "set-lead",
+							cause: "human",
+							actor_id: "example-actor",
+						},
+						`2020-01-0${day}T00:00:00Z`,
+					],
+				)
+			).rows[0].entry;
+		const agent = { party_id: AGENT, role: "listing_agent" };
+		const history = [
+			await recorded(9702, 2, "deal", { id: DEAL }),
+			await recorded(9701, 1, "deal_party", { deal_id: DEAL, ...agent }),
+			await recorded(9700, 2, "deal", { id: DEAL }),
+		];
+		const importedHistory = [
+			await imported(9712, 2),
+			await imported(9711, 1),
+			await imported(9710, 2),
+		];
+		await recorded(9703, 1, "deal_party", { deal_id: LENDER_DEAL, ...agent });
+		await recorded(9704, 1, "deal_property", {
+			deal_id: DEAL,
+			property_id: PROPERTY,
+		});
+		await recorded(9705, 1, "deal", { id: LENDER_DEAL });
+		await imported(9713, 1, LENDER_DEAL);
+		await db.query(`alter table change enable trigger stamp_change;
+			alter table imported_change enable trigger stamp_imported_change;
+			set local role engine`);
+		const result = (
+			await db.query("select everything_about_deal($1) as value", [DEAL])
+		).rows[0].value;
+		assert.deepEqual(result.history, [history[1], history[2], history[0]]);
+		assert.deepEqual(result.imported_history, [
+			importedHistory[1],
+			importedHistory[2],
+			importedHistory[0],
+		]);
+	}));
+
+test("a native owner handoff and a native removal show in the deal's history", () =>
+	rolledBack(async () => {
+		await db.query(`update deal set owner_user_id = '${TEAMMATE}' where id = '${DEAL}';
+			insert into deal_party values ('${DEAL}', '${LENDERS[0]}', 'lender');
+			delete from deal_party where (deal_id, party_id) = ('${DEAL}', '${LENDERS[0]}')`);
+		const lender = { deal_id: DEAL, party_id: LENDERS[0], role: "lender" };
+		assert.deepEqual(
+			(await readDeal()).history
+				.slice(-3)
+				.map(
+					({ id: _, merge_of: __, ...change }: Record<string, unknown>) =>
+						change,
+				),
+			[
+				{
+					table_name: "deal",
+					record: { id: DEAL },
+					action: "update",
+					old_value: { owner_user_id: USER },
+					new_value: { owner_user_id: TEAMMATE },
+				},
+				{
+					table_name: "deal_party",
+					record: lender,
+					action: "insert",
+					old_value: null,
+					new_value: { ...lender, client_role: null },
+				},
+				{
+					table_name: "deal_party",
+					record: lender,
+					action: "delete",
+					old_value: { ...lender, client_role: null },
+					new_value: null,
+				},
+			],
+		);
+	}));
+
+test("a deal's people history lookup uses its own index", () =>
+	rolledBack(async () => {
+		await db.query("set local enable_seqscan = off");
+		const { rows } = await db.query(
+			`explain select * from change
+			where table_name = 'deal_party' and (record ->> 'deal_id')::uuid = $1`,
+			[DEAL],
+		);
+		assert.match(
+			rows.map((row) => row["QUERY PLAN"]).join("\n"),
+			/change_deal_party/,
+		);
+	}));
 
 for (const [rule, cases] of Object.entries(RULES))
 	test(rule, async () => {
@@ -7133,6 +7533,7 @@ test("a completed tour appears once on its deal even when it visits several prop
 					happened_at: "2026-04-02T15:00:00+00:00",
 					from_party_id: CLIENT,
 					summary: "Example two-property tour",
+					reached: null,
 					email: null,
 				},
 			],

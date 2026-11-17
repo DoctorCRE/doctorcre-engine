@@ -817,6 +817,7 @@ create table activity (
 	kind text not null check (kind in ('email', 'call', 'meeting', 'note')),
 	happened_at timestamptz not null,
 	from_party_id uuid references party,
+	reached boolean,
 	summary text,
 	unique (id, kind)
 );
@@ -941,11 +942,24 @@ create table next_step (
 	owner_party_id uuid references party,
 	due_on date,
 	done_at timestamptz,
+	resolution text check (resolution in ('done', 'cancelled', 'expired')),
+	resolved_at timestamptz,
+	resolution_reason text check (resolution_reason is null or btrim(resolution_reason) <> ''),
+	resolution_event_id uuid,
+	status text generated always as
+		(coalesce(resolution, case when done_at is not null then 'done' else 'open' end)) stored,
 	deal_id uuid references deal,
 	party_id uuid references party,
 	property_id uuid references property,
-	constraint next_step_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1)
+	constraint next_step_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
+	constraint next_step_done_time check (done_at is null or status = 'done'),
+	constraint next_step_resolution_time check (resolved_at is null or status in ('cancelled', 'expired')),
+	constraint next_step_cancellation_reason check ((status = 'cancelled') = (resolution_reason is not null)),
+	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
+
+create view home_next_step with (security_invoker = true) as
+	select * from next_step where status = 'open';
 
 -- Each user's own preferences. A user without a row has chosen nothing yet.
 create function is_time_zone(zone text) returns boolean
@@ -1562,55 +1576,6 @@ begin atomic
 			from document doc where doc.email_activity_id = e.activity_id
 		)) from email e where e.activity_id = a.id
 	));
-end;
-
-create function everything_about_deal(wanted uuid) returns jsonb
-language sql stable
-begin atomic
-	select jsonb_build_object(
-		'deal', to_jsonb(d),
-		'phases', (
-			select coalesce(jsonb_agg(to_jsonb(c) - 'deal_id' order by c.happened_at), '[]')
-			from deal_phase_change c
-			where c.deal_id = d.id
-		),
-		'properties', (
-			select coalesce(jsonb_agg(to_jsonb(p) order by p.address), '[]')
-			from deal_property dp join property p on p.id = dp.property_id
-			where dp.deal_id = d.id
-		),
-		'parties', (
-			select coalesce(jsonb_agg(to_jsonb(p) || jsonb_build_object('role', dp.role) order by dp.role, p.name), '[]')
-			from deal_party dp join party p on p.id = dp.party_id
-			where dp.deal_id = d.id
-		),
-		'offers', (
-			select coalesce(jsonb_agg(to_jsonb(o) - array['deal_id', 'import_source', 'import_id', 'import_record'] || jsonb_build_object('documents', (
-				select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
-				from offer_document od join document doc on doc.id = od.document_id
-				where od.offer_id = o.id
-			), 'claims', (
-				select coalesce(jsonb_agg(to_jsonb(c) - 'offer_id' order by c.claim_type), '[]')
-				from offer_claim c
-				where c.offer_id = o.id
-			)) order by o.round), '[]')
-			from offer o
-			where o.deal_id = d.id
-		),
-		'activity', (
-			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
-			from activity_about aa join activity a on a.id = aa.activity_id
-			where aa.deal_id = d.id
-		),
-		'next_steps', (
-			select coalesce(jsonb_agg(to_jsonb(s) - 'deal_id' - 'party_id' - 'property_id'
-				order by s.due_on nulls last, s.id), '[]')
-			from next_step s
-			where s.deal_id = d.id
-		)
-	)
-	from deal d
-	where d.id = wanted;
 end;
 
 -- "Account" alone means a national account (docs/glossary.md).
@@ -2326,6 +2291,7 @@ create table change (
 );
 
 create index change_record on change (table_name, record);
+create index change_deal_party on change (((record ->> 'deal_id')::uuid)) where table_name = 'deal_party';
 
 alter table invoice_email add foreign key (payment_change_id) references change;
 create index change_payment_invoice_date on change (record, id desc)
@@ -2531,6 +2497,77 @@ create index imported_change_record on imported_change (table_name, record);
 create trigger stamp_imported_change before insert on imported_change
  for each row execute function stamp_change();
 
+create function everything_about_deal(wanted uuid) returns jsonb
+language sql stable
+begin atomic
+	select jsonb_build_object(
+		'deal', to_jsonb(d),
+		'phases', (
+			select coalesce(jsonb_agg(to_jsonb(c) - 'deal_id' order by c.happened_at), '[]')
+			from deal_phase_change c
+			where c.deal_id = d.id
+		),
+		'properties', (
+			select coalesce(jsonb_agg(to_jsonb(p) order by p.address), '[]')
+			from deal_property dp join property p on p.id = dp.property_id
+			where dp.deal_id = d.id
+		),
+		'parties', (
+			select coalesce(jsonb_agg(to_jsonb(p) || jsonb_build_object('role', dp.role) order by dp.role, p.name), '[]')
+			from deal_party dp join party p on p.id = dp.party_id
+			where dp.deal_id = d.id
+		),
+		'offers', (
+			select coalesce(jsonb_agg(to_jsonb(o) - array['deal_id', 'import_source', 'import_id', 'import_record'] || jsonb_build_object('documents', (
+				select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
+				from offer_document od join document doc on doc.id = od.document_id
+				where od.offer_id = o.id
+			), 'claims', (
+				select coalesce(jsonb_agg(to_jsonb(c) - 'offer_id' order by c.claim_type), '[]')
+				from offer_claim c
+				where c.offer_id = o.id
+			)) order by o.round), '[]')
+			from offer o
+			where o.deal_id = d.id
+		),
+		'activity', (
+			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
+			from activity_about aa join activity a on a.id = aa.activity_id
+			where aa.deal_id = d.id
+		),
+		'next_steps', (
+			select coalesce(jsonb_agg(to_jsonb(s) - 'deal_id' - 'party_id' - 'property_id'
+				order by s.due_on nulls last, s.id), '[]')
+			from next_step s
+			where s.deal_id = d.id
+		),
+		'earlier_parties', (
+			select coalesce(jsonb_agg(to_jsonb(e) - 'deal_id' || jsonb_build_object('party', to_jsonb(p))
+				order by e.ended_at, e.id), '[]')
+			from imported_deal_party e join party p on p.id = e.party_id
+			where e.deal_id = d.id
+		),
+		'earlier_owners', (
+			select coalesce(jsonb_agg(to_jsonb(o) - 'deal_id' order by o.ended_at, o.id), '[]')
+			from imported_deal_owner o
+			where o.deal_id = d.id
+		),
+		'history', (
+			select coalesce(jsonb_agg(to_jsonb(c) order by c.changed_at, c.id), '[]')
+			from change c
+			where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
+				or c.table_name = 'deal_party' and (c.record ->> 'deal_id')::uuid = d.id
+		),
+		'imported_history', (
+			select coalesce(jsonb_agg(to_jsonb(c) order by c.changed_at, c.id), '[]')
+			from imported_change c
+			where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
+		)
+	)
+	from deal d
+	where d.id = wanted;
+end;
+
 create function everything_about_party(wanted uuid) returns jsonb
 language sql stable
 begin atomic
@@ -2726,9 +2763,13 @@ grant update (started_on, ended_on) on party_territory to engine;
 grant update (has_office, coverage, source) on party_territory_review to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
-grant update (what, owner_party_id, due_on, done_at) on next_step to engine;
+grant update (what, owner_party_id, due_on, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) on home_mark to engine;
+-- Only the owner's import supplies the old event that closed a step.
+revoke insert on next_step from engine;
+grant insert (id, created_at, what, owner_party_id, due_on, done_at, resolution, resolved_at,
+	resolution_reason, deal_id, party_id, property_id) on next_step to engine;
 -- Only the owner's import supplies provenance. A user's or job's new round has a known status.
 revoke insert on offer from engine;
 grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,
