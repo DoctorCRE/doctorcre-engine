@@ -8442,52 +8442,65 @@ test("an invoice cannot partly close a deal when its payment refuses the date", 
 	});
 });
 
-for (const [name, held, job, blocks] of [
-	[
-		"phase writers serialize with invoice application",
-		`insert into deal_phase_change values ('${DEAL}', '2026-03-21', 'legal', 'Example manual move')`,
-		false,
-		true,
-	],
-	[
-		"automatic invoice decisions do not lock unrelated parties",
-		`insert into party (kind, name) values ('company', 'Unrelated Example')`,
-		true,
-		false,
-	],
-] satisfies [string, string, boolean, boolean][]) {
-	test(name, async () => {
-		const holder = await connect();
-		const writer = await connect();
-		try {
-			await holder.query(`begin; ${held}`);
-			await writer.query(
-				`begin; ${INVOICE_SETUP}; ${invoiceEmail()}; ${job ? asJob("mail_capture") : asUser(USER)}`,
-			);
-			const { pid } = (await writer.query("select pg_backend_pid() as pid"))
-				.rows[0];
-			let settled = false;
-			const applying = writer.query(APPLY_INVOICE).finally(() => {
-				settled = true;
-			});
-			let blocked = false;
-			while (!settled && !blocked)
-				blocked = (
-					await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
-						pid,
-					])
-				).rows[0].blocked;
-			await holder.query("rollback");
-			await applying;
-			assert.equal(blocked, blocks);
-		} finally {
-			await holder.query("rollback");
-			await writer.query("rollback");
-			await holder.end();
-			await writer.end();
-		}
-	});
-}
+test("phase writers serialize with invoice application", async () => {
+	const holder = await connect();
+	const writer = await connect();
+	try {
+		await holder.query(
+			`begin; insert into deal_phase_change values ('${DEAL}', '2026-03-21', 'legal', 'Example manual move')`,
+		);
+		await writer.query(
+			`begin; ${INVOICE_SETUP}; ${invoiceEmail()}; ${asUser(USER)}`,
+		);
+		const { pid } = (await writer.query("select pg_backend_pid() as pid"))
+			.rows[0];
+		let settled = false;
+		const applying = writer.query(APPLY_INVOICE).finally(() => {
+			settled = true;
+		});
+		let blocked = false;
+		while (!settled && !blocked)
+			blocked = (
+				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [pid])
+			).rows[0].blocked;
+		await holder.query("rollback");
+		await applying;
+		assert.equal(blocked, true);
+	} finally {
+		await holder.query("rollback");
+		await writer.query("rollback");
+		await holder.end();
+		await writer.end();
+	}
+});
+
+test("automatic invoice decisions do not lock unrelated parties", async () => {
+	const invoice = await connect();
+	const unrelated = await connect();
+	try {
+		await invoice.query(
+			`begin; ${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`,
+		);
+		assert.equal(
+			(
+				await invoice.query(
+					`select status from invoice_email where id = '${INVOICE}'`,
+				)
+			).rows[0].status,
+			"applied",
+		);
+		await unrelated.query("begin; set local lock_timeout = '1s'");
+		const inserted = await unrelated.query(
+			`insert into party (kind, name) values ('company', 'Unrelated Example') returning name`,
+		);
+		assert.equal(inserted.rows[0].name, "Unrelated Example");
+	} finally {
+		await unrelated.query("rollback");
+		await invoice.query("rollback");
+		await unrelated.end();
+		await invoice.end();
+	}
+});
 
 for (const status of ["applied", "undone"]) {
 	test(`imported ${status} invoices require every undo reference`, () =>
