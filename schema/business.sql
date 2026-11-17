@@ -427,6 +427,32 @@ CREATE TABLE ops.deal_extraction_job (
     CONSTRAINT deal_extraction_job_content_hash_check CHECK ((content_hash ~ '^[0-9a-f]{64}$'::text))
 );
 
+CREATE TABLE ops.deal_space_search (
+    id uuid NOT NULL,
+    organization_tenant_id text NOT NULL,
+    deal_id uuid NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    name text NOT NULL,
+    status text NOT NULL,
+    criteria jsonb NOT NULL,
+    requirements text NOT NULL,
+    client_prefill_source jsonb,
+    last_run_at timestamp with time zone,
+    run_criteria jsonb,
+    result_property_ids jsonb DEFAULT '[]'::jsonb NOT NULL,
+    has_more boolean DEFAULT false NOT NULL,
+    next_cursor text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT deal_space_search_check CHECK (((last_run_at IS NULL) = (run_criteria IS NULL))),
+    CONSTRAINT deal_space_search_check1 CHECK (((last_run_at IS NOT NULL) OR ((result_property_ids = '[]'::jsonb) AND (NOT has_more) AND (next_cursor IS NULL)))),
+    CONSTRAINT deal_space_search_criteria_check CHECK ((jsonb_typeof(criteria) = 'object'::text)),
+    CONSTRAINT deal_space_search_name_check CHECK (((length(name) >= 1) AND (length(name) <= 240))),
+    CONSTRAINT deal_space_search_requirements_check CHECK ((length(requirements) <= 8000)),
+    CONSTRAINT deal_space_search_result_property_ids_check CHECK (((jsonb_typeof(result_property_ids) = 'array'::text) AND (jsonb_array_length(result_property_ids) <= 100))),
+    CONSTRAINT deal_space_search_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'saved'::text, 'archived'::text]))),
+    CONSTRAINT deal_space_search_version_check CHECK ((version > 0))
+);
+
 CREATE TABLE ops.home_inbox_disposition (
     actor_id uuid NOT NULL,
     item_id text NOT NULL,
@@ -3943,6 +3969,9 @@ ALTER TABLE ONLY ops.deal_document_text
 ALTER TABLE ONLY ops.deal_extraction_job
     ADD CONSTRAINT deal_extraction_job_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY ops.deal_space_search
+    ADD CONSTRAINT deal_space_search_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY ops.home_inbox_disposition
     ADD CONSTRAINT home_inbox_disposition_pkey PRIMARY KEY (actor_id, item_id);
 
@@ -4467,6 +4496,8 @@ CREATE INDEX deal_extraction_job_field ON ops.deal_extraction_job USING btree (o
 
 CREATE UNIQUE INDEX deal_extraction_job_identity ON ops.deal_extraction_job USING btree (organization_tenant_id, document_ref, content_hash, ((contract ->> 'extractor_version'::text)), ((contract ->> 'model'::text)));
 
+CREATE INDEX deal_space_search_deal ON ops.deal_space_search USING btree (organization_tenant_id, deal_id, updated_at DESC, id);
+
 CREATE INDEX home_inbox_disposition_v2_item_idx ON ops.home_inbox_disposition USING btree (actor_id, v2_item_id) WHERE (v2_item_id IS NOT NULL);
 
 CREATE INDEX requirement_upload_receipt_request ON ops.requirement_upload_receipt USING btree (request_id);
@@ -4790,6 +4821,9 @@ ALTER TABLE ONLY ops.deal_extraction_job
 
 ALTER TABLE ONLY ops.deal_extraction_job
     ADD CONSTRAINT deal_extraction_job_document_ref_fkey FOREIGN KEY (document_ref) REFERENCES public.attachment(id);
+
+ALTER TABLE ONLY ops.deal_space_search
+    ADD CONSTRAINT deal_space_search_deal_id_fkey FOREIGN KEY (deal_id) REFERENCES public.deal(id);
 
 ALTER TABLE ONLY ops.home_inbox_disposition
     ADD CONSTRAINT home_inbox_disposition_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES public.actor(id);

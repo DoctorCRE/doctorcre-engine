@@ -131,7 +131,6 @@ insert into public.commission (id, deal_id, status, gross_amount, created_at, up
  ('${id(70)}', '${id(30)}', 'expected', 1000, '2025-01-01', '2025-02-01', '${id(1)}');
 insert into public.commission (id, deal_id, status, gross_amount, received_on, created_at, updated_at, created_by) values
  ('${id(71)}', '${id(34)}', 'received', 500, '2025-04-01', '2025-03-02', '2025-04-01', '${id(1)}');
-create table ops.deal_space_search (id uuid primary key, deal_id uuid, name text, criteria jsonb, requirements text, status text, updated_at timestamptz);
 insert into public.space_search (id, client_id, deal_id, spec, created_by, created_at) values
  ('${id(80)}', '${id(20)}', '${id(30)}', '{"min_sf": 1000, "max_sf": 2000}', '${id(1)}', '2025-01-01');
 insert into public.deal_client_need (id, deal_id, vendor_id, description, applicability, source_ref, source_revision, observed_at, fresh_until,
