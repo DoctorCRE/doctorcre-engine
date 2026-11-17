@@ -31,7 +31,7 @@ const run = async (): Promise<pg.QueryResultRow[]> => {
 const reasons = (report: pg.QueryResultRow[], n: number) =>
 	report.filter((r) => r.old_id === id(n)).map((r) => r.reason);
 let report: pg.QueryResultRow[];
-const search = (n: number, spec: object, deal = id(10)) =>
+const search = (n: number, spec: object, deal: string | null = id(10)) =>
 	db.query(
 		`insert into public.space_search (id, client_id, deal_id, spec, created_by, created_at) values ($1,$2,$3,$4,$5,'2025-01-01')`,
 		[id(n), id(3), deal, JSON.stringify(spec), id(1)],
@@ -88,10 +88,8 @@ before(async () => {
 	await search(104, { cities: ["Example City"], states: ["ZZ"] });
 	await search(105, { cities: ["Example City"] });
 	await search(106, { min_sf: 2000, max_sf: 1000 });
-	await search(107, { min_sf: "invalid" });
-	await db.query(
-		`update public.space_search set deal_id = null where id = '${id(107)}'`,
-	);
+	await search(107, { min_sf: "invalid" }, null);
+	await search(108, { max_sf: 1500 }, null);
 	// biome-ignore format: the complete archived filter is one fixture
 	await saved(200,{counties:["Example County"],property_types:["office"],min_square_feet:1200},"archived");
 	await saved(201, { query: "near hospital" });
@@ -99,7 +97,9 @@ before(async () => {
 	await saved(203, {}, "draft");
 	await db.query("begin");
 	await db.query(`create temp table copy_space_need_county (source_table text, old_id uuid, county_fips text) on commit drop;
- insert into copy_space_need_county values ('space_search','${id(101)}','99001'),('space_search','${id(101)}','99003'),('ops.deal_space_search','${id(200)}','99001'),('ops.deal_space_search','${id(200)}','99003'),('space_search','${id(104)}','99001');`);
+ insert into copy_space_need_county values ('space_search','${id(101)}','99001'),('space_search','${id(101)}','99003'),('ops.deal_space_search','${id(200)}','99001'),('ops.deal_space_search','${id(200)}','99003'),('space_search','${id(104)}','99001');
+ create temp table copy_space_need_deal (old_id uuid, deal_id uuid) on commit drop;
+ insert into copy_space_need_deal values ('${id(108)}','${id(10)}'),('${id(108)}','${id(10)}');`);
 	report = await run();
 	await db.query("commit");
 });
@@ -112,6 +112,7 @@ test("searches keep bounds, unspecified filters and source authors; archived nee
 	assert.deepEqual((await rows("select id,deal_id,name,min_sf,max_sf,max_rate_sf_yr,space_type,market_id,must_haves from space_need where id < '00000000-0000-4000-8000-000000000300' order by id")).map(Object.values), [
  [id(100),id(11),"Space need","1000.0","2000.0","0.00","office",null,null],
  [id(101),id(11),"Space need",null,"3000.0",null,null,null,null],
+ [id(108),id(11),"Space need",null,"1500.0",null,null,null,null],
  [id(200),id(11),"Example search","1200.0",null,null,"office",id(20),"Near transit"]]);
 	assert.deepEqual(
 		await rows(
@@ -140,7 +141,7 @@ test("only confirmed current allowed needs copy, with vendor provenance and appr
 	assert.deepEqual((await rows(`select action,changed_by_user_id,changed_at::text from change where table_name='space_need' and record->>'id'='${id(300)}' order by id`)).map(Object.values), [["insert",id(1),"2025-01-01 00:00:00+00"],["update",id(1),"2025-01-02 00:00:00+00"]]);
 	assert.equal(
 		(await rows("select count(*)::int as count from space_need"))[0]?.count,
-		4,
+		5,
 	);
 	for (const [i, reason] of [
 		"pending_confirmation",
@@ -267,6 +268,37 @@ test("client assertions credit their creator and wait only when observed after a
 		assert.deepEqual((await rows(`select record->>'id',action,changed_by_user_id,changed_by_job from change where table_name='space_need' and record->>'id'>='${id(600)}' order by id`)).map(Object.values), [[id(600),"insert",null,"agent"],[id(600),"update",id(1),null],[id(602),"insert",id(1),null],[id(602),"update",id(1),null]]);
 		// biome-ignore format: one row per copied need
 		assert.deepEqual((await rows(`select id,changed_by_user_id from space_need where id >= '${id(600)}' order by id`)).map(Object.values), [[id(600),id(1)],[id(602),id(1)]]);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("a reviewed deal must be one the search's client already has, chosen once; other checks still apply", async () => {
+	await db.query("begin; select set_config('engine.job','old_system',true)");
+	try {
+		await db.query(`insert into public.party (id,kind,name,created_by,updated_by) values ('${id(9)}','org','Other Example','${id(1)}','${id(1)}');
+ insert into public.client (id,party_id,created_by,updated_by) values ('${id(4)}','${id(9)}','${id(1)}','${id(1)}');
+ insert into public.deal (id,client_id,name,deal_type,phase,created_by,updated_by) values ('${id(12)}','${id(3)}','Uncopied deal','lease','closed','${id(1)}','${id(1)}'), ('${id(13)}','${id(4)}','Other client deal','lease','closed','${id(1)}','${id(1)}');`);
+		const specs: Record<number, object> = {
+			704: { sub_types: ["office", "retail"] },
+			706: { cities: ["Example City"] },
+		};
+		for (let n = 700; n <= 706; n++)
+			await search(n, specs[n] ?? {}, n === 703 ? id(10) : null);
+		await saved(707, {}, "draft");
+		// biome-ignore format: one reviewed choice per row
+		const choices: [number, number][] = [[700,10],[700,12],[701,99],[702,13],[703,12],[704,10],[705,12],[706,10],[707,10]];
+		await db.query(
+			`create temp table copy_space_need_deal (old_id uuid, deal_id uuid) on commit drop; insert into copy_space_need_deal values ${choices.map(([old, deal]) => `('${id(old)}','${id(deal)}')`).join()};`,
+		);
+		const result = await run();
+		// biome-ignore format: source ids and exact refusal reasons
+		for (const [n, expected] of [[700,["deal_choice_conflicts"]],[701,["deal_choice_not_found"]],[702,["deal_choice_client_differs"]],[703,["deal_choice_conflicts"]],[704,["incomplete_search","types_need_correction"]],[705,["deal_not_copied"]],[706,["geography_needs_correction"]],[707,["draft_needs_confirmation"]]] satisfies [number,string[]][])
+			assert.deepEqual(reasons(result, n).sort(), expected.sort());
+		assert.deepEqual(
+			await rows(`select id from space_need where id >= '${id(700)}'`),
+			[],
+		);
 	} finally {
 		await db.query("rollback");
 	}

@@ -1,21 +1,28 @@
 -- Run in a separate owner transaction after copy-attribution.sql, copy-markets.sql, copy-deals.sql and copy-vendors.sql.
 -- pg_temp.copy_space_need_county supplies complete, owner-reviewed county sets, keyed by source table and old id.
+-- pg_temp.copy_space_need_deal supplies the old deal a partner reviewed for a client-only space_search.
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 create temp table if not exists copy_space_need_county (
  source_table text not null, old_id uuid not null, county_fips text not null
 ) on commit drop;
+create temp table if not exists copy_space_need_deal (old_id uuid not null, deal_id uuid not null) on commit drop;
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 alter table space_need disable trigger stamp_change;
 alter table space_need disable trigger record_change;
 
 create temp table old_need on commit drop as
-select 'space_search'::text as source_table, s.id, s.deal_id as old_deal_id, 'Space need'::text as name,
+select 'space_search'::text as source_table, s.id, coalesce(s.deal_id, choice.deal_id) as old_deal_id, 'Space need'::text as name,
  s.created_at, s.created_at as updated_at, s.created_by as author_id, s.created_by as creator_id, s.spec as criteria,
  s.spec -> 'min_sf' as minimum, s.spec -> 'max_sf' as maximum, s.spec -> 'max_rate_sf_yr' as rate,
  s.spec -> 'sub_types' as types, null::text as must_haves, null::uuid as vendor_id,
  null::text as source_ref, null::text as source_revision, null::text as applicability, null::jsonb as approval,
- null::text as refusal
+ case when choice.deals > 1 or s.deal_id <> choice.deal_id then 'deal_choice_conflicts'
+ when choice.deals = 1 and chosen.id is null then 'deal_choice_not_found'
+ when chosen.client_id <> s.client_id then 'deal_choice_client_differs' end as refusal
 from public.space_search s
+cross join lateral (select count(distinct c.deal_id) as deals, min(c.deal_id::text)::uuid as deal_id
+ from pg_temp.copy_space_need_deal c where c.old_id = s.id) choice
+left join public.deal chosen on chosen.id = choice.deal_id
 union all
 select 'ops.deal_space_search', s.id, s.deal_id, s.name, s.updated_at, s.updated_at, null, null, s.criteria,
  s.criteria -> 'min_square_feet', s.criteria -> 'max_square_feet', null, s.criteria -> 'property_types',
