@@ -1145,6 +1145,7 @@ test("directory reads match when only their clocks and correlation ids differ, a
 			`${c1} different`,
 			`${c2} different`,
 			`${v1} different`,
+			"vendor markets different",
 			`activity ${c1} different`,
 			`activity ${c2} different`,
 			`activity ${v1} different`,
@@ -1158,8 +1159,8 @@ test("directory reads match when only their clocks and correlation ids differ, a
 				"differences: field path, kind, records, first record IDs",
 				`clients\\.rows\\[\\]\\.city  value differs  1  ${c1}`,
 				`vendors\\.rows\\[\\]\\.relationship\\.recent_entries\\[\\]\\.summary  value differs  1  ${entry}`,
-				"markets\\.markets\\[\\]\\.boundary  value differs  1  north-1",
-				`markets\\.markets\\[\\]\\.memberships\\[\\]\\.service_coverage  value differs  1  ${member}`,
+				"markets\\.markets\\[\\]\\.boundary  value differs  2  north-1",
+				`markets\\.markets\\[\\]\\.memberships\\[\\]\\.service_coverage  value differs  2  ${member}`,
 				`network\\.nodes\\[\\]\\.name  value differs  1  ${node}`,
 				`network\\.edges\\[\\]\\.summary  value differs  1  link:${node}`,
 				`network\\.referrals\\[\\]\\.win_rate  value differs  1  party:${node}`,
@@ -1419,4 +1420,111 @@ test("compares filtered client fit, Search activity at 20 and the cursorless fir
 	);
 	assert.equal(exitCode(run), 1);
 	assert.ok(!report("made-up", run).includes("Made-up Search"));
+});
+
+test("samples each app filter once from old first answers, and compares the filtered answers without printing arguments", async () => {
+	const expected: Ask[] = [
+		{ read: "board", workspace: "all", account_client_id: c1 },
+		{ read: "client fit", vertical: "Made-up Fit" },
+		{ read: "client fit", city: "Made-up Fit City" },
+		{ read: "territory", vertical: "Made-up Specialty" },
+		{ read: "territory", city: "Made-up Territory City" },
+		{ read: "territory", state: "ZX" },
+		{ read: "vendor markets", market: "made-up-market" },
+	];
+	const added = (ask: Ask) =>
+		expected.some((e) => JSON.stringify(e) === JSON.stringify(ask));
+	const old = (ask: Ask) => {
+		switch (ask.read) {
+			case "board":
+				return {
+					...board(),
+					accounts: [
+						{ account_client_id: null },
+						{ account_client_id: c1 },
+						{ account_client_id: c2 },
+					],
+				};
+			case "client fit":
+				return {
+					profiles: [
+						{ vertical: null, city: " " },
+						{ vertical: "Made-up Fit", city: "Made-up Fit City", state: "ZZ" },
+					],
+				};
+			case "lead board":
+				return workspace([leadRow(l1, { specialty: "Made-up Specialty" })]);
+			case "territory":
+				return {
+					submarkets: [
+						{ city: null, state: "" },
+						{ city: "Made-up Territory City", state: "ZX" },
+					],
+				};
+			case "vendor markets":
+				return {
+					markets: [
+						{ slug: "" },
+						{ slug: "made-up-market" },
+						{ slug: "another-market" },
+					],
+				};
+			default:
+				return answer(ask);
+		}
+	};
+	const { run } = await runWith(
+		(ask) => (added(ask) ? { ...old(ask), changed: true } : old(ask)),
+		old,
+	);
+	assert.deepEqual(
+		run.outcomes.filter((o) => added(o.ask)).map((o) => o.ask),
+		expected,
+	);
+	assert.ok(
+		run.outcomes
+			.filter((o) => added(o.ask))
+			.every((o) => o.result === "different"),
+	);
+	const text = report("made-up", run);
+	assert.doesNotMatch(text, /Made-up|made-up-market|another-market|ZX/);
+});
+
+test("missing or malformed old samples add no filter asks, even when the engine has samples", async () => {
+	const engine = (ask: Ask) => {
+		switch (ask.read) {
+			case "board":
+				return { ...board(), accounts: [{ account_client_id: c1 }] };
+			case "client fit":
+				return { profiles: [{ vertical: "Made-up", city: "Made-up" }] };
+			case "lead board":
+				return workspace([leadRow(l1, { specialty: "Made-up" })]);
+			case "territory":
+				return { submarkets: [{ city: "Made-up", state: "ZX" }] };
+			case "vendor markets":
+				return { markets: [{ slug: "made-up" }] };
+			default:
+				return answer(ask);
+		}
+	};
+	const { run } = await runWith(engine);
+	assert.equal(run.outcomes.length, 30);
+	const malformed = (ask: Ask) =>
+		[
+			"board",
+			"client fit",
+			"lead board",
+			"territory",
+			"vendor markets",
+		].includes(ask.read)
+			? {
+					accounts: [{ account_client_id: "invalid" }],
+					profiles: null,
+					leads: [{ specialty: 7 }],
+					submarkets: [{ city: " ", state: false }],
+					markets: [null, { slug: 7 }],
+				}
+			: answer(ask);
+	const invalid = await runWith(engine, malformed);
+	assert.equal(invalid.run.outcomes.length, 25);
 });

@@ -124,6 +124,9 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 		case "board":
 			return mirrored("/deals", "deal-room-board", {
 				workspace: ask.workspace,
+				...(ask.account_client_id !== undefined && {
+					account_client_id: ask.account_client_id,
+				}),
 			});
 		case "deal":
 			return {
@@ -131,11 +134,11 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 				call: { name: "get-deal-room", arguments: { deal: ask.deal } },
 			};
 		case "client fit":
-			return mirrored(
-				"/client-fit",
-				"ideal-client-profile",
-				ask.state === undefined ? {} : { state: ask.state },
-			);
+			return mirrored("/client-fit", "ideal-client-profile", {
+				...(ask.state !== undefined && { state: ask.state }),
+				...(ask.vertical !== undefined && { vertical: ask.vertical }),
+				...(ask.city !== undefined && { city: ask.city }),
+			});
 		case "capture queue":
 			return mirrored("/capture-queue", "capture-queue");
 		case "find":
@@ -145,7 +148,11 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 		case "quiet follow-ups":
 			return mirrored("/quiet-follow-ups", "quiet-follow-ups");
 		case "territory":
-			return mirrored("/territory-state-board", "territory-state-board");
+			return mirrored("/territory-state-board", "territory-state-board", {
+				...(ask.vertical !== undefined && { vertical: ask.vertical }),
+				...(ask.city !== undefined && { city: ask.city }),
+				...(ask.state !== undefined && { state: ask.state }),
+			});
 		case "reasons to reach out":
 			return reasonsPage();
 		case "invoices":
@@ -164,7 +171,11 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 				`/vendors/${encodeURIComponent(ask.vendor)}?contract=vendor-directory.v2`,
 			);
 		case "vendor markets":
-			return mirrored("/vendor-markets", "read-vendor-markets-v1");
+			return mirrored(
+				"/vendor-markets",
+				"read-vendor-markets-v1",
+				ask.market === undefined ? {} : { market: ask.market },
+			);
 		case "relationships":
 			return business("/relationships?contract=relationship-network.v1");
 		case "recent activity":

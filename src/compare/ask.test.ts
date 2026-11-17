@@ -767,3 +767,47 @@ test("compares just the cursorless first feed page even when it is full", async 
 		);
 	}
 });
+
+test("mirrors each app filter in engine query text and old tool arguments", async () => {
+	const cases: { ask: Ask; path: string; name: string; args: object }[] = [
+		{
+			ask: { read: "board", workspace: "all", account_client_id: client },
+			path: "/deals",
+			name: "deal-room-board",
+			args: { workspace: "all", account_client_id: client },
+		},
+		...["vertical", "city"].map((field) => ({
+			ask: { read: "client fit", [field]: "Made-up & 50%" } as const,
+			path: "/client-fit",
+			name: "ideal-client-profile",
+			args: { [field]: "Made-up & 50%" },
+		})),
+		...["vertical", "city", "state"].map((field) => ({
+			ask: { read: "territory", [field]: "Made-up & 50%" } as const,
+			path: "/territory-state-board",
+			name: "territory-state-board",
+			args: { [field]: "Made-up & 50%" },
+		})),
+		{
+			ask: { read: "vendor markets", market: "made-up-market" },
+			path: "/vendor-markets",
+			name: "read-vendor-markets-v1",
+			args: { market: "made-up-market" },
+		},
+	];
+	for (const { ask, path, name, args } of cases) {
+		const engine = fake(() => json({}));
+		const old = fake(() => content({}));
+		await engine.askEngine(ask);
+		await old.askOld(ask);
+		assert.equal(engine.sent[0]?.url.pathname, `/compare/joe/engine${path}`);
+		assert.deepEqual(
+			Object.fromEntries(engine.sent[0]?.url.searchParams ?? []),
+			args,
+		);
+		assert.deepEqual(
+			old.sent.map((s) => called(s.url)),
+			[{ name, arguments: args }],
+		);
+	}
+});
