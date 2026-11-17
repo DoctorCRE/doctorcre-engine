@@ -390,15 +390,24 @@ Today's `critical_date` rows keep their kinds, dates, sources and notes. `option
 
 ## Copying today's leases
 
-`schema/copy-leases.sql` runs after the deal copy, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public`, and ends with its `not_copied` list.
+`schema/copy-leases.sql` runs after the deal copy and the building copy, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public`, and ends with its `not_copied` list.
 
 - Each chain of old rows, where an amendment names the row it supersedes, becomes one lease. The lease keeps its first row's id and creation time, and each version keeps its own row's id and author, so a repeat leaves copied versions alone and adds only amendments not yet copied.
-- A lease names its deal when it has one, its client through the party map, and the one building its premises reach after building merges. On a deal, that client and building must already be on the copied deal. A lease negotiated elsewhere copies its building as a property.
+- A lease names its deal when it has one, its client through the party map, and the one building its premises reach after building merges. On a deal, that client and building must already be on the copied deal. Otherwise the building copy must have made it a property; until then the lease waits as `property_not_copied`.
 - A version needs its exact expiration and its stored source file. The file becomes a document in bucket `deal_documents` with its name, key, type, hash and size. It is not yet filed to a deal; the deal-file copy files it with its kind. A version that cannot copy holds back the later ones in its chain, listed as `earlier_version_not_copied`.
 - Executed and commencement dates copy only when known. Rent copies when quoted per square foot and small enough for its column; a gross or larger quote, TI, the escalator and the options note keep their wording in `other_terms`. No option row, escalation or rent start is inferred. Each options note is also listed as `option_terms_unparsed`, for a partner to enter each option with its notice date.
 - The evidence kind, reference and source wording, and a legacy-unverified status, have no column, so each copied version lists them. So does a lease whose deal or tenant is not copied, a deal with several chains, a tenant who is not the deal's client, a building that is missing, several, not on the deal or lost in a merge loop, a version that changes its lease's deal, tenant or building, two amendments of one row, a lease or version id the new database holds for something else, a version number the new lease already holds, a missing, deleted or incomplete file, a file whose key holds different bytes, size or type, dates out of order, and a row whose chain has no first row.
 - Today's renewal deals name no source lease, so this copy links none; the deal copy lists them as `renewal_without_lease`.
-- Each copied version links the suites its premises cover in its lease's building; a version a lease refusal holds back links none. Only spaces a copied lease covers become suites, each in its building's surviving property with its id, creation time, floor, area, area basis and condition. Its label is trimmed, and a blank one stays unknown. A label another space or suite in the same building already uses, and an id the new database holds in another building, are listed; the link waits as `suite_not_copied`, and a later run adds it once its suite copies.
+- Each copied version links the suites its premises cover in its lease's building; a version a lease refusal holds back links none. A space the building copy has not made a suite there, including one that copy lists, waits as `suite_not_copied`, and a later run adds the link once its suite copies.
+
+## Copying today's buildings, suites and owners
+
+`schema/copy-buildings.sql` runs after the party copy and before the lease copy, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public`, and ends with its `not_copied` list. It is the one place today's spaces become suites, so the lease copy only links them.
+
+- A building that has a space or an owner, after building merges, becomes a property with its id and full address, as the deal copy makes one. A building with neither is not copied. Fields with no destination are listed as `unmapped_building_fields`.
+- Every space becomes a suite in its building's surviving property with its id, creation time, floor, area, area basis and condition. Its label is trimmed, and a blank one stays unknown. A label another space or suite in the same building uses, an id the new database holds in another building, and a building lost in a merge loop are listed.
+- Every ownership becomes a `building_ownership` row with its id, creation time, kind and source, its party through the party map, and `from_on` and `to_on` as its start and end. Unknown dates stay unknown, and joint owners stay separate rows. A party not copied, a building lost in a merge loop, an end before its start, a blank source, and two links with the same property, party, kind and start, after merges, are listed. So is an id the new database holds for another link.
+- A repeat leaves copied suites and links as users left them, and adds only rows corrected since.
 
 ## Copying today's critical dates
 
