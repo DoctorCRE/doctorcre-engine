@@ -45,11 +45,15 @@ from (
 
 create temp table mapped_activity on commit drop as
 select a.*, case when a.is_mail then null else m.kind end as kind,
- nullif(concat_ws(E'\n\n', case when a.summary ~ '\S' then a.summary end,
+ nullif(concat_ws(E'\n\n', case when m.keeps_word then k.label end, case when a.summary ~ '\S' then a.summary end,
   case when a.detail ~ '\S' and a.detail is not json object then a.detail end), '') as text,
  exists (select from old_link l where l.id = a.id and (l.deal_id is not null or l.party_id is not null)) as is_about
 from old_activity a
-left join (values ('call', 'call'), ('meeting', 'meeting'), ('tour', 'meeting'), ('note', 'note')) m(old_kind, kind) using (old_kind);
+left join (values ('call', 'call', false), ('meeting', 'meeting', false), ('tour', 'meeting', false), ('note', 'note', false),
+ ('text', 'note', true), ('analysis', 'note', true), ('loi', 'note', true),
+ ('counter_sent', 'note', true), ('counter_received', 'note', true), ('lease_signed', 'note', true)) m(old_kind, kind, keeps_word) using (old_kind)
+-- A kind with no place of its own becomes a note that opens with its old label, so the partners' word survives.
+left join public.activity_kind k on k.slug = a.old_kind;
 
 insert into not_copied select a.id, f.field, f.value, f.reason from mapped_activity a cross join lateral (values
  ('kind', a.old_kind, 'later_copy_365', a.is_mail),
