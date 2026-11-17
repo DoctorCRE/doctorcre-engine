@@ -250,7 +250,7 @@ test("unmapped vendors, approval conflicts, blank text and source collisions wai
 	}
 });
 
-test("client assertions credit their creator and wait when observed after approval", async () => {
+test("client assertions credit their creator and wait only when observed after approval", async () => {
 	await db.query("begin; select set_config('engine.job','old_system',true)");
 	try {
 		await db.query(
@@ -258,17 +258,14 @@ test("client assertions credit their creator and wait when observed after approv
 		);
 		await need(600, { created_by: id(5) });
 		await need(601, { observed_at: "2025-01-03" });
+		await need(602, { observed_at: "2025-01-02" });
 		const result = await run();
-		assert.deepEqual(reasons(result, 600), []);
 		assert.deepEqual(reasons(result, 601), ["observed_after_approval"]);
+		assert.deepEqual(reasons(result, 602), []);
 		// biome-ignore format: one row per history event
-		assert.deepEqual((await rows(`select action,changed_by_user_id,changed_by_job from change where table_name='space_need' and record->>'id'='${id(600)}' order by id`)).map(Object.values), [["insert",null,"agent"],["update",id(1),null]]);
-		assert.deepEqual(
-			await rows(
-				`select changed_by_user_id from space_need where id >= '${id(600)}'`,
-			),
-			[{ changed_by_user_id: id(1) }],
-		);
+		assert.deepEqual((await rows(`select record->>'id',action,changed_by_user_id,changed_by_job from change where table_name='space_need' and record->>'id'>='${id(600)}' order by id`)).map(Object.values), [[id(600),"insert",null,"agent"],[id(600),"update",id(1),null],[id(602),"insert",id(1),null],[id(602),"update",id(1),null]]);
+		// biome-ignore format: one row per copied need
+		assert.deepEqual((await rows(`select id,changed_by_user_id from space_need where id >= '${id(600)}' order by id`)).map(Object.values), [[id(600),id(1)],[id(602),id(1)]]);
 	} finally {
 		await db.query("rollback");
 	}
