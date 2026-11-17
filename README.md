@@ -10,8 +10,8 @@ When builders run checks concurrently, give each check its own server. Separate
 databases on one server still share its connection limit (#322).
 
 This block needs Docker. If `docker` is missing, the single shared-server check below still works.
-A 2 GB Docker VM can OOM-kill PostgreSQL during concurrent checks.
-Increase the VM memory before running several checks together (this machine uses Colima).
+Concurrent checks need an 8 GB Docker VM. With Colima stopped, use
+`colima start --cpu 6 --memory 8`. A 2 GB VM can OOM-kill PostgreSQL under this load.
 
 With Docker running, paste this block from the worktree to run a check on its own
 throwaway server. Docker chooses a free loopback port. The subshell stops only
@@ -21,8 +21,7 @@ its own container when the check exits, including on failure or interruption.
 (
 	set -eu
 	postgres=$(docker run -d -p 127.0.0.1::5432 \
-		-e POSTGRES_HOST_AUTH_METHOD=trust postgres:18 \
-		-c max_locks_per_transaction=256)
+		-e POSTGRES_HOST_AUTH_METHOD=trust postgres:18)
 	trap 'docker rm -f "$postgres" >/dev/null' EXIT
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
@@ -43,7 +42,7 @@ its own container when the check exits, including on failure or interruption.
 ```
 
 The readiness probe uses TCP because the image's initialization server accepts
-only Unix sockets. The larger lock table fits concurrent schema changes in the tests.
+only Unix sockets. Each container has its own connection and lock limits.
 See Docker's [port publishing documentation](https://docs.docker.com/engine/network/port-publishing/).
 
 For a single check on an existing local throwaway server, `TEST_DATABASE_URL`
