@@ -282,7 +282,7 @@ insert into public.vendor_market_membership
 (market_slug, vendor_id, office_presence, service_coverage, source, reviewed_by, reviewed_at)
 values ('example-bay', '${id(6)}', true, null, 'Example review', '${id(8)}', '2024-02-01');`;
 
-test("merged vendors with agreeing evidence keep one review from the earliest old membership", async () => {
+test("merged vendors with agreeing evidence keep the latest review at the same vendor rank", async () => {
 	await db.query(`begin; ${mergedVendor}`);
 	try {
 		await run(counties);
@@ -301,10 +301,10 @@ join territory t on t.id = p.territory_id where t.name = 'Example Bay'`),
 					has_office: true,
 					coverage: null,
 					source: "Example review",
-					reviewed_by_user_id: null,
-					reviewed_by_job: "agent",
+					reviewed_by_user_id: id(1),
+					reviewed_by_job: null,
 					reviewed_for_user_id: null,
-					reviewed_at: "2024-02-01 00:00:00+00",
+					reviewed_at: "2025-03-01 00:00:00+00",
 					started_on: null,
 				},
 			],
@@ -314,6 +314,39 @@ join territory t on t.id = p.territory_id where t.name = 'Example Bay'`),
 	}
 });
 
+for (const hidden of ["vendor", "party"] as const) {
+	for (const time of ["2024-02-01", "2026-02-01"]) {
+		test(`an agreeing review on a merged-away ${hidden} at ${time} follows the visible survivor`, async () => {
+			await db.query(`begin; ${mergedVendor}
+insert into party (id, kind, name) values ('${id(3)}', 'company', 'Example survivor');
+update outside_id set party_id = '${id(3)}' where source = 'old_system';
+update public.${hidden} set merged_into = '${id(hidden === "vendor" ? 4 : 3)}'
+where id = '${id(hidden === "vendor" ? 6 : 5)}';
+update public.vendor_market_membership set reviewed_at = '${time}' where vendor_id = '${id(6)}';`);
+			try {
+				const visible =
+					await rows(`select m.reviewed_by as reviewed_by_user_id, m.reviewed_at::text
+from public.vendor_market_membership m
+join public.vendor v on v.id = m.vendor_id and v.merged_into is null
+join public.party p on p.id = v.party_id and p.merged_into is null and p.deleted_at is null
+where m.market_slug = 'example-bay'`);
+				assert.deepEqual(visible, [
+					{ reviewed_by_user_id: id(1), reviewed_at: "2025-03-01 00:00:00+00" },
+				]);
+				await run(counties);
+				assert.deepEqual(
+					await rows(`select r.reviewed_by_user_id, r.reviewed_at::text
+from party_territory_review r join party_territory p on p.id = r.party_territory_id
+join territory t on t.id = p.territory_id where t.name = 'Example Bay'`),
+					visible,
+				);
+			} finally {
+				await db.query("rollback");
+			}
+		});
+	}
+}
+
 test("merged reviews that disagree on office, coverage or source are all listed for correction", async () => {
 	for (const evidence of [
 		"office_presence = false",
@@ -321,6 +354,7 @@ test("merged reviews that disagree on office, coverage or source are all listed 
 		"source = 'Different source'",
 	]) {
 		await db.query(`begin; ${mergedVendor}
+update public.vendor set merged_into = '${id(4)}' where id = '${id(6)}';
 update public.vendor_market_membership set service_coverage = 'Example coverage' where market_slug = 'example-bay';
 update public.vendor_market_membership set ${evidence} where vendor_id = '${id(6)}';`);
 		try {
@@ -382,13 +416,13 @@ where t.name = 'Example Bay'`),
 			membership,
 		);
 		assert.deepEqual(
-			await rows(`select r.reviewed_by_user_id, r.reviewed_at::text
+			await rows(`select r.reviewed_by_job, r.reviewed_at::text
 from party_territory_review r join party_territory p on p.id = r.party_territory_id
 join territory t on t.id = p.territory_id where t.name = 'Example Bay'`),
 			[
 				{
-					reviewed_by_user_id: id(1),
-					reviewed_at: "2025-03-01 00:00:00+00",
+					reviewed_by_job: "agent",
+					reviewed_at: "2026-01-01 00:00:00+00",
 				},
 			],
 		);

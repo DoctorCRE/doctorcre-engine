@@ -59,7 +59,7 @@ select territory_id, id, reviewed_at, reviewed_at, changed_by_user_id, changed_b
 from old_market where refusal is null and not copied on conflict do nothing;
 
 create temp table old_membership on commit drop as
-select v.vendor_id, v.market_slug, v.office_presence, v.service_coverage, v.source, v.reviewed_at, o.party_id, m.territory_id, m.refusal, a.*
+select v.vendor_id, v.market_slug, v.office_presence, v.service_coverage, v.source, v.reviewed_at, vendor.merged_into, vendor.party_id as old_party_id, o.party_id, m.territory_id, m.refusal, a.*
 from public.vendor_market_membership v join old_market m on m.slug = v.market_slug
 join public.vendor vendor on vendor.id = v.vendor_id
 left join outside_id o on o.source = 'old_system' and o.value = vendor.party_id::text
@@ -79,7 +79,8 @@ select distinct on (m.party_id, m.territory_id) m.*,
  and (other.office_presence, other.service_coverage, other.source)
  is distinct from (m.office_presence, m.service_coverage, m.source)) as disagrees
 from old_membership m
-order by m.party_id, m.territory_id, m.reviewed_at, m.vendor_id;
+order by m.party_id, m.territory_id, m.merged_into is not null, m.old_party_id <> m.party_id,
+ m.reviewed_at desc, m.vendor_id;
 insert into party_territory_review (party_territory_id, has_office, coverage, source,
  reviewed_by_user_id, reviewed_by_job, reviewed_for_user_id, reviewed_at,
  created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
