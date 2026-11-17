@@ -80,8 +80,8 @@ insert into not_copied
 select d.id, f.field, f.value, f.reason from old_deal d join deal n on n.id = d.id
 cross join lateral (values
  ('deal_type', d.deal_type, 'renewal_without_lease', d.deal_type = 'renewal'),
- ('market', d.typed_market, 'unknown_market', d.typed_market is not null and d.market_id is null),
- ('won_value', d.won_value::text, 'nonpositive_value', d.won_value <= 0)) f(field, value, reason, refused)
+ ('market', d.typed_market, 'unknown_market', d.typed_market is not null and n.market_id is null),
+ ('won_value', d.won_value::text, 'nonpositive_value', d.won_value is not null and n.closed_value is null)) f(field, value, reason, refused)
 where f.refused;
 
 -- Only a copy leaves a parked deal without its parker; the engine's own parking always names one.

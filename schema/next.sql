@@ -2067,7 +2067,8 @@ create unique index invoice_email_one_application on invoice_email (deal_id, pay
 
 create view deal_invoiced as
 select deal_id, min(invoiced_on) as invoiced_on
-from (select deal_id, invoiced_on from commission_payment union all select deal_id, invoiced_on from imported_deal_invoiced) dated
+from (select deal_id, invoiced_on from commission_payment where invoiced_on is not null
+	union all select deal_id, invoiced_on from imported_deal_invoiced) dated
 group by deal_id;
 
 create function invoice_name(value text) returns text
@@ -2790,7 +2791,7 @@ revoke insert on app_user, job from engine;
 revoke insert on merged_party from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change, imported_change from engine;
--- The old system's earlier people, owners and invoiced dates are corrected there and copied again.
+-- Only the owner's copy adds the old system's earlier people, owners and invoiced dates.
 revoke insert on imported_deal_party, imported_deal_owner, imported_deal_invoiced from engine;
 -- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
 revoke execute on function record_change from public;
