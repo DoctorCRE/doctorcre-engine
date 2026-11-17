@@ -87,7 +87,7 @@ select p.id, m.office_presence, m.service_coverage, m.source,
  m.changed_by_user_id, m.changed_by_job, m.changed_for_user_id, m.reviewed_at,
  m.reviewed_at, m.reviewed_at, m.changed_by_user_id, m.changed_by_job, m.changed_for_user_id
 from old_membership_review m join party_territory p
- on p.id = md5('old_system:market_membership:' || m.market_slug || ':' || m.vendor_id)::uuid
+ on p.party_id = m.party_id and p.territory_id = m.territory_id and p.started_on is null
 where not m.disagrees on conflict do nothing;
 insert into not_copied select m.vendor_id::text, 'membership_details',
  jsonb_build_object('market', m.market_slug, 'office_presence', m.office_presence,

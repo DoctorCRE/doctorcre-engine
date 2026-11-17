@@ -363,3 +363,36 @@ test("a membership without old review evidence gets no invented review", async (
 		await db.query("rollback");
 	}
 });
+
+test("correcting conflicting old reviews fills the existing membership even when the earliest reviewer changes", async () => {
+	await db.query(`begin; ${mergedVendor}
+update public.vendor_market_membership set source = 'Different source' where vendor_id = '${id(6)}';`);
+	try {
+		await run(counties);
+		const membership = await rows(`select p.id from party_territory p
+join territory t on t.id = p.territory_id where t.name = 'Example Bay'`);
+		await db.query(`update public.vendor_market_membership
+set source = 'Example review', reviewed_at = '2026-01-01' where vendor_id = '${id(6)}'`);
+		const report = await run(counties);
+		assert.ok(!report.some((r) => r.field === "membership_details"));
+		assert.deepEqual(
+			await rows(`select r.party_territory_id as id from party_territory_review r
+join party_territory p on p.id = r.party_territory_id join territory t on t.id = p.territory_id
+where t.name = 'Example Bay'`),
+			membership,
+		);
+		assert.deepEqual(
+			await rows(`select r.reviewed_by_user_id, r.reviewed_at::text
+from party_territory_review r join party_territory p on p.id = r.party_territory_id
+join territory t on t.id = p.territory_id where t.name = 'Example Bay'`),
+			[
+				{
+					reviewed_by_user_id: id(1),
+					reviewed_at: "2025-03-01 00:00:00+00",
+				},
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
