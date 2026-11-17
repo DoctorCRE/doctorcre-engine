@@ -180,7 +180,6 @@ from public.national_account_owner;
 insert into not_copied select id, 'client', merged_into::text, 'merged_client' from public.client where merged_into is not null;
 insert into not_copied select id, 'candidate_pool', status, 'later_copy_334' from public.candidate_pool;
 insert into not_copied select id, 'lead_contact_draft', lead_id::text, 'later_copy_334' from public.lead_contact_draft;
-insert into not_copied select id, 'lead_stage_move', lead_id::text, 'later_copy_335' from public.lead_stage_move;
 set constraints all immediate;
 do $$ declare t text; begin
  foreach t in array array['party', 'party_role', 'client', 'national_account', 'activity', 'activity_about', 'next_step'] loop

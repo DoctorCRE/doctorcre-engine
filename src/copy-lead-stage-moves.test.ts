@@ -72,10 +72,11 @@ before(async () => {
  ('${id(71)}','${id(31)}','engaged','nurture_drip','${id(51)}','Example pending evidence','weak','proposed','${id(2)}','2024-02-01',null,null,null,null,'Example pending reason'),
  ('${id(72)}','${id(32)}','engaged','opportunity','${id(52)}','Example undo evidence','weak','undone','${id(2)}','2024-03-01','${id(1)}','2024-03-02','${id(1)}','2024-03-03','Example undo reason'),
  ('${id(73)}','${id(33)}','engaged','archived','${id(53)}','Example archive evidence','strong','applied','${id(2)}','2024-04-01','${id(1)}','2024-04-02',null,null,'Example archive reason'),
- ('${id(74)}','${id(34)}','new','qualified','${id(54)}',' ','strong','applied','${id(2)}','2024-05-01',null,null,null,null,'Example blank evidence'),
+ ('${id(74)}','${id(34)}','new','qualified','${id(54)}',' ','strong','applied','${id(2)}','2024-05-01',null,null,null,null,E'\\t'),
  ('${id(75)}','${id(35)}','engaged','opportunity','${id(55)}','Example missing activity','weak','proposed','${id(2)}','2024-06-01',null,null,null,null,'Example reason'),
  ('${id(76)}','${id(36)}','engaged','opportunity','${id(56)}','Example missing user','weak','applied','${id(2)}','2024-07-01','${id(3)}','2024-07-02',null,null,'Example reason'),
- ('${id(77)}','${id(37)}','new','qualified','${id(57)}','Example stale proposal','weak','proposed','${id(2)}','2024-08-01',null,null,null,null,'Example reason');
+ ('${id(77)}','${id(37)}','new','qualified','${id(57)}','Example stale proposal','weak','proposed','${id(2)}','2024-08-01',null,null,null,null,'Example reason'),
+ ('${id(78)}','${id(37)}','qualified','outreach_active','${id(57)}','Example earlier move','strong','applied','${id(2)}','2024-07-01',null,null,null,null,'Example reason');
  insert into public.event (id,occurred_at,actor_id,verb,subject_type,subject_id,field,old_value,new_value,cause) values ('${id(90)}','2025-01-01','${id(1)}','example-stage-edit','lead','${id(30)}','stage','{"stage":"qualified"}','{"stage":"engaged"}','human_stated');
  commit;`);
 	await db.query(`begin; select set_config('engine.job','old_system',true);
@@ -96,7 +97,7 @@ test("copies evidence, pending proposals and creation, approval and undo history
 	);
 	assert.deepEqual(
 		(await rows("select id from lead_stage_move order by id")).map((r) => r.id),
-		[id(70), id(72), id(73)],
+		[id(70), id(72), id(73), id(78)],
 	);
 	assert.deepEqual(
 		await rows(
@@ -121,20 +122,39 @@ test("copies evidence, pending proposals and creation, approval and undo history
 			["proposal", "insert", null, "old_system", "2024-03-01 00:00:00+00"],
 			["proposal", "update", id(1), null, "2024-03-02 00:00:00+00"],
 			["lead_stage_move", "insert", id(1), null, "2024-03-02 00:00:00+00"],
-			["lead_stage_move", "update", id(1), null, "2024-03-03 00:00:00+00"],
 		],
 	);
-	for (const reason of [
-		"blank_evidence",
-		"activity_not_copied",
-		"pending_stage_differs",
-		"current_stage_differs",
-		"unknown_actor",
-	])
-		assert.ok(
-			report.some((r) => r.reason === reason),
+	for (const [n, reason] of [
+		[74, "blank_evidence"],
+		[74, "blank_reason"],
+		[75, "activity_not_copied"],
+		[77, "pending_stage_differs"],
+		[78, "current_stage_differs"],
+		[76, "unknown_actor"],
+	] satisfies [number, string][])
+		assert.equal(
+			report.filter((r) => r.old_id === id(n) && r.reason === reason).length,
+			1,
 			reason,
 		);
+	assert.deepEqual(
+		(
+			await rows(
+				`select old_value->>'status' as old_status,old_value->>'decided_by_user_id' as old_user,old_value->>'decided_at' as old_time,new_value->>'status' as new_status,new_value->>'decided_by_user_id' as new_user,new_value->>'decided_at' as new_time from change where table_name='proposal' and record='{"id":"${id(73)}"}' and action='update'`,
+			)
+		).map(Object.values),
+		[["pending", null, null, "accepted", id(1), "2024-04-02T00:00:00+00:00"]],
+	);
+
+	assert.equal(
+		(
+			await rows(
+				`select count(*)::int as n from change where table_name='party_role' and changed_at='2024-03-03' and old_value='{"stage":"opportunity"}' and new_value='{"stage":"engaged"}' and changed_by_user_id='${id(1)}'`,
+			)
+		)[0]?.n,
+		1,
+	);
+
 	assert.deepEqual(
 		await rows(
 			"select tgname from pg_trigger where tgrelid in ('next.proposal'::regclass,'next.lead_stage_move'::regclass,'next.change'::regclass) and tgenabled <> 'O'",
@@ -143,7 +163,7 @@ test("copies evidence, pending proposals and creation, approval and undo history
 	);
 	assert.deepEqual(
 		await rows(
-			`select old_value->>'stage' as was,new_value->>'stage' as became,changed_by_user_id from change where new_value->>'old_event_id'='${id(90)}'`,
+			`select old_value->>'stage' as was,new_value->>'stage' as became,changed_by_user_id from change where table_name='party_role' and changed_at='2025-01-01' and record='{"party_id":"${id(10)}","role":"lead"}'`,
 		),
 		[{ was: "qualified", became: "engaged", changed_by_user_id: id(1) }],
 	);
@@ -183,4 +203,37 @@ test("copies evidence, pending proposals and creation, approval and undo history
 		)[0]?.evidence_ref,
 		"Example strong evidence",
 	);
+	await db.query(
+		`update public.lead_stage_move set evidence_ref='Example strong evidence',status='undone',undone_at='2025-02-01',undone_by='${id(1)}' where id='${id(70)}';`,
+	);
+	await run();
+	const undo = `select * from change where table_name='party_role' and record='{"party_id":"${id(10)}","role":"lead"}' and changed_at='2025-02-01'`;
+	const history = await rows(undo);
+	assert.equal(history.length, 1);
+	assert.deepEqual(history[0]?.old_value, { stage: "qualified" });
+	assert.deepEqual(history[0]?.new_value, { stage: "new" });
+	assert.equal(history[0]?.changed_by_user_id, id(1));
+	await db.query(`insert into public.event (id,occurred_at,actor_id,verb,subject_type,subject_id,field,old_value,new_value,cause) values
+ ('${id(95)}','2025-02-01','${id(1)}','undo-lead-move','lead','${id(30)}','stage','{"stage":"qualified"}','{"stage":"new","undone_move_id":"${id(70)}"}','human_correction'),
+ ('${id(96)}','2025-03-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"engaged"}','{"stage":"closed_won"}','human_stated'),
+ ('${id(97)}','2025-04-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"closed_won"}','{"stage":"closed_lost"}','human_stated'),
+ ('${id(98)}','2025-05-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"closed_lost"}','{"stage":"nurture_drip"}','human_stated'),
+ ('${id(99)}','2025-06-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"active_deal"}','{"stage":"do_not_contact"}','human_stated');`);
+	await run();
+	assert.deepEqual(await rows(undo), history);
+	assert.deepEqual(
+		(
+			await rows(
+				`select old_value->>'stage' as was,new_value->>'stage' as became from change where table_name='party_role' and changed_at between '2025-03-01' and '2025-06-01' order by changed_at`,
+			)
+		).map(Object.values),
+		[
+			["engaged", "opportunity"],
+			["opportunity", "nurture"],
+			["opportunity", "archived"],
+		],
+	);
+	const final = await rows("select * from change order by id");
+	await run();
+	assert.deepEqual(await rows("select * from change order by id"), final);
 });

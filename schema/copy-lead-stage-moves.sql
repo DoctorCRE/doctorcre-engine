@@ -10,11 +10,17 @@ alter table proposal disable trigger record_change;
 alter table change disable trigger stamp_change;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 
+create temp table stage_mapping on commit drop as
+select old, mapped from (values ('nurture_drip','nurture'), ('closed_lost','nurture'),
+ ('active_deal','opportunity'), ('closed_won','opportunity'), ('do_not_contact','archived')) v(old, mapped);
+
 create temp table old_move on commit drop as
 select m.*, p.party_id, a.kind as activity_kind,
- case m.from_stage when 'nurture_drip' then 'nurture' else m.from_stage end as mapped_from,
- case m.to_stage when 'nurture_drip' then 'nurture' else m.to_stage end as mapped_to
+ coalesce(f.mapped, m.from_stage) as mapped_from,
+ coalesce(t.mapped, m.to_stage) as mapped_to
 from public.lead_stage_move m
+left join stage_mapping f on f.old = m.from_stage
+left join stage_mapping t on t.old = m.to_stage
 left join outside_id p on p.source = 'old_system' and p.value = m.lead_id::text
 left join activity a on a.id = m.activity_id;
 create temp table move_problem on commit drop as
@@ -107,7 +113,7 @@ select 'proposal', jsonb_build_object('id', p.id), 'insert',
  a.changed_by_user_id, a.changed_by_job, a.changed_for_user_id, a.happened_at
 from copied_proposal p join move_actor a on a.id = p.id and a.kind = 'creation';
 insert into change (table_name, record, action, old_value, new_value, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select 'proposal', jsonb_build_object('id', p.id), 'update', jsonb_build_object('status','pending'),
+select 'proposal', jsonb_build_object('id', p.id), 'update', jsonb_build_object('status','pending','decided_by_user_id',null,'decided_at',null),
  jsonb_build_object('status','accepted','decided_by_user_id',p.decided_by_user_id,'decided_at',p.decided_at),
  a.changed_by_user_id, a.changed_by_job, a.changed_for_user_id, a.happened_at
 from copied_proposal p join move_actor a on a.id = p.id and a.kind = 'approval';
@@ -115,32 +121,31 @@ insert into change (table_name, record, action, new_value, changed_by_user_id, c
 select 'lead_stage_move', jsonb_build_object('id', m.id), 'insert',
  to_jsonb(m) - array['changed_by_user_id','changed_by_job','changed_for_user_id','changed_at'],
  m.changed_by_user_id, m.changed_by_job, m.changed_for_user_id, m.changed_at from copied_move m;
-insert into change (table_name, record, action, new_value, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select 'lead_stage_move', jsonb_build_object('id', m.id), 'update',
- jsonb_build_object('undone_at', a.happened_at, 'undone_by', a.actor_id),
- a.changed_by_user_id, a.changed_by_job, a.changed_for_user_id, a.happened_at
-from copied_move m join move_actor a on a.id = m.id and a.kind = 'undo';
-
 insert into not_copied select id, field, value, reason from move_problem;
 insert into not_copied
 select m.id, 'stage', r.stage, 'current_stage_differs' from old_move m join party_role r on r.party_id = m.party_id and r.role = 'lead'
 where m.status <> 'proposed' and r.stage <> case when m.status = 'undone' then m.mapped_from else m.mapped_to end
  and not exists (select from public.event e where e.subject_type = 'lead' and e.subject_id = m.lead_id and e.field = 'stage'
   and e.occurred_at > coalesce(m.undone_at, m.approved_at, m.created_at))
- and not exists (select from old_move later where later.party_id = m.party_id
+ and not exists (select from old_move later where later.party_id = m.party_id and later.status <> 'proposed'
   and coalesce(later.undone_at, later.approved_at, later.created_at) > coalesce(m.undone_at, m.approved_at, m.created_at));
 
--- Ordinary stage edits are history only. The old event id identifies a repeat import.
+-- Undo and ordinary edits are role history, with only real changed fields in each payload.
 create temp table stage_event on commit drop as
 select e.id, p.party_id, e.occurred_at, a.*,
- case e.old_value ->> 'stage' when 'nurture_drip' then 'nurture' else e.old_value ->> 'stage' end as was,
- case e.new_value ->> 'stage' when 'nurture_drip' then 'nurture' else e.new_value ->> 'stage' end as became,
- actor.id as actor_id
-from public.event e
-left join outside_id p on p.source = 'old_system' and p.value = e.subject_id::text
+ coalesce(f.mapped, e.was) as was, coalesce(t.mapped, e.became) as became, actor.id as actor_id
+from (
+ select id, subject_id as lead_id, actor_id, occurred_at, old_value ->> 'stage' as was, new_value ->> 'stage' as became
+ from public.event where subject_type = 'lead' and field = 'stage'
+ union all
+ select m.id, m.lead_id, m.undone_by, m.undone_at, m.to_stage, m.from_stage from ready_move m
+ where m.status = 'undone' and not exists (select from public.event e where e.subject_type = 'lead'
+  and e.subject_id = m.lead_id and e.field = 'stage' and e.new_value ->> 'undone_move_id' = m.id::text)
+) e
+left join outside_id p on p.source = 'old_system' and p.value = e.lead_id::text
+left join stage_mapping f on f.old = e.was left join stage_mapping t on t.old = e.became
 left join public.actor actor on actor.id = e.actor_id
-cross join lateral copy_event_attribution(e.actor_id, e.id) a
-where e.subject_type = 'lead' and e.field = 'stage';
+cross join lateral copy_event_attribution(e.actor_id, e.id) a;
 insert into not_copied
 select e.id, 'stage_event', e.became, 'stage_event_unresolved' from stage_event e
 where e.party_id is null or e.actor_id is null
@@ -151,10 +156,16 @@ where e.party_id is null or e.actor_id is null
 insert into change (table_name, record, action, old_value, new_value,
  changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select 'party_role', jsonb_build_object('party_id',e.party_id,'role','lead'), 'update',
- jsonb_build_object('stage',e.was), jsonb_build_object('stage',e.became,'old_event_id',e.id),
+ jsonb_build_object('stage',e.was), jsonb_build_object('stage',e.became),
  e.changed_by_user_id, e.changed_by_job, e.changed_for_user_id, e.occurred_at
-from stage_event e where not exists (select from not_copied where old_id = e.id)
- and not exists (select from change where table_name = 'party_role' and new_value ->> 'old_event_id' = e.id::text);
+from stage_event e where not exists (select from not_copied where old_id = e.id and field = 'stage_event')
+ and e.was is distinct from e.became
+ and not exists (select from change c where c.table_name = 'party_role'
+  and c.record = jsonb_build_object('party_id',e.party_id,'role','lead') and c.action = 'update'
+  and c.changed_at = e.occurred_at and c.old_value = jsonb_build_object('stage',e.was)
+  and c.new_value = jsonb_build_object('stage',e.became)
+  and (c.changed_by_user_id,c.changed_by_job,c.changed_for_user_id) is not distinct from
+   (e.changed_by_user_id,e.changed_by_job,e.changed_for_user_id));
 
 set constraints all immediate;
 alter table lead_stage_move enable trigger apply_lead_stage_move;
