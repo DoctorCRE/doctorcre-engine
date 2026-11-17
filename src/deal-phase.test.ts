@@ -108,23 +108,26 @@ test("phase moves drop only the partner's overdue work and match the old answers
 						[key],
 					)
 				).rows;
+			const changes = async (key: string) =>
+				(await events(key)).map((e) => [e.field, e.old_value, e.new_value]);
+			// The answer up to its event identity, then its replay.
 			const answered = async (args: { idempotency_key: string }, at = url) => {
 				const response = await request(at, args);
 				const text = await response.text();
 				assert.equal(response.status, 200, text);
 				const [phase] = await events(args.idempotency_key);
-				const tail = `"event_id":"${phase.id}","event_recorded_at":"${phase.recorded_at}"}`;
-				const receipt = (
-					await db.query(
-						"select response from tool_call where idempotency_key=$1",
-						[args.idempotency_key],
-					)
-				).rows[0].response;
+				const tail = `,"event_id":"${phase.id}","event_recorded_at":"${phase.recorded_at}"}`;
+				assert.ok(text.endsWith(tail), text);
+				const { rows } = await db.query(
+					"select response from tool_call where idempotency_key=$1",
+					[args.idempotency_key],
+				);
+				const replay = { replayed: true, ...rows[0].response };
 				assert.equal(
 					await (await request(at, args)).text(),
-					JSON.stringify({ replayed: true, ...receipt }),
+					JSON.stringify(replay),
 				);
-				return { text, tail };
+				return text.slice(0, -tail.length);
 			};
 			const open = async () =>
 				(
@@ -132,123 +135,65 @@ test("phase moves drop only the partner's overdue work and match the old answers
 						"select id from next_action where status='open' union all select id from capture_post_call_action where status='open' order by id",
 					)
 				).rows.map((r) => r.id);
+			const head = (deal: string) =>
+				`{"ok":true,"deal_id":"${deal}","field":"phase"`;
+			const ids = (...n: number[]) => JSON.stringify(n.map(id));
 
 			const replaced = move(D1, { human_quote: "Example quote" });
-			const first = await answered(replaced, login.href);
 			assert.equal(
-				first.text,
-				`{"ok":true,"deal_id":"${D1}","field":"phase","superseded_action_ids":["${id(21)}","${id(41)}"],"superseded_post_call_action_ids":["${id(41)}"],"next_step_required":false,"old_value":"example","new_value":"later",${first.tail}`,
+				await answered(replaced, login.href),
+				`${head(D1)},"superseded_action_ids":${ids(21, 41)},"superseded_post_call_action_ids":${ids(41)},"next_step_required":false,"old_value":"example","new_value":"later"`,
 			);
-			const superseded = [id(21), id(41)];
 			assert.deepEqual(
-				(await events(replaced.idempotency_key)).map((e) => [
-					e.field,
-					e.old_value,
-					e.new_value,
-				]),
-				[
-					["phase", { phase: "example" }, { phase: "later" }],
-					[
-						"next_action",
-						{
-							actions: [
-								{
-									id: id(21),
-									description: "Example overdue step",
-									due_on: PAST,
-								},
-								{
-									id: id(41),
-									description: "Example post-call step",
-									due_on: PAST,
-								},
-							],
-						},
-						{ superseded_action_ids: superseded, status: "dropped" },
-					],
-					[
-						"next_date",
-						{ next_date: PAST },
-						{ next_date: LATER, superseded_action_ids: superseded },
-					],
-					[
-						"next_step",
-						{ next_step: "Example overdue step" },
-						{
-							next_step: "Example later step",
-							superseded_action_ids: superseded,
-						},
-					],
-				],
+				await changes(replaced.idempotency_key),
+				JSON.parse(`[
+					["phase",{"phase":"example"},{"phase":"later"}],
+					["next_action",{"actions":[{"id":"${id(21)}","description":"Example overdue step","due_on":"${PAST}"},{"id":"${id(41)}","description":"Example post-call step","due_on":"${PAST}"}]},{"superseded_action_ids":${ids(21, 41)},"status":"dropped"}],
+					["next_date",{"next_date":"${PAST}"},{"next_date":"${LATER}","superseded_action_ids":${ids(21, 41)}}],
+					["next_step",{"next_step":"Example overdue step"},{"next_step":"Example later step","superseded_action_ids":${ids(21, 41)}}]]`),
 			);
-			assert.deepEqual(await open(), [
-				id(23),
-				id(24),
-				id(25),
-				id(26),
-				id(42),
-				id(43),
-			]);
-			assert.deepEqual(
-				(
-					await db.query("select phase,next_date::text from deal where id=$1", [
-						D1,
-					])
-				).rows,
-				[{ phase: "later", next_date: LATER }],
+			assert.deepEqual(await open(), [23, 24, 25, 26, 42, 43].map(id));
+			const { rows } = await db.query(
+				"select phase,next_date::text from deal where id=$1",
+				[D1],
 			);
+			assert.deepEqual(rows, [{ phase: "later", next_date: LATER }]);
 
 			const kept = move(D2, { occurred_on: "2026-01-15" });
-			const second = await answered(kept);
 			assert.equal(
-				second.text,
-				`{"ok":true,"deal_id":"${D2}","field":"phase","next_step_required":true,"prompt":"${PROMPT}","superseded_action_ids":["${id(26)}"],"superseded_post_call_action_ids":[],"old_value":"example","new_value":"later",${second.tail}`,
+				await answered(kept),
+				`${head(D2)},"next_step_required":true,"prompt":"${PROMPT}","superseded_action_ids":${ids(26)},"superseded_post_call_action_ids":[],"old_value":"example","new_value":"later"`,
 			);
-			const keptEvents = await events(kept.idempotency_key);
+			const [phase, dropped, ...rest] = await events(kept.idempotency_key);
 			assert.deepEqual(
-				keptEvents.map((e) => e.field),
-				["phase", "next_action"],
+				[phase.field, dropped.field, rest],
+				["phase", "next_action", []],
 			);
-			assert.equal(keptEvents[0].occurred_at, "2026-01-15T18:00:00+00:00");
-			assert.notEqual(keptEvents[1].occurred_at, keptEvents[0].occurred_at);
+			assert.equal(phase.occurred_at, "2026-01-15T18:00:00+00:00");
+			assert.notEqual(dropped.occurred_at, phase.occurred_at);
 
 			await db.query(
 				`update next_action set status='open' where id='${id(26)}'`,
 			);
-			const same = move(D2, { base_event_id: keptEvents[0].id });
-			const third = await answered(same);
+			const same = move(D2, { base_event_id: phase.id });
 			assert.equal(
-				third.text,
-				`{"ok":true,"deal_id":"${D2}","field":"phase","old_value":"later","new_value":"later",${third.tail}`,
+				await answered(same),
+				`${head(D2)},"old_value":"later","new_value":"later"`,
 			);
 			assert.equal((await events(same.idempotency_key)).length, 1);
 			assert.ok((await open()).includes(id(26)));
 
 			const unplanned = move(D3);
-			const fourth = await answered(unplanned);
 			assert.equal(
-				fourth.text,
-				`{"ok":true,"deal_id":"${D3}","field":"phase","superseded_action_ids":[],"superseded_post_call_action_ids":[],"next_step_required":true,"prompt":"${PROMPT}","old_value":"example","new_value":"later",${fourth.tail}`,
+				await answered(unplanned),
+				`${head(D3)},"superseded_action_ids":[],"superseded_post_call_action_ids":[],"next_step_required":true,"prompt":"${PROMPT}","old_value":"example","new_value":"later"`,
 			);
 			assert.deepEqual(
-				(await events(unplanned.idempotency_key)).map((e) => [
-					e.field,
-					e.old_value,
-					e.new_value,
-				]),
-				[
-					["phase", { phase: "example" }, { phase: "later" }],
-					[
-						"next_date",
-						{ next_date: PAST },
-						{ next_date: null, superseded_action_ids: [] },
-					],
-					[
-						"next_step",
-						{ next_step: null },
-						{ next_step: null, superseded_action_ids: [] },
-					],
-				],
+				await changes(unplanned.idempotency_key),
+				JSON.parse(`[
+					["phase",{"phase":"example"},{"phase":"later"}],
+					["next_date",{"next_date":"${PAST}"},{"next_date":null,"superseded_action_ids":[]}],
+					["next_step",{"next_step":null},{"next_step":null,"superseded_action_ids":[]}]]`),
 			);
 		} finally {
 			await db.query(`drop owned by ${role}`);
@@ -257,40 +202,7 @@ test("phase moves drop only the partner's overdue work and match the old answers
 		}
 	}));
 
-test("phase moves refuse blank phases and unusable start dates before any change", () =>
-	withSnapshot(async (url) => {
-		const db = new pg.Client({ connectionString: url });
-		await db.connect();
-		try {
-			await db.query(seed);
-			const tomorrow = new Date(Date.now() + 86_400_000)
-				.toISOString()
-				.slice(0, 10);
-			for (const [extra, error, more] of [
-				[{ value: " " }, "invalid_field_value", { fields: ["field"] }],
-				[{ occurred_on: tomorrow }, "unhandled_verb_failure", {}],
-				[{ occurred_on: "2026-02-30" }, "unhandled_verb_failure", {}],
-			] as const) {
-				const response = await request(url, move(D1, extra));
-				const body = JSON.parse(await response.text());
-				assert.equal(response.status, 400);
-				assert.deepEqual(body, {
-					error,
-					correlation_id: body.correlation_id,
-					hint: body.hint,
-					...more,
-				});
-			}
-			assert.equal(
-				(await db.query("select count(*)::int as n from event")).rows[0].n,
-				0,
-			);
-		} finally {
-			await db.end();
-		}
-	}));
-
-test("a phase move takes the next date lock before the phase lock", () =>
+test("a phase move refuses blank phases and bad start dates, then takes the next date lock before the phase lock", () =>
 	withSnapshot(async (url) => {
 		const db = new pg.Client({ connectionString: url });
 		const holder = new pg.Client({ connectionString: url });
@@ -298,6 +210,20 @@ test("a phase move takes the next date lock before the phase lock", () =>
 		await holder.connect();
 		try {
 			await db.query(seed);
+			const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+			for (const [extra, error, more] of [
+				[{ value: " " }, "invalid_field_value", { fields: ["field"] }],
+				[{ occurred_on: tomorrow.slice(0, 10) }, "unhandled_verb_failure", {}],
+				[{ occurred_on: "2026-02-30" }, "unhandled_verb_failure", {}],
+			] as const) {
+				const response = await request(url, move(D1, extra));
+				const { correlation_id, hint, ...body } = JSON.parse(
+					await response.text(),
+				);
+				assert.equal(response.status, 400);
+				assert.ok(correlation_id && hint);
+				assert.deepEqual(body, { error, ...more });
+			}
 			const lock = (field: string) =>
 				`hashtextextended('${D1}' || ':' || '${field}', 0)`;
 			await holder.query("begin");
@@ -313,16 +239,17 @@ test("a phase move takes the next date lock before the phase lock", () =>
 					"the phase move waits for the next date lock",
 				);
 			}
-			assert.deepEqual(
-				(
-					await db.query(
-						`select pg_try_advisory_xact_lock(${lock("phase")}) as free`,
-					)
-				).rows,
-				[{ free: true }],
-			);
+			const free = `select pg_try_advisory_xact_lock(${lock("phase")}) as free`;
+			assert.deepEqual((await db.query(free)).rows, [{ free: true }]);
 			await holder.query("commit");
 			assert.equal((await pending).status, 200);
+			const { rows } = await db.query(
+				"select field from event order by recorded_at",
+			);
+			assert.deepEqual(
+				rows.map((r) => r.field),
+				["phase", "next_action", "next_date", "next_step"],
+			);
 		} finally {
 			await holder.end();
 			await db.end();
