@@ -11,7 +11,7 @@ alter table imported_change disable trigger stamp_imported_change;
 -- Neither native identity nor activation state identifies a business record or a logged activity.
 insert into not_copied
 select m.id, 'activity_id', a.id::text, 'possible_duplicate' from ops.meeting m join public.activity a
- on a.kind in ('meeting','tour') and ((a.occurred_at at time zone 'America/Chicago')::date = (m.started_at at time zone 'America/Chicago')::date or a.summary = m.title)
+ on a.kind in ('meeting','tour') and (a.occurred_at between m.started_at - interval '24 hours' and m.started_at + interval '24 hours' or a.summary = m.title)
 where not exists (select from pg_temp.copy_meeting_distinct x where (x.meeting_id,x.activity_id) = (m.id,a.id))
  and not exists (select from pg_temp.copy_meeting_activity x where x.meeting_id = m.id)
  and not exists (select from imported_change i where i.id = m.id and i.source_event ->> 'source_table' = 'ops.meeting');
