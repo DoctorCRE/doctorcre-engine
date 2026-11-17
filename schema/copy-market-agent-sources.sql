@@ -11,8 +11,9 @@ select m.*, md5('old_system:market_agent_source:' || m.deal_id)::uuid as activit
 from public.deal_market_assignment m
 left join outside_id o on o.source = 'old_system' and o.value = m.deal_id::text
 cross join lateral copy_event_attribution(m.set_by, (select e.id from public.event e
- where e.subject_type = 'deal' and e.subject_id = m.deal_id and e.field = 'market_agent'
- and e.verb = 'set-market-agent' and e.actor_id = m.set_by and e.occurred_at = m.set_at
+ where e.subject_type = 'deal' and e.subject_id = m.deal_id
+ and (e.verb, coalesce(e.field, '')) in (('set-market-agent', 'market_agent'), ('create-national-market-deal', ''))
+ and e.actor_id = m.set_by and e.occurred_at = m.set_at
  order by e.mutation_order desc limit 1)) author;
 
 create temp table examined_market_agent_source on commit drop as
@@ -40,8 +41,6 @@ from examined_market_agent_source where refusal is null on conflict do nothing;
 
 insert into not_copied select deal_id, 'market_agent_source', source, refusal
 from examined_market_agent_source where refusal is not null;
-insert into not_copied select deal_id, 'market_agent', agent_name, 'agent_not_verified'
-from old_market_agent_source where agent_party_id is null;
 insert into not_copied select deal_id, 'changed_for_user_id', null, 'agent_user_unknown'
 from old_market_agent_source where changed_by_job = 'agent' and changed_for_user_id is null;
 set constraints all immediate;

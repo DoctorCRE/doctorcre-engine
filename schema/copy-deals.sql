@@ -138,8 +138,6 @@ where d.id is null or l.mapped_party_id is null or l.slug is null;
 -- A stated name is never matched to a person; only a verified party link names the agent.
 insert into not_copied select deal_id, 'market_agent', agent_name, 'agent_not_verified'
 from public.deal_market_assignment where agent_party_id is null;
-insert into not_copied select deal_id, 'market_agent_source', source, 'no_typed_destination'
-from public.deal_market_assignment;
 insert into not_copied select id, 'deal_participant', role, 'ended_participant_history'
 from public.deal_participant where to_at is not null;
 

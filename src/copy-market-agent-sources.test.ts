@@ -66,13 +66,13 @@ before(async () => {
  insert into public.client (id,party_id,created_by,updated_by) values ('${id(4)}','${id(3)}','${id(1)}','${id(1)}');
  insert into public.deal_type_ref (slug,label,sort) values ('lease','Lease',1);
  insert into public.deal_phase (slug,label) values ('negotiation','Negotiating');
- ${[10, 11, 12, 13]
+ ${[10, 11, 12, 13, 14]
 		.map(
 			(n) => `insert into public.deal
  (id,client_id,name,deal_type,phase,owner,created_by,updated_by) values
  ('${id(n)}','${id(4)}','Example deal ${n}','lease','negotiation','partner_one','${id(1)}','${id(1)}');
  insert into public.deal_market_assignment (deal_id,agent_name,agent_party_id,source,set_by,set_at) values
- ('${id(n)}','Example Agent',${n === 10 ? `'${id(5)}'` : "null"},E'  Example source ${n}\\nOriginal spacing  ','${id(n === 11 || n === 13 ? 2 : 1)}','2025-02-01');`,
+ ('${id(n)}','Example Agent',${n === 10 ? `'${id(5)}'` : "null"},E'  Example source ${n}\\nOriginal spacing  ','${id(n === 10 || n === 12 ? 1 : 2)}','2025-02-01');`,
 		)
 		.join("\n")}
  insert into deal (id,name,owner_user_id) values ('${id(20)}','Example copied deal','${id(1)}'),
@@ -81,7 +81,13 @@ before(async () => {
  ('old_system','${id(11)}','${id(21)}'), ('old_system','${id(13)}','${id(23)}');
  insert into public.event (subject_type,subject_id,field,verb,actor_id,cause,sponsoring_human_slug,occurred_at) values
  ('deal','${id(11)}','market_agent','set-market-agent','${id(2)}','human_stated','partner_one','2025-02-01'),
- ('deal','${id(11)}','market_agent','set-market-agent','${id(2)}','human_stated',null,'2025-03-01');
+ ('deal','${id(11)}','market_agent','set-market-agent','${id(2)}','human_stated',null,'2025-03-01'),
+ ('deal','${id(14)}',null,'create-national-market-deal','${id(2)}','human_stated','partner_one','2025-02-01'),
+ ('deal','${id(14)}',null,'create-national-market-deal','${id(2)}','human_stated',null,'2025-03-01'),
+ ('deal','${id(14)}',null,'create-national-market-deal','${id(1)}','human_stated',null,'2025-02-01');
+ update public.deal_market_assignment set source='partner stated in Deal Room' where deal_id='${id(14)}';
+ insert into deal (id,name,owner_user_id) values ('${id(24)}','Example created deal','${id(1)}');
+ insert into outside_id (source,value,deal_id) values ('old_system','${id(14)}','${id(24)}');
  commit;`);
 });
 after(async () => {
@@ -95,17 +101,14 @@ test("sources retain exact text, dates and setter independently of agent verific
 		assert.deepEqual(
 			report.map((r) => [r.old_id, r.field, r.reason]),
 			[
-				[id(11), "market_agent", "agent_not_verified"],
-				[id(12), "market_agent", "agent_not_verified"],
 				[id(12), "market_agent_source", "deal_not_copied"],
 				[id(13), "changed_for_user_id", "agent_user_unknown"],
-				[id(13), "market_agent", "agent_not_verified"],
 			],
 		);
 		assert.deepEqual(
 			await rows(`select a.id,a.kind,a.summary,a.happened_at::text,a.changed_at::text,
    a.changed_by_user_id,a.changed_by_job,a.changed_for_user_id,b.deal_id,b.created_at::text
-   from activity a join activity_about b on b.activity_id=a.id order by b.deal_id`),
+   from activity a join activity_about b on b.activity_id=a.id where b.deal_id <> '${id(24)}' order by b.deal_id`),
 			[10, 11, 13].map((n) => ({
 				id: noteId(n),
 				kind: "note",
@@ -124,7 +127,34 @@ test("sources retain exact text, dates and setter independently of agent verific
 		assert.deepEqual(await run(), report);
 		assert.deepEqual(await rows("select * from change order by id"), changes);
 		assert.equal((await rows("select * from party")).length, 1);
-		assert.equal((await rows("select * from activity")).length, 3);
+		assert.equal((await rows("select * from activity")).length, 4);
+	});
+});
+
+test("deal creation keeps the sponsor from the matching creator and assignment time", async () => {
+	await transaction(async () => {
+		const report = await run();
+		assert.deepEqual(
+			report.filter(
+				(r) => r.old_id === id(14) && r.field === "changed_for_user_id",
+			),
+			[],
+		);
+		assert.deepEqual(
+			await rows(`select a.summary,a.changed_by_job,a.changed_for_user_id,
+   b.deal_id,b.changed_by_job as link_job,b.changed_for_user_id as link_sponsor
+   from activity a join activity_about b on b.activity_id=a.id where a.id='${noteId(14)}'`),
+			[
+				{
+					summary: "Market agent source\n\npartner stated in Deal Room",
+					changed_by_job: "agent",
+					changed_for_user_id: id(1),
+					deal_id: id(24),
+					link_job: "agent",
+					link_sponsor: id(1),
+				},
+			],
+		);
 	});
 });
 
