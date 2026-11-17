@@ -608,6 +608,17 @@ Moving today's rows across:
 
 "Everything about this person." The rest of leads (#286). Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
 
+## Copying today's vendors
+
+`schema/copy-vendors.sql` copies today's vendors as "Vendors" above says. The owner runs it after the party copy and before the deal copy, which finds the vendor roles, in its own transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list. Introductions and worked deals follow in #343.
+
+- A vendor's party, found through the party copy's old-id map, takes the vendor role with the vendor's stage, level and target flag, and a role for its category. `outside_id` maps the vendor's old id to that record, so a second run copies only vendors it does not map yet. Its `vendor_ref` becomes an outside id under `old_system_ref`, as a party's `ref` does, unless another record holds it.
+- Each `vendor_category` row is a vendor category, with `gc` as contractor, beside the roles of `deal_vendor_assignment`. Each `vendor_stage` row but the nine original stages is a vendor stage. A role or stage already in the new database keeps its label.
+- A record's several vendors, such as those of merged parties or vendors, become one vendor role, as `merge_party` would join them: the first stage and level, the record's own vendor's first and then by when each was stored, a target on any, and every category. A different stage or level is listed, and so is a vendor added to a record copied before.
+- Today's merge joins two vendors of one party, and leaves a value that conflicted on the merged-away one. So that one joins its survivor here, after the live vendors. Its values a live vendor of the record also holds were filled in by today's merge, and are not listed again.
+- A parked or avoided vendor has no reason today, so all of its record's vendors wait and are listed. So is a vendor whose party is not copied.
+- These are listed too: an uncategorized vendor's free-text `category`, a level the new list lacks, `trust_override`, and each value of `verticals`, `owner_id`, `referral_active`, `territory`, `offers`, `seeking`, `rivalry_group`, `originated`, `enrich`, `last_touch`, `intro_notes`, `owner_label`, `links_label`, `loan_programs` and `deal_history_verified_at`, and `out_of_market` when set.
+
 ## Copying today's markets
 
 Run `schema/copy-markets.sql` after `copy-parties.sql` and `copy-attribution.sql`, before the deal copy, in its own owner transaction with the new schema on `search_path`. It only reads `public`. The copy uses the existing market, county, territory and membership tables. No new schema rule is needed (rules 40–43).
