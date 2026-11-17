@@ -2387,7 +2387,15 @@ const CHANGEABLE: Record<string, string[]> = {
 	party_email: ["is_primary", "label"],
 	party_phone: ["is_primary", "label"],
 	activity: ["from_party_id", "happened_at", "summary"],
-	next_step: ["done_at", "due_on", "owner_party_id", "what"],
+	next_step: [
+		"done_at",
+		"due_on",
+		"owner_party_id",
+		"resolution",
+		"resolution_reason",
+		"resolved_at",
+		"what",
+	],
 	user_preference: ["push_to_device", "quiet_from", "quiet_until", "time_zone"],
 	home_mark: [
 		"disposition",
@@ -2406,6 +2414,14 @@ const CHANGEABLE: Record<string, string[]> = {
 };
 // Columns the engine leaves to their default when it adds a row.
 const DEFAULTED: Record<string, string[]> = {
+	next_step: [
+		"changed_at",
+		"changed_by_job",
+		"changed_by_user_id",
+		"changed_for_user_id",
+		"resolution_event_id",
+		"status",
+	],
 	invoice_email: [
 		"application_id",
 		"application_root_id",
@@ -2971,6 +2987,175 @@ test("party next steps retain completed steps, sort due dates with id ties and l
 	});
 });
 
+test("ended next steps retain evidence and stay off Home even with marks", async () => {
+	await rolledBack(async () => {
+		await db.query(`set local role none;
+			update next_step set resolution = 'cancelled',
+			resolved_at = '2026-03-21T10:00:00Z', resolution_reason = 'No longer needed',
+			resolution_event_id = '${id(9400)}' where id = '${id(400)}';
+			update next_step set resolution = 'expired', resolution_event_id = '${id(9401)}'
+			where id = '${id(402)}';
+			set local role engine`);
+		const cancelled = (await readDeal()).next_steps.find(
+			(s: { id: string }) => s.id === id(400),
+		);
+		assert.equal(cancelled.status, "cancelled");
+		assert.equal(cancelled.done_at, null);
+		assert.equal(cancelled.resolved_at, "2026-03-21T10:00:00+00:00");
+		assert.equal(cancelled.resolution_reason, "No longer needed");
+		assert.equal(cancelled.resolution_event_id, id(9400));
+		const expired = (
+			await db.query("select * from next_step where id = $1", [id(402)])
+		).rows[0];
+		assert.equal(expired.status, "expired");
+		assert.equal(expired.resolved_at, null);
+		assert.equal(expired.done_at, null);
+		assert.equal(expired.resolution_event_id, id(9401));
+		const party = (
+			await db.query("select everything_about_party($1) as party", [CLIENT])
+		).rows[0].party;
+		assert.equal(
+			party.next_steps.find((step: { id: string }) => step.id === id(402))
+				.status,
+			"expired",
+		);
+		assert.equal((await db.query("select * from home_next_step")).rowCount, 0);
+		assert.equal(
+			(
+				await db.query("select * from home_mark where next_step_id = $1", [
+					id(400),
+				])
+			).rowCount,
+			2,
+		);
+		await db.query(
+			`update next_step set resolution = 'done' where id = '${id(402)}'`,
+		);
+		assert.equal(
+			(await db.query("select done_at from next_step where id = $1", [id(402)]))
+				.rows[0].done_at,
+			null,
+		);
+		await db.query(
+			`set local role none;
+			update next_step set resolution = null, resolution_event_id = null where id = '${id(402)}';
+			set local role engine`,
+		);
+		assert.deepEqual((await db.query("select id from home_next_step")).rows, [
+			{ id: id(402) },
+		]);
+	});
+});
+
+test("next-step end states reject contradictory times, reasons and evidence", async () => {
+	const invalid: Case[] = [
+		["resolution = 'other'", "next_step_resolution_check"],
+		["resolution = 'cancelled'", "next_step_cancellation_reason"],
+		[
+			"resolution = 'cancelled', resolution_reason = ' '",
+			"next_step_resolution_reason_check",
+		],
+		[
+			"resolution = 'expired', resolution_reason = 'Not needed'",
+			"next_step_cancellation_reason",
+		],
+		["resolution_reason = 'Not needed'", "next_step_cancellation_reason"],
+		[
+			"resolution = 'done', resolution_reason = 'Not needed'",
+			"next_step_cancellation_reason",
+		],
+		["resolution = 'expired', done_at = now()", "next_step_done_time"],
+		[
+			"resolution = 'cancelled', resolution_reason = 'Not needed', done_at = now()",
+			"next_step_done_time",
+		],
+		["resolved_at = now()", "next_step_resolution_time"],
+		["resolution = 'done', resolved_at = now()", "next_step_resolution_time"],
+		[`resolution_event_id = '${id(9400)}'`, "next_step_resolution_event"],
+	];
+	for (const [fields, refusal] of invalid) {
+		await rolledBack(async () => {
+			await assert.rejects(
+				db.query(`set local role none;
+					update next_step set ${fields} where id = '${id(400)}'`),
+				expected(refusal),
+			);
+		});
+	}
+});
+
+test("only the owner's import supplies a next step's closing event", async () => {
+	for (const statement of [
+		`insert into next_step (what, deal_id, resolution, resolution_event_id)
+		 values ('Example expired step', '${DEAL}', 'expired', '${id(9401)}')`,
+		`update next_step set resolution = 'expired', resolution_event_id = '${id(9401)}'
+		 where id = '${id(400)}'`,
+	]) {
+		await rolledBack(async () => {
+			await assert.rejects(db.query(statement), { code: "42501" });
+		});
+	}
+	await rolledBack(async () => {
+		await db.query(`set local role none;
+			insert into next_step (what, deal_id, resolution, resolution_event_id) values
+			('First expired step', '${DEAL}', 'expired', '${id(9401)}'),
+			('Second expired step', '${DEAL}', 'expired', '${id(9401)}');
+			set local role engine`);
+		assert.equal(
+			(
+				await db.query(
+					"select id from next_step where resolution_event_id = $1",
+					[id(9401)],
+				)
+			).rowCount,
+			2,
+		);
+	});
+	await rolledBack(async () => {
+		await db.query("set local role none");
+		await assert.rejects(
+			db.query(`update next_step set resolution = 'expired', resolution_event_id = 'not-an-event-id'
+				where id = '${id(400)}'`),
+			{ code: "22P02" },
+		);
+	});
+});
+
+test("the Home view refuses an engine insert with a closing event", async () => {
+	await rolledBack(async () => {
+		await db.query(asJob("agent"));
+		await assert.rejects(
+			db.query(`insert into home_next_step (what, party_id, resolution, resolution_event_id)
+				values ('Example expired step', '${CLIENT}', 'expired', '${id(9401)}')`),
+			{ code: "42501" },
+		);
+	});
+});
+
+test("the engine can insert and read an open step through the Home view", async () => {
+	await rolledBack(async () => {
+		await db.query(asJob("agent"));
+		const saved = await db.query(`insert into home_next_step (what, party_id)
+			values ('Example open step', '${CLIENT}') returning id`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select what, party_id, status, resolution_event_id from home_next_step where id = $1",
+					[saved.rows[0].id],
+				)
+			).rows,
+			[
+				{
+					what: "Example open step",
+					party_id: CLIENT,
+					status: "open",
+					resolution_event_id: null,
+				},
+			],
+		);
+	});
+});
+
 test("party proposals include only pending suggestions in creation order with id ties", async () => {
 	await withParty(async () => {
 		await db.query(`insert into activity_about (activity_id, party_id) values ('${CALL}', '${SUBJECT}');
@@ -3350,6 +3535,11 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				owner_party_id: CLIENT,
 				due_on: "2026-03-13",
 				done_at: "2026-03-13T18:00:00+00:00",
+				resolution: null,
+				resolved_at: null,
+				resolution_reason: null,
+				resolution_event_id: null,
+				status: "done",
 			},
 			{
 				id: id(400),
@@ -3357,6 +3547,11 @@ test("everything about the LOI deal comes back in one read, each list in order",
 				owner_party_id: null,
 				due_on: "2026-03-20",
 				done_at: null,
+				resolution: null,
+				resolved_at: null,
+				resolution_reason: null,
+				resolution_event_id: null,
+				status: "open",
 			},
 		],
 	});
