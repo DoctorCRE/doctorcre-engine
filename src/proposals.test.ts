@@ -165,14 +165,23 @@ test("filing accepts the suggested deal, requires a correction reason, and never
 		(await db.query("select count(*)::int as n from deal")).rows[0].n,
 		2,
 	);
+	assert.deepEqual(
+		(
+			await db.query(
+				"select deal_id from activity_about where activity_id=$1 and deal_id is not null",
+				[EMAIL],
+			)
+		).rows.map((r) => r.deal_id),
+		[OTHER],
+	);
 	assert.equal(
 		(
 			await db.query(
-				"select count(*)::int as n from activity_about where activity_id=$1 and deal_id is not null",
+				"select party_id from activity_about where activity_id=$1 and party_id is not null",
 				[EMAIL],
 			)
-		).rows[0].n,
-		2,
+		).rows[0].party_id,
+		CLIENT,
 	);
 });
 
@@ -276,4 +285,85 @@ test("the queue pages oldest first within the mailbox stamp and excludes old mai
 		404,
 	);
 	assert.equal((await save({ user: "alex" }, "proposals", {}, "POST"))[0], 404);
+});
+
+test("the queue suppresses only automatic filings removed by a partner", async () => {
+	await db.query(`begin; select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${USER}', true);
+ insert into activity (id, kind, happened_at) values ('${id(31)}', 'email', now() - interval '2 hours');
+ insert into email (activity_id, message_id, sender, subject, body) values ('${id(31)}', 'suppression@example.test', 'clinic@example.test', 'Example filing', 'Example');
+ insert into activity_about (activity_id, party_id) values ('${id(31)}', '${CLIENT}');
+ insert into activity_about (activity_id, deal_id) values ('${id(31)}', '${DEAL}');
+ select set_config('engine.job', '', true);
+ insert into activity_about (activity_id, deal_id) values ('${id(31)}', '${OTHER}');
+ delete from activity_about where activity_id = '${id(31)}' and deal_id is not null; commit;`);
+	const [status, body] = await save(job, "router-queue", {}, "GET");
+	assert.equal(status, 200);
+	assert.ok(Array.isArray(body.emails));
+	assert.deepEqual(
+		body.emails.find((e) => e.activity_id === id(31)).suppressed_deal_ids,
+		[DEAL],
+	);
+});
+
+test("shared addresses stay unknown in both queued mail and its thread", async () => {
+	await db.query(`begin; select set_config('engine.user_id', '${USER}', true);
+ insert into party_email (party_id, address, label) values ('${USER}', 'clinic@example.test', 'personal'); commit;`);
+	try {
+		const [status, body] = await save(job, "router-queue", {}, "GET");
+		assert.equal(status, 200);
+		assert.ok(Array.isArray(body.emails));
+		assert.equal(
+			body.emails.find((e) => e.activity_id === EMAIL).sender.party_id,
+			null,
+		);
+		assert.equal(
+			body.emails
+				.find((e) => e.activity_id === id(21))
+				.thread.find((e: { activity_id: string }) => e.activity_id === EMAIL)
+				.sender.party_id,
+			null,
+		);
+	} finally {
+		await db.query(
+			`begin; select set_config('engine.user_id', '${USER}', true); delete from party_email where party_id = '${USER}' and address = 'clinic@example.test'; commit;`,
+		);
+	}
+});
+
+test("the queue uses work domains, company clients and the deal market", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into market (id, name) values ('${id(40)}', 'Example Metro');
+ update deal set market_id = '${id(40)}' where id = '${DEAL}';
+ insert into party (id, kind, name) values ('${id(41)}', 'person', 'Morgan Example');
+ insert into party_email (party_id, address, label) values ('${USER}', 'alex@public.test', 'personal'), ('${id(41)}', 'morgan@public.test', 'work');
+ insert into party_company (person_id, company_id) values ('${id(41)}', '${CLIENT}');
+ select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${USER}', true);
+ insert into activity (id, kind, happened_at) values ('${id(42)}', 'email', now() - interval '3 hours'), ('${id(43)}', 'email', now() - interval '4 hours');
+ insert into activity_about (activity_id, deal_id) values ('${id(42)}', '${DEAL}'), ('${id(43)}', '${DEAL}');
+ insert into email (activity_id, message_id, sender, subject, body) values ('${id(42)}', 'known@example.test', 'morgan@public.test', 'Example known', 'Example'), ('${id(43)}', 'unknown@example.test', 'stranger@public.test', 'Example unknown', 'Example'); commit;`);
+	const [status, body] = await save(job, "router-queue", {}, "GET");
+	assert.equal(status, 200);
+	assert.ok(Array.isArray(body.emails));
+	const known = body.emails.find((e) => e.activity_id === id(42));
+	assert.equal(known.sender.internal, false);
+	assert.equal(known.sender.role, "client");
+	assert.deepEqual(known.sender.client_party_ids, [CLIENT]);
+	assert.equal(
+		body.emails.find((e) => e.activity_id === id(43)).sender.internal,
+		false,
+	);
+	assert.equal(
+		known.thread.find((e: { activity_id: string }) => e.activity_id === id(43))
+			.sender.internal,
+		false,
+	);
+	assert.equal(
+		body.emails.find((e) => e.activity_id === EMAIL).sender.internal,
+		true,
+	);
+	assert.ok(Array.isArray(body.open_deals));
+	assert.equal(
+		body.open_deals.find((d) => d.deal_id === DEAL).city,
+		"Example Metro",
+	);
 });
