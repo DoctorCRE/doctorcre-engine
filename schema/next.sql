@@ -778,6 +778,7 @@ create table activity (
 	kind text not null check (kind in ('email', 'call', 'meeting', 'note')),
 	happened_at timestamptz not null,
 	from_party_id uuid references party,
+	reached boolean,
 	summary text,
 	unique (id, kind)
 );
