@@ -25,7 +25,10 @@ export function doorTest() {
 		);
 		await copy.setup();
 		await copy.db.query(
-			`create role ${writer} login; grant engine to ${writer}; create role ${reader} login; grant engine_reader to ${reader}`,
+			`create role ${writer} login; grant engine to ${writer}`,
+		);
+		await copy.db.query(
+			`create role ${reader} login; grant engine_reader to ${reader}`,
 		);
 	};
 	const cleanup = async () => {
