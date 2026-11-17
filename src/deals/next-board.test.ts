@@ -195,7 +195,10 @@ for (const scope of [
 				account: scope.account && (clientParty.get(scope.account) ?? null),
 			}),
 		);
-		assert.deepEqual(actual, JSON.parse(expected));
+		assert.deepEqual(
+			actual.map(({ seen: _, ...deal }) => deal),
+			JSON.parse(expected),
+		);
 	});
 }
 
@@ -214,4 +217,19 @@ test("the comparison covers every open deal, owner, parking, national account, f
 			["Example other office", "partner_one", null, null],
 		],
 	);
+});
+
+test("each deal answers its latest change as the one a save says it saw", async () => {
+	const deals = await nextTransaction(connectionString, "read", (tx) =>
+		readNextBoardDeals(tx, { workspace: "all", account: null }),
+	);
+	const { rows } = await db.query<{ id: string; seen: string }>(
+		`select record ->> 'id' as id, max(id) as seen from change where table_name = 'deal' group by 1`,
+	);
+	const latest = new Map(rows.map((row) => [row.id, Number(row.seen)]));
+	assert.deepEqual(
+		deals.map((deal) => deal.seen),
+		deals.map((deal) => latest.get(String(deal.id))),
+	);
+	assert.ok(deals.every((deal) => deal.seen > 0));
 });
