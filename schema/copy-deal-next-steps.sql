@@ -10,34 +10,16 @@ select n.*, row_number() over (partition by deal_id order by created_at desc, id
   and e.field = 'next_step' and e.new_value ? 'superseded_action_ids' and e.recorded_at >= n.created_at) as superseded
 from public.deal_note n where kind = 'next_step';
 
--- Each action's latest closing event per end state. A later keep or reopen leaves no proof.
-create temp table closure on commit drop as
-select distinct on (action_id, resolution) e.*, count(*) over (partition by action_id, resolution) as events
-from (select e.new_value ->> 'next_action_id' as action_id, 'cancelled' as resolution, e.id, e.occurred_at, e.mutation_order,
-  coalesce(e.new_value ->> 'reason', e.human_quote) as reason, e.new_value ->> 'version' as version, true as proves
- from public.event e where e.verb = 'drop-action'
- union all
- select r ->> 'id', 'expired', e.id, e.occurred_at, e.mutation_order, null, null, e.new_value ->> 'action' = 'drop'
- from public.event e cross join jsonb_array_elements(e.new_value -> 'rows') r
- where e.verb = 'clear-the-deck-apply' and e.new_value ->> 'kind' = 'next_action'
-  and (e.new_value ->> 'action' = 'keep' or r ->> 'status' = 'open')
- union all
- select coalesce(e.new_value ->> 'next_action_id', e.new_value ->> 'item_id', e.new_value ->> 'action_id'), 'done',
-  e.id, e.occurred_at, e.mutation_order, null, null, e.verb <> 'reopen-one-action'
- from public.event e where e.verb in ('complete-one-action', 'complete-deal-item', 'reopen-one-action')) e
-order by action_id, resolution, mutation_order desc;
-
 create temp table old_action on commit drop as
 select n.id, 'next_action'::text as source, case n.subject_type when 'deal' then n.subject_id end as deal_id,
  case n.subject_type when 'vendor' then n.subject_id end as vendor_id, n.description, n.status, n.due_on,
- n.owner_id, n.created_at, n.updated_at, null::timestamptz as completed_at, n.version,
- n.hold_until, n.source_ref, n.item_title, n.item_bullets, a.*
+ n.owner_id, n.created_at, n.updated_at, n.hold_until, n.source_ref, n.item_title, n.item_bullets, a.*
 from public.next_action n
 cross join lateral copy_attribution('next_action', n.id, coalesce(n.updated_by, n.created_by)) a
 where n.subject_type in ('deal', 'vendor')
 union all
 select n.id, 'capture_post_call_action', n.deal_id, null, n.description, n.status, n.due_on,
- n.owner_id, n.accepted_at, n.updated_at, n.completed_at, n.version, null, n.source_ref, n.item_title, n.item_bullets, a.*
+ n.owner_id, n.accepted_at, n.updated_at, null, n.source_ref, n.item_title, n.item_bullets, a.*
 from public.capture_post_call_action n
 left join lateral (select e.id, e.actor_id from public.event e
  where e.subject_type = 'deal' and e.subject_id = n.deal_id
@@ -46,21 +28,8 @@ left join lateral (select e.id, e.actor_id from public.event e
  order by e.mutation_order desc limit 1) event on true
 cross join lateral copy_event_attribution(coalesce(event.actor_id, n.accepted_by), event.id) a;
 
--- A cancellation needs one partner drop with its reason, on the row as that drop left it.
 create temp table action_end on commit drop as
-select n.id, s.resolution, p.proven,
- case when s.resolution = 'done' then coalesce(n.completed_at, case when p.proven then c.occurred_at end) end as done_at,
- case when s.resolution <> 'done' and p.proven then c.occurred_at end as resolved_at,
- case when s.resolution = 'cancelled' and p.proven then c.reason end as resolution_reason,
- case when s.resolution <> 'done' and p.proven then c.id end as resolution_event_id,
- case when s.resolution = 'cancelled' and not p.proven then case when coalesce(c.reason, '') !~ '\S'
-  then 'cancellation_reason_missing' else 'cancellation_evidence_conflict' end end as refusal
-from old_action n
-cross join lateral (values (case n.status when 'done' then 'done' when 'dropped' then 'cancelled' when 'expired' then 'expired' end)) s(resolution)
-left join closure c on c.action_id = n.id::text and c.resolution = s.resolution
-cross join lateral (values (coalesce(case when s.resolution <> 'cancelled' then c.proves
- else c.events = 1 and c.version = n.version::text and c.reason ~ '\S' end, false))) p(proven)
-where s.resolution is not null;
+select e.* from copy_action_end() e join old_action n using (id);
 
 create temp table step_candidate on commit drop as
 select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
