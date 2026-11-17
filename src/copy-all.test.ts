@@ -44,6 +44,7 @@ const order: [file: string, input?: string][] = [
 	["copy-lead-stage-moves.sql"],
 	["copy-deal-next-steps.sql"],
 	["copy-preferences.sql"],
+	["copy-change-history.sql"],
 ];
 
 // One made-up snapshot of today's system: two partners and a clinic client leasing a suite, with its vendor and a lead.
@@ -145,8 +146,9 @@ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, act
  ('${id(83)}', 'call', '2025-01-05', '2025-01-05', '2025-01-05', '${id(1)}', 'Example prospect call', null, null, '${id(21)}');
 insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(84)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2025-01-04');
-insert into public.event (actor_id, verb, subject_type, subject_id, field, new_value, cause, occurred_at) values
- ('${id(1)}', 'add-deal-note', 'deal', '${id(30)}', 'note', '{"note": "Example deal note"}', 'human_stated', '2025-01-04');
+insert into public.event (id, actor_id, verb, subject_type, subject_id, field, old_value, new_value, cause, occurred_at) values
+ ('${id(93)}', '${id(1)}', 'add-deal-note', 'deal', '${id(30)}', 'note', null, '{"note": "Example deal note"}', 'human_stated', '2025-01-04'),
+ ('${id(94)}', '${id(1)}', 'update-party', 'party', '${id(10)}', 'name', '{"name": "Example Clinic"}', '{"name": "Example Clinic Group"}', 'human_stated', '2024-01-15');
 insert into public.lead_stage_move (id, lead_id, from_stage, to_stage, activity_id, evidence_ref, strength, status, created_by, created_at, reason) values
  ('${id(85)}', '${id(21)}', 'new', 'qualified', '${id(83)}', 'Example evidence', 'strong', 'applied', '${id(1)}', '2025-01-05', 'Example reason'),
  ('${id(92)}', '${id(21)}', 'qualified', 'outreach_active', '${id(83)}', 'Example reply', 'weak', 'proposed', '${id(3)}', '2025-01-06', 'Example proposal');
@@ -165,8 +167,8 @@ insert into public.deal_invoice_email (id, evidence_ref, from_address, deal_name
  '2025-03-01T12:00:00Z', '2025-03-01', '${id(3)}', 'captured', null, null, null, null, null, null, null),
  ('${id(91)}', 'local-mail:example-91', 'billing@example.test', 'Example closed lease', 'Example Clinic Group', '100 Example Way',
  '2025-03-01T12:00:00Z', '2025-03-01', '${id(3)}', 'applied', '${id(34)}', 'negotiation', '${id(36)}', '${id(37)}', '2025-03-02T12:00Z', '${id(3)}', 'Example invoice');
-insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug)
- select '${id(3)}', 'record-deal-invoice', 'deal_invoice_email', id, jsonb_build_object('evidence_ref', evidence_ref, 'email_date', '2025-03-01'),
+insert into public.event (id, actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug)
+ select ('00000000-0000-4000-8000-1' || right(id::text, 11))::uuid, '${id(3)}', 'record-deal-invoice', 'deal_invoice_email', id, jsonb_build_object('evidence_ref', evidence_ref, 'email_date', '2025-03-01'),
  'ingest_email', '2025-03-01T12:00:00Z', 'partner_one' from public.deal_invoice_email;
 insert into ops.notification_preference (actor, device_opt_in, quiet_hours_start, quiet_hours_end, timezone, version) values
  ('${id(1)}', true, '22:00', '06:00', 'America/Chicago', 1);
@@ -257,7 +259,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  deal_property: 1, deal_phase_change: 3, offer: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 3, activity_about: 4, lead_stage_move: 1, proposal: 1,
- candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2 };
+ candidate: 1, lead_contact_draft: 1, next_step: 2, user_preference: 1, home_mark: 2, imported_change: 1 };
 // The party copy lists a copied record's leftover values on its first run only (#392).
 // biome-ignore format: one row per correction
 const leftover = ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"];
@@ -272,6 +274,13 @@ const corrections = [
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
+ ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
+ ["copy-change-history.sql", id(35), "phase", "field_has_no_mapping"],
+ ["copy-change-history.sql", id(36), "phase", "field_has_no_mapping"],
+ ["copy-change-history.sql", id(37), "invoiced_on", "field_has_no_mapping"],
+ ["copy-change-history.sql", id(93), "note", "field_has_no_mapping"],
+ ["copy-change-history.sql", "00000000-0000-4000-8000-100000000090", null, "field_has_no_mapping"],
+ ["copy-change-history.sql", "00000000-0000-4000-8000-100000000091", null, "field_has_no_mapping"],
 ];
 
 test("every copy runs in order on one snapshot and lists only the expected corrections", async () => {

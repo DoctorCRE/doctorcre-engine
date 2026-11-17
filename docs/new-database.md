@@ -285,8 +285,9 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 17. `copy-lead-stage-moves.sql`: needs the activity each move cites.
 18. `copy-deal-next-steps.sql`: needs deals and activity.
 19. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
+20. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
-Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot. The copy of change history (#385) joins this order when it lands.
+Running the whole order again changes no row and no change history, and each copy lists the same corrections, except that the party copy lists a copied record's leftover values only once (#392). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
 
 ## Copying today's people and companies
 
