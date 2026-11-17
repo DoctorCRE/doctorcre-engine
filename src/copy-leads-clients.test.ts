@@ -535,7 +535,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 		assert.deepEqual((await steps()).map(Object.values), copied);
 		await db.query(`${restart};
  insert into public.lead (id,party_id,stage,source_type,created_at,updated_at,created_by,updated_by) values ('${id(104)}','${id(90)}','new','Example referral','2025-04-01','2025-04-01','${id(1)}','${id(1)}');
- insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,created_by) values ('${id(117)}','lead','${id(104)}','${id(1)}','Call back','2027-01-05','${id(1)}');`);
+ insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,created_at,created_by) values ('${id(117)}','lead','${id(104)}','${id(1)}','Call back','2027-01-05','2020-01-01','${id(1)}');`);
 		await db.query(copy);
 		assert.deepEqual((await steps()).map(Object.values), copied);
 		const corrected = [
