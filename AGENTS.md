@@ -38,9 +38,9 @@ When a pull request adds a dependency or a script, say in one line which of 1 an
 
 This repo has one check, one ruleset and this file. Do not add hooks, gates, extra CI jobs or workflows, bots, rule files, registries, receipts, proofs, checks that test other checks, or new sections here. Changing `AGENTS.md`, `.github/` or the scripts in `package.json` needs an issue in which the owner asked for that change.
 
-## What waits for the owner
+## Changing the rules
 
-`.github/CODEOWNERS` gives the owner `AGENTS.md`, `CLAUDE.md` and `.github/`. A pull request that changes any of them waits for the owner to merge it from the pull request page. You never merge one yourself, and you never use `--admin` or any other bypass.
+`.github/CODEOWNERS` gives the owner `AGENTS.md`, `CLAUDE.md` and `.github/`. A pull request that changes any of them needs an issue in which the owner asked for the change. Then it merges like any other pull request. A session from the other family reviews it, and the coordinator turns on auto-merge pinned to the head that was reviewed. Nobody uses `--admin` or any other bypass.
 
 ## Skills
 
