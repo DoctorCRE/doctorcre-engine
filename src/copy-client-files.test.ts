@@ -59,6 +59,10 @@ before(async () => {
  ('${id(20)}', '${id(10)}', '${id(1)}', '${id(1)}'), ('${id(21)}', '${id(11)}', '${id(1)}', '${id(1)}'),
  ('${id(22)}', '${id(13)}', '${id(1)}', '${id(1)}'), ('${id(23)}', '${id(14)}', '${id(1)}', '${id(1)}'),
  ('${id(24)}', '${id(14)}', '${id(1)}', '${id(1)}');
+ insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
+ insert into public.deal_phase (slug, label) values ('closed', 'Example closed');
+ insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
+ values ('${id(30)}', '${id(20)}', 'Example deal', 'lease', 'closed', 'partner_one', '${id(1)}', '${id(1)}');
  update public.client set merged_into = '${id(22)}' where id = '${id(24)}';
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_by) values
  ${attachment(100)}, ${attachment(102, 22)}, ${attachment(103, 24)},
@@ -81,7 +85,10 @@ before(async () => {
  ('${id(403)}', '${id(300)}', '${id(21)}', '${id(1)}', null, '${id(100)}', null),
  ('${id(400)}', '${id(300)}', '${id(20)}', '${id(1)}', '${id(112)}', '${id(113)}', 'Example generated note'),
  ('${id(401)}', '${id(300)}', '${id(20)}', '${id(1)}', null, null, null),
- ('${id(402)}', '${id(300)}', '${id(20)}', '${id(1)}', '${id(105)}', null, null);
+ ('${id(402)}', '${id(300)}', '${id(20)}', '${id(1)}', '${id(105)}', null, null),
+ ('${id(404)}', '${id(300)}', '${id(23)}', '${id(1)}', null, '${id(100)}', null);
+ insert into public.document (id, template_id, deal_id, client_id, prepared_by, pdf_attachment)
+ values ('${id(405)}', '${id(300)}', '${id(30)}', '${id(20)}', '${id(1)}', '${id(115)}');
  commit;`);
 	report = await run();
 });
@@ -149,10 +156,43 @@ test("client and generated working and PDF files keep their bytes, times and aut
 	);
 });
 
+test("a generated file with both a deal and a client stays out of client files", async () => {
+	assert.deepEqual(
+		(await files()).filter((f) => f.id === id(115)),
+		[],
+	);
+	assert.deepEqual(
+		(await links()).filter((l) => l.document_id === id(115)),
+		[],
+	);
+});
+
+test("a shared file keeps its mapped clients when another client is unmapped", async () => {
+	assert.deepEqual(
+		(await links()).filter((l) => l.document_id === id(100)).map(Object.values),
+		[
+			[id(10), id(100)],
+			[id(11), id(100)],
+		],
+	);
+	assert.deepEqual(
+		report.filter((r) => r.old_id === id(100)),
+		[
+			{
+				old_id: id(100),
+				field: "client_id",
+				value: id(23),
+				reason: "client_not_copied",
+			},
+		],
+	);
+});
+
 test("missing bytes, deleted files, unmapped clients and conflicts are listed without invented files or links", async () => {
 	assert.deepEqual(
 		report.map((r) => [r.old_id, r.reason]),
 		[
+			[id(100), "client_not_copied"],
 			[id(104), "client_not_copied"],
 			[id(105), "attachment_deleted"],
 			[id(106), "file_incomplete"],
@@ -163,6 +203,7 @@ test("missing bytes, deleted files, unmapped clients and conflicts are listed wi
 			[id(400), "generated_note"],
 			[id(401), "no_file"],
 			[id(402), "file_deleted"],
+			[id(404), "client_not_copied"],
 		],
 	);
 	assert.deepEqual(

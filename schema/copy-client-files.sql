@@ -32,9 +32,7 @@ left join document n on (n.r2_bucket, n.r2_key) = ('deal_documents', c.r2_key)
 cross join lateral (values
  ('client_id', c.client_id::text, 'client_not_copied', c.party_id is null),
  ('r2_key', c.r2_key, 'file_incomplete', not (c.r2_key ~ '\S' and c.mime ~ '\S' and c.sha256 ~ '^[0-9a-f]{64}$' and c.bytes > 0)),
- ('r2_key', c.r2_key, 'file_conflict', exists (select from candidate o where o.r2_key = c.r2_key
-  and (o.mime, o.sha256, o.bytes) is distinct from (c.mime, c.sha256, c.bytes))
-  or n.id is not null and (n.content_type, n.sha256, n.bytes) is distinct from (c.mime, c.sha256, c.bytes)),
+ ('r2_key', c.r2_key, 'file_conflict', n.id is not null and (n.content_type, n.sha256, n.bytes) is distinct from (c.mime, c.sha256, c.bytes)),
  ('id', c.id::text, 'document_id_taken', exists (select from document o where o.id = c.id
   and (o.r2_bucket, o.r2_key) is distinct from ('deal_documents', c.r2_key)))) f(field, value, reason, refused)
 where f.refused;
