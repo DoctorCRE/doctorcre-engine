@@ -262,7 +262,7 @@ order by v.person_id, v.company_id, v.title is null, v.rank;
 
 insert into not_copied
 select old_id, 'org_id', org_id::text, case
-	when kind <> 'person' then 'company links are only kept as client brands'
+	when kind <> 'person' then 'company links are only kept as brand memberships'
 	when company_id is null then 'its company is not copied'
 	else 'not a company' end
 from typed_company where org_id is not null and (kind <> 'person' or company_kind is distinct from 'company')
