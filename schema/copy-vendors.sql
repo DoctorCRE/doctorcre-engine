@@ -1,5 +1,6 @@
 -- Copies today's vendors into the new database: each one's vendor role, with its stage, relationship level and
--- target flag, its categories as roles, its introductions and the deals it worked. Run it after schema/copy-parties.sql
+-- target flag, its categories as roles, its introductions and the deals it worked, and who knows or can introduce
+-- whom. Run it after schema/copy-parties.sql
 -- and before schema/copy-deals.sql, which finds the vendor roles, and again after it, so introductions and worked deals
 -- find their deals. The owner runs it in one transaction with search_path set to the new schema.
 -- It only reads today's tables in public, and ends by listing each value it did not copy, for a partner to fix there.
@@ -13,6 +14,7 @@ alter table vendor_vertical disable trigger stamp_change;
 alter table vendor_loan_program disable trigger stamp_change;
 alter table deal_party disable trigger stamp_change;
 alter table introduction disable trigger stamp_change;
+alter table party_link disable trigger stamp_change;
 
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
@@ -268,6 +270,47 @@ where coalesce(kind, '') not in ('worked', 'referred') or kind = 'worked' and de
 	or kind = 'referred'
 		and not exists (select from introduction i where (i.vendor_id, i.deal_id, i.made_by) = (e.party_id, e.deal_id, 'vendor'));
 
+-- Each other link today, at the records its parties became. A can-introduce link through a broker says the broker can
+-- introduce the team, so it is the broker's to the end that is not a user.
+create temp table typed_link on commit drop as
+select l.id, l.kind, l.from_party, l.via_party, l.occurred_on, l.created_at, l.created_by,
+	nullif(regexp_replace(l.note, '^\s+|\s+$', '', 'g'), '') as note, ends.party_id, ends.other_party_id, case
+	when l.kind in ('works_with', 'intro_requested') then 'outside the owner''s ruling'
+	when l.kind not in ('knows', 'can_introduce') then 'not a kind of link'
+	when f.party_id is null or t.party_id is null or brokered and v.party_id is null then 'a party it links is not copied'
+	when brokered and users.from_user = users.to_user then
+		case when users.from_user then 'both ends are users' else 'neither end is a user' end
+	when ends.party_id = ends.other_party_id then 'it links a record to itself'
+end as reason
+from public.party_link l
+left join outside_id f on f.source = 'old_system' and f.value = l.from_party::text
+left join outside_id t on t.source = 'old_system' and t.value = l.to_party::text
+left join outside_id v on v.source = 'old_system' and v.value = l.via_party::text
+cross join lateral (select l.kind = 'can_introduce' and l.via_party is not null as brokered) b
+cross join lateral (select exists (select from app_user where id = f.party_id) as from_user,
+	exists (select from app_user where id = t.party_id) as to_user) users
+cross join lateral (select case when brokered then v.party_id else f.party_id end as party_id,
+	case when brokered and users.from_user then t.party_id when brokered then f.party_id else t.party_id end as other_party_id) ends
+where l.kind not in ('introduced', 'referred', 'intro', 'intro_received', 'referral')
+	and not exists (select from party_link n where n.id = l.id);
+
+-- Of links that are one, such as a knows link stored each way round, the first stored is kept.
+insert into party_link (id, created_at, kind, party_id, other_party_id, started_on, note, changed_by_user_id, changed_by_job,
+	changed_for_user_id, changed_at)
+select l.id, l.created_at, l.kind, l.party_id, l.other_party_id, l.occurred_on, l.note, a.changed_by_user_id, a.changed_by_job,
+	a.changed_for_user_id, l.created_at
+from typed_link l cross join lateral copy_attribution('party', l.from_party, l.created_by) a
+where l.reason is null
+order by l.created_at, l.id
+on conflict do nothing;
+
+insert into not_copied
+select id, 'party_link', kind, coalesce(reason, 'the same link is kept already')
+from typed_link l where reason is not null or not exists (select from party_link n where n.id = l.id);
+
+insert into not_copied
+select id, 'via_party', via_party::text, 'a knows link has no broker' from typed_link where kind = 'knows' and via_party is not null;
+
 -- A category waits on its vendor role, checked now, because a table with checks waiting cannot be altered.
 set constraints all immediate;
 alter table party_role enable trigger stamp_change;
@@ -275,5 +318,6 @@ alter table vendor_vertical enable trigger stamp_change;
 alter table vendor_loan_program enable trigger stamp_change;
 alter table deal_party enable trigger stamp_change;
 alter table introduction enable trigger stamp_change;
+alter table party_link enable trigger stamp_change;
 
 select * from not_copied order by old_id, field, value;
