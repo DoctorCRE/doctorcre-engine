@@ -11,14 +11,16 @@ databases on one server still share its connection limit (#322).
 
 With Docker running, paste this block from the worktree to run a check on its own
 throwaway server. Docker chooses a free loopback port. The subshell stops only
-its own container when the check exits, including on failure.
+its own container when the check exits, including on failure or interruption.
 
 ```sh
 (
 	set -eu
-	postgres=$(docker run --rm -d -p 127.0.0.1::5432 \
+	postgres=$(docker run -d -p 127.0.0.1::5432 \
 		-e POSTGRES_HOST_AUTH_METHOD=trust postgres:18)
-	trap 'docker stop "$postgres" >/dev/null' EXIT
+	trap 'docker rm -f "$postgres" >/dev/null' EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
 	ready=false
 	for attempt in $(seq 1 30); do
 		if docker exec "$postgres" pg_isready -h 127.0.0.1 -U postgres >/dev/null; then
@@ -45,7 +47,7 @@ The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a server with
 business data. A check opens roughly one connection per CPU core, plus sessions
 for tests that exercise concurrent writes. More simultaneous checks need more
-connections, even though the snapshot helper closes its admin connections.
+connections.
 
 Each check restores `schema/business.sql` once, generates ignored `src/database.d.ts`
 with `kysely-codegen`, and runs TypeScript and tests against that database.
