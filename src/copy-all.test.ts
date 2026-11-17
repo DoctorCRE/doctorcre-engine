@@ -48,6 +48,7 @@ const order: [file: string, input?: string][] = [
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
 	["copy-emails.sql"],
+	["copy-reply-drafts.sql"],
 	["copy-calls.sql"],
 	["copy-meetings.sql"],
 	["copy-lead-stage-moves.sql"],
@@ -171,6 +172,8 @@ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, act
  select v, 'email_in', '2025-01-06', '2025-01-06', '2025-01-06', '${id(3)}', 'Email from Example Doctor: Example tour', 'Example email text',
   '{"mailbox_owner": "partner_one", "sender_email": "doctor@example.com"}', d, c
  from (values ('${id(120)}'::uuid, '${id(30)}'::uuid, null::uuid), ('${id(121)}', null, '${id(20)}')) f(v, d, c);
+insert into public.email_proposal (id, kind, activity_id, evidence_quote, owner, confidence, created_by, draft_subject, draft_body)
+ values ('${id(122)}', 'reply_draft', '${id(120)}', 'Example asks to tour', 'partner_one', 0.9, '${id(3)}', 'Re: Example tour', 'Example reply');
 insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(84)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2025-01-04');
 insert into public.event (id, actor_id, verb, subject_type, subject_id, field, old_value, new_value, cause, occurred_at) values
@@ -294,6 +297,7 @@ const corrections = [
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
  ["copy-emails.sql", id(120), "message_id", null, "email_without_message_id"],
  ["copy-emails.sql", id(121), "message_id", null, "email_without_message_id"],
+ ["copy-reply-drafts.sql", id(122), "activity_id", id(120), "email_not_copied"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
