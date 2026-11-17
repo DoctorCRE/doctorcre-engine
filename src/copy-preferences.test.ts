@@ -251,14 +251,14 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
  ('${id(1)}','${callItem(504)}',null,'settled',null,'1','m','2026-10-02'),
  ('${id(1)}','${callItem(505)}',null,'settled',null,'1','m','2026-10-02'),
  ('${id(1)}','${callItem(506)}',null,'settled',null,'1','m','2026-10-02'),
- ('${id(1)}','legacy:503','${callItem(503)}','settled',null,'1','m','2026-10-02'),
- ('${id(1)}','legacy:110','${item(110)}','settled',null,'1','m','2026-10-02'),
- ('${id(1)}','legacy:111','${item(111)}','settled',null,'1','m','2026-10-03'),
+ ('${id(1)}','${callItem(503)}',null,'settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','${item(120)}','${item(110)}','settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','${item(121)}','${item(111)}','settled',null,'1','m','2026-10-03'),
  ('${id(1)}','${item(111)}',null,'inbox',null,'1','m','2026-10-01'),
- ('${id(1)}','legacy:112a','${item(112)}','snoozed','2026-12-01','1','m','2026-10-01'),
- ('${id(1)}','legacy:112b','${item(112)}','settled',null,'1','m','2026-10-02'),
- ('${id(1)}','legacy:112c','${item(112)}','snoozed','2026-12-01','1','m','2026-10-02'),
- ('${id(1)}','legacy:113','${item(113)}','settled',null,'1','m','2026-10-02');
+ ('${id(1)}','${item(122)}','${item(112)}','snoozed','2026-12-01','1','m','2026-10-01'),
+ ('${id(1)}','${item(123)}','${item(112)}','settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','${item(124)}','${item(112)}','snoozed','2026-12-01','1','m','2026-10-02'),
+ ('${id(1)}','${item(125)}','${item(113)}','settled',null,'1','m','2026-10-02');
  insert into ops.home_waiting (actor_id,item_id,identity_kind,identity_id,reason,evidence,version,updated_at) values
  ('${id(1)}','${callItem(501)}','party','${id(11)}','Example reply','[]',1,'2026-10-05'),
  ('${id(1)}','${callItem(503)}','actor','${id(3)}','Example review','[]',1,'2026-10-06'),
@@ -274,7 +274,12 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
 				"next_step_not_copied",
 			]),
 			...report.slice(1, 4),
-			[id(1), "item_id", item(113), "next_step_not_copied"],
+			...[113, 120, 121, 122, 123, 124, 125].map((n) => [
+				id(1),
+				"item_id",
+				item(n),
+				"next_step_not_copied",
+			]),
 			...report.slice(4),
 		]);
 		const addedMarks = (await marks()).filter(

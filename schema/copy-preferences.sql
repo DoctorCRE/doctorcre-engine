@@ -28,7 +28,6 @@ select k.actor_id, k.item_id, nullif(d.disposition, 'inbox') as disposition, d.s
  least(d.updated_at, w.updated_at) as created_at, greatest(d.updated_at, w.updated_at) as changed_at,
  u.id as user_id, s.id as next_step_id, waiting_on.id as waiting_on_party_id
 from (select actor_id, item_id from ops.home_inbox_disposition where disposition <> 'inbox'
- and (v2_item_id is null or item_id like 'next_action:%' or item_id like 'capture_post_call_action:%')
  union select actor_id, v2_item_id from ops.home_inbox_disposition where disposition <> 'inbox' and v2_item_id is not null
  union select actor_id, item_id from ops.home_waiting where identity_id is not null) k
 left join lateral (
