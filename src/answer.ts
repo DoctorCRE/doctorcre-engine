@@ -42,7 +42,14 @@ const HINTS = {
 	invalid_json: "Send the arguments as one JSON object.",
 	unknown_job: "Name a job the engine knows in the Engine-Job header.",
 	step_ended: "The step was ended elsewhere; count it as closed.",
+	agenda_too_large: "Trim the agenda to at most 262144 JSON characters.",
+	agenda_superseded: "Drop this older agenda observation.",
+	review_not_found: "Choose a review in your current agenda.",
 	step_open: "The step is already open.",
+	about_nothing:
+		"The email matches no record and names none, so nothing was stored.",
+	message_id_invalid:
+		"Send the Message-ID without angle brackets or surrounding spaces.",
 	unknown_owner: "Owner is one of joe, dell or claude.",
 	field_required:
 		"Supply the required field using the documented operation shape.",
