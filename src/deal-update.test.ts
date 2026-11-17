@@ -7,6 +7,7 @@ import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { addDealUpdate } from "./deal-update.ts";
 import { runSave } from "./save.ts";
+import worker from "./worker.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -41,6 +42,57 @@ from unnest(array['${id(31)}','${id(32)}']::uuid[]) v;
 insert into capture_post_call_action (id,candidate_id,deal_id,owner_id,due_on,description,accepted_by,updated_at,item_title,source_ref) values
 ('${id(41)}','${id(31)}','${D1}','${A}','${PAST}','Example post-call step','${A}','2026-01-04',null,null),
 ('${id(42)}','${id(32)}','${D1}','${B}','${PAST}','Example other post-call','${B}','2026-01-04',null,null);`;
+
+// The writer grants a deal update needs, and nothing else.
+async function writerLogin(db: pg.Client, url: string, role: string) {
+	await db.query(`create role ${role} login noinherit`);
+	for (const grant of [
+		"select on actor,event,deal,deal_note,v_ref_index,next_action,capture_post_call_action,v_deal_room_board,v_deal_current_action",
+		"select (idempotency_key,request_hash,response,created_at) on tool_call",
+		"insert (idempotency_key,verb,actor_id,request_hash,response,via,client_id,organization_tenant_id,sponsoring_human_slug,personal_scope,authorization_class,correlation_id) on tool_call",
+		"insert (actor_id,agent_rationale,authorization_class,cause,client_id,correlation_id,field,human_quote,idempotency_key,new_value,occurred_at,old_value,organization_tenant_id,personal_scope,recorded_at,sponsoring_human_slug,subject_id,subject_type,verb,via) on event",
+		"insert (actor_id,created_at,deal_id,kind,text) on deal_note",
+		"insert (created_by,description,due_on,owner_id,status,subject_id,subject_type,updated_at,updated_by) on next_action",
+		"update (next_date,updated_by) on deal",
+		"update (status,updated_at,updated_by) on next_action",
+		"execute on function carr_business_date(timestamptz),carr_is_partner_actor(uuid),carr_is_partner_made(uuid,text)",
+	])
+		await db.query(`grant ${grant} to ${role}`);
+	await db.query(
+		"revoke execute on function carr_business_date(timestamptz),carr_is_partner_actor(uuid),carr_is_partner_made(uuid,text) from public",
+	);
+	const login = new URL(url);
+	login.username = role;
+	return login;
+}
+
+const origin = "https://app.example.test";
+
+const request = (url: string, args: JsonObject) =>
+	worker.request(
+		`${origin}/api/engine/add-deal-note`,
+		{
+			method: "POST",
+			headers: {
+				Cookie: "__Host-dealroom_session=example",
+				Origin: origin,
+				"Sec-Fetch-Site": "same-origin",
+				"x-carr-csrf": "example",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(args),
+		},
+		{
+			DATABASE_WRITER: { connectionString: url },
+			CARR: {
+				fetch: async () =>
+					Response.json({
+						actor: { slug: "partner_one", display: "Example Partner" },
+						csrf_token: "example",
+					}),
+			},
+		},
+	);
 
 const save = (url: string, args: JsonObject) =>
 	runSave(
@@ -78,24 +130,7 @@ test("a deal update holds the partner's overdue work for checking and matches th
 	withDeals(async (url, db) => {
 		const role = `writer_${randomUUID().replaceAll("-", "")}`;
 		try {
-			await db.query(`create role ${role} login noinherit`);
-			for (const grant of [
-				"select on actor,event,deal,deal_note,v_ref_index,next_action,capture_post_call_action,v_deal_room_board,v_deal_current_action",
-				"select (idempotency_key,request_hash,response,created_at) on tool_call",
-				"insert (idempotency_key,verb,actor_id,request_hash,response,via,client_id,organization_tenant_id,sponsoring_human_slug,personal_scope,authorization_class,correlation_id) on tool_call",
-				"insert (actor_id,agent_rationale,authorization_class,cause,client_id,correlation_id,field,human_quote,idempotency_key,new_value,occurred_at,old_value,organization_tenant_id,personal_scope,recorded_at,sponsoring_human_slug,subject_id,subject_type,verb,via) on event",
-				"insert (actor_id,created_at,deal_id,kind,text) on deal_note",
-				"insert (created_by,description,due_on,owner_id,status,subject_id,subject_type,updated_at,updated_by) on next_action",
-				"update (next_date,updated_by) on deal",
-				"update (status,updated_at,updated_by) on next_action",
-				"execute on function carr_business_date(timestamptz),carr_is_partner_actor(uuid),carr_is_partner_made(uuid,text)",
-			])
-				await db.query(`grant ${grant} to ${role}`);
-			await db.query(
-				"revoke execute on function carr_business_date(timestamptz),carr_is_partner_actor(uuid),carr_is_partner_made(uuid,text) from public",
-			);
-			const login = new URL(url);
-			login.username = role;
+			const login = await writerLogin(db, url, role);
 			const changes = async (key: string) =>
 				(
 					await db.query(
@@ -263,4 +298,112 @@ test("a deal update refuses blank text, a half plan and a client, and its plan c
 			"select (select count(*)::int from event) as events, (select count(*)::int from deal_note) as notes",
 		);
 		assert.deepEqual(rows, [{ events: 0, notes: 0 }]);
+	}));
+
+test("a deal update sent to the engine is saved and replayed as the old writer answered it", () =>
+	withDeals(async (url, db) => {
+		const role = `writer_${randomUUID().replaceAll("-", "")}`;
+		try {
+			const login = (await writerLogin(db, url, role)).href;
+			const plain = update(D2);
+			const response = await request(login, plain);
+			const text = await response.text();
+			assert.equal(response.status, 200, text);
+			const { rows } = await db.query(
+				"select id, created_at from deal_note where deal_id=$1",
+				[D2],
+			);
+			assert.equal(
+				text,
+				JSON.stringify({
+					ok: true,
+					deal_id: D2,
+					note_id: rows[0].id,
+					created_at: rows[0].created_at,
+					preserved_action_ids: [],
+					next_step_required: true,
+					prompt:
+						"Doc needs the new next step and date for this deal. Use set-next-step to record both.",
+				}),
+			);
+			const receipt = await db.query(
+				"select response from tool_call where idempotency_key=$1",
+				[plain.idempotency_key],
+			);
+			assert.equal(
+				await (await request(login, plain)).text(),
+				JSON.stringify({ replayed: true, ...receipt.rows[0].response }),
+			);
+			const events = await db.query(
+				"select verb, field, old_value, new_value from event",
+			);
+			assert.deepEqual(events.rows, [
+				{
+					verb: "add-deal-note",
+					field: "note",
+					old_value: null,
+					new_value: { note: "Example update" },
+				},
+			]);
+			const reused = await request(login, { ...plain, text: "Other update" });
+			assert.equal(reused.status, 409);
+			assert.equal(JSON.parse(await reused.text()).error, "key_reuse");
+		} finally {
+			await db.query(`drop owned by ${role}`);
+			await db.query(`drop role ${role}`);
+		}
+	}));
+
+test("a deal update sent to the engine refuses as the old writer did, and one with overdue work goes back to the old system unwritten", () =>
+	withDeals(async (url, db) => {
+		for (const [args, status, error, more] of [
+			[update(D1), 501, "old_system_required", {}],
+			// The held step is kept, so the partner's new open step collides with it.
+			[
+				update(D1, { next_step: "Example plan", next_date: NEW }),
+				400,
+				"database_refused_the_statement",
+				{},
+			],
+			[update(D2, { text: " " }), 400, "unhandled_verb_failure", {}],
+			[update(D2, { next_date: NEW }), 400, "unhandled_verb_failure", {}],
+			[update(C), 422, "not_a_deal", {}],
+			[update(id(99)), 404, "unhandled_verb_failure", {}],
+			[
+				{ idempotency_key: randomUUID(), deal: D2 },
+				400,
+				"missing_required",
+				{ fields: ["text"] },
+			],
+			[
+				update(D2, { base_version: 1 }),
+				400,
+				"unregistered_operation_fields",
+				{ fields: ["base_version"] },
+			],
+			[
+				update(D2, { idempotency_key: "example" }),
+				400,
+				"invalid_idempotency_key",
+				{ fields: ["idempotency_key"] },
+			],
+		] as const) {
+			const response = await request(url, args);
+			const { correlation_id, hint, ...body } = JSON.parse(
+				await response.text(),
+			);
+			assert.equal(response.status, status, error);
+			assert.ok(correlation_id && hint);
+			assert.deepEqual(body, { error, ...more });
+		}
+		const { rows } = await db.query(
+			`select (select count(*)::int from event) as events, (select count(*)::int from deal_note) as notes,
+			(select count(*)::int from tool_call) as receipts,
+			(select count(*)::int from next_action where status='open') as open,
+			(select next_date::text from deal where id=$1) as next_date`,
+			[D1],
+		);
+		assert.deepEqual(rows, [
+			{ events: 0, notes: 0, receipts: 0, open: 5, next_date: PAST },
+		]);
 	}));
