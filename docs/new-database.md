@@ -33,13 +33,17 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`activity`**: something that happened: an email, a call, a meeting or a note, with when, who it came from and a summary.
 - **`email`**: the email behind an email activity.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
+- **`commission`**: a deal's commission, once: what an open deal is expected to bring, the gross the brokerage collects, and the closing user's part on this deal when it overrides their ladder.
+- **`commission_payment`**: one part of the gross, with when it was invoiced, falls due and was received.
+- **`commission_share`**: what goes to someone other than the users, such as a referring agent or the brokerage, as a share of the whole.
+- **`commission_tier`**: one tier of a user's ladder: the count of closed deals it starts from, the closing user's part and their partner.
 - **`change`**: one row for each insert, update or delete of a row above, with who made it and when.
 
 Each record and link carries `created_at`, when its row was stored, so moving today's records across can keep their dates. Lists such as roles and phases do not, and neither do rows that carry their own time: activities and their emails, rounds, phase changes, posts and readings. An outside id has none either; only a merge changes it, so its stamp's time is when it was imported or last merged.
 
 ## Users, jobs and who changed what
 
-Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons, specialties and how found, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, leases and their options, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, and readings.
+Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons, specialties and how found, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents, leases and their options, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, readings, and commissions, their payments and shares, and ladder tiers.
 
 The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. A removal names who made it too, in change history.
 
@@ -159,6 +163,10 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 75. A deal file names an existing deal and kind from its list, nonblank type and R2 key unique within its bucket, with a SHA-256 hash and positive byte count. Replacements increment the version and name the previous file of the same deal and kind; a version has at most one replacement. Files are never removed or rewritten except for their display name.
 76. Extraction attempts belong to the exact file version and its deal, name when and how they ran, and retain ordered page text and an optional receipt. Produced text is nonblank, no-text has no nonblank text, and unavailable or receipt-only has no pages. A receipt-only attempt requires a receipt. Pages contain no nulls and stay within 1,000 pages and 500,000 characters. The same method, extractor version, model and text format run once per file. Attempts never change or disappear.
 77. A job creates a pending proposal with an email, call or meeting source, evidence and one typed payload. Only a direct user decides it once; acceptance creates its real row atomically, dismissal creates nothing, and final decisions and payloads remain history.
+78. A deal's commission is recorded once. Its expected amount and gross are more than zero, and an override is a share between none and all.
+79. A payment is part of a deal's commission, more than zero, and invoiced no later than it is due or received. Payments never add up to more than the gross, and none comes before the gross, checked when the change is saved, one save per deal at a time.
+80. Each share to someone other than the users names a person or company, is a referral, brokerage or other share, and is more than zero. The shares never add up to more than the whole, checked when the change is saved, one save per deal at a time.
+81. A ladder tier is a user's, from a count of one or more, stored once per count, and names a partner who is another user, the same one on every tier. The closing user's part is between half and all. A ladder starts at the first closed deal and never steps up. A deal with a gross has a closing user with a ladder, even when it overrides it, so its split names both users. Both are checked when the change is saved, one save per user at a time.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -179,7 +187,8 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a round's status, and a critical date's status and resolution reason;
 - a do-not-contact row's until-date;
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;
-- a post's status, reason, platform post id and publish time, until it is published, failed or cancelled.
+- a post's status, reason, platform post id and publish time, until it is published, failed or cancelled;
+- a commission's expected amount, gross and override, a payment's amount and dates, a share's size, and a ladder tier's closing part.
 
 History is `document`, `document_extraction`, `critical_date`, `lease`, `lease_version`, `lease_option`, `deal_phase_change`, `offer`, `offer_document`, `post` and its `post_text`, `post_media` and `post_review`, `measurement`, `social_sign_in`, `outside_id` and `change`. Ids, `created_at`, and the records a link or an about row joins never change; a different link is a removed row and a new one. Who an activity came from and who owns a next step can be corrected. PostgreSQL refuses anything else before it touches a row, so a save runs no trigger just to be told no. Besides the stamp that writes who changed a row and the history that records it, the triggers left check values: a deal parked, revived or flagged by a user, a round's status moves, a later acceptance superseding a round, a lease's round accepted when recorded, a critical date's user confirmation and resolution, an option notice before lease expiration, an email about a record, a post's status moves, a post that is final, the engine's start time for an account, an edit or review inside its window, a reading of a published post, and a merged-away id used again.
 
@@ -390,7 +399,7 @@ Moving today's rows across:
 - `deal_type` splits in two. `lease`, `purchase`, `sale_leaseback` and `build_to_suit` become the kind, with no reason. `relocation`, `expansion` and `additional_office` become the reason of the same slug, and `startup` the reason `start_up`, each with no kind until a user sets it. `renewal` becomes that reason only with its source lease linked; otherwise leave the reason unknown and list the missing source for a user. `other` sets neither, and the deal is listed with its imported type for a user to file.
 - `deal.owner`, a partner's slug, becomes that partner's user as the deal owner. A closed or lost deal with none takes its open `deal_participant` row with role `lead`. A deal with neither is listed. Earlier deal owners, from the closed `lead` rows, come across later into change history, dated when each changed, with the old `event` rows.
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
-- `won_value` becomes `closed_value`. `sf_commission_placeholder` is a commission, not the deal's value, so it waits for commissions.
+- `won_value` becomes `closed_value`. `sf_commission_placeholder` is not copied (see "Commissions").
 - `lane` is not copied. A deal whose old lane disagrees with its client's national account is listed once #275 lands.
 - A `parked` deal's `parking_reason` comes across as it is, and its `parking_note` trimmed, a blank one as none. An `active` deal has no reason. `parked_at` and `parked_by` come across into change history with the old `event` rows, as earlier deal owners do, dated when the deal was parked and naming who parked it.
 - `attention` becomes `needs_attention`.
@@ -515,9 +524,25 @@ Today's system keeps one `event` row per field changed, with the actor, a verb a
 
 Only the schema owner's database role may call `erase_change(removed_change_id, fields)`. It requires a delete change and refuses a record that exists again. It removes the selected non-key text fields from old and new values for that table and record, across inserts, edits and deletions. Unknown fields, keys and non-text fields are refused. Other values stay. Keys, actions, merge pointers, authors and times stay unchanged. An `erase` change records the request with its user or job and time, with the erased field names and without copying their words. Repeating a completed erase changes nothing. The function locks the source table while it checks absence and erases, so a concurrent insert cannot recreate the record during it. The engine cannot call it or change history directly. Linked records and external copies are separate requests.
 
+## Commissions
+
+The owner answered walkthrough 4, topic E, on #196 (2026-11-16). A deal's gross commission, what the brokerage collects, is recorded once, on its `commission` row. An open deal can carry its expected commission there too, so the pipeline has a total. A gross is paid in parts, one `commission_payment` each, with its invoiced, due and received dates. Whether a payment is invoiced, unpaid, overdue or paid is read from those dates and today's date, never stored.
+
+The split pays others first. Each `commission_share` gives a referring agent, the brokerage or anyone else a share of the whole. The two users split what is left. The closing user is the deal's owner. Their ladder, the `commission_tier` rows keyed by that user, gives their part by their lifetime count of closed deals, and their partner, named on the ladder, takes the rest. The count never resets: a deal is the user's nth closed deal if it is the nth they own whose latest phase is closed, by when it closed. A tier runs from its count until the next tier starts, so tiers cannot overlap or leave a gap. A single deal overrides its users' split with its own closing part. The shares and thresholds are the partners' rows, and real ones never appear in this repo, its tests or its docs.
+
+`commission_split` works out everyone's share of each deal and its amount, so no user's take is typed. Each amount is the cents its running share of the whole adds, taking the others first and the partner last, so no amount is negative and together they are the gross. A deal that is not closed yet has no count, so its users' shares wait for it to close unless it overrides them. A gross is refused until its closing user has a ladder, because the ladder names the partner, even for a deal that overrides its closing part. The count and the ladder are read when asked, so a deal that closes, dies or changes owner moves the count for that owner's later deals, and a changed tier changes every deal it covers.
+
+Moving today's rows across:
+
+- Each deal's `commission` rows become one `commission` row. A row with status `expected` adds its `gross_amount` to the expected commission. Every other row becomes a payment of its `gross_amount`, with its `invoiced_on`, `due_on` and `received_on`, and the payments add up to the gross. A `received` row with no `received_on` is listed for a user to date.
+- `deal.invoiced_on` stays with the invoices found in email, a later slice.
+- `commission_allocation` has no rows, so nothing comes across. Its `referral_fee`, `house` and `other` kinds would be the referral, brokerage and other shares, and `partner_split` is the ladder.
+- `sf_commission_placeholder` is not copied. Today's rule already keeps it out of every money figure.
+- Today's fixed share per lane, in a report script, is replaced by each user's ladder. The partners enter their ladders themselves.
+
 ## Later slices
 
-"Everything about this person." The rest of leads (#286). Commissions. Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+"Everything about this person." The rest of leads (#286). Invoices found in email. Serving confirmed critical dates and proposals. Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
 
 ## Copying today's deals
 
