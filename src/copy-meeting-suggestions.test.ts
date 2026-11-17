@@ -72,6 +72,13 @@ before(async () => {
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
   ('${id(2)}', 'partner_two', 'human', 'Example Other'), ('${id(3)}', 'claude', 'automation', 'Example Agent');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(14)}', 'person', 'Example Prospect');
+ insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
+ insert into public.party (id, kind, name, created_by, updated_by) values ('${id(11)}', 'person', 'Example Party', '${id(1)}', '${id(1)}');
+ insert into public.client (id, party_id, created_by, updated_by) values ('${id(20)}', '${id(11)}', '${id(1)}', '${id(1)}');
+ insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
+ insert into public.deal_phase (slug, label) values ('loi', 'Example LOI');
+ insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
+  values ('${id(30)}', '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}');
  insert into app_user values ('${id(1)}');
  insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
  insert into outside_id (source, value, party_id, deal_id) values ('old_system', '${id(1)}', '${id(1)}', null),
@@ -96,7 +103,7 @@ before(async () => {
 		head(1, "proposed"), head(2, "delegated"), head(3, "accepted"), head(4, "declined"), head(5, "executed"),
 		head(6, "proposed"), head(7, "proposed"), head(8, "proposed"), head(9, "proposed", 1, 51), head(10, "proposed"),
 		head(11, "declined", 2), head(12, "proposed"), head(13, "proposed"), head(14, "proposed"), head(15, "proposed"), head(16, "proposed"), head(17, "proposed"), head(18, "proposed"), head(19, "proposed"),
-		head(20, "proposed"), head(21, "proposed"), head(22, "accepted"), head(23, "proposed"),
+		head(20, "proposed"), head(21, "proposed"), head(22, "accepted"), head(23, "proposed"), head(24, "proposed"),
 	].join(", ")};
  insert into ops.meeting_action_revision values ${[
 		revision(1, step("Example first")),
@@ -114,6 +121,7 @@ before(async () => {
 		revision(20, { verb: "set-next-action", args: { ref: id(30), description: "Example conditional", expected_action: null } }),
 		revision(21, { verb: "set-next-step", args: { deal: id(30), text: "\u00a0\ufeff", base_version: 1 } }),
 		revision(22, step("Example malformed receipt")), revision(23, step("Example held history")),
+		revision(24, { verb: "set-next-step", args: { deal: id(30), text: "Example stale", base_version: 2 } }),
 	].join(",\n  ")};
  insert into ops.meeting_action_revision values ('${id(130)}', '${id(50)}', 1, 2, 'Example summary revised', '${JSON.stringify(step("Example revised", id(30), "partner_one"))}',
   'explicit_instruction', 'processing', '${id(3)}', '2024-01-02');
@@ -184,6 +192,7 @@ test("copies each meeting suggestion with its decision and revisions, keeps the 
 		"#121 text  blank_next_step",
 		"#122 operation_key - next_step_not_copied",
 		"#123 revision #123 existing_history_conflicts",
+		"#124 base_version 2 deal_changed_since_proposal",
 		"#130 changed_for_user_id - agent_user_unknown",
 	]);
 	assert.deepEqual(

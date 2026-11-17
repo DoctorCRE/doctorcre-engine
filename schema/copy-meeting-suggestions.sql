@@ -65,9 +65,12 @@ cross join lateral (values
  ('ref', s.ref, 'meeting_not_about_record', s.party_id is not null and s.activity_id is not null
   and not exists (select from activity_about b where (b.activity_id, b.party_id) = (s.activity_id, s.party_id))),
  ('summary', s.evidence, 'blank_evidence', s.evidence !~ '\S'),
- -- The deal room refused a step without the version it was read at, and a conditional step has no place in the queue.
+ -- The deal room refused a step without the version it was read at; a conditional step has no place in the queue.
  ('base_version', s.base_version, 'base_version_invalid', s.unversioned),
  ('expected_action', s.condition, 'condition_has_no_place', s.conditional),
+ -- A pending deal-room step was refused once its deal moved on, and the queue keeps no version to check on acceptance.
+ ('base_version', s.base_version, 'deal_changed_since_proposal', s.status = 'pending' and s.verb = 'set-next-step' and not s.unversioned
+  and (select d.version from public.deal d where d.id::text = s.ref) is distinct from s.base_version::numeric),
  (case when s.verb = 'set-next-step' then 'text' else 'description' end, s.what, 'blank_next_step', coalesce(s.what, '') !~ '\S'),
  (case when s.verb = 'set-next-step' then 'next_date' else 'due_on' end, s.due_text, 'invalid_due_date', s.due_text is not null and s.due_on is null),
  ('owner', s.owner_slug, 'owner_not_a_user', s.owner_slug is not null and s.owner is null),
