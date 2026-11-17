@@ -701,31 +701,36 @@ test("an existing offer id is listed without aborting unrelated imports", async 
 	}
 });
 
-test("offer notes stay visible, submarket condition is listed, and proposed dates use Chicago in every session zone", async () => {
+test("offer notes stay visible, a known submarket condition copies and any other is listed, and proposed dates use Chicago in every session zone", async () => {
 	await db.query(
 		"begin; select set_config('engine.job', 'old_system', true); set local TimeZone = 'Asia/Tokyo'",
 	);
 	try {
-		await db.query(`insert into public.submarket_condition (slug, label, tightness, note, sort) values ('example', 'Example condition', 0, 'Example source', 1);
- insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by, escalator, options_note, opex_note, note, submarket_condition) values ('${id(107)}', '${id(10)}', 8, 'tenant', '2025-03-01', '2025-03-01', '${id(1)}', '3% yearly', 'One renewal', 'Expenses capped', 'Example general note', 'example'), ('${id(108)}', '${id(10)}', 9, 'tenant', '2025-07-01', '2025-07-01', '${id(1)}', null, null, null, null, null);`);
+		await db.query(`insert into public.submarket_condition (slug, label, tightness, note, sort) values ('example', 'Example condition', 0, 'Example source', 1), ('tight', 'Tight', 1, 'Example source', 2);
+ insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by, escalator, options_note, opex_note, note, submarket_condition) values ('${id(107)}', '${id(10)}', 8, 'tenant', '2025-03-01', '2025-03-01', '${id(1)}', '3% yearly', 'One renewal', 'Expenses capped', 'Example general note', 'example'), ('${id(108)}', '${id(10)}', 9, 'tenant', '2025-07-01', '2025-07-01', '${id(1)}', null, null, null, null, 'tight');`);
 		assert.deepEqual(
 			(await run())
-				.filter((r) => r.old_id === id(107))
-				.map((r) => [r.field, r.value, r.reason]),
-			[["submarket_condition", "example", "no_typed_destination"]],
+				.filter((r) => [id(107), id(108)].includes(r.old_id))
+				.map((r) => [r.old_id, r.field, r.value, r.reason]),
+			[[id(107), "submarket_condition", "example", "no_typed_destination"]],
 		);
 		await db.query("set local TimeZone = 'UTC'");
 		assert.deepEqual(
 			await rows(
-				`select other_terms, offered_at::text from offer where id in ('${id(107)}', '${id(108)}') order by id`,
+				`select other_terms, submarket_condition, offered_at::text from offer where id in ('${id(107)}', '${id(108)}') order by id`,
 			),
 			[
 				{
 					other_terms:
 						"Escalator: 3% yearly\nOptions: One renewal\nOperating costs: Expenses capped\nNote: Example general note",
+					submarket_condition: null,
 					offered_at: "2025-03-01 06:00:00+00",
 				},
-				{ other_terms: null, offered_at: "2025-07-01 05:00:00+00" },
+				{
+					other_terms: null,
+					submarket_condition: "tight",
+					offered_at: "2025-07-01 05:00:00+00",
+				},
 			],
 		);
 		const result = await rows(
