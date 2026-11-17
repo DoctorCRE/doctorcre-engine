@@ -689,7 +689,6 @@ create table lead_stage_move (
 	activity_id uuid references activity,
 	evidence_ref text check (evidence_ref ~ '\S'),
 	strength text not null check (strength in ('strong', 'weak')),
-	status text not null default 'proposed' check (status in ('proposed', 'applied')),
 	reason text check (reason ~ '\S'),
 	unique (party_id, from_stage, to_stage, activity_id),
 	constraint lead_stage_move_has_evidence check (to_stage = 'archived' or (activity_id is not null and evidence_ref is not null)),
@@ -704,14 +703,6 @@ create table lead_stage_move (
 create function apply_lead_stage_move() returns trigger
 language plpgsql as $$
 begin
-	if tg_op = 'UPDATE' and old.status = new.status then return null; end if;
-	if tg_op = 'UPDATE' and old.status = 'applied' then
-		raise exception 'an applied move stays applied; a correction is a new move'
-			using errcode = 'check_violation', constraint = 'lead_stage_move_final';
-	end if;
-	if new.status = 'proposed' then
-		return null;
-	end if;
 	if new.changed_by_job is not null and (new.strength = 'weak' or new.to_stage = 'archived') then
 		raise exception 'weak evidence and archiving wait for a direct user'
 			using errcode = 'check_violation', constraint = 'lead_stage_move_needs_user';
@@ -734,7 +725,7 @@ begin
 	return null;
 end $$;
 
-create trigger apply_lead_stage_move after insert or update of status on lead_stage_move
+create trigger apply_lead_stage_move after insert on lead_stage_move
 	for each row execute function apply_lead_stage_move();
 
 create function lead_stage_needs_evidence() returns trigger
@@ -745,7 +736,7 @@ begin
 	if (tg_op = 'UPDATE' and new.changed_by_job is not null and new.changed_for_user_id is null or new.stage = 'archived')
 		and not exists (select from lead_stage_move m
 			where m.party_id = new.party_id and m.from_stage = old.stage and m.to_stage = new.stage
-				and m.status = 'applied' and m.changed_at = now()
+				and m.changed_at = now()
 				and m.changed_by_user_id is not distinct from new.changed_by_user_id
 				and m.changed_by_job is not distinct from new.changed_by_job) then
 		raise exception 'a job stage move or an archive needs its applied evidence'
@@ -770,6 +761,105 @@ create table next_step (
 	property_id uuid references property,
 	constraint next_step_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1)
 );
+
+-- Suggestions from mail, calls and meetings share one decision queue, including weak lead moves.
+create table proposal (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move')),
+	activity_id uuid not null,
+	activity_kind text not null check (activity_kind in ('email', 'call', 'meeting')),
+	evidence text not null check (evidence ~ '\S'),
+	proposed_by_job text not null references job,
+	status text not null default 'pending' check (status in ('pending', 'accepted', 'dismissed')),
+	decided_by_user_id uuid references app_user,
+	decided_at timestamptz,
+	deal_id uuid references deal,
+	party_id uuid references party,
+	property_id uuid references property,
+	what text check (what ~ '\S'),
+	owner_party_id uuid references party,
+	due_on date,
+	from_phase text references phase,
+	to_phase text references phase,
+	lead_role text generated always as ('lead') stored,
+	from_stage text,
+	to_stage text,
+	how_found text references how_found,
+	strength text check (strength in ('strong', 'weak')),
+	reason text check (reason ~ '\S'),
+	foreign key (activity_id, activity_kind) references activity (id, kind),
+	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
+	foreign key (lead_role, from_stage) references stage (role, slug),
+	foreign key (lead_role, to_stage) references stage (role, slug),
+	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
+	constraint proposal_decision_whole check (
+		(status = 'pending' and decided_by_user_id is null and decided_at is null)
+		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
+	constraint proposal_payload check ((
+		(kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		or (kind = 'phase_move' and deal_id is not null and to_phase is not null
+			and from_phase is distinct from to_phase and (to_phase <> 'dead' or reason is not null)
+			and num_nonnulls(what, owner_party_id, due_on, from_stage, to_stage, how_found, strength) = 0)
+		or (kind = 'new_lead' and party_id is not null and to_stage = 'new' and how_found is not null
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, reason, strength) = 0)
+		or (kind = 'lead_stage_move' and strength is not null and party_id is not null and from_stage is not null and to_stage is not null
+			and from_stage <> to_stage and (to_stage <> 'archived' or reason is not null)
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, how_found) = 0)) is true)
+);
+
+create unique index proposal_source_payload_once on proposal
+	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found)
+	nulls not distinct;
+
+create function decide_proposal() returns trigger
+language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+	current_phase text;
+begin
+	if tg_op = 'INSERT' then
+		if new.status <> 'pending' or new.decided_by_user_id is not null or new.decided_at is not null
+			or acting_job is distinct from new.proposed_by_job then
+			raise exception 'a job creates a pending proposal' using errcode = 'check_violation', constraint = 'proposal_starts_pending';
+		end if;
+		return new;
+	end if;
+	if old.status <> 'pending' or new.status not in ('accepted', 'dismissed') then
+		raise exception 'a pending proposal is decided once' using errcode = 'check_violation', constraint = 'proposal_final';
+	end if;
+	if acting_job is not null or acting_user is null then
+		raise exception 'only a direct user decides a proposal' using errcode = 'check_violation', constraint = 'proposal_user_decides';
+	end if;
+	new.decided_by_user_id := acting_user;
+	new.decided_at := clock_timestamp();
+	if new.status = 'dismissed' then return new; end if;
+	case new.kind
+	when 'next_step' then
+		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id)
+		values (new.id, new.what, new.owner_party_id, new.due_on, new.deal_id, new.party_id, new.property_id);
+	when 'phase_move' then
+		-- Two acceptances cannot both pass the stale-phase check.
+		perform from deal where id = new.deal_id for update;
+		select phase into current_phase from deal_phase_change where deal_id = new.deal_id order by happened_at desc limit 1;
+		if current_phase is distinct from new.from_phase then
+			raise exception 'the deal has moved' using errcode = 'check_violation', constraint = 'proposal_current_phase';
+		end if;
+		insert into deal_phase_change (deal_id, happened_at, phase, reason)
+		values (new.deal_id, new.decided_at, new.to_phase, new.reason);
+	when 'new_lead' then
+		update party set how_found = coalesce(how_found, new.how_found) where id = new.party_id;
+		insert into party_role (party_id, role, stage) values (new.party_id, 'lead', new.to_stage);
+	when 'lead_stage_move' then
+		insert into lead_stage_move (id, party_id, from_stage, to_stage, activity_id, evidence_ref, strength, reason)
+		values (new.id, new.party_id, new.from_stage, new.to_stage, new.activity_id, new.evidence, new.strength, new.reason);
+	end case;
+	return new;
+end $$;
+
+create trigger decide_proposal before insert or update of status on proposal
+	for each row execute function decide_proposal();
 
 create table document (
 	id uuid primary key default gen_random_uuid(),
@@ -1473,6 +1563,12 @@ begin
 	update national_account set party_id = survivor where party_id = duplicate
 		and exists (select from party_role where party_id = survivor and role = 'national_account');
 
+	delete from proposal d using proposal s
+	where d.party_id = duplicate and s.party_id = survivor
+		and (s.activity_id, s.kind, s.deal_id, s.property_id, s.from_phase, s.to_phase, s.from_stage, s.to_stage,
+			s.what, s.owner_party_id, s.due_on, s.how_found) is not distinct from
+			(d.activity_id, d.kind, d.deal_id, d.property_id, d.from_phase, d.to_phase, d.from_stage, d.to_stage,
+			d.what, d.owner_party_id, d.due_on, d.how_found);
 	delete from lead_stage_move d using lead_stage_move s
 	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
 		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
@@ -1620,7 +1716,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'deal', 'introduction', 'deal_phase_change', 'deal_property', 'deal_party', 'activity',
-		'activity_about', 'lead_stage_move', 'next_step', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -1822,7 +1918,7 @@ grant update (status, client_type) on client to engine;
 grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
-grant update (status) on lead_stage_move to engine;
+grant update (status) on proposal to engine;
 
 grant update (subject, body, owner_user_id, scheduled_for, time_zone, approved) on lead_contact_draft to engine;
 grant delete on lead_contact_draft to engine;
