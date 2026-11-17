@@ -54,6 +54,7 @@ const order: [file: string, input?: string][] = [
 	["copy-deal-next-steps.sql"],
 	["copy-call-suggestions.sql"],
 	["copy-meeting-suggestions.sql"],
+	["copy-email-suggestions.sql"],
 	["copy-preferences.sql"],
 	["copy-change-history.sql"],
 ];
@@ -66,6 +67,8 @@ create table ops.meeting_action (meeting_id uuid, action_number integer, state t
 create table ops.meeting_action_revision (id uuid primary key, meeting_id uuid not null, action_number integer not null, revision integer not null,
  summary text not null, command jsonb, basis text not null, source text not null, proposed_by_actor uuid not null, created_at timestamptz not null);
 create table ops.meeting_action_decision_request (idempotency_key uuid primary key, request jsonb not null);
+create table public.email_lead_exclusion (mailbox_owner text not null, message_hash text not null, recorded_at timestamptz not null default now(),
+ primary key (mailbox_owner, message_hash));
 
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
@@ -212,6 +215,9 @@ insert into ops.meeting (id, organization_tenant_id, source_system, native_id, n
  values ('${id(110)}', 'example-tenant', 'example-app', 'meeting-110', '1', 'one_tap_user_activation', 'Example planning meeting', '${id(1)}', '2023-01-01');
 insert into ops.meeting_note (id, meeting_id, note_number, revision, body, author_actor, author_instance, created_at)
  values ('${id(111)}', '${id(110)}', 1, 1, 'Example planning note', '${id(1)}', 'example-device', '2023-01-01 01:00Z');
+insert into public.email_proposal (id, kind, deal_id, activity_id, evidence_quote, task_text, next_date, owner, confidence, created_by)
+ values ('${id(122)}', 'next_step', '${id(30)}', '${id(120)}', 'Example quote', 'Example email step', '2025-02-01', 'partner_one', 0.9, '${id(3)}');
+insert into public.email_lead_exclusion (mailbox_owner, message_hash) values ('partner_one', '${"8".repeat(64)}');
 insert into ops.meeting_action values ('${id(110)}', 1, 'proposed', 1, null, null, null, null, null, null);
 insert into ops.meeting_action_revision values ('${id(112)}', '${id(110)}', 1, 1, 'Example planning action',
  '{"verb": "set-next-action", "args": {"ref": "${id(30)}", "description": "Example planning step"}}', 'tentative_discussion', 'participant', '${id(1)}', '2023-01-01 02:00Z');
@@ -296,6 +302,8 @@ const corrections = [
  ["copy-emails.sql", id(121), "message_id", null, "email_without_message_id"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
+ ["copy-email-suggestions.sql", id(122), "activity_id", id(120), "email_not_copied"],
+ ["copy-email-suggestions.sql", null, "message_hash", "8".repeat(64), "message_not_stored"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(35), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(36), "phase", "field_has_no_mapping"],
