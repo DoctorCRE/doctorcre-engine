@@ -15,7 +15,7 @@ left join outside_id author_map on author_map.source = 'old_system' and author_m
 left join app_user author_user on author_user.id = author_map.party_id
 left join lateral (
  select true as resolution_logged, e.occurred_at as resolved_at, u.id as resolved_by_user_id,
-  coalesce(nullif(btrim(e.new_value ->> 'reason'), ''), nullif(btrim(e.human_quote), '')) as resolution_reason
+  case when e.new_value ->> 'reason' ~ '\S' then e.new_value ->> 'reason' when e.human_quote ~ '\S' then e.human_quote end as resolution_reason
  from public.event e
  left join public.actor resolver on resolver.id = e.actor_id and resolver.kind = 'human'
  left join outside_id m on m.source = 'old_system' and m.value = resolver.id::text

@@ -68,10 +68,12 @@ before(async () => {
 		date(306, 1, "lease_end", "open"),
 		date(307, 1, "lease_end", "open"),
 		date(308, 2, "loi_expiry", "dropped"),
+		date(309, 1, "lease_end", "dropped"),
  ].join(", ")};
  update public.critical_date set source = ' ' where id = '${id(307)}';
  insert into public.event (subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause) values
- ${[resolved(302, 1, "cleared"), resolved(304, 1, "passed"), resolved(305, 2, "dropped"), resolved(308, 1, "dropped")].join(", ")};
+ ${[resolved(302, 1, "cleared"), resolved(304, 1, "passed"), resolved(305, 2, "dropped"), resolved(308, 1, "dropped"), resolved(309, 1, "dropped")].join(", ")};
+ update public.event set new_value = jsonb_set(new_value, '{reason}', to_jsonb(E'\\t\\n'::text)) where new_value ->> 'critical_date_id' = '${id(309)}';
  commit;`);
 	await db.query("begin");
 	report = await run();
@@ -116,9 +118,10 @@ test("dates without a deal, source or decision evidence are listed, never invent
 	assert.deepEqual(reasons(report, 305), ["resolved_by_a_job"]);
 	assert.deepEqual(reasons(report, 306), ["deal_not_copied"]);
 	assert.deepEqual(reasons(report, 307), ["no_source"]);
+	assert.deepEqual(reasons(report, 309), ["resolution_without_evidence"]);
 	assert.deepEqual(
 		await rows(
-			`select id from critical_date where id in ('${id(303)}', '${id(304)}', '${id(305)}', '${id(306)}', '${id(307)}')`,
+			`select id from critical_date where id in ('${id(303)}', '${id(304)}', '${id(305)}', '${id(306)}', '${id(307)}', '${id(309)}')`,
 		),
 		[],
 	);
