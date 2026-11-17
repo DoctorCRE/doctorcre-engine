@@ -307,6 +307,91 @@ test("a second run changes nothing, lists again what still waits, and lists a ve
 		assert.deepEqual(await rows(COPIED_ROWS), lists);
 	}));
 
+const reviewed = (...reasons: [number, string][]) =>
+	`create temp table copy_vendor_ruling_reason (old_id uuid, reason text) on commit drop;
+	insert into copy_vendor_ruling_reason values ${reasons.map(([n, reason]) => `('${id(n)}', '${reason}')`)};`;
+const RULED = `select party_id, role, disposition, disposition_reason, is_target from party_role
+	where party_id in ('${id(17)}', '${id(19)}') order by party_id, role`;
+const RULING_FIELDS = [
+	"vendor",
+	"disposition",
+	"disposition_reason",
+	"is_target",
+	"party_link",
+];
+const rulingRows = async (sql: string) =>
+	(await copy(sql))?.filter((row) => RULING_FIELDS.includes(row[1] as string));
+
+test("a ruled vendor comes across with its reviewed reason, the strictest on its record, and then brings its note and introductions", () =>
+	rolledBack(async () => {
+		await db.query(`alter table public.vendor disable trigger vendor_touch;
+		update public.vendor set intro_notes = 'Example parked note' where id = '${id(44)}';
+		update public.vendor set disposition = 'avoid' where id = '${id(45)}';
+		update public.vendor set is_target = true where id = '${id(46)}';
+		insert into public.party_link_kind (slug, label, sort) values ('introduced', 'Example', 1);
+		${link(93, 17, 11, "introduced", 17)}`);
+		// biome-ignore format: one row per value
+		assert.deepEqual(await rulingRows(reviewed([46, "Example reason one"], [46, "Example reason two"])), [
+			[id(43), "vendor", null, "its record is not copied"],
+			[id(44), "disposition", "parked", "a ruling without a reason"],
+			[id(45), "disposition", "avoid", "a ruling without a reason"],
+			[id(46), "disposition", "avoid", "its reviewed reasons conflict"],
+			[id(93), "party_link", "introduced", "made by neither a copied vendor nor a user"],
+		]);
+		assert.deepEqual(await rows(RULED), []);
+
+		await db.query("discard temp");
+		const reasons = reviewed(
+			[44, " Example parked reason "],
+			[44, "Example parked reason"],
+			[45, "Example avoid reason"],
+			[46, "Example reason one"],
+			[42, "Example stray reason"],
+			[99, "Example stray reason"],
+		);
+		// biome-ignore format: one row per value
+		assert.deepEqual(await rulingRows(reasons), [
+			[id(42), "disposition_reason", "Example stray reason", "not a parked or avoided vendor"],
+			[id(43), "vendor", null, "its record is not copied"],
+			[id(44), "disposition_reason", "Example parked reason", "its record holds a stricter ruling"],
+			[id(46), "is_target", "true", "an avoided vendor cannot be a target"],
+			[id(99), "disposition_reason", "Example stray reason", "not a vendor"],
+		]);
+		// biome-ignore format: one row per role
+		assert.deepEqual(await rows(RULED), [
+			{ party_id: id(17), role: "cpa", disposition: null, disposition_reason: null, is_target: false },
+			{ party_id: id(17), role: "vendor", disposition: "avoid", disposition_reason: "Example avoid reason", is_target: false },
+			{ party_id: id(19), role: "vendor", disposition: "avoid", disposition_reason: "Example reason one", is_target: false },
+		]);
+		assert.deepEqual(
+			await rows(
+				`select a.summary, i.vendor_id, i.introduced_party_id from activity_about about join activity a on a.id = about.activity_id,
+				introduction i where about.party_id = '${id(17)}' and i.id = '${id(93)}'`,
+			),
+			[
+				{
+					summary: "Example parked note",
+					vendor_id: id(17),
+					introduced_party_id: id(11),
+				},
+			],
+		);
+
+		const copiedRows = `select to_jsonb(r) from party_role r union all select to_jsonb(o) from outside_id o
+			union all select to_jsonb(i) from introduction i union all ${COPIED_ROWS}`;
+		const kept = await rows(copiedRows);
+		const history = await rows("select * from change order by id");
+		await db.query("discard temp");
+		// biome-ignore format: one row per value
+		assert.deepEqual(await rulingRows(reasons), [
+			[id(42), "disposition_reason", "Example stray reason", "not a parked or avoided vendor"],
+			[id(43), "vendor", null, "its record is not copied"],
+			[id(99), "disposition_reason", "Example stray reason", "not a vendor"],
+		]);
+		assert.deepEqual(await rows(copiedRows), kept);
+		assert.deepEqual(await rows("select * from change order by id"), history);
+	}));
+
 test("vendor capabilities keep text and union lists without inventing a vocabulary", async () => {
 	assert.deepEqual(
 		await rows(
