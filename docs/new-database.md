@@ -45,7 +45,7 @@ Each record and link carries `created_at`, when its row was stored, so moving to
 
 ## Users, jobs and who changed what
 
-Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons, specialties, how found and claim types, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, deals and their phase changes, properties and parties, rounds and their documents and claims, leases and their options, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, readings, and commissions, their payments and shares, and ladder tiers.
+Every row a person or a job changes says who last added or changed it, and `changed_at`, when. A person's change sets `changed_by_user_id`. A job's change sets `changed_by_job` instead, and `changed_for_user_id` when it worked for a user, so a person's change is always told from a job's (decision 35). A row names a user or a job, never both and never neither. These rows are the lists of roles, stages, phases, deal kinds, deal reasons, specialties, how found and claim types, parties, their merged-into pointers, and their emails, phone numbers, roles, companies, specialties and do-not-contact rows, outside ids, properties, markets and their counties, territories, their pieces and who serves them, introductions, knows and can-introduce links, deals and their phase changes, properties and parties, rounds and their documents and claims, leases and their options, documents, activity and what it is about, emails, next steps, social accounts, ideas, design templates, posts and their text, media and reviews, readings, and commissions, their payments and shares, and ladder tiers.
 
 The engine names who acts once per transaction, never for the whole connection, because a pooled connection serves the next user. A user's save sets `set_config('engine.user_id', <user id>, true)`. A job's save sets `set_config('engine.job', <slug>, true)`, and `engine.user_id` too when it works for a user. A trigger writes the stamp on every insert and update, whatever the statement says, and refuses the change when it names neither. A statement that changes nothing keeps the row's stamp, so a final post stays as it was. A name that is not a user or a job is refused by its key. A removal names who made it too, in change history.
 
@@ -77,6 +77,7 @@ Each link is one row. No record holds a list or a column per role.
 - **`party_email`** and **`party_phone`**: a person's or company's emails and phone numbers, one row each, with a label and whether it is the primary one.
 - **`party_specialty`**: a person's specialties, one row each.
 - **`party_company`**: a person at a company, with their title there and the dates they started and left. A person who moves keeps the old row, with its end date, and gets a new one.
+- **`party_link`**: who knows whom, or who can introduce the team to whom, between any two people or companies, with the dates it started and ended.
 - **`party_territory`**: who serves a territory, with the dates they started and stopped. A user serves as their person.
 - **`deal_party`**: who is on a deal, in which role. The client, the listing agent and each vendor are rows here.
 - **`deal_property`**: the properties a deal is considering.
@@ -173,6 +174,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 83. A suite belongs to one property. A known label is trimmed, nonblank and used once in that property. Known area is positive finite square feet, with a measurement basis from the known list when supplied. Each signed lease version may link several suites, all in its lease identity's property. Each link is stored once and is immutable. A referenced suite cannot be removed.
 84. Building ownership names an existing property and party, a known kind and nonblank source. Its end is no earlier than its known start. The same property, party, kind and start, including an unknown start, is stored once. Co-owners and former owners remain separate rows.
 85. A claim is on a round, of a type from the claim type list, which never holds a deadline, and stored once per type per round. A floor is more than zero, and a quote or note is never blank. A claim, like its round, is never rewritten or removed.
+86. A knows or can-introduce link joins two different people or companies, ends no earlier than it starts, and is stored once per start date. A knows link is stored once whichever party it names first. A merge drops a link between the two records it joins, and keeps the survivor's where both hold one.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -183,7 +185,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's, a how-found's or a claim type's label;
-- a vendor role's stage, relationship level, disposition, reason and target, a lead role's stage and owner, and an introduction's date, deal and note;
+- a vendor role's stage, relationship level, disposition, reason and target, a lead role's stage and owner, an introduction's date, deal and note, and a knows or can-introduce link's dates and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI and how found, and a property's address, county and point;
 - a deal's kind, reason, lease it renews, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
@@ -460,8 +462,22 @@ Moving today's rows across:
 - Each `vendor` becomes the vendor role on its party, with its `relationship_level`, `disposition` and `is_target` as they are, and `active` becomes no disposition. These columns hold 0047's split and every change since, so they win over an old stage. Today's rows have no reason, so a parked or avoided vendor waits to move until a partner gives one. It never moves as active, which would put it back in play.
 - Each `vendor_category` row becomes a role whose `category_of` is vendor, and a vendor's `category_slug` its role. The deal roles of `deal_vendor_assignment`, such as title and inspector, join the same list, and `gc` becomes contractor. Each assignment becomes a `deal_party` row, and so does each worked deal in a vendor's `deal_evidence`.
 - Each `vendor_stage` row becomes a vendor stage, and a vendor's `stage` the stage on its vendor role, except the nine original stages. The old system's migration 0047 split those into level, disposition and target, which already hold what they meant, so none of them, such as avoid or target, comes back as a stage (owner, #258).
-- Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is empty, or is neither the vendor nor a user, waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction.
+- Each `party_link` of kind `introduced` or `referred`, or of the older `intro`, `intro_received` or `referral`, becomes an introduction. One whose `via_party` is the vendor was made by the vendor, and one made through a user by the team, naming that user. One whose `via_party` is empty, or is neither the vendor nor a user, waits for a partner to say who made it. Each `party_link_deal` whose `referred_by` is a vendor becomes an introduction made by that vendor, with its deal. A `can_introduce` or `intro_requested` link has not happened, so it is not an introduction (see "Who knows whom").
 - `trust_override`, a hand-set rating, does not move.
+
+## Who knows whom
+
+The owner ruled on #196 that "knows" and "can introduce" links between people are kept, as dated links between two parties (2026-11-16). Each is one `party_link` row of kind `knows` or `can_introduce`, between any two people or companies, with an optional `started_on`, `ended_on` and note. Knowing goes both ways, so a knows link is stored once whichever party it names first, and "who knows Avery" reads both ends. Can introduce has a direction: `party_id` can introduce the team to `other_party_id`. A link that lapses keeps its row with its end date, and a later one is a new row.
+
+A can-introduce link and an introduction are different facts. The link says someone could make an introduction, between any two parties. An introduction says one was made, with a vendor on one side, either way, and which deal it led to. When an offered introduction happens with a vendor, it becomes an `introduction` row, and the link can be ended; nothing joins the two automatically, and neither counts toward a vendor's track record but the introduction.
+
+Moving today's `party_link` rows across:
+
+- `knows` becomes a knows link from `from_party` to `to_party`, with `occurred_on` as its start, its note and its author.
+- `can_introduce` with no `via_party` becomes a can-introduce link from `from_party` to `to_party`. With a `via_party`, the broker can introduce the two ends to each other. When one end is a user, it becomes a link from the broker to the other end; otherwise it is listed for a partner.
+- `works_with` and `intro_requested` are outside the ruling, so each is listed for a partner.
+- `introduced`, `referred` and the older `intro`, `intro_received` and `referral` follow "Vendors" above. One with no vendor on either side has no place and is listed.
+- `source` does not move.
 
 ## Leads and clients
 
@@ -513,6 +529,7 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Do not contact on either? The survivor is do not contact. If both are, the longer restriction stays with its reason, with no end date stronger than either date. Equal end dates keep the survivor's reason.
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
+- A knows or can-introduce link? It moves. One between the two records is dropped, and where both hold the same link, either way round for knows, the survivor's stays.
 - Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. How found stays the survivor's, or becomes the duplicate's.
 - Both vendors? The survivor's vendor role stays, with its stage and level, and the duplicate's fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is, unless the merged disposition is avoid.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
