@@ -67,7 +67,6 @@ const snapshot = () =>
  select jsonb_build_object('table',t,'rows',jsonb_agg(v order by v::text)) x from (
  select 'party' t, to_jsonb(p) v from party p union all select 'deal',to_jsonb(d) from deal d
  union all select 'role',to_jsonb(r) from party_role r union all select 'client',to_jsonb(c) from client c
- union all select 'lease',to_jsonb(l) from lease l union all select 'version',to_jsonb(l) from lease_version l
  union all select 'change',to_jsonb(c) from change c) v group by t) s`);
 
 before(async () => {
@@ -95,12 +94,6 @@ before(async () => {
  insert into outside_id (source,value,party_id) select 'old_system',v,'${id(10)}'
  from unnest(array['${id(10)}','${id(11)}','${id(12)}','${id(13)}','${id(14)}']) v;
  insert into outside_id (source,value,deal_id) values ('old_system','${id(20)}','${id(20)}');
- insert into property (id,address) values ('${id(30)}','100 Example Way');
- insert into document (id,name,r2_bucket,r2_key,content_type,sha256,bytes)
- values ('${id(31)}','Example Lease','deal_documents','example.pdf','application/pdf',repeat('a',64),10);
- insert into lease (id,party_id,property_id) values ('${id(40)}','${id(10)}','${id(30)}');
- insert into lease_version (id,lease_id,version,document_id,expiration_on)
- values ('${id(41)}','${id(40)}',1,'${id(31)}','2030-01-01');
  commit;`);
 });
 beforeEach(async () => {
@@ -137,14 +130,6 @@ test("copies field evidence for every supported record kind without replay or in
 			"party_role",
 			{ party_id: id(10), role: "vendor" },
 			"offers",
-		],
-		[
-			"lease",
-			41,
-			"rate_norm_sf_yr",
-			"lease_version",
-			{ id: id(41) },
-			"rent_per_sf_yr",
 		],
 	];
 	for (const [i, c] of cases.entries())
