@@ -584,6 +584,12 @@ create table imported_deal_owner (
 	constraint imported_deal_owner_one_at_a_time exclude using gist (deal_id with =, tstzrange(started_at, ended_at) with &&)
 );
 
+-- Today's system dates an invoiced deal on the deal itself, often with no commission row to move the date onto.
+create table imported_deal_invoiced (
+	deal_id uuid primary key references deal,
+	invoiced_on date not null
+);
+
 -- Held per person, role and deal until the transaction ends, so a copied period and a rejoin cannot each pass alone and together break it.
 create function deal_party_rejoins_after_leaving() returns trigger
 language plpgsql as $$
@@ -2062,7 +2068,10 @@ create unique index invoice_email_one_application on invoice_email (deal_id, pay
 	where status in ('applied', 'undone');
 
 create view deal_invoiced as
-select deal_id, min(invoiced_on) as invoiced_on from commission_payment group by deal_id;
+select deal_id, min(invoiced_on) as invoiced_on
+from (select deal_id, invoiced_on from commission_payment where invoiced_on is not null
+	union all select deal_id, invoiced_on from imported_deal_invoiced) dated
+group by deal_id;
 
 create function invoice_name(value text) returns text
 language sql immutable return lower(regexp_replace(btrim(value), '\s+', ' ', 'g'));
@@ -2369,7 +2378,7 @@ declare
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
-		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'activity',
+		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'activity',
 		'activity_about', 'proposal', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document',
@@ -2762,8 +2771,8 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, imported_deal_party, imported_deal_owner, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change, imported_change, imported_deal_party, imported_deal_owner) is never removed.
+-- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, imported_deal_party, imported_deal_owner, imported_deal_invoiced, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
+-- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change, imported_change, imported_deal_party, imported_deal_owner, imported_deal_invoiced) is never removed.
 do $$ declare role_name text; begin
 	foreach role_name in array array['engine', 'engine_reader'] loop
 		begin
@@ -2792,8 +2801,8 @@ revoke insert on app_user, job from engine;
 revoke insert on merged_party from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change, imported_change from engine;
--- The old system's earlier people and owners are corrected there and copied again.
-revoke insert on imported_deal_party, imported_deal_owner from engine;
+-- Only the owner's copy adds the old system's earlier people, owners and invoiced dates.
+revoke insert on imported_deal_party, imported_deal_owner, imported_deal_invoiced from engine;
 -- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
 revoke execute on function record_change from public;
 revoke execute on function merge_party from public;

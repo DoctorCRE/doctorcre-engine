@@ -42,12 +42,13 @@ before(async () => {
  insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at) values ('example-market', 'Example Market', 'market', 'Example counties', 'Example review', '${id(1)}', '2025-01-01');
  ${["lease", "purchase", "sale_leaseback", "build_to_suit", "startup", "relocation", "expansion", "renewal", "additional_office", "other"].map((t, i) => deal(10 + i, t)).join("\n")}
  ${deal(20)} ${deal(21)}
- ${deal(22)} ${deal(23)} ${deal(24)} ${deal(25)} ${deal(26)} ${deal(27)}
+ ${deal(22)} ${deal(23)} ${deal(24)} ${deal(25)} ${deal(26)} ${deal(27)} ${deal(28)}
  alter table public.deal disable trigger deal_touch;
  update public.deal set city = 'Missing Market' where id = '${id(20)}';
  update public.deal set won_value = 0 where id = '${id(21)}';
  update public.deal set owner = null where id in ('${id(22)}', '${id(23)}');
- update public.deal set phase = 'closed' where id = '${id(23)}';
+ update public.deal set phase = 'closed', invoiced_on = '2025-03-01' where id = '${id(23)}';
+ update public.deal set outcome = 'lost' where id = '${id(28)}';
  update public.deal set city = 'Example Market', won_value = 1234 where id = '${id(10)}';
  insert into public.deal_participant (id, deal_id, actor_id, role, set_by) values ('${id(80)}', '${id(23)}', '${id(1)}', 'lead', '${id(1)}');
  insert into public.deal_participant (deal_id, party_id, role, set_by) values
@@ -91,7 +92,7 @@ insert into copy_market_county values ('example-market', '01001');`);
 });
 after(cleanup);
 
-test("types split into kind and reason, with startup renamed and other left unfiled", async () => {
+test("types split into kind and reason, with startup renamed and other kept as a kind", async () => {
 	const result = await rows(
 		`select kind, reason from deal where id between '${id(10)}' and '${id(19)}' order by id`,
 	);
@@ -103,10 +104,10 @@ test("types split into kind and reason, with startup renamed and other left unfi
 		...["start_up", "relocation", "expansion", null, "additional_office"].map(
 			(reason) => ({ kind: null, reason }),
 		),
-		{ kind: null, reason: null },
+		{ kind: "other", reason: null },
 	]);
 	assert.ok(
-		report.some((r) => r.old_id === id(19) && r.reason === "unfiled_deal_type"),
+		!report.some((r) => r.field === "deal_type" && r.value === "other"),
 	);
 });
 test("deals preserve identity, times, owner, market and value, and client links use the old-id map", async () => {
@@ -142,7 +143,7 @@ test("deals preserve identity, times, owner, market and value, and client links 
 			reason,
 		);
 });
-test("phase events retain evidence dates and actors; missing history never invents a date", async () => {
+test("phase events retain evidence dates and actors; without them the current phase holds from the last change", async () => {
 	assert.deepEqual(
 		await rows(
 			`select phase, happened_at::text, changed_by_user_id from deal_phase_change where deal_id = '${id(10)}' order by happened_at`,
@@ -155,12 +156,36 @@ test("phase events retain evidence dates and actors; missing history never inven
 	);
 	assert.deepEqual(
 		await rows(
-			`select phase from deal_phase_change where deal_id = '${id(11)}'`,
+			`select phase, happened_at::text, changed_by_job from deal_phase_change where deal_id = '${id(11)}'`,
 		),
-		[],
+		[
+			{
+				phase: "negotiation",
+				happened_at: "2025-02-01 00:00:00+00",
+				changed_by_job: "old_system",
+			},
+		],
 	);
 	assert.ok(
 		report.some((r) => r.old_id === id(11) && r.reason === "no_phase_history"),
+	);
+	assert.deepEqual(
+		await rows(
+			`select phase from deal_phase_change where deal_id = '${id(28)}'`,
+		),
+		[],
+		"a lost deal without events gets no phase",
+	);
+	assert.ok(
+		report.some(
+			(r) => r.old_id === id(28) && r.reason === "lost_without_dated_reason",
+		),
+	);
+});
+test("an invoiced deal keeps today's invoiced date without a commission", async () => {
+	assert.deepEqual(
+		await rows("select deal_id, invoiced_on::text from deal_invoiced"),
+		[{ deal_id: id(23), invoiced_on: "2025-03-01" }],
 	);
 });
 test("rounds derive unique candidates, number across sides by creation then id, and retain unknown imported status", async () => {
@@ -276,7 +301,7 @@ test("a repeat is idempotent and restores stamps after import", async () => {
 		"select * from offer_claim order by offer_id, claim_type",
 	);
 	await db.query("begin");
-	await run();
+	assert.deepEqual(await run(), report, "a rerun lists the same corrections");
 	await db.query("commit");
 	assert.deepEqual(await rows("select * from deal order by id"), original);
 	assert.deepEqual(
@@ -298,6 +323,26 @@ test("a repeat is idempotent and restores stamps after import", async () => {
 		id(1),
 	);
 	await db.query("rollback");
+});
+
+test("a rerun lists a market or value the copied deal still lacks, even once the old deal has it", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+ insert into market (name) values ('Missing Market');
+ update public.deal set won_value = 500 where id = '${id(21)}';`);
+		const listed = await run();
+		for (const [n, reason] of [
+			[20, "unknown_market"],
+			[21, "nonpositive_value"],
+		] as const)
+			assert.ok(
+				listed.some((r) => r.old_id === id(n) && r.reason === reason),
+				reason,
+			);
+	} finally {
+		await db.query("rollback");
+	}
 });
 
 test("unmappable links and phase history are listed instead of lost", async () => {
@@ -339,7 +384,7 @@ test("unmappable links and phase history are listed instead of lost", async () =
 		assert.equal(
 			(
 				await rows(
-					`select phase from deal_phase_change where deal_id = '${id(12)}'`,
+					`select phase from deal_phase_change where deal_id = '${id(12)}' order by happened_at desc`,
 				)
 			)[0]?.phase,
 			"dead",
@@ -1071,9 +1116,14 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
 		);
 		assert.deepEqual(
 			await rows(
-				`select * from deal_phase_change where deal_id >= '${id(400)}'`,
+				`select deal_id, phase, happened_at::text from deal_phase_change where deal_id >= '${id(400)}' order by deal_id`,
 			),
-			[],
+			[400, 401, 402, 403, 404, 405].map((n) => ({
+				deal_id: id(n),
+				phase: "negotiation",
+				happened_at: "2025-02-01 00:00:00+00",
+			})),
+			"only the current phase, never a change from parking",
 		);
 		assert.deepEqual(
 			await rows(

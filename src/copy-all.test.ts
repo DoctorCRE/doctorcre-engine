@@ -98,8 +98,8 @@ insert into public.lead (id, party_id, stage, source_type, created_by, updated_b
  ('${id(21)}', '${id(14)}', 'qualified', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-05', '2024-02-05');
 insert into public.vendor_category (slug, label, sort) values ('gc', 'Example contractor', 1);
 insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Example active', true, 1);
-insert into public.vendor (id, party_id, category, category_slug, created_by, updated_by, created_at, updated_at) values
- ('${id(22)}', '${id(12)}', 'Example contractor', 'gc', '${id(1)}', '${id(1)}', '2024-01-03', '2024-02-03');
+insert into public.vendor (id, party_id, category, category_slug, owner_id, created_by, updated_by, created_at, updated_at) values
+ ('${id(22)}', '${id(12)}', 'Example contractor', 'gc', '${id(1)}', '${id(1)}', '${id(1)}', '2024-01-03', '2024-02-03');
 insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at) values
  ('example-bay', 'Example Bay', 'market', 'Example counties', 'Example review', '${id(1)}', '2025-01-01');
 insert into public.vendor_market_membership (market_slug, vendor_id, office_presence, source, reviewed_by, reviewed_at) values
@@ -109,8 +109,8 @@ insert into public.deal_phase (slug, label) values ('negotiation', 'Example nego
 insert into public.participant_role (slug, label) values ('landlord_side', 'Example landlord');
 insert into public.deal (id, client_id, name, deal_type, phase, owner, city, created_by, updated_by, created_at, updated_at) values
  ('${id(30)}', '${id(20)}', 'Example clinic lease', 'lease', 'negotiation', 'partner_one', 'Example Bay', '${id(1)}', '${id(1)}', '2025-01-01', '2025-02-01');
-insert into public.deal (id, client_id, name, deal_type, phase, owner, invoiced_on, created_by, updated_by, created_at, updated_at) values
- ('${id(34)}', '${id(20)}', 'Example closed lease', 'lease', 'closed', 'partner_one', '2025-03-01', '${id(1)}', '${id(1)}', '2024-06-01', '2025-03-02');
+insert into public.deal (id, client_id, name, deal_type, phase, owner, city, invoiced_on, created_by, updated_by, created_at, updated_at) values
+ ('${id(34)}', '${id(20)}', 'Example closed lease', 'lease', 'closed', 'partner_one', 'Example Elsewhere', '2025-03-01', '${id(1)}', '${id(1)}', '2024-06-01', '2025-03-02');
 insert into public.event (id, subject_type, subject_id, field, old_value, new_value, occurred_at, actor_id, verb, cause) values
  ('${id(31)}', 'deal', '${id(30)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(35)}', 'deal', '${id(34)}', 'phase', null, '{"phase":"negotiation"}', '2024-06-02', '${id(1)}', 'update-deal', 'human_stated'),
@@ -277,7 +277,7 @@ const counts = async () =>
 const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1,
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
- deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
+ deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 5, activity_about: 5, lead_stage_move: 1, proposal: 3,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
@@ -287,6 +287,8 @@ const corrections = [
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
  ["copy-markets.sql", "example-bay", "source", "Example review", "no_typed_destination"],
+ ["copy-vendors.sql", id(22), "owner_id", id(1), "relationship owner awaits an owner ruling"],
+ ["copy-deals.sql", id(34), "market", "Example Elsewhere", "unknown_market"],
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
