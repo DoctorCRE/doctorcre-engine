@@ -4489,16 +4489,24 @@ test("a setting alone never tells a change as a merge's", async () => {
 	}
 });
 
-test("a merge moves each membership's review to the survivor, onto its own membership of the same territory and start", () =>
+test("a merge moves each membership's review to the survivor, onto its own membership of the same territory and start, keeping its reviewer and time", () =>
 	rolledBack(async () => {
+		const reviewedAt = new Date("2024-01-01T00:00:00Z");
 		await db.query(`${DUPLICATE_TITLE_COMPANY};
 			insert into party_territory (party_id, territory_id, started_on) values
 				('${DUPLICATE}', '${STATEWIDE}', '2025-07-01'), ('${DUPLICATE}', '${HOME}', null);
 			${newMembershipReview({ party: DUPLICATE, hasOffice: "false", coverage: "'Example: the whole state'" })};
 			${newMembershipReview({ party: DUPLICATE, territory: HOME, source: "'Example call'" })};
+			set local role none;
+			alter table party_territory_review disable trigger user;
+			update party_territory_review set changed_by_user_id = null, changed_by_job = 'old_system',
+				changed_for_user_id = null, changed_at = '${reviewedAt.toISOString()}';
+			alter table party_territory_review enable trigger user;
+			set local role engine;
+			${asJob("agent")};
 			select merge_party('${DUPLICATE}', '${VENDOR}')`);
 		const { rows } = await db.query(
-			`select t.territory_id, t.started_on::text, r.has_office, r.coverage, r.source
+			`select t.territory_id, t.started_on::text, r.has_office, r.coverage, r.source, r.changed_by_job, r.changed_at
 			from party_territory_review r join party_territory t on t.id = r.party_territory_id
 			where t.party_id = $1 order by t.started_on`,
 			[VENDOR],
@@ -4510,6 +4518,8 @@ test("a merge moves each membership's review to the survivor, onto its own membe
 				has_office: false,
 				coverage: "Example: the whole state",
 				source: "Example website",
+				changed_by_job: "old_system",
+				changed_at: reviewedAt,
 			},
 			{
 				territory_id: HOME,
@@ -4517,7 +4527,15 @@ test("a merge moves each membership's review to the survivor, onto its own membe
 				has_office: true,
 				coverage: null,
 				source: "Example call",
+				changed_by_job: "old_system",
+				changed_at: reviewedAt,
 			},
+		]);
+		const moves = await db.query(
+			`select changed_by_job, merge_of from change where table_name = 'party_territory_review' and action = 'update'`,
+		);
+		assert.deepEqual(moves.rows, [
+			{ changed_by_job: "agent", merge_of: DUPLICATE },
 		]);
 	}));
 

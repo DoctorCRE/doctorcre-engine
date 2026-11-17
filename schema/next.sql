@@ -2358,7 +2358,21 @@ begin
 	end loop;
 end $$;
 
+-- A review's stamp is its reviewer and time, so a merge moving it unchanged keeps them; change history names the merger.
+create function keep_review_stamp() returns trigger
+language plpgsql as $$
+begin
+	new.changed_by_user_id := old.changed_by_user_id;
+	new.changed_by_job := old.changed_by_job;
+	new.changed_for_user_id := old.changed_for_user_id;
+	new.changed_at := old.changed_at;
+	return new;
+end $$;
 
+-- Triggers run in name order, so this one undoes stamp_change's restamp.
+create trigger stamp_change_keeps_review before update on party_territory_review for each row
+	when ((new.has_office, new.coverage, new.source) is not distinct from (old.has_office, old.coverage, old.source))
+	execute function keep_review_stamp();
 
 -- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
 alter table post_text add constraint post_text_edit_by_a_user
