@@ -140,10 +140,17 @@ test("copies evidence, pending proposals and creation, approval and undo history
 	assert.deepEqual(
 		(
 			await rows(
-				`select old_value->>'status' as old_status,old_value->>'decided_by_user_id' as old_user,old_value->>'decided_at' as old_time,new_value->>'status' as new_status,new_value->>'decided_by_user_id' as new_user,new_value->>'decided_at' as new_time from change where table_name='proposal' and record='{"id":"${id(73)}"}' and action='update'`,
+				`select old_value,new_value->>'status' as new_status,new_value->>'decided_by_user_id' as new_user,new_value->>'decided_at' as new_time from change where table_name='proposal' and record='{"id":"${id(73)}"}' and action='update'`,
 			)
 		).map(Object.values),
-		[["pending", null, null, "accepted", id(1), "2024-04-02T00:00:00+00:00"]],
+		[
+			[
+				{ status: "pending", decided_by_user_id: null, decided_at: null },
+				"accepted",
+				id(1),
+				"2024-04-02T00:00:00+00:00",
+			],
+		],
 	);
 
 	assert.equal(
