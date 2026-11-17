@@ -12,7 +12,7 @@ Code, issues, pull requests, commit messages and CI logs are visible to anyone. 
 2. An issue title says the outcome in plain words the owner would use, such as "Deals board loads from the new engine". No IDs, file names or jargon in titles.
 3. One issue gets one branch named `<issue>-<short-name>` and one pull request that says `Closes #<issue>`.
 4. Run `npm run check` before pushing. CI runs the same command and nothing else.
-5. Turn on auto-merge. The merge queue merges the pull request when the check is green. Never push to main.
+5. Once the review passes, the coordinator turns on auto-merge, pinned to the head that was reviewed. The merge queue merges the pull request when the check is green. Never push to main.
 6. Work is done when it is merged and you have checked the result where it runs. Say what you checked in the pull request.
 
 Large work is a parent issue with sub-issues. Each sub-issue is one pull request.
@@ -52,9 +52,9 @@ This file wins over any skill or global rule. A skill's advice to add a lint, ch
 
 A Claude session coordinates: it slices issues, briefs workers, reviews and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
 
-Claude Opus 5.5 builds. Reasoning effort is high, never higher.
+Claude Opus 5.5 or Codex gpt-6.1-sol builds. Reasoning effort is high, never higher.
 
-Before a pull request merges, a separate Claude session that did not write the change reviews it for correctness and for code quality. The builder fixes what the review finds, then turns on auto-merge. The owner does not review code.
+Before a pull request merges, a separate session from the other family reviews it for correctness and for code quality: Claude reviews Codex's work, and Codex reviews Claude's. The builder fixes what the review finds. The owner does not review code.
 
 Check which models are available each time you start a worker. Never write a provider's usage or balance into this repo.
 
