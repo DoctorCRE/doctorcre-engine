@@ -1,0 +1,313 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { after, before, test } from "node:test";
+import { URL } from "node:url";
+import pg from "pg";
+import { asAdmin } from "../scripts/test-database.ts";
+
+const id = (n: number) =>
+	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const read = (f: string) =>
+	readFile(new URL(`../schema/${f}`, import.meta.url), "utf8");
+const [schema, attribution, copy] = await Promise.all([
+	read("next.sql"),
+	read("copy-attribution.sql"),
+	read("copy-activity.sql"),
+]);
+const name = `copy_activity_${randomUUID().replaceAll("-", "")}`;
+const url = new URL(
+	process.env.TEST_DATABASE_URL ?? "postgres://postgres@127.0.0.1/postgres",
+);
+url.pathname = `/${name}`;
+const db = new pg.Client({
+	connectionString: url.href,
+	options: "-c search_path=next -c TimeZone=UTC",
+});
+const rows = async (sql: string) => (await db.query(sql)).rows;
+const run = async (): Promise<pg.QueryResultRow[]> => {
+	await db.query("begin");
+	try {
+		const results = await db.query(copy);
+		assert.ok(Array.isArray(results));
+		await db.query("commit");
+		return results.at(-1)?.rows ?? [];
+	} catch (error) {
+		await db.query("rollback");
+		throw error;
+	}
+};
+const reasons = (report: pg.QueryResultRow[]) =>
+	report.map((r) => `${r.old_id.slice(-2)} ${r.field} ${r.reason}`);
+const about = () =>
+	rows(
+		"select activity_id, deal_id, party_id, created_at::text from activity_about order by activity_id, deal_id, party_id",
+	);
+
+const activity = (
+	n: number,
+	kind: string,
+	links: Partial<
+		Record<"deal" | "client" | "lead" | "vendor" | "party", number>
+	>,
+	extra = "null, null, null, null",
+) =>
+	`('${id(n)}', '${kind}', '2024-01-0${n % 9 || 1}', '2024-02-01', '2024-03-01', '${id(links.party ? 2 : 1)}', 'Example ${kind}', ${[
+		"deal",
+		"client",
+		"lead",
+		"vendor",
+		"party",
+	]
+		.map((k) => {
+			const v = links[k as keyof typeof links];
+			return v ? `'${id(v)}'` : "null";
+		})
+		.join(", ")}, ${extra})`;
+
+before(async () => {
+	assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
+	await asAdmin(
+		`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
+	);
+	await db.connect();
+	await db.query(`create schema next; ${schema}; ${attribution}`);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
+  ('${id(2)}', 'claude', 'automation', 'Example Agent');
+ insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
+ insert into app_user values ('${id(1)}');
+ insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
+ insert into public.party (id, kind, name, created_by, updated_by)
+  select v, case when v in ('${id(10)}'::uuid, '${id(12)}') then 'org' else 'person' end, 'Example Party ' || v, '${id(1)}', '${id(1)}'
+  from unnest(array['${id(10)}', '${id(11)}', '${id(12)}', '${id(13)}', '${id(14)}', '${id(15)}']::uuid[]) v;
+ insert into party (id, kind, name) select v, case when v in ('${id(10)}'::uuid, '${id(12)}') then 'company' else 'person' end, 'Example Party'
+  from unnest(array['${id(10)}', '${id(11)}', '${id(12)}', '${id(14)}']::uuid[]) v;
+ insert into outside_id (source, value, party_id) values ('old_system', '${id(1)}', '${id(1)}'), ('old_system', '${id(10)}', '${id(10)}'),
+  ('old_system', '${id(11)}', '${id(11)}'), ('old_system', '${id(12)}', '${id(12)}'), ('old_system', '${id(13)}', '${id(14)}'), ('old_system', '${id(14)}', '${id(14)}');
+ insert into public.client (id, party_id, created_by, updated_by) values ('${id(20)}', '${id(10)}', '${id(1)}', '${id(1)}');
+ insert into public.lead_stage (slug, label) values ('new', 'Example new');
+ insert into public.lead (id, party_id, stage, created_by, updated_by) values ('${id(21)}', '${id(11)}', 'new', '${id(1)}', '${id(1)}'),
+  ('${id(25)}', '${id(15)}', 'new', '${id(1)}', '${id(1)}');
+ insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Example active', true, 1);
+ insert into public.vendor (id, party_id, category, created_by, updated_by) values ('${id(23)}', '${id(10)}', 'lender', '${id(1)}', '${id(1)}');
+ insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
+ insert into public.deal_phase (slug, label) values ('loi', 'Example LOI');
+ insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
+  select v, '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}' from unnest(array['${id(30)}', '${id(31)}']::uuid[]) v;
+ insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
+ insert into outside_id (source, value, deal_id) values ('old_system', '${id(30)}', '${id(30)}');
+ insert into public.activity_kind (slug, label, is_contact) select s, s, true from unnest(array['call', 'tour', 'note', 'email_in', 'text', 'meeting']) s;
+ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id, client_id, lead_id, vendor_id, party_id,
+  detail, owed, connected, email_context) values
+  ${[
+		activity(
+			40,
+			"call",
+			{ deal: 30, client: 20 },
+			"'Example call notes', null, null, null",
+		),
+		activity(41, "tour", { lead: 21 }),
+		activity(42, "note", { party: 13 }),
+		activity(43, "email_in", { deal: 30 }),
+		activity(
+			44,
+			"note",
+			{ deal: 30 },
+			`'Example full text', null, null, '{"subject": "Example"}'`,
+		),
+		activity(45, "text", { deal: 30 }),
+		activity(46, "call", { deal: 31 }),
+		activity(
+			47,
+			"call",
+			{ deal: 30, lead: 25 },
+			`'{"match": "exact"}', 'Example figure', false, null`,
+		),
+		activity(48, "meeting", { client: 20, vendor: 23 }),
+		activity(49, "note", { deal: 30 }),
+		activity(
+			39,
+			"note",
+			{ deal: 30 },
+			"'https://example.com/listing', null, null, null",
+		),
+	].join(",\n  ")};
+ update public.activity set summary = 'Full text of email: Example subject' where id = '${id(49)}';
+ update public.activity set summary = 'Links from matched email' where id = '${id(39)}';
+ insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug)
+  values ('${id(2)}', 'log-activity', 'party', '${id(13)}', '{"activity": "${id(42)}"}', 'automation_job', '2024-01-06', 'partner_one');
+ insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
+  ('${id(50)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2024-05-01'),
+  ('${id(51)}', '${id(30)}', 'next_step', 'Example next step', '${id(1)}', '2024-05-02'),
+  ('${id(52)}', '${id(30)}', 'note', 'Example agent note', '${id(2)}', '2024-05-03'),
+  ('${id(53)}', '${id(30)}', 'note', 'Example unsigned note', '${id(2)}', '2024-05-04');
+ insert into public.event (actor_id, verb, subject_type, subject_id, field, new_value, cause, occurred_at, sponsoring_human_slug) values
+  ('${id(2)}', 'add-deal-note', 'deal', '${id(30)}', 'note', '{"note": "Example agent note"}', 'automation_job', '2024-05-03', 'partner_one'),
+  ('${id(2)}', 'add-deal-note', 'deal', '${id(30)}', 'note', '{"note": "Example other note"}', 'automation_job', '2024-05-04', 'partner_one');
+ commit;`);
+});
+after(async () => {
+	await db.end();
+	await asAdmin(`drop database "${name}" with (force)`);
+});
+
+test("copies calls, meetings, tours and notes with their records, listing what has no place", async () => {
+	const report = await run();
+	assert.deepEqual(
+		(
+			await rows(
+				"select id, kind, happened_at::text, summary, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at::text from activity order by id",
+			)
+		).map(Object.values),
+		[
+			[
+				id(40),
+				"call",
+				"2024-01-04 00:00:00+00",
+				"Example call\n\nExample call notes",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(41),
+				"meeting",
+				"2024-01-05 00:00:00+00",
+				"Example tour",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(42),
+				"note",
+				"2024-01-06 00:00:00+00",
+				"Example note",
+				null,
+				"agent",
+				id(1),
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(47),
+				"call",
+				"2024-01-02 00:00:00+00",
+				"Example call",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(48),
+				"meeting",
+				"2024-01-03 00:00:00+00",
+				"Example meeting",
+				id(1),
+				null,
+				null,
+				"2024-03-01 00:00:00+00",
+			],
+			[
+				id(50),
+				"note",
+				"2024-05-01 00:00:00+00",
+				"Example deal note",
+				id(1),
+				null,
+				null,
+				"2024-05-01 00:00:00+00",
+			],
+			[
+				id(52),
+				"note",
+				"2024-05-03 00:00:00+00",
+				"Example agent note",
+				null,
+				"agent",
+				id(1),
+				"2024-05-03 00:00:00+00",
+			],
+			[
+				id(53),
+				"note",
+				"2024-05-04 00:00:00+00",
+				"Example unsigned note",
+				null,
+				"agent",
+				null,
+				"2024-05-04 00:00:00+00",
+			],
+		],
+	);
+	const recorded = "2024-02-01 00:00:00+00";
+	assert.deepEqual((await about()).map(Object.values), [
+		[id(40), id(30), null, recorded],
+		[id(40), null, id(10), recorded],
+		[id(41), null, id(11), recorded],
+		[id(42), null, id(14), recorded],
+		[id(47), id(30), null, recorded],
+		[id(48), null, id(10), recorded],
+		[id(50), id(30), null, "2024-05-01 00:00:00+00"],
+		[id(52), id(30), null, "2024-05-03 00:00:00+00"],
+		[id(53), id(30), null, "2024-05-04 00:00:00+00"],
+	]);
+	assert.deepEqual(reasons(report), [
+		"39 kind later_copy_365",
+		"43 kind later_copy_365",
+		"44 kind later_copy_365",
+		"45 kind kind_has_no_place",
+		"46 activity about_nothing_copied",
+		"46 deal_id deal_not_copied",
+		"47 connected connected_has_no_place",
+		"47 detail structured_detail_not_copied",
+		"47 lead_id lead_not_copied",
+		"47 owed owed_has_no_place",
+		"49 kind later_copy_365",
+		"51 kind later_copy_366",
+		"53 changed_for_user_id agent_user_unknown",
+	]);
+	assert.deepEqual(
+		await rows(
+			"select tgname from pg_trigger where tgrelid in ('next.activity'::regclass, 'next.activity_about'::regclass) and tgenabled <> 'O'",
+		),
+		[],
+	);
+
+	const history = await rows(
+		"select jsonb_agg(c order by id) as all from change c",
+	);
+	assert.deepEqual(await run(), report);
+	assert.deepEqual(
+		await rows("select jsonb_agg(c order by id) as all from change c"),
+		history,
+	);
+});
+
+test("a record copied later gains its activity and link on the next run", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into deal (id, name, owner_user_id) values ('${id(31)}', 'Example Deal', '${id(1)}');
+ insert into party (id, kind, name) values ('${id(15)}', 'person', 'Example Party');
+ insert into outside_id (source, value, deal_id) values ('old_system', '${id(31)}', '${id(31)}');
+ insert into outside_id (source, value, party_id) values ('old_system', '${id(15)}', '${id(15)}');
+ commit;`);
+	const report = await run();
+	assert.ok(
+		!reasons(report).some(
+			(r) => r.startsWith("46 ") || r.includes("lead_not_copied"),
+		),
+	);
+	assert.deepEqual(
+		(await about())
+			.filter((r) => [id(46), id(47)].includes(r.activity_id))
+			.map((r) => [r.activity_id, r.deal_id, r.party_id]),
+		[
+			[id(46), id(31), null],
+			[id(47), id(30), null],
+			[id(47), null, id(15)],
+		],
+	);
+});
