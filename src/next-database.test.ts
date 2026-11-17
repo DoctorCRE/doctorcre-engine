@@ -154,6 +154,8 @@ const rounds = ROUNDS.map(
 		commencement_on: start,
 		commencement_days_after_delivery: days,
 		other_terms: other,
+		// Not recorded on our LOI; tight once another tenant was looking.
+		submarket_condition: i ? "tight" : null,
 		documents: [
 			{
 				id: id(200 + i),
@@ -1238,6 +1240,12 @@ const RULES: Record<string, Case[]> = {
 		offer(4, 3, AGENT, "listing_agent", { [term]: -1 }),
 		`offer_${term}_check`,
 	]),
+	"a round's submarket, when recorded, is soft, balanced or tight": [
+		[
+			offer(4, 3, AGENT, "listing_agent", { submarket_condition: "hot" }),
+			"offer_submarket_condition_check",
+		],
+	],
 	"rent starts on a date or a number of days after delivery, never both": [
 		[
 			offer(4, 3, AGENT, "listing_agent", {
@@ -6330,7 +6338,7 @@ const INVOICE_REFUSALS: Case[] = [
 	["insert into invoice_mailbox (address) values ('other@example.com')", notGranted("invoice_mailbox")],
 ];
 
-test("invoice evidence and guarded application obey rules 90 to 93", async () => {
+test("invoice evidence and guarded application obey rules 91 to 94", async () => {
 	for (const [sql, refusal] of INVOICE_REFUSALS)
 		await rolledBack(() => assert.rejects(db.query(sql), expected(refusal)));
 });

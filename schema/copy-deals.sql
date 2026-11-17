@@ -90,14 +90,9 @@ from public.deal_participant where to_at is not null;
 create temp table old_phase on commit drop as
 select e.id as old_id, e.subject_id as deal_id, e.occurred_at as happened_at, case when e.field = 'outcome' then 'dead' else e.new_value ->> 'phase' end as phase,
  coalesce(nullif(e.human_quote, ''), nullif(e.agent_rationale, '')) as reason,
- a.changed_by_user_id, job.slug as changed_by_job,
- case when job.slug in ('agent', 'mail_capture') then sponsor.id end as changed_for_user_id
+ a.*
 -- History takes its own event's cause and sponsor, rather than a later change to the same deal.
-from public.event e cross join lateral copy_attribution('event', e.id, e.actor_id) a
-left join public.actor actor on actor.id = e.actor_id
-cross join lateral (select case when a.changed_by_job = 'old_system' and actor.kind = 'automation'
- and e.cause = 'ingest_email' then 'mail_capture' else a.changed_by_job end as slug) job
-left join public.actor sponsor on sponsor.slug = e.sponsoring_human_slug and sponsor.kind = 'human'
+from public.event e cross join lateral copy_event_attribution(e.actor_id, e.id) a
 where e.subject_type = 'deal' and (e.field = 'phase' and e.old_value ->> 'phase' is distinct from e.new_value ->> 'phase'
  or e.field = 'outcome' and e.new_value ->> 'outcome' = 'lost');
 insert into not_copied select d.id, 'phase', d.phase, 'no_phase_history' from public.deal d
@@ -177,7 +172,7 @@ select r.id, f.reason from round_mapping r cross join lateral (values
 where f.refused and (f.reason = 'deal_not_copied' or exists (select from deal d where d.id = r.deal_id))
  and not exists (select from offer o where o.import_source = 'old_system' and o.import_id = r.id::text);
 insert into offer (id, deal_id, property_id, round, from_party_id, from_role, offered_at, expires_on,
- status, rent_per_sf_yr, term_months, ti_per_sf, free_rent_months, other_terms, import_source, import_id, import_record,
+ status, rent_per_sf_yr, term_months, ti_per_sf, free_rent_months, other_terms, submarket_condition, import_source, import_id, import_record,
  changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select r.id, r.deal_id, p.property_id, r.new_round, r.party_id, r.role, r.proposed_on::timestamp at time zone 'America/Chicago', r.expires_on,
  'unknown', r.rate_norm_sf_yr, r.term_months, case when r.ti_basis = 'usd_sf' and r.ti_amount >= 0 then r.ti_amount end,
@@ -186,7 +181,7 @@ select r.id, r.deal_id, p.property_id, r.new_round, r.party_id, r.role, r.propos
  case when r.options_note is not null then 'Options: ' || r.options_note end,
  case when r.opex_note is not null then 'Operating costs: ' || r.opex_note end,
  case when r.note is not null then 'Note: ' || r.note end), ''),
- 'old_system', r.id::text, to_jsonb(original), r.updated_at, a.*
+ case when r.submarket_condition in ('soft', 'balanced', 'tight') then r.submarket_condition end, 'old_system', r.id::text, to_jsonb(original), r.updated_at, a.*
 from round_mapping r join public.negotiation_round original on original.id = r.id
 join old_property p on p.deal_id = r.deal_id
 cross join lateral copy_attribution('negotiation_round', r.id, coalesce(r.updated_by, r.created_by)) a
@@ -200,7 +195,7 @@ select r.id, f.field, f.value, 'no_typed_destination' from public.negotiation_ro
 cross join lateral (values
  ('rate_amount', r.rate_amount::text, r.rate_amount is not null and r.rate_norm_sf_yr is null),
  ('ti_amount', r.ti_amount::text, r.ti_amount is not null and (r.ti_basis is distinct from 'usd_sf' or r.ti_amount < 0)),
- ('submarket_condition', r.submarket_condition, r.submarket_condition is not null)) f(field, value, refused)
+ ('submarket_condition', r.submarket_condition, r.submarket_condition not in ('soft', 'balanced', 'tight'))) f(field, value, refused)
 where f.refused;
 insert into not_copied
 select c.id, 'negotiation_claim', c.round_id::text, 'no_claim_destination' from public.negotiation_claim c;
