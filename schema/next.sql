@@ -460,7 +460,9 @@ create table outside_id (
 	value text not null check (value ~ '^\S(.*\S)?$'),
 	party_id uuid references party,
 	deal_id uuid references deal,
-	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id) = 1),
+	-- Today's system files one email as a row per record and mailbox; each row's id finds the email it became.
+	email_activity_id uuid,
+	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id, email_activity_id) = 1),
 	primary key (source, value)
 );
 
@@ -887,13 +889,34 @@ create table activity_about (
 create table email (
 	activity_id uuid primary key,
 	activity_kind text not null generated always as ('email') stored,
-	message_id text not null unique check (message_id = btrim(message_id)),
+	message_id text unique check (message_id = btrim(message_id)),
 	-- Matched to a person through party_email.
 	sender email_address not null,
 	subject text not null,
 	body text not null,
+	-- Set only by the owner's copy of today's mail, the one source that may lack the Message-ID.
+	imported boolean not null default false,
+	constraint email_message_id_unless_imported check (message_id is not null or imported),
 	foreign key (activity_id, activity_kind) references activity (id, kind)
 );
+
+alter table outside_id add foreign key (email_activity_id) references email;
+
+-- Without its Message-ID, an email is its sender, sent time and subject, so it is stored once.
+create function email_without_message_id_once() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from email e join activity a on a.id = e.activity_id join activity n on n.id = new.activity_id
+		where e.message_id is null and e.activity_id <> new.activity_id and e.sender = new.sender
+			and a.happened_at = n.happened_at and lower(e.subject) = lower(new.subject)) then
+		raise exception 'an email without its Message-ID is stored once'
+			using errcode = 'unique_violation', constraint = 'email_without_message_id_once';
+	end if;
+	return null;
+end $$;
+
+create trigger email_without_message_id_once after insert on email
+	for each row when (new.message_id is null) execute function email_without_message_id_once();
 
 create function email_about_a_record() returns trigger
 language plpgsql as $$
@@ -1632,7 +1655,7 @@ create function activity_entry(a activity) returns jsonb
 language sql stable
 begin atomic
 	select to_jsonb(a) || jsonb_build_object('email', (
-		select to_jsonb(e) - 'activity_id' - 'activity_kind' || jsonb_build_object('documents', (
+		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 			from document doc where doc.email_activity_id = e.activity_id
 		)) from email e where e.activity_id = a.id
@@ -2868,6 +2891,8 @@ grant insert (id, deal_id, property_id, round, answers_round, from_party_id, fro
 	expires_on, status, rent_per_sf_yr, nnn_per_sf_yr, term_months, ti_per_sf, free_rent_months,
 	escalation_pct, commencement_on, commencement_days_after_delivery, other_terms, submarket_condition) on offer to engine;
 grant update (status) on offer to engine;
+revoke insert on email from engine;
+grant insert (activity_id, message_id, sender, subject, body) on email to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;
