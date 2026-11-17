@@ -187,7 +187,7 @@ for (const scope of [
 				account: scope.account && (clientParty.get(scope.account) ?? null),
 			}),
 		);
-		assert.equal(JSON.stringify(actual), expected);
+		assert.deepEqual(actual, JSON.parse(expected));
 	});
 }
 
