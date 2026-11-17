@@ -11,6 +11,19 @@ select distinct on (new_value ->> 'activity') (new_value ->> 'activity')::uuid a
 from public.event where verb = 'log-activity' and new_value ->> 'activity' ~ '^[0-9a-f-]{36}$'
 order by new_value ->> 'activity', mutation_order desc;
 
+-- Setting or restoring a next step writes its note under the deal's lock, after its event's transaction starts and before it is recorded.
+-- A waiting transaction can start before an earlier one writes, so a note pairs only with an event when each is the other's nearest match.
+create temp table next_step_event on commit drop as
+select note_id, event_id from (
+ select n.id as note_id, e.id as event_id,
+  -- Each counts the candidates at least as near as this one, so a tie pairs nothing.
+  count(*) over (partition by n.id order by e.recorded_at) as nearer_events,
+  count(*) over (partition by e.id order by n.created_at desc) as nearer_notes
+ from public.deal_note n join public.event e on e.subject_type = 'deal' and e.subject_id = n.deal_id and e.actor_id = n.actor_id
+  and e.field = 'next_step' and e.new_value ->> 'next_step' = n.text and n.created_at between e.occurred_at and e.recorded_at
+ where n.kind = 'next_step'
+) m where nearer_events = 1 and nearer_notes = 1;
+
 create temp table old_activity on commit drop as
 select a.id, a.kind as old_kind, a.occurred_at as happened_at, a.recorded_at as created_at, a.updated_at as changed_at,
  a.summary, a.detail, a.owed, a.connected,
@@ -23,14 +36,12 @@ union all
 -- A written next step is history only: it opens with its label and makes no next step.
 select n.id, n.kind, n.created_at, n.created_at, n.created_at,
  concat(case when n.kind = 'next_step' then E'Recorded next step\n\n' end, n.text), null, null, null, false, s.*
-from public.deal_note n
-cross join lateral copy_event_attribution(n.actor_id, (select e.id from public.event e
- where e.subject_type = 'deal' and e.subject_id = n.deal_id and e.actor_id = n.actor_id and case n.kind
-  -- Adding a note writes its event in the same transaction, so the times match.
-  when 'note' then e.verb = 'add-deal-note' and e.occurred_at = n.created_at and e.new_value ->> 'note' = n.text
-  -- Setting or restoring a next step writes its note after the event's transaction starts and before it is recorded.
-  else e.field = 'next_step' and e.new_value ->> 'next_step' = n.text and n.created_at between e.occurred_at and e.recorded_at end
- order by e.mutation_order desc limit 1)) s;
+from public.deal_note n left join next_step_event p on p.note_id = n.id
+cross join lateral copy_event_attribution(n.actor_id, case n.kind when 'note' then (select e.id from public.event e
+ -- Adding a note writes its event in the same transaction, so the times match.
+ where e.verb = 'add-deal-note' and e.subject_type = 'deal' and e.subject_id = n.deal_id
+  and e.actor_id = n.actor_id and e.occurred_at = n.created_at and e.new_value ->> 'note' = n.text
+ order by e.mutation_order desc limit 1) else p.event_id end) s;
 
 -- A client, lead or vendor is about its person or company; merged-away ids reach their survivor through the map.
 create temp table old_link on commit drop as

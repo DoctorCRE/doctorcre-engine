@@ -586,3 +586,40 @@ test("keeps every written next step as a recorded note about its deal, making no
 		history,
 	);
 });
+
+test("signs a recorded next step only from the event written with it, even when a waiting write's event overlaps it", async () => {
+	const note = (n: number, text: string, at: string) =>
+		`('${id(n)}', '${id(30)}', 'next_step', '${text}', '${id(2)}', '${at}')`;
+	const event = (text: string, from: string, to: string, sponsor: string) =>
+		`('${id(2)}', 'set-next-step', 'deal', '${id(30)}', 'next_step', '{"next_step": "${text}"}', 'automation_job', '${from}', '${to}', ${sponsor})`;
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
+  ${note(85, "Example repeated step", "2024-07-01 00:00:02")}, ${note(86, "Example repeated step", "2024-07-01 00:00:04")},
+  ${note(87, "Example reversed step", "2024-07-02 00:00:02")}, ${note(88, "Example reversed step", "2024-07-02 00:00:04")},
+  ${note(89, "Example unmatched step", "2024-07-03 00:00:02")}, ${note(90, "Example unmatched step", "2024-07-03 00:00:04")};
+ insert into public.event (actor_id, verb, subject_type, subject_id, field, new_value, cause, occurred_at, recorded_at, sponsoring_human_slug) values
+  ${event("Example repeated step", "2024-07-01", "2024-07-01 00:00:03", "null")},
+  ${event("Example repeated step", "2024-07-01 00:00:01", "2024-07-01 00:00:05", "'partner_one'")},
+  ${event("Example reversed step", "2024-07-02", "2024-07-02 00:00:03", "'partner_one'")},
+  ${event("Example reversed step", "2024-07-02 00:00:01", "2024-07-02 00:00:05", "null")},
+  ${event("Example unmatched step", "2024-07-03 00:00:01", "2024-07-03 00:00:05", "'partner_one'")};
+ commit;`);
+	const report = await run();
+	assert.deepEqual(
+		reasons(report.filter((r) => r.old_id >= id(85) && r.old_id <= id(90))),
+		["85", "88", "89"].map(
+			(n) => `${n} changed_for_user_id agent_user_unknown`,
+		),
+	);
+	const signed =
+		await rows(`select id, changed_by_job, changed_for_user_id from activity
+ where id between '${id(85)}' and '${id(90)}' order by id`);
+	assert.deepEqual(signed.map(Object.values), [
+		[id(85), "agent", null],
+		[id(86), "agent", id(1)],
+		[id(87), "agent", id(1)],
+		[id(88), "agent", null],
+		[id(89), "agent", null],
+		[id(90), "agent", id(1)],
+	]);
+});
