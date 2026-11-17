@@ -44,13 +44,18 @@ left join pg_temp.copy_how_found h on h.old_type = r.source_kind and h.source = 
 left join how_found f on f.slug = h.how_found;
 insert into not_copied select id, 'how_found', typed_source, 'source_needs_mapping'
 from mapped_source where mapped_source is null;
+insert into not_copied select id, case kind when 'client' then 'acquisition_detail' else 'source_detail' end,
+ coalesce(fields ->> 'acquisition_detail', fields ->> 'source_detail'), 'detail_needs_source_mapping'
+from mapped_source where mapped_source is null and coalesce(fields ->> 'acquisition_detail', fields ->> 'source_detail') ~ '\S';
 insert into not_copied select id, kind, party_id::text,
  case when mapped_id is null then 'party_not_copied' else 'several_records_on_one_party' end
 from old_relationship where mapped_id is null or copies > 1;
 insert into not_copied
 select s.id, 'how_found', s.typed_source, 'sources_disagree' from mapped_source s
-where exists (select from mapped_source other where other.mapped_id = s.mapped_id
- and other.mapped_source is distinct from s.mapped_source);
+where s.mapped_source is not null and exists (select from mapped_source other where other.mapped_id = s.mapped_id
+ and other.mapped_source is not null and other.mapped_source <> s.mapped_source);
+create temp table waiting_client_source on commit drop as
+select distinct mapped_id from mapped_source where kind = 'client' and typed_source ~ '\S' and mapped_source is null;
 
 -- Client testimony takes precedence; an existing mapped fact is never overwritten.
 update party p set how_found = s.mapped_source, how_found_detail = coalesce(nullif(btrim(s.fields ->> 'acquisition_detail'), ''),
@@ -63,7 +68,8 @@ update party p set how_found = s.mapped_source, how_found_detail = coalesce(null
  changed_at = greatest(p.changed_at, s.updated_at)
 from (select distinct on (mapped_id) * from mapped_source where mapped_source is not null
  order by mapped_id, kind = 'client' desc, updated_at desc, id) s
-where p.id = s.mapped_id and p.how_found is null;
+where p.id = s.mapped_id and p.how_found is null
+ and not exists (select from waiting_client_source w where w.mapped_id = p.id);
 insert into not_copied select s.id, 'how_found', s.typed_source, 'existing_source_differs'
 from mapped_source s join party p on p.id = s.mapped_id
 where s.mapped_source is not null and p.how_found is distinct from s.mapped_source;
@@ -76,12 +82,12 @@ select r.*, p.how_found, p.how_found_detail,
  u.id as owner, coalesce(nullif(btrim(fields ->> 'event_source'), ''),
  (select case when count(*) = 1 then min(nullif(btrim(est_basis), '')) end
   from public.candidate_pool where promoted_lead_id = r.id)) as estimate_source
-from old_relationship r join party p on p.id = r.mapped_id
+from mapped_source r join party p on p.id = r.mapped_id
 left join outside_id o on o.source = 'old_system' and o.value = r.fields ->> 'owner_id'
-left join app_user u on u.id = o.party_id
-;
+left join app_user u on u.id = o.party_id;
 create temp table classified_relationship on commit drop as
 select r.*, case
+ when exists (select from waiting_client_source w where w.mapped_id = r.mapped_id) then 'client_source_needs_mapping'
  when how_found is null then 'source_needs_mapping'
  when kind = 'lead' and not exists (select from stage where role = 'lead' and slug = mapped_stage) then 'unknown_stage'
  when kind = 'client' and coalesce(fields ->> 'status', '') not in ('roster','cold','engaged','paused','active_deal','past_client') then 'unknown_client_status'
@@ -119,11 +125,16 @@ select r.mapped_id, r.first_created, r.updated_at, r.changed_by_user_id, r.chang
 from ready_relationship r join party_role pr on pr.party_id = r.mapped_id and pr.role = 'national_account'
 where r.rank = 1 and r.kind = 'client' and r.fields ->> 'client_type' = 'national_account' on conflict do nothing;
 insert into not_copied
+select id, field, fields ->> field, refusal from classified_relationship
+cross join lateral (select case refusal when 'unknown_stage' then 'stage'
+ when 'unknown_client_status' then 'status' when 'client_source_needs_mapping' then 'acquisition_source'
+ else 'client_type' end as field) f
+where refusal is not null and refusal <> 'source_needs_mapping';
+insert into not_copied
 select r.id, f.field, f.value, f.reason from classified_relationship r
 cross join lateral (values
- ('stage', fields ->> 'stage', 'unknown_stage', kind = 'lead' and not exists (select from stage where role = 'lead' and slug = mapped_stage)),
  ('do_not_contact', fields ->> 'stage', 'restriction_needs_reason', kind = 'lead' and ((fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact')),
- ('owner_id', fields ->> 'owner_id', 'owner_not_a_user', fields ->> 'owner_id' is not null and owner is null),
+ ('owner_id', fields ->> 'owner_id', 'owner_not_a_user', kind = 'lead' and fields ->> 'owner_id' is not null and owner is null),
  ('owner_id', fields ->> 'owner_id', 'client_owner_has_no_target', kind = 'client' and fields ->> 'owner_id' is not null),
  ('owner_label', fields ->> 'owner_label', 'owner_label_only', fields ->> 'owner_id' is null and fields ->> 'owner_label' ~ '\S'),
  ('lane', fields ->> 'lane', 'unknown_lane', fields ->> 'lane' is not null and not exists (select from lead_lane where slug = fields ->> 'lane')),
@@ -134,11 +145,7 @@ cross join lateral (values
   (fields ->> 'est_lease_event' is null or estimate_source is null or fields ->> 'event_confidence' not in ('high','medium','low'))),
  ('est_lease_event_raw', fields ->> 'est_lease_event_raw', 'unparsed_estimate', fields ->> 'est_lease_event_raw' ~ '\S'),
  ('notes_path', fields ->> 'notes_path', 'file_not_copied', fields ->> 'notes_path' ~ '\S'),
- ('last_touch', fields ->> 'last_touch', 'contact_activity_copy_required', fields ->> 'last_touch' is not null),
- ('client_type', fields ->> 'client_type', 'unknown_client_type', kind = 'client' and fields ->> 'client_type' is not null
-  and fields ->> 'client_type' <> 'national_account' and not exists (select from client_type where slug = mapped_type)),
- ('client_type', fields ->> 'client_type', 'national_account_needs_company', fields ->> 'client_type' = 'national_account' and not exists (select from party where id = mapped_id and kind = 'company')),
- ('status', fields ->> 'status', 'unknown_client_status', kind = 'client' and coalesce(fields ->> 'status', '') not in ('roster','cold','engaged','paused','active_deal','past_client'))
+ ('last_touch', fields ->> 'last_touch', 'contact_activity_copy_required', fields ->> 'last_touch' is not null)
 ) f(field, value, reason, refused) where f.refused;
 
 create temp table relationship_note on commit drop as
