@@ -632,3 +632,21 @@ Today's rows map as follows. The eventual copier must list unresolved values for
 Both search formats preserve unknown keys in the correction list and refuse to copy an incompletely mapped search. Empty type or geography filters mean unspecified, not an invented value. These mappings are a specification for a later copier, not an implemented import.
 
 Existing stamp attribution rules apply to these rows. `parcel` and `availability` are excluded by the owner's coverage ruling on #196. No listing or availability table is added.
+
+## Copying today's leads and clients
+
+Run `schema/copy-leads-clients.sql` as the owner, after the party copy and attribution helper, in a separate transaction with the new schema on `search_path`. It only reads `public`. It copies roles, client profiles and national accounts, working details, notes and dated follow-ups. Existing old-system role maps keep a repeat run from changing copied records. Merged party ids resolve through `outside_id`; merged client rows are listed and skipped.
+
+Before running the file, create this temporary source mapping in the same transaction. Fill it with reviewed exact old values, never guessed spellings. The file seeds the five initial how-found choices. For an additional choice, add its `how_found` row first.
+
+```sql
+create temp table copy_how_found (
+ old_type text, source text, how_found text,
+ primary key (old_type, source)
+) on commit drop;
+insert into copy_how_found values ('lead', 'Example reviewed source', 'referral');
+```
+
+`old_type` is `client` for acquisition source, `lead` for ordinary lead source, and `candidate_pool` for a prospect-pool lead's unique promoted candidate source. Missing mappings are listed in `not_copied`; a party with no mapped source gets no lead or client role. Client testimony takes precedence when mapped sources disagree, and each disagreement is listed. The newest lead supplies stage and owner; the earliest row supplies role creation time. Notes from duplicate rows remain separate activities. Unknown types and owners, incomplete estimates, file references, standalone last-touch dates and undated brand or account-owner links are listed for correction. No do-not-contact reason, contact event or history date is invented.
+
+This is the first part of #329, tracked in #333. Candidate and outreach copies, including approvals and history, remain in #334. Applied and pending stage evidence and its history remain in #335. Their old rows are listed as later copies even though their mappings are already on main. Copy contact activities before resolving listed last-touch dates. This section adds no decision or database rule numbers.
