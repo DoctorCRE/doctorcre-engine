@@ -2957,11 +2957,13 @@ test("party specialties sort by slug and exclude another person's", async () => 
 test("party territories keep dated history and each territory's ordered pieces", async () => {
 	await withParty(async () => {
 		await db.query(`insert into territory (id, name) values ('${id(9180)}', 'Example reach');
+			insert into market (id, name) values ('${id(9185)}', 'Example Alpha');
 			insert into territory_piece (id, territory_id, state_fips, market_id, base_latitude, base_longitude, miles) values
 			('${id(9181)}', '${id(9180)}', null, null, 10, -150, 5),
 			('${id(9182)}', '${id(9180)}', null, '${BAY}', null, null, null),
 			('${id(9183)}', '${id(9180)}', '91', null, null, null, null),
-			('${id(9184)}', '${id(9180)}', null, null, 10, -150, 2);
+			('${id(9184)}', '${id(9180)}', null, null, 10, -150, 2),
+			('${id(9186)}', '${id(9180)}', null, '${id(9185)}', null, null, null);
 			insert into party_territory (id, party_id, territory_id, started_on, ended_on) values
 			('${id(9170)}', '${SUBJECT}', '${id(9180)}', null, null),
 			('${id(9171)}', '${SUBJECT}', '${HOME}', '2024-01-01', null),
@@ -2977,11 +2979,11 @@ test("party territories keep dated history and each territory's ordered pieces",
 		const pieces = territories[2].territory.pieces;
 		assert.deepEqual(
 			pieces.map((piece: { id: string }) => piece.id),
-			[id(9183), id(9182), id(9184), id(9181)],
+			[id(9183), id(9186), id(9182), id(9184), id(9181)],
 		);
-		assert.equal(pieces[1].market.name, "Example Bay");
-		assert.equal(pieces[2].market, null);
-		assert.equal(pieces[2].territory_id, undefined);
+		assert.equal(pieces[1].market.name, "Example Alpha");
+		assert.equal(pieces[3].market, null);
+		assert.equal(pieces[3].territory_id, undefined);
 	});
 });
 
