@@ -7,7 +7,6 @@ export function isCalendarDate(value: unknown): value is string {
 	);
 }
 
-// A moment with its zone, on a day that exists.
 export const isInstant = (value: unknown): value is string =>
 	typeof value === "string" &&
 	/T.*(Z|[+-]\d\d:\d\d)$/.test(value) &&

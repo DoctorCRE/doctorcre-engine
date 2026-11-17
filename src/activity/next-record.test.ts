@@ -296,6 +296,23 @@ test("sender name and ordered to/cc recipients survive a second mailbox copy", a
 	);
 });
 
+test("an email refuses recipient fields it does not store", async () => {
+	const message_id = "recipient-field@example.com";
+	await refused(
+		viaJob(
+			mail(message_id, {
+				recipients: [
+					{ address: "joe@example.com", kind: "to", name: "Joe Example" },
+				],
+			}),
+		),
+		400,
+		"invalid_field_value",
+		{ fields: ["email"] },
+	);
+	assert.deepEqual(await stored(message_id), []);
+});
+
 async function filedEmails(query: string, job = otherMailbox) {
 	return ask(`/jobs/filed-emails${query}`, undefined, {
 		"Cf-Access-Jwt-Assertion": await new SignJWT({})
@@ -346,8 +363,13 @@ test("filed mail pages by id without an age limit and only for its mailbox", asy
 		(await filedEmails(`?after=${expected[1]?.activity_id}&limit=1`)).body,
 		{ emails: [], next_cursor: null },
 	);
-	for (const query of ["?after=bad", "?limit=0", "?limit=1.5"])
-		assert.equal((await filedEmails(query)).status, 400);
+	for (const [query, fields] of [
+		["?after=bad", ["after"]],
+		["?limit=0", ["limit"]],
+		["?limit=1.5", ["limit"]],
+		["?after=bad&limit=0", ["after", "limit"]],
+	] as const)
+		await refused(filedEmails(query), 400, "invalid_field_value", { fields });
 	assert.equal(
 		(await filedEmails("", { ...otherMailbox, "Engine-For-User": "unknown" }))
 			.status,

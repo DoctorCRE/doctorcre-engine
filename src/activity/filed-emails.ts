@@ -13,24 +13,24 @@ type FiledEmail = {
 	happened_at: string;
 };
 
-export const filedEmails = new Hono<NextSaveEnv>().get(
+type FiledEmailsEnv = NextSaveEnv & {
+	Variables: { stamp: { job: string; for_user?: string } };
+};
+
+export const filedEmails = new Hono<FiledEmailsEnv>().get(
 	"/filed-emails",
 	async (c) => {
 		const after = c.req.query("after") || null;
 		const limit = Number(c.req.query("limit") ?? 100);
-		if (
-			(after !== null && !isUuid(after)) ||
-			!Number.isInteger(limit) ||
-			limit < 1 ||
-			limit > 1000
-		)
-			return refuse(
-				c,
-				new Refusal(400, "invalid_field_value", { fields: ["after", "limit"] }),
-			);
+		const fields = [
+			...(after !== null && !isUuid(after) ? ["after"] : []),
+			...(!Number.isInteger(limit) || limit < 1 || limit > 1000
+				? ["limit"]
+				: []),
+		];
+		if (fields.length)
+			return refuse(c, new Refusal(400, "invalid_field_value", { fields }));
 		const stamp = c.get("stamp");
-		if (stamp.job === undefined)
-			return refuse(c, new Refusal(403, "unknown_job"));
 		const database = c.env.DATABASE;
 		if (!database) return refuse(c, new Refusal(503, "database_unavailable"));
 		try {

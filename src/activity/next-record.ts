@@ -47,7 +47,6 @@ type Settled<T> = { [K in keyof T]: Exclude<T[K], undefined> };
 const isSettled = <T extends object>(parsed: T): parsed is Settled<T> =>
 	Object.values(parsed).every((value) => value !== undefined);
 
-// The parsed request, or a refusal naming its stray, missing or invalid fields.
 function settled<T extends object>(
 	parsed: T,
 	args: JsonObject,
@@ -81,6 +80,8 @@ const filed = (value: unknown) =>
 
 function recipient(value: JsonValue): Email["recipients"][number] | undefined {
 	if (!isArguments(value) || !isText(value.address)) return undefined;
+	if (Object.keys(value).some((key) => key !== "address" && key !== "kind"))
+		return undefined;
 	const { kind } = value;
 	return kind === "to" || kind === "cc"
 		? { address: address(value.address), kind }
@@ -143,7 +144,6 @@ function parseLinks(activity_id: string, args: JsonObject) {
 	return settled({ idempotency_key, activity_id, about: filed(about) }, args);
 }
 
-// Refuses the whole save when a named record does not exist, naming each missing one.
 async function requireRecords(tx: Transaction<DB>, about: About[]) {
 	const { rows } = await sql<{ link: About }>`
 		select jsonb_strip_nulls(to_jsonb(l)) as link
