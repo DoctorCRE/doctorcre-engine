@@ -34,6 +34,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`lease_option`**: one option in a lease version, with its notice deadline and terms.
 - **`critical_date`**: a proposed deadline, with its user confirmation and resolution.
 - **`document`**: a file, as its name, its key in object storage (Cloudflare R2) and its type, read from the file's own bytes when the engine stores it. The file itself is never in the database. An email attachment names the email it arrived with.
+- **`party_document`**: a file that belongs to a person or company, such as a client's before any deal.
 - **`activity`**: something that happened: an email, a call, a meeting or a note, with when, who it came from and a summary.
 - **`email`**: the email behind an email activity.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
@@ -167,7 +168,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 72. A lead's lane comes from its list. A lease estimate has both date and nonblank source, and confidence only with an estimate. Lane, estimate, confidence and segment belong only to the lead role. How-found detail is nonblank and has how found.
 73. A lease names its tenant and property, with an optional originating deal. A negotiated lease is for that deal's client and property, and only one lease originates from a deal. An outside lease needs no invented deal. Lease identities never change or disappear.
 74. A renewal reason and the lease it renews are required together. The source lease exists, and its originating deal is not the renewal deal. A user may correct the reason and source together.
-75. A deal file names an existing deal and kind from its list, nonblank type and R2 key unique within its bucket, with a SHA-256 hash and positive byte count. Replacements increment the version and name the previous file of the same deal and kind; a version has at most one replacement. Files are never removed or rewritten except for their display name and the one-time classification in rule 97.
+75. A deal file names an existing deal and kind from its list, nonblank type and R2 key unique within its bucket, with a SHA-256 hash and positive byte count. A party file links a stored file, one with its type, hash and size, to an existing party once; a missing file is never linked. Replacements increment the version and name the previous file of the same deal and kind; a version has at most one replacement. Files are never removed or rewritten except for their display name and the one-time classification in rule 97.
 76. Extraction attempts belong to the exact file version and its deal, name when and how they ran, and retain ordered page text and an optional receipt. Produced text is nonblank, no-text has no nonblank text, and unavailable or receipt-only has no pages. A receipt-only attempt requires a receipt. Pages contain no nulls and stay within 1,000 pages and 500,000 characters. The same method, extractor version, model and text format run once per file. Attempts never change or disappear.
 77. A job creates a pending proposal with an email, call or meeting source, evidence and one typed payload. Only a direct user decides it once; acceptance creates its real row atomically, dismissal creates nothing, and final decisions and payloads remain history.
 78. A deal's commission is recorded once. Its expected amount and gross are more than zero, and an override is a share between none and all.
@@ -356,6 +357,22 @@ Moving today's rows across:
 Keeping documents also prevents deleting an email with attachments or a deal with filed files; the engine must retain those source records. This applies to attachments and post media as well as deal files.
 
 This slice designs storage only. Upload, extraction jobs, reads and the eventual copy run follow separately. It changes no live data.
+
+## Client files
+
+The old system files a generated document to its client when no deal exists (carr-system `pipelines/backfill_document_attachments.py`, an `attachment` whose subject is the client). `party_document` gives such a file its place: one row joins a person or company to a `document`. The link is the party's, not a role's, so a file stays put when the party gains or loses the client role.
+
+- **One file, stored once.** The bucket and R2 key still identify one `document`. A file several parties share, such as a brand's file its locations use, is one row with a link per party. A party file may also be filed to a deal, once, as any stored attachment is; it keeps its party links and the deal's kind and version rules then apply. The same party and file are linked once.
+- **Missing files.** A link needs a stored file: a nonblank type, a hash and a size. A row with only a name and key cannot be linked, so a party never shows a file whose bytes were not stored. A file whose bytes are gone, like an old generated document with neither file on disk, gets no document at all; the copy lists it for a user instead (rule 75).
+- **Merging duplicates.** A merge moves the duplicate's links to the survivor. Where both hold the same file, the survivor's link stays and the duplicate's is removed; change history keeps it, told as that merge's.
+- **Corrections.** The engine may remove a mistaken link; the file stays, since documents are history. A link never changes; a different link is a removed row and a new one. Links are stamped and their changes recorded.
+
+A party file has no kind. Kinds and versions stay deal-file facts until the owner asks for kinds on client files.
+
+Moving today's rows across, in the copy that follows this design:
+
+- A live `attachment` whose subject is a client becomes a document in bucket `deal_documents`, keeping its id, name, key, type, hash, size and time, linked to the client's party through the party map, including a merged-away client's survivor. Rows naming one key are one file, as in the deal-file copy.
+- A generated `document` with a client and no deal links its surviving working and PDF files the same way. One with neither file, a deleted attachment, a client that did not copy, and rows of one key that disagree on type, hash or size are listed, not linked.
 
 ## Offer rounds
 
