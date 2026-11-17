@@ -20,7 +20,7 @@ const links = () =>
 		"select id, email_activity_id, changed_at::text from document order by id",
 	);
 
-// Attachments 20 to 25 and the deal files they became; 23 is a partner's own upload.
+// Attachments 20 to 26 and the deal files they became; 23 is a partner's own upload, and 26 became file 36.
 // Old emails 40 to 44: the Message-ID each mailbox row kept; 40 and 41 are one email in two mailboxes, and 42 never copied.
 const messages: [n: number, header: string][] = [
 	[40, "First"],
@@ -37,6 +37,7 @@ const proposals: [attachment: number, email: number, day: number][] = [
 	[24, 43, 2],
 	[24, 41, 3],
 	[25, 44, 1],
+	[26, 44, 1],
 ];
 const header = Object.fromEntries(messages);
 const filed = [20, 21, 22, 24];
@@ -55,6 +56,8 @@ before(async () => {
  insert into document (id, name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind)
  select v, 'Example file.pdf', 'deal_documents', 'files/' || right(v::text, 2), 'application/pdf', repeat(right(v::text, 2), 32), 1000, '${id(10)}', 'other'
  from unnest(array[${[20, 21, 22, 23, 24, 25].map((n) => `'${id(n)}'`).join(", ")}]::uuid[]) v;
+ insert into document (id, name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind)
+ values ('${id(36)}', 'Example file.pdf', 'deal_documents', 'files/26', 'application/pdf', repeat('36', 32), 1000, '${id(10)}', 'other');
  insert into activity (id, kind, happened_at) values ${[41, 43, 44].map((n) => `('${id(n)}', 'email', '2025-01-01')`).join(", ")};
  insert into email (activity_id, message_id, sender, subject, body) values
  ${[41, 43, 44].map((n) => `('${id(n)}', '<${header[n]}@example.test>', 'doctor@example.test', 'Example', 'Example body')`).join(", ")};
@@ -67,7 +70,7 @@ before(async () => {
  from unnest(array[${messages.map(([n]) => n).join(", ")}]) n;
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by)
  select ('00000000-0000-4000-8000-0000000000' || n)::uuid, 'deal', '${id(10)}', 'files/' || n,
-  'Example file.pdf', 'application/pdf', '${"0".repeat(64)}', 1000, '${id(1)}' from generate_series(20, 25) n;
+  'Example file.pdf', 'application/pdf', '${"0".repeat(64)}', 1000, '${id(1)}' from generate_series(20, 26) n;
  insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at)
  select '${id(1)}', 'attach-deal-file', 'deal', '${id(10)}', jsonb_build_object('attachment_id', ('00000000-0000-4000-8000-0000000000' || n)::uuid), 'ingest_email', '2025-01-01'
  from unnest(array[${filed.join(", ")}]) n;
@@ -89,6 +92,7 @@ test("a file names the first copied email it arrived with and lists each emailed
 			[id(23), null],
 			[id(24), id(43)],
 			[id(25), id(44)],
+			[id(36), id(44)],
 		],
 	);
 	assert.deepEqual(
