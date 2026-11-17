@@ -33,7 +33,7 @@ before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'person', 'Example Other'), ('${id(6)}', 'company', 'Example Client');
- insert into app_user (id) values ('${id(1)}'), ('${id(2)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}'), ('${id(2)}', 'user-${id(2)}');
  insert into how_found values ('referral', 'Example referral');
  update party set how_found = 'referral';
  insert into role (slug, label) values ('client', 'Client');

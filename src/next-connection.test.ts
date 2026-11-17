@@ -27,7 +27,7 @@ before(async () => {
 		grant select on next.deal to ${directReader};
 		begin; select set_config('engine.user_id', '${person}', true);
 		insert into party (id, kind, name) values ('${person}', 'person', 'Example User');
-		insert into app_user (id) values ('${person}'); commit;`);
+		insert into app_user (id, slug) values ('${person}', 'user-${person}'); commit;`);
 });
 after(async () => {
 	await db.query(

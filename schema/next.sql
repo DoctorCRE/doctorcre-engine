@@ -51,7 +51,7 @@ create table app_user (
 	kind text not null generated always as ('person') stored,
 	created_at timestamptz not null default now(),
 	-- The name the user signs in under, which today's answers show wherever they name a user.
-	slug text unique check (slug ~ '\S'),
+	slug text not null unique check (slug ~ '\S'),
 	foreign key (id, kind) references party (id, kind)
 );
 

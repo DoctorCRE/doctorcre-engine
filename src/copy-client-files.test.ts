@@ -28,7 +28,7 @@ before(async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'),
  ('${id(10)}', 'company', 'Example Client'), ('${id(11)}', 'company', 'Example Second'), ('${id(12)}', 'company', 'Example Survivor');
- insert into app_user values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(10)}', '${id(10)}'),
  ('old_system', '${id(11)}', '${id(11)}'), ('old_system', '${id(13)}', '${id(12)}');
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User');

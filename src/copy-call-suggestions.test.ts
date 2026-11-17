@@ -57,7 +57,7 @@ before(async () => {
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
   ('${id(2)}', 'partner_two', 'human', 'Example Other'), ('${id(3)}', 'example-device', 'automation', 'Example Recorder');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
- insert into app_user values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(1)}', '${id(1)}');
  insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
  insert into public.party (id, kind, name, created_by, updated_by) values ('${id(11)}', 'person', 'Example Party', '${id(1)}', '${id(1)}');

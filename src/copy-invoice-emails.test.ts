@@ -33,7 +33,7 @@ before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}','person','Example User'), ('${id(2)}','person','Example Partner');
- insert into app_user values ('${id(1)}'), ('${id(2)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}'), ('${id(2)}', 'user-${id(2)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}'), ('old_system','${id(2)}','${id(2)}');
  insert into commission_tier (user_id, from_deal, partner_user_id, closing_share) values ('${id(1)}',1,'${id(2)}',0.6);
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}','partner_one','human','Example User'),

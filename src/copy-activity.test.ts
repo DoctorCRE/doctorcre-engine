@@ -54,7 +54,7 @@ before(async () => {
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
   ('${id(2)}', 'claude', 'automation', 'Example Agent');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
- insert into app_user values ('${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
  insert into public.party (id, kind, name, created_by, updated_by)
   select v, case when v in ('${id(10)}'::uuid, '${id(12)}') then 'org' else 'person' end, 'Example Party ' || v, '${id(1)}', '${id(1)}'

@@ -47,7 +47,7 @@ before(async () => {
 			(
 				n,
 			) => `insert into party (id,kind,name) values ('${id(n)}','person','Example User ${n}');
- insert into app_user values ('${id(n)}');
+ insert into app_user (id, slug) values ('${id(n)}', 'user-${id(n)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(n)}','${id(n)}');`,
 		)
 		.join("\n")}

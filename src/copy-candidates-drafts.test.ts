@@ -67,7 +67,7 @@ before(async () => {
   ('${agent}','claude','automation','Example agent'), ('${sweep}','example_sweep','automation','Example sweep'),
   ('${helper}','example_helper','human','Example helper');
  insert into party (id,kind,name) values ('${user}','person','Example User');
- insert into app_user values ('${user}');
+ insert into app_user (id, slug) values ('${user}', 'user-${user}');
  insert into outside_id (source,value,party_id) values ('old_system','${user}','${user}');
  insert into how_found (slug,label) values ('referral','Referral');
  insert into role (slug,label) values ('lead','Lead');
