@@ -24,6 +24,11 @@ const order: [file: string, input?: string][] = [
 		`create temp table copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop;
  insert into copy_how_found values ('lead', 'Example referral', 'referral'), ('client', 'Example referral', 'referral');`,
 	],
+	[
+		"copy-national-account-owners.sql",
+		`create temp table copy_account_owner_date (account_client_id uuid primary key, started_on date not null) on commit drop;
+ insert into copy_account_owner_date values ('${id(23)}', '2024-03-01');`,
+	],
 	["copy-candidates-drafts.sql"],
 	["copy-vendors.sql"],
 	["copy-buildings.sql"],
@@ -264,7 +269,7 @@ const counts = async () =>
 // Each table a copy writes holds what the snapshot gave it, so no copy passes by copying nothing.
 // biome-ignore format: one entry per copied table
 const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1,
- specialty: 1, do_not_contact: 1, client: 2, national_account: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
+ specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 2, document_extraction: 1, commission: 2,
@@ -280,7 +285,6 @@ const corrections = [
  ["copy-markets.sql", id(22), "membership_details", '{"market": "example-bay", "source": "Example review", "office_presence": true, "service_coverage": null}', "no_typed_destination"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
  ["copy-markets.sql", "example-bay", "source", "Example review", "no_typed_destination"],
- ["copy-leads-clients.sql", id(23), "national_account_owner", id(1), "owner_start_date_required"],
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],

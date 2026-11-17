@@ -225,11 +225,9 @@ cross join lateral (values ('contact_label', 'verbatim_label_not_stored', true),
   fields ->> 'status' = 'prospect' or fields ->> 'prospect_engagement_status' <> 'active')
 ) f(field, reason, listed) where kind = 'client' and f.listed and fields ->> f.field ~ '\S';
 
--- Neither today's org_id nor set_at establishes when brand membership or account ownership began.
+-- Today's org_id does not establish when brand membership began.
 insert into not_copied select c.id, 'org_id', p.org_id::text, 'brand_start_date_required'
 from public.client c join public.party p on p.id = c.party_id where c.merged_into is null and p.kind = 'org' and p.org_id is not null;
-insert into not_copied select account_client_id, 'national_account_owner', owner_actor_id::text, 'owner_start_date_required'
-from public.national_account_owner;
 insert into not_copied select id, 'client', merged_into::text, 'merged_client' from public.client where merged_into is not null;
 set constraints all immediate;
 do $$ declare t text; begin
