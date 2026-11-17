@@ -2528,7 +2528,7 @@ const withParty = (run: () => Promise<unknown>) =>
 		await run();
 	});
 
-test("a person with no links returns every empty list; a missing id matches the deal read", async () => {
+test("a person with no links returns every empty list; a missing id returns null", async () => {
 	await withParty(async () => {
 		assert.deepEqual(await readParty(), {
 			party: {
@@ -2539,6 +2539,10 @@ test("a person with no links returns every empty list; a missing id matches the 
 				how_found: "referral",
 				how_found_detail: null,
 			},
+			do_not_contact: null,
+			brands: [],
+			national_account_owners: [],
+			leases: [],
 			emails: [],
 			phones: [],
 			companies: [],
@@ -2549,11 +2553,7 @@ test("a person with no links returns every empty list; a missing id matches the 
 			next_steps: [],
 			proposals: [],
 		});
-		const missing = await db.query("select everything_about_deal($1) as deal", [
-			MISSING,
-		]);
 		assert.equal(await readParty(MISSING), null);
-		assert.equal(await readParty(MISSING), missing.rows[0].deal);
 	});
 });
 
@@ -2631,12 +2631,15 @@ test("company memberships read from either end with dated history and id ties", 
 		);
 		assert.equal(memberships[1].title, "Former");
 		assert.equal(memberships[1].ended_on, "2021-01-01");
-		assert.equal(memberships[1].person.name, "Example Reader");
-		assert.equal(memberships[1].company.name, "Example Company");
+		assert.equal(memberships[1].party.name, "Example Company");
+		assert.equal(memberships[1].person_kind, undefined);
+		assert.equal(memberships[1].company_kind, undefined);
+		const incoming = (await readParty(COMPANY)).companies;
 		assert.deepEqual(
-			(await readParty(COMPANY)).companies,
-			memberships.slice(1),
+			incoming.map((c: { id: string }) => c.id),
+			[id(9031), id(9032)],
 		);
+		assert.equal(incoming[0].party.name, "Example Reader");
 	});
 });
 
@@ -2651,6 +2654,7 @@ test("party roles retain lead stage and owner and the client profile", async () 
 			["client", "lead"],
 		);
 		assert.equal(roles[0].client.status, "engaged");
+		assert.equal(roles[0].client.role, undefined);
 		assert.equal(roles[0].client.current_status, "engaged");
 		await db.query(`insert into deal_party (deal_id, party_id, role)
 			values ('${DEAL}', '${SUBJECT}', 'client')`);
@@ -2698,7 +2702,15 @@ test("party relationships include incoming and outgoing links, with direction an
 		assert.equal(links[0].party_id, COMPANY);
 		assert.equal(links[0].other_party_id, SUBJECT);
 		assert.equal(links[1].ended_on, "2021-01-01");
-		assert.deepEqual((await readParty(COMPANY)).links, [links[0], links[2]]);
+		assert.equal(links[0].party.name, "Example Company");
+		assert.equal(links[2].party.name, "Example Company");
+		const incoming = (await readParty(COMPANY)).links;
+		assert.deepEqual(
+			incoming.map((l: { id: string }) => l.id),
+			[id(9050), id(9052)],
+		);
+		assert.equal(incoming[0].party.name, "Example Reader");
+		assert.equal(incoming[1].party.name, "Example Reader");
 	});
 });
 
@@ -2722,6 +2734,12 @@ test("party activity is explicit, chronological and once per item with ordered e
 		);
 		assert.equal(activity[0].email, null);
 		assert.equal(activity[1].email.body, "Example body");
+		assert.deepEqual(
+			activity[1],
+			(await readDeal()).activity.find(
+				(a: { id: string }) => a.id === id(9061),
+			),
+		);
 		assert.deepEqual(
 			activity[1].email.documents.map((d: { id: string }) => d.id),
 			[id(9063), id(9064)],
@@ -2769,6 +2787,149 @@ test("party proposals include only pending suggestions in creation order with id
 		);
 		assert.equal(proposals[0].evidence, "Example evidence");
 		assert.equal(proposals[0].what, "First");
+	});
+});
+
+test("party contact restrictions retain expired reasons and distinguish active restrictions", async () => {
+	await withParty(async () => {
+		await db.query(`insert into do_not_contact (party_id, reason, until_date) values
+			('${SUBJECT}', 'Example restriction', current_date - 1),
+			('${COMPANY}', 'Other restriction', null)`);
+		let restriction = (await readParty()).do_not_contact;
+		assert.ok(restriction);
+		assert.equal(restriction.reason, "Example restriction");
+		assert.equal(restriction.active, false);
+		assert.equal(restriction.party_id, undefined);
+		await db.query(
+			`update do_not_contact set until_date = current_date where party_id = '${SUBJECT}'`,
+		);
+		assert.equal((await readParty()).do_not_contact.active, true);
+		await db.query(
+			`update do_not_contact set until_date = null where party_id = '${SUBJECT}'`,
+		);
+		restriction = (await readParty()).do_not_contact;
+		assert.equal(restriction.active, true);
+		assert.equal(restriction.until_date, null);
+		await db.query(`insert into party (id, kind, name) values ('${id(9150)}', 'person', 'Example Survivor');
+			select merge_party('${SUBJECT}', '${id(9150)}')`);
+		assert.deepEqual((await readParty()).do_not_contact, restriction);
+	});
+});
+
+test("party brand memberships show both ends, dated history and start-date id ordering", async () => {
+	await withParty(async () => {
+		await db.query(`insert into party_role (party_id, role) values ('${COMPANY}', 'client');
+			insert into client (party_id) values ('${COMPANY}'), ('${CLIENT}');
+			insert into client_brand (id, location_id, brand_id, started_on, ended_on) values
+			('${id(9101)}', '${COMPANY}', '${BROKERAGES[0]}', '2021-01-01', null),
+			('${id(9102)}', '${COMPANY}', '${BROKERAGES[1]}', '2020-01-01', '2021-01-01');
+			insert into client_brand (id, location_id, brand_id, started_on) values
+			('${id(9100)}', '${CLIENT}', '${BROKERAGES[0]}', '2021-01-01')`);
+		const brands = (await readParty(COMPANY)).brands;
+		assert.deepEqual(
+			brands.map((b: { id: string }) => b.id),
+			[id(9102), id(9101)],
+		);
+		assert.equal(brands[0].ended_on, "2021-01-01");
+		assert.equal(brands[1].party.id, BROKERAGES[0]);
+		assert.equal(brands[1].brand_kind, undefined);
+		assert.equal(brands[1].location_kind, undefined);
+		const locations = (await readParty(BROKERAGES[0])).brands;
+		assert.deepEqual(
+			locations.map((b: { id: string }) => b.id),
+			[id(9100), id(9101)],
+		);
+		assert.equal(locations[1].party.id, COMPANY);
+		assert.deepEqual((await readParty()).brands, []);
+	});
+});
+
+test("national account ownership reads both ends and preserves former owners in total order", async () => {
+	await withParty(async () => {
+		await db.query(`insert into role (slug, label) values ('national_account', 'National account');
+			insert into party_role (party_id, role) values
+			('${COMPANY}', 'national_account'), ('${BROKERAGES[0]}', 'national_account');
+			insert into national_account (party_id) values ('${COMPANY}'), ('${BROKERAGES[0]}');
+			insert into national_account_owner (id, account_id, owner_id, started_on, ended_on) values
+			('${id(9111)}', '${COMPANY}', '${SUBJECT}', '2021-01-01', null),
+			('${id(9112)}', '${COMPANY}', '${AGENT}', '2020-01-01', '2021-01-01'),
+			('${id(9110)}', '${BROKERAGES[0]}', '${SUBJECT}', '2021-01-01', null)`);
+		const owners = (await readParty(COMPANY)).national_account_owners;
+		assert.deepEqual(
+			owners.map((o: { id: string }) => o.id),
+			[id(9112), id(9111)],
+		);
+		assert.equal(owners[0].ended_on, "2021-01-01");
+		assert.equal(owners[1].party.id, SUBJECT);
+		assert.equal(owners[1].owner_kind, undefined);
+		const accounts = (await readParty()).national_account_owners;
+		assert.deepEqual(
+			accounts.map((o: { id: string }) => o.id),
+			[id(9110), id(9111)],
+		);
+		assert.equal(accounts[1].party.id, COMPANY);
+		assert.deepEqual((await readParty(CLIENT)).national_account_owners, []);
+	});
+});
+
+test("party leases include signed versions, documents, suites and options with history and total ordering", async () => {
+	await withParty(async () => {
+		await db.query(`insert into lease (id, party_id, property_id) values
+			('${id(9121)}', '${SUBJECT}', '${PROPERTY}'), ('${id(9120)}', '${SUBJECT}', '${PROPERTY}'),
+			('${id(9122)}', '${COMPANY}', '${PROPERTY}');
+			insert into lease_version (id, lease_id, version, document_id, expiration_on, other_terms) values
+			('${id(9131)}', '${id(9121)}', 1, '${PDF_FILE}', '2030-01-01', 'Original terms'),
+			('${id(9130)}', '${id(9121)}', 2, '${PDF_FILE}', '2031-01-01', 'Amended terms');
+			insert into suite (id, property_id, label) values
+			('${id(9142)}', '${PROPERTY}', null), ('${id(9141)}', '${PROPERTY}', null),
+			('${id(9143)}', '${PROPERTY}', 'Example suite');
+			insert into lease_suite (lease_version_id, lease_id, property_id, suite_id)
+			select '${id(9131)}', '${id(9121)}', '${PROPERTY}', id from suite
+			where id in ('${id(9141)}', '${id(9142)}', '${id(9143)}');
+			insert into lease_option (lease_version_id, number, kind, notice_on, terms) values
+			('${id(9131)}', 2, 'expansion', '2029-01-01', 'Example expansion'),
+			('${id(9131)}', 1, 'renewal', '2029-01-01', 'Example renewal')`);
+		const leases = (await readParty()).leases;
+		assert.deepEqual(
+			leases.map((l: { id: string }) => l.id),
+			[id(9120), id(9121)],
+		);
+		assert.equal(leases[1].property.id, PROPERTY);
+		assert.equal(leases[1].client_role, undefined);
+		assert.deepEqual(leases[0].versions, []);
+		const versions = leases[1].versions;
+		assert.deepEqual(
+			versions.map((v: { id: string }) => v.id),
+			[id(9131), id(9130)],
+		);
+		assert.equal(versions[0].other_terms, "Original terms");
+		assert.equal(versions[1].other_terms, "Amended terms");
+		assert.equal(versions[0].document.id, PDF_FILE);
+		assert.deepEqual(
+			versions[0].suites.map((s: { id: string }) => s.id),
+			[id(9143), id(9141), id(9142)],
+		);
+		assert.deepEqual(
+			versions[0].options.map((o: { number: number }) => o.number),
+			[1, 2],
+		);
+		assert.equal(versions[0].options[0].terms, "Example renewal");
+		assert.deepEqual(versions[1].suites, []);
+		assert.deepEqual(versions[1].options, []);
+		assert.deepEqual(
+			(await readParty(COMPANY)).leases.map((l: { id: string }) => l.id),
+			[id(9122)],
+		);
+		await db.query(`update property set address = '200 Example Way' where id = '${PROPERTY}';
+			insert into property (id, address) values ('${id(9160)}', '100 Example Way');
+			insert into lease (id, party_id, property_id) values ('${id(9123)}', '${SUBJECT}', '${id(9160)}')`);
+		const allLeases = (await readParty()).leases;
+		assert.deepEqual(
+			allLeases.map((l: { id: string }) => l.id),
+			[id(9123), id(9120), id(9121)],
+		);
+		await db.query(`select merge_party('${SUBJECT}', '${AGENT}')`);
+		assert.deepEqual((await readParty()).leases, allLeases);
 	});
 });
 

@@ -1448,6 +1448,17 @@ begin atomic
 	on conflict do nothing;
 end;
 
+create function activity_entry(a activity) returns jsonb
+language sql stable
+begin atomic
+	select to_jsonb(a) || jsonb_build_object('email', (
+		select to_jsonb(e) - 'activity_id' - 'activity_kind' || jsonb_build_object('documents', (
+			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
+			from document doc where doc.email_activity_id = e.activity_id
+		)) from email e where e.activity_id = a.id
+	));
+end;
+
 create function everything_about_deal(wanted uuid) returns jsonb
 language sql stable
 begin atomic
@@ -1482,15 +1493,7 @@ begin atomic
 			where o.deal_id = d.id
 		),
 		'activity', (
-			select coalesce(jsonb_agg(to_jsonb(a) || jsonb_build_object('email', (
-				select to_jsonb(e) - 'activity_id' - 'activity_kind' || jsonb_build_object('documents', (
-					select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
-					from document doc
-					where doc.email_activity_id = e.activity_id
-				))
-				from email e
-				where e.activity_id = a.id
-			)) order by a.happened_at, a.id), '[]')
+			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
 			from activity_about aa join activity a on a.id = aa.activity_id
 			where aa.deal_id = d.id
 		),
@@ -1510,6 +1513,38 @@ language sql stable
 begin atomic
 	select jsonb_build_object(
 		'party', to_jsonb(p),
+		'do_not_contact', (
+			select to_jsonb(r) - 'party_id' || jsonb_build_object('active', a.party_id is not null)
+			from do_not_contact r left join active_do_not_contact a using (party_id) where r.party_id = p.id
+		),
+		'brands', (
+			select coalesce(jsonb_agg(to_jsonb(b) - array['location_kind', 'brand_kind']
+				|| jsonb_build_object('party', to_jsonb(other)) order by b.started_on, b.id), '[]')
+			from client_brand b join party other on other.id = case when b.location_id = p.id then b.brand_id else b.location_id end
+			where p.id in (b.location_id, b.brand_id)
+		),
+		'national_account_owners', (
+			select coalesce(jsonb_agg(to_jsonb(o) - 'owner_kind'
+				|| jsonb_build_object('party', to_jsonb(other)) order by o.started_on, o.id), '[]')
+			from national_account_owner o join party other on other.id = case when o.account_id = p.id then o.owner_id else o.account_id end
+			where p.id in (o.account_id, o.owner_id)
+		),
+		'leases', (
+			select coalesce(jsonb_agg(to_jsonb(l) - array['party_id', 'client_role'] || jsonb_build_object(
+				'property', to_jsonb(pr), 'versions', (
+					select coalesce(jsonb_agg(to_jsonb(v) - array['lease_id', 'previous_version'] || jsonb_build_object(
+						'document', (select to_jsonb(doc) from document doc where doc.id = v.document_id),
+						'suites', (
+							select coalesce(jsonb_agg(to_jsonb(s) order by s.label nulls last, s.id), '[]')
+							from lease_suite ls join suite s on s.id = ls.suite_id where ls.lease_version_id = v.id
+						), 'options', (
+							select coalesce(jsonb_agg(to_jsonb(o) - 'lease_version_id' order by o.number), '[]')
+							from lease_option o where o.lease_version_id = v.id
+						)) order by v.version), '[]')
+					from lease_version v where v.lease_id = l.id
+				)) order by pr.address, l.id), '[]')
+			from lease l join property pr on pr.id = l.property_id where l.party_id = p.id
+		),
 		'emails', (
 			select coalesce(jsonb_agg(to_jsonb(e) - 'party_id' order by e.is_primary desc, e.address, e.id), '[]')
 			from party_email e where e.party_id = p.id
@@ -1520,14 +1555,15 @@ begin atomic
 			from party_phone n where n.party_id = p.id
 		),
 		'companies', (
-			select coalesce(jsonb_agg(to_jsonb(c) || jsonb_build_object('person', to_jsonb(person), 'company', to_jsonb(company))
+			select coalesce(jsonb_agg(to_jsonb(c) - array['person_kind', 'company_kind'] || jsonb_build_object(
+				'party', to_jsonb(other))
 				order by c.started_on nulls last, c.id), '[]')
-			from party_company c join party person on person.id = c.person_id join party company on company.id = c.company_id
+			from party_company c join party other on other.id = case when c.person_id = p.id then c.company_id else c.person_id end
 			where p.id in (c.person_id, c.company_id)
 		),
 		'roles', (
 			select coalesce(jsonb_agg(to_jsonb(r) - 'party_id' || jsonb_build_object('client', (
-				select to_jsonb(c) - 'party_id' || jsonb_build_object('current_status', cs.status)
+				select to_jsonb(c) - array['party_id', 'role'] || jsonb_build_object('current_status', cs.status)
 				from client c join client_status cs using (party_id) where c.party_id = p.id and r.role = 'client'
 			)) order by r.role), '[]')
 			from party_role r where r.party_id = p.id
@@ -1538,16 +1574,12 @@ begin atomic
 			from deal_party dp join deal d on d.id = dp.deal_id where dp.party_id = p.id
 		),
 		'links', (
-			select coalesce(jsonb_agg(to_jsonb(l) order by l.kind, l.started_on nulls last, l.id), '[]')
-			from party_link l where p.id in (l.party_id, l.other_party_id)
+			select coalesce(jsonb_agg(to_jsonb(l) || jsonb_build_object('party', to_jsonb(other)) order by l.kind, l.started_on nulls last, l.id), '[]')
+			from party_link l join party other on other.id = case when l.party_id = p.id then l.other_party_id else l.party_id end
+			where p.id in (l.party_id, l.other_party_id)
 		),
 		'activity', (
-			select coalesce(jsonb_agg(to_jsonb(a) || jsonb_build_object('email', (
-				select to_jsonb(e) - 'activity_id' - 'activity_kind' || jsonb_build_object('documents', (
-					select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
-					from document doc where doc.email_activity_id = e.activity_id
-				)) from email e where e.activity_id = a.id
-			)) order by a.happened_at, a.id), '[]')
+			select coalesce(jsonb_agg(activity_entry(a) order by a.happened_at, a.id), '[]')
 			from activity_about aa join activity a on a.id = aa.activity_id where aa.party_id = p.id
 		),
 		'next_steps', (
