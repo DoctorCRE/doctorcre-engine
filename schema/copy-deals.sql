@@ -146,8 +146,6 @@ where d.id is null or l.mapped_party_id is null or l.slug is null;
 -- A stated name is never matched to a person; only a verified party link names the agent.
 insert into not_copied select deal_id, 'market_agent', agent_name, 'agent_not_verified'
 from public.deal_market_assignment where agent_party_id is null;
-insert into not_copied select deal_id, 'market_agent_source', source, 'no_typed_destination'
-from public.deal_market_assignment;
 create temp table old_membership on commit drop as
 select p.id, p.deal_id, m.party_id, p.role = 'lead' as owner,
  case p.role when 'listing_side' then 'listing_agent' when 'landlord_side' then 'property_owner' else p.role end as role,

@@ -30,18 +30,22 @@ const brand = (location: number, org = 10) =>
 	`update public.party set org_id = '${id(org)}' where id = '${id(location)}';`;
 const date = (location: number, start = "2024-03-01") =>
 	`insert into copy_client_brand_date values ('${id(location + 30)}','${start}');`;
-const restart = "drop table not_copied,old_brand,examined_brand;";
-const run = async (): Promise<
+// A run starts clear of every temp table, so it supplies the reviewed dates again.
+const run = async (
+	dates = "",
+): Promise<
 	{ old_id: string; field: string; value: string | null; reason: string }[]
 > => {
-	const result = await db.query(copy);
+	const result = await db.query(`discard temp;
+ create temp table copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop;
+ ${dates} ${copy}`);
 	assert.ok(Array.isArray(result));
 	return result.at(-1)?.rows ?? [];
 };
-const reasons = async () => (await run()).map((r) => [r.old_id, r.reason]);
+const reasons = async (dates: string) =>
+	(await run(dates)).map((r) => [r.old_id, r.reason]);
 const transaction = async (setup: string, check: () => Promise<void>) => {
 	await db.query(`begin; select set_config('engine.job','old_system',true);
- create temp table copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop;
  ${setup}`);
 	try {
 		await check();
@@ -93,8 +97,8 @@ after(async () => {
 });
 
 test("a reviewed first date copies the location's brand with its setter and storage time", async () => {
-	await transaction(brand(11) + date(11), async () => {
-		assert.deepEqual(await run(), []);
+	await transaction(brand(11), async () => {
+		assert.deepEqual(await run(date(11)), []);
 		assert.deepEqual(
 			await rows(`select location_id,brand_id,started_on::text,ended_on,created_at::text,
    changed_at::text,changed_by_user_id,changed_by_job from client_brand`),
@@ -131,21 +135,19 @@ test("an absent reviewed date is listed on each run and can be supplied later", 
 		];
 		assert.deepEqual(await run(), expected);
 		assert.deepEqual(await rows("select * from client_brand"), []);
-		await db.query(restart);
 		assert.deepEqual(await run(), expected);
-		await db.query(restart + date(11));
-		assert.deepEqual(await run(), []);
+		assert.deepEqual(await run(date(11)), []);
 		assert.equal((await rows("select * from client_brand")).length, 1);
 	});
 });
 
 test("a location pointing at itself, a person brand and uncopied records are listed, not forced", async () => {
 	await transaction(
-		`${brand(11, 11) + date(11) + brand(12, 9) + date(12) + brand(13) + date(13) + brand(14) + date(14)}
+		`${brand(11, 11) + brand(12, 9) + brand(13) + brand(14)}
  delete from outside_id where value = '${id(43)}';
  update outside_id set party_id = '${id(14)}' where value = '${id(10)}';`,
 		async () => {
-			assert.deepEqual(await run(), [
+			assert.deepEqual(await run(date(11) + date(12) + date(13) + date(14)), [
 				{
 					old_id: id(41),
 					field: "org_id",
@@ -178,32 +180,35 @@ test("a location pointing at itself, a person brand and uncopied records are lis
 
 test("a brand that was never copied waits listed", async () => {
 	await transaction(
-		`${brand(11) + date(11)} delete from outside_id where value = '${id(10)}';`,
+		`${brand(11)} delete from outside_id where value = '${id(10)}';`,
 		async () => {
-			assert.deepEqual(await reasons(), [[id(41), "brand_not_copied"]]);
+			assert.deepEqual(await reasons(date(11)), [[id(41), "brand_not_copied"]]);
 		},
 	);
 });
 
 test("all incoming memberships of one location wait, while unrelated locations copy", async () => {
 	await transaction(
-		`${brand(11) + date(11) + brand(12) + date(12, "2025-01-01") + brand(13) + date(13)}
+		`${brand(11) + brand(12) + brand(13)}
  update outside_id set party_id = '${id(11)}' where value = '${id(42)}';`,
 		async () => {
-			assert.deepEqual(await run(), [
-				{
-					old_id: id(41),
-					field: "started_on",
-					value: "2024-03-01",
-					reason: "brand_dates_overlap",
-				},
-				{
-					old_id: id(42),
-					field: "started_on",
-					value: "2025-01-01",
-					reason: "brand_dates_overlap",
-				},
-			]);
+			assert.deepEqual(
+				await run(date(11) + date(12, "2025-01-01") + date(13)),
+				[
+					{
+						old_id: id(41),
+						field: "started_on",
+						value: "2024-03-01",
+						reason: "brand_dates_overlap",
+					},
+					{
+						old_id: id(42),
+						field: "started_on",
+						value: "2025-01-01",
+						reason: "brand_dates_overlap",
+					},
+				],
+			);
 			assert.deepEqual(await rows("select location_id from client_brand"), [
 				{ location_id: id(13) },
 			]);
@@ -213,37 +218,36 @@ test("all incoming memberships of one location wait, while unrelated locations c
 
 test("an existing overlapping membership is listed and a touching one is allowed", async () => {
 	await transaction(
-		`${brand(11) + date(11) + brand(12) + date(12)}
+		`${brand(11) + brand(12)}
  insert into client_brand (location_id,brand_id,started_on,ended_on) values
  ('${id(11)}','${id(10)}','2023-01-01','2024-04-01'),
  ('${id(12)}','${id(10)}','2023-01-01','2024-03-01');`,
 		async () => {
-			assert.deepEqual(await reasons(), [[id(41), "brand_dates_overlap"]]);
+			assert.deepEqual(await reasons(date(11) + date(12)), [
+				[id(41), "brand_dates_overlap"],
+			]);
 			assert.equal((await rows("select * from client_brand")).length, 3);
 		},
 	);
 });
 
 test("a person's org_id stays their company and makes no brand", async () => {
-	await transaction(`${brand(20)}${date(20)}`, async () => {
+	await transaction(brand(20), async () => {
 		const companies = await rows("select * from party_company");
-		assert.deepEqual(await run(), []);
+		assert.deepEqual(await run(date(20)), []);
 		assert.deepEqual(await rows("select * from client_brand"), []);
 		assert.deepEqual(await rows("select * from party_company"), companies);
 	});
 });
 
 test("reruns preserve accepted rows, stamps and change history even if reviewed input changes", async () => {
-	await transaction(brand(11) + date(11), async () => {
-		await run();
+	await transaction(brand(11), async () => {
+		await run(date(11));
 		const snapshot = () =>
 			rows(`select jsonb_build_object('brands', (select jsonb_agg(b order by id) from client_brand b),
    'history', (select jsonb_agg(c order by id) from change c)) as snapshot`);
 		const original = await snapshot();
-		await db.query(
-			`${restart}update copy_client_brand_date set started_on = '2020-01-01';`,
-		);
-		assert.deepEqual(await run(), []);
+		assert.deepEqual(await run(date(11, "2020-01-01")), []);
 		assert.deepEqual(await snapshot(), original);
 	});
 });
@@ -276,14 +280,14 @@ for (const event of [
 ]) {
 	test(`an agent's membership ${event.shape}`, async () => {
 		await transaction(
-			`${brand(11)}${date(11)}
+			`${brand(11)}
  insert into public.actor (id,slug,kind,display_name) values ('${id(7)}','codex','automation','Example agent');
  update public.party set created_by = '${id(event.created_by)}' where id = '${id(11)}';
  insert into public.event (id,actor_id,verb,subject_type,subject_id,field,new_value,cause,occurred_at,sponsoring_human_slug) values
  ('${id(70)}','${id(7)}','${event.verb}','party','${id(11)}',${event.field},'{}','human_stated','2025-06-01','partner_one'),
  ('${id(71)}','${id(7)}','update-party','party','${id(11)}',null,'{}','human_stated','2025-07-01',null);`,
 			async () => {
-				assert.deepEqual(await run(), []);
+				assert.deepEqual(await run(date(11)), []);
 				assert.deepEqual(
 					await rows(
 						"select created_at::text,changed_by_user_id,changed_by_job,changed_for_user_id from client_brand",
