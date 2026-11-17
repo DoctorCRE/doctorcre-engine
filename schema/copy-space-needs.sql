@@ -71,7 +71,7 @@ where v.value is not null and v.value <> 'null' and case
  else (v.value #>> '{}')::numeric < 0 or not v.zero_allowed and (v.value #>> '{}')::numeric(10,1) = 0 end;
 
 create temp table mapped_need on commit drop as
-select n.*, d.deal_id, vendor.party_id as mapped_vendor_id, a.*, geography.market_id,
+select n.*, d.deal_id, vendor.party_id as mapped_vendor_id, a.*, geography.market_id, geography.specified,
  case when n.refusal is not null then n.refusal
  when d.deal_id is null then 'deal_not_copied'
  when count(*) over (partition by n.id) > 1 then 'source_id_collision'
@@ -107,7 +107,7 @@ create temp table copied_need on commit drop as
 with copied as (insert into space_need (id, created_at, deal_id, name, min_sf, max_sf, max_rate_sf_yr, space_type, market_id,
  must_haves, vendor_id, source_ref, source_revision, applicability, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select id, created_at, deal_id, name, min_sf, max_sf, max_rate, types ->> 0,
- case when criteria -> 'cities' <> '[]' or criteria -> 'states' <> '[]' or criteria -> 'counties' <> '[]' then market_id end,
+ case when specified then market_id end,
  must_haves, mapped_vendor_id, source_ref, source_revision, applicability,
  updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from ready_need where not (coalesce(min_sf > max_sf, false)) returning *) select * from copied;

@@ -85,7 +85,7 @@ before(async () => {
 		states: [],
 		statuses: ["available"],
 	});
-	await search(101, { max_sf: 3000 });
+	await search(101, { max_sf: 3000, cities: null, states: [] });
 	await search(102, { sub_types: ["office", "retail"] });
 	await search(103, { mystery: { keep: "this" } });
 	await search(104, { cities: ["Example City"], states: ["ZZ"] });
@@ -109,7 +109,7 @@ before(async () => {
 	await saved(203, {}, "draft");
 	await db.query("begin");
 	await db.query(`create temp table copy_space_need_county (source_table text, old_id uuid, county_fips text) on commit drop;
- insert into copy_space_need_county values ('ops.deal_space_search','${id(200)}','99001'),('ops.deal_space_search','${id(200)}','99003'),('space_search','${id(104)}','99001');`);
+ insert into copy_space_need_county values ('space_search','${id(101)}','99001'),('space_search','${id(101)}','99003'),('ops.deal_space_search','${id(200)}','99001'),('ops.deal_space_search','${id(200)}','99003'),('space_search','${id(104)}','99001');`);
 	report = await run();
 	await db.query("commit");
 });
