@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
 import { activity } from "./activity/routes.ts";
+import { cadence } from "./cadence.ts";
 import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
 import {
@@ -94,6 +95,7 @@ app.use(
 	accessDoor("jobs", (env) => env.JOBS_ACCESS_AUD),
 	jobStamp,
 );
+app.route("/jobs", cadence);
 app.route("/jobs", nextDeals);
 app.route("/jobs", nextSteps);
 app.route("/jobs", replyJobs);
