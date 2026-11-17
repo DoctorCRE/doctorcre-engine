@@ -2,6 +2,7 @@
 set local time zone 'UTC';
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 create temp table if not exists copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop;
+create temp table if not exists copy_meeting_distinct (meeting_id uuid, activity_id uuid, primary key (meeting_id, activity_id)) on commit drop;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 alter table activity disable trigger stamp_change;
 alter table activity disable trigger record_change;
@@ -10,8 +11,9 @@ alter table imported_change disable trigger stamp_imported_change;
 -- Neither native identity nor activation state identifies a business record or a logged activity.
 insert into not_copied
 select m.id, 'activity_id', a.id::text, 'possible_duplicate' from ops.meeting m join public.activity a
- on a.kind in ('meeting','tour') and (a.occurred_at = m.started_at or a.summary = m.title)
-where not exists (select from pg_temp.copy_meeting_activity x where x.meeting_id = m.id)
+ on a.kind in ('meeting','tour') and ((a.occurred_at at time zone 'America/Chicago')::date = (m.started_at at time zone 'America/Chicago')::date or a.summary = m.title)
+where not exists (select from pg_temp.copy_meeting_distinct x where (x.meeting_id,x.activity_id) = (m.id,a.id))
+ and not exists (select from pg_temp.copy_meeting_activity x where x.meeting_id = m.id)
  and not exists (select from imported_change i where i.id = m.id and i.source_event ->> 'source_table' = 'ops.meeting');
 
 create temp table meeting_edit on commit drop as
@@ -25,6 +27,8 @@ declare
  n record;
  target uuid;
  saved imported_change;
+ latest imported_change;
+ mapped boolean;
  base text;
  summary_before text;
  summary_after text;
@@ -37,13 +41,14 @@ begin
     continue;
    end if;
    select * into saved from imported_change where id = m.id;
-   select coalesce(x.activity_id, (saved.record ->> 'id')::uuid, m.id) into target
-    from (values (1)) v(n) left join pg_temp.copy_meeting_activity x on x.meeting_id = m.id;
+   select x.activity_id into target from pg_temp.copy_meeting_activity x where x.meeting_id = m.id;
+   mapped := found or saved.id is not null and saved.record <> jsonb_build_object('id', m.id);
+   target := coalesce(target, (saved.record ->> 'id')::uuid, m.id);
    if saved.id is not null and (saved.table_name <> 'activity' or saved.source_event ->> 'source_table' is distinct from 'ops.meeting'
     or saved.record <> jsonb_build_object('id', target)) then
     raise check_violation using constraint = 'meeting_identity_conflict';
    end if;
-   if target <> m.id or exists (select from pg_temp.copy_meeting_activity where meeting_id = m.id) then
+   if mapped then
     if not exists (select from public.activity where id = target and kind in ('meeting','tour')) then
      raise check_violation using constraint = 'mapping_not_a_logged_meeting';
     end if;
@@ -63,8 +68,7 @@ begin
     raise check_violation using constraint = 'note_history_out_of_order';
    end if;
    summary_before := case when saved.id is not null then saved.source_event -> 'old_value' ->> 'summary'
-    when exists (select from pg_temp.copy_meeting_activity where meeting_id = m.id)
-     then (select summary from activity where id = target) end;
+    when mapped then (select summary from activity where id = target) end;
    base := concat_ws(E'\n\n', m.title, case when summary_before is distinct from m.title then summary_before end);
    summary_after := base;
    delete from meeting_history;
@@ -105,17 +109,22 @@ begin
     raise check_violation using constraint = 'meeting_changed_since_copy';
    end if;
    if saved.id is null then
+    select h.* into latest from meeting_history h left join meeting_edit e on e.id = h.id
+     order by coalesce(e.position, 0) desc limit 1;
     if exists (select from activity where id = target) then
-     update activity set summary = summary_after, changed_at = n.happened_at,
-      changed_by_user_id = actor.changed_by_user_id, changed_by_job = actor.changed_by_job,
-      changed_for_user_id = actor.changed_for_user_id where id = target;
+     update activity set summary = summary_after where id = target;
+     update activity set changed_at = latest.changed_at, changed_by_user_id = latest.changed_by_user_id,
+      changed_by_job = latest.changed_by_job, changed_for_user_id = latest.changed_for_user_id
+      where id = target and changed_at < latest.changed_at;
     else
      insert into activity (id, kind, happened_at, summary, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-     values (target, 'meeting', m.started_at, summary_after, n.happened_at,
-      actor.changed_by_user_id, actor.changed_by_job, actor.changed_for_user_id);
+     values (target, 'meeting', m.started_at, summary_after, latest.changed_at,
+      latest.changed_by_user_id, latest.changed_by_job, latest.changed_for_user_id);
     end if;
     insert into imported_change select * from meeting_history order by changed_at, id;
    end if;
+   insert into not_copied select m.id, 'activity', target::text, 'about_nothing_copied'
+    where not exists (select from activity_about where activity_id = target);
    insert into not_copied select h.id, 'changed_for_user_id', null, 'agent_user_unknown'
     from meeting_history h where h.changed_by_job = 'agent' and h.changed_for_user_id is null;
   exception when check_violation or foreign_key_violation or unique_violation or not_null_violation then

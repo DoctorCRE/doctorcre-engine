@@ -33,7 +33,7 @@ const run = async (mapping = "", script = copy): Promise<unknown[][]> => {
 	try {
 		if (mapping)
 			await db.query(
-				`create temp table copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop; ${mapping}`,
+				`create temp table copy_meeting_activity (meeting_id uuid primary key, activity_id uuid not null unique) on commit drop; create temp table copy_meeting_distinct (meeting_id uuid, activity_id uuid, primary key (meeting_id,activity_id)) on commit drop; ${mapping}`,
 			);
 		const result = await db.query(script);
 		assert.ok(Array.isArray(result));
@@ -47,6 +47,24 @@ const run = async (mapping = "", script = copy): Promise<unknown[][]> => {
 const snapshot = () =>
 	rows(
 		"select jsonb_agg(a order by id) from activity a union all select jsonb_agg(i order by id) from imported_change i union all select jsonb_agg(c order by id) from change c",
+	);
+const baseline = [
+	[id(10), "activity", id(10), "about_nothing_copied"],
+	[id(11), "activity_id", id(50), "possible_duplicate"],
+	[id(11), "activity_id", id(51), "possible_duplicate"],
+	[id(12), "meeting", id(12), "author_not_copied"],
+	[id(13), "activity", id(13), "about_nothing_copied"],
+	[id(21), "changed_for_user_id", null, "agent_user_unknown"],
+];
+const expected = (removed: number[], ...issues: unknown[][]) =>
+	[
+		...baseline.filter((r) => !removed.some((n) => r[0] === id(n))),
+		...issues,
+	].sort(
+		(a, b) =>
+			String(a[0]).localeCompare(String(b[0])) ||
+			String(a[1]).localeCompare(String(b[1])) ||
+			String(a[2]).localeCompare(String(b[2])),
 	);
 const mapping = `insert into copy_meeting_activity values ('${id(11)}','${id(50)}')`;
 
@@ -69,7 +87,7 @@ beforeEach(async () => {
  insert into public.party (id,kind,name,created_by,updated_by) values ('${id(1)}','person','Example User','${id(1)}','${id(1)}');
  insert into public.activity_kind (slug,label,is_contact) values ('meeting','Example meeting',true), ('tour','Example tour',true);
  insert into public.activity (id,kind,occurred_at,recorded_at,updated_at,actor_id,summary,party_id) values
- ('${id(50)}','tour','2025-01-02','2025-01-02','2025-01-02','${id(1)}','Example logged visit','${id(1)}'),
+ ('${id(50)}','tour','2025-01-02','2025-01-02','2025-01-05','${id(1)}','Example logged visit','${id(1)}'),
  ('${id(51)}','meeting','2025-01-02','2025-01-02','2025-01-02','${id(1)}','Example second candidate','${id(1)}');
  create table ops.meeting (id uuid primary key, title text not null, started_by_actor uuid not null references public.actor,
  started_at timestamptz not null, ended_at timestamptz, ended_by_actor uuid references public.actor);
@@ -97,12 +115,7 @@ afterEach(async () => {
 
 test("current summaries keep note order; imported edits keep source ids, authors, times and replaced text", async () => {
 	const report = await run();
-	assert.deepEqual(report, [
-		[id(11), "activity_id", id(50), "possible_duplicate"],
-		[id(11), "activity_id", id(51), "possible_duplicate"],
-		[id(12), "meeting", id(12), "author_not_copied"],
-		[id(21), "changed_for_user_id", null, "agent_user_unknown"],
-	]);
+	assert.deepEqual(report, baseline);
 	assert.deepEqual(
 		await rows(
 			`select id,kind,summary,happened_at::text,changed_at::text,changed_by_user_id,from_party_id from activity where id in ('${id(10)}','${id(13)}') order by id`,
@@ -131,48 +144,13 @@ test("current summaries keep note order; imported edits keep source ids, authors
 	const history = await rows(
 		`select id,source_event->'old_value'->>'summary',source_event->'new_value'->>'summary',source_event->>'source_table',source_event->>'revision',changed_by_user_id,changed_by_job,changed_at::text from imported_change where record = '{"id":"${id(10)}"}' order by changed_at`,
 	);
+	// biome-ignore format: one row per historical edit
 	assert.deepEqual(history, [
-		[
-			id(10),
-			null,
-			"Example discussion",
-			"ops.meeting",
-			null,
-			id(1),
-			null,
-			"2025-01-01 00:00:00+00",
-		],
-		[
-			id(20),
-			"Example discussion",
-			"Example discussion\n\nNote 1\nExample original",
-			"ops.meeting_note",
-			"1",
-			id(1),
-			null,
-			"2025-01-01 01:00:00+00",
-		],
-		[
-			id(21),
-			"Example discussion\n\nNote 1\nExample original",
-			"Example discussion\n\nNote 1\nExample original\n\nNote 2\nExample second note",
-			"ops.meeting_note",
-			"1",
-			null,
-			"agent",
-			"2025-01-01 02:00:00+00",
-		],
-		[
-			id(22),
-			"Example discussion\n\nNote 1\nExample original\n\nNote 2\nExample second note",
-			"Example discussion\n\nNote 1\nExample corrected\n\nNote 2\nExample second note",
-			"ops.meeting_note",
-			"2",
-			id(1),
-			null,
-			"2025-01-01 03:00:00+00",
-		],
-	]);
+ [id(10), null, "Example discussion", "ops.meeting", null, id(1), null, "2025-01-01 00:00:00+00"],
+ [id(20), "Example discussion", "Example discussion\n\nNote 1\nExample original", "ops.meeting_note", "1", id(1), null, "2025-01-01 01:00:00+00"],
+ [id(21), "Example discussion\n\nNote 1\nExample original", "Example discussion\n\nNote 1\nExample original\n\nNote 2\nExample second note", "ops.meeting_note", "1", null, "agent", "2025-01-01 02:00:00+00"],
+ [id(22), "Example discussion\n\nNote 1\nExample original\n\nNote 2\nExample second note", "Example discussion\n\nNote 1\nExample corrected\n\nNote 2\nExample second note", "ops.meeting_note", "2", id(1), null, "2025-01-01 03:00:00+00"],
+ ]);
 	const before = await snapshot();
 	await db.query("set time zone 'America/Chicago'");
 	assert.deepEqual(await run(), report);
@@ -182,6 +160,9 @@ test("current summaries keep note order; imported edits keep source ids, authors
 
 test("a reviewed tour mapping reuses the copied activity and links, and survives a later activity rerun", async () => {
 	await run();
+	const stamp = await rows(
+		`select changed_at, changed_by_user_id, changed_by_job, changed_for_user_id from activity where id = '${id(50)}'`,
+	);
 	const links = await rows(
 		`select * from activity_about where activity_id = '${id(50)}'`,
 	);
@@ -201,6 +182,12 @@ test("a reviewed tour mapping reuses the copied activity and links, and survives
 		await rows(`select * from activity_about where activity_id = '${id(50)}'`),
 		links,
 	);
+	assert.deepEqual(
+		await rows(
+			`select changed_at, changed_by_user_id, changed_by_job, changed_for_user_id from activity where id = '${id(50)}'`,
+		),
+		stamp,
+	);
 	const before = await snapshot();
 	await run("", activityCopy);
 	await run();
@@ -213,13 +200,18 @@ test("invalid mappings and changed source history are listed without rewriting c
 	const report = await run(
 		`insert into copy_meeting_activity values ('${id(12)}','${id(999)}')`,
 	);
-	assert.ok(report.some((r) => r[3] === "mapping_not_a_logged_meeting"));
+	assert.deepEqual(
+		report,
+		expected([12], [id(12), "meeting", id(12), "mapping_not_a_logged_meeting"]),
+	);
 	await db.query(
 		`update ops.meeting_note set body = 'Example changed source' where id = '${id(20)}'`,
 	);
-	assert.ok(
-		(await run()).some(
-			(r) => r[0] === id(10) && r[3] === "existing_history_conflicts",
+	assert.deepEqual(
+		await run(),
+		expected(
+			[10, 21],
+			[id(10), "meeting", id(10), "existing_history_conflicts"],
 		),
 	);
 	assert.deepEqual(await snapshot(), before);
@@ -229,9 +221,14 @@ test("invalid mappings and changed source history are listed without rewriting c
 	await db.query(
 		`insert into ops.meeting_note values ('${id(24)}','${id(10)}',3,1,'Example later note','${id(1)}','2025-01-01 04:00Z')`,
 	);
-	assert.ok((await run()).some((r) => r[3] === "meeting_changed_since_copy"));
+	assert.deepEqual(
+		await run(),
+		expected(
+			[10, 21],
+			[id(10), "meeting", id(10), "meeting_changed_since_copy"],
+		),
+	);
 	assert.deepEqual(await snapshot(), before);
-	await db.query(`delete from ops.meeting_note where id = '${id(24)}'`);
 });
 
 test("database constraints and engine grants still protect imported meeting history", async () => {
@@ -259,30 +256,69 @@ test("uncopied mapping targets, reused targets and reversed revisions wait; late
 	await db.query(
 		`insert into ops.meeting values ('${id(14)}','Example other meeting','${id(1)}','2025-02-01',null,null)`,
 	);
-	assert.ok(
-		(
-			await run(
-				`insert into copy_meeting_activity values ('${id(14)}','${id(50)}')`,
-			)
-		).some((r) => r[3] === "activity_already_has_meeting"),
+	assert.deepEqual(
+		await run(
+			`insert into copy_meeting_activity values ('${id(14)}','${id(50)}')`,
+		),
+		expected([11], [id(14), "meeting", id(14), "activity_already_has_meeting"]),
 	);
 	await db.query(
 		`insert into public.activity (id,kind,occurred_at,actor_id,summary) values ('${id(52)}','meeting','2025-02-02','${id(1)}','Example unlinked')`,
 	);
-	assert.ok(
-		(
-			await run(
-				`insert into copy_meeting_activity values ('${id(12)}','${id(52)}')`,
-			)
-		).some((r) => r[3] === "mapped_activity_not_copied"),
+	assert.deepEqual(
+		await run(
+			`insert into copy_meeting_activity values ('${id(12)}','${id(52)}')`,
+		),
+		expected(
+			[11, 12],
+			[id(12), "meeting", id(12), "mapped_activity_not_copied"],
+			[id(14), "activity", id(14), "about_nothing_copied"],
+		),
 	);
 	await db.query(
 		`update ops.meeting_note set created_at = '2025-01-01 00:30Z' where id = '${id(22)}'`,
 	);
-	assert.ok((await run()).some((r) => r[3] === "note_history_out_of_order"));
+	assert.deepEqual(
+		await run(),
+		expected(
+			[10, 11, 21],
+			[id(10), "meeting", id(10), "note_history_out_of_order"],
+			[id(14), "activity", id(14), "about_nothing_copied"],
+		),
+	);
 	await db.query(`update ops.meeting_note set created_at = '2025-01-01 03:00Z' where id = '${id(22)}';
  begin; select set_config('engine.user_id','${id(1)}',true); update activity set summary = 'Example user correction' where id = '${id(10)}'; commit`);
 	const before = await snapshot();
 	await run();
+	assert.deepEqual(await snapshot(), before);
+});
+
+test("same Chicago day lists every candidate despite different titles and times; reviewed distinct pairs unblock copying", async () => {
+	await db.query(`update ops.meeting set started_at = '2025-02-01' where id = '${id(12)}';
+ update public.activity set occurred_at = '2025-01-02 00:03Z' where id = '${id(50)}';
+ update public.activity set occurred_at = '2025-01-02 05:59Z' where id = '${id(51)}';
+ insert into public.activity (id,kind,occurred_at,actor_id,summary) values ('${id(52)}','meeting','2025-01-02 06:01Z','${id(1)}','Example next Chicago day')`);
+	assert.deepEqual(await run(), baseline);
+	const distinct = `insert into copy_meeting_distinct values ('${id(11)}','${id(50)}')`;
+	assert.deepEqual(
+		await run(distinct),
+		baseline.filter((r) => r[2] !== id(50)),
+	);
+	const report = await run(
+		`${distinct}; insert into copy_meeting_distinct values ('${id(11)}','${id(51)}')`,
+	);
+	assert.deepEqual(report, [
+		baseline[0],
+		[id(11), "activity", id(11), "about_nothing_copied"],
+		...baseline.slice(3),
+	]);
+	assert.deepEqual(
+		await rows(
+			`select id from activity where id in ('${id(11)}','${id(50)}','${id(51)}') order by id`,
+		),
+		[[id(11)], [id(50)], [id(51)]],
+	);
+	const before = await snapshot();
+	assert.deepEqual(await run(), report);
 	assert.deepEqual(await snapshot(), before);
 });
