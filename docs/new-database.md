@@ -392,6 +392,16 @@ Today's `critical_date` rows keep their kinds, dates, sources and notes. `option
 - Today's renewal deals name no source lease, so this copy links none; the deal copy lists them as `renewal_without_lease`.
 - Each copied version links the suites its premises cover in its lease's building; a version a lease refusal holds back links none. Only spaces a copied lease covers become suites, each in its building's surviving property with its id, creation time, floor, area, area basis and condition. Its label is trimmed, and a blank one stays unknown. A label another space or suite in the same building already uses, and an id the new database holds in another building, are listed; the link waits as `suite_not_copied`, and a later run adds it once its suite copies.
 
+## Copying today's critical dates
+
+`schema/copy-critical-dates.sql` runs after the deal copy, in a separate owner transaction with `search_path` set to the new schema, after `schema/copy-attribution.sql`. It only reads `public`, and ends with its `not_copied` list. Dates keep their ids, kinds, due dates, sources and notes, so a repeat leaves copied dates alone.
+
+- `option_window` becomes `option_notice`. A kind not on the list becomes `other`, with `Kind:` and its old wording first in the note.
+- A date a partner added is confirmed by that partner at its creation time. A date an agent or job added loads as proposed, waiting for a user.
+- A resolved date takes its user, time and reason from its latest `status` event on the deal naming that date and status. `cleared` becomes `done`. A done or passed date also needs a partner's confirmation.
+- Listed, not copied: a date whose deal is not copied, a blank source, a resolution with no event or no reason, a resolution by an agent or job, a done or passed date no partner confirmed, and an id the new database holds on another deal.
+- The transition and stamp triggers are off during the load and on again after it.
+
 ## Tours as meetings
 
 A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal; the property links support a later property read. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
