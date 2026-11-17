@@ -289,7 +289,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 15. `copy-commissions.sql`, after the partners enter their ladders.
 16. `copy-invoice-emails.sql`: needs the deals and their payments.
 17. `copy-space-needs.sql`, with `copy_space_need_county` and `copy_space_need_deal`: needs markets, deals and vendors.
-18. `copy-activity.sql`, then `copy-emails.sql`: need parties and deals.
+18. `copy-activity.sql`, then `copy-emails.sql`: need parties and deals. Then `copy-attachment-emails.sql`: needs the deal files and emails.
 19. `copy-calls.sql`: needs the activity a logged meeting already is.
 20. `copy-meetings.sql`: needs logged activities, with reviewed reuse or distinct-pair inputs when needed.
 21. `copy-lead-stage-moves.sql`: needs the activity each move cites.
@@ -914,6 +914,14 @@ Run `schema/copy-emails.sql` as the owner right after `copy-activity.sql`, in it
 - `outside_id` maps each row of a copied email, under `old_system`, to the email activity it became, so a later copy that names one of today's rows finds its email.
 - A rerun copies only emails not yet copied, and adds the links of records copied since, including those of rows filed since.
 
+## Copying today's email attachments
+
+Run `schema/copy-attachment-emails.sql` as the owner right after `copy-emails.sql`, in its own transaction with the new schema on `search_path`. It only reads `public` and `ops`, and ends with `not_copied`.
+
+- Today's intake marks each attachment it files to a deal with an `attach-deal-file` event, and names the email of an outside sender's attachment in an `ops.requirement_reply_proposal`. A partner's own mail names none.
+- The deal file that attachment became names the email the proposal's row became, as `outside_id` maps it. A file sent again on a later email keeps the earliest email that copied.
+- Listed and not copied: an emailed file no proposal names an email for, as `email_unknown`, and each email a proposal names that did not copy, as `email_not_copied`, while the file has no copied email. A rerun links a file whose email was copied since and leaves a linked file alone.
+
 ## Copying today's calls
 
 Run `schema/copy-calls.sql` as the owner after `copy-activity.sql`, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`. It is the source activity the call suggestions copy needs (decision 83).
@@ -1094,7 +1102,7 @@ Exact counts from production on 2026-11-17, aggregate only.
 | `activity` email in / out                                   |       172 / 134 | `activity`, `email`                                                | `copy-emails.sql`; without a Message-ID, matched by sender, sent time and subject (2, 4)     |
 | `activity` task                                             |               1 | Waits for an owner ruling                                          | Listed (31)                                                                                  |
 | `email_message_summary` available / unavailable             |         27 / 32 | No place yet                                                       | Gap: kept or regenerated, decided with the email copy (4)                                    |
-| `attachment` on a deal                                      |               6 | `document`                                                         | `copy-deal-files.sql`; the email it came with (5)                                            |
+| `attachment` on a deal                                      |               6 | `document`                                                         | `copy-deal-files.sql`, then `copy-attachment-emails.sql` for the email it came with          |
 | `ops.deal_document_text`                                    |               6 | `document_extraction`                                              | `copy-deal-file-text.sql`                                                                    |
 | `email_proposal` next step pending / dismissed              |          22 / 1 | `proposal`                                                         | Gap: mapping written, copy not built (6)                                                     |
 | `email_proposal` file to deal pending                       |              29 | No proposal kind                                                   | Gap (7)                                                                                      |
