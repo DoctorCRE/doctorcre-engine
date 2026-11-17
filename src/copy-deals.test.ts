@@ -81,7 +81,9 @@ before(async () => {
  ('${id(10)}', '${id(4)}', 'landlord_side', '${id(1)}'), ('${id(24)}', '${id(4)}', 'listing_side', '${id(1)}'),
  ('${id(24)}', '${id(5)}', 'listing_side', '${id(1)}');
  insert into public.building (id, address, created_by, updated_by) values ('${id(90)}', '100 Example Way', '${id(1)}', '${id(1)}'), ('${id(91)}', '200 Example Way', '${id(1)}', '${id(1)}');
- update public.building set name = 'Example Building' where id = '${id(90)}';
+ update public.building set name = 'Example Building', class = 'A', sub_type = 'medical_dental', year_built = 1998, stories = 3,
+ status = 'existing', status_source = 'Example county record' where id = '${id(90)}';
+ update public.building set name = ' ', class = '', sub_type = ' ' where id = '${id(91)}';
  insert into public.space (id, building_id, created_by, updated_by) values ('${id(92)}', '${id(90)}', '${id(1)}', '${id(1)}'), ('${id(93)}', '${id(91)}', '${id(1)}', '${id(1)}');
  insert into public.premises (id, deal_id, label, created_by) values ('${id(94)}', '${id(10)}', 'Example', '${id(1)}'), ('${id(95)}', '${id(26)}', 'Example', '${id(1)}');
  insert into public.premises_space values ('${id(94)}', '${id(92)}'), ('${id(95)}', '${id(92)}'), ('${id(95)}', '${id(93)}');
@@ -251,14 +253,6 @@ test("rounds derive unique candidates, number across sides by creation then id, 
 			},
 		],
 	);
-	assert.ok(
-		report.some(
-			(r) =>
-				r.old_id === id(90) &&
-				r.reason === "unmapped_building_fields" &&
-				JSON.parse(r.value).name === "Example Building",
-		),
-	);
 	assert.deepEqual(
 		report
 			.filter((r) => r.field === "negotiation_claim")
@@ -272,8 +266,46 @@ test("rounds derive unique candidates, number across sides by creation then id, 
 		),
 	);
 });
+test("a property keeps its building's name, class, type, year built and stories, a blank one stays unknown, and only its construction status is listed", async () => {
+	assert.deepEqual(
+		await rows(
+			"select id, name, building_class, building_type, year_built, stories from property order by id",
+		),
+		[
+			{
+				id: id(90),
+				name: "Example Building",
+				building_class: "A",
+				building_type: "medical_dental",
+				year_built: 1998,
+				stories: 3,
+			},
+			{
+				id: id(91),
+				name: null,
+				building_class: null,
+				building_type: null,
+				year_built: null,
+				stories: null,
+			},
+		],
+	);
+	assert.deepEqual(
+		report
+			.filter((r) => r.reason === "unmapped_building_fields")
+			.map((r) => [r.old_id, r.value]),
+		[
+			[
+				id(90),
+				'{"status": "existing", "status_source": "Example county record"}',
+			],
+		],
+	);
+});
+
 test("a repeat is idempotent and restores stamps after import", async () => {
 	const original = await rows("select * from deal order by id");
+	const properties = await rows("select * from property order by id");
 	const offers = await rows("select * from offer order by id");
 	const claims = await rows(
 		"select * from offer_claim order by offer_id, claim_type",
@@ -282,6 +314,10 @@ test("a repeat is idempotent and restores stamps after import", async () => {
 	await run();
 	await db.query("commit");
 	assert.deepEqual(await rows("select * from deal order by id"), original);
+	assert.deepEqual(
+		await rows("select * from property order by id"),
+		properties,
+	);
 	assert.deepEqual(await rows("select * from offer order by id"), offers);
 	assert.deepEqual(
 		await rows("select * from offer_claim order by offer_id, claim_type"),

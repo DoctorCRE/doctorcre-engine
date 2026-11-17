@@ -3344,6 +3344,8 @@ test("party leases include signed versions, documents, suites and options with h
 		await db.query(`insert into lease (id, party_id, property_id) values
 			('${id(9121)}', '${SUBJECT}', '${PROPERTY}'), ('${id(9120)}', '${SUBJECT}', '${PROPERTY}'),
 			('${id(9122)}', '${COMPANY}', '${PROPERTY}');
+			update property set name = 'Example Plaza', building_class = 'Example class',
+			building_type = 'Example type', year_built = 2005, stories = 4 where id = '${PROPERTY}';
 			insert into lease_version (id, lease_id, version, document_id, expiration_on, other_terms) values
 			('${id(9131)}', '${id(9121)}', 1, '${PDF_FILE}', '2030-01-01', 'Original terms'),
 			('${id(9130)}', '${id(9121)}', 2, '${PDF_FILE}', '2031-01-01', 'Amended terms');
@@ -3361,7 +3363,14 @@ test("party leases include signed versions, documents, suites and options with h
 			leases.map((l: { id: string }) => l.id),
 			[id(9120), id(9121)],
 		);
-		assert.equal(leases[1].property.id, PROPERTY);
+		assert.partialDeepStrictEqual(leases[1].property, {
+			id: PROPERTY,
+			name: "Example Plaza",
+			building_class: "Example class",
+			building_type: "Example type",
+			year_built: 2005,
+			stories: 4,
+		});
 		assert.equal(leases[1].client_role, undefined);
 		assert.deepEqual(leases[0].versions, []);
 		const versions = leases[1].versions;

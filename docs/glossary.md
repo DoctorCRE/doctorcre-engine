@@ -282,6 +282,10 @@ _Database_: `space_need` in the new database; today's `space_search`, `ops.deal_
 Space within a building, with a label, floor and area when known. A lease can name a suite in its property.
 _Database_: `suite` in the new database; `space` today.
 
+**Building facts**:
+A property's name, class, type, year built and stories, when known. Class and type are free text, as the old system kept them.
+_Database_: `property.name`, `building_class`, `building_type`, `year_built` and `stories` in the new database; `building.name`, `class`, `sub_type`, `year_built` and `stories` today.
+
 **Building owner**:
 A person or company that owns a property, with dates when known. A building can have joint and former owners.
 _Database_: `building_ownership` in both databases. The table also keeps property managers and listing representatives under their own kinds.
