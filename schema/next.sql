@@ -1192,6 +1192,7 @@ begin
 			where d.deal_id = new.filed_deal_id and d.role = 'client' and a.activity_id = new.activity_id)) then
 			raise exception 'a corrected filing needs a reason' using errcode = 'check_violation', constraint = 'proposal_filing_reason';
 		end if;
+		delete from activity_about where activity_id = new.activity_id and deal_id <> new.filed_deal_id;
 		insert into activity_about (activity_id, deal_id) values (new.activity_id, new.filed_deal_id) on conflict do nothing;
 	when 'new_lead' then
 		update party set how_found = coalesce(how_found, new.how_found) where id = new.party_id;

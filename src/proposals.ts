@@ -14,7 +14,6 @@ import {
 	optional,
 } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
-import { isArguments } from "./save-door.ts";
 
 const kinds = [
 	"next_step",
@@ -105,7 +104,7 @@ async function dealNow(tx: Transaction<DB>, id: string) {
 
 export const proposalJobs = new Hono<NextSaveEnv>()
 	.post("/proposals", async (c) => {
-		const response = await answerNextSave(
+		return answerNextSave(
 			c,
 			"proposal-store",
 			(b) =>
@@ -126,6 +125,7 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 					to = phaseMove(from, d.kind, r.evidence);
 					if (!to) return fail(422, "phase_not_eligible");
 				}
+				const toStage = r.kind === "new_lead" ? "new" : (r.to_stage ?? null);
 				const { rows } = await sql<{
 					id: string;
 					status: string;
@@ -136,7 +136,7 @@ export const proposalJobs = new Hono<NextSaveEnv>()
    values (${r.kind}, ${r.activity_id}::uuid, ${activity.kind}, ${r.evidence}, current_setting('engine.job'),
     ${r.deal_id ?? null}::uuid, ${r.party_id ?? null}::uuid, ${r.property_id ?? null}::uuid,
     ${r.what ?? null}, ${r.owner_party_id ?? null}::uuid, ${r.due_on ?? null}::date, ${from}, ${to},
-    ${r.how_found ?? null}, ${r.from_stage ?? null}, ${r.kind === "new_lead" ? "new" : (r.to_stage ?? null)}, ${r.strength ?? null}, ${r.reason ?? null})
+    ${r.how_found ?? null}, ${r.from_stage ?? null}, ${toStage}, ${r.strength ?? null}, ${r.reason ?? null})
    on conflict do nothing returning id, status, false as existing`.execute(tx);
 				if (rows[0]) return { proposal_id: rows[0].id, status: rows[0].status };
 				const prior = await tx
@@ -148,16 +148,12 @@ export const proposalJobs = new Hono<NextSaveEnv>()
     and property_id is not distinct from ${r.property_id ?? null}::uuid and from_phase is not distinct from ${from} and to_phase is not distinct from ${to}
     and what is not distinct from ${r.what ?? null} and owner_party_id is not distinct from ${r.owner_party_id ?? null}::uuid
     and due_on is not distinct from ${r.due_on ?? null}::date and how_found is not distinct from ${r.how_found ?? null}
-    and from_stage is not distinct from ${r.from_stage ?? null} and to_stage is not distinct from ${r.kind === "new_lead" ? "new" : (r.to_stage ?? null)}`)
+    and from_stage is not distinct from ${r.from_stage ?? null} and to_stage is not distinct from ${toStage}`)
 					.executeTakeFirstOrThrow();
 				return { proposal_id: prior.id, status: prior.status, existing: true };
 			},
-			201,
+			(result) => (result.existing ? 200 : 201),
 		);
-		const body = await response.clone().json();
-		return isArguments(body) && body.existing
-			? new Response(response.body, { status: 200, headers: response.headers })
-			: response;
 	})
 	.post("/proposals/:id/decision", (c) =>
 		refuse(c, new Refusal(403, "user_decides")),
@@ -219,12 +215,13 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 							current_stage: lead?.stage ?? null,
 						});
 				}
+				const filingDeal = r.deal_id ?? p.deal_id;
 				if (
 					r.decision === "accept" &&
 					["file_to_deal", "possible_new_deal"].includes(p.kind) &&
-					(r.deal_id ?? p.deal_id)
+					filingDeal
 				) {
-					await dealNow(tx, r.deal_id ?? p.deal_id ?? "");
+					await dealNow(tx, filingDeal);
 				}
 
 				const { rows } = await sql<{

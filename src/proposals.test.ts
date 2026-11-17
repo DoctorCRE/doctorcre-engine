@@ -307,19 +307,23 @@ test("the queue suppresses only automatic filings removed by a partner", async (
 
 test("shared addresses stay unknown in both queued mail and its thread", async () => {
 	await db.query(`begin; select set_config('engine.user_id', '${USER}', true);
- insert into party_email (party_id, address, label) values ('${USER}', 'clinic@example.test', 'personal'); commit;`);
+ insert into party_email (party_id, address, label) values ('${USER}', 'clinic@example.test', 'personal');
+ select set_config('engine.job', 'mail_capture', true);
+ insert into activity (id, kind, happened_at) values ('${id(32)}', 'email', now() - interval '5 hours'), ('${id(33)}', 'email', now() - interval '4 hours');
+ insert into activity_about (activity_id, deal_id) values ('${id(32)}', '${DEAL}'), ('${id(33)}', '${DEAL}');
+ insert into email (activity_id, message_id, sender, subject, body) values ('${id(32)}', 'shared-old@example.test', 'clinic@example.test', 'Shared example', 'Example'), ('${id(33)}', 'shared-new@example.test', 'clinic@example.test', 'Re: Shared example', 'Example'); commit;`);
 	try {
 		const [status, body] = await save(job, "router-queue", {}, "GET");
 		assert.equal(status, 200);
 		assert.ok(Array.isArray(body.emails));
 		assert.equal(
-			body.emails.find((e) => e.activity_id === EMAIL).sender.party_id,
+			body.emails.find((e) => e.activity_id === id(32)).sender.party_id,
 			null,
 		);
 		assert.equal(
 			body.emails
-				.find((e) => e.activity_id === id(21))
-				.thread.find((e: { activity_id: string }) => e.activity_id === EMAIL)
+				.find((e) => e.activity_id === id(33))
+				.thread.find((e: { activity_id: string }) => e.activity_id === id(32))
 				.sender.party_id,
 			null,
 		);

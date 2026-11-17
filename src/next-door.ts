@@ -34,7 +34,7 @@ export async function answerNextSave<Request extends JsonObject>(
 	verb: string,
 	parse: (body: JsonObject) => Refusal | Request,
 	change: (tx: Transaction<DB>, request: Request) => Promise<JsonObject>,
-	status: 200 | 201 = 200,
+	status: 200 | 201 | ((result: JsonObject) => 200 | 201) = 200,
 ): Promise<Response> {
 	const correlation_id = crypto.randomUUID();
 	const refused = (refusal: Refusal) => refuse(c, refusal, correlation_id);
@@ -46,11 +46,12 @@ export async function answerNextSave<Request extends JsonObject>(
 	if (!writer) return refused(new Refusal(503, "database_unavailable"));
 	try {
 		const save = { stamp: c.get("stamp"), verb, args: request };
+		const result = await runNextSave(writer.connectionString, save, (tx) =>
+			change(tx, request),
+		);
 		return c.json(
-			await runNextSave(writer.connectionString, save, (tx) =>
-				change(tx, request),
-			),
-			status,
+			result,
+			typeof status === "function" ? status(result) : status,
 		);
 	} catch (error) {
 		if (error instanceof SaveRefusal) return refused(error.refusal);
