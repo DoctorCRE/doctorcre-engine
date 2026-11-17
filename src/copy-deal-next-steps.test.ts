@@ -121,7 +121,7 @@ before(async () => {
  update public.deal set next_date='2026-02-01' where id='${id(10)}';
  insert into public.event (subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause, sponsoring_human_slug) values
  ('deal','${id(12)}','next_step','{"superseded_action_ids":[]}', '2025-02-01','2025-02-01','${id(1)}','replace-step','human_stated',null),
- ('deal','${id(11)}','note','{"note":"Example current note"}', '2025-02-01','2025-02-01','${id(2)}','add-deal-note','automation_job','partner_one');
+ ('deal','${id(11)}','next_step','{"next_step":"Example current note"}', '2025-01-31 23:59:59','2025-02-01 00:00:01','${id(2)}','set-next-step','automation_job','partner_one');
  insert into public.activity_kind (slug, label, is_contact) values ('task','Example task',false);
  insert into public.activity (id, kind, occurred_at, recorded_at, actor_id, summary, detail, deal_id, party_id) values
  ('${id(300)}','task','2025-01-01','2025-02-01','${id(2)}','Example task','Example details','${id(10)}',null),
@@ -310,6 +310,119 @@ test("post-call acceptance and outreach-completion events name their own author 
  [id(501),null,'agent',id(1)], [id(502),null,'agent',id(1)],
  ]);
 });
+test("a recorded next-step activity names its sponsoring user", async () => {
+	assert.deepEqual(
+		await rows(`select changed_by_user_id, changed_by_job, changed_for_user_id
+ from activity where id='${id(201)}'`),
+		[
+			{
+				changed_by_user_id: null,
+				changed_by_job: "agent",
+				changed_for_user_id: id(1),
+			},
+		],
+	);
+});
+
+for (const scenario of [
+	{
+		name: "set-next-step",
+		setup: `insert into public.event (id,subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug)
+ values ('${id(704)}','deal','${id(700)}','next_step','{"next_step":"Example repeated step"}','${id(2)}','set-next-step','automation_job','2025-03-01 00:00:01','2025-03-01 00:00:05','partner_one');`,
+		expected: id(1),
+		matchedNotes: [id(701), id(702)],
+	},
+	{
+		name: "undo-call-change",
+		setup: `insert into public.event (id,subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug)
+ values ('${id(704)}','deal','${id(700)}','next_step','{"next_step":"Example repeated step"}','${id(2)}','undo-call-change','automation_job','2025-03-01 00:00:01','2025-03-01 00:00:05','partner_one');`,
+		expected: id(1),
+		matchedNotes: [id(701), id(702)],
+	},
+	{
+		name: "undo-call",
+		setup: `insert into public.event (id,subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug)
+ values ('${id(704)}','deal','${id(700)}','next_step','{"next_step":"Example repeated step"}','${id(2)}','undo-call','automation_job','2025-03-01 00:00:01','2025-03-01 00:00:05','partner_one');`,
+		expected: id(1),
+		matchedNotes: [id(701), id(702)],
+	},
+	{
+		name: "an earlier sponsor cannot sign the current note",
+		setup: `insert into public.event (id,subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug)
+ values ('${id(704)}','deal','${id(700)}','next_step','{"next_step":"Example repeated step"}','${id(2)}','set-next-step','automation_job','2025-03-01 00:00:01','2025-03-01 00:00:05',null);
+ update public.event set sponsoring_human_slug='partner_one' where id='${id(703)}';`,
+		expected: null,
+		matchedNotes: [id(701), id(702)],
+	},
+	{
+		name: "tied event times",
+		setup: `insert into public.event (id,subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug)
+ values ('${id(704)}','deal','${id(700)}','next_step','{"next_step":"Example repeated step"}','${id(2)}','set-next-step','automation_job','2025-03-01 00:00:01','2025-03-01 00:00:05','partner_one');
+ delete from public.event where id='${id(703)}';
+ insert into public.event (subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug)
+ select subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug from public.event where id='${id(704)}';`,
+		expected: null,
+		matchedNotes: [],
+	},
+	{
+		name: "tied note times",
+		setup: `insert into public.event (id,subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug)
+ values ('${id(704)}','deal','${id(700)}','next_step','{"next_step":"Example repeated step"}','${id(2)}','set-next-step','automation_job','2025-03-01 00:00:01','2025-03-01 00:00:05','partner_one');
+ update public.deal_note set created_at='2025-03-01 00:00:04' where id='${id(701)}';`,
+		expected: null,
+		matchedNotes: [],
+	},
+	{
+		name: "no event for the current note",
+		setup: `delete from public.event where id='${id(704)}';`,
+		expected: null,
+		matchedNotes: [id(701)],
+	},
+]) {
+	test(`fallback signing uses mutual closest matches for ${scenario.name}`, async () => {
+		await db.query("begin; select set_config('engine.job','old_system',true)");
+		try {
+			await db.query(`insert into public.deal (id,client_id,name,deal_type,phase,owner,next_date,created_by,updated_by)
+ values ('${id(700)}','${id(3)}','Example signing deal','lease','closed','partner_one','2026-03-01','${id(1)}','${id(1)}');
+ insert into deal (id,name,owner_user_id) values ('${id(700)}','Example signing deal','${id(1)}');
+ insert into public.deal_note (id,deal_id,kind,text,actor_id,created_at) values
+ ('${id(701)}','${id(700)}','next_step','Example repeated step','${id(2)}','2025-03-01 00:00:02'),
+ ('${id(702)}','${id(700)}','next_step','Example repeated step','${id(2)}','2025-03-01 00:00:04');
+ insert into public.event (id,subject_type,subject_id,field,new_value,actor_id,verb,cause,occurred_at,recorded_at,sponsoring_human_slug) values
+ ('${id(703)}','deal','${id(700)}','next_step','{"next_step":"Example repeated step"}','${id(2)}','set-next-step','automation_job','2025-03-01 00:00:00','2025-03-01 00:00:03',null);`);
+			await db.query(scenario.setup);
+			assert.deepEqual(
+				(
+					await rows(`select note_id from copy_next_step_event()
+ where note_id in ('${id(701)}','${id(702)}') order by note_id`)
+				).map((row) => row.note_id),
+				scenario.matchedNotes,
+			);
+			const result = await run();
+			assert.deepEqual(
+				await rows(
+					`select what,due_on::text,changed_by_user_id,changed_by_job,changed_for_user_id from next_step where id='${id(702)}'`,
+				),
+				[
+					{
+						what: "Example repeated step",
+						due_on: "2026-03-01",
+						changed_by_user_id: null,
+						changed_by_job: "agent",
+						changed_for_user_id: scenario.expected,
+					},
+				],
+			);
+			assert.deepEqual(
+				reasons(result, 702),
+				scenario.expected ? [] : ["agent_user_unknown"],
+			);
+		} finally {
+			await db.query("rollback");
+		}
+	});
+}
+
 test("the activity copy keeps every next-step note as a recorded note beside the step it backs, and copies no task", async () => {
 	const recorded = (text: string) => `Recorded next step\n\n${text}`;
 	// biome-ignore format: one row per deal note
