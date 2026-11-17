@@ -256,8 +256,11 @@ select distinct p.deal_id, b.id as property_id
 from public.premises p join public.premises_space ps on ps.premises_id = p.id
 join public.space s on s.id = ps.space_id join building_map m on m.old_id = s.building_id
 join public.building b on b.id = m.id join deal d on d.id = p.deal_id;
-insert into property (id, address, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+insert into property (id, address, name, building_class, building_type, year_built, stories,
+ created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select b.id, concat_ws(', ', b.address, nullif(b.city, ''), nullif(b.state, ''), nullif(b.zip, '')),
+ case when b.name ~ '\S' then b.name end, case when b.class ~ '\S' then b.class end,
+ case when b.sub_type ~ '\S' then b.sub_type end, b.year_built, b.stories,
  b.created_at, b.updated_at, a.* from public.building b
 cross join lateral copy_attribution('building', b.id, b.updated_by) a
 where exists (select from old_property p where p.property_id = b.id) on conflict (id) do nothing;
@@ -276,7 +279,7 @@ where not exists (select from building_map m where m.old_id = s.building_id);
 insert into not_copied
 select b.id, 'property', remaining.value::text, 'unmapped_building_fields' from public.building b
 cross join lateral (select jsonb_strip_nulls(to_jsonb(b) - array['id', 'address', 'city', 'state', 'zip',
- 'created_at', 'created_by', 'updated_at', 'updated_by', 'merged_into', 'version']) as value) remaining
+ 'name', 'class', 'sub_type', 'year_built', 'stories', 'created_at', 'created_by', 'updated_at', 'updated_by', 'merged_into', 'version']) as value) remaining
 where remaining.value <> '{}'::jsonb and exists (select from old_property p where p.property_id = b.id);
 
 create temp table round_mapping on commit drop as
