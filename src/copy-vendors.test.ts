@@ -83,6 +83,7 @@ ${oldVendor(40, 10, {
 	loan_programs: `{Example financing,"\tExample financing\n"}`,
 	owner_id: PARTNER,
 	referral_active: "true",
+	originated: " Example referral, date unknown. ",
 	owner_label: "Example import label",
 	links_label: "Example link label",
 	last_touch: "2025-01-01",
@@ -99,10 +100,12 @@ ${oldVendor(41, 15, {
 	is_target: "true",
 	verticals: `{dental,medical," dental ","\tdental","dental\n",NULL," "}`,
 	seeking: "Conflicting request",
+	originated: "Another origin",
+	rivalry_group: " Example rivalry note\nKeep wording. ",
 	loan_programs: "{Example financing,Example equipment}",
 	intro_notes: " \t",
 })}
-${oldVendor(42, 11, { vendor_ref: "P-0010", category: "Misc", relationship_level: "4", enrich: "true" })}
+${oldVendor(42, 11, { vendor_ref: "P-0010", category: "Misc", relationship_level: "4", enrich: "true", referral_active: "false" })}
 ${oldVendor(43, 16)}
 ${oldVendor(44, 17, { disposition: "parked", category_slug: "cpa" })}
 ${oldVendor(45, 18, { vendor_ref: "V-0045" })}
@@ -113,6 +116,9 @@ ${oldVendor(47, 10, {
 	stage: "avoid_not_a_good_partner",
 	territory: "Example territory",
 	offers: "Different offer",
+	originated: "Merged origin",
+	rivalry_group: "Different rivalry note",
+	referral_active: "false",
 	verticals: "{medical,vet}",
 	intro_notes: " Example vendor note ",
 })}
@@ -120,6 +126,7 @@ ${oldVendor(49, 10, {
 	merged_into: id(40),
 	category_slug: "cpa",
 	intro_notes: "Example merged note",
+	originated: " Example referral, date unknown. ",
 	updated_by: PARTNER,
 	updated_at: "2025-02-03T04:05:06Z",
 })}
@@ -245,8 +252,8 @@ test("each value it does not copy is listed, with why", () => {
 	assert.deepEqual(report, [
 		[id(40), "out_of_market", "true", "no place in the new database"],
 		[id(40), "owner_id", PARTNER, "relationship owner awaits an owner ruling"],
-		[id(40), "referral_active", "true", "no place in the new database"],
 		[id(40), "trust_override", "Proven", "a hand-set rating, which the new database does not keep"],
+		[id(41), "originated", "Another origin", "its record holds another value"],
 		[id(41), "relationship_level", "3", "its record holds another level"],
 		[id(41), "seeking", "Conflicting request", "its record holds another value"],
 		[id(41), "verticals", " ", "blank or null list entry"],
@@ -256,8 +263,88 @@ test("each value it does not copy is listed, with why", () => {
 		[id(42), "vendor_ref", "P-0010", `also the id of ${id(10)}`],
 		...WAITING,
 		[id(47), "offers", "Different offer", "its record holds another value"],
+		[id(47), "originated", "Merged origin", "its record holds another value"],
+		[id(47), "referral_active", "false", "its record holds another value"],
+		[id(47), "rivalry_group", "Different rivalry note", "its record holds another value"],
 	]);
 });
+
+test("relationship wording and referral yes, no and unknown copy without inference", () =>
+	rolledBack(async () => {
+		await db.query("discard temp");
+		await copy(
+			reviewed([44, "Example parked reason"], [46, "Example avoid reason"]),
+		);
+		assert.deepEqual(
+			await rows(`select party_id, relationship_origin, rivalry_note, refers_business
+				from party_role where role = 'vendor' order by party_id`),
+			[
+				{
+					party_id: id(10),
+					relationship_origin: " Example referral, date unknown. ",
+					rivalry_note: " Example rivalry note\nKeep wording. ",
+					refers_business: true,
+				},
+				...[11, 17, 19].map((n) => ({
+					party_id: id(n),
+					relationship_origin: null,
+					rivalry_note: null,
+					refers_business: n === 11 ? false : null,
+				})),
+			],
+		);
+		assert.deepEqual(
+			await rows(`select v.originated as relationship_origin, v.rivalry_group as rivalry_note,
+				v.referral_active as refers_business from public.vendor v where v.id = '${id(42)}'`),
+			await rows(`select relationship_origin, rivalry_note, refers_business from party_role
+				where party_id = '${id(11)}' and role = 'vendor'`),
+		);
+		assert.deepEqual(
+			await rows(`select a.originated as relationship_origin, b.rivalry_group as rivalry_note,
+				a.referral_active as refers_business from public.vendor a, public.vendor b
+				where a.id = '${id(40)}' and b.id = '${id(41)}'`),
+			await rows(`select relationship_origin, rivalry_note, refers_business from party_role
+				where party_id = '${id(10)}' and role = 'vendor'`),
+		);
+		assert.deepEqual(await rows("select * from introduction"), []);
+		assert.deepEqual(await rows("select * from party_link"), []);
+	}));
+
+for (const field of [
+	"relationship_origin",
+	"rivalry_note",
+	"refers_business",
+]) {
+	test(`${field} belongs only on the vendor role`, () =>
+		rolledBack(async () => {
+			await db.query(`set local role engine; select set_config('engine.user_id', '${PARTNER}', true);
+			select set_config('engine.job', '', true);`);
+			const value = field === "refers_business" ? "false" : "'Example'";
+			await assert.rejects(
+				db.query(
+					`update party_role set ${field} = ${value} where role = 'contractor'`,
+				),
+				{
+					code: "23514",
+					constraint: "party_role_relationship_notes_on_vendor",
+				},
+			);
+		}));
+}
+
+test("users can keep empty wording, clear unknown referral status, and reruns keep their edits", () =>
+	rolledBack(async () => {
+		await db.query(`set local role engine; select set_config('engine.user_id', '${PARTNER}', true);
+			select set_config('engine.job', '', true);
+			update party_role set relationship_origin = '', rivalry_note = '  ', refers_business = null
+			where party_id = '${id(10)}' and role = 'vendor'; reset role; set constraints all immediate; discard temp;`);
+		await copy();
+		assert.deepEqual(
+			await rows(`select relationship_origin, rivalry_note, refers_business
+			from party_role where party_id = '${id(10)}' and role = 'vendor'`),
+			[{ relationship_origin: "", rivalry_note: "  ", refers_business: null }],
+		);
+	}));
 
 const noteId = (vendor: number) => {
 	const hex = createHash("md5")
@@ -518,8 +605,9 @@ test("merging vendor roles keeps survivor text, fills empty text and unions capa
 	rolledBack(async () => {
 		await db.query(`select set_config('engine.user_id', '${PARTNER}', true); select set_config('engine.job', '', true);
 		update party set kind = 'company' where id = '${id(11)}';
-		update party_role set offers = 'Other offer', seeking = 'Other request' where party_id = '${id(11)}';
-		update party_role set seeking = null where party_id = '${id(10)}' and role = 'vendor';
+		update party_role set relationship_origin = 'Other origin', rivalry_note = 'Other rivalry', refers_business = true,
+		offers = 'Other offer', seeking = 'Other request' where party_id = '${id(11)}';
+		update party_role set rivalry_note = null, refers_business = false, seeking = null where party_id = '${id(10)}' and role = 'vendor';
 		insert into vendor_vertical (party_id, vertical) values ('${id(11)}', 'dental'), ('${id(11)}', 'Example new');
 		insert into vendor_loan_program (party_id, loan_program) values ('${id(11)}', 'Example financing'), ('${id(11)}', 'Example new');
 		set local role engine;
@@ -529,6 +617,33 @@ test("merging vendor roles keeps survivor text, fills empty text and unions capa
 				`select offers, seeking from party_role where party_id = '${id(10)}' and role = 'vendor'`,
 			),
 			[{ offers: "Example offer", seeking: "Other request" }],
+		);
+		assert.deepEqual(
+			await rows(`select relationship_origin, rivalry_note, refers_business
+			from party_role where party_id = '${id(10)}' and role = 'vendor'`),
+			[
+				{
+					relationship_origin: " Example referral, date unknown. ",
+					rivalry_note: "Other rivalry",
+					refers_business: false,
+				},
+			],
+		);
+		await db.query(`update party_role set relationship_origin = null, rivalry_note = null, refers_business = null
+			where party_id = '${id(10)}' and role = 'vendor';
+			insert into party_role (party_id, role, relationship_origin, rivalry_note, refers_business)
+			values ('${id(17)}', 'vendor', 'Filled origin', 'Filled rivalry', false);
+			select merge_party('${id(17)}', '${id(10)}');`);
+		assert.deepEqual(
+			await rows(`select relationship_origin, rivalry_note, refers_business
+			from party_role where party_id = '${id(10)}' and role = 'vendor'`),
+			[
+				{
+					relationship_origin: "Filled origin",
+					rivalry_note: "Filled rivalry",
+					refers_business: false,
+				},
+			],
 		);
 		assert.equal((await rows("select * from vendor_vertical")).length, 4);
 		assert.equal((await rows("select * from vendor_loan_program")).length, 3);

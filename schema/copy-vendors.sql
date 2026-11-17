@@ -79,6 +79,7 @@ where record_id is not null and not record_had_vendor
 -- own vendor's first, then by when they were stored, the strictest ruling with its reason, and a target on any unless
 -- it is avoided.
 insert into party_role (party_id, role, created_at, stage, relationship_level, disposition, disposition_reason, is_target, offers, seeking,
+	relationship_origin, rivalry_note, refers_business,
 	changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (record_id) record_id, 'vendor', created_at,
 	first_value(stage_slug) over (partition by record_id order by stage_slug is null, rank),
@@ -86,7 +87,11 @@ select distinct on (record_id) record_id, 'vendor', created_at,
 	first_value(ruling) over strictest, first_value(ruling_reason) over strictest,
 	bool_or(is_target) over (partition by record_id) and every(ruling is distinct from 'avoid') over (partition by record_id),
 	first_value(typed_offers) over (partition by record_id order by typed_offers is null, rank),
-	first_value(typed_seeking) over (partition by record_id order by typed_seeking is null, rank), changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
+	first_value(typed_seeking) over (partition by record_id order by typed_seeking is null, rank),
+	first_value(originated) over (partition by record_id order by originated is null, rank),
+	first_value(rivalry_group) over (partition by record_id order by rivalry_group is null, rank),
+	first_value(referral_active) over (partition by record_id order by referral_active is null, rank),
+	changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from copied
 window strictest as (partition by record_id order by array_position(array['parked', 'avoid'], ruling) desc nulls last, rank)
 order by record_id, rank;
@@ -120,7 +125,9 @@ from copied cross join lateral unnest(loan_programs) value where value is null o
 insert into not_copied
 select v.id, f.field, f.value, 'its record holds another value'
 from copied v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
-cross join lateral (values ('offers', v.typed_offers, r.offers), ('seeking', v.typed_seeking, r.seeking)) f(field, value, stored)
+cross join lateral (values ('offers', v.typed_offers, r.offers), ('seeking', v.typed_seeking, r.seeking),
+	('originated', v.originated, r.relationship_origin), ('rivalry_group', v.rivalry_group, r.rivalry_note),
+	('referral_active', v.referral_active::text, r.refers_business::text)) f(field, value, stored)
 where f.value is not null and f.value <> f.stored;
 
 insert into outside_id (source, value, party_id) select 'old_system', id::text, record_id from copied;
@@ -193,8 +200,7 @@ create temp table unplaced on commit drop as
 select v.id, v.record_id, v.merged_into, f.field, f.value, f.reason
 from copied v cross join lateral (values ('category', case when v.category_slug is null then v.category end, 'not a vendor category'),
 	('trust_override', v.trust_override ->> 'tier', 'a hand-set rating, which the new database does not keep'),
-	('owner_id', v.owner_id::text, 'relationship owner awaits an owner ruling'), ('rivalry_group', v.rivalry_group, null), ('originated', v.originated, null),
-	('referral_active', v.referral_active::text, null),
+	('owner_id', v.owner_id::text, 'relationship owner awaits an owner ruling'),
 	('out_of_market', nullif(v.out_of_market, false)::text, null)) as f (field, value, reason)
 where f.value ~ '\S';
 

@@ -132,6 +132,9 @@ create table party_role (
 	is_target boolean not null default false,
 	offers text check (offers ~ '\S'),
 	seeking text check (seeking ~ '\S'),
+	relationship_origin text,
+	rivalry_note text,
+	refers_business boolean,
 	primary key (party_id, role),
 	foreign key (role, stage) references stage,
 	constraint party_role_level_on_vendor check (relationship_level is null or role = 'vendor'),
@@ -139,6 +142,7 @@ create table party_role (
 	constraint party_role_ruling_has_a_reason check ((disposition is null) = (disposition_reason is null)),
 	constraint party_role_target_on_vendor check (not is_target or role = 'vendor'),
 	constraint party_role_avoid_not_target check (not is_target or disposition is distinct from 'avoid'),
+	constraint party_role_relationship_notes_on_vendor check (role = 'vendor' or num_nonnulls(relationship_origin, rivalry_note, refers_business) = 0),
 	constraint party_role_capabilities_on_vendor check (role = 'vendor' or num_nonnulls(offers, seeking) = 0)
 );
 
@@ -2193,6 +2197,9 @@ begin
 	update party_role s set stage = coalesce(s.stage, d.stage),
 		relationship_level = coalesce(s.relationship_level, d.relationship_level),
 		offers = coalesce(s.offers, d.offers), seeking = coalesce(s.seeking, d.seeking),
+		relationship_origin = coalesce(s.relationship_origin, d.relationship_origin),
+		rivalry_note = coalesce(s.rivalry_note, d.rivalry_note),
+		refers_business = coalesce(s.refers_business, d.refers_business),
 		(disposition, disposition_reason) = (
 			select ruling, reason
 			from (values (s.disposition, s.disposition_reason, 1), (d.disposition, d.disposition_reason, 2)) r (ruling, reason, side)
@@ -2777,7 +2784,7 @@ grant delete on vendor_vertical, vendor_loan_program, party, party_email, party_
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
-grant update (offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
+grant update (relationship_origin, rivalry_note, refers_business, offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (started_on, ended_on, note) on party_link to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
