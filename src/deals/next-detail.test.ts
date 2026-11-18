@@ -37,14 +37,15 @@ insert into public.client (id, party_id, status, acquisition_source, client_type
  ('${id(23)}', '${id(15)}', 'engaged', 'Example referral', 'national_account', 'active', ${by});
 update public.client set roster_ref = 'C-EX-23' where id = '${id(23)}';
 update public.party set ref = 'P-EX-15' where id = '${id(15)}';
-insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2);
+insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2), ('renewal', 'Example renewal', 3);
 insert into public.deal_phase (slug, label) values ('touring', 'Example touring'), ('negotiation', 'Example negotiation');
 insert into public.participant_role (slug, label) values ('lead', 'Example lead'), ('support', 'Example support'),
  ('listing_side', 'Example listing side');
 insert into public.deal (id, client_id, name, deal_type, phase, owner, attention, next_date, created_by, updated_by, created_at) values
  ('${id(30)}', '${id(20)}', 'Example startup office', 'startup', 'touring', 'partner_one', true, '2030-01-15', ${by}, '2025-01-01'),
  ('${id(31)}', '${id(21)}', 'Example clinic lease', 'lease', 'negotiation', 'partner_two', false, null, ${by}, '2025-01-02'),
- ('${id(32)}', '${id(20)}', 'Z Example earlier lease', 'lease', 'negotiation', 'partner_one', true, '2029-12-01', ${by}, '2025-01-03');
+ ('${id(32)}', '${id(20)}', 'Z Example earlier lease', 'lease', 'negotiation', 'partner_one', true, '2029-12-01', ${by}, '2025-01-03'),
+ ('${id(35)}', '${id(20)}', 'Example copied renewal', 'renewal', 'negotiation', 'partner_one', false, null, ${by}, '2025-01-04');
 update public.deal set city = 'Example West' where id = '${id(32)}';
 insert into public.deal_participant (deal_id, actor_id, party_id, role, from_at, set_by) values
  ('${id(30)}', '${id(1)}', null, 'lead', '2025-01-01', '${id(1)}'),
@@ -300,11 +301,11 @@ for (const schema of [undefined, "next"]) {
 				Array.isArray(board.accounts),
 		);
 		assert.equal(board.accounts.length, 1);
-		assert.equal(board.deals.length, schema ? 2 : 3);
+		assert.equal(board.deals.length, schema ? 3 : 4);
 		if (schema) {
 			assert.deepEqual(
 				board.deals.map((deal) => deal.id),
-				[id(32), id(30)],
+				[id(32), id(30), id(35)],
 			);
 			assert.deepEqual(board.deals[0].last_step, {
 				kind: "completed_action",
@@ -398,6 +399,19 @@ test("signed-in detail shows saved items and checklist progress from lease facts
 	});
 });
 
+test("a proposed critical date stays off the deal checklist", async () => {
+	const page = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(30)),
+	);
+	assert.ok(!("error" in page));
+	const legal = page.checklist.phases.find((phase) => phase.id === "legal");
+	assert.ok(legal);
+	assert.equal(
+		legal.items.some((item) => item.id === `critical-date:${id(81)}`),
+		false,
+	);
+});
+
 test("the renewal checklist tracks confirmed deadlines and leaves a forecast outstanding", async () => {
 	const response = await get(`/deals/${id(33)}`, "next");
 	assert.equal(response.status, 200);
@@ -432,6 +446,41 @@ test("the renewal checklist tracks confirmed deadlines and leaves a forecast out
 	});
 });
 
+test("a copied renewal without a source lease shows only the common checklist", async () => {
+	const response = await get(`/deals/${id(35)}`, "next");
+	assert.equal(response.status, 200);
+	const detail = await response.json();
+	assert.partialDeepStrictEqual(detail, {
+		checklist: { template_state: "deal_type_unknown", deal_type: null },
+	});
+	assert.ok(detail && typeof detail === "object" && "checklist" in detail);
+	const { checklist } = detail;
+	assert.ok(
+		checklist &&
+			typeof checklist === "object" &&
+			"phases" in checklist &&
+			Array.isArray(checklist.phases),
+	);
+	const items = checklist.phases.flatMap((phase) => {
+		const items: unknown = phase.items;
+		assert.ok(Array.isArray(items));
+		return items.map((item) => item.id);
+	});
+	assert.deepEqual(items.toSorted(), [
+		"attorney_comments",
+		"business_terms",
+		"commission_received",
+		"contract_draft",
+		"executed_comp",
+		"invoice_recorded",
+		"loi_grid",
+		"loi_submission",
+		"market_survey",
+		"representation",
+		"requirements",
+	]);
+});
+
 test("the checklist records an invoice and completes receipt only when all payments arrived", async () => {
 	for (const [deal, status] of [
 		[id(31), "complete"],
@@ -445,13 +494,17 @@ test("the checklist records an invoice and completes receipt only when all payme
 					{
 						id: "invoice",
 						items: [
-							{ id: "invoice_recorded", status: "complete" },
+							{
+								id: "invoice_recorded",
+								status: "complete",
+								evidence_ref: "Invoiced Feb 1, 2025",
+							},
 							{
 								id: "commission_received",
 								status,
 								evidence_ref:
 									status === "complete"
-										? `commission:${id(87)}, commission:${id(88)}`
+										? "2 commission payments received"
 										: null,
 							},
 						],

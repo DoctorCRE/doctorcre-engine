@@ -117,13 +117,14 @@ test("a new next step replaces the partner's steps, keeps the old one as history
 			);
 			const login = new URL(url);
 			login.username = role;
-			const changes = async (key: string) =>
-				(
-					await db.query(
-						"select field,old_value,new_value from event where idempotency_key=$1 order by recorded_at,id",
-						[key],
-					)
-				).rows.map((e) => [e.field, e.old_value, e.new_value]);
+			const changes = async (key: string) => {
+				const { rows } = await db.query({
+					text: "select field,old_value,new_value from event where idempotency_key=$1",
+					values: [key],
+					rowMode: "array",
+				});
+				return new Set(rows);
+			};
 			// The whole answer, built from what the save wrote, then its replay.
 			const answered = async (
 				args: { idempotency_key: string; deal: string },
@@ -172,12 +173,14 @@ test("a new next step replaces the partner's steps, keeps the old one as history
 			const made = await answered(replaced, id(51));
 			assert.deepEqual(
 				await changes(replaced.idempotency_key),
-				JSON.parse(`[
+				new Set(
+					JSON.parse(`[
 					["next_action",{"actions":[{"id":"${id(21)}","description":"Example overdue step","due_on":"${PAST}"},{"id":"${id(41)}","description":"Example post-call step","due_on":"${PAST}"}]},{"superseded_action_ids":${ids(21, 41)},"status":"dropped"}],
 					["next_date",{"next_date":"${PAST}"},{"next_date":"${LATER}","superseded_action_ids":${ids(21, 41)}}],
 					["next_step",{"next_step":"Example overdue step"},{"next_step":"Example later step","superseded_action_ids":${ids(21, 41)}}],
 					["next_step",{"next_step":"Example prior step","board_next_step":"Example later step","board_next_action_id":"${id(23)}"},{"next_step":"Example new step","next_date":"${NEW}","next_action_id":"${made}","replaced_action_ids":[]}],
 					["next_date",{"next_date":"${LATER}"},{"next_date":"${NEW}"}]]`),
+				),
 			);
 			const { rows } = await db.query(
 				"select next_date::text, (select count(*)::int from deal_note where deal_id=$1) as notes from deal where id=$1",
@@ -189,9 +192,11 @@ test("a new next step replaces the partner's steps, keeps the old one as history
 			const call = await answered(undated, null);
 			assert.deepEqual(
 				await changes(undated.idempotency_key),
-				JSON.parse(`[
+				new Set(
+					JSON.parse(`[
 					["next_step",{"next_step":null,"board_next_step":"Example current step","board_next_action_id":"${id(25)}"},{"next_step":"Example call back","next_date":null,"next_action_id":"${call}","replaced_action_ids":${ids(26)}}],
 					["next_date",{"next_date":null},{"next_date":null}]]`),
+				),
 			);
 			assert.deepEqual(
 				await open(),

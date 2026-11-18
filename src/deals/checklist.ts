@@ -157,11 +157,8 @@ type Facts = {
 		source: string | null;
 		status: string | null;
 	}[];
-	sections:
-		| { id: string; status: string; body_hash: string | null }[]
-		| "engine";
+	templateCurrent: boolean;
 	commissions: {
-		commission_id: string;
 		status: string;
 		received_on: string | null;
 	}[];
@@ -187,6 +184,11 @@ const DEAL_TYPES = new Map<string | null, DealType>([
 	["land", "land"],
 ]);
 
+const invoiceDate = new Intl.DateTimeFormat("en-US", {
+	dateStyle: "medium",
+	timeZone: "UTC",
+});
+
 function evidenceOf({ deal, lease, commissions }: Facts) {
 	const evidence = new Map<string, string>();
 	if (lease?.status === "current" && lease.evidence_ref) {
@@ -198,7 +200,7 @@ function evidenceOf({ deal, lease, commissions }: Facts) {
 	if (isDate(deal.invoiced_on))
 		evidence.set(
 			"invoice_recorded",
-			`deal:${deal.id}:invoiced_on:${deal.invoiced_on}`,
+			`Invoiced ${invoiceDate.format(new Date(deal.invoiced_on))}`,
 		);
 	if (
 		commissions.length > 0 &&
@@ -206,7 +208,9 @@ function evidenceOf({ deal, lease, commissions }: Facts) {
 	)
 		evidence.set(
 			"commission_received",
-			commissions.map((c) => `commission:${c.commission_id}`).join(", "),
+			commissions.length === 1
+				? "Commission payment received"
+				: `${commissions.length} commission payments received`,
 		);
 	return evidence;
 }
@@ -260,20 +264,10 @@ function criticalDateItems({ deal, criticalDates, today }: Facts): Item[] {
 
 export function checklistOf(facts: Facts) {
 	const type = DEAL_TYPES.get(facts.deal.type) ?? null;
-	const { sections } = facts;
-	const active =
-		sections === "engine" ||
-		SOURCES.every(({ section_id, content_hash }) =>
-			sections.some(
-				(s) =>
-					s.id === section_id &&
-					s.status === "active" &&
-					s.body_hash === content_hash,
-			),
-		);
+	const { templateCurrent } = facts;
 	const head = {
 		schema_version: "deal-checklist.v1",
-		template_state: !active
+		template_state: !templateCurrent
 			? "source_changed"
 			: type
 				? "current"
@@ -284,7 +278,7 @@ export function checklistOf(facts: Facts) {
 	};
 	const evidence = evidenceOf(facts);
 	const requests = new Map(facts.requests.map((r) => [r.row_key, r]));
-	const phases = (active ? PHASES : []).map(({ id, label, rows }) => ({
+	const phases = (templateCurrent ? PHASES : []).map(({ id, label, rows }) => ({
 		id,
 		label,
 		items: [
@@ -361,15 +355,18 @@ export async function readChecklist(
 			SOURCES.map((s) => s.section_id),
 		)
 		.execute();
+	const templateCurrent = SOURCES.every(({ section_id, content_hash }) =>
+		sections.some(
+			(s) =>
+				s.id === section_id &&
+				s.status === "active" &&
+				s.body_hash === content_hash,
+		),
+	);
 	const commissions = await db
 		.selectFrom("commission")
-		.select((eb) => [
-			"id as commission_id",
-			"status",
-			asText(eb.ref("received_on")).as("received_on"),
-		])
+		.select((eb) => ["status", asText(eb.ref("received_on")).as("received_on")])
 		.where("deal_id", "=", deal.id)
-		.orderBy("id")
 		.execute();
 	const requests = await requestsOf(db, deal.id);
 	const { today } = await db
@@ -380,7 +377,7 @@ export async function readChecklist(
 		deal,
 		lease,
 		criticalDates,
-		sections,
+		templateCurrent,
 		commissions,
 		requests,
 		today,

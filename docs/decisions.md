@@ -301,4 +301,6 @@
 
 152\. **Home uses the step's revision to finish and reopen it (2026-11-18).** This updates the end and reopen rules in decision 111. Mark done checks the revision Home read. Undo checks the completion's change ID. Snooze and its undo check the separate Home mark version, including on a completion review. Jobs and the Deals checklist keep their existing versionless completion calls (#711).
 
-153\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).
+153\. **Deal people search filters by kind before the result limit (2026-11-18).** The deal page can ask for people or companies by name prefix. The Market agent picker asks for people so that companies cannot use up its 25 results. The search includes do-not-contact records because choosing a participant does not contact them (#712).
+
+155\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).

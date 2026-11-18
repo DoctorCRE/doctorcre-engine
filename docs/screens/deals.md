@@ -158,7 +158,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 Questions 1 and 3 are roadmap asks 9 and 11. Question 9 is the roadmap ask "one tap for each on the add line". Each recommendation comes first.
 
 1. Client website: the new database has no place yet for a deal's client website. Recommended: add one, so the deal page keeps its Client website link after the switch.
-2. Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move (#718).
+2. Answered on 2026-11-18 (#718): Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move.
 3. Moved automatically: the copy does not record which phase moves the system made (16 cards today). Recommended: keep that mark on copied moves, with Undo on the card.
 4. Answered on 2026-11-18. A person who is a client may belong to a national account.
 5. When both partners have an open next step on one deal, which shows on the card? Recommended: the deal owner's, with both steps on the deal page.
