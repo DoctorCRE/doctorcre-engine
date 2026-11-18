@@ -289,12 +289,11 @@ test("only the owner can undo an automatic completion and the new save carries t
 	const change_id = await stepChange(next_step_id);
 	const [, { automatic_resolutions }] = await home(alex);
 	assert.ok(Array.isArray(automatic_resolutions));
-	assert.ok(
-		automatic_resolutions.some(
-			(item) =>
-				item.next_step_id === next_step_id && item.change_id === change_id,
-		),
+	const listed = automatic_resolutions.find(
+		(item) => item.next_step_id === next_step_id,
 	);
+	assert.equal(listed?.change_id, change_id);
+	assert.equal(listed?.changed_by_job, job.job);
 	assert.equal((await undo(next_step_id, change_id, blair))[0], 409);
 	assert.equal((await undo(next_step_id, change_id, job))[0], 404);
 	const key = randomUUID();
@@ -319,6 +318,46 @@ test("only the owner can undo an automatic completion and the new save carries t
 			new_value: { resolution: null, done_at: null, status: "open" },
 		},
 	]);
+});
+
+test("Home hides an automatic completion once its change is over seven days old", async () => {
+	const { next_step_id } = await fixture("note");
+	assert.equal((await end(next_step_id))[0], 200);
+	const change_id = await stepChange(next_step_id);
+	await db.query(
+		"update change set changed_at = now() - interval '8 days' where id = $1",
+		[change_id],
+	);
+	const [status, { automatic_resolutions }] = await home(alex);
+	assert.equal(status, 200);
+	assert.ok(Array.isArray(automatic_resolutions));
+	assert.ok(
+		automatic_resolutions.every((item) => item.change_id !== change_id),
+	);
+});
+
+test("Home hides Undo when the owner has another open step on the deal", async () => {
+	const { deal_id, next_step_id } = await fixture("note");
+	assert.equal((await end(next_step_id))[0], 200);
+	const [created, newer] = await save(alex, "next-steps", {
+		idempotency_key: randomUUID(),
+		deal_id,
+		what: "Review the lease",
+	});
+	assert.equal(created, 201);
+	const [status, { automatic_resolutions }] = await home(alex);
+	assert.equal(status, 200);
+	assert.ok(Array.isArray(automatic_resolutions));
+	assert.ok(
+		automatic_resolutions.every((item) => item.next_step_id !== next_step_id),
+	);
+	const [refused, answer] = await undo(
+		next_step_id,
+		await stepChange(next_step_id),
+	);
+	assert.equal(refused, 409);
+	assert.equal(answer.error, "open_step_exists");
+	assert.equal(answer.next_step_id, newer.next_step_id);
 });
 
 test("a partner's resolution has no undo", async () => {

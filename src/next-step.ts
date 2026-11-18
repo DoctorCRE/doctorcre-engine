@@ -1,15 +1,9 @@
 import { Hono } from "hono";
-import { type RawBuilder, sql, type Transaction } from "kysely";
-import { Refusal, refuse } from "./answer.ts";
+import { sql } from "kysely";
+import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { lockFields } from "./deal-field-base.ts";
 import { lookupRefusal, resolveDeal } from "./deals/resolve.ts";
-import { failureKind } from "./failure.ts";
-import { nextTransaction } from "./next-connection.ts";
-import type { DB } from "./next-database.d.ts";
-import type { NextSaveEnv } from "./next-door.ts";
-import { stampNextSave } from "./next-save.ts";
-import { automaticResolutions } from "./next-steps.ts";
 import { dropOverdueWork, notKept } from "./overdue-work.ts";
 import {
 	answerSave,
@@ -38,27 +32,25 @@ nextStep.post("/set-next-step", (c) =>
 	),
 );
 
-function refuseSave(refusal: Refusal): never {
+function refuse(refusal: Refusal): never {
 	throw new SaveRefusal(refusal);
 }
 
 async function setNextStep(saving: Saving, args: JsonObject) {
 	const { tx } = saving;
 	const subject = await resolveDeal(tx, String(args.deal));
-	if ("error" in subject) refuseSave(lookupRefusal(subject));
+	if ("error" in subject) refuse(lookupRefusal(subject));
 	const deal_id = subject.id;
 	const { text } = args;
 	// The old text_required was not a public error.
 	if (typeof text !== "string" || !text.trim())
-		refuseSave(new Refusal(400, "unhandled_verb_failure"));
+		refuse(new Refusal(400, "unhandled_verb_failure"));
 	const next_date = args.next_date ?? null;
 	if (
 		next_date !== null &&
 		(typeof next_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(next_date))
 	)
-		refuseSave(
-			new Refusal(400, "invalid_field_value", { fields: ["next_date"] }),
-		);
+		refuse(new Refusal(400, "invalid_field_value", { fields: ["next_date"] }));
 	await lockFields(tx, deal_id, ["next_date", "next_step"]);
 	// Strict: a newer version refuses even when it changed another field.
 	const { version } = await tx
@@ -68,9 +60,7 @@ async function setNextStep(saving: Saving, args: JsonObject) {
 		.forUpdate()
 		.executeTakeFirstOrThrow();
 	if (version !== args.base_version)
-		refuseSave(
-			new Refusal(409, "version_conflict", { current_version: version }),
-		);
+		refuse(new Refusal(409, "version_conflict", { current_version: version }));
 	const kept = await awaitingAssessment(saving, deal_id);
 	await dropOverdueWork(saving, deal_id, kept);
 	return appendNextStep(saving, deal_id, text.trim(), next_date, kept);
@@ -99,78 +89,6 @@ async function awaitingAssessment(
 	);
 	return rows.map((row) => row.id);
 }
-
-// The new schema stores the assessment as a proposal and the update as an activity.
-const heldSteps = (tx: Transaction<DB>, owner: RawBuilder<string>) =>
-	tx
-		.selectFrom("proposal as p")
-		.innerJoin("next_step as s", "s.id", "p.next_step_id")
-		.innerJoin("deal as d", "d.id", "s.deal_id")
-		.innerJoin("activity as a", "a.id", "p.activity_id")
-		.select([
-			"p.id as proposal_id",
-			"d.id as deal_id",
-			"d.name as deal_name",
-			"s.id as next_step_id",
-			"s.what",
-			"s.due_on",
-			"p.evidence",
-			"a.id as activity_id",
-			"a.kind as activity_kind",
-			"a.happened_at",
-			"a.summary",
-			sql<boolean>`s.changed_at = p.step_seen_at`.as("can_resolve"),
-		])
-		.where("s.owner_party_id", "=", owner)
-		.where("s.status", "=", "open")
-		.where("p.kind", "=", "next_step_done")
-		.where("p.status", "=", "pending")
-		.orderBy("p.created_at")
-		.orderBy("p.id");
-
-export const heldStepReviews = new Hono<NextSaveEnv>().get(
-	"/home/held-steps",
-	async (c) => {
-		const reader = c.env.DATABASE;
-		if (!reader) return refuse(c, new Refusal(503, "database_unavailable"));
-		try {
-			return c.json(
-				await nextTransaction(reader.connectionString, "read", async (tx) => {
-					await stampNextSave(tx, c.get("stamp"));
-					const owner = sql<string>`current_setting('engine.user_id')::uuid`;
-					return {
-						proposals: await heldSteps(tx, owner).execute(),
-						automatic_resolutions: (
-							await automaticResolutions(tx, owner)
-								.select([
-									"s.id as next_step_id",
-									"s.what",
-									"s.done_at",
-									"h.id as change_id",
-									"d.id as deal_id",
-									"d.name as deal_name",
-								])
-								.where(
-									"h.changed_at",
-									">=",
-									sql<string>`now() - interval '7 days'`,
-								)
-								.orderBy("h.id", "desc")
-								.execute()
-						).map(({ change_id, ...step }) => ({
-							...step,
-							change_id: Number(change_id),
-						})),
-					};
-				}),
-			);
-		} catch (error) {
-			if (error instanceof SaveRefusal) return refuse(c, error.refusal);
-			console.warn("held steps read failed:", failureKind(error));
-			return refuse(c, new Refusal(503, "database_unavailable"));
-		}
-	},
-);
 
 // The prior step stays as history; the partner's other open steps are dropped.
 // A deal update's step is recorded under set-next-step too, as the old writer did.
