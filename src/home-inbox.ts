@@ -20,7 +20,7 @@ type Step = {
 	hold_until: string | null;
 	snoozed_until: string | null;
 	settled: boolean;
-	step_version: number;
+	step_version: string;
 	mark_version: string | null;
 	call_id: string | null;
 	call_at: string | null;
@@ -39,8 +39,9 @@ function stepRows(userId: string) {
 			case when s.hold_until > (now() at time zone 'America/Chicago')::date
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
-			coalesce(m.disposition = 'settled' and mark_change.id >= step_change.id, false) as settled,
-			step_change.id::float8 as step_version, mark_change.id as mark_version,
+			coalesce(m.disposition = 'settled'
+				and mark_change.settled_id >= step_change.id, false) as settled,
+			step_change.id as step_version, mark_change.id as mark_version,
 			c.id as call_id, c.happened_at as call_at, contact.name as call_contact,
 			c.summary as call_summary, s.call_evidence_quote as call_quote,
 			accepted.activity_id as source_id, accepted.activity_kind as source_kind
@@ -56,13 +57,16 @@ function stepRows(userId: string) {
 			and m.item_id = s.id
 			and m.item_kind = case when c.id is null then 'next_step' else 'call_follow_up' end
 		cross join lateral (
-			select max(id) as id from change where table_name = 'next_step'
+			select coalesce(max(id), 0) as id from change where table_name = 'next_step'
 				and record = jsonb_build_object('id', s.id)
 		) step_change
 		left join lateral (
-			select max(id) as id from change where table_name = 'home_mark'
-				and record = jsonb_build_object('user_id', m.user_id, 'item_kind', m.item_kind, 'item_id', m.item_id)
-		) mark_change on m.item_id is not null
+			select max(id) as id,
+				coalesce(max(id) filter (where new_value ->> 'disposition' = 'settled'), 0) as settled_id
+			from change where table_name = 'home_mark'
+				and record = jsonb_build_object('user_id', s.owner_party_id, 'item_id', s.id,
+					'item_kind', case when c.id is null then 'next_step' else 'call_follow_up' end)
+		) mark_change on true
 		where s.owner_party_id = ${userId}::uuid
 			and (s.status = 'open' or (s.status = 'done' and s.done_at >= now() - interval '7 days'))
 		order by (s.status = 'done'), activity_at desc, s.id
@@ -83,7 +87,7 @@ function stepCard(step: Step) {
 	const disposition =
 		done || step.settled ? "settled" : snoozed_until ? "snoozed" : "inbox";
 	const source_type = step.call_id ? "capture_post_call_action" : "next_action";
-	const source_version = String(step.step_version);
+	const source_version = step.step_version;
 	const open_url = step.call_id
 		? `/calls?session=${step.call_id}`
 		: step.deal_id
@@ -114,7 +118,7 @@ function stepCard(step: Step) {
 		open_url,
 		kind_label: step.call_id ? "Call follow-up" : "Task",
 		action_id: step.id,
-		action_version: step.step_version,
+		action_version: Number(step.step_version),
 		deal_id: step.deal_id,
 		merged_source_ids: [step.id],
 		waiting_version: 0,
