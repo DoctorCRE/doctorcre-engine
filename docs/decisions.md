@@ -297,7 +297,7 @@
 
 150\. **A person who is a client can belong to a brand (2026-11-18).** The owner approved national-account deals with a person as the client. The brand is a company. The copy takes the old account link for a person client and the reviewed date the old system first recorded that membership. The Deals board uses the current membership for open and closed deals (#697).
 
-151\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one saves its summary as a note on the call's deal or party at the recorded call's time. The owner left the twelve old work alerts behind (#698).
+151\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one saves its summary as a note on the call's deal or party at the recorded call's time. Home uses the reviewer kept on the copied suggestion when the call itself has no partner stamp (#743). The owner left the twelve old work alerts behind (#698).
 
 152\. **Home uses the step's revision to finish and reopen it (2026-11-18).** This updates the end and reopen rules in decision 111. Mark done checks the revision Home read. Undo checks the completion's change ID. Snooze and its undo check the separate Home mark version, including on a completion review. Jobs and the Deals checklist keep their existing versionless completion calls (#711).
 
