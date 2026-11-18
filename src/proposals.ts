@@ -6,7 +6,7 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
-import { resolveStepOwner } from "./next-steps.ts";
+import { cancelCurrentStep, resolveStepOwner } from "./next-steps.ts";
 import { saveOpenStep } from "./open-step.ts";
 import {
 	clearable,
@@ -405,6 +405,12 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								tx,
 								{ ...p, owner_party_id: owner },
 								async () => {
+									if (
+										p.deal_id &&
+										(p.activity_kind === "call" ||
+											p.activity_kind === "meeting")
+									)
+										await cancelCurrentStep(tx, p.deal_id, owner);
 									if (ownerEdit)
 										await sql`select set_config('engine.proposal_step_owner', ${ownerEdit}, true)`.execute(
 											tx,
