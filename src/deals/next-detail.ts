@@ -1,8 +1,12 @@
 import { type Expression, sql, type Transaction } from "kysely";
-import { jsonArrayFrom, jsonBuildObject } from "kysely/helpers/postgres";
+import {
+	jsonArrayFrom,
+	jsonBuildObject,
+	jsonObjectFrom,
+} from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
-import { pendingProposals } from "../pending-proposals.ts";
 import { asText } from "../reader.ts";
+import { checklistOf } from "./checklist.ts";
 import { selectNextDeals } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
@@ -14,6 +18,37 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			sql.lit("deal-items.v1").as("item_schema_version"),
 			"d.id as deal_id",
 			"d.closed_value",
+			"d.reason",
+			asText(sql`(now() at time zone 'America/Chicago')::date`)
+				.$notNull()
+				.as("today"),
+			jsonArrayFrom(
+				eb
+					.selectFrom("commission_payment as payment")
+					.select((eb) => [
+						eb
+							.case()
+							.when("payment.received_on", "is not", null)
+							.then("received")
+							.else("unpaid")
+							.end()
+							.as("status"),
+						asText(eb.ref("payment.received_on")).as("received_on"),
+					])
+					.whereRef("payment.deal_id", "=", "d.id")
+					// A copied expected commission still leaves the receipt incomplete.
+					.where((eb) =>
+						eb.not(
+							eb.exists(
+								eb
+									.selectFrom("commission")
+									.select("deal_id")
+									.whereRef("deal_id", "=", "payment.deal_id")
+									.where("expected", "is not", null),
+							),
+						),
+					),
+			).as("commissions"),
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),
 			jsonArrayFrom(
@@ -49,18 +84,46 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 						a.happened_at desc, a.id desc
 				) t
 			)`.as("email_threads"),
-			sql`(select coalesce(json_agg(cd order by due_on, id), '[]') from (
-				select id, kind, due_on, note, source, case when status = 'done' then 'cleared' else status end as status
-				from critical_date where deal_id = d.id
-			) cd)`.as("critical_dates"),
+			jsonArrayFrom(
+				eb
+					.selectFrom("critical_date as cd")
+					.select((eb) => [
+						"cd.id",
+						"cd.kind",
+						asText(eb.ref("cd.due_on")).as("due_on"),
+						"cd.note",
+						"cd.source",
+						eb
+							.case()
+							.when("cd.status", "=", "done")
+							.then("cleared")
+							.else(eb.ref("cd.status"))
+							.end()
+							.as("status"),
+					])
+					.whereRef("cd.deal_id", "=", "d.id")
+					.orderBy("cd.due_on")
+					.orderBy("cd.id"),
+			).as("critical_dates"),
 			jsonArrayFrom(documentsOf(db, eb.ref("d.id"))).as("documents"),
 			jsonArrayFrom(emailFollowUpsOf(db, eb.ref("d.id"))).as(
 				"email_follow_ups",
 			),
-			sql`(select row_to_json(lease) from (
-				select id, version, executed_on, commencement_on, expiration_on, 'current' as status
-				from current_lease where deal_id = d.id
-			) lease)`.as("lease"),
+			jsonObjectFrom(
+				eb
+					.selectFrom("current_lease as lease")
+					.innerJoin("document as file", "file.id", "lease.document_id")
+					.select((eb) => [
+						"lease.id",
+						"lease.version",
+						asText(eb.ref("lease.executed_on")).as("executed_on"),
+						asText(eb.ref("lease.commencement_on")).as("commencement_on"),
+						asText(eb.ref("lease.expiration_on")).as("expiration_on"),
+						"file.name as evidence_ref",
+						sql.lit("current").as("status"),
+					])
+					.whereRef("lease.deal_id", "=", "d.id"),
+			).as("lease"),
 			sql<
 				unknown[]
 			>`(select coalesce(json_agg(e order by recorded_at desc, id desc), '[]') from (
@@ -92,7 +155,23 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		])
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
-	return record ?? { error: "not_found" as const };
+	if (!record) return { error: "not_found" as const };
+	const { today, commissions, reason, ...detail } = record;
+	const checklist = checklistOf({
+		deal: {
+			id: detail.deal_id,
+			owner: detail.owner,
+			type: reason === "renewal" ? reason : detail.type,
+			invoiced_on: detail.invoiced_on,
+		},
+		lease: detail.lease,
+		criticalDates: detail.critical_dates,
+		templateCurrent: true,
+		commissions,
+		requests: [],
+		today,
+	});
+	return { ...detail, checklist };
 }
 
 function dealEditValue(column: "c.old_value" | "c.new_value") {
@@ -121,7 +200,7 @@ const documentsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			"kind",
 			"note",
 			"version",
-			eb.cast<number | null>("bytes", "double precision").as("bytes"),
+			eb.ref("bytes").$castTo<number>().as("bytes"),
 			"content_type",
 			asText(eb.ref("created_at")).as("prepared_at"),
 		])
@@ -130,16 +209,18 @@ const documentsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.orderBy("id");
 
 const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
-	pendingProposals(db)
+	db
+		.selectFrom("proposal as p")
 		.innerJoin("email as e", "e.activity_id", "p.activity_id")
 		.innerJoin("activity as a", "a.id", "e.activity_id")
+		.leftJoin("app_user as o", "o.id", "p.owner_party_id")
 		.select((eb) => [
 			"p.id as proposal_id",
 			"p.kind",
 			"p.deal_id",
 			"p.evidence",
 			"p.what",
-			"p.owner_party_id",
+			"o.slug as owner",
 			asText(eb.ref("p.due_on")).as("due_on"),
 			"p.from_phase",
 			"p.to_phase",
@@ -153,7 +234,7 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			}).as("email"),
 		])
 		.where("p.deal_id", "=", deal)
-		.where("p.activity_kind", "=", "email")
+		.where("p.status", "=", "pending")
 		.where((eb) =>
 			eb.or([
 				eb("p.kind", "<>", "file_to_deal"),

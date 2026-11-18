@@ -129,6 +129,7 @@ A client's comment on a toured property, or a property added to or removed from 
 
 - With the Home read switched to the new database, the engine supplies one priority row per Outlook conversation. Each row links to its matching Home card and its source email.
 - An email without an Outlook conversation ID is its own group, keyed by its source email ID.
+- The panel orders up to 25 inbox cards and indicates when more qualify. The remaining conversations stay in the inbox, with no next page in the panel.
 - [ ] Each row names the sender, the subject, what is suggested, and the date in words.
 - [ ] Opening a row opens the same thing its inbox card opens.
 - [ ] No coverage line in system words, such as "Mailbox Example · Recorded inbound pending proposals".

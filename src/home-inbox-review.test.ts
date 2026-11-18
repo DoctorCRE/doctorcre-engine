@@ -59,8 +59,8 @@ before(async () => {
 		insert into activity (id, kind, happened_at) values ('${unstampedCall}', 'call', '2026-01-02T12:00Z');
 		insert into activity_about (activity_id, deal_id) values ('${unstampedCall}', '${deal}');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id, created_at, due_on)
-			values ('${id(30)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}', '2026-01-05', null),
-				('${id(31)}', 'next_step', '${id(11)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the plan', '${partner}', '2026-01-03', '2026-01-09'),
+			values ('${id(30)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}', '2026-01-05', '2026-01-09'),
+				('${id(31)}', 'next_step', '${id(11)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the plan', '${partner}', '2026-01-03', null),
 				('${id(32)}', 'next_step', '${id(12)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the drawing', null, '2026-01-04', null),
 				('${id(33)}', 'next_step', '${call}', 'call', 'Ask about the lease.', 'old_system', '${deal}', 'Check the lease', null, '2026-01-02', null),
 				('${id(34)}', 'next_step', '${call}', 'call', 'Send a budget.', 'old_system', '${deal}', 'Send a budget', '${partner}', '2026-01-03', null),
@@ -433,20 +433,23 @@ test("Mail priorities ranks inbound work once per Outlook conversation and opens
 		(card) => card.item_id === `suggestion:${id(30)}`,
 	);
 	assert.ok(matchingCard);
+	assert.equal(thread.length, 1);
 	assert.partialDeepStrictEqual(thread, [
 		{
 			item_id: matchingCard.item_id,
 			base_version: matchingCard.base_version,
-			title: "Pat Example · Floor plan",
+			title: matchingCard.title,
+			sender: "Pat Example",
+			subject: "Floor plan",
 			kind: "next_step",
-			suggestion: "Check the plan",
-			proposal_id: id(31),
+			suggestion: "Send the plan",
+			proposal_id: id(30),
 			reply_draft_id: null,
 			due_on: "2026-01-09",
 			source_activity: {
 				kind: "email",
-				id: id(11),
-				happened_at: "2026-01-03T00:00:00.000Z",
+				id: id(10),
+				happened_at: "2026-01-02T00:00:00.000Z",
 			},
 		},
 	]);
@@ -486,4 +489,58 @@ test("Mail priorities keeps two emails without conversation IDs in separate grou
 			{ conversation_id: null, source_activity: { id: id(15) } },
 		],
 	});
+});
+
+test("Mail priorities caps inbound groups at 25 and skips snoozed cards and partner-sent mail", async () => {
+	const user = { user: "priority-reviewer" };
+	const reviewer = id(56);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Priority Reviewer');
+		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');
+		insert into party_email (party_id, address, label) values ('${reviewer}', 'reviewer@example.test', 'work');
+		select set_config('engine.user_id', '${reviewer}', true);
+		insert into activity (id, kind, happened_at)
+			select md5('priority-email' || n)::uuid, 'email', '2026-03-01'::date + n
+			from generate_series(0, 26) n;
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body)
+			select md5('priority-email' || n)::uuid, '<priority-' || n || '@example.test>', 'Group ' || n,
+				case when n = 0 then 'reviewer@example.test' else 'pat@example.test' end,
+				'Example plan', 'Please check the plan.'
+			from generate_series(0, 26) n;
+		insert into activity_about (activity_id, deal_id)
+			select md5('priority-email' || n)::uuid, '${deal}' from generate_series(0, 26) n;
+		insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job)
+			select 'possible_new_deal', md5('priority-email' || n)::uuid, 'email', 'Please check the plan.', 'old_system'
+			from generate_series(0, 26) n;
+		commit;`);
+	const priorities = async (start: number, more: boolean) => {
+		const response = await request(
+			user,
+			"home/mail-priorities",
+			{ method: "GET" },
+			{ HOME_INBOX_READ_SCHEMA: "next" },
+		);
+		assert.equal(response.status, 200);
+		const page: unknown = await response.json();
+		assert.ok(isArguments(page) && Array.isArray(page.items));
+		const rows = page.items.filter(isArguments);
+		assert.equal(page.more, more);
+		assert.deepEqual(
+			rows.map((row) => row.conversation_id),
+			Array.from({ length: 25 }, (_, i) => `Group ${start + i}`),
+		);
+		return rows;
+	};
+	const [first] = await priorities(1, true);
+	assert.ok(first);
+	const [status] = await save(user, "home/marks", {
+		idempotency_key: randomUUID(),
+		item_id: first.item_id,
+		base_version: first.base_version,
+		action: "snooze",
+		until: new Date(Date.now() + 86_400_000).toISOString(),
+	});
+	assert.equal(status, 200);
+	await priorities(2, false);
 });

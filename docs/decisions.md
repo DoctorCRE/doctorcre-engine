@@ -308,3 +308,5 @@
 155\. **Home marks follow the suggestion card or reply draft (2026-11-18).** A partner marks the visible suggestion group's leading proposal or their own active reply draft. The mark uses source and mark history to refuse stale saves. A new proposal in the same group keeps its snooze. Sent drafts appear once in Done by their recorded send time, alongside any active draft in the same conversation (#721).
 
 156\. **Mail priorities opens the same review as Home (2026-11-18).** The read ranks pending inbound suggestions and reply drafts by their due dates, then by the source email's time. Each Outlook conversation contributes one row with the selected review and its Home card ID (#721).
+
+157\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).

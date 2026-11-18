@@ -707,7 +707,7 @@ test("the checklist reads its sources, commissions and requests", async () => {
 				})),
 			)
 			.execute();
-		const commission = await tx
+		await tx
 			.insertInto("commission")
 			.values({
 				deal_id: deal,
@@ -716,8 +716,7 @@ test("the checklist reads its sources, commissions and requests", async () => {
 				received_on: "2030-05-02",
 				created_by: actor,
 			})
-			.returning("id")
-			.executeTakeFirstOrThrow();
+			.execute();
 		const attachment = await tx
 			.insertInto("attachment")
 			.values({
@@ -751,11 +750,11 @@ test("the checklist reads its sources, commissions and requests", async () => {
 		const item = (id: string) => items.find((i) => i.id === id);
 		assert.equal(
 			item("commission_received")?.evidence_ref,
-			`commission:${commission.id}`,
+			"Commission payment received",
 		);
 		assert.equal(
 			item("invoice_recorded")?.evidence_ref,
-			`deal:${deal}:invoiced_on:2030-04-30`,
+			"Invoiced Apr 30, 2030",
 		);
 		assert.deepEqual(item("representation"), {
 			id: "representation",
@@ -781,6 +780,22 @@ test("the checklist reads its sources, commissions and requests", async () => {
 				evidence_filename: "example-agreement.pdf",
 			},
 		});
+		const [source] = SOURCES;
+		for (const change of [
+			{ body_hash: "0".repeat(64) },
+			{ body_hash: source.content_hash, status: "retired" },
+		]) {
+			await tx
+				.updateTable("doctrine_section")
+				.set(change)
+				.where("id", "=", source.section_id)
+				.execute();
+			const stale = await readDealDetail(tx, deal);
+			assert.ok(!("error" in stale));
+			assert.equal(stale.checklist.template_state, "source_changed");
+			assert.deepEqual(stale.checklist.phases, []);
+			assert.deepEqual(stale.checklist.due_items, []);
+		}
 	});
 });
 

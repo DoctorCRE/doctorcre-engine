@@ -1281,9 +1281,11 @@ Aggregate counts from production on 2026-11-17. The file-to-deal and possible-ne
 
 Steps 13–15 and 29 use `GET /api/engine/deals` and `GET /api/engine/deals/{deal_id}`. The board accepts `workspace` (`all`, `team`, or `national_account`) and `account_client_id`. It returns the signed-in partner's slug, open, closed and lost lists, and national account summaries. The detail returns the deal header, steps, checklist items, critical dates, files, lease, and history under the app's existing section names. The new detail route takes the deal UUID the board supplies.
 
+The detail sends `checklist` as `deal-checklist.v1`. The template lives in engine code and needs no doctrine hash check. Saved deal items and their due dates still come from `next_step`. The template shows progress from `current_lease` and its source file, the deal's invoice date, and commission payments. A copied renewal without a source lease shows the common checklist until a partner links the source lease. A copied expected commission or a payment without a receipt leaves the commission receipt outstanding. Confirmed open critical dates count as due or overdue by the Central calendar day. Document requests stay on the old side because Pass D found no rows to move (#718).
+
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
-Each `email_follow_ups` entry is one pending email suggestion targeting the deal, from either partner's mailbox. It gives `proposal_id`, `kind`, `deal_id`, `evidence`, the proposed step fields (`what`, `owner_party_id`, `due_on`) or phase fields (`from_phase`, `to_phase`), and an `email` with `activity_id`, `sender`, `sender_name`, `subject`, `happened_at` and `summary`. A filing suggestion drops from this list once the email is on the deal. Use the proposal ID to accept or dismiss through door 21. Accepting a filing suggestion files the email.
+Each `email_follow_ups` entry is one pending email suggestion targeting the deal, from either partner's mailbox. It gives `proposal_id`, `kind`, `deal_id`, `evidence`, the proposed step fields (`what`, `owner`, `due_on`) or phase fields (`from_phase`, `to_phase`), and an `email` with `activity_id`, `sender`, `sender_name`, `subject`, `happened_at` and `summary`. The `owner` field gives the app user slug. A filing suggestion drops from this list once the email is on the deal. Use the proposal ID to accept or dismiss through door 21. Accepting a filing suggestion files the email.
 
 Set the engine Worker's `DEALS_READ_SCHEMA` variable to `next` to use the read-only `next` schema through the existing `DATABASE` binding. The login must be able to assume `engine_reader` on the copied database. An absent setting or any other value uses today's readers. Once rehearsal verifies the remaining app dependencies, set the engine variable first, then set `deals-from-engine` to `on` in the app's `ENGINE_ROUTING` KV. To return the app to CARR, set the KV value to `off`.
 
@@ -1296,7 +1298,6 @@ When the nightly invoice job moved the deal to its current Closed phase, the boa
 Question numbers refer to the [Deals screen spec](screens/deals.md#questions-for-the-owner).
 
 - The new schema needs a place for client website registrations (question 1). Pass D had one registered deal site in the old schema. The app offers site setup when the read lacks the registration.
-- The checklist panel needs template source status and hashes, progress, and document requests (question 2). Titled deal items and their due dates already come from `next_step`. Pass D had 144 deals with a recognized template type and zero document requests.
 - The "Moved automatically" mark and Undo on copied moves need the source event ID and the fact that the move was automatic (question 3). Pass D copied the phase rows behind all 16 old receipts, with the phase, occurrence and save times, reason, and author stamp.
 - Pipeline-call state waits on the deal watch and pipeline call recorder decision (question 8).
 
@@ -1318,7 +1319,7 @@ The app does not display premises or offer-round summaries. Deal links use the U
 
 The response is `200 { ok: true, schema_version: "party-search.v1", parties }`. Each result carries `id`, `display_name`, and `kind`. The read returns the first 25 matches in case-insensitive name order, with ties ordered by ID. With no `kind`, the list can contain both people and companies. The Market agent picker will send `kind=person` so the limit applies to matching people. The list includes live parties, including do-not-contact records, and excludes merged-away duplicates.
 
-No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated kinds return 400. Session and database refusals use the shared read rules. The app routes the picker to this door in a separate change.
+No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated kinds return 400. Session and database refusals use the shared read rules. App #977 routes the deal-page picker to this door.
 
 ## Home inbox reads for the app
 
@@ -1344,7 +1345,7 @@ Some copied steps lack a verified origin, and some completed steps lack a known 
 
 The read keeps one row per Outlook conversation. An email without an Outlook conversation ID is its own group, keyed by its source email ID. The earliest due suggestion comes first. Rows without a due date follow. At the same due date, including when dates are absent, it ranks the oldest source email first. The response is `{ ok, schema_version: "home-mail-priorities.v1", items, more }`. It lists at most 25 rows and sets `more` when more groups qualify.
 
-A row gives `item_id` and `base_version` from its Home card, `kind`, `conversation_id`, `title`, `sender`, `subject`, `suggestion`, `due_on` and `source_activity: { kind: "email", id, happened_at }`. Use `proposal_id` or `reply_draft_id` to open the selected review from the matching Home card. The other ID is null. In a grouped suggestion card, the selected proposal can differ from the leading proposal in `item_id`. Home formats the dates in Central time.
+A row gives `item_id` and `base_version` from its Home card, `kind`, `conversation_id`, `title`, `sender`, `subject`, `suggestion`, `due_on` and `source_activity: { kind: "email", id, happened_at }`. Use `proposal_id` or `reply_draft_id` to open the selected review from the matching Home card. The other ID is null. For a grouped suggestion, the sender and subject come from the newest email shown on its Home card. The selected proposal and source email can be older. Home formats the dates in Central time.
 
 ## Invoice tracker reads for the app
 
