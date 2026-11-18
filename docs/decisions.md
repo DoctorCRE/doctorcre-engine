@@ -265,4 +265,6 @@
 
 133\. **The nightly invoice close has its own save (2026-11-18).** Lead stages submit the captured invoice and selected deal and payment together. The database applies both changes or attaches a resend, and a direct user can undo the original application through the app entrance. Shared save receipts return the same answer when either caller retries (#663).
 
-134\. **Invoice capture keeps the first evidence for a source reference (2026-11-18).** The mail job saves invoice facts for the mailbox's partner. The nightly job reads captured evidence with a proposed deal and payment only when the same database checks used for application find a unique target. Evidence with no target waits for a user (#669).
+134\. **Call and meeting review can replace the deal's current next step (2026-11-18).** Accepting a deal step from a call or meeting cancels the final owner's open ordinary step and saves the replacement in the same transaction, as the old capture card did through `set-next-step`. Email keeps its existing conflict behavior because the old email replacement had its own preview and version check. The job's deal read returns when the current phase was saved, which a backdated `on` date does not change (#662).
+
+135\. **Invoice capture keeps the first evidence for a source reference (2026-11-18).** The mail job saves invoice facts for the mailbox's partner. The nightly job reads captured evidence with a proposed deal and payment only when the same database checks used for application find a unique target. Evidence with no target waits for a user (#669).
