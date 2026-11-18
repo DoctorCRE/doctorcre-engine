@@ -91,6 +91,7 @@ test("requires sign-in and refuses malformed search parameters", async () => {
 		"",
 		"?query=",
 		"?query=%20",
+		"?query=a%00b",
 		`?query=${"a".repeat(101)}`,
 		"?query=Clover&query=Marble",
 		"?query=Clover&kind=org",

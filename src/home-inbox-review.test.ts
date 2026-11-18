@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { isArguments } from "./save-door.ts";
 import { doorTest } from "./test-door.ts";
 
-const { db, setup, cleanup, request } = doorTest();
+const { db, setup, cleanup, request, save } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const partner = id(1);
@@ -168,6 +169,52 @@ test("Home groups pending suggestions from each email conversation or call and k
 
 test("Home leaves pending unknown-sender suggestions in the candidate queue", async () => {
 	assert.ok(!(await inbox()).some((card) => card.proposal_id === id(41)));
+});
+
+test("Home shows one pending call log with the proposal to decide", async () => {
+	const user = { user: "call-reviewer" };
+	const reviewer = id(7);
+	const callId = id(8);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Reviewer');
+		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${reviewer}', true);
+		insert into activity (id, kind, happened_at) values ('${callId}', 'call', '2026-01-06T12:00Z');
+		insert into activity_about (activity_id, deal_id) values ('${callId}', '${deal}');
+		commit;`);
+	const [stored, proposal] = await save(
+		{ job: "mail_capture", for_user: user.user },
+		"proposals",
+		{
+			idempotency_key: randomUUID(),
+			kind: "log_call",
+			activity_id: callId,
+			deal_id: deal,
+			what: "Agreed to review the example plan.",
+			evidence: "Let's review the example plan.",
+		},
+	);
+	assert.equal(stored, 201);
+	const cards = await inbox(user.user);
+	assert.partialDeepStrictEqual(cards, [
+		{
+			item_id: `capture_session:${proposal.proposal_id}`,
+			title: "Call on Tue, Jan 6: 1 suggestion",
+			proposal_id: proposal.proposal_id,
+			suggestions: [
+				{ id: proposal.proposal_id, kind: "log_call", deal_id: deal },
+			],
+		},
+	]);
+	const [dismissed] = await save(
+		user,
+		`proposals/${cards[0]?.proposal_id}/decision`,
+		{
+			idempotency_key: randomUUID(),
+			decision: "dismiss",
+		},
+	);
+	assert.equal(dismissed, 200);
 });
 
 test("An email suggestion names its sender and subject", async () => {
