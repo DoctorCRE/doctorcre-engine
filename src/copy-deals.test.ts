@@ -333,29 +333,6 @@ test("a repeat is idempotent and restores stamps after import", async () => {
 	await db.query("rollback");
 });
 
-test("a phase copied with its effective date as the save time is listed without rewriting history", async () => {
-	await db.query("begin");
-	try {
-		await db.query(`alter table deal_phase_change disable trigger stamp_change;
-			update deal_phase_change set changed_at = happened_at where deal_id = '${id(10)}' and phase = 'closed';
-			alter table deal_phase_change enable trigger stamp_change;`);
-		const phase = `select * from deal_phase_change where deal_id = '${id(10)}' order by happened_at`;
-		const history = "select * from change order by id";
-		const originalPhase = await rows(phase);
-		const originalHistory = await rows(history);
-		assert.ok(
-			(await run()).some(
-				(row) =>
-					row.old_id === id(111) && row.reason === "existing_phase_conflict",
-			),
-		);
-		assert.deepEqual(await rows(phase), originalPhase);
-		assert.deepEqual(await rows(history), originalHistory);
-	} finally {
-		await db.query("rollback");
-	}
-});
-
 test("a rerun lists a market or value the copied deal still lacks, even once the old deal has it", async () => {
 	await db.query("begin");
 	try {

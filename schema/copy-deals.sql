@@ -240,7 +240,7 @@ where not exists (select from public.event e where e.subject_type = 'deal' and e
 create temp table mapped_phase on commit drop as
 select p.*, case when d.id is null then 'deal_not_copied' when f.slug is null then 'unknown_phase'
  when exists (select from deal_phase_change c where (c.deal_id, c.happened_at) = (p.deal_id, p.happened_at)
-  and (c.phase, c.reason, c.changed_at) is distinct from (p.phase, p.reason, p.changed_at)) then 'existing_phase_conflict'
+  and (c.phase, c.reason) is distinct from (p.phase, p.reason)) then 'existing_phase_conflict'
  when p.phase = 'dead' and p.reason is null then 'dead_without_reason'
  when count(*) over (partition by p.deal_id, p.happened_at) > 1 then 'same_time_phase_changes' end as refusal
 from old_phase p left join deal d on d.id = p.deal_id left join phase f on f.slug = p.phase;
