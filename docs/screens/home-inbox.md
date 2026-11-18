@@ -63,7 +63,6 @@ A recorded call whose suggestions wait for the partner.
 - [ ] While the call is still being read, it sits in In motion and asks for nothing.
 - [ ] Then says "Call with Dr. Example, Tue, Nov 17: 3 suggestions".
 - [ ] Opens to each suggestion with Accept and Dismiss. Neither has Undo.
-- A copied Log a call suggestion uses the reviewer recorded for that suggestion when the source call has no partner stamp.
 - [ ] Next steps and phase moves the call made by itself show as made automatically, each with Undo.
 - [ ] Leaves when every suggestion is accepted or dismissed.
 
