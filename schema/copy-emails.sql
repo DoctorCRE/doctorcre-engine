@@ -1,13 +1,19 @@
 -- Run after copy-activity.sql, in one owner transaction. Load copy-attribution.sql first and put the new schema on search_path.
--- Only public is read.
+-- Read legacy rows from public and optional private input from pg_temp.copy_email_evidence.
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 alter table activity disable trigger stamp_change;
 alter table activity_about disable trigger stamp_change;
 alter table email disable trigger stamp_change;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
-create temp table if not exists copy_email_evidence (
+create temp table validated_email_evidence (
  old_id uuid primary key, sender email_address not null, subject_start integer not null check (subject_start > 0),
  message_id text check (message_id ~ '\S' and message_id = btrim(message_id))) on commit drop;
+do $$ begin
+	if to_regclass('pg_temp.copy_email_evidence') is not null then
+		insert into pg_temp.validated_email_evidence (old_id, sender, subject_start, message_id)
+		select old_id, sender, subject_start, message_id from pg_temp.copy_email_evidence;
+	end if;
+end $$;
 
 -- public.email arrives with carr-system #3233; until production has it, no email has a Message-ID.
 create temp table old_message_id (activity_id uuid primary key, message_id text not null) on commit drop;
@@ -25,15 +31,18 @@ create temp table old_link on commit drop as select * from copy_activity_link();
 -- Deleting is per mailbox, so a row is live on its own.
 create temp table old_email on commit drop as
 select a.id, a.kind, a.occurred_at, a.recorded_at, a.updated_at, a.summary, a.detail,
- coalesce(m.message_id, proof.message_id) as message_id,
+ copied.activity_id as copied_email_id,
+ coalesce(m.message_id, proof.message_id, copied.message_id) as message_id,
  case when a.email_context ->> 'conversation_id' ~ '\S' then a.email_context ->> 'conversation_id' end as conversation_id,
  a.email_context #>> '{lifecycle,state}' as lifecycle, coalesce(a.email_context #>> '{lifecycle,state}', 'live') = 'live' as live,
  lower(coalesce(a.email_context #>> '{sender,email}', a.email_source ->> 'sender_email',
-  case when a.kind = 'email_out' then a.email_identity ->> 'mailbox_account' end, proof.sender)) as sender,
- coalesce(a.email_context ->> 'subject', substring(a.summary from proof.subject_start),
+  case when a.kind = 'email_out' then a.email_identity ->> 'mailbox_account' end, proof.sender, copied.sender)) as sender,
+ coalesce(a.email_context ->> 'subject', substring(a.summary from proof.subject_start), copied.subject,
   substring(a.summary from '^Email (?:from|to) [^:]*: (.*)$'), a.summary) as subject, s.*
 from public.activity a left join old_message_id m on m.activity_id = a.id left join activity_event e on e.activity_id = a.id
-left join pg_temp.copy_email_evidence proof on proof.old_id = a.id
+left join pg_temp.validated_email_evidence proof on proof.old_id = a.id
+left join outside_id prior on prior.source = 'old_system' and prior.value = a.id::text
+left join email copied on copied.activity_id = prior.email_activity_id
 cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.event_id) s
 where a.kind in ('email_in', 'email_out');
 
@@ -47,11 +56,12 @@ from (select match_key, min(message_id) as message_id from old_email where messa
  group by match_key having count(distinct message_id) = 1) k
 where o.message_id is null and o.match_key = k.match_key;
 
--- One email per Message-ID, else per match; a rerun keeps the row it copied, so a row filed since never starts a second copy.
+-- A saved mapping keeps a row with its email even when a rerun omits the evidence that matched it.
 create temp table email_group on commit drop as
-select o.*, first_value(o.id) over (partition by coalesce(to_jsonb(o.message_id), o.match_key)
-  order by o.id in (select activity_id from email) desc, o.live desc, o.recorded_at, o.id) as email_id
-from old_email o where o.message_id is not null
+select o.*, coalesce(o.copied_email_id, first_value(coalesce(o.copied_email_id, o.id)) over (
+  partition by coalesce(to_jsonb(o.message_id), o.match_key)
+  order by (o.copied_email_id is not null) desc, o.live desc, o.recorded_at, o.id)) as email_id
+from old_email o where o.copied_email_id is not null or o.message_id is not null
  or o.match_key is not null and not exists (select from old_email k where k.match_key = o.match_key and k.message_id is not null);
 
 -- The intake files a preview first, then the full text as a note naming it; older notes match by time and subject.
