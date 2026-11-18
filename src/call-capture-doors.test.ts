@@ -10,7 +10,10 @@ const ALEX = id(1),
 	AUTOMATIC = id(3),
 	REVIEW = id(4),
 	STEPS = id(5),
-	CALL = id(6);
+	CALL = id(6),
+	EARLY = id(7),
+	FUTURE = id(8),
+	CROSSED = id(9);
 const job = { job: "call_capture", for_user: "alex" };
 
 before(async () => {
@@ -21,7 +24,8 @@ before(async () => {
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
 		insert into phase values ('research', 'Research'), ('legal', 'Legal');
 		insert into deal (id, name, owner_user_id)
-		values ('${AUTOMATIC}', 'Automatic Example', '${ALEX}'), ('${REVIEW}', 'Review Example', '${ALEX}'), ('${STEPS}', 'Steps Example', '${ALEX}');
+		select id, 'Example Deal', '${ALEX}'
+		from unnest(array['${AUTOMATIC}', '${REVIEW}', '${STEPS}', '${EARLY}', '${FUTURE}', '${CROSSED}']::uuid[]) as fixture(id);
 		insert into deal_phase_change (deal_id, phase, happened_at)
 		select id, 'research', '2026-01-05T15:00:00Z' from deal;
 		insert into activity (id, kind, happened_at) values ('${CALL}', 'call', '2026-01-07T15:00:00Z');
@@ -94,6 +98,41 @@ test("a call's stated phase and date survive acceptance without an email milesto
 	);
 	assert.deepEqual(rows, [{ phase: "legal", day: "2026-01-06" }]);
 });
+
+test("a call cannot suggest a date before the current phase began", async () => {
+	const [status, body] = await propose({
+		kind: "phase_move",
+		deal_id: STEPS,
+		to: "legal",
+		on: "2026-01-04",
+	});
+	assert.deepEqual([status, body.error], [422, "phase_not_eligible"]);
+});
+
+for (const [when, deal, date] of [
+	["before the current phase began", EARLY, "date '2026-01-04'"],
+	["after today", FUTURE, "(now() at time zone 'America/Chicago')::date + 2"],
+]) {
+	test(`acceptance refuses a stored phase date ${when}`, async () => {
+		const proposal = randomUUID();
+		await db.query(`begin; select set_config('engine.job', 'call_capture', true);
+			insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job,
+				deal_id, from_phase, to_phase, phase_stated, phase_on)
+			values ('${proposal}', 'phase_move', '${CALL}', 'call', 'Example move', 'call_capture',
+				'${deal}', 'research', 'legal', true, ${date});
+			commit;`);
+		const [status, body] = await decide(proposal);
+		assert.deepEqual(
+			[status, body.error, body.rule],
+			[422, "database_refused_the_statement", "proposal_phase_date"],
+		);
+		const { rows } = await db.query(
+			"select status from proposal where id = $1",
+			[proposal],
+		);
+		assert.deepEqual(rows, [{ status: "pending" }]);
+	});
+}
 
 test("call capture can assign a suggested next step by user slug", async () => {
 	const args = {
@@ -176,4 +215,50 @@ test("replacement cancels the saving owner's ordinary step and clears an omitted
 	assert.equal(state.get(other.next_step_id)?.status, "open");
 	assert.equal(state.get(other.next_step_id)?.owner_party_id, BLAIR);
 	assert.equal(state.get(item.next_step_id)?.status, "open");
+});
+
+test("a waiting replacement cancels the step committed ahead of it", {
+	timeout: 10000,
+}, async (t) => {
+	const held = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'call_capture', true);
+		select id from deal where id = '${CROSSED}' for no key update;
+		insert into next_step (id, deal_id, owner_party_id, what)
+		values ('${held}', '${CROSSED}', '${ALEX}', 'First call task');`);
+	let settled = false;
+	const pending = post("next-steps", {
+		deal_id: CROSSED,
+		what: "Second call task",
+		replaces: "current",
+	}).finally(() => {
+		settled = true;
+	});
+	try {
+		let waiting = false;
+		while (!settled && !waiting) {
+			t.signal.throwIfAborted();
+			waiting = (
+				await db.query(`select exists (
+				select from pg_locks where not granted
+				and pg_backend_pid() = any(pg_blocking_pids(pid))
+			) as waiting`)
+			).rows[0].waiting;
+		}
+		await db.query("commit");
+		const [status, current] = await pending;
+		assert.equal(status, 201, JSON.stringify(current));
+		assert.ok(waiting);
+		const { rows } = await db.query(
+			"select status from next_step where id = $1",
+			[held],
+		);
+		assert.deepEqual(rows, [{ status: "cancelled" }]);
+		assert.deepEqual((await read(CROSSED))[1].next_step, {
+			id: current.next_step_id,
+			due_on: null,
+		});
+	} finally {
+		await db.query("rollback");
+		await pending;
+	}
 });

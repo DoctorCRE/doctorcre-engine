@@ -149,7 +149,7 @@ async function createStep(
 	const insert = sql<{ id: string }>`
 		insert into next_step (created_at, deal_id, party_id, property_id, what, owner_party_id, due_on, hold_until,
 			item_title, item_bullets, source_ref)
-		values (${replaces ? sql`clock_timestamp()` : sql`now()`}, ${deal_id ?? null}::uuid, ${party_id ?? null}::uuid, ${property_id ?? null}::uuid, ${what},
+		values (now(), ${deal_id ?? null}::uuid, ${party_id ?? null}::uuid, ${property_id ?? null}::uuid, ${what},
 			${owner_party_id}::uuid, ${due_on ?? null}::date, ${hold_until ?? null}::date,
 			${item?.title ?? null}, ${JSON.stringify(item?.bullets ?? [])}::jsonb, ${item?.source_ref ?? null})
 		returning id`;
