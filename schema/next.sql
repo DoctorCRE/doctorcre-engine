@@ -1188,7 +1188,9 @@ create table proposal (
 	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id, candidate_id) = case when kind = 'possible_new_deal' then 0 else 1 end),
 	filed_deal_id uuid references deal,
 	filing_reason text check (filing_reason ~ '\S'),
+	dismiss_reason text check (dismiss_reason ~ '\S'),
 	constraint proposal_filing_decision check ((filed_deal_id is null and filing_reason is null) or (status = 'accepted' and kind in ('file_to_deal', 'possible_new_deal'))),
+	constraint proposal_dismiss_reason check (dismiss_reason is null or (status = 'dismissed' and kind = 'email_lead')),
 	constraint proposal_decision_whole check (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
 		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
@@ -1257,7 +1259,8 @@ begin
 				using errcode = 'check_violation', constraint = 'email_lead_candidate_pending';
 		end if;
 		if new.status = 'dismissed' then
-			update candidate set status = 'declined', reason = 'Dismissed by mailbox owner' where id = new.candidate_id;
+			update candidate set status = 'declined', reason = coalesce(new.dismiss_reason, 'Dismissed by mailbox owner')
+			where id = new.candidate_id;
 		else
 			perform pg_advisory_xact_lock(hashtextextended(sender_address, 0));
 			if exists (select from party_email where address = sender_address) then
@@ -1312,7 +1315,7 @@ begin
 	return new;
 end $$;
 
-create trigger decide_proposal before insert or update of status, filed_deal_id, filing_reason on proposal
+create trigger decide_proposal before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
 	for each row execute function decide_proposal();
 
 -- A job's reply to one email, which its owner's mailbox sends. An outreach draft is apart: a user sends it by hand.
@@ -3168,7 +3171,7 @@ grant update (status, client_type) on client to engine;
 grant update (started_on, ended_on) on client_brand, national_account_owner to engine;
 grant delete on client, national_account, client_brand, national_account_owner to engine;
 
-grant update (status, filed_deal_id, filing_reason) on proposal to engine;
+grant update (status, filed_deal_id, filing_reason, dismiss_reason) on proposal to engine;
 grant update (subject, body, status, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason)
 	on reply_draft to engine;
 

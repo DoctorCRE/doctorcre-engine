@@ -50,15 +50,14 @@ const shape = {
 const textWithin =
 	(max: number, min = 1) =>
 	(v: unknown): v is string =>
-		isText(v) && v.length >= min && v.length <= max;
+		typeof v === "string" &&
+		(min === 0 || isText(v)) &&
+		v.length >= min &&
+		v.length <= max;
 const emailLead = {
 	idempotency_key: isUuid,
 	address: textWithin(320),
-	display_name: optional(
-		orNull(
-			(v: unknown): v is string => typeof v === "string" && v.length <= 200,
-		),
-	),
+	display_name: optional(orNull(textWithin(200, 0))),
 	summary: textWithin(300),
 	first_seen_at: isInstant,
 	message_ref: textWithin(100),
@@ -157,7 +156,7 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 					message_ref: r.message_ref,
 					first_seen_at: r.first_seen_at,
 					reading: {
-						applies_to: r.applies_to,
+						applies_to: "new_matter",
 						confidence: r.confidence,
 						evidence_quote: r.evidence_quote ?? null,
 					},
@@ -172,15 +171,17 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 					where not exists (select from party_email where address = ${address}::email_address)
 					on conflict (source, source_key) do nothing returning id`.execute(tx);
 				if (candidate) {
-					const {
-						rows: [proposal],
-					} = await sql<{ proposal_id: string; status: string }>`
-						insert into proposal (kind, candidate_id, proposed_by_job, evidence)
-						values ('email_lead', ${candidate.id}::uuid, 'mail_capture', ${r.summary})
-						returning id as proposal_id, status`.execute(tx);
-					if (!proposal)
-						throw new Error("Email lead proposal was not returned");
-					return proposal;
+					return tx
+						.insertInto("proposal")
+						.values({
+							kind: "email_lead",
+							candidate_id: candidate.id,
+							proposed_by_job: "mail_capture",
+							evidence: r.summary,
+							changed_at: sql<string>`now()`,
+						})
+						.returning(["id as proposal_id", "status"])
+						.executeTakeFirstOrThrow();
 				}
 				const prior = await tx
 					.selectFrom("candidate")
@@ -278,6 +279,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.selectFrom("proposal")
 					.selectAll()
 					.where("id", "=", r.proposal_id)
+					// A direct decision clears the mailbox stamp and records the owner as decider.
 					.where(sql<boolean>`(kind <> 'email_lead' or coalesce(decided_by_user_id, changed_for_user_id)
 						= nullif(current_setting('engine.user_id', true), '')::uuid)`)
 					.forUpdate()
@@ -288,10 +290,13 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						status: p.status,
 						decided_by: p.decided_by_user_id,
 					});
+				const filing = ["file_to_deal", "possible_new_deal"].includes(p.kind);
+				const dismissEmailLead =
+					r.decision === "dismiss" && p.kind === "email_lead";
 				if (
 					(r.edits && p.kind !== "next_step") ||
-					((r.deal_id || r.reason) &&
-						!["file_to_deal", "possible_new_deal"].includes(p.kind))
+					(r.deal_id && !filing) ||
+					(r.reason && !filing && !dismissEmailLead)
 				)
 					return fail(422, "invalid_field_value");
 				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
@@ -320,11 +325,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						});
 				}
 				const filingDeal = r.deal_id ?? p.deal_id;
-				if (
-					r.decision === "accept" &&
-					["file_to_deal", "possible_new_deal"].includes(p.kind) &&
-					filingDeal
-				) {
+				if (r.decision === "accept" && filing && filingDeal) {
 					await dealNow(tx, filingDeal);
 				}
 
@@ -339,7 +340,8 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						filed_deal_id: string | null;
 					}>`update proposal
    set status = ${accepts ? "accepted" : "dismissed"}, filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
-    filing_reason = ${accepts ? (r.reason ?? null) : null} where id = ${p.id}::uuid
+    filing_reason = ${accepts ? (r.reason ?? null) : null},
+    dismiss_reason = ${dismissEmailLead ? (r.reason ?? null) : null} where id = ${p.id}::uuid
    returning status, decided_at::text, filed_deal_id`.execute(tx);
 				const { rows } =
 					accepts && p.kind === "next_step"
