@@ -2471,6 +2471,31 @@ group by deal_id;
 create function invoice_name(value text) returns text
 language sql immutable return lower(regexp_replace(btrim(value), '\s+', ' ', 'g'));
 
+create function invoice_email_target(evidence invoice_email)
+returns table (deal_id uuid, payment_id uuid)
+language sql stable as $$
+	with matched_deal as (
+		select (array_agg(d.id))[1] as id from deal d
+		where invoice_name(d.name) = invoice_name(evidence.deal_name)
+			and (evidence.client_name is not null or evidence.property_address is not null)
+			and (evidence.client_name is null or exists (
+				select from deal_party dp join party p on p.id = dp.party_id
+				where dp.deal_id = d.id and dp.role = 'client' and invoice_name(p.name) = invoice_name(evidence.client_name)))
+			and (evidence.property_address is null or exists (
+				select from deal_property dp join property p on p.id = dp.property_id
+				where dp.deal_id = d.id and invoice_name(p.address) = invoice_name(evidence.property_address)))
+		having count(*) = 1
+	)
+	select d.id, (array_agg(p.id))[1] from matched_deal d
+	join commission_payment p on p.deal_id = d.id
+	where (p.invoiced_on is null or p.invoiced_on = evidence.email_date)
+		and exists (select from invoice_mailbox where address = evidence.sender)
+		and evidence.occurred_at <= clock_timestamp() and evidence.email_date <= current_date
+		and exists (select from deal_phase_change ph where ph.deal_id = d.id)
+		and not exists (select from deal_invoiced di where di.deal_id = d.id and di.invoiced_on <> evidence.email_date)
+	group by d.id having count(*) = 1
+$$;
+
 create function invoice_email_transition() returns trigger
 language plpgsql as $$
 declare
@@ -2497,20 +2522,10 @@ begin
 		if latest.happened_at is null then
 			raise exception 'an invoice needs the previous phase for undo' using errcode = 'check_violation', constraint = 'invoice_email_needs_prior_phase';
 		end if;
-		-- One condition, so the automatic checks read the same snapshot.
-		if not direct_user and (not exists (select from invoice_mailbox where address = new.sender)
-			or (select array_agg(d.id) from deal d
-				where invoice_name(d.name) = invoice_name(new.deal_name)
-					and (new.client_name is not null or new.property_address is not null)
-					and (new.client_name is null or exists (select from deal_party dp join party p on p.id = dp.party_id
-						where dp.deal_id = d.id and dp.role = 'client' and invoice_name(p.name) = invoice_name(new.client_name)))
-					and (new.property_address is null or exists (select from deal_property dp join property p on p.id = dp.property_id
-						where dp.deal_id = d.id and invoice_name(p.address) = invoice_name(new.property_address)))) is distinct from array[new.deal_id]
-			or new.occurred_at > clock_timestamp() or new.email_date > current_date
-			or payment.invoiced_on is not null and payment.invoiced_on <> new.email_date
-			or exists (select from deal_invoiced where deal_id = new.deal_id and invoiced_on <> new.email_date)
-			or (select count(*) from commission_payment where deal_id = new.deal_id
-				and (invoiced_on is null or invoiced_on = new.email_date)) <> 1) then
+		if not direct_user and not exists (
+			select from invoice_email_target(new) target
+			where target.deal_id = new.deal_id and target.payment_id = new.payment_id
+		) then
 			raise exception 'a doubtful invoice waits for a user' using errcode = 'check_violation', constraint = 'invoice_email_needs_user';
 		end if;
 		select id into new.application_id from invoice_email

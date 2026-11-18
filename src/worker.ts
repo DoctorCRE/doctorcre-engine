@@ -21,6 +21,7 @@ import { dealUpdate } from "./deal-update.ts";
 import { dealJobs, nextDeals } from "./deals/next-change.ts";
 import { deals } from "./deals/routes.ts";
 import { heldStepReviews } from "./held-steps.ts";
+import { invoiceEvidence } from "./invoice-evidence.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
 import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
@@ -121,5 +122,6 @@ app.route("/jobs", filedEmails);
 app.route("/jobs", attachmentFiles);
 app.route("/jobs", attachments);
 app.route("/jobs", replyJobs);
+app.route("/jobs", invoiceEvidence);
 
 export default app;
