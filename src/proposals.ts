@@ -6,6 +6,7 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
+import { saveOpenStep } from "./open-step.ts";
 import {
 	clearable,
 	fit,
@@ -328,27 +329,40 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					await dealNow(tx, filingDeal);
 				}
 
-				const { rows } = await sql<{
-					status: string;
-					decided_at: string;
-					filed_deal_id: string | null;
-				}>`update proposal
-   set status = ${r.decision === "accept" ? "accepted" : "dismissed"}, filed_deal_id = ${r.decision === "accept" ? (r.deal_id ?? null) : null}::uuid,
-    filing_reason = ${r.decision === "accept" ? (r.reason ?? null) : null},
+				const accepts = r.decision === "accept";
+				const { owner_party_id: editedOwner, ...stepEdits } = r.edits ?? {};
+				const ownerEdit = isUuid(editedOwner) ? editedOwner : undefined;
+				const owner = ownerEdit ?? p.owner_party_id;
+				const updateDecision = () =>
+					sql<{
+						status: string;
+						decided_at: string;
+						filed_deal_id: string | null;
+					}>`update proposal
+   set status = ${accepts ? "accepted" : "dismissed"}, filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
+    filing_reason = ${accepts ? (r.reason ?? null) : null},
     dismiss_reason = ${dismissEmailLead ? (r.reason ?? null) : null} where id = ${p.id}::uuid
    returning status, decided_at::text, filed_deal_id`.execute(tx);
-				if (r.decision === "accept" && r.edits) {
-					const { owner_party_id, ...otherEdits } = r.edits;
-					const stepEdits = isUuid(owner_party_id)
-						? { ...otherEdits, owner_party_id }
-						: otherEdits;
-					if (Object.keys(stepEdits).length)
-						await tx
-							.updateTable("next_step")
-							.set(stepEdits)
-							.where("id", "=", p.id)
-							.execute();
-				}
+				const { rows } =
+					accepts && p.kind === "next_step"
+						? await saveOpenStep(
+								tx,
+								{ ...p, owner_party_id: owner },
+								async () => {
+									if (ownerEdit)
+										await sql`select set_config('engine.proposal_step_owner', ${ownerEdit}, true)`.execute(
+											tx,
+										);
+									return updateDecision();
+								},
+							)
+						: await updateDecision();
+				if (accepts && Object.keys(stepEdits).length)
+					await tx
+						.updateTable("next_step")
+						.set(stepEdits)
+						.where("id", "=", p.id)
+						.execute();
 				const promoted =
 					r.decision === "accept" && p.candidate_id
 						? await tx

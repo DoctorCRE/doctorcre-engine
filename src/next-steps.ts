@@ -6,6 +6,7 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
+import { saveOpenStep } from "./open-step.ts";
 import {
 	type Check,
 	clearable,
@@ -93,24 +94,27 @@ async function createStep(
 	request: Fitted<typeof NEW_STEP>,
 ): Promise<JsonObject> {
 	const { deal_id, party_id, property_id, what, item } = request;
-	const { owner_party_id, due_on, hold_until } = request;
-	const { rows } = await sql<{ id: string }>`
+	const { owner_party_id = null, due_on, hold_until } = request;
+	const insert = sql<{ id: string }>`
 		insert into next_step (deal_id, party_id, property_id, what, owner_party_id, due_on, hold_until,
 			item_title, item_bullets, source_ref)
 		values (${deal_id ?? null}::uuid, ${party_id ?? null}::uuid, ${property_id ?? null}::uuid, ${what},
-			${owner_party_id ?? null}::uuid, ${due_on ?? null}::date, ${hold_until ?? null}::date,
+			${owner_party_id}::uuid, ${due_on ?? null}::date, ${hold_until ?? null}::date,
 			${item?.title ?? null}, ${JSON.stringify(item?.bullets ?? [])}::jsonb, ${item?.source_ref ?? null})
-		returning id`
-		.execute(tx)
-		.catch((error: unknown) => {
-			const named = RECORDS.map((name) => `next_step_${name}_fkey`);
-			if (
-				error instanceof pg.DatabaseError &&
-				named.includes(error.constraint ?? "")
-			)
-				throw new SaveRefusal(new Refusal(404, "not_found"));
-			throw error;
-		});
+		returning id`;
+	const { rows } = await saveOpenStep(
+		tx,
+		{ deal_id, party_id, owner_party_id },
+		() => insert.execute(tx),
+	).catch((error: unknown) => {
+		const named = RECORDS.map((name) => `next_step_${name}_fkey`);
+		if (
+			error instanceof pg.DatabaseError &&
+			named.includes(error.constraint ?? "")
+		)
+			throw new SaveRefusal(new Refusal(404, "not_found"));
+		throw error;
+	});
 	const { id } = rows[0] ?? {};
 	if (!id) throw new Error("next step insert returned no row");
 	return {
@@ -123,12 +127,12 @@ async function createStep(
 async function lockStep(tx: Transaction<DB>, id: string) {
 	const step = await tx
 		.selectFrom("next_step")
-		.select("status")
+		.select(["status", "deal_id", "party_id", "owner_party_id"])
 		.where("id", "=", id)
 		.forUpdate()
 		.executeTakeFirst();
 	if (!step) throw new SaveRefusal(new Refusal(404, "not_found"));
-	return step.status;
+	return step;
 }
 
 async function changeStep(
@@ -146,7 +150,7 @@ async function changeStep(
 		item_bullets === undefined
 			? fields
 			: { ...fields, item_bullets: JSON.stringify(item_bullets) };
-	await lockStep(tx, next_step_id);
+	const step = await lockStep(tx, next_step_id);
 	const keys = Object.keys(changes);
 	const unseen = await unseenChanges(
 		tx,
@@ -155,11 +159,22 @@ async function changeStep(
 		seen_change_id,
 		keys,
 	);
-	await tx
-		.updateTable("next_step")
-		.set(changes)
-		.where("id", "=", next_step_id)
-		.execute();
+	await saveOpenStep(
+		tx,
+		{
+			...step,
+			owner_party_id:
+				fields.owner_party_id === undefined
+					? step.owner_party_id
+					: fields.owner_party_id,
+		},
+		() =>
+			tx
+				.updateTable("next_step")
+				.set(changes)
+				.where("id", "=", next_step_id)
+				.execute(),
+	);
 	return {
 		next_step_id,
 		...(await seenAnswer(
@@ -176,7 +191,7 @@ async function endStep(
 	tx: Transaction<DB>,
 	{ next_step_id, resolution, done_at, reason }: StepRequest<typeof STEP_END>,
 ): Promise<JsonObject> {
-	const status = await lockStep(tx, next_step_id);
+	const { status } = await lockStep(tx, next_step_id);
 	if (status !== "open")
 		throw new SaveRefusal(new Refusal(409, "step_ended", { status }));
 	const now = sql<string>`now()`;
@@ -197,18 +212,21 @@ async function reopenStep(
 	tx: Transaction<DB>,
 	{ next_step_id }: StepRequest<typeof STEP_REOPEN>,
 ): Promise<JsonObject> {
-	if ((await lockStep(tx, next_step_id)) === "open")
+	const step = await lockStep(tx, next_step_id);
+	if (step.status === "open")
 		throw new SaveRefusal(new Refusal(409, "step_open"));
-	await tx
-		.updateTable("next_step")
-		.set({
-			resolution: null,
-			resolution_reason: null,
-			done_at: null,
-			resolved_at: null,
-		})
-		.where("id", "=", next_step_id)
-		.execute();
+	await saveOpenStep(tx, step, () =>
+		tx
+			.updateTable("next_step")
+			.set({
+				resolution: null,
+				resolution_reason: null,
+				done_at: null,
+				resolved_at: null,
+			})
+			.where("id", "=", next_step_id)
+			.execute(),
+	);
 	return { next_step_id, status: "open" };
 }
 

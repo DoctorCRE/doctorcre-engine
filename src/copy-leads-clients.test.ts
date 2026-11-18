@@ -584,6 +584,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 			],
 			[id(105), "resolution_event_id", null, "expiry_unproven"],
 			[id(106), "status", "dropped", "cancellation_reason_missing"],
+			[id(111), "next_step", id(110), "open_step_exists"],
 			[id(114), "description", "\t\n", "blank_next_action"],
 			[id(114), "owner_id", id(119), "owner_not_a_user"],
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],
@@ -606,6 +607,45 @@ test("next actions, reference numbers and roster wording are copied once or list
 			await freshCopy(correction);
 			assert.deepEqual((await steps()).map(Object.values), corrected);
 		}
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("a converted lead keeps the recorded client action over a date-only follow-up", async () => {
+	const party = id(93);
+	const lead = id(120);
+	const client = id(121);
+	const action = id(122);
+	const owner = id(1);
+	try {
+		const report = await run(
+			`insert into public.party (id,kind,name,created_by,updated_by) values ('${party}','person','Example converted lead','${owner}','${owner}');
+ insert into party (id,kind,name) values ('${party}','person','Example converted lead');
+ insert into outside_id (source,value,party_id) values ('old_system','${party}','${party}');
+ insert into public.client (id,party_id,status,client_type,acquisition_source,created_by,updated_by) values
+ ('${client}','${party}','roster','franchise','Example client source','${owner}','${owner}');
+ insert into public.lead (id,party_id,client_id,stage,source_type,owner_id,next_action_date,created_at,updated_at,created_by,updated_by) values
+ ('${lead}','${party}','${client}','new','Example referral','${owner}','2027-03-01','2025-01-01','2025-01-01','${owner}','${owner}');
+ insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,created_at,updated_at,created_by) values
+ ('${action}','client','${client}','${owner}','Send proposal','2027-04-01','2025-02-01','2025-02-01','${owner}');`,
+			true,
+		);
+		assert.deepEqual(
+			await rows(`select id from next_step where party_id = '${party}'`),
+			[{ id: action }],
+		);
+		assert.deepEqual(
+			report.filter((row) => row.old_id === lead && row.field === "next_step"),
+			[
+				{
+					old_id: lead,
+					field: "next_step",
+					value: action,
+					reason: "open_step_exists",
+				},
+			],
+		);
 	} finally {
 		await db.query("rollback");
 	}

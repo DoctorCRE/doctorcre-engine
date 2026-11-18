@@ -326,7 +326,7 @@ test("an accepted next step keeps its proposed owner or defaults to the partner 
 	for (const [index, { owner, ownerEdit }] of cases.entries()) {
 		const [status, proposal] = await propose({
 			kind: "next_step",
-			deal_id: DEAL,
+			deal_id: OTHER,
 			what: `Check the example dates ${index}`,
 			owner_party_id: owner,
 		});
@@ -347,7 +347,54 @@ test("an accepted next step keeps its proposed owner or defaults to the partner 
 			[proposal.proposal_id],
 		);
 		assert.deepEqual(rows, [{ owner_party_id: owner ?? PARTNER }]);
+		const [ended] = await save(
+			{ user: "casey" },
+			`next-steps/${proposal.proposal_id}/end`,
+			{
+				idempotency_key: randomUUID(),
+				resolution: "done",
+			},
+		);
+		assert.equal(ended, 200);
 	}
+});
+
+test("a conflicting next-step acceptance stays pending and can use an edited owner", async () => {
+	const [created, existing] = await save({ user: "alex" }, "next-steps", {
+		idempotency_key: randomUUID(),
+		party_id: CLIENT,
+		what: "Call the clinic",
+	});
+	assert.equal(created, 201);
+	const [stored, proposal] = await propose({
+		kind: "next_step",
+		party_id: CLIENT,
+		what: "Send available times",
+	});
+	assert.equal(stored, 201);
+	const [status, conflict] = await decide(proposal.proposal_id, {});
+	assert.deepEqual(
+		[status, conflict.error, conflict.next_step_id],
+		[409, "open_step_exists", existing.next_step_id],
+	);
+	const saved = () =>
+		db.query(
+			`select p.status, p.owner_party_id as suggested_owner, s.owner_party_id as step_owner
+		from proposal p left join next_step s using (id) where p.id=$1`,
+			[proposal.proposal_id],
+		);
+	assert.deepEqual((await saved()).rows, [
+		{ status: "pending", suggested_owner: null, step_owner: null },
+	]);
+	assert.equal(
+		(
+			await decide(proposal.proposal_id, { edits: { owner_party_id: PARTNER } })
+		)[0],
+		200,
+	);
+	assert.deepEqual((await saved()).rows, [
+		{ status: "accepted", suggested_owner: null, step_owner: PARTNER },
+	]);
 });
 
 test("a phase quote is derived at storage and refuses a stale acceptance", async () => {

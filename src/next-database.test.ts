@@ -3185,7 +3185,7 @@ test("party activity is explicit, chronological and once per item with ordered e
 test("party next steps retain completed steps, sort due dates with id ties and leave undated last", async () => {
 	await withParty(async () => {
 		await db.query(`insert into next_step (id, what, party_id, due_on, resolution, done_at) values
-			('${id(9072)}', 'Undated', '${SUBJECT}', null, null, null),
+			('${id(9072)}', 'Undated', '${SUBJECT}', null, 'done', null),
 			('${id(9071)}', 'Open', '${SUBJECT}', '2020-01-01', null, null),
 			('${id(9070)}', 'Done', '${SUBJECT}', '2020-01-01', 'done', '2020-01-01')`);
 		const steps = (await readParty()).next_steps;
@@ -5406,8 +5406,8 @@ test("only the engine and the owner run a merge", async () => {
 	assert.deepEqual(rows, [{ anyone: false, engine: true }]);
 });
 
-// A merge would repeat these keys, so merge_party keeps the survivor's row and removes the duplicate's first, or refuses a user.
-const COLLAPSED = [
+// A merge either settles these keys or the constraint refuses it.
+const MERGE_KEYS = [
 	"activity_about_activity_id_deal_id_party_id_property_id_key",
 	"activity_about_activity_party_key",
 	"app_user_pkey",
@@ -5417,6 +5417,7 @@ const COLLAPSED = [
 	"lead_contact_draft_party_id_key",
 	"lead_stage_move_party_id_from_stage_to_stage_activity_id_key",
 	"national_account_pkey",
+	"next_step_one_open_per_owner",
 	"party_company_person_id_company_id_started_on_key",
 	"party_document_pkey",
 	"party_email_address_party_id_key",
@@ -5429,7 +5430,7 @@ const COLLAPSED = [
 	"party_territory_party_id_territory_id_started_on_key",
 	"proposal_source_payload_once",
 ];
-test("every unique key that holds a party is one a merge collapses", async () => {
+test("every unique key that holds a party is one a merge handles", async () => {
 	const { rows } = await db.query(
 		`select array_agg(distinct i.indexrelid::regclass::text order by i.indexrelid::regclass::text) as keys
 		from pg_constraint c
@@ -5438,8 +5439,27 @@ test("every unique key that holds a party is one a merge collapses", async () =>
 			and c.conkey[array_position(c.confkey, target.attnum)] = any (i.indkey)
 		where c.contype = 'f' and c.confrelid = 'party'::regclass`,
 	);
-	assert.deepEqual(rows[0].keys, COLLAPSED);
+	assert.deepEqual(rows[0].keys, MERGE_KEYS);
 });
+
+test("a party merge cannot discard one of two conflicting open steps", async () =>
+	rolledBack(async () => {
+		await db.query(`${asUser(TEAMMATE)};
+			insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'Example Duplicate');
+			insert into next_step (what, party_id) values ('First example', '${DUPLICATE}'), ('Second example', '${AGENT}');
+			savepoint merge_attempt`);
+		await assert.rejects(
+			db.query(`select merge_party('${DUPLICATE}', '${AGENT}')`),
+			{ code: "23505" },
+		);
+		await db.query("rollback to merge_attempt");
+		const { rows } = await db.query(`select party_id from next_step
+			where party_id in ('${DUPLICATE}', '${AGENT}') and status = 'open' and owner_party_id = '${TEAMMATE}'`);
+		assert.deepEqual(
+			new Set(rows.map((row) => row.party_id)),
+			new Set([DUPLICATE, AGENT]),
+		);
+	}));
 
 for (const [label, sql, refusal] of [
 	[

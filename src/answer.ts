@@ -56,6 +56,7 @@ const HINTS = {
 	agenda_superseded: "Drop this older agenda observation.",
 	review_not_found: "Choose a review in your current agenda.",
 	step_open: "The step is already open.",
+	open_step_exists: "This owner already has an open next step on this record.",
 	about_nothing:
 		"The email matches no record and names none, so nothing was stored.",
 	message_id_invalid:

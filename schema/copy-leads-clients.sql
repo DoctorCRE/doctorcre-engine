@@ -268,20 +268,31 @@ left join copy_action_end() e on e.id = n.id
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
 cross join lateral copy_attribution('next_action', n.id, coalesce(n.updated_by, n.created_by)) a;
-insert into next_step (id, party_id, what, due_on, hold_until, owner_party_id, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
- created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select distinct on (mapped_id, what, due_on) * from (
- select id, mapped_id, what, due_on, hold_until, owner, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
+create temp table relationship_step on commit drop as
+ select id, id as old_id, mapped_id, what, due_on, hold_until, owner, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
   created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
  from old_next_action where copied and what is not null and refusal is null
  union all
- select md5('old_system:lead:' || id || ':follow_up')::uuid, mapped_id, 'Imported lead follow-up', (fields ->> 'next_action_date')::date, null,
+ select md5('old_system:lead:' || id || ':follow_up')::uuid, id, mapped_id, 'Imported lead follow-up', (fields ->> 'next_action_date')::date, null,
   owner, null, null, null, null, null, created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
  from ready_relationship r where kind = 'lead' and fields ->> 'next_action_date' is not null
-  and not exists (select from public.next_action n where n.subject_type = 'lead' and n.subject_id = r.id)
-) s where not exists (select from next_step done where done.party_id = s.mapped_id and done.what = s.what and done.due_on is not distinct from s.due_on)
-order by mapped_id, what, due_on, resolution is not null, created_at, id
-on conflict do nothing;
+  and not exists (select from public.next_action n where n.subject_type = 'lead' and n.subject_id = r.id);
+
+insert into next_step (id, party_id, what, due_on, hold_until, owner_party_id, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
+ created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+select id, mapped_id, what, due_on, hold_until, owner, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
+ created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+from (
+ select distinct on (mapped_id, what, due_on) s.* from relationship_step s
+ where not exists (select from next_step done where done.party_id = s.mapped_id and done.what = s.what and done.due_on is not distinct from s.due_on)
+ order by mapped_id, what, due_on, resolution is not null, created_at, id
+) s order by old_id <> id, created_at, id on conflict do nothing;
+
+insert into not_copied
+select s.old_id, 'next_step', kept.id::text, 'open_step_exists'
+from relationship_step s join next_step kept on kept.party_id = s.mapped_id and kept.owner_party_id = s.owner
+where s.resolution is null and kept.status = 'open' and kept.item_title is null
+ and not exists (select from next_step done where done.id = s.id);
 insert into not_copied select n.id, f.field, f.value, f.reason from old_next_action n
 cross join lateral (values
  ('description', n.description, 'blank_next_action', n.what is null),

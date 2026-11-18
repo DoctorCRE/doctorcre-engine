@@ -6,7 +6,14 @@ import { type Caller, doorTest } from "./test-door.ts";
 const { db, setup, cleanup, save } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const [ALEX, BLAIR, CLIENT, DEAL] = [id(1), id(2), id(3), id(10)];
+const [ALEX, BLAIR, CLIENT, CADENCE_CLIENT, DEAL, PROPERTY] = [
+	id(1),
+	id(2),
+	id(3),
+	id(4),
+	id(10),
+	id(11),
+];
 const ITEM = {
 	title: "Example plan sent",
 	bullets: ["First example point"],
@@ -21,10 +28,13 @@ const FACTS = [
 before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into job values ('cadence', 'Example cadence');
 		insert into party (id, kind, name) values ('${ALEX}', 'person', 'Alex Example'),
-			('${BLAIR}', 'person', 'Blair Example'), ('${CLIENT}', 'company', 'Example Clinic');
+			('${BLAIR}', 'person', 'Blair Example'), ('${CLIENT}', 'company', 'Example Clinic'),
+			('${CADENCE_CLIENT}', 'company', 'Example Practice');
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
 		insert into deal (id, name, owner_user_id) values ('${DEAL}', 'Example Deal', '${ALEX}');
+		insert into property (id, address) values ('${PROPERTY}', 'Example Property');
 		commit;`);
 });
 after(cleanup);
@@ -58,9 +68,12 @@ const create = (caller: Caller, args: object) =>
 	save(caller, "next-steps", { idempotency_key: randomUUID(), ...args });
 
 async function newStep(args: object = {}) {
+	const deal = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${ALEX}'); commit;`);
 	const [status, body] = await create(
 		{ user: "alex" },
-		{ deal_id: DEAL, what: "Call the example clinic", ...args },
+		{ deal_id: deal, what: "Call the example clinic", ...args },
 	);
 	assert.equal(status, 201);
 	return String(body.next_step_id);
@@ -162,6 +175,77 @@ test("a job for a partner adds a held step on a party; an item off a deal, two r
 test("an explicit next-step owner wins over the saving partner", async () => {
 	const step = await newStep({ owner_party_id: BLAIR });
 	assert.equal((await stepNow(step)).owner_party_id, BLAIR);
+});
+
+test("cadence and a partner saving together get one held step and its conflict id", async () => {
+	const step = {
+		party_id: CADENCE_CLIENT,
+		what: "Check in",
+		hold_until: "2099-01-01",
+	};
+	const answers = await Promise.all([
+		create({ user: "alex" }, step),
+		create({ job: "cadence", for_user: "alex" }, step),
+	]);
+	assert.deepEqual(answers.map(([status]) => status).sort(), [201, 409]);
+	const winner = answers.find(([status]) => status === 201)?.[1];
+	const conflict = answers.find(([status]) => status === 409)?.[1];
+	assert.ok(winner && conflict);
+	assert.deepEqual(
+		[conflict.error, conflict.next_step_id],
+		["open_step_exists", winner.next_step_id],
+	);
+	const change = await act(String(winner.next_step_id), "changes", {
+		seen_change_id: await seen(winner.next_step_id),
+		owner_party_id: BLAIR,
+	});
+	assert.equal(change[0], 200);
+	const [replacementStatus, replacement] = await create({ user: "alex" }, step);
+	assert.equal(replacementStatus, 201);
+	const [changed, denied] = await act(String(winner.next_step_id), "changes", {
+		seen_change_id: await seen(winner.next_step_id),
+		owner_party_id: ALEX,
+	});
+	assert.deepEqual(
+		[changed, denied.error, denied.next_step_id],
+		[409, "open_step_exists", replacement.next_step_id],
+	);
+	await act(String(winner.next_step_id), "end", { resolution: "done" });
+	assert.equal((await create({ user: "blair" }, step))[0], 201);
+	const [reopened, reopen] = await act(
+		String(winner.next_step_id),
+		"reopen",
+		{},
+	);
+	assert.deepEqual([reopened, reopen.error], [409, "open_step_exists"]);
+	assert.equal((await stepNow(winner.next_step_id)).status, "done");
+});
+
+test("the database enforces the owner slot and allows checklist, property and ownerless steps", async () => {
+	const values = (
+		rows: string,
+	) => `begin; select set_config('engine.job', 'old_system', true);
+		insert into next_step (what, deal_id, party_id, property_id, owner_party_id, item_title, source_ref)
+		values ${rows}`;
+	try {
+		await db.query(
+			values(`
+			('Example ordinary', '${DEAL}', null, null, '${ALEX}', null, null),
+			('Example checklist', '${DEAL}', null, null, '${ALEX}', 'Example item', 'example:one'),
+			('Example checklist', '${DEAL}', null, null, '${ALEX}', 'Example item', 'example:two'),
+			('Example property', null, null, '${PROPERTY}', '${ALEX}', null, null),
+			('Example property', null, null, '${PROPERTY}', '${ALEX}', null, null),
+			('Example unclaimed', '${DEAL}', null, null, null, null, null),
+			('Example unclaimed', '${DEAL}', null, null, null, null, null)`),
+		);
+		await assert.rejects(
+			db.query(`insert into next_step (what, deal_id, owner_party_id)
+			values ('Example duplicate', '${DEAL}', '${ALEX}')`),
+			{ code: "23505" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
 });
 
 test("a change lands from what the caller saw; a crossed field is refused and other fields rebase", async () => {

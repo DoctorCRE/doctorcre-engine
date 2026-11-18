@@ -86,7 +86,16 @@ insert into next_step (id, deal_id, party_id, what, due_on, hold_until, owner_pa
  resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select id, deal_id, party_id, what, due_on, hold_until, owner, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
  resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id from step_candidate s
-where not exists (select from step_refusal r where r.id = s.id) on conflict do nothing;
+where not exists (select from step_refusal r where r.id = s.id)
+order by source <> 'deal_note', created_at, id on conflict do nothing;
+
+insert into not_copied
+select s.id, 'next_step', kept.id::text, 'open_step_exists'
+from step_candidate s join next_step kept on kept.owner_party_id = s.owner
+ and (kept.deal_id, kept.party_id) is not distinct from (s.deal_id, s.party_id)
+where s.resolution is null and s.item_title is null and kept.status = 'open' and kept.item_title is null
+ and not exists (select from step_refusal r where r.id = s.id)
+ and not exists (select from next_step done where done.id = s.id);
 
 insert into not_copied select n.id, f.field, f.value, f.reason from old_action n
 cross join lateral (values

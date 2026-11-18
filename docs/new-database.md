@@ -986,6 +986,8 @@ Ended steps stay in detail reads and never show on Home. A hold copies as the st
 
 Vendor next actions follow the same rules, as next steps about the person or company the vendor became, never about a deal. A merged-away vendor's actions reach its survivor. An action whose vendor is not copied, such as one waiting for a ruling's reason, is listed as `vendor_not_copied`, and a later run retries it.
 
+Both next-step copies list a row blocked by another open step as `open_step_exists`, with the kept step's id in `value`. A previously copied step keeps its place. On a fresh copy, the deal copy prefers the current note fallback when it exists. The lead and client copy prefers recorded actions to date-only fallbacks. Remaining ties use creation time and id.
+
 The board's current-action view decides whether the newest unsuperseded note copies as a fallback. Checklist items and pending assessments do not hide a note; a current done plan suppresses it and its date. Older, superseded and hidden notes stay listed without an invented completion, and the activity copy keeps each as a recorded note. A newer note can replace a completed plan. The fallback takes `deal.next_date`, including null, and the deal's mapped owner. A deal with a date but no actions or next-step notes gets an `Imported deal follow-up`, with a stable id derived from its deal id. A date matching an open action's due date needs no report; otherwise a date without a fallback is listed.
 
 Post-call actions in `capture_post_call_action` copy too, with their ids, owners, nullable due dates, acceptance time as creation time and explicit `completed_at`. Only `drop-action` records a reason, and it never names a post-call action, so dropped post-call actions stay listed as `cancellation_reason_missing`. Source references and display fields are listed like ordinary actions. Attribution follows the action's own event when available, otherwise its accepting actor.
@@ -1298,6 +1300,7 @@ The suggestion kinds:
 - **Filing.** A filing suggestion stores no deal name and creates no deal. Accepting moves the email to the deal the partner names in `deal_id`, which defaults to the suggested deal for `file_to_deal` and is required for `possible_new_deal`; the deal must be open. Other deal links are removed in the same save; party and property links stay. `reason` is required when the email is already linked to another deal or the named deal's client is not one it is about, as today (`email-proposals.js:291`). Today's "mark handled" also files the email to the named deal (`:305`), so it is this accept, not a separate outcome. A partner who needs a new deal makes it first (17) and then names it. Slice 7 adds both kinds to `proposal.kind` and lets `proposal_one_record` name no record for `possible_new_deal` alone, whose subject is the email.
 - **Decide.** Only a direct partner decides, once. `edits` (`what`, `owner_party_id`, `due_on`) change the accepted next step in the same transaction, so history shows the suggestion and the edit and the suggestion itself never changes. Answer `{ proposal_id, status, decided_at, created: { next_step_id | deal_id | activity_id | party_id } }`. Refusals: `409 already_decided { status, decided_by }`; `409 version_conflict { current_phase }` or `{ current_stage }` when the deal or lead moved since the suggestion, leaving it pending; `403 user_decides` from a job; `404 not_found`.
 - **Next-step owner.** An owner ID in `edits.owner_party_id` overrides the suggestion's owner. Omitted, blank, and `null` owner edits keep the suggested owner. If the suggestion has no owner, the step belongs to the partner who accepts it.
+- Accepting a next step whose final owner already has an open step on that record returns `409 open_step_exists { next_step_id }` under door 18's rule. The suggestion stays pending.
 - Snoozing a suggestion is a Home mark (slices 10, 24). Email summaries wait for slice 4's decision and have no door yet.
 
 ### 22. Reply drafts and their delivery
@@ -1357,6 +1360,7 @@ The suggestion kinds:
 `...` is `/jobs` or `/api/engine`.
 
 - **Owner on creation.** A supplied `owner_party_id` wins. Otherwise, the database uses the signed-in partner's person or, for a job, the person named by `Engine-For-User`.
+- An owner can have one ordinary open step on each deal or party. Lead, client, and vendor steps use their party record. Held steps count as open. Ended steps, titled deal checklist items, property steps, and steps without an owner are outside this rule. A create, owner change, or reopen that would break it returns `409 open_step_exists { next_step_id }`. The id names the step to use and is null if it ceased to conflict before the lookup.
 - **Retry.** The cadence keys each step on its rule, record and due date, intake keys a flag's item on mailbox, message and state, and call capture keys on the call and its suggestion, so a rerun converges on the first step.
 - **Concurrent edits.** A change uses `seen_change_id` on the step's change history with the deal rule above. Ending or reopening has no version: ending an ended step is `409 step_ended { status }`, which the caller counts as closed elsewhere, as intake does today, and reopening an open one is `409 step_open`.
 - **Stamp.** The user, or `cadence`, `mail_capture`, `call_capture` or `agent` for a partner.
@@ -1370,7 +1374,7 @@ The suggestion kinds:
 - Clients and converted leads answer the party's stored `cold` or `paused` status when set, and its derived client status otherwise. Leads without a client role answer null for that status. Leads also answer `estimated_lease_on` as a date or null. Converted parties appear in both collections because the active lead rules use lease dates and only the client and vendor rules use completions. Vendors answer null for client status and both owner fields.
 - Open party steps answer `{ id, party_id, owner_party_id }`, including held steps. Done party steps also answer `{ description, done_at }`. Skip completions with a null `done_at`.
 
-Rules and lookback stay on the old side. Only the owner provisions the `cadence` job.
+If a cadence save returns `409 open_step_exists`, skip that reminder for this run and continue with the other records. The existing step, including a held one, occupies its place. Rules and lookback stay on the old side. Only the owner provisions the `cadence` job.
 
 ### What can start when this merges
 
