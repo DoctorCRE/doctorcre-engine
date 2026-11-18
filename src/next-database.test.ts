@@ -1297,6 +1297,29 @@ const RULES: Record<string, Case[]> = {
 			"deal_parked_or_flagged_by_a_user",
 		],
 	],
+	"lead attention is never unknown and only a user can set or clear it": [
+		[
+			`${asJob("old_system")}; update party_role set needs_attention = true where party_id = '${LEAD}' and role = 'lead'`,
+			"lead_flagged_by_a_user",
+		],
+		[
+			`update party_role set needs_attention = true where party_id = '${LEAD}' and role = 'lead';
+				${asJob("old_system")}; update party_role set needs_attention = false where party_id = '${LEAD}' and role = 'lead'`,
+			"lead_flagged_by_a_user",
+		],
+		[
+			`update party_role set needs_attention = true where party_id = '${VENDOR}' and role = 'vendor'`,
+			"party_role_attention_only_on_lead",
+		],
+		[
+			`update party_role set needs_attention = null where party_id = '${LEAD}' and role = 'lead'`,
+			{
+				code: "23502",
+				message:
+					'null value in column "needs_attention" of relation "party_role" violates not-null constraint',
+			},
+		],
+	],
 	"a deal needs attention or not, never unknown": [
 		[
 			"update deal set needs_attention = null",
@@ -4872,6 +4895,18 @@ test("a lead becomes a client when a deal is opened for them, and keeps its stag
 				deals: [id(662)],
 			},
 		]);
+	}));
+
+test("a merge keeps Needs attention when the duplicate lead had it", () =>
+	rolledBack(async () => {
+		await db.query(`insert into party (id, kind, name, how_found) values ('${DUPLICATE}', 'person', 'Example Duplicate', 'referral');
+			insert into party_role (party_id, role, stage, needs_attention) values ('${DUPLICATE}', 'lead', 'opportunity', true);
+			select merge_party('${DUPLICATE}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+		const result = await db.query(
+			"select needs_attention from party_role where party_id = $1 and role = 'lead'",
+			[LEAD],
+		);
+		assert.deepEqual(result.rows, [{ needs_attention: true }]);
 	}));
 
 test("a merge keeps the survivor's lead owner and how it was found, filled from the duplicate's, and moves its deals as client", () =>

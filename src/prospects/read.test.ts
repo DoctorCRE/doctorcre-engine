@@ -14,13 +14,14 @@ const [
 	earlier,
 	later,
 	newest,
+	recentlyMoved,
 	oldest,
 	onDeal,
 	qualified,
 	deal,
 	note,
 	olderNote,
-] = Array.from({ length: 12 }, () => randomUUID());
+] = Array.from({ length: 13 }, () => randomUUID());
 
 before(async () => {
 	await setup();
@@ -29,7 +30,7 @@ before(async () => {
 		insert into party (id, kind, name, how_found)
 			select id, 'person', 'Example Person', 'referral' from unnest(array[
 				'${joeId}', '${dellId}', '${highlighted}', '${earlier}', '${later}', '${newest}',
-				'${oldest}', '${onDeal}', '${qualified}']::uuid[]) as id;
+				'${recentlyMoved}', '${oldest}', '${onDeal}', '${qualified}']::uuid[]) as id;
 		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
 		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('client_contact', 'Client contact');
 		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity'), ('lead', 'qualified', 'Qualified');
@@ -41,8 +42,10 @@ before(async () => {
 			('${later}', 'lead', 'opportunity', '${dellId}', false, '2024-01-01'),
 			('${newest}', 'lead', 'opportunity', null, false, '2024-02-01'),
 			('${oldest}', 'lead', 'opportunity', null, false, '2024-01-01'),
+			('${recentlyMoved}', 'lead', 'qualified', null, false, '2001-01-01'),
 			('${onDeal}', 'lead', 'opportunity', null, false, '2024-01-01'),
 			('${qualified}', 'lead', 'qualified', null, false, '2024-01-01');
+		update party_role set stage = 'opportunity' where party_id = '${recentlyMoved}' and role = 'lead';
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${joeId}');
 		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${onDeal}', 'client_contact');
 		insert into next_step (party_id, owner_party_id, what, due_on, resolution) values
@@ -74,9 +77,9 @@ function steps(prospect: unknown) {
 
 test("lane includes only eligible leads and orders attention, follow-up date, then newest", async () => {
 	for (const [filter, expected] of [
-		["", [highlighted, earlier, later, newest, oldest]],
-		["?owner=joe", [highlighted, earlier, newest, oldest]],
-		["?owner=dell", [highlighted, later, newest, oldest]],
+		["", [highlighted, earlier, later, recentlyMoved, newest, oldest]],
+		["?owner=joe", [highlighted, earlier, recentlyMoved, newest, oldest]],
+		["?owner=dell", [highlighted, later, recentlyMoved, newest, oldest]],
 	] as const) {
 		const response = await request(joe, `prospects${filter}`, {
 			method: "GET",
@@ -163,19 +166,4 @@ test("detail includes older notes and a second partner's poll picks up a new not
 		(await request(joe, `prospects/${onDeal}`, { method: "GET" })).status,
 		404,
 	);
-});
-
-test("lead attention requires a user and cannot be set on another role", async () => {
-	await assert.rejects(
-		db.query(`begin; set local engine.job = 'old_system';
-			update party_role set needs_attention = false where party_id = '${highlighted}'; commit;`),
-		{ constraint: "lead_flagged_by_a_user" },
-	);
-	await db.query("rollback");
-	await assert.rejects(
-		db.query(`begin; set local engine.user_id = '${joeId}';
-			insert into party_role (party_id, role, needs_attention) values ('${qualified}', 'client', true); commit;`),
-		{ constraint: "party_role_attention_only_on_lead" },
-	);
-	await db.query("rollback");
 });

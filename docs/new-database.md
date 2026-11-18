@@ -767,7 +767,7 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
 - A knows or can-introduce link? It moves. One between the two records is dropped, and where both hold the same link, either way round for knows, the survivor's stays.
-- Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. How found stays the survivor's, or becomes the duplicate's.
+- Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. Needs attention stays set if either lead had it. How found stays the survivor's, or becomes the duplicate's.
 - Both vendors? The survivor's vendor role stays, with its stage, level and relationship partner. The duplicate's values fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is, unless the merged disposition is avoid.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.

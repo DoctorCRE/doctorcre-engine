@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { etag } from "hono/etag";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
+import { PARTNERS } from "../clients/read.ts";
 import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../request-shape.ts";
@@ -100,7 +101,7 @@ export const prospectReads = new Hono<DatabaseEnv>()
 	.get("/prospects", async (c): Promise<Response> => {
 		const params = new URL(c.req.url).searchParams;
 		const error = checkFields(params, ["owner"], {
-			vocabularies: { owner: ["all", "joe", "dell"] },
+			vocabularies: { owner: ["all", ...PARTNERS] },
 		});
 		if (error) return refuse(c, error);
 		return answerNextRead(c, "read-prospects", async (db) => {

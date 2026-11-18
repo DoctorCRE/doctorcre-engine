@@ -2725,6 +2725,7 @@ begin
 		is_target = (s.is_target or d.is_target) and coalesce(s.disposition, '') <> 'avoid'
 			and coalesce(d.disposition, '') <> 'avoid',
 		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id),
+		needs_attention = s.needs_attention or d.needs_attention,
 		lane = coalesce(s.lane, d.lane), segment = coalesce(s.segment, d.segment),
 		lease_estimate_source = case when s.estimated_lease_on is null then d.lease_estimate_source else s.lease_estimate_source end,
 		lease_estimate_confidence = case when s.estimated_lease_on is null then d.lease_estimate_confidence else s.lease_estimate_confidence end,
