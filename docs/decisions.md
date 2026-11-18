@@ -315,4 +315,6 @@
 
 159\. **The new database keeps each deal's client website registration (2026-11-18).** A website name belongs to one registration, and a deal can have one active registration. The copied site keeps its verifier and its binding to the deal and client. Both partners get the address when the registration is active and the client matches. The verifier stays out of deal reads and change history (#728).
 
+161\. **Phase effective dates have their own kind, and undated person memberships start with the first deal (2026-11-18).** The deal page saves phase effective dates as `phase_effective_date`. The membership copy uses the first deal's Chicago opening date when a person client belongs to a national account and has no reviewed membership date (#734).
+
 163\. **A partner sets up a deal's client website once (2026-11-18).** Either signed-in partner can register the website name and password. Repeating setup with the same name and password keeps the original registration. The credential is a bcrypt verifier of the hex SHA-256 password digest, compatible with copied registrations. The save receipt identifies the deal and name and carries no password fingerprint (#729).

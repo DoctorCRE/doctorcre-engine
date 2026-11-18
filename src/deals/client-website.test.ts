@@ -136,6 +136,14 @@ test("setup requires a current client, valid input and the partner's CSRF token"
 	const invalid = await save(partner, path(raceDeal), args("Bad Name", ""));
 	assert.equal(invalid[0], 400);
 	assert.deepEqual(invalid[1].fields, ["slug", "password"]);
+	const nul = await save(
+		partner,
+		path(raceDeal),
+		args("example-nul", "invalid\u0000password"),
+	);
+	assert.equal(nul[0], 400);
+	assert.deepEqual(nul[1].fields, ["password"]);
+
 	const unauthorised = await request(partner, path(raceDeal), {
 		method: "POST",
 		headers: { "x-carr-csrf": "wrong" },
@@ -151,5 +159,51 @@ test("setup requires a current client, valid input and the partner's CSRF token"
 			)
 		)[0],
 		404,
+	);
+});
+
+test("disabled and former-client websites keep their names reserved", async () => {
+	const [disabled, changed, formerClient] = [
+		randomUUID(),
+		randomUUID(),
+		randomUUID(),
+	];
+	const gone = args("example-disabled");
+	const former = args("example-former-client");
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name, how_found)
+		values ('${formerClient}', 'company', 'Former Example Clinic', 'referral');
+		insert into party_role (party_id, role) values ('${formerClient}', 'client');
+		insert into deal (id, name, owner_user_id)
+		values ('${disabled}', 'Example disabled website deal', '${alex}'),
+		       ('${changed}', 'Example client change deal', '${alex}');
+		insert into deal_party (deal_id, party_id, role)
+		values ('${disabled}', '${client}', 'client'), ('${changed}', '${client}', 'client');
+		insert into deal_client_website (slug, deal_id, client_party_id, password_hash, disabled_at)
+		select slug, deal_id::uuid, party_id::uuid,
+			public.crypt(encode(public.digest('made-up password', 'sha256'), 'hex'), public.gen_salt('bf', 12)),
+			case when disabled then clock_timestamp() end
+		from (values ('${gone.slug}', '${disabled}', '${client}', true),
+		             ('${former.slug}', '${changed}', '${formerClient}', false)) registrations(slug, deal_id, party_id, disabled);
+		commit;`);
+	for (const [deal, input] of [
+		[disabled, gone],
+		[changed, former],
+	] as const) {
+		const [status, answer] = await save(partner, path(deal), input);
+		assert.equal(status, 409);
+		assert.equal(answer.error, "portal_slug_taken");
+	}
+	assert.deepEqual(
+		await save(partner, path(disabled), args("example-replacement")),
+		[
+			200,
+			{
+				ok: true,
+				deal_id: disabled,
+				client_portal_url: "https://share.doctorcre.com/example-replacement",
+				created: true,
+			},
+		],
 	);
 });
