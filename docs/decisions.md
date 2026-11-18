@@ -293,4 +293,6 @@
 
 148\. **Deals identify an automatic invoice close from its application (2026-11-18).** The latest phase shows as closed automatically when it matches an invoice application's closing phase, differs from the prior phase, and carries the nightly job's stamp. The receipt uses the closing phase row's date in Central time, matching the deal's close date, and takes its previous phase from the application (#674).
 
-149\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one records the call on its deal or party at the recorded call's time. The owner left the twelve old work alerts behind (#698).
+149\. **Home checks the card and mark revisions before a save (2026-11-18).** The signed-in partner can change one mark on their own card. The mark's history keeps its last revision even after a clear, so a stale Undo cannot overwrite another save. Only a disposition change can renew a settlement after the underlying card changes (#696).
+
+151\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one records the call on its deal or party at the recorded call's time. The owner left the twelve old work alerts behind (#698).

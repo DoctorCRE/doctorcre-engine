@@ -1270,7 +1270,7 @@ Home and Invoices use `GET /api/engine/invoices` when `invoices-from-engine` is 
 
 The tracker lists each commission payment on an included deal. An undated payment has status `expected` and shows as Awaiting invoice, including when another payment on the deal has been invoiced. A dated payment shows as paid when it has a receipt date. The amount and due date come from the payment. A closed or invoiced deal with no payments has one row with a blank amount. If the copy kept an invoice date for that deal, the row shows as invoiced. Undo uses the restored phase and invoice date on the next read. Expected commission is a pipeline estimate. Home shows only unpaid rows with an explicit past due date.
 
-The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. Keep the production tracker on the old read until the app routes Mark paid to the engine and the production writer is available.
+The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. With `invoices-from-engine` on, the app also routes Mark paid to the engine (app #958). Keep the production tracker on the old read until the production writer is available.
 
 ### Mark paid
 
@@ -1523,6 +1523,22 @@ These doors use the signed-in partner entrance. They share the save and retry ru
 - A date the partner adds opens in the same save, with the database recording that partner and the confirmation time. `kind` is `loi_expiry`, `option_notice`, `rent_start`, `lease_end`, `due_diligence` or `other`. `due_on` is a valid `YYYY-MM-DD` date, `source` is nonblank text, and `note` is optional nonblank text or null.
 - Confirm opens a date proposed by automation. Resolve takes `done`, `dropped` or `passed` as `resolution` and returns it as `status`. A proposal can be dropped, and an open date can take any of the three resolutions. `reason` must be nonblank. The database stamps the decisions and keeps the confirmation when resolving.
 - A missing date on confirm or resolve returns `404 not_found`. A fresh key targeting the date's current status returns `409 version_conflict { status }`. Other disallowed transitions return `422 database_refused_the_statement { rule: "critical_date_status_moves" }`.
+
+### 24. Home marks saved
+
+`POST /api/engine/home/marks` saves one card's mark for the signed-in partner. Every request includes `idempotency_key` and the card's `item_id` and `base_version` from the new Home inbox read. Item IDs are `next_action:<UUID>`, `capture_post_call_action:<UUID>` or `notification:<UUID>` for an ordinary step, call follow-up or update. An unknown card or a card owned by another partner returns `404 home_item_not_found`.
+
+| `action`        | Extra fields and effect                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `snooze`        | `until`, a future instant with zone. The app picks the time for the chosen day in Central time.                     |
+| `settle`        | Sets the Home disposition to settled. Completing a step uses door 18.                                               |
+| `unsettle`      | Clears the disposition and snooze time.                                                                             |
+| `set-waiting`   | `target: { kind: "party", id }` and a nonblank `reason`. The ID is that of a person or company in the new database. |
+| `clear-waiting` | Clears the waiting person or company and reason.                                                                    |
+
+The version is `<source change ID>:<mark change ID>:<visible disposition>`. Missing history starts at `0`. A cleared mark keeps its latest history ID. A change after the card was read returns `409 version_conflict { current_version }`. A valid instant that has already passed returns `422 invalid_snooze_time` on a snooze. Waiting changes leave the disposition intact. A later edit to the source makes a settlement lapse. Only a new disposition save can settle it again. When both parts of a mark are empty, the save deletes its row.
+
+The answer is `200 { ok, item_id, base_version, previous }`. The previous mark has `disposition`, `snoozed_until`, `waiting_on_party_id` and `waiting_reason` with nulls for absent values. Undo uses a fresh key, the returned version and the previous value for the affected part of the mark. Clear a prior snooze whose time has passed. Shared retry rules apply. App routing (slice 30) submits one request per card for a selection and refreshes Home after saves.
 
 ### What can start when this merges
 
