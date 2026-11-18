@@ -310,3 +310,5 @@
 156\. **Mail priorities opens the same review as Home (2026-11-18).** The read ranks pending inbound suggestions and reply drafts by their due dates, then by the source email's time. Each Outlook conversation contributes one row with the selected review and its Home card ID (#721).
 
 157\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).
+
+158\. **Commission receipt progress comes from payments (2026-11-18).** Commission received is complete when the deal has at least one payment and all its payments have receipt dates. A copied expected amount stays as a forecast and has no effect on the checklist (#732).

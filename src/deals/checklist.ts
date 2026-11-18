@@ -98,8 +98,8 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 			["executed_lease", "Executed lease / amendment", LEASED, KIT],
 			["purchase_close", "Purchase closing and executed documents", OWNED, KIT],
 			["commencement_letter", "Commencement letter and possession dates", LEASED, KIT_TOURS],
-			["executed_comp", "Executed comp recorded", ANY, KIT],
-			["expiration_recorded", "Lease expiration recorded for renewal", LEASED, KIT],
+			["executed_comp", "Executed comp", ANY, KIT],
+			["expiration_recorded", "Lease expiration for renewal", LEASED, KIT],
 			["entity_structure", "Entity / lease-back structure for CPA", OWNED, KIT],
 			["move_in", "Move-in", ["lease"], KIT],
 			["check_in_90_day", "90-day check-in", ["lease"], KIT],
@@ -109,8 +109,8 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 		id: "invoice",
 		label: "Invoice",
 		rows: [
-			["invoice_recorded", "Invoice recorded", ANY, recordedBy("record-deal-invoice")],
-			["commission_received", "Commission receipt recorded", ANY, recordedBy("record-commission-receipt")],
+			["invoice_recorded", "Invoice", ANY, recordedBy("record-deal-invoice")],
+			["commission_received", "Commission received", ANY, recordedBy("record-commission-receipt")],
 		],
 	},
 ];
@@ -243,13 +243,19 @@ function settle(
 	};
 }
 
+function criticalDateLabel(kind: string | null) {
+	if (kind === "loi_expiry") return "LOI expiry";
+	const words = (kind ?? "").replaceAll("_", " ");
+	return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function criticalDateItems({ deal, criticalDates, today }: Facts): Item[] {
 	return criticalDates.flatMap((date) =>
 		date.status === "open" && date.source?.trim() && isDate(date.due_on)
 			? [
 					{
 						id: `critical-date:${date.id}`,
-						label: (date.kind ?? "").replaceAll("_", " "),
+						label: criticalDateLabel(date.kind),
 						status: dueStatus(date.due_on, today),
 						due_on: date.due_on,
 						evidence_ref: date.source,

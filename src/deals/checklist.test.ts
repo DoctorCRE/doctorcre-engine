@@ -74,6 +74,32 @@ test("the deal type picks the items each phase lists", () => {
 	]);
 });
 
+test("checklist milestones use plain labels", () => {
+	const checklist = checklistOf(
+		facts({
+			criticalDates: [
+				{
+					id: "offer-expiration",
+					kind: "loi_expiry",
+					due_on: "2030-07-01",
+					source: "Example offer",
+					status: "open",
+				},
+			],
+		}),
+	);
+	const items = checklist.phases.flatMap((phase) => phase.items);
+	const labels = new Map(items.map(({ id, label }) => [id, label]));
+	assert.equal(labels.get("executed_comp"), "Executed comp");
+	assert.equal(
+		labels.get("expiration_recorded"),
+		"Lease expiration for renewal",
+	);
+	assert.equal(labels.get("invoice_recorded"), "Invoice");
+	assert.equal(labels.get("commission_received"), "Commission received");
+	assert.equal(labels.get("critical-date:offer-expiration"), "LOI expiry");
+});
+
 test("recorded facts complete items and requests set owner, date and status", () => {
 	const requests: Request[] = [
 		request("executed_lease", "2030-07-01"),
@@ -163,7 +189,7 @@ test("recorded facts complete items and requests set owner, date and status", ()
 	});
 	assert.deepEqual(checklist.phases[3]?.items.at(-1), {
 		id: "critical-date:example-date",
-		label: "due diligence end",
+		label: "Due diligence end",
 		status: "overdue",
 		due_on: "2030-06-01",
 		evidence_ref: "example-lease",
