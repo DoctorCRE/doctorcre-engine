@@ -165,7 +165,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 63. A lead or client says how they were found, from the list. A new lead or client is checked when the change is saved. Only a record copied from the old system may say it was not recorded, checked when the change is saved.
 64. Someone on a deal as its client holds the client role, checked when the change is saved, so the role cannot be removed while they are.
 65. A client profile names its client role, has only roster, cold, engaged or paused as manual status, and takes its type from the client type list. Active deal and past client come from deals.
-66. A brand membership joins two different companies, its location has a client profile, and its dates never overlap another membership of that location.
+66. A brand membership links a client to a different party that is a company. A client's membership dates never overlap.
 67. A national account is a company holding that role. Its dated owners are people, and their dates never overlap on one account. Membership and ownership end strictly after they start, with the end excluded.
 68. Client and account profiles and their dated links keep their parties; users may correct dates and remove mistakes. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
 69. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank. Only a parked deal has a time it was parked, and a user who parked it only with that time.
@@ -328,24 +328,24 @@ Running the whole order again changes no row and no change history, and each cop
 
 A `client` row extends its party's client role with a manual status and a `client_type` from the short list. The initial types are independent, group practice, DSO, franchise and regional system. Labels may change, like roles. Only roster, cold, engaged and paused are stored. `client_status` reports active_deal when any client deal's latest phase is neither closed nor dead, including a deal with no phase yet. Otherwise any closed phase in its history makes it past_client, and otherwise the manual status applies. An open deal wins over past work. A dead deal alone does not make a past client.
 
-A brand is a company. `client_brand` joins a client location company to a different brand company, with dates. Its dates include started_on and exclude ended_on, and an absent end means still a member. Memberships never overlap, even across brands. Ending one and starting the next on the same day preserves which brand held the location on each date. A franchisee has its own client row and franchise type; its deals name it, never its brand.
+A brand is a company. As the owner decided on 2026-11-18, a person who is a client may also belong to a national account (#697). `client_brand` links a person or company with a client profile to a different brand company, with dates. Its dates include started_on and exclude ended_on, and an absent end means still a member. Memberships never overlap, even across brands. Ending one and starting the next on the same day preserves which brand held the location on each date. A franchisee has its own client row and franchise type; its deals name it, never its brand.
 
 A `national_account` is a company with that role. It need not itself be a client. `national_account_owner` names a person, including an outside agent who refers work, with dates under the same non-overlap rule. It does not name an app user or decide a deal's owner. The engine can correct membership and ownership dates and remove mistaken links; change history keeps what was corrected. Changing the parties removes the mistaken link and adds the right one. All five tables are stamped and their changes recorded. A merge moves a lone profile and its dated links; two client profiles or two account profiles are refused for a user to settle first, as are overlapping histories or a location becoming its own brand.
 
-For #273, national on a date means a `client_brand` membership covering that date whose `brand_id` joins `national_account.party_id`. A deal uses its location client and its own date for this join, so a later rebrand does not move old work. The current directory uses current_date instead. There is no stored national flag here.
+For #273, national on a date means a `client_brand` membership covering that date whose `brand_id` joins `national_account.party_id`. The copy compares the old lane to the membership on the Chicago date the deal opened. The Deals board and the current directory use the current membership. The database derives national status from the membership.
 
 Moving today's rows across:
 
 - Each client becomes its party's client role and client row. Roster, cold, engaged and paused map directly. Active deal and past client are recomputed; those old labels supply no manual status, so start those records at roster.
 - The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. Vertical and subtype do not move as free text.
-- A company location's `party.org_id` becomes its brand membership. A person's org_id remains party_company. Existing national_account_owner rows map their human actor to its person. The old system lacks membership start dates and complete owner history, so a user must supply the first known dates before copying these links. Never invent an earlier history.
+- A company location's `party.org_id` becomes its brand membership. A person client's `party.org_id` also becomes a brand membership when the old account view identifies that client as a member. The party copy still keeps the person's company link. Existing `national_account_owner` rows map their human actor to its person. The copy takes the partners' reviewed first-recorded dates, as the owner decided on 2026-11-18.
 - Client owner and acquisition source belong to the lead and attribution slice, not account ownership. ETL status and agreements are excluded by the owner's B9 answer. No representation agreement table is added.
 
 Run `schema/copy-national-account-owners.sql` after the party, client and attribution copies, in one owner transaction with the new schema on `search_path`. Before running it, create temporary `copy_account_owner_date (account_client_id uuid primary key, started_on date not null) on commit drop` and insert the partners' reviewed first known dates. An absent date stays listed; `set_at` is retained as the row's storage and change time, never used as its start. Overlaps with copied ownership or between accounts mapped to one company stay listed together. Accepted rows keep a stable import id and reruns leave them unchanged, including stamps and history.
 
 Today's required actor foreign key permits only human, automation and system actors, so only human owners mapped to people are copied; outside people can be owners through later engine writes. Automation, system and unmapped human owners stay listed for the partners.
 
-Run `schema/copy-client-brands.sql` the same way, after the national account owner copy. Before running it, create temporary `copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop` with the partners' reviewed first known date for each old client whose company names a brand in `org_id`. A location without a date stays listed. The membership's stored and changed time is when its org_id was set, never its start. Overlapping memberships of one location, a location that is its own brand, a brand that is not a company and uncopied records stay listed. A person's org_id is untouched, since the party copy made it their company. Accepted rows keep a stable import id and reruns leave them unchanged.
+Run `schema/copy-client-brands.sql` the same way, after the national account owner copy. Before running it, create temporary `copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop` with the partners' reviewed first known date for each company client with a brand in `org_id` and each person client linked to a national account in the old account view. A location without a date stays listed. The membership's stored and changed time is when its org_id was set, never its start. Overlapping memberships of one location, a location that is its own brand, a brand that is not a company and uncopied records stay listed. Accepted rows keep a stable import id and reruns leave them unchanged.
 
 ## Deal files and extracted text
 
@@ -587,7 +587,7 @@ Moving today's rows across:
 - `deal.owner`, a partner's slug, becomes that partner's user as the deal owner. A closed or lost deal with none takes its open `deal_participant` row with role `lead`. A deal with neither is listed. Earlier deal owners, from the closed `lead` rows, come across into `imported_deal_owner` (see above). Ended participants come across into `imported_deal_party`.
 - `deal.city` becomes the market whose name matches it, and a national deal's `deal_market_assignment.market` the same way. One that matches no market is listed for a user to add the market or choose one.
 - `won_value` becomes `closed_value`. `sf_commission_placeholder` is not copied (see "Commissions").
-- `lane` is not copied. Each run lists a deal whose stated lane disagrees with the copied account links as `lane_disagrees_with_account`: national means its client location held a brand membership in a national account on the Chicago date the deal opened. A person is never a location, so a national lane on a person's deal disagrees. A company whose `org_id` names a brand but has no copied membership yet is listed as `brand_dates_not_reviewed`, never as a disagreement. A deal with no lane is not listed.
+- `lane` is not copied. Each run lists a deal whose stated lane disagrees with the copied account links as `lane_disagrees_with_account`: national means its client location held a brand membership in a national account on the Chicago date the deal opened. A company client with a brand link or a person client linked to a national account in the old account view is listed as `brand_dates_not_reviewed` while its membership is missing. The copy lists only deals with a stated lane.
 - A `parked` deal's `parking_reason` comes across as it is, and its `parking_note` trimmed, a blank one as none. An `active` deal has no reason. A `parked` deal keeps `parked_at`, and `parked_by` when that actor is an engine user through the actor map. Any other parker stays empty and is listed as `parker_not_a_user`, never guessed. No history event is made from them.
 - `attention` becomes `needs_attention`.
 - A national deal's local agent in `deal_market_assignment` becomes a `deal_party` row with role `market_agent` when `agent_party_id` names the agent's verified person. An assignment with only the stated name is listed for a user to link the agent; the copy never matches a person by name.
@@ -1292,17 +1292,21 @@ The app still needs its remaining save and live refresh paths (app #953 onward),
 
 "Mark inactive" is outside #674 because the Deals spec calls for Park with the reason "prospect never active" and pass D had zero prospect clients.
 
-The app does not display premises or offer-round summaries. Deal links use the UUIDs kept by the copy, so missing legacy deal references are invisible. National account placement (#653) produced the same visible board counts on pass D. The account list uses the national accounts admitted by the copy, which excludes old prospect clients.
+The app does not display premises or offer-round summaries. Deal links use the UUIDs kept by the copy, so missing legacy deal references are invisible. Pass D kept the overall board count but placed person clients' national-account deals under Team. The brand copy now includes their dated memberships (#653, #697). The board places each deal under the client's current national account once that membership is copied. The account list uses the national accounts admitted by the copy, which excludes old prospect clients.
 
 ## Home inbox reads for the app
 
-Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's steps and marks. With the variable unset, the route returns 404 and the app still calls CARR.
+Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's steps, completion reviews, updates and marks. With the variable unset, the route returns 404 and the app still calls CARR.
 
 The response uses the app's `home-inbox.v5` card fields. It shows each step once, including call follow-ups as that step, with the full step text as the title. It includes the step's date, destination and linked source when known. A call source includes its date, contact when known, summary and quote. An accepted suggestion links a step to its email or meeting. The step's change ID gives `action_version`, and `base_version` includes the mark's revision and current disposition.
 
 An open step can be held, snoozed, settled or in the inbox. A snooze ends at its saved time, and a hold ends on its date in Central time. A settled step returns to the inbox after a later step change. Cancelled and expired steps leave the inbox. A step with status `done` appears only if its completion time is known and within the last seven days. The read puts unfinished work first.
 
-Slice 23 still needs reply drafts, pending suggestions, overdue completion reviews and updates. Some copied steps lack a verified origin, and some completed steps lack a known completion time. Legacy waiting evidence and versions did not move. Keep Home on CARR until these reads, slice 24 saves and slice 30 app routing and destinations are ready. The app must use the new change IDs only with new-schema saves.
+An open step shows as a completion review while its latest completion suggestion is pending. The card opens the deal's next step and carries the proposal ID, the source activity and the evidence. If the step changed, the review can still be dismissed. When the step is snoozed or settled, its ordinary step card stays on that shelf. A snoozed step shows when it returns.
+
+Each unread Home update appears once for its recipient and links to its deal. A checklist update carries its checklist reference and due date. A snoozed update stays on the snoozed shelf with its return time until the snooze ends. A settled update stays on the settled shelf until the update changes or the mark is cleared. The update's `base_version` uses its latest change ID, the latest change ID for its `home_update` mark, and the visible disposition. A missing change ID is `0`. Clearing the mark keeps its latest change ID, and editing waiting details leaves the disposition's change ID alone.
+
+Slice 23 still needs reply drafts and pending suggestions. Some copied steps lack a verified origin, and some completed steps lack a known completion time. Legacy waiting evidence and versions did not move. Keep Home on CARR until these reads, slice 24 saves and slice 30 app routing and destinations are ready. The app must use the new change IDs only with new-schema saves.
 
 ## Invoice tracker reads for the app
 
@@ -1310,7 +1314,7 @@ Home and Invoices use `GET /api/engine/invoices` when `invoices-from-engine` is 
 
 The tracker lists each commission payment on an included deal. An undated payment has status `expected` and shows as Awaiting invoice, including when another payment on the deal has been invoiced. A dated payment shows as paid when it has a receipt date. The amount and due date come from the payment. A closed or invoiced deal with no payments has one row with a blank amount. If the copy kept an invoice date for that deal, the row shows as invoiced. Undo uses the restored phase and invoice date on the next read. Expected commission is a pipeline estimate. Home shows only unpaid rows with an explicit past due date.
 
-The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. Keep the production tracker on the old read until the app routes Mark paid to the engine and the production writer is available.
+The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. With `invoices-from-engine` on, the app also routes Mark paid to the engine (app #958). Keep the production tracker on the old read until the production writer is available.
 
 ### Mark paid
 
@@ -1562,6 +1566,22 @@ These doors use the signed-in partner entrance. They share the save and retry ru
 - A date the partner adds opens in the same save, with the database recording that partner and the confirmation time. `kind` is `loi_expiry`, `option_notice`, `rent_start`, `lease_end`, `due_diligence` or `other`. `due_on` is a valid `YYYY-MM-DD` date, `source` is nonblank text, and `note` is optional nonblank text or null.
 - Confirm opens a date proposed by automation. Resolve takes `done`, `dropped` or `passed` as `resolution` and returns it as `status`. A proposal can be dropped, and an open date can take any of the three resolutions. `reason` must be nonblank. The database stamps the decisions and keeps the confirmation when resolving.
 - A missing date on confirm or resolve returns `404 not_found`. A fresh key targeting the date's current status returns `409 version_conflict { status }`. Other disallowed transitions return `422 database_refused_the_statement { rule: "critical_date_status_moves" }`.
+
+### 24. Home marks saved
+
+`POST /api/engine/home/marks` saves one card's mark for the signed-in partner. Every request includes `idempotency_key` and the card's `item_id` and `base_version` from the new Home inbox read. Item IDs are `next_action:<UUID>`, `capture_post_call_action:<UUID>` or `notification:<UUID>` for an ordinary step, call follow-up or update. An unknown card or a card owned by another partner returns `404 home_item_not_found`.
+
+| `action`        | Extra fields and effect                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `snooze`        | `until`, a future instant with zone. The app picks the time for the chosen day in Central time.                     |
+| `settle`        | Sets the Home disposition to settled. Completing a step uses door 18.                                               |
+| `unsettle`      | Clears the disposition and snooze time.                                                                             |
+| `set-waiting`   | `target: { kind: "party", id }` and a nonblank `reason`. The ID is that of a person or company in the new database. |
+| `clear-waiting` | Clears the waiting person or company and reason.                                                                    |
+
+The version is `<source change ID>:<mark change ID>:<visible disposition>`. Missing history starts at `0`. A cleared mark keeps its latest history ID. A change after the card was read returns `409 version_conflict { current_version }`. A valid instant that has already passed returns `422 invalid_snooze_time` on a snooze. Waiting changes leave the disposition intact. A later edit to the source makes a settlement lapse. Only a new disposition save can settle it again. When both parts of a mark are empty, the save deletes its row.
+
+The answer is `200 { ok, item_id, base_version, previous }`. The previous mark has `disposition`, `snoozed_until`, `waiting_on_party_id` and `waiting_reason` with nulls for absent values. Undo uses a fresh key, the returned version and the previous value for the affected part of the mark. Clear a prior snooze whose time has passed. Shared retry rules apply. App routing (slice 30) submits one request per card for a selection and refreshes Home after saves.
 
 ### What can start when this merges
 

@@ -3564,7 +3564,6 @@ test("party brand memberships show both ends, dated history and start-date id or
 		assert.equal(brands[0].ended_on, "2021-01-01");
 		assert.equal(brands[1].party.id, BROKERAGES[0]);
 		assert.equal(brands[1].brand_kind, undefined);
-		assert.equal(brands[1].location_kind, undefined);
 		const locations = (await readParty(BROKERAGES[0])).brands;
 		assert.deepEqual(
 			locations.map((b: { id: string }) => b.id),
@@ -6420,12 +6419,10 @@ const CLIENT_REFUSALS: Case[] = [
 	insert into national_account (party_id) values ('${USER}')`, "national_account_party_id_kind_fkey"],
 	[`insert into national_account (party_id) values ('${NEXT_BRAND}')`, "national_account_party_id_role_fkey"],
 	[`insert into national_account (party_id, role) values ('${CLIENT}', 'client')`, "national_account_role_check"],
-	[`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${CLIENT}', '2026-01-01')`, "client_brand_different_companies"],
+	[`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${CLIENT}', '2026-01-01')`, "client_brand_different_parties"],
 	[`insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${AGENT}', '2026-01-01')`, "client_brand_brand_id_brand_kind_fkey"],
 	[`insert into client_brand (location_id, brand_id, started_on) values ('${NEXT_BRAND}', '${BRAND}', '2026-01-01')`, "client_brand_location_id_fkey"],
-	[`insert into party_role (party_id, role) values ('${USER}', 'client');
-	insert into client (party_id) values ('${USER}');
-	insert into client_brand (location_id, brand_id, started_on) values ('${USER}', '${BRAND}', '2026-01-01')`, "client_brand_location_id_location_kind_fkey"],
+	[`insert into client_brand (location_id, brand_id, started_on) values ('${USER}', '${BRAND}', '2026-01-01')`, "client_brand_location_id_fkey"],
 	[`update client_brand set ended_on = '2020-01-01'`, "client_brand_check"],
 	[`update national_account_owner set ended_on = '2020-01-01'`, "national_account_owner_check"],
 	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${BRAND}', '${CLIENT}', '2026-01-01')`, "national_account_owner_owner_id_owner_kind_fkey"],

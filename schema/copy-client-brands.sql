@@ -7,29 +7,29 @@ select set_config('engine.job', 'old_system', true), set_config('engine.user_id'
 alter table client_brand disable trigger stamp_change;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 
--- A person's org_id is their company, which the party copy keeps; only a company's names its brand.
 create temp table old_brand on commit drop as
 select c.id as client_id, c.party_id as old_location_id, p.org_id, md5('old_system:client_brand:' || c.id)::uuid as id,
- location.id as location_id, brand.id as brand_id, d.started_on,
+ location.party_id as location_id, brand.id as brand_id, d.started_on,
  coalesce(set_event.occurred_at, p.created_at) as set_at, author.*,
  case when d.started_on is null then 'brand_start_date_required'
- when location.id is null then 'location_not_copied'
+ when location.party_id is null then 'location_not_copied'
  when brand.id is null then 'brand_not_copied'
  when brand.kind <> 'company' then 'brand_not_company'
- when brand.id = location.id then 'brand_is_location' end as refusal
+ when brand.id = location.party_id then 'brand_is_location' end as refusal
 from public.client c join public.party p on p.id = c.party_id
 left join pg_temp.copy_client_brand_date d on d.location_client_id = c.id
 left join outside_id location_map on location_map.source = 'old_system' and location_map.value = c.id::text
-left join party location on location.id = location_map.party_id and location.kind = 'company'
+left join client location on location.party_id = location_map.party_id
 left join outside_id brand_map on brand_map.source = 'old_system' and brand_map.value = p.org_id::text
 left join party brand on brand.id = brand_map.party_id
--- An org_id given when the company was made has no event of its own, so its creation event signs it.
+-- An org_id supplied at creation has no event of its own.
 left join lateral (select e.id, e.actor_id, e.occurred_at from public.event e where e.subject_type = 'party' and e.subject_id = p.id
  and e.field = 'org_id' order by e.mutation_order desc limit 1) set_event on true
 left join lateral (select e.id from public.event e where e.subject_type = 'party' and e.subject_id = p.id
  and e.verb = 'add-party' order by e.mutation_order limit 1) made_event on true
 cross join lateral copy_event_attribution(coalesce(set_event.actor_id, p.created_by), coalesce(set_event.id, made_event.id)) author
-where c.merged_into is null and p.kind = 'org' and p.org_id is not null
+where c.merged_into is null and p.org_id is not null
+ and (p.kind = 'org' or exists (select from public.v_client_account a where a.client_id = c.id and a.is_sub_client))
  and not exists (select from client_brand done where done.id = md5('old_system:client_brand:' || c.id)::uuid);
 
 create temp table examined_brand on commit drop as

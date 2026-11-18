@@ -95,7 +95,8 @@ select d.id, 'lane', d.lane, case when answer.unreviewed then 'brand_dates_not_r
 from public.deal d join deal n on n.id = d.id
 join public.client c on c.id = d.client_id join public.party p on p.id = c.party_id
 join outside_id m on m.source = 'old_system' and m.value = p.id::text
-cross join lateral (select p.kind = 'org' and p.org_id is not null
+cross join lateral (select p.org_id is not null
+ and (p.kind = 'org' or exists (select from public.v_client_account a where a.client_id = c.id and a.is_sub_client))
  and not exists (select from client_brand b where b.location_id = m.party_id) as unreviewed,
  exists (select from client_brand b join national_account a on a.party_id = b.brand_id where b.location_id = m.party_id
  and daterange(b.started_on, b.ended_on) @> (n.created_at at time zone 'America/Chicago')::date) as national) answer

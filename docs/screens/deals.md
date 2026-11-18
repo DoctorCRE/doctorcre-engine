@@ -113,7 +113,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 
 - [ ] One card per national account: its name, its account owner, and how many open deals, late next steps and parked deals it has. No client codes.
 - [ ] Opening an account lists its deals, one row per location deal: name, market, phase, next step and market agent.
-- **Open (question 4).** National-account deals whose client is a person. Recommended: they show under their account, never under Local Deals.
+- [ ] National-account deals whose client is a person show under their account (owner answer, 2026-11-18).
 - [ ] Each row opens the deal page. Park and the phase work as they do on the board.
 
 ## Deal page
@@ -151,12 +151,12 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ## Questions for the owner
 
-Questions 1 to 4 are roadmap asks 9, 10, 11 and 7. Questions 5 to 13 are not on it yet. Each recommendation comes first.
+Questions 1 to 3 are roadmap asks 9 to 11. Questions 5 to 13 are not on it yet. Each recommendation comes first.
 
 1. Client website: the new database has no place yet for a deal's client website. Recommended: add one, so the deal page keeps its Client website link after the switch.
 2. Checklist: the new database keeps the checklist items but not checklist progress or document requests (144 of 194 deals have a checklist). Recommended: add both, so the checklist shows in full on every deal page instead of "Checklist unavailable".
 3. Moved automatically: the copy does not record which phase moves the system made (16 cards today). Recommended: keep that mark on copied moves, with Undo on the card.
-4. 15 of the 16 national-account deals show under Local Deals because their client is a person. Recommended: let a person who is a client belong to a national account, so all 16 show under their account.
+4. Answered on 2026-11-18. A person who is a client may belong to a national account.
 5. When both partners have an open next step on one deal, which shows on the card? Recommended: the deal owner's, with both steps on the deal page.
 6. Setting up a client website: today's Set up client website form asks for a website name and a password. How should a partner link a new site? Recommended: keep that setup, below the deal's facts.
 7. Compare terms compares recorded terms across deals in one submarket and use type. Should it compare this deal's own offers instead? Recommended: keep today's comparison until you decide.

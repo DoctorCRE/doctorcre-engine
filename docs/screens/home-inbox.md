@@ -23,6 +23,8 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Home has no "set waiting person" control.
 - **Open (question 2).** Recommended: Home has no Hide; every card is finished, snoozed to a date, or dropped with a reason, and the selection bar's Hide button (today "Settle selected") goes too. Otherwise Hide from inbox sets a card aside unfinished, and it shows under "Hidden from inbox" with Show in inbox.
 
+When app routing moves to the new database, Home saves snooze, settlement and Undo through the engine’s Home marks door for steps, call follow-ups and updates. Mark done on a step still completes the step itself. See “24. Home marks saved” in `docs/new-database.md`.
+
 ## Inbox sections
 
 - [ ] Overdue: the partner's steps dated before today.
@@ -161,7 +163,7 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.
 - The Today panel's Deal pulse stayed on "Checking recent deal changes…".
-- Overdue steps to confirm ("Overdue tasks to review") did not appear on Home.
-- Update cards offer "Open" and the page the update names, or "Open Updates" when it names none, and never Got it (code).
+- Overdue steps to confirm ("Overdue tasks to review") did not appear on Home. The engine read can return completion reviews with a link to the deal's next step. Home still needs to route the read and wire the decision buttons.
+- Update cards offer "Open" and the page the update names, or "Open Updates" when it names none, and never Got it (code). The engine read links each unread Home update to its deal. Home still needs to route the read and wire Got it.
 - A card with no page to open and no finishing button says "Read it, then hide it from your inbox." (code).
 - Tour feedback cards on Home have no review and no finishing button. Only an action link's page opens the feedback, and it only shows it (code).
