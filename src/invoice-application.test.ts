@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { isChangeId } from "./request-shape.ts";
+import { isArguments } from "./save-door.ts";
 import { doorTest } from "./test-door.ts";
 
 const { db, setup, cleanup, save, request: read } = doorTest();
@@ -77,7 +79,7 @@ const applyPath = (id: string) => `invoice-emails/${id}/apply`;
 const undoPath = (id: string) => `invoice-emails/${id}/undo`;
 const key = () => ({ idempotency_key: randomUUID() });
 
-async function trackerEntries() {
+async function trackerEntries(deal: string) {
 	const response = await read(
 		user,
 		"invoices",
@@ -87,9 +89,11 @@ async function trackerEntries() {
 		},
 	);
 	assert.equal(response.status, 200);
-	const tracker = await response.json();
-	assert.ok(tracker && typeof tracker === "object" && "entries" in tracker);
-	return tracker.entries;
+	const tracker: unknown = await response.json();
+	assert.ok(isArguments(tracker) && Array.isArray(tracker.entries));
+	return tracker.entries
+		.filter(isArguments)
+		.filter((row) => row.deal_id === deal);
 }
 
 async function records(deal: string, payment: string) {
@@ -102,6 +106,44 @@ async function records(deal: string, payment: string) {
 		)
 	).rows[0];
 }
+
+test("a recorded payment prevents invoice undo", async () => {
+	const { deal, payment, invoice } = await fixture();
+	assert.equal(
+		(
+			await save(job, applyPath(invoice), {
+				...key(),
+				deal_id: deal,
+				payment_id: payment,
+			})
+		)[0],
+		200,
+	);
+	const entry = (await trackerEntries(deal)).find(
+		(row) => row.commission_id === payment,
+	);
+	assert.ok(entry && isChangeId(entry.base_version));
+	const receivedOn = "2020-04-02";
+	assert.equal(
+		(
+			await save(user, "invoices/mark-paid", {
+				...key(),
+				commission_id: payment,
+				base_version: entry.base_version,
+				received_on: receivedOn,
+			})
+		)[0],
+		200,
+	);
+	const [status, refusal] = await save(user, undoPath(invoice), key());
+	assert.equal(status, 422);
+	assert.equal(refusal.error, "invoice_already_paid");
+	assert.partialDeepStrictEqual(await records(deal, payment), {
+		invoiced_on: invoiceDate,
+		received_on: receivedOn,
+		phases: ["closing", "closed"],
+	});
+});
 
 test("lead stages close and date an invoice once, and a partner can undo both changes", async () => {
 	const { deal, payment, invoice, name } = await fixture();
@@ -134,7 +176,7 @@ test("lead stages close and date an invoice once, and a partner can undo both ch
 		changed_by_user_id: null,
 		phases: ["closing", "closed"],
 	});
-	assert.partialDeepStrictEqual(await trackerEntries(), [
+	assert.partialDeepStrictEqual(await trackerEntries(deal), [
 		{
 			deal_id: deal,
 			commission_id: payment,
@@ -158,7 +200,7 @@ test("lead stages close and date an invoice once, and a partner can undo both ch
 	const undone = { ...applied, status: "undone" };
 	assert.equal((await save(job, undoPath(invoice), undo))[0], 404);
 	assert.deepEqual(await save(user, undoPath(invoice), undo), [200, undone]);
-	assert.deepEqual(await trackerEntries(), []);
+	assert.deepEqual(await trackerEntries(deal), []);
 	assert.deepEqual(await save(user, undoPath(invoice), undo), [
 		200,
 		{ replayed: true, ...undone },

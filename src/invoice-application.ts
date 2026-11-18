@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Transaction } from "kysely";
+import pg from "pg";
 import { Refusal, refuse } from "./answer.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
@@ -29,7 +30,15 @@ async function moveInvoice(
 			"status",
 			"application_id",
 		])
-		.executeTakeFirst();
+		.executeTakeFirst()
+		.catch((error: unknown) => {
+			if (
+				error instanceof pg.DatabaseError &&
+				error.constraint === "invoice_email_undo_unpaid"
+			)
+				throw new SaveRefusal(new Refusal(422, "invoice_already_paid"));
+			throw error;
+		});
 	if (!invoice) throw new SaveRefusal(new Refusal(404, "not_found"));
 	return invoice;
 }

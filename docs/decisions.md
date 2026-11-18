@@ -282,3 +282,5 @@
 141\. **One save opens or closes a deal (2026-11-18).** Adding a deal links its existing client and records its first phase in one transaction. Won records a move to Closed with the date and any known value. Lost records a move to Dead with the date and reason. The signed-in app and registered jobs use door 16 and its shared retry receipt (#683).
 
 142\. **Home and Invoices share the new tracker read (2026-11-18).** `INVOICES_READ_SCHEMA=next` uses current payment dates and amounts through the read-only engine role. Each payment awaiting an invoice has its own row, even when another payment on the deal has been invoiced. A copied invoice date still shows when it has no payment, with a blank amount (#682).
+
+145\. **Mark paid records receipt of one payment (2026-11-18).** The partner's save uses the tracker row's change ID and records the date the full payment was received. The tracker reads that date to show Paid. The database requires an invoice date for every received payment and refuses invoice undo once its payment is recorded. A retry returns the first receipt (#689).
