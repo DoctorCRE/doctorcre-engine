@@ -282,7 +282,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 2. `copy-markets.sql`, with `copy_market_county`: the deal copy matches a deal's market by name.
 3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role.
 4. `copy-national-account-owners.sql`, with `copy_account_owner_date`: needs the national accounts and mapped human owners.
-5. `copy-client-brands.sql`, with `copy_client_brand_date`: needs the client locations and their brand companies.
+5. `copy-client-brands.sql`, with `copy_client_brand_date`: needs the client locations and their brand companies. A person client without a reviewed date uses their first old deal's Chicago opening date.
 6. `copy-candidates-drafts.sql`: drafts and candidates find their leads and mailbox users.
 7. `copy-vendors.sql`, with `copy_vendor_ruling_reason` when reviewed: the deal copy finds the vendor roles.
 8. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
@@ -1628,7 +1628,7 @@ These doors use the signed-in partner entrance. They share the save and retry ru
 | `/api/engine/critical-dates/{critical_date_id}/resolve` | `{ idempotency_key, resolution, reason }`          | `200 { critical_date_id, status }`         |
 
 - All IDs are UUIDs. `party_id` names the existing person or company and `role` is its role slug on this deal. Each save adds or removes exactly that link. A missing link on removal returns `404 not_found`. The database records the removal in deal history. Deal ownership changes use door 16.
-- A date the partner adds opens in the same save, with the database recording that partner and the confirmation time. `kind` is `loi_expiry`, `option_notice`, `rent_start`, `lease_end`, `due_diligence`, `phase_effective_date` or `other`. `due_on` is a valid `YYYY-MM-DD` date, `source` is nonblank text, and `note` is optional nonblank text or null. The deal page read returns the label "Phase effective date" for `phase_effective_date`.
+- A date the partner adds opens in the same save, with the database recording that partner and the confirmation time. `kind` is `loi_expiry`, `option_notice`, `rent_start`, `lease_end`, `due_diligence`, `phase_effective_date` or `other`. `due_on` is a valid `YYYY-MM-DD` date, `source` is nonblank text, and `note` is optional nonblank text or null. The deal page read returns a plain label for each kind, using the same labels as the checklist.
 - Confirm opens a date proposed by automation. Resolve takes `done`, `dropped` or `passed` as `resolution` and returns it as `status`. A proposal can be dropped, and an open date can take any of the three resolutions. `reason` must be nonblank. The database stamps the decisions and keeps the confirmation when resolving.
 - A missing date on confirm or resolve returns `404 not_found`. A fresh key targeting the date's current status returns `409 version_conflict { status }`. Other disallowed transitions return `422 database_refused_the_statement { rule: "critical_date_status_moves" }`.
 
@@ -1660,7 +1660,7 @@ A suggestion group uses the most recent mark revision among its proposals, inclu
 
 1. May the assistant accept or dismiss a suggestion when a partner asks it to? It dismissed 9 in the last 30 days; the new database lets only a partner decide directly. Recommended no: the assistant asks the partner instead.
 2. Add the jobs `cadence` (nightly next steps) and `call_capture` (call suggestions and their automatic steps); only the owner adds a job.
-3. Phase effective date is its own critical-date kind. Copied dates now stored as `other` with the note "Phase effective date" take that kind (owner, 2026-11-18).
+3. Phase effective date is its own critical-date kind for new saves (owner, 2026-11-18). The [critical dates section](#critical-dates) records the rehearsal count for the copy.
 4. Each national account's owner is Joe or Dell (owner, 2026-11-18).
 5. A new location client under a national account has "national account or corporate lead" as how found (owner, 2026-11-18).
 6. The 13 national-account memberships for person clients with no proven start date use the opening date of each client's first deal (owner, 2026-11-18).

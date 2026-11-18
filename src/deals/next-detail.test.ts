@@ -422,6 +422,14 @@ test("the renewal checklist tracks confirmed deadlines and a saved receipt", asy
 	const response = await get(`/deals/${id(33)}`, "next");
 	assert.equal(response.status, 200);
 	assert.partialDeepStrictEqual(await response.json(), {
+		critical_dates: [
+			{ id: id(82), kind: "option_notice", label: "Option notice" },
+			{
+				id: id(86),
+				kind: "phase_effective_date",
+				label: "Phase effective date",
+			},
+		],
 		checklist: {
 			deal_type: "renewal",
 			phases: [
