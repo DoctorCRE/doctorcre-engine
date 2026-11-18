@@ -84,9 +84,15 @@ test("one completion review replaces its ordinary step until a partner decides",
 	assert.deepEqual(await cards(blair, deal), []);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values
-			('${owner}', '${step}', 'snoozed', '2999-01-01');
+			('${owner}', '${step}', 'snoozed', '2999-01-01T00:00Z');
 		commit;`);
-	assert.deepEqual(await cards(alex, deal), []);
+	assert.partialDeepStrictEqual(await cards(alex, deal), [
+		{
+			item_id: `next_action:${step}`,
+			section: "snoozed",
+			snoozed_until: "2999-01-01T00:00:00.000Z",
+		},
+	]);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		update home_mark set snoozed_until = '2001-01-01' where next_step_id = '${step}';
 		commit;`);
@@ -94,7 +100,9 @@ test("one completion review replaces its ordinary step until a partner decides",
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		update home_mark set disposition = 'settled', snoozed_until = null where next_step_id = '${step}';
 		commit;`);
-	assert.deepEqual(await cards(alex, deal), []);
+	assert.partialDeepStrictEqual(await cards(alex, deal), [
+		{ item_id: `next_action:${step}`, section: "settled" },
+	]);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		delete from home_mark where next_step_id = '${step}';
 		commit;`);
@@ -134,23 +142,50 @@ test("updates respect recipient, read time, snoozes and the latest disposition c
 	assert.deepEqual(await cards(blair, deal), []);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		insert into home_mark (user_id, home_update_id, disposition, snoozed_until) values
-			('${owner}', '${update}', 'snoozed', '2999-01-01');
+			('${owner}', '${update}', 'snoozed', '2999-01-01T00:00Z');
 		commit;`);
-	assert.deepEqual(await cards(alex, deal), []);
+	const [snoozed] = await cards(alex, deal);
+	assert.partialDeepStrictEqual(snoozed, {
+		item_id: `notification:${update}`,
+		section: "snoozed",
+		disposition: "snoozed",
+		snoozed_until: "2999-01-01T00:00:00.000Z",
+	});
+	assert.match(
+		String(snoozed?.base_version),
+		new RegExp(`^${card?.source_version}:[1-9][0-9]*:snoozed$`),
+	);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		update home_mark set snoozed_until = '2001-01-01' where home_update_id = '${update}';
 		commit;`);
-	assert.equal((await cards(alex, deal))[0]?.item_id, card?.item_id);
+	assert.partialDeepStrictEqual((await cards(alex, deal))[0], {
+		item_id: `notification:${update}`,
+		section: "inbox",
+		snoozed_until: null,
+	});
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		update home_mark set disposition = 'settled', snoozed_until = null where home_update_id = '${update}';
 		commit;`);
-	assert.deepEqual(await cards(alex, deal), []);
+	const [settled] = await cards(alex, deal);
+	assert.partialDeepStrictEqual(settled, {
+		item_id: `notification:${update}`,
+		section: "settled",
+		disposition: "settled",
+		snoozed_until: null,
+	});
+	assert.match(
+		String(settled?.base_version),
+		new RegExp(`^${card?.source_version}:[1-9][0-9]*:settled$`),
+	);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		update home_update set what = 'Review the revised survey' where id = '${update}';
 		update home_mark set waiting_on_party_id = '${other}', waiting_reason = 'For review' where home_update_id = '${update}';
 		commit;`);
 	const [revised] = await cards(alex, deal);
-	assert.equal(revised?.title, "Review the revised survey");
+	assert.partialDeepStrictEqual(revised, {
+		title: "Review the revised survey",
+		section: "inbox",
+	});
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		delete from home_mark where home_update_id = '${update}';
 		commit;`);

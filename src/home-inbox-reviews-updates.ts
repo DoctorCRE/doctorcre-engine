@@ -12,30 +12,45 @@ type DealNotice = {
 
 function noticeCard(
 	notice: DealNotice,
-	kind_label: "Task" | "Update",
-	source_version: string,
-	markVersion: string,
+	{
+		item_id,
+		open_url,
+		kind_label,
+		source_version,
+		mark_version,
+		snoozed_until = null,
+		settled = false,
+	}: {
+		item_id: string;
+		open_url: string;
+		kind_label: "Task" | "Update";
+		source_version: string;
+		mark_version: string;
+		snoozed_until?: string | null;
+		settled?: boolean;
+	},
 ) {
+	const disposition = settled ? "settled" : snoozed_until ? "snoozed" : "inbox";
 	return {
-		item_id: `notification:${notice.id}`,
+		item_id,
 		source_type: "notification",
 		source_id: notice.id,
 		source_version,
 		source_state: "needs_attention",
-		base_version: `${source_version}:${markVersion}:inbox`,
+		base_version: `${source_version}:${mark_version}:${disposition}`,
 		title: notice.title,
 		activity_at: new Date(notice.activity_at).toISOString(),
 		completed_at: null,
 		hold_until: null,
 		due_on: notice.due_on,
-		snoozed_until: null,
-		disposition: "inbox",
-		section: "inbox",
+		snoozed_until: snoozed_until ? new Date(snoozed_until).toISOString() : null,
+		disposition,
+		section: disposition,
 		unseen: true,
 		explicit_unsettle: false,
 		auto_settled: false,
 		context_label: notice.deal_name,
-		open_url: `/deals?deal=${notice.deal_id}`,
+		open_url,
 		kind_label,
 		action_id: null,
 		action_version: null,
@@ -85,17 +100,15 @@ export function completionReviewCard(
 	stepVersion: number,
 	markVersion: string | null,
 ) {
-	const card = noticeCard(
-		review,
-		"Task",
-		String(stepVersion),
-		markVersion ?? "0",
-	);
 	return {
-		...card,
-		item_id: `next_step_done:${review.id}`,
+		...noticeCard(review, {
+			item_id: `next_step_done:${review.id}`,
+			open_url: `/deals?deal=${review.deal_id}&focus=next-step`,
+			kind_label: "Task",
+			source_version: String(stepVersion),
+			mark_version: markVersion ?? "0",
+		}),
 		title: `Did this happen? ${review.title}`,
-		open_url: `${card.open_url}&focus=next-step`,
 		completion_review: {
 			proposal_id: review.id,
 			next_step_id: review.next_step_id,
@@ -115,6 +128,8 @@ type HomeUpdate = DealNotice & {
 	checklist_item_ref: string | null;
 	source_version: string;
 	mark_version: string;
+	snoozed_until: string | null;
+	settled: boolean;
 };
 
 export async function readHomeUpdates(
@@ -126,7 +141,10 @@ export async function readHomeUpdates(
 		select u.id, u.deal_id, d.name as deal_name, u.what as title, u.due_on,
 			u.created_at as activity_at, u.checklist_item_ref,
 			coalesce(update_change.id, 0)::text as source_version,
-			coalesce(mark_change.id, 0)::text as mark_version
+			coalesce(mark_change.id, 0)::text as mark_version,
+			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
+			coalesce(m.disposition = 'settled'
+				and coalesce(mark_change.disposition_id, 0) >= coalesce(update_change.id, 0), false) as settled
 		from home_update u
 		join deal d on d.id = u.deal_id
 		left join home_mark m on (m.user_id, m.item_kind, m.item_id) = (u.user_id, 'home_update', u.id)
@@ -142,14 +160,19 @@ export async function readHomeUpdates(
 				and record = jsonb_build_object('user_id', u.user_id, 'item_kind', 'home_update', 'item_id', u.id)
 		) mark_change
 		where u.user_id = ${userId}::uuid and u.read_at is null
-			and (m.snoozed_until is null or m.snoozed_until <= now())
-			and (m.disposition is distinct from 'settled'
-				or coalesce(mark_change.disposition_id, 0) < coalesce(update_change.id, 0))
 		order by u.created_at desc, u.id
 		limit ${limit}
 	`.execute(db);
 	return rows.map((update) => ({
-		...noticeCard(update, "Update", update.source_version, update.mark_version),
+		...noticeCard(update, {
+			item_id: `notification:${update.id}`,
+			open_url: `/deals?deal=${update.deal_id}`,
+			kind_label: "Update",
+			source_version: update.source_version,
+			mark_version: update.mark_version,
+			snoozed_until: update.snoozed_until,
+			settled: update.settled,
+		}),
 		checklist_item_ref: update.checklist_item_ref,
 	}));
 }

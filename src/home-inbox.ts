@@ -145,14 +145,11 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 		db,
 		rows.filter((step) => step.status === "open").map((step) => step.id),
 	);
-	const steps = rows
-		.map((step) => {
-			const review = reviews.get(step.id);
-			if (!review) return stepCard(step);
-			if (step.settled || step.snoozed_until) return null;
-			return completionReviewCard(review, step.step_version, step.mark_version);
-		})
-		.filter((card) => card !== null);
+	const steps = rows.map((step) => {
+		const review = reviews.get(step.id);
+		if (!review || step.settled || step.snoozed_until) return stepCard(step);
+		return completionReviewCard(review, step.step_version, step.mark_version);
+	});
 	const updates = await readHomeUpdates(db, userId, LIMIT + 1);
 	const items = [...steps, ...updates].sort(
 		(a, b) =>
