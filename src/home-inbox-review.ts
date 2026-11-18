@@ -67,7 +67,7 @@ function suggestionRows(userId: string, limit: number) {
 	return sql<Suggestion>`
 		with pending as (
 			select p.id, p.activity_id, p.activity_kind, p.created_at as activity_at, p.due_on,
-				coalesce(d.name, party.name, property.name, property.address, candidate.name,
+				coalesce(d.name, party.name, property.name, property.address,
 					nullif(btrim(e.sender_name), ''), e.sender::text) as context_label,
 				case when p.activity_kind = 'call' then '/calls?session=' || a.id
 					when d.id is not null then '/deals?deal=' || d.id
@@ -75,18 +75,17 @@ function suggestionRows(userId: string, limit: number) {
 				case
 					when p.activity_kind = 'call' then 'Call' || coalesce(' with ' || contact.name, '')
 						|| ' on ' || to_char(a.happened_at at time zone 'America/Chicago', 'Dy, Mon FMDD')
-					else case p.kind
-					when 'next_step' then case when e.activity_id is null then p.what else
-						'Next step from ' || coalesce(nullif(btrim(e.sender_name), ''), e.sender::text)
-						|| ' on ' || to_char(a.happened_at at time zone 'America/Chicago', 'Dy, Mon FMDD')
-								|| ': ' || p.what end
-					when 'phase_move' then 'Move to ' || phase.label
-					when 'file_to_deal' then 'File email to ' || d.name
-					when 'possible_new_deal' then 'Review possible new deal'
-					when 'lead_stage_move' then 'Review lead stage'
+					when p.kind = 'next_step' then p.what
+					when p.kind = 'phase_move' then 'Move to ' || phase.label
+					when p.kind = 'file_to_deal' then 'File email to ' || d.name
+					when p.kind = 'possible_new_deal' then 'Review possible new deal'
+					when p.kind = 'lead_stage_move' then 'Review lead stage'
 					else 'Review new lead'
-					end
-				end as title,
+				end as suggestion_title,
+				case when e.activity_id is not null then
+					concat_ws(' · ', coalesce(nullif(btrim(e.sender_name), ''), e.sender::text), nullif(btrim(e.subject), ''))
+				end as email_title,
+				a.happened_at as source_at,
 				e.conversation_id,
 				jsonb_build_object(
 					'id', p.id, 'kind', p.kind, 'activity_id', p.activity_id,
@@ -100,9 +99,8 @@ function suggestionRows(userId: string, limit: number) {
 			left join deal d on d.id = p.deal_id
 			left join party on party.id = p.party_id
 			left join property on property.id = p.property_id
-			left join candidate on candidate.id = p.candidate_id
 			left join phase on phase.slug = p.to_phase
-			where p.status = 'pending' and p.kind <> 'next_step_done'
+			where p.status = 'pending' and p.kind not in ('next_step_done', 'email_lead')
 				and case
 					when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 					when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
@@ -113,6 +111,7 @@ function suggestionRows(userId: string, limit: number) {
 				end
 		), grouped as (
 			select pending.*,
+				coalesce(first_value(email_title) over (source_group order by source_at desc, activity_id desc), suggestion_title) as title,
 				row_number() over same_source as position,
 				md5(string_agg(id::text, ':') over all_members) as source_version,
 				jsonb_agg(reference) over all_members as suggestions

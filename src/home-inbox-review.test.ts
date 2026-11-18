@@ -27,7 +27,10 @@ before(async () => {
 			with ordinality t(id, offset_days);
 		insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
 			select id, '<'||id||'@example.test>', case when id in ('${id(10)}', '${id(11)}') then 'Thread' end,
-				'pat@example.test', 'Pat Example', 'Floor plan', 'Please send the plan.'
+				'pat@example.test',
+				case when id = '${id(10)}' then 'Sam Example' when id <> '${id(12)}' then 'Pat Example' end,
+				case when id = '${id(10)}' then 'Earlier floor plan' else 'Floor plan' end,
+				'Please send the plan.'
 			from activity;
 		insert into email_mailbox (activity_id, user_id) values
 			('${id(10)}', '${partner}'), ('${id(11)}', '${partner}'), ('${id(11)}', '${other}'), ('${id(12)}', '${partner}');
@@ -55,7 +58,7 @@ before(async () => {
 		insert into activity (id, kind, happened_at) values ('${unstampedCall}', 'call', '2026-01-02T12:00Z');
 		insert into activity_about (activity_id, deal_id) values ('${unstampedCall}', '${deal}');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id, created_at)
-			values ('${id(30)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}', '2026-01-02'),
+			values ('${id(30)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}', '2026-01-05'),
 				('${id(31)}', 'next_step', '${id(11)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the plan', '${partner}', '2026-01-03'),
 				('${id(32)}', 'next_step', '${id(12)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the drawing', null, '2026-01-04'),
 				('${id(33)}', 'next_step', '${call}', 'call', 'Ask about the lease.', 'old_system', '${deal}', 'Check the lease', null, '2026-01-02'),
@@ -134,16 +137,15 @@ test("Home groups pending suggestions from each email conversation or call and k
 	);
 	assert.deepEqual(
 		suggestions.flatMap((card) => card.merged_source_ids).sort(),
-		[30, 31, 32, 33, 34, 38, 41].map(id),
+		[30, 31, 32, 33, 34, 38].map(id),
 	);
 	assert.partialDeepStrictEqual(
-		suggestions.find((card) => card.proposal_id === id(31)),
+		suggestions.find((card) => card.proposal_id === id(30)),
 		{
 			source_type: "email_proposal",
-			title: "Next step from Pat Example on Fri, Jan 2: Check the plan",
 			open_url: `/deals?deal=${deal}`,
-			merged_source_ids: [id(31), id(30), id(38)],
-			source_activity: { kind: "email", id: id(11) },
+			merged_source_ids: [id(30), id(31), id(38)],
+			source_activity: { kind: "email", id: id(10) },
 		},
 	);
 	assert.partialDeepStrictEqual(
@@ -156,18 +158,28 @@ test("Home groups pending suggestions from each email conversation or call and k
 			source_activity: { kind: "call", id: call },
 		},
 	);
-	assert.partialDeepStrictEqual(
-		suggestions.find((card) => card.proposal_id === id(41)),
-		{
-			context_label: "New Example",
-			source_activity: null,
-			suggestions: [{ id: id(41), kind: "email_lead", candidate_id: id(40) }],
-		},
-	);
 	assert.deepEqual(
 		(await inbox("other"))
 			.filter((card) => Array.isArray(card.suggestions))
 			.map((card) => card.merged_source_ids),
 		[[id(38)]],
 	);
+});
+
+test("Home leaves pending unknown-sender suggestions in the candidate queue", async () => {
+	assert.ok(!(await inbox()).some((card) => card.proposal_id === id(41)));
+});
+
+test("An email suggestion names its sender and subject", async () => {
+	const filing = (await inbox("other")).find(
+		(card) => card.proposal_id === id(38),
+	);
+	assert.equal(filing?.title, "Pat Example · Floor plan");
+	const step = (await inbox()).find((card) => card.proposal_id === id(32));
+	assert.equal(step?.title, "pat@example.test · Floor plan");
+});
+
+test("A grouped suggestion card uses the latest source email, even when an older email has the newest suggestion", async () => {
+	const group = (await inbox()).find((card) => card.proposal_id === id(30));
+	assert.equal(group?.title, "Pat Example · Floor plan");
 });

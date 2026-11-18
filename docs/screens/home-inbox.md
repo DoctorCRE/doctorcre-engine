@@ -77,7 +77,7 @@ A reply Dr. CRE drafted to an email.
 
 A next step, a deal to file the email to, a possible new deal, or a deal's progress that an email suggests.
 
-- [ ] Says what the email suggests and from whom: "Next step from Pat Example's email of Mon, Nov 16: send the floor plan".
+- [ ] Shows the sender and subject as its title, such as "Pat Example · Floor plan". A grouped card uses the latest email among its suggestions.
 - [ ] Opens to the email and the deal, client or lead it would change.
 - [ ] Accept saves the suggestion, and lets the partner edit a step's words and date first. Dismiss drops it for good. Neither has Undo. Only the partner's click decides, never the assistant.
 - [ ] Leaves when accepted or dismissed. One card per email conversation.
