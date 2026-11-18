@@ -27,6 +27,7 @@ insert into public.party (id, kind, name, created_by, updated_by) values
  ('${id(13)}', 'org', 'Example Former Location', '${id(1)}', '${id(1)}');
 insert into public.party (id, kind, name, org_id, created_by, updated_by) values
  ('${id(10)}', 'org', 'Example Clinic Location', '${id(16)}', '${id(1)}', '${id(1)}');
+update public.party set org_id = '${id(16)}' where id = '${id(11)}';
 insert into public.client_type (slug, label) values ('national_account', 'Example account');
 insert into public.client_status (slug, label) values ('engaged', 'Example engaged');
 insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by) values
@@ -109,7 +110,7 @@ const COPIES: [file: string, input?: string][] = [
 	[
 		"copy-client-brands.sql",
 		`create temp table copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop;
- insert into copy_client_brand_date values ('${id(20)}', '2025-06-01');`,
+ insert into copy_client_brand_date values ('${id(20)}', '2025-06-01'), ('${id(21)}', '2024-03-01');`,
 	],
 	["copy-deals.sql"],
 	[
@@ -221,12 +222,12 @@ test("the comparison covers every open deal, owner, parking, national account, f
 	assert.deepEqual(
 		deals.map((d) => [d.name, d.owner, d.parked_by, d.account_owner]),
 		[
-			["Example startup office", "partner_two", null, null],
+			["Example startup office", "partner_two", null, "partner_two"],
 			["Example clinic lease", "partner_one", null, "partner_two"],
 			["Example dental move", "partner_one", "partner_two", null],
 			["Example former brand lease", "partner_one", null, null],
 			["Example lease paid before invoice", "partner_one", null, null],
-			["Example other office", "partner_one", null, null],
+			["Example other office", "partner_one", null, "partner_two"],
 		],
 	);
 });
@@ -303,7 +304,10 @@ test("closed and lost lists keep the recorded outcome even without a close date 
 			{ workspace: "national_account", account: id(16) },
 			"closed",
 		);
-		assert.deepEqual(national, []);
+		assert.deepEqual(
+			national.map((d) => d.id),
+			[id(35)],
+		);
 	});
 });
 

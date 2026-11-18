@@ -43,7 +43,7 @@ before(async () => {
  insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
- insert into public.client_type (slug,label) values ('franchise','Example franchise');
+ insert into public.client_type (slug,label) values ('franchise','Example franchise'), ('national_account','Example account');
  insert into public.client_status (slug,label) values ('roster','Example roster');
  insert into role (slug,label) values ('client','Client');
  insert into how_found (slug,label) values ('referral','Referral');
@@ -51,6 +51,8 @@ before(async () => {
   ('${id(9)}','person','Example Person','${id(1)}','${id(1)}'),
   ('${id(10)}','org','Example Brand','${id(1)}','${id(1)}');
  insert into party (id,kind,name) values ('${id(9)}','person','Example Person'), ('${id(10)}','company','Example Brand');
+ insert into public.client (id,party_id,status,client_type,created_by,updated_by) values
+  ('${id(40)}','${id(10)}','roster','national_account','${id(1)}','${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(9)}','${id(9)}'), ('old_system','${id(10)}','${id(10)}');
  ${[11, 12, 13, 14, 20]
 		.map((n) => {
@@ -205,11 +207,26 @@ test("an existing overlapping membership is listed and a touching one is allowed
 	);
 });
 
-test("a person's org_id stays their company and makes no brand", async () => {
-	await transaction(brand(20), async () => {
-		const companies = await rows("select * from party_company");
+test("an ordinary company link on a person does not become a brand membership", async () => {
+	await transaction(brand(20, 11), async () => {
 		assert.deepEqual(await run(date(20)), []);
 		assert.deepEqual(await rows("select * from client_brand"), []);
+	});
+});
+
+test("a person client's national account copies with its reviewed date", async () => {
+	await transaction(brand(20), async () => {
+		const companies = await rows("select * from party_company");
+		assert.deepEqual(await reasons(""), [
+			[id(50), "brand_start_date_required"],
+		]);
+		assert.deepEqual(await run(date(20)), []);
+		assert.deepEqual(
+			await rows(
+				"select location_id, brand_id, started_on::text from client_brand",
+			),
+			[{ location_id: id(20), brand_id: id(10), started_on: "2024-03-01" }],
+		);
 		assert.deepEqual(await rows("select * from party_company"), companies);
 	});
 });
