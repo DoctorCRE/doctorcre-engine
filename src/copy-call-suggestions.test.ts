@@ -38,8 +38,9 @@ const capture = (
 	payload: object,
 	status = "pending",
 	ref?: number,
+	session = 60,
 ) =>
-	`('${id(n)}', '${id(60)}', 'key-${n}', 'batch', ${n}, '${kind}', '${JSON.stringify(payload)}', 'Example quote', 0.9, ${resolution(status, 1, ref)}, '2024-01-01 15:01')`;
+	`('${id(n)}', '${id(session)}', 'key-${n}', 'batch', ${n}, '${kind}', '${JSON.stringify(payload)}', 'Example quote', 0.9, ${resolution(status, 1, ref)}, '2024-01-01 15:01')`;
 const postCall = (
 	n: number,
 	status = "pending",
@@ -55,9 +56,10 @@ before(async () => {
 	// biome-ignore format: one fixture row per line
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
-  ('${id(2)}', 'partner_two', 'human', 'Example Other'), ('${id(3)}', 'example-device', 'automation', 'Example Recorder');
+  ('${id(2)}', 'partner_two', 'human', 'Example Other'), ('${id(3)}', 'example-device', 'automation', 'Example Recorder'),
+  ('${id(4)}', 'quill-joe-studio', 'automation', 'Example Studio Recorder');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
- insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'joe');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(1)}', '${id(1)}');
  insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
  insert into public.party (id, kind, name, created_by, updated_by) values ('${id(11)}', 'person', 'Example Party', '${id(1)}', '${id(1)}');
@@ -69,14 +71,15 @@ before(async () => {
  insert into phase values ('loi', 'Example LOI'), ('negotiation', 'Example negotiation'), ('dead', 'Example dead');
  insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}'), ('${id(32)}', 'Another Deal', '${id(1)}');
  insert into outside_id (source, value, deal_id) values ('old_system', '${id(30)}', '${id(30)}'), ('old_system', '${id(32)}', '${id(32)}');
- insert into activity (id, kind, happened_at) values ('${id(60)}', 'call', '2024-01-01 15:00');
- insert into activity_about (activity_id, deal_id) values ('${id(60)}', '${id(30)}');
+ insert into activity (id, kind, happened_at) values ('${id(60)}', 'call', '2024-01-01 15:00'), ('${id(61)}', 'call', '2024-01-01 15:00');
+ insert into activity_about (activity_id, deal_id) values ('${id(60)}', '${id(30)}'), ('${id(61)}', '${id(30)}');
  insert into party (id, kind, name) values ('${id(11)}', 'person', 'Example Party');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(11)}', '${id(11)}');
  insert into activity_about (activity_id, party_id) values ('${id(60)}', '${id(11)}');
  insert into public.capture_session (id, nonce, device_id, actor_id, mode, started_at, consent_announced_at, session_token_hash,
   expires_at, state, state_at, post_call) values
-  ('${id(60)}', 'nonce-60', 'example-device', '${id(3)}', 'meeting', '2024-01-01 15:00', '2024-01-01 15:00', 'token-60', '2024-02-01', 'done', '2024-01-01 16:00', true);
+  ('${id(60)}', 'nonce-60', 'example-device', '${id(3)}', 'meeting', '2024-01-01 15:00', '2024-01-01 15:00', 'token-60', '2024-02-01', 'done', '2024-01-01 16:00', true),
+  ('${id(61)}', 'nonce-61', 'quill-joe-studio', '${id(4)}', 'meeting', '2024-01-01 15:00', '2024-01-01 15:00', 'token-61', '2024-02-01', 'done', '2024-01-01 16:00', true);
  insert into public.event (id, occurred_at, actor_id, verb, subject_type, subject_id, field, new_value, cause)
   values ('${id(50)}', '2023-12-01', '${id(1)}', 'patch-deal-field', 'deal', '${id(30)}', 'phase', '{"phase": "loi"}', 'human_stated');
  insert into public.capture_post_call_candidate (id, session_id, idempotency_key, batch_hash, item_index, kind, deal_id, assignee_slug,
@@ -97,7 +100,7 @@ before(async () => {
 		capture(86, "meeting_record", { ref: id(30), summary: "Example" }),
 		capture(87, "next_step", { deal: id(30), text: "Example twice", next_date: null }),
 		capture(88, "next_step", { deal: id(30), text: "Example twice", next_date: null }),
-		capture(97, "activity", { ref: id(30), kind: "note", summary: "Example deal call" }),
+		capture(97, "activity", { ref: id(30), kind: "note", summary: "Example deal call" }, "pending", undefined, 61),
 		capture(98, "activity", { ref: id(20), kind: "note", summary: "Example client call" }),
 		capture(99, "activity", { ref: id(30), kind: "note", summary: "Example skipped call" }, "skipped"),
 		capture(96, "next_step", { deal: id(32), text: "Example unrelated step" }),
@@ -118,14 +121,23 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		"#90 next_step #60 call Example quote old_system accepted #01 2024-01-10 00:00:00+00 #30 Example action 72 #01 2024-02-01 - - #01 - 2024-01-10 00:00:00+00",
 	]);
 	assert.deepEqual(
-		await rows(`select id, kind, status, activity_id, deal_id, party_id, what, evidence
+		await rows(`select id, kind, status, activity_id, deal_id, party_id, what, evidence, changed_for_user_id
 			from proposal where kind = 'log_call' order by id`),
 		[
-			"#97 log_call pending #60 #30 - Example deal call Example quote",
-			"#98 log_call pending #60 - #11 Example client call Example quote",
+			"#97 log_call pending #61 #30 - Example deal call Example quote #01",
+			"#98 log_call pending #60 - #11 Example client call Example quote -",
 		],
 	);
-	assert.deepEqual(await rows("select id from activity"), ["#60"]);
+	assert.deepEqual(await rows("select id from activity order by id"), [
+		"#60",
+		"#61",
+	]);
+	assert.deepEqual(
+		await rows(
+			`select changed_for_user_id from change where table_name = 'proposal' and record->>'id' = '${id(97)}'`,
+		),
+		["#01"],
+	);
 	assert.deepEqual(await rows("select id from next_step"), ["#90"]);
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select record ->> 'id' as id, action, new_value ->> 'status' as status, changed_by_user_id, changed_by_job,
