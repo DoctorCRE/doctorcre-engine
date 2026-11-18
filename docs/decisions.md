@@ -270,3 +270,5 @@
 135\. **Assistant saves use the sponsor's plan (2026-11-18).** Completing by subject touches only the sponsor's ordinary step. An activity with an omitted time takes its timestamp inside the save, so retries keep the first activity. A deal update with an explicit plan replaces the sponsor's prior step in the same transaction. An update alone sends the sponsor's overdue step to Home for review (#664).
 
 136\. **Invoice capture keeps the first evidence for a source reference (2026-11-18).** The mail job saves invoice facts for the mailbox's partner. The nightly job reads captured evidence with a proposed deal and payment only when the same database checks used for application find a unique target. Evidence with no target waits for a user (#669).
+
+137\. **The signed-in Deals reads switch together (2026-11-18).** The engine selects `next` for both Deals GET routes only when `DEALS_READ_SCHEMA=next`. The reads use the existing database binding, the `engine_reader` role, and the app's board and detail response sections. The app's own KV switch still decides when its calls reach the engine (#668).

@@ -1,6 +1,8 @@
 import type { Context } from "hono";
-import { type Expression, sql } from "kysely";
+import { type Expression, sql, type Transaction } from "kysely";
 import { failureKind, sqlState } from "./failure.ts";
+import { nextTransaction } from "./next-connection.ts";
+import type { DB as NextDB } from "./next-database.d.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 
 // The hints are the old system's public ones, so a refusal body is exactly
@@ -276,10 +278,41 @@ type Verb =
 	| "territory-state-board"
 	| "today-triage";
 
-export async function answer(
+export function answer(
 	c: Context<DatabaseEnv>,
 	verb: Verb,
 	read: (db: Reader) => Promise<unknown>,
+) {
+	return answerRead(c, verb, (url, partner) =>
+		readSnapshot(url, async (db) =>
+			(await isKnownPartner(db, partner))
+				? read(db)
+				: new Refusal(422, "unauthenticated"),
+		),
+	);
+}
+
+export function answerNextRead(
+	c: Context<DatabaseEnv>,
+	verb: Verb,
+	read: (db: Transaction<NextDB>) => Promise<unknown>,
+) {
+	return answerRead(c, verb, (url, partner) =>
+		nextTransaction(url, "read", async (db) => {
+			const user = await db
+				.selectFrom("app_user")
+				.select("id")
+				.where("slug", "=", partner)
+				.executeTakeFirst();
+			return user ? read(db) : new Refusal(422, "unauthenticated");
+		}),
+	);
+}
+
+async function answerRead(
+	c: Context<DatabaseEnv>,
+	verb: Verb,
+	read: (url: string, partner: string) => Promise<unknown>,
 ) {
 	const failed = (status: 500 | 503) =>
 		refuse(c, new Refusal(status, "unhandled_verb_failure", { verb }));
@@ -288,11 +321,7 @@ export async function answer(
 	const started = performance.now();
 	let result: unknown;
 	try {
-		result = await readSnapshot(database.connectionString, async (db) =>
-			(await isKnownPartner(db, c.get("partner").slug))
-				? read(db)
-				: new Refusal(422, "unauthenticated"),
-		);
+		result = await read(database.connectionString, c.get("partner").slug);
 	} catch (error) {
 		// The old system turned PostgreSQL's refusal of a malformed id into this
 		// public error.
