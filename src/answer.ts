@@ -284,6 +284,7 @@ type Verb =
 	| "read-home-mail-priorities-v1"
 	| "read-invoice-tracker"
 	| "read-proposal"
+	| "read-prospects"
 	| "read-reply-draft"
 	| "read-vendor-meetings"
 	| "read-vendor-markets-v1"
