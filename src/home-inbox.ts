@@ -1,7 +1,10 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, refuse } from "./answer.ts";
-import { readHomeReviewCards } from "./home-inbox-review.ts";
+import {
+	readHomeMailPriorities,
+	readHomeReviewCards,
+} from "./home-inbox-review.ts";
 import {
 	completionReviewCard,
 	readCompletionReviews,
@@ -187,4 +190,15 @@ homeInbox.get("/home/inbox", (c) => {
 	const refused = checkFields(new URL(c.req.url).searchParams, []);
 	if (refused) return refuse(c, refused);
 	return answerNextRead(c, "read-home-inbox-v5", readHomeInbox);
+});
+
+homeInbox.get("/home/mail-priorities", (c) => {
+	if (c.env.HOME_INBOX_READ_SCHEMA !== "next") return c.notFound();
+	const refused = checkFields(new URL(c.req.url).searchParams, []);
+	if (refused) return refuse(c, refused);
+	return answerNextRead(
+		c,
+		"read-home-mail-priorities-v1",
+		readHomeMailPriorities,
+	);
 });
