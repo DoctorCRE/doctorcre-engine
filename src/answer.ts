@@ -22,6 +22,8 @@ const HINTS = {
 	draft_changed: "Read the draft again before recording delivery.",
 	already_sent: "This draft already has a sent message.",
 	unauthenticated: "The authenticated actor could not be resolved.",
+	account_name_exists:
+		"Confirm a separate company or choose an existing account.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
 	not_found: "The requested record was not found.",
 	home_item_not_found: "Choose a card from your Home inbox.",

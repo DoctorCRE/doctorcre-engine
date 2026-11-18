@@ -13,7 +13,8 @@ select o.*, md5('old_system:national_account_owner:' || o.account_client_id)::uu
  case when d.started_on is null then 'owner_start_date_required'
  when account.party_id is null then 'account_not_copied'
  when actor.kind <> 'human' then 'owner_not_human'
- when person.id is null then 'owner_person_not_copied' end as refusal
+ when person.id is null then 'owner_person_not_copied'
+ when partner.id is null then 'owner_not_account_partner' end as refusal
 from public.national_account_owner o
 left join pg_temp.copy_account_owner_date d using (account_client_id)
 left join public.actor actor on actor.id = o.owner_actor_id
@@ -21,6 +22,7 @@ left join outside_id account_map on account_map.source = 'old_system' and accoun
 left join national_account account on account.party_id = account_map.party_id
 left join outside_id owner_map on owner_map.source = 'old_system' and owner_map.value = o.owner_actor_id::text
 left join party person on person.id = owner_map.party_id and person.kind = 'person' and actor.kind = 'human'
+left join app_user partner on partner.id = person.id and partner.slug = actor.slug and partner.is_account_partner
 cross join lateral copy_event_attribution(o.set_by, (
  select e.id from public.event e where e.subject_type = 'client' and e.subject_id = o.account_client_id
   and (e.field = 'account_owner' or e.verb = 'create-national-account')

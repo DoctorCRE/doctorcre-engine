@@ -312,3 +312,5 @@
 157\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).
 
 158\. **Commission receipt progress comes from payments (2026-11-18).** Commission received is complete when the deal has at least one payment and all its payments have receipt dates. A copied expected amount stays as a forecast and has no effect on the checklist (#732).
+
+159\. **Joe or Dell owns a national account (2026-11-18).** A composite foreign key limits dated ownership to the two signed-in partner identities. A handoff ends the previous period on the new owner's start date in Central time. Changes on the same date keep one dated period and preserve each handoff in change history (#738).
