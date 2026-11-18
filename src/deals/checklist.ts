@@ -243,7 +243,7 @@ function settle(
 	};
 }
 
-function criticalDateLabel(kind: string | null) {
+export function criticalDateLabel(kind: string | null) {
 	if (kind === "loi_expiry") return "LOI expiry";
 	const words = (kind ?? "").replaceAll("_", " ");
 	return words.charAt(0).toUpperCase() + words.slice(1);

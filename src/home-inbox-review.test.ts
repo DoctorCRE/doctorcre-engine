@@ -399,6 +399,71 @@ test("Home shows one pending call log with the proposal to decide", async () => 
 	assert.equal(dismissed, 200);
 });
 
+test("Home uses the copied call log's reviewer when the call has no partner stamp", async () => {
+	const copied = id(42);
+	const unassigned = id(43);
+	const copiedForOther = id(44);
+	const newLog = id(45);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${partner}', true);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
+			values ('${copied}', 'log_call', '${unstampedCall}', 'call', 'old_system', '${deal}', 'Review the plan.', 'Review the plan.');
+		select set_config('engine.user_id', '', true);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
+			values ('${unassigned}', 'log_call', '${unstampedCall}', 'call', 'old_system', '${deal}', 'Review the lease.', 'Review the lease.');
+		select set_config('engine.user_id', '${other}', true);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
+			values ('${copiedForOther}', 'log_call', '${call}', 'call', 'old_system', '${deal}', 'Review the timing.', 'Review the timing.');
+		select set_config('engine.job', 'mail_capture', true);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
+			values ('${newLog}', 'log_call', '${unstampedCall}', 'call', 'mail_capture', '${deal}', 'Review the budget.', 'Review the budget.');
+		commit;`);
+	try {
+		const calls = async (user: string, callId = unstampedCall) =>
+			(await inbox(user)).filter(
+				(card) => card.open_url === `/calls?session=${callId}`,
+			);
+		assert.partialDeepStrictEqual(await calls("example"), [
+			{ proposal_id: copied, merged_source_ids: [copied] },
+		]);
+		assert.deepEqual(
+			await calls("other"),
+			[],
+			"A new suggestion needs its call's partner stamp",
+		);
+		assert.deepEqual(
+			await calls("other", call),
+			[],
+			"A copied proposal cannot override its call's partner stamp",
+		);
+		for (const [user, proposal, status] of [
+			["example", copied, 200],
+			["other", copied, 404],
+			["example", unassigned, 404],
+			["other", newLog, 404],
+			["other", copiedForOther, 404],
+		] as const) {
+			const detail = await request({ user }, `proposals/${proposal}`, {
+				method: "GET",
+			});
+			assert.equal(detail.status, status);
+		}
+		const [status] = await save(
+			{ user: "example" },
+			`proposals/${copied}/decision`,
+			{
+				idempotency_key: randomUUID(),
+				decision: "dismiss",
+			},
+		);
+		assert.equal(status, 200);
+		assert.deepEqual(await calls("example"), []);
+	} finally {
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+			delete from proposal where id in ('${copied}', '${unassigned}', '${copiedForOther}', '${newLog}'); commit;`);
+	}
+});
+
 test("An email suggestion names its sender and subject", async () => {
 	const filing = (await inbox("other")).find(
 		(card) => card.proposal_id === id(38),
