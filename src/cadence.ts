@@ -58,10 +58,11 @@ async function subjects(
 		.limit(limit + 1);
 	if (collection === "vendors")
 		return query
+			.leftJoin("app_user as u", "u.id", "r.owner_user_id")
 			.select([
 				sql<null>`null`.as("client_status"),
-				sql<null>`null`.as("owner"),
-				sql<null>`null`.as("owner_party_id"),
+				"u.slug as owner",
+				"u.id as owner_party_id",
 			])
 			.execute();
 	const owner = collection === "leads" ? "r.owner_user_id" : "c.owner_user_id";

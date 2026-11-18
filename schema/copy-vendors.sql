@@ -1,4 +1,4 @@
--- Copies today's vendors into the new database: each one's vendor role, with its stage, relationship level and
+-- Copies today's vendors into the new database: each one's vendor role, with its partner, stage, relationship level and
 -- target flag, its categories as roles, its notes, its introductions and the deals it worked, and who knows or can
 -- introduce whom. Run it after schema/copy-parties.sql
 -- and before schema/copy-deals.sql, which finds the vendor roles, and again after it, so introductions and worked deals
@@ -50,7 +50,8 @@ select v.*, map.party_id as record_id,
 	exists (select from party_role r where r.party_id = map.party_id and r.role = 'vendor') as record_had_vendor,
 	row_number() over (partition by map.party_id
 		order by v.merged_into is not null, v.party_id <> map.party_id, v.created_at, v.id) as rank,
-	stage.slug as stage_slug, level.level, nullif(regexp_replace(v.offers, '^\s+|\s+$', '', 'g'), '') as typed_offers,
+	stage.slug as stage_slug, level.level, u.id as owner_user_id,
+	nullif(regexp_replace(v.offers, '^\s+|\s+$', '', 'g'), '') as typed_offers,
 	nullif(regexp_replace(v.seeking, '^\s+|\s+$', '', 'g'), '') as typed_seeking, nullif(v.disposition, 'active') as ruling,
 	case when v.disposition <> 'active' then reviewed.reason end as ruling_reason, case
 	when v.disposition = 'active' then null
@@ -60,6 +61,8 @@ select v.*, map.party_id as record_id,
 	exists (select from outside_id where source = 'old_system' and value = v.id::text) as copied_before, author.*
 from public.vendor v
 left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text
+left join outside_id owner_map on owner_map.source = 'old_system' and owner_map.value = v.owner_id::text
+left join app_user u on u.id = owner_map.party_id
 cross join lateral (select count(distinct r.value) as reasons, min(r.value) as reason
 	from pg_temp.copy_vendor_ruling_reason c
 	cross join lateral (select nullif(regexp_replace(c.reason, '^\s+|\s+$', '', 'g'), '') as value) r
@@ -79,7 +82,7 @@ where not copied_before and record_id is not null and not record_had_vendor
 -- own vendor's first, then by when they were stored, the strictest ruling with its reason, and a target on any unless
 -- it is avoided.
 insert into party_role (party_id, role, created_at, stage, relationship_level, disposition, disposition_reason, is_target, offers, seeking,
-	relationship_origin, rivalry_note, refers_business,
+	relationship_origin, rivalry_note, refers_business, owner_user_id,
 	changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (record_id) record_id, 'vendor', created_at,
 	first_value(stage_slug) over (partition by record_id order by stage_slug is null, rank),
@@ -91,6 +94,7 @@ select distinct on (record_id) record_id, 'vendor', created_at,
 	first_value(originated) over (partition by record_id order by originated is null, rank),
 	first_value(rivalry_group) over (partition by record_id order by rivalry_group is null, rank),
 	first_value(referral_active) over (partition by record_id order by referral_active is null, rank),
+	first_value(owner_user_id) over (partition by record_id order by owner_user_id is null, rank),
 	changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from copied
 window strictest as (partition by record_id order by array_position(array['parked', 'avoid'], ruling) desc nulls last, rank)
@@ -135,6 +139,17 @@ cross join lateral (values ('offers', v.typed_offers, r.offers), ('seeking', v.t
 	('originated', v.originated, r.relationship_origin), ('rivalry_group', v.rivalry_group, r.rivalry_note),
 	('referral_active', v.referral_active::text, r.refers_business::text)) f(field, value, stored)
 where f.value is not null and f.value <> f.stored;
+
+insert into not_copied
+select id, 'owner_id', owner_id::text, 'relationship owner is not a copied user'
+from old_vendor where owner_id is not null and owner_user_id is null
+union all
+select id, 'owner_label', owner_label, 'relationship owner has no actor id'
+from old_vendor where owner_id is null and owner_label ~ '\S' and lower(btrim(owner_label)) <> 'unassigned'
+union all
+select v.id, 'owner_id', v.owner_id::text, 'its record holds another value'
+from kept v join party_role r on r.party_id = v.record_id and r.role = 'vendor'
+where v.owner_user_id <> r.owner_user_id;
 
 -- A merged-away vendor's note that its survivor holds too was filled in by today's merge.
 create temp table vendor_note on commit drop as
@@ -204,7 +219,6 @@ create temp table unplaced on commit drop as
 select v.id, v.record_id, v.merged_into, f.field, f.value, f.reason
 from kept v cross join lateral (values ('category', case when v.category_slug is null then v.category end, 'not a vendor category'),
 	('trust_override', v.trust_override ->> 'tier', 'a hand-set rating, which the new database does not keep'),
-	('owner_id', v.owner_id::text, 'relationship owner awaits an owner ruling'),
 	('out_of_market', nullif(v.out_of_market, false)::text, null)) as f (field, value, reason)
 where f.value ~ '\S';
 

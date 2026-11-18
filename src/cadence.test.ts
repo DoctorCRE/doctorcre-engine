@@ -23,7 +23,8 @@ before(async () => {
 		update party set how_found = 'referral' where id in ('${id(2)}', '${id(3)}', '${id(5)}', '${id(6)}');
 		insert into app_user (id, slug) values ('${id(1)}', 'alex');
 		insert into party_role (party_id, role) values
-		('${id(2)}', 'client'), ('${id(5)}', 'client'), ('${id(6)}', 'client'), ('${id(4)}', 'vendor');
+		('${id(2)}', 'client'), ('${id(5)}', 'client'), ('${id(6)}', 'client'), ('${id(6)}', 'vendor');
+		insert into party_role (party_id, role, owner_user_id) values ('${id(4)}', 'vendor', '${id(1)}');
 		insert into party_role (party_id, role, stage, owner_user_id, estimated_lease_on, lease_estimate_source) values
 		('${id(2)}', 'lead', 'new', null, '2027-06-01', 'Example lease estimate'),
 		('${id(3)}', 'lead', 'new', '${id(1)}', '2027-06-01', 'Example lease estimate'),
@@ -140,12 +141,24 @@ test("converted parties appear in clients and leads with the same governing stat
 		],
 		next_cursor: null,
 	});
+});
+
+test("vendor cadence answers the relationship partner and leaves an unassigned vendor unassigned", async () => {
 	assert.deepEqual(await items("collection=vendors"), {
 		items: [
 			{
 				id: id(4),
 				name: "Example Vendor",
 				ref: "V-EX-1",
+				client_status: null,
+				owner: "alex",
+				owner_party_id: id(1),
+				old_ids: [],
+			},
+			{
+				id: id(6),
+				name: "Example Converted Clinic",
+				ref: null,
 				client_status: null,
 				owner: null,
 				owner_party_id: null,
