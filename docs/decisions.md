@@ -302,3 +302,5 @@
 152\. **Home uses the step's revision to finish and reopen it (2026-11-18).** This updates the end and reopen rules in decision 111. Mark done checks the revision Home read. Undo checks the completion's change ID. Snooze and its undo check the separate Home mark version, including on a completion review. Jobs and the Deals checklist keep their existing versionless completion calls (#711).
 
 153\. **Deal people search filters by kind before the result limit (2026-11-18).** The deal page can ask for people or companies by name prefix. The Market agent picker asks for people so that companies cannot use up its 25 results. The search includes do-not-contact records because choosing a participant does not contact them (#712).
+
+154\. **Home reads draft recipients before approval (2026-11-18).** A pending reply uses the original sender and previews the other partner's work email when it can identify one address. Approval freezes both addresses. Saving the draft changes its text and revision. Declining it requires a reason, as in the old inbox (#713).

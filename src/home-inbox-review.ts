@@ -1,4 +1,6 @@
 import { sql, type Transaction } from "kysely";
+import { jsonObjectFrom } from "kysely/helpers/postgres";
+import { isoMillis, Refusal } from "./answer.ts";
 import type { DB } from "./next-database.d.ts";
 import { pendingProposals } from "./pending-proposals.ts";
 
@@ -64,6 +66,79 @@ function draftRows(userId: string, limit: number) {
 	`;
 }
 
+const visibleSuggestion = (userId: string) => sql<boolean>`
+	case
+		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
+		when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
+		else p.changed_for_user_id = ${userId}::uuid
+			or exists (select from email_mailbox m where m.activity_id = a.id and m.user_id = ${userId}::uuid)
+			or (p.activity_kind in ('call', 'meeting')
+				and ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id))
+	end
+`;
+
+export async function readProposal(
+	db: Transaction<DB>,
+	userId: string,
+	id: string,
+) {
+	const proposal = await db
+		.selectFrom("proposal as p")
+		.innerJoin("activity as a", "a.id", "p.activity_id")
+		.leftJoin("next_step as step", "step.id", "p.next_step_id")
+		.leftJoin("deal as d", "d.id", "p.deal_id")
+		.leftJoin("party", "party.id", "p.party_id")
+		.leftJoin("property", "property.id", "p.property_id")
+		.select([
+			"p.id as proposal_id",
+			"p.kind",
+			"p.evidence",
+			"p.next_step_id",
+			"p.deal_id",
+			"p.party_id",
+			"p.property_id",
+			"p.owner_party_id",
+			"p.from_phase",
+			"p.to_phase",
+			"p.phase_on",
+			"p.from_stage",
+			"p.to_stage",
+			"p.how_found",
+			"p.strength",
+			"p.reason",
+		])
+		.select((eb) => [
+			eb.fn.coalesce("p.what", "step.what").as("what"),
+			eb.fn.coalesce("p.due_on", "step.due_on").as("due_on"),
+			eb.fn
+				.coalesce("d.name", "party.name", "property.name", "property.address")
+				.as("target_name"),
+			jsonObjectFrom(
+				eb
+					.selectFrom("activity as source")
+					.leftJoin("email as e", "e.activity_id", "source.id")
+					.whereRef("source.id", "=", "a.id")
+					.select((source) => [
+						"source.id",
+						"source.kind",
+						"source.summary",
+						"e.sender",
+						"e.sender_name",
+						"e.subject",
+						"e.body",
+						isoMillis(source.ref("source.happened_at")).as("happened_at"),
+					]),
+			).as("source_activity"),
+		])
+		.where("p.id", "=", id)
+		.where("p.status", "=", "pending")
+		.where(sql<boolean>`case when p.kind = 'next_step_done'
+			then step.owner_party_id = ${userId}::uuid and step.status = 'open'
+			else ${visibleSuggestion(userId)} end`)
+		.executeTakeFirst();
+	return proposal ?? new Refusal(404, "not_found");
+}
+
 function suggestionRows(db: Transaction<DB>, userId: string, limit: number) {
 	return sql<Suggestion>`
 		with pending as (
@@ -102,14 +177,7 @@ function suggestionRows(db: Transaction<DB>, userId: string, limit: number) {
 			left join property on property.id = p.property_id
 			left join phase on phase.slug = p.to_phase
 			where p.kind not in ('next_step_done', 'email_lead')
-				and case
-					when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
-					when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
-					else p.changed_for_user_id = ${userId}::uuid
-						or exists (select from email_mailbox m where m.activity_id = e.activity_id and m.user_id = ${userId}::uuid)
-						or (p.activity_kind in ('call', 'meeting')
-							and ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id))
-				end
+				and ${visibleSuggestion(userId)}
 		), grouped as (
 			select pending.*,
 				coalesce(first_value(email_title) over (source_group order by source_at desc, activity_id desc), suggestion_title) as title,

@@ -282,6 +282,8 @@ type Verb =
 	| "quiet-follow-ups"
 	| "read-home-inbox-v5"
 	| "read-invoice-tracker"
+	| "read-proposal"
+	| "read-reply-draft"
 	| "read-vendor-meetings"
 	| "read-vendor-markets-v1"
 	| "search-parties-v1"
@@ -302,8 +304,8 @@ export function answer(
 	);
 }
 
-export function answerNextRead(
-	c: Context<DatabaseEnv>,
+export function answerNextRead<E extends DatabaseEnv>(
+	c: Context<E>,
 	verb: Verb,
 	read: (db: Transaction<NextDB>, userId: string) => Promise<unknown>,
 ) {
@@ -319,8 +321,8 @@ export function answerNextRead(
 	);
 }
 
-async function answerRead(
-	c: Context<DatabaseEnv>,
+async function answerRead<E extends DatabaseEnv>(
+	c: Context<E>,
 	verb: Verb,
 	read: (url: string, partner: string) => Promise<unknown>,
 ) {
