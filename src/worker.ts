@@ -18,7 +18,7 @@ import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
-import { nextDeals } from "./deals/next-change.ts";
+import { dealJobs, nextDeals } from "./deals/next-change.ts";
 import { deals } from "./deals/routes.ts";
 import { invoices } from "./invoices.ts";
 import { leads } from "./leads/routes.ts";
@@ -108,6 +108,7 @@ app.use(
 );
 app.route("/jobs", cadence);
 app.route("/jobs", nextDeals);
+app.route("/jobs", dealJobs);
 app.route("/jobs", nextSteps);
 app.route("/jobs", proposalJobs);
 app.route("/jobs", routerQueue);

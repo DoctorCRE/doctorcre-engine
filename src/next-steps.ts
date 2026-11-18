@@ -6,6 +6,7 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
+import { userId } from "./next-save.ts";
 import { saveOpenStep } from "./open-step.ts";
 import {
 	type Check,
@@ -53,6 +54,8 @@ const NEW_STEP = {
 	party_id: optional(isUuid),
 	property_id: optional(isUuid),
 	...STEP_FIELDS,
+	owner: optional(isText),
+	replaces: optional((value): value is "current" => value === "current"),
 	what: isText,
 	item: optional(
 		fitting({ title: isText, bullets: isBullets, source_ref: isText }),
@@ -88,17 +91,65 @@ const STEP_REOPEN = { idempotency_key: isUuid };
 
 type StepRequest<S extends Shape> = Fitted<S> & { next_step_id: string };
 
+export async function resolveStepOwner(
+	tx: Transaction<DB>,
+	{ owner, owner_party_id }: { owner?: string; owner_party_id?: string | null },
+) {
+	if (owner === undefined) return owner_party_id;
+	if (owner_party_id !== undefined)
+		throw new SaveRefusal(
+			new Refusal(400, "invalid_field_value", {
+				fields: ["owner", "owner_party_id"],
+			}),
+		);
+	return userId(tx, owner);
+}
+
+async function cancelCurrentStep(
+	tx: Transaction<DB>,
+	deal_id: string,
+	owner: string | null,
+) {
+	await tx
+		.selectFrom("deal")
+		.select("id")
+		.where("id", "=", deal_id)
+		.forNoKeyUpdate()
+		.execute();
+	await tx
+		.updateTable("next_step")
+		.set({
+			resolution: "cancelled",
+			resolved_at: sql<string>`clock_timestamp()`,
+			resolution_reason: "Replaced by a new next step",
+		})
+		.where("deal_id", "=", deal_id)
+		.where("status", "=", "open")
+		.where("item_title", "is", null)
+		.where(sql<boolean>`owner_party_id =
+			coalesce(${owner}::uuid, nullif(current_setting('engine.user_id', true), '')::uuid)`)
+		.execute();
+}
+
 // Written out, because the generated row type asks for the stamp the database sets.
 async function createStep(
 	tx: Transaction<DB>,
 	request: Fitted<typeof NEW_STEP>,
 ): Promise<JsonObject> {
-	const { deal_id, party_id, property_id, what, item } = request;
-	const { owner_party_id = null, due_on, hold_until } = request;
+	const { deal_id, party_id, property_id, what, item, replaces } = request;
+	const { due_on, hold_until } = request;
+	const owner_party_id = (await resolveStepOwner(tx, request)) ?? null;
+	if (replaces) {
+		if (!deal_id || item || party_id || property_id)
+			throw new SaveRefusal(
+				new Refusal(400, "invalid_field_value", { fields: ["replaces"] }),
+			);
+		await cancelCurrentStep(tx, deal_id, owner_party_id);
+	}
 	const insert = sql<{ id: string }>`
-		insert into next_step (deal_id, party_id, property_id, what, owner_party_id, due_on, hold_until,
+		insert into next_step (created_at, deal_id, party_id, property_id, what, owner_party_id, due_on, hold_until,
 			item_title, item_bullets, source_ref)
-		values (${deal_id ?? null}::uuid, ${party_id ?? null}::uuid, ${property_id ?? null}::uuid, ${what},
+		values (${replaces ? sql`clock_timestamp()` : sql`now()`}, ${deal_id ?? null}::uuid, ${party_id ?? null}::uuid, ${property_id ?? null}::uuid, ${what},
 			${owner_party_id}::uuid, ${due_on ?? null}::date, ${hold_until ?? null}::date,
 			${item?.title ?? null}, ${JSON.stringify(item?.bullets ?? [])}::jsonb, ${item?.source_ref ?? null})
 		returning id`;

@@ -6,6 +6,7 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
+import { resolveStepOwner } from "./next-steps.ts";
 import { saveOpenStep } from "./open-step.ts";
 import {
 	clearable,
@@ -38,6 +39,9 @@ const shape = {
 	property_id: optional(isUuid),
 	what: optional(isText),
 	owner_party_id: optional(isUuid),
+	owner: optional(isText),
+	to: optional(isText),
+	on: optional(isCalendarDate),
 	due_on: optional(isCalendarDate),
 	how_found: optional(isText),
 	from_stage: optional(isText),
@@ -82,7 +86,7 @@ const decision = {
 	reason: optional(isText),
 };
 const fail = (
-	status: 404 | 409 | 422,
+	status: 400 | 404 | 409 | 422,
 	error: Refusal["error"],
 	extra: JsonObject = {},
 ): never => {
@@ -220,13 +224,35 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 					.executeTakeFirst();
 				if (!activity)
 					return fail(404, "not_found", { activity_id: r.activity_id });
+				const stated = r.to !== undefined;
+				if (
+					(stated &&
+						(r.kind !== "phase_move" ||
+							!["call", "meeting"].includes(activity.kind))) ||
+					(r.on && !stated)
+				)
+					return fail(400, "invalid_field_value", { fields: ["to", "on"] });
+				if (r.owner !== undefined && r.kind !== "next_step")
+					return fail(400, "invalid_field_value", { fields: ["owner"] });
+				const owner = await resolveStepOwner(tx, r);
 				let from: string | null = null,
 					to: string | null = null;
 				if (r.kind === "phase_move" && r.deal_id) {
 					const d = await dealNow(tx, r.deal_id);
 					from = d.phase;
-					to = phaseMove(from, d.kind, r.evidence);
-					if (!to) return fail(422, "phase_not_eligible");
+					to = r.to ?? phaseMove(from, d.kind, r.evidence);
+					if (
+						!to ||
+						to === from ||
+						(stated && to === "dead" && !r.reason) ||
+						(stated &&
+							!(await tx
+								.selectFrom("phase")
+								.select("slug")
+								.where("slug", "=", to)
+								.executeTakeFirst()))
+					)
+						return fail(422, "phase_not_eligible");
 				}
 				const toStage = r.kind === "new_lead" ? "new" : (r.to_stage ?? null);
 				const { rows } = await sql<{
@@ -235,10 +261,10 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 					existing: boolean;
 				}>`
    insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, party_id, property_id,
-    what, owner_party_id, due_on, from_phase, to_phase, how_found, from_stage, to_stage, strength, reason)
+    what, owner_party_id, due_on, from_phase, to_phase, phase_stated, phase_on, how_found, from_stage, to_stage, strength, reason)
    values (${r.kind}, ${r.activity_id}::uuid, ${activity.kind}, ${r.evidence}, current_setting('engine.job'),
     ${r.deal_id ?? null}::uuid, ${r.party_id ?? null}::uuid, ${r.property_id ?? null}::uuid,
-    ${r.what ?? null}, ${r.owner_party_id ?? null}::uuid, ${r.due_on ?? null}::date, ${from}, ${to},
+    ${r.what ?? null}, ${owner ?? null}::uuid, ${r.due_on ?? null}::date, ${from}, ${to}, ${stated}, ${r.on ?? null}::date,
     ${r.how_found ?? null}, ${r.from_stage ?? null}, ${toStage}, ${r.strength ?? null}, ${r.reason ?? null})
    on conflict do nothing returning id, status, false as existing`.execute(tx);
 				if (rows[0]) return { proposal_id: rows[0].id, status: rows[0].status };
@@ -249,7 +275,8 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 					.where("kind", "=", r.kind)
 					.where(sql<boolean>`deal_id is not distinct from ${r.deal_id ?? null}::uuid and party_id is not distinct from ${r.party_id ?? null}::uuid
     and property_id is not distinct from ${r.property_id ?? null}::uuid and from_phase is not distinct from ${from} and to_phase is not distinct from ${to}
-    and what is not distinct from ${r.what ?? null} and owner_party_id is not distinct from ${r.owner_party_id ?? null}::uuid
+    and phase_stated = ${stated} and phase_on is not distinct from ${r.on ?? null}::date
+    and what is not distinct from ${r.what ?? null} and owner_party_id is not distinct from ${owner ?? null}::uuid
     and due_on is not distinct from ${r.due_on ?? null}::date and how_found is not distinct from ${r.how_found ?? null}
     and from_stage is not distinct from ${r.from_stage ?? null} and to_stage is not distinct from ${toStage}`)
 					.executeTakeFirstOrThrow();
@@ -303,7 +330,8 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					const d = await dealNow(tx, p.deal_id);
 					if (
 						d.phase !== p.from_phase ||
-						phaseMove(d.phase, d.kind, p.evidence) !== p.to_phase
+						(!p.phase_stated &&
+							phaseMove(d.phase, d.kind, p.evidence) !== p.to_phase)
 					)
 						return fail(409, "version_conflict", { current_phase: d.phase });
 				}
