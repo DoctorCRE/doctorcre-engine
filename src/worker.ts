@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 
+import { dealNoteDoor } from "./activity/deal-note.ts";
 import { filedEmails } from "./activity/filed-emails.ts";
-import { activityDoor, dealNoteDoor } from "./activity/next-record.ts";
+import { activityDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
 import { attachmentFiles, attachments } from "./attachments.ts";
 import { cadence } from "./cadence.ts";

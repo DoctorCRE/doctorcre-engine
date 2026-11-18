@@ -112,6 +112,66 @@ test("a hold cites the activity and exact step, and the same pair is stored once
 const assistantNote = (args: object) =>
 	save({ job: "agent", for_user: "alex" }, "activities/deal-note", args);
 
+async function dealWithoutStep() {
+	const id = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id) values ('${id}', 'Example Deal', '${ownerId}'); commit;`);
+	return id;
+}
+
+test("a deal note with a plan requires an agent with a sponsoring partner", async () => {
+	const deal_id = await dealWithoutStep();
+	for (const caller of [
+		{ job: "mail_capture", for_user: "alex" },
+		{ job: "agent" },
+	]) {
+		const [status, answer] = await save(caller, "activities/deal-note", {
+			idempotency_key: randomUUID(),
+			deal_id,
+			text: "Example update with a plan.",
+			plan: { what: "Send the survey", due_on: "2034-10-15" },
+		});
+		assert.deepEqual([status, answer.error], [403, "AUTHORIZATION_REFUSED"]);
+	}
+	assert.equal(
+		(await db.query("select from activity_about where deal_id = $1", [deal_id]))
+			.rowCount,
+		0,
+	);
+	assert.equal(
+		(await db.query("select from next_step where deal_id = $1", [deal_id]))
+			.rowCount,
+		0,
+	);
+});
+
+test("a deal note without a current step asks for a next step and creates no review", async () => {
+	const deal_id = await dealWithoutStep();
+	const [status, answer] = await assistantNote({
+		idempotency_key: randomUUID(),
+		deal_id,
+		text: "The survey was sent.",
+	});
+	assert.deepEqual(
+		[status, answer.proposal_id, answer.next_step_required],
+		[201, null, true],
+	);
+	assert.equal(
+		(await db.query("select from proposal where deal_id = $1", [deal_id]))
+			.rowCount,
+		0,
+	);
+});
+
+test("a deal note for an unknown deal returns 404", async () => {
+	const [status, answer] = await assistantNote({
+		idempotency_key: randomUUID(),
+		deal_id: randomUUID(),
+		text: "The survey was sent.",
+	});
+	assert.deepEqual([status, answer.error], [404, "not_found"]);
+});
+
 test("a deal note saves once and sends the owner's overdue step to Home for review", async () => {
 	const { deal_id, next_step_id } = await fixture("note");
 	const args = {

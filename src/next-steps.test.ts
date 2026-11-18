@@ -133,6 +133,15 @@ test("the assistant completes its sponsoring owner's ordinary step on a named de
 	]);
 });
 
+test("a completion naming both a deal and a party returns 400", async () => {
+	const [status, answer] = await save({ user: "alex" }, "next-steps/complete", {
+		idempotency_key: randomUUID(),
+		deal_id: DEAL,
+		party_id: CLIENT,
+	});
+	assert.deepEqual([status, answer.error], [400, "invalid_field_value"]);
+});
+
 test("a partner can complete their step on a party and a missing party is refused", async () => {
 	const caller = { user: "blair" };
 	const party_id = randomUUID();
