@@ -262,3 +262,5 @@
 131\. **The Deals board uses the deal's full name (2026-11-18).** Market remains visible and searchable in the deal workspace. The short name appears on Home's overdue deal cards through the separate Home agenda read (#593).
 
 132\. **Undo uses the automatic completion's change id (2026-11-18).** Home lists pending held steps with their linked activities. An owner can undo a job's completion using the exact change id while it is still the step's latest change. The new save reopens the same step and the deal date follows the current step. A partner's own resolution has no undo (#658).
+
+133\. **Call review can replace the deal's current next step (2026-11-18).** Accepting a call's deal step cancels the final owner's open ordinary step and saves the replacement together, as the old call card did through `set-next-step`. The legacy email replacement had its own preview and version check, so this change applies to call suggestions on deals. The job's deal read returns the current phase's effective start from the same history row as the phase (#662).

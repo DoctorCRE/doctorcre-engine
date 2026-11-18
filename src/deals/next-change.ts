@@ -191,14 +191,19 @@ export const dealJobs = new Hono<NextSaveEnv>().get(
 					} = await sql<{
 						deal_id: string;
 						phase: string | null;
+						phase_changed_at: string | null;
 						next_step: { id: string; due_on: string | null } | null;
 					}>`
-						select id as deal_id,
-							(select phase from deal_phase_change where deal_id = d.id order by happened_at desc limit 1),
+						select d.id as deal_id, latest.phase,
+							to_jsonb(latest.happened_at) #>> '{}' as phase_changed_at,
 							(select jsonb_build_object('id', id, 'due_on', due_on) from next_step
 								where deal_id = d.id and status = 'open' and item_title is null
 								order by created_at desc, id desc limit 1) as next_step
-						from deal d where id = ${deal_id}::uuid`.execute(tx);
+						from deal d left join lateral (
+							select phase, happened_at from deal_phase_change
+							where deal_id = d.id order by happened_at desc limit 1
+						) latest on true
+						where d.id = ${deal_id}::uuid`.execute(tx);
 					return (
 						deal && {
 							...deal,
