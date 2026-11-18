@@ -163,7 +163,7 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.
 - The Today panel's Deal pulse stayed on "Checking recent deal changes…".
-- Overdue steps to confirm ("Overdue tasks to review") did not appear on Home.
-- Update cards offer "Open" and the page the update names, or "Open Updates" when it names none, and never Got it (code).
+- Overdue steps to confirm ("Overdue tasks to review") did not appear on Home. The engine read can return completion reviews with a link to the deal's next step. Home still needs to route the read and wire the decision buttons.
+- Update cards offer "Open" and the page the update names, or "Open Updates" when it names none, and never Got it (code). The engine read links each unread Home update to its deal. Home still needs to route the read and wire Got it.
 - A card with no page to open and no finishing button says "Read it, then hide it from your inbox." (code).
 - Tour feedback cards on Home have no review and no finishing button. Only an action link's page opens the feedback, and it only shows it (code).

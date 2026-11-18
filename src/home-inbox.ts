@@ -2,6 +2,11 @@ import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, refuse } from "./answer.ts";
 import { readHomeReviewCards } from "./home-inbox-review.ts";
+import {
+	completionReviewCard,
+	readCompletionReviews,
+	readHomeUpdates,
+} from "./home-inbox-reviews-updates.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
 
@@ -141,8 +146,19 @@ function stepCard(step: Step) {
 
 async function readHomeInbox(db: Transaction<DB>, userId: string) {
 	const { rows } = await stepRows(userId).execute(db);
-	const cards = [
-		...rows.map(stepCard),
+	const reviews = await readCompletionReviews(
+		db,
+		rows.filter((step) => step.status === "open").map((step) => step.id),
+	);
+	const steps = rows.map((step) => {
+		const review = reviews.get(step.id);
+		if (!review || step.settled || step.snoozed_until) return stepCard(step);
+		return completionReviewCard(review, step.step_version, step.mark_version);
+	});
+	const updates = await readHomeUpdates(db, userId, LIMIT + 1);
+	const items = [
+		...steps,
+		...updates,
 		...(await readHomeReviewCards(db, userId, LIMIT + 1)),
 	].sort(
 		(a, b) =>
@@ -153,8 +169,8 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 	return {
 		ok: true,
 		schema_version: "home-inbox.v5",
-		items: cards.slice(0, LIMIT),
-		truncated: cards.length > LIMIT,
+		items: items.slice(0, LIMIT),
+		truncated: rows.length > LIMIT || items.length > LIMIT,
 		limit: LIMIT,
 		working_collapsed: true,
 		auto_settle_enabled: true,

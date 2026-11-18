@@ -1260,6 +1260,9 @@ test("a lane that disagrees with the account links is listed, and one awaiting b
  insert into public.client (id, party_id, created_by, updated_by) values ('${id(50)}', '${id(40)}', '${id(1)}', '${id(1)}'),
  ('${id(52)}', '${id(42)}', '${id(1)}', '${id(1)}'), ('${id(53)}', '${id(43)}', '${id(1)}', '${id(1)}'),
  ('${id(54)}', '${id(44)}', '${id(1)}', '${id(1)}'), ('${id(55)}', '${id(45)}', '${id(1)}', '${id(1)}');
+ insert into public.client_type (slug, label) values ('national_account', 'Example account');
+ insert into public.client (id, party_id, client_type, created_by, updated_by)
+ values ('${id(51)}', '${id(41)}', 'national_account', '${id(1)}', '${id(1)}');
  insert into public.deal_lane (slug, label, sort) values ('territory', 'Example territory', 10), ('national', 'Example national', 20);
  ${[420, 421, 422, 423, 424, 425, 426].map((n) => deal(n)).join("\n")}
  update public.deal d set client_id = v.client_id, lane = v.lane from (values
@@ -1279,10 +1282,16 @@ test("a lane that disagrees with the account links is listed, and one awaiting b
 		assert.deepEqual(lanes(first), [
 			listed(421, "territory", "lane_disagrees_with_account"),
 			listed(422, "national", "brand_dates_not_reviewed"),
-			listed(423, "national", "lane_disagrees_with_account"),
+			listed(423, "national", "brand_dates_not_reviewed"),
 			listed(424, "national", "lane_disagrees_with_account"),
 		]);
 		assert.deepEqual(lanes(await run()), lanes(first));
+		await db.query(`insert into client (party_id) values ('${id(33)}');
+ insert into client_brand (location_id, brand_id, started_on) values ('${id(33)}', '${id(31)}', '2020-01-01');`);
+		assert.deepEqual(
+			lanes(await run()),
+			lanes(first).filter((row) => row.old_id !== id(423)),
+		);
 	} finally {
 		await db.query("rollback");
 	}
