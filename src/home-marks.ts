@@ -105,6 +105,7 @@ type MarkState = Mark & {
 };
 
 async function lockItem(tx: Transaction<DB>, id: string, kind: ItemKind) {
+	type LockedItem = { user_id: string; done: boolean };
 	const update = kind === "home_update";
 	if (update) {
 		// Updates have a fixed recipient and no row lock privilege for engine saves.
@@ -113,23 +114,20 @@ async function lockItem(tx: Transaction<DB>, id: string, kind: ItemKind) {
 		);
 	}
 	const source = update
-		? sql`select user_id, false as done from home_update where id = ${id} and user_id = ${ACTING_USER}`
-		: sql`select owner_party_id as user_id, status = 'done' as done from next_step
+		? sql<LockedItem>`select user_id, false as done from home_update where id = ${id} and user_id = ${ACTING_USER}`
+		: sql<LockedItem>`select owner_party_id as user_id, status = 'done' as done from next_step
 			where ${sql.ref(kind === "next_step" ? "home_step_id" : "home_call_follow_up_id")} = ${id}
 				and owner_party_id = ${ACTING_USER} for no key update`;
-	const { rows } = await sql<{
-		user_id: string;
-		done: boolean;
-	}>`${source}`.execute(tx);
+	const { rows } = await source.execute(tx);
 	return rows[0];
 }
 
-async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
-	const { id, item_kind, item_id } = request;
-	const item = await lockItem(tx, id, item_kind);
-	if (!item?.user_id)
-		throw new SaveRefusal(new Refusal(404, "home_item_not_found"));
-	const record = { user_id: item.user_id, item_kind, item_id: id };
+async function readMarkState(
+	tx: Transaction<DB>,
+	record: { user_id: string; item_kind: ItemKind; item_id: string },
+	snoozedUntil: string | null,
+) {
+	const { item_kind, item_id: id } = record;
 	const sourceTable = item_kind === "home_update" ? "home_update" : "next_step";
 	const {
 		rows: [state],
@@ -137,7 +135,7 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 		select m.created_at, m.disposition, m.waiting_on_party_id, m.waiting_reason,
 			to_jsonb(m.snoozed_until)#>>'{}' as snoozed_until,
 			coalesce(m.snoozed_until > now(), false) as snoozed,
-			coalesce(${request.mark.snoozed_until ?? null}::timestamptz > now(), true) as valid_snooze,
+			coalesce(${snoozedUntil}::timestamptz > now(), true) as valid_snooze,
 			(select coalesce(max(id), 0) from change
 				where table_name = ${sourceTable} and record = ${{ id }}) as source_version,
 			h.version as mark_version, h.settled_version
@@ -150,6 +148,20 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 			and m.item_kind = ${item_kind} and m.item_id = ${id}
 	`.execute(tx);
 	if (!state) throw new Error("Home mark state was unavailable");
+	return state;
+}
+
+async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
+	const { id, item_kind, item_id } = request;
+	const item = await lockItem(tx, id, item_kind);
+	if (!item?.user_id)
+		throw new SaveRefusal(new Refusal(404, "home_item_not_found"));
+	const record = { user_id: item.user_id, item_kind, item_id: id };
+	const state = await readMarkState(
+		tx,
+		record,
+		request.mark.snoozed_until ?? null,
+	);
 	const history = tx
 		.selectFrom("change")
 		.where("table_name", "=", "home_mark")
@@ -166,8 +178,12 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 	const staleSettlement =
 		before.disposition === "settled" &&
 		BigInt(settled_version) < BigInt(source_version);
-	const visible = (mark: string | null | undefined, snoozed: boolean) =>
-		item.done || mark === "settled" ? "settled" : snoozed ? "snoozed" : "inbox";
+	const visible = (mark: string | null | undefined, activeSnooze: boolean) =>
+		item.done || mark === "settled"
+			? "settled"
+			: activeSnooze
+				? "snoozed"
+				: "inbox";
 	const version = (markVersion: string | null, disposition: string) =>
 		`${source_version}:${markVersion ?? 0}:${disposition}`;
 	const currentVersion = version(
