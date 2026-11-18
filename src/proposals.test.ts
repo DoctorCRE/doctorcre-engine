@@ -38,7 +38,8 @@ before(async () => {
  select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${USER}', true);
  insert into activity (id, kind, happened_at) values ('${EMAIL}', 'email', now() - interval '1 hour');
  insert into activity_about (activity_id, party_id) values ('${EMAIL}', '${CLIENT}');
- insert into email (activity_id, message_id, sender, subject, body) values ('${EMAIL}', 'example-624@example.test', 'clinic@example.test', 'Example tour', 'The tour is confirmed.'); commit;`);
+ insert into email (activity_id, message_id, sender, subject, body) values ('${EMAIL}', 'example-624@example.test', 'clinic@example.test', 'Example tour', 'The tour is confirmed.');
+ insert into email_mailbox (activity_id, user_id) values ('${EMAIL}', '${USER}'); commit;`);
 });
 after(async () => {
 	await db.query("rollback");
@@ -475,16 +476,44 @@ test("the queue pages oldest first within the mailbox stamp and excludes old mai
   insert into email (activity_id, message_id, sender, subject, body) values
    ('${id(21)}', 'second@example.test', 'clinic@example.test', 'Second example', 'Example'),
    ('${id(22)}', 'old@example.test', 'clinic@example.test', 'Old example', 'Example');
-  select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
+  insert into email_mailbox (activity_id, user_id) values
+   ('${id(21)}', '${USER}'), ('${id(22)}', '${USER}');
+  select set_config('engine.user_id', '${PARTNER}', true);
+  insert into email_mailbox (activity_id, user_id) values ('${EMAIL}', '${PARTNER}');
+  alter table email_mailbox disable trigger stamp_change;
+  update email_mailbox set changed_at = now() - interval '4 days' where activity_id = '${id(21)}' and user_id = '${USER}';
+  alter table email_mailbox enable trigger stamp_change;
   insert into activity (id, kind, happened_at) values ('${id(23)}', 'email', now());
   insert into activity_about (activity_id, party_id) values ('${id(23)}', '${CLIENT}');
-  insert into email (activity_id, message_id, sender, subject, body) values ('${id(23)}', 'unowned@example.test', 'clinic@example.test', 'Other mailbox', 'Example'); commit;`);
+  insert into email (activity_id, message_id, sender, subject, body) values ('${id(23)}', 'other@example.test', 'clinic@example.test', 'Other mailbox', 'Example');
+  insert into email_mailbox (activity_id, user_id) values ('${id(23)}', '${PARTNER}');
+  select set_config('engine.user_id', '${USER}', true);
+  insert into activity (id, kind, happened_at) values ('${id(24)}', 'email', now());
+  insert into email (activity_id, message_id, sender, subject, body) values ('${id(24)}', 'fresh@example.test', 'clinic@example.test', 'Fresh mailbox', 'Example');
+  insert into activity_about (activity_id, party_id) values ('${id(24)}', '${CLIENT}');
+  insert into email_mailbox (activity_id, user_id) values ('${id(24)}', '${USER}'); commit;`);
 	const [ok, body] = await save(job, "router-queue?limit=1", {}, "GET");
 	assert.equal(ok, 200);
 	assert.ok(Array.isArray(body.emails));
 	assert.equal(body.emails.length, 1);
 	assert.equal(body.emails[0].activity_id, EMAIL);
 	assert.equal(body.emails[0].sender.party_id, CLIENT);
+	assert.equal(body.emails[0].mailbox_user, "alex");
+	const [partnerStatus, partner] = await save(
+		{ ...job, for_user: "casey" },
+		"router-queue",
+		{},
+		"GET",
+	);
+	assert.equal(partnerStatus, 200);
+	assert.ok(Array.isArray(partner.emails));
+	assert.deepEqual(
+		partner.emails.map((e) => [e.activity_id, e.mailbox_user]),
+		[
+			[EMAIL, "casey"],
+			[id(23), "casey"],
+		],
+	);
 	assert.equal(body.next_cursor, EMAIL);
 	const [, page] = await save(
 		job,
@@ -494,7 +523,7 @@ test("the queue pages oldest first within the mailbox stamp and excludes old mai
 	);
 	assert.ok(Array.isArray(page.emails));
 	assert.equal(page.emails.length, 1);
-	assert.equal(page.emails[0].activity_id, id(21));
+	assert.equal(page.emails[0].activity_id, id(24));
 	assert.equal(page.next_cursor, null);
 	assert.equal((await save(job, "router-queue?days=8", {}, "GET"))[0], 400);
 	assert.equal(
@@ -508,6 +537,7 @@ test("the queue suppresses only automatic filings removed by a partner", async (
 	await db.query(`begin; select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${USER}', true);
  insert into activity (id, kind, happened_at) values ('${id(31)}', 'email', now() - interval '2 hours');
  insert into email (activity_id, message_id, sender, subject, body) values ('${id(31)}', 'suppression@example.test', 'clinic@example.test', 'Example filing', 'Example');
+ insert into email_mailbox (activity_id, user_id) values ('${id(31)}', '${USER}');
  insert into activity_about (activity_id, party_id) values ('${id(31)}', '${CLIENT}');
  insert into activity_about (activity_id, deal_id) values ('${id(31)}', '${DEAL}');
  select set_config('engine.job', '', true);
@@ -528,7 +558,8 @@ test("shared addresses stay unknown in both queued mail and its thread", async (
  select set_config('engine.job', 'mail_capture', true);
  insert into activity (id, kind, happened_at) values ('${id(32)}', 'email', now() - interval '5 hours'), ('${id(33)}', 'email', now() - interval '4 hours');
  insert into activity_about (activity_id, deal_id) values ('${id(32)}', '${DEAL}'), ('${id(33)}', '${DEAL}');
- insert into email (activity_id, message_id, sender, subject, body) values ('${id(32)}', 'shared-old@example.test', 'clinic@example.test', 'Shared example', 'Example'), ('${id(33)}', 'shared-new@example.test', 'clinic@example.test', 'Re: Shared example', 'Example'); commit;`);
+ insert into email (activity_id, message_id, sender, subject, body) values ('${id(32)}', 'shared-old@example.test', 'clinic@example.test', 'Shared example', 'Example'), ('${id(33)}', 'shared-new@example.test', 'clinic@example.test', 'Re: Shared example', 'Example');
+ insert into email_mailbox (activity_id, user_id) values ('${id(32)}', '${USER}'), ('${id(33)}', '${USER}'); commit;`);
 	try {
 		const [status, body] = await save(job, "router-queue", {}, "GET");
 		assert.equal(status, 200);
@@ -561,7 +592,8 @@ test("the queue uses work domains, company clients and the deal market", async (
  select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${USER}', true);
  insert into activity (id, kind, happened_at) values ('${id(42)}', 'email', now() - interval '3 hours'), ('${id(43)}', 'email', now() - interval '4 hours');
  insert into activity_about (activity_id, deal_id) values ('${id(42)}', '${DEAL}'), ('${id(43)}', '${DEAL}');
- insert into email (activity_id, message_id, sender, subject, body) values ('${id(42)}', 'known@example.test', 'morgan@public.test', 'Example known', 'Example'), ('${id(43)}', 'unknown@example.test', 'stranger@public.test', 'Example unknown', 'Example'); commit;`);
+ insert into email (activity_id, message_id, sender, subject, body) values ('${id(42)}', 'known@example.test', 'morgan@public.test', 'Example known', 'Example'), ('${id(43)}', 'unknown@example.test', 'stranger@public.test', 'Fwd: Example known', 'Example');
+ insert into email_mailbox (activity_id, user_id) values ('${id(42)}', '${USER}'), ('${id(43)}', '${USER}'); commit;`);
 	const [status, body] = await save(job, "router-queue", {}, "GET");
 	assert.equal(status, 200);
 	assert.ok(Array.isArray(body.emails));
@@ -587,4 +619,55 @@ test("the queue uses work domains, company clients and the deal market", async (
 		body.open_deals.find((d) => d.deal_id === DEAL).city,
 		"Example Metro",
 	);
+});
+
+test("the queue follows Outlook conversations and falls back to subject for mail without an id", async () => {
+	await db.query(`begin; select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${USER}', true);
+ insert into activity (id, kind, happened_at) values
+  ('${id(51)}', 'email', now() - interval '60 days'), ('${id(52)}', 'email', now() - interval '2 days'),
+  ('${id(53)}', 'email', now() - interval '1 day'), ('${id(54)}', 'email', now() - interval '1 hour'),
+  ('${id(55)}', 'email', now()), ('${id(56)}', 'email', now() - interval '31 days');
+ insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body) values
+  ('${id(51)}', 'prior@example.test', 'Thread-A', 'prior@outside.test', 'Prior Sender', 'Changed subject', 'Example'),
+  ('${id(52)}', 'other-thread@example.test', 'Thread-B', 'prior@outside.test', null, 'New space', 'Example'),
+  ('${id(53)}', 'no-thread@example.test', null, 'prior@outside.test', null, 'New space', 'Example'),
+  ('${id(54)}', 'same-thread@example.test', 'Thread-A', 'current@outside.test', 'Current Sender', 'New space', 'Example'),
+  ('${id(55)}', 'same-subject@example.test', null, 'clinic@example.test', 'Raw Name', ' Fwd: Re:  NEW   SPACE ', 'Example'),
+  ('${id(56)}', 'old-subject@example.test', null, 'prior@outside.test', null, 'New space', 'Example');
+ insert into activity_about (activity_id, deal_id) select id, '${DEAL}' from activity where id between '${id(51)}' and '${id(56)}';
+ insert into email_mailbox (activity_id, user_id) values ('${id(54)}', '${USER}'), ('${id(55)}', '${USER}');
+ insert into email_recipient (activity_id, position, address, kind) values
+  ('${id(51)}', 1, 'clinic@example.test', 'to'), ('${id(51)}', 0, 'outside@outside.test', 'cc'),
+  ('${id(54)}', 1, 'outside@outside.test', 'cc'), ('${id(54)}', 0, 'clinic@example.test', 'to');
+ commit;`);
+	const [status, body] = await save(job, "router-queue", {}, "GET");
+	assert.equal(status, 200);
+	assert.ok(Array.isArray(body.emails));
+	const conversation = body.emails.find((e) => e.activity_id === id(54));
+	const subject = body.emails.find((e) => e.activity_id === id(55));
+	assert.equal(conversation.conversation_id, "Thread-A");
+	assert.equal(conversation.sender.name, "Current Sender");
+	assert.equal(subject.sender.name, "Example Clinic");
+	assert.deepEqual(
+		conversation.thread.map(
+			(entry: { activity_id: string }) => entry.activity_id,
+		),
+		[id(51)],
+	);
+	assert.deepEqual(
+		subject.thread.map((entry: { activity_id: string }) => entry.activity_id),
+		[id(53)],
+	);
+	const prior = conversation.thread[0];
+	assert.equal(prior.conversation_id, "Thread-A");
+	assert.equal(prior.sender.name, "Prior Sender");
+	const people = (
+		recipients: { address: string; kind: string; party_id: string | null }[],
+	) =>
+		recipients.map(({ address, kind, party_id }) => [address, kind, party_id]);
+	const clinic = ["clinic@example.test", "to", CLIENT];
+	const outside = ["outside@outside.test", "cc", null];
+	assert.deepEqual(people(conversation.recipients), [clinic, outside]);
+	assert.deepEqual(people(prior.recipients), [outside, clinic]);
+	assert.deepEqual(subject.recipients, []);
 });

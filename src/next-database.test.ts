@@ -218,10 +218,20 @@ const newClaim = (row: Record<string, string | number>) =>
 // Runs the checks commit would run, inside a transaction the test still rolls back.
 // Later statements in the transaction are then checked as they run.
 const CHECK_AT_COMMIT = "set constraints all immediate";
-const newEmail = (activity: string, messageId = `<${activity}@example.com>`) =>
+const newEmail = (
+	activity: string,
+	messageId = `<${activity}@example.com>`,
+	conversationId: string | null = null,
+) =>
 	`insert into activity (id, kind, happened_at) values ('${activity}', 'email', now());
-	insert into email (activity_id, message_id, sender, subject, body)
-	values ('${activity}', '${messageId}', 'avery@example.com', 'Example', 'Example')`;
+	${insert("email", {
+		activity_id: activity,
+		message_id: messageId,
+		conversation_id: conversationId,
+		sender: "avery@example.com",
+		subject: "Example",
+		body: "Example",
+	})}`;
 // Only today's mail, copied by the owner, may lack its Message-ID.
 const emailWithoutId = (activity: string, subject: string, imported: boolean) =>
 	`insert into activity (id, kind, happened_at) values ('${activity}', 'email', '2026-03-01');
@@ -1381,6 +1391,14 @@ const RULES: Record<string, Case[]> = {
 				"email_message_id_unless_imported",
 			],
 			[emailWithoutId(id(303), "Example", true), notGranted("email")],
+			[newEmail(id(303), ""), "email_message_id_not_blank"],
+			[newEmail(id(303), "\t"), "email_message_id_not_blank"],
+			...["   ", "", "\t"].map(
+				(conversationId): Case => [
+					newEmail(id(303), undefined, conversationId),
+					"email_conversation_id_not_blank",
+				],
+			),
 		],
 	"a next step is about exactly one record": [
 		[
