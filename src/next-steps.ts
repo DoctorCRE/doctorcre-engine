@@ -6,7 +6,7 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
-import { userId } from "./next-save.ts";
+import { ACTING_USER, userId } from "./next-save.ts";
 import { saveOpenStep } from "./open-step.ts";
 import {
 	type Check,
@@ -26,6 +26,12 @@ import { SaveRefusal } from "./save.ts";
 import { latestChange, seenAnswer, unseenChanges } from "./seen-change.ts";
 
 const RECORDS = ["deal_id", "party_id", "property_id"] as const;
+const SUBJECTS = ["deal_id", "party_id"] as const;
+const SUBJECT_COMPLETE = {
+	idempotency_key: isUuid,
+	deal_id: optional(isUuid),
+	party_id: optional(isUuid),
+};
 
 const BULLET_KINDS = ["promised", "call", "suggestion", "status"] as const;
 // A bullet is text, or the dated fact the old system writes and the copy keeps.
@@ -127,16 +133,19 @@ async function cancelCurrentStep(
 		.where("deal_id", "=", deal_id)
 		.where("status", "=", "open")
 		.where("item_title", "is", null)
-		.where(sql<boolean>`owner_party_id =
-			coalesce(${owner}::uuid, nullif(current_setting('engine.user_id', true), '')::uuid)`)
+		.where(
+			"owner_party_id",
+			"=",
+			sql<string>`coalesce(${owner}::uuid, ${ACTING_USER})`,
+		)
 		.execute();
 }
 
 // Written out, because the generated row type asks for the stamp the database sets.
-async function createStep(
+export async function createStep(
 	tx: Transaction<DB>,
-	request: Fitted<typeof NEW_STEP>,
-): Promise<JsonObject> {
+	request: Omit<Fitted<typeof NEW_STEP>, "idempotency_key">,
+) {
 	const { deal_id, party_id, property_id, what, item, replaces } = request;
 	const { due_on, hold_until } = request;
 	const owner_party_id = (await resolveStepOwner(tx, request)) ?? null;
@@ -260,6 +269,35 @@ async function endStep(
 	return { next_step_id, status: resolution };
 }
 
+async function completeCurrentStep(
+	tx: Transaction<DB>,
+	{ deal_id, party_id }: Fitted<typeof SUBJECT_COMPLETE>,
+) {
+	const recordId = deal_id ?? party_id;
+	if (!recordId || (deal_id && party_id))
+		throw new SaveRefusal(
+			new Refusal(400, "invalid_field_value", { fields: [...SUBJECTS] }),
+		);
+	const record = await tx
+		.selectFrom(deal_id ? "deal" : "party")
+		.select("id")
+		.where("id", "=", recordId)
+		.forNoKeyUpdate()
+		.executeTakeFirst();
+	if (!record) throw new SaveRefusal(new Refusal(404, "not_found"));
+	const step = await tx
+		.updateTable("next_step")
+		.set({ resolution: "done", done_at: sql<string>`clock_timestamp()` })
+		.where(deal_id ? "deal_id" : "party_id", "=", recordId)
+		.where("owner_party_id", "=", ACTING_USER)
+		.where("status", "=", "open")
+		.where("item_title", "is", null)
+		.returning(["id as next_step_id", "status"])
+		.executeTakeFirst();
+	if (!step) throw new SaveRefusal(new Refusal(409, "no_open_step"));
+	return step;
+}
+
 export function automaticResolutions(tx: Transaction<DB>) {
 	const owner = sql<string>`current_setting('engine.user_id')::uuid`;
 	return tx
@@ -375,6 +413,14 @@ export const nextSteps = new Hono<NextSaveEnv>()
 			(body) => fit(body, NEW_STEP, ["idempotency_key", "what"], RECORDS),
 			createStep,
 			201,
+		),
+	)
+	.post("/next-steps/complete", (c) =>
+		answerNextSave(
+			c,
+			"next-step-complete-current",
+			(body) => fit(body, SUBJECT_COMPLETE, ["idempotency_key"], SUBJECTS),
+			completeCurrentStep,
 		),
 	)
 	.post(

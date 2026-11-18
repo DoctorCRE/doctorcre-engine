@@ -17,6 +17,8 @@ export type NextChange = (
 	args: JsonObject,
 ) => Promise<JsonObject>;
 
+export const ACTING_USER = sql<string>`nullif(current_setting('engine.user_id', true), '')::uuid`;
+
 // One new-section save: stamped with who made it, and landing once however often it is retried.
 export function runNextSave(
 	connectionString: string,

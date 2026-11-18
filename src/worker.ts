@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 
 import { filedEmails } from "./activity/filed-emails.ts";
-import { activityDoor } from "./activity/next-record.ts";
+import { activityDoor, dealNoteDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
 import { attachmentFiles, attachments } from "./attachments.ts";
 import { cadence } from "./cadence.ts";
@@ -117,6 +117,7 @@ app.route("/jobs", proposalJobs);
 app.route("/jobs", routerQueue);
 app.route("/jobs", nextAgenda);
 app.route("/jobs", activityDoor);
+app.route("/jobs", dealNoteDoor);
 app.route("/jobs", filedEmails);
 app.route("/jobs", attachmentFiles);
 app.route("/jobs", attachments);
