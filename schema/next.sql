@@ -2694,7 +2694,9 @@ begin
 	end loop;
 end $$;
 
-
+alter table how_found disable trigger stamp_change;
+insert into how_found (slug, label, changed_by_job, changed_at) values ('event', 'Event', 'old_system', now());
+alter table how_found enable trigger stamp_change;
 
 -- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
 alter table post_text add constraint post_text_edit_by_a_user
