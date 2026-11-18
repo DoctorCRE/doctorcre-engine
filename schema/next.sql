@@ -506,7 +506,6 @@ create table how_found (
 -- A fact about the person or company, so it holds in every role and a lead that becomes a client copies nothing.
 alter table party add how_found text references how_found;
 
--- A lead needs a stage. Lead and vendor roles may name the user responsible for them.
 alter table party_role add owner_user_id uuid references app_user,
 	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
 	add constraint party_role_owner_on_lead_or_vendor check (owner_user_id is null or role in ('lead', 'vendor'));

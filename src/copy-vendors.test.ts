@@ -265,6 +265,37 @@ test("vendor relationship owners must map to a user and reruns keep a partner's 
 		]);
 	}));
 
+test("a vendor with only a partner label is copied without an owner and listed", () =>
+	rolledBack(async () => {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+			insert into party (id, kind, name) values ('${id(21)}', 'person', 'Example Vendor');
+			insert into public.party (id, kind, name, created_by, updated_by)
+			values ('${id(21)}', 'person', 'Example Vendor', '${SYSTEM}', '${SYSTEM}');
+			insert into outside_id (source, value, party_id) values ('old_system', '${id(21)}', '${id(21)}');`);
+		const listed = await copy(
+			oldVendor(59, 21, { owner_label: "partner_one" }),
+		);
+		assert.deepEqual(
+			await rows(
+				`select owner_user_id from party_role where party_id = '${id(21)}' and role = 'vendor'`,
+			),
+			[{ owner_user_id: null }],
+		);
+		assert.deepEqual(
+			listed?.filter(
+				([oldId, field]) => oldId === id(59) && field === "owner_label",
+			),
+			[
+				[
+					id(59),
+					"owner_label",
+					"partner_one",
+					"relationship owner has no actor id",
+				],
+			],
+		);
+	}));
+
 test("relationship wording and referral yes, no and unknown copy without inference", () =>
 	rolledBack(async () => {
 		await db.query("discard temp");
