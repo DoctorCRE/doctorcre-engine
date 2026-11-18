@@ -170,6 +170,7 @@ async function lockSubject(
 	exclusive = false,
 ) {
 	const query = tx.selectFrom(kind).select("id").where("id", "=", id);
+	// A deal link takes key-share on the party, so the exclusive lock guards eligibility.
 	const record = await (exclusive
 		? query.forUpdate()
 		: query.forNoKeyUpdate()

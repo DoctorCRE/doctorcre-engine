@@ -17,7 +17,7 @@ before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
 		insert into role (slug, label) values ('lead', 'Lead');
-		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity');
+		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity'), ('lead', 'qualified', 'Qualified');
 		insert into how_found (slug, label) values ('referral', 'Referral');
 		insert into party (id, kind, name, how_found)
 			select id, 'person', 'Example Person', 'referral'
@@ -150,3 +150,59 @@ test("a dated follow-up replaces only the setting partner's step and opens that 
 		[dellStep.next_step_id],
 	);
 });
+
+async function newProspect(stage = "opportunity") {
+	const partyId = randomUUID();
+	await db.query(`begin; set local engine.user_id = '${joeId}';
+		insert into party (id, kind, name, how_found)
+		values ('${partyId}', 'company', 'Example Prospect', 'referral');
+		insert into party_role (party_id, role, stage) values ('${partyId}', 'lead', 'opportunity');
+		update party_role set stage = '${stage}' where party_id = '${partyId}' and role = 'lead';
+		commit;`);
+	return partyId;
+}
+
+const replacement = {
+	replaces: "current",
+	seen_current_step: null,
+	due_on: "2024-03-01",
+	what: "Call for timing",
+};
+
+test("a follow-up refuses a lead that has left Prospects", async () => {
+	const [status, answer] = await save(joe, "next-steps", {
+		...key(),
+		...replacement,
+		party_id: await newProspect("qualified"),
+	});
+	assert.equal(status, 409);
+	assert.equal(answer.error, "not_a_prospect");
+});
+
+for (const [label, invalid, error, field] of [
+	["without a due date", { due_on: undefined }, "missing_required", "due_on"],
+	[
+		"with an explicit owner",
+		{ owner: "joe" },
+		"invalid_field_value",
+		"seen_current_step",
+	],
+	[
+		"without replacement",
+		{ replaces: undefined },
+		"invalid_field_value",
+		"seen_current_step",
+	],
+] as const) {
+	test(`a versioned follow-up refuses a save ${label}`, async () => {
+		const [status, answer] = await save(joe, "next-steps", {
+			...key(),
+			...replacement,
+			...invalid,
+			party_id: await newProspect(),
+		});
+		assert.equal(status, 400);
+		assert.equal(answer.error, error);
+		assert.deepEqual(answer.fields, [field]);
+	});
+}
