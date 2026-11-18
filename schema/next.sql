@@ -506,10 +506,9 @@ create table how_found (
 -- A fact about the person or company, so it holds in every role and a lead that becomes a client copies nothing.
 alter table party add how_found text references how_found;
 
--- A lead's stage comes from the lead stages, and its owner is the user who works it. None means nobody works it yet.
 alter table party_role add owner_user_id uuid references app_user,
 	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
-	add constraint party_role_owner_on_lead check (owner_user_id is null or role = 'lead');
+	add constraint party_role_owner_on_lead_or_vendor check (owner_user_id is null or role in ('lead', 'vendor'));
 
 create table lead_lane (
 	slug text primary key,
@@ -2545,7 +2544,7 @@ begin
 	update space_need set vendor_id = survivor
 	where vendor_id = duplicate and exists (select from party_role where party_id = survivor and role = vendor_role);
 	-- Where both hold the same link, the survivor's row stays, and so does its primary email and phone.
-	-- Its stage, level and lead owner stay too, and the duplicate's fill any it lacks. A target on either holds.
+	-- Its stage, level and owner stay too, and the duplicate's fill any it lacks. A target on either holds.
 	-- The stricter ruling stays with its reason, so a merge never puts an avoided vendor back in play.
 	update party_role s set stage = coalesce(s.stage, d.stage),
 		relationship_level = coalesce(s.relationship_level, d.relationship_level),
