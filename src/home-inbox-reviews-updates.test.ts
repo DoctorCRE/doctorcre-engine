@@ -82,6 +82,17 @@ test("one completion review replaces its ordinary step until a partner decides",
 		completion_review: { next_step_id: step, can_resolve: true },
 	});
 	assert.deepEqual(await cards(blair, deal), []);
+	const detailPath = `proposals/${card?.source_id}`;
+	const [opened, detail] = await save(alex, detailPath, {}, "GET");
+	assert.equal(opened, 200);
+	assert.partialDeepStrictEqual(detail, {
+		kind: "next_step_done",
+		next_step_id: step,
+		what: "Send the survey",
+		evidence: "I received the survey.",
+		source_activity: { id: call, kind: "call" },
+	});
+	assert.equal((await save(blair, detailPath, {}, "GET"))[0], 404);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values
 			('${owner}', '${step}', 'snoozed', '2999-01-01T00:00Z');

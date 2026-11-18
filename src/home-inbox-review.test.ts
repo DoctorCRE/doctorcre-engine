@@ -183,3 +183,44 @@ test("A grouped suggestion card uses the latest source email, even when an older
 	const group = (await inbox()).find((card) => card.proposal_id === id(30));
 	assert.equal(group?.title, "Pat Example · Floor plan");
 });
+
+test("Home opens each visible suggestion with its original evidence and proposed fields", async () => {
+	const read = (n: number, user = "example") =>
+		request({ user }, `proposals/${id(n)}`, { method: "GET" });
+	const email = await read(30);
+	assert.equal(email.status, 200);
+	assert.partialDeepStrictEqual(await email.json(), {
+		proposal_id: id(30),
+		kind: "next_step",
+		what: "Send the plan",
+		deal_id: deal,
+		target_name: "Example Dental",
+		owner_party_id: partner,
+		evidence: "Please send the plan.",
+		source_activity: {
+			id: id(10),
+			kind: "email",
+			subject: "Earlier floor plan",
+			sender: "pat@example.test",
+			sender_name: "Sam Example",
+			body: "Please send the plan.",
+		},
+	});
+	const citedCall = await read(33);
+	assert.equal(citedCall.status, 200);
+	assert.partialDeepStrictEqual(await citedCall.json(), {
+		kind: "next_step",
+		what: "Check the lease",
+		evidence: "Ask about the lease.",
+		source_activity: {
+			id: call,
+			kind: "call",
+			happened_at: "2026-01-02T12:00:00.000Z",
+		},
+	});
+	assert.equal((await read(38, "other")).status, 200);
+	assert.equal((await read(30, "other")).status, 404);
+	assert.equal((await read(33, "other")).status, 404);
+	assert.equal((await read(35)).status, 404);
+	assert.equal((await read(41)).status, 404);
+});

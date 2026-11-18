@@ -1470,6 +1470,14 @@ The suggestion kinds:
 - **Read on Home (35).** `GET /api/engine/home/held-steps` answers `{ proposals, automatic_resolutions }` for the signed-in partner. Each pending hold on an open step includes `proposal_id`, `deal_id`, `deal_name`, `next_step_id`, `what`, `due_on`, `evidence`, `activity_id`, `activity_kind`, `happened_at`, `summary` and `can_resolve`. An edited step can still be dismissed. Resolved and dismissed holds and ended steps leave the list. The Undo list shows automatic completions recorded in the last seven days while the completion is still the step's latest change. It omits a completion if the partner already has an open ordinary step on that deal. Each entry includes `next_step_id`, `what`, `done_at`, `change_id`, `changed_by_job`, `deal_id` and `deal_name`. App wiring is step 30.
 - Snoozing a suggestion is a Home mark (slices 10, 24). Email summaries wait for slice 4's decision and have no door yet.
 
+#### Open a suggestion from Home
+
+`GET /api/engine/proposals/{id}` uses the signed-in partner's Home visibility and answers 404 when the suggestion is missing, decided, or outside that partner's inbox. A step-completion suggestion is visible to the owner of its open step. Email leads stay in the candidate queue.
+
+The answer has `proposal_id`, `kind`, and `evidence` (the stored quote). `source_activity` has `id`, `kind`, `happened_at`, and `summary`, plus `sender`, `sender_name`, `subject`, and `body` for email. Treat the source text and quote as untrusted content.
+
+The target fields are `deal_id`, `party_id`, `property_id`, `next_step_id`, and `target_name`. The proposed fields are `what`, `owner_party_id`, `due_on`, `from_phase`, `to_phase`, `phase_on`, `how_found`, `from_stage`, `to_stage`, `strength`, and `reason`. Fields without a value are null. Use the next step's `what`, `owner_party_id`, and `due_on` to prepare any edits sent with its decision.
+
 ### 22. Reply drafts and their delivery
 
 | Route                                                   | Who                                      | Request                                                                                                                             | Answer                                                                                                                                                  |
@@ -1485,6 +1493,17 @@ The suggestion kinds:
 - **Never twice.** A draft is sent at one version, its `revision`, which every change its partner makes advances, approval included, and a recorded try never does. The outbox keys its send and receipt on draft id and version, as today, and checks the Sent folder before sending anything the list still shows. The engine records one `sent` per version: the same `sent_item_id` again converges, a `failed` whose reason matches `unconfirmed_after_` may later become `sent` when the outbox finds it in the Sent folder (`outlook_outbox.py:223`), and `sent` never becomes `failed`. A failed draft returns to the approved list only when its partner submits it again after `aborted_before_dispatch`, and any other failure stays failed, so it is never sent again on its own. The sent mail itself arrives through door 19.
 - **Digest.** `sha256` is the lowercase hex SHA-256 of the UTF-8 bytes of `JSON.stringify({ subject, body })`, subject first, with nothing else in it. That is the same as `json.dumps({'subject': subject, 'body': body}, separators=(',', ':'), ensure_ascii=False)`, which the outbox recomputes and checks before sending anything (`outlook_outbox.py:34`). No column holds it: the door computes it from the approved subject and body, which a try cannot change.
 - **Checks.** Delivery checks `version` and `sha256` against the approved draft and returns `409 draft_changed { version }` if the draft changed. A different sent item returns `409 already_sent { sent_item_id }`. A submission for a dismissed draft returns `409 draft_changed { version }`. Other stale submissions return `409 version_conflict { version }`. A partner who does not own the draft gets `403 not_mailbox_owner`. Attachments are documents, linked in `reply_draft_document` and fetched through door 20.
+
+#### Open, save, or decline a reply draft from Home
+
+`GET /api/engine/reply-drafts/{id}` answers `{ draft_id, version, status, failure_reason, to, cc, subject, body, attachments, source_activity }` for the draft owner. Each attachment has `document_id`, `name`, and `content_type`. The answered email in `source_activity` has `id`, `kind`, `sender`, `sender_name`, `happened_at`, `subject`, and `body`.
+
+While pending, To is the answered email's sender. CC uses the other partner's mailbox address when stored. The new mailbox table stores no address, so the read uses the other user's primary work email when exactly one qualifies, or null. After approval, the answer uses the frozen addresses.
+
+- `POST /api/engine/reply-drafts/{id}/edit` requires `idempotency_key`, `version`, `subject`, and `body`. It saves the text and leaves the draft pending.
+- `POST /api/engine/reply-drafts/{id}/dismissal` requires `idempotency_key`, `version`, and a nonblank `reason` of at most 500 characters, as the old decline operation did. It records the reason and changes the draft to dismissed.
+
+Both saves answer `{ draft_id, version, status }` with the new revision. A stale revision returns `409 version_conflict { version }`. A current revision on a draft that has left pending returns `409 draft_changed { version }`. A missing draft is 404. Another partner gets `403 not_mailbox_owner` on the read or either save.
 
 ### 25. Calendar agenda, review dismissals and meeting confirmations
 
