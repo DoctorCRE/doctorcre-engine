@@ -24,6 +24,7 @@ import { dealJobs, nextDeals } from "./deals/next-change.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
 import { heldStepReviews } from "./held-steps.ts";
+import { homeInbox } from "./home-inbox.ts";
 import { invoiceJobs, invoiceUndo } from "./invoice-application.ts";
 import { invoiceEvidence } from "./invoice-evidence.ts";
 import { invoicePayment } from "./invoice-payment.ts";
@@ -70,6 +71,7 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", dealField)
 	.route("/", dealClosing)
 	.route("/", dealUpdate)
+	.route("/", homeInbox)
 	.route("/", invoices)
 	.route("/", leads)
 	.route("/", nextStep)

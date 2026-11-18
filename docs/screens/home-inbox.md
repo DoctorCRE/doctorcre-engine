@@ -39,7 +39,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 
 A next step the partner owns.
 
-- [ ] Says the step, who or what it is for, and when it is due.
+- [ ] Uses the full step text as its title and shows who or what it is for and when it is due.
 - [ ] Opens to the deal, client, lead or vendor page with the step in view: who set it, when, and from what (a call, an email, a meeting, or the automatic follow-up schedule).
 - [ ] Mark done finishes the step. Undo reopens it.
 - [ ] Leaves when done or dropped anywhere, or when a newer step replaces it for the same person on the same client or deal.
@@ -48,7 +48,7 @@ A next step the partner owns.
 
 A step a recorded call produced.
 
-- [ ] Says the step, the deal, and "From your call with Dr. Example on Tue, Nov 17".
+- [ ] Uses the full step text as its title and shows the deal and "From your call with Dr. Example on Tue, Nov 17".
 - [ ] Opens to the call's summary with the part of the call the step came from, and a link to the deal.
 - [ ] Mark done and Undo work as on a step. Leaves as a step does.
 

@@ -278,6 +278,7 @@ type Verb =
 	| "lead-board"
 	| "list-practice-origination"
 	| "quiet-follow-ups"
+	| "read-home-inbox-v5"
 	| "read-invoice-tracker"
 	| "read-vendor-meetings"
 	| "read-vendor-markets-v1"
@@ -301,7 +302,7 @@ export function answer(
 export function answerNextRead(
 	c: Context<DatabaseEnv>,
 	verb: Verb,
-	read: (db: Transaction<NextDB>) => Promise<unknown>,
+	read: (db: Transaction<NextDB>, userId: string) => Promise<unknown>,
 ) {
 	return answerRead(c, verb, (url, partner) =>
 		nextTransaction(url, "read", async (db) => {
@@ -310,7 +311,7 @@ export function answerNextRead(
 				.select("id")
 				.where("slug", "=", partner)
 				.executeTakeFirst();
-			return user ? read(db) : new Refusal(422, "unauthenticated");
+			return user ? read(db, user.id) : new Refusal(422, "unauthenticated");
 		}),
 	);
 }
