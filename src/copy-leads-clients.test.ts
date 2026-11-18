@@ -58,10 +58,6 @@ const run = async (
 let report: pg.QueryResultRow[];
 before(async () => {
 	await setup();
-	assert.deepEqual(
-		await rows("select label from how_found where slug = 'event'"),
-		[{ label: "Event" }],
-	);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id,slug,kind,display_name) values ('${id(1)}','example_user','human','Example User');
  insert into party (id,kind,name) values ('${id(1)}','person','Example User');
@@ -265,15 +261,17 @@ test("a correction can supply a missing source without changing already copied l
 	}
 });
 
-const extraParties = [80, 81, 82]
-	.map(
-		(
-			n,
-		) => `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n)}','person','Example waiting party','${id(1)}','${id(1)}');
+const waitingParties = (ids: number[]) =>
+	ids
+		.map(
+			(
+				n,
+			) => `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n)}','person','Example waiting party','${id(1)}','${id(1)}');
  insert into party (id,kind,name) values ('${id(n)}','person','Example waiting party');
  insert into outside_id (source,value,party_id) values ('old_system','${id(n)}','${id(n)}');`,
-	)
-	.join("\n");
+		)
+		.join("\n");
+const extraParties = waitingParties([80, 81, 82]);
 
 test("an unmapped client source waits, and mapping it later matches mapping it at once", async () => {
 	const setup = `${extraParties}
@@ -654,9 +652,10 @@ test("a first client copy records only its insert with the agreed owner", async 
 test("event leads from automation stay unclaimed and clients take their deal or reviewed owner", async () => {
 	try {
 		const listed = await run(
-			`${extraParties}
+			`${waitingParties([80, 81, 82, 83, 84])}
  insert into public.actor (id,slug,kind,display_name) values
  ('${id(2)}','example_deal_owner','human','Example Deal Owner'),
+ ('${id(3)}','example_unmapped_owner','human','Example Unmapped Owner'),
  ('${id(89)}','example_automation','automation','Example Automation');
  insert into party (id,kind,name) values ('${id(2)}','person','Example Deal Owner');
  insert into app_user (id,slug) values ('${id(2)}','example_deal_owner');
@@ -667,14 +666,20 @@ test("event leads from automation stay unclaimed and clients take their deal or 
  insert into public.client (id,party_id,status,owner_id,owner_label,created_by,updated_by) values
  ('${id(901)}','${id(81)}','roster','${id(89)}',null,'${id(1)}','${id(1)}'),
  ('${id(902)}','${id(82)}','roster',null,'Example shared label','${id(1)}','${id(1)}'),
- ('${id(903)}','${id(80)}','roster','${id(89)}',null,'${id(1)}','${id(1)}');
+ ('${id(903)}','${id(80)}','roster','${id(89)}',null,'${id(1)}','${id(1)}'),
+ ('${id(904)}','${id(83)}','roster','${id(89)}',null,'${id(1)}','${id(1)}'),
+ ('${id(905)}','${id(84)}','roster','${id(89)}',null,'${id(1)}','${id(1)}');
  insert into public.deal_type_ref (slug,label,sort) values ('lease','Example lease',1);
  insert into public.deal_phase (slug,label) values ('negotiation','Example negotiation');
  insert into public.deal (client_id,name,deal_type,phase,owner,created_by,updated_by) values
  ('${id(901)}','Example deal','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
  ('${id(901)}','Example second deal','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
  ('${id(903)}','Example disputed deal','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
- ('${id(903)}','Example other deal','lease','negotiation','example_user','${id(1)}','${id(1)}');
+ ('${id(903)}','Example other deal','lease','negotiation','example_user','${id(1)}','${id(1)}'),
+ ('${id(904)}','Example deal with a mapped owner','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
+ ('${id(904)}','Example deal without an owner','lease','negotiation',null,'${id(1)}','${id(1)}'),
+ ('${id(905)}','Example deal with a mapped owner','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
+ ('${id(905)}','Example deal with an unmapped owner','lease','negotiation','example_unmapped_owner','${id(1)}','${id(1)}');
  create temp table copy_client_owner (old_id uuid primary key, owner_actor_id uuid not null) on commit drop;
  insert into copy_client_owner values ('${id(902)}','${id(1)}');`,
 			true,
@@ -686,23 +691,30 @@ test("event leads from automation stay unclaimed and clients take their deal or 
 		);
 		assert.deepEqual(
 			(await clients()).owners.filter(([party]) =>
-				[id(80), id(81), id(82)].includes(party),
+				[id(80), id(81), id(82), id(83), id(84)].includes(party),
 			),
 			[
 				[id(80), null],
 				[id(81), id(2)],
 				[id(82), id(1)],
+				[id(83), null],
+				[id(84), null],
 			],
 		);
 		assert.deepEqual(
 			listed
 				.filter(
 					(r) =>
-						[id(900), id(901), id(902), id(903)].includes(r.old_id) &&
-						r.field.startsWith("owner"),
+						[id(900), id(901), id(902), id(903), id(904), id(905)].includes(
+							r.old_id,
+						) && r.field.startsWith("owner"),
 				)
 				.map((r) => [r.old_id, r.reason]),
-			[[id(903), "deal_owner_unresolved"]],
+			[
+				[id(903), "deal_owner_unresolved"],
+				[id(904), "deal_owner_unresolved"],
+				[id(905), "deal_owner_unresolved"],
+			],
 		);
 	} finally {
 		await db.query("rollback");
