@@ -1226,7 +1226,7 @@ Set the engine Worker's `DEALS_READ_SCHEMA` variable to `next` to use the read-o
 
 Timeline rows for a new-schema deal update show the fields and values the update changed. Owner changes show user slugs and market changes show market names. Parking reason and note changes share one `operating_state` line, and reviving a deal shows `Active`. Imported rows keep the original event's verb and field. National account cards show the retained client roster reference when the account has one unambiguous `C-` reference in `outside_id`.
 
-When the latest phase is the close applied by the nightly invoice job, the board and detail reads carry its receipt. The app shows the automatic close in Closed deals. The read uses the invoice application ID, its email date and its linked prior phase. A close applied by a partner, a later phase move or an invoice undo leaves the current phase without that label. The app still needs to route invoice undo to the new engine.
+When the nightly invoice job moved the deal to its current Closed phase, the board and detail reads carry its receipt. The app shows the automatic close in Closed deals. The read uses the invoice application ID, its email date and its linked prior phase. Partner applications, invoices on already-closed deals, later phase moves and invoice undos leave the current phase without that label. The app still needs to route invoice undo to the new engine.
 
 Cutover still needs:
 

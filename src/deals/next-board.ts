@@ -138,6 +138,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 						])
 						.whereRef("invoice.deal_id", "=", "d.id")
 						.whereRef("invoice.applied_phase_at", "=", "p.happened_at")
+						.whereRef("prior.phase", "<>", "p.phase")
 						.where("invoice.status", "=", "applied")
 						.where("p.changed_by_job", "=", "lead_stage"),
 				).as("phase_change"),
