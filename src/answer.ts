@@ -281,6 +281,7 @@ type Verb =
 	| "list-practice-origination"
 	| "quiet-follow-ups"
 	| "read-home-inbox-v5"
+	| "read-home-mail-priorities-v1"
 	| "read-invoice-tracker"
 	| "read-vendor-meetings"
 	| "read-vendor-markets-v1"

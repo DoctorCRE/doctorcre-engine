@@ -1338,6 +1338,14 @@ Each unread Home update appears once for its recipient and links to its deal. A 
 
 Some copied steps lack a verified origin, and some completed steps lack a known completion time. Legacy waiting evidence and versions did not move. Keep Home on CARR until slice 24 saves and slice 30 app routing and destinations are ready. The app must use the new change IDs only with new-schema saves.
 
+### Mail priorities
+
+`GET /api/engine/home/mail-priorities` uses the same Home switch, signed-in partner and read-only database role. It takes no query parameters. It ranks pending inbound email filing, possible deals, next steps, phase moves and reply drafts that appear on Home. A snoozed or settled card stays off the list until it returns to the inbox.
+
+The read keeps one row per Outlook conversation. An email without an Outlook conversation ID is its own group, keyed by its source email ID. The earliest due suggestion comes first. Rows without a due date follow. At the same due date, including when dates are absent, it ranks the oldest source email first. The response is `{ ok, schema_version: "home-mail-priorities.v1", items, more }`. It lists at most 25 rows and sets `more` when more groups qualify.
+
+A row gives `item_id` and `base_version` from its Home card, `kind`, `conversation_id`, `title`, `sender`, `subject`, `suggestion`, `due_on` and `source_activity: { kind: "email", id, happened_at }`. Use `proposal_id` or `reply_draft_id` to open the selected review from the matching Home card. The other ID is null. In a grouped suggestion card, the selected proposal can differ from the leading proposal in `item_id`. Home formats the dates in Central time.
+
 ## Invoice tracker reads for the app
 
 Home and Invoices use `GET /api/engine/invoices` when `invoices-from-engine` is `on` in the app's `ENGINE_ROUTING` KV. Set the engine Worker's `INVOICES_READ_SCHEMA` to `next` to read through `DATABASE` as `engine_reader`, the same way the Deals reads do. An absent setting or any other value keeps the old-table read. Set the engine variable before routing the app to the new read. Remove the variable to return the engine to the old-table read, or set the app switch to `off` to route to CARR.

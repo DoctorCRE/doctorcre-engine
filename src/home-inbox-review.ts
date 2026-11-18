@@ -36,7 +36,7 @@ type Suggestion = ReviewRow &
 		suggestions: SuggestionReference[];
 	};
 
-function draftRows(userId: string, limit: number, itemId?: string) {
+function draftRows(userId: string, limit?: number, itemId?: string) {
 	return sql<Draft>`
 		with drafts as (
 			select r.id, r.status, r.sent_at, r.failure_reason, r.revision::text as source_version,
@@ -68,11 +68,11 @@ function draftRows(userId: string, limit: number, itemId?: string) {
 		select * from drafts where position = 1
 			${itemId ? sql`and id = ${itemId} and status <> 'sent'` : sql``}
 		order by (status = 'sent'), activity_at desc, id
-		limit ${limit}
+		limit ${limit ?? null}
 	`;
 }
 
-function suggestionRows(userId: string, limit: number, itemId?: string) {
+function suggestionRows(userId: string, limit?: number, itemId?: string) {
 	return sql<Suggestion>`
 		with visible as (
 			select p.id, p.status, p.activity_id, p.activity_kind, p.created_at as activity_at, p.due_on,
@@ -141,7 +141,7 @@ function suggestionRows(userId: string, limit: number, itemId?: string) {
 		select * from grouped where position = 1 and status = 'pending'
 			${itemId ? sql`and id = ${itemId}` : sql``}
 		order by activity_at desc, id
-		limit ${limit}
+		limit ${limit ?? null}
 	`;
 }
 
@@ -304,4 +304,95 @@ export async function readHomeReviewCards(
 			};
 		}),
 	];
+}
+
+type MailPriority = {
+	item_id: string;
+	base_version: string;
+	suggestion: string;
+	due_on: string | null;
+	activity_id: string;
+	happened_at: string;
+	conversation_id: string | null;
+	sender: string;
+	subject: string;
+} & (
+	| {
+			kind: "next_step" | "file_to_deal" | "possible_new_deal" | "phase_move";
+			proposal_id: string;
+			reply_draft_id: null;
+	  }
+	| { kind: "reply_draft"; proposal_id: null; reply_draft_id: string }
+);
+
+export async function readHomeMailPriorities(
+	db: Transaction<DB>,
+	userId: string,
+) {
+	const limit = 25;
+	const suggestions = markedReviews(suggestionRows(userId), userId, "proposal");
+	const drafts = markedReviews(draftRows(userId), userId, "reply_draft");
+	const { rows } = await sql<MailPriority>`
+		with cards as (
+			select 'suggestion:' || card.id as item_id,
+				card.source_change_id, card.mark_version,
+				p.id as proposal_id, null::uuid as reply_draft_id, p.kind, p.activity_id, p.due_on,
+				case p.kind
+					when 'next_step' then p.what
+					when 'file_to_deal' then 'File email to ' || d.name
+					when 'phase_move' then 'Move to ' || phase.label
+					else 'Review possible new deal'
+				end as suggestion
+			from (${suggestions}) card
+			cross join lateral jsonb_to_recordset(card.suggestions) ref(id uuid)
+			join proposal p on p.id = ref.id
+			left join deal d on d.id = p.deal_id
+			left join phase on phase.slug = p.to_phase
+			where card.activity_kind = 'email' and not card.settled and card.snoozed_until is null
+				and p.kind in ('next_step', 'file_to_deal', 'possible_new_deal', 'phase_move')
+			union all
+			select 'reply_draft:' || card.id, card.source_change_id, card.mark_version,
+				null, card.id, 'reply_draft', card.email_activity_id, null, 'Review reply draft'
+			from (${drafts}) card
+			where card.status = 'pending' and not card.settled and card.snoozed_until is null
+		), ranked as (
+			select cards.*, e.conversation_id, a.happened_at,
+				coalesce(nullif(btrim(e.sender_name), ''), e.sender::text) as sender,
+				coalesce(nullif(btrim(e.subject), ''), 'No subject') as subject,
+				row_number() over (
+					partition by e.conversation_id, case when e.conversation_id is null then e.activity_id end
+					order by cards.due_on nulls last, a.happened_at, coalesce(cards.proposal_id, cards.reply_draft_id)
+				) as position
+			from cards
+			join email e on e.activity_id = cards.activity_id
+			join activity a on a.id = e.activity_id
+			where not exists (
+				select from party_email pe join app_user u on u.id = pe.party_id where pe.address = e.sender
+			)
+		)
+		select item_id, source_change_id || ':' || coalesce(mark_version, 0) || ':inbox' as base_version,
+			proposal_id, reply_draft_id, kind, suggestion, due_on, activity_id, happened_at,
+			conversation_id, sender, subject
+		from ranked where position = 1
+		order by due_on nulls last, happened_at, item_id
+		limit ${limit + 1}
+	`.execute(db);
+	return {
+		ok: true,
+		schema_version: "home-mail-priorities.v1",
+		items: rows
+			.slice(0, limit)
+			.map(({ activity_id, happened_at, sender, subject, ...row }) => ({
+				...row,
+				title: `${sender} · ${subject}`,
+				sender,
+				subject,
+				source_activity: {
+					kind: "email",
+					id: activity_id,
+					happened_at: new Date(happened_at).toISOString(),
+				},
+			})),
+		more: rows.length > limit,
+	};
 }

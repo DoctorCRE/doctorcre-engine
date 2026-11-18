@@ -58,15 +58,15 @@ before(async () => {
 		select set_config('engine.user_id', '', true);
 		insert into activity (id, kind, happened_at) values ('${unstampedCall}', 'call', '2026-01-02T12:00Z');
 		insert into activity_about (activity_id, deal_id) values ('${unstampedCall}', '${deal}');
-		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id, created_at)
-			values ('${id(30)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}', '2026-01-05'),
-				('${id(31)}', 'next_step', '${id(11)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the plan', '${partner}', '2026-01-03'),
-				('${id(32)}', 'next_step', '${id(12)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the drawing', null, '2026-01-04'),
-				('${id(33)}', 'next_step', '${call}', 'call', 'Ask about the lease.', 'old_system', '${deal}', 'Check the lease', null, '2026-01-02'),
-				('${id(34)}', 'next_step', '${call}', 'call', 'Send a budget.', 'old_system', '${deal}', 'Send a budget', '${partner}', '2026-01-03'),
-				('${id(35)}', 'next_step', '${id(12)}', 'email', 'Please send details.', 'old_system', '${deal}', 'Send details', '${partner}', '2026-01-04'),
-				('${id(36)}', 'next_step', '${meeting}', 'meeting', 'Please check the date.', 'old_system', '${deal}', 'Check the date', '${partner}', '2026-01-04'),
-				('${id(37)}', 'next_step', '${unstampedCall}', 'call', 'Please check the floor plan.', 'old_system', '${deal}', 'Check the floor plan', null, '2026-01-04');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id, created_at, due_on)
+			values ('${id(30)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}', '2026-01-05', null),
+				('${id(31)}', 'next_step', '${id(11)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the plan', '${partner}', '2026-01-03', '2026-01-09'),
+				('${id(32)}', 'next_step', '${id(12)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the drawing', null, '2026-01-04', null),
+				('${id(33)}', 'next_step', '${call}', 'call', 'Ask about the lease.', 'old_system', '${deal}', 'Check the lease', null, '2026-01-02', null),
+				('${id(34)}', 'next_step', '${call}', 'call', 'Send a budget.', 'old_system', '${deal}', 'Send a budget', '${partner}', '2026-01-03', null),
+				('${id(35)}', 'next_step', '${id(12)}', 'email', 'Please send details.', 'old_system', '${deal}', 'Send details', '${partner}', '2026-01-04', null),
+				('${id(36)}', 'next_step', '${meeting}', 'meeting', 'Please check the date.', 'old_system', '${deal}', 'Check the date', '${partner}', '2026-01-04', null),
+				('${id(37)}', 'next_step', '${unstampedCall}', 'call', 'Please check the floor plan.', 'old_system', '${deal}', 'Check the floor plan', null, '2026-01-04', null);
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, created_at)
 			values ('${id(38)}', 'file_to_deal', '${id(11)}', 'email', 'Please file this.', 'old_system', '${deal}', '2026-01-02');
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${partner}', true);
@@ -342,4 +342,82 @@ test("An email suggestion names its sender and subject", async () => {
 test("A grouped suggestion card uses the latest source email, even when an older email has the newest suggestion", async () => {
 	const group = (await inbox()).find((card) => card.proposal_id === id(30));
 	assert.equal(group?.title, "Pat Example · Floor plan");
+});
+
+test("Mail priorities ranks inbound work once per Outlook conversation and opens the same Home card", async () => {
+	const user = { user: "example" };
+	const url = "home/mail-priorities";
+	const get = (viewer = user, enabled = true) =>
+		request(
+			viewer,
+			url,
+			{ method: "GET" },
+			enabled ? { HOME_INBOX_READ_SCHEMA: "next" } : {},
+		);
+	assert.equal((await get(user, false)).status, 404);
+
+	const response = await get();
+	assert.equal(response.status, 200);
+	const page: unknown = await response.json();
+	assert.ok(isArguments(page) && Array.isArray(page.items));
+	const priorities = page.items.filter(isArguments);
+	const thread = priorities.filter((row) => row.conversation_id === "Thread");
+	const cards = await inbox();
+	const matchingCard = cards.find(
+		(card) => card.item_id === `suggestion:${id(30)}`,
+	);
+	assert.ok(matchingCard);
+	assert.partialDeepStrictEqual(thread, [
+		{
+			item_id: matchingCard.item_id,
+			base_version: matchingCard.base_version,
+			title: "Pat Example · Floor plan",
+			kind: "next_step",
+			suggestion: "Check the plan",
+			proposal_id: id(31),
+			reply_draft_id: null,
+			due_on: "2026-01-09",
+			source_activity: {
+				kind: "email",
+				id: id(11),
+				happened_at: "2026-01-03T00:00:00.000Z",
+			},
+		},
+	]);
+	assert.equal(priorities[0]?.item_id, matchingCard.item_id);
+	const other: unknown = await (await get({ user: "other" })).json();
+	assert.ok(isArguments(other) && Array.isArray(other.items));
+	assert.partialDeepStrictEqual(
+		other.items
+			.filter(isArguments)
+			.filter((row) => row.conversation_id === "Thread"),
+		[{ item_id: `suggestion:${id(38)}`, proposal_id: id(38) }],
+	);
+});
+
+test("Mail priorities keeps two emails without conversation IDs in separate groups", async () => {
+	const user = { user: "unkeyed-reviewer" };
+	const reviewer = id(53);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Reviewer');
+		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');
+		select set_config('engine.user_id', '${reviewer}', true);
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job)
+			values ('${id(54)}', 'possible_new_deal', '${id(12)}', 'email', 'Review the first suite.', 'old_system'),
+				('${id(55)}', 'possible_new_deal', '${id(15)}', 'email', 'Review the other suite.', 'old_system');
+		commit;`);
+	const response = await request(
+		user,
+		"home/mail-priorities",
+		{ method: "GET" },
+		{ HOME_INBOX_READ_SCHEMA: "next" },
+	);
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), {
+		items: [
+			{ conversation_id: null, source_activity: { id: id(12) } },
+			{ conversation_id: null, source_activity: { id: id(15) } },
+		],
+	});
 });

@@ -304,3 +304,5 @@
 153\. **Deal people search filters by kind before the result limit (2026-11-18).** The deal page can ask for people or companies by name prefix. The Market agent picker asks for people so that companies cannot use up its 25 results. The search includes do-not-contact records because choosing a participant does not contact them (#712).
 
 154\. **Home marks follow the suggestion card or reply draft (2026-11-18).** A partner marks the visible suggestion group's leading proposal or their own active reply draft. The mark uses source and mark history to refuse stale saves. Sent drafts appear once in Done by their recorded send time, alongside any active draft in the same conversation (#721).
+
+155\. **Mail priorities opens the same review as Home (2026-11-18).** The read ranks pending inbound suggestions and reply drafts by their due dates, then by the source email's time. Each Outlook conversation contributes one row with the selected review and its Home card ID (#721).
