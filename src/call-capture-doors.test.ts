@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { readSchema } from "./test-copy.ts";
 import { doorTest } from "./test-door.ts";
 
 const { db, setup, cleanup, save } = doorTest();
@@ -126,6 +127,38 @@ test("a backdated phase move reports when the partner saved it", async () => {
 	assert.equal(status, 200);
 	assert.equal(deal.phase, "legal");
 	assert.equal(deal.phase_saved_at, phase.saved_at);
+});
+
+test("call capture reads the original save time of a copied backdated phase", async () => {
+	const copiedDeal = id(18);
+	const client = id(19);
+	await db
+		.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into outside_id (source, value, party_id) values ('old_system', '${ALEX}', '${ALEX}');
+		insert into public.actor (id, slug, kind, display_name) values ('${ALEX}', 'alex', 'human', 'Alex Example');
+		insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Active', true, 1);
+		insert into public.party (id, kind, name, created_by, updated_by)
+		values ('${client}', 'org', 'Example Client', '${ALEX}', '${ALEX}');
+		insert into public.client (id, party_id, created_by, updated_by)
+		values ('${client}', '${client}', '${ALEX}', '${ALEX}');
+		insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Lease', 1);
+		insert into public.deal_phase (slug, label) values ('legal', 'Legal');
+		insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
+		values ('${copiedDeal}', '${client}', 'Example copied deal', 'lease', 'legal', 'alex', '${ALEX}', '${ALEX}');
+		insert into public.event (actor_id, verb, subject_type, subject_id, field, new_value, cause, occurred_at, recorded_at)
+		values ('${ALEX}', 'update-deal', 'deal', '${copiedDeal}', 'phase', '{"phase":"legal"}', 'human_stated',
+			'2026-01-06T06:00:00Z', '2026-01-08T15:00:00Z');
+		${await readSchema("copy-deals.sql")}
+		commit;`)
+		.catch(async (error: unknown) => {
+			await db.query("rollback");
+			throw error;
+		});
+	const [status, deal] = await read(copiedDeal);
+	assert.equal(status, 200);
+	assert.equal(deal.phase, "legal");
+	assert.equal(deal.phase_saved_at, "2026-01-08T15:00:00+00:00");
 });
 
 test("a call's stated phase and date survive acceptance without an email milestone quote", async () => {

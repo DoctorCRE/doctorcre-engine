@@ -228,6 +228,7 @@ end $$;
 
 create temp table old_phase on commit drop as
 select e.id as old_id, e.subject_id as deal_id, e.occurred_at as happened_at, case when e.field = 'outcome' then 'dead' else e.new_value ->> 'phase' end as phase,
+ e.recorded_at as changed_at,
  coalesce(nullif(e.human_quote, ''), nullif(e.agent_rationale, '')) as reason,
  a.*
 -- History takes its own event's cause and sponsor, rather than a later change to the same deal.
@@ -238,12 +239,13 @@ insert into not_copied select d.id, 'phase', d.phase, 'no_phase_history' from pu
 where not exists (select from public.event e where e.subject_type = 'deal' and e.subject_id = d.id and e.field = 'phase');
 create temp table mapped_phase on commit drop as
 select p.*, case when d.id is null then 'deal_not_copied' when f.slug is null then 'unknown_phase'
- when exists (select from deal_phase_change c where (c.deal_id, c.happened_at) = (p.deal_id, p.happened_at) and (c.phase, c.reason) is distinct from (p.phase, p.reason)) then 'existing_phase_conflict'
+ when exists (select from deal_phase_change c where (c.deal_id, c.happened_at) = (p.deal_id, p.happened_at)
+  and (c.phase, c.reason, c.changed_at) is distinct from (p.phase, p.reason, p.changed_at)) then 'existing_phase_conflict'
  when p.phase = 'dead' and p.reason is null then 'dead_without_reason'
  when count(*) over (partition by p.deal_id, p.happened_at) > 1 then 'same_time_phase_changes' end as refusal
 from old_phase p left join deal d on d.id = p.deal_id left join phase f on f.slug = p.phase;
 insert into deal_phase_change (deal_id, happened_at, phase, reason, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select p.deal_id, p.happened_at, p.phase, p.reason, p.changed_by_user_id, p.changed_by_job, p.changed_for_user_id, p.happened_at
+select p.deal_id, p.happened_at, p.phase, p.reason, p.changed_by_user_id, p.changed_by_job, p.changed_for_user_id, p.changed_at
 from mapped_phase p where refusal is null
  and not exists (select from deal_phase_change c where (c.deal_id, c.happened_at) = (p.deal_id, p.happened_at));
 insert into not_copied select old_id, 'phase', phase, refusal from mapped_phase where refusal is not null;

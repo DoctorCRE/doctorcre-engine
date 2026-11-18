@@ -69,9 +69,9 @@ before(async () => {
  ('${id(105)}', '${id(10)}', 7, 'tenant', '2024-12-01', '2024-12-01', '${id(1)}'),
  ('${id(106)}', '${id(22)}', 1, 'tenant', '2025-01-01', '2025-01-01', '${id(1)}'),
  ('${id(104)}', '${id(26)}', 1, 'tenant', '2025-01-01', '2025-01-01', '${id(1)}');
- insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause) values
- ('${id(110)}', 'deal', '${id(10)}', 'phase', '{"phase":"negotiation"}', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
- ('${id(111)}', 'deal', '${id(10)}', 'phase', '{"phase":"closed"}', '2025-02-02', '${id(1)}', 'update-deal', 'human_stated');
+ insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause) values
+ ('${id(110)}', 'deal', '${id(10)}', 'phase', '{"phase":"negotiation"}', '2025-01-02', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
+ ('${id(111)}', 'deal', '${id(10)}', 'phase', '{"phase":"closed"}', '2025-02-02', '2025-02-04', '${id(1)}', 'update-deal', 'human_stated');
  insert into public.negotiation_claim_type (slug, label, falsifiable, reversal_test, sort) values ('example', 'Example claim', true, 'Example evidence', 1);
  insert into public.negotiation_claim (id, round_id, claim_type, created_by) values ('${id(120)}', '${id(100)}', 'example', '${id(1)}'), ('${id(121)}', '${id(102)}', 'example', '${id(1)}');
  update public.negotiation_round set rate_amount = 2, rate_basis = 'usd_sf_mo', term_months = 60, ti_amount = 20, ti_basis = 'usd_sf', free_rent_months = 2, note = 'Example original terms' where id = '${id(100)}';
@@ -143,14 +143,15 @@ test("deals preserve identity, times, owner, market and value, and client links 
 			reason,
 		);
 });
-test("phase events retain evidence dates and actors; without them the current phase holds from the last change", async () => {
+test("phase events retain effective dates, save times and actors; without them the current phase holds from the last change", async () => {
 	assert.deepEqual(
 		await rows(
-			`select phase, happened_at::text, changed_by_user_id from deal_phase_change where deal_id = '${id(10)}' order by happened_at`,
+			`select phase, happened_at::text, changed_at::text, changed_by_user_id from deal_phase_change where deal_id = '${id(10)}' order by happened_at`,
 		),
 		["negotiation", "closed"].map((phase, i) => ({
 			phase,
 			happened_at: i ? "2025-02-02 00:00:00+00" : "2025-01-02 00:00:00+00",
+			changed_at: i ? "2025-02-04 00:00:00+00" : "2025-01-02 00:00:00+00",
 			changed_by_user_id: id(1),
 		})),
 	);
@@ -297,12 +298,19 @@ test("a repeat is idempotent and restores stamps after import", async () => {
 	const original = await rows("select * from deal order by id");
 	const properties = await rows("select * from property order by id");
 	const offers = await rows("select * from offer order by id");
+	const phases =
+		"select * from deal_phase_change order by deal_id, happened_at";
+	const history = "select * from change order by id";
+	const originalPhases = await rows(phases);
+	const originalHistory = await rows(history);
 	const claims = await rows(
 		"select * from offer_claim order by offer_id, claim_type",
 	);
 	await db.query("begin");
 	assert.deepEqual(await run(), report, "a rerun lists the same corrections");
 	await db.query("commit");
+	assert.deepEqual(await rows(phases), originalPhases);
+	assert.deepEqual(await rows(history), originalHistory);
 	assert.deepEqual(await rows("select * from deal order by id"), original);
 	assert.deepEqual(
 		await rows("select * from property order by id"),
@@ -323,6 +331,29 @@ test("a repeat is idempotent and restores stamps after import", async () => {
 		id(1),
 	);
 	await db.query("rollback");
+});
+
+test("a phase copied with its effective date as the save time is listed without rewriting history", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`alter table deal_phase_change disable trigger stamp_change;
+			update deal_phase_change set changed_at = happened_at where deal_id = '${id(10)}' and phase = 'closed';
+			alter table deal_phase_change enable trigger stamp_change;`);
+		const phase = `select * from deal_phase_change where deal_id = '${id(10)}' order by happened_at`;
+		const history = "select * from change order by id";
+		const originalPhase = await rows(phase);
+		const originalHistory = await rows(history);
+		assert.ok(
+			(await run()).some(
+				(row) =>
+					row.old_id === id(111) && row.reason === "existing_phase_conflict",
+			),
+		);
+		assert.deepEqual(await rows(phase), originalPhase);
+		assert.deepEqual(await rows(history), originalHistory);
+	} finally {
+		await db.query("rollback");
+	}
 });
 
 test("a rerun lists a market or value the copied deal still lacks, even once the old deal has it", async () => {
