@@ -84,7 +84,7 @@ async function locked(
 	return draft;
 }
 
-async function dismissEarlierDrafts(
+async function dismissOlderDrafts(
 	tx: Transaction<DB>,
 	{
 		activity_id,
@@ -102,16 +102,24 @@ async function dismissEarlierDrafts(
 	if (!source) return;
 	await tx
 		.updateTable("reply_draft")
-		.from("email")
 		.set({
 			status: "dismissed",
 			dismiss_reason: "Replaced by a newer reply draft in this conversation",
 		})
-		.whereRef("reply_draft.email_activity_id", "=", "email.activity_id")
-		.where("email.conversation_id", "=", source.conversation_id)
-		.where("reply_draft.email_activity_id", "!=", activity_id)
-		.where("reply_draft.owner_user_id", "=", owner_user_id)
-		.where("reply_draft.status", "=", "pending")
+		.where("status", "=", "pending")
+		.where("id", "in", (eb) =>
+			eb
+				.selectFrom("reply_draft as pending")
+				.innerJoin("email", "email.activity_id", "pending.email_activity_id")
+				.innerJoin("activity", "activity.id", "email.activity_id")
+				.select("pending.id")
+				.where("email.conversation_id", "=", source.conversation_id)
+				.where("pending.owner_user_id", "=", owner_user_id)
+				.where("pending.status", "=", "pending")
+				.orderBy("activity.happened_at", "desc")
+				.orderBy("activity.id", "desc")
+				.offset(1),
+		)
 		.execute();
 }
 
@@ -137,6 +145,8 @@ export const replySubmissions = new Hono<NextSaveEnv>().post(
 			},
 			async (tx, request) => {
 				const draft = await locked(tx, c, request.draft_id);
+				if (draft.status === "dismissed")
+					fail(new Refusal(409, "draft_changed", { version: draft.revision }));
 				if (draft.revision !== request.version)
 					fail(
 						new Refusal(409, "version_conflict", { version: draft.revision }),
@@ -206,7 +216,7 @@ export const replyJobs = new Hono<NextSaveEnv>()
 				);
 				const [draft] = inserted.rows;
 				if (draft) {
-					await dismissEarlierDrafts(tx, {
+					await dismissOlderDrafts(tx, {
 						activity_id: request.activity_id,
 						owner_user_id: user.id,
 					});

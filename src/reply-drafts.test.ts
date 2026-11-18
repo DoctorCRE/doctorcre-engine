@@ -48,12 +48,15 @@ before(async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Alex Example'), ('${id(2)}', 'person', 'Blair Example');
  insert into app_user (id, slug) values ('${id(1)}', 'alex'), ('${id(2)}', 'blair');
- insert into activity (id, kind, happened_at) select v, 'email', now() from unnest(array[${Array.from({ length: 22 }, (_, i) => `'${id(i + 10)}'`).join(",")}]::uuid[]) v;
+ insert into activity (id, kind, happened_at) select v, 'email', '2026-01-02T12:00:00Z' from unnest(array[${Array.from({ length: 27 }, (_, i) => `'${id(i + 10)}'`).join(",")}]::uuid[]) v;
+ update activity set happened_at = '2026-01-01T12:00:00Z' where id in ('${id(25)}', '${id(34)}', '${id(35)}');
  insert into document (id, name, r2_key) values ('${id(50)}', 'Example plan', 'example/plan.pdf');
  insert into email (activity_id, message_id, sender, subject, body) select id, '<' || id || '@example.test>', 'doctor@example.com', 'Example', 'Please reply' from activity;
  update email set conversation_id = 'ExampleThread' where activity_id in (${[22, 23, 24, 25, 29].map((n) => `'${id(n)}'`).join(",")});
  update email set conversation_id = 'examplethread' where activity_id = '${id(26)}';
  update email set conversation_id = 'ConcurrentThread' where activity_id in ('${id(30)}', '${id(31)}');
+ update email set conversation_id = 'BackfilledThread' where activity_id between '${id(32)}' and '${id(34)}';
+ update email set conversation_id = 'RollbackThread' where activity_id in ('${id(35)}', '${id(36)}');
  insert into activity_about (activity_id, party_id) select id, '${id(1)}' from activity;
  commit;`);
 });
@@ -91,21 +94,15 @@ test("a new store dismisses only its partner's pending draft in the same Outlook
 	const otherConversation = await draft(26);
 	const noConversation = [await draft(27), await draft(28)];
 
-	assert.equal(
-		(
-			await post("reply-drafts", { ...draftArgs(29), subject: "x".repeat(999) })
-		)[0],
-		422,
-	);
-	assert.equal(
-		(await db.query("select status from reply_draft where id = $1", [older]))
-			.rows[0].status,
-		"pending",
-	);
 	const newer = await draft(29);
 	assert.deepEqual(
 		await post("reply-drafts", { ...draftArgs(25), body: "Changed" }),
 		[200, { draft_id: older, version: 1, existing: true }],
+	);
+	const [status, refusal] = await submit(older);
+	assert.deepEqual(
+		[status, refusal.error, refusal.version],
+		[409, "draft_changed", 1],
 	);
 	const { rows } = await db.query(
 		"select id, status from reply_draft where email_activity_id between $1 and $2",
@@ -140,13 +137,58 @@ test("a new store dismisses only its partner's pending draft in the same Outlook
 	]);
 });
 
-test("overlapping stores in the same conversation leave one pending draft", async () => {
+test("overlapping stores in the same conversation leave the highest activity id pending when times tie", async () => {
 	const drafts = await Promise.all([draft(30), draft(31)]);
 	const { rows } = await db.query(
-		"select status from reply_draft where id = any($1::uuid[]) order by status",
+		"select status from reply_draft where id = any($1::uuid[]) order by email_activity_id",
 		[drafts],
 	);
 	assert.deepEqual(rows, [{ status: "dismissed" }, { status: "pending" }]);
+});
+
+test("an older email or a lower activity id at the same time cannot replace the newest email's draft", async () => {
+	const newest = await draft(33);
+	const tied = await draft(32);
+	const older = await draft(34);
+	const { rows } = await db.query(
+		"select id, status from reply_draft where id = any($1::uuid[]) order by email_activity_id",
+		[[tied, newest, older]],
+	);
+	assert.deepEqual(rows, [
+		{ id: tied, status: "dismissed" },
+		{ id: newest, status: "pending" },
+		{ id: older, status: "dismissed" },
+	]);
+});
+
+test("a receipt failure rolls back the new draft, earlier dismissal, and change history", async () => {
+	const earlier = await draft(35);
+	const key = randomUUID();
+	await db.query(`alter table save_receipt add constraint test_reply_receipt_refused
+		check (idempotency_key <> '${key}')`);
+	const [status, refusal] = await save(job, "reply-drafts", {
+		...draftArgs(36),
+		idempotency_key: key,
+	});
+	assert.deepEqual([status, refusal.rule], [422, "test_reply_receipt_refused"]);
+	const { rows } = await db.query(
+		"select id, status, revision, decided_at, dismiss_reason from reply_draft where email_activity_id in ($1, $2)",
+		[id(35), id(36)],
+	);
+	assert.deepEqual(rows, [
+		{
+			id: earlier,
+			status: "pending",
+			revision: 1,
+			decided_at: null,
+			dismiss_reason: null,
+		},
+	]);
+	const history = await db.query(
+		"select action from change where table_name = 'reply_draft' and record ->> 'id' = $1",
+		[earlier],
+	);
+	assert.deepEqual(history.rows, [{ action: "insert" }]);
 });
 
 test("a draft is stored once per email and owner, submissions freeze the known UTF-8 digest", async () => {
