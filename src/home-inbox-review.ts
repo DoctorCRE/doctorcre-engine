@@ -2,6 +2,7 @@ import { sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import { isoMillis, Refusal } from "./answer.ts";
 import type { DB } from "./next-database.d.ts";
+import { pendingProposals } from "./pending-proposals.ts";
 
 type ReviewRow = {
 	id: string;
@@ -138,7 +139,7 @@ export async function readProposal(
 	return proposal ?? new Refusal(404, "not_found");
 }
 
-function suggestionRows(userId: string, limit: number) {
+function suggestionRows(db: Transaction<DB>, userId: string, limit: number) {
 	return sql<Suggestion>`
 		with pending as (
 			select p.id, p.activity_id, p.activity_kind, p.created_at as activity_at, p.due_on,
@@ -167,7 +168,7 @@ function suggestionRows(userId: string, limit: number) {
 					'activity_kind', p.activity_kind, 'deal_id', p.deal_id, 'party_id', p.party_id,
 					'property_id', p.property_id, 'candidate_id', p.candidate_id
 				) as reference
-			from proposal p
+			from ${pendingProposals(db).selectAll().as("p")}
 			left join activity a on a.id = p.activity_id
 			left join email e on e.activity_id = a.id
 			left join party contact on contact.id = a.from_party_id
@@ -175,7 +176,7 @@ function suggestionRows(userId: string, limit: number) {
 			left join party on party.id = p.party_id
 			left join property on property.id = p.property_id
 			left join phase on phase.slug = p.to_phase
-			where p.status = 'pending' and p.kind not in ('next_step_done', 'email_lead')
+			where p.kind not in ('next_step_done', 'email_lead')
 				and ${visibleSuggestion(userId)}
 		), grouped as (
 			select pending.*,
@@ -236,7 +237,7 @@ export async function readHomeReviewCards(
 	limit: number,
 ) {
 	const drafts = await draftRows(userId, limit).execute(db);
-	const suggestions = await suggestionRows(userId, limit).execute(db);
+	const suggestions = await suggestionRows(db, userId, limit).execute(db);
 	return [
 		...drafts.rows.map((draft) => ({
 			...reviewCard(
