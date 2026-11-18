@@ -24,6 +24,7 @@ import { SaveRefusal } from "./save.ts";
 
 const kinds = [
 	"next_step",
+	"next_step_done",
 	"phase_move",
 	"new_lead",
 	"lead_stage_move",
@@ -36,6 +37,7 @@ const shape = {
 	activity_id: isUuid,
 	evidence: isText,
 	deal_id: optional(isUuid),
+	next_step_id: optional(isUuid),
 	party_id: optional(isUuid),
 	property_id: optional(isUuid),
 	what: optional(isText),
@@ -286,11 +288,11 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 					existing: boolean;
 				}>`
    insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, party_id, property_id,
-    what, owner_party_id, due_on, from_phase, to_phase, phase_stated, phase_on, how_found, from_stage, to_stage, strength, reason)
+    what, owner_party_id, due_on, from_phase, to_phase, phase_stated, phase_on, how_found, from_stage, to_stage, strength, reason, next_step_id)
    values (${r.kind}, ${r.activity_id}::uuid, ${activity.kind}, ${r.evidence}, current_setting('engine.job'),
     ${r.deal_id ?? null}::uuid, ${r.party_id ?? null}::uuid, ${r.property_id ?? null}::uuid,
     ${r.what ?? null}, ${owner ?? null}::uuid, ${r.due_on ?? null}::date, ${from}, ${to}, ${stated}, ${r.on ?? null}::date,
-    ${r.how_found ?? null}, ${r.from_stage ?? null}, ${toStage}, ${r.strength ?? null}, ${r.reason ?? null})
+    ${r.how_found ?? null}, ${r.from_stage ?? null}, ${toStage}, ${r.strength ?? null}, ${r.reason ?? null}, ${r.next_step_id ?? null}::uuid)
    on conflict do nothing returning id, status, false as existing`.execute(tx);
 				if (rows[0]) return { proposal_id: rows[0].id, status: rows[0].status };
 				const prior = await tx
@@ -301,6 +303,7 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 					.where(sql<boolean>`deal_id is not distinct from ${r.deal_id ?? null}::uuid and party_id is not distinct from ${r.party_id ?? null}::uuid
     and property_id is not distinct from ${r.property_id ?? null}::uuid and from_phase is not distinct from ${from} and to_phase is not distinct from ${to}
     and phase_stated = ${stated} and phase_on is not distinct from ${r.on ?? null}::date
+    and next_step_id is not distinct from ${r.next_step_id ?? null}::uuid
     and what is not distinct from ${r.what ?? null} and owner_party_id is not distinct from ${owner ?? null}::uuid
     and due_on is not distinct from ${r.due_on ?? null}::date and how_found is not distinct from ${r.how_found ?? null}
     and from_stage is not distinct from ${r.from_stage ?? null} and to_stage is not distinct from ${toStage}`)
@@ -425,7 +428,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								.executeTakeFirstOrThrow()
 						: undefined;
 				const created =
-					r.decision === "dismiss"
+					r.decision === "dismiss" || p.kind === "next_step_done"
 						? {}
 						: p.kind === "next_step"
 							? { next_step_id: p.id }
@@ -439,6 +442,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					status: rows[0]?.status ?? null,
 					decided_at: rows[0]?.decided_at ?? null,
 					created,
+					...(p.next_step_id && { next_step_id: p.next_step_id }),
 				};
 			},
 		),

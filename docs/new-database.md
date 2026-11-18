@@ -1285,9 +1285,10 @@ The queue answers `{ emails, open_deals, next_cursor }` with what `email_matchin
 
 The suggestion kinds:
 
-| `kind`              | Fields                                                                  | Accepting creates                                                |
+| `kind`              | Fields                                                                  | On acceptance                                                    |
 | ------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `next_step`         | `what`; optional `owner` or `owner_party_id`, and `due_on`              | the next step, with the proposal's id                            |
+| `next_step_done`    | `deal_id` and `next_step_id` with a note, call, or recorded meeting     | completes the existing next step                                 |
 | `phase_move`        | `deal_id`; for a call or meeting, optional `to` and `on`                | the phase change                                                 |
 | `new_lead`          | `party_id`, `how_found`                                                 | the lead role at New                                             |
 | `email_lead`        | `candidate_id` from the email-lead route                                | an inbound lead at New for the mailbox owner                     |
@@ -1306,6 +1307,9 @@ The suggestion kinds:
 - **Decide.** Only a direct partner decides, once. `edits` (`what`, `owner_party_id`, `due_on`) change the accepted next step in the same transaction, so history shows the suggestion and the edit and the suggestion itself never changes. Answer `{ proposal_id, status, decided_at, created: { next_step_id | deal_id | activity_id | party_id } }`. Refusals: `409 already_decided { status, decided_by }`; `409 version_conflict { current_phase }` or `{ current_stage }` when the deal or lead moved since the suggestion, leaving it pending; `403 user_decides` from a job; `404 not_found`.
 - **Next-step owner.** A supplied `owner` user slug resolves to that user's person. On store, supplying both owner fields or using `owner` on another kind of suggestion returns `400 invalid_field_value`. An unknown slug returns `400 unknown_owner`. An owner ID in `edits.owner_party_id` overrides the suggestion's owner. Omitted, blank, and `null` owner edits keep the suggested owner. If the suggestion has no owner, the step belongs to the partner who accepts it.
 - Accepting a next step whose final owner already has an open step on that record returns `409 open_step_exists { next_step_id }` under door 18's rule. The suggestion stays pending.
+- **Held steps (35).** A job acting for the step's owner can store a completion suggestion about an open, overdue deal step outside the checklist. The note, call, or recorded meeting must be linked to the same deal. The due date must precede the activity's Central calendar day. One suggestion is kept per activity and step. Storing it leaves the step open.
+- Only the step's owner can click Resolve (`accept`) or Dismiss (`dismiss`). The decision answers with `next_step_id` and an empty `created` object. Resolving stamps and completes the step in the same save. An edited or ended step refuses resolution with `422 database_refused_the_statement { rule: "proposal_step_changed" }`. Dismissal closes the suggestion and leaves the step intact.
+- The deal detail derives its date from the current step. A note's resolution advances that date only if it completes the current step. A call or recorded meeting's resolution preserves the current date until a newer ordinary step takes its place. Home's held-step list and undo for automatic resolutions are the rest of slice 35.
 - Snoozing a suggestion is a Home mark (slices 10, 24). Email summaries wait for slice 4's decision and have no door yet.
 
 ### 22. Reply drafts and their delivery
