@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { type AliasedExpression, sql, type Transaction } from "kysely";
+import { sql, type Transaction } from "kysely";
 import { answer, answerNextRead, checkFields, refuse } from "./answer.ts";
 import { selectNextDeals } from "./deals/next-board.ts";
 import type { DB } from "./next-database.d.ts";
@@ -43,24 +43,14 @@ export async function readInvoiceTracker(db: Reader, partner: string) {
 	return trackerAnswer(partner, entries);
 }
 
-async function readNextInvoiceTracker(db: Transaction<DB>, partner: string) {
-	const deals: AliasedExpression<
-		{
-			id: string;
-			name: string;
-			owner: string;
-			phase: string | null;
-			outcome: string | null;
-			closed_on: string | null;
-			invoiced_on: string | null;
-		},
-		"d"
-	> = selectNextDeals(db).where("c.party_id", "is not", null).as("d");
+async function readNextInvoiceTracker(
+	db: Transaction<DB>,
+	partner: string,
+): ReturnType<typeof readInvoiceTracker> {
+	const deals = selectNextDeals(db).where("c.party_id", "is not", null).as("d");
 	const entries = await db
 		.selectFrom(deals)
-		.leftJoin("commission_payment as p", (join) =>
-			join.onRef("p.deal_id", "=", "d.id").on("p.invoiced_on", "is not", null),
-		)
+		.leftJoin("commission_payment as p", "p.deal_id", "d.id")
 		.where((eb) =>
 			eb.or([
 				eb("d.invoiced_on", "is not", null),
@@ -83,6 +73,10 @@ async function readNextInvoiceTracker(db: Transaction<DB>, partner: string) {
 			"p.amount as gross_amount",
 			eb
 				.case()
+				.when(
+					eb.and([eb("p.id", "is not", null), eb("p.invoiced_on", "is", null)]),
+				)
+				.then("expected")
 				.when("p.received_on", "is not", null)
 				.then("received")
 				.when("p.invoiced_on", "is not", null)

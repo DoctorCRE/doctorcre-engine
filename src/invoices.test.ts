@@ -213,15 +213,17 @@ test("the invoices read answers the old tracker's rows, values and order", () =>
 		});
 	}));
 
-test("both tracker reads show the same invoiced, paid and awaiting deals after an undo", async () => {
+test("both tracker reads show the same invoiced, paid and awaiting deals", async (t) => {
 	const { db, setup, cleanup, connectionString } = copyTest();
 	try {
 		await setup();
 		await db.query(`begin;
 			set local search_path = public;
 			${SEED}
-			delete from commission where status = 'expected';
-			update deal set phase = 'invoices-open', closed_on = null where id = '${id(31)}';
+			delete from commission where id in ('${id(43)}', '${id(44)}');
+			update deal set phase = 'closed' where id = '${id(34)}';
+			insert into commission (id, deal_id, gross_amount, status, version, created_by)
+				values ('${id(47)}', '${id(31)}', 800, 'expected', 1, '${agent}');
 			commit;`);
 		await db.query(`begin;
 			select set_config('engine.job', 'old_system', true);
@@ -243,10 +245,9 @@ test("both tracker reads show the same invoiced, paid and awaiting deals after a
 			insert into deal_phase_change (deal_id, phase, happened_at)
 				select d.id, o.phase, '2026-07-15T18:00:00Z' from deal d join public.deal o using (id);
 			insert into imported_deal_invoiced (deal_id, invoiced_on) values ('${id(33)}', '2026-09-30');
-			insert into commission (deal_id, gross) values ('${id(31)}', 800), ('${id(32)}', 2249.50), ('${id(34)}', 500);
+			insert into commission (deal_id, gross) values ('${id(31)}', 800), ('${id(32)}', 2249.50), ('${id(34)}', 575);
 			insert into commission_payment (id, deal_id, amount, invoiced_on, received_on, due_on)
 				select id, deal_id, gross_amount, invoiced_on, received_on, due_on from public.commission;
-			insert into commission_payment (deal_id, amount) values ('${id(31)}', 800);
 			commit;`);
 
 		for (const schema of [undefined, "next"]) {
@@ -272,65 +273,99 @@ test("both tracker reads show the same invoiced, paid and awaiting deals after a
 			}
 			const entries: ReturnType<typeof visibleEntry>[] =
 				data.entries.map(visibleEntry);
+			entries.sort((a, b) => a.key.localeCompare(b.key));
+			const expected = [
+				{
+					deal: id(32),
+					key: id(41),
+					state: "invoiced",
+					amount: "999.50",
+					invoiceDay: "2026-09-02",
+					paidDay: null,
+					dueDay: null,
+				},
+				{
+					deal: id(32),
+					key: id(42),
+					state: "received",
+					amount: "1250.00",
+					invoiceDay: "2026-07-20",
+					paidDay: "2026-08-10",
+					dueDay: "2026-08-19",
+				},
+				{
+					deal: id(34),
+					key: id(45),
+					state: "invoiced",
+					amount: "500.00",
+					invoiceDay: "2026-10-01",
+					paidDay: null,
+					dueDay: "2026-10-31",
+				},
+				{
+					deal: id(34),
+					key: id(46),
+					state: "expected",
+					amount: "75.00",
+					invoiceDay: null,
+					paidDay: null,
+					dueDay: null,
+				},
+				{
+					deal: id(31),
+					key: id(47),
+					state: "expected",
+					amount: "800.00",
+					invoiceDay: null,
+					paidDay: null,
+					dueDay: null,
+				},
+				{
+					deal: id(33),
+					key: `awaiting:${id(33)}`,
+					state: null,
+					amount: null,
+					invoiceDay: "2026-09-30",
+					paidDay: null,
+					dueDay: null,
+				},
+				{
+					deal: id(52),
+					key: `awaiting:${id(52)}`,
+					state: null,
+					amount: null,
+					invoiceDay: null,
+					paidDay: null,
+					dueDay: null,
+				},
+				{
+					deal: id(53),
+					key: `awaiting:${id(53)}`,
+					state: null,
+					amount: null,
+					invoiceDay: null,
+					paidDay: null,
+					dueDay: null,
+				},
+			];
+			const read = schema ?? "old tables";
+			const paymentCases = new Map([
+				[id(31), "a closed deal with one undated payment"],
+				[id(34), "a deal with dated and undated payments"],
+			]);
+			for (const [dealId, name] of paymentCases) {
+				await t.test(`${read} read includes ${name}`, () => {
+					assert.deepEqual(
+						entries.filter((row) => row.deal === dealId),
+						expected.filter((row) => row.deal === dealId),
+					);
+				});
+			}
+			const otherDeal = (row: { deal: string }) => !paymentCases.has(row.deal);
 			assert.deepEqual(
-				entries.sort((a, b) => a.key.localeCompare(b.key)),
-				[
-					{
-						deal: id(32),
-						key: id(41),
-						state: "invoiced",
-						amount: "999.50",
-						invoiceDay: "2026-09-02",
-						paidDay: null,
-						dueDay: null,
-					},
-					{
-						deal: id(32),
-						key: id(42),
-						state: "received",
-						amount: "1250.00",
-						invoiceDay: "2026-07-20",
-						paidDay: "2026-08-10",
-						dueDay: "2026-08-19",
-					},
-					{
-						deal: id(34),
-						key: id(45),
-						state: "invoiced",
-						amount: "500.00",
-						invoiceDay: "2026-10-01",
-						paidDay: null,
-						dueDay: "2026-10-31",
-					},
-					{
-						deal: id(33),
-						key: `awaiting:${id(33)}`,
-						state: null,
-						amount: null,
-						invoiceDay: "2026-09-30",
-						paidDay: null,
-						dueDay: null,
-					},
-					{
-						deal: id(52),
-						key: `awaiting:${id(52)}`,
-						state: null,
-						amount: null,
-						invoiceDay: null,
-						paidDay: null,
-						dueDay: null,
-					},
-					{
-						deal: id(53),
-						key: `awaiting:${id(53)}`,
-						state: null,
-						amount: null,
-						invoiceDay: null,
-						paidDay: null,
-						dueDay: null,
-					},
-				],
-				schema ?? "old tables",
+				entries.filter(otherDeal),
+				expected.filter(otherDeal),
+				read,
 			);
 		}
 	} finally {

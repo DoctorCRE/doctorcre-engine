@@ -1226,9 +1226,9 @@ The app does not display premises or offer-round summaries. Deal links use the U
 
 Home and Invoices use `GET /api/engine/invoices` when `invoices-from-engine` is `on` in the app's `ENGINE_ROUTING` KV. Set the engine Worker's `INVOICES_READ_SCHEMA` to `next` to read through `DATABASE` as `engine_reader`, the same way the Deals reads do. An absent setting or any other value keeps the old-table read. Set the engine variable before routing the app to the new read. Remove the variable to return the engine to the old-table read, or set the app switch to `off` to route to CARR.
 
-The tracker lists each dated commission payment and shows it as paid when it has a receipt date. It reads the amount and due date from that payment. A closed deal that has no dated payment has one row with a blank amount. If the copy kept an invoice date for that deal, the row shows as invoiced. Undo uses the restored phase and invoice date on the next read. Expected commission is a pipeline estimate. Home shows only unpaid rows with an explicit past due date.
+The tracker lists each commission payment on an included deal. An undated payment has status `expected` and shows as Awaiting invoice, including when another payment on the deal has been invoiced. A dated payment shows as paid when it has a receipt date. The amount and due date come from the payment. A closed or invoiced deal with no payments has one row with a blank amount. If the copy kept an invoice date for that deal, the row shows as invoiced. Undo uses the restored phase and invoice date on the next read. Expected commission is a pipeline estimate. Home shows only unpaid rows with an explicit past due date.
 
-The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. The app's Mark paid save still calls `record-commission-receipt` in CARR and needs a new-database save before it can record receipts from these rows.
+The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. The app's Mark paid save still calls `record-commission-receipt` in CARR. Keep the production tracker on the old read until Mark paid saves to the new database.
 
 ## Doors the old system calls
 
