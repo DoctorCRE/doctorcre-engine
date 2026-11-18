@@ -4267,6 +4267,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
 				"invoice_mailbox",
+				"imported_automatic_phase_move",
 				"imported_change",
 				"imported_deal_board",
 				"imported_deal_party",
