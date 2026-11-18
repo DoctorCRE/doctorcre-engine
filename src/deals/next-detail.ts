@@ -14,7 +14,20 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			"d.id as deal_id",
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),
-			jsonArrayFrom(activitiesOf(db, eb.ref("d.id"))).as("activities"),
+			jsonArrayFrom(
+				activityHistoryOf(db, eb.ref("d.id")).select((eb) => [
+					"a.summary",
+					asText(eb.ref("a.happened_at")).as("occurred_at"),
+				]),
+			).as("activities"),
+			jsonArrayFrom(
+				activityHistoryOf(db, eb.ref("d.id"))
+					.where("a.kind", "=", "note")
+					.select((eb) => [
+						"a.summary as text",
+						asText(eb.ref("a.happened_at")).as("created_at"),
+					]),
+			).as("thread"),
 			sql<
 				{
 					conversation_id: string | null;
@@ -97,22 +110,17 @@ const partiesOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.orderBy("dp.role")
 		.orderBy("p.name");
 
-const aboutDeal = (db: Transaction<DB>, deal: Expression<string>) =>
+const activityHistoryOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db
 		.selectFrom("activity as a")
 		.innerJoin("activity_about as ab", "ab.activity_id", "a.id")
-		.where("ab.deal_id", "=", deal)
-		.orderBy("a.happened_at", "desc")
-		.orderBy("a.id", "desc");
-
-const activitiesOf = (db: Transaction<DB>, deal: Expression<string>) =>
-	aboutDeal(db, deal)
 		.leftJoin("app_user as by", "by.id", "a.changed_by_user_id")
 		.select((eb) => [
 			"a.id",
-			asText(eb.ref("a.happened_at")).as("occurred_at"),
-			eb.fn.coalesce("by.slug", "a.changed_by_job").as("actor"),
 			"a.kind",
-			"a.summary",
+			eb.fn.coalesce("by.slug", "a.changed_by_job").as("actor"),
 		])
+		.where("ab.deal_id", "=", deal)
+		.orderBy("a.happened_at", "desc")
+		.orderBy("a.id", "desc")
 		.limit(HISTORY_CAP);

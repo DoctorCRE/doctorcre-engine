@@ -24,18 +24,25 @@ insert into public.contact_state (slug, label, contactable, sort) values ('activ
 insert into public.party (id, kind, name, created_by, updated_by) values
  ('${id(11)}', 'person', 'Dr. Jo Example', ${by}),
  ('${id(12)}', 'org', 'Example Unmapped Clinic', ${by}),
- ('${id(13)}', 'person', 'Example Listing Broker', ${by});
-insert into public.client_status (slug, label) values ('engaged', 'Example engaged');
+ ('${id(13)}', 'person', 'Example Listing Broker', ${by}),
+ ('${id(14)}', 'org', 'Example Inactive Account', ${by}),
+ ('${id(15)}', 'org', 'Example Engaged Account', ${by});
+insert into public.client_status (slug, label) values ('engaged', 'Example engaged'), ('prospect', 'Example prospect');
+insert into public.client_type (slug, label) values ('national_account', 'Example account');
 insert into public.client (id, party_id, status, acquisition_source, created_by, updated_by) values
  ('${id(20)}', '${id(11)}', 'engaged', 'Example referral', ${by}),
  ('${id(21)}', '${id(12)}', 'engaged', 'Example unmapped source', ${by});
+insert into public.client (id, party_id, status, acquisition_source, client_type, prospect_engagement_status, created_by, updated_by) values
+ ('${id(22)}', '${id(14)}', 'prospect', 'Example referral', 'national_account', 'inactive', ${by}),
+ ('${id(23)}', '${id(15)}', 'engaged', 'Example referral', 'national_account', 'active', ${by});
 insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2);
 insert into public.deal_phase (slug, label) values ('touring', 'Example touring'), ('negotiation', 'Example negotiation');
 insert into public.participant_role (slug, label) values ('lead', 'Example lead'), ('support', 'Example support'),
  ('listing_side', 'Example listing side');
 insert into public.deal (id, client_id, name, deal_type, phase, owner, attention, next_date, created_by, updated_by, created_at) values
  ('${id(30)}', '${id(20)}', 'Example startup office', 'startup', 'touring', 'partner_one', true, '2030-01-15', ${by}, '2025-01-01'),
- ('${id(31)}', '${id(21)}', 'Example clinic lease', 'lease', 'negotiation', 'partner_two', false, null, ${by}, '2025-01-02');
+ ('${id(31)}', '${id(21)}', 'Example clinic lease', 'lease', 'negotiation', 'partner_two', false, null, ${by}, '2025-01-02'),
+ ('${id(32)}', '${id(20)}', 'Z Example earlier lease', 'lease', 'negotiation', 'partner_one', true, '2029-12-01', ${by}, '2025-01-03');
 insert into public.deal_participant (deal_id, actor_id, party_id, role, from_at, set_by) values
  ('${id(30)}', '${id(1)}', null, 'lead', '2025-01-01', '${id(1)}'),
  ('${id(30)}', '${id(2)}', null, 'support', '2025-01-01', '${id(1)}'),
@@ -46,7 +53,8 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
  ('${id(42)}', 'deal', '${id(30)}', 'attention', '{"attention":false}', '{"attention":true}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, due_on, status, created_at, created_by, updated_by) values
  ('${id(50)}', 'deal', '${id(30)}', '${id(1)}', 'Example send the survey', '2030-01-15', 'open', '2025-01-04', ${by}),
- ('${id(51)}', 'deal', '${id(30)}', '${id(2)}', 'Example book the tour', '2025-01-20', 'done', '2025-01-05', ${by});
+ ('${id(51)}', 'deal', '${id(30)}', '${id(2)}', 'Example book the tour', '2025-01-20', 'done', '2025-01-05', ${by}),
+ ('${id(52)}', 'deal', '${id(32)}', '${id(1)}', 'Example prepare the lease', '2029-12-01', 'open', '2025-01-05', ${by});
 insert into public.activity_kind (slug, label, is_contact) select s, s, true from unnest(array['call', 'email_in']) s;
 insert into public.activity (id, kind, occurred_at, actor_id, summary, deal_id, email_context, email_id) values
  ('${id(60)}', 'call', '2025-02-01T15:00:00Z', '${id(1)}', 'Example call about tours', '${id(30)}', null, null),
@@ -88,6 +96,8 @@ before(async () => {
 		values ('${id(80)}', '${id(30)}', 'Example call about the sign', 'Confirm signage', 'example-call');
 		insert into critical_date (id, deal_id, kind, due_on, source)
 		values ('${id(81)}', '${id(30)}', 'loi_expiry', '2030-02-01', 'Example offer');
+		insert into next_step (deal_id, what, resolution, done_at)
+		values ('${id(32)}', 'Example confirm terms', 'done', '2025-02-04T18:00:00Z');
 		commit;`);
 });
 after(cleanup);
@@ -217,11 +227,24 @@ for (const schema of [undefined, "next"]) {
 					next_step: "Example send the survey",
 					next_date: "2030-01-15",
 					items: schema ? [{ title: "Confirm signage", status: "open" }] : [],
+					open_actions: [
+						{
+							id: id(50),
+							owner: "partner_one",
+							due_on: "2030-01-15",
+							item_id: `next_action:${id(50)}`,
+							description: "Example send the survey",
+						},
+					],
+					last_step: {
+						summary: "Email from Dr. Jo Example: Example tour times",
+						occurred_at: "2025-02-02T16:00:00+00:00",
+					},
 				},
 			],
 			closed_deals: [],
 			lost_deals: [],
-			accounts: [],
+			accounts: [{ account_name: "Example Engaged Account" }],
 		});
 		assert.ok(
 			board &&
@@ -229,7 +252,20 @@ for (const schema of [undefined, "next"]) {
 				"deals" in board &&
 				Array.isArray(board.deals),
 		);
-		assert.equal(board.deals.length, schema ? 1 : 2);
+		assert.equal(board.accounts.length, 1);
+		assert.equal(board.deals.length, schema ? 2 : 3);
+		if (schema) {
+			assert.deepEqual(
+				board.deals.map((deal) => deal.id),
+				[id(32), id(30)],
+			);
+			assert.deepEqual(board.deals[0].last_step, {
+				kind: "completed_action",
+				summary: "Example confirm terms",
+				occurred_at: "2025-02-04T18:00:00+00:00",
+			});
+			assert.equal(board.deals[1].open_actions.length, 1);
+		}
 	});
 
 	test(`signed-in detail uses ${schema ?? "the old schema"}`, async () => {
@@ -241,6 +277,15 @@ for (const schema of [undefined, "next"]) {
 			next_step: "Example send the survey",
 			email_threads: [{ conversation_id: "example-thread" }],
 			events: [{ field: "attention" }],
+			thread: [
+				{
+					id: id(70),
+					kind: "note",
+					text: "Example note about parking",
+					actor: "partner_two",
+					created_at: "2025-02-03T17:00:00+00:00",
+				},
+			],
 			...(schema
 				? {
 						critical_dates: [{ due_on: "2030-02-01" }],
@@ -248,7 +293,6 @@ for (const schema of [undefined, "next"]) {
 					}
 				: {
 						critical_dates: [],
-						thread: [{ text: "Example note about parking" }],
 					}),
 		});
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);

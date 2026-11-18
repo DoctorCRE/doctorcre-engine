@@ -249,9 +249,29 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 		workspace: input.workspace ?? "all",
 		account: input.account_client_id || null,
 	};
-	const deals = await readNextBoardDeals(db, scope);
+	const deals = await nextBoardQuery(db, scope)
+		.select([
+			sql`(select coalesce(json_agg(action order by due_on nulls last, id), '[]') from (
+				select s.id, u.slug as owner, s.due_on, 'next_action:' || s.id as item_id, s.what as description
+				from next_step s left join app_user u on u.id = s.owner_party_id
+				where s.deal_id = board.id and s.status = 'open' and s.item_title is null
+				order by s.due_on nulls last, s.id limit 3
+			) action)`.as("open_actions"),
+			// Deal notes have their own section and did not feed the old card summary.
+			sql`(select to_jsonb(latest) - 'id' from (
+				select a.id, a.kind, a.summary, a.happened_at as occurred_at
+				from activity_about ab join activity a on a.id = ab.activity_id
+				where ab.deal_id = board.id and a.kind <> 'note'
+				union all
+				select id, 'completed_action', what, done_at
+				from next_step where deal_id = board.id and status = 'done' and done_at is not null
+				order by occurred_at desc, id desc limit 1
+			) latest)`.as("last_step"),
+		])
+		.execute();
 	const closed_deals = await readNextBoardDeals(db, scope, "closed");
 	const lost_deals = await readNextBoardDeals(db, scope, "lost");
+	// The client copy leaves prospects outside national_account.
 	const { rows: accounts } = await sql`
 		select na.party_id as account_client_id, p.name as account_name, u.slug as account_owner,
 			count(b.id) filter (where b.operating_state = 'active')::int as open_deals,

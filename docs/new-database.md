@@ -1214,7 +1214,9 @@ Steps 13–15 and 29 use `GET /api/engine/deals` and `GET /api/engine/deals/{dea
 
 Set the engine Worker's `DEALS_READ_SCHEMA` variable to `next` to use the read-only `next` schema through the existing `DATABASE` binding. The login must be able to assume `engine_reader` on the copied database. An absent setting or any other value uses today's readers. Once rehearsal verifies the remaining app dependencies, set the engine variable first, then set `deals-from-engine` to `on` in the app's `ENGINE_ROUTING` KV. To return the app to CARR, set the KV value to `off`.
 
-Cutover still needs national account placement (#653), client website links, checklist and pipeline-call state, and the app's save and live refresh paths. New-schema change IDs and party IDs have different meanings from legacy save versions and client IDs.
+Cutover still needs client website links, checklist and pipeline-call state, the app's save and live refresh paths, and the automatic phase-move receipt on cards. New-schema change IDs and party IDs have different meanings from legacy save versions and client IDs. The prospect form needs `client_status` to show its “Mark inactive” button. Timeline changes saved after the switch display “update” with no field name. Account cards display “National account” where the reference normally appears.
+
+The app does not display premises or offer-round summaries. Deal links use the UUIDs kept by the copy, so missing legacy deal references are invisible. National account placement (#653) produced the same visible board counts on pass D. The account list uses the national accounts admitted by the copy, which excludes old prospect clients.
 
 ## Doors the old system calls
 
