@@ -2167,17 +2167,21 @@ const RULES: Record<string, Case[]> = {
 				notGranted("party_link"),
 			],
 		],
-	"a lead has a stage, and only a lead has an owner, who is a user": [
+	"a lead has a stage, and lead or vendor role owners must be users": [
 		[
 			"update party_role set stage = null where role = 'lead'",
 			"party_role_lead_has_a_stage",
 		],
 		[
-			`update party_role set owner_user_id = '${USER}' where role = 'vendor'`,
-			"party_role_owner_on_lead",
+			`update party_role set owner_user_id = '${USER}' where role = 'client'`,
+			"party_role_owner_on_lead_or_vendor",
 		],
 		[
 			`update party_role set owner_user_id = '${CLIENT}' where role = 'lead'`,
+			"party_role_owner_user_id_fkey",
+		],
+		[
+			`update party_role set owner_user_id = '${CLIENT}' where role = 'vendor'`,
 			"party_role_owner_user_id_fkey",
 		],
 	],

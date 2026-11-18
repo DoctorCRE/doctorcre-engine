@@ -8,6 +8,7 @@ const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const PARTNER = id(1);
 const SYSTEM = id(2);
+const OTHER_PARTNER = id(4);
 
 const COPY = await readSchema("copy-vendors.sql");
 
@@ -44,13 +45,15 @@ const ORIGINAL_STAGES = [
 // Old parties 10 to 19, of which 15 was merged into 10 and 18 into 17, and 16 was not copied.
 const SETUP = `begin;
 select set_config('engine.job', 'old_system', true);
-insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Example User'), ('${id(10)}', 'company', 'Example Bank'),
+insert into party (id, kind, name) values ('${PARTNER}', 'person', 'Example User'), ('${OTHER_PARTNER}', 'person', 'Example Second User'),
+	('${id(10)}', 'company', 'Example Bank'),
 	('${id(11)}', 'person', 'Example Builder'), ('${id(17)}', 'company', 'Example Parked'), ('${id(19)}', 'person', 'Example Avoided');
-insert into app_user (id, slug) values ('${PARTNER}', 'user-${PARTNER}');
+insert into app_user (id, slug) values ('${PARTNER}', 'user-${PARTNER}'), ('${OTHER_PARTNER}', 'user-${OTHER_PARTNER}');
 insert into outside_id (source, value, party_id) values ('old_system_ref', 'P-0010', '${id(10)}'),
-	${[1, 10, 11, 15, 17, 18, 19].map((n) => `('old_system', '${id(n)}', '${id({ 15: 10, 18: 17 }[n] ?? n)}')`)};
+	${[1, 4, 10, 11, 15, 17, 18, 19].map((n) => `('old_system', '${id(n)}', '${id({ 15: 10, 18: 17 }[n] ?? n)}')`)};
 insert into public.actor (id, slug, kind, display_name) values
-	('${PARTNER}', 'partner_one', 'human', 'Example User'), ('${SYSTEM}', 'example-system', 'system', 'Example system');
+	('${PARTNER}', 'partner_one', 'human', 'Example User'), ('${OTHER_PARTNER}', 'partner_two', 'human', 'Example Second User'),
+	('${SYSTEM}', 'example-system', 'system', 'Example system');
 insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 10);
 insert into public.party (id, kind, name, created_by, updated_by)
 	select id, 'person', 'Example party', '${SYSTEM}', '${SYSTEM}' from unnest(array[${[10, 11, 15, 16, 17, 18, 19].map((n) => `'${id(n)}'::uuid`)}]) id;
@@ -92,18 +95,20 @@ ${oldVendor(41, 15, {
 	is_target: "true",
 	verticals: `{dental,medical," dental ","\tdental","dental\n",NULL," "}`,
 	seeking: "Conflicting request",
+	owner_id: OTHER_PARTNER,
 	originated: "Another origin",
 	rivalry_group: " Example rivalry note\nKeep wording. ",
 	loan_programs: "{Example financing,Example equipment}",
 	intro_notes: " \t",
 })}
-${oldVendor(42, 11, { vendor_ref: "P-0010", category: "Misc", relationship_level: "4", enrich: "true", referral_active: "false" })}
-${oldVendor(43, 16)}
+${oldVendor(42, 11, { vendor_ref: "P-0010", category: "Misc", relationship_level: "4", enrich: "true", referral_active: "false", owner_id: SYSTEM, owner_label: "partner_one" })}
+${oldVendor(43, 16, { owner_label: "Unassigned" })}
 ${oldVendor(44, 17, { disposition: "parked", category_slug: "cpa" })}
 ${oldVendor(45, 18, { vendor_ref: "V-0045" })}
 ${oldVendor(46, 19, { disposition: "avoid", is_target: "false" })}
 ${oldVendor(47, 10, {
 	merged_into: id(40),
+	owner_label: "Shared",
 	category_slug: "cpa",
 	stage: "avoid_not_a_good_partner",
 	territory: "Example territory",
@@ -217,14 +222,15 @@ test("each value it does not copy is listed, with why", () => {
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
 		[id(40), "out_of_market", "true", "no place in the new database"],
-		[id(40), "owner_id", PARTNER, "relationship owner awaits an owner ruling"],
 		[id(40), "trust_override", "Proven", "a hand-set rating, which the new database does not keep"],
 		[id(41), "originated", "Another origin", "its record holds another value"],
+		[id(41), "owner_id", OTHER_PARTNER, "its record holds another value"],
 		[id(41), "relationship_level", "3", "its record holds another level"],
 		[id(41), "seeking", "Conflicting request", "its record holds another value"],
 		[id(41), "verticals", " ", "blank or null list entry"],
 		[id(41), "verticals", null, "blank or null list entry"],
 		[id(42), "category", "Misc", "not a vendor category"],
+		[id(42), "owner_id", SYSTEM, "relationship owner is not a copied user"],
 		[id(42), "relationship_level", "4", "not a relationship level"],
 		[id(42), "vendor_ref", "P-0010", `also the id of ${id(10)}`],
 		[id(43), "vendor", null, "its record is not copied"],
@@ -233,11 +239,31 @@ test("each value it does not copy is listed, with why", () => {
 		[id(46), "disposition", "avoid", "a ruling without a reason"],
 		[id(47), "offers", "Different offer", "its record holds another value"],
 		[id(47), "originated", "Merged origin", "its record holds another value"],
+		[id(47), "owner_label", "Shared", "relationship owner has no actor id"],
 		[id(47), "referral_active", "false", "its record holds another value"],
 		[id(47), "rivalry_group", "Different rivalry note", "its record holds another value"],
 		[id(49), "originated", "Different merged origin", "its record holds another value"],
 	]);
 });
+
+test("vendor relationship owners must map to a user and reruns keep a partner's edit", () =>
+	rolledBack(async () => {
+		const owners = () =>
+			rows(`select party_id, owner_user_id from party_role
+			where role = 'vendor' order by party_id`);
+		assert.deepEqual(await owners(), [
+			{ party_id: id(10), owner_user_id: PARTNER },
+			{ party_id: id(11), owner_user_id: null },
+		]);
+		await db.query(`select set_config('engine.user_id', '${PARTNER}', true);
+			update party_role set owner_user_id = null where party_id = '${id(10)}' and role = 'vendor';
+			set constraints all immediate;`);
+		await copy();
+		assert.deepEqual(await owners(), [
+			{ party_id: id(10), owner_user_id: null },
+			{ party_id: id(11), owner_user_id: null },
+		]);
+	}));
 
 test("relationship wording and referral yes, no and unknown copy without inference", () =>
 	rolledBack(async () => {
@@ -550,12 +576,12 @@ test("users edit vendor text and add or remove stamped list entries; reruns keep
 		);
 	}));
 
-test("merging vendor roles keeps survivor text, fills empty text and unions capabilities", () =>
+test("merging vendor roles keeps the survivor's owner and text, fills missing values and unions capabilities", () =>
 	rolledBack(async () => {
 		await db.query(`select set_config('engine.user_id', '${PARTNER}', true); select set_config('engine.job', '', true);
 		update party set kind = 'company' where id = '${id(11)}';
 		update party_role set relationship_origin = 'Other origin', rivalry_note = 'Other rivalry', refers_business = true,
-		offers = 'Other offer', seeking = 'Other request' where party_id = '${id(11)}';
+		offers = 'Other offer', seeking = 'Other request', owner_user_id = '${OTHER_PARTNER}' where party_id = '${id(11)}';
 		update party_role set rivalry_note = null, refers_business = false, seeking = null where party_id = '${id(10)}' and role = 'vendor';
 		insert into vendor_vertical (party_id, vertical) values ('${id(11)}', 'dental'), ('${id(11)}', 'Example new');
 		insert into vendor_loan_program (party_id, loan_program) values ('${id(11)}', 'Example financing'), ('${id(11)}', 'Example new');
@@ -568,29 +594,31 @@ test("merging vendor roles keeps survivor text, fills empty text and unions capa
 			[{ offers: "Example offer", seeking: "Other request" }],
 		);
 		assert.deepEqual(
-			await rows(`select relationship_origin, rivalry_note, refers_business
+			await rows(`select relationship_origin, rivalry_note, refers_business, owner_user_id
 			from party_role where party_id = '${id(10)}' and role = 'vendor'`),
 			[
 				{
 					relationship_origin: " Example referral, date unknown. ",
 					rivalry_note: "Other rivalry",
 					refers_business: false,
+					owner_user_id: PARTNER,
 				},
 			],
 		);
-		await db.query(`update party_role set relationship_origin = null, rivalry_note = null, refers_business = null
+		await db.query(`update party_role set relationship_origin = null, rivalry_note = null, refers_business = null, owner_user_id = null
 			where party_id = '${id(10)}' and role = 'vendor';
-			insert into party_role (party_id, role, relationship_origin, rivalry_note, refers_business)
-			values ('${id(17)}', 'vendor', 'Filled origin', 'Filled rivalry', false);
+			insert into party_role (party_id, role, relationship_origin, rivalry_note, refers_business, owner_user_id)
+			values ('${id(17)}', 'vendor', 'Filled origin', 'Filled rivalry', false, '${OTHER_PARTNER}');
 			select merge_party('${id(17)}', '${id(10)}');`);
 		assert.deepEqual(
-			await rows(`select relationship_origin, rivalry_note, refers_business
+			await rows(`select relationship_origin, rivalry_note, refers_business, owner_user_id
 			from party_role where party_id = '${id(10)}' and role = 'vendor'`),
 			[
 				{
 					relationship_origin: "Filled origin",
 					rivalry_note: "Filled rivalry",
 					refers_business: false,
+					owner_user_id: OTHER_PARTNER,
 				},
 			],
 		);
