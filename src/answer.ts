@@ -58,6 +58,7 @@ const HINTS = {
 	agenda_superseded: "Drop this older agenda observation.",
 	review_not_found: "Choose a review in your current agenda.",
 	step_open: "The step is already open.",
+	no_open_step: "You have no open next step on this record.",
 	automatic_resolution_changed: "Refresh Home before undoing this completion.",
 	open_step_exists: "This owner already has an open next step on this record.",
 	about_nothing:
