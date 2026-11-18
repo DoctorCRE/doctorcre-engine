@@ -37,19 +37,22 @@ async function cards(caller: typeof alex, dealId: string) {
 		.filter((item) => item.deal_id === dealId);
 }
 
-test("one completion review replaces its ordinary step until a partner decides", async () => {
+async function checkCompletionReview(callFollowUp: boolean) {
 	const deal = randomUUID();
 	const step = randomUUID();
 	const note = randomUUID();
 	const call = randomUUID();
+	const item_id = `${callFollowUp ? "capture_post_call_action" : "next_action"}:${step}`;
 	await db.query(`begin;
 		select set_config('engine.user_id', '${owner}', true);
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${owner}');
-		insert into next_step (id, deal_id, what, due_on) values ('${step}', '${deal}', 'Send the survey', '2001-02-01');
 		insert into activity (id, kind, happened_at, summary) values
 			('${note}', 'note', '2001-02-03T15:00Z', 'The client asked for the survey.'),
 			('${call}', 'call', '2001-02-04T15:00Z', 'The client received the survey.');
 		insert into activity_about (activity_id, deal_id) values ('${note}', '${deal}'), ('${call}', '${deal}');
+		insert into next_step (id, deal_id, what, due_on, call_activity_id, call_evidence_quote)
+		values ('${step}', '${deal}', 'Send the survey', '2001-02-01',
+			${callFollowUp ? `'${call}', 'Send the survey.'` : "null, null"});
 		commit;`);
 	for (const activity_id of [note, call]) {
 		const [status] = await save(
@@ -69,6 +72,7 @@ test("one completion review replaces its ordinary step until a partner decides",
 	const [card, ...duplicates] = await cards(alex, deal);
 	assert.deepEqual(duplicates, []);
 	assert.partialDeepStrictEqual(card, {
+		item_id,
 		title: "Did this happen? Send the survey",
 		context_label: "Example Dental",
 		due_on: "2001-02-01",
@@ -93,40 +97,53 @@ test("one completion review replaces its ordinary step until a partner decides",
 		source_activity: { id: call, kind: "call" },
 	});
 	assert.equal((await save(blair, detailPath, {}, "GET"))[0], 404);
-	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
-		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values
-			('${owner}', '${step}', 'snoozed', '2999-01-01T00:00Z');
-		commit;`);
+	const [snoozed, mark] = await save(alex, "home/marks", {
+		idempotency_key: randomUUID(),
+		item_id: card?.item_id,
+		base_version: card?.base_version,
+		action: "snooze",
+		until: "2999-01-01T00:00Z",
+	});
+	assert.equal(snoozed, 200);
 	assert.partialDeepStrictEqual(await cards(alex, deal), [
 		{
-			item_id: `next_action:${step}`,
+			item_id,
 			section: "snoozed",
+			base_version: mark.base_version,
 			snoozed_until: "2999-01-01T00:00:00.000Z",
 		},
 	]);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
-		update home_mark set snoozed_until = '2001-01-01' where next_step_id = '${step}';
+		update home_mark set snoozed_until = '2001-01-01' where item_id = '${step}';
 		commit;`);
-	assert.equal((await cards(alex, deal))[0]?.item_id, card?.item_id);
+	assert.deepEqual(
+		(await cards(alex, deal))[0]?.completion_review,
+		card?.completion_review,
+	);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
-		update home_mark set disposition = 'settled', snoozed_until = null where next_step_id = '${step}';
+		update home_mark set disposition = 'settled', snoozed_until = null where item_id = '${step}';
 		commit;`);
 	assert.partialDeepStrictEqual(await cards(alex, deal), [
-		{ item_id: `next_action:${step}`, section: "settled" },
+		{ item_id, section: "settled" },
 	]);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
-		delete from home_mark where next_step_id = '${step}';
+		delete from home_mark where item_id = '${step}';
 		commit;`);
 	const [status] = await save(alex, `proposals/${card?.source_id}/decision`, {
 		idempotency_key: randomUUID(),
 		decision: "dismiss",
 	});
 	assert.equal(status, 200);
-	assert.deepEqual(
-		(await cards(alex, deal)).map((item) => item.item_id),
-		[`next_action:${step}`],
-	);
-});
+	const [dismissed, ...remaining] = await cards(alex, deal);
+	assert.deepEqual(remaining, []);
+	assert.partialDeepStrictEqual(dismissed, { item_id, action_id: step });
+	assert.equal(dismissed?.completion_review, undefined);
+}
+
+test("a completion review can be snoozed and dismissed", () =>
+	checkCompletionReview(false));
+test("a call follow-up completion review can be snoozed and dismissed", () =>
+	checkCompletionReview(true));
 
 test("updates respect recipient, read time, snoozes and the latest disposition change", async () => {
 	const deal = randomUUID();

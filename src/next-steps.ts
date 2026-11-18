@@ -6,7 +6,7 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
-import { ACTING_USER, userId } from "./next-save.ts";
+import { ACTING_USER, type Stamp, userId } from "./next-save.ts";
 import { saveOpenStep } from "./open-step.ts";
 import {
 	type Check,
@@ -101,15 +101,18 @@ const isResolution: Check<"done" | "cancelled"> = (
 	value,
 ): value is "done" | "cancelled" => value === "done" || value === "cancelled";
 
-const STEP_END = {
+const STEP_REOPEN = {
 	idempotency_key: isUuid,
+	base_version: optional(isChangeId),
+};
+const STEP_END = {
+	...STEP_REOPEN,
 	resolution: isResolution,
 	done_at: optional(isInstant),
 	reason: optional(isText),
 };
 
-const STEP_REOPEN = { idempotency_key: isUuid };
-const STEP_UNDO = { ...STEP_REOPEN, change_id: isChangeId };
+const STEP_UNDO = { idempotency_key: isUuid, change_id: isChangeId };
 
 type StepRequest<S extends Shape> = Fitted<S> & { next_step_id: string };
 
@@ -244,7 +247,14 @@ export async function createStep(
 async function lockStep(tx: Transaction<DB>, id: string) {
 	const step = await tx
 		.selectFrom("next_step")
-		.select(["status", "deal_id", "party_id", "owner_party_id"])
+		.select([
+			"id",
+			"status",
+			"deal_id",
+			"party_id",
+			"owner_party_id",
+			"item_title",
+		])
 		.where("id", "=", id)
 		.forUpdate()
 		.executeTakeFirst();
@@ -304,11 +314,38 @@ async function changeStep(
 	};
 }
 
+async function checkStepVersion(
+	tx: Transaction<DB>,
+	id: string,
+	base_version: number | undefined,
+	allowOmitted: boolean,
+) {
+	if (base_version === undefined) {
+		if (allowOmitted) return;
+		throw new SaveRefusal(
+			new Refusal(400, "missing_required", { fields: ["base_version"] }),
+		);
+	}
+	const current_version = (await latestChange(tx, "next_step", id)) ?? 0;
+	if (base_version !== current_version)
+		throw new SaveRefusal(
+			new Refusal(409, "version_conflict", { current_version }),
+		);
+}
+
 async function endStep(
 	tx: Transaction<DB>,
-	{ next_step_id, resolution, done_at, reason }: StepRequest<typeof STEP_END>,
+	request: StepRequest<typeof STEP_END>,
+	stamp: Stamp,
 ): Promise<JsonObject> {
-	const { status } = await lockStep(tx, next_step_id);
+	const { next_step_id, resolution, done_at, reason, base_version } = request;
+	const { id, status, item_title } = await lockStep(tx, next_step_id);
+	await checkStepVersion(
+		tx,
+		id,
+		base_version,
+		stamp.job !== undefined || item_title !== null,
+	);
 	if (status !== "open")
 		throw new SaveRefusal(new Refusal(409, "step_ended", { status }));
 	const now = sql<string>`now()`;
@@ -322,7 +359,8 @@ async function endStep(
 		})
 		.where("id", "=", next_step_id)
 		.execute();
-	return { next_step_id, status: resolution };
+	const change_id = await latestChange(tx, "next_step", id);
+	return { next_step_id, status: resolution, change_id };
 }
 
 async function completeCurrentStep(
@@ -390,9 +428,17 @@ export function automaticResolutions(tx: Transaction<DB>) {
 
 async function reopenStep(
 	tx: Transaction<DB>,
-	{ next_step_id }: StepRequest<typeof STEP_REOPEN>,
+	request: StepRequest<typeof STEP_REOPEN>,
+	stamp: Stamp,
 ): Promise<JsonObject> {
+	const { next_step_id } = request;
 	const step = await lockStep(tx, next_step_id);
+	await checkStepVersion(
+		tx,
+		step.id,
+		request.base_version,
+		stamp.job !== undefined,
+	);
 	if (step.status === "open")
 		throw new SaveRefusal(new Refusal(409, "step_open"));
 	return reopenLockedStep(tx, next_step_id, step);
@@ -441,6 +487,7 @@ const stepSave =
 		change: (
 			tx: Transaction<DB>,
 			request: Request & { next_step_id: string },
+			stamp: Stamp,
 		) => Promise<JsonObject>,
 	) =>
 	(c: Context<NextSaveEnv>) => {
@@ -455,7 +502,7 @@ const stepSave =
 					? request
 					: { ...request, next_step_id };
 			},
-			change,
+			(tx, request) => change(tx, request, c.get("stamp")),
 		);
 	};
 

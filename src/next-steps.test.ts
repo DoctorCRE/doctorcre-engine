@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { isArguments } from "./save-door.ts";
 import { type Caller, doorTest } from "./test-door.ts";
 
-const { db, setup, cleanup, save } = doorTest();
+const { db, setup, cleanup, request, save } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const [ALEX, BLAIR, CLIENT, CADENCE_CLIENT, DEAL, PROPERTY] = [
@@ -100,9 +101,12 @@ async function newStep(args: object = {}) {
 	return String(body.next_step_id);
 }
 
-const act = (step: string, door: string, args: object) =>
+const act = async (step: string, door: string, args: object) =>
 	save({ user: "alex" }, `next-steps/${step}/${door}`, {
 		idempotency_key: randomUUID(),
+		...((door === "end" || door === "reopen") && {
+			base_version: await seen(step),
+		}),
 		...args,
 	});
 
@@ -567,35 +571,137 @@ test("a copied item's dated facts come back through a change, and a new item tak
 		);
 });
 
-test("a step ends done or cancelled once, and reopens once", async () => {
+test("a job can end and reopen a step without a version", async () => {
 	const step = await newStep();
-	assert.deepEqual(await act(step, "end", { resolution: "done" }), [
-		200,
-		{ next_step_id: step, status: "done" },
-	]);
-	const [again, ended] = await act(step, "end", { resolution: "cancelled" });
+	const job = { job: "cadence", for_user: "alex" };
+	const act = (door: string, args: object) =>
+		save(job, `next-steps/${step}/${door}`, {
+			idempotency_key: randomUUID(),
+			...args,
+		});
+	const [status, endedStep] = await act("end", { resolution: "done" });
+	assert.equal(status, 200);
+	assert.deepEqual(endedStep, {
+		next_step_id: step,
+		status: "done",
+		change_id: await seen(step),
+	});
+	const [again, ended] = await act("end", { resolution: "cancelled" });
 	assert.deepEqual(
 		[again, ended.error, ended.status],
 		[409, "step_ended", "done"],
 	);
-	assert.deepEqual(await act(step, "reopen", {}), [
+	assert.deepEqual(await act("reopen", {}), [
 		200,
 		{ next_step_id: step, status: "open" },
 	]);
-	assert.deepEqual((await act(step, "reopen", {}))[1].error, "step_open");
-	const [unreasoned, refusal] = await act(step, "end", {
+	assert.deepEqual((await act("reopen", {}))[1].error, "step_open");
+	const [unreasoned, refusal] = await act("end", {
 		resolution: "cancelled",
 	});
 	assert.deepEqual(
 		[unreasoned, refusal.rule],
 		[422, "next_step_cancellation_reason"],
 	);
-	await act(step, "end", { resolution: "cancelled", reason: "Client paused" });
+	await act("end", { resolution: "cancelled", reason: "Client paused" });
 	const now = await stepNow(step);
 	assert.deepEqual(
 		[now.status, now.resolution_reason, now.done, now.resolved],
 		["cancelled", "Client paused", false, true],
 	);
+});
+
+test("Home can finish and undo a step with its current version and retry either save", async () => {
+	const step = await newStep();
+	const caller = { user: "alex" };
+	const lifecycle = (door: "end" | "reopen", args: object) =>
+		save(caller, `next-steps/${step}/${door}`, args);
+	const response = await request(
+		caller,
+		"home/inbox",
+		{ method: "GET" },
+		{
+			HOME_INBOX_READ_SCHEMA: "next",
+		},
+	);
+	assert.equal(response.status, 200);
+	const read: unknown = await response.json();
+	assert.ok(isArguments(read) && Array.isArray(read.items));
+	const card = read.items
+		.filter(isArguments)
+		.find((item) => item.action_id === step);
+	assert.ok(card);
+	const end = {
+		idempotency_key: randomUUID(),
+		resolution: "done",
+		base_version: card.action_version,
+	};
+	const [, edit] = await act(step, "changes", {
+		seen_change_id: card.action_version,
+		what: "Send the revised plan",
+	});
+	const [stale, conflict] = await lifecycle("end", end);
+	assert.deepEqual(
+		[stale, conflict.error, conflict.current_version],
+		[409, "version_conflict", edit.change_id],
+	);
+	assert.equal((await stepNow(step)).status, "open");
+	const [unversioned, missing] = await lifecycle("end", {
+		idempotency_key: randomUUID(),
+		resolution: "done",
+	});
+	assert.deepEqual([unversioned, missing.fields], [400, ["base_version"]]);
+
+	const current = { ...end, base_version: edit.change_id };
+	const [ended, completion] = await lifecycle("end", current);
+	assert.equal(ended, 200);
+	assert.deepEqual(completion, {
+		next_step_id: step,
+		status: "done",
+		change_id: await seen(step),
+	});
+	assert.equal((await stepNow(step)).status, "done");
+	const undo = {
+		idempotency_key: randomUUID(),
+		base_version: completion.change_id,
+	};
+	const [oldUndo, refused] = await lifecycle("reopen", {
+		...undo,
+		base_version: edit.change_id,
+	});
+	assert.deepEqual(
+		[oldUndo, refused.error, refused.current_version],
+		[409, "version_conflict", completion.change_id],
+	);
+	assert.equal((await stepNow(step)).status, "done");
+
+	const reopened = { next_step_id: step, status: "open" };
+	assert.deepEqual(await lifecycle("reopen", undo), [200, reopened]);
+	const version = await seen(step);
+	assert.deepEqual(await lifecycle("end", current), [
+		200,
+		{ ...completion, replayed: true },
+	]);
+	assert.deepEqual(await lifecycle("reopen", undo), [
+		200,
+		{ ...reopened, replayed: true },
+	]);
+	assert.equal(await seen(step), version);
+	assert.equal((await stepNow(step)).status, "open");
+});
+
+test("the Deals checklist can still complete an item without a version", async () => {
+	const step = await newStep({ item: ITEM });
+	const [status, answer] = await save(
+		{ user: "alex" },
+		`next-steps/${step}/end`,
+		{
+			idempotency_key: randomUUID(),
+			resolution: "done",
+		},
+	);
+	assert.equal(status, 200);
+	assert.equal(answer.status, "done");
 });
 
 test("a step ended at a given moment keeps it, and a copied closed step reopens without its old event", async () => {

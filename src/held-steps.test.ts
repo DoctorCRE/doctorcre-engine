@@ -322,6 +322,7 @@ test("a new ordinary step takes over the date preserved by a call", async () => 
 			await save(alex, `next-steps/${step.next_step_id}/end`, {
 				idempotency_key: randomUUID(),
 				resolution: "done",
+				base_version: step.change_id,
 			})
 		)[0],
 		200,
