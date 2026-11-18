@@ -3,6 +3,7 @@
 -- A lead or client with no source at all is copied as not recorded, which a recorded source later replaces.
 create temp table if not exists copy_how_found (old_type text, source text, how_found text,
  primary key (old_type, source)) on commit drop;
+create temp table if not exists copy_client_owner (old_id uuid primary key, owner_actor_id uuid not null) on commit drop;
 -- Supply partner-reviewed suppression reasons keyed by old lead id; private rows stay outside this repo.
 create temp table if not exists copy_lead_restriction (old_id uuid not null, reason text) on commit drop;
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
@@ -17,7 +18,8 @@ insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('
 insert into how_found (slug, label) values ('referral', 'Referral'), ('vendor', 'Vendor'),
  ('marketing_post', 'Marketing post'), ('public_records', 'Public records'), ('cold_outreach', 'Cold outreach'),
  ('own_research', 'Own research'), ('inbound', 'Inbound'), ('national_account', 'National account or corporate lead'),
- ('existing_relationship', 'Existing relationship'), ('not_recorded', 'Not recorded before this system') on conflict do nothing;
+ ('existing_relationship', 'Existing relationship'), ('event', 'Event'),
+ ('not_recorded', 'Not recorded before this system') on conflict do nothing;
 insert into stage (role, slug, label) select 'lead', s, initcap(replace(s, '_', ' '))
 from unnest(array['new','qualified','outreach_active','engaged','nurture','opportunity','archived']) s on conflict do nothing;
 insert into lead_lane (slug, label) select slug, label from public.lead_lane on conflict do nothing;
@@ -90,12 +92,32 @@ select r.*, p.how_found, p.how_found_detail,
  case when (fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact' then 'archived'
  when fields ->> 'stage' in ('nurture_drip','closed_lost') then 'nurture'
  when fields ->> 'stage' in ('active_deal','closed_won') then 'opportunity' else fields ->> 'stage' end as mapped_stage,
- u.id as owner, coalesce(nullif(btrim(fields ->> 'event_source'), ''),
+ case when reviewed.owner_actor_id is null and old_owner.kind <> 'human' then deal_owner.id else u.id end as owner,
+ case when reviewed.owner_actor_id is not null then
+  case when u.id is null then 'reviewed_owner_not_a_user' end
+  when old_owner.kind <> 'human' then
+   case when r.kind = 'client' and deal_owner.id is null then 'deal_owner_unresolved' end
+  when fields ->> 'owner_id' is not null and u.id is null then 'owner_not_a_user'
+  when fields ->> 'owner_id' is null and fields ->> 'owner_label' ~ '\S' then 'owner_label_only'
+ end as unmapped_owner_reason,
+ reviewed.owner_actor_id as reviewed_owner_actor_id,
+ coalesce(nullif(btrim(fields ->> 'event_source'), ''),
  (select case when count(*) = 1 then min(nullif(btrim(est_basis), '')) end
   from public.candidate_pool where promoted_lead_id = r.id)) as estimate_source
 from old_relationship r join party p on p.id = r.mapped_id
-left join outside_id o on o.source = 'old_system' and o.value = r.fields ->> 'owner_id'
-left join app_user u on u.id = o.party_id;
+left join public.actor old_owner on old_owner.id = (r.fields ->> 'owner_id')::uuid
+left join pg_temp.copy_client_owner reviewed on r.kind = 'client' and reviewed.old_id = r.id
+left join outside_id o on o.source = 'old_system' and o.value = coalesce(reviewed.owner_actor_id::text, r.fields ->> 'owner_id')
+left join app_user u on u.id = o.party_id
+left join lateral (
+ select (array_agg(deal_user.id))[1] as id
+ from public.deal d
+ left join public.actor a on a.slug = d.owner and a.kind = 'human'
+ left join outside_id m on m.source = 'old_system' and m.value = a.id::text
+ left join app_user deal_user on deal_user.id = m.party_id
+ where r.kind = 'client' and reviewed.owner_actor_id is null and old_owner.kind <> 'human' and d.client_id = r.id
+ having count(distinct deal_user.id) = 1 and count(deal_user.id) = count(*)
+) deal_owner on true;
 create temp table classified_relationship on commit drop as
 select r.*, case
  when exists (select from waiting_client_source w where w.mapped_id = r.mapped_id) then 'client_source_needs_mapping'
@@ -128,7 +150,8 @@ create temp table client_owner on commit drop as
 select r.*, case
  when r.owner is null then null
  when exists (select from examined_relationship other where other.kind = 'client' and other.mapped_id = r.mapped_id
-  and (other.owner is distinct from r.owner) and (other.fields ->> 'owner_id' is not null or other.fields ->> 'owner_label' ~ '\S'))
+  and other.owner is distinct from r.owner
+  and (other.reviewed_owner_actor_id is not null or other.fields ->> 'owner_id' is not null or other.fields ->> 'owner_label' ~ '\S'))
  then 'client_owners_disagree'
  when c.owner_user_id <> r.owner then 'existing_client_owner_differs'
  end as owner_refusal
@@ -190,10 +213,14 @@ select id, 'do_not_contact', fields ->> 'stage', restriction_refusal
 from examined_lead_restriction where restriction_refusal is not null;
 
 insert into not_copied
+select id, field, coalesce(reviewed_owner_actor_id::text, fields ->> field), unmapped_owner_reason from classified_relationship
+cross join lateral (select case when unmapped_owner_reason = 'owner_label_only'
+ then 'owner_label' else 'owner_id' end as field) f
+where unmapped_owner_reason is not null;
+
+insert into not_copied
 select r.id, f.field, f.value, f.reason from classified_relationship r
 cross join lateral (values
- ('owner_id', fields ->> 'owner_id', 'owner_not_a_user', fields ->> 'owner_id' is not null and owner is null),
- ('owner_label', fields ->> 'owner_label', 'owner_label_only', fields ->> 'owner_id' is null and fields ->> 'owner_label' ~ '\S'),
  ('lane', fields ->> 'lane', 'unknown_lane', fields ->> 'lane' is not null and not exists (select from lead_lane where slug = fields ->> 'lane')),
  ('segment', fields ->> 'segment', 'blank_segment', fields ->> 'segment' is not null and fields ->> 'segment' !~ '\S'),
  ('est_lease_event', fields ->> 'est_lease_event', 'estimate_needs_source', fields ->> 'est_lease_event' is not null and estimate_source is null),
@@ -283,7 +310,7 @@ where o.party_id <> t.mapped_id;
 insert into not_copied select r.id, f.field, fields ->> f.field, f.reason from classified_relationship r
 cross join lateral (values ('contact_label', 'verbatim_label_not_stored', true), ('deal_type_label', 'verbatim_label_not_stored', true),
  ('possible_duplicate_label', 'verbatim_label_not_stored', true), ('specialty_type_label', 'verbatim_label_not_stored', true),
- ('owner_label', 'verbatim_label_not_stored', fields ->> 'owner_id' is not null),
+ ('owner_label', 'verbatim_label_not_stored', fields ->> 'owner_id' is not null and reviewed_owner_actor_id is null),
  ('prospect_engagement_status', 'engagement_status_not_stored',
   fields ->> 'status' = 'prospect' or fields ->> 'prospect_engagement_status' <> 'active')
 ) f(field, reason, listed) where kind = 'client' and f.listed and fields ->> f.field ~ '\S';
