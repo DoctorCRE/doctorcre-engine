@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { Refusal, refuse } from "./answer.ts";
@@ -9,9 +10,12 @@ import {
 	clearable,
 	fit,
 	fitting,
+	isAmount,
+	isInstant,
 	isText,
 	isUuid,
 	optional,
+	orNull,
 } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 
@@ -41,6 +45,25 @@ const shape = {
 		(v: unknown): v is "strong" | "weak" => v === "strong" || v === "weak",
 	),
 	reason: optional(isText),
+};
+const textWithin =
+	(max: number, min = 1) =>
+	(v: unknown): v is string =>
+		isText(v) && v.length >= min && v.length <= max;
+const emailLead = {
+	idempotency_key: isUuid,
+	address: textWithin(320),
+	display_name: optional(
+		orNull(
+			(v: unknown): v is string => typeof v === "string" && v.length <= 200,
+		),
+	),
+	summary: textWithin(300),
+	first_seen_at: isInstant,
+	message_ref: textWithin(100),
+	applies_to: (v: unknown): v is "new_matter" => v === "new_matter",
+	confidence: (v: unknown): v is number => isAmount(v) && v >= 0 && v <= 1,
+	evidence_quote: optional(textWithin(500, 10)),
 };
 const edits = {
 	what: optional(isText),
@@ -103,6 +126,81 @@ async function dealNow(tx: Transaction<DB>, id: string) {
 }
 
 export const proposalJobs = new Hono<NextSaveEnv>()
+	.post("/proposals/email-lead", async (c) => {
+		const stamp = c.get("stamp");
+		if (stamp.job !== "mail_capture")
+			return refuse(c, new Refusal(403, "unknown_job"));
+		const owner = stamp.for_user;
+		if (!owner) return refuse(c, new Refusal(422, "actor_not_provisioned"));
+		return answerNextSave(
+			c,
+			"email-lead-proposal",
+			(b) =>
+				fit(b, emailLead, [
+					"idempotency_key",
+					"address",
+					"summary",
+					"first_seen_at",
+					"message_ref",
+					"applies_to",
+					"confidence",
+				]),
+			async (tx, r) => {
+				const address = r.address.trim().toLowerCase();
+				const source = "outlook-intake";
+				const sourceKey = `email-sha256:${owner}:${createHash("sha256").update(address).digest("hex")}`;
+				const details = {
+					message_ref: r.message_ref,
+					first_seen_at: r.first_seen_at,
+					reading: {
+						applies_to: r.applies_to,
+						confidence: r.confidence,
+						evidence_quote: r.evidence_quote ?? null,
+					},
+				};
+				const {
+					rows: [candidate],
+				} = await sql<{ id: string }>`
+					insert into candidate (source, source_key, source_row, name, qualification)
+					select ${source}, ${sourceKey}, ${JSON.stringify(details)}::jsonb
+						|| jsonb_build_object('address', ${address}::email_address),
+						${r.display_name?.trim() || address}, ${r.summary}
+					where not exists (select from party_email where address = ${address}::email_address)
+					on conflict (source, source_key) do nothing returning id`.execute(tx);
+				if (candidate) {
+					const {
+						rows: [proposal],
+					} = await sql<{ proposal_id: string; status: string }>`
+						insert into proposal (kind, candidate_id, proposed_by_job, evidence)
+						values ('email_lead', ${candidate.id}::uuid, 'mail_capture', ${r.summary})
+						returning id as proposal_id, status`.execute(tx);
+					if (!proposal)
+						throw new Error("Email lead proposal was not returned");
+					return proposal;
+				}
+				const prior = await tx
+					.selectFrom("candidate")
+					.leftJoin("proposal", "proposal.candidate_id", "candidate.id")
+					.select([
+						"candidate.id as candidate_id",
+						"proposal.id as proposal_id",
+						"proposal.status",
+					])
+					.where("candidate.source", "=", source)
+					.where("candidate.source_key", "=", sourceKey)
+					.executeTakeFirst();
+				if (!prior) return { status: "known_party" };
+				if (!prior.proposal_id)
+					return { candidate_id: prior.candidate_id, status: "already_queued" };
+				return {
+					proposal_id: prior.proposal_id,
+					status: prior.status,
+					existing: true,
+				};
+			},
+			(result) => (result.status === "pending" && !result.existing ? 201 : 200),
+		);
+	})
 	.post("/proposals", async (c) => {
 		return answerNextSave(
 			c,
@@ -176,6 +274,8 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.selectFrom("proposal")
 					.selectAll()
 					.where("id", "=", r.proposal_id)
+					.where(sql<boolean>`(kind <> 'email_lead' or coalesce(decided_by_user_id, changed_for_user_id)
+						= nullif(current_setting('engine.user_id', true), '')::uuid)`)
 					.forUpdate()
 					.executeTakeFirst();
 				if (!p) return fail(404, "not_found");
@@ -238,6 +338,14 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						.set(r.edits)
 						.where("id", "=", p.id)
 						.execute();
+				const promoted =
+					r.decision === "accept" && p.candidate_id
+						? await tx
+								.selectFrom("candidate")
+								.select("promoted_party_id")
+								.where("id", "=", p.candidate_id)
+								.executeTakeFirstOrThrow()
+						: undefined;
 				const created =
 					r.decision === "dismiss"
 						? {}
@@ -245,7 +353,9 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 							? { next_step_id: p.id }
 							: p.kind === "phase_move"
 								? { deal_id: p.deal_id }
-								: { activity_id: p.activity_id };
+								: promoted
+									? { party_id: promoted.promoted_party_id }
+									: { activity_id: p.activity_id };
 				return {
 					proposal_id: p.id,
 					status: rows[0]?.status ?? null,

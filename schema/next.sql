@@ -1142,9 +1142,10 @@ create table home_mark (
 create table proposal (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
-	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move', 'file_to_deal', 'possible_new_deal')),
-	activity_id uuid not null,
-	activity_kind text not null check (activity_kind in ('email', 'call', 'meeting')),
+	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move', 'file_to_deal', 'possible_new_deal', 'email_lead')),
+	activity_id uuid,
+	activity_kind text check (activity_kind in ('email', 'call', 'meeting')),
+	candidate_id uuid unique references candidate,
 	evidence text not null check (evidence ~ '\S'),
 	proposed_by_job text not null references job,
 	status text not null default 'pending' check (status in ('pending', 'accepted', 'dismissed')),
@@ -1168,7 +1169,10 @@ create table proposal (
 	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
 	foreign key (lead_role, from_stage) references stage (role, slug),
 	foreign key (lead_role, to_stage) references stage (role, slug),
-	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id) = case when kind = 'possible_new_deal' then 0 else 1 end),
+	constraint proposal_source check (case when kind = 'email_lead' then
+		candidate_id is not null and activity_id is null and activity_kind is null
+		else candidate_id is null and activity_id is not null and activity_kind is not null end),
+	constraint proposal_one_record check (num_nonnulls(deal_id, party_id, property_id, candidate_id) = case when kind = 'possible_new_deal' then 0 else 1 end),
 	filed_deal_id uuid references deal,
 	filing_reason text check (filing_reason ~ '\S'),
 	constraint proposal_filing_decision check ((filed_deal_id is null and filing_reason is null) or (status = 'accepted' and kind in ('file_to_deal', 'possible_new_deal'))),
@@ -1176,7 +1180,9 @@ create table proposal (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
 		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
 	constraint proposal_payload check ((
-		(kind in ('file_to_deal', 'possible_new_deal') and activity_kind = 'email'
+		(kind = 'email_lead'
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		or (kind in ('file_to_deal', 'possible_new_deal') and activity_kind = 'email'
 			and (kind <> 'file_to_deal' or deal_id is not null)
 			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
@@ -1192,7 +1198,7 @@ create table proposal (
 
 create unique index proposal_source_payload_once on proposal
 	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found)
-	nulls not distinct;
+	nulls not distinct where activity_id is not null;
 
 create function decide_proposal() returns trigger
 language plpgsql as $$
@@ -1200,11 +1206,21 @@ declare
 	acting_job text := nullif(current_setting('engine.job', true), '');
 	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
 	current_phase text;
+	sender_name text;
+	sender_address email_address;
+	lead_party_id uuid;
 begin
 	if tg_op = 'INSERT' then
 		if new.status <> 'pending' or new.decided_by_user_id is not null or new.decided_at is not null
 			or acting_job is distinct from new.proposed_by_job then
 			raise exception 'a job creates a pending proposal' using errcode = 'check_violation', constraint = 'proposal_starts_pending';
+		end if;
+		if new.kind = 'email_lead' and (acting_job <> 'mail_capture' or acting_user is null or not exists (
+			select from candidate where id = new.candidate_id and source = 'outlook-intake' and status = 'unreviewed'
+			and changed_for_user_id = acting_user and source_row->>'address' is not null
+		)) then
+			raise exception 'mail capture proposes an unreviewed candidate for its mailbox owner'
+				using errcode = 'check_violation', constraint = 'email_lead_proposal_source';
 		end if;
 		return new;
 	end if;
@@ -1216,6 +1232,32 @@ begin
 	end if;
 	new.decided_by_user_id := acting_user;
 	new.decided_at := clock_timestamp();
+	if new.kind = 'email_lead' then
+		if acting_user is distinct from old.changed_for_user_id then
+			raise exception 'the mailbox owner decides the email lead'
+				using errcode = 'check_violation', constraint = 'email_lead_owner_decides';
+		end if;
+		select name, source_row->>'address' into sender_name, sender_address from candidate
+			where id = new.candidate_id and status = 'unreviewed' for update;
+		if not found then
+			raise exception 'the email lead candidate is already reviewed'
+				using errcode = 'check_violation', constraint = 'email_lead_candidate_pending';
+		end if;
+		if new.status = 'dismissed' then
+			update candidate set status = 'declined', reason = 'Dismissed by mailbox owner' where id = new.candidate_id;
+		else
+			perform pg_advisory_xact_lock(hashtextextended(sender_address, 0));
+			if exists (select from party_email where address = sender_address) then
+				raise exception 'a contact already has the sender address'
+					using errcode = 'check_violation', constraint = 'email_lead_sender_known';
+			end if;
+			insert into party (kind, name, how_found) values ('person', sender_name, 'inbound') returning id into lead_party_id;
+			insert into party_email (party_id, address, label, is_primary) values (lead_party_id, sender_address, 'work', true);
+			insert into party_role (party_id, role, stage, owner_user_id) values (lead_party_id, 'lead', 'new', acting_user);
+			update candidate set status = 'promoted', promoted_party_id = lead_party_id where id = new.candidate_id;
+		end if;
+		return new;
+	end if;
 	if new.status = 'dismissed' then return new; end if;
 	case new.kind
 	when 'next_step' then
@@ -1245,7 +1287,8 @@ begin
 		delete from activity_about where activity_id = new.activity_id and deal_id <> new.filed_deal_id;
 		insert into activity_about (activity_id, deal_id) values (new.activity_id, new.filed_deal_id) on conflict do nothing;
 	when 'new_lead' then
-		update party set how_found = coalesce(how_found, new.how_found) where id = new.party_id;
+		update party set how_found = new.how_found, how_found_detail = null where id = new.party_id
+			and (how_found is null or (how_found = 'not_recorded' and new.how_found <> 'not_recorded'));
 		insert into party_role (party_id, role, stage) values (new.party_id, 'lead', new.to_stage);
 	when 'lead_stage_move' then
 		insert into lead_stage_move (id, party_id, from_stage, to_stage, activity_id, evidence_ref, strength, reason)
