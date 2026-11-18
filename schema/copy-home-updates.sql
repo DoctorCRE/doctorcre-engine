@@ -36,4 +36,6 @@ from old_home_update n where not exists (select from not_copied r where r.old_id
 on conflict (id) do nothing;
 
 alter table home_update enable trigger stamp_change;
+select 'old_work_alert' as kind, count(*) as left_behind
+from ops.notification where subject_type in ('engineering_program', 'loop', 'release');
 select * from not_copied order by old_id, field, value, reason;

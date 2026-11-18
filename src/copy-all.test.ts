@@ -272,6 +272,11 @@ const runAll = async () => {
 		const result = await db.query(scripts[i] ?? "");
 		assert.ok(Array.isArray(result));
 		await db.query("commit");
+		if (file === "copy-home-updates.sql") {
+			assert.deepEqual(result.at(-2)?.rows, [
+				{ kind: "old_work_alert", left_behind: "1" },
+			]);
+		}
 		listed.set(file, result.at(-1)?.rows.map(Object.values) ?? []);
 	}
 	return [...listed].flatMap(([file, list]) =>

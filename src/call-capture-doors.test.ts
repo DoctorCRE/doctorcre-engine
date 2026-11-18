@@ -41,6 +41,7 @@ before(async () => {
 		select id, 'research', '2026-01-05T15:00:00Z' from deal where id <> '${NO_PHASE}';
 		insert into activity (id, kind, happened_at) values ('${CALL}', 'call', '2026-01-07T15:00:00Z');
 		insert into activity_about (activity_id, deal_id) select '${CALL}', id from deal;
+		insert into activity_about (activity_id, party_id) values ('${CALL}', '${BLAIR}');
 		insert into activity (id, kind, happened_at) values ('${MEETING}', 'meeting', '2026-01-07T15:00:00Z');
 		insert into activity_about (activity_id, deal_id) values ('${MEETING}', '${MEETING_DEAL}');
 		insert into activity (id, kind, happened_at) values ('${EMAIL}', 'email', '2026-01-07T15:00:00Z');
@@ -67,6 +68,88 @@ const decide = (id: unknown) =>
 		idempotency_key: randomUUID(),
 		decision: "accept",
 	});
+
+test("accepting a call log leaves one call and adds one note at the call's time", async () => {
+	for (const target of [{ deal_id: REVIEW }, { party_id: BLAIR }]) {
+		const dealId = target.deal_id ?? null;
+		const partyId = target.party_id ?? null;
+		const what = "Agreed to review the example floor plan.";
+		const [stored, proposal] = await propose({
+			kind: "log_call",
+			what,
+			...target,
+		});
+		assert.equal(stored, 201);
+		const decision = { idempotency_key: randomUUID(), decision: "accept" };
+		const accept = () =>
+			save(
+				{ user: "alex" },
+				`proposals/${proposal.proposal_id}/decision`,
+				decision,
+			);
+		const [accepted, answer] = await accept();
+		assert.equal(accepted, 200);
+		assert.deepEqual(answer.created, { activity_id: proposal.proposal_id });
+		assert.deepEqual(await accept(), [200, { ...answer, replayed: true }]);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select a.id, a.kind, a.happened_at = source.happened_at as original_time,
+						a.summary, a.changed_by_user_id
+					from activity a join activity_about b on b.activity_id = a.id
+					join activity source on source.id = $3
+					where (b.deal_id = $1 or b.party_id = $2) and a.kind in ('call', 'note')
+					order by a.id`,
+					[dealId, partyId, CALL],
+				)
+			).rows,
+			[
+				{
+					id: CALL,
+					kind: "call",
+					original_time: true,
+					summary: null,
+					changed_by_user_id: null,
+				},
+				{
+					id: proposal.proposal_id,
+					kind: "note",
+					original_time: true,
+					summary: what,
+					changed_by_user_id: ALEX,
+				},
+			],
+		);
+	}
+});
+
+test("a call log requires a linked recorded call and a summary, and dismissal writes no activity", async () => {
+	const base = { kind: "log_call", deal_id: REVIEW, what: "Example call" };
+	for (const invalid of [
+		{ activity_id: MEETING, deal_id: MEETING_DEAL },
+		{ what: undefined },
+		{ deal_id: undefined, party_id: ALEX },
+	]) {
+		assert.equal((await propose({ ...base, ...invalid }))[0], 422);
+	}
+	const [stored, proposal] = await propose(base);
+	assert.equal(stored, 201);
+	const [dismissed, answer] = await save(
+		{ user: "alex" },
+		`proposals/${proposal.proposal_id}/decision`,
+		{ idempotency_key: randomUUID(), decision: "dismiss" },
+	);
+	assert.equal(dismissed, 200);
+	assert.deepEqual(answer.created, {});
+	assert.equal(
+		(
+			await db.query("select id from activity where id = $1", [
+				proposal.proposal_id,
+			])
+		).rowCount,
+		0,
+	);
+});
 
 test("a registered job reads a deal and uses the answer to save a phase move", async () => {
 	const [status, deal] = await read(AUTOMATIC);
