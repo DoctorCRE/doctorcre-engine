@@ -269,6 +269,7 @@ test("suggestions converge across retries, edits create a step without changing 
 		kind: "next_step",
 		deal_id: DEAL,
 		what: "Call the example clinic",
+		owner_party_id: PARTNER,
 	};
 	const [status, p] = await propose(args);
 	assert.equal(status, 201);
@@ -312,6 +313,29 @@ test("suggestions converge across retries, edits create a step without changing 
 	});
 	assert.equal((await decide(p.proposal_id, {}))[1].error, "already_decided");
 	assert.equal((await propose(args))[1].status, "accepted");
+});
+
+test("an accepted next step keeps its proposed owner or defaults to the partner who accepts it", async () => {
+	for (const owner of [undefined, USER]) {
+		const [status, proposal] = await propose({
+			kind: "next_step",
+			deal_id: DEAL,
+			what: "Check the example dates",
+			owner_party_id: owner,
+		});
+		assert.equal(status, 201);
+		const [accepted] = await save(
+			{ user: "casey" },
+			`proposals/${proposal.proposal_id}/decision`,
+			{ idempotency_key: randomUUID(), decision: "accept" },
+		);
+		assert.equal(accepted, 200);
+		const { rows } = await db.query(
+			"select owner_party_id from next_step where id=$1",
+			[proposal.proposal_id],
+		);
+		assert.deepEqual(rows, [{ owner_party_id: owner ?? PARTNER }]);
+	}
 });
 
 test("a phase quote is derived at storage and refuses a stale acceptance", async () => {
