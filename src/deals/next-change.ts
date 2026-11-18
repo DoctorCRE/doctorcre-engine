@@ -24,6 +24,7 @@ import {
 import { SaveRefusal } from "../save.ts";
 import { latestChange, seenAnswer, unseenChanges } from "../seen-change.ts";
 import { UUID } from "../uuid.ts";
+import { ENDED_PHASES } from "./shared.ts";
 
 // The database checks each value against its own rules, such as a known kind.
 const DEAL_FIELDS = {
@@ -53,6 +54,18 @@ const DEAL_CHANGES = {
 	phase: optional(fitting(PHASE_MOVE)),
 };
 
+const NEW_DEAL = {
+	idempotency_key: isUuid,
+	name: isText,
+	client_id: isUuid,
+	owner: isText,
+	phase: isText,
+	kind: DEAL_FIELDS.kind,
+	reason: DEAL_FIELDS.reason,
+	market_id: DEAL_FIELDS.market_id,
+	renews_lease_id: clearable(isUuid),
+};
+
 type DealFields = Partial<Fitted<typeof DEAL_FIELDS>>;
 type PhaseMove = NonNullable<DealChanges["phase"]>;
 type DealChanges = Exclude<ReturnType<typeof parseDealChanges>, Refusal>;
@@ -67,6 +80,8 @@ function parseDealChanges(deal_id: string, body: JsonObject) {
 	);
 	if (request instanceof Refusal) return request;
 	const { idempotency_key, seen_change_id, phase } = request;
+	if (phase && (phase.to === "closed" || phase.to === "dead") && !phase.on)
+		return new Refusal(400, "missing_required", { fields: ["phase.on"] });
 	const fields: DealFields = request.fields ?? {};
 	return {
 		idempotency_key,
@@ -81,6 +96,60 @@ function parseDealChanges(deal_id: string, body: JsonObject) {
 					reason: phase.reason ?? null,
 				}
 			: null,
+	};
+}
+
+function parseNewDeal(body: JsonObject) {
+	const request = fit(body, NEW_DEAL, [
+		"idempotency_key",
+		"name",
+		"client_id",
+		"owner",
+		"phase",
+	]);
+	if (request instanceof Refusal) return request;
+	if (ENDED_PHASES.includes(request.phase))
+		return new Refusal(400, "invalid_field_value", { fields: ["phase"] });
+	return request;
+}
+
+async function addDeal(
+	tx: Transaction<DB>,
+	{
+		client_id,
+		phase,
+		owner,
+		name,
+		kind,
+		reason,
+		market_id,
+		renews_lease_id,
+	}: Fitted<typeof NEW_DEAL>,
+): Promise<JsonObject> {
+	const owner_id = await userId(tx, owner);
+	const {
+		rows: [added],
+	} = await sql<{ deal_id: string }>`
+		with added as (
+			insert into deal (name, kind, reason, market_id, renews_lease_id, owner_user_id)
+			values (${name}, ${kind ?? null}, ${reason ?? null}, ${market_id ?? null}, ${renews_lease_id ?? null}, ${owner_id})
+			returning id
+		)
+		insert into deal_party (deal_id, party_id, role)
+		select id, ${client_id}::uuid, 'client' from added
+		returning deal_id`.execute(tx);
+	if (!added) throw new Error("Deal insert returned no id");
+	const { deal_id } = added;
+	const phase_changed_at = await movePhase(tx, deal_id, {
+		from: null,
+		to: phase,
+		on: null,
+		reason: null,
+	});
+	return {
+		deal_id,
+		change_id: (await latestChange(tx, "deal", deal_id)) ?? 0,
+		phase_changed_at,
 	};
 }
 
@@ -162,16 +231,20 @@ async function movePhase(
 	return moved.happened_at;
 }
 
-export const nextDeals = new Hono<NextSaveEnv>().post(
-	"/deals/:deal/changes",
-	(c) =>
+export const nextDeals = new Hono<NextSaveEnv>()
+	.post("/deals", (c) =>
+		answerNextSave(c, "add-deal", parseNewDeal, addDeal, (result) =>
+			result.replayed ? 200 : 201,
+		),
+	)
+	.post("/deals/:deal/changes", (c) =>
 		answerNextSave(
 			c,
 			"deal-changes",
 			(body) => parseDealChanges(c.req.param("deal"), body),
 			saveDealChanges,
 		),
-);
+	);
 
 export const dealJobs = new Hono<NextSaveEnv>().get(
 	"/deals/:deal",

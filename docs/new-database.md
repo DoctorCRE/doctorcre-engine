@@ -1388,6 +1388,12 @@ The suggestion kinds:
 
 ### 16. Deal fields and phase moves
 
+`POST /jobs/deals` and `POST /api/engine/deals` add a deal.
+
+- The body requires `idempotency_key` (UUID), `name` (nonblank text), `client_id` (an existing client's party UUID), `owner` (user slug), and `phase` (an open phase slug). It accepts `kind` and `reason` (slugs), `market_id` (market UUID), and `renews_lease_id` (lease UUID). Omit an unknown kind, reason, or market, or send null. A renewal reason requires the source lease. Any other reason, including an unknown one, requires the source lease field to be absent or null.
+- The deal, its client link, and its first phase save together. National status follows the client's account membership.
+- The answer is `201 { deal_id, change_id, phase_changed_at }`. A retry answers `200` with the same fields and `replayed: true`. An unknown owner returns `400 unknown_owner`. An ended phase returns `400 invalid_field_value { fields: ["phase"] }`. The database refuses an unknown vocabulary value, a party without the client role, or an invalid renewal link.
+
 `GET /jobs/deals/{deal_id}` answers `{ deal_id, phase, phase_saved_at, change_id, next_step: { id, due_on } | null }` for a registered job. Use `phase` as `phase.from` and `change_id` as `seen_change_id` on a save. `phase_saved_at` is the current phase's save timestamp with an offset. It comes from `changed_at` on the same `deal_phase_change` row. Call capture can compare this timestamp with the call time even when a move has a backdated `on` date. Both phase fields are null before the first move, and the change id is 0 before the first deal change. The next step is the newest open step outside the checklist, with a null date when undated. An unknown job gets `403 unknown_job`, and an unknown deal gets `404 not_found`.
 
 `POST /jobs/deals/{deal_id}/changes` and `POST /api/engine/deals/{deal_id}/changes`
@@ -1397,10 +1403,12 @@ The suggestion kinds:
 | `idempotency_key` | UUID                                                                                                                                   | yes                 |
 | `seen_change_id`  | integer: the deal's latest change the caller read, 0 for none                                                                          | yes                 |
 | `fields`          | any of `name`, `kind`, `reason`, `owner` (user slug), `market_id`, `closed_value`, `parking_reason`, `parking_note`, `needs_attention` | `fields` or `phase` |
-| `phase`           | `{ from, to, on?, reason? }`: the phase the caller saw, the new one, a date in Central time, and a reason, required for dead           | `fields` or `phase` |
+| `phase`           | `{ from, to, on?, reason? }`: the phase the caller saw, the new one, a date in Central time, and a reason                              | `fields` or `phase` |
 
 - `changeDeal` applies `fields` with its rule: a later change to one of the same fields is `409 version_conflict { current_version }`; a later change to other fields stands and the answer is `{ deal_id, rebased: true, intervening_change_ids }`, so the caller re-reads. A phase move is refused `409 version_conflict { current_phase }` when the deal's phase is not `from`, as accepting a phase suggestion checks it, under the same row lock.
 - Answer: `{ deal_id, change_id }`, or the rebased answer, plus `phase_changed_at` for a move.
+- For Won, send `phase: { from, to: "closed", on }` and, when known, `fields: { closed_value }` with the positive amount as a JSON number. An omitted value leaves the field as it was. For Lost, send `phase: { from, to: "dead", on, reason }` with a nonblank reason. Both moves require a real `YYYY-MM-DD` date in Central time, from the day the current phase began through today. A missing date returns `400 missing_required { fields: ["phase.on"] }`. The phase and any field changes save together.
+- With the new Deals reads on, a new loss shows the dead phase's date as `closed_on` and its reason as `lost_reason`. The deal page answers the recorded `closed_value` as a decimal string or null.
 - Stamp: the user, or a job for a partner. A job alone may not park, revive or flag a deal: `422 database_refused_the_statement { rule: "deal_parked_or_flagged_by_a_user" }`. `404 not_found` for an unknown deal; `400 unknown_owner`.
 - Callers: call capture's automatic phase moves (`call_capture`, with today's confidence bar, which moves into the engine in slice 35), the assistant (`agent`) and the app. The nightly lead stages use the invoice application below.
 
