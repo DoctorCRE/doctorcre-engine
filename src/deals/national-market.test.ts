@@ -4,8 +4,8 @@ import { after, before, test } from "node:test";
 import { doorTest } from "../test-door.ts";
 
 const { db, setup, cleanup, save, request } = doorTest();
-const [USER, BRAND, CLIENT, OTHER, AGENT, MARKET] = Array.from(
-	{ length: 6 },
+const [USER, BRAND, CLIENT, OTHER, FORMER, AGENT, MARKET] = Array.from(
+	{ length: 7 },
 	randomUUID,
 );
 const partner = { user: "example" };
@@ -19,19 +19,23 @@ const opening = {
 before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into phase values ('pending', 'Prospective Client');
+		insert into phase values ('pending', 'Prospective Client'), ('invoiced', 'Invoiced');
 		insert into how_found values ('referral', 'Referral'), ('national_account', 'National account or corporate lead');
 		insert into role values ('client', 'Client'), ('national_account', 'National account'), ('market_agent', 'Market agent');
 		insert into client_type values ('franchise', 'Franchise');
 		insert into party (id, kind, name, how_found) values
 			('${USER}', 'person', 'Example Partner', null), ('${AGENT}', 'person', 'Example Agent', null),
 			('${BRAND}', 'company', 'Example Account', null), ('${CLIENT}', 'person', 'Example Existing Location', 'referral'),
-			('${OTHER}', 'company', 'Example Other Client', 'referral');
+			('${OTHER}', 'company', 'Example Other Client', 'referral'),
+			('${FORMER}', 'company', 'Example Former Location', 'referral');
 		insert into app_user (id, slug) values ('${USER}', 'example');
-		insert into party_role (party_id, role) values ('${BRAND}', 'national_account'), ('${CLIENT}', 'client'), ('${OTHER}', 'client');
+		insert into party_role (party_id, role) values
+			('${BRAND}', 'national_account'), ('${CLIENT}', 'client'), ('${OTHER}', 'client'), ('${FORMER}', 'client');
 		insert into national_account (party_id) values ('${BRAND}');
-		insert into client (party_id) values ('${CLIENT}'), ('${OTHER}');
-		insert into client_brand (location_id, brand_id, started_on) values ('${CLIENT}', '${BRAND}', '2020-01-01');
+		insert into client (party_id) values ('${CLIENT}'), ('${OTHER}'), ('${FORMER}');
+		insert into client_brand (location_id, brand_id, started_on, ended_on) values
+			('${CLIENT}', '${BRAND}', '2020-01-01', null),
+			('${FORMER}', '${BRAND}', '2020-01-01', '2020-12-31');
 		insert into market (id, name) values ('${MARKET}', 'Example Market');
 		commit;`);
 });
@@ -113,6 +117,50 @@ test("an existing location is reused with its original how found", async () => {
 	);
 	assert.equal(duplicate, 409);
 	assert.equal(refusal.error, "deal_name_exists");
+});
+
+test("a market deal can reuse an invoiced deal's name", async () => {
+	const name = "Example Invoiced Market Deal";
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		with invoiced as (
+			insert into deal (name, owner_user_id, market_id)
+			values ('${name}', '${USER}', '${MARKET}') returning id
+		)
+		insert into deal_phase_change (deal_id, happened_at, phase)
+		select id, '2020-12-31T12:00:00Z', 'invoiced' from invoiced;
+		commit;`);
+
+	const [status, receipt] = await save(
+		partner,
+		"deals",
+		deal(name, { client_id: CLIENT }),
+	);
+	assert.deepEqual([status, receipt.error], [201, undefined]);
+});
+
+test("an ended membership refuses the old client and allows a new location with the same name", async () => {
+	const [outside, refusal] = await save(
+		partner,
+		"deals",
+		deal("Example Former Location Deal", { client_id: FORMER }),
+	);
+	const [created, receipt] = await save(
+		partner,
+		"deals",
+		deal("Example Replacement Location Deal", {
+			new_location: { name: "Example Former Location", kind: "company" },
+		}),
+	);
+	assert.deepEqual(
+		[
+			[outside, refusal.error],
+			[created, receipt.error],
+		],
+		[
+			[409, "location_not_in_account"],
+			[201, undefined],
+		],
+	);
 });
 
 test("market deals refuse unlinked, duplicate or ambiguous locations and keep jobs on the original contract", async () => {

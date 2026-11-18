@@ -3,6 +3,7 @@ import { Refusal } from "../answer.ts";
 import type { DB } from "../next-database.d.ts";
 import { ACTING_USER } from "../next-save.ts";
 import { SaveRefusal } from "../save.ts";
+import { ENDED_PHASES } from "./shared.ts";
 
 type NewLocation = { name: string; kind: "person" | "company" };
 
@@ -78,8 +79,12 @@ export async function checkMarketDealName(tx: Transaction<DB>, name: string) {
 		.selectFrom("deal as d")
 		.select(["d.id", "d.name"])
 		.where(sql`lower(d.name)`, "=", sql`lower(${name})`)
-		.where(sql<boolean>`coalesce((select phase from deal_phase_change where deal_id = d.id
-			order by happened_at desc limit 1), '') not in ('closed', 'dead')`)
+		.where(
+			sql<string>`coalesce((select phase from deal_phase_change where deal_id = d.id
+				order by happened_at desc limit 1), '')`,
+			"not in",
+			ENDED_PHASES,
+		)
 		.orderBy("d.id")
 		.execute();
 	if (existing.length)
