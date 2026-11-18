@@ -49,7 +49,7 @@ before(async () => {
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
   ('${id(2)}', 'partner_two', 'human', 'Example Other'), ('${id(3)}', 'example-mail', 'automation', 'Example Mail');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(12)}', 'person', 'Example Client');
- insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'partner_one');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(1)}', '${id(1)}'), ('old_system', '${id(12)}', '${id(12)}');
  insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
  insert into public.party (id, kind, name, created_by, updated_by) select v, 'person', 'Example Party', '${id(1)}', '${id(1)}'
@@ -62,7 +62,8 @@ before(async () => {
   select v, '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}' from unnest(array['${id(30)}', '${id(31)}']::uuid[]) v;
  insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
  insert into outside_id (source, value, deal_id) values ('old_system', '${id(30)}', '${id(30)}');
- insert into public.activity_kind (slug, label, is_contact) values ('email_in', 'Example email', true);
+ insert into public.activity_kind (slug, label, is_contact) values ('email_in', 'Example inbound email', true),
+  ('email_out', 'Example outbound email', true);
  insert into public.activity (id, kind, occurred_at, actor_id, summary, deal_id, client_id) values
   ('${id(60)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', '${id(30)}', null),
   ('${id(61)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', null, '${id(21)}'),
@@ -70,14 +71,22 @@ before(async () => {
   ('${id(63)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', null, '${id(21)}'),
   ('${id(64)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', '${id(30)}', null),
   ('${id(65)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', '${id(30)}', null);
+ insert into public.activity (id, kind, occurred_at, actor_id, summary, party_id)
+  values ('${id(68)}', 'email_in', '2024-01-01 15:00', '${id(3)}', 'Example email', '${id(12)}'),
+  ('${id(69)}', 'email_out', '2024-01-01 15:00', '${id(1)}', 'Example email', '${id(12)}');
+ update public.activity set email_source = '{"mailbox_owner":"partner_one","sender_email":"sender@example.test"}'
+  where id in ('${id(60)}', '${id(64)}');
  insert into activity (id, kind, happened_at) select v, 'email', '2024-01-01 15:00' from unnest(array['${id(60)}', '${id(61)}', '${id(63)}', '${id(66)}']::uuid[]) v;
+ insert into activity (id, kind, happened_at) values ('${id(68)}', 'email', '2024-01-01 15:00');
  insert into activity_about (activity_id, deal_id, party_id) values ('${id(60)}', '${id(30)}', null), ('${id(61)}', null, '${id(12)}'),
-  ('${id(63)}', '${id(30)}', null), ('${id(66)}', '${id(30)}', null);
+  ('${id(63)}', '${id(30)}', null), ('${id(66)}', '${id(30)}', null), ('${id(68)}', null, '${id(12)}');
  insert into email (activity_id, message_id, sender, subject, body, imported) select v, case when v <> '${id(66)}' then 'message-' || v end,
-  'sender@example.com', 'Example', 'Example', true from unnest(array['${id(60)}', '${id(61)}', '${id(63)}', '${id(66)}']::uuid[]) v;
+  'sender@example.com', 'Example', 'Example', true from unnest(array['${id(60)}', '${id(61)}', '${id(63)}', '${id(66)}', '${id(68)}']::uuid[]) v;
+ insert into email_mailbox (activity_id, user_id) values ('${id(60)}', '${id(1)}');
  -- Row 64 is another mailbox's row of email 60, and row 65 joined email 66, copied without a Message-ID; row 62 never copied.
  insert into outside_id (source, value, email_activity_id) values ('old_system', '${id(60)}', '${id(60)}'), ('old_system', '${id(61)}', '${id(61)}'),
-  ('old_system', '${id(63)}', '${id(63)}'), ('old_system', '${id(64)}', '${id(60)}'), ('old_system', '${id(65)}', '${id(66)}');
+  ('old_system', '${id(63)}', '${id(63)}'), ('old_system', '${id(64)}', '${id(60)}'), ('old_system', '${id(65)}', '${id(66)}'),
+  ('old_system', '${id(68)}', '${id(68)}'), ('old_system', '${id(69)}', '${id(60)}');
  insert into public.email_proposal (id, kind, deal_id, activity_id, evidence_quote, task_text, next_date, owner, confidence, status, created_by,
   created_at, resolved_by, resolved_at, resolution_reason) values
   ${[
@@ -91,10 +100,18 @@ before(async () => {
 		step(78, null, 63),
 		step(80, 30, 64),
 		step(81, 30, 65),
+		step(82, null, 68),
 	].join(",\n  ")};
  update public.email_proposal set resolution_note = 'Example note' where id = '${id(72)}';
- insert into public.email_proposal (id, kind, deal_id, activity_id, evidence_quote, confidence, sender_role, created_by)
-  values ('${id(79)}', 'file_to_deal', '${id(30)}', '${id(60)}', 'Example quote', 0.9, 'client', '${id(3)}');
+ insert into public.email_proposal (id, kind, deal_id, activity_id, evidence_quote, task_text, confidence, sender_role, created_by, created_at) values
+  ('${id(79)}', 'file_to_deal', '${id(30)}', '${id(60)}', 'Example quote', null, 0.9, 'client', '${id(3)}', '2024-01-01 15:01'),
+  ('${id(83)}', 'possible_new_deal', null, '${id(64)}', 'Example quote', 'Example matter', 0.9, 'client', '${id(3)}', '2024-01-01 15:01'),
+  ('${id(84)}', 'file_to_deal', '${id(30)}', '${id(64)}', 'Example duplicate', null, 0.9, 'client', '${id(3)}', '2024-01-01 15:02'),
+  ('${id(85)}', 'possible_new_deal', null, '${id(68)}', 'Example quote', null, 0.9, 'client', '${id(3)}', '2024-01-01 15:01'),
+  ('${id(86)}', 'possible_new_deal', null, '${id(69)}', 'Example quote', null, 0.9, 'client', '${id(3)}', '2024-01-01 15:01'),
+  ('${id(87)}', 'possible_new_deal', null, '${id(60)}', 'Example quote', null, 0.9, 'client', '${id(3)}', '2024-01-01 15:01');
+ update public.email_proposal set status='dismissed', resolved_by='${id(1)}', resolved_at='2024-01-10', resolution_reason='Example reason'
+  where id = '${id(87)}';
  commit;`);
 });
 after(cleanup);
@@ -106,8 +123,11 @@ test("copies each email next step with its decision and email, lists what waits,
   deal_id, party_id, what, owner_party_id, due_on::text, changed_by_user_id, changed_by_job, changed_at::text from proposal order by id`), [
 		"#71 next_step #60 email Example quote 71 old_system pending - - #30 - Example step 71 #01 2024-02-01 - old_system 2024-01-01 15:01:00+00",
 		"#72 next_step #61 email Example quote 72 old_system dismissed #01 2024-01-10 00:00:00+00 - #12 Example step 72 #01 2024-02-01 #01 - 2024-01-10 00:00:00+00",
+		"#79 file_to_deal #60 email Example quote old_system pending - - #30 - - - - - old_system 2024-01-01 15:01:00+00",
 		"#80 next_step #60 email Example quote 80 old_system pending - - #30 - Example step 80 #01 2024-02-01 - old_system 2024-01-01 15:01:00+00",
 		"#81 next_step #66 email Example quote 81 old_system pending - - #30 - Example step 81 #01 2024-02-01 - old_system 2024-01-01 15:01:00+00",
+		"#82 next_step #68 email Example quote 82 old_system pending - - - #12 Example step 82 #01 2024-02-01 - old_system 2024-01-01 15:01:00+00",
+		"#83 possible_new_deal #60 email Example quote old_system pending - - - - - - - - old_system 2024-01-01 15:01:00+00",
 	]);
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select record ->> 'id' as id, action, new_value ->> 'status' as status, changed_by_user_id, changed_by_job,
@@ -115,9 +135,18 @@ test("copies each email next step with its decision and email, lists what waits,
 		"#71 insert pending - old_system 2024-01-01 15:01:00+00",
 		"#72 insert pending - old_system 2024-01-01 15:01:00+00",
 		"#72 update dismissed #01 - 2024-01-10 00:00:00+00",
+		"#79 insert pending - old_system 2024-01-01 15:01:00+00",
 		"#80 insert pending - old_system 2024-01-01 15:01:00+00",
 		"#81 insert pending - old_system 2024-01-01 15:01:00+00",
+		"#82 insert pending - old_system 2024-01-01 15:01:00+00",
+		"#83 insert pending - old_system 2024-01-01 15:01:00+00",
 	]);
+	assert.deepEqual(
+		await rows(
+			`select id, changed_for_user_id from proposal where kind <> 'next_step' order by id`,
+		),
+		["#79 #01", "#83 #01"],
+	);
 	assert.deepEqual(report, [
 		"#72 resolution_note Example note note_has_no_place",
 		"#72 resolution_reason Example reason reason_has_no_place",
@@ -128,6 +157,10 @@ test("copies each email next step with its decision and email, lists what waits,
 		"#77 deal_id #31 record_not_copied",
 		"#77 status confirmed accepted_not_copied",
 		"#78 activity_id #63 email_not_about_record",
+		"#84 proposal #84 duplicate_filing_suggestion",
+		"#85 activity_id #68 mailbox_not_copied",
+		"#86 activity_id #69 filing_not_inbound",
+		"#87 status dismissed filing_not_pending",
 		`- message_hash ${"a".repeat(64)} message_not_stored`,
 	]);
 	assert.deepEqual(
@@ -151,11 +184,12 @@ test("copies each email next step with its decision and email, lists what waits,
 	assert.ok(later.includes("#71 proposal #71 existing_proposal_conflicts"));
 	assert.ok(!later.some((r) => r.startsWith("#75 ")));
 	// biome-ignore format: one row per line
-	assert.deepEqual(await rows("select id, status, deal_id, what from proposal order by id"), [
+	assert.deepEqual(await rows("select id, status, deal_id, what from proposal where kind = 'next_step' order by id"), [
 		"#71 pending #30 Example step 71",
 		"#72 dismissed - Example step 72",
 		"#75 pending #30 Example step 75",
 		"#80 pending #30 Example step 80",
 		"#81 pending #30 Example step 81",
+		"#82 pending - Example step 82",
 	]);
 });
