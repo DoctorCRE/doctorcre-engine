@@ -33,6 +33,7 @@ const order: [file: string, input?: string][] = [
 	["copy-buildings.sql"],
 	["copy-deals.sql"],
 	["copy-market-agent-sources.sql"],
+	["copy-client-websites.sql"],
 	["copy-vendors.sql"],
 	["copy-leases.sql"],
 	["copy-critical-dates.sql"],
@@ -303,6 +304,10 @@ let first: unknown[][];
 before(async () => {
 	await setup();
 	await db.query(`begin; ${OLD} commit;`);
+	await db.query(`insert into ops.client_portal (slug, deal_id, client_id, password_hash, created_at, updated_at)
+		values ('example-clinic', '${id(30)}', '${id(20)}',
+			public.crypt(encode(public.digest('a made-up password', 'sha256'), 'hex'), public.gen_salt('bf', 12)),
+			'2025-02-02', '2025-02-03')`);
 	first = await runAll();
 });
 after(cleanup);
@@ -318,7 +323,7 @@ const counts = async () =>
 	);
 // Each table a copy writes holds what the snapshot gave it, so no copy passes by copying nothing.
 // biome-ignore format: one entry per copied table
-const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1,
+const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1, deal_client_website: 1,
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
@@ -359,6 +364,24 @@ const corrections = [
 test("every copy runs in order on one snapshot and lists only the expected corrections", async () => {
 	assert.deepEqual(first, corrections);
 	assert.deepEqual(await counts(), copied);
+	assert.deepEqual(
+		await rows(`select w.deal_id, w.created_at::date::text, w.changed_at::date::text,
+			w.password_hash = p.password_hash as same_verifier
+			from deal_client_website w join ops.client_portal p using (slug)`),
+		[
+			{
+				deal_id: id(30),
+				created_at: "2025-02-02",
+				changed_at: "2025-02-03",
+				same_verifier: true,
+			},
+		],
+	);
+	assert.deepEqual(
+		await rows(`select new_value ? 'password_hash' as exposed
+			from change where table_name = 'deal_client_website'`),
+		[{ exposed: false }],
+	);
 	assert.deepEqual(
 		await rows(
 			"select id, deal_id, user_id, checklist_item_ref, due_on::text, what, read_at::date::text from home_update",

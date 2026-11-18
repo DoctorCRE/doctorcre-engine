@@ -135,27 +135,24 @@ async function changeOwner(
 		);
 	if (current?.owner_id === owner_id) return { account_client_id, owner };
 
-	// A same-day handoff fits in one dated period. Change history keeps both owners.
-	if (current?.started_today) {
+	// Daily periods cannot end on their start date. Change history keeps a replaced owner.
+	if (current?.started_today)
 		await tx
-			.updateTable("national_account_owner")
-			.set({ owner_id })
+			.deleteFrom("national_account_owner")
 			.where("id", "=", current.id)
 			.execute();
-	} else {
-		if (current)
-			await tx
-				.updateTable("national_account_owner")
-				.set({ ended_on: today })
-				.where("id", "=", current.id)
-				.execute();
-		await sql`insert into national_account_owner (account_id, owner_id, started_on, ended_on)
-			values (${account_client_id}::uuid, ${owner_id}::uuid, ${today}, coalesce(${current?.ended_on ?? null}::date,
-				(select min(started_on) from national_account_owner
-				where account_id = ${account_client_id}::uuid and started_on > ${today})))`.execute(
-			tx,
-		);
-	}
+	else if (current)
+		await tx
+			.updateTable("national_account_owner")
+			.set({ ended_on: today })
+			.where("id", "=", current.id)
+			.execute();
+	await sql`insert into national_account_owner (account_id, owner_id, started_on, ended_on)
+		values (${account_client_id}::uuid, ${owner_id}::uuid, ${today}, coalesce(${current?.ended_on ?? null}::date,
+			(select min(started_on) from national_account_owner
+			where account_id = ${account_client_id}::uuid and started_on > ${today})))`.execute(
+		tx,
+	);
 	return { account_client_id, owner };
 }
 

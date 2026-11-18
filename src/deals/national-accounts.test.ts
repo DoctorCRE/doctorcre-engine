@@ -101,8 +101,8 @@ test("a handoff keeps the last period and stale board versions cannot undo it", 
 	]);
 	const history = await db.query(
 		`select id from change where table_name = 'national_account_owner'
-		and old_value->>'owner_id' = $1 and new_value->>'owner_id' = $2`,
-		[DELL, JOE],
+		and action = 'delete' and old_value->>'owner_id' = $1 and old_value->>'account_id' = $2`,
+		[DELL, BRAND],
 	);
 	assert.equal(history.rowCount, 1);
 });

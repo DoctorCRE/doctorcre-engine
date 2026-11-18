@@ -313,4 +313,6 @@
 
 158\. **Commission receipt progress comes from payments (2026-11-18).** Commission received is complete when the deal has at least one payment and all its payments have receipt dates. A copied expected amount stays as a forecast and has no effect on the checklist (#732).
 
-159\. **Joe or Dell owns a national account (2026-11-18).** A composite foreign key limits dated ownership to the two signed-in partner identities. A handoff ends the previous period on the new owner's start date in Central time. Changes on the same date keep one dated period and preserve each handoff in change history (#738).
+159\. **The new database keeps each deal's client website registration (2026-11-18).** A website name belongs to one registration, and a deal can have one active registration. The copied site keeps its verifier and its binding to the deal and client. Both partners get the address when the registration is active and the client matches. The verifier stays out of deal reads and change history (#728).
+
+162\. **Joe or Dell owns a national account (2026-11-18).** A composite foreign key limits dated ownership to the two signed-in partner identities. A handoff ends the previous period on the new owner's start date in Central time. Changes on the same date keep one dated period and preserve each handoff in change history (#738).
