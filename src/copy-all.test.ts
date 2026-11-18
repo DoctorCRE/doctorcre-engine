@@ -130,12 +130,26 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
  ('${id(37)}', 'deal', '${id(34)}', 'invoiced_on', '{"invoiced_on":null}', '{"invoiced_on":"2025-03-01"}', '2025-03-02T12:00Z', '${id(3)}', 'update-deal', 'ingest_email');
 update public.event set sponsoring_human_slug = 'partner_one' where id = '${id(37)}';
 insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause) values
- ('${id(130)}', 'deal', '${id(30)}', 'checklist_ping', '{"checklist_item_id":"example-floor-plan"}',
+ ('${id(130)}', 'deal', '${id(30)}', 'checklist_ping', '{"checklist_item_id":"example-floor-plan","due_on":"2025-01-10"}',
+ '2025-01-03', '${id(3)}', 'ping-deal-checklist', 'automation_job'),
+ ('${id(140)}', 'deal', '${id(30)}', 'checklist_ping', '{"checklist_item_id":"example-floor-plan","due_on":"2025-02-30"}',
  '2025-01-03', '${id(3)}', 'ping-deal-checklist', 'automation_job');
 insert into ops.notification (id, subject_type, subject_ref, event_ref, event_source, recipient_actor, reason, severity, deep_link, dedupe_key, created_at) values
  ('${id(131)}', 'deal', '${id(30)}', '${id(130)}', 'event', '${id(1)}', 'Review the floor plan.', 'action_required', '/notifications', 'deal-checklist:example', '2025-01-03'),
  ('${id(132)}', 'loop', 'example', '${id(130)}', 'event', '${id(1)}', 'Example work alert.', 'action_required', '/notifications', 'loop:example', '2025-01-03');
-insert into ops.notification_read (notification_id, recipient_actor, read_at) values ('${id(131)}', '${id(1)}', '2025-01-04');
+insert into ops.notification (id, subject_type, subject_ref, event_ref, event_source, recipient_actor, reason, severity, deep_link, dedupe_key, created_at)
+select notification_id::uuid, 'deal', subject_ref, event_ref::uuid, 'event', recipient::uuid, reason,
+ 'action_required', '/notifications', 'deal-checklist:refused:' || notification_id, '2025-01-03'
+from (values
+ ('${id(141)}', '${id(999)}', '${id(130)}', '${id(1)}', 'Review the plan.'),
+ ('${id(142)}', '${id(30)}', '${id(130)}', '${id(3)}', 'Review the plan.'),
+ ('${id(143)}', '${id(30)}', '${id(999)}', '${id(1)}', 'Review the plan.'),
+ ('${id(144)}', '${id(30)}', '${id(130)}', '${id(1)}', ' '),
+ ('${id(145)}', '${id(30)}', '${id(130)}', '${id(1)}', 'Review the plan.'),
+ ('${id(146)}', '${id(30)}', '${id(140)}', '${id(1)}', 'Review the plan.')
+) refused(notification_id, subject_ref, event_ref, recipient, reason);
+insert into ops.notification_read (notification_id, recipient_actor, read_at) values
+ ('${id(131)}', '${id(1)}', '2025-01-04'), ('${id(145)}', '${id(1)}', '2025-01-02');
 insert into public.deal_participant (deal_id, party_id, role, set_by) values ('${id(30)}', '${id(13)}', 'landlord_side', '${id(1)}');
 insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by) values
  ('${id(32)}', '${id(30)}', 1, 'tenant', '2025-01-10', '2025-01-10', '${id(1)}');
@@ -319,21 +333,30 @@ const corrections = [
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
  ["copy-email-suggestions.sql", null, "message_hash", "8".repeat(64), "message_not_stored"],
+ ["copy-home-updates.sql", id(141), "deal_id", id(999), "deal_not_copied"],
+ ["copy-home-updates.sql", id(141), "event_ref", id(130), "checklist_item_missing"],
+ ["copy-home-updates.sql", id(142), "user_id", id(3), "recipient_not_a_user"],
+ ["copy-home-updates.sql", id(143), "event_ref", id(999), "checklist_item_missing"],
+ ["copy-home-updates.sql", id(144), "what", null, "blank_update"],
+ ["copy-home-updates.sql", id(145), "read_at", "2025-01-02 00:00:00+00", "read_before_creation"],
+ ["copy-home-updates.sql", id(146), "due_on", "2025-02-30", "checklist_due_date_missing_or_invalid"],
  ["copy-change-history.sql", id(31), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(35), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(36), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(37), "invoiced_on", "field_has_no_mapping"],
  ["copy-change-history.sql", id(93), "note", "field_has_no_mapping"],
  ["copy-change-history.sql", id(130), "checklist_ping", "field_has_no_mapping"],
+ ["copy-change-history.sql", id(140), "checklist_ping", "field_has_no_mapping"],
  ["copy-change-history.sql", "00000000-0000-4000-8000-100000000090", null, "field_has_no_mapping"],
  ["copy-change-history.sql", "00000000-0000-4000-8000-100000000091", null, "field_has_no_mapping"],
 ];
 
 test("every copy runs in order on one snapshot and lists only the expected corrections", async () => {
+	assert.deepEqual(first, corrections);
 	assert.deepEqual(await counts(), copied);
 	assert.deepEqual(
 		await rows(
-			"select id, deal_id, user_id, checklist_item_ref, what, read_at::date::text from home_update",
+			"select id, deal_id, user_id, checklist_item_ref, due_on::text, what, read_at::date::text from home_update",
 		),
 		[
 			{
@@ -341,6 +364,7 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 				deal_id: id(30),
 				user_id: id(1),
 				checklist_item_ref: "example-floor-plan",
+				due_on: "2025-01-10",
 				what: "Review the floor plan.",
 				read_at: "2025-01-04",
 			},
@@ -365,7 +389,6 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 		[{ document_id: id(52), email_activity_id: id(120) }],
 		"a file names the email without a Message-ID it arrived with",
 	);
-	assert.deepEqual(first, corrections);
 });
 
 test("running every copy again changes no row or change history and lists the same corrections", async () => {

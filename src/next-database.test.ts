@@ -3346,6 +3346,51 @@ test("deal checklist titles require two to four words, a source and array bullet
 	}
 });
 
+test("a step's call source cannot be a meeting about its deal", async () => {
+	const meeting = id(9402);
+	await asOwner([
+		[
+			`insert into activity (id, kind, happened_at) values ('${meeting}', 'meeting', '2025-01-01');
+			insert into activity_about (activity_id, deal_id) values ('${meeting}', '${DEAL}');
+			update next_step set call_activity_id = '${meeting}', call_evidence_quote = 'Send the plan'
+			where id = '${id(401)}'`,
+			"next_step_call_activity_id_call_kind_fkey",
+		],
+	]);
+});
+
+test("a step's call source cannot be a call about another deal", async () => {
+	await asOwner([
+		[
+			`insert into next_step (what, deal_id, call_activity_id, call_evidence_quote)
+			values ('Send the plan', '${LENDER_DEAL}', '${CALL}', 'Send the plan')`,
+			"next_step_call_activity_id_deal_id_fkey",
+		],
+	]);
+});
+
+test("a checklist reminder cannot repeat for the same recipient, deal, item and due date", async () => {
+	await asOwner([
+		[
+			`insert into home_update (user_id, deal_id, what, checklist_item_ref, due_on) values
+			('${USER}', '${DEAL}', 'Review the plan', 'example-plan', '2025-01-01'),
+			('${USER}', '${DEAL}', 'Review the plan', 'example-plan', '2025-01-02'),
+			('${USER}', '${DEAL}', 'Review the revised plan', 'example-plan', '2025-01-01')`,
+			"home_update_user_id_deal_id_checklist_item_ref_due_on_key",
+		],
+	]);
+});
+
+test("a checklist reminder requires a due date", async () => {
+	await asOwner([
+		[
+			`insert into home_update (user_id, deal_id, what, checklist_item_ref)
+			values ('${USER}', '${DEAL}', 'Review the plan', 'example-plan')`,
+			"home_update_checklist_due_date",
+		],
+	]);
+});
+
 test("next-step end states reject contradictory times, reasons and evidence", async () => {
 	const invalid: Case[] = [
 		["resolution = 'other'", "next_step_resolution_check"],

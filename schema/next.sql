@@ -1163,8 +1163,11 @@ create table home_update (
 	deal_id uuid not null references deal,
 	what text not null check (what ~ '\S'),
 	checklist_item_ref text check (checklist_item_ref ~ '\S'),
+	due_on date,
 	created_at timestamptz not null default now(),
 	read_at timestamptz check (read_at >= created_at),
+	constraint home_update_checklist_due_date check ((checklist_item_ref is null) = (due_on is null)),
+	unique (user_id, deal_id, checklist_item_ref, due_on),
 	unique (id, user_id)
 );
 
@@ -1209,6 +1212,7 @@ create table proposal (
 	deal_id uuid references deal,
 	next_step_id uuid,
 	held_deal_id uuid generated always as (case when kind = 'next_step_done' then deal_id end) stored,
+	call_step_deal_id uuid generated always as (case when kind = 'next_step' and activity_kind = 'call' then deal_id end) stored,
 	step_seen_at timestamptz,
 	keeps_deal_date boolean not null default false,
 	party_id uuid references party,
@@ -1230,6 +1234,7 @@ create table proposal (
 	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
 	foreign key (next_step_id, deal_id) references next_step (id, deal_id),
 	foreign key (activity_id, held_deal_id) references activity_about (activity_id, deal_id) deferrable initially deferred,
+	foreign key (activity_id, call_step_deal_id) references activity_about (activity_id, deal_id) deferrable initially deferred,
 	foreign key (lead_role, from_stage) references stage (role, slug),
 	foreign key (lead_role, to_stage) references stage (role, slug),
 	constraint proposal_source check (case when kind = 'email_lead' then

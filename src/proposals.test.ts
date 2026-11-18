@@ -315,6 +315,20 @@ test("suggestions converge across retries, edits create a step without changing 
 	assert.equal((await propose(args))[1].status, "accepted");
 });
 
+test("storing a call's step suggestion for another deal is refused", async () => {
+	const call = id(26);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${call}', 'call', '2025-01-01');
+		insert into activity_about (activity_id, deal_id) values ('${call}', '${DEAL}'); commit;`);
+	const [status] = await propose({
+		kind: "next_step",
+		deal_id: OTHER,
+		activity_id: call,
+		what: "Send the plan",
+	});
+	assert.equal(status, 422);
+});
+
 test("accepting a step from a recorded call keeps the proposal's original evidence", async () => {
 	const call = id(25);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
