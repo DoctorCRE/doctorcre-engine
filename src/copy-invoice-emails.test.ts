@@ -49,7 +49,7 @@ before(async () => {
 		await db.query(`insert into public.deal (id,client_id,name,deal_type,phase,owner,created_by,updated_by,invoiced_on)
    values ('${id(d)}','${id(7)}','Example deal ${d}','lease','${undone ? "negotiation" : "closed"}','partner_one','${id(1)}','${id(1)}',${undone ? "null" : "'2025-03-01'"});
    insert into public.commission (id,deal_id,status,gross_amount,invoiced_on,received_on,created_by)
-   values ('${id(d + 100)}','${id(d)}','received',100,${undated ? "null" : "'2025-03-01'"},'2025-04-01','${id(1)}');
+   values ('${id(d + 100)}','${id(d)}',${undated ? "'invoiced'" : "'received'"},100,'2025-03-01',${undated ? "null" : "'2025-04-01'"},'${id(1)}');
    insert into public.event (id,actor_id,verb,subject_type,subject_id,field,old_value,new_value,cause,occurred_at) values
    ('${id(d + 1000)}','${id(1)}','update-deal','deal','${id(d)}','phase',null,'{"phase":"negotiation"}','human_stated','2025-01-01'),
    ('${id(d + 2000)}','${id(3)}','update-deal','deal','${id(d)}','phase','{"phase":"negotiation"}','{"phase":"closed"}','automation_job','2025-03-02T12:00Z'),
@@ -80,6 +80,8 @@ before(async () => {
    '{"evidence_ref":"local-mail:example-${n}","email_date":"2025-03-01"}','ingest_email','2025-03-02T06:00Z','partner_one');`);
 	}
 	await db.query(`begin; select set_config('engine.job','old_system',true);
+ update commission_payment set invoiced_on = null where id in ('${id(110)}','${id(111)}');
+ update public.commission set invoiced_on = null where id in ('${id(110)}','${id(111)}');
  insert into public.event (id,actor_id,verb,subject_type,subject_id,field,old_value,new_value,cause,occurred_at) values
  ('${id(4010)}','${id(3)}','update-deal','deal','${id(10)}','phase','{"phase":"closed"}','{"phase":"closed"}','automation_job','2025-03-04'),
  ('${id(5010)}','${id(3)}','update-deal','deal','${id(10)}','invoiced_on','{"invoiced_on":"2025-03-01"}','{"invoiced_on":"2025-03-01"}','automation_job','2025-03-04');

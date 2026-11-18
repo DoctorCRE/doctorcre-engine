@@ -32,6 +32,7 @@ cross join lateral (values
  ('invoiced_on', null, 'status_disagrees_with_dates', c.status = 'invoiced' and c.invoiced_on is null),
  ('received_on', c.received_on::text, 'status_disagrees_with_dates', c.status = 'invoiced' and c.received_on is not null),
  ('received_on', null, 'received_without_date', c.status = 'received' and c.received_on is null),
+ ('invoiced_on', null, 'receipt_without_invoice_date', c.status = 'received' and c.received_on is not null and c.invoiced_on is null),
  ('due_on', concat_ws(' ', c.invoiced_on, c.due_on), 'dates_out_of_order', c.status <> 'expected' and c.due_on < c.invoiced_on),
  ('received_on', concat_ws(' ', c.invoiced_on, c.received_on), 'dates_out_of_order',
   c.status <> 'expected' and c.received_on < c.invoiced_on),

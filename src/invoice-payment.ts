@@ -10,10 +10,8 @@ import { latestChange } from "./seen-change.ts";
 const receipt = {
 	idempotency_key: isUuid,
 	commission_id: isUuid,
-	base_version: (value: unknown): value is number =>
-		isChangeId(value) && value > 0,
-	received_on: (value: unknown): value is string =>
-		isCalendarDate(value) && !value.startsWith("0000-"),
+	base_version: isChangeId,
+	received_on: isCalendarDate,
 };
 
 export const invoicePayment = new Hono<NextSaveEnv>().post(

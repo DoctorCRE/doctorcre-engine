@@ -50,6 +50,8 @@ const HINTS = {
 	version_conflict: "Re-read the record and ask the human before retrying.",
 	invoice_not_found: "Choose an invoice with a commission payment.",
 	invoice_not_unpaid: "Choose an invoiced payment that is still unpaid.",
+	invoice_already_paid:
+		"This invoice cannot be undone because its payment was marked paid.",
 	payment_date_out_of_range: "Use a date from the invoice date through today.",
 	old_system_required:
 		"The engine does not finish this save. Send it to the old system unchanged.",

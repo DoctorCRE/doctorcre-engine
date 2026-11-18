@@ -154,6 +154,7 @@ test("Mark paid refuses stale, ineligible and bad-dated payments", async () => {
 		received_on: receivedOn,
 	};
 	const cases = [
+		[{ base_version: 0 }, 409, "version_conflict"],
 		[{ base_version: before.base_version - 1 }, 409, "version_conflict"],
 		[
 			{ commission_id: undated, base_version: other.base_version },
@@ -162,6 +163,7 @@ test("Mark paid refuses stale, ineligible and bad-dated payments", async () => {
 		],
 		[{ commission_id: randomUUID() }, 404, "invoice_not_found"],
 		[{ received_on: "2020-03-31" }, 422, "payment_date_out_of_range"],
+		[{ received_on: "0000-01-01" }, 422, "payment_date_out_of_range"],
 		[{ received_on: "9999-01-01" }, 422, "payment_date_out_of_range"],
 		[{ received_on: "2020-02-30" }, 400, "invalid_field_value"],
 	] as const;
@@ -181,4 +183,55 @@ test("Mark paid refuses stale, ineligible and bad-dated payments", async () => {
 	assert.equal(jobStatus, 404);
 	assert.deepEqual(await trackerRow(dated), before);
 	assert.deepEqual(await trackerRow(undated), other);
+});
+
+test("only one Mark paid save can use a payment version", {
+	timeout: 10000,
+}, async (t) => {
+	const { dated } = await payments();
+	const { base_version } = await trackerRow(dated);
+	await db.query("begin");
+	await db.query("select id from commission_payment where id = $1 for update", [
+		dated,
+	]);
+	const markPaid = (received_on: string) =>
+		save(user, path, {
+			commission_id: dated,
+			base_version,
+			received_on,
+			idempotency_key: randomUUID(),
+		});
+	const pending = Promise.all([markPaid(receivedOn), markPaid("2020-04-03")]);
+	try {
+		// Hold both saves at the payment until each has reached the database lock.
+		let waiting = 0;
+		while (waiting < 2) {
+			t.signal.throwIfAborted();
+			await db.query("select pg_stat_clear_snapshot()");
+			const { rows } = await db.query<{
+				waiting: number;
+			}>(`select count(*)::int as waiting
+				from pg_stat_activity where datname = current_database()
+				and wait_event_type = 'Lock' and usename like 'door_%'`);
+			waiting = rows[0]?.waiting ?? 0;
+		}
+	} finally {
+		await db.query("rollback");
+		await pending;
+	}
+	const answers = await pending;
+	answers.sort(([first], [second]) => first - second);
+	assert.deepEqual(
+		answers.map(([status]) => status),
+		[200, 409],
+	);
+	const [[, saved], [, refusal]] = answers;
+	assert.partialDeepStrictEqual(refusal, {
+		error: "version_conflict",
+		current_version: saved.base_version,
+	});
+	assert.partialDeepStrictEqual(await trackerRow(dated), {
+		base_version: saved.base_version,
+		received_on: saved.received_on,
+	});
 });
