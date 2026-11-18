@@ -153,7 +153,7 @@ test("Home shows a sent draft once in Done at the recorded send time", async () 
 	]);
 });
 
-for (const item_id of [`suggestion:${id(30)}`, `reply_draft:${id(21)}`]) {
+for (const item_id of [`suggestion:${id(32)}`, `reply_draft:${id(21)}`]) {
 	test(`Home snoozes and undoes ${item_id.split(":")[0]} through its card version`, async () => {
 		const user = { user: "example" };
 		const card = async () =>
@@ -199,6 +199,49 @@ for (const item_id of [`suggestion:${id(30)}`, `reply_draft:${id(21)}`]) {
 			base_version: receipt.base_version,
 		});
 		assert.notEqual(receipt.base_version, original.base_version);
+		if (item_id === `reply_draft:${id(21)}`) {
+			const [settled, mark] = await save(user, "home/marks", {
+				idempotency_key: randomUUID(),
+				item_id,
+				base_version: receipt.base_version,
+				action: "settle",
+			});
+			assert.equal(settled, 200);
+			assert.partialDeepStrictEqual(await card(), {
+				section: "settled",
+				suggestions: [{ id: id(30) }, { id: id(31) }, { id: id(38) }],
+			});
+			assert.ok(
+				!(await inbox()).some(
+					(item) => item.item_id === `suggestion:${id(30)}`,
+				),
+			);
+			const priorities = await request(
+				user,
+				"home/mail-priorities",
+				{ method: "GET" },
+				{ HOME_INBOX_READ_SCHEMA: "next" },
+			);
+			assert.equal(priorities.status, 200);
+			const page: unknown = await priorities.json();
+			assert.ok(isArguments(page) && Array.isArray(page.items));
+			assert.ok(
+				!page.items
+					.filter(isArguments)
+					.some((row) => row.conversation_id === "Thread"),
+			);
+			assert.equal(
+				(
+					await save(user, "home/marks", {
+						idempotency_key: randomUUID(),
+						item_id,
+						base_version: mark.base_version,
+						action: "unsettle",
+					})
+				)[0],
+				200,
+			);
+		}
 	});
 }
 
@@ -276,15 +319,16 @@ test("Home groups pending suggestions from each email conversation or call and k
 	);
 	assert.deepEqual(
 		suggestions.flatMap((card) => card.merged_source_ids).sort(),
-		[30, 31, 32, 33, 34, 38].map(id),
+		[21, 30, 31, 32, 33, 34, 38].map(id),
 	);
 	assert.partialDeepStrictEqual(
-		suggestions.find((card) => card.proposal_id === id(30)),
+		suggestions.find((card) => card.reply_draft_id === id(21)),
 		{
 			source_type: "email_proposal",
 			open_url: `/deals?deal=${deal}`,
-			merged_source_ids: [id(30), id(31), id(38)],
-			source_activity: { kind: "email", id: id(10) },
+			merged_source_ids: [id(21), id(30), id(31), id(38)],
+			suggestions: [{ id: id(30) }, { id: id(31) }, { id: id(38) }],
+			source_activity: { kind: "email", id: id(11) },
 		},
 	);
 	assert.partialDeepStrictEqual(
@@ -364,11 +408,6 @@ test("An email suggestion names its sender and subject", async () => {
 	assert.equal(step?.title, "pat@example.test · Floor plan");
 });
 
-test("A grouped suggestion card uses the latest source email, even when an older email has the newest suggestion", async () => {
-	const group = (await inbox()).find((card) => card.proposal_id === id(30));
-	assert.equal(group?.title, "Pat Example · Floor plan");
-});
-
 test("Home opens each visible suggestion with its original evidence and proposed fields", async () => {
 	const read = (n: number, user = "example") =>
 		request({ user }, `proposals/${id(n)}`, { method: "GET" });
@@ -430,7 +469,7 @@ test("Mail priorities ranks inbound work once per Outlook conversation and opens
 	const thread = priorities.filter((row) => row.conversation_id === "Thread");
 	const cards = await inbox();
 	const matchingCard = cards.find(
-		(card) => card.item_id === `suggestion:${id(30)}`,
+		(card) => card.item_id === `reply_draft:${id(21)}`,
 	);
 	assert.ok(matchingCard);
 	assert.equal(thread.length, 1);
@@ -438,18 +477,18 @@ test("Mail priorities ranks inbound work once per Outlook conversation and opens
 		{
 			item_id: matchingCard.item_id,
 			base_version: matchingCard.base_version,
-			title: matchingCard.title,
+			title: "Pat Example · Floor plan",
 			sender: "Pat Example",
 			subject: "Floor plan",
-			kind: "next_step",
-			suggestion: "Send the plan",
-			proposal_id: id(30),
-			reply_draft_id: null,
+			kind: "reply_draft",
+			suggestion: "Review reply draft",
+			proposal_id: null,
+			reply_draft_id: id(21),
 			due_on: "2026-01-09",
 			source_activity: {
 				kind: "email",
-				id: id(10),
-				happened_at: "2026-01-02T00:00:00.000Z",
+				id: id(11),
+				happened_at: "2026-01-03T00:00:00.000Z",
 			},
 		},
 	]);
@@ -461,6 +500,112 @@ test("Mail priorities ranks inbound work once per Outlook conversation and opens
 			.filter(isArguments)
 			.filter((row) => row.conversation_id === "Thread"),
 		[{ item_id: `suggestion:${id(38)}`, proposal_id: id(38) }],
+	);
+});
+
+test("Home falls back to suggestions and keeps delivery feedback on their card", async () => {
+	const user = { user: "draft-reviewer" };
+	const reviewer = id(57);
+	const draft = id(58);
+	const declinedDraft = id(59);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Draft Reviewer');
+		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');
+		select set_config('engine.user_id', '${reviewer}', true);
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+			values ('${draft}', '${id(11)}', '${reviewer}', 'old_system', 'Floor plan', 'Here it is.', 'Please send the plan.'),
+				('${declinedDraft}', '${id(13)}', '${reviewer}', 'old_system', 'Floor plan', 'Here it is.', 'Please send the plan.');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, created_at)
+			values ('${id(60)}', 'possible_new_deal', '${id(10)}', 'email', 'Check the plan.', 'old_system', '2026-01-07'),
+				('${id(61)}', 'possible_new_deal', '${id(11)}', 'email', 'Review the suite.', 'old_system', '2026-01-06'),
+				('${id(62)}', 'possible_new_deal', '${id(13)}', 'email', 'Review the other suite.', 'old_system', '2026-01-06');
+		commit;`);
+	const cards = () => inbox(user.user);
+	const thread = async () =>
+		(await cards()).filter((card) =>
+			[draft, id(60)].includes(String(card.source_id)),
+		);
+	assert.partialDeepStrictEqual(await thread(), [
+		{
+			item_id: `reply_draft:${draft}`,
+			suggestions: [{ id: id(60) }, { id: id(61) }],
+		},
+	]);
+	assert.partialDeepStrictEqual(
+		(await cards()).filter((card) =>
+			[declinedDraft, id(62)].includes(String(card.source_id)),
+		),
+		[
+			{
+				item_id: `reply_draft:${declinedDraft}`,
+				suggestions: [{ id: id(62) }],
+			},
+		],
+	);
+	const [declined] = await save(
+		user,
+		`reply-drafts/${declinedDraft}/dismissal`,
+		{
+			idempotency_key: randomUUID(),
+			reason: "The example reply is no longer needed.",
+			version: 1,
+		},
+	);
+	assert.equal(declined, 200);
+	assert.ok(
+		(await cards()).some((card) => card.item_id === `suggestion:${id(62)}`),
+	);
+	const setDraft = (job: string, change: string) =>
+		db.query(`begin;
+		select set_config('engine.job', '${job}', true), set_config('engine.user_id', '${reviewer}', true);
+		update reply_draft set ${change} where id = '${draft}'; commit;`);
+	const approve =
+		"status = 'approved', failure_reason = null, to_address = 'pat@example.test', cc_address = 'copy@example.test'";
+	await setDraft("", approve);
+	assert.partialDeepStrictEqual(await thread(), [
+		{
+			item_id: `suggestion:${id(60)}`,
+			title: "Pat Example · Floor plan",
+			fallback_reply_draft: {
+				id: draft,
+				version: "2",
+				status: "approved",
+				failure_reason: null,
+			},
+			suggestions: [{ id: id(60) }, { id: id(61) }],
+		},
+	]);
+	await setDraft(
+		"old_system",
+		"status = 'failed', failure_reason = 'aborted_before_dispatch'",
+	);
+	assert.partialDeepStrictEqual(await thread(), [
+		{
+			item_id: `suggestion:${id(60)}`,
+			fallback_reply_draft: {
+				id: draft,
+				version: "2",
+				status: "failed",
+				failure_reason: "aborted_before_dispatch",
+			},
+		},
+	]);
+	await setDraft("", approve);
+	await setDraft(
+		"old_system",
+		"status = 'sent', sent_at = now(), sent_item_id = 'example-draft-sent'",
+	);
+	const sent = await thread();
+	assert.equal(sent.length, 2);
+	const suggestion = sent.find(
+		(card) => card.item_id === `suggestion:${id(60)}`,
+	);
+	assert.ok(suggestion && !("fallback_reply_draft" in suggestion));
+	assert.ok(
+		sent.some(
+			(card) => card.source_id === draft && card.source_state === "done",
+		),
 	);
 });
 

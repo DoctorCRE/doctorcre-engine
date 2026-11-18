@@ -13,8 +13,13 @@ type ReviewRow = {
 	open_url: string | null;
 };
 
+type DraftStatus = "pending" | "approved" | "failed" | "sent";
+
 type Draft = ReviewRow & {
-	status: "pending" | "approved" | "failed" | "sent";
+	status: DraftStatus;
+	mail_group: string;
+	member_ids: string[] | null;
+	suggestions: SuggestionReference[] | null;
 	sent_at: string | null;
 	failure_reason: string | null;
 	email_activity_id: string;
@@ -35,16 +40,25 @@ type SuggestionReference = {
 type Suggestion = ReviewRow &
 	Pick<SuggestionReference, "activity_id" | "activity_kind"> & {
 		due_on: string | null;
+		fallback_reply_draft: {
+			id: string;
+			version: string;
+			status: "approved" | "failed";
+			failure_reason: string | null;
+		} | null;
 		suggestions: SuggestionReference[];
 		member_ids: string[];
 	};
 
-function draftRows(userId: string, limit?: number, itemId?: string) {
-	return sql<Draft>`
+const mailGroup = sql`coalesce('conversation:' || e.conversation_id, 'email:' || e.activity_id)`;
+
+function draftRows(userId: string) {
+	return sql`
 		with drafts as (
 			select r.id, r.status, r.sent_at, r.failure_reason, r.revision::text as source_version,
 				(select coalesce(max(id), 0) from change where table_name = 'reply_draft'
-					and record = jsonb_build_object('id', r.id)) as source_change_id,
+					and record = jsonb_build_object('id', r.id)) as draft_change_id,
+				${mailGroup} as mail_group,
 				coalesce(r.sent_at, r.changed_at) as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
 				'Reply to ' || coalesce(nullif(btrim(e.sender_name), ''), e.sender::text) || ': ' || r.subject as title,
 				coalesce(d.name, nullif(btrim(e.sender_name), ''), e.sender::text) as context_label,
@@ -69,9 +83,6 @@ function draftRows(userId: string, limit?: number, itemId?: string) {
 			)
 		)
 		select * from drafts where position = 1
-			${itemId ? sql`and id = ${itemId} and status <> 'sent'` : sql``}
-		order by (status = 'sent'), activity_at desc, id
-		limit ${limit ?? null}
 	`;
 }
 
@@ -152,13 +163,8 @@ export async function readProposal(
 	return proposal ?? new Refusal(404, "not_found");
 }
 
-function suggestionRows(
-	userId: string,
-	limit?: number,
-	itemId?: string,
-	forMail = false,
-) {
-	return sql<Suggestion>`
+function suggestionRows(userId: string, forMail: boolean) {
+	return sql`
 		with visible as (
 			select p.id, p.status, p.activity_id, p.activity_kind, p.created_at as activity_at, p.due_on,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
@@ -183,6 +189,7 @@ function suggestionRows(
 				end as email_title,
 				a.happened_at as source_at,
 				e.conversation_id,
+				${mailGroup} as mail_group,
 				jsonb_build_object(
 					'id', p.id, 'kind', p.kind, 'activity_id', p.activity_id,
 					'activity_kind', p.activity_kind, 'deal_id', p.deal_id, 'party_id', p.party_id,
@@ -203,7 +210,7 @@ function suggestionRows(
 				coalesce(first_value(email_title) over latest_source, suggestion_title) as title,
 				first_value(activity_id) over latest_source as latest_activity_id,
 				row_number() over same_source as position,
-				max(proposal_version) over source_group as source_change_id,
+				max(proposal_version) over source_group as suggestion_change_id,
 				array_agg(id) over all_members as member_ids,
 				md5(string_agg(id::text, ':') filter (where status = 'pending') over all_members) as source_version,
 				jsonb_agg(${forMail ? sql`reference || jsonb_build_object('suggestion_title', suggestion_title, 'due_on', due_on)` : sql`reference`})
@@ -217,9 +224,45 @@ function suggestionRows(
 			all_members as (same_source rows between unbounded preceding and unbounded following)
 		)
 		select * from grouped where position = 1 and status = 'pending'
-			${itemId ? sql`and id = ${itemId}` : sql``}
-		order by activity_at desc, id
-		limit ${limit ?? null}
+	`;
+}
+
+function homeReviewGroups(userId: string, forMail = false) {
+	return sql`
+		with draft_groups as (${draftRows(userId)}),
+		suggestion_groups as (${suggestionRows(userId, forMail)}),
+		draft_cards as (
+			select d.*, greatest(d.draft_change_id, s.suggestion_change_id) as source_change_id,
+				s.suggestions, s.member_ids
+			from draft_groups d
+			left join suggestion_groups s on s.mail_group = d.mail_group and d.status <> 'sent'
+			where d.status in ('pending', 'sent') or s.id is null
+		), suggestion_cards as (
+			select s.*, greatest(s.suggestion_change_id, d.draft_change_id) as source_change_id,
+				case when d.id is not null then jsonb_build_object('id', d.id, 'version', d.source_version,
+					'status', d.status, 'failure_reason', d.failure_reason) end as fallback_reply_draft
+			from suggestion_groups s
+			left join draft_groups d on d.mail_group = s.mail_group and d.status <> 'sent'
+			where d.status is distinct from 'pending'
+		)
+	`;
+}
+
+function draftCards(userId: string, limit: number, itemId?: string) {
+	return sql<Draft>`
+		${homeReviewGroups(userId)}
+		select * from draft_cards
+		${itemId ? sql`where id = ${itemId} and status <> 'sent'` : sql``}
+		order by (status = 'sent'), activity_at desc, id limit ${limit}
+	`;
+}
+
+function suggestionCards(userId: string, limit: number, itemId?: string) {
+	return sql<Suggestion>`
+		${homeReviewGroups(userId)}
+		select * from suggestion_cards
+		${itemId ? sql`where id = ${itemId}` : sql``}
+		order by activity_at desc, id limit ${limit}
 	`;
 }
 
@@ -262,19 +305,30 @@ export async function lockHomeReview(
 	id: string,
 	userId: string,
 ) {
-	const group =
-		kind === "proposal"
-			? (await suggestionRows(userId, 1, id).execute(tx)).rows[0]
-			: undefined;
-	if (kind === "proposal" && !group) return;
-	await tx
-		.selectFrom(kind)
-		.select("id")
-		.where("id", "in", group?.member_ids ?? [id])
-		.orderBy("id")
-		.forNoKeyUpdate()
-		.execute();
-	const query = kind === "proposal" ? suggestionRows : draftRows;
+	const query = kind === "reply_draft" ? draftCards : suggestionCards;
+	const {
+		rows: [group],
+	} = await query(userId, 1, id).execute(tx);
+	if (!group) return;
+	const draftId =
+		"fallback_reply_draft" in group ? group.fallback_reply_draft?.id : group.id;
+	if (draftId) {
+		await tx
+			.selectFrom("reply_draft")
+			.select("id")
+			.where("id", "=", draftId)
+			.forNoKeyUpdate()
+			.execute();
+	}
+	if (group.member_ids) {
+		await tx
+			.selectFrom("proposal")
+			.select("id")
+			.where("id", "in", group.member_ids)
+			.orderBy("id")
+			.forNoKeyUpdate()
+			.execute();
+	}
 	const {
 		rows: [card],
 	} = await markedReviews<ReviewRow>(
@@ -339,12 +393,12 @@ export async function readHomeReviewCards(
 	limit: number,
 ) {
 	const drafts = await markedReviews(
-		draftRows(userId, limit),
+		draftCards(userId, limit),
 		userId,
 		"reply_draft",
 	).execute(db);
 	const suggestions = await markedReviews(
-		suggestionRows(userId, limit),
+		suggestionCards(userId, limit),
 		userId,
 		"proposal",
 	).execute(db);
@@ -366,7 +420,11 @@ export async function readHomeReviewCards(
 			kind_label: "Reply draft",
 			deal_id: null,
 			due_on: null,
-			merged_source_ids: [draft.id],
+			merged_source_ids: [
+				draft.id,
+				...(draft.suggestions?.map(({ id }) => id) ?? []),
+			],
+			...(draft.suggestions && { suggestions: draft.suggestions }),
 			reply_draft_id: draft.id,
 			reply_draft_status: draft.status,
 			failure_reason: draft.failure_reason,
@@ -394,6 +452,9 @@ export async function readHomeReviewCards(
 				proposal_id: suggestion.id,
 				merged_source_ids: suggestion.suggestions.map(({ id }) => id),
 				suggestions: suggestion.suggestions,
+				...(suggestion.fallback_reply_draft && {
+					fallback_reply_draft: suggestion.fallback_reply_draft,
+				}),
 				source_activity: suggestion.activity_id
 					? { kind: suggestion.activity_kind, id: suggestion.activity_id }
 					: null,
@@ -407,8 +468,8 @@ type MailPriority = {
 	base_version: string;
 	suggestion: string;
 	due_on: string | null;
-	activity_id: string;
-	happened_at: string;
+	review_activity_id: string;
+	review_happened_at: string;
 	conversation_id: string | null;
 	sender: string;
 	subject: string;
@@ -427,29 +488,44 @@ export async function readHomeMailPriorities(
 ) {
 	const limit = 25;
 	const suggestions = markedReviews(
-		suggestionRows(userId, undefined, undefined, true),
+		sql<Suggestion>`select * from suggestion_cards`,
 		userId,
 		"proposal",
 	);
-	const drafts = markedReviews(draftRows(userId), userId, "reply_draft");
+	const drafts = markedReviews(
+		sql<Draft>`select * from draft_cards`,
+		userId,
+		"reply_draft",
+	);
 	const { rows } = await sql<MailPriority>`
-		with cards as (
-			select 'suggestion:' || card.id as item_id,
-				card.source_change_id, card.mark_version,
-				card.latest_activity_id as title_activity_id, ref.id as proposal_id, null::uuid as reply_draft_id,
-				ref.kind, ref.activity_id, ref.due_on, ref.suggestion_title as suggestion
-			from (${suggestions}) card
+		${homeReviewGroups(userId, true)}, marked_drafts as (${drafts}),
+		cards as (
+			select case when draft.id is not null then 'reply_draft:' || draft.id
+					else 'suggestion:' || card.id end as item_id,
+				coalesce(draft.source_change_id, standalone.source_change_id) as source_change_id,
+				case when draft.id is not null then draft.mark_version else standalone.mark_version end as mark_version,
+				coalesce(draft.email_activity_id, card.latest_activity_id) as title_activity_id,
+				case when draft.id is null then ref.id end as proposal_id, draft.id as reply_draft_id,
+				case when draft.id is not null then 'reply_draft' else ref.kind end as kind,
+				ref.activity_id, coalesce(draft.email_activity_id, ref.activity_id) as review_activity_id,
+				ref.due_on,
+				case when draft.id is not null then 'Review reply draft' else ref.suggestion_title end as suggestion
+			from suggestion_groups card
+			left join marked_drafts draft on draft.mail_group = card.mail_group and draft.status = 'pending'
+			left join (${suggestions}) standalone on standalone.id = card.id
 			cross join lateral jsonb_to_recordset(card.suggestions)
 				ref(id uuid, kind text, activity_id uuid, due_on date, suggestion_title text)
-			where card.activity_kind = 'email' and not card.settled and card.snoozed_until is null
+			where card.activity_kind = 'email'
+				and case when draft.id is not null then not draft.settled and draft.snoozed_until is null
+					else not standalone.settled and standalone.snoozed_until is null end
 				and ref.kind in ('next_step', 'file_to_deal', 'possible_new_deal', 'phase_move')
 			union all
 			select 'reply_draft:' || card.id, card.source_change_id, card.mark_version,
-				card.email_activity_id, null, card.id, 'reply_draft', card.email_activity_id, null, 'Review reply draft'
-			from (${drafts}) card
+				card.email_activity_id, null, card.id, 'reply_draft', card.email_activity_id, card.email_activity_id, null, 'Review reply draft'
+			from marked_drafts card
 			where card.status = 'pending' and not card.settled and card.snoozed_until is null
 		), ranked as (
-			select cards.*, e.conversation_id, a.happened_at,
+			select cards.*, e.conversation_id, a.happened_at, review.happened_at as review_happened_at,
 				coalesce(nullif(btrim(title_email.sender_name), ''), title_email.sender::text) as sender,
 				coalesce(nullif(btrim(title_email.subject), ''), 'No subject') as subject,
 				row_number() over (
@@ -460,13 +536,14 @@ export async function readHomeMailPriorities(
 			join email e on e.activity_id = cards.activity_id
 			join email title_email on title_email.activity_id = cards.title_activity_id
 			join activity a on a.id = e.activity_id
+			join activity review on review.id = cards.review_activity_id
 			where not exists (
 				select from party_email pe join app_user u on u.id = pe.party_id where pe.address = e.sender
 			)
 		)
 		select item_id, source_change_id || ':' || coalesce(mark_version, 0) || ':inbox' as base_version,
-			proposal_id, reply_draft_id, kind, suggestion, due_on, activity_id, happened_at,
-			conversation_id, sender, subject
+			proposal_id, reply_draft_id, kind, suggestion, due_on,
+			conversation_id, sender, subject, review_activity_id, review_happened_at
 		from ranked where position = 1
 		order by due_on nulls last, happened_at, item_id
 		limit ${limit + 1}
@@ -476,17 +553,25 @@ export async function readHomeMailPriorities(
 		schema_version: "home-mail-priorities.v1",
 		items: rows
 			.slice(0, limit)
-			.map(({ activity_id, happened_at, sender, subject, ...row }) => ({
-				...row,
-				title: `${sender} · ${subject}`,
-				sender,
-				subject,
-				source_activity: {
-					kind: "email",
-					id: activity_id,
-					happened_at: new Date(happened_at).toISOString(),
-				},
-			})),
+			.map(
+				({
+					review_activity_id,
+					review_happened_at,
+					sender,
+					subject,
+					...row
+				}) => ({
+					...row,
+					title: `${sender} · ${subject}`,
+					sender,
+					subject,
+					source_activity: {
+						kind: "email",
+						id: review_activity_id,
+						happened_at: new Date(review_happened_at).toISOString(),
+					},
+				}),
+			),
 		more: rows.length > limit,
 	};
 }
