@@ -127,6 +127,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | What each old program can start on                       | § "What can start when this merges"                                                                                                 |
 | Invoice capture, application and payment                 | § "Invoice email capture and list"; § "Invoice application"; § "Mark paid"                                                          |
 | Deals reads, their switch and cutover needs              | § "Deals reads for the app"                                                                                                         |
+| Deal page people and company search                      | § "People and company search for the deal page"                                                                                     |
 | Owner decisions the doors raised                         | § "Owner decisions"                                                                                                                 |
 | Home screen                                              | `docs/screens/home-inbox.md`                                                                                                        |
 | Deals screen                                             | `docs/screens/deals.md`                                                                                                             |

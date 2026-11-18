@@ -1308,6 +1308,14 @@ The app still needs its remaining save and live refresh paths (app #953 onward),
 
 The app does not display premises or offer-round summaries. Deal links use the UUIDs kept by the copy, so missing legacy deal references are invisible. Pass D kept the overall board count but placed person clients' national-account deals under Team. The brand copy now includes their dated memberships (#653, #697). The board places each deal under the client's current national account once that membership is copied. The account list uses the national accounts admitted by the copy, which excludes old prospect clients.
 
+### People and company search for the deal page
+
+`GET /api/engine/parties/search` uses the signed-in partner's session and reads through `DATABASE` as `engine_reader`. It takes one `query` of 1 to 100 characters and an optional `kind` of `person` or `company`. The read trims the query and matches a literal name prefix without regard to case.
+
+The response is `200 { ok: true, schema_version: "party-search.v1", parties }`. Each result carries `id`, `display_name`, and `kind`. The read returns the first 25 matches in case-insensitive name order, with ties ordered by ID. With no `kind`, the list can contain both people and companies. The Market agent picker will send `kind=person` so the limit applies to matching people. The list includes live parties, including do-not-contact records, and excludes merged-away duplicates.
+
+No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values and invalid or repeated kinds return 400. Session and database refusals use the shared read rules. The app routes the picker to this door in a separate change.
+
 ## Home inbox reads for the app
 
 Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's work and marks. With the variable unset, the route returns 404 and the app still calls CARR.
