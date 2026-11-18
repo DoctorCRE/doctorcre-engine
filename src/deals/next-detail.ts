@@ -1,6 +1,7 @@
 import { type Expression, sql, type Transaction } from "kysely";
-import { jsonArrayFrom } from "kysely/helpers/postgres";
+import { jsonArrayFrom, jsonBuildObject } from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
+import { pendingProposals } from "../pending-proposals.ts";
 import { asText } from "../reader.ts";
 import { selectNextDeals } from "./next-board.ts";
 
@@ -52,10 +53,10 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				select id, kind, due_on, note, source, case when status = 'done' then 'cleared' else status end as status
 				from critical_date where deal_id = d.id
 			) cd)`.as("critical_dates"),
-			sql`(select coalesce(json_agg(doc order by prepared_at desc, id), '[]') from (
-				select id, name, kind, note, created_at as prepared_at
-				from document where deal_id = d.id order by created_at desc, id limit 20
-			) doc)`.as("documents"),
+			jsonArrayFrom(documentsOf(db, eb.ref("d.id"))).as("documents"),
+			jsonArrayFrom(emailFollowUpsOf(db, eb.ref("d.id"))).as(
+				"email_follow_ups",
+			),
 			sql`(select row_to_json(lease) from (
 				select id, version, executed_on, commencement_on, expiration_on, 'current' as status
 				from current_lease where deal_id = d.id
@@ -110,6 +111,65 @@ function dealEditValue(column: "c.old_value" | "c.new_value") {
 		else ${value} -> edit.key
 	end`;
 }
+
+const documentsOf = (db: Transaction<DB>, deal: Expression<string>) =>
+	db
+		.selectFrom("document")
+		.select((eb) => [
+			"id",
+			"name",
+			"kind",
+			"note",
+			"version",
+			eb.cast<number | null>("bytes", "double precision").as("bytes"),
+			"content_type",
+			asText(eb.ref("created_at")).as("prepared_at"),
+		])
+		.where("deal_id", "=", deal)
+		.orderBy("created_at", "desc")
+		.orderBy("id");
+
+const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
+	pendingProposals(db)
+		.innerJoin("email as e", "e.activity_id", "p.activity_id")
+		.innerJoin("activity as a", "a.id", "e.activity_id")
+		.select((eb) => [
+			"p.id as proposal_id",
+			"p.kind",
+			"p.deal_id",
+			"p.evidence",
+			"p.what",
+			"p.owner_party_id",
+			asText(eb.ref("p.due_on")).as("due_on"),
+			"p.from_phase",
+			"p.to_phase",
+			jsonBuildObject({
+				activity_id: eb.ref("e.activity_id"),
+				sender: eb.ref("e.sender"),
+				sender_name: eb.ref("e.sender_name"),
+				subject: eb.ref("e.subject"),
+				happened_at: asText(eb.ref("a.happened_at")),
+				summary: eb.ref("a.summary"),
+			}).as("email"),
+		])
+		.where("p.deal_id", "=", deal)
+		.where("p.activity_kind", "=", "email")
+		.where((eb) =>
+			eb.or([
+				eb("p.kind", "<>", "file_to_deal"),
+				eb.not(
+					eb.exists(
+						eb
+							.selectFrom("activity_about as ab")
+							.select("ab.activity_id")
+							.whereRef("ab.activity_id", "=", "p.activity_id")
+							.whereRef("ab.deal_id", "=", "p.deal_id"),
+					),
+				),
+			]),
+		)
+		.orderBy("p.created_at", "desc")
+		.orderBy("p.id");
 
 const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db
