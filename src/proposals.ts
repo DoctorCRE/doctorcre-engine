@@ -405,7 +405,11 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								tx,
 								{ ...p, owner_party_id: owner },
 								async () => {
-									if (p.deal_id && p.activity_kind === "call")
+									if (
+										p.deal_id &&
+										(p.activity_kind === "call" ||
+											p.activity_kind === "meeting")
+									)
 										await cancelCurrentStep(tx, p.deal_id, owner);
 									if (ownerEdit)
 										await sql`select set_config('engine.proposal_step_owner', ${ownerEdit}, true)`.execute(

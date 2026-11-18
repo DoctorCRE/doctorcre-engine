@@ -17,7 +17,12 @@ const ALEX = id(1),
 	CROSSED = id(9),
 	NO_PHASE = id(10),
 	SUGGESTED = id(11),
-	EDITED_OWNER = id(12);
+	EDITED_OWNER = id(12),
+	BACKDATED = id(13),
+	MEETING = id(14),
+	MEETING_DEAL = id(15),
+	EMAIL = id(16),
+	EMAIL_DEAL = id(17);
 const job = { job: "call_capture", for_user: "alex" };
 
 before(async () => {
@@ -30,11 +35,18 @@ before(async () => {
 		insert into deal (id, name, owner_user_id)
 		select id, 'Example Deal', '${ALEX}'
 		from unnest(array['${AUTOMATIC}', '${REVIEW}', '${STEPS}', '${EARLY}', '${FUTURE}', '${CROSSED}',
-			'${NO_PHASE}', '${SUGGESTED}', '${EDITED_OWNER}']::uuid[]) as fixture(id);
+			'${NO_PHASE}', '${SUGGESTED}', '${EDITED_OWNER}', '${BACKDATED}', '${MEETING_DEAL}', '${EMAIL_DEAL}']::uuid[]) as fixture(id);
 		insert into deal_phase_change (deal_id, phase, happened_at)
 		select id, 'research', '2026-01-05T15:00:00Z' from deal where id <> '${NO_PHASE}';
 		insert into activity (id, kind, happened_at) values ('${CALL}', 'call', '2026-01-07T15:00:00Z');
 		insert into activity_about (activity_id, deal_id) select '${CALL}', id from deal;
+		insert into activity (id, kind, happened_at) values ('${MEETING}', 'meeting', '2026-01-07T15:00:00Z');
+		insert into activity_about (activity_id, deal_id) values ('${MEETING}', '${MEETING_DEAL}');
+		insert into activity (id, kind, happened_at) values ('${EMAIL}', 'email', '2026-01-07T15:00:00Z');
+		insert into activity_about (activity_id, deal_id) values ('${EMAIL}', '${EMAIL_DEAL}');
+		insert into email (activity_id, message_id, sender, subject, body)
+		values ('${EMAIL}', 'example-step@example.test', 'clinic@example.test', 'Example tour', 'Send available times.');
+		insert into email_mailbox (activity_id, user_id) values ('${EMAIL}', '${ALEX}');
 		commit;`);
 });
 after(cleanup);
@@ -58,7 +70,8 @@ const decide = (id: unknown) =>
 test("a registered job reads a deal and uses the answer to save a phase move", async () => {
 	const [status, deal] = await read(AUTOMATIC);
 	const { rows } = await db.query(
-		"select max(id) as id from change where table_name = 'deal' and record = jsonb_build_object('id', $1::uuid)",
+		`select (select max(id) from change where table_name = 'deal' and record = jsonb_build_object('id', $1::uuid)) as id,
+			to_jsonb(changed_at) #>> '{}' as phase_saved_at from deal_phase_change where deal_id = $1`,
 		[AUTOMATIC],
 	);
 	assert.equal(status, 200);
@@ -66,7 +79,7 @@ test("a registered job reads a deal and uses the answer to save a phase move", a
 	assert.deepEqual(deal, {
 		deal_id: AUTOMATIC,
 		phase: "research",
-		phase_changed_at: "2026-01-05T15:00:00+00:00",
+		phase_saved_at: rows[0].phase_saved_at,
 		change_id: Number(rows[0].id),
 		next_step: null,
 	});
@@ -76,17 +89,43 @@ test("a registered job reads a deal and uses the answer to save a phase move", a
 	});
 	assert.deepEqual([denied, refusal.error], [403, "unknown_job"]);
 	assert.equal((await read(randomUUID()))[0], 404);
-	const [saved, moved] = await post(`deals/${AUTOMATIC}/changes`, {
+	const [saved] = await post(`deals/${AUTOMATIC}/changes`, {
 		seen_change_id: deal.change_id,
 		phase: { from: deal.phase, to: "legal" },
 	});
 	assert.equal(saved, 200);
 	const [, latest] = await read(AUTOMATIC);
 	assert.equal(latest.phase, "legal");
-	assert.equal(latest.phase_changed_at, moved.phase_changed_at);
 	const [, noPhase] = await read(NO_PHASE);
 	assert.equal(noPhase.phase, null);
-	assert.equal(noPhase.phase_changed_at, null);
+	assert.equal(noPhase.phase_saved_at, null);
+});
+
+test("a backdated phase move reports when the partner saved it", async () => {
+	const [, before] = await read(BACKDATED);
+	const [saved, moved] = await save(
+		{ user: "alex" },
+		`deals/${BACKDATED}/changes`,
+		{
+			idempotency_key: randomUUID(),
+			seen_change_id: before.change_id,
+			phase: { from: "research", to: "legal", on: "2026-01-06" },
+		},
+	);
+	assert.equal(saved, 200, JSON.stringify(moved));
+	assert.equal(moved.phase_changed_at, "2026-01-06T06:00:00+00:00");
+	const {
+		rows: [phase],
+	} = await db.query(
+		`select to_jsonb(changed_at) #>> '{}' as saved_at, changed_at > happened_at as backdated
+		from deal_phase_change where deal_id = $1 and phase = 'legal'`,
+		[BACKDATED],
+	);
+	assert.equal(phase.backdated, true);
+	const [status, deal] = await read(BACKDATED);
+	assert.equal(status, 200);
+	assert.equal(deal.phase, "legal");
+	assert.equal(deal.phase_saved_at, phase.saved_at);
 });
 
 test("a call's stated phase and date survive acceptance without an email milestone quote", async () => {
@@ -170,16 +209,33 @@ test("call capture can assign a suggested next step by user slug", async () => {
 	assert.deepEqual(rows, [{ owner_party_id: BLAIR }]);
 });
 
-for (const { deal, edits, owner, otherOwner } of [
-	{ deal: SUGGESTED, edits: undefined, owner: ALEX, otherOwner: BLAIR },
+for (const { kind, activity, deal, edits, owner, otherOwner } of [
 	{
+		kind: "call",
+		activity: CALL,
+		deal: SUGGESTED,
+		edits: undefined,
+		owner: ALEX,
+		otherOwner: BLAIR,
+	},
+	{
+		kind: "call",
+		activity: CALL,
 		deal: EDITED_OWNER,
 		edits: { owner_party_id: BLAIR },
 		owner: BLAIR,
 		otherOwner: ALEX,
 	},
+	{
+		kind: "meeting",
+		activity: MEETING,
+		deal: MEETING_DEAL,
+		edits: undefined,
+		owner: ALEX,
+		otherOwner: BLAIR,
+	},
 ]) {
-	test(`accepting a call suggestion replaces the ${edits ? "edited owner's" : "accepting partner's"} open step`, async () => {
+	test(`accepting a ${kind} suggestion replaces the ${edits ? "edited owner's" : "accepting partner's"} open step`, async () => {
 		const [oldStatus, old] = await post("next-steps", {
 			deal_id: deal,
 			what: "Call the example office",
@@ -196,6 +252,7 @@ for (const { deal, edits, owner, otherOwner } of [
 		assert.equal(otherStatus, 201);
 		const [stored, proposal] = await propose({
 			kind: "next_step",
+			activity_id: activity,
 			deal_id: deal,
 			what: "Send the example plan",
 			...(edits && { owner: "alex" }),
@@ -234,6 +291,36 @@ for (const { deal, edits, owner, otherOwner } of [
 		});
 	});
 }
+
+test("an email suggestion cannot replace the owner's open deal step", async () => {
+	const [created, existing] = await post("next-steps", {
+		deal_id: EMAIL_DEAL,
+		what: "Call the clinic",
+	});
+	assert.equal(created, 201);
+	const [stored, proposal] = await save(
+		{ job: "mail_capture", for_user: "alex" },
+		"proposals",
+		{
+			idempotency_key: randomUUID(),
+			activity_id: EMAIL,
+			kind: "next_step",
+			deal_id: EMAIL_DEAL,
+			what: "Send available times",
+			evidence: "Send available times.",
+		},
+	);
+	assert.equal(stored, 201);
+	const [status, conflict] = await decide(proposal.proposal_id);
+	assert.deepEqual(
+		[status, conflict.error, conflict.next_step_id],
+		[409, "open_step_exists", existing.next_step_id],
+	);
+	const { rows } = await db.query("select status from proposal where id = $1", [
+		proposal.proposal_id,
+	]);
+	assert.deepEqual(rows, [{ status: "pending" }]);
+});
 
 test("replacement cancels the saving owner's ordinary step and clears an omitted date", async () => {
 	const args = { deal_id: STEPS, what: "Call the example office" };
