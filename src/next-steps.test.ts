@@ -19,6 +19,7 @@ const OLD_ROLES = [
 	{ kind: "client", id: id(21), party_id: id(31) },
 	{ kind: "vendor", id: id(22), party_id: id(32) },
 ] as const;
+const OTHER_SOURCE_VENDOR_ID = id(23);
 const ITEM = {
 	title: "Example plan sent",
 	bullets: ["First example point"],
@@ -53,6 +54,8 @@ before(async () => {
 			insert into outside_id (source, value, party_id)
 			values ('old_system', '${id}', '${party_id}');`,
 		).join("")}
+		insert into outside_id (source, value, party_id)
+		values ('other_source', '${OTHER_SOURCE_VENDOR_ID}', '${OLD_ROLES[2].party_id}');
 		commit;`);
 });
 after(cleanup);
@@ -269,7 +272,7 @@ for (const { kind, id, party_id } of OLD_ROLES) {
 	});
 }
 
-async function oldRoleRefusal(old_role: object, expected: [number, string]) {
+async function assertOldRoleNotFound(old_role: object) {
 	const agent = { job: "agent", for_user: "blair" };
 	for (const path of ["next-steps", "next-steps/complete"]) {
 		const [status, answer] = await save(agent, path, {
@@ -277,31 +280,17 @@ async function oldRoleRefusal(old_role: object, expected: [number, string]) {
 			old_role,
 			...(path === "next-steps" && { what: "Send the floor plan" }),
 		});
-		assert.deepEqual([status, answer.error], expected);
+		assert.deepEqual([status, answer.error], [404, "old_role_not_found"]);
 	}
 }
 
 test("an unknown old role ID or a mismatched kind is refused", async () => {
-	const expected: [number, string] = [404, "old_role_not_found"];
-	await oldRoleRefusal({ kind: "vendor", id: OLD_ROLES[2].party_id }, expected);
-	await oldRoleRefusal({ kind: "vendor", id: OLD_ROLES[0].id }, expected);
+	await assertOldRoleNotFound({ kind: "vendor", id: OLD_ROLES[2].party_id });
+	await assertOldRoleNotFound({ kind: "vendor", id: OLD_ROLES[0].id });
 });
 
-test("an old role ID mapped to two parties is refused even if only one has the role", async () => {
-	const { kind, id } = OLD_ROLES[2];
-	// The primary key normally prevents this state. Exercise the refusal with a damaged map.
-	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		alter table outside_id drop constraint outside_id_pkey;
-		insert into outside_id (source, value, party_id)
-		values ('old_system', '${id}', '${OLD_ROLES[0].party_id}'); commit;`);
-	try {
-		await oldRoleRefusal({ kind, id }, [409, "old_role_ambiguous"]);
-	} finally {
-		await db.query(`begin; select set_config('engine.job', 'old_system', true);
-			delete from outside_id
-			where source = 'old_system' and value = '${id}' and party_id = '${OLD_ROLES[0].party_id}';
-			alter table outside_id add primary key (source, value); commit;`);
-	}
+test("a vendor ID from another source is refused as an old role ID", async () => {
+	await assertOldRoleNotFound({ kind: "vendor", id: OTHER_SOURCE_VENDOR_ID });
 });
 
 test("a partner's checklist item lands once on its deal, stamped with the partner", async () => {

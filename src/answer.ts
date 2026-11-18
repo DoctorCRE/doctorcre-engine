@@ -60,7 +60,6 @@ const HINTS = {
 	step_open: "The step is already open.",
 	no_open_step: "You have no open next step on this record.",
 	old_role_not_found: "No copied party matches this old role ID and kind.",
-	old_role_ambiguous: "This old role ID maps to more than one party.",
 	automatic_resolution_changed: "Refresh Home before undoing this completion.",
 	open_step_exists: "This owner already has an open next step on this record.",
 	about_nothing:

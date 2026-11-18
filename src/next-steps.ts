@@ -142,26 +142,18 @@ async function resolveOldRole(
 		throw new SaveRefusal(
 			new Refusal(400, "invalid_field_value", { fields: ["old_role"] }),
 		);
-	const [match, another] = await tx
+	const match = await tx
 		.selectFrom("outside_id as o")
-		.select("o.party_id")
-		.select(({ exists, selectFrom }) =>
-			exists(
-				selectFrom("party_role as r")
-					.select("r.party_id")
-					.whereRef("r.party_id", "=", "o.party_id")
-					.where("r.role", "=", old_role.kind),
-			).as("has_role"),
+		.innerJoin("party_role as r", (join) =>
+			join
+				.onRef("r.party_id", "=", "o.party_id")
+				.on("r.role", "=", old_role.kind),
 		)
+		.select("r.party_id")
 		.where("o.source", "=", "old_system")
 		.where("o.value", "=", old_role.id.toLowerCase())
-		.where("o.party_id", "is not", null)
-		.distinct()
-		.limit(2)
-		.execute();
-	if (another) throw new SaveRefusal(new Refusal(409, "old_role_ambiguous"));
-	if (!match?.party_id || !match.has_role)
-		throw new SaveRefusal(new Refusal(404, "old_role_not_found"));
+		.executeTakeFirst();
+	if (!match) throw new SaveRefusal(new Refusal(404, "old_role_not_found"));
 	return match.party_id;
 }
 
