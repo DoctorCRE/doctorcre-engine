@@ -4,6 +4,7 @@ select set_config('engine.job', 'old_system', true), set_config('engine.user_id'
 alter table activity disable trigger stamp_change;
 alter table activity_about disable trigger stamp_change;
 alter table email disable trigger stamp_change;
+alter table email_mailbox disable trigger stamp_change;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 create temp table validated_email_evidence (
  old_id uuid primary key, sender email_address not null, subject_start integer not null check (subject_start > 0),
@@ -123,10 +124,11 @@ from email_group g join ready_email using (email_id) join old_link l on l.id = g
 where g.live and (l.deal_id is not null or l.party_id is not null)
 order by g.email_id, l.deal_id, l.party_id, g.recorded_at, g.id
 on conflict do nothing;
-insert into email_mailbox (activity_id, user_id)
-select g.email_id, m.user_id
+insert into email_mailbox (activity_id, user_id, changed_by_job, changed_at)
+select g.email_id, m.user_id, 'old_system', min(g.recorded_at)
 from email_group g join ready_email using (email_id) join copy_email_mailboxes() m on m.activity_id = g.id
 where g.live
+group by g.email_id, m.user_id
 on conflict do nothing;
 insert into not_copied
 select id, 'mailbox', null, 'mailbox_unknown' from ready_email e
@@ -141,4 +143,5 @@ set constraints all immediate;
 alter table activity enable trigger stamp_change;
 alter table activity_about enable trigger stamp_change;
 alter table email enable trigger stamp_change;
+alter table email_mailbox enable trigger stamp_change;
 select * from not_copied order by old_id, field, value, reason;

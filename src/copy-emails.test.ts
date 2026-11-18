@@ -44,6 +44,7 @@ type Mail = {
 	n: number;
 	kind: string;
 	time: string;
+	recordedAt?: string;
 	summary: string;
 	detail?: string;
 	link: [field: string, record: number];
@@ -68,8 +69,8 @@ const messages: [n: number, account: string, header: string][] = [
 // biome-ignore format: one old row per line
 const mail: Mail[] = [
 	{ n: 40, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: deal, context: context(DOCTOR, "Example tour", ', "conversation_id": "   "'), email: 90 },
-	{ n: 41, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: ["client_id", 20], context: context(DOCTOR, "Example tour"), email: 90 },
-	{ n: 42, kind: "email_in", time: "10:00", summary: "Email from doctor: Example tour", detail: "Example preview", link: ["lead_id", 21], context: context(DOCTOR, "Example tour", ', "conversation_id": "Tour-Thread="'), email: 91 },
+	{ n: 41, kind: "email_in", time: "10:00", recordedAt: "2024-02-03", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: ["client_id", 20], context: context(DOCTOR, "Example tour"), email: 90 },
+	{ n: 42, kind: "email_in", time: "10:00", recordedAt: "2024-02-02", summary: "Email from doctor: Example tour", detail: "Example preview", link: ["lead_id", 21], context: context(DOCTOR, "Example tour", ', "conversation_id": "Tour-Thread="'), email: 91 },
 	{ n: 52, kind: "email_in", time: "10:00", summary: "Email from doctor: Example tour", link: deal, context: context(DOCTOR, "Example tour") },
 	{ n: 43, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", detail: "Example short", link: deal, source, email: 94 },
 	{ n: 44, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", detail: "Example short", link: ["lead_id", 21], source, email: 94 },
@@ -115,7 +116,7 @@ const offerWithId: Mail = {
 const insert = (m: Mail) =>
 	`insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, detail,
   email_context, email_source, email_identity, email_id, ${m.link[0]})
- values ('${id(m.n)}', '${m.kind}', '2024-01-02 ${m.time}Z', '2024-02-01', '2024-03-01', '${id(3)}', '${m.summary}',
+ values ('${id(m.n)}', '${m.kind}', '2024-01-02 ${m.time}Z', '${m.recordedAt ?? "2024-02-01"}', '2024-03-01', '${id(3)}', '${m.summary}',
   ${m.detail ? `'${m.detail}'` : "null"}, ${m.context ?? "null"}, ${m.source ?? "null"}, ${m.identity ?? "null"},
   ${m.email ? `'${id(m.email)}'` : "null"}, '${id(m.link[1])}');`;
 
@@ -190,8 +191,8 @@ test("stores each email once by its Message-ID with all its records and its full
 	]);
 	const links = [
 		"40 30 null 2024-02-01 00:00:00+00",
-		"40 null 10 2024-02-01 00:00:00+00",
-		"40 null 11 2024-02-01 00:00:00+00",
+		"40 null 10 2024-02-03 00:00:00+00",
+		"40 null 11 2024-02-02 00:00:00+00",
 		"43 30 null 2024-02-01 00:00:00+00",
 		"43 null 11 2024-02-01 00:00:00+00",
 		"46 30 null 2024-02-01 00:00:00+00",
@@ -208,9 +209,16 @@ test("stores each email once by its Message-ID with all its records and its full
 	);
 	assert.deepEqual(
 		await lines(
-			"select activity_id, user_id from email_mailbox order by activity_id, user_id",
+			"select activity_id, user_id, changed_by_job, changed_at::text from email_mailbox order by activity_id, user_id",
 		),
-		["40 01", "40 02", "43 01", "46 01", "57 02"],
+		[
+			"40 01 old_system 2024-02-01 00:00:00+00",
+			"40 02 old_system 2024-02-02 00:00:00+00",
+			"43 01 old_system 2024-02-01 00:00:00+00",
+			"46 01 old_system 2024-02-01 00:00:00+00",
+			"57 02 old_system 2024-02-01 00:00:00+00",
+		],
+		"each mailbox keeps its earliest live row's recorded time",
 	);
 	assert.deepEqual(
 		report.map(
