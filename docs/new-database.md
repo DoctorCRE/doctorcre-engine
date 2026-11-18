@@ -1251,13 +1251,17 @@ The app does not display premises or offer-round summaries. Deal links use the U
 
 ## Home inbox reads for the app
 
-Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's steps and marks. With the variable unset, the route returns 404 and the app still calls CARR.
+Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's steps, completion reviews, updates and marks. With the variable unset, the route returns 404 and the app still calls CARR.
 
 The response uses the app's `home-inbox.v5` card fields. It shows each step once, including call follow-ups as that step, with the full step text as the title. It includes the step's date, destination and linked source when known. A call source includes its date, contact when known, summary and quote. An accepted suggestion links a step to its email or meeting. The step's change ID gives `action_version`, and `base_version` includes the mark's revision and current disposition.
 
 An open step can be held, snoozed, settled or in the inbox. A snooze ends at its saved time, and a hold ends on its date in Central time. A settled step returns to the inbox after a later step change. Cancelled and expired steps leave the inbox. A step with status `done` appears only if its completion time is known and within the last seven days. The read puts unfinished work first.
 
-Slice 23 still needs reply drafts, pending suggestions, overdue completion reviews and updates. Some copied steps lack a verified origin, and some completed steps lack a known completion time. Legacy waiting evidence and versions did not move. Keep Home on CARR until these reads, slice 24 saves and slice 30 app routing and destinations are ready. The app must use the new change IDs only with new-schema saves.
+An open step shows as a completion review while its latest completion suggestion is pending. The card opens the deal's next step and carries the proposal ID, the source activity and the evidence. If the step changed, the review can still be dismissed. When the step is snoozed or settled, its ordinary step card stays on that shelf. A snoozed step shows when it returns.
+
+Each unread Home update appears once for its recipient and links to its deal. A checklist update carries its checklist reference and due date. A snoozed update stays on the snoozed shelf with its return time until the snooze ends. A settled update stays on the settled shelf until the update changes or the mark is cleared. The update's `base_version` uses its latest change ID, the latest change ID for its `home_update` mark, and the visible disposition. A missing change ID is `0`. Clearing the mark keeps its latest change ID, and editing waiting details leaves the disposition's change ID alone.
+
+Slice 23 still needs reply drafts and pending suggestions. Some copied steps lack a verified origin, and some completed steps lack a known completion time. Legacy waiting evidence and versions did not move. Keep Home on CARR until these reads, slice 24 saves and slice 30 app routing and destinations are ready. The app must use the new change IDs only with new-schema saves.
 
 ## Invoice tracker reads for the app
 
