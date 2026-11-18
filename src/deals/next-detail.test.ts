@@ -109,7 +109,7 @@ before(async () => {
 		insert into next_step (id, deal_id, what, item_title, source_ref, due_on)
 		values ('${id(80)}', '${id(30)}', 'Example call about the sign', 'Confirm signage', 'example-call', '2030-01-16');
 		insert into critical_date (id, deal_id, kind, due_on, source)
-		values ('${id(81)}', '${id(30)}', 'loi_expiry', '2030-02-01', 'Example offer');
+		values ('${id(81)}', '${id(30)}', 'phase_effective_date', '2030-02-01', 'Example phase record');
 		insert into property (id, address) values ('${id(83)}', '100 Example Road');
 		insert into deal_property (deal_id, property_id) values ('${id(30)}', '${id(83)}');
 		insert into document (id, name, r2_key, r2_bucket, content_type) values
@@ -124,7 +124,7 @@ before(async () => {
 			('${id(34)}', 'Example unpaid deal', 'lease', null, null, '${id(2)}');
 		insert into critical_date (id, deal_id, kind, due_on, source)
 		values ('${id(82)}', '${id(33)}', 'option_notice', '2000-01-03', 'Example option'),
-			('${id(86)}', '${id(33)}', 'due_diligence', '2999-01-01', 'Example contract');
+			('${id(86)}', '${id(33)}', 'phase_effective_date', '2999-01-01', 'Example phase record');
 		update critical_date set status = 'open' where id in ('${id(82)}', '${id(86)}');
 		insert into commission_tier (user_id, from_deal, partner_user_id, closing_share)
 		values ('${id(2)}', 1, '${id(1)}', 0.8);
@@ -343,7 +343,13 @@ for (const schema of [undefined, "next"]) {
 			],
 			...(schema
 				? {
-						critical_dates: [{ due_on: "2030-02-01" }],
+						critical_dates: [
+							{
+								kind: "phase_effective_date",
+								label: "Phase effective date",
+								due_on: "2030-02-01",
+							},
+						],
 						activities: [{ id: id(61) }, { id: id(60) }],
 					}
 				: {
@@ -489,13 +495,27 @@ test("the renewal checklist tracks confirmed deadlines and a saved receipt", asy
 	const response = await get(`/deals/${id(33)}`, "next");
 	assert.equal(response.status, 200);
 	assert.partialDeepStrictEqual(await response.json(), {
+		critical_dates: [
+			{ id: id(82), kind: "option_notice", label: "Option notice" },
+			{
+				id: id(86),
+				kind: "phase_effective_date",
+				label: "Phase effective date",
+			},
+		],
 		checklist: {
 			deal_type: "renewal",
 			phases: [
 				{ id: "research", items: [{ id: "current_lease_abstraction" }] },
 				{
 					id: "legal",
-					items: [{ id: `critical-date:${id(86)}`, status: "upcoming" }],
+					items: [
+						{
+							id: `critical-date:${id(86)}`,
+							status: "upcoming",
+							label: "Phase effective date",
+						},
+					],
 				},
 				{
 					id: "closing",
