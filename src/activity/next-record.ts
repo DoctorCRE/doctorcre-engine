@@ -1,10 +1,11 @@
 import { Hono } from "hono";
-import { sql, type Transaction } from "kysely";
+import { type RawBuilder, sql, type Transaction } from "kysely";
 import { Refusal, unregisteredFields } from "../answer.ts";
 import { isInstant } from "../calendar-date.ts";
 import type { JsonObject, JsonValue } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
+import { ACTING_USER } from "../next-save.ts";
 import { SaveRefusal } from "../save.ts";
 import { isArguments } from "../save-door.ts";
 import { isUuid } from "../uuid.ts";
@@ -24,13 +25,14 @@ type Email = {
 };
 type ActivityFields = {
 	kind: string;
-	happened_at: string;
+	happened_at: string | RawBuilder<string>;
 	summary: string | null;
 	from_party_id: string | null;
 	reached: boolean | null;
 };
-type NewActivity = ActivityFields & {
+type NewActivity = Omit<ActivityFields, "happened_at"> & {
 	idempotency_key: JsonValue;
+	happened_at?: string;
 	about: About[];
 	email: Email | null;
 	calendar_review_key?: string;
@@ -46,7 +48,6 @@ const unused = (value: JsonValue) => (value === null ? null : undefined);
 const address = (value: string) => value.trim().toLowerCase();
 // stamp_change sets it; the generated type asks only because it has no default.
 const STAMPED = { changed_at: sql<string>`now()` };
-const ACTING_USER = sql<string>`nullif(current_setting('engine.user_id', true), '')::uuid`;
 
 type Settled<T> = { [K in keyof T]: Exclude<T[K], undefined> };
 const isSettled = <T extends object>(parsed: T): parsed is Settled<T> =>
@@ -137,7 +138,11 @@ function parseActivity(args: JsonObject): NewActivity | Refusal {
 		{
 			idempotency_key,
 			kind: isText(kind) ? kind : undefined,
-			happened_at: isInstant(happened_at) ? happened_at : undefined,
+			...((kind === "email" ||
+				calendar_review_key !== undefined ||
+				happened_at !== undefined) && {
+				happened_at: isInstant(happened_at) ? happened_at : undefined,
+			}),
 			about: kind === "email" ? parseAbout(about) : filed(about),
 			summary: optional(summary, isText),
 			from_party_id: optional(from_party_id, isUuid),
@@ -310,17 +315,22 @@ async function recordEmail(
 	};
 }
 
-async function recordActivity(
+export async function recordActivity(
 	tx: Transaction<DB>,
 	{
 		idempotency_key: _key,
 		about,
 		email,
 		calendar_review_key,
-		...activity
+		happened_at,
+		...fields
 	}: NewActivity,
 ) {
 	await requireRecords(tx, about);
+	const activity = {
+		...fields,
+		happened_at: happened_at ?? sql<string>`now()`,
+	};
 	if (email) return recordEmail(tx, activity, about, email);
 	const { activity_id, existing } =
 		calendar_review_key === undefined

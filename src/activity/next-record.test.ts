@@ -227,6 +227,51 @@ test("a partner's call is stamped with them and its records must exist", async (
 		await refused(viaApp(note(more)), ...refusal);
 });
 
+test("an activity without a time gets the save time and replays the same row", async () => {
+	const summary = "Example just now";
+	const args = note({
+		kind: "call",
+		happened_at: undefined,
+		summary,
+	});
+	const {
+		rows: [before],
+	} = await db.query("select now() as time");
+	const first = await viaApp(args);
+	assert.equal(first.status, 201);
+	assert.deepEqual(await viaApp(args), {
+		status: 201,
+		body: { ...first.body, replayed: true },
+	});
+	const { rows } = await db.query(
+		`select id, happened_at >= $1 and happened_at <= now() as saved_now
+		 from activity where summary = $2`,
+		[before.time, summary],
+	);
+	assert.deepEqual(rows, [{ id: first.body.activity_id, saved_now: true }]);
+	await refused(
+		viaApp({ ...args, happened_at: "2026-01-01T12:00:00Z" }),
+		409,
+		"key_reuse",
+	);
+	await refused(
+		viaJob({ ...mail("missing-time@example.test"), happened_at: undefined }),
+		400,
+		"missing_required",
+		{ fields: ["happened_at"] },
+	);
+	await refused(
+		viaApp({
+			...args,
+			kind: "meeting",
+			calendar_review_key: "0123456789abcdef",
+		}),
+		400,
+		"missing_required",
+		{ fields: ["happened_at"] },
+	);
+});
+
 test("filing adds links to a stored activity and keeps the ones there", async () => {
 	const { activity_id } = (await viaJob(note())).body;
 	const about = [{ party_id: CASEY }, { deal_id: DEAL }];
