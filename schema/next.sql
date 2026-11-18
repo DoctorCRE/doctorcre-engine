@@ -1297,7 +1297,6 @@ begin
 			raise exception 'the held step has changed'
 				using errcode = 'check_violation', constraint = 'proposal_step_changed';
 		end if;
-		new.decided_at := clock_timestamp();
 		new.keeps_deal_date := new.activity_kind in ('call', 'meeting') and new.next_step_id = (
 			select id from next_step where deal_id = new.deal_id and status = 'open' and item_title is null
 			order by created_at desc, id desc limit 1);

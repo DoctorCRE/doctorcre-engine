@@ -28,7 +28,8 @@ async function fixture(kind: "note" | "call", current = true) {
 	const next_step_id = randomUUID();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into deal (id, name, owner_user_id) values ('${deal_id}', 'Example Deal', '${ownerId}');
-		insert into activity (id, kind, happened_at) values ('${activity_id}', '${kind}', '2001-02-03T15:00:00Z');
+		insert into activity (id, kind, happened_at, summary) values
+			('${activity_id}', '${kind}', '2001-02-03T15:00:00Z', 'The client received the survey.');
 		insert into activity_about (activity_id, deal_id) values ('${activity_id}', '${deal_id}');
 		insert into next_step (id, deal_id, owner_party_id, what, due_on, created_at) values
 			('${next_step_id}', '${deal_id}', '${ownerId}', 'Send the survey', '2001-02-01', '${current ? "2001-01-03" : "2001-01-01"}'),
@@ -57,6 +58,31 @@ async function dealDate(id: string) {
 	);
 	assert.ok("next_date" in deal);
 	return deal.next_date;
+}
+
+const home = (caller: Caller) => save(caller, "home/held-steps", {}, "GET");
+const end = (id: string) =>
+	save(job, `next-steps/${id}/end`, {
+		idempotency_key: randomUUID(),
+		resolution: "done",
+	});
+const undo = (
+	id: string,
+	change_id: unknown,
+	caller: Caller = alex,
+	key = randomUUID(),
+) =>
+	save(caller, `next-steps/${id}/undo-automatic-resolution`, {
+		idempotency_key: key,
+		change_id,
+	});
+
+async function stepChange(id: string) {
+	const { rows } = await db.query(
+		"select max(id) as id from change where table_name = 'next_step' and record = jsonb_build_object('id', $1::uuid)",
+		[id],
+	);
+	return Number(rows[0].id);
 }
 
 test("a hold cites the activity and exact step, and the same pair is stored once", async () => {
@@ -186,22 +212,152 @@ test("resolving a step edited since the hold leaves both rows alone", async () =
 	const source = await fixture("call");
 	const [stored, p] = await hold(source);
 	assert.equal(stored, 201);
-	const { rows } = await db.query(
-		"select max(id) as id from change where table_name = 'next_step' and record = jsonb_build_object('id', $1::uuid)",
-		[source.next_step_id],
-	);
 	const [edited] = await save(
 		alex,
 		`next-steps/${source.next_step_id}/changes`,
 		{
 			idempotency_key: randomUUID(),
-			seen_change_id: Number(rows[0].id),
+			seen_change_id: await stepChange(source.next_step_id),
 			what: "Send the updated survey",
 		},
 	);
 	assert.equal(edited, 200);
+	const [read, { proposals }] = await home(alex);
+	assert.equal(read, 200);
+	assert.ok(Array.isArray(proposals));
+	assert.equal(
+		proposals.find((item) => item.proposal_id === p.proposal_id)?.can_resolve,
+		false,
+	);
 	const [status, refusal] = await decide(p.proposal_id, "accept");
 	assert.deepEqual([status, refusal.rule], [422, "proposal_step_changed"]);
 	assert.equal((await hold(source))[1].status, "pending");
 	assert.equal(await dealDate(source.deal_id), "2001-02-01");
+});
+
+test("Home shows the partner's pending holds with the linked update or call", async () => {
+	const call = await fixture("call");
+	const note = await fixture("note");
+	const [stored, p] = await hold(call);
+	const [noteStored, n] = await hold(note);
+	assert.equal(stored, 201);
+	assert.equal(noteStored, 201);
+	const [status, { proposals }] = await home(alex);
+	assert.equal(status, 200);
+	assert.ok(Array.isArray(proposals));
+	assert.deepEqual(
+		proposals.find((item) => item.proposal_id === p.proposal_id),
+		{
+			...call,
+			proposal_id: p.proposal_id,
+			deal_name: "Example Deal",
+			what: "Send the survey",
+			due_on: "2001-02-01",
+			evidence: "The survey was sent.",
+			activity_kind: "call",
+			happened_at: "2001-02-03 15:00:00+00",
+			summary: "The client received the survey.",
+			can_resolve: true,
+		},
+	);
+	assert.ok(
+		proposals.some(
+			(item) =>
+				item.proposal_id === n.proposal_id && item.activity_kind === "note",
+		),
+	);
+	assert.deepEqual(await home(blair), [
+		200,
+		{ proposals: [], automatic_resolutions: [] },
+	]);
+	assert.equal((await home(job))[0], 404);
+	assert.equal((await decide(p.proposal_id, "dismiss"))[0], 200);
+	assert.equal((await end(note.next_step_id))[0], 200);
+	const pending = (await home(alex))[1].proposals;
+	assert.ok(Array.isArray(pending));
+	assert.ok(
+		pending.every(
+			(item) => ![p.proposal_id, n.proposal_id].includes(item.proposal_id),
+		),
+	);
+});
+
+test("only the owner can undo an automatic completion and the new save carries their stamp", async () => {
+	const { deal_id, next_step_id } = await fixture("note");
+	assert.equal((await end(next_step_id))[0], 200);
+	assert.equal(await dealDate(deal_id), "2001-02-02");
+	const change_id = await stepChange(next_step_id);
+	const [, { automatic_resolutions }] = await home(alex);
+	assert.ok(Array.isArray(automatic_resolutions));
+	assert.ok(
+		automatic_resolutions.some(
+			(item) =>
+				item.next_step_id === next_step_id && item.change_id === change_id,
+		),
+	);
+	assert.equal((await undo(next_step_id, change_id, blair))[0], 409);
+	assert.equal((await undo(next_step_id, change_id, job))[0], 404);
+	const key = randomUUID();
+	const answer = { next_step_id, status: "open" };
+	assert.deepEqual(await undo(next_step_id, change_id, alex, key), [
+		200,
+		answer,
+	]);
+	assert.deepEqual(await undo(next_step_id, change_id, alex, key), [
+		200,
+		{ ...answer, replayed: true },
+	]);
+	assert.equal((await undo(next_step_id, change_id))[0], 409);
+	assert.equal(await dealDate(deal_id), "2001-02-01");
+	const { rows } = await db.query(
+		"select changed_by_user_id, new_value from change where id = $1",
+		[await stepChange(next_step_id)],
+	);
+	assert.deepEqual(rows, [
+		{
+			changed_by_user_id: ownerId,
+			new_value: { resolution: null, done_at: null, status: "open" },
+		},
+	]);
+});
+
+test("a partner's resolution has no undo", async () => {
+	const source = await fixture("note");
+	const [stored, p] = await hold(source);
+	assert.equal(stored, 201);
+	assert.equal((await decide(p.proposal_id, "accept"))[0], 200);
+	assert.equal(
+		(await undo(source.next_step_id, await stepChange(source.next_step_id)))[0],
+		409,
+	);
+	const [, { automatic_resolutions }] = await home(alex);
+	assert.ok(Array.isArray(automatic_resolutions));
+	assert.ok(
+		automatic_resolutions.every(
+			(item) => item.next_step_id !== source.next_step_id,
+		),
+	);
+});
+
+test("undo checks for intervening edits even when the wording changes back", async () => {
+	const { next_step_id } = await fixture("note");
+	assert.equal((await end(next_step_id))[0], 200);
+	const change_id = await stepChange(next_step_id);
+	for (const what of ["Send the revised survey", "Send the survey"]) {
+		assert.equal(
+			(
+				await save(alex, `next-steps/${next_step_id}/changes`, {
+					idempotency_key: randomUUID(),
+					seen_change_id: await stepChange(next_step_id),
+					what,
+				})
+			)[0],
+			200,
+		);
+	}
+	const [status, refusal] = await undo(next_step_id, change_id);
+	assert.deepEqual(
+		[status, refusal.error],
+		[409, "automatic_resolution_changed"],
+	);
 });
