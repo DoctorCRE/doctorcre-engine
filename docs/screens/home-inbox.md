@@ -80,7 +80,7 @@ A reply Dr. CRE drafted to an email.
 
 A next step, a deal to file the email to, a possible new deal, or a deal's progress that an email suggests.
 
-- [ ] Says what the email suggests and from whom: "Next step from Pat Example's email of Mon, Nov 16: send the floor plan".
+- [ ] Shows the sender and subject as its title, such as "Pat Example · Floor plan". A grouped card uses the latest email among its suggestions.
 - [ ] Opens to the email and the deal, client or lead it would change.
 - [ ] Accept saves the suggestion, and lets the partner edit a step's words and date first. Dismiss drops it for good. Neither has Undo. Only the partner's click decides, never the assistant.
 - [ ] Leaves when accepted or dismissed. One card per email conversation.
@@ -159,7 +159,7 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - Every card carries a "needs attention" badge and "Ready for your attention". The inbox says "91 matching loaded cards of 91 loaded" and "Partner inbox".
 - Steps due in 2027, and one on hold until 2027, sit in Needs your attention.
 - Mail priorities rows are titled only "Next step", "Email filing" or "Possible new deal", with no sender or subject, and almost all link to the same email follow-ups page.
-- Email suggestions have no inbox card and no Accept or Dismiss on Home.
+- The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs. Opening the email and deciding a suggestion from Home still need app routing.
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.

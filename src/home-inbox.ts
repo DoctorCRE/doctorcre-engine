@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, refuse } from "./answer.ts";
+import { readHomeReviewCards } from "./home-inbox-review.ts";
 import {
 	completionReviewCard,
 	readCompletionReviews,
@@ -155,7 +156,11 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 		return completionReviewCard(review, step.step_version, step.mark_version);
 	});
 	const updates = await readHomeUpdates(db, userId, LIMIT + 1);
-	const items = [...steps, ...updates].sort(
+	const items = [
+		...steps,
+		...updates,
+		...(await readHomeReviewCards(db, userId, LIMIT + 1)),
+	].sort(
 		(a, b) =>
 			Number(a.source_state === "done") - Number(b.source_state === "done") ||
 			b.activity_at.localeCompare(a.activity_at) ||
