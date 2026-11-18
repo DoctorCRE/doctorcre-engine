@@ -453,10 +453,7 @@ test("deal and vendor holds copy as the step's hold date", async () => {
 				"select id, hold_until::text from next_step where hold_until is not null order by id",
 			)
 		).map(Object.values),
-		[
-			[id(100), "2026-04-01"],
-			[id(124), "2026-06-01"],
-		],
+		[[id(100), "2026-04-01"]],
 	);
 });
 
@@ -466,12 +463,21 @@ test("vendor actions become next steps about the vendor's record, never about a 
  [id(120), null, id(61), "2026-05-01", null, id(1), id(1)],
  [id(121), null, id(61), null, null, id(1), id(1)],
  [id(123), null, id(61), null, null, id(1), id(1)],
- [id(124), null, id(61), null, null, id(1), id(1)],
  ]);
 	for (const n of [120, 121]) assert.deepEqual(reasons(report, n), []);
 	assert.deepEqual(reasons(report, 122), ["cancellation_reason_missing"]);
 	assert.deepEqual(reasons(report, 123), ["expiry_unproven"]);
-	assert.deepEqual(reasons(report, 124), []);
+	assert.deepEqual(
+		report.filter((r) => r.old_id === id(124)),
+		[
+			{
+				old_id: id(124),
+				field: "next_step",
+				value: id(120),
+				reason: "open_step_exists",
+			},
+		],
+	);
 	assert.deepEqual(
 		report.filter((r) => r.old_id === id(125)),
 		[
@@ -502,13 +508,15 @@ test("reruns preserve every row and history entry, and retry a deal or vendor co
 		"Example missing deal",
 	);
 	await db.query(
-		`begin; select set_config('engine.job','old_system',true); insert into outside_id (source,value,party_id) values ('old_system','${id(63)}','${id(61)}'); commit`,
+		`begin; select set_config('engine.job','old_system',true);
+		insert into party (id,kind,name) values ('${id(64)}','company','Example late vendor');
+		insert into outside_id (source,value,party_id) values ('old_system','${id(63)}','${id(64)}'); commit`,
 	);
 	await copyOnce();
 	assert.equal(
 		(await rows(`select party_id from next_step where id='${id(125)}'`))[0]
 			?.party_id,
-		id(61),
+		id(64),
 	);
 });
 test("an id on another record is listed without changing its row", async () => {
@@ -552,6 +560,10 @@ for (const [subject, record] of [
 	test(`${subject} completion events date only the named done actions and survive reruns`, async () => {
 		await db.query("begin; select set_config('engine.job','old_system',true)");
 		try {
+			if (subject === "vendor")
+				await db.query(
+					`update public.next_action set status='done' where id='${id(124)}'`,
+				);
 			await db.query(completionEvents(subject, record));
 			await run();
 			await assertCompletionDates(rows);

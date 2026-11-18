@@ -1088,6 +1088,9 @@ create table next_step (
 	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
 
+create unique index next_step_one_open_per_owner on next_step (deal_id, party_id, owner_party_id)
+	nulls not distinct where status = 'open' and item_title is null and owner_party_id is not null and property_id is null;
+
 create function next_step_default_owner() returns trigger
 language plpgsql as $$
 begin
@@ -1271,8 +1274,10 @@ begin
 	if new.status = 'dismissed' then return new; end if;
 	case new.kind
 	when 'next_step' then
+		-- The decision can override the step owner without changing the suggestion.
 		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id)
-		values (new.id, new.what, new.owner_party_id, new.due_on, new.deal_id, new.party_id, new.property_id);
+		values (new.id, new.what, coalesce(nullif(current_setting('engine.proposal_step_owner', true), '')::uuid, new.owner_party_id),
+			new.due_on, new.deal_id, new.party_id, new.property_id);
 	when 'phase_move' then
 		-- Two acceptances cannot both pass the stale-phase check.
 		perform from deal where id = new.deal_id for update;

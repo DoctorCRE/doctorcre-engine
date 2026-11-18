@@ -587,6 +587,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 			],
 			[id(105), "resolution_event_id", null, "expiry_unproven"],
 			[id(106), "status", "dropped", "cancellation_reason_missing"],
+			[id(111), "next_step", id(110), "open_step_exists"],
 			[id(114), "description", "\t\n", "blank_next_action"],
 			[id(114), "owner_id", id(119), "owner_not_a_user"],
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],

@@ -7,6 +7,8 @@ export const id = (n: number) =>
 // Old completion events on one record's actions 800 to 807; only 806 is still open.
 export const completionEvents = (subject: string, record: number) => `
  update public.next_action set status='done' where subject_type='${subject}' and subject_id='${id(record)}' and owner_id='${id(1)}' and status='open';
+ update next_step set resolution='done' where owner_party_id='${id(1)}' and status='open' and item_title is null
+ and (deal_id='${id(record)}' or party_id in (select party_id from outside_id where source='old_system' and value='${id(record)}'));
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,status,created_at,updated_at,created_by)
  select v.id, '${subject}', '${id(record)}', '${id(1)}', 'Example completion ' || v.id,
  case when v.n = 806 then 'open' else 'done' end, '2025-01-01', '2025-04-01', '${id(1)}'
