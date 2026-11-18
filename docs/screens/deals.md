@@ -130,7 +130,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 ### Overview
 
 - [ ] Client website, near the top, when the deal has one. For a signed-in partner it opens the client's site already unlocked, in a new tab, and asks for no password.
-- [ ] The new database keeps each deal's client website registration so the Client website link still opens the site after the switch (owner, 2026-11-18).
+- [ ] The new database keeps each deal's client website registration so the deal page can still show its Client website link after the switch (owner, 2026-11-18, #728).
 - [ ] A deal with no website says "No client website linked."
 - [ ] Set up client website stays below the deal's facts and asks for the website name and a password (owner, 2026-11-18).
 - [ ] Next steps: each person's open next step on the deal, with its owner and due date in words. A Home card for one of them opens here with that step in view.
@@ -141,6 +141,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Checklist: the deal's checklist items, each with its due date in words. Clicking one opens it.
 - [ ] Checklist progress uses plain labels like "Lease expiration for renewal", "Invoice" and "Commission received". It shows which confirmed dates are due. Commission received is complete when all saved payments have receipt dates, even if the deal still has an expected amount.
 - [ ] Critical dates: each with its name in plain words, its date in words and its state. A proposed date, such as one read from a lease, shows Confirm and Drop. Confirm makes it a confirmed date. Drop asks a reason. A confirmed date can be marked done, dropped or passed, each with a reason. Only a partner's click decides.
+- [ ] Phase effective date is a kind the partner can choose when adding a critical date.
 - [ ] Terms: Show sourced terms lists each lease term found in the deal's documents, with its document, pages and quoted text. Approve, Correct and Reject each take a reason and save the partner's choice, as on Home's lease fact card.
 - [ ] Email follow-ups: each suggestion from an email on this deal, with that email. Accept and Dismiss work as on Home's email suggestion.
 - [ ] Update: a note saved to the deal's history with its author and time.
@@ -159,7 +160,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ## Questions for the owner
 
-1. Answered on 2026-11-18. The new database keeps each deal's client website.
+1. Answered on 2026-11-18 (#728). The new database keeps each deal's client website registration.
 2. Answered on 2026-11-18 (#718): Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move.
 3. Answered on 2026-11-18. Copied automatic phase moves keep the "Moved automatically" mark and Undo on the card.
 4. Answered on 2026-11-18. A person who is a client may belong to a national account.

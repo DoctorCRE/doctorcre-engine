@@ -551,6 +551,7 @@ const STAMPED = [
 	"party_territory",
 	"party_territory_review",
 	"deal",
+	"deal_client_website",
 	"introduction",
 	"party_link",
 	"deal_phase_change",
@@ -4285,6 +4286,32 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 		})),
 	);
 });
+
+test("the deal reader can form the website link but cannot read its password verifier", () =>
+	rolledBack(async () => {
+		await db.query(`insert into deal_client_website (slug, deal_id, client_party_id, password_hash)
+			values ('example-site', '${DEAL}', '${CLIENT}', '$2a$12$${"A".repeat(53)}');
+			set local role engine_reader;`);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select slug, deal_id, client_party_id, disabled_at from deal_client_website",
+				)
+			).rows,
+			[
+				{
+					slug: "example-site",
+					deal_id: DEAL,
+					client_party_id: CLIENT,
+					disabled_at: null,
+				},
+			],
+		);
+		await assert.rejects(
+			db.query("select password_hash from deal_client_website"),
+			{ code: "42501" },
+		);
+	}));
 
 test("every table a user or a job changes records who changed it and when", async () => {
 	const { rows } = await db.query(

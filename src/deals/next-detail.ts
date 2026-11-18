@@ -6,7 +6,7 @@ import {
 } from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
-import { checklistOf } from "./checklist.ts";
+import { checklistOf, criticalDateLabel } from "./checklist.ts";
 import { selectNextDeals } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
@@ -18,6 +18,15 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			sql.lit("deal-items.v1").as("item_schema_version"),
 			"d.id as deal_id",
 			"d.closed_value",
+			eb
+				.selectFrom("deal_client_website as website")
+				.select(
+					sql<string>`'https://share.doctorcre.com/' || website.slug`.as("url"),
+				)
+				.whereRef("website.deal_id", "=", "d.id")
+				.whereRef("website.client_party_id", "=", "c.party_id")
+				.where("website.disabled_at", "is", null)
+				.as("client_portal_url"),
 			"d.reason",
 			asText(sql`(now() at time zone 'America/Chicago')::date`)
 				.$notNull()
@@ -144,7 +153,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
-	const { today, commissions, reason, ...detail } = record;
+	const { today, commissions, reason, critical_dates, ...detail } = record;
 	const checklist = checklistOf({
 		deal: {
 			id: detail.deal_id,
@@ -153,13 +162,20 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			invoiced_on: detail.invoiced_on,
 		},
 		lease: detail.lease,
-		criticalDates: detail.critical_dates,
+		criticalDates: critical_dates,
 		templateCurrent: true,
 		commissions,
 		requests: [],
 		today,
 	});
-	return { ...detail, checklist };
+	return {
+		...detail,
+		critical_dates: critical_dates.map((date) => ({
+			...date,
+			label: criticalDateLabel(date.kind),
+		})),
+		checklist,
+	};
 }
 
 function dealEditValue(column: "c.old_value" | "c.new_value") {
