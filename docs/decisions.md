@@ -303,4 +303,6 @@
 
 153\. **Deal people search filters by kind before the result limit (2026-11-18).** The deal page can ask for people or companies by name prefix. The Market agent picker asks for people so that companies cannot use up its 25 results. The search includes do-not-contact records because choosing a participant does not contact them (#712).
 
+154\. **Home reads draft recipients before approval (2026-11-18).** A pending reply uses the original sender and previews the other partner's work email when it can identify one address. Approval freezes both addresses. Saving the draft changes its text and revision. Declining it requires a reason, as in the old inbox (#713).
+
 155\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { type Context, Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { jsonArrayFrom } from "kysely/helpers/postgres";
-import { Refusal, refuse } from "./answer.ts";
+import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
+import { answerNextRead, isoMillis, Refusal, refuse } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
@@ -18,6 +18,7 @@ import {
 import { SaveRefusal } from "./save.ts";
 
 const text = { subject: isText, body: isText };
+const draftVersion = { idempotency_key: isUuid, version: isChangeId };
 const create = {
 	idempotency_key: isUuid,
 	activity_id: isUuid,
@@ -27,8 +28,7 @@ const create = {
 const submission = {
 	to: isText,
 	cc: isText,
-	idempotency_key: isUuid,
-	version: isChangeId,
+	...draftVersion,
 	...text,
 	document_ids: (v: unknown): v is string[] =>
 		Array.isArray(v) && v.every(isUuid),
@@ -123,7 +123,57 @@ async function dismissOlderDrafts(
 		.execute();
 }
 
-export const replySubmissions = new Hono<NextSaveEnv>().post(
+function savePendingDraft(
+	c: Context<NextSaveEnv>,
+	action: "edit" | "dismissal",
+) {
+	return answerNextSave(
+		c,
+		`reply-draft-${action}`,
+		(body) => {
+			const draft_id = c.req.param("id");
+			if (!isUuid(draft_id)) return new Refusal(404, "not_found");
+			const parsed =
+				action === "edit"
+					? fit(body, { ...draftVersion, ...text }, [
+							"idempotency_key",
+							"version",
+							"subject",
+							"body",
+						])
+					: fit(
+							body,
+							{
+								...draftVersion,
+								reason: (v: unknown): v is string =>
+									isText(v) && v.length <= 500,
+							},
+							["idempotency_key", "version", "reason"],
+						);
+			return parsed instanceof Refusal ? parsed : { ...parsed, draft_id };
+		},
+		async (tx, request) => {
+			const draft = await locked(tx, c, request.draft_id);
+			const current = { version: draft.revision };
+			if (request.version !== draft.revision)
+				fail(new Refusal(409, "version_conflict", current));
+			if (draft.status !== "pending")
+				fail(new Refusal(409, "draft_changed", current));
+			return tx
+				.updateTable("reply_draft")
+				.set(
+					"reason" in request
+						? { status: "dismissed", dismiss_reason: request.reason.trim() }
+						: { subject: request.subject, body: request.body },
+				)
+				.where("id", "=", draft.id)
+				.returning(["id as draft_id", "revision as version", "status"])
+				.executeTakeFirstOrThrow();
+		},
+	);
+}
+
+export const replyDrafts = new Hono<NextSaveEnv>().post(
 	"/reply-drafts/:id/submission",
 	(c) =>
 		answerNextSave(
@@ -189,6 +239,71 @@ export const replySubmissions = new Hono<NextSaveEnv>().post(
 			},
 		),
 );
+
+replyDrafts
+	.get("/reply-drafts/:id", async (c) => {
+		const id = c.req.param("id");
+		if (!isUuid(id)) return refuse(c, new Refusal(404, "not_found"));
+		return answerNextRead(c, "read-reply-draft", async (db, userId) => {
+			const draft = await db
+				.selectFrom("reply_draft as r")
+				.innerJoin("email as e", "e.activity_id", "r.email_activity_id")
+				.select([
+					"r.id as draft_id",
+					"r.owner_user_id",
+					"r.status",
+					"r.failure_reason",
+					"r.revision as version",
+					"r.subject",
+					"r.body",
+					sql<
+						string | null
+					>`case when r.status = 'pending' then e.sender else r.to_address end`.as(
+						"to",
+					),
+					sql<string | null>`case when r.status = 'pending' then (
+						select min(pe.address::text) from app_user u join party_email pe on pe.party_id = u.id
+						where u.id <> r.owner_user_id and pe.is_primary and pe.label = 'work'
+						having count(*) = 1
+					) else r.cc_address end`.as("cc"),
+				])
+				.select((eb) => [
+					jsonObjectFrom(
+						eb
+							.selectFrom("activity as a")
+							.whereRef("a.id", "=", "e.activity_id")
+							.select([
+								"a.id",
+								"a.kind",
+								"e.sender",
+								"e.sender_name",
+								"e.subject",
+								"e.body",
+							])
+							.select((source) =>
+								isoMillis(source.ref("a.happened_at")).as("happened_at"),
+							),
+					).as("source_activity"),
+					jsonArrayFrom(
+						eb
+							.selectFrom("reply_draft_document as attachment")
+							.innerJoin("document as d", "d.id", "attachment.document_id")
+							.whereRef("attachment.reply_draft_id", "=", "r.id")
+							.select(["d.id as document_id", "d.name", "d.content_type"])
+							.orderBy("d.id"),
+					).as("attachments"),
+				])
+				.where("r.id", "=", id)
+				.executeTakeFirst();
+			if (!draft) return new Refusal(404, "not_found");
+			const { owner_user_id, ...detail } = draft;
+			return owner_user_id === userId
+				? detail
+				: new Refusal(403, "not_mailbox_owner");
+		});
+	})
+	.post("/reply-drafts/:id/edit", (c) => savePendingDraft(c, "edit"))
+	.post("/reply-drafts/:id/dismissal", (c) => savePendingDraft(c, "dismissal"));
 
 export const replyJobs = new Hono<NextSaveEnv>()
 	.post("/reply-drafts", async (c) => {

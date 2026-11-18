@@ -86,6 +86,17 @@ async function checkCompletionReview(callFollowUp: boolean) {
 		completion_review: { next_step_id: step, can_resolve: true },
 	});
 	assert.deepEqual(await cards(blair, deal), []);
+	const detailPath = `proposals/${card?.source_id}`;
+	const [opened, detail] = await save(alex, detailPath, {}, "GET");
+	assert.equal(opened, 200);
+	assert.partialDeepStrictEqual(detail, {
+		kind: "next_step_done",
+		next_step_id: step,
+		what: "Send the survey",
+		evidence: "I received the survey.",
+		source_activity: { id: call, kind: "call" },
+	});
+	assert.equal((await save(blair, detailPath, {}, "GET"))[0], 404);
 	const [snoozed, mark] = await save(alex, "home/marks", {
 		idempotency_key: randomUUID(),
 		item_id: card?.item_id,
