@@ -275,4 +275,4 @@
 
 138\. **Copied phases keep their effective and save times (2026-11-18).** The deal copy uses the old event's `occurred_at` for `happened_at` and `recorded_at` for `changed_at`. The board dates a phase from its effective time, and call capture compares the call against the phase's save time. A rerun preserves the existing row and its change history (#672).
 
-139\. **Deals show the facts kept in native change history (2026-11-18).** The timeline shows one field per deal edit and keeps imported event labels verbatim. A national account shows its copied roster reference when there is exactly one client reference on its record (#674).
+139\. **Deals show the facts kept in native change history (2026-11-18).** The timeline shows the fields changed by a deal edit, with user slugs for owners and names for markets. Parking reason and note changes appear together as one operating state change. Imported event labels stay verbatim. A national account shows its copied roster reference when there is exactly one client reference on its record (#674).

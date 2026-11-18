@@ -45,6 +45,7 @@ insert into public.deal (id, client_id, name, deal_type, phase, owner, attention
  ('${id(30)}', '${id(20)}', 'Example startup office', 'startup', 'touring', 'partner_one', true, '2030-01-15', ${by}, '2025-01-01'),
  ('${id(31)}', '${id(21)}', 'Example clinic lease', 'lease', 'negotiation', 'partner_two', false, null, ${by}, '2025-01-02'),
  ('${id(32)}', '${id(20)}', 'Z Example earlier lease', 'lease', 'negotiation', 'partner_one', true, '2029-12-01', ${by}, '2025-01-03');
+update public.deal set city = 'Example West' where id = '${id(32)}';
 insert into public.deal_participant (deal_id, actor_id, party_id, role, from_at, set_by) values
  ('${id(30)}', '${id(1)}', null, 'lead', '2025-01-01', '${id(1)}'),
  ('${id(30)}', '${id(2)}', null, 'support', '2025-01-01', '${id(1)}'),
@@ -85,6 +86,10 @@ const { db, setup, cleanup, connectionString } = copyTest();
 before(async () => {
 	await setup();
 	await db.query(`begin; ${OLD} commit;`);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into market (id, name) values ('${id(91)}', 'Example West'), ('${id(92)}', 'Example East');
+		commit;`);
 	for (const [file, input = ""] of COPIES) {
 		await db.query(
 			`begin; select set_config('engine.job', 'old_system', true); ${input}`,
@@ -100,7 +105,11 @@ before(async () => {
 		values ('${id(81)}', '${id(30)}', 'loi_expiry', '2030-02-01', 'Example offer');
 		insert into next_step (deal_id, what, resolution, done_at)
 		values ('${id(32)}', 'Example confirm terms', 'done', '2025-02-04T18:00:00Z');
-		update deal set closed_value = 1250, parking_reason = 'other' where id = '${id(31)}';
+		update deal set closed_value = 1250, parking_reason = 'other', parking_note = 'Example waiting for plans'
+		where id = '${id(31)}';
+		update deal set owner_user_id = '${id(2)}', market_id = '${id(92)}' where id = '${id(32)}';
+		update deal set parking_reason = 'client_paused' where id = '${id(32)}';
+		update deal set parking_reason = null where id = '${id(32)}';
 		commit;`);
 });
 after(cleanup);
@@ -335,9 +344,9 @@ test("signed-in detail names every field changed by one new-schema save", async 
 	assert.partialDeepStrictEqual(events, [
 		{
 			verb: "update-deal",
-			field: "parking_reason",
-			old_value: null,
-			new_value: "other",
+			field: "operating_state",
+			old_value: "Active",
+			new_value: "Parked · Other · Example waiting for plans",
 		},
 		{
 			verb: "update-deal",
@@ -346,4 +355,38 @@ test("signed-in detail names every field changed by one new-schema save", async 
 			new_value: 1250,
 		},
 	]);
+});
+
+test("signed-in detail names both owners in a deal handoff", async () => {
+	const response = await get(`/deals/${id(32)}`, "next");
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), {
+		events: [
+			{ field: "owner", old_value: "partner_one", new_value: "partner_two" },
+		],
+	});
+});
+
+test("signed-in detail names both markets when a deal moves", async () => {
+	const response = await get(`/deals/${id(32)}`, "next");
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), {
+		events: [
+			{ field: "market", old_value: "Example West", new_value: "Example East" },
+		],
+	});
+});
+
+test("signed-in detail shows a revived deal as active", async () => {
+	const response = await get(`/deals/${id(32)}`, "next");
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), {
+		events: [
+			{
+				field: "operating_state",
+				old_value: "Parked · Client paused",
+				new_value: "Active",
+			},
+		],
+	});
 });
