@@ -283,4 +283,6 @@
 
 142\. **Home and Invoices share the new tracker read (2026-11-18).** `INVOICES_READ_SCHEMA=next` uses current payment dates and amounts through the read-only engine role. Each payment awaiting an invoice has its own row, even when another payment on the deal has been invoiced. A copied invoice date still shows when it has no payment, with a blank amount (#682).
 
+143\. **Deals saves use the exact participant link and critical date (2026-11-18).** A participant save names the existing person or company and their role on that deal. Removal keeps the database's change history. When a partner adds a critical date, the save inserts and confirms it in one transaction. Dates proposed by automation still need a partner's confirmation. The database supplies the decision stamps and keeps the confirmation through resolution (#684).
+
 145\. **Mark paid records receipt of one payment (2026-11-18).** The partner's save uses the tracker row's change ID and records the date the full payment was received. The tracker reads that date to show Paid. The database requires an invoice date for every received payment and refuses invoice undo once its payment is recorded. A retry returns the first receipt (#689).
