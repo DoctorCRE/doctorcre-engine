@@ -112,7 +112,7 @@ export async function resolveStepOwner(
 	return userId(tx, owner);
 }
 
-async function cancelCurrentStep(
+export async function cancelCurrentStep(
 	tx: Transaction<DB>,
 	deal_id: string,
 	owner: string | null,
