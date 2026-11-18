@@ -260,3 +260,5 @@
 130\. **The old prospect filter and paused outcome have no cards to move (2026-11-18).** The rehearsal copy has zero prospect clients and zero deals with the `paused` outcome; parked deals keep their existing parking controls and filter (#593).
 
 131\. **The Deals board uses the deal's full name (2026-11-18).** Market remains visible and searchable in the deal workspace. The short name appears on Home's overdue deal cards through the separate Home agenda read (#593).
+
+132\. **Undo uses the automatic completion's change id (2026-11-18).** Home lists pending held steps with their linked activities. An owner can undo a job's completion using the exact change id while it is still the step's latest change. The new save reopens the same step and the deal date follows the current step. A partner's own resolution has no undo (#658).

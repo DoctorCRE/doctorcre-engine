@@ -88,6 +88,7 @@ const STEP_END = {
 };
 
 const STEP_REOPEN = { idempotency_key: isUuid };
+const STEP_UNDO = { ...STEP_REOPEN, change_id: isChangeId };
 
 type StepRequest<S extends Shape> = Fitted<S> & { next_step_id: string };
 
@@ -259,6 +260,42 @@ async function endStep(
 	return { next_step_id, status: resolution };
 }
 
+export function automaticResolutions(tx: Transaction<DB>) {
+	const owner = sql<string>`current_setting('engine.user_id')::uuid`;
+	return tx
+		.selectFrom("next_step as s")
+		.innerJoin("deal as d", "d.id", "s.deal_id")
+		.innerJoinLateral(
+			(eb) =>
+				eb
+					.selectFrom("change as c")
+					.select([
+						"id",
+						"action",
+						"old_value",
+						"new_value",
+						"changed_by_job",
+						"changed_for_user_id",
+						"changed_at",
+					])
+					.where("table_name", "=", "next_step")
+					.where("record", "=", sql<JsonObject>`jsonb_build_object('id', s.id)`)
+					.orderBy("id", "desc")
+					.limit(1)
+					.as("h"),
+			(join) => join.onTrue(),
+		)
+		.where("s.owner_party_id", "=", owner)
+		.where("s.item_title", "is", null)
+		.where("s.status", "=", "done")
+		.where("h.changed_for_user_id", "=", owner)
+		.where("h.changed_by_job", "<>", "old_system")
+		.where("h.action", "=", "update")
+		.where(
+			sql<boolean>`h.old_value @> '{"resolution":null}' and h.new_value @> '{"resolution":"done"}'`,
+		);
+}
+
 async function reopenStep(
 	tx: Transaction<DB>,
 	{ next_step_id }: StepRequest<typeof STEP_REOPEN>,
@@ -266,6 +303,29 @@ async function reopenStep(
 	const step = await lockStep(tx, next_step_id);
 	if (step.status === "open")
 		throw new SaveRefusal(new Refusal(409, "step_open"));
+	return reopenLockedStep(tx, next_step_id, step);
+}
+
+async function undoAutomaticResolution(
+	tx: Transaction<DB>,
+	{ next_step_id, change_id }: StepRequest<typeof STEP_UNDO>,
+): Promise<JsonObject> {
+	const step = await lockStep(tx, next_step_id);
+	const completion = await automaticResolutions(tx)
+		.select("h.id")
+		.where("s.id", "=", next_step_id)
+		.where("h.id", "=", String(change_id))
+		.executeTakeFirst();
+	if (!completion)
+		throw new SaveRefusal(new Refusal(409, "automatic_resolution_changed"));
+	return reopenLockedStep(tx, next_step_id, step);
+}
+
+async function reopenLockedStep(
+	tx: Transaction<DB>,
+	next_step_id: string,
+	step: Awaited<ReturnType<typeof lockStep>>,
+): Promise<JsonObject> {
 	await saveOpenStep(tx, step, () =>
 		tx
 			.updateTable("next_step")
@@ -347,3 +407,12 @@ export const nextSteps = new Hono<NextSaveEnv>()
 			reopenStep,
 		),
 	);
+
+export const automaticStepUndo = new Hono<NextSaveEnv>().post(
+	"/next-steps/:step/undo-automatic-resolution",
+	stepSave(
+		"next-step-undo-automatic-resolution",
+		(body) => fit(body, STEP_UNDO, ["idempotency_key", "change_id"]),
+		undoAutomaticResolution,
+	),
+);
