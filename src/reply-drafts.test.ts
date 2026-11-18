@@ -48,6 +48,7 @@ before(async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Alex Example'), ('${id(2)}', 'person', 'Blair Example');
  insert into app_user (id, slug) values ('${id(1)}', 'alex'), ('${id(2)}', 'blair');
+ insert into party_email (party_id, address, label, is_primary) values ('${id(2)}', 'blair@example.com', 'work', true);
  insert into activity (id, kind, happened_at) select v, 'email', '2026-01-02T12:00:00Z' from unnest(array[${Array.from({ length: 27 }, (_, i) => `'${id(i + 10)}'`).join(",")}]::uuid[]) v;
  update activity set happened_at = '2026-01-01T12:00:00Z' where id in ('${id(25)}', '${id(34)}', '${id(35)}');
  insert into document (id, name, r2_key) values ('${id(50)}', 'Example plan', 'example/plan.pdf');
@@ -412,8 +413,137 @@ test("attachments freeze with approval and a crossed submission cannot replace t
 	);
 });
 
-test("an approved draft refuses approval at its current version and still records its receipt", async () => {
+test("the owner can read, edit and decline a pending reply at its current revision", async () => {
+	const d = await draft(36);
+	const path = `reply-drafts/${d}`;
+	const alex = { user: "alex" };
+	const blair = { user: "blair" };
+	const get = (caller: Caller = alex) => save(caller, path, {}, "GET");
+	const [status, detail] = await get();
+	assert.equal(status, 200);
+	assert.deepEqual(detail, {
+		draft_id: d,
+		version: 1,
+		status: "pending",
+		failure_reason: null,
+		...mail,
+		attachments: [],
+		source_activity: {
+			id: id(36),
+			kind: "email",
+			sender: mail.to,
+			sender_name: null,
+			subject: "Example",
+			body: "Please reply",
+			happened_at: "2026-01-02T12:00:00.000Z",
+		},
+	});
+	const otherDraft = await draft(36, { ...job, for_user: "blair" });
+	assert.equal(
+		(await save(blair, `reply-drafts/${otherDraft}`, {}, "GET"))[1].cc,
+		null,
+	);
+	assert.equal((await get(blair))[0], 403);
+	assert.equal((await get(job))[0], 404);
+
+	const edit = {
+		idempotency_key: randomUUID(),
+		version: 1,
+		subject: "Re: Example",
+		body: "The plan is attached.",
+	};
+	const decline = {
+		idempotency_key: randomUUID(),
+		version: 2,
+		reason: "Replied from Outlook",
+	};
+	const edited = { draft_id: d, version: 2, status: "pending" };
+	assert.deepEqual(await save(alex, `${path}/edit`, edit), [200, edited]);
+	assert.deepEqual(await save(alex, `${path}/edit`, edit), [
+		200,
+		{ ...edited, replayed: true },
+	]);
+	assert.partialDeepStrictEqual((await get())[1], {
+		...edited,
+		body: edit.body,
+		subject: edit.subject,
+	});
+	for (const [action, args] of [
+		["edit", edit],
+		["dismissal", decline],
+	] as const) {
+		const route = `${path}/${action}`;
+		const attempt = {
+			...args,
+			idempotency_key: randomUUID(),
+			version: 1,
+		};
+		assert.equal((await save(blair, route, attempt))[0], 403);
+		assert.equal((await save(job, route, attempt))[0], 404);
+		const [stale, refusal] = await save(alex, route, attempt);
+		assert.equal(stale, 409);
+		assert.partialDeepStrictEqual(refusal, {
+			error: "version_conflict",
+			version: 2,
+		});
+	}
+	assert.equal((await post(`${path}/dismissal`, { version: 2 }, alex))[0], 400);
+	const dismissed = { draft_id: d, version: 3, status: "dismissed" };
+	assert.deepEqual(await save(alex, `${path}/dismissal`, decline), [
+		200,
+		dismissed,
+	]);
+	assert.deepEqual(await save(alex, `${path}/dismissal`, decline), [
+		200,
+		{ ...dismissed, replayed: true },
+	]);
+	assert.partialDeepStrictEqual((await get())[1], dismissed);
+	const [closed, refusal] = await post(
+		`${path}/edit`,
+		{ version: 3, subject: edit.subject, body: edit.body },
+		alex,
+	);
+	assert.equal(closed, 409);
+	assert.partialDeepStrictEqual(refusal, {
+		error: "draft_changed",
+		version: 3,
+	});
+});
+
+test("draft detail shows the frozen addresses and attached documents after approval", async () => {
+	const d = await draft(21);
+	assert.equal(
+		(await submit(d, { cc: "frozen@example.test", document_ids: [id(50)] }))[0],
+		200,
+	);
+	const [status, detail] = await save(
+		{ user: "alex" },
+		`reply-drafts/${d}`,
+		{},
+		"GET",
+	);
+	assert.equal(status, 200);
+	assert.partialDeepStrictEqual(detail, {
+		status: "approved",
+		version: 2,
+		to: mail.to,
+		cc: "frozen@example.test",
+		attachments: [
+			{ document_id: id(50), name: "Example plan", content_type: null },
+		],
+	});
+});
+
+test("an approved draft refuses edits and repeat approval and still records its receipt", async () => {
 	const { d, a } = await approved(19);
+	assert.partialDeepStrictEqual(
+		await post(
+			`reply-drafts/${d}/edit`,
+			{ version: a.version, subject: "Revised subject", body: "Revised reply" },
+			{ user: "alex" },
+		),
+		[409, { error: "draft_changed", version: a.version }],
+	);
 	const [status, refusal] = await submit(d, { version: 2 });
 	assert.deepEqual(
 		[status, refusal.error, refusal.rule],

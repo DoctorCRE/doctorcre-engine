@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { Refusal, refuse } from "./answer.ts";
+import { answerNextRead, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
+import { readProposal } from "./home-inbox-review.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { cancelCurrentStep, resolveStepOwner } from "./next-steps.ts";
@@ -460,3 +461,11 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 			},
 		),
 );
+
+proposalDecisions.get("/proposals/:id", async (c) => {
+	const id = c.req.param("id");
+	if (!isUuid(id)) return refuse(c, new Refusal(404, "not_found"));
+	return answerNextRead(c, "read-proposal", (tx, userId) =>
+		readProposal(tx, userId, id),
+	);
+});

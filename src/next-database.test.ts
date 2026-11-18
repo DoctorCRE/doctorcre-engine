@@ -7489,12 +7489,22 @@ test("competing phase acceptances hold the deal until the first decision complet
 	}
 });
 
-test("a merge collapses matching suggestions and keeps the removed proposal in history", () =>
+test("a merge collapses matching suggestions, clears their removed mark and keeps proposal history", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${id(905)}', 'person', 'Example Suggested Duplicate');
 		insert into activity_about (activity_id, party_id) values ('${CALL}', '${id(905)}');
 		${stageProposal()}; ${stageProposal({ id: id(901), party_id: id(905) })};
-		${asUser(USER)}; select merge_party('${id(905)}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+		${asUser(USER)};
+		insert into home_mark (user_id, proposal_id, disposition) values ('${USER}', '${id(901)}', 'settled');
+		select merge_party('${id(905)}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
+		assert.equal(
+			(
+				await db.query("select from home_mark where proposal_id = $1", [
+					id(901),
+				])
+			).rowCount,
+			0,
+		);
 		assert.equal(
 			(await db.query("select count(*) from proposal")).rows[0].count,
 			"1",

@@ -39,7 +39,7 @@ import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
 import { relationships } from "./relationships/routes.ts";
-import { replyJobs, replySubmissions } from "./reply-drafts.ts";
+import { replyDrafts, replyJobs } from "./reply-drafts.ts";
 import { routerQueue } from "./router-queue.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
@@ -101,7 +101,7 @@ app.route("/api/engine", nextAgenda);
 app.route("/api/engine", calendarDismissal);
 app.route("/api/engine", activityDoor);
 app.route("/api/engine", attachmentFiles);
-app.route("/api/engine", replySubmissions);
+app.route("/api/engine", replyDrafts);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
 app.use(

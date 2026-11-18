@@ -1,4 +1,6 @@
 import { type RawBuilder, sql, type Transaction } from "kysely";
+import { jsonObjectFrom } from "kysely/helpers/postgres";
+import { isoMillis, Refusal } from "./answer.ts";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {
@@ -34,6 +36,7 @@ type Suggestion = ReviewRow &
 	Pick<SuggestionReference, "activity_id" | "activity_kind"> & {
 		due_on: string | null;
 		suggestions: SuggestionReference[];
+		member_ids: string[];
 	};
 
 function draftRows(userId: string, limit?: number, itemId?: string) {
@@ -70,6 +73,83 @@ function draftRows(userId: string, limit?: number, itemId?: string) {
 		order by (status = 'sent'), activity_at desc, id
 		limit ${limit ?? null}
 	`;
+}
+
+const visibleSuggestion = (userId: string) => sql<boolean>`
+	case
+		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
+		when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
+		else p.changed_for_user_id = ${userId}::uuid
+			or (p.status <> 'pending' and exists (
+				select from change where table_name = 'proposal' and action = 'insert'
+					and record = jsonb_build_object('id', p.id) and changed_for_user_id = ${userId}::uuid
+			))
+			or exists (select from email_mailbox m where m.activity_id = a.id and m.user_id = ${userId}::uuid)
+			or (p.activity_kind in ('call', 'meeting')
+				and ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id))
+	end
+`;
+
+export async function readProposal(
+	db: Transaction<DB>,
+	userId: string,
+	id: string,
+) {
+	const proposal = await db
+		.selectFrom("proposal as p")
+		.innerJoin("activity as a", "a.id", "p.activity_id")
+		.leftJoin("next_step as step", "step.id", "p.next_step_id")
+		.leftJoin("deal as d", "d.id", "p.deal_id")
+		.leftJoin("party", "party.id", "p.party_id")
+		.leftJoin("property", "property.id", "p.property_id")
+		.select([
+			"p.id as proposal_id",
+			"p.kind",
+			"p.evidence",
+			"p.next_step_id",
+			"p.deal_id",
+			"p.party_id",
+			"p.property_id",
+			"p.owner_party_id",
+			"p.from_phase",
+			"p.to_phase",
+			"p.phase_on",
+			"p.from_stage",
+			"p.to_stage",
+			"p.how_found",
+			"p.strength",
+			"p.reason",
+		])
+		.select((eb) => [
+			eb.fn.coalesce("p.what", "step.what").as("what"),
+			eb.fn.coalesce("p.due_on", "step.due_on").as("due_on"),
+			eb.fn
+				.coalesce("d.name", "party.name", "property.name", "property.address")
+				.as("target_name"),
+			jsonObjectFrom(
+				eb
+					.selectFrom("activity as source")
+					.leftJoin("email as e", "e.activity_id", "source.id")
+					.whereRef("source.id", "=", "a.id")
+					.select((source) => [
+						"source.id",
+						"source.kind",
+						"source.summary",
+						"e.sender",
+						"e.sender_name",
+						"e.subject",
+						"e.body",
+						isoMillis(source.ref("source.happened_at")).as("happened_at"),
+					]),
+			).as("source_activity"),
+		])
+		.where("p.id", "=", id)
+		.where("p.status", "=", "pending")
+		.where(sql<boolean>`case when p.kind = 'next_step_done'
+			then step.owner_party_id = ${userId}::uuid and step.status = 'open'
+			else ${visibleSuggestion(userId)} end`)
+		.executeTakeFirst();
+	return proposal ?? new Refusal(404, "not_found");
 }
 
 function suggestionRows(userId: string, limit?: number, itemId?: string) {
@@ -112,23 +192,13 @@ function suggestionRows(userId: string, limit?: number, itemId?: string) {
 			left join property on property.id = p.property_id
 			left join phase on phase.slug = p.to_phase
 			where p.kind not in ('next_step_done', 'email_lead')
-				and case
-					when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
-					when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
-					else p.changed_for_user_id = ${userId}::uuid
-						or (p.status <> 'pending' and exists (
-							select from change where table_name = 'proposal' and action = 'insert'
-								and record = jsonb_build_object('id', p.id) and changed_for_user_id = ${userId}::uuid
-						))
-						or exists (select from email_mailbox m where m.activity_id = e.activity_id and m.user_id = ${userId}::uuid)
-						or (p.activity_kind in ('call', 'meeting')
-							and ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id))
-				end
+				and ${visibleSuggestion(userId)}
 		), grouped as (
 			select visible.*,
 				coalesce(first_value(email_title) over (source_group order by (status = 'pending') desc, source_at desc, activity_id desc), suggestion_title) as title,
 				row_number() over same_source as position,
 				max(proposal_version) over source_group as source_change_id,
+				array_agg(id) over all_members as member_ids,
 				md5(string_agg(id::text, ':') filter (where status = 'pending') over all_members) as source_version,
 				jsonb_agg(reference) filter (where status = 'pending') over all_members as suggestions
 			from visible
@@ -149,6 +219,7 @@ type ReviewSource = "email_proposal" | "capture_session" | "notification";
 type ReviewState = "working" | "failed" | "needs_attention" | "done";
 type ReviewKind = "proposal" | "reply_draft";
 type ReviewMark = {
+	mark_item_id: string;
 	mark_version: string | null;
 	settled: boolean;
 	snoozed_until: string | null;
@@ -160,17 +231,20 @@ function markedReviews<Row extends ReviewRow>(
 	kind: ReviewKind,
 ) {
 	return sql<Row & ReviewMark>`
-		select card.*, history.mark_version,
+		select card.*, history.mark_version, coalesce(history.item_id, card.id) as mark_item_id,
 			coalesce(m.disposition = 'settled' and history.settled_version >= card.source_change_id, false) as settled,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
 		from (${rows}) card
-		left join home_mark m on m.user_id = ${userId}::uuid and m.item_kind = ${kind} and m.item_id = card.id
-		cross join lateral (
-			select max(id) as mark_version,
-				max(id) filter (where new_value ->> 'disposition' = 'settled') as settled_version
-			from change where table_name = 'home_mark'
-				and record = jsonb_build_object('user_id', ${userId}::uuid, 'item_kind', ${kind}::text, 'item_id', card.id)
-		) history
+		left join lateral (
+			select member.item_id, max(h.id) as mark_version,
+				max(h.id) filter (where h.new_value ->> 'disposition' = 'settled') as settled_version
+			from unnest(${kind === "proposal" ? sql`card.member_ids` : sql`array[card.id]`}) member(item_id)
+			join change h on h.table_name = 'home_mark'
+				and h.record = jsonb_build_object('user_id', ${userId}::uuid, 'item_kind', ${kind}::text, 'item_id', member.item_id)
+			group by member.item_id order by mark_version desc limit 1
+		) history on true
+		left join home_mark m on m.user_id = ${userId}::uuid
+			and m.item_kind = ${kind} and m.item_id = coalesce(history.item_id, card.id)
 	`;
 }
 
@@ -180,18 +254,32 @@ export async function lockHomeReview(
 	id: string,
 	userId: string,
 ) {
-	const locked = await tx
+	const group =
+		kind === "proposal"
+			? (await suggestionRows(userId, 1, id).execute(tx)).rows[0]
+			: undefined;
+	if (kind === "proposal" && !group) return;
+	await tx
 		.selectFrom(kind)
 		.select("id")
-		.where("id", "=", id)
+		.where("id", "in", group?.member_ids ?? [id])
+		.orderBy("id")
 		.forNoKeyUpdate()
-		.executeTakeFirst();
-	if (!locked) return;
+		.execute();
 	const query = kind === "proposal" ? suggestionRows : draftRows;
 	const {
 		rows: [card],
-	} = await query(userId, 1, id).execute(tx);
-	return card?.source_change_id;
+	} = await markedReviews<ReviewRow>(
+		query(userId, 1, id),
+		userId,
+		kind,
+	).execute(tx);
+	return (
+		card && {
+			source_version: card.source_change_id,
+			mark_item_id: card.mark_item_id,
+		}
+	);
 }
 
 function reviewCard(
