@@ -4,6 +4,7 @@ import { filedEmails } from "./activity/filed-emails.ts";
 import { activityDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
 import { attachmentFiles, attachments } from "./attachments.ts";
+import { cadence } from "./cadence.ts";
 import { calendarDismissal, nextAgenda } from "./calendar/next-agenda.ts";
 import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
@@ -105,6 +106,7 @@ app.use(
 	accessDoor("jobs", (env) => env.JOBS_ACCESS_AUD),
 	jobStamp,
 );
+app.route("/jobs", cadence);
 app.route("/jobs", nextDeals);
 app.route("/jobs", nextSteps);
 app.route("/jobs", proposalJobs);

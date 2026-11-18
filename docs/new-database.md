@@ -1350,6 +1350,16 @@ The suggestion kinds:
 - **Stamp.** The user, or `cadence`, `mail_capture`, `call_capture` or `agent` for a partner.
 - **Refusals.** `422 database_refused_the_statement { rule }` for a checklist item of the wrong shape (`next_step_item_shape`), a cancel without a reason, or a step about two records; `404 not_found` for the step or its record.
 
+#### Cadence inputs
+
+`GET /jobs/cadence?collection=clients|leads|vendors|next_steps&after=&limit=` is read-only and requires the registered `cadence` job behind the jobs Access door. For `next_steps`, set `status=open|done`. Each collection answers `{ items, next_cursor }` in id order. `after` excludes the last id already read, and the final cursor is null. `limit` defaults to 100 and accepts 1 through 500. Invalid queries return `400 invalid_field_value`. Another or unregistered job gets `403 unknown_job`.
+
+- Subjects answer `{ id, name, ref, client_status, owner, owner_party_id, old_ids }`. Use the subject's `id` as `party_id` in door 18. `old_ids` lists `old_system` outside ids as `{ value }`. `ref` is the first retained `old_system_ref` with the collection's C-, L- or V- prefix, or null. `owner` is the owner's user slug.
+- Clients and converted leads answer the party's stored `cold` or `paused` status when set, and its derived client status otherwise. Leads without a client role answer null for that status. Leads also answer `estimated_lease_on` as a date or null. Converted parties appear in both collections because the active lead rules use lease dates and only the client and vendor rules use completions. Vendors answer null for client status and both owner fields.
+- Open party steps answer `{ id, party_id, owner_party_id }`, including held steps. Done party steps also answer `{ description, done_at }`. Skip completions with a null `done_at`.
+
+Rules and lookback stay on the old side. Only the owner provisions the `cadence` job.
+
 ### What can start when this merges
 
 - Program 26, mail intake: email and activity and the filed-email read (19), attachments (20) and the agenda (25). Intake also proposes an unknown sender as a lead through `propose-email-lead` (`outlook_intake.py:1376`, written at `:1729`). That is the lead candidate door, owned by slice 21 and not fixed here, so that one call stays on the old system until 21 fixes it.
