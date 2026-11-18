@@ -155,7 +155,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ## Questions for the owner
 
-Questions 1 to 3 are roadmap asks 9 to 11, and question 9 is the roadmap ask "one tap for each on the add line". The others are not on it yet. Each recommendation comes first.
+Questions 1 and 3 are roadmap asks 9 and 11. Question 9 is the roadmap ask "one tap for each on the add line". Each recommendation comes first.
 
 1. Client website: the new database has no place yet for a deal's client website. Recommended: add one, so the deal page keeps its Client website link after the switch.
 2. Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move (#718).

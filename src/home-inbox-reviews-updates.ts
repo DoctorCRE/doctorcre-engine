@@ -17,7 +17,6 @@ function noticeCard(
 		open_url,
 		kind_label,
 		source_version,
-		mark_version,
 		snoozed_until = null,
 		settled = false,
 	}: {
@@ -25,7 +24,6 @@ function noticeCard(
 		open_url: string;
 		kind_label: "Task" | "Update";
 		source_version: string;
-		mark_version: string;
 		snoozed_until?: string | null;
 		settled?: boolean;
 	},
@@ -37,7 +35,6 @@ function noticeCard(
 		source_id: notice.id,
 		source_version,
 		source_state: "needs_attention",
-		base_version: `${source_version}:${mark_version}:${disposition}`,
 		title: notice.title,
 		activity_at: new Date(notice.activity_at).toISOString(),
 		completed_at: null,
@@ -97,17 +94,23 @@ export async function readCompletionReviews(
 
 export function completionReviewCard(
 	review: CompletionReview,
-	stepVersion: string,
-	markVersion: string | null,
+	step: {
+		item_id: string;
+		base_version: string;
+		source_version: string;
+		action_version: number;
+	},
 ) {
+	const { item_id, base_version, source_version, action_version } = step;
 	return {
 		...noticeCard(review, {
-			item_id: `next_step_done:${review.id}`,
+			item_id,
 			open_url: `/deals?deal=${review.deal_id}&focus=next-step`,
 			kind_label: "Task",
-			source_version: stepVersion,
-			mark_version: markVersion ?? "0",
+			source_version,
 		}),
+		base_version,
+		action_version,
 		title: `Did this happen? ${review.title}`,
 		completion_review: {
 			proposal_id: review.id,
@@ -163,16 +166,19 @@ export async function readHomeUpdates(
 		order by u.created_at desc, u.id
 		limit ${limit}
 	`.execute(db);
-	return rows.map((update) => ({
-		...noticeCard(update, {
+	return rows.map((update) => {
+		const card = noticeCard(update, {
 			item_id: `notification:${update.id}`,
 			open_url: `/deals?deal=${update.deal_id}`,
 			kind_label: "Update",
 			source_version: update.source_version,
-			mark_version: update.mark_version,
 			snoozed_until: update.snoozed_until,
 			settled: update.settled,
-		}),
-		checklist_item_ref: update.checklist_item_ref,
-	}));
+		});
+		return {
+			...card,
+			base_version: `${update.source_version}:${update.mark_version}:${card.disposition}`,
+			checklist_item_ref: update.checklist_item_ref,
+		};
+	});
 }
