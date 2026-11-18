@@ -159,7 +159,7 @@ function savePendingDraft(
 				fail(new Refusal(409, "version_conflict", current));
 			if (draft.status !== "pending")
 				fail(new Refusal(409, "draft_changed", current));
-			const saved = await tx
+			return tx
 				.updateTable("reply_draft")
 				.set(
 					"reason" in request
@@ -169,7 +169,6 @@ function savePendingDraft(
 				.where("id", "=", draft.id)
 				.returning(["id as draft_id", "revision as version", "status"])
 				.executeTakeFirstOrThrow();
-			return saved;
 		},
 	);
 }

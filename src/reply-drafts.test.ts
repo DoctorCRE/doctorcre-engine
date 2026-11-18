@@ -534,8 +534,16 @@ test("draft detail shows the frozen addresses and attached documents after appro
 	});
 });
 
-test("an approved draft refuses approval at its current version and still records its receipt", async () => {
+test("an approved draft refuses edits and repeat approval and still records its receipt", async () => {
 	const { d, a } = await approved(19);
+	assert.partialDeepStrictEqual(
+		await post(
+			`reply-drafts/${d}/edit`,
+			{ version: a.version, subject: "Revised subject", body: "Revised reply" },
+			{ user: "alex" },
+		),
+		[409, { error: "draft_changed", version: a.version }],
+	);
 	const [status, refusal] = await submit(d, { version: 2 });
 	assert.deepEqual(
 		[status, refusal.error, refusal.rule],

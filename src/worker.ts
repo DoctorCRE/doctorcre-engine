@@ -34,6 +34,7 @@ import { leads } from "./leads/routes.ts";
 import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { automaticStepUndo, nextSteps } from "./next-steps.ts";
+import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
@@ -85,6 +86,7 @@ const engine = new Hono<WorkerEnv>()
 
 app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
+app.route("/api/engine", partySearch);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", dealParticipants);
 app.route("/api/engine", criticalDates);

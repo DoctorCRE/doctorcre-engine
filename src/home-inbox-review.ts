@@ -117,7 +117,7 @@ export async function readProposal(
 					.selectFrom("activity as source")
 					.leftJoin("email as e", "e.activity_id", "source.id")
 					.whereRef("source.id", "=", "a.id")
-					.select([
+					.select((source) => [
 						"source.id",
 						"source.kind",
 						"source.summary",
@@ -125,7 +125,7 @@ export async function readProposal(
 						"e.sender_name",
 						"e.subject",
 						"e.body",
-						isoMillis(eb.ref("a.happened_at")).as("happened_at"),
+						isoMillis(source.ref("source.happened_at")).as("happened_at"),
 					]),
 			).as("source_activity"),
 		])
