@@ -55,6 +55,8 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Search finds deals by name, client, kind or close date.
 - [ ] Each deal opens its deal page.
 
+With the new read, Closed deals shows "Closed automatically: Invoice received" with an `11/17`-style date when the nightly invoice job closed the deal.
+
 ## National Accounts
 
 - [ ] One card per national account: its name, its account owner, and how many open deals, late next steps and parked deals it has. No client codes.
@@ -118,7 +120,7 @@ Seen on the live Deals screen on 2026-11-18 (screen), or read in the app's Deals
 - App #950, in review, shows one next step and hides the watch line until the watch is read. It shows the client once and moves website setup below the snapshot. Its board and deal page still choose the next step from different inputs, so they can differ (code).
 - A parked card's title is not a link or button. The card opens on a click outside its buttons, or on Enter or Space when focused (code).
 - "Moved automatically" shows `10/19`, and the card has no Undo (screen).
-- The new read can label a close made by the nightly invoice job. Today's copied phase moves lack the provenance needed to label them as automatic.
+- Copied phase moves show no automatic mark in the new read.
 - On a deal Dell owns, Joe's Documents tab says "Request unavailable or version changed" (screen, old system #3232).
 - Email follow-ups on a deal page offer "File email to this deal", with File to existing deal and New deal. Many say "Sender unavailable" or "Summary unavailable", and show role words such as `landlord_side` (screen).
 - Critical dates read "lease expiration estimated" and "864 days" in lower case (screen).
@@ -127,4 +129,3 @@ Seen on the live Deals screen on 2026-11-18 (screen), or read in the app's Deals
 - Lost deals show no reason, and most show "Close date: Not recorded" (screen, roadmap ask 4).
 - Add deal asks "Type", which mixes kind and reason, labels the phase "Stage", and takes the client as "C-ref or exact client name" (code).
 - The phase move offers a Paused outcome, and asks "Next item (2–4 words)", "Evidence" and "In your words" (code).
-- "Mark inactive" on a prospect deal has no place in the new database (`docs/new-database.md` § "Deals reads for the app").

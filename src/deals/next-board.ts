@@ -132,14 +132,15 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 							"prior.phase as prior_phase",
 							"p.phase",
 							"p.reason",
-							asText(eb.ref("invoice.email_date")).as("evidence_date"),
+							asText(
+								sql`(p.happened_at at time zone 'America/Chicago')::date`,
+							).as("evidence_date"),
 							asText(eb.ref("p.changed_at")).as("recorded_at"),
 							sql.lit(true).as("automatic"),
 						])
 						.whereRef("invoice.deal_id", "=", "d.id")
 						.whereRef("invoice.applied_phase_at", "=", "p.happened_at")
 						.whereRef("prior.phase", "<>", "p.phase")
-						.where("invoice.status", "=", "applied")
 						.where("p.changed_by_job", "=", "lead_stage"),
 				).as("phase_change"),
 				eb

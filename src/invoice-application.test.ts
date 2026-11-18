@@ -208,18 +208,28 @@ test("lead stages close and date an invoice once, and a partner can undo both ch
 		stamps.rows,
 		Array(2).fill({ changed_by_job: "lead_stage", changed_for_user_id: owner }),
 	);
+	const {
+		rows: [close],
+	} = await db.query<{ closed_on: string }>(
+		`select ((happened_at at time zone 'America/Chicago')::date)::text as closed_on
+		from deal_phase_change where deal_id = $1 and phase = 'closed'`,
+		[deal],
+	);
+	assert.ok(close);
+	assert.notEqual(close.closed_on, invoiceDate);
 	const phase_change = {
 		event_id: invoice,
 		prior_phase: "closing",
 		phase: "closed",
 		reason: "Invoice received",
-		evidence_date: invoiceDate,
+		evidence_date: close.closed_on,
 		automatic: true,
 	};
 	assert.partialDeepStrictEqual(await readDeals("deals"), {
-		closed_deals: [{ id: deal, phase_change }],
+		closed_deals: [{ id: deal, closed_on: close.closed_on, phase_change }],
 	});
 	assert.partialDeepStrictEqual(await readDeals(`deals/${deal}`), {
+		closed_on: close.closed_on,
 		phase_change,
 	});
 
