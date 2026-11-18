@@ -14,6 +14,12 @@ const [ALEX, BLAIR, CLIENT, CADENCE_CLIENT, DEAL, PROPERTY] = [
 	id(10),
 	id(11),
 ];
+const OLD_ROLES = [
+	{ kind: "lead", id: id(20), party_id: id(30) },
+	{ kind: "client", id: id(21), party_id: id(31) },
+	{ kind: "vendor", id: id(22), party_id: id(32) },
+] as const;
+const OTHER_SOURCE_VENDOR_ID = id(23);
 const ITEM = {
 	title: "Example plan sent",
 	bullets: ["First example point"],
@@ -35,6 +41,21 @@ before(async () => {
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
 		insert into deal (id, name, owner_user_id) values ('${DEAL}', 'Example Deal', '${ALEX}');
 		insert into property (id, address) values ('${PROPERTY}', 'Example Property');
+		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('vendor', 'Vendor');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New');
+		insert into how_found (slug, label) values ('inbound', 'Inbound');
+		${OLD_ROLES.map(
+			({ kind, id, party_id }) => `
+			insert into party (id, kind, name, how_found)
+			values ('${party_id}', 'company', 'Example ${kind}', 'inbound');
+			insert into party_role (party_id, role, stage)
+			values ('${party_id}', '${kind}', ${kind === "lead" ? "'new'" : "null"});
+			${kind === "client" ? `insert into client (party_id) values ('${party_id}');` : ""}
+			insert into outside_id (source, value, party_id)
+			values ('old_system', '${id}', '${party_id}');`,
+		).join("")}
+		insert into outside_id (source, value, party_id)
+		values ('other_source', '${OTHER_SOURCE_VENDOR_ID}', '${OLD_ROLES[2].party_id}');
 		commit;`);
 });
 after(cleanup);
@@ -163,6 +184,113 @@ test("a partner can complete their step on a party and a missing party is refuse
 	]);
 	const [missing, refusal] = await complete(randomUUID());
 	assert.deepEqual([missing, refusal.error], [404, "not_found"]);
+});
+
+test("replacing a held party step spares the other owner and replay spares the newest step", async () => {
+	const agent = { job: "agent", for_user: "alex" };
+	const party_id = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${party_id}', 'company', 'Example Office'); commit;`);
+	const target = { party_id };
+	const [firstStatus, first] = await create(agent, {
+		...target,
+		what: "Check the measurements",
+		hold_until: "2035-01-01",
+	});
+	const [otherStatus, other] = await create(
+		{ user: "blair" },
+		{
+			...target,
+			what: "Ask about parking",
+		},
+	);
+	assert.deepEqual([firstStatus, otherStatus], [201, 201]);
+	const [conflict, refused] = await create(agent, {
+		...target,
+		what: "Send the floor plan",
+	});
+	assert.deepEqual(
+		[conflict, refused.error, refused.next_step_id],
+		[409, "open_step_exists", first.next_step_id],
+	);
+	const request = {
+		...target,
+		idempotency_key: randomUUID(),
+		what: "Send the floor plan",
+		replaces: "current",
+	};
+	const [replaced, answer] = await save(agent, "next-steps", request);
+	assert.equal(replaced, 201);
+	assert.equal((await stepNow(first.next_step_id)).status, "cancelled");
+	assert.equal((await stepNow(other.next_step_id)).status, "open");
+	assert.equal((await stepNow(answer.next_step_id)).status, "open");
+	const [latestStatus, latest] = await save(agent, "next-steps", {
+		...request,
+		idempotency_key: randomUUID(),
+		what: "Confirm the tour",
+	});
+	assert.equal(latestStatus, 201);
+	assert.deepEqual(await save(agent, "next-steps", request), [
+		201,
+		{ ...answer, replayed: true },
+	]);
+	assert.equal((await stepNow(latest.next_step_id)).status, "open");
+});
+
+for (const { kind, id, party_id } of OLD_ROLES) {
+	test(`a copied ${kind} role ID replaces and completes its party's step`, async () => {
+		const agent = { job: "agent", for_user: "alex" };
+		const [firstStatus, first] = await create(agent, {
+			party_id,
+			what: "Check the measurements",
+		});
+		assert.equal(firstStatus, 201);
+		const old_role = { kind, id };
+		const [status, step] = await create(agent, {
+			old_role,
+			what: "Send the floor plan",
+			replaces: "current",
+		});
+		assert.equal(status, 201);
+		assert.equal(step.party_id, party_id);
+		assert.equal((await stepNow(first.next_step_id)).status, "cancelled");
+		const args = { idempotency_key: randomUUID(), old_role };
+		const answer = {
+			next_step_id: step.next_step_id,
+			status: "done",
+			party_id,
+		};
+		assert.deepEqual(await save(agent, "next-steps/complete", args), [
+			200,
+			answer,
+		]);
+		assert.equal((await stepNow(step.next_step_id)).status, "done");
+		assert.deepEqual(await save(agent, "next-steps/complete", args), [
+			200,
+			{ ...answer, replayed: true },
+		]);
+	});
+}
+
+async function assertOldRoleNotFound(old_role: object) {
+	const agent = { job: "agent", for_user: "blair" };
+	for (const path of ["next-steps", "next-steps/complete"]) {
+		const [status, answer] = await save(agent, path, {
+			idempotency_key: randomUUID(),
+			old_role,
+			...(path === "next-steps" && { what: "Send the floor plan" }),
+		});
+		assert.deepEqual([status, answer.error], [404, "old_role_not_found"]);
+	}
+}
+
+test("an unknown old role ID or a mismatched kind is refused", async () => {
+	await assertOldRoleNotFound({ kind: "vendor", id: OLD_ROLES[2].party_id });
+	await assertOldRoleNotFound({ kind: "vendor", id: OLD_ROLES[0].id });
+});
+
+test("a vendor ID from another source is refused as an old role ID", async () => {
+	await assertOldRoleNotFound({ kind: "vendor", id: OTHER_SOURCE_VENDOR_ID });
 });
 
 test("a partner's checklist item lands once on its deal, stamped with the partner", async () => {
@@ -458,7 +586,7 @@ test("a request missing or misnaming its arguments, or naming no known step, is 
 	assert.deepEqual(await refusal("next-steps", { idempotency_key: key }), [
 		400,
 		"missing_required",
-		["what", "deal_id", "party_id", "property_id"],
+		["what", "deal_id", "party_id", "property_id", "old_role"],
 	]);
 	const step = await newStep();
 	assert.deepEqual(

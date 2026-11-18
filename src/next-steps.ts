@@ -25,13 +25,28 @@ import {
 import { SaveRefusal } from "./save.ts";
 import { latestChange, seenAnswer, unseenChanges } from "./seen-change.ts";
 
+const SUBJECTS = ["deal_id", "party_id", "old_role"] as const;
 const RECORDS = ["deal_id", "party_id", "property_id"] as const;
-const SUBJECTS = ["deal_id", "party_id"] as const;
-const SUBJECT_COMPLETE = {
-	idempotency_key: isUuid,
+const OLD_ROLE = {
+	kind: (value: unknown): value is "lead" | "client" | "vendor" =>
+		value === "lead" || value === "client" || value === "vendor",
+	id: isUuid,
+};
+const STEP_SUBJECT = {
 	deal_id: optional(isUuid),
 	party_id: optional(isUuid),
+	old_role: optional(fitting(OLD_ROLE)),
 };
+const SUBJECT_COMPLETE = { idempotency_key: isUuid, ...STEP_SUBJECT };
+type CurrentSubject = { kind: "deal" | "party"; id: string };
+
+function currentSubject(
+	deal_id: string | undefined,
+	party_id: string | undefined,
+): CurrentSubject | undefined {
+	if (deal_id && !party_id) return { kind: "deal", id: deal_id };
+	if (party_id && !deal_id) return { kind: "party", id: party_id };
+}
 
 const BULLET_KINDS = ["promised", "call", "suggestion", "status"] as const;
 // A bullet is text, or the dated fact the old system writes and the copy keeps.
@@ -56,8 +71,7 @@ const STEP_FIELDS = {
 
 const NEW_STEP = {
 	idempotency_key: isUuid,
-	deal_id: optional(isUuid),
-	party_id: optional(isUuid),
+	...STEP_SUBJECT,
 	property_id: optional(isUuid),
 	...STEP_FIELDS,
 	owner: optional(isText),
@@ -112,17 +126,53 @@ export async function resolveStepOwner(
 	return userId(tx, owner);
 }
 
+async function resolveOldRole(
+	tx: Transaction<DB>,
+	{
+		old_role,
+		deal_id,
+		party_id,
+		property_id,
+	}: Fitted<typeof STEP_SUBJECT> & {
+		property_id?: string;
+	},
+) {
+	if (!old_role) return;
+	if (deal_id || party_id || property_id)
+		throw new SaveRefusal(
+			new Refusal(400, "invalid_field_value", { fields: ["old_role"] }),
+		);
+	const match = await tx
+		.selectFrom("outside_id as o")
+		.innerJoin("party_role as r", (join) =>
+			join
+				.onRef("r.party_id", "=", "o.party_id")
+				.on("r.role", "=", old_role.kind),
+		)
+		.select("r.party_id")
+		.where("o.source", "=", "old_system")
+		.where("o.value", "=", old_role.id.toLowerCase())
+		.executeTakeFirst();
+	if (!match) throw new SaveRefusal(new Refusal(404, "old_role_not_found"));
+	return match.party_id;
+}
+
+async function lockSubject(tx: Transaction<DB>, { kind, id }: CurrentSubject) {
+	const record = await tx
+		.selectFrom(kind)
+		.select("id")
+		.where("id", "=", id)
+		.forNoKeyUpdate()
+		.executeTakeFirst();
+	if (!record) throw new SaveRefusal(new Refusal(404, "not_found"));
+}
+
 export async function cancelCurrentStep(
 	tx: Transaction<DB>,
-	deal_id: string,
+	subject: CurrentSubject,
 	owner: string | null,
 ) {
-	await tx
-		.selectFrom("deal")
-		.select("id")
-		.where("id", "=", deal_id)
-		.forNoKeyUpdate()
-		.execute();
+	await lockSubject(tx, subject);
 	await tx
 		.updateTable("next_step")
 		.set({
@@ -130,7 +180,7 @@ export async function cancelCurrentStep(
 			resolved_at: sql<string>`clock_timestamp()`,
 			resolution_reason: "Replaced by a new next step",
 		})
-		.where("deal_id", "=", deal_id)
+		.where(`${subject.kind}_id`, "=", subject.id)
 		.where("status", "=", "open")
 		.where("item_title", "is", null)
 		.where(
@@ -146,15 +196,18 @@ export async function createStep(
 	tx: Transaction<DB>,
 	request: Omit<Fitted<typeof NEW_STEP>, "idempotency_key">,
 ) {
-	const { deal_id, party_id, property_id, what, item, replaces } = request;
+	const { deal_id, property_id, what, item, replaces } = request;
 	const { due_on, hold_until } = request;
+	const copiedParty = await resolveOldRole(tx, request);
+	const party_id = copiedParty ?? request.party_id;
 	const owner_party_id = (await resolveStepOwner(tx, request)) ?? null;
 	if (replaces) {
-		if (!deal_id || item || party_id || property_id)
+		const subject = currentSubject(deal_id, party_id);
+		if (!subject || item || property_id)
 			throw new SaveRefusal(
 				new Refusal(400, "invalid_field_value", { fields: ["replaces"] }),
 			);
-		await cancelCurrentStep(tx, deal_id, owner_party_id);
+		await cancelCurrentStep(tx, subject, owner_party_id);
 	}
 	const insert = sql<{ id: string }>`
 		insert into next_step (created_at, deal_id, party_id, property_id, what, owner_party_id, due_on, hold_until,
@@ -181,6 +234,7 @@ export async function createStep(
 	return {
 		next_step_id: id,
 		change_id: await latestChange(tx, "next_step", id),
+		...(copiedParty && { party_id: copiedParty }),
 	};
 }
 
@@ -271,31 +325,29 @@ async function endStep(
 
 async function completeCurrentStep(
 	tx: Transaction<DB>,
-	{ deal_id, party_id }: Fitted<typeof SUBJECT_COMPLETE>,
+	request: Fitted<typeof SUBJECT_COMPLETE>,
 ) {
-	const recordId = deal_id ?? party_id;
-	if (!recordId || (deal_id && party_id))
+	const copiedParty = await resolveOldRole(tx, request);
+	const subject = currentSubject(
+		request.deal_id,
+		copiedParty ?? request.party_id,
+	);
+	if (!subject)
 		throw new SaveRefusal(
 			new Refusal(400, "invalid_field_value", { fields: [...SUBJECTS] }),
 		);
-	const record = await tx
-		.selectFrom(deal_id ? "deal" : "party")
-		.select("id")
-		.where("id", "=", recordId)
-		.forNoKeyUpdate()
-		.executeTakeFirst();
-	if (!record) throw new SaveRefusal(new Refusal(404, "not_found"));
+	await lockSubject(tx, subject);
 	const step = await tx
 		.updateTable("next_step")
 		.set({ resolution: "done", done_at: sql<string>`clock_timestamp()` })
-		.where(deal_id ? "deal_id" : "party_id", "=", recordId)
+		.where(`${subject.kind}_id`, "=", subject.id)
 		.where("owner_party_id", "=", ACTING_USER)
 		.where("status", "=", "open")
 		.where("item_title", "is", null)
 		.returning(["id as next_step_id", "status"])
 		.executeTakeFirst();
 	if (!step) throw new SaveRefusal(new Refusal(409, "no_open_step"));
-	return step;
+	return { ...step, ...(copiedParty && { party_id: copiedParty }) };
 }
 
 export function automaticResolutions(tx: Transaction<DB>) {
@@ -410,7 +462,13 @@ export const nextSteps = new Hono<NextSaveEnv>()
 		answerNextSave(
 			c,
 			"next-step-create",
-			(body) => fit(body, NEW_STEP, ["idempotency_key", "what"], RECORDS),
+			(body) =>
+				fit(
+					body,
+					NEW_STEP,
+					["idempotency_key", "what"],
+					[...RECORDS, "old_role"],
+				),
 			createStep,
 			201,
 		),

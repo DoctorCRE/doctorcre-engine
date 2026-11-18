@@ -59,6 +59,7 @@ const HINTS = {
 	review_not_found: "Choose a review in your current agenda.",
 	step_open: "The step is already open.",
 	no_open_step: "You have no open next step on this record.",
+	old_role_not_found: "No copied party matches this old role ID and kind.",
 	automatic_resolution_changed: "Refresh Home before undoing this completion.",
 	open_step_exists: "This owner already has an open next step on this record.",
 	about_nothing:
