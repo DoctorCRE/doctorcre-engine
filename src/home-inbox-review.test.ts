@@ -355,6 +355,52 @@ test("Home shows one pending call log with the proposal to decide", async () => 
 	assert.equal(dismissed, 200);
 });
 
+test("Home uses the copied call log's reviewer when the call has no partner stamp", async () => {
+	const copied = id(42);
+	const unassigned = id(43);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${partner}', true);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
+			values ('${copied}', 'log_call', '${unstampedCall}', 'call', 'old_system', '${deal}', 'Review the plan.', 'Review the plan.');
+		select set_config('engine.user_id', '', true);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
+			values ('${unassigned}', 'log_call', '${unstampedCall}', 'call', 'old_system', '${deal}', 'Review the lease.', 'Review the lease.');
+		commit;`);
+	try {
+		const calls = async (user: string) =>
+			(await inbox(user)).filter(
+				(card) => card.open_url === `/calls?session=${unstampedCall}`,
+			);
+		assert.partialDeepStrictEqual(await calls("example"), [
+			{ proposal_id: copied, merged_source_ids: [copied] },
+		]);
+		assert.deepEqual(await calls("other"), []);
+		for (const [user, proposal, status] of [
+			["example", copied, 200],
+			["other", copied, 404],
+			["example", unassigned, 404],
+		] as const) {
+			const detail = await request({ user }, `proposals/${proposal}`, {
+				method: "GET",
+			});
+			assert.equal(detail.status, status);
+		}
+		const [status] = await save(
+			{ user: "example" },
+			`proposals/${copied}/decision`,
+			{
+				idempotency_key: randomUUID(),
+				decision: "dismiss",
+			},
+		);
+		assert.equal(status, 200);
+		assert.deepEqual(await calls("example"), []);
+	} finally {
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+			delete from proposal where id in ('${copied}', '${unassigned}'); commit;`);
+	}
+});
+
 test("An email suggestion names its sender and subject", async () => {
 	const filing = (await inbox("other")).find(
 		(card) => card.proposal_id === id(38),
