@@ -65,7 +65,7 @@ const messages: [n: number, account: string, header: string][] = [
 ];
 // biome-ignore format: one old row per line
 const mail: Mail[] = [
-	{ n: 40, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: deal, context: context(DOCTOR, "Example tour"), email: 90 },
+	{ n: 40, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: deal, context: context(DOCTOR, "Example tour", ', "conversation_id": "   "'), email: 90 },
 	{ n: 41, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: ["client_id", 20], context: context(DOCTOR, "Example tour"), email: 90 },
 	{ n: 42, kind: "email_in", time: "10:00", summary: "Email from doctor: Example tour", detail: "Example preview", link: ["lead_id", 21], context: context(DOCTOR, "Example tour", ', "conversation_id": "Tour-Thread="'), email: 91 },
 	{ n: 52, kind: "email_in", time: "10:00", summary: "Email from doctor: Example tour", link: deal, context: context(DOCTOR, "Example tour") },
@@ -80,7 +80,7 @@ const mail: Mail[] = [
 	{ n: 51, kind: "note", time: "16:00", summary: "Full text of email: Example lost", link: deal },
 	{ n: 53, kind: "call", time: "17:00", summary: "Example call about an email", link: deal, context: context(DOCTOR, "Example") },
 	{ n: 56, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: deal, context: context(DOCTOR, "Example visit", ', "lifecycle": {"state": "deleted"}'), email: 92 },
-	{ n: 57, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: ["client_id", 20], context: `'{"subject": "Example visit"}'`, email: 93 },
+	{ n: 57, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: ["client_id", 20], context: `'{"subject": "Example visit", "conversation_id": ""}'`, email: 93 },
 ];
 // Without a Message-ID; 60 and 61 are one email in two mailboxes, and 65 matches two emails that have one.
 // 66 was sent a second later and 67's subject has a space today's intake kept, so each is its own email.

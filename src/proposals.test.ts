@@ -410,14 +410,15 @@ test("the queue follows Outlook conversations and falls back to subject for mail
  insert into activity (id, kind, happened_at) values
   ('${id(51)}', 'email', now() - interval '60 days'), ('${id(52)}', 'email', now() - interval '2 days'),
   ('${id(53)}', 'email', now() - interval '1 day'), ('${id(54)}', 'email', now() - interval '1 hour'),
-  ('${id(55)}', 'email', now());
+  ('${id(55)}', 'email', now()), ('${id(56)}', 'email', now() - interval '31 days');
  insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body) values
   ('${id(51)}', 'prior@example.test', 'Thread-A', 'prior@outside.test', 'Prior Sender', 'Changed subject', 'Example'),
   ('${id(52)}', 'other-thread@example.test', 'Thread-B', 'prior@outside.test', null, 'New space', 'Example'),
   ('${id(53)}', 'no-thread@example.test', null, 'prior@outside.test', null, 'New space', 'Example'),
   ('${id(54)}', 'same-thread@example.test', 'Thread-A', 'current@outside.test', 'Current Sender', 'New space', 'Example'),
-  ('${id(55)}', 'same-subject@example.test', null, 'clinic@example.test', 'Raw Name', ' Fwd: Re:  NEW   SPACE ', 'Example');
- insert into activity_about (activity_id, deal_id) select id, '${DEAL}' from activity where id between '${id(51)}' and '${id(55)}';
+  ('${id(55)}', 'same-subject@example.test', null, 'clinic@example.test', 'Raw Name', ' Fwd: Re:  NEW   SPACE ', 'Example'),
+  ('${id(56)}', 'old-subject@example.test', null, 'prior@outside.test', null, 'New space', 'Example');
+ insert into activity_about (activity_id, deal_id) select id, '${DEAL}' from activity where id between '${id(51)}' and '${id(56)}';
  insert into email_mailbox (activity_id, user_id) values ('${id(54)}', '${USER}'), ('${id(55)}', '${USER}');
  insert into email_recipient (activity_id, position, address, kind) values
   ('${id(51)}', 1, 'clinic@example.test', 'to'), ('${id(51)}', 0, 'outside@outside.test', 'cc'),

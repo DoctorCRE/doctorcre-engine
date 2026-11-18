@@ -177,6 +177,22 @@ test("an email about no record, or with a padded Message-ID, is not stored", asy
 	assert.deepEqual(await stored("made-up-3@example.com"), []);
 });
 
+test("an omitted conversation id and null replay the same email save", async () => {
+	const message = mail("missing-conversation@example.test");
+	const first = await viaJob(message);
+	assert.equal(first.status, 201);
+	const retry = await viaJob({
+		...message,
+		email: { ...message.email, conversation_id: null },
+	});
+	assert.deepEqual(retry.body, { replayed: true, ...first.body });
+	const { rows } = await db.query(
+		"select conversation_id from email where activity_id = $1",
+		[first.body.activity_id],
+	);
+	assert.deepEqual(rows, [{ conversation_id: null }]);
+});
+
 test("a partner's call is stamped with them and its records must exist", async () => {
 	const call = note({ kind: "call", reached: true });
 	const { status, body } = await viaApp(call);
