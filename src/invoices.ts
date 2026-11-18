@@ -1,7 +1,18 @@
 import { Hono } from "hono";
-import { sql } from "kysely";
-import { answer, checkFields, refuse } from "./answer.ts";
+import { sql, type Transaction } from "kysely";
+import { answer, answerNextRead, checkFields, refuse } from "./answer.ts";
+import { selectNextDeals } from "./deals/next-board.ts";
+import type { DB } from "./next-database.d.ts";
 import { asText, type DatabaseEnv, type Reader } from "./reader.ts";
+
+function trackerAnswer<Entry>(actor: string, entries: Entry[]) {
+	return {
+		schema_version: "invoice-tracker.v1",
+		actor,
+		entries,
+		observed_at: new Date().toISOString(),
+	};
+}
 
 export async function readInvoiceTracker(db: Reader, partner: string) {
 	const entries = await db
@@ -29,21 +40,75 @@ export async function readInvoiceTracker(db: Reader, partner: string) {
 		.orderBy("commission_id")
 		.orderBy("deal_id")
 		.execute();
-	return {
-		schema_version: "invoice-tracker.v1",
-		actor: partner,
-		entries,
-		observed_at: new Date().toISOString(),
-	};
+	return trackerAnswer(partner, entries);
 }
 
-export const invoices = new Hono<DatabaseEnv>();
+async function readNextInvoiceTracker(
+	db: Transaction<DB>,
+	partner: string,
+): ReturnType<typeof readInvoiceTracker> {
+	const deals = selectNextDeals(db).where("c.party_id", "is not", null).as("d");
+	const entries = await db
+		.selectFrom(deals)
+		.leftJoin("commission_payment as p", "p.deal_id", "d.id")
+		.where((eb) =>
+			eb.or([
+				eb("d.invoiced_on", "is not", null),
+				eb.and([
+					eb("d.phase", "=", "closed"),
+					eb("d.outcome", "is distinct from", "lost"),
+				]),
+			]),
+		)
+		.select((eb) => [
+			"d.id as deal_id",
+			"d.name",
+			"d.owner",
+			"d.phase",
+			sql<null>`null`.as("lane"),
+			"d.outcome",
+			"d.closed_on",
+			"d.invoiced_on",
+			"p.id as commission_id",
+			"p.amount as gross_amount",
+			eb
+				.case()
+				.when(
+					eb.and([eb("p.id", "is not", null), eb("p.invoiced_on", "is", null)]),
+				)
+				.then("expected")
+				.when("p.received_on", "is not", null)
+				.then("received")
+				.when("p.invoiced_on", "is not", null)
+				.then("invoiced")
+				.end()
+				.as("status"),
+			sql<number | null>`(select max(ch.id)::float8 from change ch
+				where ch.table_name = 'commission_payment' and ch.record = jsonb_build_object('id', p.id))`.as(
+				"base_version",
+			),
+			asText(eb.ref("p.invoiced_on")).as("commission_invoiced_on"),
+			asText(eb.ref("p.received_on")).as("received_on"),
+			asText(eb.ref("p.due_on")).as("due_on"),
+			asText(sql`current_date`).as("as_of"),
+		])
+		.execute();
+	return trackerAnswer(partner, entries);
+}
+
+export const invoices = new Hono<
+	DatabaseEnv & { Bindings: { INVOICES_READ_SCHEMA?: string } }
+>();
 
 invoices.get("/invoices", async (c) => {
 	const refused = checkFields(new URL(c.req.url).searchParams, []);
-	return refused
-		? refuse(c, refused)
+	if (refused) return refuse(c, refused);
+	const partner = c.get("partner").slug;
+	return c.env.INVOICES_READ_SCHEMA === "next"
+		? answerNextRead(c, "read-invoice-tracker", (db) =>
+				readNextInvoiceTracker(db, partner),
+			)
 		: answer(c, "read-invoice-tracker", (db) =>
-				readInvoiceTracker(db, c.get("partner").slug),
+				readInvoiceTracker(db, partner),
 			);
 });
