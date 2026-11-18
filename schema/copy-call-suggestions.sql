@@ -7,7 +7,7 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 
 -- A meeting record is its session's activity, which copy-calls.sql carries, so it is not a suggestion.
 create temp table old_suggestion on commit drop as
-select s.*, target.deal_id, target.party_id, source.id as activity_id, source.kind as activity_kind, owner.id as owner,
+select s.*, target.deal_id, source.id as activity_id, source.kind as activity_kind, owner.id as owner,
  reviewer.id as reviewer,
  case when pg_input_is_valid(s.due_text, 'date') then s.due_text::date end as due_on,
  base.new_value ->> 'phase' as from_phase,
@@ -16,6 +16,7 @@ from (
  select c.id, c.session_id, case when log_call then 'log_call' else c.kind end as old_kind,
   c.payload ->> (case when log_call then 'ref' else 'deal' end) as target_ref,
   case when log_call then c.payload ->> 'summary' else btrim(c.payload ->> 'text') end as what,
+  case when log_call then c.payload ->> 'occurred_at' end as occurred_at,
   c.payload ->> 'next_date' as due_text, null as assignee, case when c.payload ->> 'field' = 'phase' then c.payload ->> 'value' end as to_phase,
   c.payload ->> 'base_event_id' as base_event, c.payload ->> 'started_on' as started_on, null::uuid as contact_party_id,
   c.evidence_quote, c.status, c.resolved_by, c.resolved_at, c.resulting_ref, c.resolution_note, c.created_at, c.undone_at
@@ -23,16 +24,11 @@ from (
  cross join lateral (select c.kind = 'activity' and c.status = 'pending' and c.payload ->> 'kind' = 'note' as log_call) f
  where c.kind <> 'meeting_record'
  union all
- select c.id, c.session_id, c.kind, c.deal_id::text, btrim(c.action_description), c.due_on::text, c.assignee_slug, null, null, null,
+ select c.id, c.session_id, c.kind, c.deal_id::text, btrim(c.action_description), null, c.due_on::text, c.assignee_slug, null, null, null,
   c.contact_party_id, c.evidence_quote, c.status, c.resolved_by, c.resolved_at, c.resulting_ref, c.resolution_note, c.created_at, null
  from public.capture_post_call_candidate c
 ) s
-left join public.client cl on s.old_kind = 'log_call' and cl.id::text = s.target_ref
-left join public.lead l on s.old_kind = 'log_call' and l.id::text = s.target_ref
-left join public.vendor v on s.old_kind = 'log_call' and v.id::text = s.target_ref
-left join outside_id target on target.source = 'old_system'
- and target.value = coalesce(cl.party_id::text, l.party_id::text, v.party_id::text, s.target_ref)
- and (target.deal_id is not null or (s.old_kind = 'log_call' and target.party_id is not null))
+left join outside_id target on target.source = 'old_system' and target.value = s.target_ref and target.deal_id is not null
 -- The same source activity copy-calls.sql chose: the session's logged meeting, else the session itself.
 left join activity source on source.id = coalesce((select max(o.id::text)::uuid from public.capture_candidate c
  join public.activity o on o.id::text = c.resulting_ref
@@ -66,14 +62,12 @@ insert into not_copied select s.id, f.field, f.value, f.reason from suggestion s
  ('kind', s.old_kind, 'kind_has_no_suggestion', s.kind is null),
  ('undone_at', s.undone_at::text, 'undone_after_apply', s.undone_at is not null),
  ('deal', s.target_ref, 'deal_not_copied', s.kind <> 'log_call' and s.deal_id is null),
- ('ref', s.target_ref, 'target_not_copied', s.kind = 'log_call' and s.deal_id is null and s.party_id is null),
+ ('ref', s.target_ref, 'target_not_copied', s.kind = 'log_call' and s.deal_id is null),
  ('session_id', s.session_id::text, 'source_activity_not_copied', s.activity_id is null),
  ('activity_kind', s.activity_kind, 'source_not_a_call_or_meeting', s.activity_kind not in ('call', 'meeting')),
  ('activity_kind', s.activity_kind, 'source_not_a_call', s.kind = 'log_call' and s.activity_kind = 'meeting'),
  ('deal', s.target_ref, 'call_not_about_deal', s.kind in ('next_step', 'log_call') and s.activity_kind = 'call' and s.deal_id is not null
   and not exists (select from activity_about a where a.activity_id = s.activity_id and a.deal_id = s.deal_id)),
- ('ref', s.target_ref, 'call_not_about_party', s.kind = 'log_call' and s.activity_kind = 'call' and s.party_id is not null
-  and not exists (select from activity_about a where a.activity_id = s.activity_id and a.party_id = s.party_id)),
  ('evidence_quote', s.evidence_quote, 'blank_evidence', s.evidence_quote !~ '\S'),
  ('text', s.what, 'blank_next_step', s.kind = 'next_step' and coalesce(s.what, '') !~ '\S'),
  ('summary', s.what, 'blank_call_summary', s.kind = 'log_call' and coalesce(s.what, '') !~ '\S'),
@@ -94,34 +88,35 @@ insert into not_copied select s.id, f.field, f.value, f.reason from suggestion s
 
 create temp table ready on commit drop as
 select s.proposal_id as id, s.created_at, s.kind, s.activity_id, s.activity_kind, s.evidence_quote as evidence, s.mapped_status as status,
- case when s.status <> 'pending' then s.decider end as decided_by_user_id, s.resolved_at as decided_at, s.deal_id, s.party_id, s.reviewer,
+ case when s.status <> 'pending' then s.decider end as decided_by_user_id, s.resolved_at as decided_at, s.deal_id, s.reviewer,
  case when s.kind in ('next_step', 'log_call') then s.what end as what, s.owner as owner_party_id, case when s.kind = 'next_step' then s.due_on end as due_on,
  case when s.kind = 'phase_move' then s.from_phase end as from_phase, case when s.kind = 'phase_move' then s.to_phase end as to_phase, s.id as old_id
 from suggestion s where not exists (select from not_copied n where n.old_id = s.id);
 
 -- A copied proposal is left as it is; a changed suggestion, or two with one payload, waits for a user.
 insert into not_copied select r.old_id, 'proposal', r.id::text, 'existing_proposal_conflicts' from ready r
-where exists (select from proposal p where (p.id = r.id) <> ((p.activity_id, p.kind, p.deal_id, p.party_id, p.what, p.owner_party_id, p.due_on, p.from_phase, p.to_phase)
- is not distinct from (r.activity_id, r.kind, r.deal_id, r.party_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase))
+where exists (select from proposal p where (p.id = r.id) <> ((p.activity_id, p.kind, p.deal_id, p.what, p.owner_party_id, p.due_on, p.from_phase, p.to_phase)
+ is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase))
  or p.id = r.id and (p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at, p.changed_for_user_id)
   is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at, r.reviewer))
  or exists (select from ready other where other.old_id <> r.old_id and (other.id = r.id
-  or (other.activity_id, other.kind, other.deal_id, other.party_id, other.what, other.owner_party_id, other.due_on, other.from_phase, other.to_phase)
-  is not distinct from (r.activity_id, r.kind, r.deal_id, r.party_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase)));
+  or (other.activity_id, other.kind, other.deal_id, other.what, other.owner_party_id, other.due_on, other.from_phase, other.to_phase)
+  is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase)));
 
 insert into not_copied select s.id, f.field, f.value, f.reason from suggestion s cross join lateral (values
  ('resolution_note', s.resolution_note, 'note_has_no_place', s.resolution_note ~ '\S'),
  ('started_on', s.started_on, 'start_date_has_no_place', s.kind = 'phase_move' and s.started_on is not null),
- ('contact_party_id', s.contact_party_id::text, 'contact_has_no_place', s.contact_party_id is not null)
+ ('contact_party_id', s.contact_party_id::text, 'contact_has_no_place', s.contact_party_id is not null),
+ ('occurred_at', s.occurred_at, 'uses_recorded_call_time', s.occurred_at is not null)
 ) f(field, value, reason, listed) where f.listed and exists (select from ready r where r.old_id = s.id)
  and not exists (select from not_copied n where n.old_id = s.id and n.reason = 'existing_proposal_conflicts');
 
 create temp table copied on commit drop as
 with inserted as (
  insert into proposal (id, created_at, kind, activity_id, activity_kind, evidence, proposed_by_job, status, decided_by_user_id, decided_at,
-  deal_id, party_id, what, owner_party_id, due_on, from_phase, to_phase, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+  deal_id, what, owner_party_id, due_on, from_phase, to_phase, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
  select id, created_at, kind, activity_id, activity_kind, evidence, 'old_system', status, decided_by_user_id,
-  case when status <> 'pending' then decided_at end, deal_id, party_id, what, owner_party_id, due_on, from_phase, to_phase,
+  case when status <> 'pending' then decided_at end, deal_id, what, owner_party_id, due_on, from_phase, to_phase,
   decided_by_user_id, case when status = 'pending' then 'old_system' end, reviewer, case when status = 'pending' then created_at else decided_at end
  from ready r where not exists (select from not_copied n where n.old_id = r.old_id and n.reason = 'existing_proposal_conflicts')
  on conflict do nothing returning *

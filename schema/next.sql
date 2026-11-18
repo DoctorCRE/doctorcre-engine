@@ -1381,7 +1381,7 @@ begin
 	case new.kind
 	when 'log_call' then
 		insert into activity (id, kind, happened_at, summary)
-		select new.id, 'call', happened_at, new.what from activity where id = new.activity_id;
+		select new.id, 'note', happened_at, new.what from activity where id = new.activity_id;
 		insert into activity_about (activity_id, deal_id, party_id)
 		values (new.id, new.deal_id, new.party_id);
 	when 'next_step' then

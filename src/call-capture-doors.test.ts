@@ -69,8 +69,10 @@ const decide = (id: unknown) =>
 		decision: "accept",
 	});
 
-test("accepting a call log records its summary and original time on its deal or party once", async () => {
+test("accepting a call log leaves one call and adds one note at the call's time", async () => {
 	for (const target of [{ deal_id: REVIEW }, { party_id: BLAIR }]) {
+		const dealId = target.deal_id ?? null;
+		const partyId = target.party_id ?? null;
 		const what = "Agreed to review the example floor plan.";
 		const [stored, proposal] = await propose({
 			kind: "log_call",
@@ -92,21 +94,29 @@ test("accepting a call log records its summary and original time on its deal or 
 		assert.deepEqual(
 			(
 				await db.query(
-					`select a.kind, a.happened_at = source.happened_at as original_time,
-						a.summary, a.changed_by_user_id, b.deal_id, b.party_id
+					`select a.id, a.kind, a.happened_at = source.happened_at as original_time,
+						a.summary, a.changed_by_user_id
 					from activity a join activity_about b on b.activity_id = a.id
-					cross join activity source where a.id = $1 and source.id = $2`,
-					[proposal.proposal_id, CALL],
+					join activity source on source.id = $3
+					where (b.deal_id = $1 or b.party_id = $2) and a.kind in ('call', 'note')
+					order by a.id`,
+					[dealId, partyId, CALL],
 				)
 			).rows,
 			[
 				{
+					id: CALL,
 					kind: "call",
+					original_time: true,
+					summary: null,
+					changed_by_user_id: null,
+				},
+				{
+					id: proposal.proposal_id,
+					kind: "note",
 					original_time: true,
 					summary: what,
 					changed_by_user_id: ALEX,
-					deal_id: "deal_id" in target ? target.deal_id : null,
-					party_id: "party_id" in target ? target.party_id : null,
 				},
 			],
 		);

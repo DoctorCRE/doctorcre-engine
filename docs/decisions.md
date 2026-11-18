@@ -295,4 +295,4 @@
 
 149\. **Home checks the card and mark revisions before a save (2026-11-18).** The signed-in partner can change one mark on their own card. The mark's history keeps its last revision even after a clear, so a stale Undo cannot overwrite another save. Only a disposition change can renew a settlement after the underlying card changes (#696).
 
-151\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one records the call on its deal or party at the recorded call's time. The owner left the twelve old work alerts behind (#698).
+151\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one saves its summary as a note on the call's deal or party at the recorded call's time. The owner left the twelve old work alerts behind (#698).

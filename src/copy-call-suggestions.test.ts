@@ -100,8 +100,9 @@ before(async () => {
 		capture(86, "meeting_record", { ref: id(30), summary: "Example" }),
 		capture(87, "next_step", { deal: id(30), text: "Example twice", next_date: null }),
 		capture(88, "next_step", { deal: id(30), text: "Example twice", next_date: null }),
+		capture(95, "activity", { ref: id(20), kind: "note", summary: "Example client call" }),
 		capture(97, "activity", { ref: id(30), kind: "note", summary: "Example deal call" }, "pending", undefined, 61),
-		capture(98, "activity", { ref: id(20), kind: "note", summary: "Example client call" }),
+		capture(98, "activity", { ref: id(30), kind: "note", summary: "Example other call", occurred_at: "2024-01-01T14:00:00Z" }),
 		capture(99, "activity", { ref: id(30), kind: "note", summary: "Example skipped call" }, "skipped"),
 		capture(96, "next_step", { deal: id(32), text: "Example unrelated step" }),
 	].join(",\n  ")};
@@ -125,7 +126,7 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 			from proposal where kind = 'log_call' order by id`),
 		[
 			"#97 log_call pending #61 #30 - Example deal call Example quote #01",
-			"#98 log_call pending #60 - #11 Example client call Example quote -",
+			"#98 log_call pending #60 #30 - Example other call Example quote -",
 		],
 	);
 	assert.deepEqual(await rows("select id from activity order by id"), [
@@ -163,7 +164,9 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		"#85 kind new_deal kind_has_no_suggestion",
 		"#87 proposal #87 existing_proposal_conflicts",
 		"#88 proposal #88 existing_proposal_conflicts",
+		"#95 ref #20 target_not_copied",
 		"#96 deal #32 call_not_about_deal",
+		"#98 occurred_at 2024-01-01T14:00:00Z uses_recorded_call_time",
 		"#99 kind activity kind_has_no_suggestion",
 	]);
 	assert.deepEqual(
