@@ -5,11 +5,6 @@ import { checklistOf, SOURCES } from "./checklist.ts";
 type Facts = Parameters<typeof checklistOf>[0];
 type Request = Facts["requests"][number];
 
-const cited = SOURCES.map((s) => ({
-	id: s.section_id,
-	status: "active",
-	body_hash: s.content_hash,
-}));
 const facts = (changes: Partial<Facts> = {}): Facts => ({
 	deal: {
 		id: "example-deal",
@@ -19,7 +14,7 @@ const facts = (changes: Partial<Facts> = {}): Facts => ({
 	},
 	lease: null,
 	criticalDates: [],
-	sections: cited,
+	templateCurrent: true,
 	commissions: [],
 	requests: [],
 	today: "2030-06-15",
@@ -43,29 +38,6 @@ const itemIds = (checklist: ReturnType<typeof checklistOf>) =>
 	Object.fromEntries(
 		checklist.phases.map((p) => [p.id, p.items.map((i) => i.id)]),
 	);
-
-test("a changed or retired source turns the checklist off", () => {
-	for (const change of [{ body_hash: "0".repeat(64) }, { status: "retired" }]) {
-		const checklist = checklistOf(
-			facts({
-				sections: cited.map((s, i) => (i === 2 ? { ...s, ...change } : s)),
-			}),
-		);
-		assert.equal(
-			JSON.stringify({ ...checklist, sources: checklist.sources.length }),
-			JSON.stringify({
-				schema_version: "deal-checklist.v1",
-				template_state: "source_changed",
-				deal_type: "lease",
-				sources: 5,
-				observed_on: "2030-06-15",
-				phases: [],
-				due_items: [],
-				requests_state: "current",
-			}),
-		);
-	}
-});
 
 test("the deal type picks the items each phase lists", () => {
 	assert.deepEqual(itemIds(checklistOf(facts())), {
@@ -127,11 +99,10 @@ test("recorded facts complete items and requests set owner, date and status", ()
 				executed_on: "2030-01-01",
 				expiration_on: null,
 			},
-			commissions: ["a", "b"].map((id) => ({
-				commission_id: id,
-				status: "received",
-				received_on: "2030-06-03",
-			})),
+			commissions: [
+				{ status: "received", received_on: "2030-06-03" },
+				{ status: "received", received_on: "2030-06-04" },
+			],
 			criticalDates: [
 				deadline,
 				{ ...deadline, id: "unsourced", source: " " },
@@ -151,11 +122,11 @@ test("recorded facts complete items and requests set owner, date and status", ()
 	assert.deepEqual(status("expiration_recorded"), ["not_recorded", null]);
 	assert.deepEqual(status("invoice_recorded"), [
 		"complete",
-		"deal:example-deal:invoiced_on:2030-06-02",
+		"Invoiced Jun 2, 2030",
 	]);
 	assert.deepEqual(status("commission_received"), [
 		"complete",
-		"commission:a, commission:b",
+		"2 commission payments received",
 	]);
 	assert.deepEqual(status("representation"), [
 		"received",

@@ -160,7 +160,7 @@ test("both partners see the deal's pending email suggestions and can decide them
 					kind: "next_step",
 					deal_id: dealId,
 					what: "Send the plan",
-					owner_party_id: id(1),
+					owner: "alex",
 					due_on: "2026-02-01",
 					email: {
 						activity_id: id(20),
@@ -174,7 +174,7 @@ test("both partners see the deal's pending email suggestions and can decide them
 		});
 	}
 	assert.partialDeepStrictEqual(await detail(alex, otherDealId), {
-		email_follow_ups: [{ proposal_id: id(31) }],
+		email_follow_ups: [{ proposal_id: id(31), owner: null }],
 	});
 	const decide = (proposal: string, decision: "accept" | "dismiss") =>
 		save(casey, `proposals/${proposal}/decision`, {

@@ -69,6 +69,8 @@ Still on the old API with no switch yet:
 - The app's Home, email and calendar calls (slice 30), including routing Home marks to `POST /api/engine/home/marks` (door 24), and its Deals saves outside the two save switches above (slice 29).
 - Sign-in.
 
+The deal page's checklist and progress use the new schema with `DEALS_READ_SCHEMA=next`. See § "Deals reads for the app".
+
 ## Who owns which records
 
 - Until the switch, the old system owns every old table. The engine saves deal fields, notes, next steps, overdue holds and closings into them, and changes no schema there (decision 1).

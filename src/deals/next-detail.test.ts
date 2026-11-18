@@ -37,14 +37,15 @@ insert into public.client (id, party_id, status, acquisition_source, client_type
  ('${id(23)}', '${id(15)}', 'engaged', 'Example referral', 'national_account', 'active', ${by});
 update public.client set roster_ref = 'C-EX-23' where id = '${id(23)}';
 update public.party set ref = 'P-EX-15' where id = '${id(15)}';
-insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2);
+insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2), ('renewal', 'Example renewal', 3);
 insert into public.deal_phase (slug, label) values ('touring', 'Example touring'), ('negotiation', 'Example negotiation');
 insert into public.participant_role (slug, label) values ('lead', 'Example lead'), ('support', 'Example support'),
  ('listing_side', 'Example listing side');
 insert into public.deal (id, client_id, name, deal_type, phase, owner, attention, next_date, created_by, updated_by, created_at) values
  ('${id(30)}', '${id(20)}', 'Example startup office', 'startup', 'touring', 'partner_one', true, '2030-01-15', ${by}, '2025-01-01'),
  ('${id(31)}', '${id(21)}', 'Example clinic lease', 'lease', 'negotiation', 'partner_two', false, null, ${by}, '2025-01-02'),
- ('${id(32)}', '${id(20)}', 'Z Example earlier lease', 'lease', 'negotiation', 'partner_one', true, '2029-12-01', ${by}, '2025-01-03');
+ ('${id(32)}', '${id(20)}', 'Z Example earlier lease', 'lease', 'negotiation', 'partner_one', true, '2029-12-01', ${by}, '2025-01-03'),
+ ('${id(35)}', '${id(20)}', 'Example copied renewal', 'renewal', 'negotiation', 'partner_one', false, null, ${by}, '2025-01-04');
 update public.deal set city = 'Example West' where id = '${id(32)}';
 insert into public.deal_participant (deal_id, actor_id, party_id, role, from_at, set_by) values
  ('${id(30)}', '${id(1)}', null, 'lead', '2025-01-01', '${id(1)}'),
@@ -99,10 +100,36 @@ before(async () => {
 	}
 	await db.query(`begin;
 		select set_config('engine.user_id', '${id(1)}', true);
-		insert into next_step (id, deal_id, what, item_title, source_ref)
-		values ('${id(80)}', '${id(30)}', 'Example call about the sign', 'Confirm signage', 'example-call');
+		insert into next_step (id, deal_id, what, item_title, source_ref, due_on)
+		values ('${id(80)}', '${id(30)}', 'Example call about the sign', 'Confirm signage', 'example-call', '2030-01-16');
 		insert into critical_date (id, deal_id, kind, due_on, source)
 		values ('${id(81)}', '${id(30)}', 'loi_expiry', '2030-02-01', 'Example offer');
+		insert into property (id, address) values ('${id(83)}', '100 Example Road');
+		insert into deal_property (deal_id, property_id) values ('${id(30)}', '${id(83)}');
+		insert into document (id, name, r2_key, r2_bucket, content_type) values
+			('${id(84)}', 'Example lease.pdf', 'example-lease', 'deal_documents', 'application/pdf');
+		insert into lease (id, deal_id, party_id, property_id)
+		values ('${id(85)}', '${id(30)}', '${id(11)}', '${id(83)}');
+		insert into lease_version (lease_id, version, document_id, executed_on, expiration_on)
+		values ('${id(85)}', 1, '${id(84)}', '2025-01-01', '2030-01-01');
+		insert into deal_reason (slug, label) values ('renewal', 'Renewal') on conflict do nothing;
+		insert into deal (id, name, kind, reason, renews_lease_id, owner_user_id)
+		values ('${id(33)}', 'Example renewal', 'lease', 'renewal', '${id(85)}', '${id(2)}'),
+			('${id(34)}', 'Example unpaid deal', 'lease', null, null, '${id(2)}');
+		insert into critical_date (id, deal_id, kind, due_on, source)
+		values ('${id(82)}', '${id(33)}', 'option_notice', '2000-01-03', 'Example option'),
+			('${id(86)}', '${id(33)}', 'due_diligence', '2999-01-01', 'Example contract');
+		update critical_date set status = 'open' where id in ('${id(82)}', '${id(86)}');
+		insert into commission_tier (user_id, from_deal, partner_user_id, closing_share)
+		values ('${id(2)}', 1, '${id(1)}', 0.8);
+		insert into commission (deal_id, expected, gross)
+		values ('${id(31)}', null, 200), ('${id(33)}', 20, 100), ('${id(34)}', null, 200);
+		insert into commission_payment (id, deal_id, amount, invoiced_on, received_on)
+		values ('${id(87)}', '${id(31)}', 100, '2025-02-01', '2025-02-03'),
+			('${id(88)}', '${id(31)}', 100, '2025-02-02', '2025-02-03'),
+			('${id(89)}', '${id(33)}', 100, '2025-02-01', '2025-02-03'),
+			('${id(93)}', '${id(34)}', 100, '2025-02-01', '2025-02-03'),
+			('${id(94)}', '${id(34)}', 100, '2025-02-02', null);
 		insert into next_step (deal_id, what, resolution, done_at)
 		values ('${id(32)}', 'Example confirm terms', 'done', '2025-02-04T18:00:00Z');
 		update deal set closed_value = 1250, parking_reason = 'other', parking_note = 'Example waiting for plans'
@@ -274,11 +301,11 @@ for (const schema of [undefined, "next"]) {
 				Array.isArray(board.accounts),
 		);
 		assert.equal(board.accounts.length, 1);
-		assert.equal(board.deals.length, schema ? 2 : 3);
+		assert.equal(board.deals.length, schema ? 3 : 4);
 		if (schema) {
 			assert.deepEqual(
 				board.deals.map((deal) => deal.id),
-				[id(32), id(30)],
+				[id(32), id(30), id(35)],
 			);
 			assert.deepEqual(board.deals[0].last_step, {
 				kind: "completed_action",
@@ -327,6 +354,166 @@ for (const schema of [undefined, "next"]) {
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
 	});
 }
+
+test("signed-in detail shows saved items and checklist progress from lease facts", async () => {
+	const response = await get(`/deals/${id(30)}`, "next");
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), {
+		items: [{ id: id(80), title: "Confirm signage", due_on: "2030-01-16" }],
+		checklist: {
+			schema_version: "deal-checklist.v1",
+			template_state: "current",
+			deal_type: "lease",
+			phases: [
+				{
+					id: "research",
+					items: [{ id: "representation", status: "not_recorded" }],
+				},
+				{
+					id: "legal",
+					items: [
+						{ id: "contract_draft" },
+						{ id: "attorney_comments" },
+						{ id: "legal_review" },
+						{ id: "ti_scope" },
+					],
+				},
+				{
+					id: "closing",
+					items: [
+						{
+							id: "executed_lease",
+							status: "complete",
+							evidence_ref: "Example lease.pdf",
+						},
+						{
+							id: "expiration_recorded",
+							status: "complete",
+							evidence_ref: "Example lease.pdf",
+						},
+					],
+				},
+			],
+			due_items: [],
+		},
+	});
+});
+
+test("a proposed critical date stays off the deal checklist", async () => {
+	const page = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(30)),
+	);
+	assert.ok(!("error" in page));
+	const legal = page.checklist.phases.find((phase) => phase.id === "legal");
+	assert.ok(legal);
+	assert.equal(
+		legal.items.some((item) => item.id === `critical-date:${id(81)}`),
+		false,
+	);
+});
+
+test("the renewal checklist tracks confirmed deadlines and leaves a forecast outstanding", async () => {
+	const response = await get(`/deals/${id(33)}`, "next");
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), {
+		checklist: {
+			deal_type: "renewal",
+			phases: [
+				{ id: "research", items: [{ id: "current_lease_abstraction" }] },
+				{
+					id: "legal",
+					items: [{ id: `critical-date:${id(86)}`, status: "upcoming" }],
+				},
+				{
+					id: "closing",
+					items: [{ id: "executed_lease", status: "not_recorded" }],
+				},
+				{
+					id: "invoice",
+					items: [{ id: "commission_received", status: "not_recorded" }],
+				},
+			],
+			due_items: [
+				{
+					id: `critical-date:${id(82)}`,
+					status: "overdue",
+					due_on: "2000-01-03",
+					owner: "partner_two",
+					evidence_ref: "Example option",
+				},
+			],
+		},
+	});
+});
+
+test("a copied renewal without a source lease shows only the common checklist", async () => {
+	const response = await get(`/deals/${id(35)}`, "next");
+	assert.equal(response.status, 200);
+	const detail = await response.json();
+	assert.partialDeepStrictEqual(detail, {
+		checklist: { template_state: "deal_type_unknown", deal_type: null },
+	});
+	assert.ok(detail && typeof detail === "object" && "checklist" in detail);
+	const { checklist } = detail;
+	assert.ok(
+		checklist &&
+			typeof checklist === "object" &&
+			"phases" in checklist &&
+			Array.isArray(checklist.phases),
+	);
+	const items = checklist.phases.flatMap((phase) => {
+		const items: unknown = phase.items;
+		assert.ok(Array.isArray(items));
+		return items.map((item) => item.id);
+	});
+	assert.deepEqual(items.toSorted(), [
+		"attorney_comments",
+		"business_terms",
+		"commission_received",
+		"contract_draft",
+		"executed_comp",
+		"invoice_recorded",
+		"loi_grid",
+		"loi_submission",
+		"market_survey",
+		"representation",
+		"requirements",
+	]);
+});
+
+test("the checklist records an invoice and completes receipt only when all payments arrived", async () => {
+	for (const [deal, status] of [
+		[id(31), "complete"],
+		[id(34), "not_recorded"],
+	]) {
+		const response = await get(`/deals/${deal}`, "next");
+		assert.equal(response.status, 200);
+		assert.partialDeepStrictEqual(await response.json(), {
+			checklist: {
+				phases: [
+					{
+						id: "invoice",
+						items: [
+							{
+								id: "invoice_recorded",
+								status: "complete",
+								evidence_ref: "Invoiced Feb 1, 2025",
+							},
+							{
+								id: "commission_received",
+								status,
+								evidence_ref:
+									status === "complete"
+										? "2 commission payments received"
+										: null,
+							},
+						],
+					},
+				],
+			},
+		});
+	}
+});
 
 test("signed-in detail names every field changed by one new-schema save", async () => {
 	const response = await get(`/deals/${id(31)}`, "next");
