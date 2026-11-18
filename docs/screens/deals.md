@@ -57,6 +57,62 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 With the new read, Closed deals shows "Closed automatically: Invoice received" with an `11/17`-style date when the nightly invoice job closed the deal.
 
+## Prospects
+
+A prospect is someone who may become a deal but is not one yet. The owner's words: the old spreadsheet worked because "it didn't block us from typing out a quick note or adding something in", and a lead once slipped for one to two months because it had no place to live.
+
+- **Open (question 10).** Which leads are prospects. Recommended: a lead at stage Opportunity that is on no deal yet.
+
+### Prospects lane
+
+- [ ] Local Deals' Board shows a Prospects lane before Prospective Client, with its count. List shows the prospects after the deals, one row each.
+- [ ] The headline counts them: "38 open deals · 27 parked · 9 prospects".
+- [ ] All, Joe and Dell show the prospects that partner claimed. An unclaimed prospect shows under all three.
+- [ ] Each card shows the name, who claimed it or "Unclaimed", the newest note's first line with who wrote it and when in words, and the soonest open follow-up with whose it is, such as "Joe · Due Thu, Nov 19", or "No follow-up set". A late follow-up says how late.
+- [ ] Needs attention shows when a partner set it, as on a deal card. It is the owner's "highlight".
+- [ ] Order: Needs attention first, then by that follow-up date, soonest first, then those with none, newest first.
+- [ ] Clicking the name opens the prospect.
+
+### Adding a prospect
+
+- [ ] Add prospect is one line at the top of the lane: a name, then an optional note. Enter saves.
+- **Open (question 9).** What else that save needs for someone new. Recommended: one tap each on the same line for person or company and for how found, both required. Nothing else is asked.
+- [ ] It is never refused because the person or practice is not a client or not in the system yet. A blank name, or a save that fails, keeps the line open with the typed name and note and says what is missing or what went wrong.
+- [ ] While the partner types, people and companies already in the system with that name are offered. Picking one puts it in the lane, asking how found only when it has none. Picking a prospect already in the lane adds the note to it. Picking a client offers Add deal for them instead.
+- [ ] A new prospect is unclaimed until a partner clicks Claim (owner, 2026-11-18: leads "go to no one until they are claimed").
+
+### A prospect
+
+- [ ] Shows the name, how found, who claimed it, Needs attention, each partner's open follow-up and the notes.
+- [ ] The note box is at the top. Enter saves the note; there is no Save button.
+- [ ] Notes run newest first, all of them, including those from before it was a prospect, each saying who wrote it and when in words: "Dell · Mon, Nov 16, 9:40 AM".
+- [ ] With both partners on the same prospect, a note one saves shows on the other's screen within five seconds, with no reload. Checked with both partners signed in side by side.
+- [ ] Follow-up takes a date and a few words, such as "Call back about the second location". It is the setting partner's next step on this lead: it replaces their open step on it, including an automatic check-in, which stays in history as replaced. Mark done on Home finishes it.
+- [ ] Home shows a due follow-up as a step for the partner who set it. Opening it on Home opens this prospect with the follow-up in view.
+- [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
+- [ ] Claim makes the signed-in partner its owner. The owner can be changed to the other partner or back to Unclaimed.
+- **Open (question 11).** Turn into deal. Recommended: it opens Add deal with the deal name, the newest note and the claimed owner filled in. Client, phase and owner must still be set there; the client may be this prospect or another, such as the practice a doctor runs. On save the deal opens and the prospect leaves the lane, its notes kept on its history.
+- [ ] Drop asks a reason and takes it off the lane. It stays a lead, archived with that reason, on the Leads screen.
+- [ ] If the other partner saved the same field since the prospect opened, the save says so and offers to reload. Nothing is overwritten.
+
+## Monday review
+
+The owner's words: every Monday they went over "all the deals we had, all the potential deals that werent yet technically a deal".
+
+- [ ] Monday review opens from the Deals board on any day and covers the week that began that Monday, in Central time.
+- [ ] It covers every open deal on Local Deals and National Accounts and every prospect, whoever owns or claimed it. The board's All, Joe and Dell choice and its collapsed columns do not narrow it.
+- [ ] Order: deals by the phase each was in when the week began, in board column order, then by name; then prospects, oldest added first. Items that arrive during the week join at the end. A phase move, a new follow-up or Needs attention never moves an item.
+- [ ] A prospect turned into a deal this week stays in its place as that deal, with its mark. A deal closed or lost and a prospect dropped this week stay in place, saying so, so the count holds.
+- **Open (question 13).** Parked deals. Recommended: they come last, after the prospects.
+- [ ] The top says how far along it is: "31 of 47 reviewed this week". Not reviewed only hides the reviewed ones.
+- [ ] One at a time shows one deal or prospect: its name, owner, phase or "Prospect", Needs attention, next step or follow-up, its latest notes and the note box. Next and Back move through the list.
+- [ ] As a list shows the same items, one row each, with the note box and the next step or follow-up opening in place.
+- [ ] Change next step on a deal and Follow-up on a prospect save as they do on the deal page and the prospect. A note saved here shows on the other partner's open review within five seconds, as on a prospect.
+- [ ] Reviewed marks the item reviewed this week, saying who and when, and goes to the next. Undo removes the mark, also after a reload.
+- [ ] Opening a name goes to the deal page or the prospect. Back returns to the same place in the review.
+- **Open (question 12).** Whether a mark is shared. Recommended: one mark per item per week, shared by both partners, either of whom can Undo it.
+- **Open (question 14).** Whether Monday review replaces the pipeline call recorder. Recommended: yes.
+
 ## National Accounts
 
 - [ ] One card per national account: its name, its account owner, and how many open deals, late next steps and parked deals it has. No client codes.
@@ -99,7 +155,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ## Questions for the owner
 
-Questions 1 to 3 are roadmap asks 9 to 11. Questions 5 to 8 are not on it yet. Each recommendation comes first.
+Questions 1 to 3 are roadmap asks 9 to 11, and question 9 is the roadmap ask "one tap for each on the add line". The others are not on it yet. Each recommendation comes first.
 
 1. Client website: the new database has no place yet for a deal's client website. Recommended: add one, so the deal page keeps its Client website link after the switch.
 2. Checklist: the new database keeps the checklist items but not checklist progress or document requests (144 of 194 deals have a checklist). Recommended: add both, so the checklist shows in full on every deal page instead of "Checklist unavailable".
@@ -109,6 +165,12 @@ Questions 1 to 3 are roadmap asks 9 to 11. Questions 5 to 8 are not on it yet. E
 6. Setting up a client website: today's Set up client website form asks for a website name and a password. How should a partner link a new site? Recommended: keep that setup, below the deal's facts.
 7. Compare terms compares recorded terms across deals in one submarket and use type. Should it compare this deal's own offers instead? Recommended: keep today's comparison until you decide.
 8. The deal page has deal watch settings, which choose whether the deal's changes reach Home, and the pipeline call recorder, whose proposed items each wait for Confirm or Skip. Recommended: keep both as they work today.
+9. Adding a prospect for someone new: the one line gives a name and an optional note, but the database requires a real person-or-company and how found on every lead (rules 4 and 63, #604). Recommended: one tap each on the add line, both required, so the save never loosens a rule. Otherwise a prospect is saved without them, which loosens those rules. Until you answer, the save for someone new is not built.
+10. Which leads show as prospects? Recommended: a lead at stage Opportunity that is on no deal yet. Adding one from the lane puts the lead at Opportunity, and leads at earlier stages stay on Leads until a partner moves them. Otherwise every open lead shows in the lane, including the 126 leads nobody has claimed.
+11. How does a prospect become a deal? A deal needs a client, a phase and an owner, which a prospect does not have. Recommended: Turn into deal opens Add deal filled in from the prospect (name, newest note, claimed owner), and the partner sets client, phase and owner there before it saves. Otherwise one click makes the deal with set defaults, which would guess the phase and the client.
+12. Is a Monday review mark shared? Recommended: one mark per deal or prospect per week, shared by both partners, saying who marked it, and either can Undo it. Otherwise each partner keeps their own marks.
+13. Should parked deals be in the Monday review? Recommended: yes, last, so nothing parked is forgotten. Otherwise only active deals and prospects.
+14. Does Monday review replace the old system's pipeline call sittings? Their three sittings marked no deal reviewed. Recommended: yes; the deal page's pipeline call recorder stays as question 8 says. Otherwise both run side by side.
 
 ## Not yet true
 

@@ -48,7 +48,7 @@ _Database_: `lead.source_type` and `client.acquisition_source` (shown as "Referr
 The stage in between lead and client. A lead becomes a prospect when it turns warm, or a potential client becomes one when introduced. It stays a prospect until we represent them. An inactive prospect goes back to Leads.
 _Avoid_: lead (still on the Leads screen), on-deck client
 _Database_: `client.status = 'prospect'` with `client.prospect_engagement_status` (`active` or `inactive`); `v_client_engagement_status`.
-_New database_: no prospect status. Someone is a client once a deal is opened for them, and a deal in Prospective Client is not signed yet.
+_New database_: no prospect status. Someone is a client once a deal is opened for them, and a deal in Prospective Client is not signed yet. On the Deals board, a prospect is recommended to be a lead at stage Opportunity on no deal yet, pending the owner (`docs/screens/deals.md` § "Prospects", question 10).
 
 **National account**:
 A franchise or multi-location brand that we serve as one main client. One partner is its account owner. Each location is a franchisee with its own deals. A deal outside our territory is likely a national-account deal.
@@ -213,6 +213,11 @@ A sitting where a partner goes through the open deals and marks each reviewed or
 _Avoid_: deal review, session, agenda
 _Database_: `deal_review_session` and `deal_review_item`; `v_deal_room_session`; `last_review_at` in `v_deal_room_board` and `v_deal_room_account`.
 _Engine_: `open_session` on the board.
+
+**Monday review**:
+The weekly pass over every open deal and prospect, marking each reviewed for that week.
+_Avoid_: pipeline call (the old system's sitting), deal review
+_New database_: `weekly_review`, one row per deal or prospect per week.
 
 **Lease**:
 A tenant's agreement for a property, whether negotiated by the team or elsewhere. Its sourced terms are versions; an amendment is the next version. The latest version is current. A renewal is a new deal linked to this lease.

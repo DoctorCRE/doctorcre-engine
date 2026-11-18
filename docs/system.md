@@ -130,5 +130,6 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Owner decisions the doors raised                         | § "Owner decisions"                                                                                                                 |
 | Home screen                                              | `docs/screens/home-inbox.md`                                                                                                        |
 | Deals screen                                             | `docs/screens/deals.md`                                                                                                             |
+| Prospects lane and Monday review                         | `docs/screens/deals.md` § "Prospects" and § "Monday review"; § "Prospects and the Monday review"                                    |
 
 Every `§` without a file is in `docs/new-database.md`.
