@@ -5,6 +5,9 @@ alter table activity disable trigger stamp_change;
 alter table activity_about disable trigger stamp_change;
 alter table email disable trigger stamp_change;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
+create temp table if not exists copy_email_evidence (
+ old_id uuid primary key, sender email_address not null, subject_start integer not null check (subject_start > 0),
+ message_id text check (message_id ~ '\S' and message_id = btrim(message_id))) on commit drop;
 
 -- public.email arrives with carr-system #3233; until production has it, no email has a Message-ID.
 create temp table old_message_id (activity_id uuid primary key, message_id text not null) on commit drop;
@@ -21,13 +24,16 @@ create temp table old_link on commit drop as select * from copy_activity_link();
 -- Today an email filed to several records is one row per record, and mail both partners filed is a row per mailbox.
 -- Deleting is per mailbox, so a row is live on its own.
 create temp table old_email on commit drop as
-select a.id, a.kind, a.occurred_at, a.recorded_at, a.updated_at, a.summary, a.detail, m.message_id,
+select a.id, a.kind, a.occurred_at, a.recorded_at, a.updated_at, a.summary, a.detail,
+ coalesce(m.message_id, proof.message_id) as message_id,
  case when a.email_context ->> 'conversation_id' ~ '\S' then a.email_context ->> 'conversation_id' end as conversation_id,
  a.email_context #>> '{lifecycle,state}' as lifecycle, coalesce(a.email_context #>> '{lifecycle,state}', 'live') = 'live' as live,
  lower(coalesce(a.email_context #>> '{sender,email}', a.email_source ->> 'sender_email',
-  case when a.kind = 'email_out' then a.email_identity ->> 'mailbox_account' end)) as sender,
- coalesce(a.email_context ->> 'subject', substring(a.summary from '^Email (?:from|to) [^:]*: (.*)$'), a.summary) as subject, s.*
+  case when a.kind = 'email_out' then a.email_identity ->> 'mailbox_account' end, proof.sender)) as sender,
+ coalesce(a.email_context ->> 'subject', substring(a.summary from proof.subject_start),
+  substring(a.summary from '^Email (?:from|to) [^:]*: (.*)$'), a.summary) as subject, s.*
 from public.activity a left join old_message_id m on m.activity_id = a.id left join activity_event e on e.activity_id = a.id
+left join pg_temp.copy_email_evidence proof on proof.old_id = a.id
 cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.event_id) s
 where a.kind in ('email_in', 'email_out');
 
