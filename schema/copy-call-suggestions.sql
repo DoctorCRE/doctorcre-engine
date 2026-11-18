@@ -7,8 +7,7 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 
 -- A meeting record is its session's activity, which copy-calls.sql carries, so it is not a suggestion.
 create temp table old_suggestion on commit drop as
-select s.*, target.deal_id, source.id as activity_id, source.kind as activity_kind, owner.id as owner,
- reviewer.id as reviewer,
+select s.*, deal.deal_id, source.id as activity_id, source.kind as activity_kind, owner.id as owner, reviewer.id as reviewer,
  case when pg_input_is_valid(s.due_text, 'date') then s.due_text::date end as due_on,
  base.new_value ->> 'phase' as from_phase,
  (select u.id from app_user u where u.id = decided.changed_by_user_id) as decider
@@ -28,15 +27,17 @@ from (
   c.contact_party_id, c.evidence_quote, c.status, c.resolved_by, c.resolved_at, c.resulting_ref, c.resolution_note, c.created_at, null
  from public.capture_post_call_candidate c
 ) s
-left join outside_id target on target.source = 'old_system' and target.value = s.target_ref and target.deal_id is not null
+left join outside_id deal on deal.source = 'old_system' and deal.value = s.target_ref and deal.deal_id is not null
+join public.capture_session session on session.id = s.session_id
+join public.actor recorder on recorder.id = session.actor_id
+left join app_user reviewer on s.assignee is null and reviewer.slug = case recorder.slug
+ when 'quill-joe-mac' then 'joe' when 'quill-joe-studio' then 'joe' when 'quill-dell-mac' then 'dell'
+ else case when recorder.kind = 'human' then recorder.slug end end
+ and (s.old_kind <> 'log_call' or recorder.slug = 'quill-joe-studio')
 -- The same source activity copy-calls.sql chose: the session's logged meeting, else the session itself.
 left join activity source on source.id = coalesce((select max(o.id::text)::uuid from public.capture_candidate c
  join public.activity o on o.id::text = c.resulting_ref
  where c.session_id = s.session_id and c.kind = 'meeting_record' and c.status = 'confirmed'), s.session_id)
--- Old migration 1168 gives review of the Studio recorder's calls to Joe.
-left join public.capture_session session on s.old_kind = 'log_call' and session.id = s.session_id
-left join public.actor recorder on recorder.id = session.actor_id and recorder.slug = 'quill-joe-studio'
-left join app_user reviewer on recorder.id is not null and reviewer.slug = 'joe'
 left join public.actor assignee on assignee.slug = s.assignee
 left join outside_id o on o.source = 'old_system' and o.value = assignee.id::text
 left join app_user owner on owner.id = o.party_id
@@ -88,7 +89,8 @@ insert into not_copied select s.id, f.field, f.value, f.reason from suggestion s
 
 create temp table ready on commit drop as
 select s.proposal_id as id, s.created_at, s.kind, s.activity_id, s.activity_kind, s.evidence_quote as evidence, s.mapped_status as status,
- case when s.status <> 'pending' then s.decider end as decided_by_user_id, s.resolved_at as decided_at, s.deal_id, s.reviewer,
+ case when s.status <> 'pending' then s.decider end as decided_by_user_id, s.resolved_at as decided_at, s.deal_id,
+ case when s.status = 'pending' then s.reviewer end as changed_for_user_id,
  case when s.kind in ('next_step', 'log_call') then s.what end as what, s.owner as owner_party_id, case when s.kind = 'next_step' then s.due_on end as due_on,
  case when s.kind = 'phase_move' then s.from_phase end as from_phase, case when s.kind = 'phase_move' then s.to_phase end as to_phase, s.id as old_id
 from suggestion s where not exists (select from not_copied n where n.old_id = s.id);
@@ -98,7 +100,7 @@ insert into not_copied select r.old_id, 'proposal', r.id::text, 'existing_propos
 where exists (select from proposal p where (p.id = r.id) <> ((p.activity_id, p.kind, p.deal_id, p.what, p.owner_party_id, p.due_on, p.from_phase, p.to_phase)
  is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase))
  or p.id = r.id and (p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at, p.changed_for_user_id)
-  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at, r.reviewer))
+  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at, r.changed_for_user_id))
  or exists (select from ready other where other.old_id <> r.old_id and (other.id = r.id
   or (other.activity_id, other.kind, other.deal_id, other.what, other.owner_party_id, other.due_on, other.from_phase, other.to_phase)
   is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase)));
@@ -117,7 +119,7 @@ with inserted as (
   deal_id, what, owner_party_id, due_on, from_phase, to_phase, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
  select id, created_at, kind, activity_id, activity_kind, evidence, 'old_system', status, decided_by_user_id,
   case when status <> 'pending' then decided_at end, deal_id, what, owner_party_id, due_on, from_phase, to_phase,
-  decided_by_user_id, case when status = 'pending' then 'old_system' end, reviewer, case when status = 'pending' then created_at else decided_at end
+  decided_by_user_id, case when status = 'pending' then 'old_system' end, changed_for_user_id, case when status = 'pending' then created_at else decided_at end
  from ready r where not exists (select from not_copied n where n.old_id = r.old_id and n.reason = 'existing_proposal_conflicts')
  on conflict do nothing returning *
 ) select * from inserted;

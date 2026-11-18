@@ -131,6 +131,34 @@ begin atomic
 	order by new_value ->> 'activity', mutation_order desc;
 end;
 
+create or replace function copy_email_mailboxes()
+returns table (activity_id uuid, user_id uuid)
+language plpgsql stable as $$
+begin
+	-- The older snapshot predates public.email and its activity foreign key.
+	return query execute format($query$
+		select a.id, u.id
+		from public.activity a
+		left join public.actor author on author.id = a.actor_id
+		left join copy_activity_event() logged on logged.activity_id = a.id
+		left join public.event v on v.id = logged.event_id and v.actor_id = a.actor_id
+		left join (%s) stored on stored.activity_id = a.id
+		left join lateral (
+			select min(owner.slug) as slug from public.actor owner
+			where owner.kind = 'human' and lower(owner.email) = lower(stored.mailbox_account)
+			having count(*) = 1
+		) account on true
+		join app_user u on u.slug = coalesce(a.email_source ->> 'mailbox_owner',
+			a.email_identity ->> 'mailbox_owner', account.slug,
+			case when author.kind = 'human' then author.slug
+				when author.slug = v.sponsoring_human_slug || '-local' then v.sponsoring_human_slug end)
+		where a.kind in ('email_in', 'email_out')
+			and (a.email_source ->> 'mailbox_owner' = a.email_identity ->> 'mailbox_owner') is not false
+	$query$, case when to_regclass('public.email') is not null
+		then 'select a.id as activity_id, e.mailbox_account from public.activity a join public.email e on e.id = a.email_id'
+		else 'select null::uuid as activity_id, null::text as mailbox_account where false' end);
+end $$;
+
 -- A client, lead or vendor is about its person or company; merged-away ids reach their survivor through the map.
 create or replace function copy_activity_link()
 returns table (id uuid, field text, value uuid, deal_id uuid, party_id uuid)
