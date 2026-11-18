@@ -261,15 +261,17 @@ test("a correction can supply a missing source without changing already copied l
 	}
 });
 
-const extraParties = [80, 81, 82]
-	.map(
-		(
-			n,
-		) => `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n)}','person','Example waiting party','${id(1)}','${id(1)}');
+const waitingParties = (ids: number[]) =>
+	ids
+		.map(
+			(
+				n,
+			) => `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n)}','person','Example waiting party','${id(1)}','${id(1)}');
  insert into party (id,kind,name) values ('${id(n)}','person','Example waiting party');
  insert into outside_id (source,value,party_id) values ('old_system','${id(n)}','${id(n)}');`,
-	)
-	.join("\n");
+		)
+		.join("\n");
+const extraParties = waitingParties([80, 81, 82]);
 
 test("an unmapped client source waits, and mapping it later matches mapping it at once", async () => {
 	const setup = `${extraParties}
@@ -303,16 +305,11 @@ test("an unmapped client source waits, and mapping it later matches mapping it a
 					r.reason === "existing_source_differs",
 			),
 		);
-		assert.ok(
-			waiting.some(
-				(r) => r.old_id === id(83) && r.reason === "owner_not_a_user",
-			),
-		);
 		assert.deepEqual(
 			waiting
 				.filter((r) => r.old_id === id(84) && r.field === "owner_id")
 				.map((r) => r.reason),
-			["owner_not_a_user"],
+			["deal_owner_unresolved"],
 		);
 		assert.deepEqual(await answer(), [
 			{ how_found: null, how_found_detail: null, roles: 0 },
@@ -686,6 +683,78 @@ test("a first client copy records only its insert with the agreed owner", async 
 				`select action, new_value ->> 'owner_user_id' as owner from change where table_name = 'client' and record = jsonb_build_object('party_id', '${id(80)}'::text) order by id`,
 			),
 			[{ action: "insert", owner: id(1) }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("event leads from automation stay unclaimed and clients take their deal or reviewed owner", async () => {
+	try {
+		const listed = await run(
+			`${waitingParties([80, 81, 82, 83, 84])}
+ insert into public.actor (id,slug,kind,display_name) values
+ ('${id(2)}','example_deal_owner','human','Example Deal Owner'),
+ ('${id(3)}','example_unmapped_owner','human','Example Unmapped Owner'),
+ ('${id(89)}','example_automation','automation','Example Automation');
+ insert into party (id,kind,name) values ('${id(2)}','person','Example Deal Owner');
+ insert into app_user (id,slug) values ('${id(2)}','example_deal_owner');
+ insert into outside_id (source,value,party_id) values ('old_system','${id(2)}','${id(2)}');
+ insert into public.lead (id,party_id,stage,source_type,owner_id,created_by,updated_by)
+ values ('${id(900)}','${id(80)}','new','Example convention','${id(89)}','${id(1)}','${id(1)}');
+ insert into copy_how_found values ('lead','Example convention','event');
+ insert into public.client (id,party_id,status,owner_id,owner_label,created_by,updated_by) values
+ ('${id(901)}','${id(81)}','roster','${id(89)}',null,'${id(1)}','${id(1)}'),
+ ('${id(902)}','${id(82)}','roster',null,'Example shared label','${id(1)}','${id(1)}'),
+ ('${id(903)}','${id(80)}','roster','${id(89)}',null,'${id(1)}','${id(1)}'),
+ ('${id(904)}','${id(83)}','roster','${id(89)}',null,'${id(1)}','${id(1)}'),
+ ('${id(905)}','${id(84)}','roster','${id(89)}',null,'${id(1)}','${id(1)}');
+ insert into public.deal_type_ref (slug,label,sort) values ('lease','Example lease',1);
+ insert into public.deal_phase (slug,label) values ('negotiation','Example negotiation');
+ insert into public.deal (client_id,name,deal_type,phase,owner,created_by,updated_by) values
+ ('${id(901)}','Example deal','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
+ ('${id(901)}','Example second deal','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
+ ('${id(903)}','Example disputed deal','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
+ ('${id(903)}','Example other deal','lease','negotiation','example_user','${id(1)}','${id(1)}'),
+ ('${id(904)}','Example deal with a mapped owner','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
+ ('${id(904)}','Example deal without an owner','lease','negotiation',null,'${id(1)}','${id(1)}'),
+ ('${id(905)}','Example deal with a mapped owner','lease','negotiation','example_deal_owner','${id(1)}','${id(1)}'),
+ ('${id(905)}','Example deal with an unmapped owner','lease','negotiation','example_unmapped_owner','${id(1)}','${id(1)}');
+ create temp table copy_client_owner (old_id uuid primary key, owner_actor_id uuid not null) on commit drop;
+ insert into copy_client_owner values ('${id(902)}','${id(1)}');`,
+			true,
+		);
+		assert.deepEqual(
+			await rows(`select p.how_found, r.owner_user_id from party p join party_role r on r.party_id = p.id
+ where p.id = '${id(80)}' and r.role = 'lead'`),
+			[{ how_found: "event", owner_user_id: null }],
+		);
+		assert.deepEqual(
+			(await clients()).owners.filter(([party]) =>
+				[id(80), id(81), id(82), id(83), id(84)].includes(party),
+			),
+			[
+				[id(80), null],
+				[id(81), id(2)],
+				[id(82), id(1)],
+				[id(83), null],
+				[id(84), null],
+			],
+		);
+		assert.deepEqual(
+			listed
+				.filter(
+					(r) =>
+						[id(900), id(901), id(902), id(903), id(904), id(905)].includes(
+							r.old_id,
+						) && r.field.startsWith("owner"),
+				)
+				.map((r) => [r.old_id, r.reason]),
+			[
+				[id(903), "deal_owner_unresolved"],
+				[id(904), "deal_owner_unresolved"],
+				[id(905), "deal_owner_unresolved"],
+			],
 		);
 	} finally {
 		await db.query("rollback");
