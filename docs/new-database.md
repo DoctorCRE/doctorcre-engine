@@ -169,7 +169,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 67. A national account is a company holding that role. Its dated owners are people, and their dates never overlap on one account. Membership and ownership end strictly after they start, with the end excluded.
 68. Client and account profiles and their dated links keep their parties; users may correct dates and remove mistakes. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
 69. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank. Only a parked deal has a time it was parked, and a user who parked it only with that time.
-70. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
+70. Needs attention is never unknown. Only a user, or a job working for one, sets or clears it on a deal or lead, or parks or revives a deal. Other party roles cannot have the flag.
 71. Lead stage evidence names a lead and two different lead stages. Non-archive moves name an activity about that lead and nonblank evidence. Repeated proposals and applied evidence for the same activity and move are refused. Pending moves use the shared proposal queue. An unattended job applies only strong evidence along the funnel; weak evidence and every archive wait for a direct user, and archiving has a nonblank reason. Applying a stale proposal is refused. Applied evidence is final and never rewritten or removed.
 
 72. A lead's lane comes from its list. A lease estimate has both date and nonblank source, and confidence only with an estimate. Lane, estimate, confidence and segment belong only to the lead role. How-found detail is nonblank and has how found.
@@ -213,7 +213,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `imported_change`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's, a how-found's or a claim type's label;
-- a vendor role's stage, relationship level, relationship partner, disposition, reason and target, a lead role's stage and owner, an introduction's date, deal and note, and a knows or can-introduce link's dates and note;
+- a vendor role's stage, relationship level, relationship partner, disposition, reason and target, a lead role's stage, owner and Needs attention flag, an introduction's date, deal and note, and a knows or can-introduce link's dates and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI and how found, and a property's address, county and point;
 - a deal's kind, reason, lease it renews, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
@@ -716,7 +716,7 @@ Two facts are new, each typed and constrained:
 - **Needs attention on a lead.** `party_role.needs_attention`, a boolean that is never unknown, true only on the lead role, set or cleared only by a user or a job working for one, like a deal's (rule 70). The engine's role may update it.
 - **`weekly_review`.** One row per item reviewed in a week: `week_of`, a Monday, and exactly one of `deal_id` and a `party_id` holding the lead role (decision 21), stored once per week and item and stamped with the user who marked it. Both partners share the mark and either can undo it (question 12, owner, 2026-11-18). Undo removes the row and change history keeps it.
 
-Slice 36 adds both, with these rules and their tests, to § "Rules the database enforces" and § "Who may change what".
+Slice 36 defines the database rules for both. The prospect read adds lead attention under rule 70.
 
 The new doors below use only the signed-in partner entrance, so a job gets 404 on them. Doors 16, 18 and 19 keep both entrances. Every save follows the shared save rules (§ "What every door shares"), including `idempotency_key`.
 
@@ -736,8 +736,8 @@ The new doors below use only the signed-in partner entrance, so a job gets 404 o
 - **Turn into deal** (pending question 11). The client gains the client role in the same save. `prospect_id` must be in the lane, or `409 not_a_prospect`. A `client_id` other than `prospect_id` adds the prospect as `client_contact`.
 - **Drop.** A blank reason is `400 missing_required`, and a party not in the lane is `409 not_a_prospect`. The move and the stage change save together under the lead's lock.
 - **Mark reviewed.** A `week_of` that is not a Monday is `400 invalid_field_value`. Marking a marked item answers the stored mark with `existing: true`.
-- **Lane read.** `GET /api/engine/prospects` answers `{ prospects: [{ party_id, name, kind, how_found, owner, needs_attention, follow_ups: [{ next_step_id, owner, what, due_on }], latest_note: { summary, by, at } | null, change_id }] }` in lane order.
-- **One prospect.** `GET /api/engine/prospects/{party_id}` answers the lane fields plus `notes: [{ activity_id, summary, by, at }]`, every note about the party, newest first. The open prospect and the review's open item re-read it, or the deal detail for a deal, every five seconds, so a note shows on the other partner's screen without a reload.
+- **Lane read.** `GET /api/engine/prospects` accepts `?owner=all|joe|dell` (default `all`) and answers `{ count, prospects: [{ party_id, name, kind, how_found, owner, needs_attention, follow_ups: [{ next_step_id, owner, what, due_on }], latest_note: { summary, by, at } | null, change_id }] }` in lane order. Either partner's filter includes unclaimed prospects. The count is for the selected filter.
+- **One prospect.** `GET /api/engine/prospects/{party_id}` answers the lane fields plus `notes: [{ activity_id, summary, by, at }]`, every note about the party, newest first. Send the detail's `ETag` in `If-None-Match` on each five-second poll. The read answers `304` with no body if the detail is unchanged. The tag covers notes and follow-ups too. Use `change_id` for edits to the lead role. It is zero when the lead has no recorded change.
 - **Review read.** `GET /api/engine/weekly-reviews?week_of=` answers `{ items: [{ deal_id or party_id, state, reviewed: { review_id, by, at } | null }] }` with each deal's and prospect's fields as the board and lane read them. It covers both workspaces and both partners. Active deals are ordered by their phase at the start of `week_of` in Central time, from phase history, then name. Prospects follow by when the lead reached `opportunity`, then active deals and prospects that arrive during the week, by arrival. Parked deals come last (question 13, owner, 2026-11-18). A prospect that became a deal that week keeps its place and mark, found through the deal it joined. `state` is `open`, `closed`, `lost` or `dropped`, so items that left during the week keep their place.
 
 These saves write only the new schema, so the lane and the review go live with the Deals switch. Home shows a due follow-up only once Home also reads the new schema (23, 30): the Deals switch alone leaves Home on the old read. Home's step read names the prospect as the follow-up's destination. Slices, in order: 36, then 37 and 38 in parallel, then 39 after 30. Turn into deal waits on question 11.
@@ -767,7 +767,7 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
 - A knows or can-introduce link? It moves. One between the two records is dropped, and where both hold the same link, either way round for knows, the survivor's stays.
-- Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. How found stays the survivor's, or becomes the duplicate's.
+- Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. Needs attention stays set if either lead had it. How found stays the survivor's, or becomes the duplicate's.
 - Both vendors? The survivor's vendor role stays, with its stage, level and relationship partner. The duplicate's values fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is, unless the merged disposition is avoid.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.

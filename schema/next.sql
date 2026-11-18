@@ -495,6 +495,8 @@ create table deal_party (
 	primary key (deal_id, party_id, role)
 );
 
+create index deal_party_by_party on deal_party (party_id);
+
 -- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
 
 -- How a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
@@ -509,6 +511,24 @@ alter table party add how_found text references how_found;
 alter table party_role add owner_user_id uuid references app_user,
 	add constraint party_role_lead_has_a_stage check (role <> 'lead' or stage is not null),
 	add constraint party_role_owner_on_lead_or_vendor check (owner_user_id is null or role in ('lead', 'vendor'));
+
+alter table party_role add needs_attention boolean not null default false,
+	add constraint party_role_attention_only_on_lead check (not needs_attention or role = 'lead');
+
+create function lead_flagged_by_a_user() returns trigger
+language plpgsql as $$
+begin
+	if nullif(current_setting('engine.user_id', true), '') is null
+		and new.needs_attention is distinct from
+			(case when tg_op = 'INSERT' then false else old.needs_attention end) then
+		raise exception 'a user sets or clears lead attention'
+			using errcode = 'check_violation', constraint = 'lead_flagged_by_a_user';
+	end if;
+	return new;
+end $$;
+
+create trigger lead_flagged_by_a_user before insert or update of needs_attention on party_role
+	for each row execute function lead_flagged_by_a_user();
 
 create table lead_lane (
 	slug text primary key,
@@ -923,6 +943,8 @@ create table activity_about (
 	constraint activity_about_one_record check (num_nonnulls(deal_id, party_id, property_id) = 1),
 	unique nulls not distinct (activity_id, deal_id, party_id, property_id)
 );
+
+create index activity_about_by_party on activity_about (party_id, activity_id) where party_id is not null;
 
 -- Only the new text is kept; the date is the activity's, and the mailbox stays the full record.
 create table email (
@@ -2703,6 +2725,7 @@ begin
 		is_target = (s.is_target or d.is_target) and coalesce(s.disposition, '') <> 'avoid'
 			and coalesce(d.disposition, '') <> 'avoid',
 		owner_user_id = coalesce(s.owner_user_id, d.owner_user_id),
+		needs_attention = s.needs_attention or d.needs_attention,
 		lane = coalesce(s.lane, d.lane), segment = coalesce(s.segment, d.segment),
 		lease_estimate_source = case when s.estimated_lease_on is null then d.lease_estimate_source else s.lease_estimate_source end,
 		lease_estimate_confidence = case when s.estimated_lease_on is null then d.lease_estimate_confidence else s.lease_estimate_confidence end,
@@ -3296,7 +3319,7 @@ grant delete on vendor_vertical, vendor_loan_program, party, party_email, party_
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
-grant update (relationship_origin, rivalry_note, refers_business, offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id) on party_role to engine;
+grant update (relationship_origin, rivalry_note, refers_business, offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id, needs_attention) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (started_on, ended_on, note) on party_link to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
