@@ -23,6 +23,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
 - **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, with who parked it and when, and whether it needs attention.
+- **`deal_client_website`**: a deal's client website registration, with the client it was set up for, its unique website name, its password verifier and when it was disabled, if applicable. A deal can have one active registration.
 - **`deal_kind`**: the list of kinds of transaction, such as lease and purchase. Like roles, a label can be renamed.
 - **`deal_reason`**: the list of reasons a client takes space, such as a start-up or a relocation. Like roles, a label can be renamed.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
@@ -169,7 +170,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 67. A national account is a company holding that role. Its dated owners are people, and their dates never overlap on one account. Membership and ownership end strictly after they start, with the end excluded.
 68. Client and account profiles and their dated links keep their parties; users may correct dates and remove mistakes. A merge carries a lone profile and refuses two client profiles or two account profiles rather than discarding their histories.
 69. A parked deal says why: the client paused, the prospect was never active, or another reason. Only a parked deal has a note, and a note is never blank. Only a parked deal has a time it was parked, and a user who parked it only with that time.
-70. A deal needs attention or does not; it is never unknown. Only a user, or a job working for one, parks, revives or flags a deal.
+70. Needs attention is never unknown. Only a user, or a job working for one, sets or clears it on a deal or lead, or parks or revives a deal. Other party roles cannot have the flag.
 71. Lead stage evidence names a lead and two different lead stages. Non-archive moves name an activity about that lead and nonblank evidence. Repeated proposals and applied evidence for the same activity and move are refused. Pending moves use the shared proposal queue. An unattended job applies only strong evidence along the funnel; weak evidence and every archive wait for a direct user, and archiving has a nonblank reason. Applying a stale proposal is refused. Applied evidence is final and never rewritten or removed.
 
 72. A lead's lane comes from its list. A lease estimate has both date and nonblank source, and confidence only with an estimate. Lane, estimate, confidence and segment belong only to the lead role. How-found detail is nonblank and has how found.
@@ -213,7 +214,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `imported_change`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's, a how-found's or a claim type's label;
-- a vendor role's stage, relationship level, relationship partner, disposition, reason and target, a lead role's stage and owner, an introduction's date, deal and note, and a knows or can-introduce link's dates and note;
+- a vendor role's stage, relationship level, relationship partner, disposition, reason and target, a lead role's stage, owner and Needs attention flag, an introduction's date, deal and note, and a knows or can-introduce link's dates and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI and how found, and a property's address, county and point;
 - a deal's kind, reason, lease it renews, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
@@ -286,7 +287,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 6. `copy-candidates-drafts.sql`: drafts and candidates find their leads and mailbox users.
 7. `copy-vendors.sql`, with `copy_vendor_ruling_reason` when reviewed: the deal copy finds the vendor roles.
 8. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
-9. `copy-deals.sql`, then `copy-market-agent-sources.sql` in its own transaction.
+9. `copy-deals.sql`, then `copy-market-agent-sources.sql` and `copy-client-websites.sql`, each in its own transaction.
 10. `copy-vendors.sql` again: introductions and worked deals find their deals.
 11. `copy-leases.sql`: needs its deal, client and building.
 12. `copy-critical-dates.sql`.
@@ -306,6 +307,8 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 26. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
 Running the whole order again changes no row and no change history, and each copy lists the same corrections, including the leftover values of records an earlier run copied, so the list a partner fixes stays whole (#596). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
+
+The website copy uses the deal and client maps to preserve each registration's name, bcrypt verifier of the hex SHA-256 password digest, creation time and last update time. It assigns the old-system job because the source row has no author. It lists deal IDs and reasons for registrations it cannot copy, such as a missing client link, missing update time or conflicting registration. A rerun keeps a registration that is already copied. The verifier stays out of the correction list and change history.
 
 ## Copying today's people and companies
 
@@ -716,7 +719,7 @@ Two facts are new, each typed and constrained:
 - **Needs attention on a lead.** `party_role.needs_attention`, a boolean that is never unknown, true only on the lead role, set or cleared only by a user or a job working for one, like a deal's (rule 70). The engine's role may update it.
 - **`weekly_review`.** One row per item reviewed in a week: `week_of`, a Monday, and exactly one of `deal_id` and a `party_id` holding the lead role (decision 21), stored once per week and item and stamped with the user who marked it. Both partners share the mark and either can undo it (question 12, owner, 2026-11-18). Undo removes the row and change history keeps it.
 
-Slice 36 adds both, with these rules and their tests, to § "Rules the database enforces" and § "Who may change what".
+Slice 36 defines the database rules for both. The prospect read adds lead attention under rule 70.
 
 The new doors below use only the signed-in partner entrance, so a job gets 404 on them. Doors 16, 18 and 19 keep both entrances. Every save follows the shared save rules (§ "What every door shares"), including `idempotency_key`.
 
@@ -736,8 +739,8 @@ The new doors below use only the signed-in partner entrance, so a job gets 404 o
 - **Turn into deal** (pending question 11). The client gains the client role in the same save. `prospect_id` must be in the lane, or `409 not_a_prospect`. A `client_id` other than `prospect_id` adds the prospect as `client_contact`.
 - **Drop.** A blank reason is `400 missing_required`, and a party not in the lane is `409 not_a_prospect`. The move and the stage change save together under the lead's lock.
 - **Mark reviewed.** A `week_of` that is not a Monday is `400 invalid_field_value`. Marking a marked item answers the stored mark with `existing: true`.
-- **Lane read.** `GET /api/engine/prospects` answers `{ prospects: [{ party_id, name, kind, how_found, owner, needs_attention, follow_ups: [{ next_step_id, owner, what, due_on }], latest_note: { summary, by, at } | null, change_id }] }` in lane order.
-- **One prospect.** `GET /api/engine/prospects/{party_id}` answers the lane fields plus `notes: [{ activity_id, summary, by, at }]`, every note about the party, newest first. The open prospect and the review's open item re-read it, or the deal detail for a deal, every five seconds, so a note shows on the other partner's screen without a reload.
+- **Lane read.** `GET /api/engine/prospects` accepts `?owner=all|joe|dell` (default `all`) and answers `{ count, prospects: [{ party_id, name, kind, how_found, owner, needs_attention, follow_ups: [{ next_step_id, owner, what, due_on }], latest_note: { summary, by, at } | null, change_id }] }` in lane order. Either partner's filter includes unclaimed prospects. The count is for the selected filter.
+- **One prospect.** `GET /api/engine/prospects/{party_id}` answers the lane fields plus `notes: [{ activity_id, summary, by, at }]`, every note about the party, newest first. Send the detail's `ETag` in `If-None-Match` on each five-second poll. The read answers `304` with no body if the detail is unchanged. The tag covers notes and follow-ups too. Use `change_id` for edits to the lead role. It is zero when the lead has no recorded change.
 - **Review read.** `GET /api/engine/weekly-reviews?week_of=` answers `{ items: [{ deal_id or party_id, state, reviewed: { review_id, by, at } | null }] }` with each deal's and prospect's fields as the board and lane read them. It covers both workspaces and both partners. Active deals are ordered by their phase at the start of `week_of` in Central time, from phase history, then name. Prospects follow by when the lead reached `opportunity`, then active deals and prospects that arrive during the week, by arrival. Parked deals come last (question 13, owner, 2026-11-18). A prospect that became a deal that week keeps its place and mark, found through the deal it joined. `state` is `open`, `closed`, `lost` or `dropped`, so items that left during the week keep their place.
 
 These saves write only the new schema, so the lane and the review go live with the Deals switch. Home shows a due follow-up only once Home also reads the new schema (23, 30): the Deals switch alone leaves Home on the old read. Home's step read names the prospect as the follow-up's destination. Slices, in order: 36, then 37 and 38 in parallel, then 39 after 30. Turn into deal waits on question 11.
@@ -767,7 +770,7 @@ A conflict keeps the survivor's data and refuses what cannot be settled safely:
 - Both on one deal in the same role? One link stays, and the duplicate's rounds move to it. In different roles, both stay.
 - The survivor keeps its name. Outside ids, next steps, sent activity, social accounts and introductions all move.
 - A knows or can-introduce link? It moves. One between the two records is dropped, and where both hold the same link, either way round for knows, the survivor's stays.
-- Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. How found stays the survivor's, or becomes the duplicate's.
+- Both leads? The survivor's lead role stays, with its stage and owner, and the duplicate's owner fills a missing one. Needs attention stays set if either lead had it. How found stays the survivor's, or becomes the duplicate's.
 - Both vendors? The survivor's vendor role stays, with its stage, level and relationship partner. The duplicate's values fill any it lacks. The stricter disposition stays with its reason: avoid, then parked, then the survivor's. If either is a target, the survivor is, unless the merged disposition is avoid.
 - A vendor and someone it introduced, or was introduced to? Refused, because an introduction joins two different records.
 - A record merged into the duplicate earlier now points at the survivor, so pointers never chain.
@@ -1285,6 +1288,8 @@ The detail sends `checklist` as `deal-checklist.v1`. The template lives in engin
 
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
+Both partners' detail reads return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The detail database role can read the fields used to form the link. The website setup save and the signed-in handoff to the website are separate steps in #729 and #730.
+
 Each `email_follow_ups` entry is one pending email suggestion targeting the deal, from either partner's mailbox. It gives `proposal_id`, `kind`, `deal_id`, `evidence`, the proposed step fields (`what`, `owner`, `due_on`) or phase fields (`from_phase`, `to_phase`), and an `email` with `activity_id`, `sender`, `sender_name`, `subject`, `happened_at` and `summary`. The `owner` field gives the app user slug. A filing suggestion drops from this list once the email is on the deal. Use the proposal ID to accept or dismiss through door 21. Accepting a filing suggestion files the email.
 
 Set the engine Worker's `DEALS_READ_SCHEMA` variable to `next` to use the read-only `next` schema through the existing `DATABASE` binding. The login must be able to assume `engine_reader` on the copied database. An absent setting or any other value uses today's readers. Once rehearsal verifies the remaining app dependencies, set the engine variable first, then set `deals-from-engine` to `on` in the app's `ENGINE_ROUTING` KV. To return the app to CARR, set the KV value to `off`.
@@ -1297,7 +1302,6 @@ When the nightly invoice job moved the deal to its current Closed phase, the boa
 
 Question numbers refer to the [Deals screen spec](screens/deals.md#questions-for-the-owner).
 
-- The new schema needs a place for client website registrations (question 1). Pass D had one registered deal site in the old schema. The app offers site setup when the read lacks the registration.
 - The "Moved automatically" mark and Undo on copied moves need the source event ID and the fact that the move was automatic (question 3). Pass D copied the phase rows behind all 16 old receipts, with the phase, occurrence and save times, reason, and author stamp.
 - Pipeline-call state waits on the deal watch and pipeline call recorder decision (question 8).
 

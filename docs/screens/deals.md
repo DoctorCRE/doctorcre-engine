@@ -129,7 +129,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 ### Overview
 
 - [ ] Client website, near the top, when the deal has one. For a signed-in partner it opens the client's site already unlocked, in a new tab, and asks for no password.
-- [ ] The new database keeps each deal's client website registration so the Client website link still opens the site after the switch (owner, 2026-11-18).
+- [ ] The new database keeps each deal's client website registration so the deal page can still show its Client website link after the switch (owner, 2026-11-18, #728).
 - [ ] A deal with no website says "No client website linked."
 - [ ] Set up client website stays below the deal's facts and asks for the website name and a password (owner, 2026-11-18).
 - [ ] Next steps: each person's open next step on the deal, with its owner and due date in words. A Home card for one of them opens here with that step in view.
@@ -158,7 +158,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ## Questions for the owner
 
-1. Answered on 2026-11-18. The new database keeps each deal's client website.
+1. Answered on 2026-11-18 (#728). The new database keeps each deal's client website registration.
 2. Answered on 2026-11-18 (#718): Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move.
 3. Answered on 2026-11-18. Copied automatic phase moves keep the "Moved automatically" mark and Undo on the card.
 4. Answered on 2026-11-18. A person who is a client may belong to a national account.
