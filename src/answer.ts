@@ -48,6 +48,9 @@ const HINTS = {
 		"Supply a UUID as idempotency_key and reuse it only for the same action.",
 	key_reuse: "Use a fresh idempotency_key for changed arguments.",
 	version_conflict: "Re-read the record and ask the human before retrying.",
+	invoice_not_found: "Choose an invoice with a commission payment.",
+	invoice_not_unpaid: "Choose an invoiced payment that is still unpaid.",
+	payment_date_out_of_range: "Use a date from the invoice date through today.",
 	old_system_required:
 		"The engine does not finish this save. Send it to the old system unchanged.",
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
