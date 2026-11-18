@@ -55,9 +55,9 @@ before(async () => {
 	// biome-ignore format: one fixture row per line
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
-  ('${id(2)}', 'partner_two', 'human', 'Example Other'), ('${id(3)}', 'example-device', 'automation', 'Example Recorder');
+  ('${id(2)}', 'partner_two', 'human', 'Example Other'), ('${id(3)}', 'quill-joe-studio', 'automation', 'Example Recorder');
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
- insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'joe');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(1)}', '${id(1)}');
  insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
  insert into public.party (id, kind, name, created_by, updated_by) values ('${id(11)}', 'person', 'Example Party', '${id(1)}', '${id(1)}');
@@ -73,7 +73,7 @@ before(async () => {
  insert into activity_about (activity_id, deal_id) values ('${id(60)}', '${id(30)}');
  insert into public.capture_session (id, nonce, device_id, actor_id, mode, started_at, consent_announced_at, session_token_hash,
   expires_at, state, state_at, post_call) values
-  ('${id(60)}', 'nonce-60', 'example-device', '${id(3)}', 'meeting', '2024-01-01 15:00', '2024-01-01 15:00', 'token-60', '2024-02-01', 'done', '2024-01-01 16:00', true);
+  ('${id(60)}', 'nonce-60', 'quill-joe-studio', '${id(3)}', 'meeting', '2024-01-01 15:00', '2024-01-01 15:00', 'token-60', '2024-02-01', 'done', '2024-01-01 16:00', true);
  insert into public.event (id, occurred_at, actor_id, verb, subject_type, subject_id, field, new_value, cause)
   values ('${id(50)}', '2023-12-01', '${id(1)}', 'patch-deal-field', 'deal', '${id(30)}', 'phase', '{"phase": "loi"}', 'human_stated');
  insert into public.capture_post_call_candidate (id, session_id, idempotency_key, batch_hash, item_index, kind, deal_id, assignee_slug,
@@ -112,6 +112,12 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		"#90 next_step #60 call Example quote old_system accepted #01 2024-01-10 00:00:00+00 #30 Example action 72 #01 2024-02-01 - - #01 - 2024-01-10 00:00:00+00",
 	]);
 	assert.deepEqual(await rows("select id from next_step"), ["#90"]);
+	assert.deepEqual(
+		await rows(
+			`select id, changed_for_user_id from proposal where status = 'pending' order by id`,
+		),
+		["#71 -", "#82 #01"],
+	);
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select record ->> 'id' as id, action, new_value ->> 'status' as status, changed_by_user_id, changed_by_job,
   changed_at::text from change where table_name = 'proposal' order by record ->> 'id', changed_at`), [

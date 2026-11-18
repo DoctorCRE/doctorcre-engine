@@ -123,6 +123,15 @@ from email_group g join ready_email using (email_id) join old_link l on l.id = g
 where g.live and (l.deal_id is not null or l.party_id is not null)
 order by g.email_id, l.deal_id, l.party_id, g.recorded_at, g.id
 on conflict do nothing;
+insert into email_mailbox (activity_id, user_id)
+select g.email_id, m.user_id
+from email_group g join ready_email using (email_id) join copy_email_mailboxes() m on m.activity_id = g.id
+where g.live
+on conflict do nothing;
+insert into not_copied
+select id, 'mailbox', null, 'mailbox_unknown' from ready_email e
+where not exists (select from email_mailbox m where m.activity_id = e.id);
+
 -- Later copies find the email each of today's rows became.
 insert into outside_id (source, value, email_activity_id)
 select 'old_system', g.id::text, g.email_id from email_group g join email e on e.activity_id = g.email_id

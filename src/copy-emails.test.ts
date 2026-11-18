@@ -29,7 +29,8 @@ const run = async (evidence?: string): Promise<pg.QueryResultRow[]> => {
 };
 const everything = () =>
 	rows(`select (select jsonb_agg(a order by id) from activity a), (select jsonb_agg(e order by activity_id) from email e),
- (select jsonb_agg(l order by activity_id, deal_id, party_id) from activity_about l), (select count(*) from change)`);
+ (select jsonb_agg(l order by activity_id, deal_id, party_id) from activity_about l),
+ (select jsonb_agg(m order by activity_id, user_id) from email_mailbox m), (select count(*) from change)`);
 
 const JOE = "partner-one@example.test";
 const DELL = "partner-two@example.test";
@@ -124,11 +125,12 @@ before(async () => {
  create table public.email (id uuid primary key, mailbox_account text not null, message_id text check (message_id = btrim(message_id)));
  alter table public.activity add column email_id uuid references public.email;
  insert into public.email values ${messages.map(([n, account, header]) => `('${id(n)}', '${account}', '<${header}@example.test>')`).join(", ")};
- insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
-  ('${id(3)}', 'example-mail', 'automation', 'Example mail job');
- insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(10)}', 'company', 'Example Clinic'),
+ insert into public.actor (id, slug, kind, display_name, email) values ('${id(1)}', 'partner_one', 'human', 'Example User', '${JOE}'),
+  ('${id(2)}', 'partner_two', 'human', 'Example Other', '${DELL}'), ('${id(3)}', 'partner_one-local', 'automation', 'Example mail job', null);
+ insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User'), ('${id(2)}', 'person', 'Example Other'),
+  ('${id(10)}', 'company', 'Example Clinic'),
   ('${id(11)}', 'person', 'Example Doctor');
- insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
+ insert into app_user (id, slug) values ('${id(1)}', 'partner_one'), ('${id(2)}', 'partner_two');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(10)}', '${id(10)}'), ('old_system', '${id(11)}', '${id(11)}');
  insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
  insert into public.party (id, kind, name, created_by, updated_by) select v, 'person', 'Example Party', '${id(1)}', '${id(1)}'
@@ -203,6 +205,12 @@ test("stores each email once by its Message-ID with all its records and its full
 		await about(),
 		links,
 		"a mailbox that deleted its copy files nothing",
+	);
+	assert.deepEqual(
+		await lines(
+			"select activity_id, user_id from email_mailbox order by activity_id, user_id",
+		),
+		["40 01", "40 02", "43 01", "46 01", "57 02"],
 	);
 	assert.deepEqual(
 		report.map(
@@ -348,7 +356,10 @@ test("copies verified older email evidence with the original subject and links",
 		},
 	];
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
- ${oldMail.map(insert).join("\n")} commit;`);
+ ${oldMail.map(insert).join("\n")}
+ insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug)
+  values ('${id(3)}', 'log-activity', 'deal', '${id(30)}', '{"activity": "${id(72)}"}', 'automation_job', '2024-01-02', 'partner_one');
+ commit;`);
 	const evidence = (subjectStart = senderLabel.length + 1) =>
 		`create temp table copy_email_evidence (old_id, sender, subject_start, message_id) on commit drop as
  values ('${id(70)}'::uuid, '${DOCTOR}', ${subjectStart}, null),
@@ -359,7 +370,10 @@ test("copies verified older email evidence with the original subject and links",
 			await assert.rejects(run(evidence(0)), { code: "23514" });
 		},
 	);
-	const missing = [[id(73), "no_message_id_or_sender"]];
+	const missing = [
+		[id(70), "mailbox_unknown"],
+		[id(73), "no_message_id_or_sender"],
+	];
 	const reportForOldMail = (report: pg.QueryResultRow[]) =>
 		report
 			.filter((row) => row.old_id >= id(70))
@@ -378,6 +392,12 @@ test("copies verified older email evidence with the original subject and links",
 			await lines(`select activity_id, deal_id, party_id from activity_about
  where activity_id >= '${id(70)}' order by activity_id, deal_id, party_id`),
 			["70 30 null", "70 null 10", "72 30 null"],
+		);
+		assert.deepEqual(
+			await lines(
+				`select activity_id, user_id from email_mailbox where activity_id >= '${id(70)}'`,
+			),
+			["72 01"],
 		);
 	};
 	await copyWithEvidence();

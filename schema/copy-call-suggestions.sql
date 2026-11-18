@@ -7,7 +7,7 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 
 -- A meeting record is its session's activity, which copy-calls.sql carries, so it is not a suggestion.
 create temp table old_suggestion on commit drop as
-select s.*, deal.deal_id, source.id as activity_id, source.kind as activity_kind, owner.id as owner,
+select s.*, deal.deal_id, source.id as activity_id, source.kind as activity_kind, owner.id as owner, reviewer.id as reviewer,
  case when pg_input_is_valid(s.due_text, 'date') then s.due_text::date end as due_on,
  base.new_value ->> 'phase' as from_phase,
  (select u.id from app_user u where u.id = decided.changed_by_user_id) as decider
@@ -23,6 +23,11 @@ from (
  from public.capture_post_call_candidate c
 ) s
 left join outside_id deal on deal.source = 'old_system' and deal.value = s.deal_ref and deal.deal_id is not null
+join public.capture_session session on session.id = s.session_id
+join public.actor recorder on recorder.id = session.actor_id
+left join app_user reviewer on s.assignee is null and reviewer.slug = case recorder.slug
+ when 'quill-joe-mac' then 'joe' when 'quill-joe-studio' then 'joe' when 'quill-dell-mac' then 'dell'
+ else case when recorder.kind = 'human' then recorder.slug end end
 -- The same source activity copy-calls.sql chose: the session's logged meeting, else the session itself.
 left join activity source on source.id = coalesce((select max(o.id::text)::uuid from public.capture_candidate c
  join public.activity o on o.id::text = c.resulting_ref
@@ -75,6 +80,7 @@ insert into not_copied select s.id, f.field, f.value, f.reason from suggestion s
 create temp table ready on commit drop as
 select s.proposal_id as id, s.created_at, s.kind, s.activity_id, s.activity_kind, s.evidence_quote as evidence, s.mapped_status as status,
  case when s.status <> 'pending' then s.decider end as decided_by_user_id, s.resolved_at as decided_at, s.deal_id,
+ case when s.status = 'pending' then s.reviewer end as changed_for_user_id,
  case when s.kind = 'next_step' then s.what end as what, s.owner as owner_party_id, case when s.kind = 'next_step' then s.due_on end as due_on,
  case when s.kind = 'phase_move' then s.from_phase end as from_phase, case when s.kind = 'phase_move' then s.to_phase end as to_phase, s.id as old_id
 from suggestion s where not exists (select from not_copied n where n.old_id = s.id);
@@ -83,8 +89,8 @@ from suggestion s where not exists (select from not_copied n where n.old_id = s.
 insert into not_copied select r.old_id, 'proposal', r.id::text, 'existing_proposal_conflicts' from ready r
 where exists (select from proposal p where (p.id = r.id) <> ((p.activity_id, p.kind, p.deal_id, p.what, p.owner_party_id, p.due_on, p.from_phase, p.to_phase)
  is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase))
- or p.id = r.id and (p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at)
-  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at))
+ or p.id = r.id and (p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at, p.changed_for_user_id)
+  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at, r.changed_for_user_id))
  or exists (select from ready other where other.old_id <> r.old_id and (other.id = r.id
   or (other.activity_id, other.kind, other.deal_id, other.what, other.owner_party_id, other.due_on, other.from_phase, other.to_phase)
   is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase)));
@@ -102,7 +108,7 @@ with inserted as (
   deal_id, what, owner_party_id, due_on, from_phase, to_phase, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
  select id, created_at, kind, activity_id, activity_kind, evidence, 'old_system', status, decided_by_user_id,
   case when status <> 'pending' then decided_at end, deal_id, what, owner_party_id, due_on, from_phase, to_phase,
-  decided_by_user_id, case when status = 'pending' then 'old_system' end, null, case when status = 'pending' then created_at else decided_at end
+  decided_by_user_id, case when status = 'pending' then 'old_system' end, changed_for_user_id, case when status = 'pending' then created_at else decided_at end
  from ready r where not exists (select from not_copied n where n.old_id = r.old_id and n.reason = 'existing_proposal_conflicts')
  on conflict do nothing returning *
 ) select * from inserted;
@@ -110,7 +116,7 @@ with inserted as (
 -- History is written from today's times: the old system proposed it, and the user decided it later.
 insert into change (table_name, record, action, old_value, new_value, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select 'proposal', jsonb_build_object('id', id), 'insert', null, to_jsonb(p) - array['changed_by_user_id', 'changed_by_job', 'changed_for_user_id', 'changed_at']
- || '{"status": "pending", "decided_by_user_id": null, "decided_at": null}', null, 'old_system', null, created_at from copied p;
+ || '{"status": "pending", "decided_by_user_id": null, "decided_at": null}', null, 'old_system', changed_for_user_id, created_at from copied p;
 insert into change (table_name, record, action, old_value, new_value, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select 'proposal', jsonb_build_object('id', id), 'update', '{"status": "pending", "decided_by_user_id": null, "decided_at": null}',
  jsonb_build_object('status', status, 'decided_by_user_id', decided_by_user_id, 'decided_at', decided_at), decided_by_user_id, null, null, decided_at
