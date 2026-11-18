@@ -77,11 +77,10 @@ test("a partner's checklist item lands once on its deal, stamped with the partne
 		idempotency_key: randomUUID(),
 		deal_id: DEAL,
 		what: "Send the example plan",
-		owner_party_id: ALEX,
 		due_on: "2026-02-01",
 		item: ITEM,
 	};
-	const [status, answer] = await save({ user: "alex" }, "next-steps", args);
+	const [status, answer] = await save({ user: "blair" }, "next-steps", args);
 	assert.deepEqual(
 		[status, answer],
 		[
@@ -94,7 +93,7 @@ test("a partner's checklist item lands once on its deal, stamped with the partne
 	);
 	assert.deepEqual(await stepNow(answer.next_step_id), {
 		what: "Send the example plan",
-		owner_party_id: ALEX,
+		owner_party_id: BLAIR,
 		due_on: "2026-02-01",
 		hold_until: null,
 		item_title: ITEM.title,
@@ -104,15 +103,15 @@ test("a partner's checklist item lands once on its deal, stamped with the partne
 		done: false,
 		resolved: false,
 		resolution_event_id: null,
-		by_user: "alex",
+		by_user: "blair",
 		by_job: null,
 		for_user: null,
 	});
-	assert.deepEqual(await save({ user: "alex" }, "next-steps", args), [
+	assert.deepEqual(await save({ user: "blair" }, "next-steps", args), [
 		201,
 		{ replayed: true, ...answer },
 	]);
-	const [reused, refusal] = await save({ user: "alex" }, "next-steps", {
+	const [reused, refusal] = await save({ user: "blair" }, "next-steps", {
 		...args,
 		what: "Another example",
 	});
@@ -129,8 +128,14 @@ test("a job for a partner adds a held step on a party; an item off a deal, two r
 	assert.equal(status, 201);
 	const step = await stepNow(answer.next_step_id);
 	assert.deepEqual(
-		[step.hold_until, step.by_user, step.by_job, step.for_user],
-		["2026-03-01", null, "agent", "blair"],
+		[
+			step.hold_until,
+			step.by_user,
+			step.by_job,
+			step.for_user,
+			step.owner_party_id,
+		],
+		["2026-03-01", null, "agent", "blair", BLAIR],
 	);
 	const refused = async (args: object) => {
 		const [status, body] = await create(agent, { what: "Example", ...args });
@@ -152,6 +157,11 @@ test("a job for a partner adds a held step on a party; an item off a deal, two r
 		"not_found",
 		undefined,
 	]);
+});
+
+test("an explicit next-step owner wins over the saving partner", async () => {
+	const step = await newStep({ owner_party_id: BLAIR });
+	assert.equal((await stepNow(step)).owner_party_id, BLAIR);
 });
 
 test("a change lands from what the caller saw; a crossed field is refused and other fields rebase", async () => {

@@ -1088,6 +1088,16 @@ create table next_step (
 	constraint next_step_resolution_event check (resolution_event_id is null or status <> 'open')
 );
 
+create function next_step_default_owner() returns trigger
+language plpgsql as $$
+begin
+	new.owner_party_id := nullif(current_setting('engine.user_id', true), '')::uuid;
+	return new;
+end $$;
+
+create trigger next_step_default_owner before insert on next_step
+	for each row when (new.owner_party_id is null) execute function next_step_default_owner();
+
 -- A reopened step forgets the old event that closed it; its history keeps it.
 create function next_step_reopened() returns trigger
 language plpgsql as $$

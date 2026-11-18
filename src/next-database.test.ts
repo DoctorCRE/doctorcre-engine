@@ -3870,7 +3870,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			{
 				id: id(400),
 				what: "Start the lease draft",
-				owner_party_id: null,
+				owner_party_id: USER,
 				due_on: "2026-03-20",
 				hold_until: null,
 				item_title: null,
