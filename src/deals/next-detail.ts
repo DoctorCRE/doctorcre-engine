@@ -44,19 +44,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 							.as("status"),
 						asText(eb.ref("payment.received_on")).as("received_on"),
 					])
-					.whereRef("payment.deal_id", "=", "d.id")
-					// A copied expected commission still leaves the receipt incomplete.
-					.where((eb) =>
-						eb.not(
-							eb.exists(
-								eb
-									.selectFrom("commission")
-									.select("deal_id")
-									.whereRef("deal_id", "=", "payment.deal_id")
-									.where("expected", "is not", null),
-							),
-						),
-					),
+					.whereRef("payment.deal_id", "=", "d.id"),
 			).as("commissions"),
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),

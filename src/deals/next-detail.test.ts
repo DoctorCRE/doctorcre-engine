@@ -104,6 +104,8 @@ before(async () => {
 	}
 	await db.query(`begin;
 		select set_config('engine.user_id', '${id(1)}', true);
+		insert into deal_client_website (slug, deal_id, client_party_id, password_hash)
+		values ('example-former-client', '${id(32)}', '${id(14)}', '$2a$12$${"C".repeat(53)}');
 		insert into next_step (id, deal_id, what, item_title, source_ref, due_on)
 		values ('${id(80)}', '${id(30)}', 'Example call about the sign', 'Confirm signage', 'example-call', '2030-01-16');
 		insert into critical_date (id, deal_id, kind, due_on, source)
@@ -369,12 +371,60 @@ test("both partners see a deal's active client website", async () => {
 		});
 		assert.doesNotMatch(body, /password_hash|\$2a\$12\$/);
 	}
+});
+
+test("a missing, disabled or client-mismatched website stays off the deal page", async () => {
 	for (const deal of [id(31), id(32)]) {
 		const response = await get(`/deals/${deal}`, "next");
 		assert.equal(response.status, 200);
 		assert.partialDeepStrictEqual(await response.json(), {
 			client_portal_url: null,
 		});
+	}
+});
+
+test("website copy reports each unavailable registration and skips it", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+			delete from outside_id where source = 'old_system' and deal_id = '${id(31)}';
+			update ops.client_portal set disabled_at = now() where deal_id = '${id(30)}';
+			insert into ops.client_portal (slug, deal_id, client_id, password_hash, disabled_at, updated_at)
+			select slug, deal_id::uuid, client_id::uuid, '$2a$12$${"A".repeat(53)}',
+				case when disabled then now() end, case when has_update then now() end
+			from (values
+				('example-conflict', '${id(30)}', '${id(20)}', false, true),
+				('example-no-time', '${id(30)}', '${id(20)}', true, false),
+				('example-no-deal', '${id(31)}', '${id(21)}', false, true),
+				('example-wrong-client', '${id(32)}', '${id(22)}', false, true)
+			) example(slug, deal_id, client_id, disabled, has_update)`);
+		const results = await db.query(
+			await readSchema("copy-client-websites.sql"),
+		);
+		assert.ok(Array.isArray(results));
+		assert.deepEqual(
+			results.at(-1)?.rows,
+			[
+				[id(30), "registration_conflict"],
+				[id(30), "registration_update_time_missing"],
+				[id(31), "deal_not_copied"],
+				[id(32), "client_link_not_copied"],
+			].map(([old_id, reason]) => ({
+				old_id,
+				field: "client_website",
+				value: null,
+				reason,
+			})),
+		);
+		assert.deepEqual(
+			(await db.query(`select slug from deal_client_website order by slug`))
+				.rows,
+			["example-earlier-lease", "example-former-client", "example-startup"].map(
+				(slug) => ({ slug }),
+			),
+		);
+	} finally {
+		await db.query("rollback");
 	}
 });
 
@@ -435,7 +485,7 @@ test("a proposed critical date stays off the deal checklist", async () => {
 	);
 });
 
-test("the renewal checklist tracks confirmed deadlines and leaves a forecast outstanding", async () => {
+test("the renewal checklist tracks confirmed deadlines and a saved receipt", async () => {
 	const response = await get(`/deals/${id(33)}`, "next");
 	assert.equal(response.status, 200);
 	assert.partialDeepStrictEqual(await response.json(), {
@@ -453,7 +503,7 @@ test("the renewal checklist tracks confirmed deadlines and leaves a forecast out
 				},
 				{
 					id: "invoice",
-					items: [{ id: "commission_received", status: "not_recorded" }],
+					items: [{ id: "commission_received", status: "complete" }],
 				},
 			],
 			due_items: [
