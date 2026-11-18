@@ -1484,7 +1484,7 @@ create table reply_draft (
 			and (status = 'failed') = (failure_reason is not null)) is true)
 );
 
-alter table home_mark add foreign key (proposal_id) references proposal;
+alter table home_mark add foreign key (proposal_id) references proposal on delete cascade;
 alter table home_mark add foreign key (reply_draft_id, user_id) references reply_draft (id, owner_user_id);
 
 create function reply_draft_delivery() returns trigger

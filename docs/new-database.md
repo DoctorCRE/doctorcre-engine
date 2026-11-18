@@ -1614,6 +1614,8 @@ The version is `<source change ID>:<mark change ID>:<visible disposition>`. For 
 
 The answer is `200 { ok, item_id, base_version, previous }`. The previous mark has `disposition`, `snoozed_until`, `waiting_on_party_id` and `waiting_reason` with nulls for absent values. Undo uses a fresh key, the returned version and the previous value for the affected part of the mark. Clear a prior snooze whose time has passed. Shared retry rules apply. App routing (slice 30) submits one request per card for a selection and refreshes Home after saves.
 
+A suggestion group uses the most recent mark revision among its proposals, including a clear. A new suggestion in the group keeps its snooze until the saved time, even when the new proposal becomes the card's ID.
+
 ### What can start when this merges
 
 - Program 26, mail intake: email and activity and the filed-email read (19), attachments (20), the agenda (25) and the unknown-sender lead suggestion (21).

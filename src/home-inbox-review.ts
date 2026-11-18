@@ -34,6 +34,7 @@ type Suggestion = ReviewRow &
 	Pick<SuggestionReference, "activity_id" | "activity_kind"> & {
 		due_on: string | null;
 		suggestions: SuggestionReference[];
+		member_ids: string[];
 	};
 
 function draftRows(userId: string, limit: number, itemId?: string) {
@@ -129,6 +130,7 @@ function suggestionRows(userId: string, limit: number, itemId?: string) {
 				coalesce(first_value(email_title) over (source_group order by (status = 'pending') desc, source_at desc, activity_id desc), suggestion_title) as title,
 				row_number() over same_source as position,
 				max(proposal_version) over source_group as source_change_id,
+				array_agg(id) over all_members as member_ids,
 				md5(string_agg(id::text, ':') filter (where status = 'pending') over all_members) as source_version,
 				jsonb_agg(reference) filter (where status = 'pending') over all_members as suggestions
 			from visible
@@ -149,6 +151,7 @@ type ReviewSource = "email_proposal" | "capture_session" | "notification";
 type ReviewState = "working" | "failed" | "needs_attention" | "done";
 type ReviewKind = "proposal" | "reply_draft";
 type ReviewMark = {
+	mark_item_id: string;
 	mark_version: string | null;
 	settled: boolean;
 	snoozed_until: string | null;
@@ -160,17 +163,20 @@ function markedReviews<Row extends ReviewRow>(
 	kind: ReviewKind,
 ) {
 	return sql<Row & ReviewMark>`
-		select card.*, history.mark_version,
+		select card.*, history.mark_version, coalesce(history.item_id, card.id) as mark_item_id,
 			coalesce(m.disposition = 'settled' and history.settled_version >= card.source_change_id, false) as settled,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
 		from (${rows}) card
-		left join home_mark m on m.user_id = ${userId}::uuid and m.item_kind = ${kind} and m.item_id = card.id
-		cross join lateral (
-			select max(id) as mark_version,
-				max(id) filter (where new_value ->> 'disposition' = 'settled') as settled_version
-			from change where table_name = 'home_mark'
-				and record = jsonb_build_object('user_id', ${userId}::uuid, 'item_kind', ${kind}::text, 'item_id', card.id)
-		) history
+		left join lateral (
+			select member.item_id, max(h.id) as mark_version,
+				max(h.id) filter (where h.new_value ->> 'disposition' = 'settled') as settled_version
+			from unnest(${kind === "proposal" ? sql`card.member_ids` : sql`array[card.id]`}) member(item_id)
+			join change h on h.table_name = 'home_mark'
+				and h.record = jsonb_build_object('user_id', ${userId}::uuid, 'item_kind', ${kind}::text, 'item_id', member.item_id)
+			group by member.item_id order by mark_version desc limit 1
+		) history on true
+		left join home_mark m on m.user_id = ${userId}::uuid
+			and m.item_kind = ${kind} and m.item_id = coalesce(history.item_id, card.id)
 	`;
 }
 
@@ -180,18 +186,32 @@ export async function lockHomeReview(
 	id: string,
 	userId: string,
 ) {
-	const locked = await tx
+	const group =
+		kind === "proposal"
+			? (await suggestionRows(userId, 1, id).execute(tx)).rows[0]
+			: undefined;
+	if (kind === "proposal" && !group) return;
+	await tx
 		.selectFrom(kind)
 		.select("id")
-		.where("id", "=", id)
+		.where("id", "in", group?.member_ids ?? [id])
+		.orderBy("id")
 		.forNoKeyUpdate()
-		.executeTakeFirst();
-	if (!locked) return;
+		.execute();
 	const query = kind === "proposal" ? suggestionRows : draftRows;
 	const {
 		rows: [card],
-	} = await query(userId, 1, id).execute(tx);
-	return card?.source_change_id;
+	} = await markedReviews<ReviewRow>(
+		query(userId, 1, id),
+		userId,
+		kind,
+	).execute(tx);
+	return (
+		card && {
+			source_version: card.source_change_id,
+			mark_item_id: card.mark_item_id,
+		}
+	);
 }
 
 function reviewCard(

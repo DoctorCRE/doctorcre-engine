@@ -202,29 +202,52 @@ for (const item_id of [`suggestion:${id(30)}`, `reply_draft:${id(21)}`]) {
 	});
 }
 
-test("A decision on a grouped suggestion invalidates the card's settlement", async () => {
+test("A new suggestion keeps the conversation snoozed and a later decision clears its settlement", async () => {
 	const user = { user: "mail-reviewer" };
 	const reviewer = id(9);
-	const item_id = `suggestion:${id(50)}`;
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Mail Reviewer');
 		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');
 		select set_config('engine.user_id', '${reviewer}', true);
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id)
-			values ('${id(50)}', 'file_to_deal', '${id(13)}', 'email', 'Please file the plan.', 'old_system', '${deal}'),
-				('${id(51)}', 'possible_new_deal', '${id(13)}', 'email', 'Another example suite.', 'old_system', null);
+			values ('${id(50)}', 'file_to_deal', '${id(10)}', 'email', 'Please file the plan.', 'old_system', '${deal}'),
+				('${id(51)}', 'possible_new_deal', '${id(10)}', 'email', 'Another example suite.', 'old_system', null);
 		commit;`);
-	const card = async () =>
-		(await inbox(user.user)).find((item) => item.item_id === item_id);
-	const original = await card();
-	assert.ok(original);
-	const [settled, mark] = await save(user, "home/marks", {
-		idempotency_key: randomUUID(),
-		item_id,
-		base_version: original.base_version,
-		action: "settle",
+	const card = async () => {
+		const [item] = await inbox(user.user);
+		assert.ok(item);
+		return item;
+	};
+	const mark = async (
+		action: string,
+		saved?: Record<string, unknown>,
+		until?: string,
+	) => {
+		const item = saved ?? (await card());
+		return save(user, "home/marks", {
+			idempotency_key: randomUUID(),
+			item_id: item.item_id,
+			base_version: item.base_version,
+			action,
+			...(until && { until }),
+		});
+	};
+	const until = new Date(Date.now() + 86_400_000).toISOString();
+	assert.equal((await mark("snooze", await card(), until))[0], 200);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${reviewer}', true);
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job)
+			values ('${id(52)}', 'possible_new_deal', '${id(11)}', 'email', 'Review the newer suite.', 'old_system');
+		commit;`);
+	assert.partialDeepStrictEqual(await card(), {
+		item_id: `suggestion:${id(52)}`,
+		section: "snoozed",
+		snoozed_until: until,
 	});
+	assert.equal((await mark("unsettle"))[0], 200);
+	assert.equal((await card()).section, "inbox");
+	const [settled, receipt] = await mark("settle");
 	assert.equal(settled, 200);
 	assert.equal((await card())?.section, "settled");
 	const [decided] = await save(user, `proposals/${id(51)}/decision`, {
@@ -234,14 +257,9 @@ test("A decision on a grouped suggestion invalidates the card's settlement", asy
 	assert.equal(decided, 200);
 	assert.partialDeepStrictEqual(await card(), {
 		section: "inbox",
-		merged_source_ids: [id(50)],
+		merged_source_ids: [id(52), id(50)],
 	});
-	const [undo] = await save(user, "home/marks", {
-		idempotency_key: randomUUID(),
-		item_id,
-		base_version: mark.base_version,
-		action: "unsettle",
-	});
+	const [undo] = await mark("unsettle", receipt);
 	assert.equal(undo, 409);
 });
 
