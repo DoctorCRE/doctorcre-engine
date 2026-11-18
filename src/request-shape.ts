@@ -1,4 +1,5 @@
 import { Refusal } from "./answer.ts";
+import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import { isArguments } from "./save-door.ts";
 import { UUID } from "./uuid.ts";
@@ -27,7 +28,9 @@ export const isBoolean: Check<boolean> = (value): value is boolean =>
 // A moment with its zone, such as 2026-01-05T15:00:00Z.
 export const isInstant: Check<string> = (value): value is string =>
 	typeof value === "string" &&
-	/^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-]\d{2}:\d{2})$/.test(value) &&
+	/^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-](0\d|1[0-5]):[0-5]\d)$/.test(value) &&
+	!value.startsWith("0000-") &&
+	isCalendarDate(value.slice(0, 10)) &&
 	Number.isFinite(Date.parse(value));
 export const optional =
 	<T>(check: Check<T>): Check<T | undefined> =>

@@ -250,7 +250,9 @@ for (const schema of [undefined, "next"]) {
 			board &&
 				typeof board === "object" &&
 				"deals" in board &&
-				Array.isArray(board.deals),
+				Array.isArray(board.deals) &&
+				"accounts" in board &&
+				Array.isArray(board.accounts),
 		);
 		assert.equal(board.accounts.length, 1);
 		assert.equal(board.deals.length, schema ? 2 : 3);

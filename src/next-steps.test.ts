@@ -493,6 +493,14 @@ test("a request missing or misnaming its arguments, or naming no known step, is 
 		}),
 		[400, "invalid_field_value", ["resolution", "done_at"]],
 	);
+	assert.deepEqual(
+		await refusal(`next-steps/${step}/end`, {
+			idempotency_key: key,
+			resolution: "done",
+			done_at: "2020-02-31T00:00:00Z",
+		}),
+		[400, "invalid_field_value", ["done_at"]],
+	);
 	for (const path of [
 		`next-steps/${id(98)}/end`,
 		"next-steps/not-a-step/reopen",
