@@ -47,7 +47,7 @@ async function addInvoice(
 	);
 }
 
-async function fixture() {
+async function fixture(phase: "closing" | "closed" = "closing") {
 	const [deal, payment, invoice] = [randomUUID(), randomUUID(), randomUUID()];
 	const name = `Example Deal ${deal}`;
 	await db.query("begin; select set_config('engine.job', 'old_system', true)");
@@ -60,8 +60,8 @@ async function fixture() {
 		[deal, client],
 	);
 	await db.query(
-		"insert into deal_phase_change (deal_id, happened_at, phase) values ($1, '2020-03-01', 'closing')",
-		[deal],
+		"insert into deal_phase_change (deal_id, happened_at, phase) values ($1, '2020-03-01', $2)",
+		[deal, phase],
 	);
 	await db.query("insert into commission (deal_id, gross) values ($1, 1000)", [
 		deal,
@@ -95,6 +95,19 @@ async function trackerEntries(deal: string) {
 		.filter(isArguments)
 		.filter((row) => row.deal_id === deal);
 }
+
+const readDeals = async (path: string) => {
+	const response = await read(
+		user,
+		path,
+		{ method: "GET" },
+		{
+			DEALS_READ_SCHEMA: "next",
+		},
+	);
+	assert.equal(response.status, 200);
+	return response.json();
+};
 
 async function records(deal: string, payment: string) {
 	return (
@@ -195,12 +208,39 @@ test("lead stages close and date an invoice once, and a partner can undo both ch
 		stamps.rows,
 		Array(2).fill({ changed_by_job: "lead_stage", changed_for_user_id: owner }),
 	);
+	const {
+		rows: [close],
+	} = await db.query<{ closed_on: string }>(
+		`select ((happened_at at time zone 'America/Chicago')::date)::text as closed_on
+		from deal_phase_change where deal_id = $1 and phase = 'closed'`,
+		[deal],
+	);
+	assert.ok(close);
+	assert.notEqual(close.closed_on, invoiceDate);
+	const phase_change = {
+		event_id: invoice,
+		prior_phase: "closing",
+		phase: "closed",
+		reason: "Invoice received",
+		evidence_date: close.closed_on,
+		automatic: true,
+	};
+	assert.partialDeepStrictEqual(await readDeals("deals"), {
+		closed_deals: [{ id: deal, closed_on: close.closed_on, phase_change }],
+	});
+	assert.partialDeepStrictEqual(await readDeals(`deals/${deal}`), {
+		closed_on: close.closed_on,
+		phase_change,
+	});
 
 	const undo = key();
 	const undone = { ...applied, status: "undone" };
 	assert.equal((await save(job, undoPath(invoice), undo))[0], 404);
 	assert.deepEqual(await save(user, undoPath(invoice), undo), [200, undone]);
 	assert.deepEqual(await trackerEntries(deal), []);
+	assert.partialDeepStrictEqual(await readDeals("deals"), {
+		deals: [{ id: deal, phase_change: null }],
+	});
 	assert.deepEqual(await save(user, undoPath(invoice), undo), [
 		200,
 		{ replayed: true, ...undone },
@@ -239,6 +279,39 @@ test("lead stages close and date an invoice once, and a partner can undo both ch
 		changed_for_user_id: null,
 		changed_by_user_id: owner,
 		phases: ["closing", "closed", "closing"],
+	});
+});
+
+test("an invoice applied by a partner has no automatic phase receipt", async () => {
+	const { deal, payment, invoice } = await fixture();
+	await db.query("begin");
+	await db.query("select set_config('engine.user_id', $1, true)", [owner]);
+	await db.query(
+		"update invoice_email set status = 'applied', deal_id = $2, payment_id = $3 where id = $1",
+		[invoice, deal, payment],
+	);
+	await db.query("commit");
+	assert.partialDeepStrictEqual(await readDeals(`deals/${deal}`), {
+		phase: "closed",
+		phase_change: null,
+	});
+});
+
+test("an invoice for an already closed deal has no automatic phase receipt", async () => {
+	const { deal, payment, invoice } = await fixture("closed");
+	assert.equal(
+		(
+			await save(job, applyPath(invoice), {
+				...key(),
+				deal_id: deal,
+				payment_id: payment,
+			})
+		)[0],
+		200,
+	);
+	assert.partialDeepStrictEqual(await readDeals(`deals/${deal}`), {
+		phase: "closed",
+		phase_change: null,
 	});
 });
 

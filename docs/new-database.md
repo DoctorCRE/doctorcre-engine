@@ -1226,7 +1226,26 @@ Set the engine Worker's `DEALS_READ_SCHEMA` variable to `next` to use the read-o
 
 Timeline rows for a new-schema deal update show the fields and values the update changed. Owner changes show user slugs and market changes show market names. Parking reason and note changes share one `operating_state` line, and reviving a deal shows `Active`. Imported rows keep the original event's verb and field. National account cards show the retained client roster reference when the account has one unambiguous `C-` reference in `outside_id`.
 
-Cutover still needs client website links, checklist and pipeline-call state, the app's save and live refresh paths, and automatic phase-move receipts. The schema and copy lack the client website registration, the checklist's doctrine section status and hashes, and its document requests. Copied phase rows keep the phase, occurrence and save times, reason and author stamp. The original event ID and provenance used for automatic receipts and undo are absent. The new client model has no prospect status or engagement flag to drive “Mark inactive.” New-schema change IDs and party IDs have different meanings from legacy save versions and client IDs.
+When the nightly invoice job moved the deal to its current Closed phase, the board and detail reads carry its receipt. The app shows the automatic close in Closed deals. The receipt uses the invoice application ID and its linked prior phase. Its date comes from the closing phase row in Central time, the same source as the close date. Partner applications, invoices on already-closed deals, later phase moves and invoice undos leave the current phase without that label.
+
+### Deals gaps waiting on owner answers
+
+Question numbers refer to the [Deals screen spec](screens/deals.md#questions-for-the-owner).
+
+- The new schema needs a place for client website registrations (question 1). Pass D had one registered deal site in the old schema. The app offers site setup when the read lacks the registration.
+- The checklist panel needs template source status and hashes, progress, and document requests (question 2). Titled deal items and their due dates already come from `next_step`. Pass D had 144 deals with a recognized template type and zero document requests.
+- The "Moved automatically" mark and Undo on copied moves need the source event ID and the fact that the move was automatic (question 3). Pass D copied the phase rows behind all 16 old receipts, with the phase, occurrence and save times, reason, and author stamp.
+- Pipeline-call state waits on the deal watch and pipeline call recorder decision (question 8).
+
+### Call phase-move receipts
+
+A call proposes a phase move, and only a partner's click accepts it. The Deals screen spec needs to say whether that move should show an automatic receipt.
+
+### App work for the Deals switch
+
+The app still needs its remaining save and live refresh paths (app #953 onward), including routing invoice undo to the engine. New-schema change IDs and party IDs have different meanings from legacy save versions and client IDs.
+
+"Mark inactive" is outside #674 because the Deals spec calls for Park with the reason "prospect never active" and pass D had zero prospect clients.
 
 The app does not display premises or offer-round summaries. Deal links use the UUIDs kept by the copy, so missing legacy deal references are invisible. National account placement (#653) produced the same visible board counts on pass D. The account list uses the national accounts admitted by the copy, which excludes old prospect clients.
 
