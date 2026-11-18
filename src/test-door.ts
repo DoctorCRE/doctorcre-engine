@@ -109,5 +109,12 @@ export function doorTest() {
 		});
 		return [response.status, await response.json()];
 	};
-	return { db: copy.db, setup, cleanup, save, request };
+	return {
+		db: copy.db,
+		readerUrl: login(reader),
+		setup,
+		cleanup,
+		save,
+		request,
+	};
 }

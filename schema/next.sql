@@ -997,6 +997,7 @@ create constraint trigger email_about_a_record after delete on activity_about
 	initially deferred for each row execute function email_about_a_record();
 
 alter table activity_about add constraint activity_about_activity_party_key unique (activity_id, party_id);
+alter table activity_about add constraint activity_about_activity_deal_key unique (activity_id, deal_id);
 
 -- Evidence is separate from ordinary stage edits, whose author and time are already in change history.
 create table lead_stage_move (
@@ -1087,6 +1088,7 @@ create table next_step (
 	deal_id uuid references deal,
 	party_id uuid references party,
 	property_id uuid references property,
+	unique (id, deal_id),
 	constraint next_step_item_shape check (item_title is null or (deal_id is not null
 		and cardinality(regexp_split_to_array(btrim(item_title), '\s+')) between 2 and 4
 		and source_ref is not null and btrim(source_ref) <> '' and jsonb_typeof(item_bullets) = 'array')),
@@ -1164,9 +1166,10 @@ create table home_mark (
 create table proposal (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
-	kind text not null check (kind in ('next_step', 'phase_move', 'new_lead', 'lead_stage_move', 'file_to_deal', 'possible_new_deal', 'email_lead')),
+	kind text not null check (kind in ('next_step', 'next_step_done', 'phase_move', 'new_lead', 'lead_stage_move', 'file_to_deal', 'possible_new_deal', 'email_lead')),
 	activity_id uuid,
-	activity_kind text check (activity_kind in ('email', 'call', 'meeting')),
+	activity_kind text constraint proposal_activity_kind_check
+		check (activity_kind in ('email', 'call', 'meeting') or (activity_kind = 'note' and kind = 'next_step_done')),
 	candidate_id uuid unique references candidate,
 	evidence text not null check (evidence ~ '\S'),
 	proposed_by_job text not null references job,
@@ -1174,6 +1177,10 @@ create table proposal (
 	decided_by_user_id uuid references app_user,
 	decided_at timestamptz,
 	deal_id uuid references deal,
+	next_step_id uuid,
+	held_deal_id uuid generated always as (case when kind = 'next_step_done' then deal_id end) stored,
+	step_seen_at timestamptz,
+	keeps_deal_date boolean not null default false,
 	party_id uuid references party,
 	property_id uuid references property,
 	what text check (what ~ '\S'),
@@ -1191,6 +1198,8 @@ create table proposal (
 	reason text check (reason ~ '\S'),
 	foreign key (activity_id, activity_kind) references activity (id, kind),
 	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
+	foreign key (next_step_id, deal_id) references next_step (id, deal_id),
+	foreign key (activity_id, held_deal_id) references activity_about (activity_id, deal_id) deferrable initially deferred,
 	foreign key (lead_role, from_stage) references stage (role, slug),
 	foreign key (lead_role, to_stage) references stage (role, slug),
 	constraint proposal_source check (case when kind = 'email_lead' then
@@ -1207,6 +1216,10 @@ create table proposal (
 		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
 	constraint proposal_stated_phase check (case when phase_stated then
 		kind = 'phase_move' and activity_kind in ('call', 'meeting') else phase_on is null end),
+	constraint proposal_held_step check (case when kind = 'next_step_done' then
+		next_step_id is not null and step_seen_at is not null else next_step_id is null and step_seen_at is null end),
+	constraint proposal_kept_date check (not keeps_deal_date or
+		(kind = 'next_step_done' and status = 'accepted' and activity_kind in ('call', 'meeting'))),
 	constraint proposal_payload check ((
 		(kind = 'email_lead'
 			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
@@ -1214,6 +1227,8 @@ create table proposal (
 			and (kind <> 'file_to_deal' or deal_id is not null)
 			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'next_step' and what is not null and num_nonnulls(from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
+		or (kind = 'next_step_done' and deal_id is not null and activity_kind in ('note', 'call', 'meeting')
+			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
 		or (kind = 'phase_move' and deal_id is not null and to_phase is not null
 			and from_phase is distinct from to_phase and (to_phase <> 'dead' or reason is not null)
 			and num_nonnulls(what, owner_party_id, due_on, from_stage, to_stage, how_found, strength) = 0)
@@ -1225,7 +1240,7 @@ create table proposal (
 );
 
 create unique index proposal_source_payload_once on proposal
-	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found, phase_stated, phase_on)
+	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found, phase_stated, phase_on, next_step_id)
 	nulls not distinct where activity_id is not null;
 
 create function decide_proposal() returns trigger
@@ -1240,6 +1255,7 @@ declare
 	sender_name text;
 	sender_address email_address;
 	lead_party_id uuid;
+	held_step next_step%rowtype;
 begin
 	if tg_op = 'INSERT' then
 		if new.status <> 'pending' or new.decided_by_user_id is not null or new.decided_at is not null
@@ -1253,6 +1269,20 @@ begin
 			raise exception 'mail capture proposes an unreviewed candidate for its mailbox owner'
 				using errcode = 'check_violation', constraint = 'email_lead_proposal_source';
 		end if;
+		if new.kind = 'next_step_done' then
+			perform from deal where id = new.deal_id for no key update;
+			select * into held_step from next_step where id = new.next_step_id and deal_id = new.deal_id for no key update;
+			new.step_seen_at := held_step.changed_at;
+			if not exists (select from proposal where kind = new.kind and activity_id = new.activity_id
+					and deal_id = new.deal_id and next_step_id = new.next_step_id)
+				and (acting_user is null or held_step.owner_party_id is distinct from acting_user
+					or held_step.status <> 'open' or held_step.item_title is not null
+					or held_step.due_on is null or held_step.due_on >= (select
+						(happened_at at time zone 'America/Chicago')::date from activity where id = new.activity_id)) then
+				raise exception 'a hold names the sponsoring partner''s overdue open step'
+					using errcode = 'check_violation', constraint = 'proposal_step_overdue';
+			end if;
+		end if;
 		return new;
 	end if;
 	if old.status <> 'pending' or new.status not in ('accepted', 'dismissed') then
@@ -1263,6 +1293,27 @@ begin
 	end if;
 	new.decided_by_user_id := acting_user;
 	new.decided_at := clock_timestamp();
+	if new.kind = 'next_step_done' then
+		perform from deal where id = new.deal_id for update;
+		perform from next_step where deal_id = new.deal_id and (status = 'open' or id = new.next_step_id)
+			order by id for no key update;
+		select * into held_step from next_step where id = new.next_step_id;
+		if held_step.owner_party_id is distinct from acting_user then
+			raise exception 'the step owner decides the hold'
+				using errcode = 'check_violation', constraint = 'proposal_step_owner_decides';
+		end if;
+		if new.status = 'dismissed' then return new; end if;
+		if held_step.status <> 'open' or held_step.changed_at is distinct from new.step_seen_at then
+			raise exception 'the held step has changed'
+				using errcode = 'check_violation', constraint = 'proposal_step_changed';
+		end if;
+		new.decided_at := clock_timestamp();
+		new.keeps_deal_date := new.activity_kind in ('call', 'meeting') and new.next_step_id = (
+			select id from next_step where deal_id = new.deal_id and status = 'open' and item_title is null
+			order by created_at desc, id desc limit 1);
+		update next_step set resolution = 'done', done_at = new.decided_at where id = new.next_step_id;
+		return new;
+	end if;
 	if new.kind = 'email_lead' then
 		if acting_user is distinct from old.changed_for_user_id then
 			raise exception 'the mailbox owner decides the email lead'
@@ -1345,6 +1396,15 @@ end $$;
 
 create trigger decide_proposal before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
 	for each row execute function decide_proposal();
+
+-- A call's resolution can keep the current date until a new ordinary step takes its place.
+create view deal_next_date with (security_invoker = true) as
+	select distinct on (s.deal_id) s.deal_id, s.due_on from next_step s
+	where s.deal_id is not null and s.item_title is null and (s.status = 'open' or exists (
+		select from proposal p where p.next_step_id = s.id and p.keeps_deal_date and p.decided_at = s.done_at
+		and not exists (select from next_step newer where newer.deal_id = s.deal_id
+			and newer.item_title is null and newer.created_at > p.decided_at)))
+	order by s.deal_id, s.created_at desc, s.id desc;
 
 -- A job's reply to one email, which its owner's mailbox sends. An outreach draft is apart: a user sends it by hand.
 create table reply_draft (

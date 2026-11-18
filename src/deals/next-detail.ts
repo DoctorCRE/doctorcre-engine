@@ -7,6 +7,11 @@ import { selectNextDeals } from "./next-board.ts";
 export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 	const record = await selectNextDeals(db)
 		.select((eb) => [
+			eb
+				.selectFrom("deal_next_date as plan")
+				.select((plan) => asText(plan.ref("plan.due_on")).as("due_on"))
+				.whereRef("plan.deal_id", "=", "d.id")
+				.as("next_date"),
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),
 			jsonArrayFrom(activitiesOf(db, eb.ref("d.id"))).as("activities"),
@@ -22,7 +27,6 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 	return {
 		...record,
 		next_step: current?.description ?? null,
-		next_date: current?.due_on ?? null,
 	};
 }
 
