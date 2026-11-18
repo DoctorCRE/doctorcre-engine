@@ -30,6 +30,7 @@ const kinds = [
 	"lead_stage_move",
 	"file_to_deal",
 	"possible_new_deal",
+	"log_call",
 ] as const;
 const shape = {
 	idempotency_key: isUuid,
@@ -446,7 +447,9 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								? { deal_id: p.deal_id }
 								: promoted
 									? { party_id: promoted.promoted_party_id }
-									: { activity_id: p.activity_id };
+									: {
+											activity_id: p.kind === "log_call" ? p.id : p.activity_id,
+										};
 				return {
 					proposal_id: p.id,
 					status: rows[0]?.status ?? null,

@@ -71,6 +71,9 @@ before(async () => {
  insert into outside_id (source, value, deal_id) values ('old_system', '${id(30)}', '${id(30)}'), ('old_system', '${id(32)}', '${id(32)}');
  insert into activity (id, kind, happened_at) values ('${id(60)}', 'call', '2024-01-01 15:00');
  insert into activity_about (activity_id, deal_id) values ('${id(60)}', '${id(30)}');
+ insert into party (id, kind, name) values ('${id(11)}', 'person', 'Example Party');
+ insert into outside_id (source, value, party_id) values ('old_system', '${id(11)}', '${id(11)}');
+ insert into activity_about (activity_id, party_id) values ('${id(60)}', '${id(11)}');
  insert into public.capture_session (id, nonce, device_id, actor_id, mode, started_at, consent_announced_at, session_token_hash,
   expires_at, state, state_at, post_call) values
   ('${id(60)}', 'nonce-60', 'example-device', '${id(3)}', 'meeting', '2024-01-01 15:00', '2024-01-01 15:00', 'token-60', '2024-02-01', 'done', '2024-01-01 16:00', true);
@@ -94,6 +97,9 @@ before(async () => {
 		capture(86, "meeting_record", { ref: id(30), summary: "Example" }),
 		capture(87, "next_step", { deal: id(30), text: "Example twice", next_date: null }),
 		capture(88, "next_step", { deal: id(30), text: "Example twice", next_date: null }),
+		capture(97, "activity", { ref: id(30), kind: "note", summary: "Example deal call" }),
+		capture(98, "activity", { ref: id(20), kind: "note", summary: "Example client call" }),
+		capture(99, "activity", { ref: id(30), kind: "note", summary: "Example skipped call" }, "skipped"),
 		capture(96, "next_step", { deal: id(32), text: "Example unrelated step" }),
 	].join(",\n  ")};
  update public.capture_candidate set resolution_note = 'Example note' where id = '${id(80)}';
@@ -105,12 +111,21 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 	const report = await run();
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select id, kind, activity_id, activity_kind, evidence, proposed_by_job, status, decided_by_user_id, decided_at::text,
-  deal_id, what, owner_party_id, due_on::text, from_phase, to_phase, changed_by_user_id, changed_by_job, changed_at::text from proposal order by id`), [
+  deal_id, what, owner_party_id, due_on::text, from_phase, to_phase, changed_by_user_id, changed_by_job, changed_at::text from proposal where kind <> 'log_call' order by id`), [
 		"#71 next_step #60 call Example quote old_system pending - - #30 Example action 71 #01 2024-02-01 - - - old_system 2024-01-01 15:01:00+00",
 		"#80 next_step #60 call Example quote old_system dismissed #01 2024-01-10 00:00:00+00 #30 Example step - - - - #01 - 2024-01-10 00:00:00+00",
 		"#82 phase_move #60 call Example quote old_system pending - - #30 - - - loi negotiation - old_system 2024-01-01 15:01:00+00",
 		"#90 next_step #60 call Example quote old_system accepted #01 2024-01-10 00:00:00+00 #30 Example action 72 #01 2024-02-01 - - #01 - 2024-01-10 00:00:00+00",
 	]);
+	assert.deepEqual(
+		await rows(`select id, kind, status, activity_id, deal_id, party_id, what, evidence
+			from proposal where kind = 'log_call' order by id`),
+		[
+			"#97 log_call pending #60 #30 - Example deal call Example quote",
+			"#98 log_call pending #60 - #11 Example client call Example quote",
+		],
+	);
+	assert.deepEqual(await rows("select id from activity"), ["#60"]);
 	assert.deepEqual(await rows("select id from next_step"), ["#90"]);
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select record ->> 'id' as id, action, new_value ->> 'status' as status, changed_by_user_id, changed_by_job,
@@ -121,6 +136,8 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		"#82 insert pending - old_system 2024-01-01 15:01:00+00",
 		"#90 insert pending - old_system 2024-01-01 15:01:00+00",
 		"#90 update accepted #01 - 2024-01-10 00:00:00+00",
+		"#97 insert pending - old_system 2024-01-01 15:01:00+00",
+		"#98 insert pending - old_system 2024-01-01 15:01:00+00",
 	]);
 	assert.deepEqual(report, [
 		"#73 resulting_ref #90 next_step_shared",
@@ -135,6 +152,7 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		"#87 proposal #87 existing_proposal_conflicts",
 		"#88 proposal #88 existing_proposal_conflicts",
 		"#96 deal #32 call_not_about_deal",
+		"#99 kind activity kind_has_no_suggestion",
 	]);
 	assert.deepEqual(
 		await rows(
@@ -169,7 +187,7 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 	assert.ok(later.includes("#72 proposal #90 existing_proposal_conflicts"));
 	assert.ok(later.includes("#89 phase unmapped phase_before_call_unknown"));
 	// biome-ignore format: one row per line
-	assert.deepEqual(await rows(`select id, status, what, due_on::text from proposal where id not in ('${id(80)}', '${id(90)}') order by id`), [
+	assert.deepEqual(await rows(`select id, status, what, due_on::text from proposal where id not in ('${id(80)}', '${id(90)}') and kind <> 'log_call' order by id`), [
 		"#71 pending Example action 71 2024-02-01",
 		"#82 pending - -",
 		"#93 accepted Example taken 2024-02-01",

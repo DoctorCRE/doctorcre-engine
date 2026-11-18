@@ -292,3 +292,5 @@
 147\. **Home reads a next step once (2026-11-18).** The switched Home inbox reads the signed-in partner's steps and their marks through the read-only engine role. A call follow-up is the same step with its recorded call and quote. Card versions come from change history, and the read shows a completion only when its time is known (#692).
 
 148\. **Deals identify an automatic invoice close from its application (2026-11-18).** The latest phase shows as closed automatically when it matches an invoice application's closing phase, differs from the prior phase, and carries the nightly job's stamp. The receipt uses the closing phase row's date in Central time, matching the deal's close date, and takes its previous phase from the application (#674).
+
+149\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one records the call on its deal or party at the recorded call's time. The owner left the twelve old work alerts behind (#698).
