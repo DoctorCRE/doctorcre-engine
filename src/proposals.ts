@@ -67,7 +67,10 @@ const emailLead = {
 };
 const edits = {
 	what: optional(isText),
-	owner_party_id: clearable(isUuid),
+	owner_party_id: clearable(
+		(value): value is string =>
+			isUuid(value) || (typeof value === "string" && value.trim() === ""),
+	),
 	due_on: clearable(isCalendarDate),
 };
 const decision = {
@@ -332,12 +335,18 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
    set status = ${r.decision === "accept" ? "accepted" : "dismissed"}, filed_deal_id = ${r.decision === "accept" ? (r.deal_id ?? null) : null}::uuid,
     filing_reason = ${r.decision === "accept" ? (r.reason ?? null) : null} where id = ${p.id}::uuid
    returning status, decided_at::text, filed_deal_id`.execute(tx);
-				if (r.decision === "accept" && r.edits && Object.keys(r.edits).length)
-					await tx
-						.updateTable("next_step")
-						.set(r.edits)
-						.where("id", "=", p.id)
-						.execute();
+				if (r.decision === "accept" && r.edits) {
+					const { owner_party_id, ...otherEdits } = r.edits;
+					const stepEdits = isUuid(owner_party_id)
+						? { ...otherEdits, owner_party_id }
+						: otherEdits;
+					if (Object.keys(stepEdits).length)
+						await tx
+							.updateTable("next_step")
+							.set(stepEdits)
+							.where("id", "=", p.id)
+							.execute();
+				}
 				const promoted =
 					r.decision === "accept" && p.candidate_id
 						? await tx

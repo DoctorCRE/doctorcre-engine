@@ -316,18 +316,30 @@ test("suggestions converge across retries, edits create a step without changing 
 });
 
 test("an accepted next step keeps its proposed owner or defaults to the partner who accepts it", async () => {
-	for (const owner of [undefined, USER]) {
+	const cases = [
+		{ owner: undefined, ownerEdit: undefined },
+		{ owner: USER, ownerEdit: undefined },
+		{ owner: undefined, ownerEdit: null },
+		{ owner: undefined, ownerEdit: "" },
+		{ owner: USER, ownerEdit: null },
+	];
+	for (const [index, { owner, ownerEdit }] of cases.entries()) {
 		const [status, proposal] = await propose({
 			kind: "next_step",
 			deal_id: DEAL,
-			what: "Check the example dates",
+			what: `Check the example dates ${index}`,
 			owner_party_id: owner,
 		});
 		assert.equal(status, 201);
 		const [accepted] = await save(
 			{ user: "casey" },
 			`proposals/${proposal.proposal_id}/decision`,
-			{ idempotency_key: randomUUID(), decision: "accept" },
+			{
+				idempotency_key: randomUUID(),
+				decision: "accept",
+				edits:
+					ownerEdit === undefined ? undefined : { owner_party_id: ownerEdit },
+			},
 		);
 		assert.equal(accepted, 200);
 		const { rows } = await db.query(
