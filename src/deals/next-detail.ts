@@ -4,12 +4,22 @@ import {
 	jsonBuildObject,
 	jsonObjectFrom,
 } from "kysely/helpers/postgres";
-import type { DB } from "../next-database.d.ts";
+import type { DB, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { checklistOf } from "./checklist.ts";
 import { selectNextDeals } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
+
+type DealEvent = {
+	id: string;
+	recorded_at: string;
+	actor: string;
+	verb: string;
+	field: string | null;
+	old_value: JsonValue;
+	new_value: JsonValue;
+};
 
 export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 	const record = await selectNextDeals(db)
@@ -122,13 +132,29 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 					.whereRef("lease.deal_id", "=", "d.id"),
 			).as("lease"),
 			sql<
-				unknown[]
+				DealEvent[]
 			>`(select coalesce(json_agg(e order by recorded_at desc, id desc), '[]') from (
-				select c.id::text, c.changed_at as recorded_at, coalesce(u.slug, c.changed_by_job) as actor,
+				select c.id::text, coalesce((c.source_event ->> 'recorded_at')::timestamptz, c.changed_at) as recorded_at,
+					coalesce(u.slug, c.changed_by_job) as actor,
 					c.source_event ->> 'verb' as verb, c.source_event ->> 'field' as field,
 					c.source_event -> 'old_value' as old_value, c.source_event -> 'new_value' as new_value
-				from imported_change c left join app_user u on u.id = c.changed_by_user_id
-				where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
+				from (
+					select c.* from imported_change c
+					where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
+					union all
+					select c.* from activity_about ab join imported_change c
+						on c.table_name = 'activity' and c.record = jsonb_build_object('id', ab.activity_id)
+					where ab.deal_id = d.id and c.source_event ->> 'verb' = 'add-deal-note'
+						and c.source_event ->> 'subject_id' = d.id::text
+				) c left join app_user u on u.id = c.changed_by_user_id
+				union all
+				select p.deal_id || ':phase:' || (to_jsonb(p.happened_at) #>> '{}'),
+					p.changed_at, coalesce(u.slug, p.changed_by_job), 'move-phase',
+					'phase', null::jsonb, to_jsonb(p.phase)
+				from deal_phase_change p left join app_user u on u.id = p.changed_by_user_id
+				where p.deal_id = d.id
+					-- An import can seed the phase at the last observed time without move evidence.
+					and (p.changed_by_job is distinct from 'old_system' or p.happened_at <> p.changed_at)
 				union all
 				select c.id || ':' || edit.key, c.changed_at, coalesce(u.slug, c.changed_by_job), 'update-deal',
 					case edit.key

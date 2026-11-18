@@ -66,6 +66,11 @@ insert into public.activity (id, kind, occurred_at, actor_id, summary, deal_id, 
   '{"sender": {"email": "doctor@example.test"}, "subject": "Example tour times", "conversation_id": "example-thread"}', '${id(90)}');
 insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(70)}', '${id(30)}', 'note', 'Example note about parking', '${id(2)}', '2025-02-03T17:00:00Z');
+update public.event set recorded_at = '2025-01-02T18:00:00Z' where id = '${id(40)}';
+update public.event set recorded_at = '2025-01-03' where id = '${id(42)}';
+insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause) values
+ ('${id(43)}', 'deal', '${id(30)}', 'note', '{"note":"Example note about parking"}',
+  '2025-02-03T17:00:00Z', '2025-02-03T17:00:01Z', '${id(2)}', 'add-deal-note', 'human_stated');
 `;
 
 const COPIES: [file: string, input?: string][] = [
@@ -241,6 +246,38 @@ test("an unknown deal is not found", async () => {
 		readNextDealDetail(tx, id(99)),
 	);
 	assert.deepEqual(page, { error: "not_found" });
+});
+
+test("deal events include the copied note and phase move, with their saved time and author", async () => {
+	const page = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(30)),
+	);
+	assert.ok(!("error" in page));
+	assert.partialDeepStrictEqual(page.events, [
+		{
+			id: id(43),
+			recorded_at: "2025-02-03T17:00:01+00:00",
+			actor: "partner_two",
+			verb: "add-deal-note",
+			field: "note",
+			new_value: { note: "Example note about parking" },
+		},
+		{ id: id(42), field: "attention" },
+		{
+			recorded_at: "2025-01-02T18:00:00+00:00",
+			actor: "partner_one",
+			field: "phase",
+			new_value: "touring",
+		},
+	]);
+	const other = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(32)),
+	);
+	assert.ok(!("error" in other));
+	assert.deepEqual(
+		other.events.filter(({ field }) => field === "phase" || field === "note"),
+		[],
+	);
 });
 
 const get = (path: string, schema?: string, partner = "partner_one") =>
@@ -598,7 +635,7 @@ test("signed-in detail names every field changed by one new-schema save", async 
 			"events" in detail &&
 			Array.isArray(detail.events),
 	);
-	const { events } = detail;
+	const events = detail.events.filter(({ verb }) => verb === "update-deal");
 	assert.equal(events.length, 2);
 	assert.notEqual(events[0].id, events[1].id);
 	assert.partialDeepStrictEqual(events, [
