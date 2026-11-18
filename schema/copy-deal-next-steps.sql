@@ -81,13 +81,35 @@ select s.id, f.field, f.value, f.reason from step_candidate s cross join lateral
  ('id', s.id::text, 'id_taken', exists (select from next_step n where n.id = s.id
   and (n.deal_id, n.party_id) is distinct from (s.deal_id, s.party_id)))
 ) f(field, value, reason, refused) where f.refused;
+create temp table post_call_source on commit drop as
+select n.id, c.session_id, c.evidence_quote, c.contact_party_id, contact.party_id as contact_id,
+ case when a.id is null then 'call_activity_not_copied'
+  when c.evidence_quote !~ '\S' then 'call_quote_missing' end as refusal
+from public.capture_post_call_action n
+join public.capture_post_call_candidate c on c.id = n.candidate_id and c.deal_id = n.deal_id
+left join activity a on a.id = c.session_id and a.kind = 'call'
+ and exists (select from activity_about aa where aa.activity_id = a.id and aa.deal_id = n.deal_id)
+left join outside_id contact on contact.source = 'old_system' and contact.value = c.contact_party_id::text;
+
+insert into step_refusal
+select s.id, 'call_activity_id', c.session_id::text, coalesce(c.refusal, 'call_candidate_deal_differs')
+from step_candidate s left join post_call_source c using (id)
+where s.source = 'capture_post_call_action' and (c.id is null or c.refusal is not null)
+ and not exists (select from step_refusal r where r.id = s.id);
 insert into not_copied select * from step_refusal;
+insert into not_copied
+select id, 'call_contact_party_id', contact_party_id::text, 'call_contact_not_copied'
+from post_call_source where contact_party_id is not null and contact_id is null;
+
 insert into next_step (id, deal_id, party_id, what, due_on, hold_until, owner_party_id, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
- resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select id, deal_id, party_id, what, due_on, hold_until, owner, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
- resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id from step_candidate s
+ resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
+ call_activity_id, call_evidence_quote, call_contact_party_id)
+select s.id, deal_id, party_id, what, due_on, hold_until, owner, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
+ resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
+ c.session_id, c.evidence_quote, c.contact_id
+from step_candidate s left join post_call_source c on c.id = s.id and s.source = 'capture_post_call_action'
 where not exists (select from step_refusal r where r.id = s.id)
-order by source <> 'deal_note', created_at, id on conflict do nothing;
+order by source <> 'deal_note', created_at, s.id on conflict do nothing;
 
 insert into not_copied
 select s.id, 'next_step', kept.id::text, 'open_step_exists'

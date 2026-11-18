@@ -9,6 +9,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id and the `slug` they sign in under. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's facts will be columns here, or a child table keyed by the user, as they come.
 - **`user_preference`**: a user's own settings and notification choices: their time zone, quiet hours and whether notifications reach their devices.
 - **`home_mark`**: a user's own mark on an item on their Home: snoozed until a time or settled, and whom it waits on and why.
+- **`home_update`**: an update about a deal for one user, with the words shown on Home, the checklist reference when applicable, and when it was read.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.
 - **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason and an optional until-date.
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
@@ -252,12 +253,14 @@ Today's `party` row holds one free-text `email`, `phone` and `cell` on each pers
 The owner ruled on #196 that each user's settings, Home marks and notification choices become per-user preferences on the user (2026-11-16). Both tables are keyed by the user, so the owner still adds users while the engine keeps their preferences.
 
 - **Preferences.** `user_preference` holds one row per user: their `time_zone`, an IANA name such as `America/Chicago` that the database knows; quiet hours, `quiet_from` and `quiet_until`, in that zone, which may run past midnight; and `push_to_device`, whether notifications reach their devices. The known zones come from the server's time zone data, and PostgreSQL does not recheck stored zones when that data changes, so a server upgrade checks that every stored zone is still known. A user with no row has chosen nothing, and a read uses the defaults.
-- **Home marks.** An item on a user's Home with no `home_mark` is in their inbox. A mark snoozes it until `snoozed_until`, or settles it, and can say whom it waits on, a person or company, with the reason. Waiting is separate from snoozing, as today. A next step is the only kind of Home item so far. Each kind that comes, such as a suggestion from mail, adds its own key, with a check that exactly one is set (decision 21). Removing a next step removes its marks in the same save. Whether a settled item changed since it was settled is read from change history, so a mark holds no version.
+- **Home marks.** A mark snoozes an item until `snoozed_until`, or settles it, and can say whom it waits on, a person or company, with the reason. Waiting is separate from snoozing, as today. Exactly one of `next_step_id`, `call_follow_up_id` and `home_update_id` is set (decision 21). The database gives each step just one of the two mark keys and gives each user one mark per item. An update's mark belongs to its recipient. Whether a settled item changed since it was settled is read from change history, so a mark holds no version.
+- **Call follow-ups.** A follow-up is the next step itself. It links to its recorded call on the same deal and keeps the evidence quote. Home reads the call's date and summary from `activity` and the contact from the saved follow-up or the call when known. The same step owns the due date, completion and reopen.
+- **Updates.** `home_update` holds the recipient, deal, wording and creation time. Checklist reminders keep the checklist item reference. An update with `read_at` has already been acknowledged. The checklist reference lets Home open the deal at that item.
 
 Moving today's rows across:
 
 - Each `ops.notification_preference` row becomes its actor's user's preferences: `timezone`, `quiet_hours_start` and `quiet_hours_end`, and `device_opt_in` as `push_to_device`. A zone the database does not know, or equal start and end, is listed for that user to fix. `version` does not move; change history replaces it.
-- Each `ops.home_inbox_disposition` that is snoozed or settled on a `next_action:` or `capture_post_call_action:` item becomes a mark on the next step it became. Dispositions match by `item_id` or `v2_item_id`, preferring an exact `item_id`, then the latest change and then `item_id`, as the old Home does. An `inbox` row is no mark and overrides inherited dispositions. Marks on other items, such as call sessions, reply drafts and notifications, wait for those records, with the suggestions from mail, calls and meetings. `source_version`, `material_version` and `explicit_unsettle` do not move.
+- Each `ops.home_inbox_disposition` that is snoozed or settled on a `next_action:` or `capture_post_call_action:` item becomes a mark on the next step it became. Dispositions match by `item_id` or `v2_item_id`, preferring an exact `item_id`, then the latest change and then `item_id`, as the old Home does. An `inbox` row is no mark and overrides inherited dispositions. A post-call action uses the call follow-up key. Marks on call sessions, reply drafts and update groups wait for slice 10. `source_version`, `material_version` and `explicit_unsettle` do not move.
 - Each `ops.home_waiting` with someone named becomes the mark's `waiting_on_party_id`, an actor as their person, and its `reason`. Its `evidence` lines do not move. A row whose identity was cleared waits on no one.
 - `ops.home_inbox_batch` and the `_write` tables are receipts of past saves and do not move.
 - Feature switches (`feature_switch`) are switches for releasing old-system features, and `system_config` holds system-wide values. Neither is a user's setting, so neither moves here; the owner decides them separately.
@@ -295,10 +298,10 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 19. `copy-calls.sql`: needs the activity a logged meeting already is.
 20. `copy-meetings.sql`: needs logged activities, with reviewed reuse or distinct-pair inputs when needed.
 21. `copy-lead-stage-moves.sql`: needs the activity each move cites.
-22. `copy-deal-next-steps.sql`: needs vendors, deals and activity.
+22. `copy-deal-next-steps.sql`: needs vendors, deals and the activities from both activity and call copies.
 23. `copy-call-suggestions.sql`: needs the calls and the next steps an accepted suggestion made.
 24. `copy-meeting-suggestions.sql`: needs the meetings and the next steps an accepted action made. Then `copy-email-suggestions.sql`: needs the emails.
-25. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make.
+25. `copy-preferences.sql`: needs the next steps the lead and deal next-step copies make. Then `copy-home-updates.sql` in its own transaction, after the deal and user copies.
 26. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
 Running the whole order again changes no row and no change history, and each copy lists the same corrections, including the leftover values of records an earlier run copied, so the list a partner fixes stays whole (#596). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
@@ -980,7 +983,7 @@ Run `schema/copy-preferences.sql` as the owner after `copy-leads-clients.sql` an
 
 ## Copying today's deal and vendor next steps
 
-Run `schema/copy-deal-next-steps.sql` as the owner after the party, vendor, deal and activity copies, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`.
+Run `schema/copy-deal-next-steps.sql` as the owner after the party, vendor, deal, activity and call copies, in its own transaction with the new schema on `search_path` and attribution loaded. It only reads `public` and ends with `not_copied`.
 
 Deal next actions keep their ids, descriptions, owners and nullable due dates. Each copies with its end state, taken only from the old event that closed it, and never from a last edit or the copy time:
 
@@ -1001,6 +1004,11 @@ The board's current-action view decides whether the newest unsuperseded note cop
 Post-call actions in `capture_post_call_action` copy too, with their ids, owners, nullable due dates, acceptance time as creation time and explicit `completed_at`. Only `drop-action` records a reason, and it never names a post-call action, so dropped post-call actions stay listed as `cancellation_reason_missing`. Source references and display fields are listed like ordinary actions. Attribution follows the action's own event when available, otherwise its accepting actor.
 
 Following the coordinator's ruling on #363, every activity of kind `task` stays listed as `task_kind_unconfirmed`, pending an owner ruling. Logged task history supplies no proof that work remains open or was completed, so no task becomes a new Home to-do and no completion time is invented. Notes retain their event attribution; an unknown agent sponsor is listed. Existing source ids prevent duplicates and leave rows, stamps and history unchanged on reruns. A later run retries records whose deal has since copied.
+
+## Copying today's Home updates and call follow-ups
+
+- Run `schema/copy-home-updates.sql` as the owner in its own transaction, with the new schema on `search_path` and attribution loaded. The populated update kind is the nightly deal checklist reminder in `ops.notification`. It keeps its id, recipient, deal, wording, date, the checklist item named by its event, and the recipient's read time from `ops.notification_read`. Missing links and invalid facts are listed in `not_copied`. A rerun leaves existing updates alone. Old work alerts are outside this copy. Rehearsal had zero deal-watch updates.
+- `copy-deal-next-steps.sql` finds a post-call action's source by its candidate id. The candidate names the call session, deal, quote and any stored contact. A missing call link or blank quote leaves the action listed. A missing contact mapping is listed and the contact stays empty. An old session with no summary keeps an empty summary. Rehearsal had zero ordinary `next_action` rows with a call-candidate reference.
 
 ## Copying today's change history
 
@@ -1155,7 +1163,7 @@ Exact counts from production on 2026-11-17, aggregate only.
 | `capture_post_call_action` open                             |               5 | `next_step`                                                        | `copy-deal-next-steps.sql`                                                                   |
 | `capture_post_call_candidate` confirmed / pending / skipped |      5 / 10 / 1 | `proposal`                                                         | `copy-call-suggestions.sql`                                                                  |
 | `ops.home_inbox_disposition` settled / inbox                |          11 / 2 | `home_mark` on a next step                                         | `copy-preferences.sql`; marks on drafts and updates (10)                                     |
-| `ops.notification` deal / old-system work                   |          1 / 12 | No place yet                                                       | Gap (9); the 12 about loops, releases and engineering work move only if the owner keeps them |
+| `ops.notification` deal / old-system work                   |          1 / 12 | `home_update` for the deal checklist reminder                      | `copy-home-updates.sql`. The 12 alerts about engineering work wait until the owner says yes. |
 | `ops.notification_delivery`, `ops.notification_read`        |           13, 6 | Follow their update                                                | Gap (9, 10)                                                                                  |
 | `ops.notification_preference`                               |               2 | `user_preference`                                                  | `copy-preferences.sql`                                                                       |
 | `board_snapshot` `calendar-agenda`                          |               2 | No place yet                                                       | Gap (25)                                                                                     |
@@ -1435,6 +1443,7 @@ The suggestion kinds:
 `...` is `/jobs` or `/api/engine`.
 
 - **Owner on creation.** Use `owner` for a user slug, which resolves to the user's person, or `owner_party_id` for a person ID. Both fields together return `400 invalid_field_value`, and an unknown slug returns `400 unknown_owner`. On creation without an owner, the database uses the signed-in partner's person or the person named by `Engine-For-User`.
+- **Call follow-up on creation.** A recorded call can supply `call: { activity_id, evidence_quote }` with the step's `deal_id`. Both values are required when `call` is sent. The activity must be a call about that deal. Accepting a call's deal-step suggestion in door 21 also keeps its original activity and evidence on the step, even if the partner edits the step's words.
 - **Replace the current step.** Create with `replaces: "current"` and one of `deal_id`, `party_id` or `old_role`. The save cancels that owner's open ordinary step as superseded and creates the new one in the same transaction. The previous step stays in history. Omit `due_on` to leave the new step undated. A replacement with `property_id` or `item` returns `400 invalid_field_value`.
 - **Complete by subject.** `POST .../next-steps/complete` takes `idempotency_key` and one of `deal_id`, `party_id` or `old_role`. It marks the signed-in partner's or sponsoring partner's open ordinary step done, including a held step. It returns `{ next_step_id, status: "done" }`, `404 not_found` for an unknown deal or party ID, or `409 no_open_step` if that owner has no matching step. A retry with the same key returns the original completion even if a new step has since opened.
 - **Use a copied role ID.** On create and complete, `old_role: { kind, id }` stands in for the subject. `kind` is `lead`, `client` or `vendor`, and `id` is the old role row's UUID. The `outside_id` primary key `(source, value)` keeps each old ID on one record. The save uses the `old_system` entry and requires its party to hold the named role. It returns `404 old_role_not_found` when no party matches. A successful response also includes the resolved `party_id`. Use it to file a separate outcome note about the same party.

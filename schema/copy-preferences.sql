@@ -26,7 +26,7 @@ where not exists (select from preference_refusal r where r.actor = p.actor);
 create temp table old_mark on commit drop as
 select k.actor_id, k.item_id, nullif(d.disposition, 'inbox') as disposition, d.snoozed_until, w.identity_id, w.reason,
  least(d.updated_at, w.updated_at) as created_at, greatest(d.updated_at, w.updated_at) as changed_at,
- u.id as user_id, s.id as next_step_id, waiting_on.id as waiting_on_party_id
+ u.id as user_id, s.id as step_id, s.home_step_id, s.home_call_follow_up_id, waiting_on.id as waiting_on_party_id
 from (select actor_id, item_id from ops.home_inbox_disposition where disposition <> 'inbox'
  union select actor_id, v2_item_id from ops.home_inbox_disposition where disposition <> 'inbox' and v2_item_id is not null
  union select actor_id, item_id from ops.home_waiting where identity_id is not null) k
@@ -44,24 +44,26 @@ left join public.capture_post_call_action a on 'capture_post_call_action:' || a.
 left join outside_id subject on subject.source = 'old_system' and subject.value = n.subject_id::text
 -- A step with the action's id that belongs to another record is not the action's copy.
 left join next_step s on s.id = coalesce(n.id, a.id)
- and case when a.id is not null then s.deal_id = a.deal_id
- when n.subject_type = 'deal' then s.deal_id = n.subject_id else s.party_id = subject.party_id end
+ and case when a.id is not null then s.deal_id = a.deal_id and s.home_call_follow_up_id is not null
+ else s.home_step_id is not null and
+  case when n.subject_type = 'deal' then s.deal_id = n.subject_id else s.party_id = subject.party_id end end
 left join outside_id wo on wo.source = 'old_system' and wo.value = w.identity_id::text
 left join party waiting_on on waiting_on.id = wo.party_id
 where (d.disposition <> 'inbox' or w.identity_id is not null)
- and not exists (select from home_mark done where (done.user_id, done.next_step_id) = (u.id, s.id));
+ and not exists (select from home_mark done where done.user_id = u.id
+  and (done.next_step_id = s.home_step_id or done.call_follow_up_id = s.home_call_follow_up_id));
 create temp table mark_refusal on commit drop as
 select m.actor_id, m.item_id, f.field, f.value, f.reason from old_mark m cross join lateral (values
  ('actor_id', m.actor_id::text, 'actor_not_a_user', m.user_id is null),
  ('item_id', m.item_id, 'waits_for_its_record', m.item_id not like 'next_action:%' and m.item_id not like 'capture_post_call_action:%'),
- ('item_id', m.item_id, 'next_step_not_copied', (m.item_id like 'next_action:%' or m.item_id like 'capture_post_call_action:%') and m.next_step_id is null),
+ ('item_id', m.item_id, 'next_step_not_copied', (m.item_id like 'next_action:%' or m.item_id like 'capture_post_call_action:%') and m.step_id is null),
  ('identity_id', m.identity_id::text, 'waiting_on_not_copied', m.identity_id is not null and m.waiting_on_party_id is null),
  ('reason', m.reason, 'waiting_needs_reason', m.identity_id is not null and m.reason !~ '\S')
 ) f(field, value, reason, refused) where f.refused;
 insert into not_copied select actor_id, field, value, reason from mark_refusal;
-insert into home_mark (user_id, next_step_id, created_at, disposition, snoozed_until, waiting_on_party_id, waiting_reason,
+insert into home_mark (user_id, next_step_id, call_follow_up_id, created_at, disposition, snoozed_until, waiting_on_party_id, waiting_reason,
  changed_by_user_id, changed_at)
-select user_id, next_step_id, created_at, disposition, snoozed_until, waiting_on_party_id,
+select user_id, home_step_id, home_call_follow_up_id, created_at, disposition, snoozed_until, waiting_on_party_id,
  reason, user_id, changed_at
 from old_mark m where not exists (select from mark_refusal r where (r.actor_id, r.item_id) = (m.actor_id, m.item_id));
 alter table user_preference enable trigger stamp_change;

@@ -315,6 +315,44 @@ test("suggestions converge across retries, edits create a step without changing 
 	assert.equal((await propose(args))[1].status, "accepted");
 });
 
+test("accepting a step from a recorded call keeps the proposal's original evidence", async () => {
+	const call = id(25);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${call}', 'call', '2025-01-01');
+		insert into activity_about (activity_id, deal_id) values ('${call}', '${DEAL}'); commit;`);
+	const evidence = "Please send the example plan.";
+	const [stored, p] = await propose({
+		kind: "next_step",
+		deal_id: DEAL,
+		activity_id: call,
+		evidence,
+		what: "Send the plan",
+	});
+	assert.equal(stored, 201);
+	const [accepted] = await decide(p.proposal_id, {
+		edits: { what: "Send the revised plan" },
+	});
+	assert.equal(accepted, 200);
+	assert.deepEqual(
+		(
+			await db.query(
+				"select call_activity_id, call_evidence_quote from home_next_step where id = $1",
+				[p.proposal_id],
+			)
+		).rows,
+		[{ call_activity_id: call, call_evidence_quote: evidence }],
+	);
+	assert.equal(
+		(
+			await save({ user: "alex" }, `next-steps/${p.proposal_id}/end`, {
+				idempotency_key: randomUUID(),
+				resolution: "done",
+			})
+		)[0],
+		200,
+	);
+});
+
 test("an accepted next step keeps its proposed owner or defaults to the partner who accepts it", async () => {
 	const cases = [
 		{ owner: undefined, ownerEdit: undefined },

@@ -119,6 +119,10 @@ before(async () => {
  insert into public.capture_post_call_candidate (id,session_id,idempotency_key,batch_hash,item_index,kind,deal_id,assignee_slug,action_description,evidence_quote,confidence)
  select v,'${id(400)}',v::text,'example-batch', row_number() over () - 1,'assigned_action','${id(10)}','partner_one','Example post-call action','Example evidence',1
  from unnest(array['${id(401)}','${id(402)}','${id(403)}','${id(404)}']::uuid[]) v;
+ update public.capture_post_call_candidate set contact_party_id = '${id(6)}' where id = '${id(401)}';
+ insert into outside_id (source, value, party_id) values ('old_system', '${id(6)}', '${id(61)}');
+ insert into activity (id, kind, happened_at) values ('${id(400)}', 'call', '2025-01-01');
+ insert into activity_about (activity_id, deal_id) values ('${id(400)}', '${id(10)}');
  insert into public.capture_post_call_action (id,candidate_id,deal_id,owner_id,description,accepted_by,accepted_at,status,due_on,completed_at,updated_at,item_title,item_bullets,source_ref) values
  ('${id(501)}','${id(401)}','${id(10)}','${id(1)}','Example post-call open','${id(1)}','2025-01-01','open',null,null,'2025-02-01','Review lease terms','[{"date":null,"kind":"call","text":"Example first fact"},{"date":"2025-01-01","kind":"call","text":"Example second fact"}]','capture_post_call_candidate:${id(401)}'),
  ('${id(502)}','${id(402)}','${id(10)}','${id(1)}','Example post-call done','${id(1)}','2025-01-01','done','2025-02-01','2025-02-02','2025-02-03',null,'[]',null),
@@ -241,6 +245,30 @@ test("post-call actions keep explicit completion times and list dropped or unmap
 		"owner_not_a_user",
 	]);
 	assert.deepEqual(reasons(report, 206), ["plan_already_done"]);
+});
+
+test("a Home follow-up opens the original call, with its own quote and any stored contact", async () => {
+	const followUps =
+		await rows(`select s.id, s.deal_id, a.id as call_id, a.happened_at::date::text as called_on,
+		a.summary, s.call_evidence_quote, s.call_contact_party_id
+		from home_next_step s join activity a on a.id = s.call_activity_id where s.id = '${id(501)}'`);
+	assert.deepEqual(followUps, [
+		{
+			id: id(501),
+			deal_id: id(10),
+			call_id: id(400),
+			called_on: "2025-01-01",
+			summary: null,
+			call_evidence_quote: "Example evidence",
+			call_contact_party_id: id(61),
+		},
+	]);
+	assert.deepEqual(
+		await rows(
+			`select call_contact_party_id from next_step where id = '${id(502)}'`,
+		),
+		[{ call_contact_party_id: null }],
+	);
 });
 test("unmappable values are listed and refused rows never appear", async () => {
 	assert.deepEqual(reasons(report, 100), [
@@ -434,7 +462,7 @@ test("the activity copy keeps every next-step note as a recorded note beside the
 	const recorded = (text: string) => `Recorded next step\n\n${text}`;
 	// biome-ignore format: one row per deal note
 	assert.deepEqual((await rows(`select a.id, a.summary, s.id is not null as backs_step
- from activity a left join next_step s using (id) order by a.id`)).map(Object.values), [
+ from activity a left join next_step s using (id) where a.kind = 'note' order by a.id`)).map(Object.values), [
  [id(200), recorded("Example old note"), false],
  [id(201), recorded("Example current note"), true],
  [id(202), recorded("Example superseded"), false],

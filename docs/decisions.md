@@ -282,3 +282,5 @@
 141\. **One save opens or closes a deal (2026-11-18).** Adding a deal links its existing client and records its first phase in one transaction. Won records a move to Closed with the date and any known value. Lost records a move to Dead with the date and reason. The signed-in app and registered jobs use door 16 and its shared retry receipt (#683).
 
 142\. **Home and Invoices share the new tracker read (2026-11-18).** `INVOICES_READ_SCHEMA=next` uses current payment dates and amounts through the read-only engine role. Each payment awaiting an invoice has its own row, even when another payment on the deal has been invoiced. A copied invoice date still shows when it has no payment, with a blank amount (#682).
+
+146\. **A call follow-up keeps the recorded call and its quote (2026-11-18).** A deal step created from a call keeps the call activity and the evidence on that step. Home marks it through the call follow-up key, and it completes and reopens as the same step. A deal update belongs to its recipient. A copied checklist reminder keeps the checklist reference and its read time (#643).

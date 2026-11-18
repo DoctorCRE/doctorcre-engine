@@ -58,6 +58,7 @@ const order: [file: string, input?: string][] = [
 	["copy-meeting-suggestions.sql"],
 	["copy-email-suggestions.sql"],
 	["copy-preferences.sql"],
+	["copy-home-updates.sql"],
 	["copy-change-history.sql"],
 ];
 
@@ -72,6 +73,11 @@ create table ops.meeting_action_decision_request (idempotency_key uuid primary k
 create table public.email_lead_exclusion (mailbox_owner text not null, message_hash text not null, recorded_at timestamptz not null default now(),
  primary key (mailbox_owner, message_hash));
 create table ops.requirement_reply_proposal (id uuid primary key, activity_id uuid not null, attachment_id uuid not null, created_at timestamptz not null);
+create table ops.notification (id uuid primary key, subject_type text not null, subject_ref text not null, event_ref uuid not null,
+ event_source text not null, recipient_actor uuid not null, reason text not null, severity text not null, deep_link text not null,
+ dedupe_key text not null, created_at timestamptz not null);
+create table ops.notification_read (notification_id uuid references ops.notification, recipient_actor uuid not null,
+ read_at timestamptz not null, primary key (notification_id, recipient_actor));
 
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
@@ -123,6 +129,13 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
  ('${id(36)}', 'deal', '${id(34)}', 'phase', '{"phase":"negotiation"}', '{"phase":"closed"}', '2025-03-02T12:00Z', '${id(3)}', 'update-deal', 'automation_job'),
  ('${id(37)}', 'deal', '${id(34)}', 'invoiced_on', '{"invoiced_on":null}', '{"invoiced_on":"2025-03-01"}', '2025-03-02T12:00Z', '${id(3)}', 'update-deal', 'ingest_email');
 update public.event set sponsoring_human_slug = 'partner_one' where id = '${id(37)}';
+insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause) values
+ ('${id(130)}', 'deal', '${id(30)}', 'checklist_ping', '{"checklist_item_id":"example-floor-plan"}',
+ '2025-01-03', '${id(3)}', 'ping-deal-checklist', 'automation_job');
+insert into ops.notification (id, subject_type, subject_ref, event_ref, event_source, recipient_actor, reason, severity, deep_link, dedupe_key, created_at) values
+ ('${id(131)}', 'deal', '${id(30)}', '${id(130)}', 'event', '${id(1)}', 'Review the floor plan.', 'action_required', '/notifications', 'deal-checklist:example', '2025-01-03'),
+ ('${id(132)}', 'loop', 'example', '${id(130)}', 'event', '${id(1)}', 'Example work alert.', 'action_required', '/notifications', 'loop:example', '2025-01-03');
+insert into ops.notification_read (notification_id, recipient_actor, read_at) values ('${id(131)}', '${id(1)}', '2025-01-04');
 insert into public.deal_participant (deal_id, party_id, role, set_by) values ('${id(30)}', '${id(13)}', 'landlord_side', '${id(1)}');
 insert into public.negotiation_round (id, deal_id, round_no, side, proposed_on, created_at, created_by) values
  ('${id(32)}', '${id(30)}', 1, 'tenant', '2025-01-10', '2025-01-10', '${id(1)}');
@@ -292,7 +305,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, email_document: 1, lead_stage_move: 1, proposal: 4,
- candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, imported_change: 4 };
+ candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, home_update: 1, imported_change: 4 };
 // biome-ignore format: one row per correction
 const corrections = [
  ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
@@ -311,12 +324,28 @@ const corrections = [
  ["copy-change-history.sql", id(36), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(37), "invoiced_on", "field_has_no_mapping"],
  ["copy-change-history.sql", id(93), "note", "field_has_no_mapping"],
+ ["copy-change-history.sql", id(130), "checklist_ping", "field_has_no_mapping"],
  ["copy-change-history.sql", "00000000-0000-4000-8000-100000000090", null, "field_has_no_mapping"],
  ["copy-change-history.sql", "00000000-0000-4000-8000-100000000091", null, "field_has_no_mapping"],
 ];
 
 test("every copy runs in order on one snapshot and lists only the expected corrections", async () => {
 	assert.deepEqual(await counts(), copied);
+	assert.deepEqual(
+		await rows(
+			"select id, deal_id, user_id, checklist_item_ref, what, read_at::date::text from home_update",
+		),
+		[
+			{
+				id: id(131),
+				deal_id: id(30),
+				user_id: id(1),
+				checklist_item_ref: "example-floor-plan",
+				what: "Review the floor plan.",
+				read_at: "2025-01-04",
+			},
+		],
+	);
 	assert.deepEqual(
 		await rows("select invoiced_on::text from commission_payment"),
 		[{ invoiced_on: "2025-03-01" }],

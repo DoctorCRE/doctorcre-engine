@@ -565,6 +565,7 @@ const STAMPED = [
 	"next_step",
 	"user_preference",
 	"home_mark",
+	"home_update",
 	"document",
 	"document_extraction",
 	"document_kind",
@@ -2130,6 +2131,15 @@ const RULES: Record<string, Case[]> = {
 			[newMark({ user_id: CLIENT }), "home_mark_user_id_fkey"],
 			[newMark({ next_step_id: MISSING }), "home_mark_next_step_id_fkey"],
 			[
+				newMark({ next_step_id: null, call_follow_up_id: id(400) }),
+				"home_mark_call_follow_up_id_fkey",
+			],
+			[newMark({ home_update_id: MISSING }), "home_mark_one_item"],
+			[
+				newMark({ next_step_id: null, home_update_id: MISSING }),
+				"home_mark_home_update_id_user_id_fkey",
+			],
+			[
 				`delete from next_step where id = '${id(400)}'`,
 				"home_mark_next_step_id_fkey",
 			],
@@ -2626,10 +2636,14 @@ const DEFAULTED: Record<string, string[]> = {
 		"imported",
 	],
 	next_step: [
+		"call_contact_party_id",
+		"call_kind",
 		"changed_at",
 		"changed_by_job",
 		"changed_by_user_id",
 		"changed_for_user_id",
+		"home_call_follow_up_id",
+		"home_step_id",
 		"resolution_event_id",
 		"status",
 	],
