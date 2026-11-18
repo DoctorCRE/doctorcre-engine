@@ -15,7 +15,7 @@ type About =
 	| { property_id: string };
 type Email = {
 	message_id: string;
-	conversation_id?: string | null;
+	conversation_id: string | null;
 	sender: string;
 	sender_name: string | null;
 	recipients: { address: string; kind: "to" | "cc" }[];
@@ -97,7 +97,7 @@ function parseEmail(value: JsonValue): Email | undefined {
 	if (!isArguments(value)) return undefined;
 	const {
 		message_id,
-		conversation_id,
+		conversation_id = null,
 		sender,
 		sender_name = null,
 		recipients,
@@ -110,8 +110,7 @@ function parseEmail(value: JsonValue): Email | undefined {
 		: [undefined];
 	return !Object.keys(rest).length &&
 		to.every((item) => item !== undefined) &&
-		(conversation_id === undefined ||
-			conversation_id === null ||
+		(conversation_id === null ||
 			(isText(conversation_id) && conversation_id.trim() !== "")) &&
 		(sender_name === null || isText(sender_name)) &&
 		isText(message_id) &&
@@ -120,7 +119,7 @@ function parseEmail(value: JsonValue): Email | undefined {
 		isText(body)
 		? {
 				message_id,
-				...(conversation_id !== undefined && { conversation_id }),
+				conversation_id,
 				sender: address(sender),
 				sender_name,
 				recipients: to,
@@ -236,7 +235,7 @@ async function insertActivity(
 	if (email) {
 		const { recipients, ...stored } = email;
 		await sql`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
-	   values (${id}, ${stored.message_id}, ${stored.conversation_id ?? null}, ${stored.sender}, ${stored.sender_name}, ${stored.subject}, ${stored.body})`.execute(
+	   values (${id}, ${stored.message_id}, ${stored.conversation_id}, ${stored.sender}, ${stored.sender_name}, ${stored.subject}, ${stored.body})`.execute(
 			tx,
 		);
 		if (recipients.length)

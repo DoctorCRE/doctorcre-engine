@@ -931,6 +931,7 @@ create table email (
 	-- Set only by the owner's copy of today's mail, the one source that may lack the Message-ID.
 	imported boolean not null default false,
 	constraint email_message_id_not_blank check (message_id ~ '\S'),
+	constraint email_conversation_id_not_blank check (conversation_id ~ '\S'),
 	constraint email_message_id_unless_imported check (message_id is not null or imported),
 	foreign key (activity_id, activity_kind) references activity (id, kind)
 );

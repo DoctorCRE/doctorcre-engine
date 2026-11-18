@@ -22,7 +22,7 @@ create temp table old_link on commit drop as select * from copy_activity_link();
 -- Deleting is per mailbox, so a row is live on its own.
 create temp table old_email on commit drop as
 select a.id, a.kind, a.occurred_at, a.recorded_at, a.updated_at, a.summary, a.detail, m.message_id,
- nullif(a.email_context ->> 'conversation_id', '') as conversation_id,
+ case when a.email_context ->> 'conversation_id' ~ '\S' then a.email_context ->> 'conversation_id' end as conversation_id,
  a.email_context #>> '{lifecycle,state}' as lifecycle, coalesce(a.email_context #>> '{lifecycle,state}', 'live') = 'live' as live,
  lower(coalesce(a.email_context #>> '{sender,email}', a.email_source ->> 'sender_email',
   case when a.kind = 'email_out' then a.email_identity ->> 'mailbox_account' end)) as sender,
