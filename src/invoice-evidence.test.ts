@@ -179,13 +179,16 @@ test("capture converges by reference and the nightly list gives only captured ev
 	assert.deepEqual(await list(), [200, { invoices: [pending, ready] }]);
 	assert.deepEqual(await list(), [200, { invoices: [pending, ready] }]);
 
-	await db.query("begin; select set_config('engine.job', 'lead_stage', true)");
-	await db.query(
-		`update invoice_email set status = 'applied', deal_id = $1, payment_id = $2
-		where id = $3`,
-		[deal, payment, invoice_id],
-	);
-	await db.query("commit");
+	const { for_user, ...target } = ready.target;
+	const apply = (id: unknown) =>
+		save({ ...nightly, for_user }, `${path}/${id}/apply`, {
+			idempotency_key: randomUUID(),
+			...target,
+		});
+	assert.deepEqual(await apply(invoice_id), [
+		200,
+		{ invoice_id, ...target, status: "applied", application_id: null },
+	]);
 	assert.deepEqual(await list(), [200, { invoices: [pending] }]);
 	assert.deepEqual(
 		await save(mail, path, request({ evidence_ref: evidence.evidence_ref })),
