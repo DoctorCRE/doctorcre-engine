@@ -206,11 +206,26 @@ test("reruns change no rows or history and leave attribution triggers enabled", 
 	);
 });
 
-test("a dated receipt can be copied later and missing ladders remain user data", async () => {
+test("a receipt missing its invoice date waits for correction, then copies", async () => {
 	await db.query("begin");
 	try {
 		await db.query(
 			`update public.commission set received_on = '2025-03-01' where id = '${id(120)}'`,
+		);
+		assert.deepEqual(lines(await run(), 120), [
+			["invoiced_on", null, "receipt_without_invoice_date"],
+		]);
+		assert.deepEqual(
+			await rows(`select id from commission_payment where id = '${id(120)}'`),
+			[],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.commission set invoiced_on = '2025-02-01', received_on = '2025-03-01' where id = '${id(120)}'`,
 		);
 		await run();
 		assert.deepEqual(
@@ -230,7 +245,7 @@ test("saved commissions, conflicting payment ids and changed old rows are report
 	try {
 		await db.query(`insert into commission (deal_id, gross) values ('${id(19)}', 100);
  insert into commission_payment (id, deal_id, amount) values ('${id(120)}', '${id(19)}', 10);
- update public.commission set received_on = '2025-03-01' where id = '${id(120)}';
+ update public.commission set invoiced_on = '2025-02-01', received_on = '2025-03-01' where id = '${id(120)}';
  update public.commission set gross_amount = 121 where id = '${id(102)}';
  update commission set expected = 76 where deal_id = '${id(11)}';`);
 		await db.query("set constraints all immediate");
@@ -269,6 +284,7 @@ test("a saved invoice date no invoice email explains is listed once today's row 
 		assert.deepEqual(lines(await run(), 103), [
 			["deal_id", id(10), "existing_commission_conflict"],
 			["id", id(103), "payment_id_taken"],
+			["invoiced_on", null, "receipt_without_invoice_date"],
 		]);
 	} finally {
 		await db.query("rollback");
