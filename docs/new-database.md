@@ -23,6 +23,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
 - **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, with who parked it and when, and whether it needs attention.
+- **`deal_client_website`**: a deal's client website registration, with the client it was set up for, its unique website name, its password verifier and when it was disabled, if applicable. A deal can have one active registration.
 - **`deal_kind`**: the list of kinds of transaction, such as lease and purchase. Like roles, a label can be renamed.
 - **`deal_reason`**: the list of reasons a client takes space, such as a start-up or a relocation. Like roles, a label can be renamed.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
@@ -286,7 +287,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 6. `copy-candidates-drafts.sql`: drafts and candidates find their leads and mailbox users.
 7. `copy-vendors.sql`, with `copy_vendor_ruling_reason` when reviewed: the deal copy finds the vendor roles.
 8. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
-9. `copy-deals.sql`, then `copy-market-agent-sources.sql` in its own transaction.
+9. `copy-deals.sql`, then `copy-market-agent-sources.sql` and `copy-client-websites.sql`, each in its own transaction.
 10. `copy-vendors.sql` again: introductions and worked deals find their deals.
 11. `copy-leases.sql`: needs its deal, client and building.
 12. `copy-critical-dates.sql`.
@@ -306,6 +307,8 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 26. `copy-change-history.sql`: last, since each old event becomes history of a record an earlier copy made.
 
 Running the whole order again changes no row and no change history, and each copy lists the same corrections, including the leftover values of records an earlier run copied, so the list a partner fixes stays whole (#596). `src/copy-all.test.ts` runs this order twice on one made-up snapshot.
+
+The website copy uses the deal and client maps to preserve each registration's name, bcrypt verifier of the hex SHA-256 password digest, creation time and last update time. It assigns the old-system job because the source row has no author. It lists deal IDs and reasons for registrations it cannot copy, such as a missing client link, missing update time or conflicting registration. A rerun keeps a registration that is already copied. The verifier stays out of the correction list and change history.
 
 ## Copying today's people and companies
 
@@ -1285,6 +1288,8 @@ The detail sends `checklist` as `deal-checklist.v1`. The template lives in engin
 
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
+Both partners' detail reads return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The detail database role can read the fields used to form the link. The website setup save and the signed-in handoff to the website are separate steps in #729 and #730.
+
 Each `email_follow_ups` entry is one pending email suggestion targeting the deal, from either partner's mailbox. It gives `proposal_id`, `kind`, `deal_id`, `evidence`, the proposed step fields (`what`, `owner`, `due_on`) or phase fields (`from_phase`, `to_phase`), and an `email` with `activity_id`, `sender`, `sender_name`, `subject`, `happened_at` and `summary`. The `owner` field gives the app user slug. A filing suggestion drops from this list once the email is on the deal. Use the proposal ID to accept or dismiss through door 21. Accepting a filing suggestion files the email.
 
 Set the engine Worker's `DEALS_READ_SCHEMA` variable to `next` to use the read-only `next` schema through the existing `DATABASE` binding. The login must be able to assume `engine_reader` on the copied database. An absent setting or any other value uses today's readers. Once rehearsal verifies the remaining app dependencies, set the engine variable first, then set `deals-from-engine` to `on` in the app's `ENGINE_ROUTING` KV. To return the app to CARR, set the KV value to `off`.
@@ -1297,7 +1302,6 @@ When the nightly invoice job moved the deal to its current Closed phase, the boa
 
 Question numbers refer to the [Deals screen spec](screens/deals.md#questions-for-the-owner).
 
-- The new schema needs a place for client website registrations (question 1). Pass D had one registered deal site in the old schema. The app offers site setup when the read lacks the registration.
 - The "Moved automatically" mark and Undo on copied moves need the source event ID and the fact that the move was automatic (question 3). Pass D copied the phase rows behind all 16 old receipts, with the phase, occurrence and save times, reason, and author stamp.
 - Pipeline-call state waits on the deal watch and pipeline call recorder decision (question 8).
 

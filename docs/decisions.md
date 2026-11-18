@@ -310,3 +310,5 @@
 156\. **Mail priorities opens the same review as Home (2026-11-18).** The read ranks pending inbound suggestions and reply drafts by their due dates, then by the source email's time. Each Outlook conversation contributes one row with the selected review and its Home card ID (#721).
 
 157\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).
+
+158\. **The new database keeps each deal’s client website registration (2026-11-18).** A website name belongs to one registration, and a deal can have one active registration. The copied site keeps its verifier and its binding to the deal and client. Both partners get the address when the registration is active and the client matches. The verifier stays out of deal reads and change history (#728).

@@ -76,6 +76,7 @@ const COPIES: [file: string, input?: string][] = [
  insert into copy_how_found values ('client', 'Example referral', 'referral');`,
 	],
 	["copy-deals.sql"],
+	["copy-client-websites.sql"],
 	["copy-activity.sql"],
 	["copy-emails.sql"],
 	["copy-deal-next-steps.sql"],
@@ -87,6 +88,9 @@ const { db, setup, cleanup, connectionString } = copyTest();
 before(async () => {
 	await setup();
 	await db.query(`begin; ${OLD} commit;`);
+	await db.query(`insert into ops.client_portal (slug, deal_id, client_id, password_hash, disabled_at)
+		values ('example-startup', '${id(30)}', '${id(20)}', '$2a$12$${"A".repeat(53)}', null),
+		       ('example-earlier-lease', '${id(32)}', '${id(20)}', '$2a$12$${"B".repeat(53)}', now())`);
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
 		insert into market (id, name) values ('${id(91)}', 'Example West'), ('${id(92)}', 'Example East');
@@ -237,7 +241,7 @@ test("an unknown deal is not found", async () => {
 	assert.deepEqual(page, { error: "not_found" });
 });
 
-const get = (path: string, schema?: string) =>
+const get = (path: string, schema?: string, partner = "partner_one") =>
 	worker.request(
 		`https://app.example.test/api/engine${path}`,
 		{ headers: { Cookie: "__Host-dealroom_session=example" } },
@@ -247,7 +251,7 @@ const get = (path: string, schema?: string) =>
 			CARR: {
 				fetch: async () =>
 					Response.json({
-						actor: { slug: "partner_one", display: "Example Partner" },
+						actor: { slug: partner, display: "Example Partner" },
 						csrf_token: "example",
 					}),
 			},
@@ -354,6 +358,25 @@ for (const schema of [undefined, "next"]) {
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
 	});
 }
+
+test("both partners see a deal's active client website", async () => {
+	for (const partner of ["partner_one", "partner_two"]) {
+		const response = await get(`/deals/${id(30)}`, "next", partner);
+		assert.equal(response.status, 200);
+		const body = await response.text();
+		assert.partialDeepStrictEqual(JSON.parse(body), {
+			client_portal_url: "https://share.doctorcre.com/example-startup",
+		});
+		assert.doesNotMatch(body, /password_hash|\$2a\$12\$/);
+	}
+	for (const deal of [id(31), id(32)]) {
+		const response = await get(`/deals/${deal}`, "next");
+		assert.equal(response.status, 200);
+		assert.partialDeepStrictEqual(await response.json(), {
+			client_portal_url: null,
+		});
+	}
+});
 
 test("signed-in detail shows saved items and checklist progress from lease facts", async () => {
 	const response = await get(`/deals/${id(30)}`, "next");

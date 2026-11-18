@@ -18,6 +18,15 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			sql.lit("deal-items.v1").as("item_schema_version"),
 			"d.id as deal_id",
 			"d.closed_value",
+			eb
+				.selectFrom("deal_client_website as website")
+				.select(
+					sql<string>`'https://share.doctorcre.com/' || website.slug`.as("url"),
+				)
+				.whereRef("website.deal_id", "=", "d.id")
+				.whereRef("website.client_party_id", "=", "c.party_id")
+				.where("website.disabled_at", "is", null)
+				.as("client_portal_url"),
 			"d.reason",
 			asText(sql`(now() at time zone 'America/Chicago')::date`)
 				.$notNull()

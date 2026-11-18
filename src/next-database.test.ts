@@ -551,6 +551,7 @@ const STAMPED = [
 	"party_territory",
 	"party_territory_review",
 	"deal",
+	"deal_client_website",
 	"introduction",
 	"party_link",
 	"deal_phase_change",
