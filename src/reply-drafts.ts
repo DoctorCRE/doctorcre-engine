@@ -84,6 +84,45 @@ async function locked(
 	return draft;
 }
 
+async function dismissOlderDrafts(
+	tx: Transaction<DB>,
+	{
+		activity_id,
+		owner_user_id,
+	}: { activity_id: string; owner_user_id: string },
+) {
+	// Run the update after taking the lock so it sees the previous save's commit.
+	const {
+		rows: [source],
+	} = await sql<{ conversation_id: string }>`
+		select conversation_id, pg_advisory_xact_lock(
+			hashtextextended('reply draft ' || ${owner_user_id}::text || ' ' || conversation_id, 0))
+		from email where activity_id = ${activity_id} and conversation_id is not null
+	`.execute(tx);
+	if (!source) return;
+	await tx
+		.updateTable("reply_draft")
+		.set({
+			status: "dismissed",
+			dismiss_reason: "Replaced by a newer reply draft in this conversation",
+		})
+		.where("status", "=", "pending")
+		.where("id", "in", (eb) =>
+			eb
+				.selectFrom("reply_draft as pending")
+				.innerJoin("email", "email.activity_id", "pending.email_activity_id")
+				.innerJoin("activity", "activity.id", "email.activity_id")
+				.select("pending.id")
+				.where("email.conversation_id", "=", source.conversation_id)
+				.where("pending.owner_user_id", "=", owner_user_id)
+				.where("pending.status", "=", "pending")
+				.orderBy("activity.happened_at", "desc")
+				.orderBy("activity.id", "desc")
+				.offset(1),
+		)
+		.execute();
+}
+
 export const replySubmissions = new Hono<NextSaveEnv>().post(
 	"/reply-drafts/:id/submission",
 	(c) =>
@@ -106,6 +145,8 @@ export const replySubmissions = new Hono<NextSaveEnv>().post(
 			},
 			async (tx, request) => {
 				const draft = await locked(tx, c, request.draft_id);
+				if (draft.status === "dismissed")
+					fail(new Refusal(409, "draft_changed", { version: draft.revision }));
 				if (draft.revision !== request.version)
 					fail(
 						new Refusal(409, "version_conflict", { version: draft.revision }),
@@ -173,18 +214,24 @@ export const replyJobs = new Hono<NextSaveEnv>()
    on conflict (email_activity_id, owner_user_id) do nothing returning id, revision`.execute(
 					tx,
 				);
-				const draft =
-					inserted.rows[0] ??
-					(await tx
-						.selectFrom("reply_draft")
-						.select(["id", "revision"])
-						.where("email_activity_id", "=", request.activity_id)
-						.where("owner_user_id", "=", user.id)
-						.executeTakeFirstOrThrow());
+				const [draft] = inserted.rows;
+				if (draft) {
+					await dismissOlderDrafts(tx, {
+						activity_id: request.activity_id,
+						owner_user_id: user.id,
+					});
+					return { draft_id: draft.id, version: draft.revision };
+				}
+				const existing = await tx
+					.selectFrom("reply_draft")
+					.select(["id", "revision"])
+					.where("email_activity_id", "=", request.activity_id)
+					.where("owner_user_id", "=", user.id)
+					.executeTakeFirstOrThrow();
 				return {
-					draft_id: draft.id,
-					version: draft.revision,
-					...(inserted.rows.length ? {} : { existing: true }),
+					draft_id: existing.id,
+					version: existing.revision,
+					existing: true,
 				};
 			},
 		);
