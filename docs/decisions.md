@@ -283,4 +283,6 @@
 
 142\. **Home and Invoices share the new tracker read (2026-11-18).** `INVOICES_READ_SCHEMA=next` uses current payment dates and amounts through the read-only engine role. Each payment awaiting an invoice has its own row, even when another payment on the deal has been invoiced. A copied invoice date still shows when it has no payment, with a blank amount (#682).
 
+145\. **Mark paid records receipt of one payment (2026-11-18).** The partner's save uses the tracker row's change ID and records the date the full payment was received. The tracker reads that date to show Paid. The database requires an invoice date for every received payment and refuses invoice undo once its payment is recorded. A retry returns the first receipt (#689).
+
 146\. **A call follow-up keeps the recorded call and its quote (2026-11-18).** A deal step created from a call keeps the call activity and the evidence on that step. Home marks it through the call follow-up key, and it completes and reopens as the same step. A deal update belongs to its recipient. A copied checklist reminder keeps the checklist reference, due date and read time, and the database allows one reminder per recipient, deal, item and due date (#643).

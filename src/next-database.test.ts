@@ -6943,6 +6943,7 @@ const COMMISSION_REFUSALS: Record<string, Case[]> = {
 	"a payment is part of a deal's gross, more than zero, invoiced before it is due or received": [
 		[payment({}), "commission_payment_deal_id_fkey"],
 		[`${COMMISSION}; ${payment({ amount: 0 })}`, "commission_payment_amount_check"],
+		[`${COMMISSION}; ${payment({ received_on: "2026-05-01" })}`, "commission_payment_received_after_invoice"],
 		[`${COMMISSION}; ${payment({ invoiced_on: "2026-05-01", due_on: "2026-04-30" })}`, "commission_payment_dates_in_order"],
 		[`${COMMISSION}; ${payment({ invoiced_on: "2026-05-01", received_on: "2026-04-30" })}`, "commission_payment_dates_in_order"],
 	],

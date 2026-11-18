@@ -181,8 +181,8 @@ insert into public.critical_date (id, deal_id, kind, due_on, note, source, statu
  ('${id(60)}', '${id(30)}', 'lease_end', '2030-01-31', 'Example note', 'Example source', 'open', '2025-01-01', '${id(1)}', '2025-02-01');
 insert into public.commission (id, deal_id, status, gross_amount, created_at, updated_at, created_by) values
  ('${id(70)}', '${id(30)}', 'expected', 1000, '2025-01-01', '2025-02-01', '${id(1)}');
-insert into public.commission (id, deal_id, status, gross_amount, received_on, created_at, updated_at, created_by) values
- ('${id(71)}', '${id(34)}', 'received', 500, '2025-04-01', '2025-03-02', '2025-04-01', '${id(1)}');
+insert into public.commission (id, deal_id, status, gross_amount, invoiced_on, received_on, created_at, updated_at, created_by) values
+ ('${id(71)}', '${id(34)}', 'received', 500, '2025-03-01', '2025-04-01', '2025-03-02', '2025-04-01', '${id(1)}');
 insert into public.space_search (id, client_id, deal_id, spec, created_by, created_at) values
  ('${id(80)}', '${id(20)}', '${id(30)}', '{"min_sf": 1000, "max_sf": 2000}', '${id(1)}', '2025-01-01');
 insert into public.deal_client_need (id, deal_id, vendor_id, description, applicability, source_ref, source_revision, observed_at, fresh_until,
@@ -373,7 +373,6 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 	assert.deepEqual(
 		await rows("select invoiced_on::text from commission_payment"),
 		[{ invoiced_on: "2025-03-01" }],
-		"the invoice email dated the payment today's row leaves undated",
 	);
 	assert.deepEqual(
 		await rows("select party_id, document_id from party_document"),

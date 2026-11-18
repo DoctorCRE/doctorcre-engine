@@ -2330,6 +2330,7 @@ create table commission_payment (
 	invoiced_on date,
 	due_on date,
 	received_on date,
+	constraint commission_payment_received_after_invoice check (received_on is null or invoiced_on is not null),
 	constraint commission_payment_dates_in_order check (due_on >= invoiced_on and received_on >= invoiced_on)
 );
 
@@ -2587,6 +2588,9 @@ begin
 		select max(id) into new.payment_change_id from change where table_name = 'commission_payment'
 			and record = jsonb_build_object('id', new.payment_id) and (new_value ? 'invoiced_on');
 	else
+		if payment.received_on is not null then
+			raise exception 'a received payment prevents undo' using errcode = 'check_violation', constraint = 'invoice_email_undo_unpaid';
+		end if;
 		if latest.happened_at is distinct from old.applied_phase_at
 			or old.payment_change_id is distinct from (select max(id) from change where table_name = 'commission_payment'
 				and record = jsonb_build_object('id', new.payment_id) and new_value ? 'invoiced_on') then
