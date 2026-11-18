@@ -9,15 +9,18 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 
 create temp table old_brand on commit drop as
 select c.id as client_id, c.party_id as old_location_id, p.org_id, md5('old_system:client_brand:' || c.id)::uuid as id,
- location.party_id as location_id, brand.id as brand_id, d.started_on,
+ location.party_id as location_id, brand.id as brand_id, start_date.started_on,
  coalesce(set_event.occurred_at, p.created_at) as set_at, author.*,
- case when d.started_on is null then 'brand_start_date_required'
+ case when start_date.started_on is null then 'brand_start_date_required'
  when location.party_id is null then 'location_not_copied'
  when brand.id is null then 'brand_not_copied'
  when brand.kind <> 'company' then 'brand_not_company'
  when brand.id = location.party_id then 'brand_is_location' end as refusal
 from public.client c join public.party p on p.id = c.party_id
 left join pg_temp.copy_client_brand_date d on d.location_client_id = c.id
+cross join lateral (select coalesce(d.started_on, case when p.kind = 'person' then
+ (select (min(deal.created_at) at time zone 'America/Chicago')::date from public.deal where deal.client_id = c.id)
+ end) as started_on) start_date
 left join outside_id location_map on location_map.source = 'old_system' and location_map.value = c.id::text
 left join client location on location.party_id = location_map.party_id
 left join outside_id brand_map on brand_map.source = 'old_system' and brand_map.value = p.org_id::text

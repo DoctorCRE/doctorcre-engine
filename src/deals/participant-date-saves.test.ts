@@ -127,7 +127,12 @@ test("refuse removal of someone absent from the deal", async () => {
 });
 
 test("add a sourced critical date once and stamp the adding partner's confirmation", async () => {
-	const fields = { ...dateFields, source: "Second sample offer" };
+	const fields = {
+		...dateFields,
+		kind: "phase_effective_date",
+		source: "Sample phase record",
+		note: null,
+	};
 	const answer = await saveAndRetry(datePath, { ...key(), ...fields }, 201, {
 		user: "blair",
 	});

@@ -283,7 +283,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 2. `copy-markets.sql`, with `copy_market_county`: the deal copy matches a deal's market by name.
 3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role.
 4. `copy-national-account-owners.sql`, with `copy_account_owner_date`: needs the national accounts and mapped human owners.
-5. `copy-client-brands.sql`, with `copy_client_brand_date`: needs the client locations and their brand companies.
+5. `copy-client-brands.sql`, with `copy_client_brand_date`: needs the client locations and their brand companies. A person client without a reviewed date uses their first old deal's Chicago opening date.
 6. `copy-candidates-drafts.sql`: drafts and candidates find their leads and mailbox users.
 7. `copy-vendors.sql`, with `copy_vendor_ruling_reason` when reviewed: the deal copy finds the vendor roles.
 8. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
@@ -348,7 +348,7 @@ Run `schema/copy-national-account-owners.sql` after the party, client and attrib
 
 Today's required actor foreign key permits only human, automation and system actors, so only human owners mapped to people are copied; outside people can be owners through later engine writes. Automation, system and unmapped human owners stay listed for the partners.
 
-Run `schema/copy-client-brands.sql` the same way, after the national account owner copy. Before running it, create temporary `copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop` with the partners' reviewed first known date for each company client with a brand in `org_id` and each person client linked to a national account in the old account view. A location without a date stays listed. The membership's stored and changed time is when its org_id was set, never its start. Overlapping memberships of one location, a location that is its own brand, a brand that is not a company and uncopied records stay listed. Accepted rows keep a stable import id and reruns leave them unchanged.
+Run `schema/copy-client-brands.sql` the same way, after the national account owner copy. Supply the partners' reviewed first known dates in temporary `copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop`. For a person linked to a national account in the old account view without a reviewed date, use the Chicago opening date of that client's first deal. A location without either applicable date stays listed. The membership's stored and changed time is when its org_id was set, never its start. Overlapping memberships of one location, a location that is its own brand, a brand that is not a company and uncopied records stay listed. Accepted rows keep a stable import id and reruns leave them unchanged.
 
 ## Deal files and extracted text
 
@@ -460,13 +460,15 @@ Moving today's rows across, each deal's lease chain becomes one lease and its or
 
 ## Critical dates
 
-A `critical_date` starts proposed, with a deal, kind, due date and nonblank source. It can name its source round, lease, lease option or document; a round or lease must belong to that deal. Kinds are LOI expiry, option notice, rent start, lease end, due diligence or other. The source text describes manually added dates too.
+A `critical_date` starts proposed, with a deal, kind, due date and nonblank source. It can name its source round, lease, lease option or document; a round or lease must belong to that deal. Kinds are LOI expiry, option notice, rent start, lease end, due diligence, phase effective date or other. The source text describes manually added dates too.
 
 `propose_critical_dates(deal_id)` derives dates from current lease versions and their options, and expiries on open rounds. Repeating it adds nothing twice. It uses exact dates only; days after delivery need an actual delivery date before a rent-start proposal can be made. New amendments produce new proposals; old proposals and confirmed dates remain for a user to drop when appropriate.
 
 A direct user confirms a proposal to open, or drops it with a reason. Only a direct user resolves an open date as done, dropped or passed, with a reason. The database writes confirmation and resolution users and times itself. Jobs, including agents working for a user, can propose but cannot decide. Confirmation stays when a different user later resolves the date. Dates, sources and decisions cannot be rewritten or removed; a correction is a new proposal and a reasoned drop.
 
 Today's `critical_date` rows keep their kinds, dates, sources and notes. `option_window` maps to `option_notice`, an unlisted kind to `other` with its original wording in the note. A date directly added by a user takes its confirmation from `created_by` and `created_at`; dates proposed by automation still need user confirmation. `cleared` maps to `done`. Resolved rows take their user, time and reason from the resolution event log; a legacy resolution without that evidence is listed for a partner to fix. The owner's load preserves known users and times with the transition and stamp triggers disabled, and lists missing evidence or decisions for a partner to fix rather than inventing confirmation. Today shows confirmed open dates; proposals stay out of Today and are read per deal as `critical_date_proposals`. `everything_about_deal` lists a deal's `open` dates as `critical_dates`; proposals and done, dropped or passed dates stay out. `critical_date_proposals` lists only that deal's `proposed` dates in the same read, by due date then id. Both lists contain the complete critical date row without `deal_id`, and return `[]` when empty. The old deal read lists dates per deal in that order (`carr-system` at `7a8ca32`, the `get-deal-room` tool and `v_deal_room_critical_date`). The old schema has no proposed status (`critical_date_status_check`); Home's `v_today_triage` critical dates are open dates due within fourteen days. There is no separate old confirmation list to port, so proposals use a separate key on the deal read rather than a new cross-deal queue.
+
+The November 18 rehearsal had zero critical dates with kind `other` and note "Phase effective date", so the copy needs no remap.
 
 ## Copying today's leases
 
@@ -1633,7 +1635,7 @@ These doors use the signed-in partner entrance. They share the save and retry ru
 | `/api/engine/critical-dates/{critical_date_id}/resolve` | `{ idempotency_key, resolution, reason }`          | `200 { critical_date_id, status }`         |
 
 - All IDs are UUIDs. `party_id` names the existing person or company and `role` is its role slug on this deal. Each save adds or removes exactly that link. A missing link on removal returns `404 not_found`. The database records the removal in deal history. Deal ownership changes use door 16.
-- A date the partner adds opens in the same save, with the database recording that partner and the confirmation time. `kind` is `loi_expiry`, `option_notice`, `rent_start`, `lease_end`, `due_diligence` or `other`. `due_on` is a valid `YYYY-MM-DD` date, `source` is nonblank text, and `note` is optional nonblank text or null.
+- A date the partner adds opens in the same save, with the database recording that partner and the confirmation time. `kind` is `loi_expiry`, `option_notice`, `rent_start`, `lease_end`, `due_diligence`, `phase_effective_date` or `other`. `due_on` is a valid `YYYY-MM-DD` date, `source` is nonblank text, and `note` is optional nonblank text or null. The deal page read returns a plain label for each kind, using the same labels as the checklist.
 - Confirm opens a date proposed by automation. Resolve takes `done`, `dropped` or `passed` as `resolution` and returns it as `status`. A proposal can be dropped, and an open date can take any of the three resolutions. `reason` must be nonblank. The database stamps the decisions and keeps the confirmation when resolving.
 - A missing date on confirm or resolve returns `404 not_found`. A fresh key targeting the date's current status returns `409 version_conflict { status }`. Other disallowed transitions return `422 database_refused_the_statement { rule: "critical_date_status_moves" }`.
 
@@ -1665,7 +1667,7 @@ A suggestion group uses the most recent mark revision among its proposals, inclu
 
 1. May the assistant accept or dismiss a suggestion when a partner asks it to? It dismissed 9 in the last 30 days; the new database lets only a partner decide directly. Recommended no: the assistant asks the partner instead.
 2. Add the jobs `cadence` (nightly next steps) and `call_capture` (call suggestions and their automatic steps); only the owner adds a job.
-3. Phase effective date is its own critical-date kind. Copied dates now stored as `other` with the note "Phase effective date" take that kind (owner, 2026-11-18).
+3. Phase effective date is its own critical-date kind for new saves (owner, 2026-11-18). The [critical dates section](#critical-dates) records the rehearsal count for the copy.
 4. Each national account's owner is Joe or Dell (owner, 2026-11-18).
 5. A new location client under a national account has "national account or corporate lead" as how found (owner, 2026-11-18).
 6. The 13 national-account memberships for person clients with no proven start date use the opening date of each client's first deal (owner, 2026-11-18).
