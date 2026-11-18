@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
+import { lockHomeReview } from "./home-inbox-review.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { ACTING_USER } from "./next-save.ts";
@@ -15,11 +16,18 @@ import {
 } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 
-type ItemKind = "next_step" | "call_follow_up" | "home_update";
+type ItemKind =
+	| "next_step"
+	| "call_follow_up"
+	| "home_update"
+	| "proposal"
+	| "reply_draft";
 const itemKinds = new Map<string, ItemKind>([
 	["next_action", "next_step"],
 	["capture_post_call_action", "call_follow_up"],
 	["notification", "home_update"],
+	["suggestion", "proposal"],
+	["reply_draft", "reply_draft"],
 ]);
 
 const isVersion = (value: unknown): value is string =>
@@ -99,13 +107,22 @@ type MarkState = Mark & {
 	created_at: string | null;
 	snoozed: boolean;
 	valid_snooze: boolean;
-	source_version: string;
 	mark_version: string | null;
 	settled_version: string;
 };
 
 async function lockItem(tx: Transaction<DB>, id: string, kind: ItemKind) {
 	type LockedItem = { user_id: string; done: boolean };
+	if (kind === "proposal" || kind === "reply_draft") {
+		const {
+			rows: [actor],
+		} = await sql<{ user_id: string | null }>`
+			select ${ACTING_USER} as user_id
+		`.execute(tx);
+		if (!actor?.user_id) return;
+		const review = await lockHomeReview(tx, kind, id, actor.user_id);
+		return review && { user_id: actor.user_id, done: false, ...review };
+	}
 	const update = kind === "home_update";
 	if (update) {
 		// Updates have a fixed recipient and no row lock privilege for engine saves.
@@ -118,8 +135,18 @@ async function lockItem(tx: Transaction<DB>, id: string, kind: ItemKind) {
 		: sql<LockedItem>`select owner_party_id as user_id, status = 'done' as done from next_step
 			where ${sql.ref(kind === "next_step" ? "home_step_id" : "home_call_follow_up_id")} = ${id}
 				and owner_party_id = ${ACTING_USER} for no key update`;
-	const { rows } = await source.execute(tx);
-	return rows[0];
+	const {
+		rows: [item],
+	} = await source.execute(tx);
+	if (!item) return;
+	const {
+		rows: [version],
+	} = await sql<{ source_version: string }>`
+		select coalesce(max(id), 0) as source_version from change
+		where table_name = ${update ? "home_update" : "next_step"} and record = ${{ id }}
+	`.execute(tx);
+	if (!version) throw new Error("Home source history was unavailable");
+	return { ...item, ...version, mark_item_id: id };
 }
 
 async function readMarkState(
@@ -128,7 +155,6 @@ async function readMarkState(
 	snoozedUntil: string | null,
 ) {
 	const { item_kind, item_id: id } = record;
-	const sourceTable = item_kind === "home_update" ? "home_update" : "next_step";
 	const {
 		rows: [state],
 	} = await sql<MarkState>`
@@ -136,8 +162,6 @@ async function readMarkState(
 			to_jsonb(m.snoozed_until)#>>'{}' as snoozed_until,
 			coalesce(m.snoozed_until > now(), false) as snoozed,
 			coalesce(${snoozedUntil}::timestamptz > now(), true) as valid_snooze,
-			(select coalesce(max(id), 0) from change
-				where table_name = ${sourceTable} and record = ${{ id }}) as source_version,
 			h.version as mark_version, h.settled_version
 		from (
 			select max(id) as version,
@@ -152,10 +176,11 @@ async function readMarkState(
 }
 
 async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
-	const { id, item_kind, item_id } = request;
-	const item = await lockItem(tx, id, item_kind);
+	const { item_kind, item_id } = request;
+	const item = await lockItem(tx, request.id, item_kind);
 	if (!item?.user_id)
 		throw new SaveRefusal(new Refusal(404, "home_item_not_found"));
+	const { mark_item_id: id, source_version } = item;
 	const record = { user_id: item.user_id, item_kind, item_id: id };
 	const state = await readMarkState(
 		tx,
@@ -170,7 +195,6 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 		created_at,
 		snoozed,
 		valid_snooze,
-		source_version,
 		mark_version,
 		settled_version,
 		...before
