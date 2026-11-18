@@ -54,7 +54,8 @@ insert into public.deal_participant (deal_id, actor_id, party_id, role, from_at,
 insert into public.event (id, subject_type, subject_id, field, old_value, new_value, occurred_at, actor_id, verb, cause) values
  ('${id(40)}', 'deal', '${id(30)}', 'phase', null, '{"phase":"touring"}', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(41)}', 'deal', '${id(31)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated'),
- ('${id(42)}', 'deal', '${id(30)}', 'attention', '{"attention":false}', '{"attention":true}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated');
+ ('${id(42)}', 'deal', '${id(30)}', 'attention', '{"attention":false}', '{"attention":true}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated'),
+ ('${id(43)}', 'deal', '${id(35)}', 'phase', '{"phase":"touring"}', '{"phase":"negotiation"}', '2025-03-02T02:00Z', '${id(1)}', 'update-deal', 'automation_job');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, due_on, status, created_at, created_by, updated_by) values
  ('${id(50)}', 'deal', '${id(30)}', '${id(1)}', 'Example send the survey', '2030-01-15', 'open', '2025-01-04', ${by}),
  ('${id(51)}', 'deal', '${id(30)}', '${id(2)}', 'Example book the tour', '2025-01-20', 'done', '2025-01-05', ${by}),
@@ -259,6 +260,38 @@ const get = (path: string, schema?: string, partner = "partner_one") =>
 			},
 		},
 	);
+
+test("the board and detail carry the same imported automatic phase move", async () => {
+	const board = await get("/deals?workspace=all", "next");
+	const detail = await get(`/deals/${id(35)}`, "next");
+	assert.equal(board.status, 200);
+	assert.equal(detail.status, 200);
+	const page = await detail.json();
+	const boardData = await board.json();
+	assert.ok(
+		page &&
+			typeof page === "object" &&
+			"phase_change" in page &&
+			"seen" in page,
+	);
+	assert.partialDeepStrictEqual(page, {
+		phase_change: {
+			event_id: id(43),
+			prior_phase: "touring",
+			phase: "negotiation",
+			automatic: true,
+			source: "copied",
+			evidence_date: "2025-03-01",
+		},
+	});
+	assert.equal(typeof page.seen, "number");
+	assert.partialDeepStrictEqual(boardData, {
+		deals: [{ id: id(35), phase_change: page.phase_change, seen: page.seen }],
+	});
+	assert.partialDeepStrictEqual(boardData, {
+		deals: [{ id: id(30), phase_change: null }],
+	});
+});
 
 for (const schema of [undefined, "next"]) {
 	test(`signed-in board uses ${schema ?? "the old schema"}`, async () => {

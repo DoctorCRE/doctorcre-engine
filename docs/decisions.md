@@ -314,3 +314,5 @@
 158\. **Commission receipt progress comes from payments (2026-11-18).** Commission received is complete when the deal has at least one payment and all its payments have receipt dates. A copied expected amount stays as a forecast and has no effect on the checklist (#732).
 
 159\. **The new database keeps each deal's client website registration (2026-11-18).** A website name belongs to one registration, and a deal can have one active registration. The copied site keeps its verifier and its binding to the deal and client. Both partners get the address when the registration is active and the client matches. The verifier stays out of deal reads and change history (#728).
+
+165\. **Copied automatic phase moves keep their receipts (2026-11-18).** Each actual move marked automatic by the old board keeps its event and previous phase against the same copied phase row. Undo checks the card's version and appends the previous phase only while that exact move is current (#746).

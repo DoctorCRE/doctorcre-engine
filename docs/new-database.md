@@ -859,7 +859,7 @@ Parked deals keep `parking_reason` and their whitespace-trimmed `parking_note`, 
 
 Phase events keep their phase, stated reason and two times. The effective time `occurred_at` becomes `happened_at`. The save time `recorded_at` becomes the row's `changed_at`, which call capture reads as `phase_saved_at`. The native `change` entry records the owner's import under the `old_system` job. No-change events are ignored. A lost-outcome event becomes dead only with a dated reason. A lost deal without one is listed, as is a current phase that differs from the latest copied phase. Without events, the current phase comes across as one phase change at the deal's last change, the one time today's system shows it held, stamped by the `old_system` job. It is still listed as `no_phase_history`, because its start date is unknown. A lost deal without events gets none. Unknown phases, dead without a reason and same-time events are listed.
 
-A repeat leaves matching phase rows and their history alone.
+A repeat leaves matching phase rows and their history alone. The copy also keeps each actual move marked automatic by the old Deals read. Its receipt stores the source event ID, previous phase, and reason against the exact copied phase row. A move with an unknown previous phase stays listed for correction.
 
 The Deals board reads open, closed and lost lists with the same workspace and national account scope. On the first copy, `imported_deal_board` keeps the old card's typed city and the recorded phase, outcome and close date of historical deals. The first market change replaces the copied city on the card. The board and deal page show the same phase, outcome, and close date. A later phase change supersedes the copied facts. When a deal in Closed or Invoiced takes its win and close date from its latest move into Closed, the date comes from that move's `happened_at` in America/Chicago. Closed Deals includes every ended deal except losses, including copied deals in Closed or Invoiced with no recorded outcome or date. A recorded loss stays in Lost Deals even when its move to dead could not be copied. A payment with no invoice date does not by itself end a deal.
 
@@ -1298,11 +1298,14 @@ Timeline rows for a new-schema deal update show the fields and values the update
 
 When the nightly invoice job moved the deal to its current Closed phase, the board and detail reads carry its receipt. The app shows the automatic close in Closed deals. The receipt uses the invoice application ID and its linked prior phase. Its date comes from the closing phase row in Central time, the same source as the close date. Partner applications, invoices on already-closed deals, later phase moves and invoice undos leave the current phase without that label.
 
+A copied automatic move also appears as `phase_change` on the board and deal page while its phase row is current. It gives the original `event_id`, `prior_phase`, `phase`, `reason`, Chicago `evidence_date`, `recorded_at`, `automatic: true`, and `source: "copied"`. A current invoice application uses its own receipt and undo.
+
+The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. A same-key retry returns the original answer.
+
 ### Remaining Deals read work
 
 Question numbers refer to the [Deals screen spec](screens/deals.md#questions-for-the-owner).
 
-- The "Moved automatically" mark and Undo on copied moves need the source event ID and the fact that the move was automatic (question 3). Pass D copied the phase rows behind all 16 old receipts, with the phase, occurrence and save times, reason, and author stamp.
 - Pipeline-call state waits on the deal watch and pipeline call recorder decision (question 8).
 
 ### Call phase-move receipts
@@ -1311,7 +1314,7 @@ A call proposes a phase move, and only a partner's click accepts it. The Deals s
 
 ### App work for the Deals switch
 
-The app still needs its remaining save and live refresh paths (app #953 onward), including routing invoice undo to the engine. New-schema change IDs and party IDs have different meanings from legacy save versions and client IDs.
+The app still needs its remaining save and live refresh paths (app #953 onward), including routing invoice undo and copied phase-move Undo to the engine. New-schema change IDs and party IDs have different meanings from legacy save versions and client IDs.
 
 "Mark inactive" is outside #674 because the Deals spec calls for Park with the reason "prospect never active" and pass D had zero prospect clients.
 
