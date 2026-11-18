@@ -254,7 +254,7 @@ A visit to properties. In the new database a completed tour is a meeting about t
 
 **Client status** is active deal when a client has open work, past client after closed work when none is open, and otherwise its manual roster, cold, engaged or paused status. `client_status` derives it; `client.status` holds only the manual value.
 
-**Brand membership** joins a client location company to its brand company for dates in `client_brand`. A franchisee is a client of type franchise with its own deals. Rebranding ends the old membership and begins another.
+**Brand membership** joins a person or company with a client profile to its brand company for dates in `client_brand`. A franchisee is a client of type franchise with its own deals. Rebranding ends the old membership and begins another.
 
 **National account owner** is the person responsible for the account, including an outside referring agent. `national_account_owner` keeps dated ownership; a deal's owner is separate. `national_account` identifies the brand company, independently of client type.
 

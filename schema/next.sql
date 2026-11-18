@@ -841,13 +841,11 @@ create table client_brand (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	location_id uuid not null references client (party_id) on update cascade,
-	location_kind text generated always as ('company') stored,
 	brand_id uuid not null,
 	brand_kind text generated always as ('company') stored,
 	started_on date not null,
 	ended_on date check (ended_on > started_on),
-	constraint client_brand_different_companies check (location_id <> brand_id),
-	foreign key (location_id, location_kind) references party (id, kind),
+	constraint client_brand_different_parties check (location_id <> brand_id),
 	foreign key (brand_id, brand_kind) references party (id, kind),
 	exclude using gist (location_id with =, daterange(started_on, ended_on) with &&)
 );
@@ -3128,7 +3126,7 @@ begin atomic
 			from lead_contact_draft d where d.party_id = p.id
 		),
 		'brands', (
-			select coalesce(jsonb_agg(to_jsonb(b) - array['location_kind', 'brand_kind']
+			select coalesce(jsonb_agg(to_jsonb(b) - 'brand_kind'
 				|| jsonb_build_object('party', to_jsonb(other)) order by b.started_on, b.id), '[]')
 			from client_brand b join party other on other.id = case when b.location_id = p.id then b.brand_id else b.location_id end
 			where p.id in (b.location_id, b.brand_id)
