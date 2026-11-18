@@ -480,6 +480,16 @@ create table deal_phase_change (
 	constraint deal_phase_change_dead_has_reason check (phase <> 'dead' or reason is not null)
 );
 
+create table deal_client_website (
+	slug text primary key check (slug ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
+	deal_id uuid not null references deal,
+	client_party_id uuid not null references party,
+	password_hash text not null check (password_hash ~ '^[$]2[aby][$]12[$][./A-Za-z0-9]{53}$'),
+	disabled_at timestamptz,
+	created_at timestamptz not null default now()
+);
+create unique index deal_client_website_one_active on deal_client_website (deal_id) where disabled_at is null;
+
 create table deal_property (
 	deal_id uuid not null references deal,
 	property_id uuid not null references property,
@@ -2847,8 +2857,9 @@ create function record_change() returns trigger
 language plpgsql security definer as $$
 declare
 	stamp constant text[] := array['changed_by_user_id', 'changed_by_job', 'changed_for_user_id', 'changed_at'];
-	was jsonb := to_jsonb(old) - stamp;
-	became jsonb := to_jsonb(new) - stamp;
+	hidden text[] := case when tg_table_name = 'deal_client_website' then stamp || array['password_hash'] else stamp end;
+	was jsonb := to_jsonb(old) - hidden;
+	became jsonb := to_jsonb(new) - hidden;
 	whole jsonb := coalesce(was, became);
 	row_key jsonb := coalesce((select jsonb_object_agg(k, whole -> k) from unnest(tg_argv) k), whole);
 begin
@@ -2876,7 +2887,7 @@ declare
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
-		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity',
+		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document', 'email_document',
@@ -3405,3 +3416,6 @@ do $$ begin
 end $$;
 
 grant update (observed_at, snapshot) on calendar_agenda to engine;
+
+revoke select on deal_client_website from engine_reader;
+grant select (slug, deal_id, client_party_id, disabled_at) on deal_client_website to engine_reader;
