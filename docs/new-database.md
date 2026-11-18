@@ -1232,13 +1232,17 @@ The app does not display premises or offer-round summaries. Deal links use the U
 
 ## Home inbox reads for the app
 
-Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's steps and marks. With the variable unset, the route returns 404 and the app still calls CARR.
+Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's work and marks. With the variable unset, the route returns 404 and the app still calls CARR.
 
 The response uses the app's `home-inbox.v5` card fields. It shows each step once, including call follow-ups as that step, with the full step text as the title. It includes the step's date, destination and linked source when known. A call source includes its date, contact when known, summary and quote. An accepted suggestion links a step to its email or meeting. The step's change ID gives `action_version`, and `base_version` includes the mark's revision and current disposition.
 
 An open step can be held, snoozed, settled or in the inbox. A snooze ends at its saved time, and a hold ends on its date in Central time. A settled step returns to the inbox after a later step change. Cancelled and expired steps leave the inbox. A step with status `done` appears only if its completion time is known and within the last seven days. The read puts unfinished work first.
 
-Slice 23 still needs reply drafts, pending suggestions, overdue completion reviews and updates. Some copied steps lack a verified origin, and some completed steps lack a known completion time. Legacy waiting evidence and versions did not move. Keep Home on CARR until these reads, slice 24 saves and slice 30 app routing and destinations are ready. The app must use the new change IDs only with new-schema saves.
+Reply drafts are visible to their owner while pending, sending, or failed. One draft appears for each known Outlook conversation. An approved draft takes precedence while it sends. Otherwise the draft answering the newest email appears. An email without a conversation ID is grouped by its own activity ID. The card gives the draft ID and the email it answers.
+
+Pending suggestions appear for the proposed owner, the partner the job acted for, or the partner whose mailbox has the source email. A call or meeting also reaches the partner who recorded it or had it recorded for them. One card groups the suggestions from each known email conversation, call, or meeting. Each member carries its proposal ID, activity, and target. An unknown-sender lead suggestion carries its candidate ID. A completion review belongs to its own card kind. The inbox read does not decide any suggestion.
+
+Slice 23 still needs overdue completion reviews and updates. Some copied steps lack a verified origin, and some completed steps lack a known completion time. Legacy waiting evidence and versions did not move. Keep Home on CARR until these reads, slice 24 saves and slice 30 app routing and destinations are ready. The app must use the new change IDs only with new-schema saves.
 
 ## Invoice tracker reads for the app
 

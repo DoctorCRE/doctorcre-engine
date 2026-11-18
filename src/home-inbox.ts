@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, refuse } from "./answer.ts";
+import { readHomeReviewCards } from "./home-inbox-review.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
 
@@ -136,11 +137,20 @@ function stepCard(step: Step) {
 
 async function readHomeInbox(db: Transaction<DB>, userId: string) {
 	const { rows } = await stepRows(userId).execute(db);
+	const cards = [
+		...rows.map(stepCard),
+		...(await readHomeReviewCards(db, userId, LIMIT + 1)),
+	].sort(
+		(a, b) =>
+			Number(a.source_state === "done") - Number(b.source_state === "done") ||
+			b.activity_at.localeCompare(a.activity_at) ||
+			a.item_id.localeCompare(b.item_id),
+	);
 	return {
 		ok: true,
 		schema_version: "home-inbox.v5",
-		items: rows.slice(0, LIMIT).map(stepCard),
-		truncated: rows.length > LIMIT,
+		items: cards.slice(0, LIMIT),
+		truncated: cards.length > LIMIT,
 		limit: LIMIT,
 		working_collapsed: true,
 		auto_settle_enabled: true,
