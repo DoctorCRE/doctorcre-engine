@@ -68,9 +68,22 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				from imported_change c left join app_user u on u.id = c.changed_by_user_id
 				where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
 				union all
-				select c.id::text, c.changed_at, coalesce(u.slug, c.changed_by_job), c.action,
-					null, c.old_value, c.new_value
+				select c.id || ':' || edit.key, c.changed_at, coalesce(u.slug, c.changed_by_job), 'update-deal',
+					case edit.key
+						when 'owner_user_id' then 'owner'
+						when 'market_id' then 'market'
+						when 'needs_attention' then 'attention'
+						when 'closed_value' then 'won_value'
+						else edit.key
+					end,
+					${dealEditValue("c.old_value")}, ${dealEditValue("c.new_value")}
 				from change c left join app_user u on u.id = c.changed_by_user_id
+				cross join lateral (
+					select key from jsonb_object_keys(c.new_value) as fields(key)
+					where key not in ('parking_reason', 'parking_note', 'parked_at', 'parked_by_user_id')
+					union all
+					select 'operating_state' where c.new_value ?| array['parking_reason', 'parking_note']
+				) edit
 				where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id) and c.action = 'update'
 				order by recorded_at desc, id desc limit ${HISTORY_CAP}
 			) e)`.as("events"),
@@ -78,6 +91,23 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
 	return record ?? { error: "not_found" as const };
+}
+
+function dealEditValue(column: "c.old_value" | "c.new_value") {
+	const value = sql.ref(column);
+	return sql`case edit.key
+		when 'owner_user_id' then to_jsonb((select slug from app_user where id = (${value} ->> edit.key)::uuid))
+		when 'market_id' then to_jsonb((select name from market where id = (${value} ->> edit.key)::uuid))
+		when 'operating_state' then to_jsonb(case
+			when ${value} -> 'parking_reason' = 'null'::jsonb then 'Active'
+			else concat_ws(' · ', 'Parked', case ${value} ->> 'parking_reason'
+				when 'client_paused' then 'Client paused'
+				when 'prospect_never_active' then 'Prospect never became active work'
+				when 'other' then 'Other'
+			end, ${value} ->> 'parking_note')
+		end)
+		else ${value} -> edit.key
+	end`;
 }
 
 const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
