@@ -5,6 +5,8 @@ import { asText, inJsonbOrder } from "../reader.ts";
 type DealId = string | Expression<string | null>;
 
 export const RETIRED_ITEM_STATUSES = ["dropped", "expired"] as const;
+export const CLOSED_PHASES = ["closed", "invoiced"];
+export const ENDED_PHASES = [...CLOSED_PHASES, "dead"];
 
 // Over a deal board view aliased "b".
 export const nextStepRequired =

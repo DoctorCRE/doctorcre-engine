@@ -2,9 +2,8 @@ import { type Expression, sql, type Transaction } from "kysely";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
+import { CLOSED_PHASES, ENDED_PHASES } from "./shared.ts";
 
-const CLOSED_PHASES = ["closed", "invoiced"];
-const ENDED_PHASES = [...CLOSED_PHASES, "dead"];
 type BoardList = "open" | "closed" | "lost";
 // Today's board groups by brand and owner as they stand on the partners' calendar day.
 const covers = (from: Expression<string>, to: Expression<string | null>) =>
@@ -25,7 +24,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 			(eb) =>
 				eb
 					.selectFrom("deal_phase_change as pc")
-					.select(["pc.phase", "pc.happened_at"])
+					.select(["pc.phase", "pc.happened_at", "pc.reason"])
 					.whereRef("pc.deal_id", "=", "d.id")
 					.orderBy("pc.happened_at", "desc")
 					.limit(1)
@@ -91,8 +90,12 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 					"outcome",
 				),
 				sql<string | null>`(case when ${importedHistory} then imported.closed_on
+					when p.phase = 'dead' then (p.happened_at at time zone 'America/Chicago')::date
 					else (last_close.happened_at at time zone 'America/Chicago')::date end)::text`.as(
 					"closed_on",
+				),
+				sql<string | null>`case when p.phase = 'dead' then p.reason end`.as(
+					"lost_reason",
 				),
 				"d.id",
 				"d.name",

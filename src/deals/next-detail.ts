@@ -12,6 +12,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			sql.lit("deal-timeline.v1").as("schema_version"),
 			sql.lit("deal-items.v1").as("item_schema_version"),
 			"d.id as deal_id",
+			"d.closed_value",
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),
 			jsonArrayFrom(
