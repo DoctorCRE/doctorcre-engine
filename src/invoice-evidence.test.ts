@@ -43,7 +43,6 @@ before(async () => {
 		insert into phase (slug, label) values ('closing', 'Closing'), ('closed', 'Closed');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${partner}');
 		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${client}', 'client');
-		insert into deal_phase_change (deal_id, happened_at, phase) values ('${deal}', '2020-03-01', 'closing');
 		insert into commission (deal_id, gross) values ('${deal}', 1000);
 		insert into commission_payment (id, deal_id, amount) values ('${payment}', '${deal}', 1000);
 		insert into invoice_mailbox (address) values ('${sender}');
@@ -96,7 +95,7 @@ test("only the mail job for a provisioned mailbox partner can capture invoice fa
 	assert.equal((await save(mail, path, {}, "GET"))[0], 403);
 });
 
-test("capture converges by reference and the nightly list gives only captured evidence", async () => {
+test("capture converges by reference and the nightly list gives only captured evidence", async (t) => {
 	const evidence = request();
 	const freshKey = { ...evidence, idempotency_key: randomUUID() };
 	const [first, second] = await Promise.all([
@@ -176,6 +175,15 @@ test("capture converges by reference and the nightly list gives only captured ev
 		email_date: "2020-04-01",
 		target: { deal_id: deal, payment_id: payment, for_user: "blair" },
 	};
+	await t.test("a deal without phase history has no target", async () => {
+		assert.deepEqual(await list(), [
+			200,
+			{ invoices: [pending, { ...ready, target: null }] },
+		]);
+	});
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal_phase_change (deal_id, happened_at, phase) values ('${deal}', '2020-03-01', 'closing');
+		commit;`);
 	assert.deepEqual(await list(), [200, { invoices: [pending, ready] }]);
 	assert.deepEqual(await list(), [200, { invoices: [pending, ready] }]);
 

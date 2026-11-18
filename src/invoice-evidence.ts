@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { sql } from "kysely";
 import { isoMillis, Refusal, refuse } from "./answer.ts";
-import { isCalendarDate } from "./calendar-date.ts";
 import { nextTransaction } from "./next-connection.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { clearable, fit, isInstant, isText, isUuid } from "./request-shape.ts";
@@ -9,12 +8,7 @@ import { clearable, fit, isInstant, isText, isUuid } from "./request-shape.ts";
 const invoiceText = (value: unknown): value is string =>
 	isText(value) && !value.includes("\0");
 
-const invoiceInstant = (value: unknown): value is string =>
-	isInstant(value) &&
-	isCalendarDate(value.slice(0, 10)) &&
-	!value.startsWith("0000-") &&
-	/(Z|[+-](0\d|1[0-5]):[0-5]\d)$/.test(value);
-
+// PostgreSQL rejects NUL and dates JS parses (Feb 31, year 0000, +23:00), yielding a 503.
 const captureRequest = {
 	idempotency_key: isUuid,
 	evidence_ref: invoiceText,
@@ -22,7 +16,7 @@ const captureRequest = {
 	deal_name: invoiceText,
 	client_name: clearable(invoiceText),
 	property_address: clearable(invoiceText),
-	occurred_at: invoiceInstant,
+	occurred_at: isInstant,
 };
 
 export const invoiceEvidence = new Hono<NextSaveEnv>()
