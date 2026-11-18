@@ -85,6 +85,7 @@ A next step, a deal to file the email to, a possible new deal, or a deal's progr
 - [ ] Opens to the email and the deal, client or lead it would change.
 - [ ] Accept saves the suggestion, and lets the partner edit a step's words and date first. Dismiss drops it for good. Neither has Undo. Only the partner's click decides, never the assistant.
 - [ ] Leaves when accepted or dismissed. One card per email conversation.
+- [ ] When a pending reply draft and pending suggestions share a conversation, the draft leads one card and the partner can decide each suggestion inside it. Snooze and settle apply to that card. Mail priorities opens the same card. When the draft is approved, sent, failed or declined, any remaining suggestions lead the card. An approved or failed draft carries its delivery status on that card, including “Didn't send” and Retry when eligible. A sent reply appears in Done (coordinator, 2026-11-18).
 
 ### Step that may be done
 
