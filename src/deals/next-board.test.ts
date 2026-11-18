@@ -243,22 +243,18 @@ test("each deal answers its latest change as the one a save says it saw", async 
 
 const allBoards: Scope = { workspace: "all", account: null };
 
-test("open cards keep the city that was shown and use it in doctor titles", async () => {
+test("open cards keep the recorded city, including cities without a named market", async () => {
 	const deals = await nextTransaction(connectionString, "read", (tx) =>
 		readNextBoardDeals(tx, allBoards),
 	);
 	assert.deepEqual(
 		deals
 			.filter((deal) => [id(30), id(31), id(37)].includes(deal.id))
-			.map((deal) => [deal.id, deal.market, deal.short_name]),
+			.map((deal) => [deal.id, deal.market]),
 		[
-			[id(31), "Example Bay", "Dr. Example's Example Bay Deal"],
-			[id(30), null, "Example clinic lease"],
-			[
-				id(37),
-				"Unmapped Example City",
-				"Dr. Example's Unmapped Example City Deal",
-			],
+			[id(31), "Example Bay"],
+			[id(30), null],
+			[id(37), "Unmapped Example City"],
 		],
 	);
 });
@@ -310,10 +306,7 @@ test("market and phase edits supersede the imported display values", async () =>
 				values (${id(40)}, '2025-04-01T12:00:00Z', 'touring')`.execute(tx);
 
 			const deals = await readNextBoardDeals(tx, allBoards);
-			assert.equal(
-				deals.find((d) => d.id === id(31))?.short_name,
-				"Example startup office",
-			);
+			assert.equal(deals.find((d) => d.id === id(31))?.market, null);
 			assert.equal(deals.find((d) => d.id === id(40))?.phase, "touring");
 			assert.deepEqual(await readNextBoardDeals(tx, allBoards, "lost"), []);
 			throw rollback;

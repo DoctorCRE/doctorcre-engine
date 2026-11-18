@@ -2,7 +2,6 @@ import { type Expression, sql, type Transaction } from "kysely";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { Scope } from "./board.ts";
-import { shortName } from "./shared.ts";
 
 const ENDED_PHASES = ["closed", "invoiced", "dead"];
 type BoardList = "open" | "closed" | "lost";
@@ -185,6 +184,5 @@ export async function readNextBoardDeals(
 	return deals.map(({ board_phase, ...deal }) => ({
 		...deal,
 		phase: board_phase,
-		short_name: list === "open" ? shortName(deal) : deal.name,
 	}));
 }

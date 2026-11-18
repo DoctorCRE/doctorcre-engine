@@ -256,3 +256,5 @@
 128\. **The board keeps recorded city and outcome facts (2026-11-18).** The owner copy preserves the old card's city for display and the historical phase, win or loss and stated close date so the history lists work without a fabricated market or a fabricated phase event. An explicit market edit or a later phase move takes precedence over its respective copied facts (#593).
 
 129\. **The old prospect filter and paused outcome have no cards to move (2026-11-18).** The rehearsal copy has zero prospect clients and zero deals with the `paused` outcome; parked deals keep their existing parking controls and filter (#593).
+
+130\. **The Deals board uses the deal's full name (2026-11-18).** Market remains visible and searchable in the deal workspace. The short name appears on Home's overdue deal cards through the separate Home agenda read (#593).
