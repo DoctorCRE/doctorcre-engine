@@ -147,12 +147,14 @@ async function newPage(deal: string) {
 			.filter((s) => s.title === null)
 			.map((s) => [s.description, s.owner, s.due_on, s.status]),
 		parties: page.participants.map((p) => [p.role, p.name]),
-		timeline: byId(page.activities).map((a) => [
-			a.id,
-			a.occurred_at,
-			a.actor,
-			a.summary,
-		]),
+		timeline: byId([
+			...page.activities,
+			...page.thread.map((n) => ({
+				...n,
+				occurred_at: n.created_at,
+				summary: n.text,
+			})),
+		]).map((a) => [a.id, a.occurred_at, a.actor, a.summary]),
 		emails: page.email_threads.map((e) => [e.subject, e.latest_message_at]),
 	};
 }
@@ -273,7 +275,8 @@ for (const schema of [undefined, "next"]) {
 	test(`signed-in detail uses ${schema ?? "the old schema"}`, async () => {
 		const response = await get(`/deals/${id(30)}`, schema);
 		assert.equal(response.status, 200);
-		assert.partialDeepStrictEqual(await response.json(), {
+		const detail = await response.json();
+		assert.partialDeepStrictEqual(detail, {
 			schema_version: "deal-timeline.v1",
 			deal_id: id(30),
 			next_step: "Example send the survey",
@@ -291,12 +294,19 @@ for (const schema of [undefined, "next"]) {
 			...(schema
 				? {
 						critical_dates: [{ due_on: "2030-02-01" }],
-						activities: [{ summary: "Example note about parking" }],
+						activities: [{ id: id(61) }, { id: id(60) }],
 					}
 				: {
 						critical_dates: [],
 					}),
 		});
+		assert.ok(
+			detail &&
+				typeof detail === "object" &&
+				"activities" in detail &&
+				Array.isArray(detail.activities),
+		);
+		assert.equal(detail.activities.length, 2);
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
 	});
 }

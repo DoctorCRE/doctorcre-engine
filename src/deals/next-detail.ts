@@ -15,10 +15,12 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),
 			jsonArrayFrom(
-				activityHistoryOf(db, eb.ref("d.id")).select((eb) => [
-					"a.summary",
-					asText(eb.ref("a.happened_at")).as("occurred_at"),
-				]),
+				activityHistoryOf(db, eb.ref("d.id"))
+					.where("a.kind", "<>", "note")
+					.select((eb) => [
+						"a.summary",
+						asText(eb.ref("a.happened_at")).as("occurred_at"),
+					]),
 			).as("activities"),
 			jsonArrayFrom(
 				activityHistoryOf(db, eb.ref("d.id"))
