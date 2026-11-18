@@ -84,6 +84,37 @@ async function locked(
 	return draft;
 }
 
+async function dismissEarlierDrafts(
+	tx: Transaction<DB>,
+	{
+		activity_id,
+		owner_user_id,
+	}: { activity_id: string; owner_user_id: string },
+) {
+	// Run the update after taking the lock so it sees the previous save's commit.
+	const {
+		rows: [source],
+	} = await sql<{ conversation_id: string }>`
+		select conversation_id, pg_advisory_xact_lock(
+			hashtextextended('reply draft ' || ${owner_user_id}::text || ' ' || conversation_id, 0))
+		from email where activity_id = ${activity_id} and conversation_id is not null
+	`.execute(tx);
+	if (!source) return;
+	await tx
+		.updateTable("reply_draft")
+		.from("email")
+		.set({
+			status: "dismissed",
+			dismiss_reason: "Replaced by a newer reply draft in this conversation",
+		})
+		.whereRef("reply_draft.email_activity_id", "=", "email.activity_id")
+		.where("email.conversation_id", "=", source.conversation_id)
+		.where("reply_draft.email_activity_id", "!=", activity_id)
+		.where("reply_draft.owner_user_id", "=", owner_user_id)
+		.where("reply_draft.status", "=", "pending")
+		.execute();
+}
+
 export const replySubmissions = new Hono<NextSaveEnv>().post(
 	"/reply-drafts/:id/submission",
 	(c) =>
@@ -173,18 +204,24 @@ export const replyJobs = new Hono<NextSaveEnv>()
    on conflict (email_activity_id, owner_user_id) do nothing returning id, revision`.execute(
 					tx,
 				);
-				const draft =
-					inserted.rows[0] ??
-					(await tx
-						.selectFrom("reply_draft")
-						.select(["id", "revision"])
-						.where("email_activity_id", "=", request.activity_id)
-						.where("owner_user_id", "=", user.id)
-						.executeTakeFirstOrThrow());
+				const [draft] = inserted.rows;
+				if (draft) {
+					await dismissEarlierDrafts(tx, {
+						activity_id: request.activity_id,
+						owner_user_id: user.id,
+					});
+					return { draft_id: draft.id, version: draft.revision };
+				}
+				const existing = await tx
+					.selectFrom("reply_draft")
+					.select(["id", "revision"])
+					.where("email_activity_id", "=", request.activity_id)
+					.where("owner_user_id", "=", user.id)
+					.executeTakeFirstOrThrow();
 				return {
-					draft_id: draft.id,
-					version: draft.revision,
-					...(inserted.rows.length ? {} : { existing: true }),
+					draft_id: existing.id,
+					version: existing.revision,
+					existing: true,
 				};
 			},
 		);
