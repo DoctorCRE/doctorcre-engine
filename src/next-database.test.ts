@@ -2504,6 +2504,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	deal_client_website_attempt: ["failed_attempts", "window_started_at"],
 	calendar_agenda: ["observed_at", "snapshot"],
 	invoice_email: ["deal_id", "payment_id", "status"],
 	suite: ["area_basis", "area_sf", "condition", "floor", "label"],
@@ -2716,6 +2717,8 @@ const DEFAULTED: Record<string, string[]> = {
 	],
 };
 const REMOVABLE = [
+	"deal_client_website_attempt",
+	"deal_client_website_grant",
 	...STORED_AT.filter(
 		(table) =>
 			![

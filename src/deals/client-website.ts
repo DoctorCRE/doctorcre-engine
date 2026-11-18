@@ -10,9 +10,9 @@ import { SaveRefusal } from "../save.ts";
 
 export const CLIENT_WEBSITE_ORIGIN = "https://share.doctorcre.com";
 
-const isWebsiteSlug: Check<string> = (value): value is string =>
+export const isWebsiteSlug: Check<string> = (value): value is string =>
 	typeof value === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(value);
-const isWebsitePassword: Check<string> = (value): value is string =>
+export const isWebsitePassword: Check<string> = (value): value is string =>
 	typeof value === "string" &&
 	value.length > 0 &&
 	[...value].length <= 1024 &&
@@ -35,7 +35,10 @@ const parseSetup = (deal_id: string, body: JsonObject) => {
 const passwordDigest = (password: string) =>
 	createHash("sha256").update(password, "utf8").digest("hex");
 
-const matchesPassword = (password: string, verifier: Expression<string>) =>
+export const matchesPassword = (
+	password: string,
+	verifier: Expression<string>,
+) =>
 	sql<boolean>`${verifier} = public.crypt(${passwordDigest(password)}, ${verifier})`;
 
 async function register(

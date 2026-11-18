@@ -490,6 +490,19 @@ create table deal_client_website (
 );
 create unique index deal_client_website_one_active on deal_client_website (deal_id) where disabled_at is null;
 
+create table deal_client_website_attempt (
+	slug text primary key references deal_client_website,
+	failed_attempts integer not null check (failed_attempts between 1 and 5),
+	window_started_at timestamptz not null
+);
+
+create table deal_client_website_grant (
+	digest text primary key check (digest ~ '^[0-9a-f]{64}$'),
+	slug text not null references deal_client_website,
+	user_id uuid not null references app_user,
+	expires_at timestamptz not null
+);
+
 create table deal_property (
 	deal_id uuid not null references deal,
 	property_id uuid not null references property,
@@ -3419,3 +3432,7 @@ grant update (observed_at, snapshot) on calendar_agenda to engine;
 
 revoke select on deal_client_website from engine_reader;
 grant select (slug, deal_id, client_party_id, disabled_at) on deal_client_website to engine_reader;
+
+revoke select on deal_client_website_attempt, deal_client_website_grant from engine_reader;
+grant update (failed_attempts, window_started_at) on deal_client_website_attempt to engine;
+grant delete on deal_client_website_attempt, deal_client_website_grant to engine;

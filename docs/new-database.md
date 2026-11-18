@@ -24,6 +24,8 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
 - **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, with who parked it and when, and whether it needs attention.
 - **`deal_client_website`**: a deal's client website registration, with the client it was set up for, its unique website name, its password verifier and when it was disabled, if applicable. A deal can have one active registration.
+- **`deal_client_website_attempt`**: the active failed-password window for one website.
+- **`deal_client_website_grant`**: a short-lived link grant, with the signed-in user who requested it and the website it opens.
 - **`deal_kind`**: the list of kinds of transaction, such as lease and purchase. Like roles, a label can be renamed.
 - **`deal_reason`**: the list of reasons a client takes space, such as a start-up or a relocation. Like roles, a label can be renamed.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
@@ -1290,13 +1292,19 @@ The detail sends `checklist` as `deal-checklist.v1`. The template lives in engin
 
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
-Both partners' detail reads return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The detail database role can read the fields used to form the link. The signed-in handoff to the website is tracked in #730.
+Both partners' detail reads return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The detail database role can read the fields used to form the link.
 
 ### Set up a client website
 
 `POST /api/engine/deals/{deal_id}/client-website` is a signed-in partner save. It takes `idempotency_key`, `slug` (1 to 63 lowercase letters, digits and hyphens, starting with a letter or digit), and `password` (1 to 1,024 characters). It returns `200 { ok, deal_id, client_portal_url, created }`. A repeat with the same name and password and a fresh key returns `created: false`. A transport retry with the same key returns the original answer and `replayed: true`. The receipt fingerprint uses the deal and name, omitting the password as the old save did.
 
 The save refuses a name reserved by another registration (`409 portal_slug_taken`), a different password for the same registration (`409 portal_password_differs`), or a new name for a deal with an active registration (`409 portal_deal_already_registered`). A missing deal or current client returns `404 portal_deal_not_found`. The database stores a bcrypt cost-12 verifier of the hex SHA-256 password digest, compatible with the copied registration. Setup registers the website's address and credential. Publishing the website remains a separate operation.
+
+### Open a client website
+
+`POST /api/engine/deals/{deal_id}/client-website/open` uses the signed-in session and CSRF token and returns `200 { url }` for the new tab. Either partner can request it. A deal with no active registration for its current client returns 404. The URL carries a one-use grant that expires after 60 seconds. The engine stores only its digest, tied to the website and signed-in user.
+
+The share Worker calls the engine's private `ClientWebsiteAccess` service binding. `redeemGrant(slug, grant)` rechecks the current registration and consumes the matching grant atomically. The share Worker starts its own secure site session and redirects to the address with the grant removed. `verifyPassword(slug, password)` checks the same registration's stored verifier. The fifth failed password locks that website's password check for the rest of its 15-minute window. A correct password clears the failure count. The share Worker still owns the session cookie and the asset-decryption key.
 
 Each `email_follow_ups` entry is one pending email suggestion targeting the deal, from either partner's mailbox. It gives `proposal_id`, `kind`, `deal_id`, `evidence`, the proposed step fields (`what`, `owner`, `due_on`) or phase fields (`from_phase`, `to_phase`), and an `email` with `activity_id`, `sender`, `sender_name`, `subject`, `happened_at` and `summary`. The `owner` field gives the app user slug. A filing suggestion drops from this list once the email is on the deal. Use the proposal ID to accept or dismiss through door 21. Accepting a filing suggestion files the email.
 

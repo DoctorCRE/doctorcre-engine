@@ -320,3 +320,5 @@
 161\. **Phase effective dates have their own kind, and undated person memberships start with the first deal (2026-11-18).** The deal page saves phase effective dates as `phase_effective_date`. The membership copy uses the first deal's Chicago opening date when a person client belongs to a national account and has no reviewed membership date (#734).
 
 163\. **A partner sets up a deal's client website once (2026-11-18).** Either signed-in partner can register the website name and password. Repeating setup with the same name and password keeps the original registration. The credential is a bcrypt verifier of the hex SHA-256 password digest, compatible with copied registrations. The save receipt identifies the deal and name and carries no password fingerprint (#729).
+
+167\. **A signed-in partner opens a client website with a one-use link (2026-11-18).** The engine issues a short-lived site grant and checks the client's password through a private Worker binding. The share Worker exchanges the grant for its existing cookie and serves the site's encrypted files using its own key. Its switch selects one verified website and ships empty (#730).

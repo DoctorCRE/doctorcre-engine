@@ -37,6 +37,7 @@ After the switch:
 ```text
 partner ─▶ app ─▶ engine /api/engine ─▶ next schema
 Studio programs, assistant ─▶ engine /jobs ─▶ next schema
+client website ─▶ share Worker ─▶ engine ClientWebsiteAccess ─▶ next schema
 ```
 
 Sign-in still runs through the old API after the switch until it moves to the engine, which no slice plans yet (decision 6).
@@ -62,6 +63,8 @@ Each switch moves where requests go. None of them builds anything, and none move
 | `engine_lead_stage`                    | Same file                                                                             | The nightly lead stages send invoice captures from an evidence file to the engine, skip the old invoice closes, and apply invoice closes through the engine.                                                                                                                                                                                                                                                                                                                                                                              |
 | `engine_calls`                         | Studio, `~/.config/carr-capture/config.json`, or the file `CARR_CAPTURE_CONFIG` names | Call capture sends calls, suggestions and automatic changes to doors 16, 18, 19 and 21.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `ENGINE_ASSISTANT="true"`              | Old API Worker, `mcp-server/wrangler.toml` (checked in as `"false"`)                  | Four assistant saves go to `/jobs` as the `agent` job: a call, meeting or note on a deal, a deal's next step, completing a deal's or party's step, and a deal note. The old API still finds the deal or party in the old tables first. Every other assistant save and every assistant read stays on the old API. Once carr-system #3246 merges (open today), it also sends invoice captures to the engine, skips the old invoice closes in `advance-leads` and refuses the old invoice undo, so it then needs `engine_lead_stage` on too. |
+
+The share Worker's `CLIENT_WEBSITE_ENGINE_SLUG` is empty until cutover. After the app can request signed-in grants, set it to the verified website name to use the engine for that site's password checks and grant exchanges. The share Worker still serves and decrypts the site's files.
 
 Still on the old API with no switch yet:
 
