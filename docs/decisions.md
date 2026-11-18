@@ -303,4 +303,6 @@
 
 153\. **Deal people search filters by kind before the result limit (2026-11-18).** The deal page can ask for people or companies by name prefix. The Market agent picker asks for people so that companies cannot use up its 25 results. The search includes do-not-contact records because choosing a participant does not contact them (#712).
 
-154\. **Home marks follow the suggestion card or reply draft (2026-11-18).** A partner marks the visible suggestion group's leading proposal or their own active reply draft. The mark uses source and mark history to refuse stale saves. Sent drafts appear once in Done by their recorded send time, alongside any active draft in the same conversation (#721).
+154\. **Home reads draft recipients before approval (2026-11-18).** A pending reply uses the original sender and previews the other partner's work email when it can identify one address. Approval freezes both addresses. Saving the draft changes its text and revision. Declining it requires a reason, as in the old inbox (#713).
+
+155\. **Home marks follow the suggestion card or reply draft (2026-11-18).** A partner marks the visible suggestion group's leading proposal or their own active reply draft. The mark uses source and mark history to refuse stale saves. A new proposal in the same group keeps its snooze. Sent drafts appear once in Done by their recorded send time, alongside any active draft in the same conversation (#721).
