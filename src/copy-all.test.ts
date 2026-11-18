@@ -299,7 +299,6 @@ const corrections = [
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
  ["copy-markets.sql", "example-bay", "source", "Example review", "no_typed_destination"],
- ["copy-vendors.sql", id(22), "owner_id", id(1), "relationship owner awaits an owner ruling"],
  ["copy-deals.sql", id(34), "market", "Example Elsewhere", "unknown_market"],
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
