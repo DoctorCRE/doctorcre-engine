@@ -22,7 +22,7 @@ export const dealParticipants = new Hono<NextSaveEnv>()
 			c,
 			"add_deal_party",
 			(body) => parseParticipant(c.req.param("deal"), body),
-			async (tx, { deal_id, party_id, role }) =>
+			(tx, { deal_id, party_id, role }) =>
 				tx
 					.insertInto("deal_party")
 					.values({ deal_id, party_id, role, changed_at: sql<string>`now()` })

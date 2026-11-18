@@ -1443,17 +1443,17 @@ If a cadence save returns `409 open_step_exists`, skip that reminder for this ru
 
 These doors use the signed-in partner entrance. They share the save and retry rules above.
 
-| POST path                                               | JSON body                                          | Success                                        |
-| ------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------- |
-| `/api/engine/deals/{deal_id}/parties`                   | `{ idempotency_key, party_id, role }`              | `201 { deal_id, party_id, role }`              |
-| `/api/engine/deals/{deal_id}/parties/remove`            | `{ idempotency_key, party_id, role }`              | `200 { deal_id, party_id, role }`              |
-| `/api/engine/deals/{deal_id}/critical-dates`            | `{ idempotency_key, kind, due_on, source, note? }` | `201 { critical_date_id, status: "proposed" }` |
-| `/api/engine/critical-dates/{critical_date_id}/confirm` | `{ idempotency_key }`                              | `200 { critical_date_id, status: "open" }`     |
-| `/api/engine/critical-dates/{critical_date_id}/resolve` | `{ idempotency_key, resolution, reason }`          | `200 { critical_date_id, status }`             |
+| POST path                                               | JSON body                                          | Success                                    |
+| ------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------ |
+| `/api/engine/deals/{deal_id}/parties`                   | `{ idempotency_key, party_id, role }`              | `201 { deal_id, party_id, role }`          |
+| `/api/engine/deals/{deal_id}/parties/remove`            | `{ idempotency_key, party_id, role }`              | `200 { deal_id, party_id, role }`          |
+| `/api/engine/deals/{deal_id}/critical-dates`            | `{ idempotency_key, kind, due_on, source, note? }` | `201 { critical_date_id, status: "open" }` |
+| `/api/engine/critical-dates/{critical_date_id}/confirm` | `{ idempotency_key }`                              | `200 { critical_date_id, status: "open" }` |
+| `/api/engine/critical-dates/{critical_date_id}/resolve` | `{ idempotency_key, resolution, reason }`          | `200 { critical_date_id, status }`         |
 
 - All IDs are UUIDs. `party_id` names the existing person or company and `role` is its role slug on this deal. Each save adds or removes exactly that link. A missing link on removal returns `404 not_found`. The database records the removal in deal history. Deal ownership changes use door 16.
-- A manually added date starts proposed. `kind` is `loi_expiry`, `option_notice`, `rent_start`, `lease_end`, `due_diligence` or `other`. `due_on` is a valid `YYYY-MM-DD` date, `source` is nonblank text, and `note` is optional nonblank text or null.
-- Confirm opens a proposed date. Resolve takes `done`, `dropped` or `passed` as `resolution` and returns it as `status`. A proposal can be dropped, and an open date can take any of the three resolutions. `reason` must be nonblank. The database stamps the decisions and keeps the confirmation when resolving.
+- A date the partner adds opens in the same save, with the database recording that partner and the confirmation time. `kind` is `loi_expiry`, `option_notice`, `rent_start`, `lease_end`, `due_diligence` or `other`. `due_on` is a valid `YYYY-MM-DD` date, `source` is nonblank text, and `note` is optional nonblank text or null.
+- Confirm opens a date proposed by automation. Resolve takes `done`, `dropped` or `passed` as `resolution` and returns it as `status`. A proposal can be dropped, and an open date can take any of the three resolutions. `reason` must be nonblank. The database stamps the decisions and keeps the confirmation when resolving.
 - A missing date on confirm or resolve returns `404 not_found`. A fresh key targeting the date's current status returns `409 version_conflict { status }`. Other disallowed transitions return `422 database_refused_the_statement { rule: "critical_date_status_moves" }`.
 
 ### What can start when this merges

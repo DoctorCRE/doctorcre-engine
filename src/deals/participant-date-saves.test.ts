@@ -54,7 +54,18 @@ async function addDate() {
 		...dateFields,
 	});
 	assert.equal(status, 201, JSON.stringify(answer));
-	return `critical-dates/${answer.critical_date_id}`;
+	assert.equal(answer.status, "open");
+	assert.ok(typeof answer.critical_date_id === "string");
+	return answer.critical_date_id;
+}
+
+async function proposeDate() {
+	const id = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'agent', true);
+		insert into critical_date (id, deal_id, kind, due_on, source)
+		values ('${id}', '${deal}', 'loi_expiry', '2027-02-10', 'Offer round');
+		commit;`);
+	return id;
 }
 
 test("add a person and a company in their roles once", async () => {
@@ -115,12 +126,15 @@ test("refuse removal of someone absent from the deal", async () => {
 	assert.deepEqual([status, body.error], [404, "not_found"]);
 });
 
-test("add a sourced critical date once as a proposal", async () => {
+test("add a sourced critical date once and stamp the adding partner's confirmation", async () => {
 	const fields = { ...dateFields, source: "Second sample offer" };
-	const answer = await saveAndRetry(datePath, { ...key(), ...fields }, 201);
-	assert.equal(answer.status, "proposed");
+	const answer = await saveAndRetry(datePath, { ...key(), ...fields }, 201, {
+		user: "blair",
+	});
+	assert.equal(answer.status, "open");
 	const rows = await db.query(
-		`select id, kind, due_on::text, source, note, status, confirmed_at, changed_by_user_id
+		`select id, kind, due_on::text, source, note, status, confirmed_by_user_id,
+			confirmed_at = created_at as confirmed_on_add, changed_by_user_id
 			from critical_date where deal_id = $1 and source = $2`,
 		[deal, fields.source],
 	);
@@ -128,15 +142,16 @@ test("add a sourced critical date once as a proposal", async () => {
 		{
 			id: answer.critical_date_id,
 			...fields,
-			status: "proposed",
-			confirmed_at: null,
-			changed_by_user_id: alex,
+			status: "open",
+			confirmed_by_user_id: blair,
+			confirmed_on_add: true,
+			changed_by_user_id: blair,
 		},
 	]);
 });
 
 test("confirm a proposal once and record the partner", async () => {
-	const path = `${await addDate()}/confirm`;
+	const path = `critical-dates/${await proposeDate()}/confirm`;
 	const answer = await saveAndRetry(path, key(), 200);
 	assert.equal(answer.status, "open");
 	const result = await db.query(
@@ -160,12 +175,7 @@ for (const [initial, resolution] of [
 	["open", "passed"],
 ] as const) {
 	test(`resolve a ${initial} date as ${resolution} once and keep any confirmation`, async () => {
-		const path = await addDate();
-		const id = path.split("/")[1];
-		if (initial === "open") {
-			const [status] = await save(partner, `${path}/confirm`, key());
-			assert.equal(status, 200);
-		}
+		const id = initial === "open" ? await addDate() : await proposeDate();
 		const read = async () =>
 			(
 				await db.query(
@@ -177,7 +187,7 @@ for (const [initial, resolution] of [
 		const before = await read();
 		const reason = "Sample reason";
 		const answer = await saveAndRetry(
-			`${path}/resolve`,
+			`critical-dates/${id}/resolve`,
 			{ ...key(), resolution, reason },
 			200,
 			{ user: "blair" },
@@ -195,18 +205,17 @@ for (const [initial, resolution] of [
 }
 
 test("refuse a job confirming a critical date even when it works for a partner", async () => {
-	const path = await addDate();
 	const [status, body] = await save(
 		{ job: "agent", for_user: "alex" },
-		`${path}/confirm`,
+		`critical-dates/${await proposeDate()}/confirm`,
 		key(),
 	);
 	assert.deepEqual([status, body.error], [404, "not_found"]);
 });
 
 test("refuse a blank reason for dropping a proposed date", async () => {
-	const path = await addDate();
-	const [status, body] = await save(partner, `${path}/resolve`, {
+	const path = `critical-dates/${await proposeDate()}/resolve`;
+	const [status, body] = await save(partner, path, {
 		...key(),
 		resolution: "dropped",
 		reason: " \t ",

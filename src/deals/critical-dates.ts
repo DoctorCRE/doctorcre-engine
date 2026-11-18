@@ -63,12 +63,13 @@ export const criticalDates = new Hono<NextSaveEnv>()
 			c,
 			"add_critical_date",
 			(body) => parseDate(c.req.param("deal"), body),
-			async (tx, { idempotency_key: _key, ...date }) =>
+			(tx, { idempotency_key: _key, ...date }) =>
 				tx
 					.insertInto("critical_date")
 					.values({ ...date, changed_at: sql<string>`now()` })
-					.returning(["id as critical_date_id", "status"])
-					.executeTakeFirstOrThrow(),
+					.returning("id")
+					.executeTakeFirstOrThrow()
+					.then(({ id }) => decideDate(tx, id, { status: "open" })),
 			201,
 		),
 	)

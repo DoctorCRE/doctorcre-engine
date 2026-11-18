@@ -112,7 +112,7 @@ Questions 1 to 4 are roadmap asks 9, 10, 11 and 7. Questions 5 to 8 are not on i
 
 Seen on the live Deals screen on 2026-11-18 (screen), or read in the app's Deals code (code).
 
-- Every save on Deals goes to the old database (code). App #953 is a partial move to the new one, switched off until the switch. Deal creation, participant changes, closing and critical dates still have no new-database save.
+- Every save on Deals goes to the old database (code). App #953 is a partial move to the new one, switched off until the switch. The engine has saves for participant changes and critical dates (`docs/new-database.md` § "Deals participants and critical dates"). App #953 still needs to call them. Deal creation and closing still have no new-database save.
 - A deal page shows four open next actions, and an "Overdue action" different from the card's next step. The client shows twice, and website setup sits in the opening facts (screen).
 - The deal page says "Watch state not confirmed" when nothing failed (screen).
 - App #950, in review, shows one next step and hides the watch line until the watch is read. It shows the client once and moves website setup below the snapshot. Its board and deal page still choose the next step from different inputs, so they can differ (code).
