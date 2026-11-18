@@ -312,3 +312,5 @@
 157\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).
 
 158\. **Commission receipt progress comes from payments (2026-11-18).** Commission received is complete when the deal has at least one payment and all its payments have receipt dates. A copied expected amount stays as a forecast and has no effect on the checklist (#732).
+
+159\. **Phase effective dates have their own kind, and undated person memberships start with the first deal (2026-11-18).** The deal page saves phase effective dates as `phase_effective_date`. The membership copy uses the first deal's Chicago opening date when a person client belongs to a national account and has no reviewed membership date (#734).

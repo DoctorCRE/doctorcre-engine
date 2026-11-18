@@ -231,6 +231,24 @@ test("a person client's national account copies with its reviewed date", async (
 	});
 });
 
+test("a person client's account starts on their first deal's Chicago opening date when no reviewed date exists", async () => {
+	await transaction(
+		`${brand(20)}
+ insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
+ insert into public.deal_phase (slug, label) values ('research', 'Example Research');
+ insert into public.deal (client_id, name, deal_type, phase, created_by, updated_by, created_at)
+ select '${id(50)}', 'Example Deal', 'lease', 'research', '${id(1)}', '${id(1)}', opened
+ from unnest(array['2025-12-02 12:00Z', '2025-07-02 04:00Z']::timestamptz[]) opened;`,
+		async () => {
+			assert.deepEqual(await run(), []);
+			assert.deepEqual(
+				await rows("select started_on::text from client_brand"),
+				[{ started_on: "2025-07-01" }],
+			);
+		},
+	);
+});
+
 test("reruns preserve accepted rows, stamps and change history even if reviewed input changes", async () => {
 	await transaction(brand(11), async () => {
 		await run(date(11));

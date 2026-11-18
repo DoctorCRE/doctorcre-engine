@@ -78,6 +78,12 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 					.select((eb) => [
 						"cd.id",
 						"cd.kind",
+						eb
+							.case()
+							.when("cd.kind", "=", "phase_effective_date")
+							.then("Phase effective date")
+							.end()
+							.as("label"),
 						asText(eb.ref("cd.due_on")).as("due_on"),
 						"cd.note",
 						"cd.source",
