@@ -152,8 +152,9 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 	);
 	const steps = rows.map((step) => {
 		const review = reviews.get(step.id);
-		if (!review || step.settled || step.snoozed_until) return stepCard(step);
-		return completionReviewCard(review, step.step_version, step.mark_version);
+		const card = stepCard(step);
+		if (!review || step.settled || step.snoozed_until) return card;
+		return completionReviewCard(review, card);
 	});
 	const updates = await readHomeUpdates(db, userId, LIMIT + 1);
 	const items = [

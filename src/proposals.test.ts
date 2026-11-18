@@ -59,6 +59,18 @@ const decide = (p: unknown, args: object) =>
 		...args,
 	});
 
+async function endAcceptedStep(user: string, step: unknown) {
+	const { rows } = await db.query(
+		"select max(id) as version from change where table_name = 'next_step' and record = jsonb_build_object('id', $1::uuid)",
+		[step],
+	);
+	return save({ user }, `next-steps/${step}/end`, {
+		idempotency_key: randomUUID(),
+		resolution: "done",
+		base_version: Number(rows[0].version),
+	});
+}
+
 const emailLead = (address: string) => ({
 	idempotency_key: randomUUID(),
 	address,
@@ -356,15 +368,7 @@ test("accepting a step from a recorded call keeps the proposal's original eviden
 		).rows,
 		[{ call_activity_id: call, call_evidence_quote: evidence }],
 	);
-	assert.equal(
-		(
-			await save({ user: "alex" }, `next-steps/${p.proposal_id}/end`, {
-				idempotency_key: randomUUID(),
-				resolution: "done",
-			})
-		)[0],
-		200,
-	);
+	assert.equal((await endAcceptedStep("alex", p.proposal_id))[0], 200);
 });
 
 test("an accepted next step keeps its proposed owner or defaults to the partner who accepts it", async () => {
@@ -399,14 +403,7 @@ test("an accepted next step keeps its proposed owner or defaults to the partner 
 			[proposal.proposal_id],
 		);
 		assert.deepEqual(rows, [{ owner_party_id: owner ?? PARTNER }]);
-		const [ended] = await save(
-			{ user: "casey" },
-			`next-steps/${proposal.proposal_id}/end`,
-			{
-				idempotency_key: randomUUID(),
-				resolution: "done",
-			},
-		);
+		const [ended] = await endAcceptedStep("casey", proposal.proposal_id);
 		assert.equal(ended, 200);
 	}
 });
