@@ -18,6 +18,8 @@ const meetingDeal = randomUUID();
 const followUp = randomUUID();
 const held = randomUUID();
 const completed = randomUUID();
+const completedWithoutTime = randomUUID();
+const completedEightDaysAgo = randomUUID();
 const canceled = randomUUID();
 const otherStep = randomUUID();
 const settled = randomUUID();
@@ -40,12 +42,14 @@ before(async () => {
 			('${meeting}', 'meeting', '2026-11-17 17:00+00', '${contact}', 'Discussed renewal.');
 		insert into activity_about (activity_id, deal_id) values ('${call}', '${deal}');
 		insert into next_step (id, deal_id, owner_party_id, what, item_title, source_ref, call_activity_id, call_evidence_quote)
-			values ('${followUp}', '${deal}', '${owner}', 'Send the suite plan', 'Send suite plan',
+			values ('${followUp}', '${deal}', '${owner}', 'Call Dr. Example about the second-floor suite', 'Call about suite',
 				'call-example', '${call}', 'Please send the floor plan.');
 		insert into next_step (id, party_id, owner_party_id, what, due_on, hold_until, resolution, done_at, resolution_reason) values
 			('${ordinary}', '${client}', '${owner}', 'Send the lease', '2026-11-19', null, null, null, null),
 			('${held}', '${contact}', '${owner}', 'Call about the suite', '2026-11-19', '2999-04-01', null, null, null),
 			('${completed}', '${client}', '${owner}', 'Check the budget', null, null, 'done', now() - interval '1 hour', null),
+			('${completedWithoutTime}', '${client}', '${owner}', 'Review the floor plan', null, null, 'done', null, null),
+			('${completedEightDaysAgo}', '${client}', '${owner}', 'Confirm the suite number', null, null, 'done', now() - interval '8 days', null),
 			('${canceled}', '${client}', '${owner}', 'Tour the suite', null, null, 'cancelled', null, 'Client paused'),
 			('${otherStep}', '${client}', '${other}', 'Arrange a tour', null, null, null, null, null);
 		insert into next_step (id, deal_id, owner_party_id, what)
@@ -102,6 +106,13 @@ test("switch off leaves the inbox on CARR and the read refuses a caller-supplied
 test("Home reads a partner's steps, holds, completion and marks", async () => {
 	const items = await inbox();
 	assert.deepEqual(
+		{
+			completionWithoutTime: items.has(completedWithoutTime),
+			completionEightDaysAgo: items.has(completedEightDaysAgo),
+		},
+		{ completionWithoutTime: false, completionEightDaysAgo: false },
+	);
+	assert.deepEqual(
 		new Set(items.keys()),
 		new Set([ordinary, followUp, held, completed, settled, proposal]),
 	);
@@ -146,8 +157,12 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 });
 
 test("a call follow-up appears once with its call, deal and evidence", async () => {
-	assert.partialDeepStrictEqual((await inbox()).get(followUp), {
+	const item = (await inbox()).get(followUp);
+	assert.ok(item);
+	assert.equal(Object.hasOwn(item, "source_ref"), false);
+	assert.partialDeepStrictEqual(item, {
 		item_id: `capture_post_call_action:${followUp}`,
+		title: "Call Dr. Example about the second-floor suite",
 		kind_label: "Call follow-up",
 		section: "inbox",
 		open_url: `/calls?session=${call}`,

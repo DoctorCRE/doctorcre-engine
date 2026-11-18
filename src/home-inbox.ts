@@ -9,6 +9,7 @@ const LIMIT = 1000;
 type Step = {
 	id: string;
 	title: string;
+	status: string | null;
 	deal_id: string | null;
 	party_id: string | null;
 	context_label: string;
@@ -25,14 +26,13 @@ type Step = {
 	call_contact: string | null;
 	call_summary: string | null;
 	call_quote: string | null;
-	source_ref: string | null;
 	source_id: string | null;
 	source_kind: string | null;
 };
 
 function stepRows(userId: string) {
 	return sql<Step>`
-		select s.id, coalesce(s.item_title, s.what) as title, s.deal_id, s.party_id,
+		select s.id, s.what as title, s.status, s.deal_id, s.party_id,
 			coalesce(d.name, p.name, property.name, property.address) as context_label,
 			s.due_on, coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
 			case when s.hold_until > (now() at time zone 'America/Chicago')::date
@@ -42,7 +42,7 @@ function stepRows(userId: string) {
 			step_change.id::float8 as step_version, mark_change.id as mark_version,
 			c.id as call_id, c.happened_at as call_at, contact.name as call_contact,
 			c.summary as call_summary, s.call_evidence_quote as call_quote,
-			s.source_ref, accepted.activity_id as source_id, accepted.activity_kind as source_kind
+			accepted.activity_id as source_id, accepted.activity_kind as source_kind
 		from next_step s
 		left join deal d on d.id = s.deal_id
 		left join party p on p.id = s.party_id
@@ -75,7 +75,7 @@ const optionalIso = (timestamp: string | null) =>
 
 function stepCard(step: Step) {
 	const completed_at = optionalIso(step.completed_at);
-	const done = completed_at !== null;
+	const done = step.status === "done";
 	const auto_settled = done && !step.settled;
 	const snoozed_until = done ? null : optionalIso(step.snoozed_until);
 	const hold_until = done ? null : optionalIso(step.hold_until);
@@ -118,7 +118,6 @@ function stepCard(step: Step) {
 		merged_source_ids: [step.id],
 		waiting_version: 0,
 		waiting_on: null,
-		source_ref: step.source_ref,
 		source_activity:
 			step.call_id && step.call_at
 				? {
