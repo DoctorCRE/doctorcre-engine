@@ -11,6 +11,7 @@ const other = id(2);
 const deal = id(3);
 const call = id(4);
 const meeting = id(5);
+const unstampedCall = id(6);
 
 before(async () => {
 	await setup();
@@ -51,6 +52,8 @@ before(async () => {
 		update reply_draft set status = 'sent', sent_at = now(), sent_item_id = 'example-sent' where id = '${id(24)}';
 		update reply_draft set status = 'failed', failure_reason = 'aborted_before_dispatch' where id = '${id(26)}';
 		select set_config('engine.user_id', '', true);
+		insert into activity (id, kind, happened_at) values ('${unstampedCall}', 'call', '2026-01-02T12:00Z');
+		insert into activity_about (activity_id, deal_id) values ('${unstampedCall}', '${deal}');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id, created_at)
 			values ('${id(30)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}', '2026-01-02'),
 				('${id(31)}', 'next_step', '${id(11)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the plan', '${partner}', '2026-01-03'),
@@ -58,7 +61,10 @@ before(async () => {
 				('${id(33)}', 'next_step', '${call}', 'call', 'Ask about the lease.', 'old_system', '${deal}', 'Check the lease', null, '2026-01-02'),
 				('${id(34)}', 'next_step', '${call}', 'call', 'Send a budget.', 'old_system', '${deal}', 'Send a budget', '${partner}', '2026-01-03'),
 				('${id(35)}', 'next_step', '${id(12)}', 'email', 'Please send details.', 'old_system', '${deal}', 'Send details', '${partner}', '2026-01-04'),
-				('${id(36)}', 'next_step', '${meeting}', 'meeting', 'Please check the date.', 'old_system', '${deal}', 'Check the date', '${partner}', '2026-01-04');
+				('${id(36)}', 'next_step', '${meeting}', 'meeting', 'Please check the date.', 'old_system', '${deal}', 'Check the date', '${partner}', '2026-01-04'),
+				('${id(37)}', 'next_step', '${unstampedCall}', 'call', 'Please check the floor plan.', 'old_system', '${deal}', 'Check the floor plan', null, '2026-01-04');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, created_at)
+			values ('${id(38)}', 'file_to_deal', '${id(11)}', 'email', 'Please file this.', 'old_system', '${deal}', '2026-01-02');
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${partner}', true);
 		update proposal set status = 'dismissed' where id = '${id(35)}';
 		update proposal set status = 'accepted' where id = '${id(36)}';
@@ -128,7 +134,7 @@ test("Home groups pending suggestions from each email conversation or call and k
 	);
 	assert.deepEqual(
 		suggestions.flatMap((card) => card.merged_source_ids).sort(),
-		[30, 31, 32, 33, 34, 41].map(id),
+		[30, 31, 32, 33, 34, 38, 41].map(id),
 	);
 	assert.partialDeepStrictEqual(
 		suggestions.find((card) => card.proposal_id === id(31)),
@@ -136,7 +142,7 @@ test("Home groups pending suggestions from each email conversation or call and k
 			source_type: "email_proposal",
 			title: "Next step from Pat Example on Fri, Jan 2: Check the plan",
 			open_url: `/deals?deal=${deal}`,
-			merged_source_ids: [id(31), id(30)],
+			merged_source_ids: [id(31), id(30), id(38)],
 			source_activity: { kind: "email", id: id(11) },
 		},
 	);
@@ -162,6 +168,6 @@ test("Home groups pending suggestions from each email conversation or call and k
 		(await inbox("other"))
 			.filter((card) => Array.isArray(card.suggestions))
 			.map((card) => card.merged_source_ids),
-		[[id(31)]],
+		[[id(38)]],
 	);
 });

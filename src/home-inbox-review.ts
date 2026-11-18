@@ -103,12 +103,14 @@ function suggestionRows(userId: string, limit: number) {
 			left join candidate on candidate.id = p.candidate_id
 			left join phase on phase.slug = p.to_phase
 			where p.status = 'pending' and p.kind <> 'next_step_done'
-				and (
-					p.owner_party_id = ${userId}::uuid or p.changed_for_user_id = ${userId}::uuid
-					or exists (select from email_mailbox m where m.activity_id = e.activity_id and m.user_id = ${userId}::uuid)
-					or (p.activity_kind in ('call', 'meeting')
-						and ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id))
-				)
+				and case
+					when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
+					when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
+					else p.changed_for_user_id = ${userId}::uuid
+						or exists (select from email_mailbox m where m.activity_id = e.activity_id and m.user_id = ${userId}::uuid)
+						or (p.activity_kind in ('call', 'meeting')
+							and ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id))
+				end
 		), grouped as (
 			select pending.*,
 				row_number() over same_source as position,
