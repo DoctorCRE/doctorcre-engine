@@ -313,4 +313,4 @@
 
 158\. **Commission receipt progress comes from payments (2026-11-18).** Commission received is complete when the deal has at least one payment and all its payments have receipt dates. A copied expected amount stays as a forecast and has no effect on the checklist (#732).
 
-159\. **A pending draft leads one card for its conversation (2026-11-18).** Home and Mail priorities use that card for the draft and all visible suggestions. Once the draft is approved, sent, failed or declined, the suggestions lead, with any sending or failure state carried on their card (#745).
+160\. **A pending draft leads one card for its conversation (2026-11-18).** Home and Mail priorities use that card for the draft and all visible suggestions. Once the draft is approved, sent, failed or declined, the suggestions lead, with any sending or failure state carried on their card (#745).
