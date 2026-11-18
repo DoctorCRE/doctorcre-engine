@@ -23,7 +23,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Home has no "set waiting person" control.
 - **Open (question 2).** Recommended: Home has no Hide; every card is finished, snoozed to a date, or dropped with a reason, and the selection bar's Hide button (today "Settle selected") goes too. Otherwise Hide from inbox sets a card aside unfinished, and it shows under "Hidden from inbox" with Show in inbox.
 
-When app routing moves to the new database, Home saves snooze, settlement and Undo through the engine’s Home marks door for steps, call follow-ups and updates. Mark done on a step still completes the step itself. See “24. Home marks saved” in `docs/new-database.md`.
+When app routing moves to the new database, Home uses door 24 for snooze, settlement and undo of those marks, door 18 for Mark done and reopening the step, and door 21 for completion review decisions (see `docs/new-database.md`).
 
 ## Inbox sections
 
@@ -92,6 +92,7 @@ A note, deal update or call suggests an overdue step already happened.
 - [ ] Says "Did this happen? Send the lease draft (Example Dental, Springfield)" with the words that suggest it.
 - [ ] Opens to the deal and the note or call it came from.
 - [ ] Yes, it's done finishes the step. Not yet keeps it open. Neither has Undo.
+- [ ] Snooze puts the step on the snoozed shelf until the chosen time, then the review returns if it is still pending.
 - [ ] A step closed automatically shows under "Closed automatically" for seven days, with Undo.
 - [ ] Leaves when answered.
 
