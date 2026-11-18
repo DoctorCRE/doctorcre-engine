@@ -16,7 +16,7 @@ import {
 export const WORKSPACES = ["team", "national_account", "all"] as const;
 export type Workspace = (typeof WORKSPACES)[number];
 
-type BoardInputs = {
+export type BoardInputs = {
 	partner: string;
 	workspace?: Workspace | null;
 	account_client_id?: string | null;

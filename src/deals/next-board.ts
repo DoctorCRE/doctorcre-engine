@@ -1,7 +1,7 @@
 import { type Expression, sql, type Transaction } from "kysely";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
-import type { Scope } from "./board.ts";
+import type { BoardInputs, Scope } from "./board.ts";
 
 const CLOSED_PHASES = ["closed", "invoiced"];
 const ENDED_PHASES = [...CLOSED_PHASES, "dead"];
@@ -128,28 +128,73 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 				asText(eb.ref("d.parked_at")).as("parked_at"),
 				"parker.slug as parked_by",
 			];
-		});
+		})
+		.select([
+			sql<
+				string | null
+			>`(select invoiced_on::text from deal_invoiced where deal_id = d.id)`.as(
+				"invoiced_on",
+			),
+			sql<
+				string | null
+			>`(select due_on::text from deal_next_date where deal_id = d.id)`.as(
+				"next_date",
+			),
+			sql<string | null>`case when imported.deal_id is not null and not exists (
+				select from change ch where ch.table_name = 'deal' and ch.record = jsonb_build_object('id', d.id)
+				and ch.action = 'update' and ch.new_value ? 'market_id'
+			) then imported.city else (select name from market where id = d.market_id) end`.as(
+				"market",
+			),
+			sql<number>`(select coalesce(max(ch.id), 0)::float8 from change ch
+				where ch.table_name = 'deal' and ch.record = jsonb_build_object('id', d.id))`.as(
+				"seen",
+			),
+			sql<
+				string | null
+			>`(select (max(a.happened_at) at time zone 'America/Chicago')::date::text
+				from activity_about ab join activity a on a.id = ab.activity_id
+				where ab.deal_id = d.id and (a.kind in ('email', 'meeting') or a.kind = 'call' and a.reached))`.as(
+				"last_touch",
+			),
+			sql<string | null>`(select what from next_step
+				where deal_id = d.id and status = 'open' and item_title is null
+				order by created_at desc, id desc limit 1)`.as("next_step"),
+			sql`(select coalesce(jsonb_agg(jsonb_build_object('id', s.id, 'title', s.item_title,
+				'status', s.status, 'due_on', s.due_on, 'bullets', s.item_bullets, 'source_ref', s.source_ref)
+				order by s.created_at, s.id), '[]') from next_step s
+				where s.deal_id = d.id and s.item_title is not null and s.status not in ('cancelled', 'expired'))`.as(
+				"items",
+			),
+			sql`(select coalesce(jsonb_object_agg(phase, started_on), '{}') from (
+				select phase, min((happened_at at time zone 'America/Chicago')::date) as started_on
+				from deal_phase_change where deal_id = d.id group by phase
+			) dates)`.as("phase_started_on"),
+			sql<
+				string | null
+			>`(select p.name from deal_party dp join party p on p.id = dp.party_id
+				where dp.deal_id = d.id and dp.role = 'market_agent'
+				order by dp.created_at desc, dp.party_id limit 1)`.as("market_agent"),
+			sql`(select coalesce(jsonb_agg(to_jsonb(vendor) - 'name' order by vendor.role, vendor.name, vendor.party_id), '[]') from (
+				select dp.role, dp.party_id, p.name,
+					case when p.kind = 'company' then jsonb_build_object('name', p.name)
+						else (select jsonb_build_object('name', company.name) from party_company pc
+							join party company on company.id = pc.company_id where pc.person_id = p.id
+							and pc.ended_on is null order by pc.started_on desc nulls last, pc.id limit 1) end as company,
+					case when p.kind = 'person' then jsonb_build_object('name', p.name,
+						'email', (select address from party_email where party_id = p.id and is_primary),
+						'phone', (select concat(number, ' x' || extension) from party_phone where party_id = p.id and is_primary)) end as contact
+				from deal_party dp join role r on r.slug = dp.role join party p on p.id = dp.party_id
+				where dp.deal_id = d.id and r.category_of = 'vendor'
+			) vendor)`.as("vendors"),
+		]);
 
-export async function readNextBoardDeals(
+function nextBoardQuery(
 	db: Transaction<DB>,
 	{ workspace, account }: Scope,
 	list: BoardList = "open",
 ) {
 	const rows = selectNextDeals(db)
-		.leftJoin("market as m", "m.id", "d.market_id")
-		.leftJoin("deal_invoiced as invoice", "invoice.deal_id", "d.id")
-		.select((eb) => [
-			asText(eb.ref("invoice.invoiced_on")).as("invoiced_on"),
-			sql<string | null>`case when imported.deal_id is not null and not exists (
-					select from change ch where ch.table_name = 'deal' and ch.record = jsonb_build_object('id', d.id)
-					and ch.action = 'update' and ch.new_value ? 'market_id'
-				) then imported.city else m.name end`.as("market"),
-			// The seen_change_id a save sends back; a float8 reads as a number, a bigint as text.
-			sql<number>`(select coalesce(max(ch.id), 0)::float8 from change ch
-				where ch.table_name = 'deal' and ch.record = jsonb_build_object('id', d.id))`.as(
-				"seen",
-			),
-		])
 		.where("c.party_id", "is not", null)
 		.$if(workspace !== "all", (q) =>
 			q.where(
@@ -171,7 +216,8 @@ export async function readNextBoardDeals(
 				.where((eb) =>
 					eb.or([eb("phase", "is", null), eb("phase", "not in", ENDED_PHASES)]),
 				)
-				.orderBy("attention", "desc"),
+				.orderBy("attention", "desc")
+				.orderBy("next_date", (o) => o.asc().nullsLast()),
 		)
 		.$if(list === "closed", (q) =>
 			q
@@ -189,6 +235,47 @@ export async function readNextBoardDeals(
 		.$if(list !== "open", (q) =>
 			q.orderBy("closed_on", (o) => o.desc().nullsLast()),
 		)
-		.orderBy("name")
-		.execute();
+		.orderBy("name");
+}
+
+export const readNextBoardDeals = (
+	db: Transaction<DB>,
+	scope: Scope,
+	list?: BoardList,
+) => nextBoardQuery(db, scope, list).execute();
+
+export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
+	const scope = {
+		workspace: input.workspace ?? "all",
+		account: input.account_client_id || null,
+	};
+	const deals = await readNextBoardDeals(db, scope);
+	const closed_deals = await readNextBoardDeals(db, scope, "closed");
+	const lost_deals = await readNextBoardDeals(db, scope, "lost");
+	const { rows: accounts } = await sql`
+		select na.party_id as account_client_id, p.name as account_name, u.slug as account_owner,
+			count(b.id) filter (where b.operating_state = 'active')::int as open_deals,
+			count(b.id) filter (where b.operating_state = 'parked')::int as parked_deals,
+			count(b.id) filter (where b.operating_state = 'active' and b.attention)::int as attention_deals,
+			count(b.id) filter (where b.operating_state = 'active' and b.next_date::date < days.today)::int as overdue_deals,
+			count(b.id) filter (where b.operating_state = 'active' and (b.last_touch is null or b.last_touch::date < days.today - 14))::int as stale_deals
+		from national_account na join party p on p.id = na.party_id
+		cross join (select (now() at time zone 'America/Chicago')::date as today) days
+		left join national_account_owner o on o.account_id = na.party_id and daterange(o.started_on, o.ended_on) @> days.today
+		left join app_user u on u.id = o.owner_id
+		left join (${nextBoardQuery(db, { workspace: "all", account: null })}) b on b.account_client_id = na.party_id
+		group by na.party_id, p.name, u.slug order by p.name`.execute(db);
+	return {
+		schema_version: "local-deals-board.v2",
+		actor: input.partner,
+		deals: deals.map((deal) => ({
+			...deal,
+			item_schema_version: "deal-items.v1",
+			next_step_required: deal.next_step === null || deal.next_date === null,
+		})),
+		closed_deals,
+		lost_deals,
+		accounts,
+		open_session: null,
+	};
 }

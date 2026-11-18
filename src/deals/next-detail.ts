@@ -4,30 +4,65 @@ import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { selectNextDeals } from "./next-board.ts";
 
+const HISTORY_CAP = 500;
+
 export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 	const record = await selectNextDeals(db)
 		.select((eb) => [
-			eb
-				.selectFrom("deal_next_date as plan")
-				.select((plan) => asText(plan.ref("plan.due_on")).as("due_on"))
-				.whereRef("plan.deal_id", "=", "d.id")
-				.as("next_date"),
+			sql.lit("deal-timeline.v1").as("schema_version"),
+			sql.lit("deal-items.v1").as("item_schema_version"),
+			"d.id as deal_id",
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),
 			jsonArrayFrom(activitiesOf(db, eb.ref("d.id"))).as("activities"),
-			jsonArrayFrom(emailsOf(db, eb.ref("d.id"))).as("email_threads"),
+			sql<
+				{
+					conversation_id: string | null;
+					subject: string;
+					latest_message_at: string;
+				}[]
+			>`(
+				select coalesce(jsonb_agg(to_jsonb(t) - 'email_id' order by latest_message_at desc, email_id desc), '[]')
+				from (
+					select distinct on (coalesce('thread:' || e.conversation_id, 'email:' || a.id))
+						e.conversation_id, e.subject, a.happened_at as latest_message_at, a.id as email_id
+					from activity_about ab join email e on e.activity_id = ab.activity_id
+					join activity a on a.id = ab.activity_id where ab.deal_id = d.id
+					order by coalesce('thread:' || e.conversation_id, 'email:' || a.id),
+						a.happened_at desc, a.id desc
+				) t
+			)`.as("email_threads"),
+			sql`(select coalesce(json_agg(cd order by due_on, id), '[]') from (
+				select id, kind, due_on, note, source, case when status = 'done' then 'cleared' else status end as status
+				from critical_date where deal_id = d.id
+			) cd)`.as("critical_dates"),
+			sql`(select coalesce(json_agg(doc order by prepared_at desc, id), '[]') from (
+				select id, name, kind, note, created_at as prepared_at
+				from document where deal_id = d.id order by created_at desc, id limit 20
+			) doc)`.as("documents"),
+			sql`(select row_to_json(lease) from (
+				select id, version, executed_on, commencement_on, expiration_on, 'current' as status
+				from current_lease where deal_id = d.id
+			) lease)`.as("lease"),
+			sql<
+				unknown[]
+			>`(select coalesce(json_agg(e order by recorded_at desc, id desc), '[]') from (
+				select c.id::text, c.changed_at as recorded_at, coalesce(u.slug, c.changed_by_job) as actor,
+					c.source_event ->> 'verb' as verb, c.source_event ->> 'field' as field,
+					c.source_event -> 'old_value' as old_value, c.source_event -> 'new_value' as new_value
+				from imported_change c left join app_user u on u.id = c.changed_by_user_id
+				where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
+				union all
+				select c.id::text, c.changed_at, coalesce(u.slug, c.changed_by_job), c.action,
+					null, c.old_value, c.new_value
+				from change c left join app_user u on u.id = c.changed_by_user_id
+				where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id) and c.action = 'update'
+				order by recorded_at desc, id desc limit ${HISTORY_CAP}
+			) e)`.as("events"),
 		])
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
-	if (!record) return { error: "not_found" as const };
-	// As today, the deal's next step is its latest open step that is not a checklist item.
-	const current = record.next_actions.findLast(
-		(step) => step.status === "open" && step.title === null,
-	);
-	return {
-		...record,
-		next_step: current?.description ?? null,
-	};
+	return record ?? { error: "not_found" as const };
 }
 
 const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
@@ -44,6 +79,7 @@ const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			asText(eb.ref("s.due_on")).as("due_on"),
 			"s.status",
 			asText(eb.ref("s.hold_until")).as("hold_until"),
+			asText(eb.ref("s.changed_at")).as("updated_at"),
 		])
 		.where("s.deal_id", "=", deal)
 		.orderBy("s.created_at")
@@ -78,14 +114,5 @@ const activitiesOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			eb.fn.coalesce("by.slug", "a.changed_by_job").as("actor"),
 			"a.kind",
 			"a.summary",
-		]);
-
-// The new section keeps no conversation id, so each email is its own thread.
-const emailsOf = (db: Transaction<DB>, deal: Expression<string>) =>
-	aboutDeal(db, deal)
-		.innerJoin("email as e", "e.activity_id", "a.id")
-		.select((eb) => [
-			sql<null>`null`.as("conversation_id"),
-			"e.subject",
-			asText(eb.ref("a.happened_at")).as("latest_message_at"),
-		]);
+		])
+		.limit(HISTORY_CAP);

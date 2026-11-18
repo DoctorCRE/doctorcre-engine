@@ -1,30 +1,44 @@
 import { Hono } from "hono";
-import { answer, checkFields, Refusal, refuse } from "../answer.ts";
+import {
+	answer,
+	answerNextRead,
+	checkFields,
+	Refusal,
+	refuse,
+} from "../answer.ts";
 import { failureKind } from "../failure.ts";
 import { type DatabaseEnv, readSnapshot } from "../reader.ts";
+import { isUuid } from "../uuid.ts";
 import { readBoard, WORKSPACES } from "./board.ts";
 import { readCaptureQueue } from "./capture-queue.ts";
 import { decodeCursor, readChanges } from "./changes.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
+import { readNextBoard } from "./next-board.ts";
+import { readNextDealDetail } from "./next-detail.ts";
 import { lookupRefusal } from "./resolve.ts";
 
-export const deals = new Hono<DatabaseEnv>();
+export const deals = new Hono<
+	DatabaseEnv & {
+		Bindings: { DEALS_READ_SCHEMA?: string };
+	}
+>();
 
-deals.get("/deals", async (c) => {
+deals.get("/deals", async (c): Promise<Response> => {
 	const params = new URL(c.req.url).searchParams;
 	const refused = checkFields(params, ["workspace", "account_client_id"], {
 		vocabularies: { workspace: WORKSPACES },
 	});
 	if (refused) return refuse(c, refused);
 	const given = params.get("workspace");
-	return answer(c, "deal-room-board", (db) =>
-		readBoard(db, {
-			partner: c.get("partner").slug,
-			workspace: WORKSPACES.find((workspace) => workspace === given) ?? null,
-			account_client_id: params.get("account_client_id"),
-		}),
-	);
+	const input = {
+		partner: c.get("partner").slug,
+		workspace: WORKSPACES.find((workspace) => workspace === given) ?? "all",
+		account_client_id: params.get("account_client_id"),
+	};
+	return c.env.DEALS_READ_SCHEMA === "next"
+		? answerNextRead(c, "deal-room-board", (db) => readNextBoard(db, input))
+		: answer(c, "deal-room-board", (db) => readBoard(db, input));
 });
 
 // The deal page's argument is its path, never a query field.
@@ -43,13 +57,20 @@ deals.get("/deals/", (c) =>
 	),
 );
 
-deals.get("/deals/:deal{.+}", async (c) => {
-	const refused = checkFields(dealArguments(c.req.url, c.req.param("deal")), [
-		"deal",
-	]);
+deals.get("/deals/:deal{.+}", async (c): Promise<Response> => {
+	const deal = c.req.param("deal");
+	const refused = checkFields(dealArguments(c.req.url, deal), ["deal"]);
 	if (refused) return refuse(c, refused);
+	if (c.env.DEALS_READ_SCHEMA === "next") {
+		return answerNextRead(c, "get-deal-room", async (db) => {
+			const detail = isUuid(deal) ? await readNextDealDetail(db, deal) : null;
+			return !detail || "error" in detail
+				? new Refusal(404, "not_found")
+				: detail;
+		});
+	}
 	return answer(c, "get-deal-room", async (db) => {
-		const detail = await readDealDetail(db, c.req.param("deal"));
+		const detail = await readDealDetail(db, deal);
 		if (!("error" in detail)) return detail;
 		return detail.error === "not_found"
 			? new Refusal(404, "not_found")

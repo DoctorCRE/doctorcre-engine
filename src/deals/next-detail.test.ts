@@ -3,6 +3,7 @@ import { after, before, test } from "node:test";
 import { nextTransaction } from "../next-connection.ts";
 import { readSnapshot } from "../reader.ts";
 import { copyTest, readSchema } from "../test-copy.ts";
+import worker from "../worker.ts";
 import { readDealDetail } from "./detail.ts";
 import { readNextDealDetail } from "./next-detail.ts";
 
@@ -41,7 +42,8 @@ insert into public.deal_participant (deal_id, actor_id, party_id, role, from_at,
  ('${id(30)}', null, '${id(13)}', 'listing_side', '2025-01-01', '${id(1)}');
 insert into public.event (id, subject_type, subject_id, field, old_value, new_value, occurred_at, actor_id, verb, cause) values
  ('${id(40)}', 'deal', '${id(30)}', 'phase', null, '{"phase":"touring"}', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
- ('${id(41)}', 'deal', '${id(31)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated');
+ ('${id(41)}', 'deal', '${id(31)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated'),
+ ('${id(42)}', 'deal', '${id(30)}', 'attention', '{"attention":false}', '{"attention":true}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, due_on, status, created_at, created_by, updated_by) values
  ('${id(50)}', 'deal', '${id(30)}', '${id(1)}', 'Example send the survey', '2030-01-15', 'open', '2025-01-04', ${by}),
  ('${id(51)}', 'deal', '${id(30)}', '${id(2)}', 'Example book the tour', '2025-01-20', 'done', '2025-01-05', ${by});
@@ -65,6 +67,7 @@ const COPIES: [file: string, input?: string][] = [
 	["copy-activity.sql"],
 	["copy-emails.sql"],
 	["copy-deal-next-steps.sql"],
+	["copy-change-history.sql"],
 ];
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -79,6 +82,13 @@ before(async () => {
 		await db.query(await readSchema(file));
 		await db.query("commit");
 	}
+	await db.query(`begin;
+		select set_config('engine.user_id', '${id(1)}', true);
+		insert into next_step (id, deal_id, what, item_title, source_ref)
+		values ('${id(80)}', '${id(30)}', 'Example call about the sign', 'Confirm signage', 'example-call');
+		insert into critical_date (id, deal_id, kind, due_on, source)
+		values ('${id(81)}', '${id(30)}', 'loi_expiry', '2030-02-01', 'Example offer');
+		commit;`);
 });
 after(cleanup);
 
@@ -123,12 +133,9 @@ async function newPage(deal: string) {
 		header: [page.name, page.type, page.phase, page.owner, page.attention],
 		client: page.client_name,
 		next_step: [page.next_step, page.next_date],
-		steps: page.next_actions.map((s) => [
-			s.description,
-			s.owner,
-			s.due_on,
-			s.status,
-		]),
+		steps: page.next_actions
+			.filter((s) => s.title === null)
+			.map((s) => [s.description, s.owner, s.due_on, s.status]),
 		parties: page.participants.map((p) => [p.role, p.name]),
 		timeline: byId(page.activities).map((a) => [
 			a.id,
@@ -178,3 +185,72 @@ test("an unknown deal is not found", async () => {
 	);
 	assert.deepEqual(page, { error: "not_found" });
 });
+
+const get = (path: string, schema?: string) =>
+	worker.request(
+		`https://app.example.test/api/engine${path}`,
+		{ headers: { Cookie: "__Host-dealroom_session=example" } },
+		{
+			DEALS_READ_SCHEMA: schema,
+			DATABASE: { connectionString },
+			CARR: {
+				fetch: async () =>
+					Response.json({
+						actor: { slug: "partner_one", display: "Example Partner" },
+						csrf_token: "example",
+					}),
+			},
+		},
+	);
+
+for (const schema of [undefined, "next"]) {
+	test(`signed-in board uses ${schema ?? "the old schema"}`, async () => {
+		const response = await get("/deals?workspace=all", schema);
+		assert.equal(response.status, 200);
+		const board = await response.json();
+		assert.partialDeepStrictEqual(board, {
+			schema_version: "local-deals-board.v2",
+			actor: "partner_one",
+			deals: [
+				{
+					id: id(30),
+					next_step: "Example send the survey",
+					next_date: "2030-01-15",
+					items: schema ? [{ title: "Confirm signage", status: "open" }] : [],
+				},
+			],
+			closed_deals: [],
+			lost_deals: [],
+			accounts: [],
+		});
+		assert.ok(
+			board &&
+				typeof board === "object" &&
+				"deals" in board &&
+				Array.isArray(board.deals),
+		);
+		assert.equal(board.deals.length, schema ? 1 : 2);
+	});
+
+	test(`signed-in detail uses ${schema ?? "the old schema"}`, async () => {
+		const response = await get(`/deals/${id(30)}`, schema);
+		assert.equal(response.status, 200);
+		assert.partialDeepStrictEqual(await response.json(), {
+			schema_version: "deal-timeline.v1",
+			deal_id: id(30),
+			next_step: "Example send the survey",
+			email_threads: [{ conversation_id: "example-thread" }],
+			events: [{ field: "attention" }],
+			...(schema
+				? {
+						critical_dates: [{ due_on: "2030-02-01" }],
+						activities: [{ summary: "Example note about parking" }],
+					}
+				: {
+						critical_dates: [],
+						thread: [{ text: "Example note about parking" }],
+					}),
+		});
+		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
+	});
+}
