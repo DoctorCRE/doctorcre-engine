@@ -85,6 +85,86 @@ const act = (step: string, door: string, args: object) =>
 		...args,
 	});
 
+test("the assistant completes its sponsoring owner's ordinary step on a named deal", async () => {
+	const next_step_id = await newStep({ hold_until: "2035-01-01" });
+	const {
+		rows: [step],
+	} = await db.query("select deal_id from next_step where id = $1", [
+		next_step_id,
+	]);
+	const args = { idempotency_key: randomUUID(), deal_id: step.deal_id };
+	const agent = { job: "agent", for_user: "alex" };
+	const created = await Promise.all([
+		create(
+			{ user: "blair" },
+			{ deal_id: step.deal_id, what: "Ask the lender" },
+		),
+		create(
+			{ user: "alex" },
+			{ deal_id: step.deal_id, what: "Gather example files", item: ITEM },
+		),
+	]);
+	assert.deepEqual(
+		created.map(([status]) => status),
+		[201, 201],
+	);
+	const complete = (key: string) =>
+		save(agent, "next-steps/complete", { ...args, idempotency_key: key });
+	const answer = { next_step_id, status: "done" };
+	assert.deepEqual(await complete(args.idempotency_key), [200, answer]);
+	assert.deepEqual(await complete(args.idempotency_key), [
+		200,
+		{ ...answer, replayed: true },
+	]);
+	const done = await stepNow(next_step_id);
+	assert.deepEqual(
+		[done.done, done.by_job, done.for_user],
+		[true, "agent", "alex"],
+	);
+	const [status, body] = await complete(randomUUID());
+	assert.deepEqual([status, body.error], [409, "no_open_step"]);
+	const { rows } = await db.query(
+		"select status, count(*)::int from next_step where deal_id = $1 group by status order by status",
+		[step.deal_id],
+	);
+	assert.deepEqual(rows, [
+		{ status: "done", count: 1 },
+		{ status: "open", count: 2 },
+	]);
+});
+
+test("a completion naming both a deal and a party returns 400", async () => {
+	const [status, answer] = await save({ user: "alex" }, "next-steps/complete", {
+		idempotency_key: randomUUID(),
+		deal_id: DEAL,
+		party_id: CLIENT,
+	});
+	assert.deepEqual([status, answer.error], [400, "invalid_field_value"]);
+});
+
+test("a partner can complete their step on a party and a missing party is refused", async () => {
+	const caller = { user: "blair" };
+	const party_id = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${party_id}', 'company', 'Example Office'); commit;`);
+	const [status, step] = await create(caller, {
+		party_id,
+		what: "Call the example office",
+	});
+	assert.equal(status, 201);
+	const complete = (id: string) =>
+		save(caller, "next-steps/complete", {
+			idempotency_key: randomUUID(),
+			party_id: id,
+		});
+	assert.deepEqual(await complete(party_id), [
+		200,
+		{ next_step_id: step.next_step_id, status: "done" },
+	]);
+	const [missing, refusal] = await complete(randomUUID());
+	assert.deepEqual([missing, refusal.error], [404, "not_found"]);
+});
+
 test("a partner's checklist item lands once on its deal, stamped with the partner", async () => {
 	const args = {
 		idempotency_key: randomUUID(),
