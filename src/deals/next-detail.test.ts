@@ -76,6 +76,7 @@ const COPIES: [file: string, input?: string][] = [
  insert into copy_how_found values ('client', 'Example referral', 'referral');`,
 	],
 	["copy-deals.sql"],
+	["copy-client-websites.sql"],
 	["copy-activity.sql"],
 	["copy-emails.sql"],
 	["copy-deal-next-steps.sql"],
@@ -87,6 +88,9 @@ const { db, setup, cleanup, connectionString } = copyTest();
 before(async () => {
 	await setup();
 	await db.query(`begin; ${OLD} commit;`);
+	await db.query(`insert into ops.client_portal (slug, deal_id, client_id, password_hash, disabled_at)
+		values ('example-startup', '${id(30)}', '${id(20)}', '$2a$12$${"A".repeat(53)}', null),
+		       ('example-earlier-lease', '${id(32)}', '${id(20)}', '$2a$12$${"B".repeat(53)}', now())`);
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
 		insert into market (id, name) values ('${id(91)}', 'Example West'), ('${id(92)}', 'Example East');
@@ -100,10 +104,12 @@ before(async () => {
 	}
 	await db.query(`begin;
 		select set_config('engine.user_id', '${id(1)}', true);
+		insert into deal_client_website (slug, deal_id, client_party_id, password_hash)
+		values ('example-former-client', '${id(32)}', '${id(14)}', '$2a$12$${"C".repeat(53)}');
 		insert into next_step (id, deal_id, what, item_title, source_ref, due_on)
 		values ('${id(80)}', '${id(30)}', 'Example call about the sign', 'Confirm signage', 'example-call', '2030-01-16');
 		insert into critical_date (id, deal_id, kind, due_on, source)
-		values ('${id(81)}', '${id(30)}', 'loi_expiry', '2030-02-01', 'Example offer');
+		values ('${id(81)}', '${id(30)}', 'phase_effective_date', '2030-02-01', 'Example phase record');
 		insert into property (id, address) values ('${id(83)}', '100 Example Road');
 		insert into deal_property (deal_id, property_id) values ('${id(30)}', '${id(83)}');
 		insert into document (id, name, r2_key, r2_bucket, content_type) values
@@ -118,7 +124,7 @@ before(async () => {
 			('${id(34)}', 'Example unpaid deal', 'lease', null, null, '${id(2)}');
 		insert into critical_date (id, deal_id, kind, due_on, source)
 		values ('${id(82)}', '${id(33)}', 'option_notice', '2000-01-03', 'Example option'),
-			('${id(86)}', '${id(33)}', 'due_diligence', '2999-01-01', 'Example contract');
+			('${id(86)}', '${id(33)}', 'phase_effective_date', '2999-01-01', 'Example phase record');
 		update critical_date set status = 'open' where id in ('${id(82)}', '${id(86)}');
 		insert into commission_tier (user_id, from_deal, partner_user_id, closing_share)
 		values ('${id(2)}', 1, '${id(1)}', 0.8);
@@ -237,7 +243,7 @@ test("an unknown deal is not found", async () => {
 	assert.deepEqual(page, { error: "not_found" });
 });
 
-const get = (path: string, schema?: string) =>
+const get = (path: string, schema?: string, partner = "partner_one") =>
 	worker.request(
 		`https://app.example.test/api/engine${path}`,
 		{ headers: { Cookie: "__Host-dealroom_session=example" } },
@@ -247,7 +253,7 @@ const get = (path: string, schema?: string) =>
 			CARR: {
 				fetch: async () =>
 					Response.json({
-						actor: { slug: "partner_one", display: "Example Partner" },
+						actor: { slug: partner, display: "Example Partner" },
 						csrf_token: "example",
 					}),
 			},
@@ -337,7 +343,13 @@ for (const schema of [undefined, "next"]) {
 			],
 			...(schema
 				? {
-						critical_dates: [{ due_on: "2030-02-01" }],
+						critical_dates: [
+							{
+								kind: "phase_effective_date",
+								label: "Phase effective date",
+								due_on: "2030-02-01",
+							},
+						],
 						activities: [{ id: id(61) }, { id: id(60) }],
 					}
 				: {
@@ -354,6 +366,73 @@ for (const schema of [undefined, "next"]) {
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
 	});
 }
+
+test("both partners see a deal's active client website", async () => {
+	for (const partner of ["partner_one", "partner_two"]) {
+		const response = await get(`/deals/${id(30)}`, "next", partner);
+		assert.equal(response.status, 200);
+		const body = await response.text();
+		assert.partialDeepStrictEqual(JSON.parse(body), {
+			client_portal_url: "https://share.doctorcre.com/example-startup",
+		});
+		assert.doesNotMatch(body, /password_hash|\$2a\$12\$/);
+	}
+});
+
+test("a missing, disabled or client-mismatched website stays off the deal page", async () => {
+	for (const deal of [id(31), id(32)]) {
+		const response = await get(`/deals/${deal}`, "next");
+		assert.equal(response.status, 200);
+		assert.partialDeepStrictEqual(await response.json(), {
+			client_portal_url: null,
+		});
+	}
+});
+
+test("website copy reports each unavailable registration and skips it", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+			delete from outside_id where source = 'old_system' and deal_id = '${id(31)}';
+			update ops.client_portal set disabled_at = now() where deal_id = '${id(30)}';
+			insert into ops.client_portal (slug, deal_id, client_id, password_hash, disabled_at, updated_at)
+			select slug, deal_id::uuid, client_id::uuid, '$2a$12$${"A".repeat(53)}',
+				case when disabled then now() end, case when has_update then now() end
+			from (values
+				('example-conflict', '${id(30)}', '${id(20)}', false, true),
+				('example-no-time', '${id(30)}', '${id(20)}', true, false),
+				('example-no-deal', '${id(31)}', '${id(21)}', false, true),
+				('example-wrong-client', '${id(32)}', '${id(22)}', false, true)
+			) example(slug, deal_id, client_id, disabled, has_update)`);
+		const results = await db.query(
+			await readSchema("copy-client-websites.sql"),
+		);
+		assert.ok(Array.isArray(results));
+		assert.deepEqual(
+			results.at(-1)?.rows,
+			[
+				[id(30), "registration_conflict"],
+				[id(30), "registration_update_time_missing"],
+				[id(31), "deal_not_copied"],
+				[id(32), "client_link_not_copied"],
+			].map(([old_id, reason]) => ({
+				old_id,
+				field: "client_website",
+				value: null,
+				reason,
+			})),
+		);
+		assert.deepEqual(
+			(await db.query(`select slug from deal_client_website order by slug`))
+				.rows,
+			["example-earlier-lease", "example-former-client", "example-startup"].map(
+				(slug) => ({ slug }),
+			),
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
 
 test("signed-in detail shows saved items and checklist progress from lease facts", async () => {
 	const response = await get(`/deals/${id(30)}`, "next");
@@ -416,13 +495,27 @@ test("the renewal checklist tracks confirmed deadlines and a saved receipt", asy
 	const response = await get(`/deals/${id(33)}`, "next");
 	assert.equal(response.status, 200);
 	assert.partialDeepStrictEqual(await response.json(), {
+		critical_dates: [
+			{ id: id(82), kind: "option_notice", label: "Option notice" },
+			{
+				id: id(86),
+				kind: "phase_effective_date",
+				label: "Phase effective date",
+			},
+		],
 		checklist: {
 			deal_type: "renewal",
 			phases: [
 				{ id: "research", items: [{ id: "current_lease_abstraction" }] },
 				{
 					id: "legal",
-					items: [{ id: `critical-date:${id(86)}`, status: "upcoming" }],
+					items: [
+						{
+							id: `critical-date:${id(86)}`,
+							status: "upcoming",
+							label: "Phase effective date",
+						},
+					],
 				},
 				{
 					id: "closing",

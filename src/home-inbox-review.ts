@@ -79,6 +79,9 @@ const visibleSuggestion = (userId: string) => sql<boolean>`
 	case
 		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 		when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
+			or (p.proposed_by_job = 'old_system'
+				and a.changed_by_user_id is null and a.changed_for_user_id is null
+				and p.changed_for_user_id = ${userId}::uuid)
 		else p.changed_for_user_id = ${userId}::uuid
 			or (p.status <> 'pending' and exists (
 				select from change where table_name = 'proposal' and action = 'insert'

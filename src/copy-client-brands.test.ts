@@ -12,6 +12,10 @@ const brand = (location: number, org = 10) =>
 	`update public.party set org_id = '${id(org)}' where id = '${id(location)}';`;
 const date = (location: number, start = "2024-03-01") =>
 	`insert into copy_client_brand_date values ('${id(location + 30)}','${start}');`;
+const deals = (location: number) =>
+	`insert into public.deal (client_id, name, deal_type, phase, created_by, updated_by, created_at)
+ select '${id(location + 30)}', 'Example Deal', 'lease', 'research', '${id(1)}', '${id(1)}', opened
+ from unnest(array['2025-12-02 12:00Z', '2025-07-02 04:00Z']::timestamptz[]) opened;`;
 // A run starts clear of every temp table, so it supplies the reviewed dates again.
 const run = async (
 	dates = "",
@@ -45,6 +49,8 @@ before(async () => {
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  insert into public.client_type (slug,label) values ('franchise','Example franchise'), ('national_account','Example account');
  insert into public.client_status (slug,label) values ('roster','Example roster');
+ insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
+ insert into public.deal_phase (slug, label) values ('research', 'Example Research');
  insert into role (slug,label) values ('client','Client');
  insert into how_found (slug,label) values ('referral','Referral');
  insert into public.party (id,kind,name,created_by,updated_by) values
@@ -99,8 +105,8 @@ test("a reviewed first date copies the location's brand with its setter and stor
 	});
 });
 
-test("an absent reviewed date is listed on each run and can be supplied later", async () => {
-	await transaction(brand(11), async () => {
+test("a company location with deals still needs a reviewed date", async () => {
+	await transaction(brand(11) + deals(11), async () => {
 		const expected = [
 			{
 				old_id: id(41),
@@ -230,6 +236,25 @@ test("a person client's national account copies with its reviewed date", async (
 		assert.deepEqual(await rows("select * from party_company"), companies);
 	});
 });
+
+for (const [rule, input, started_on] of [
+	[
+		"their first deal's Chicago opening date when no reviewed date exists",
+		"",
+		"2025-07-01",
+	],
+	["their reviewed date when they also have deals", date(20), "2024-03-01"],
+] as const) {
+	test(`a person client's account starts on ${rule}`, async () => {
+		await transaction(brand(20) + deals(20), async () => {
+			assert.deepEqual(await run(input), []);
+			assert.deepEqual(
+				await rows("select started_on::text from client_brand"),
+				[{ started_on }],
+			);
+		});
+	});
+}
 
 test("reruns preserve accepted rows, stamps and change history even if reviewed input changes", async () => {
 	await transaction(brand(11), async () => {
