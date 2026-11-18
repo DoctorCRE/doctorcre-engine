@@ -14,9 +14,10 @@ const lines = async (sql: string) =>
 	(await rows(sql)).map((r) =>
 		r.map((v) => String(v).replace(/^0{8}-0{4}-4000-8000-0{10}/, "")).join(" "),
 	);
-const run = async (): Promise<pg.QueryResultRow[]> => {
+const run = async (evidence?: string): Promise<pg.QueryResultRow[]> => {
 	await db.query("begin");
 	try {
+		if (evidence) await db.query(evidence);
 		const results = await db.query(copy);
 		assert.ok(Array.isArray(results));
 		await db.query("commit");
@@ -306,4 +307,88 @@ test("matches an email without its Message-ID by sender, sent time and subject, 
 		["5"],
 	);
 	assert.deepEqual((await emailOf())[0], "59 60", "so does a row filed since");
+});
+
+test("copies verified older email evidence with the original subject and links", async (t) => {
+	const senderLabel = "Email from Example: Support: ";
+	const recipientLabel = `Email to ${DOCTOR}: `;
+	const oldMail: Mail[] = [
+		{
+			n: 70,
+			kind: "email_in",
+			time: "23:00",
+			summary: `${senderLabel}Example estimate`,
+			link: deal,
+		},
+		{
+			n: 71,
+			kind: "email_in",
+			time: "23:00",
+			summary: "Example estimate",
+			link: ["client_id", 20],
+			context: context(
+				DOCTOR,
+				"Example estimate",
+				', "conversation_id": "Estimate-Thread="',
+			),
+		},
+		{
+			n: 72,
+			kind: "email_out",
+			time: "23:01",
+			summary: `${recipientLabel}Example reply`,
+			link: deal,
+		},
+		{
+			n: 73,
+			kind: "email_out",
+			time: "23:02",
+			summary: `${recipientLabel}Example receipt`,
+			link: deal,
+		},
+	];
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ ${oldMail.map(insert).join("\n")} commit;`);
+	const evidence = (subjectStart = senderLabel.length + 1) =>
+		`create temp table copy_email_evidence (old_id, sender, subject_start, message_id) on commit drop as
+ values ('${id(70)}'::uuid, '${DOCTOR}', ${subjectStart}, null),
+ ('${id(72)}'::uuid, '${JOE}', ${recipientLabel.length + 1}, 'Example-Reply@example.test');`;
+	await t.test(
+		"rejects an invalid subject position in the private input",
+		async () => {
+			await assert.rejects(run(evidence(0)), { code: "23514" });
+		},
+	);
+	const missing = [[id(73), "no_message_id_or_sender"]];
+	const reportForOldMail = (report: pg.QueryResultRow[]) =>
+		report
+			.filter((row) => row.old_id >= id(70))
+			.map((row) => [row.old_id, row.reason]);
+	const copyWithEvidence = async () => {
+		assert.deepEqual(reportForOldMail(await run(evidence())), missing);
+		assert.deepEqual(
+			await lines(`select activity_id, sender, subject, message_id, conversation_id
+ from email where activity_id >= '${id(70)}' order by activity_id`),
+			[
+				`70 ${DOCTOR} Example estimate null Estimate-Thread=`,
+				`72 ${JOE} Example reply Example-Reply@example.test null`,
+			],
+		);
+		assert.deepEqual(
+			await lines(`select activity_id, deal_id, party_id from activity_about
+ where activity_id >= '${id(70)}' order by activity_id, deal_id, party_id`),
+			["70 30 null", "70 null 10", "72 30 null"],
+		);
+	};
+	await copyWithEvidence();
+	const before = await everything();
+	await copyWithEvidence();
+	assert.deepEqual(await everything(), before);
+	await t.test(
+		"reruns without private input and keeps the copied emails and links",
+		async () => {
+			assert.deepEqual(reportForOldMail(await run()), missing);
+			assert.deepEqual(await everything(), before);
+		},
+	);
 });
