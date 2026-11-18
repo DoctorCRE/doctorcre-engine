@@ -73,6 +73,10 @@ const HINTS = {
 		"The email matches no record and names none, so nothing was stored.",
 	message_id_invalid:
 		"Send the Message-ID without angle brackets or surrounding spaces.",
+	location_not_in_account: "Choose a location in this national account.",
+	location_name_exists:
+		"Choose the existing location in this national account.",
+	deal_name_exists: "Open the existing deal or use a different deal name.",
 	unknown_owner: "Owner is one of joe, dell or claude.",
 	field_required:
 		"Supply the required field using the documented operation shape.",

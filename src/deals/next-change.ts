@@ -24,6 +24,11 @@ import {
 import { SaveRefusal } from "../save.ts";
 import { latestChange, seenAnswer, unseenChanges } from "../seen-change.ts";
 import { UUID } from "../uuid.ts";
+import {
+	checkMarketDealName,
+	linkMarketAgent,
+	marketClient,
+} from "./national-market.ts";
 import { ENDED_PHASES } from "./shared.ts";
 
 // The database checks each value against its own rules, such as a known kind.
@@ -54,16 +59,27 @@ const DEAL_CHANGES = {
 	phase: optional(fitting(PHASE_MOVE)),
 };
 
-const NEW_DEAL = {
+const DEAL_OPENING = {
 	idempotency_key: isUuid,
 	name: isText,
-	client_id: isUuid,
 	owner: isText,
 	phase: isText,
 	kind: DEAL_FIELDS.kind,
 	reason: DEAL_FIELDS.reason,
 	market_id: DEAL_FIELDS.market_id,
 	renews_lease_id: clearable(isUuid),
+};
+
+const NEW_DEAL = { ...DEAL_OPENING, client_id: isUuid };
+const isLocationKind = (value: unknown): value is "person" | "company" =>
+	value === "person" || value === "company";
+const NEW_MARKET_DEAL = {
+	...DEAL_OPENING,
+	national_account_id: isUuid,
+	market_id: isUuid,
+	client_id: optional(isUuid),
+	new_location: optional(fitting({ name: isText, kind: isLocationKind })),
+	market_agent_id: optional(isUuid),
 };
 
 type DealFields = Partial<Fitted<typeof DEAL_FIELDS>>;
@@ -99,18 +115,71 @@ function parseDealChanges(deal_id: string, body: JsonObject) {
 	};
 }
 
-function parseNewDeal(body: JsonObject) {
-	const request = fit(body, NEW_DEAL, [
-		"idempotency_key",
-		"name",
-		"client_id",
-		"owner",
-		"phase",
-	]);
+function parseNewDeal(body: JsonObject, signedIn: boolean) {
+	const request =
+		signedIn && body.national_account_id !== undefined
+			? parseMarketDeal(body)
+			: fit(body, NEW_DEAL, [
+					"idempotency_key",
+					"name",
+					"client_id",
+					"owner",
+					"phase",
+				]);
 	if (request instanceof Refusal) return request;
 	if (ENDED_PHASES.includes(request.phase))
 		return new Refusal(400, "invalid_field_value", { fields: ["phase"] });
 	return request;
+}
+
+function parseMarketDeal(body: JsonObject) {
+	const request = fit(
+		body,
+		NEW_MARKET_DEAL,
+		[
+			"idempotency_key",
+			"name",
+			"owner",
+			"phase",
+			"national_account_id",
+			"market_id",
+		],
+		["client_id", "new_location"],
+	);
+	if (request instanceof Refusal) return request;
+	const { client_id, new_location, name, ...fields } = request;
+	if (client_id && new_location)
+		return new Refusal(400, "invalid_field_value", {
+			fields: ["client_id", "new_location"],
+		});
+	const deal = { ...fields, name: name.trim() };
+	if (client_id) return { ...deal, client_id };
+	if (new_location)
+		return {
+			...deal,
+			new_location: { ...new_location, name: new_location.name.trim() },
+		};
+	return new Refusal(400, "missing_required", {
+		fields: ["client_id", "new_location"],
+	});
+}
+
+async function saveNewDeal(
+	tx: Transaction<DB>,
+	request: Exclude<ReturnType<typeof parseNewDeal>, Refusal>,
+) {
+	if (!("national_account_id" in request)) return addDeal(tx, request);
+
+	await checkMarketDealName(tx, request.name);
+	const client_id = await marketClient(
+		tx,
+		request.national_account_id,
+		request,
+	);
+	const added = await addDeal(tx, { ...request, client_id });
+	if (request.market_agent_id)
+		await linkMarketAgent(tx, added.deal_id, request.market_agent_id);
+	return added;
 }
 
 async function addDeal(
@@ -125,7 +194,7 @@ async function addDeal(
 		market_id,
 		renews_lease_id,
 	}: Fitted<typeof NEW_DEAL>,
-): Promise<JsonObject> {
+) {
 	const owner_id = await userId(tx, owner);
 	const {
 		rows: [added],
@@ -233,8 +302,12 @@ async function movePhase(
 
 export const nextDeals = new Hono<NextSaveEnv>()
 	.post("/deals", (c) =>
-		answerNextSave(c, "add-deal", parseNewDeal, addDeal, (result) =>
-			result.replayed ? 200 : 201,
+		answerNextSave(
+			c,
+			"add-deal",
+			(body) => parseNewDeal(body, c.get("stamp").user !== undefined),
+			saveNewDeal,
+			(result) => (result.replayed ? 200 : 201),
 		),
 	)
 	.post("/deals/:deal/changes", (c) =>
