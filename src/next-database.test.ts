@@ -2550,6 +2550,7 @@ const CHANGEABLE: Record<string, string[]> = {
 		"lane",
 		"lease_estimate_confidence",
 		"lease_estimate_source",
+		"needs_attention",
 		"offers",
 		"owner_user_id",
 		"refers_business",
