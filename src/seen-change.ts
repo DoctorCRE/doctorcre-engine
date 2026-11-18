@@ -3,20 +3,30 @@ import { Refusal } from "./answer.ts";
 import type { DB } from "./next-database.d.ts";
 import { SaveRefusal } from "./save.ts";
 
-type Recorded = "commission_payment" | "deal" | "next_step";
+type RecordedIds = {
+	commission_payment: string;
+	deal: string;
+	next_step: string;
+	party_role: { party_id: string; role: "lead" };
+};
+type Recorded = keyof RecordedIds;
 
-const history = (tx: Transaction<DB>, table: Recorded, id: string) =>
+const history = <Table extends Recorded>(
+	tx: Transaction<DB>,
+	table: Table,
+	id: RecordedIds[Table],
+) =>
 	tx
 		.selectFrom("change")
 		.where("table_name", "=", table)
-		.where("record", "=", { id });
+		.where("record", "=", typeof id === "string" ? { id } : id);
 
 // A row's changes after `seen`, the latest its caller read (0 for none). Run under the row's
 // lock; a later change to one of `keys` refuses the save, and later changes to other fields stand.
-export async function unseenChanges(
+export async function unseenChanges<Table extends Recorded>(
 	tx: Transaction<DB>,
-	table: Recorded,
-	id: string,
+	table: Table,
+	id: RecordedIds[Table],
 	seen: number,
 	keys: readonly string[],
 ) {
@@ -34,10 +44,10 @@ export async function unseenChanges(
 	return ids;
 }
 
-export async function latestChange(
+export async function latestChange<Table extends Recorded>(
 	tx: Transaction<DB>,
-	table: Recorded,
-	id: string,
+	table: Table,
+	id: RecordedIds[Table],
 ) {
 	const latest = await history(tx, table, id)
 		.select((eb) => eb.fn.max("id").as("id"))
@@ -46,10 +56,10 @@ export async function latestChange(
 }
 
 // An answer's change id would cover the unseen changes, so the caller re-reads first.
-export const seenAnswer = async (
+export const seenAnswer = async <Table extends Recorded>(
 	tx: Transaction<DB>,
-	table: Recorded,
-	id: string,
+	table: Table,
+	id: RecordedIds[Table],
 	seen: number,
 	unseen: readonly number[],
 ) =>

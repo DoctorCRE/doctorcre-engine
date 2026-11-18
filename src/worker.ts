@@ -38,6 +38,7 @@ import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
+import { prospectAdd } from "./prospects/add.ts";
 import { prospectReads } from "./prospects/read.ts";
 import { relationships } from "./relationships/routes.ts";
 import { replyDrafts, replyJobs } from "./reply-drafts.ts";
@@ -102,6 +103,7 @@ app.route("/api/engine", proposalDecisions);
 app.route("/api/engine", nextAgenda);
 app.route("/api/engine", calendarDismissal);
 app.route("/api/engine", activityDoor);
+app.route("/api/engine", prospectAdd);
 app.route("/api/engine", attachmentFiles);
 app.route("/api/engine", replyDrafts);
 
