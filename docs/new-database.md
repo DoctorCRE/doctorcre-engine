@@ -1295,6 +1295,7 @@ The suggestion kinds:
 - Accepting a `new_lead` suggestion for an existing contact replaces `not_recorded` with the recorded how-found value.
 - **Filing.** A filing suggestion stores no deal name and creates no deal. Accepting moves the email to the deal the partner names in `deal_id`, which defaults to the suggested deal for `file_to_deal` and is required for `possible_new_deal`; the deal must be open. Other deal links are removed in the same save; party and property links stay. `reason` is required when the email is already linked to another deal or the named deal's client is not one it is about, as today (`email-proposals.js:291`). Today's "mark handled" also files the email to the named deal (`:305`), so it is this accept, not a separate outcome. A partner who needs a new deal makes it first (17) and then names it. Slice 7 adds both kinds to `proposal.kind` and lets `proposal_one_record` name no record for `possible_new_deal` alone, whose subject is the email.
 - **Decide.** Only a direct partner decides, once. `edits` (`what`, `owner_party_id`, `due_on`) change the accepted next step in the same transaction, so history shows the suggestion and the edit and the suggestion itself never changes. Answer `{ proposal_id, status, decided_at, created: { next_step_id | deal_id | activity_id | party_id } }`. Refusals: `409 already_decided { status, decided_by }`; `409 version_conflict { current_phase }` or `{ current_stage }` when the deal or lead moved since the suggestion, leaving it pending; `403 user_decides` from a job; `404 not_found`.
+- **Next-step owner.** An owner ID in `edits.owner_party_id` overrides the suggestion's owner. Omitted, blank, and `null` owner edits keep the suggested owner. If the suggestion has no owner, the step belongs to the partner who accepts it.
 - Snoozing a suggestion is a Home mark (slices 10, 24). Email summaries wait for slice 4's decision and have no door yet.
 
 ### 22. Reply drafts and their delivery
@@ -1352,6 +1353,7 @@ The suggestion kinds:
 
 `...` is `/jobs` or `/api/engine`.
 
+- **Owner on creation.** A supplied `owner_party_id` wins. Otherwise, the database uses the signed-in partner's person or, for a job, the person named by `Engine-For-User`.
 - **Retry.** The cadence keys each step on its rule, record and due date, intake keys a flag's item on mailbox, message and state, and call capture keys on the call and its suggestion, so a rerun converges on the first step.
 - **Concurrent edits.** A change uses `seen_change_id` on the step's change history with the deal rule above. Ending or reopening has no version: ending an ended step is `409 step_ended { status }`, which the caller counts as closed elsewhere, as intake does today, and reopening an open one is `409 step_open`.
 - **Stamp.** The user, or `cadence`, `mail_capture`, `call_capture` or `agent` for a partner.
