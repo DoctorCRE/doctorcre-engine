@@ -289,56 +289,59 @@ for (const [field, value] of [
 	["owner", PARTNERS[0]],
 	["operating_state", { state: "parked", reason: "other" }],
 ] as const) {
-	test(
-		`${field} history is stamped after the field lock`,
-		{ timeout: 10000 },
-		(t) =>
-			withDeal(async (url, db) => {
-				const key = randomUUID();
-				await db.query("begin");
-				await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
-					`${D}:${field}`,
-				]);
-				const pending = request(url, {
+	test(`${field} history is stamped after the field lock`, () =>
+		withDeal(async (url, db) => {
+			const key = randomUUID();
+			await db.query("begin");
+			await db.query("select pg_advisory_xact_lock(hashtextextended($1,0))", [
+				`${D}:${field}`,
+			]);
+			let saveFinished = false;
+			const pending = Promise.resolve(
+				request(url, {
 					idempotency_key: key,
 					deal: D,
 					field,
 					value,
 					base_event_id: null,
-				});
-				try {
-					let waiting = false;
-					while (!waiting) {
-						t.signal.throwIfAborted();
-						waiting = (
-							await db.query(`select exists (
-						select 1 from pg_locks
-						where locktype='advisory' and not granted
+				}),
+			);
+			const finish = () => {
+				saveFinished = true;
+			};
+			void pending.then(finish, finish);
+
+			let stamp: string | undefined;
+			try {
+				// Restoring or dropping the snapshot can be slow under load.
+				const deadline = AbortSignal.timeout(10_000);
+				while (!saveFinished && stamp === undefined) {
+					deadline.throwIfAborted();
+					const { rows } = await db.query<{
+						stamp: string;
+					}>(`select clock_timestamp()::text as stamp
+						from pg_locks
+						where locktype = 'advisory' and not granted
+						and database = (select oid from pg_database where datname = current_database())
 						and pg_backend_pid() = any(pg_blocking_pids(pid))
-					) as waiting`)
-						).rows[0].waiting;
-					}
-					const { stamp } = (
-						await db.query("select clock_timestamp()::text as stamp")
-					).rows[0];
-					await db.query("commit");
-					const response = await pending;
-					assert.equal(response.status, 200, await response.text());
-					const event = (
-						await db.query(
-							"select recorded_at > $1::timestamptz as after_lock from event where idempotency_key=$2",
-							[stamp, key],
-						)
-					).rows[0];
-					assert.equal(
-						event.after_lock,
-						true,
-						"history must be stamped after releasing the field lock",
-					);
-				} finally {
-					await db.query("rollback");
-					await pending;
+						limit 1`);
+					stamp = rows[0]?.stamp;
 				}
-			}),
-	);
+			} finally {
+				await db.query("rollback");
+				await pending;
+			}
+			const response = await pending;
+			assert.equal(response.status, 200, await response.text());
+			assert.ok(stamp, "the save must wait for the field lock");
+			const { rows } = await db.query<{ after_lock: boolean }>(
+				"select recorded_at > $1::timestamptz as after_lock from event where idempotency_key=$2",
+				[stamp, key],
+			);
+			assert.equal(
+				rows[0]?.after_lock,
+				true,
+				"history must be stamped after releasing the field lock",
+			);
+		}));
 }
