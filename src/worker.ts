@@ -38,6 +38,7 @@ import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
+import { prospectReads } from "./prospects/read.ts";
 import { relationships } from "./relationships/routes.ts";
 import { replyDrafts, replyJobs } from "./reply-drafts.ts";
 import { routerQueue } from "./router-queue.ts";
@@ -87,6 +88,7 @@ const engine = new Hono<WorkerEnv>()
 app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
 app.route("/api/engine", partySearch);
+app.route("/api/engine", prospectReads);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", dealParticipants);
 app.route("/api/engine", criticalDates);
