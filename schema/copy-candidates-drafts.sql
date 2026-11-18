@@ -1,5 +1,5 @@
 -- Copies today's lead candidates and outreach drafts with their decisions, approvals and history. Run it after
--- schema/copy-leads-clients.sql, in its own owner transaction with search_path set to the new schema.
+-- schema/copy-emails.sql, in its own owner transaction with search_path set to the new schema.
 -- It only reads today's tables in public, and ends by listing each value it did not copy, for a user to fix there.
 -- A copied row keeps its old id, so a second run copies only rows that are new.
 
@@ -8,6 +8,7 @@ select set_config('engine.job', 'old_system', true), set_config('engine.user_id'
 -- Off until the end: rows keep their old authors and times, and their history is written below from today's records.
 alter table candidate disable trigger stamp_change, disable trigger record_change, disable trigger candidate_review;
 alter table lead_contact_draft disable trigger stamp_change, disable trigger record_change;
+alter table proposal disable trigger stamp_change, disable trigger record_change;
 alter table change disable trigger stamp_change;
 
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
@@ -125,8 +126,39 @@ select c.id, f.field, f.value, f.reason from old_candidate c cross join lateral 
 	('confirmed_by', c.confirmed_by::text, 'confirmation_needs_user', c.confirmed_at is not null and c.confirmer is null)
 ) f (field, value, reason, refused) where f.refused and c.status <> 'confirmed';
 
+-- A store key identifies the message even when Outlook changes its recorded sent time.
+create temp table pending_email_candidate on commit drop as
+select c.id, owner.id as mailbox_user_id, lower(btrim(c.email)) as address, matched.email_found
+from old_candidate c
+left join app_user owner on owner.slug = c.source_row ->> 'mailbox_owner'
+cross join lateral (
+	select count(distinct e.activity_id) = 1 as email_found
+	from public.activity a
+	join outside_id o on o.source = 'old_system' and o.value = a.id::text
+	join email e on e.activity_id = o.email_activity_id
+	where a.kind = 'email_in' and a.email_identity ->> 'mailbox_owner' = c.source_row ->> 'mailbox_owner'
+		and (a.email_identity ->> 'item_id' = 'intake:' || (c.source_row ->> 'message_ref')
+			or (a.email_identity ->> 'item_id' like 'hxstore-key:%'
+				and c.source_row ->> 'message_ref' ~ '^[0-9a-f]{20}:[0-9]+$'
+				and split_part(c.source_row ->> 'message_ref', ':', 1) = left(encode(sha256(
+					convert_to('hxstore-local' || chr(31) || substr(a.email_identity ->> 'item_id', 13), 'UTF8')), 'hex'), 20)))
+) matched
+where c.source = 'outlook-intake' and c.status = 'pool'
+	and not exists (select from proposal p where p.candidate_id = c.id);
+
+insert into not_copied
+select p.id, f.field, null, f.reason from pending_email_candidate p cross join lateral (values
+	('mailbox_owner', 'mailbox_not_copied', p.mailbox_user_id is null),
+	('message_ref', 'email_activity_not_found', not p.email_found),
+	('email', 'invalid_sender_address', p.address is null or not pg_input_is_valid(p.address, 'email_address'))
+) f (field, reason, refused) where f.refused;
+
 create temp table ready_candidate on commit drop as
-select c.*, c.est_lease_event is not null and c.est_basis ~ '\S' as sourced from old_candidate c
+select c.*, c.est_lease_event is not null and c.est_basis ~ '\S' as sourced, p.mailbox_user_id, p.address as sender_address,
+	case when p.mailbox_user_id is null then c.made_by_user_id end as copied_by_user_id,
+	case when p.mailbox_user_id is not null then 'mail_capture' else c.made_by_job end as copied_by_job,
+	coalesce(p.mailbox_user_id, c.made_for_user_id) as copied_for_user_id
+from old_candidate c left join pending_email_candidate p using (id)
 where not exists (select from not_copied n where n.old_id = c.id and n.reason not in
 		('estimate_needs_source', 'source_without_estimate', 'confirmation_needs_user'))
 	and not exists (select from candidate n where n.id = c.id);
@@ -134,14 +166,18 @@ where not exists (select from not_copied n where n.old_id = c.id and n.reason no
 -- A candidate last changed with the latest of its finding, decision and confirmation.
 insert into candidate (id, created_at, source, source_key, source_row, name, qualification, estimated_lease_on,
 	lease_estimate_source, status, reason, promoted_party_id, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select c.id, c.created_at, c.source, c.source_key, jsonb_build_object('row', c.source_row, 'pool', to_jsonb(p) - 'source_row'),
+select c.id, c.created_at, c.source, c.source_key,
+	jsonb_build_object('row', c.source_row, 'pool', to_jsonb(p) - 'source_row')
+	|| case when c.mailbox_user_id is not null then jsonb_build_object('address', c.sender_address,
+		'message_ref', c.source_row -> 'message_ref', 'first_seen_at', c.source_row -> 'first_seen_at',
+		'reading', c.source_row -> 'reading') else '{}'::jsonb end,
 	c.name, c.score_basis, case when c.sourced then c.est_lease_event end, case when c.sourced then c.est_basis end,
 	c.mapped_status, c.reason, case when c.status = 'promoted' then c.lead_party_id end, s.*
 from ready_candidate c join public.candidate_pool p using (id)
 cross join lateral (select at, by_user, by_job, for_user from (values
-	(c.created_at, c.made_by_user_id, c.made_by_job, c.made_for_user_id, true),
+	(c.created_at, c.copied_by_user_id, c.copied_by_job, c.copied_for_user_id, true),
 	(c.decided_at, c.decided_by_user_id, c.decided_by_job, c.decided_for_user_id, c.status in ('promoted', 'declined', 'expired')),
-	(c.confirmed_at, c.confirmer, null, null, c.confirmer is not null)
+	(c.confirmed_at, c.confirmer, null, null, c.confirmer is not null and c.mailbox_user_id is null)
 ) e (at, by_user, by_job, for_user, happened) where happened order by at desc limit 1) s;
 
 -- A decided candidate was unreviewed when it was found; its decision is the change to what it is now.
@@ -151,7 +187,8 @@ select c.*, r.now_row, case when c.status in ('promoted', 'declined', 'expired')
 from ready_candidate c cross join lateral (select to_jsonb(n)
 	- '{changed_by_user_id,changed_by_job,changed_for_user_id,changed_at}'::text[] as now_row from candidate n where n.id = c.id) r;
 insert into copied_history
-select 'candidate', id, 'insert', null, found_row, created_at, made_by_user_id, made_by_job, made_for_user_id from copied_candidate;
+select 'candidate', id, 'insert', null, found_row, created_at, copied_by_user_id, copied_by_job, copied_for_user_id
+from copied_candidate;
 insert into copied_history
 select 'candidate', c.id, 'update', d.was, d.became, c.decided_at, c.decided_by_user_id, c.decided_by_job, c.decided_for_user_id
 from copied_candidate c cross join lateral (select jsonb_object_agg(k, c.found_row -> k) as was, jsonb_object_agg(k, v) as became
@@ -162,6 +199,26 @@ select 'candidate', id, 'update', '{"confirmed_at": null, "confirmed_by": null}'
 	jsonb_build_object('confirmed_at', confirmed_at, 'confirmed_by', confirmed_by), confirmed_at, confirmer, null, null
 from copied_candidate where confirmer is not null;
 
+do $$
+declare
+	mailbox uuid;
+begin
+	perform set_config('engine.job', 'mail_capture', true);
+	for mailbox in select distinct mailbox_user_id from copied_candidate where mailbox_user_id is not null loop
+		perform set_config('engine.user_id', mailbox::text, true);
+		with inserted as (
+			insert into proposal (kind, candidate_id, created_at, evidence, proposed_by_job, changed_at, changed_by_job, changed_for_user_id)
+			select 'email_lead', id, created_at, score_basis, 'mail_capture', created_at, 'mail_capture', mailbox
+			from copied_candidate where mailbox_user_id = mailbox returning *
+		)
+		insert into copied_history
+		select 'proposal', p.id, 'insert', null,
+			to_jsonb(p) - '{changed_by_user_id,changed_by_job,changed_for_user_id,changed_at}'::text[],
+			p.changed_at, p.changed_by_user_id, p.changed_by_job, p.changed_for_user_id from inserted p;
+	end loop;
+	perform set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
+end $$;
+
 insert into change (table_name, record, action, old_value, new_value, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select table_name, jsonb_build_object('id', id), action, was, became, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from copied_history order by changed_at, action = 'update', id;
@@ -169,5 +226,6 @@ from copied_history order by changed_at, action = 'update', id;
 set constraints all immediate;
 alter table candidate enable trigger stamp_change, enable trigger record_change, enable trigger candidate_review;
 alter table lead_contact_draft enable trigger stamp_change, enable trigger record_change;
+alter table proposal enable trigger stamp_change, enable trigger record_change;
 alter table change enable trigger stamp_change;
 select * from not_copied order by old_id, field, value, reason;

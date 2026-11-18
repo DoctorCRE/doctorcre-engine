@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
-import type pg from "pg";
 import { copyTest, readSchema } from "./test-copy.ts";
+import { doorTest } from "./test-door.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -9,8 +10,9 @@ const { db, setup, cleanup } = copyTest();
 const copy = await readSchema("copy-candidates-drafts.sql");
 const rows = async (sql: string) =>
 	(await db.query(sql)).rows.map(Object.values);
-const run = async () => {
-	const result = await db.query(`begin; ${copy}; commit;`);
+type CopyRefusal = { old_id: string; reason: string; value: string | null };
+const run = async (database = db): Promise<CopyRefusal[]> => {
+	const result = await database.query<CopyRefusal>(`begin; ${copy}; commit;`);
 	assert.ok(Array.isArray(result));
 	return result.at(-2)?.rows ?? [];
 };
@@ -58,7 +60,7 @@ const statusEvent = (
 	sponsor: string | null = null,
 ) =>
 	`insert into public.event (occurred_at,actor_id,verb,subject_type,subject_id,field,new_value,cause,sponsoring_human_slug) values ('2025-02-05','${actor}','promote-pool','candidate_pool','${id(n)}','status','{"status": "${status}"${extra}}','human_stated',${sponsor ? `'${sponsor}'` : "null"});`;
-let report: pg.QueryResultRow[];
+let report: CopyRefusal[];
 
 before(async () => {
 	await setup();
@@ -189,7 +191,10 @@ test("candidates keep their decision, its user and history, and refusals are lis
 	);
 	assert.ok(
 		report.some(
-			(r) => r.old_id === id(45) && JSON.parse(r.value).party_id === id(10),
+			(r) =>
+				r.old_id === id(45) &&
+				r.value &&
+				JSON.parse(r.value).party_id === id(10),
 		),
 	);
 });
@@ -208,4 +213,146 @@ test("a rerun lists the same values and leaves copied rows, stamps and history u
 		),
 		[],
 	);
+});
+
+test("a copied email lead can be decided by its own mailbox partner", async (t) => {
+	const door = doorTest();
+	await door.setup();
+	t.after(async () => {
+		await door.db.query("rollback");
+		await door.cleanup();
+	});
+	const hash = (text: string) =>
+		createHash("sha256").update(text).digest("hex");
+	const storeRef = `${hash("hxstore-local\x1fexample-store-key").slice(0, 20)}:1735689600`;
+	const pending = (n: number, mailbox: string, message: string) => {
+		const address = `sender-${n}@example.test`;
+		return candidate(n, "pool", {
+			source: "outlook-intake",
+			source_key: `email-sha256:${mailbox}:${hash(address)}`,
+			source_row: JSON.stringify({
+				mailbox_owner: mailbox,
+				message_ref: message,
+			}),
+			email: address,
+		});
+	};
+	const mail = (n: number, mailbox: string, item: string, sender: number) =>
+		insert("activity", {
+			id: id(n),
+			kind: "email_in",
+			occurred_at: `2025-01-0${sender - 60}`,
+			actor_id: sweep,
+			party_id: user,
+			summary: `Example email ${n}`,
+			email_context: JSON.stringify({
+				sender: { email: `sender-${sender}@example.test` },
+				subject: `Example email ${n}`,
+			}),
+			email_identity: JSON.stringify({
+				mailbox_owner: mailbox,
+				mailbox_account: `${mailbox}@example.test`,
+				item_id: item,
+				subject: `Example email ${n}`,
+			}),
+		});
+	await door.db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into public.actor (id, slug, kind, display_name) values
+  ('${user}', 'partner_one', 'human', 'Example User'),
+  ('${helper}', 'partner_two', 'human', 'Example Partner'),
+  ('${sweep}', 'mail-example', 'automation', 'Example Mail Capture');
+ insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
+ insert into public.activity_kind (slug, label, is_contact) values ('email_in', 'Inbound email', true);
+ insert into public.party (id, kind, name, created_by, updated_by)
+  values ('${user}', 'person', 'Example User', '${user}', '${user}');
+ insert into party (id, kind, name)
+  values ('${user}', 'person', 'Example User'), ('${helper}', 'person', 'Example Partner');
+ insert into app_user (id, slug) values ('${user}', 'partner_one'), ('${helper}', 'partner_two');
+ insert into outside_id (source, value, party_id) values ('old_system', '${user}', '${user}');
+ insert into how_found (slug, label) values ('inbound', 'Inbound');
+ insert into role (slug, label) values ('lead', 'Lead');
+ insert into stage (role, slug, label) values ('lead', 'new', 'New');
+ ${pending(61, "partner_one", "example-keyless-ref")}
+ ${pending(62, "partner_two", storeRef)}
+ ${pending(63, "partner_one", "wrong-mailbox-ref")}
+ ${pending(64, "unknown-mailbox", "missing-ref")}
+ ${mail(71, "partner_one", "intake:example-keyless-ref", 61)}
+ ${mail(72, "partner_two", "hxstore-key:example-store-key", 62)}
+ ${mail(73, "partner_two", "intake:wrong-mailbox-ref", 63)}
+ commit;`);
+	await door.db.query(`begin; ${await readSchema("copy-emails.sql")}; commit;`);
+	const refusals = await run(door.db);
+	assert.deepEqual(
+		refusals.map(({ old_id, reason }) => [old_id, reason]),
+		[
+			[id(63), "email_activity_not_found"],
+			[id(64), "mailbox_not_copied"],
+			[id(64), "email_activity_not_found"],
+		],
+	);
+	const suggestions = () =>
+		door.db.query<{ id: string; candidate_id: string; status: string }>(
+			"select id, candidate_id, status from proposal where kind = 'email_lead' order by candidate_id",
+		);
+	const {
+		rows: [accept, dismiss, ...extra],
+	} = await suggestions();
+	assert.ok(accept && dismiss);
+	assert.deepEqual(extra, []);
+	assert.deepEqual(
+		[accept.candidate_id, dismiss.candidate_id],
+		[id(61), id(62)],
+	);
+	assert.deepEqual([accept.status, dismiss.status], ["pending", "pending"]);
+	const decide = (user: string, proposal: string, decision: object) =>
+		door.save({ user }, `proposals/${proposal}/decision`, {
+			idempotency_key: randomUUID(),
+			...decision,
+		});
+	assert.equal(
+		(await decide("partner_two", accept.id, { decision: "accept" }))[0],
+		404,
+	);
+	assert.equal(
+		(await decide("partner_one", accept.id, { decision: "accept" }))[0],
+		200,
+	);
+	const reason = "This sender is already working with another broker";
+	assert.equal(
+		(
+			await decide("partner_two", dismiss.id, { decision: "dismiss", reason })
+		)[0],
+		200,
+	);
+	assert.deepEqual(
+		(
+			await door.db.query(`select e.address, p.how_found, l.stage, l.owner_user_id
+			from party_email e join party p on p.id = e.party_id
+			join party_role l on l.party_id = p.id and l.role = 'lead'`)
+		).rows,
+		[
+			{
+				address: "sender-61@example.test",
+				how_found: "inbound",
+				stage: "new",
+				owner_user_id: user,
+			},
+		],
+	);
+	assert.deepEqual(
+		(
+			await door.db.query(
+				"select id, status, reason from candidate order by id",
+			)
+		).rows,
+		[
+			{ id: id(61), status: "promoted", reason: null },
+			{ id: id(62), status: "declined", reason },
+		],
+	);
+	assert.deepEqual(await run(door.db), refusals);
+	assert.deepEqual((await suggestions()).rows, [
+		{ ...accept, status: "accepted" },
+		{ ...dismiss, status: "dismissed" },
+	]);
 });
