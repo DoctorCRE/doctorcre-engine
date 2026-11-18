@@ -19,7 +19,9 @@ import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
+import { criticalDates } from "./deals/critical-dates.ts";
 import { dealJobs, nextDeals } from "./deals/next-change.ts";
+import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
 import { heldStepReviews } from "./held-steps.ts";
 import { invoiceJobs, invoiceUndo } from "./invoice-application.ts";
@@ -80,6 +82,8 @@ const engine = new Hono<WorkerEnv>()
 app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
 app.route("/api/engine", nextDeals);
+app.route("/api/engine", dealParticipants);
+app.route("/api/engine", criticalDates);
 app.route("/api/engine", nextSteps);
 app.route("/api/engine", heldStepReviews);
 app.route("/api/engine", automaticStepUndo);
