@@ -7,6 +7,7 @@ import { readSnapshot } from "../reader.ts";
 import { copyTest, readSchema } from "../test-copy.ts";
 import { readBoard, type Scope } from "./board.ts";
 import { readNextBoardDeals } from "./next-board.ts";
+import { readNextDealDetail } from "./next-detail.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -40,7 +41,7 @@ insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_b
 insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2),
  ('relocation', 'Example relocation', 3), ('other', 'Example other', 4);
 insert into public.deal_phase (slug, label) values ('touring', 'Example touring'), ('negotiation', 'Example negotiation'),
- ('closed', 'Example closed');
+ ('closed', 'Example closed'), ('invoiced', 'Example invoiced');
 insert into public.deal_lane (slug, label, sort) values ('national', 'Example national', 1);
 insert into public.deal (id, client_id, name, deal_type, phase, owner, city, attention, created_by, updated_by, created_at) values
  ('${id(34)}', '${id(24)}', 'Example former brand lease', 'lease', 'touring', 'partner_one', null, false, '${id(1)}', '${id(1)}', '2025-01-05'),
@@ -79,7 +80,11 @@ update public.deal set closed_on = '2024-09-01' where id = '${id(33)}';
 update public.deal set city = 'Unmapped Example City' where id = '${id(37)}';
 insert into public.deal (id, client_id, name, deal_type, phase, outcome, owner, created_by, updated_by, created_at) values
  ('${id(39)}', '${id(22)}', 'Example undated won lease', 'lease', 'closed', 'won', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-03'),
- ('${id(40)}', '${id(22)}', 'Example undated lost lease', 'lease', 'closed', 'lost', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-04');
+ ('${id(40)}', '${id(22)}', 'Example undated lost lease', 'lease', 'negotiation', 'lost', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-04');
+insert into public.deal (id, client_id, name, deal_type, phase, owner, closed_on, created_by, updated_by) values
+ ('${id(41)}', '${id(22)}', 'Example closed without a date', 'lease', 'closed', 'partner_one', null, '${id(1)}', '${id(1)}'),
+ ('${id(42)}', '${id(22)}', 'Example invoiced without a date', 'lease', 'invoiced', 'partner_one', null, '${id(1)}', '${id(1)}'),
+ ('${id(43)}', '${id(22)}', 'Example closing date only', 'lease', 'negotiation', 'partner_one', '2024-10-01', '${id(1)}', '${id(1)}');
 `;
 
 // The partners' reviewed first known dates and ladders, which the account, brand and commission copies need.
@@ -266,22 +271,32 @@ test("an imported loss without phase events stays off the open board", async () 
 	assert.ok(deals.every((deal) => deal.id !== id(40)));
 });
 
+test("an imported close date keeps a deal in a live phase off the open board", async () => {
+	const deals = await nextTransaction(connectionString, "read", (tx) =>
+		readNextBoardDeals(tx, allBoards),
+	);
+	assert.ok(deals.every((deal) => deal.id !== id(43)));
+});
+
 test("closed and lost lists keep the recorded outcome even without a close date or phase events", async () => {
 	await nextTransaction(connectionString, "read", async (tx) => {
 		const closed = await readNextBoardDeals(tx, allBoards, "closed");
 		assert.deepEqual(
 			closed.map((d) => [d.id, d.phase, d.outcome, d.closed_on, d.invoiced_on]),
 			[
+				[id(43), "negotiation", null, "2024-10-01", null],
 				[id(33), "closed", null, "2024-09-01", null],
+				[id(41), "closed", null, null, null],
 				[id(35), "negotiation", null, null, "2025-02-01"],
 				[id(36), "negotiation", null, null, "2025-02-02"],
+				[id(42), "invoiced", null, null, null],
 				[id(39), "closed", "won", null, null],
 			],
 		);
 		const lost = await readNextBoardDeals(tx, allBoards, "lost");
 		assert.deepEqual(
 			lost.map((d) => [d.id, d.phase, d.outcome, d.closed_on]),
-			[[id(40), "closed", "lost", null]],
+			[[id(40), "negotiation", "lost", null]],
 		);
 		const national = await readNextBoardDeals(
 			tx,
@@ -290,6 +305,61 @@ test("closed and lost lists keep the recorded outcome even without a close date 
 		);
 		assert.deepEqual(national, []);
 	});
+});
+
+test("the deal page shares the card's copied phase, outcome and close date", async () => {
+	await nextTransaction(connectionString, "read", async (tx) => {
+		const closed = await readNextBoardDeals(tx, allBoards, "closed");
+		const lost = await readNextBoardDeals(tx, allBoards, "lost");
+		for (const dealId of [id(39), id(40), id(43)]) {
+			const card = [...closed, ...lost].find((deal) => deal.id === dealId);
+			assert.ok(card);
+			const page = await readNextDealDetail(tx, dealId);
+			assert.ok("id" in page);
+			assert.deepEqual(
+				[page.phase, page.outcome, page.closed_on],
+				[card.phase, card.outcome, card.closed_on],
+			);
+		}
+	});
+});
+
+test("a deal stays won with its latest close date when it moves to Invoiced", async () => {
+	const rollback = new Error("roll back test phase moves");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			await sql`insert into deal_phase_change (deal_id, happened_at, phase)
+				values (${id(33)}, '2025-04-01T12:00:00Z', 'negotiation'),
+					(${id(33)}, '2025-04-03T01:00:00Z', 'closed')`.execute(tx);
+			const closed = (await readNextBoardDeals(tx, allBoards, "closed")).find(
+				(deal) => deal.id === id(33),
+			);
+			assert.ok(closed);
+			assert.deepEqual(
+				[closed.phase, closed.outcome, closed.closed_on],
+				["closed", "won", "2025-04-02"],
+			);
+
+			await sql`insert into deal_phase_change (deal_id, happened_at, phase)
+				values (${id(33)}, '2025-04-08T12:00:00Z', 'invoiced')`.execute(tx);
+			const invoiced = (await readNextBoardDeals(tx, allBoards, "closed")).find(
+				(deal) => deal.id === id(33),
+			);
+			assert.ok(invoiced);
+			assert.deepEqual(
+				[
+					invoiced.phase,
+					invoiced.outcome,
+					invoiced.closed_on,
+					invoiced.invoiced_on,
+				],
+				["invoiced", "won", "2025-04-02", null],
+			);
+			throw rollback;
+		}),
+		rollback,
+	);
 });
 
 test("market and phase edits supersede the imported display values", async () => {
