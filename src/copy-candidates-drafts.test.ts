@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { copyTest, readSchema } from "./test-copy.ts";
 import { doorTest } from "./test-door.ts";
@@ -222,49 +222,35 @@ test("a copied email lead can be decided by its own mailbox partner", async (t) 
 		await door.db.query("rollback");
 		await door.cleanup();
 	});
-	const hash = (text: string) =>
-		createHash("sha256").update(text).digest("hex");
-	const storeRef = `${hash("hxstore-local\x1fexample-store-key").slice(0, 20)}:1735689600`;
-	const pending = (n: number, mailbox: string, message: string) => {
-		const address = `sender-${n}@example.test`;
-		return candidate(n, "pool", {
+	const reading = {
+		applies_to: "existing_deal",
+		deal_id: id(71),
+		confidence: 0.9,
+		evidence_quote: "Could we see the space next week?",
+	};
+	const pending = (
+		n: number,
+		mailbox: string,
+		basis: string,
+		reading?: object,
+		fields = {},
+	) =>
+		candidate(n, "pool", {
 			source: "outlook-intake",
-			source_key: `email-sha256:${mailbox}:${hash(address)}`,
 			source_row: JSON.stringify({
 				mailbox_owner: mailbox,
-				message_ref: message,
+				message_ref: `example-ref-${n}`,
+				reading,
 			}),
-			email: address,
-		});
-	};
-	const mail = (n: number, mailbox: string, item: string, sender: number) =>
-		insert("activity", {
-			id: id(n),
-			kind: "email_in",
-			occurred_at: `2025-01-0${sender - 60}`,
-			actor_id: sweep,
-			party_id: user,
-			summary: `Example email ${n}`,
-			email_context: JSON.stringify({
-				sender: { email: `sender-${sender}@example.test` },
-				subject: `Example email ${n}`,
-			}),
-			email_identity: JSON.stringify({
-				mailbox_owner: mailbox,
-				mailbox_account: `${mailbox}@example.test`,
-				item_id: item,
-				subject: `Example email ${n}`,
-			}),
+			email: `sender-${n}@example.test`,
+			score_basis: `Inbound email: Example summary ${n}${basis}`,
+			...fields,
 		});
 	await door.db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.actor (id, slug, kind, display_name) values
   ('${user}', 'partner_one', 'human', 'Example User'),
   ('${helper}', 'partner_two', 'human', 'Example Partner'),
   ('${sweep}', 'mail-example', 'automation', 'Example Mail Capture');
- insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
- insert into public.activity_kind (slug, label, is_contact) values ('email_in', 'Inbound email', true);
- insert into public.party (id, kind, name, created_by, updated_by)
-  values ('${user}', 'person', 'Example User', '${user}', '${user}');
  insert into party (id, kind, name)
   values ('${user}', 'person', 'Example User'), ('${helper}', 'person', 'Example Partner');
  insert into app_user (id, slug) values ('${user}', 'partner_one'), ('${helper}', 'partner_two');
@@ -272,38 +258,63 @@ test("a copied email lead can be decided by its own mailbox partner", async (t) 
  insert into how_found (slug, label) values ('inbound', 'Inbound');
  insert into role (slug, label) values ('lead', 'Lead');
  insert into stage (role, slug, label) values ('lead', 'new', 'New');
- ${pending(61, "partner_one", "example-keyless-ref")}
- ${pending(62, "partner_two", storeRef)}
- ${pending(63, "partner_one", "wrong-mailbox-ref")}
- ${pending(64, "unknown-mailbox", "missing-ref")}
- ${mail(71, "partner_one", "intake:example-keyless-ref", 61)}
- ${mail(72, "partner_two", "hxstore-key:example-store-key", 62)}
- ${mail(73, "partner_two", "intake:wrong-mailbox-ref", 63)}
+ insert into party_email (party_id, address, label)
+  values ('${helper}', 'sender-65@example.test', 'work');
+ ${pending(61, "partner_one", " Applies to open deal Example deal.", reading)}
+ ${pending(62, "partner_two", "")}
+ ${pending(63, "partner_one", " Possible new lead or matter.", { applies_to: "new_matter" })}
+ ${pending(64, "unknown-mailbox", "")}
+ ${pending(65, "partner_one", "", undefined, {
+		email: "Sender-65@EXAMPLE.TEST",
+		confirmed_at: "2025-01-03",
+		confirmed_by: user,
+ })}
+ ${pending(66, "partner_one", "", undefined, { email: "invalid" })}
  commit;`);
-	await door.db.query(`begin; ${await readSchema("copy-emails.sql")}; commit;`);
 	const refusals = await run(door.db);
 	assert.deepEqual(
 		refusals.map(({ old_id, reason }) => [old_id, reason]),
 		[
-			[id(63), "email_activity_not_found"],
 			[id(64), "mailbox_not_copied"],
-			[id(64), "email_activity_not_found"],
+			[id(65), "known_party"],
+			[id(66), "invalid_sender_address"],
 		],
 	);
 	const suggestions = () =>
-		door.db.query<{ id: string; candidate_id: string; status: string }>(
-			"select id, candidate_id, status from proposal where kind = 'email_lead' order by candidate_id",
-		);
-	const {
-		rows: [accept, dismiss, ...extra],
-	} = await suggestions();
-	assert.ok(accept && dismiss);
-	assert.deepEqual(extra, []);
+		door.db.query<{
+			id: string;
+			candidate_id: string;
+			status: string;
+			evidence: string;
+			reading: unknown;
+		}>(`select p.id, p.candidate_id, p.status, p.evidence, c.source_row -> 'reading' as reading
+			from proposal p join candidate c on c.id = p.candidate_id
+			where p.kind = 'email_lead' order by p.candidate_id`);
+	const { rows: pendingSuggestions } = await suggestions();
 	assert.deepEqual(
-		[accept.candidate_id, dismiss.candidate_id],
-		[id(61), id(62)],
+		pendingSuggestions.map(({ candidate_id, status, evidence, reading }) => [
+			candidate_id,
+			status,
+			evidence,
+			reading,
+		]),
+		[
+			[id(61), "pending", "Example summary 61", reading],
+			[id(62), "pending", "Example summary 62", null],
+			[id(63), "pending", "Example summary 63", { applies_to: "new_matter" }],
+		],
 	);
-	assert.deepEqual([accept.status, dismiss.status], ["pending", "pending"]);
+	const [accept, dismiss, untouched] = pendingSuggestions;
+	assert.ok(accept && dismiss && untouched);
+	assert.deepEqual(
+		(
+			await door.db.query(
+				"select changed_by_user_id from candidate where id = $1",
+				[id(65)],
+			)
+		).rows,
+		[{ changed_by_user_id: user }],
+	);
 	const decide = (user: string, proposal: string, decision: object) =>
 		door.save({ user }, `proposals/${proposal}/decision`, {
 			idempotency_key: randomUUID(),
@@ -348,11 +359,17 @@ test("a copied email lead can be decided by its own mailbox partner", async (t) 
 		[
 			{ id: id(61), status: "promoted", reason: null },
 			{ id: id(62), status: "declined", reason },
+			...[63, 64, 65, 66].map((n) => ({
+				id: id(n),
+				status: "unreviewed",
+				reason: null,
+			})),
 		],
 	);
 	assert.deepEqual(await run(door.db), refusals);
 	assert.deepEqual((await suggestions()).rows, [
 		{ ...accept, status: "accepted" },
 		{ ...dismiss, status: "dismissed" },
+		untouched,
 	]);
 });

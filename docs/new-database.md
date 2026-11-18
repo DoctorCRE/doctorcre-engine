@@ -279,19 +279,19 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role.
 4. `copy-national-account-owners.sql`, with `copy_account_owner_date`: needs the national accounts and mapped human owners.
 5. `copy-client-brands.sql`, with `copy_client_brand_date`: needs the client locations and their brand companies.
-6. `copy-vendors.sql`, with `copy_vendor_ruling_reason` when reviewed: the deal copy finds the vendor roles.
-7. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
-8. `copy-deals.sql`, then `copy-market-agent-sources.sql` in its own transaction.
-9. `copy-vendors.sql` again: introductions and worked deals find their deals.
-10. `copy-leases.sql`: needs its deal, client and building.
-11. `copy-critical-dates.sql`.
-12. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
-13. `copy-deal-file-text.sql`: needs the deal files. Then `copy-client-files.sql` reuses stored files and links client-only files through the party map.
-14. `copy-commissions.sql`, after the partners enter their ladders.
-15. `copy-invoice-emails.sql`: needs the deals and their payments.
-16. `copy-space-needs.sql`, with `copy_space_need_county` and `copy_space_need_deal`: needs markets, deals and vendors.
-17. `copy-activity.sql`, then `copy-emails.sql`: need parties and deals. Then `copy-attachment-emails.sql`: needs the deal files and emails. Then `copy-reply-drafts.sql`: needs the emails and the partners as users.
-18. `copy-candidates-drafts.sql`: needs copied leads, emails and mailbox users.
+6. `copy-candidates-drafts.sql`: drafts and candidates find their leads and mailbox users.
+7. `copy-vendors.sql`, with `copy_vendor_ruling_reason` when reviewed: the deal copy finds the vendor roles.
+8. `copy-buildings.sql`: the only place today's spaces become suites, which the lease copy links.
+9. `copy-deals.sql`, then `copy-market-agent-sources.sql` in its own transaction.
+10. `copy-vendors.sql` again: introductions and worked deals find their deals.
+11. `copy-leases.sql`: needs its deal, client and building.
+12. `copy-critical-dates.sql`.
+13. `copy-deal-files.sql`, with `copy_template_kind` when reviewed: files a lease's source file to its deal.
+14. `copy-deal-file-text.sql`: needs the deal files. Then `copy-client-files.sql` reuses stored files and links client-only files through the party map.
+15. `copy-commissions.sql`, after the partners enter their ladders.
+16. `copy-invoice-emails.sql`: needs the deals and their payments.
+17. `copy-space-needs.sql`, with `copy_space_need_county` and `copy_space_need_deal`: needs markets, deals and vendors.
+18. `copy-activity.sql`, then `copy-emails.sql`: need parties and deals. Then `copy-attachment-emails.sql`: needs the deal files and emails. Then `copy-reply-drafts.sql`: needs the emails and the partners as users.
 19. `copy-calls.sql`: needs the activity a logged meeting already is.
 20. `copy-meetings.sql`: needs logged activities, with reviewed reuse or distinct-pair inputs when needed.
 21. `copy-lead-stage-moves.sql`: needs the activity each move cites.
@@ -880,9 +880,9 @@ This is the first part of #329, tracked in #333. `schema/copy-candidates-drafts.
 
 ## Copying today's candidates and outreach drafts
 
-Run `schema/copy-candidates-drafts.sql` as the owner after `copy-leads-clients.sql` and `copy-emails.sql`, in its own transaction with the new schema on `search_path`. It reads the source rows in `public`, follows the mappings under "Leads and clients", and lists missing values and records in `not_copied`. A rerun only inserts new drafts, candidates and their suggestions.
+Run `schema/copy-candidates-drafts.sql` as the owner after `copy-leads-clients.sql`, in its own transaction with the new schema on `search_path`. It reads the source rows in `public`, follows the mappings under "Leads and clients", and lists missing values and records in `not_copied`. A rerun only inserts new drafts, candidates and their suggestions.
 
-A pending Outlook candidate needs a valid sender address, a mapped mailbox user and one copied email matched by the old intake reference in that mailbox. Missing or ambiguous matches are listed by candidate id. The copy keeps the old context and brings the address, message reference, first seen time and reading to the top of `source_row`. It stamps the candidate and the new pending `email_lead` suggestion as `mail_capture` for the mailbox user at the candidate's creation time. The candidate keeps its old id. Accepting it creates an inbound lead. Any saved reading about an existing record remains evidence.
+A pending Outlook candidate becomes an email lead suggestion when it has a valid sender address, a mapped mailbox user and an unknown sender. Missing mailbox users, invalid addresses and known contacts are listed by candidate id. Those candidates still copy as unreviewed. The copy keeps the old context and brings the address, message reference, first seen time and reading to the top of `source_row` for the mailbox user. The suggestion stores the original summary and carries the mailbox owner's `mail_capture` stamp. A reading about an existing deal stays with the candidate so the partner can see it and dismiss the suggestion. Accepting any of these suggestions creates a new inbound lead.
 
 A draft or candidate finds its lead on the party the lead copy recorded. Its history is written from today's facts, not from the load: a draft's creation by its creator and its approval by the approving user; a candidate's finding by its creator, as unreviewed when a decision came later, then its confirmation and its decision. The row names whoever made the latest of these, and when. A promotion's or email confirmation's user comes from its status event, and a decline's from `declined_by`, each through a sponsored agent where one acted. A creation takes the event its own transaction recorded, so mail capture keeps its job and sponsor. An expiry takes the Clear the deck drop that named the candidate, or else the row's last change. Today's rows record no expiry basis, so every expired candidate takes "Expired by Clear the deck". A draft's earlier edits stay in today's events; the copy keeps its current text and revision.
 

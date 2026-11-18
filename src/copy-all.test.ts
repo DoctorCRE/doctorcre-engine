@@ -28,6 +28,7 @@ const order: [file: string, input?: string][] = [
 		`create temp table copy_client_brand_date (location_client_id uuid primary key, started_on date not null) on commit drop;
  insert into copy_client_brand_date values ('${id(20)}', '2024-01-01');`,
 	],
+	["copy-candidates-drafts.sql"],
 	["copy-vendors.sql"],
 	["copy-buildings.sql"],
 	["copy-deals.sql"],
@@ -49,7 +50,6 @@ const order: [file: string, input?: string][] = [
 	["copy-emails.sql"],
 	["copy-attachment-emails.sql"],
 	["copy-reply-drafts.sql"],
-	["copy-candidates-drafts.sql"],
 	["copy-calls.sql"],
 	["copy-meetings.sql"],
 	["copy-lead-stage-moves.sql"],

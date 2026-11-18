@@ -1,5 +1,5 @@
 -- Copies today's lead candidates and outreach drafts with their decisions, approvals and history. Run it after
--- schema/copy-emails.sql, in its own owner transaction with search_path set to the new schema.
+-- schema/copy-leads-clients.sql, in its own owner transaction with search_path set to the new schema.
 -- It only reads today's tables in public, and ends by listing each value it did not copy, for a user to fix there.
 -- A copied row keeps its old id, so a second run copies only rows that are new.
 
@@ -126,32 +126,12 @@ select c.id, f.field, f.value, f.reason from old_candidate c cross join lateral 
 	('confirmed_by', c.confirmed_by::text, 'confirmation_needs_user', c.confirmed_at is not null and c.confirmer is null)
 ) f (field, value, reason, refused) where f.refused and c.status <> 'confirmed';
 
--- A store key identifies the message even when Outlook changes its recorded sent time.
 create temp table pending_email_candidate on commit drop as
-select c.id, owner.id as mailbox_user_id, lower(btrim(c.email)) as address, matched.email_found
+select c.id, owner.id as mailbox_user_id, lower(btrim(c.email)) as address
 from old_candidate c
 left join app_user owner on owner.slug = c.source_row ->> 'mailbox_owner'
-cross join lateral (
-	select count(distinct e.activity_id) = 1 as email_found
-	from public.activity a
-	join outside_id o on o.source = 'old_system' and o.value = a.id::text
-	join email e on e.activity_id = o.email_activity_id
-	where a.kind = 'email_in' and a.email_identity ->> 'mailbox_owner' = c.source_row ->> 'mailbox_owner'
-		and (a.email_identity ->> 'item_id' = 'intake:' || (c.source_row ->> 'message_ref')
-			or (a.email_identity ->> 'item_id' like 'hxstore-key:%'
-				and c.source_row ->> 'message_ref' ~ '^[0-9a-f]{20}:[0-9]+$'
-				and split_part(c.source_row ->> 'message_ref', ':', 1) = left(encode(sha256(
-					convert_to('hxstore-local' || chr(31) || substr(a.email_identity ->> 'item_id', 13), 'UTF8')), 'hex'), 20)))
-) matched
 where c.source = 'outlook-intake' and c.status = 'pool'
 	and not exists (select from proposal p where p.candidate_id = c.id);
-
-insert into not_copied
-select p.id, f.field, null, f.reason from pending_email_candidate p cross join lateral (values
-	('mailbox_owner', 'mailbox_not_copied', p.mailbox_user_id is null),
-	('message_ref', 'email_activity_not_found', not p.email_found),
-	('email', 'invalid_sender_address', p.address is null or not pg_input_is_valid(p.address, 'email_address'))
-) f (field, reason, refused) where f.refused;
 
 create temp table ready_candidate on commit drop as
 select c.*, c.est_lease_event is not null and c.est_basis ~ '\S' as sourced, p.mailbox_user_id, p.address as sender_address,
@@ -177,7 +157,7 @@ from ready_candidate c join public.candidate_pool p using (id)
 cross join lateral (select at, by_user, by_job, for_user from (values
 	(c.created_at, c.copied_by_user_id, c.copied_by_job, c.copied_for_user_id, true),
 	(c.decided_at, c.decided_by_user_id, c.decided_by_job, c.decided_for_user_id, c.status in ('promoted', 'declined', 'expired')),
-	(c.confirmed_at, c.confirmer, null, null, c.confirmer is not null and c.mailbox_user_id is null)
+	(c.confirmed_at, c.confirmer, null, null, c.confirmer is not null)
 ) e (at, by_user, by_job, for_user, happened) where happened order by at desc limit 1) s;
 
 -- A decided candidate was unreviewed when it was found; its decision is the change to what it is now.
@@ -199,17 +179,38 @@ select 'candidate', id, 'update', '{"confirmed_at": null, "confirmed_by": null}'
 	jsonb_build_object('confirmed_at', confirmed_at, 'confirmed_by', confirmed_by), confirmed_at, confirmer, null, null
 from copied_candidate where confirmer is not null;
 
+-- These refusals apply to the suggestion alone, after the candidate has been copied.
+insert into not_copied
+select p.id, f.field, null, f.reason from pending_email_candidate p cross join lateral (values
+	('mailbox_owner', 'mailbox_not_copied', p.mailbox_user_id is null),
+	('email', 'invalid_sender_address', p.address is null or not pg_input_is_valid(p.address, 'email_address')),
+	('email', 'known_party', exists (select from party_email where address = p.address))
+) f (field, reason, refused) where f.refused;
+
+create temp table ready_email_suggestion on commit drop as
+select id, mailbox_user_id, created_at,
+	regexp_replace(regexp_replace(score_basis, '^Inbound email: ', ''),
+		case source_row #>> '{reading,applies_to}'
+			when 'existing_deal' then '^(.*) Applies to open deal .+\.$'
+			when 'existing_party' then '^(.*) Likely a new address for .+\.$'
+			when 'new_matter' then '^(.*) Possible new lead or matter\.$'
+			else '^(.*)$'
+		end, '\1') as summary
+from copied_candidate c
+where c.mailbox_user_id is not null
+	and not exists (select from not_copied n where n.old_id = c.id and n.field in ('email', 'mailbox_owner'));
+
 do $$
 declare
 	mailbox uuid;
 begin
 	perform set_config('engine.job', 'mail_capture', true);
-	for mailbox in select distinct mailbox_user_id from copied_candidate where mailbox_user_id is not null loop
+	for mailbox in select distinct mailbox_user_id from ready_email_suggestion loop
 		perform set_config('engine.user_id', mailbox::text, true);
 		with inserted as (
 			insert into proposal (kind, candidate_id, created_at, evidence, proposed_by_job, changed_at, changed_by_job, changed_for_user_id)
-			select 'email_lead', id, created_at, score_basis, 'mail_capture', created_at, 'mail_capture', mailbox
-			from copied_candidate where mailbox_user_id = mailbox returning *
+			select 'email_lead', id, created_at, summary, 'mail_capture', created_at, 'mail_capture', mailbox
+			from ready_email_suggestion where mailbox_user_id = mailbox returning *
 		)
 		insert into copied_history
 		select 'proposal', p.id, 'insert', null,
