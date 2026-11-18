@@ -94,17 +94,17 @@ async function createStep(
 	request: Fitted<typeof NEW_STEP>,
 ): Promise<JsonObject> {
 	const { deal_id, party_id, property_id, what, item } = request;
-	const { owner_party_id, due_on, hold_until } = request;
+	const { owner_party_id = null, due_on, hold_until } = request;
 	const insert = sql<{ id: string }>`
 		insert into next_step (deal_id, party_id, property_id, what, owner_party_id, due_on, hold_until,
 			item_title, item_bullets, source_ref)
 		values (${deal_id ?? null}::uuid, ${party_id ?? null}::uuid, ${property_id ?? null}::uuid, ${what},
-			${owner_party_id ?? null}::uuid, ${due_on ?? null}::date, ${hold_until ?? null}::date,
+			${owner_party_id}::uuid, ${due_on ?? null}::date, ${hold_until ?? null}::date,
 			${item?.title ?? null}, ${JSON.stringify(item?.bullets ?? [])}::jsonb, ${item?.source_ref ?? null})
 		returning id`;
 	const { rows } = await saveOpenStep(
 		tx,
-		{ deal_id, party_id, owner_party_id: owner_party_id ?? undefined },
+		{ deal_id, party_id, owner_party_id },
 		() => insert.execute(tx),
 	).catch((error: unknown) => {
 		const named = RECORDS.map((name) => `next_step_${name}_fkey`);

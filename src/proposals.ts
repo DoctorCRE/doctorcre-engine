@@ -347,7 +347,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					accepts && p.kind === "next_step"
 						? await saveOpenStep(
 								tx,
-								{ ...p, owner_party_id: owner ?? undefined },
+								{ ...p, owner_party_id: owner },
 								async () => {
 									if (ownerEdit)
 										await sql`select set_config('engine.proposal_step_owner', ${ownerEdit}, true)`.execute(
