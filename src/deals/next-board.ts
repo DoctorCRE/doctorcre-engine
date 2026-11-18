@@ -274,6 +274,8 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 	// The client copy leaves prospects outside national_account.
 	const { rows: accounts } = await sql`
 		select na.party_id as account_client_id, p.name as account_name, u.slug as account_owner,
+			(select min(value) from outside_id where party_id = na.party_id
+				and source = 'old_system_ref' and value like 'C-%' having count(*) = 1) as account_client_ref,
 			count(b.id) filter (where b.operating_state = 'active')::int as open_deals,
 			count(b.id) filter (where b.operating_state = 'parked')::int as parked_deals,
 			count(b.id) filter (where b.operating_state = 'active' and b.attention)::int as attention_deals,

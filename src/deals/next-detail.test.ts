@@ -35,6 +35,8 @@ insert into public.client (id, party_id, status, acquisition_source, created_by,
 insert into public.client (id, party_id, status, acquisition_source, client_type, prospect_engagement_status, created_by, updated_by) values
  ('${id(22)}', '${id(14)}', 'prospect', 'Example referral', 'national_account', 'inactive', ${by}),
  ('${id(23)}', '${id(15)}', 'engaged', 'Example referral', 'national_account', 'active', ${by});
+update public.client set roster_ref = 'C-EX-23' where id = '${id(23)}';
+update public.party set ref = 'P-EX-15' where id = '${id(15)}';
 insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2);
 insert into public.deal_phase (slug, label) values ('touring', 'Example touring'), ('negotiation', 'Example negotiation');
 insert into public.participant_role (slug, label) values ('lead', 'Example lead'), ('support', 'Example support'),
@@ -98,6 +100,7 @@ before(async () => {
 		values ('${id(81)}', '${id(30)}', 'loi_expiry', '2030-02-01', 'Example offer');
 		insert into next_step (deal_id, what, resolution, done_at)
 		values ('${id(32)}', 'Example confirm terms', 'done', '2025-02-04T18:00:00Z');
+		update deal set closed_value = 1250, parking_reason = 'other' where id = '${id(31)}';
 		commit;`);
 });
 after(cleanup);
@@ -246,7 +249,12 @@ for (const schema of [undefined, "next"]) {
 			],
 			closed_deals: [],
 			lost_deals: [],
-			accounts: [{ account_name: "Example Engaged Account" }],
+			accounts: [
+				{
+					account_name: "Example Engaged Account",
+					account_client_ref: "C-EX-23",
+				},
+			],
 		});
 		assert.ok(
 			board &&
@@ -281,7 +289,7 @@ for (const schema of [undefined, "next"]) {
 			deal_id: id(30),
 			next_step: "Example send the survey",
 			email_threads: [{ conversation_id: "example-thread" }],
-			events: [{ field: "attention" }],
+			events: [{ id: id(42), verb: "update-deal", field: "attention" }],
 			thread: [
 				{
 					id: id(70),
@@ -310,3 +318,32 @@ for (const schema of [undefined, "next"]) {
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
 	});
 }
+
+test("signed-in detail names every field changed by one new-schema save", async () => {
+	const response = await get(`/deals/${id(31)}`, "next");
+	assert.equal(response.status, 200);
+	const detail = await response.json();
+	assert.ok(
+		detail &&
+			typeof detail === "object" &&
+			"events" in detail &&
+			Array.isArray(detail.events),
+	);
+	const { events } = detail;
+	assert.equal(events.length, 2);
+	assert.notEqual(events[0].id, events[1].id);
+	assert.partialDeepStrictEqual(events, [
+		{
+			verb: "update-deal",
+			field: "parking_reason",
+			old_value: null,
+			new_value: "other",
+		},
+		{
+			verb: "update-deal",
+			field: "won_value",
+			old_value: null,
+			new_value: 1250,
+		},
+	]);
+});

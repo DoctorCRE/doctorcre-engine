@@ -272,3 +272,5 @@
 136\. **Invoice capture keeps the first evidence for a source reference (2026-11-18).** The mail job saves invoice facts for the mailbox's partner. The nightly job reads captured evidence with a proposed deal and payment only when the same database checks used for application find a unique target. Evidence with no target waits for a user (#669).
 
 137\. **The signed-in Deals reads switch together (2026-11-18).** The engine selects `next` for both Deals GET routes only when `DEALS_READ_SCHEMA=next`. The reads use the existing database binding, the `engine_reader` role, and the app's board and detail response sections. The app's own KV switch still decides when its calls reach the engine (#668).
+
+138\. **Deals show the facts kept in native change history (2026-11-18).** The timeline shows one field per deal edit and keeps imported event labels verbatim. A national account shows its copied roster reference when there is exactly one client reference on its record (#674).

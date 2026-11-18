@@ -68,10 +68,13 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				from imported_change c left join app_user u on u.id = c.changed_by_user_id
 				where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
 				union all
-				select c.id::text, c.changed_at, coalesce(u.slug, c.changed_by_job), c.action,
-					null, c.old_value, c.new_value
+				select c.id || ':' || edit.key, c.changed_at, coalesce(u.slug, c.changed_by_job), 'update-deal',
+					case edit.key when 'needs_attention' then 'attention' when 'closed_value' then 'won_value' else edit.key end,
+					c.old_value -> edit.key, edit.value
 				from change c left join app_user u on u.id = c.changed_by_user_id
+				cross join lateral jsonb_each(c.new_value) edit
 				where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id) and c.action = 'update'
+					and edit.key not in ('parked_at', 'parked_by_user_id')
 				order by recorded_at desc, id desc limit ${HISTORY_CAP}
 			) e)`.as("events"),
 		])
