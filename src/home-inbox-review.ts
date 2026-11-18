@@ -20,6 +20,7 @@ type Draft = ReviewRow & {
 	mail_group: string;
 	member_ids: string[] | null;
 	suggestions: SuggestionReference[] | null;
+	due_on: string | null;
 	sent_at: string | null;
 	failure_reason: string | null;
 	email_activity_id: string;
@@ -233,7 +234,7 @@ function homeReviewGroups(userId: string, forMail = false) {
 		suggestion_groups as (${suggestionRows(userId, forMail)}),
 		draft_cards as (
 			select d.*, greatest(d.draft_change_id, s.suggestion_change_id) as source_change_id,
-				s.suggestions, s.member_ids
+				s.suggestions, s.member_ids, s.due_on
 			from draft_groups d
 			left join suggestion_groups s on s.mail_group = d.mail_group and d.status <> 'sent'
 			where d.status in ('pending', 'sent') or s.id is null
@@ -419,7 +420,7 @@ export async function readHomeReviewCards(
 			),
 			kind_label: "Reply draft",
 			deal_id: null,
-			due_on: null,
+			due_on: draft.due_on,
 			merged_source_ids: [
 				draft.id,
 				...(draft.suggestions?.map(({ id }) => id) ?? []),
