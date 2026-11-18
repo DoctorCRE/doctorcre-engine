@@ -247,14 +247,7 @@ export async function createStep(
 async function lockStep(tx: Transaction<DB>, id: string) {
 	const step = await tx
 		.selectFrom("next_step")
-		.select([
-			"id",
-			"status",
-			"deal_id",
-			"party_id",
-			"owner_party_id",
-			"item_title",
-		])
+		.select(["status", "deal_id", "party_id", "owner_party_id", "item_title"])
 		.where("id", "=", id)
 		.forUpdate()
 		.executeTakeFirst();
@@ -339,10 +332,10 @@ async function endStep(
 	stamp: Stamp,
 ): Promise<JsonObject> {
 	const { next_step_id, resolution, done_at, reason, base_version } = request;
-	const { id, status, item_title } = await lockStep(tx, next_step_id);
+	const { status, item_title } = await lockStep(tx, next_step_id);
 	await checkStepVersion(
 		tx,
-		id,
+		next_step_id,
 		base_version,
 		stamp.job !== undefined || item_title !== null,
 	);
@@ -359,7 +352,7 @@ async function endStep(
 		})
 		.where("id", "=", next_step_id)
 		.execute();
-	const change_id = await latestChange(tx, "next_step", id);
+	const change_id = await latestChange(tx, "next_step", next_step_id);
 	return { next_step_id, status: resolution, change_id };
 }
 
@@ -435,7 +428,7 @@ async function reopenStep(
 	const step = await lockStep(tx, next_step_id);
 	await checkStepVersion(
 		tx,
-		step.id,
+		next_step_id,
 		request.base_version,
 		stamp.job !== undefined,
 	);

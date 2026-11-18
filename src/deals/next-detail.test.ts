@@ -412,7 +412,7 @@ test("a proposed critical date stays off the deal checklist", async () => {
 	);
 });
 
-test("the renewal checklist tracks confirmed deadlines and leaves a forecast outstanding", async () => {
+test("the renewal checklist tracks confirmed deadlines and a saved receipt", async () => {
 	const response = await get(`/deals/${id(33)}`, "next");
 	assert.equal(response.status, 200);
 	assert.partialDeepStrictEqual(await response.json(), {
@@ -430,7 +430,7 @@ test("the renewal checklist tracks confirmed deadlines and leaves a forecast out
 				},
 				{
 					id: "invoice",
-					items: [{ id: "commission_received", status: "not_recorded" }],
+					items: [{ id: "commission_received", status: "complete" }],
 				},
 			],
 			due_items: [

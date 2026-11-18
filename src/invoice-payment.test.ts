@@ -73,6 +73,50 @@ async function trackerRow(
 	return { ...entry, base_version };
 }
 
+test("Mark paid completes the deal checklist despite a copied expected amount", async () => {
+	const { deal, dated, undated } = await payments();
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		update commission set expected = 200 where deal_id = '${deal}';
+		update commission_payment set invoiced_on = '${invoicedOn}', received_on = '${receivedOn}'
+		where id = '${undated}';
+		commit;`);
+
+	const before = await trackerRow(dated);
+	const [status, result] = await save(user, path, {
+		commission_id: dated,
+		base_version: before.base_version,
+		received_on: receivedOn,
+		idempotency_key: randomUUID(),
+	});
+	assert.equal(status, 200, JSON.stringify(result));
+
+	const page = await request(
+		user,
+		`deals/${deal}`,
+		{ method: "GET" },
+		{ DEALS_READ_SCHEMA: "next" },
+	);
+	assert.equal(page.status, 200);
+	assert.partialDeepStrictEqual(await page.json(), {
+		checklist: {
+			phases: [
+				{
+					id: "invoice",
+					items: [
+						{
+							id: "commission_received",
+							label: "Commission received",
+							status: "complete",
+							evidence_ref: "2 commission payments received",
+						},
+					],
+				},
+			],
+		},
+	});
+});
+
 test("a partner's retried Mark paid shows one receipt on the refreshed tracker", async () => {
 	const { deal, dated, undated } = await payments();
 	const before = await trackerRow(dated);
