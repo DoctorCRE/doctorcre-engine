@@ -96,6 +96,19 @@ async function trackerEntries(deal: string) {
 		.filter((row) => row.deal_id === deal);
 }
 
+const readDeals = async (path: string) => {
+	const response = await read(
+		user,
+		path,
+		{ method: "GET" },
+		{
+			DEALS_READ_SCHEMA: "next",
+		},
+	);
+	assert.equal(response.status, 200);
+	return response.json();
+};
+
 async function records(deal: string, payment: string) {
 	return (
 		await db.query(
@@ -195,12 +208,29 @@ test("lead stages close and date an invoice once, and a partner can undo both ch
 		stamps.rows,
 		Array(2).fill({ changed_by_job: "lead_stage", changed_for_user_id: owner }),
 	);
+	const phase_change = {
+		event_id: invoice,
+		prior_phase: "closing",
+		phase: "closed",
+		reason: "Invoice received",
+		evidence_date: invoiceDate,
+		automatic: true,
+	};
+	assert.partialDeepStrictEqual(await readDeals("deals"), {
+		closed_deals: [{ id: deal, phase_change }],
+	});
+	assert.partialDeepStrictEqual(await readDeals(`deals/${deal}`), {
+		phase_change,
+	});
 
 	const undo = key();
 	const undone = { ...applied, status: "undone" };
 	assert.equal((await save(job, undoPath(invoice), undo))[0], 404);
 	assert.deepEqual(await save(user, undoPath(invoice), undo), [200, undone]);
 	assert.deepEqual(await trackerEntries(deal), []);
+	assert.partialDeepStrictEqual(await readDeals("deals"), {
+		deals: [{ id: deal, phase_change: null }],
+	});
 	assert.deepEqual(await save(user, undoPath(invoice), undo), [
 		200,
 		{ replayed: true, ...undone },
@@ -239,6 +269,21 @@ test("lead stages close and date an invoice once, and a partner can undo both ch
 		changed_for_user_id: null,
 		changed_by_user_id: owner,
 		phases: ["closing", "closed", "closing"],
+	});
+});
+
+test("an invoice applied by a partner has no automatic phase receipt", async () => {
+	const { deal, payment, invoice } = await fixture();
+	await db.query("begin");
+	await db.query("select set_config('engine.user_id', $1, true)", [owner]);
+	await db.query(
+		"update invoice_email set status = 'applied', deal_id = $2, payment_id = $3 where id = $1",
+		[invoice, deal, payment],
+	);
+	await db.query("commit");
+	assert.partialDeepStrictEqual(await readDeals(`deals/${deal}`), {
+		phase: "closed",
+		phase_change: null,
 	});
 });
 

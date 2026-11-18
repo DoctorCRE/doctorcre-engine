@@ -1,4 +1,5 @@
 import { type Expression, sql, type Transaction } from "kysely";
+import { jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
@@ -24,7 +25,13 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 			(eb) =>
 				eb
 					.selectFrom("deal_phase_change as pc")
-					.select(["pc.phase", "pc.happened_at", "pc.reason"])
+					.select([
+						"pc.phase",
+						"pc.happened_at",
+						"pc.reason",
+						"pc.changed_at",
+						"pc.changed_by_job",
+					])
 					.whereRef("pc.deal_id", "=", "d.id")
 					.orderBy("pc.happened_at", "desc")
 					.limit(1)
@@ -112,6 +119,28 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 				"a.account_client_id",
 				"a.account_name",
 				"a.account_owner",
+				jsonObjectFrom(
+					eb
+						.selectFrom("invoice_email as invoice")
+						.innerJoin("deal_phase_change as prior", (join) =>
+							join
+								.onRef("prior.deal_id", "=", "invoice.deal_id")
+								.onRef("prior.happened_at", "=", "invoice.prior_phase_at"),
+						)
+						.select((eb) => [
+							"invoice.id as event_id",
+							"prior.phase as prior_phase",
+							"p.phase",
+							"p.reason",
+							asText(eb.ref("invoice.email_date")).as("evidence_date"),
+							asText(eb.ref("p.changed_at")).as("recorded_at"),
+							sql.lit(true).as("automatic"),
+						])
+						.whereRef("invoice.deal_id", "=", "d.id")
+						.whereRef("invoice.applied_phase_at", "=", "p.happened_at")
+						.where("invoice.status", "=", "applied")
+						.where("p.changed_by_job", "=", "lead_stage"),
+				).as("phase_change"),
 				eb
 					.case()
 					.when("a.account_client_id", "is", null)
