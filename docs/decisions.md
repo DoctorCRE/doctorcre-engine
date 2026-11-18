@@ -305,4 +305,6 @@
 
 154\. **Home reads draft recipients before approval (2026-11-18).** A pending reply uses the original sender and previews the other partner's work email when it can identify one address. Approval freezes both addresses. Saving the draft changes its text and revision. Declining it requires a reason, as in the old inbox (#713).
 
-155\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).
+155\. **Home marks follow the suggestion card or reply draft (2026-11-18).** A partner marks the visible suggestion group's leading proposal or their own active reply draft. The mark uses source and mark history to refuse stale saves. A new proposal in the same group keeps its snooze. Sent drafts appear once in Done by their recorded send time, alongside any active draft in the same conversation (#721).
+
+157\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).
