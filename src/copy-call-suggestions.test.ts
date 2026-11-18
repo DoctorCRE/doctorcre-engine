@@ -65,11 +65,12 @@ before(async () => {
  insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
  insert into public.deal_phase (slug, label) values ('loi', 'Example LOI');
  insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
-  select v, '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}' from unnest(array['${id(30)}', '${id(31)}']::uuid[]) v;
+  select v, '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}' from unnest(array['${id(30)}', '${id(31)}', '${id(32)}']::uuid[]) v;
  insert into phase values ('loi', 'Example LOI'), ('negotiation', 'Example negotiation'), ('dead', 'Example dead');
- insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
- insert into outside_id (source, value, deal_id) values ('old_system', '${id(30)}', '${id(30)}');
+ insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}'), ('${id(32)}', 'Another Deal', '${id(1)}');
+ insert into outside_id (source, value, deal_id) values ('old_system', '${id(30)}', '${id(30)}'), ('old_system', '${id(32)}', '${id(32)}');
  insert into activity (id, kind, happened_at) values ('${id(60)}', 'call', '2024-01-01 15:00');
+ insert into activity_about (activity_id, deal_id) values ('${id(60)}', '${id(30)}');
  insert into public.capture_session (id, nonce, device_id, actor_id, mode, started_at, consent_announced_at, session_token_hash,
   expires_at, state, state_at, post_call) values
   ('${id(60)}', 'nonce-60', 'example-device', '${id(3)}', 'meeting', '2024-01-01 15:00', '2024-01-01 15:00', 'token-60', '2024-02-01', 'done', '2024-01-01 16:00', true);
@@ -93,6 +94,7 @@ before(async () => {
 		capture(86, "meeting_record", { ref: id(30), summary: "Example" }),
 		capture(87, "next_step", { deal: id(30), text: "Example twice", next_date: null }),
 		capture(88, "next_step", { deal: id(30), text: "Example twice", next_date: null }),
+		capture(96, "next_step", { deal: id(32), text: "Example unrelated step" }),
 	].join(",\n  ")};
  update public.capture_candidate set resolution_note = 'Example note' where id = '${id(80)}';
  commit;`);
@@ -132,6 +134,7 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		"#85 kind new_deal kind_has_no_suggestion",
 		"#87 proposal #87 existing_proposal_conflicts",
 		"#88 proposal #88 existing_proposal_conflicts",
+		"#96 deal #32 call_not_about_deal",
 	]);
 	assert.deepEqual(
 		await rows(

@@ -1088,7 +1088,18 @@ create table next_step (
 	deal_id uuid references deal,
 	party_id uuid references party,
 	property_id uuid references property,
+	call_activity_id uuid,
+	call_kind text generated always as ('call') stored,
+	call_evidence_quote text check (call_evidence_quote ~ '\S'),
+	call_contact_party_id uuid references party,
+	home_step_id uuid generated always as (case when call_activity_id is null then id end) stored unique,
+	home_call_follow_up_id uuid generated always as (case when call_activity_id is not null then id end) stored unique,
 	unique (id, deal_id),
+	foreign key (call_activity_id, call_kind) references activity (id, kind),
+	foreign key (call_activity_id, deal_id) references activity_about (activity_id, deal_id),
+	constraint next_step_call_source check (
+		(call_activity_id is null and call_evidence_quote is null and call_contact_party_id is null)
+		or (call_activity_id is not null and deal_id is not null and call_evidence_quote is not null)),
 	constraint next_step_item_shape check (item_title is null or (deal_id is not null
 		and cardinality(regexp_split_to_array(btrim(item_title), '\s+')) between 2 and 4
 		and source_ref is not null and btrim(source_ref) <> '' and jsonb_typeof(item_bullets) = 'array')),
@@ -1146,17 +1157,39 @@ create table user_preference (
 	constraint user_preference_quiet_hours check ((quiet_from is null) = (quiet_until is null) and quiet_from <> quiet_until)
 );
 
--- A user's own marks on an item on their Home. An item without one is in the inbox.
--- A next step is the one kind of item so far; each kind that comes adds its own key.
+create table home_update (
+	id uuid primary key default gen_random_uuid(),
+	user_id uuid not null references app_user,
+	deal_id uuid not null references deal,
+	what text not null check (what ~ '\S'),
+	checklist_item_ref text check (checklist_item_ref ~ '\S'),
+	due_on date,
+	created_at timestamptz not null default now(),
+	read_at timestamptz check (read_at >= created_at),
+	constraint home_update_checklist_due_date check ((checklist_item_ref is null) = (due_on is null)),
+	unique (user_id, deal_id, checklist_item_ref, due_on),
+	unique (id, user_id)
+);
+
+-- A step is marked through just one key, even when a call produced it.
 create table home_mark (
 	user_id uuid not null references app_user,
-	next_step_id uuid not null references next_step,
+	next_step_id uuid references next_step (home_step_id),
+	call_follow_up_id uuid references next_step (home_call_follow_up_id),
+	home_update_id uuid,
+	item_id uuid generated always as (coalesce(next_step_id, call_follow_up_id, home_update_id)) stored,
+	item_kind text generated always as (
+		case when next_step_id is not null then 'next_step'
+			when call_follow_up_id is not null then 'call_follow_up'
+			when home_update_id is not null then 'home_update' end) stored,
 	created_at timestamptz not null default now(),
 	disposition text check (disposition in ('snoozed', 'settled')),
 	snoozed_until timestamptz,
 	waiting_on_party_id uuid references party,
 	waiting_reason text check (waiting_reason ~ '\S'),
-	primary key (user_id, next_step_id),
+	primary key (user_id, item_kind, item_id),
+	foreign key (home_update_id, user_id) references home_update (id, user_id),
+	constraint home_mark_one_item check (num_nonnulls(next_step_id, call_follow_up_id, home_update_id) = 1),
 	constraint home_mark_snoozed_until check ((disposition is not distinct from 'snoozed') = (snoozed_until is not null)),
 	constraint home_mark_waiting_has_a_reason check ((waiting_on_party_id is null) = (waiting_reason is null)),
 	constraint home_mark_marks_something check (disposition is not null or waiting_on_party_id is not null)
@@ -1179,6 +1212,7 @@ create table proposal (
 	deal_id uuid references deal,
 	next_step_id uuid,
 	held_deal_id uuid generated always as (case when kind = 'next_step_done' then deal_id end) stored,
+	call_step_deal_id uuid generated always as (case when kind = 'next_step' and activity_kind = 'call' then deal_id end) stored,
 	step_seen_at timestamptz,
 	keeps_deal_date boolean not null default false,
 	party_id uuid references party,
@@ -1200,6 +1234,7 @@ create table proposal (
 	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
 	foreign key (next_step_id, deal_id) references next_step (id, deal_id),
 	foreign key (activity_id, held_deal_id) references activity_about (activity_id, deal_id) deferrable initially deferred,
+	foreign key (activity_id, call_step_deal_id) references activity_about (activity_id, deal_id) deferrable initially deferred,
 	foreign key (lead_role, from_stage) references stage (role, slug),
 	foreign key (lead_role, to_stage) references stage (role, slug),
 	constraint proposal_source check (case when kind = 'email_lead' then
@@ -1344,9 +1379,12 @@ begin
 	case new.kind
 	when 'next_step' then
 		-- The decision can override the step owner without changing the suggestion.
-		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id)
+		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id,
+			call_activity_id, call_evidence_quote)
 		values (new.id, new.what, coalesce(nullif(current_setting('engine.proposal_step_owner', true), '')::uuid, new.owner_party_id),
-			new.due_on, new.deal_id, new.party_id, new.property_id);
+			new.due_on, new.deal_id, new.party_id, new.property_id,
+			case when new.activity_kind = 'call' and new.deal_id is not null then new.activity_id end,
+			case when new.activity_kind = 'call' and new.deal_id is not null then new.evidence end);
 	when 'phase_move' then
 		-- Two acceptances cannot both pass the stale-phase check.
 		perform from deal where id = new.deal_id for update;
@@ -2803,7 +2841,7 @@ begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity',
-		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
+		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
 		'party_document', 'email_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
@@ -3017,7 +3055,8 @@ begin atomic
 			where aa.deal_id = d.id
 		),
 		'next_steps', (
-			select coalesce(jsonb_agg(to_jsonb(s) - 'deal_id' - 'party_id' - 'property_id'
+			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id', 'call_activity_id',
+				'call_kind', 'call_evidence_quote', 'call_contact_party_id', 'home_step_id', 'home_call_follow_up_id']
 				order by s.due_on nulls last, s.id), '[]')
 			from next_step s
 			where s.deal_id = d.id
@@ -3181,7 +3220,8 @@ begin atomic
 			from activity_about aa join activity a on a.id = aa.activity_id where aa.party_id = p.id
 		),
 		'next_steps', (
-			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id']
+			select coalesce(jsonb_agg(to_jsonb(s) - array['deal_id', 'party_id', 'property_id', 'call_activity_id',
+				'call_kind', 'call_evidence_quote', 'call_contact_party_id', 'home_step_id', 'home_call_follow_up_id']
 				order by s.due_on nulls last, s.id), '[]')
 			from next_step s where s.party_id = p.id
 		),
@@ -3262,7 +3302,8 @@ grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) o
 -- Only the owner's import supplies the old event that closed a step.
 revoke insert on next_step from engine;
 grant insert (id, created_at, what, owner_party_id, due_on, hold_until, item_title, item_bullets, source_ref,
-	done_at, resolution, resolved_at, resolution_reason, deal_id, party_id, property_id) on next_step to engine;
+	done_at, resolution, resolved_at, resolution_reason, deal_id, party_id, property_id,
+	call_activity_id, call_evidence_quote) on next_step to engine;
 -- Only the owner's import supplies provenance. A user's or job's new round has a known status.
 revoke insert on offer from engine;
 grant insert (id, deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at,

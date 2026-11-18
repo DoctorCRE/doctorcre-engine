@@ -80,6 +80,7 @@ const NEW_STEP = {
 	item: optional(
 		fitting({ title: isText, bullets: isBullets, source_ref: isText }),
 	),
+	call: optional(fitting({ activity_id: isUuid, evidence_quote: isText })),
 };
 
 const STEP_CHANGES = {
@@ -196,7 +197,7 @@ export async function createStep(
 	tx: Transaction<DB>,
 	request: Omit<Fitted<typeof NEW_STEP>, "idempotency_key">,
 ) {
-	const { deal_id, property_id, what, item, replaces } = request;
+	const { deal_id, property_id, what, item, call, replaces } = request;
 	const { due_on, hold_until } = request;
 	const copiedParty = await resolveOldRole(tx, request);
 	const party_id = copiedParty ?? request.party_id;
@@ -211,10 +212,11 @@ export async function createStep(
 	}
 	const insert = sql<{ id: string }>`
 		insert into next_step (created_at, deal_id, party_id, property_id, what, owner_party_id, due_on, hold_until,
-			item_title, item_bullets, source_ref)
+			item_title, item_bullets, source_ref, call_activity_id, call_evidence_quote)
 		values (now(), ${deal_id ?? null}::uuid, ${party_id ?? null}::uuid, ${property_id ?? null}::uuid, ${what},
 			${owner_party_id}::uuid, ${due_on ?? null}::date, ${hold_until ?? null}::date,
-			${item?.title ?? null}, ${JSON.stringify(item?.bullets ?? [])}::jsonb, ${item?.source_ref ?? null})
+			${item?.title ?? null}, ${JSON.stringify(item?.bullets ?? [])}::jsonb, ${item?.source_ref ?? null},
+			${call?.activity_id ?? null}::uuid, ${call?.evidence_quote ?? null})
 		returning id`;
 	const { rows } = await saveOpenStep(
 		tx,

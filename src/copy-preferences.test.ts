@@ -31,7 +31,7 @@ const users = [1, 3, 4];
 const actions = [100, 101, 102, 103, 104, 105, 106, 107, 108];
 const marks = () =>
 	rows(
-		"select next_step_id, disposition, snoozed_until::text, waiting_on_party_id, waiting_reason, created_at::text, changed_at::text, changed_by_user_id, changed_by_job from home_mark order by next_step_id",
+		"select item_id, disposition, snoozed_until::text, waiting_on_party_id, waiting_reason, created_at::text, changed_at::text, changed_by_user_id, changed_by_job from home_mark order by item_id",
 	);
 const preferences = () =>
 	rows(
@@ -214,8 +214,10 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
  from unnest(array[${[501, 502, 503, 504, 505].map((n) => `'${id(n)}'::uuid`).join(",")}]) v;
  insert into public.capture_post_call_action (id,candidate_id,deal_id,owner_id,description,accepted_by)
  select id,id,deal_id,'${id(1)}',action_description,'${id(1)}' from public.capture_post_call_candidate;
- insert into next_step (id,deal_id,what)
- select id,deal_id,description from public.capture_post_call_action where id in ('${id(501)}','${id(502)}','${id(503)}');
+ insert into activity (id,kind,happened_at) values ('${id(400)}','call','2025-01-01');
+ insert into activity_about (activity_id,deal_id) values ('${id(400)}','${id(50)}');
+ insert into next_step (id,deal_id,what,call_activity_id,call_evidence_quote)
+ select id,deal_id,description,'${id(400)}','Example evidence' from public.capture_post_call_action where id in ('${id(501)}','${id(502)}','${id(503)}');
  insert into next_step (id,party_id,what) values ('${id(505)}','${id(10)}','Example wrong record');
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,status,created_by)
  select v,'lead','${id(30)}','${id(1)}','Example inherited step','done','${id(1)}'
@@ -260,6 +262,12 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
 		]);
 		const addedMarks = (await marks()).filter(
 			([step]) => !originalMarks.some(([original]) => original === step),
+		);
+		assert.deepEqual(
+			await rows(
+				"select call_follow_up_id from home_mark where call_follow_up_id is not null order by call_follow_up_id",
+			),
+			[[id(501)], [id(502)], [id(503)]],
 		);
 		assert.deepEqual(addedMarks, [
 			[
@@ -329,7 +337,8 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
 		assert.deepEqual(rerun.at(-1)?.rows.map(Object.values), firstReport);
 		assert.deepEqual(await state(), beforeRerun);
 		await db.query(
-			`insert into next_step (id,deal_id,what) values ('${id(504)}','${id(50)}','Example later copy'); discard temp`,
+			`insert into next_step (id,deal_id,what,call_activity_id,call_evidence_quote)
+			values ('${id(504)}','${id(50)}','Example later copy','${id(400)}','Example evidence'); discard temp`,
 		);
 		const corrected = await db.query(copy);
 		assert.ok(Array.isArray(corrected));

@@ -53,6 +53,8 @@ insert into not_copied select s.id, f.field, f.value, f.reason from suggestion s
  ('deal', s.deal_ref, 'deal_not_copied', s.deal_id is null),
  ('session_id', s.session_id::text, 'source_activity_not_copied', s.activity_id is null),
  ('activity_kind', s.activity_kind, 'source_not_a_call_or_meeting', s.activity_kind not in ('call', 'meeting')),
+ ('deal', s.deal_ref, 'call_not_about_deal', s.kind = 'next_step' and s.activity_kind = 'call' and s.deal_id is not null
+  and not exists (select from activity_about a where a.activity_id = s.activity_id and a.deal_id = s.deal_id)),
  ('evidence_quote', s.evidence_quote, 'blank_evidence', s.evidence_quote !~ '\S'),
  ('text', s.what, 'blank_next_step', s.kind = 'next_step' and coalesce(s.what, '') !~ '\S'),
  ('next_date', s.due_text, 'invalid_due_date', s.due_text is not null and s.due_on is null),

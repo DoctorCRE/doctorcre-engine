@@ -34,7 +34,7 @@ const FACTS = [
 before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into job values ('cadence', 'Example cadence');
+		insert into job values ('cadence', 'Example cadence'), ('call_capture', 'Example call capture');
 		insert into party (id, kind, name) values ('${ALEX}', 'person', 'Alex Example'),
 			('${BLAIR}', 'person', 'Blair Example'), ('${CLIENT}', 'company', 'Example Clinic'),
 			('${CADENCE_CLIENT}', 'company', 'Example Practice');
@@ -105,6 +105,46 @@ const act = (step: string, door: string, args: object) =>
 		idempotency_key: randomUUID(),
 		...args,
 	});
+
+test("a call-produced step keeps its source and leaves Home when completed", async () => {
+	const callId = id(12);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${callId}', 'call', '2025-01-01');
+		insert into activity_about (activity_id, deal_id) values ('${callId}', '${DEAL}'); commit;`);
+	const caller = { job: "call_capture", for_user: "alex" };
+	const call = { activity_id: callId, evidence_quote: "Please send the plan." };
+	const [wrongDeal] = await create(caller, {
+		party_id: CLIENT,
+		what: "Send the plan",
+		call,
+	});
+	assert.equal(wrongDeal, 422);
+	const [status, step] = await create(caller, {
+		deal_id: DEAL,
+		what: "Send the plan",
+		call,
+	});
+	assert.equal(status, 201);
+	const read = () =>
+		db.query(
+			"select call_activity_id, call_evidence_quote from home_next_step where id = $1",
+			[step.next_step_id],
+		);
+	assert.deepEqual((await read()).rows, [
+		{ call_activity_id: callId, call_evidence_quote: call.evidence_quote },
+	]);
+	assert.equal(
+		(await act(String(step.next_step_id), "end", { resolution: "done" }))[0],
+		200,
+	);
+	assert.equal((await read()).rowCount, 0);
+	assert.equal((await act(String(step.next_step_id), "reopen", {}))[0], 200);
+	assert.equal((await read()).rowCount, 1);
+	assert.equal(
+		(await act(String(step.next_step_id), "end", { resolution: "done" }))[0],
+		200,
+	);
+});
 
 test("the assistant completes its sponsoring owner's ordinary step on a named deal", async () => {
 	const next_step_id = await newStep({ hold_until: "2035-01-01" });
