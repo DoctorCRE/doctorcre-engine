@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { sql } from "kysely";
 import { nextTransaction } from "../next-connection.ts";
+import { stampNextSave } from "../next-save.ts";
 import { readSnapshot } from "../reader.ts";
 import { copyTest, readSchema } from "../test-copy.ts";
 import { readBoard, type Scope } from "./board.ts";
@@ -56,7 +58,7 @@ insert into public.commission (id, deal_id, gross_amount, status, invoiced_on, c
  ('${id(50)}', '${id(35)}', 1000, 'invoiced', '2025-02-01', '${id(1)}');
 insert into public.deal (id, client_id, name, deal_type, phase, owner, invoiced_on, created_by, updated_by, created_at) values
  ('${id(36)}', '${id(22)}', 'Example invoiced lease without commission', 'lease', 'negotiation', 'partner_one', '2025-02-02', '${id(1)}', '${id(1)}', '2025-01-07'),
- ('${id(37)}', '${id(22)}', 'Example other office', 'other', 'touring', 'partner_one', null, '${id(1)}', '${id(1)}', '2025-01-08'),
+ ('${id(37)}', '${id(21)}', 'Example other office', 'other', 'touring', 'partner_one', null, '${id(1)}', '${id(1)}', '2025-01-08'),
  ('${id(38)}', '${id(22)}', 'Example lease paid before invoice', 'lease', 'touring', 'partner_one', null, '${id(1)}', '${id(1)}', '2025-01-09');
 insert into public.commission (id, deal_id, gross_amount, status, received_on, created_by) values
  ('${id(51)}', '${id(38)}', 1000, 'received', '2025-02-03', '${id(1)}');
@@ -74,6 +76,10 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
  ('${id(46)}', 'deal', '${id(35)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-07', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(47)}', 'deal', '${id(36)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-08', '${id(1)}', 'update-deal', 'human_stated');
 update public.deal set closed_on = '2024-09-01' where id = '${id(33)}';
+update public.deal set city = 'Unmapped Example City' where id = '${id(37)}';
+insert into public.deal (id, client_id, name, deal_type, phase, outcome, owner, created_by, updated_by, created_at) values
+ ('${id(39)}', '${id(22)}', 'Example undated won lease', 'lease', 'closed', 'won', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-03'),
+ ('${id(40)}', '${id(22)}', 'Example undated lost lease', 'lease', 'closed', 'lost', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-04');
 `;
 
 // The partners' reviewed first known dates and ladders, which the account, brand and commission copies need.
@@ -113,9 +119,6 @@ insert into client_brand (location_id, brand_id, started_on, ended_on) values ('
 insert into national_account_owner (account_id, owner_id, started_on, ended_on) values ('${id(16)}', '${id(1)}', '2023-01-01', '2024-03-01');
 `;
 
-// The board fields this read covers; the steps, files and history reads add the rest. Not market or short name:
-// today's market is the deal's typed city, which the new section keeps only as a matched market, and a doctor's
-// short name names it.
 const COVERED = new Set([
 	"id",
 	"name",
@@ -196,7 +199,11 @@ for (const scope of [
 			}),
 		);
 		assert.deepEqual(
-			actual.map(({ seen: _, ...deal }) => deal),
+			actual.map((deal) =>
+				Object.fromEntries(
+					Object.entries(deal).filter(([k]) => COVERED.has(k)),
+				),
+			),
 			JSON.parse(expected),
 		);
 	});
@@ -232,4 +239,85 @@ test("each deal answers its latest change as the one a save says it saw", async 
 		deals.map((deal) => latest.get(String(deal.id))),
 	);
 	assert.ok(deals.every((deal) => deal.seen > 0));
+});
+
+const allBoards: Scope = { workspace: "all", account: null };
+
+test("open cards keep the city that was shown and use it in doctor titles", async () => {
+	const deals = await nextTransaction(connectionString, "read", (tx) =>
+		readNextBoardDeals(tx, allBoards),
+	);
+	assert.deepEqual(
+		deals
+			.filter((deal) => [id(30), id(31), id(37)].includes(deal.id))
+			.map((deal) => [deal.id, deal.market, deal.short_name]),
+		[
+			[id(31), "Example Bay", "Dr. Example's Example Bay Deal"],
+			[id(30), null, "Example clinic lease"],
+			[
+				id(37),
+				"Unmapped Example City",
+				"Dr. Example's Unmapped Example City Deal",
+			],
+		],
+	);
+});
+
+test("an imported loss without phase events stays off the open board", async () => {
+	const deals = await nextTransaction(connectionString, "read", (tx) =>
+		readNextBoardDeals(tx, allBoards),
+	);
+	assert.ok(deals.every((deal) => deal.id !== id(40)));
+});
+
+test("closed and lost lists keep the recorded outcome even without a close date or phase events", async () => {
+	await nextTransaction(connectionString, "read", async (tx) => {
+		const closed = await readNextBoardDeals(tx, allBoards, "closed");
+		assert.deepEqual(
+			closed.map((d) => [d.id, d.phase, d.outcome, d.closed_on, d.invoiced_on]),
+			[
+				[id(33), "closed", null, "2024-09-01", null],
+				[id(35), "negotiation", null, null, "2025-02-01"],
+				[id(36), "negotiation", null, null, "2025-02-02"],
+				[id(39), "closed", "won", null, null],
+			],
+		);
+		const lost = await readNextBoardDeals(tx, allBoards, "lost");
+		assert.deepEqual(
+			lost.map((d) => [d.id, d.phase, d.outcome, d.closed_on]),
+			[[id(40), "closed", "lost", null]],
+		);
+		const national = await readNextBoardDeals(
+			tx,
+			{ workspace: "national_account", account: id(16) },
+			"closed",
+		);
+		assert.deepEqual(national, []);
+	});
+});
+
+test("market and phase edits supersede the imported display values", async () => {
+	const rollback = new Error("roll back test edits");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			await tx
+				.updateTable("deal")
+				.set({ market_id: null })
+				.where("id", "=", id(31))
+				.execute();
+			await sql`insert into deal_phase_change (deal_id, happened_at, phase)
+				values (${id(40)}, '2025-04-01T12:00:00Z', 'touring')`.execute(tx);
+
+			const deals = await readNextBoardDeals(tx, allBoards);
+			assert.equal(
+				deals.find((d) => d.id === id(31))?.short_name,
+				"Example startup office",
+			);
+			assert.equal(deals.find((d) => d.id === id(40))?.phase, "touring");
+			assert.deepEqual(await readNextBoardDeals(tx, allBoards, "lost"), []);
+			throw rollback;
+		}),
+		rollback,
+	);
 });

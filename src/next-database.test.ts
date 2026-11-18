@@ -4184,6 +4184,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			addable: ![
 				"invoice_mailbox",
 				"imported_change",
+				"imported_deal_board",
 				"imported_deal_party",
 				"imported_deal_owner",
 				"imported_deal_invoiced",

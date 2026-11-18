@@ -609,6 +609,16 @@ create table imported_deal_invoiced (
 	invoiced_on date not null
 );
 
+create table imported_deal_board (
+	deal_id uuid primary key references deal,
+	city text,
+	phase text references phase,
+	outcome text check (outcome in ('won', 'lost')),
+	closed_on date,
+	phase_at timestamptz,
+	foreign key (deal_id, phase_at) references deal_phase_change (deal_id, happened_at)
+);
+
 -- Held per person, role and deal until the transaction ends, so a copied period and a rejoin cannot each pass alone and together break it.
 create function deal_party_rejoins_after_leaving() returns trigger
 language plpgsql as $$
@@ -3132,8 +3142,8 @@ revoke insert on app_user, job from engine;
 revoke insert on merged_party from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change, imported_change from engine;
--- Only the owner's copy adds the old system's earlier people, owners and invoiced dates.
-revoke insert on imported_deal_party, imported_deal_owner, imported_deal_invoiced from engine;
+-- Only the owner's copy adds the old system's earlier people, owners and board facts.
+revoke insert on imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board from engine;
 -- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
 revoke execute on function record_change from public;
 revoke execute on function merge_party from public;

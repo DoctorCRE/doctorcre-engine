@@ -259,6 +259,17 @@ where (d.outcome = 'lost' or exists (select from deal_phase_change c where c.dea
  and (select c.phase from deal_phase_change c where c.deal_id = d.id order by happened_at desc limit 1)
  is distinct from case when d.outcome = 'lost' then 'dead' else d.phase end;
 
+-- Keep the board's source city and history without inventing a market or phase event.
+insert into imported_deal_board (deal_id, city, phase, outcome, closed_on, phase_at)
+select d.id, nullif(btrim(d.city), ''),
+ case when d.phase in ('closed', 'invoiced') or d.outcome in ('won', 'lost') or d.closed_on is not null then d.phase end,
+ case when d.outcome in ('won', 'lost') then d.outcome end, d.closed_on, p.happened_at
+from old_deal d join deal n on n.id = d.id
+left join lateral (
+ select happened_at from deal_phase_change where deal_id = d.id order by happened_at desc limit 1
+) p on true
+where not d.copied_before and (d.city is not null or d.market_id is not null
+ or d.phase in ('closed', 'invoiced') or d.outcome in ('won', 'lost') or d.closed_on is not null);
 
 -- Follow merged buildings to their survivor; several suites there remain one property.
 create temp table building_map on commit drop as
