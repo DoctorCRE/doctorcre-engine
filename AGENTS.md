@@ -2,6 +2,8 @@
 
 The engine behind the DoctorCRE app. It serves the partners' business records (deals, clients, leads, contacts, vendors, activity) to the app, to background jobs and to agents. It is replacing the old system in `DoctorCRE/carr-system` one piece at a time. Both run against the same database until the old one serves nothing.
 
+Read `docs/system.md` first, and the matching file in `docs/screens/` for screen work. A brief or pull request never makes a design decision the docs do not already make; it reports it instead. A pull request that changes what a doc describes updates that doc in the same pull request.
+
 ## This repo is public
 
 Code, issues, pull requests, commit messages and CI logs are visible to anyone. Never put a real client, contact, deal, address, email, phone number or secret in any of them. Tests use made-up data. Refer to a real record only by its ID.

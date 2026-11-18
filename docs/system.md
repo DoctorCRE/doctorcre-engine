@@ -1,0 +1,132 @@
+# The system
+
+Read this page first. It names the parts, how they connect today and after the switch, who owns which records, and where every topic is written down. Detail lives in the files the last table points to; this page links to it and does not repeat it.
+
+## The parts
+
+| Part         | Where                                                                                         | What it does                                                                                                                                                                                                                                                                                                                              |
+| ------------ | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App          | `jbookout/doctorcre-app`, a Cloudflare Worker at app.doctorcre.com                            | The partners' screens. Its Worker checks each page's sign-in with the old API, then sends each call to the old system or the engine (`src/worker.js`).                                                                                                                                                                                    |
+| Engine       | `src/` here, the Worker `doctorcre-engine`                                                    | Three entrances (`src/worker.ts`): `/api/engine/...` for the app and a partner's own calls, signed in through the old API's `/auth/session` (decision 6); `/jobs/...` for the Studio programs and the assistant; `/intake/...` for the Friday marketing post batch. `/jobs` and `/intake` each have their own Cloudflare Access audience. |
+| New database | The `next` schema in the same Neon database: `schema/next.sql`, filled by `schema/copy-*.sql` | Every record once, with its rules in constraints. Specified in `docs/new-database.md`.                                                                                                                                                                                                                                                    |
+| Old database | The old tables in that database, snapshot in `schema/business.sql`                            | Today's records. The old system owns them.                                                                                                                                                                                                                                                                                                |
+| Files        | Cloudflare R2 bucket `carr-documents`, engine binding `DEAL_DOCUMENTS`                        | File bytes. The new database keeps each file's name, type and key, never the bytes.                                                                                                                                                                                                                                                       |
+| Old system   | `DoctorCRE/carr-system`                                                                       | Being replaced. Its API Worker (`mcp-server`) signs partners in, answers the app and serves the assistant. Its programs on the Studio Mac do mail, calls and nightly jobs.                                                                                                                                                                |
+
+The engine reads through its `DATABASE` binding and saves through `DATABASE_WRITER`. Production declares no `DATABASE_WRITER` yet, only staging does (`wrangler.jsonc`), so every engine save answers 503 in production until it is added.
+
+Which old program reads and writes what, with file and line: `docs/new-database.md` § "Who reads and writes the three features' records".
+
+## How they connect
+
+Today:
+
+```text
+partner ─▶ app ─┬─▶ old API (mcp-server) ─▶ old tables     sign-in, page checks, most reads and saves
+                └─▶ engine /api/engine ─┬─▶ old tables      reads and deal saves whose app switch is on
+                                        └─▶ next schema     Deals reads, with DEALS_READ_SCHEMA=next
+engine ─▶ old API /auth/session                             every partner call's sign-in check
+Studio programs ─▶ old API ─▶ old tables                    every program whose switch is off
+Studio programs, assistant ─▶ engine /jobs ─▶ next schema   only where a switch below is on
+engine ─▶ R2                                                file bytes
+```
+
+After the switch:
+
+```text
+partner ─▶ app ─▶ engine /api/engine ─▶ next schema
+Studio programs, assistant ─▶ engine /jobs ─▶ next schema
+```
+
+Sign-in still runs through the old API after the switch until it moves to the engine, which no slice plans yet (decision 6).
+
+Outlook stays the source of mail and calendar. Which mail the database keeps, and how older mail without a Message-ID is matched: `docs/new-database.md` § "Activity, emails and next steps" and § "Copying today's emails". The agenda is one snapshot per partner, replaced whole (§ "25. Calendar agenda, review dismissals and meeting confirmations").
+
+## Switches
+
+Each switch moves where requests go. None of them builds anything, and none moves records back (see "Going back").
+
+| Switch                                 | Where it is set                                                                       | What it moves                                                                                                                                                                                                                                                                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENGINE_ROUTING` read keys, value `on` | App Worker KV                                                                         | App reads to the engine: `deals-from-engine` (board and deal page), `leads-from-engine`, `invoices-from-engine`, `charts-from-engine` (client fit), `national-deals-from-engine` (capture queue), `search-from-engine`, `clients-vendors-from-engine`, `relationships-from-engine`, `frame-from-engine` (Today and meeting prep). |
+| `deal-saves-to-engine`, value `on`     | App Worker KV                                                                         | The Deals field save and closing save (`patch-deal-field`, `update-deal`) go to the engine's old-table saves first. Off, they go to the old API first, and a save the old API refuses as `key_reuse` is replayed at the engine.                                                                                                   |
+| `deals-saves-from-engine`              | App Worker KV, added by open draft app PR #953                                        | Deals saves to the new schema: phase, owner, attention and parking, next step, deal items and notes. Needs `deals-from-engine` on. New deals, participants, closing and critical dates are not covered yet.                                                                                                                       |
+| `DEALS_READ_SCHEMA=next`               | Engine Worker variable                                                                | Only the Deals board and deal page reads move to the new schema. The order of this and `deals-from-engine`, and what cutover still needs: § "Deals reads for the app".                                                                                                                                                            |
+| `engine_mail`                          | Studio, `~/.config/carr/outlook.json`                                                 | Mail intake sends emails, filed-email notes and attachments to doors 19 and 20.                                                                                                                                                                                                                                                   |
+| `engine_router`                        | Same file                                                                             | The router reads its queue, stores suggestions and reply drafts, and files emails to their thread's deal through doors 19, 21 and 22, and writes nothing to the old tables.                                                                                                                                                       |
+| `engine_outbox`                        | Same file; needs `engine_mail`                                                        | The outbox reads approved replies and records delivery through door 22.                                                                                                                                                                                                                                                           |
+| `engine_cadence`                       | Same file                                                                             | The nightly cadence saves its steps through door 18.                                                                                                                                                                                                                                                                              |
+| `engine_lead_stage`                    | Same file                                                                             | The nightly lead stages apply invoice closes through the engine.                                                                                                                                                                                                                                                                  |
+| `engine_calls`                         | Studio, `~/.config/carr-capture/config.json`, or the file `CARR_CAPTURE_CONFIG` names | Call capture sends calls, suggestions and automatic changes to doors 16, 18, 19 and 21.                                                                                                                                                                                                                                           |
+| `ENGINE_ASSISTANT="true"`              | Old API Worker, `mcp-server/wrangler.toml` (checked in as `"false"`)                  | Four assistant saves go to `/jobs` as the `agent` job: a call, meeting or note on a deal, a deal's next step, completing a deal's or party's step, and a deal note. The old API still finds the deal or party in the old tables first. Every other assistant save and every assistant read stays on the old API.                  |
+
+Still on the old API with no switch yet:
+
+- Mail intake's calendar agenda (door 25) and its unknown-sender lead suggestions (door 21), even with `engine_mail` on.
+- Mail intake does not send each email's Outlook conversation id to door 19, so the engine cannot keep one open reply draft per conversation for that mail.
+- The nightly checklist reminders and the deal room page.
+- The app's Home, email and calendar calls (slice 30), and its Deals saves outside the two save switches above (slice 29).
+- Sign-in.
+
+## Who owns which records
+
+- Until the switch, the old system owns every old table. The engine saves deal fields, notes, next steps, overdue holds and closings into them, and changes no schema there (decision 1).
+- After the switch, the engine owns every record in the new database. The app, the Studio programs and the assistant change records only through engine doors. Who each save names: § "Users, jobs and who changed what".
+- Which old kind goes to which new table, and what is left behind: § "Where each populated kind goes" and § "Kinds not moved or empty".
+
+## The switch plan
+
+The owner's rulings of 2026-11-17:
+
+- The switch happens by 2026-11-30.
+- The practice run is Wed 2026-11-25: the whole move on a fresh copy of production (slice 32), with the copies in the order of § "Running the copies". Until then, the practice move reruns on a fresh copy after each merge that changes a copy or a read.
+- Switch day is Sat 2026-11-28. Thu 2026-11-26 is allowed only if the practice run is clean; the coordinator tells the owner which day by Wednesday evening.
+- On switch day, mail intake and saving pause briefly for the move, then the switches above flip. Switch day builds nothing: every old-system and app change ships before it, switched off.
+
+Not yet written down, so a brief that needs one reports the gap and does not decide it: the order of the switches after the Deals pair, how long the pause lasts, and going back after new saves.
+
+## Going back
+
+Turning a switch off sends requests back to the old side. It does not copy back what the new schema saved after the switch flipped, so those saves would be missing from the old side. Today only the Deals read pair has a written way back, before any new saves: § "Deals reads for the app".
+
+## Open decisions
+
+The owner's open questions live on one list, "What we need from you" on the roadmap in the private plans repo. A brief or pull request never answers one. It reports the question to the coordinator, who adds it there.
+
+## Where to find it
+
+| Topic                                                    | File § section                                                                                                                      |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Words to use on screens and in code                      | `docs/glossary.md`                                                                                                                  |
+| Lasting decisions, numbered                              | `docs/decisions.md`                                                                                                                 |
+| Running the check, local database, comparing old and new | `README.md`                                                                                                                         |
+| The new database's tables, one line each                 | `docs/new-database.md` § "Records"                                                                                                  |
+| Users, jobs and save stamps                              | § "Users, jobs and who changed what"; § "Change history"                                                                            |
+| Rules the database enforces                              | § "Rules the database enforces"; `schema/next.sql`                                                                                  |
+| Who may change what                                      | § "Who may change what"                                                                                                             |
+| People, companies, emails and phone numbers              | § "Emails and phone numbers"; § "Do not contact, NPIs and outside ids"; § "Merging duplicates"                                      |
+| Clients, national accounts, leads                        | § "Clients, brands and national accounts"; § "Leads and clients"                                                                    |
+| Deals, phases, parking                                   | § "Deals"; § "When a deal falls apart"                                                                                              |
+| Markets and territories                                  | § "Markets and territories"                                                                                                         |
+| Vendors and introductions                                | § "Vendors"; § "Who knows whom"                                                                                                     |
+| Leases, critical dates, offers                           | § "Leases and options"; § "Critical dates"; § "Offer rounds"                                                                        |
+| Buildings, suites, space needs                           | § "Space needs, suites and building owners"                                                                                         |
+| Deal and client files                                    | § "Deal files and extracted text"; § "Client files"                                                                                 |
+| Activity, emails, next steps                             | § "Activity, emails and next steps"; § "Worked example: an LOI response by email"                                                   |
+| Suggestions and reply drafts                             | § "Suggestions from mail, calls and meetings"; § "Reply drafts"                                                                     |
+| Home marks and preferences                               | § "Users' preferences and Home marks"                                                                                               |
+| Tours and marketing                                      | § "Tours as meetings"; § "Marketing"                                                                                                |
+| Commissions and invoices                                 | § "Commissions"; § "Invoices found in email"                                                                                        |
+| The copies: order, reruns and each copy's file           | § "Running the copies"                                                                                                              |
+| The copy of the three features' records                  | § "Copying today's deals"; § "Copying today's activity"; § "Copying today's emails"; § "Copying today's deal and vendor next steps" |
+| Which program reads and writes what                      | § "Who reads and writes the three features' records" and its tables                                                                 |
+| Slice numbers                                            | § "Slices named above"                                                                                                              |
+| Doors: shared rules                                      | § "What every door shares"                                                                                                          |
+| Door 19, 20, 21, 22, 25, 16, 18                          | § "Doors the old system calls", the heading with that number                                                                        |
+| What each old program can start on                       | § "What can start when this merges"                                                                                                 |
+| Invoice capture and application                          | § "Invoice email capture and list"; § "Invoice application"                                                                         |
+| Deals reads, their switch and cutover needs              | § "Deals reads for the app"                                                                                                         |
+| Owner decisions the doors raised                         | § "Owner decisions"                                                                                                                 |
+| Home screen                                              | `docs/screens/home-inbox.md`                                                                                                        |
+
+Every `§` without a file is in `docs/new-database.md`.
