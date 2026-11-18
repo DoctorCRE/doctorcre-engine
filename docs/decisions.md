@@ -263,4 +263,6 @@
 
 132\. **Undo uses the automatic completion's change id (2026-11-18).** Home lists pending held steps with their linked activities. An owner can undo a job's completion using the exact change id while it is still the step's latest change. The new save reopens the same step and the deal date follows the current step. A partner's own resolution has no undo (#658).
 
-133\. **Assistant saves use the sponsor's plan (2026-11-18).** Completing by subject touches only the sponsor's ordinary step. An activity with an omitted time takes its timestamp inside the save, so retries keep the first activity. A deal update with an explicit plan replaces the sponsor's prior step in the same transaction. An update alone sends the sponsor's overdue step to Home for review (#664).
+133\. **The nightly invoice close has its own save (2026-11-18).** Lead stages submit the captured invoice and selected deal and payment together. The database applies both changes or attaches a resend, and a direct user can undo the original application through the app entrance. Shared save receipts return the same answer when either caller retries (#663).
+
+134\. **Assistant saves use the sponsor's plan (2026-11-18).** Completing by subject touches only the sponsor's ordinary step. An activity with an omitted time takes its timestamp inside the save, so retries keep the first activity. A deal update with an explicit plan replaces the sponsor's prior step in the same transaction. An update alone sends the sponsor's overdue step to Home for review (#664).

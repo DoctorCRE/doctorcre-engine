@@ -2476,8 +2476,9 @@ language plpgsql as $$
 declare
 	latest deal_phase_change;
 	payment commission_payment;
+	acting_job text := nullif(current_setting('engine.job', true), '');
 	direct_user boolean := nullif(current_setting('engine.user_id', true), '') is not null
-		and nullif(current_setting('engine.job', true), '') is null;
+		and acting_job is null;
 begin
 	if old.status <> 'captured' and (new.deal_id, new.payment_id) is distinct from (old.deal_id, old.payment_id) then
 		raise exception 'an applied invoice keeps its target' using errcode = 'check_violation', constraint = 'invoice_email_keeps_target';
@@ -2485,6 +2486,10 @@ begin
 	if old.status = 'captured' and new.status = 'captured' then return new; end if;
 	if not (old.status = 'captured' and new.status = 'applied' or old.status = 'applied' and new.status = 'undone' and direct_user) then
 		raise exception 'an invoice applies once and only a user undoes it' using errcode = 'check_violation', constraint = 'invoice_email_status_moves';
+	end if;
+	if new.status = 'applied' and not direct_user and acting_job is distinct from 'lead_stage' then
+		raise exception 'only the lead stages job applies invoices automatically'
+			using errcode = 'check_violation', constraint = 'invoice_email_apply_job';
 	end if;
 	-- FOR UPDATE conflicts with the phase foreign key's KEY SHARE, so every phase writer takes turns with undo.
 	perform from deal where id = new.deal_id for update;

@@ -8541,12 +8541,13 @@ const UNDO_INVOICE = `update invoice_email set status = 'undone' where id = '${I
 
 // biome-ignore format: one row per refusal
 const INVOICE_REFUSALS: Case[] = [
-	[`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set invoiced_on = '2026-04-02' where id = '${INVOICE_PAYMENT}'; ${payment({id: id(983), invoiced_on: '2026-04-01'})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture", USER)}; ${APPLY_INVOICE}`, "invoice_email_apply_job"],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set invoiced_on = '2026-04-02' where id = '${INVOICE_PAYMENT}'; ${payment({id: id(983), invoiced_on: '2026-04-01'})}; ${asJob("lead_stage")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
 	...['evidence_ref', 'deal_name', 'client_name', 'property_address'].map((field): Case => [`${INVOICE_SETUP}; ${invoiceEmail({[field]: ' '})}`, `invoice_email_${field}_check`]),
 	[`${INVOICE_SETUP}; ${invoiceEmail({email_date: '2026-03-01'})}`, 'invoice_email_date_matches_time'],
 	[`${INVOICE_SETUP}; ${invoiceEmail({occurred_at: '-infinity'})}`, 'invoice_email_date_matches_time'],
-	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${payment({id: id(983)})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
-	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${payment({id: id(983), invoiced_on: '2026-03-01'})}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${payment({id: id(983)})}; ${asJob("lead_stage")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${payment({id: id(983), invoiced_on: '2026-03-01'})}; ${asJob("lead_stage")}; ${APPLY_INVOICE}`, 'invoice_email_needs_user'],
 	[`${payment({id: INVOICE_PAYMENT, deal_id: LENDER_DEAL, amount: 500})}; ${invoiceEmail({deal_id: LENDER_DEAL})}; ${APPLY_INVOICE}`, 'invoice_email_needs_prior_phase'],
 	[`${INVOICE_SETUP}; insert into invoice_email (status) values ('applied')`, notGranted('invoice_email')],
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${invoiceEmail({id: id(982)})}`, "invoice_email_evidence_ref_key"],
@@ -8557,9 +8558,9 @@ const INVOICE_REFUSALS: Case[] = [
 		{sender: "unknown@example.com"}, {client_name: "Other Example"}, {client_name: null},
 		{property_address: "Wrong example address"}, {deal_name: "Other Example Deal"},
 		{occurred_at: "2999-04-01T00:00:00Z", email_date: "2999-04-01"},
-	].map((row): Case => [`${INVOICE_SETUP}; ${invoiceEmail(row)}; ${asJob("mail_capture", USER)}; ${APPLY_INVOICE}`, "invoice_email_needs_user"]),
-	[`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set invoiced_on = '2026-03-31' where id = '${INVOICE_PAYMENT}'; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, "invoice_email_needs_user"],
-	[`${INVOICE_SETUP}; insert into deal (id, name, owner_user_id) values ('${id(982)}', 'Example Dental Springfield Deal', '${USER}'); insert into deal_party values ('${id(982)}', '${CLIENT}', 'client'); ${invoiceEmail()}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`, "invoice_email_needs_user"],
+	].map((row): Case => [`${INVOICE_SETUP}; ${invoiceEmail(row)}; ${asJob("lead_stage", USER)}; ${APPLY_INVOICE}`, "invoice_email_needs_user"]),
+	[`${INVOICE_SETUP}; ${invoiceEmail()}; update commission_payment set invoiced_on = '2026-03-31' where id = '${INVOICE_PAYMENT}'; ${asJob("lead_stage")}; ${APPLY_INVOICE}`, "invoice_email_needs_user"],
+	[`${INVOICE_SETUP}; insert into deal (id, name, owner_user_id) values ('${id(982)}', 'Example Dental Springfield Deal', '${USER}'); insert into deal_party values ('${id(982)}', '${CLIENT}', 'client'); ${invoiceEmail()}; ${asJob("lead_stage")}; ${APPLY_INVOICE}`, "invoice_email_needs_user"],
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${APPLY_INVOICE}`, "invoice_email_status_moves"],
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; ${asJob("agent", USER)}; ${UNDO_INVOICE}`, "invoice_email_status_moves"],
 	[`${INVOICE_SETUP}; ${invoiceEmail()}; ${APPLY_INVOICE}; update invoice_email set deal_id = null, payment_id = null`, "invoice_email_keeps_target"],
@@ -8570,7 +8571,7 @@ const INVOICE_REFUSALS: Case[] = [
 	...[
 		{sender: "stranger@example.net"}, {deal_name: "Example Unrelated Deal"},
 		{client_name: "Example Other Client"},
-	].map((row): Case => [`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture")}; ${APPLY_INVOICE}; ${resendEmail(row)}; ${APPLY_RESEND}`, "invoice_email_needs_user"]),
+	].map((row): Case => [`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("lead_stage")}; ${APPLY_INVOICE}; ${resendEmail(row)}; ${APPLY_RESEND}`, "invoice_email_needs_user"]),
 	...[
 		"update invoice_email set status = 'undone'",
 		"update invoice_email set status = 'applied'",
@@ -8589,7 +8590,7 @@ test("invoice evidence and guarded application obey rules 92 to 95", async () =>
 test("a trusted invoice closes its deal, dates one payment once, and a user undoes it", async () => {
 	await rolledBack(async () => {
 		await db.query(
-			`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture", USER)}; ${APPLY_INVOICE}; ${CHECK_AT_COMMIT}`,
+			`${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("lead_stage", USER)}; ${APPLY_INVOICE}; ${CHECK_AT_COMMIT}`,
 		);
 		assert.deepEqual(
 			(
@@ -8602,7 +8603,7 @@ test("a trusted invoice closes its deal, dates one payment once, and a user undo
 					invoiced_on: "2026-04-01",
 					received_on: null,
 					status: "applied",
-					changed_by_job: "mail_capture",
+					changed_by_job: "lead_stage",
 					changed_for_user_id: USER,
 				},
 			],
@@ -8750,7 +8751,7 @@ test("automatic invoice decisions do not lock unrelated parties", async () => {
 	const unrelated = await connect();
 	try {
 		await invoice.query(
-			`begin; ${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("mail_capture")}; ${APPLY_INVOICE}`,
+			`begin; ${INVOICE_SETUP}; ${invoiceEmail()}; ${asJob("lead_stage")}; ${APPLY_INVOICE}`,
 		);
 		assert.equal(
 			(
@@ -8890,7 +8891,7 @@ test("invoice matching and payment checks cannot straddle a user's transaction",
 			alter table invoice_mailbox enable row level security;
 			create policy pause_mailbox_test on invoice_mailbox for select to engine using (pause_mailbox_test())`);
 		await db.query("select pg_advisory_lock(324989)");
-		await writer.query(`begin; ${asJob("mail_capture")}`);
+		await writer.query(`begin; ${asJob("lead_stage")}`);
 		const { pid } = (await writer.query("select pg_backend_pid() as pid"))
 			.rows[0];
 		let settled = false;
@@ -8949,7 +8950,7 @@ test("invoice matching and payment checks cannot straddle a user's transaction",
 
 for (const [label, actor] of [
 	["user", asUser(USER)],
-	["job", asJob("mail_capture")],
+	["job", asJob("lead_stage")],
 ]) {
 	test(`resent invoice evidence attaches without changing the original close for a ${label}`, async () => {
 		await rolledBack(async () => {
@@ -9032,8 +9033,8 @@ test("concurrent invoice captures keep both sources and one undoable application
 			${payment({ id: paymentId, deal_id: deal, amount: 500 })};
 			insert into deal_phase_change values ('${deal}', '2026-03-01', 'legal', 'Example prior phase');
 			${invoiceEmail({ deal_id: deal, payment_id: paymentId, deal_name: "Example Resend Deal" })}`);
-		await first.query(`begin; ${asJob("mail_capture")}; ${APPLY_INVOICE}`);
-		await second.query(`begin; ${asJob("mail_capture")}`);
+		await first.query(`begin; ${asJob("lead_stage")}; ${APPLY_INVOICE}`);
+		await second.query(`begin; ${asJob("lead_stage")}`);
 		const { pid } = (await second.query("select pg_backend_pid() as pid"))
 			.rows[0];
 		let settled = false;
