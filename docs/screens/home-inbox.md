@@ -23,6 +23,8 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Home has no "set waiting person" control.
 - **Open (question 2).** Recommended: Home has no Hide; every card is finished, snoozed to a date, or dropped with a reason, and the selection bar's Hide button (today "Settle selected") goes too. Otherwise Hide from inbox sets a card aside unfinished, and it shows under "Hidden from inbox" with Show in inbox.
 
+When app routing moves to the new database, Home saves snooze, settlement and Undo through the engine’s Home marks door for steps, call follow-ups and updates. Mark done on a step still completes the step itself. See “24. Home marks saved” in `docs/new-database.md`.
+
 ## Inbox sections
 
 - [ ] Overdue: the partner's steps dated before today.

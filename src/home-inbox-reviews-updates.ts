@@ -97,7 +97,7 @@ export async function readCompletionReviews(
 
 export function completionReviewCard(
 	review: CompletionReview,
-	stepVersion: number,
+	stepVersion: string,
 	markVersion: string | null,
 ) {
 	return {
@@ -105,7 +105,7 @@ export function completionReviewCard(
 			item_id: `next_step_done:${review.id}`,
 			open_url: `/deals?deal=${review.deal_id}&focus=next-step`,
 			kind_label: "Task",
-			source_version: String(stepVersion),
+			source_version: stepVersion,
 			mark_version: markVersion ?? "0",
 		}),
 		title: `Did this happen? ${review.title}`,
