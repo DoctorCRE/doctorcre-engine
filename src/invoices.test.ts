@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
+import { copyTest } from "./test-copy.ts";
 import worker from "./worker.ts";
 
 const id = (n: number) =>
@@ -102,11 +103,12 @@ const beta = deal(32, "Example Beta", {
 });
 const delta = deal(34, "Example Delta", { phase: "invoices-open" });
 
-const get = (url: string, slug: string) =>
+const get = (url: string, slug: string, schema?: string) =>
 	worker.request(
 		"https://app.example.test/api/engine/invoices",
 		{ headers: { Cookie: "__Host-dealroom_session=made-up-session" } },
 		{
+			INVOICES_READ_SCHEMA: schema,
 			CARR: {
 				fetch: async () =>
 					Response.json({
@@ -210,3 +212,152 @@ test("the invoices read answers the old tracker's rows, values and order", () =>
 			hint: "The authenticated actor could not be resolved.",
 		});
 	}));
+
+test("both tracker reads show the same invoiced, paid and awaiting deals after an undo", async () => {
+	const { db, setup, cleanup, connectionString } = copyTest();
+	try {
+		await setup();
+		await db.query(`begin;
+			set local search_path = public;
+			${SEED}
+			delete from commission where status = 'expected';
+			update deal set phase = 'invoices-open', closed_on = null where id = '${id(31)}';
+			commit;`);
+		await db.query(`begin;
+			select set_config('engine.job', 'old_system', true);
+			insert into party (id, kind, name) values
+				('${agent}', 'person', 'Example Partner'), ('${id(2)}', 'person', 'Example Other Partner'),
+				('${id(11)}', 'company', 'Example Clinic');
+			insert into app_user (id, slug) values ('${agent}', 'invoices-agent'), ('${id(2)}', 'other-partner');
+			insert into role (slug, label) values ('client', 'Client');
+			insert into how_found (slug, label) values ('referral', 'Referral');
+			update party set how_found = 'referral' where id = '${id(11)}';
+			insert into party_role (party_id, role) values ('${id(11)}', 'client');
+			insert into phase (slug, label) values ('closed', 'Closed'), ('invoices-open', 'Open');
+			insert into commission_tier (user_id, from_deal, partner_user_id, closing_share)
+				values ('${agent}', 1, '${id(2)}', 0.8);
+			insert into deal (id, name, owner_user_id)
+				select id, name, '${agent}' from public.deal where id in
+				('${id(31)}', '${id(32)}', '${id(33)}', '${id(34)}', '${id(52)}', '${id(53)}');
+			insert into deal_party (deal_id, party_id, role) select id, '${id(11)}', 'client' from deal;
+			insert into deal_phase_change (deal_id, phase, happened_at)
+				select d.id, o.phase, '2026-07-15T18:00:00Z' from deal d join public.deal o using (id);
+			insert into imported_deal_invoiced (deal_id, invoiced_on) values ('${id(33)}', '2026-09-30');
+			insert into commission (deal_id, gross) values ('${id(31)}', 800), ('${id(32)}', 2249.50), ('${id(34)}', 500);
+			insert into commission_payment (id, deal_id, amount, invoiced_on, received_on, due_on)
+				select id, deal_id, gross_amount, invoiced_on, received_on, due_on from public.commission;
+			insert into commission_payment (deal_id, amount) values ('${id(31)}', 800);
+			commit;`);
+
+		for (const schema of [undefined, "next"]) {
+			const response = await get(connectionString, "invoices-agent", schema);
+			assert.equal(response.status, 200);
+			const data = await response.json();
+			assert.partialDeepStrictEqual(data, {
+				schema_version: "invoice-tracker.v1",
+				actor: "invoices-agent",
+			});
+			assert.ok(
+				data &&
+					typeof data === "object" &&
+					"entries" in data &&
+					Array.isArray(data.entries),
+			);
+			for (const row of data.entries) {
+				if (row.commission_id !== null) {
+					assert.ok(
+						Number.isSafeInteger(row.base_version) && row.base_version > 0,
+					);
+				}
+			}
+			const entries: ReturnType<typeof visibleEntry>[] =
+				data.entries.map(visibleEntry);
+			assert.deepEqual(
+				entries.sort((a, b) => a.key.localeCompare(b.key)),
+				[
+					{
+						deal: id(32),
+						key: id(41),
+						state: "invoiced",
+						amount: "999.50",
+						invoiceDay: "2026-09-02",
+						paidDay: null,
+						dueDay: null,
+					},
+					{
+						deal: id(32),
+						key: id(42),
+						state: "received",
+						amount: "1250.00",
+						invoiceDay: "2026-07-20",
+						paidDay: "2026-08-10",
+						dueDay: "2026-08-19",
+					},
+					{
+						deal: id(34),
+						key: id(45),
+						state: "invoiced",
+						amount: "500.00",
+						invoiceDay: "2026-10-01",
+						paidDay: null,
+						dueDay: "2026-10-31",
+					},
+					{
+						deal: id(33),
+						key: `awaiting:${id(33)}`,
+						state: null,
+						amount: null,
+						invoiceDay: "2026-09-30",
+						paidDay: null,
+						dueDay: null,
+					},
+					{
+						deal: id(52),
+						key: `awaiting:${id(52)}`,
+						state: null,
+						amount: null,
+						invoiceDay: null,
+						paidDay: null,
+						dueDay: null,
+					},
+					{
+						deal: id(53),
+						key: `awaiting:${id(53)}`,
+						state: null,
+						amount: null,
+						invoiceDay: null,
+						paidDay: null,
+						dueDay: null,
+					},
+				],
+				schema ?? "old tables",
+			);
+		}
+	} finally {
+		await db.query("rollback");
+		await cleanup();
+	}
+});
+
+function visibleEntry(row: {
+	deal_id: string;
+	commission_id: string | null;
+	gross_amount: string | null;
+	status: string | null;
+	invoiced_on: string | null;
+	commission_invoiced_on: string | null;
+	received_on: string | null;
+	due_on: string | null;
+}) {
+	return {
+		deal: row.deal_id,
+		key: row.commission_id ?? `awaiting:${row.deal_id}`,
+		state: row.status,
+		amount: row.gross_amount,
+		invoiceDay: row.commission_id
+			? row.commission_invoiced_on
+			: row.invoiced_on,
+		paidDay: row.received_on,
+		dueDay: row.due_on,
+	};
+}

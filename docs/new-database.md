@@ -1222,6 +1222,14 @@ Cutover still needs client website links, checklist and pipeline-call state, the
 
 The app does not display premises or offer-round summaries. Deal links use the UUIDs kept by the copy, so missing legacy deal references are invisible. National account placement (#653) produced the same visible board counts on pass D. The account list uses the national accounts admitted by the copy, which excludes old prospect clients.
 
+## Invoice tracker reads for the app
+
+Home and Invoices use `GET /api/engine/invoices` when `invoices-from-engine` is `on` in the app's `ENGINE_ROUTING` KV. Set the engine Worker's `INVOICES_READ_SCHEMA` to `next` to read through `DATABASE` as `engine_reader`, the same way the Deals reads do. An absent setting or any other value keeps the old-table read. Set the engine variable before routing the app to the new read. Remove the variable to return the engine to the old-table read, or set the app switch to `off` to route to CARR.
+
+The tracker lists each dated commission payment and shows it as paid when it has a receipt date. It reads the amount and due date from that payment. A closed deal that has no dated payment has one row with a blank amount. If the copy kept an invoice date for that deal, the row shows as invoiced. Undo uses the restored phase and invoice date on the next read. Expected commission is a pipeline estimate. Home shows only unpaid rows with an explicit past due date.
+
+The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. The app's Mark paid save still calls `record-commission-receipt` in CARR and needs a new-database save before it can record receipts from these rows.
+
 ## Doors the old system calls
 
 These are the engine requests old-system programs 26, 27 and 28 will make, fixed before either side is built so both can be built at once. Where the engine side is unbuilt, this is the shape it implements. Old callers were read at `carr-system` `e5966a7`, which already keeps each email's Message-ID (slice 2).
