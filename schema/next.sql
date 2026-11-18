@@ -1171,6 +1171,8 @@ create table proposal (
 	due_on date,
 	from_phase text references phase,
 	to_phase text references phase,
+	phase_stated boolean not null default false,
+	phase_on date,
 	lead_role text generated always as ('lead') stored,
 	from_stage text,
 	to_stage text,
@@ -1193,6 +1195,8 @@ create table proposal (
 	constraint proposal_decision_whole check (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
 		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
+	constraint proposal_stated_phase check (case when phase_stated then
+		kind = 'phase_move' and activity_kind in ('call', 'meeting') else phase_on is null end),
 	constraint proposal_payload check ((
 		(kind = 'email_lead'
 			and num_nonnulls(what, owner_party_id, due_on, from_phase, to_phase, from_stage, to_stage, how_found, reason, strength) = 0)
@@ -1211,7 +1215,7 @@ create table proposal (
 );
 
 create unique index proposal_source_payload_once on proposal
-	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found)
+	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found, phase_stated, phase_on)
 	nulls not distinct where activity_id is not null;
 
 create function decide_proposal() returns trigger
@@ -1220,6 +1224,9 @@ declare
 	acting_job text := nullif(current_setting('engine.job', true), '');
 	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
 	current_phase text;
+	phase_started_at timestamptz;
+	move_at timestamptz;
+	today date;
 	sender_name text;
 	sender_address email_address;
 	lead_party_id uuid;
@@ -1283,12 +1290,24 @@ begin
 	when 'phase_move' then
 		-- Two acceptances cannot both pass the stale-phase check.
 		perform from deal where id = new.deal_id for update;
-		select phase into current_phase from deal_phase_change where deal_id = new.deal_id order by happened_at desc limit 1;
+		select phase, happened_at into current_phase, phase_started_at
+			from deal_phase_change where deal_id = new.deal_id order by happened_at desc limit 1;
 		if current_phase is distinct from new.from_phase then
 			raise exception 'the deal has moved' using errcode = 'check_violation', constraint = 'proposal_current_phase';
 		end if;
+		move_at := new.decided_at;
+		if new.phase_on is not null then
+			today := (move_at at time zone 'America/Chicago')::date;
+			if new.phase_on > today or new.phase_on < (phase_started_at at time zone 'America/Chicago')::date then
+				raise exception 'phase date falls outside the current phase'
+					using errcode = 'check_violation', constraint = 'proposal_phase_date';
+			end if;
+			move_at := greatest(phase_started_at + interval '1 microsecond',
+				case when new.phase_on = today then move_at
+					else new.phase_on::timestamp at time zone 'America/Chicago' end);
+		end if;
 		insert into deal_phase_change (deal_id, happened_at, phase, reason)
-		values (new.deal_id, new.decided_at, new.to_phase, new.reason);
+		values (new.deal_id, move_at, new.to_phase, new.reason);
 	when 'file_to_deal', 'possible_new_deal' then
 		new.filed_deal_id := coalesce(new.filed_deal_id, new.deal_id);
 		perform from deal where id = new.filed_deal_id for update;

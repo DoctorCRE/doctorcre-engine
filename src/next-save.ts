@@ -74,3 +74,13 @@ export async function stampNextSave(tx: Transaction<DB>, stamp: Stamp) {
 		await sql`select set_config('engine.job', ${stamp.job}, true)`.execute(tx);
 	}
 }
+
+export async function userId(tx: Transaction<DB>, slug: string) {
+	const user = await tx
+		.selectFrom("app_user")
+		.select("id")
+		.where("slug", "=", slug)
+		.executeTakeFirst();
+	if (!user) throw new SaveRefusal(new Refusal(400, "unknown_owner"));
+	return user.id;
+}

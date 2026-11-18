@@ -1,10 +1,13 @@
 import { Hono } from "hono";
 import { sql, type Transaction, type Updateable } from "kysely";
-import { Refusal } from "../answer.ts";
+import { Refusal, refuse } from "../answer.ts";
 import { isCalendarDate } from "../calendar-date.ts";
 import type { JsonObject } from "../database.d.ts";
+import { failureKind } from "../failure.ts";
+import { nextTransaction } from "../next-connection.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
+import { stampNextSave, userId } from "../next-save.ts";
 import {
 	clearable,
 	type Fitted,
@@ -19,7 +22,7 @@ import {
 	orNull,
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
-import { seenAnswer, unseenChanges } from "../seen-change.ts";
+import { latestChange, seenAnswer, unseenChanges } from "../seen-change.ts";
 import { UUID } from "../uuid.ts";
 
 // The database checks each value against its own rules, such as a known kind.
@@ -95,16 +98,6 @@ async function saveDealChanges(
 		: answer;
 }
 
-async function userId(tx: Transaction<DB>, slug: string) {
-	const user = await tx
-		.selectFrom("app_user")
-		.select("id")
-		.where("slug", "=", slug)
-		.executeTakeFirst();
-	if (!user) throw new SaveRefusal(new Refusal(400, "unknown_owner"));
-	return user.id;
-}
-
 // Changes a deal's fields unless another save changed one of them after `seen`, the
 // deal's latest change the partner's answer showed (0 for none). Other fields' changes
 // stand, so two partners editing different fields both keep theirs.
@@ -178,4 +171,47 @@ export const nextDeals = new Hono<NextSaveEnv>().post(
 			(body) => parseDealChanges(c.req.param("deal"), body),
 			saveDealChanges,
 		),
+);
+
+export const dealJobs = new Hono<NextSaveEnv>().get(
+	"/deals/:deal",
+	async (c) => {
+		const deal_id = c.req.param("deal");
+		const database = c.env.DATABASE;
+		if (!database) return refuse(c, new Refusal(503, "database_unavailable"));
+		try {
+			const result = await nextTransaction(
+				database.connectionString,
+				"read",
+				async (tx) => {
+					await stampNextSave(tx, c.get("stamp"));
+					if (!isUuid(deal_id)) return null;
+					const {
+						rows: [deal],
+					} = await sql<{
+						deal_id: string;
+						phase: string | null;
+						next_step: { id: string; due_on: string | null } | null;
+					}>`
+						select id as deal_id,
+							(select phase from deal_phase_change where deal_id = d.id order by happened_at desc limit 1),
+							(select jsonb_build_object('id', id, 'due_on', due_on) from next_step
+								where deal_id = d.id and status = 'open' and item_title is null
+								order by created_at desc, id desc limit 1) as next_step
+						from deal d where id = ${deal_id}::uuid`.execute(tx);
+					return (
+						deal && {
+							...deal,
+							change_id: (await latestChange(tx, "deal", deal.deal_id)) ?? 0,
+						}
+					);
+				},
+			);
+			return result ? c.json(result) : refuse(c, new Refusal(404, "not_found"));
+		} catch (error) {
+			if (error instanceof SaveRefusal) return refuse(c, error.refusal);
+			console.warn("deal read failed:", failureKind(error));
+			return refuse(c, new Refusal(503, "database_unavailable"));
+		}
+	},
 );
