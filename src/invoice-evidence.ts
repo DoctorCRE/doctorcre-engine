@@ -43,25 +43,33 @@ export const invoiceEvidence = new Hono<NextSaveEnv>()
 					"deal_name",
 					"occurred_at",
 				]),
-			async (tx, { idempotency_key, ...evidence }) => {
-				const inserted = await tx
-					.insertInto("invoice_email")
-					.values({
-						...evidence,
-						sender: evidence.sender.trim().toLowerCase(),
-						email_date: evidence.occurred_at.slice(0, 10),
-					})
-					.onConflict((conflict) => conflict.column("evidence_ref").doNothing())
-					.returning("id as invoice_id")
-					.executeTakeFirst();
+			async (tx, evidence) => {
+				const {
+					evidence_ref,
+					sender,
+					deal_name,
+					client_name,
+					property_address,
+					occurred_at,
+				} = evidence;
+				const {
+					rows: [inserted],
+				} = await sql<{ invoice_id: string }>`
+					insert into invoice_email
+						(evidence_ref, sender, deal_name, client_name, property_address, occurred_at, email_date)
+					values (${evidence_ref}, ${sender.trim().toLowerCase()}, ${deal_name},
+						${client_name ?? null}, ${property_address ?? null}, ${occurred_at}, ${occurred_at.slice(0, 10)})
+					on conflict (evidence_ref) do nothing
+					returning id as invoice_id
+				`.execute(tx);
 				const saved =
 					inserted ??
 					(await tx
 						.selectFrom("invoice_email")
 						.select("id as invoice_id")
-						.where("evidence_ref", "=", evidence.evidence_ref)
+						.where("evidence_ref", "=", evidence_ref)
 						.executeTakeFirstOrThrow());
-				return { ...saved, evidence_ref: evidence.evidence_ref };
+				return { ...saved, evidence_ref };
 			},
 		);
 	})
