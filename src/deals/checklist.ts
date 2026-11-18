@@ -12,8 +12,7 @@ type Status =
 	| "due"
 	| "overdue";
 
-// The doctrine sections the template cites. A changed or retired section
-// switches the checklist off until the template is reviewed.
+// The old read needs these doctrine versions to avoid showing a stale template.
 // biome-ignore format: one row per section reads as a table.
 export const SOURCES = [
 	{ document: "deal-room-kit", section_id: "5f8a3cbd-fe89-4557-b3f4-5b0bbc53276c", version: 1, content_hash: "fe11a8c2bf371dcab98a0fba969594df46ee64c6a8be047dba9b6befc3dc6424" },
@@ -158,7 +157,9 @@ type Facts = {
 		source: string | null;
 		status: string | null;
 	}[];
-	sections: { id: string; status: string; body_hash: string | null }[];
+	sections:
+		| { id: string; status: string; body_hash: string | null }[]
+		| "engine";
 	commissions: {
 		commission_id: string;
 		status: string;
@@ -259,17 +260,20 @@ function criticalDateItems({ deal, criticalDates, today }: Facts): Item[] {
 
 export function checklistOf(facts: Facts) {
 	const type = DEAL_TYPES.get(facts.deal.type) ?? null;
-	const cited = SOURCES.every(({ section_id, content_hash }) =>
-		facts.sections.some(
-			(s) =>
-				s.id === section_id &&
-				s.status === "active" &&
-				s.body_hash === content_hash,
-		),
-	);
+	const { sections } = facts;
+	const active =
+		sections === "engine" ||
+		SOURCES.every(({ section_id, content_hash }) =>
+			sections.some(
+				(s) =>
+					s.id === section_id &&
+					s.status === "active" &&
+					s.body_hash === content_hash,
+			),
+		);
 	const head = {
 		schema_version: "deal-checklist.v1",
-		template_state: !cited
+		template_state: !active
 			? "source_changed"
 			: type
 				? "current"
@@ -280,7 +284,7 @@ export function checklistOf(facts: Facts) {
 	};
 	const evidence = evidenceOf(facts);
 	const requests = new Map(facts.requests.map((r) => [r.row_key, r]));
-	const phases = (cited ? PHASES : []).map(({ id, label, rows }) => ({
+	const phases = (active ? PHASES : []).map(({ id, label, rows }) => ({
 		id,
 		label,
 		items: [

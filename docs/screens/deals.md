@@ -135,7 +135,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Phase, deal owner and Park, with the same rules as the board. Park asks the reason (client paused, prospect never active, or other) and takes an optional note.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Checklist: the deal's checklist items, each with its due date in words. Clicking one opens it.
-- **Open (question 2).** Checklist progress and document requests on every deal. Recommended: they show here after the switch.
+- [ ] Checklist progress shows the lease, invoice and commission facts recorded on the deal, and which confirmed dates are due.
 - [ ] Critical dates: each with its name in plain words, its date in words and its state. A proposed date, such as one read from a lease, shows Confirm and Drop. Confirm makes it a confirmed date. Drop asks a reason. A confirmed date can be marked done, dropped or passed, each with a reason. Only a partner's click decides.
 - [ ] Terms: Show sourced terms lists each lease term found in the deal's documents, with its document, pages and quoted text. Approve, Correct and Reject each take a reason and save the partner's choice, as on Home's lease fact card.
 - [ ] Email follow-ups: each suggestion from an email on this deal, with that email. Accept and Dismiss work as on Home's email suggestion.
@@ -158,7 +158,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 Questions 1 to 3 are roadmap asks 9 to 11, and question 9 is the roadmap ask "one tap for each on the add line". The others are not on it yet. Each recommendation comes first.
 
 1. Client website: the new database has no place yet for a deal's client website. Recommended: add one, so the deal page keeps its Client website link after the switch.
-2. Checklist: the new database keeps the checklist items but not checklist progress or document requests (144 of 194 deals have a checklist). Recommended: add both, so the checklist shows in full on every deal page instead of "Checklist unavailable".
+2. Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move (#718).
 3. Moved automatically: the copy does not record which phase moves the system made (16 cards today). Recommended: keep that mark on copied moves, with Undo on the card.
 4. Answered on 2026-11-18. A person who is a client may belong to a national account.
 5. When both partners have an open next step on one deal, which shows on the card? Recommended: the deal owner's, with both steps on the deal page.

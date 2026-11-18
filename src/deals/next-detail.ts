@@ -1,7 +1,8 @@
 import { type Expression, sql, type Transaction } from "kysely";
-import { jsonArrayFrom } from "kysely/helpers/postgres";
+import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
+import { checklistOf } from "./checklist.ts";
 import { selectNextDeals } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
@@ -13,6 +14,39 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			sql.lit("deal-items.v1").as("item_schema_version"),
 			"d.id as deal_id",
 			"d.closed_value",
+			"d.reason",
+			asText(sql`(now() at time zone 'America/Chicago')::date`)
+				.$notNull()
+				.as("today"),
+			jsonArrayFrom(
+				eb
+					.selectFrom("commission_payment as payment")
+					.select((eb) => [
+						"payment.id as commission_id",
+						eb
+							.case()
+							.when("payment.received_on", "is not", null)
+							.then("received")
+							.else("unpaid")
+							.end()
+							.as("status"),
+						asText(eb.ref("payment.received_on")).as("received_on"),
+					])
+					.whereRef("payment.deal_id", "=", "d.id")
+					// A copied expected commission still leaves the receipt incomplete.
+					.where((eb) =>
+						eb.not(
+							eb.exists(
+								eb
+									.selectFrom("commission")
+									.select("deal_id")
+									.whereRef("deal_id", "=", "payment.deal_id")
+									.where("expected", "is not", null),
+							),
+						),
+					)
+					.orderBy("payment.id"),
+			).as("commissions"),
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),
 			jsonArrayFrom(
@@ -48,18 +82,46 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 						a.happened_at desc, a.id desc
 				) t
 			)`.as("email_threads"),
-			sql`(select coalesce(json_agg(cd order by due_on, id), '[]') from (
-				select id, kind, due_on, note, source, case when status = 'done' then 'cleared' else status end as status
-				from critical_date where deal_id = d.id
-			) cd)`.as("critical_dates"),
+			jsonArrayFrom(
+				eb
+					.selectFrom("critical_date as cd")
+					.select((eb) => [
+						"cd.id",
+						"cd.kind",
+						asText(eb.ref("cd.due_on")).as("due_on"),
+						"cd.note",
+						"cd.source",
+						eb
+							.case()
+							.when("cd.status", "=", "done")
+							.then("cleared")
+							.else(eb.ref("cd.status"))
+							.end()
+							.as("status"),
+					])
+					.whereRef("cd.deal_id", "=", "d.id")
+					.orderBy("cd.due_on")
+					.orderBy("cd.id"),
+			).as("critical_dates"),
 			sql`(select coalesce(json_agg(doc order by prepared_at desc, id), '[]') from (
 				select id, name, kind, note, created_at as prepared_at
 				from document where deal_id = d.id order by created_at desc, id limit 20
 			) doc)`.as("documents"),
-			sql`(select row_to_json(lease) from (
-				select id, version, executed_on, commencement_on, expiration_on, 'current' as status
-				from current_lease where deal_id = d.id
-			) lease)`.as("lease"),
+			jsonObjectFrom(
+				eb
+					.selectFrom("current_lease as lease")
+					.innerJoin("document as file", "file.id", "lease.document_id")
+					.select((eb) => [
+						"lease.id",
+						"lease.version",
+						asText(eb.ref("lease.executed_on")).as("executed_on"),
+						asText(eb.ref("lease.commencement_on")).as("commencement_on"),
+						asText(eb.ref("lease.expiration_on")).as("expiration_on"),
+						"file.name as evidence_ref",
+						sql.lit("current").as("status"),
+					])
+					.whereRef("lease.deal_id", "=", "d.id"),
+			).as("lease"),
 			sql<
 				unknown[]
 			>`(select coalesce(json_agg(e order by recorded_at desc, id desc), '[]') from (
@@ -91,7 +153,23 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		])
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
-	return record ?? { error: "not_found" as const };
+	if (!record) return { error: "not_found" as const };
+	const { today, commissions, reason, ...detail } = record;
+	const checklist = checklistOf({
+		deal: {
+			id: detail.deal_id,
+			owner: detail.owner,
+			type: reason === "renewal" ? reason : detail.type,
+			invoiced_on: detail.invoiced_on,
+		},
+		lease: detail.lease,
+		criticalDates: detail.critical_dates,
+		sections: "engine",
+		commissions,
+		requests: [],
+		today,
+	});
+	return { ...detail, checklist };
 }
 
 function dealEditValue(column: "c.old_value" | "c.new_value") {

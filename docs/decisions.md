@@ -298,3 +298,5 @@
 150\. **A person who is a client can belong to a brand (2026-11-18).** The owner approved national-account deals with a person as the client. The brand is a company. The copy takes the old account link for a person client and the reviewed date the old system first recorded that membership. The Deals board uses the current membership for open and closed deals (#697).
 
 151\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one saves its summary as a note on the call's deal or party at the recorded call's time. The owner left the twelve old work alerts behind (#698).
+
+152\. **The engine computes checklist progress from deal facts (2026-11-18).** The checklist template lives in engine code. The new read uses saved lease, invoice, commission and critical date facts to show progress. Pass D found no document requests, so the new read leaves them behind (#718).

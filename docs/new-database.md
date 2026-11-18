@@ -1281,6 +1281,8 @@ Aggregate counts from production on 2026-11-17. The file-to-deal and possible-ne
 
 Steps 13–15 and 29 use `GET /api/engine/deals` and `GET /api/engine/deals/{deal_id}`. The board accepts `workspace` (`all`, `team`, or `national_account`) and `account_client_id`. It returns the signed-in partner's slug, open, closed and lost lists, and national account summaries. The detail returns the deal header, steps, checklist items, critical dates, files, lease, and history under the app's existing section names. The new detail route takes the deal UUID the board supplies.
 
+The detail sends `checklist` as `deal-checklist.v1`. The template lives in engine code and needs no doctrine hash check. Saved deal items and their due dates still come from `next_step`. The template shows progress from `current_lease` and its source file, the deal's invoice date, and commission payments. A copied expected commission or a payment without a receipt leaves the commission receipt outstanding. Confirmed open critical dates count as due or overdue by the Central calendar day. Document requests stay on the old side because Pass D found no rows to move (#718).
+
 Set the engine Worker's `DEALS_READ_SCHEMA` variable to `next` to use the read-only `next` schema through the existing `DATABASE` binding. The login must be able to assume `engine_reader` on the copied database. An absent setting or any other value uses today's readers. Once rehearsal verifies the remaining app dependencies, set the engine variable first, then set `deals-from-engine` to `on` in the app's `ENGINE_ROUTING` KV. To return the app to CARR, set the KV value to `off`.
 
 Timeline rows for a new-schema deal update show the fields and values the update changed. Owner changes show user slugs and market changes show market names. Parking reason and note changes share one `operating_state` line, and reviving a deal shows `Active`. Imported rows keep the original event's verb and field. National account cards show the retained client roster reference when the account has one unambiguous `C-` reference in `outside_id`.
@@ -1292,7 +1294,6 @@ When the nightly invoice job moved the deal to its current Closed phase, the boa
 Question numbers refer to the [Deals screen spec](screens/deals.md#questions-for-the-owner).
 
 - The new schema needs a place for client website registrations (question 1). Pass D had one registered deal site in the old schema. The app offers site setup when the read lacks the registration.
-- The checklist panel needs template source status and hashes, progress, and document requests (question 2). Titled deal items and their due dates already come from `next_step`. Pass D had 144 deals with a recognized template type and zero document requests.
 - The "Moved automatically" mark and Undo on copied moves need the source event ID and the fact that the move was automatic (question 3). Pass D copied the phase rows behind all 16 old receipts, with the phase, occurrence and save times, reason, and author stamp.
 - Pipeline-call state waits on the deal watch and pipeline call recorder decision (question 8).
 
