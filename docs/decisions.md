@@ -292,3 +292,5 @@
 147\. **Home reads a next step once (2026-11-18).** The switched Home inbox reads the signed-in partner's steps and their marks through the read-only engine role. A call follow-up is the same step with its recorded call and quote. Card versions come from change history, and the read shows a completion only when its time is known (#692).
 
 148\. **Deals identify an automatic invoice close from its application (2026-11-18).** The latest phase shows as closed automatically when it matches an invoice application's closing phase, differs from the prior phase, and carries the nightly job's stamp. The receipt uses the closing phase row's date in Central time, matching the deal's close date, and takes its previous phase from the application (#674).
+
+149\. **A person who is a client can belong to a brand (2026-11-18).** The owner approved national-account deals with a person as the client. The brand is a company. The copy takes the old account link for a person client and the reviewed date the old system first recorded that membership. The Deals board uses the current membership for open and closed deals (#697).
