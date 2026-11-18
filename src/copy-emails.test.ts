@@ -65,9 +65,9 @@ const messages: [n: number, account: string, header: string][] = [
 ];
 // biome-ignore format: one old row per line
 const mail: Mail[] = [
-	{ n: 40, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: deal, context: context(DOCTOR, "Example tour"), email: 90 },
+	{ n: 40, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: deal, context: context(DOCTOR, "Example tour", ', "conversation_id": "   "'), email: 90 },
 	{ n: 41, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", detail: "Example preview", link: ["client_id", 20], context: context(DOCTOR, "Example tour"), email: 90 },
-	{ n: 42, kind: "email_in", time: "10:00", summary: "Email from doctor: Example tour", detail: "Example preview", link: ["lead_id", 21], context: context(DOCTOR, "Example tour"), email: 91 },
+	{ n: 42, kind: "email_in", time: "10:00", summary: "Email from doctor: Example tour", detail: "Example preview", link: ["lead_id", 21], context: context(DOCTOR, "Example tour", ', "conversation_id": "Tour-Thread="'), email: 91 },
 	{ n: 52, kind: "email_in", time: "10:00", summary: "Email from doctor: Example tour", link: deal, context: context(DOCTOR, "Example tour") },
 	{ n: 43, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", detail: "Example short", link: deal, source, email: 94 },
 	{ n: 44, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", detail: "Example short", link: ["lead_id", 21], source, email: 94 },
@@ -80,7 +80,7 @@ const mail: Mail[] = [
 	{ n: 51, kind: "note", time: "16:00", summary: "Full text of email: Example lost", link: deal },
 	{ n: 53, kind: "call", time: "17:00", summary: "Example call about an email", link: deal, context: context(DOCTOR, "Example") },
 	{ n: 56, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: deal, context: context(DOCTOR, "Example visit", ', "lifecycle": {"state": "deleted"}'), email: 92 },
-	{ n: 57, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: ["client_id", 20], context: `'{"subject": "Example visit"}'`, email: 93 },
+	{ n: 57, kind: "email_in", time: "19:00", summary: "Email from Example Doctor: Example visit", link: ["client_id", 20], context: `'{"subject": "Example visit", "conversation_id": ""}'`, email: 93 },
 ];
 // Without a Message-ID; 60 and 61 are one email in two mailboxes, and 65 matches two emails that have one.
 // 66 was sent a second later and 67's subject has a space today's intake kept, so each is its own email.
@@ -92,14 +92,14 @@ const withoutId: Mail[] = [
 	{ n: 63, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source, email: 88 },
 	{ n: 64, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source, email: 89 },
 	{ n: 65, kind: "email_in", time: "22:00", summary: "Email from Example Doctor: Example twin", link: deal, source },
-	{ n: 66, kind: "email_in", time: "20:00:01", summary: "Email from Example Doctor: Example offer", link: deal, source },
+	{ n: 66, kind: "email_in", time: "20:00:01", summary: "Email from Example Doctor: Example offer", link: deal, source, email: 86 },
 	{ n: 67, kind: "email_in", time: "20:00", summary: "Email from Example Doctor: Example offer ", link: deal, source },
 ];
 // Filed after the first copy, with lower ids than the emails they belong to.
 // biome-ignore format: one old row per line
 const later: Mail[] = [
 	{ n: 38, kind: "email_in", time: "10:00", summary: "Email from Example Doctor: Example tour", link: ["client_id", 20], context: context(DOCTOR, "Example tour"), email: 91 },
-	{ n: 39, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", link: ["client_id", 20], source, email: 94 },
+	{ n: 39, kind: "email_in", time: "11:00", summary: "Email from Example Doctor: Example lease", link: ["client_id", 20], source, context: context(DOCTOR, "Example lease", ', "conversation_id": "Lease-Thread="'), email: 94 },
 ];
 const offerWithId: Mail = {
 	n: 59,
@@ -175,6 +175,16 @@ test("stores each email once by its Message-ID with all its records and its full
 		],
 		"the sender comes from any row of the email",
 	);
+	const conversations = () =>
+		lines(
+			"select activity_id, conversation_id from email order by activity_id",
+		);
+	assert.deepEqual(await conversations(), [
+		"40 Tour-Thread=",
+		"43 null",
+		"46 null",
+		"57 null",
+	]);
 	const links = [
 		"40 30 null 2024-02-01 00:00:00+00",
 		"40 null 10 2024-02-01 00:00:00+00",
@@ -227,11 +237,17 @@ test("stores each email once by its Message-ID with all its records and its full
 		links.toSpliced(4, 0, "43 null 10 2024-02-01 00:00:00+00"),
 		"it adds that row's record",
 	);
+	assert.deepEqual(await conversations(), [
+		"40 Tour-Thread=",
+		"43 Lease-Thread=",
+		"46 null",
+		"57 null",
+	]);
 });
 
 test("matches an email without its Message-ID by sender, sent time and subject, once across mailboxes and reruns", async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
- insert into public.email values ('${id(87)}', '${JOE}', '<Offer@example.test>'), ('${id(88)}', '${JOE}', '<Twin-1@example.test>'),
+ insert into public.email values ('${id(86)}', '${JOE}', ''), ('${id(87)}', '${JOE}', '<Offer@example.test>'), ('${id(88)}', '${JOE}', '<Twin-1@example.test>'),
   ('${id(89)}', '${DELL}', '<Twin-2@example.test>');
  ${withoutId.map(insert).join("\n ")} commit;`);
 	const listed = async () =>

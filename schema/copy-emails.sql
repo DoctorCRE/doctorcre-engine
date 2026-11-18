@@ -11,7 +11,7 @@ create temp table old_message_id (activity_id uuid primary key, message_id text 
 do $$ begin
 	if to_regclass('public.email') is not null then
 		execute 'insert into old_message_id select a.id, e.message_id from public.activity a
-			join public.email e on e.id = a.email_id where e.message_id is not null';
+			join public.email e on e.id = a.email_id where e.message_id ~ ''\S''';
 	end if;
 end $$;
 
@@ -22,6 +22,7 @@ create temp table old_link on commit drop as select * from copy_activity_link();
 -- Deleting is per mailbox, so a row is live on its own.
 create temp table old_email on commit drop as
 select a.id, a.kind, a.occurred_at, a.recorded_at, a.updated_at, a.summary, a.detail, m.message_id,
+ case when a.email_context ->> 'conversation_id' ~ '\S' then a.email_context ->> 'conversation_id' end as conversation_id,
  a.email_context #>> '{lifecycle,state}' as lifecycle, coalesce(a.email_context #>> '{lifecycle,state}', 'live') = 'live' as live,
  lower(coalesce(a.email_context #>> '{sender,email}', a.email_source ->> 'sender_email',
   case when a.kind = 'email_out' then a.email_identity ->> 'mailbox_account' end)) as sender,
@@ -62,6 +63,8 @@ select g.*, coalesce((select f.detail from full_text f where f.emails = array[g.
  '') as body,
  (select m.sender from email_group m where m.email_id = g.email_id and pg_input_is_valid(m.sender, 'email_address')
   order by m.id <> g.id, m.recorded_at, m.id limit 1) as email_sender,
+ (select m.conversation_id from email_group m where m.email_id = g.email_id and m.live and m.conversation_id is not null
+  order by m.id <> g.id, m.recorded_at, m.id limit 1) as email_conversation_id,
  exists (select from email_group m where m.email_id = g.email_id and m.live) as live_somewhere,
  exists (select from email_group m join old_link l using (id) where m.email_id = g.email_id and m.live
   and (l.deal_id is not null or l.party_id is not null)) as is_about
@@ -87,11 +90,15 @@ select * from mapped_email where email_sender is not null and live_somewhere and
 insert into activity (id, kind, happened_at, summary, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, 'email', occurred_at, summary, changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from ready_email on conflict (id) do nothing;
-insert into email (activity_id, message_id, sender, subject, body, imported, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select id, message_id, email_sender::email_address, subject, body, true, changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
+insert into email (activity_id, message_id, conversation_id, sender, subject, body, imported, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+select id, message_id, email_conversation_id, email_sender::email_address, subject, body, true,
+ changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from ready_email
--- A row filed since can bring the Message-ID an email copied without one lacked.
-on conflict (activity_id) do update set message_id = excluded.message_id where email.message_id is null and excluded.message_id is not null;
+-- A row filed since can bring a mailbox fact the copied email lacked.
+on conflict (activity_id) do update set message_id = coalesce(email.message_id, excluded.message_id),
+ conversation_id = coalesce(email.conversation_id, excluded.conversation_id)
+where (email.message_id is null and excluded.message_id is not null)
+ or (email.conversation_id is null and excluded.conversation_id is not null);
 -- Each live row filed it to its records; links are retried, so a record copied since then gains its link.
 insert into activity_about (activity_id, deal_id, party_id, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (g.email_id, l.deal_id, l.party_id) g.email_id, l.deal_id, l.party_id, g.recorded_at,

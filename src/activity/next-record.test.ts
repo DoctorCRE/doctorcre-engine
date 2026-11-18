@@ -177,6 +177,22 @@ test("an email about no record, or with a padded Message-ID, is not stored", asy
 	assert.deepEqual(await stored("made-up-3@example.com"), []);
 });
 
+test("an omitted conversation id and null replay the same email save", async () => {
+	const message = mail("missing-conversation@example.test");
+	const first = await viaJob(message);
+	assert.equal(first.status, 201);
+	const retry = await viaJob({
+		...message,
+		email: { ...message.email, conversation_id: null },
+	});
+	assert.deepEqual(retry.body, { replayed: true, ...first.body });
+	const { rows } = await db.query(
+		"select conversation_id from email where activity_id = $1",
+		[first.body.activity_id],
+	);
+	assert.deepEqual(rows, [{ conversation_id: null }]);
+});
+
 test("a partner's call is stamped with them and its records must exist", async () => {
 	const call = note({ kind: "call", reached: true });
 	const { status, body } = await viaApp(call);
@@ -323,14 +339,16 @@ test("only a meeting can carry a 16-character lowercase hex calendar review key"
 		);
 });
 
-test("sender name and ordered to/cc recipients survive a second mailbox copy", async () => {
+test("conversation id, sender name and ordered recipients survive a second mailbox copy", async () => {
 	const message = mail("router-facts@example.com", {
 		sender_name: "Casey Display",
+		conversation_id: "Opaque-Outlook-Id=",
 	});
 	const first = await viaJob(message);
 	const second = await viaJob(
 		mail("router-facts@example.com", {
 			sender_name: "Changed",
+			conversation_id: "Different-Outlook-Id",
 			subject: "Changed",
 			body: "Changed",
 			recipients: [],
@@ -340,7 +358,7 @@ test("sender name and ordered to/cc recipients survive a second mailbox copy", a
 	assert.equal(second.body.activity_id, first.body.activity_id);
 	assert.equal(second.body.existing, true);
 	const { rows } = await db.query(
-		`select sender, sender_name, subject, body from email where activity_id = $1`,
+		`select sender, sender_name, subject, body, conversation_id from email where activity_id = $1`,
 		[first.body.activity_id],
 	);
 	assert.deepEqual(rows, [
@@ -349,6 +367,7 @@ test("sender name and ordered to/cc recipients survive a second mailbox copy", a
 			sender_name: "Casey Display",
 			subject: "Example subject",
 			body: "Example body",
+			conversation_id: "Opaque-Outlook-Id=",
 		},
 	]);
 	assert.deepEqual(
@@ -368,6 +387,12 @@ test("sender name and ordered to/cc recipients survive a second mailbox copy", a
 			)
 		).rows,
 		[{ user_id: JOE }, { user_id: DELL }],
+	);
+	await refused(
+		viaJob(mail("invalid-conversation@example.com", { conversation_id: 42 })),
+		400,
+		"invalid_field_value",
+		{ fields: ["email"] },
 	);
 	await refused(
 		viaJob(
