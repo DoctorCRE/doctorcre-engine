@@ -1175,11 +1175,15 @@ create table home_mark (
 	next_step_id uuid references next_step (home_step_id),
 	call_follow_up_id uuid references next_step (home_call_follow_up_id),
 	home_update_id uuid,
-	item_id uuid generated always as (coalesce(next_step_id, call_follow_up_id, home_update_id)) stored,
+	proposal_id uuid,
+	reply_draft_id uuid,
+	item_id uuid generated always as (coalesce(next_step_id, call_follow_up_id, home_update_id, proposal_id, reply_draft_id)) stored,
 	item_kind text generated always as (
 		case when next_step_id is not null then 'next_step'
 			when call_follow_up_id is not null then 'call_follow_up'
-			when home_update_id is not null then 'home_update' end) stored,
+			when home_update_id is not null then 'home_update'
+			when proposal_id is not null then 'proposal'
+			when reply_draft_id is not null then 'reply_draft' end) stored,
 	created_at timestamptz not null default now(),
 	disposition text check (disposition in ('snoozed', 'settled')),
 	snoozed_until timestamptz,
@@ -1187,7 +1191,7 @@ create table home_mark (
 	waiting_reason text check (waiting_reason ~ '\S'),
 	primary key (user_id, item_kind, item_id),
 	foreign key (home_update_id, user_id) references home_update (id, user_id),
-	constraint home_mark_one_item check (num_nonnulls(next_step_id, call_follow_up_id, home_update_id) = 1),
+	constraint home_mark_one_item check (num_nonnulls(next_step_id, call_follow_up_id, home_update_id, proposal_id, reply_draft_id) = 1),
 	constraint home_mark_snoozed_until check ((disposition is not distinct from 'snoozed') = (snoozed_until is not null)),
 	constraint home_mark_waiting_has_a_reason check ((waiting_on_party_id is null) = (waiting_reason is null)),
 	constraint home_mark_marks_something check (disposition is not null or waiting_on_party_id is not null)
@@ -1470,6 +1474,7 @@ create table reply_draft (
 	sent_item_id text unique check (sent_item_id ~ '\S'),
 	failure_reason text check (failure_reason ~ '\S'),
 	unique (email_activity_id, owner_user_id),
+	unique (id, owner_user_id),
 	constraint reply_draft_delivery_facts check ((
 		status = 'pending' and num_nonnulls(decided_at, dismiss_reason, to_address, cc_address, sent_at, sent_item_id, failure_reason) = 0
 		or status = 'dismissed' and num_nonnulls(decided_at, dismiss_reason) = 2
@@ -1478,6 +1483,9 @@ create table reply_draft (
 			and (status = 'sent') = (sent_at is not null) and (status = 'sent') = (sent_item_id is not null)
 			and (status = 'failed') = (failure_reason is not null)) is true)
 );
+
+alter table home_mark add foreign key (proposal_id) references proposal;
+alter table home_mark add foreign key (reply_draft_id, user_id) references reply_draft (id, owner_user_id);
 
 create function reply_draft_delivery() returns trigger
 language plpgsql as $$

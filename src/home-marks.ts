@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
+import { lockHomeReview } from "./home-inbox-review.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { ACTING_USER } from "./next-save.ts";
@@ -15,11 +16,18 @@ import {
 } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 
-type ItemKind = "next_step" | "call_follow_up" | "home_update";
+type ItemKind =
+	| "next_step"
+	| "call_follow_up"
+	| "home_update"
+	| "proposal"
+	| "reply_draft";
 const itemKinds = new Map<string, ItemKind>([
 	["next_action", "next_step"],
 	["capture_post_call_action", "call_follow_up"],
 	["notification", "home_update"],
+	["suggestion", "proposal"],
+	["reply_draft", "reply_draft"],
 ]);
 
 const isVersion = (value: unknown): value is string =>
@@ -105,7 +113,19 @@ type MarkState = Mark & {
 };
 
 async function lockItem(tx: Transaction<DB>, id: string, kind: ItemKind) {
-	type LockedItem = { user_id: string; done: boolean };
+	type LockedItem = { user_id: string; done: boolean; sourceVersion?: string };
+	if (kind === "proposal" || kind === "reply_draft") {
+		const {
+			rows: [actor],
+		} = await sql<{ user_id: string | null }>`
+			select ${ACTING_USER} as user_id
+		`.execute(tx);
+		if (!actor?.user_id) return;
+		const sourceVersion = await lockHomeReview(tx, kind, id, actor.user_id);
+		if (sourceVersion !== undefined)
+			return { user_id: actor.user_id, done: false, sourceVersion };
+		return;
+	}
 	const update = kind === "home_update";
 	if (update) {
 		// Updates have a fixed recipient and no row lock privilege for engine saves.
@@ -126,6 +146,7 @@ async function readMarkState(
 	tx: Transaction<DB>,
 	record: { user_id: string; item_kind: ItemKind; item_id: string },
 	snoozedUntil: string | null,
+	sourceVersion: string | undefined,
 ) {
 	const { item_kind, item_id: id } = record;
 	const sourceTable = item_kind === "home_update" ? "home_update" : "next_step";
@@ -136,8 +157,8 @@ async function readMarkState(
 			to_jsonb(m.snoozed_until)#>>'{}' as snoozed_until,
 			coalesce(m.snoozed_until > now(), false) as snoozed,
 			coalesce(${snoozedUntil}::timestamptz > now(), true) as valid_snooze,
-			(select coalesce(max(id), 0) from change
-				where table_name = ${sourceTable} and record = ${{ id }}) as source_version,
+			coalesce(${sourceVersion ?? null}::bigint, (select coalesce(max(id), 0) from change
+				where table_name = ${sourceTable} and record = ${{ id }})) as source_version,
 			h.version as mark_version, h.settled_version
 		from (
 			select max(id) as version,
@@ -161,6 +182,7 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 		tx,
 		record,
 		request.mark.snoozed_until ?? null,
+		item.sourceVersion,
 	);
 	const history = tx
 		.selectFrom("change")

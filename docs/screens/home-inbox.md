@@ -23,7 +23,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Home has no "set waiting person" control.
 - **Open (question 2).** Recommended: Home has no Hide; every card is finished, snoozed to a date, or dropped with a reason, and the selection bar's Hide button (today "Settle selected") goes too. Otherwise Hide from inbox sets a card aside unfinished, and it shows under "Hidden from inbox" with Show in inbox.
 
-When app routing moves to the new database, Home uses door 24 for snooze, settlement and undo of those marks, door 18 for Mark done and reopening the step, and door 21 for completion review decisions (see `docs/new-database.md`).
+When app routing moves to the new database, Home uses door 24 for snooze, settlement and undo on steps, call follow-ups, updates, suggestions and reply drafts. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
 
 ## Inbox sections
 
@@ -72,7 +72,7 @@ A reply Dr. CRE drafted to an email.
 - [ ] Says "Reply to Pat Example: Floor plan for suite 200". One card per email conversation.
 - [ ] Opens to the email being answered (who wrote, when, what they said), then the draft with To and CC.
 - [ ] Save draft sends nothing. Decline asks for a reason, and the card leaves.
-- [ ] Send reply approves this exact text to be sent once from the partner's own mailbox. The card shows "Sending" until the outbox records it, then leaves and shows under done as sent. Send reply has no Undo.
+- [ ] Send reply approves this exact text to be sent once from the partner's own mailbox. The card shows "Sending" until the outbox records it, then appears once in Done as sent, using the recorded send time. Send reply has no Undo.
 - [ ] When the outbox records a failure, the card says "Didn't send" and why, in plain words. If nothing went out, Send reply is offered again. If it may have gone out, the card says it is checking the Sent folder and offers no Send reply. Any other failure is never sent again on its own; the partner answers from Outlook.
 - [ ] Leaves by itself, with no click, when the partner's own reply in that conversation is recorded from Outlook, or when a newer email in the conversation brings a newer draft.
 
@@ -160,7 +160,7 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - Every card carries a "needs attention" badge and "Ready for your attention". The inbox says "91 matching loaded cards of 91 loaded" and "Partner inbox".
 - Steps due in 2027, and one on hold until 2027, sit in Needs your attention.
 - Mail priorities rows are titled only "Next step", "Email filing" or "Possible new deal", with no sender or subject, and almost all link to the same email follow-ups page.
-- The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs. Opening the email and deciding a suggestion from Home still need app routing.
+- The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs, marks and sent draft history. Opening the email and deciding a suggestion from Home still need app routing.
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.

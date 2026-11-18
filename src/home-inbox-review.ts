@@ -1,9 +1,10 @@
-import { sql, type Transaction } from "kysely";
+import { type RawBuilder, sql, type Transaction } from "kysely";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {
 	id: string;
 	source_version: string;
+	source_change_id: string;
 	activity_at: string;
 	title: string;
 	context_label: string | null;
@@ -11,7 +12,8 @@ type ReviewRow = {
 };
 
 type Draft = ReviewRow & {
-	status: "pending" | "approved" | "failed";
+	status: "pending" | "approved" | "failed" | "sent";
+	sent_at: string | null;
 	failure_reason: string | null;
 	email_activity_id: string;
 	deal_id: string | null;
@@ -34,16 +36,19 @@ type Suggestion = ReviewRow &
 		suggestions: SuggestionReference[];
 	};
 
-function draftRows(userId: string, limit: number) {
+function draftRows(userId: string, limit: number, itemId?: string) {
 	return sql<Draft>`
 		with drafts as (
-			select r.id, r.status, r.revision::text as source_version, r.failure_reason,
-				r.changed_at as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
+			select r.id, r.status, r.sent_at, r.failure_reason, r.revision::text as source_version,
+				(select coalesce(max(id), 0) from change where table_name = 'reply_draft'
+					and record = jsonb_build_object('id', r.id)) as source_change_id,
+				coalesce(r.sent_at, r.changed_at) as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
 				'Reply to ' || coalesce(nullif(btrim(e.sender_name), ''), e.sender::text) || ': ' || r.subject as title,
 				coalesce(d.name, nullif(btrim(e.sender_name), ''), e.sender::text) as context_label,
 				'/deals?deal=' || d.id as open_url,
 				row_number() over (
-					partition by e.conversation_id, case when e.conversation_id is null then e.activity_id end
+					partition by (r.status = 'sent'), e.conversation_id,
+						case when e.conversation_id is null or r.status = 'sent' then e.activity_id end
 					order by (r.status = 'approved') desc, a.happened_at desc, a.id desc
 				) as position
 			from reply_draft r
@@ -55,18 +60,24 @@ function draftRows(userId: string, limit: number) {
 				where about.activity_id = a.id and about.deal_id is not null
 				having count(*) = 1
 			)
-			where r.owner_user_id = ${userId}::uuid and r.status in ('pending', 'approved', 'failed')
+			where r.owner_user_id = ${userId}::uuid and (
+				r.status in ('pending', 'approved', 'failed')
+				or r.sent_at >= now() - interval '7 days'
+			)
 		)
 		select * from drafts where position = 1
-		order by activity_at desc, id
+			${itemId ? sql`and id = ${itemId} and status <> 'sent'` : sql``}
+		order by (status = 'sent'), activity_at desc, id
 		limit ${limit}
 	`;
 }
 
-function suggestionRows(userId: string, limit: number) {
+function suggestionRows(userId: string, limit: number, itemId?: string) {
 	return sql<Suggestion>`
-		with pending as (
-			select p.id, p.activity_id, p.activity_kind, p.created_at as activity_at, p.due_on,
+		with visible as (
+			select p.id, p.status, p.activity_id, p.activity_kind, p.created_at as activity_at, p.due_on,
+				(select coalesce(max(id), 0) from change where table_name = 'proposal'
+					and record = jsonb_build_object('id', p.id)) as proposal_version,
 				coalesce(d.name, party.name, property.name, property.address,
 					nullif(btrim(e.sender_name), ''), e.sender::text) as context_label,
 				case when p.activity_kind = 'call' then '/calls?session=' || a.id
@@ -100,59 +111,123 @@ function suggestionRows(userId: string, limit: number) {
 			left join party on party.id = p.party_id
 			left join property on property.id = p.property_id
 			left join phase on phase.slug = p.to_phase
-			where p.status = 'pending' and p.kind not in ('next_step_done', 'email_lead')
+			where p.kind not in ('next_step_done', 'email_lead')
 				and case
 					when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 					when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
 					else p.changed_for_user_id = ${userId}::uuid
+						or (p.status <> 'pending' and exists (
+							select from change where table_name = 'proposal' and action = 'insert'
+								and record = jsonb_build_object('id', p.id) and changed_for_user_id = ${userId}::uuid
+						))
 						or exists (select from email_mailbox m where m.activity_id = e.activity_id and m.user_id = ${userId}::uuid)
 						or (p.activity_kind in ('call', 'meeting')
 							and ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id))
 				end
 		), grouped as (
-			select pending.*,
-				coalesce(first_value(email_title) over (source_group order by source_at desc, activity_id desc), suggestion_title) as title,
+			select visible.*,
+				coalesce(first_value(email_title) over (source_group order by (status = 'pending') desc, source_at desc, activity_id desc), suggestion_title) as title,
 				row_number() over same_source as position,
-				md5(string_agg(id::text, ':') over all_members) as source_version,
-				jsonb_agg(reference) over all_members as suggestions
-			from pending
+				max(proposal_version) over source_group as source_change_id,
+				md5(string_agg(id::text, ':') filter (where status = 'pending') over all_members) as source_version,
+				jsonb_agg(reference) filter (where status = 'pending') over all_members as suggestions
+			from visible
 			window source_group as (
 				partition by activity_kind, conversation_id,
 					case when conversation_id is null then coalesce(activity_id, id) end
-			), same_source as (source_group order by activity_at desc, id),
+			), same_source as (source_group order by (status = 'pending') desc, activity_at desc, id),
 			all_members as (same_source rows between unbounded preceding and unbounded following)
 		)
-		select * from grouped where position = 1
+		select * from grouped where position = 1 and status = 'pending'
+			${itemId ? sql`and id = ${itemId}` : sql``}
 		order by activity_at desc, id
 		limit ${limit}
 	`;
 }
 
 type ReviewSource = "email_proposal" | "capture_session" | "notification";
-type ReviewState = "working" | "failed" | "needs_attention";
+type ReviewState = "working" | "failed" | "needs_attention" | "done";
+type ReviewKind = "proposal" | "reply_draft";
+type ReviewMark = {
+	mark_version: string | null;
+	settled: boolean;
+	snoozed_until: string | null;
+};
+
+function markedReviews<Row extends ReviewRow>(
+	rows: RawBuilder<Row>,
+	userId: string,
+	kind: ReviewKind,
+) {
+	return sql<Row & ReviewMark>`
+		select card.*, history.mark_version,
+			coalesce(m.disposition = 'settled' and history.settled_version >= card.source_change_id, false) as settled,
+			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
+		from (${rows}) card
+		left join home_mark m on m.user_id = ${userId}::uuid and m.item_kind = ${kind} and m.item_id = card.id
+		cross join lateral (
+			select max(id) as mark_version,
+				max(id) filter (where new_value ->> 'disposition' = 'settled') as settled_version
+			from change where table_name = 'home_mark'
+				and record = jsonb_build_object('user_id', ${userId}::uuid, 'item_kind', ${kind}::text, 'item_id', card.id)
+		) history
+	`;
+}
+
+export async function lockHomeReview(
+	tx: Transaction<DB>,
+	kind: ReviewKind,
+	id: string,
+	userId: string,
+) {
+	const locked = await tx
+		.selectFrom(kind)
+		.select("id")
+		.where("id", "=", id)
+		.forNoKeyUpdate()
+		.executeTakeFirst();
+	if (!locked) return;
+	const query = kind === "proposal" ? suggestionRows : draftRows;
+	const {
+		rows: [card],
+	} = await query(userId, 1, id).execute(tx);
+	return card?.source_change_id;
+}
 
 function reviewCard(
-	row: ReviewRow,
+	row: ReviewRow & ReviewMark,
+	kind: ReviewKind,
 	source_type: ReviewSource,
 	source_state: ReviewState,
+	completed_at: string | null = null,
 ) {
+	const snoozed_until =
+		row.snoozed_until && !completed_at
+			? new Date(row.snoozed_until).toISOString()
+			: null;
+	const disposition =
+		completed_at || row.settled
+			? "settled"
+			: snoozed_until
+				? "snoozed"
+				: "inbox";
 	return {
-		item_id: `${source_type}:${row.id}`,
+		item_id: `${kind === "proposal" ? "suggestion" : kind}:${row.id}`,
 		source_type,
 		source_id: row.id,
 		source_version: row.source_version,
 		source_state,
-		base_version: `${row.source_version}:0:inbox`,
+		base_version: `${row.source_change_id}:${row.mark_version ?? "0"}:${disposition}`,
 		title: row.title,
 		activity_at: new Date(row.activity_at).toISOString(),
-		completed_at: null,
+		completed_at: completed_at ? new Date(completed_at).toISOString() : null,
 		hold_until: null,
-		snoozed_until: null,
-		disposition: "inbox",
-		section: source_state === "working" ? "working" : "inbox",
+		snoozed_until,
+		disposition,
+		section: source_state === "working" ? "working" : disposition,
 		unseen: false,
 		explicit_unsettle: false,
-		auto_settled: false,
+		auto_settled: source_state === "done",
 		context_label: row.context_label,
 		open_url: row.open_url,
 		action_id: null,
@@ -167,18 +242,30 @@ export async function readHomeReviewCards(
 	userId: string,
 	limit: number,
 ) {
-	const drafts = await draftRows(userId, limit).execute(db);
-	const suggestions = await suggestionRows(userId, limit).execute(db);
+	const drafts = await markedReviews(
+		draftRows(userId, limit),
+		userId,
+		"reply_draft",
+	).execute(db);
+	const suggestions = await markedReviews(
+		suggestionRows(userId, limit),
+		userId,
+		"proposal",
+	).execute(db);
 	return [
 		...drafts.rows.map((draft) => ({
 			...reviewCard(
 				draft,
+				"reply_draft",
 				"email_proposal",
-				draft.status === "approved"
-					? "working"
-					: draft.status === "failed"
-						? "failed"
-						: "needs_attention",
+				draft.status === "sent"
+					? "done"
+					: draft.status === "approved"
+						? "working"
+						: draft.status === "failed"
+							? "failed"
+							: "needs_attention",
+				draft.sent_at,
 			),
 			kind_label: "Reply draft",
 			deal_id: null,
@@ -201,7 +288,7 @@ export async function readHomeReviewCards(
 					? "notification"
 					: "email_proposal";
 			return {
-				...reviewCard(suggestion, sourceType, "needs_attention"),
+				...reviewCard(suggestion, "proposal", sourceType, "needs_attention"),
 				title: call
 					? `${suggestion.title}: ${suggestion.suggestions.length} ${suggestion.suggestions.length === 1 ? "suggestion" : "suggestions"}`
 					: suggestion.title,
