@@ -82,7 +82,7 @@ create table ops.notification_read (notification_id uuid references ops.notifica
 
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
- ('${id(2)}', 'partner_two', 'human', 'Example Partner Two'),
+ ('${id(2)}', 'dell', 'human', 'Example Partner Two'),
  ('${id(3)}', 'example-mail', 'automation', 'Example mail job');
 insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1),
  ('do_not_contact', 'Example do not contact', false, 2);
@@ -105,7 +105,7 @@ insert into public.client_status (slug, label) values ('active_deal', 'Example a
 insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by, created_at) values
  ('${id(20)}', '${id(10)}', 'active_deal', null, 'Example referral', '${id(1)}', '${id(1)}', '2024-01-01'),
  ('${id(23)}', '${id(16)}', 'active_deal', 'national_account', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-06');
-insert into public.national_account_owner (account_client_id, owner_actor_id, set_by) values ('${id(23)}', '${id(1)}', '${id(1)}');
+insert into public.national_account_owner (account_client_id, owner_actor_id, set_by) values ('${id(23)}', '${id(2)}', '${id(1)}');
 insert into public.lead_stage (slug, label) values ('qualified', 'Example qualified');
 insert into public.lead (id, party_id, stage, source_type, created_by, updated_by, created_at, updated_at) values
  ('${id(21)}', '${id(14)}', 'qualified', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-05', '2024-02-05');
@@ -329,7 +329,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, email_document: 1, lead_stage_move: 1, proposal: 4,
- candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, home_update: 1, imported_change: 4 };
+ candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, home_update: 1, imported_change: 5 };
 // biome-ignore format: one row per correction
 const corrections = [
  ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
@@ -354,7 +354,6 @@ const corrections = [
  ["copy-change-history.sql", id(35), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(36), "phase", "field_has_no_mapping"],
  ["copy-change-history.sql", id(37), "invoiced_on", "field_has_no_mapping"],
- ["copy-change-history.sql", id(93), "note", "field_has_no_mapping"],
  ["copy-change-history.sql", id(130), "checklist_ping", "field_has_no_mapping"],
  ["copy-change-history.sql", id(140), "checklist_ping", "field_has_no_mapping"],
  ["copy-change-history.sql", "00000000-0000-4000-8000-100000000090", null, "field_has_no_mapping"],

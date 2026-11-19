@@ -39,14 +39,16 @@ before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into public.actor (id,slug,kind,display_name) values
- ('${id(1)}','partner_one','human','Example Human'),
+ ('${id(1)}','joe','human','Example Human'),
  ('${id(2)}','example_automation','automation','Example Automation'),
  ('${id(3)}','example_system','system','Example System'),
  ('${id(4)}','example_unmapped','human','Example Unmapped'),
- ('${id(5)}','example_company','human','Example Company');
- insert into party (id,kind,name) values ('${id(1)}','person','Example Human');
- insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
- insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
+ ('${id(5)}','example_company','human','Example Company'),
+ ('${id(8)}','example_other_user','human','Example Other User'),
+ ('${id(9)}','partner_one','human','Example Old Sponsor');
+ insert into party (id,kind,name) values ('${id(1)}','person','Example Human'), ('${id(8)}','person','Example Other User'), ('${id(9)}','person','Example Old Sponsor');
+ insert into app_user (id, slug) values ('${id(1)}', 'joe'), ('${id(8)}', 'example_other_user'), ('${id(9)}', 'partner_one');
+ insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}'), ('old_system','${id(8)}','${id(8)}');
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
  insert into public.client_type (slug,label) values ('national_account','Example account');
  insert into public.client_status (slug,label) values ('roster','Example roster');
@@ -113,20 +115,20 @@ test("an absent reviewed date is listed on each run and can be supplied later", 
 	});
 });
 
-test("automation, system, unmapped humans and company mappings cannot become owners", async () => {
+test("automation, system, unmapped humans, companies and other users cannot become owners", async () => {
 	await transaction(
-		[2, 3, 4, 5].map((actor, i) => owner(40 + i, actor)).join("\n"),
+		[2, 3, 4, 5, 8].map((actor, i) => owner(40 + i, actor)).join("\n"),
 		async () => {
 			assert.deepEqual(
-				(await run(date(40) + date(41) + date(42) + date(43))).map((r) => [
-					r.old_id,
-					r.reason,
-				]),
+				(await run(date(40) + date(41) + date(42) + date(43) + date(44))).map(
+					(r) => [r.old_id, r.reason],
+				),
 				[
 					[id(40), "owner_not_human"],
 					[id(41), "owner_not_human"],
 					[id(42), "owner_person_not_copied"],
 					[id(43), "owner_person_not_copied"],
+					[id(44), "owner_not_account_partner"],
 				],
 			);
 			assert.deepEqual(await rows("select * from national_account_owner"), []);
@@ -209,6 +211,8 @@ test("a human owner's mapped person is used even when its id differs from the ac
 	await transaction(
 		`${owner(40)}
  insert into party (id,kind,name) values ('${id(6)}','person','Example mapped person');
+ update app_user set slug='former' where id='${id(1)}';
+ insert into app_user (id, slug) values ('${id(6)}', 'joe');
  update outside_id set party_id='${id(6)}' where value='${id(1)}';`,
 		async () => {
 			assert.deepEqual(await run(date(40)), []);
@@ -242,7 +246,7 @@ for (const event of [
 						{
 							changed_by_user_id: null,
 							changed_by_job: "agent",
-							changed_for_user_id: id(1),
+							changed_for_user_id: id(9),
 						},
 					],
 				);

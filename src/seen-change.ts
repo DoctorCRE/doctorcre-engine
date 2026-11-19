@@ -6,6 +6,7 @@ import { SaveRefusal } from "./save.ts";
 type RecordedIds = {
 	commission_payment: string;
 	deal: string;
+	national_account_owner: string;
 	next_step: string;
 	party_role: { party_id: string; role: "lead" };
 };
