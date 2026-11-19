@@ -422,12 +422,15 @@ create table deal (
 	parking_note text check (parking_note ~ '\S'),
 	-- A flag a user sets, never worked out from anything else.
 	needs_attention boolean not null default false,
-	-- Who last parked the deal and when, apart from its last change. A copied parker no user matches stays empty.
+	-- Who last parked the deal and when, apart from its last change.
 	parked_at timestamptz,
 	parked_by_user_id uuid references app_user,
+	parked_automatically boolean not null default false,
 	constraint deal_parking_note_when_parked check (parking_note is null or parking_reason is not null),
 	constraint deal_parked_stamps_when_parked check ((parking_reason is null) = (parked_at is null)
-		and (parked_by_user_id is null or parked_at is not null))
+		and (parked_by_user_id is null or parked_at is not null)),
+	constraint deal_automatic_parking_has_no_user check (not parked_automatically
+		or (parked_at is not null and parked_by_user_id is null))
 );
 
 -- A job alone never parks, revives or flags a deal; one working for a user, such as the agent, does.
@@ -449,6 +452,7 @@ begin
 	if tg_op = 'INSERT' or (new.parking_reason, new.parking_note) is distinct from (old.parking_reason, old.parking_note) then
 		new.parked_at := case when new.parking_reason is not null then now() end;
 		new.parked_by_user_id := case when new.parking_reason is not null then acting_user end;
+		new.parked_automatically := false;
 	end if;
 	return new;
 end $$;
@@ -698,6 +702,7 @@ create table imported_deal_board (
 	outcome text check (outcome in ('won', 'lost')),
 	closed_on date,
 	phase_at timestamptz,
+	renewal_lease_unrecorded boolean not null default false,
 	foreign key (deal_id, phase_at) references deal_phase_change (deal_id, happened_at)
 );
 
