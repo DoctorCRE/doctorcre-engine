@@ -555,7 +555,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(118), id(90), "Example expired", null, id(1), null],
 			[id(115), id(92), "Send proposal", "2027-04-01", id(1), null],
 			[id(105), id(92), "Example lapsed", null, id(1), null],
-			[id(109), id(92), "Earlier proposal follow-up", null, null, null],
+			[id(109), id(92), "Earlier proposal follow-up", null, id(1), null],
 		];
 		assert.deepEqual((await steps()).map(Object.values), copied);
 		assert.deepEqual(
@@ -569,6 +569,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(105), "expired", null, null, null],
 			[id(106), "cancelled", null, "not recorded before this system", null],
 			[id(107), "done", null, null, null],
+			[id(109), "cancelled", null, "replaced at the move", null],
 			[id(112), "done", null, null, null],
 			[id(113), "cancelled", "2025-02-01 00:00:00+00", "Example no longer needed", id(601)],
 			[id(118), "expired", "2025-03-01 00:00:00+00", null, id(602)],
@@ -614,7 +615,6 @@ test("next actions, reference numbers and roster wording are copied once or list
 				"verbatim_label_not_stored",
 			],
 			[id(105), "resolution_event_id", null, "expiry_unproven"],
-			[id(109), "next_step", id(115), "open_step_exists"],
 			[id(111), "next_step", id(110), "open_step_exists"],
 			[id(114), "description", "\t\n", "blank_next_action"],
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],
@@ -662,19 +662,49 @@ test("a converted lead keeps the recorded client action over a date-only follow-
 			true,
 		);
 		assert.deepEqual(
-			await rows(`select id from next_step where party_id = '${party}'`),
-			[{ id: action }],
+			await rows(
+				`select what, status, owner_party_id, resolution_reason from next_step where party_id = '${party}' order by status desc`,
+			),
+			[
+				{
+					what: "Send proposal",
+					status: "open",
+					owner_party_id: owner,
+					resolution_reason: null,
+				},
+				{
+					what: "Imported lead follow-up",
+					status: "cancelled",
+					owner_party_id: owner,
+					resolution_reason: "replaced at the move",
+				},
+			],
 		);
 		assert.deepEqual(
 			report.filter((row) => row.old_id === lead && row.field === "next_step"),
+			[],
+		);
+		const nextAction = id(123);
+		const retried = await freshCopy(
+			`insert into public.next_action (id,subject_type,subject_id,owner_id,description,created_by) values
+ ('${nextAction}','lead','${lead}','${owner}','Example recorded lead action','${owner}')`,
+		);
+		assert.deepEqual(
+			retried.filter((row) => row.old_id === nextAction),
 			[
 				{
-					old_id: lead,
+					old_id: nextAction,
 					field: "next_step",
 					value: action,
 					reason: "open_step_exists",
 				},
 			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select id, status from next_step where id in ('${action}', '${nextAction}') order by id`,
+			),
+			[{ id: action, status: "open" }],
 		);
 	} finally {
 		await db.query("rollback");

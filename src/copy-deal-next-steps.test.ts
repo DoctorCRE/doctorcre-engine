@@ -90,6 +90,7 @@ before(async () => {
 				`('${id(Number(n))}', 'vendor', '${id(Number(v))}', '${id(1)}', '${text}', '${status}', ${due}, ${hold}, '2025-01-01', '2025-02-01', '${id(1)}')`,
 		)
 		.join(",")};
+ update public.next_action set owner_id = '${id(2)}' where id = '${id(124)}';
  insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(200)}','${id(11)}','next_step','Example old note','${id(1)}','2025-01-01'),
  ('${id(201)}','${id(11)}','next_step','Example current note','${id(2)}','2025-02-01'),
@@ -154,8 +155,20 @@ test("actions keep their own due dates and done time, never the deal date", asyn
 	assert.deepEqual((await rows(`select id, status, due_on::text, done_at::text, owner_party_id, created_at::text from next_step where id in ('${id(100)}','${id(101)}','${id(106)}') order by id`)).map(Object.values), [
  [id(100), "open", "2026-02-01", null, id(1), "2025-01-01 00:00:00+00"],
  [id(101), "done", null, "2025-01-15 00:00:00+00", id(1), "2025-01-01 00:00:00+00"],
- [id(106), "open", null, null, null, "2024-12-31 00:00:00+00"],
+ [id(106), "cancelled", null, null, id(1), "2024-12-31 00:00:00+00"],
  ]);
+	assert.deepEqual(
+		await rows(
+			`select resolution_reason, resolved_at, resolution_event_id from next_step where id = '${id(106)}'`,
+		),
+		[
+			{
+				resolution_reason: "replaced at the move",
+				resolved_at: null,
+				resolution_event_id: null,
+			},
+		],
+	);
 	assert.deepEqual(
 		await rows(
 			"select n.id from next_step n join public.next_action a using (id) where n.changed_at <> a.updated_at",
@@ -278,10 +291,7 @@ test("unmappable values are listed and refused rows never appear", async () => {
 	]);
 	assert.deepEqual(reasons(report, 104), ["blank_next_step"]);
 	assert.deepEqual(reasons(report, 105), ["deal_not_copied"]);
-	assert.deepEqual(reasons(report, 106), [
-		"agent_user_unknown",
-		"open_step_exists",
-	]);
+	assert.deepEqual(reasons(report, 106), ["agent_user_unknown"]);
 	assert.deepEqual(reasons(report, 10), []);
 	assert.deepEqual(
 		await rows(
@@ -290,18 +300,22 @@ test("unmappable values are listed and refused rows never appear", async () => {
 		[],
 	);
 });
-test("ended actions keep only the end state, reason, time and event their old closing event proves", async () => {
+test("ended actions keep proven closing details and move cancellations leave the old event empty", async () => {
 	// biome-ignore format: one row per ended action
 	assert.deepEqual((await rows(`select id,status,done_at::text,resolved_at::text,resolution_reason,resolution_event_id from next_step where status <> 'open' and id between '${id(100)}' and '${id(599)}' order by id`)).map(Object.values), [
  [id(101),'done','2025-01-15 00:00:00+00',null,null,null],
  [id(102),'cancelled',null,'2025-01-20 00:00:00+00','Example no longer needed',id(601)],
  [id(103),'expired',null,'2025-01-25 00:00:00+00',null,id(602)],
+ [id(106),'cancelled',null,null,'replaced at the move',null],
  [id(107),'expired',null,'2025-01-25 00:00:00+00',null,id(602)],
  [id(108),'done','2025-01-18 00:00:00+00',null,null,null],
  [id(110),'done',null,null,null,null],
  [id(121),'done',null,null,null,null],
  [id(122),'cancelled',null,null,'not recorded before this system',null],
  [id(123),'expired',null,null,null,null],
+ [id(124),'cancelled',null,null,'replaced at the move',null],
+ [id(204),'cancelled',null,null,'replaced at the move',null],
+ [id(207),'cancelled',null,null,'replaced at the move',null],
  [id(502),'done','2025-02-02 00:00:00+00',null,null,null],
  [id(503),'cancelled',null,null,'not recorded before this system',null],
  ]);
@@ -325,7 +339,7 @@ test("ended actions keep only the end state, reason, time and event their old cl
 		],
 	);
 	// biome-ignore format: ended and open actions on Home
-	assert.deepEqual((await rows(`select id from home_next_step where id in (${[100, 101, 102, 103, 107, 121, 123, 502].map((n) => `'${id(n)}'`).join(",")})`)).map((r) => r.id), [id(100)]);
+	assert.deepEqual((await rows(`select id from home_next_step where id in (${[100, 101, 102, 103, 106, 107, 121, 123, 124, 204, 207, 502].map((n) => `'${id(n)}'`).join(",")})`)).map((r) => r.id), [id(100)]);
 });
 test("unattached dates and unknown agent sponsors are reported with their values", () => {
 	const listed = report.filter(
@@ -483,7 +497,10 @@ test("deal and vendor holds copy as the step's hold date", async () => {
 				"select id, hold_until::text from next_step where hold_until is not null order by id",
 			)
 		).map(Object.values),
-		[[id(100), "2026-04-01"]],
+		[
+			[id(100), "2026-04-01"],
+			[id(124), "2026-06-01"],
+		],
 	);
 });
 
@@ -494,21 +511,18 @@ test("vendor actions become next steps about the vendor's record, never about a 
  [id(121), null, id(61), null, null, id(1), id(1)],
  [id(122), null, id(61), null, null, id(1), id(1)],
  [id(123), null, id(61), null, null, id(1), id(1)],
+ [id(124), null, id(61), null, null, id(1), id(1)],
  ]);
 	for (const n of [120, 121]) assert.deepEqual(reasons(report, n), []);
 	assert.deepEqual(reasons(report, 122), []);
 	assert.deepEqual(reasons(report, 123), ["expiry_unproven"]);
 	assert.deepEqual(
-		report.filter((r) => r.old_id === id(124)),
-		[
-			{
-				old_id: id(124),
-				field: "next_step",
-				value: id(120),
-				reason: "open_step_exists",
-			},
-		],
+		await rows(
+			`select status, resolution_reason from next_step where id = '${id(124)}'`,
+		),
+		[{ status: "cancelled", resolution_reason: "replaced at the move" }],
 	);
+	assert.deepEqual(reasons(report, 124), []);
 	assert.deepEqual(
 		report.filter((r) => r.old_id === id(125)),
 		[
@@ -520,6 +534,105 @@ test("vendor actions become next steps about the vendor's record, never about a 
 			},
 		],
 	);
+});
+
+test("vendor ownership uses the creator, then the latest attributed work, and lists ties or missing evidence", async () => {
+	await db.query("begin; select set_config('engine.job','old_system',true)");
+	try {
+		await db.query(`
+ insert into party (id,kind,name) values ('${id(7)}','person','Example Second Partner');
+ insert into app_user (id,slug) values ('${id(7)}','partner_two');
+ insert into public.actor (id,slug,kind,display_name) values ('${id(7)}','partner_two','human','Example Second Partner');
+ insert into outside_id (source,value,party_id) values ('old_system','${id(7)}','${id(7)}');
+ insert into public.activity_kind (slug,label,is_contact) values ('call','Example call',true), ('email_out','Example outgoing mail',true);
+ insert into public.vendor_disposition (slug,label,workable,sort) values ('active','Example active',true,1);
+ insert into party (id,kind,name)
+ select v,'company','Example vendor ' || v from unnest(array[${[70, 71, 72, 73, 74, 75, 76, 77].map((n) => `'${id(n)}'::uuid`).join(",")}]) v;
+ insert into public.party (id,kind,name,created_by,updated_by)
+ select id,'org',name,'${id(1)}','${id(1)}' from party where id between '${id(70)}' and '${id(77)}';
+ insert into public.vendor (id,party_id,category,created_by,updated_by)
+ select id,id,'Example category','${id(1)}','${id(1)}' from public.party where id between '${id(70)}' and '${id(77)}';
+ insert into role (slug,label) values ('vendor','Vendor');
+ insert into party_role (party_id,role,owner_user_id) values ('${id(74)}','vendor','${id(1)}');
+ insert into outside_id (source,value,party_id) select 'old_system',id::text,id from party
+ where id between '${id(70)}' and '${id(77)}';
+ insert into public.activity_kind (slug,label,is_contact) values ('note','Example note',false);
+ insert into public.activity (id,kind,occurred_at,actor_id,summary,vendor_id,source) values
+ ('${id(310)}','call','2025-01-01','${id(2)}','Example sponsored call','${id(77)}','stated'),
+ ('${id(311)}','note','2025-02-01','${id(7)}','last-touch stamp (imported)','${id(72)}','import');
+ insert into public.event (subject_type,subject_id,new_value,actor_id,verb,cause,sponsoring_human_slug,occurred_at) values
+ ('vendor','${id(77)}','{"activity":"${id(310)}"}','${id(2)}','log-activity','automation_job','partner_one','2025-01-01');
+ insert into public.activity (kind,occurred_at,actor_id,updated_by,summary,vendor_id,email_context) values
+ ('call','2025-01-01','${id(7)}','${id(1)}','Example work','${id(71)}',null),
+ ('call','2024-01-01','${id(1)}',null,'Example earlier work','${id(71)}',null),
+ ('email_out','2025-02-01','${id(1)}',null,'Example withdrawn email','${id(71)}','{"lifecycle":{"state":"recalled"}}'),
+ ('call','2025-01-01','${id(1)}',null,'Example work','${id(70)}',null);
+ insert into public.activity (kind,occurred_at,actor_id,summary,vendor_id,email_identity) values
+ ('email_out','2025-02-01','${id(2)}','Example sent mail','${id(76)}',
+  '{"mailbox_owner":"partner_two","mailbox_account":"tester@example.com","item_id":"example-item","subject":"Example subject"}');
+ insert into public.next_action (id,subject_type,subject_id,owner_id,description,created_at,updated_at,created_by,updated_by,status) values
+ ('${id(130)}','vendor','${id(70)}','${id(2)}','Example partner created','2024-01-01','2025-01-01','${id(7)}','${id(1)}','open'),
+ ('${id(131)}','vendor','${id(71)}','${id(2)}','Example automated','2024-01-01','2025-01-01','${id(2)}','${id(1)}','open'),
+ ('${id(132)}','vendor','${id(72)}','${id(2)}','Example no evidence','2024-01-01','2025-01-01','${id(2)}','${id(1)}','open'),
+ ('${id(133)}','vendor','${id(73)}','${id(2)}','Example tied evidence','2024-01-01','2025-01-01','${id(2)}','${id(1)}','open'),
+ ('${id(134)}','vendor','${id(74)}','${id(2)}','Example relationship owner','2024-01-01','2025-01-01','${id(7)}','${id(1)}','open'),
+ ('${id(135)}','vendor','${id(73)}','${id(1)}','Example prior work','2025-01-01','2025-01-01','${id(1)}','${id(1)}','done'),
+ ('${id(136)}','vendor','${id(73)}','${id(7)}','Example simultaneous work','2025-01-01','2025-01-01','${id(7)}','${id(7)}','done'),
+ ('${id(137)}','vendor','${id(75)}','${id(2)}','Example next-step evidence','2024-01-01','2025-01-01','${id(2)}',null,'open'),
+ ('${id(138)}','vendor','${id(75)}','${id(7)}','Example prior step','2025-01-01','2025-01-01','${id(7)}',null,'done'),
+ ('${id(139)}','vendor','${id(76)}','${id(2)}','Example sent mail evidence','2024-01-01','2025-01-01','${id(2)}',null,'open'),
+ ('${id(143)}','vendor','${id(77)}','${id(2)}','Example sponsored work evidence','2024-01-01','2025-01-01','${id(2)}',null,'open');`);
+		const listed = await run();
+		assert.deepEqual(
+			(
+				await rows(`select id, owner_party_id, status from next_step
+				where id between '${id(130)}' and '${id(143)}' and status = 'open' order by id`)
+			).map(Object.values),
+			[
+				[id(130), id(7), "open"],
+				[id(131), id(7), "open"],
+				[id(132), null, "open"],
+				[id(133), null, "open"],
+				[id(134), id(1), "open"],
+				[id(137), id(7), "open"],
+				[id(139), id(7), "open"],
+				[id(143), id(1), "open"],
+			],
+		);
+		assert.deepEqual(reasons(listed, 132), ["vendor_owner_unknown"]);
+		assert.deepEqual(reasons(listed, 133), ["vendor_owner_unknown"]);
+		await db.query(`discard temp;
+ insert into public.actor (id,slug,kind,display_name) values ('${id(9)}','example-system','system','Example System');
+ insert into public.next_action (id,subject_type,subject_id,owner_id,description,created_at,created_by) values
+ ('${id(140)}','vendor','${id(70)}','${id(1)}','Example new recorded step','2025-02-01','${id(1)}'),
+ ('${id(141)}','vendor','${id(70)}','${id(9)}','Example new inferred step','2025-02-01','${id(7)}'),
+ ('${id(142)}','vendor','${id(70)}','${id(7)}','Example conflicting recorded step','2025-02-01','${id(7)}');`);
+		const retried = await run();
+		assert.deepEqual(
+			retried.filter((row) => row.old_id === id(142)),
+			[
+				{
+					old_id: id(142),
+					field: "next_step",
+					value: id(130),
+					reason: "open_step_exists",
+				},
+			],
+		);
+		assert.deepEqual(
+			(
+				await rows(`select id, owner_party_id, status, resolution_reason from next_step
+				where party_id = '${id(70)}' order by id`)
+			).map(Object.values),
+			[
+				[id(130), id(7), "open", null],
+				[id(140), id(1), "open", null],
+				[id(141), id(7), "cancelled", "replaced at the move"],
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
 });
 
 test("reruns preserve every row and history entry, and retry a deal or vendor copied later", async () => {
