@@ -107,6 +107,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] It covers every open deal on Local Deals and National Accounts and every prospect, whoever owns or claimed it. The board's All, Joe and Dell choice and its collapsed columns do not narrow it.
 - [ ] Order: deals by the phase each was in when the week began, in board column order, then by name; then prospects, oldest added first. Active deals and prospects that arrive during the week join just before parked deals. A phase move, a new follow-up or Needs attention never moves an item.
 - [ ] Turn into deal carries the prospect's mark for that week to the new deal, with the same reviewer and time (owner, 2026-11-19).
+- [ ] Add deal also carries the mark when the selected client is an active prospect.
 - [ ] A new deal takes its prospect's place in the review for the week it was turned into a deal (owner, 2026-11-19).
 - [ ] A deal closed or lost and a prospect dropped this week stay in place, saying so, so the count holds.
 - [ ] Parked deals come last in the Monday review, after prospects (owner, 2026-11-18).
@@ -116,7 +117,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] Change next step on a deal and Follow-up on a prospect save as they do on the deal page and the prospect. A note saved here shows on the other partner's open review within five seconds, as on a prospect.
 - [ ] Reviewed marks the item reviewed this week, saying who and when, and goes to the next. Undo removes the mark, also after a reload.
 - [ ] Opening a name goes to the deal page or the prospect. Back returns to the same place in the review.
-- [ ] Opening a Dropped row goes to the read-only prospect page. The row has no prospect save or review mark controls.
+- [ ] Opening a Dropped row goes to the read-only prospect page. The row keeps Reviewed and Undo.
 - [ ] Each deal or prospect has one review mark per week. Both partners see who marked it, and either can Undo it (owner, 2026-11-18).
 - [ ] Monday review replaces the old pipeline call sittings. The deal page keeps its call recorder (owner, 2026-11-18).
 

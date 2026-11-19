@@ -133,14 +133,6 @@ test("partners can claim, hand off, unclaim and highlight without overwriting a 
 test("a dropped prospect still opens with its reason and history and refuses prospect saves", async () => {
 	const path = `prospects/${toDrop}/drop`;
 	const seen_change_id = await leadVersion(toDrop);
-	const week_of = "2026-11-16";
-	const [markStatus, mark] = await save(joe, "weekly-reviews", {
-		...key(),
-		week_of,
-		party_id: toDrop,
-		seen_change_id: 0,
-	});
-	assert.equal(markStatus, 201);
 	const [noteStatus, note] = await save(joe, "activities", {
 		...key(),
 		kind: "note",
@@ -210,11 +202,6 @@ test("a dropped prospect still opens with its reason and history and refuses pro
 	assert.equal(again, 409);
 	assert.equal(refusal.error, "not_a_prospect");
 	for (const [door, args] of [
-		[
-			"weekly-reviews",
-			{ week_of: "2026-11-23", party_id: toDrop, seen_change_id: 0 },
-		],
-		[`weekly-reviews/${mark.review_id}/remove`, { seen_change_id: 0 }],
 		[
 			"next-steps",
 			{

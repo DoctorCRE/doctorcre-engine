@@ -51,17 +51,6 @@ async function checkVersion(
 	seen: number,
 ) {
 	const { week_of, deal_id, party_id } = target;
-	if (party_id) {
-		const lead = await tx
-			.selectFrom("party_role")
-			.select("stage")
-			.where("party_id", "=", party_id)
-			.where("role", "=", "lead")
-			.forNoKeyUpdate()
-			.executeTakeFirst();
-		if (lead?.stage === "archived")
-			throw new SaveRefusal(new Refusal(409, "not_a_prospect", { party_id }));
-	}
 	await sql`select lock_weekly_review(${week_of}::date, ${deal_id}::uuid, ${party_id}::uuid)`.execute(
 		tx,
 	);

@@ -54,25 +54,26 @@ export function prospectQuery({
 	const qualifies = includeDropped
 		? sql<boolean>`(${isProspect} or archive.changed_at is not null)`
 		: isProspect;
+	const archive = includeDropped
+		? sql`left join lateral (
+			select m.from_stage, m.changed_at,
+				jsonb_build_object('at', m.changed_at, 'by', u.slug, 'reason', m.reason) as detail
+			from lead_stage_move m left join app_user u on u.id = m.changed_by_user_id
+			where r.stage = 'archived' and m.party_id = r.party_id and m.to_stage = 'archived'
+			order by m.changed_at desc, m.id limit 1
+		) archive on archive.from_stage = 'opportunity'
+			and not exists (select from deal_party d where d.party_id = r.party_id
+				and d.created_at <= archive.changed_at)`
+		: sql``;
 	return sql<Prospect>`
 		select p.id as party_id, p.name, p.kind, p.how_found, owner.slug as owner,
 			r.needs_attention, coalesce(history.change_id, 0)::float8 as change_id,
 			notes.items as notes, follow_ups.items as follow_ups, history.entered_at,
-			case when archive.changed_at is not null then
-				jsonb_build_object('at', archive.changed_at, 'by', archive.by, 'reason', archive.reason)
-			end as dropped
+			${includeDropped ? sql`archive.detail` : sql`null::jsonb`} as dropped
 		from party_role r
 		join party p on p.id = r.party_id
 		left join app_user owner on owner.id = r.owner_user_id
-		left join lateral (
-			select m.from_stage, m.changed_at, u.slug as by, m.reason
-			from lead_stage_move m left join app_user u on u.id = m.changed_by_user_id
-			where ${includeDropped} and r.stage = 'archived'
-				and m.party_id = r.party_id and m.to_stage = 'archived'
-			order by m.changed_at desc, m.id limit 1
-		) archive on archive.from_stage = 'opportunity'
-			and not exists (select from deal_party d where d.party_id = r.party_id
-				and d.created_at <= archive.changed_at)
+		${archive}
 		cross join lateral (
 			select max(c.id) as change_id,
 				max(coalesce((c.new_value->>'created_at')::timestamptz, c.changed_at))
