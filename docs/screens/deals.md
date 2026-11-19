@@ -93,7 +93,7 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 - [ ] Home shows a due follow-up as a step for the partner who set it. Opening it on Home opens this prospect with the follow-up in view.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Claim makes the signed-in partner its owner. The owner can be changed to the other partner or back to Unclaimed.
-- **Open (question 11).** Turn into deal. Recommended: it opens Add deal with the deal name, the newest note and the claimed owner filled in. Client, phase and owner must still be set there; the client may be this prospect or another, such as the practice a doctor runs. On save the deal opens and the prospect leaves the lane, its notes kept on its history.
+- [ ] Turn into deal opens Add deal with the deal name, the newest note and the claimed owner filled in. The partner picks the client, phase and owner before saving. The client may be this prospect or another, such as the practice a doctor runs. On save the deal opens and the prospect leaves the lane with its notes and follow-ups kept on its history.
 - [ ] Drop asks a reason and takes it off the lane. It stays a lead, archived with that reason, on the Leads screen.
 - [ ] If the other partner saved the same field since the prospect opened, the save says so and offers to reload. Nothing is overwritten.
 
@@ -174,7 +174,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 8. How should deal watch settings and the deal page's call recorder work? Recommended: watch settings choose whether deal changes reach Home, and each item the recorder proposes waits for Confirm or Skip, as today.
 9. Answered on 2026-11-18. For someone new, Add prospect requires one tap for person or company and one for how found on the add line.
 10. Answered on 2026-11-18. A prospect is a lead at stage Opportunity that is on no deal. Adding a lead from the lane puts it at Opportunity.
-11. How does a prospect become a deal? A deal needs a client, a phase and an owner, which a prospect does not have. Recommended: Turn into deal opens Add deal filled in from the prospect (name, newest note, claimed owner), and the partner sets client, phase and owner there before it saves. Otherwise one click makes the deal with set defaults, which would guess the phase and the client.
+11. Answered on 2026-11-19. Turn into deal opens Add deal filled in from the prospect (name, newest note, claimed owner). The partner picks the client, phase and owner before saving.
 12. Answered on 2026-11-18. Both partners share one mark per deal or prospect per week. It shows who marked it, and either can Undo it.
 13. Answered on 2026-11-18. Parked deals come last in the Monday review, after prospects.
 14. Answered on 2026-11-18. Monday review replaces the old pipeline call sittings. The deal page keeps its call recorder.

@@ -8,6 +8,7 @@ import { nextTransaction } from "../next-connection.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { stampNextSave, userId } from "../next-save.ts";
+import { lockLead, requireProspect } from "../prospects/membership.ts";
 import {
 	clearable,
 	type Fitted,
@@ -16,6 +17,7 @@ import {
 	isAmount,
 	isBoolean,
 	isChangeId,
+	isStoredText,
 	isText,
 	isUuid,
 	optional,
@@ -71,14 +73,22 @@ const DEAL_OPENING = {
 };
 
 const NEW_DEAL = { ...DEAL_OPENING, client_id: isUuid };
-const isLocationKind = (value: unknown): value is "person" | "company" =>
+const isPartyKind = (value: unknown): value is "person" | "company" =>
 	value === "person" || value === "company";
+const CONVERT_PROSPECT = {
+	...DEAL_OPENING,
+	prospect_id: isUuid,
+	client_id: optional(isUuid),
+	client: optional(
+		fitting({ name: isStoredText, kind: isPartyKind, how_found: isStoredText }),
+	),
+};
 const NEW_MARKET_DEAL = {
 	...DEAL_OPENING,
 	national_account_id: isUuid,
 	market_id: isUuid,
 	client_id: optional(isUuid),
-	new_location: optional(fitting({ name: isText, kind: isLocationKind })),
+	new_location: optional(fitting({ name: isText, kind: isPartyKind })),
 	market_agent_id: optional(isUuid),
 };
 
@@ -117,19 +127,40 @@ function parseDealChanges(deal_id: string, body: JsonObject) {
 
 function parseNewDeal(body: JsonObject, signedIn: boolean) {
 	const request =
-		signedIn && body.national_account_id !== undefined
-			? parseMarketDeal(body)
-			: fit(body, NEW_DEAL, [
-					"idempotency_key",
-					"name",
-					"client_id",
-					"owner",
-					"phase",
-				]);
+		signedIn && body.prospect_id !== undefined
+			? parseProspectConversion(body)
+			: signedIn && body.national_account_id !== undefined
+				? parseMarketDeal(body)
+				: fit(body, NEW_DEAL, [
+						"idempotency_key",
+						"name",
+						"client_id",
+						"owner",
+						"phase",
+					]);
 	if (request instanceof Refusal) return request;
 	if (ENDED_PHASES.includes(request.phase))
 		return new Refusal(400, "invalid_field_value", { fields: ["phase"] });
 	return request;
+}
+
+function parseProspectConversion(body: JsonObject) {
+	const clientFields = ["client_id", "client"] as const;
+	const request = fit(
+		body,
+		CONVERT_PROSPECT,
+		["idempotency_key", "name", "owner", "phase", "prospect_id"],
+		clientFields,
+	);
+	if (request instanceof Refusal) return request;
+	const { client_id, client, ...deal } = request;
+	if (client_id && client)
+		return new Refusal(400, "invalid_field_value", {
+			fields: [...clientFields],
+		});
+	if (client) return { ...deal, client };
+	if (client_id) return { ...deal, client_id };
+	return new Refusal(400, "missing_required", { fields: [...clientFields] });
 }
 
 function parseMarketDeal(body: JsonObject) {
@@ -168,6 +199,7 @@ async function saveNewDeal(
 	tx: Transaction<DB>,
 	request: Exclude<ReturnType<typeof parseNewDeal>, Refusal>,
 ) {
+	if ("prospect_id" in request) return convertProspect(tx, request);
 	if (!("national_account_id" in request)) return addDeal(tx, request);
 
 	await checkMarketDealName(tx, request.name);
@@ -179,6 +211,55 @@ async function saveNewDeal(
 	const added = await addDeal(tx, { ...request, client_id });
 	if (request.market_agent_id)
 		await linkMarketAgent(tx, added.deal_id, request.market_agent_id);
+	return added;
+}
+
+async function convertProspect(
+	tx: Transaction<DB>,
+	request: Exclude<ReturnType<typeof parseProspectConversion>, Refusal>,
+) {
+	const { prospect_id } = request;
+	const existingClient = "client_id" in request ? request.client_id : undefined;
+	const lead = await lockLead(tx, prospect_id, existingClient);
+	await requireProspect(tx, prospect_id, lead?.stage);
+
+	const client_id =
+		"client" in request
+			? (
+					await tx
+						.insertInto("party")
+						.values({
+							...request.client,
+							name: request.client.name.trim(),
+							changed_at: sql<string>`now()`,
+						})
+						.returning("id")
+						.executeTakeFirstOrThrow()
+				).id
+			: request.client_id;
+	await tx
+		.insertInto("party_role")
+		.values({
+			party_id: client_id,
+			role: "client",
+			changed_at: sql<string>`now()`,
+		})
+		.onConflict((conflict) =>
+			conflict.columns(["party_id", "role"]).doNothing(),
+		)
+		.execute();
+
+	const added = await addDeal(tx, { ...request, client_id });
+	if (client_id.toLowerCase() !== prospect_id.toLowerCase())
+		await tx
+			.insertInto("deal_party")
+			.values({
+				deal_id: added.deal_id,
+				party_id: prospect_id,
+				role: "client_contact",
+				changed_at: sql<string>`now()`,
+			})
+			.execute();
 	return added;
 }
 
