@@ -87,6 +87,7 @@ function stepRows(db: Transaction<DB>, userId: string) {
 					'item_kind', case when c.id is null then 'next_step' else 'call_follow_up' end)
 		) mark_change on true
 		where s.owner_party_id = ${userId}::uuid
+			and m.disposition is distinct from 'dropped'
 			and (s.status = 'open' or (s.status = 'done' and s.done_at >= now() - interval '7 days'))
 		order by (s.status = 'done'), activity_at desc, s.id
 		limit ${LIMIT + 1}
@@ -187,6 +188,8 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 	return {
 		ok: true,
 		schema_version: "home-inbox.v5",
+		home_mark_drop: true,
+		home_proposal_drop: true,
 		items: items.slice(0, LIMIT),
 		truncated: rows.length > LIMIT || items.length > LIMIT,
 		limit: LIMIT,

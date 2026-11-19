@@ -2135,6 +2135,18 @@ const RULES: Record<string, Case[]> = {
 				"home_mark_disposition_check",
 			],
 			[
+				newMark({ disposition: "snoozed", drop_reason: "Not needed" }),
+				"home_mark_drop_reason",
+			],
+			[
+				newMark({
+					disposition: "dropped",
+					snoozed_until: null,
+					drop_reason: "Not needed",
+				}),
+				"home_mark_drop_kind",
+			],
+			[
 				newMark({ disposition: "snoozed", snoozed_until: null }),
 				"home_mark_snoozed_until",
 			],
@@ -2661,10 +2673,12 @@ const CHANGEABLE: Record<string, string[]> = {
 	user_preference: ["push_to_device", "quiet_from", "quiet_until", "time_zone"],
 	home_mark: [
 		"disposition",
+		"drop_reason",
 		"snoozed_until",
 		"waiting_on_party_id",
 		"waiting_reason",
 	],
+	home_update: ["read_at"],
 	document: ["bytes", "content_type", "deal_id", "kind", "name", "sha256"],
 	document_kind: ["label"],
 	offer: ["status"],
@@ -3434,14 +3448,60 @@ test("a checklist reminder cannot repeat for the same recipient, deal, item and 
 	]);
 });
 
-test("a checklist reminder requires a due date", async () => {
+test("a checklist reminder requires a due date and tour feedback forbids checklist refs", async () => {
 	await asOwner([
 		[
 			`insert into home_update (user_id, deal_id, what, checklist_item_ref)
 			values ('${USER}', '${DEAL}', 'Review the plan', 'example-plan')`,
 			"home_update_checklist_due_date",
 		],
+		[
+			`insert into home_update (user_id, deal_id, kind, what)
+			values ('${USER}', '${DEAL}', 'other', 'Unknown update')`,
+			"home_update_kind_check",
+		],
+		[
+			`insert into home_update (user_id, deal_id, kind, what, checklist_item_ref, due_on)
+			values ('${USER}', '${DEAL}', 'tour_feedback', 'Client commented', 'example-plan', '2025-01-01')`,
+			"home_update_checklist_due_date",
+		],
+		[
+			`insert into home_update (user_id, deal_id, what, property_id)
+			values ('${USER}', '${DEAL}', 'Ordinary update', '${PROPERTY}')`,
+			"home_update_property_kind",
+		],
 	]);
+});
+
+test("a dropped Home mark requires a nonblank reason, forbids waiting and is permanent", async () => {
+	const update = id(980);
+	const setup = `${asUser(USER)}; insert into home_update (id, user_id, deal_id, what) values ('${update}', '${USER}', '${DEAL}', 'Example update')`;
+	const drop = (cols: string, vals: string) =>
+		`${setup}; insert into home_mark (user_id, home_update_id, disposition${cols}) values ('${USER}', '${update}', 'dropped'${vals})`;
+	for (const [sql, constraint] of [
+		[drop("", ""), "home_mark_drop_reason"],
+		[drop(", drop_reason", ", ' '"), "home_mark_drop_reason_check"],
+		[drop(", drop_reason", ", chr(160)"), "home_mark_drop_reason_check"],
+		[
+			drop(
+				", drop_reason, waiting_on_party_id, waiting_reason",
+				`, 'Not needed', '${CLIENT}', 'Example'`,
+			),
+			"home_mark_drop_reason",
+		],
+		[
+			`${drop(", drop_reason", ", 'Not needed'")}; update home_mark set disposition = 'snoozed', snoozed_until = '2099-01-01T00:00Z', drop_reason = null where home_update_id = '${update}'`,
+			"home_mark_dropped_final",
+		],
+		[
+			`${drop(", drop_reason", ", 'Not needed'")}; delete from home_mark where home_update_id = '${update}'`,
+			"home_mark_dropped_final",
+		],
+	] as const) {
+		await rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(constraint));
+		});
+	}
 });
 
 test("next-step end states reject contradictory times, reasons and evidence", async () => {
@@ -7337,6 +7397,9 @@ const SHARED_PROPOSAL_REFUSALS: [string, string, Refusal][] = [
 	["missing lead stage", newProposal({ kind: "new_lead", deal_id: null, party_id: DOCTOR, what: null, how_found: "referral", }), "proposal_payload"],
 	["job decision", `${newProposal()}; update proposal set status = 'accepted'`, "proposal_user_decides"],
 	["agent decision", `${newProposal()}; ${asJob("agent", USER)}; update proposal set status = 'dismissed'`, "proposal_user_decides"],
+	["blank dismiss reason", `${newProposal()}; ${asUser(USER)}; update proposal set status = 'dismissed', dismiss_reason = ' '`, "proposal_dismiss_reason_check"],
+	["nonbreaking-space dismiss reason", `${newProposal()}; ${asUser(USER)}; update proposal set status = 'dismissed', dismiss_reason = chr(160)`, "proposal_dismiss_reason_check"],
+	["dismiss reason on acceptance", `${newProposal()}; ${asUser(TEAMMATE)}; update proposal set status = 'accepted', dismiss_reason = 'Not needed'`, "proposal_dismiss_reason"],
 	["repeat decision", `${newProposal()}; ${decide()}; ${decide()}`, "proposal_final"],
 	["rewrite", `${newProposal()}; update proposal set evidence = 'replacement'`, notGranted("proposal")],
 	["erase", `${newProposal()}; delete from proposal`, notGranted("proposal")],

@@ -21,7 +21,7 @@ function noticeCard(
 	}: {
 		item_id: string;
 		open_url: string;
-		kind_label: "Task" | "Update";
+		kind_label: "Task" | "Update" | "Tour feedback";
 		source_version: string;
 		snoozed_until?: string | null;
 	},
@@ -124,7 +124,9 @@ export function completionReviewCard(
 }
 
 type HomeUpdate = DealNotice & {
+	kind: "update" | "tour_feedback";
 	checklist_item_ref: string | null;
+	property_id: string | null;
 	source_version: string;
 	mark_version: string;
 	snoozed_until: string | null;
@@ -136,8 +138,8 @@ export async function readHomeUpdates(
 	limit: number,
 ) {
 	const { rows } = await sql<HomeUpdate>`
-		select u.id, u.deal_id, d.name as deal_name, u.what as title, u.due_on,
-			u.created_at as activity_at, u.checklist_item_ref,
+		select u.id, u.deal_id, d.name as deal_name, u.kind, u.what as title, u.due_on,
+			u.created_at as activity_at, u.checklist_item_ref, u.property_id,
 			coalesce(update_change.id, 0)::text as source_version,
 			coalesce(mark_change.id, 0)::text as mark_version,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
@@ -153,22 +155,30 @@ export async function readHomeUpdates(
 			where table_name = 'home_mark'
 				and record = jsonb_build_object('user_id', u.user_id, 'item_kind', 'home_update', 'item_id', u.id)
 		) mark_change
-		where u.user_id = ${userId}::uuid and u.read_at is null
+		where u.user_id = ${userId}::uuid
+			and u.read_at is null
+			and m.disposition is distinct from 'dropped'
 		order by u.created_at desc, u.id
 		limit ${limit}
 	`.execute(db);
 	return rows.map((update) => {
+		const tourFeedback = update.kind === "tour_feedback";
 		const card = noticeCard(update, {
 			item_id: `notification:${update.id}`,
-			open_url: `/deals?deal=${update.deal_id}`,
-			kind_label: "Update",
+			open_url:
+				tourFeedback && update.property_id
+					? `/deals?deal=${update.deal_id}&property=${update.property_id}`
+					: `/deals?deal=${update.deal_id}`,
+			kind_label: tourFeedback ? "Tour feedback" : "Update",
 			source_version: update.source_version,
 			snoozed_until: update.snoozed_until,
 		});
 		return {
 			...card,
+			kind: update.kind,
 			base_version: `${update.source_version}:${update.mark_version}:${card.disposition}`,
 			checklist_item_ref: update.checklist_item_ref,
+			...(update.property_id && { property_id: update.property_id }),
 		};
 	});
 }
