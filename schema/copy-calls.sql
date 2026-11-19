@@ -60,7 +60,7 @@ create temp table ready_call on commit drop as
 select * from old_call c where case when is_logged then exists (select from activity a where a.id = c.activity_id)
  else exists (select from old_link l where l.id = c.id and (l.deal_id is not null or l.party_id is not null)) end;
 insert into activity (id, kind, happened_at, summary, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select id, kind, happened_at, summary, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at
+select id, kind, happened_at, copy_note_text(summary, false), changed_by_user_id, changed_by_job, changed_for_user_id, changed_at
 from ready_call where not is_logged on conflict do nothing;
 -- Links are retried for calls copied earlier, so a record copied since then gains its link.
 insert into activity_about (activity_id, deal_id, party_id, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)

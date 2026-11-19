@@ -728,6 +728,8 @@ test("copies a recorded step's words and due date and only removes a proven step
 		"Nothing outstanding on the agent side. Keep (abcdef13, waiting for a reply).";
 	const unknown =
 		"{'text': 'Keep this as written', 'due': '2026-02-29', 'waiting_on': None}";
+	const conflicting =
+		"{'text': 'Keep this as written', 'due': '2026-02-28', 'waiting_on': None}";
 	const steps = [
 		[`${code}-0000-4000-8000-000000000001`, 15, "Example earlier action"],
 		[
@@ -742,6 +744,7 @@ test("copies a recorded step's words and due date and only removes a proven step
 			`{'text': "Check the landlord's response", 'due': '2026-07-31', 'waiting_on': 'Broker to reply'}`,
 		],
 		[id(804), 15, unknown],
+		[id(805), 15, conflicting],
 	] as const;
 	await db.query("begin");
 	try {
@@ -752,6 +755,10 @@ test("copies a recorded step's words and due date and only removes a proven step
 				[stepId, id(deal), id(1), text],
 			);
 		}
+		await db.query(
+			"update public.next_action set due_on = '2026-03-01' where id = $1",
+			[id(805)],
+		);
 		for (const _ of [1, 2]) {
 			await db.query("discard temp");
 			const result = await run();
@@ -760,7 +767,7 @@ test("copies a recorded step's words and due date and only removes a proven step
 			assert.deepEqual(
 				(
 					await rows(`select what, due_on::text, status from next_step
-     where id between '${id(801)}' and '${id(804)}' order by id`)
+     where id between '${id(801)}' and '${id(805)}' order by id`)
 				).map(Object.values),
 				[
 					[
@@ -775,9 +782,77 @@ test("copies a recorded step's words and due date and only removes a proven step
 						"done",
 					],
 					[unknown, null, "done"],
+					[conflicting, "2026-03-01", "done"],
 				],
 			);
 		}
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("leaves an automation-only step and its event behind while keeping partner work", async () => {
+	const housekeeping =
+		"Nothing outstanding on the agent side. The live ball on this deal is Sam's (abcdef12, due 2025-09-21). This row exists only because an agent-owned ball cannot be cleared by the partner surface, and it should be ignored when reading the board.";
+	const business =
+		"Nothing outstanding on the agent side. Send terms (2025-09-20).";
+	const history = await readSchema("copy-change-history.sql");
+	await db.query("begin");
+	try {
+		for (const [n, author, text] of [
+			[811, 2, housekeeping],
+			[812, 1, housekeeping],
+			[813, 2, business],
+		] as const) {
+			await db.query(
+				`insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, created_at, updated_at, created_by)
+ values ($1, 'deal', $2, $3, $4, 'done', '2025-02-01', '2025-02-02', $5)`,
+				[id(n), id(author === 1 ? 16 : 15), id(1), text, id(author)],
+			);
+		}
+		await db.query(
+			`insert into public.event (id, subject_type, subject_id, new_value, actor_id, verb, cause, occurred_at, recorded_at)
+ values ($1, 'deal', $2, $3, $4, 'set-next-action', 'automation_job', '2025-02-01', '2025-02-01')`,
+			[id(814), id(15), { next_action: housekeeping }, id(2)],
+		);
+		for (const _ of [1, 2]) {
+			await db.query("discard temp");
+			assert.ok(
+				(await run()).some(
+					(row) =>
+						row.old_id === id(811) &&
+						row.field === "text" &&
+						row.reason === "automation_note_step" &&
+						row.value === null,
+				),
+			);
+		}
+		const steps = await rows(
+			`select id, what from next_step where id between '${id(811)}' and '${id(813)}' order by id`,
+		);
+		assert.deepEqual(
+			steps.map((step) => step.id),
+			[id(812), id(813)],
+		);
+		assert.equal(
+			steps[1]?.what,
+			"Nothing outstanding on the agent side. Send terms (September 20, 2025).",
+		);
+		const report = await db.query(history);
+		assert.ok(Array.isArray(report));
+		const listed: pg.QueryResultRow[] = report.at(-1)?.rows ?? [];
+		assert.ok(
+			listed.some(
+				(row) =>
+					row.old_id === id(814) && row.reason === "automation_note_step",
+			),
+		);
+		assert.deepEqual(
+			await rows(
+				`select id from imported_deal_history where id = '${id(814)}'`,
+			),
+			[],
+		);
 	} finally {
 		await db.query("rollback");
 	}

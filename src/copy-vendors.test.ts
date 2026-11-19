@@ -86,7 +86,7 @@ ${oldVendor(40, 10, {
 	last_touch: "2025-01-01",
 	deal_history_verified_at: "2025-01-01",
 	out_of_market: "true",
-	intro_notes: " Example vendor note ",
+	intro_notes: " Example vendor note from 2025-01-04. ",
 	trust_override: `{"tier": "Proven", "recorded_by": "partner_one", "reason": "Example reason", "recorded_at": "2025-01-01"}`,
 })}
 ${oldVendor(41, 15, {
@@ -119,7 +119,7 @@ ${oldVendor(47, 10, {
 	rivalry_group: "Different rivalry note",
 	referral_active: "false",
 	verticals: "{medical,vet}",
-	intro_notes: " Example vendor note ",
+	intro_notes: " Example vendor note from 2025-01-04. ",
 })}
 ${oldVendor(49, 10, {
 	merged_into: id(40),
@@ -380,7 +380,7 @@ test("each nonblank vendor note is a note about its record, unless its surviving
 	assert.deepEqual(await rows(`select a.id, a.kind, a.happened_at::text, a.summary, about.party_id, about.created_at::text,
 		a.changed_by_user_id, a.changed_by_job, a.changed_at::text from activity a join activity_about about on about.activity_id = a.id
 		order by a.happened_at`), [
-		{ id: noteId(40), kind: "note", happened_at: "2025-01-02 03:04:05+00", summary: " Example vendor note ", party_id: id(10),
+		{ id: noteId(40), kind: "note", happened_at: "2025-01-02 03:04:05+00", summary: " Example vendor note from January 4, 2025. ", party_id: id(10),
 			created_at: "2025-01-02 03:04:05+00", changed_by_user_id: PARTNER, changed_by_job: null, changed_at: "2025-01-02 03:04:05+00" },
 		{ id: noteId(49), kind: "note", happened_at: "2025-02-03 04:05:06+00", summary: "Example merged note", party_id: id(10),
 			created_at: "2025-02-03 04:05:06+00", changed_by_user_id: PARTNER, changed_by_job: null, changed_at: "2025-02-03 04:05:06+00" },

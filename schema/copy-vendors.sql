@@ -158,7 +158,7 @@ from copied v
 where intro_notes ~ '\S' and not exists (select from public.vendor s where s.id = v.merged_into and s.intro_notes = v.intro_notes);
 
 insert into activity (id, kind, happened_at, summary, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select activity_id, 'note', updated_at, intro_notes, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+select activity_id, 'note', updated_at, copy_note_text(intro_notes), updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from vendor_note;
 
 insert into activity_about (activity_id, party_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)

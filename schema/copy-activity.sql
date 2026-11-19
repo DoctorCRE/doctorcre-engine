@@ -99,7 +99,7 @@ where a.kind is not null and l.deal_id is null and l.party_id is null;
 create temp table ready_activity on commit drop as
 select * from mapped_activity where kind is not null and is_about and (not is_deal_note or text is not null);
 insert into activity (id, kind, happened_at, summary, reached, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
-select id, kind, happened_at, text, connected, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at
+select id, kind, happened_at, copy_note_text(text, kind = 'note'), connected, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at
 from ready_activity on conflict do nothing;
 -- Links are retried for activities copied earlier, so a record copied since then gains its link.
 insert into activity_about (activity_id, deal_id, party_id, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
