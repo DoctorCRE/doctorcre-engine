@@ -1,6 +1,6 @@
 # The new database
 
-The engine will move to a new, cleanly connected database in one planned step, after it serves every screen from today's database. This note designs the core. `schema/next.sql` holds the first slice. Tests load it into its own namespace in a throwaway database with made-up data. Nothing applies it to a live database.
+The engine will move to a new, cleanly connected database in one planned step, after it serves every screen from today's database. This note designs the core. `schema/next.sql` defines the new schema. Tests load it into its own namespace in a throwaway database with made-up data. The production rebuild follows the [switch plan](system.md#the-switch-plan).
 
 ## Records
 
@@ -271,6 +271,7 @@ Moving today's rows across:
 
 - Each `ops.notification_preference` row becomes its actor's user's preferences: `timezone`, `quiet_hours_start` and `quiet_hours_end`, and `device_opt_in` as `push_to_device`. A zone the database does not know, or equal start and end, is listed for that user to fix. `version` does not move; change history replaces it.
 - Each `ops.home_inbox_disposition` that is snoozed or settled on a `next_action:` or `capture_post_call_action:` item becomes a mark on the next step it became. Dispositions match by `item_id` or `v2_item_id`, preferring an exact `item_id`, then the latest change and then `item_id`, as the old Home does. An `inbox` row is no mark and overrides inherited dispositions. A post-call action uses the call follow-up key. Marks on call sessions, reply drafts and update groups wait for slice 10. `source_version`, `material_version` and `explicit_unsettle` do not move.
+- Home no longer hides cards (owner, 2026-11-19). The 11 copied settled marks come back to the inbox when the engine change that builds Home's side deletes the settled disposition (`docs/screens/home-inbox.md`).
 - Each `ops.home_waiting` with someone named becomes the mark's `waiting_on_party_id`, an actor as their person, and its `reason`. Its `evidence` lines do not move. A row whose identity was cleared waits on no one.
 - `ops.home_inbox_batch` and the `_write` tables are receipts of past saves and do not move.
 - Feature switches (`feature_switch`) are switches for releasing old-system features, and `system_config` holds system-wide values. Neither is a user's setting, so neither moves here; the owner decides them separately.
@@ -1373,7 +1374,7 @@ The detail sends `checklist` as `deal-checklist.v1`. The template lives in engin
 
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
-The new detail read returns `correspondence`, an array of email messages and meetings linked directly to the deal by `activity_about`, newest first by `happened_at`. Each entry gives `activity_id`, `kind`, and `happened_at`. An `email` also gives `sender`, `sender_name`, and `subject` from the stored message. Messages in the same Outlook conversation have their own entries. A `meeting` gives `title` from the part of the stored activity summary before the first blank line. The meeting notes copy puts the recorded title there. Other meetings use the saved summary caption, and an absent or blank caption returns null. Deal notes still come from `thread`. The old-schema read supplies `email_threads`.
+The new detail read returns `correspondence`, an array of email messages and meetings linked directly to the deal by `activity_about`, newest first by `happened_at`. A filed email appears even when it has a pending follow-up. An unfiled email with a pending filing suggestion appears in `email_follow_ups`. Each correspondence entry gives `activity_id`, `kind`, and `happened_at`. An `email` also gives `sender`, `sender_name`, and `subject` from the stored message. Messages in the same Outlook conversation have their own entries. A `meeting` gives `title` from the part of the stored activity summary before the first blank line. The meeting notes copy puts the recorded title there. Other meetings use the saved summary caption, and an absent or blank caption returns null. Deal notes still come from `thread`. The old-schema read supplies `email_threads`.
 
 Both partners' open board cards and deal pages return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The reader database role can read the fields used to form the link.
 
@@ -1393,7 +1394,7 @@ Each `email_follow_ups` entry is one pending email suggestion targeting the deal
 
 Set the engine Worker's `DEALS_READ_SCHEMA` variable to `next` to use the read-only `next` schema through the existing `DATABASE` binding. The login must be able to assume `engine_reader` on the copied database. An absent setting or any other value uses today's readers. Once rehearsal verifies the remaining app dependencies, set the engine variable first, then set `deals-from-engine` to `on` in the app's `ENGINE_ROUTING` KV. To return the app to CARR, set the KV value to `off`.
 
-Timeline rows for a new-schema deal update show the fields and values the update changed. Owner changes show user slugs and market changes show market names. Parking reason and note changes share one `operating_state` line, and reviving a deal shows `Active`. Imported rows keep the original event's verb, field and recorded time. A matched note event appears on its source deal. Its `activity_id` matches the note's `thread[].id` so the Timeline can show the note once. Other events have a null `activity_id`. A dated phase move shows the recorded phase, author and save time. When the earliest phase row has the `old_system` stamp and equal save and effective times, the read treats it as the copied current phase and leaves it out of `events`. Later phase moves can have equal times and still appear. National account cards show the retained client roster reference when the account has one unambiguous `C-` reference in `outside_id`.
+Timeline rows for a new-schema deal update show the fields and values the update changed. Owner changes show user slugs and market changes show market names. Parking reason and note changes share one `operating_state` line. Native and copied parking events return `{ state: "parked", reason, note? }`. The reason is the same code the board returns in `parking_reason`. A change that records only the note omits the reason. Revival returns `{ state: "active" }`. The app uses the card's labels to render these events. Imported rows keep the original event's verb, field and recorded time. A matched note event appears on its source deal. Its `activity_id` matches the note's `thread[].id` so the Timeline can show the note once. Other events have a null `activity_id`. A dated phase move shows the recorded phase, author and save time. When the earliest phase row has the `old_system` stamp and equal save and effective times, the read treats it as the copied current phase and leaves it out of `events`. Later phase moves can have equal times and still appear. National account cards show the retained client roster reference when the account has one unambiguous `C-` reference in `outside_id`.
 
 The deal page returns `imported_deal_history` in ascending `recorded_at` and `id` order, or `[]` when empty. Each entry has `id` (the source event UUID), `recorded_at`, `occurred_at`, `actor` (a user or job slug), `verb`, nullable `field`, `old_value`, `new_value`, and `imported: true`. Each value is null or an object with the recorded facts for that verb and field. Missing values are omitted. An explicit clear of a previously recorded fact keeps a null in `new_value`. Website links, research source URLs, internal paths, and next-action routing summaries stay in the source record. Use `verb` and `field` to label what happened. A document attachment event stays out of the read when every attachment ID matches a filed document on the same deal. The list is read-only and the signed-in read includes it for either partner.
 
@@ -1401,17 +1402,15 @@ Each row in `critical_dates`, `documents`, and `next_actions` gives an `actor` w
 
 When the nightly invoice job moved the deal to its current Closed phase, the board and detail reads carry its receipt. The app shows the automatic close in Closed deals. The receipt uses the invoice application ID and its linked prior phase. Its date comes from the closing phase row in Central time, the same source as the close date. Partner applications, invoices on already-closed deals, later phase moves and invoice undos leave the current phase without that label.
 
-A copied automatic move appears as `phase_change` on the board and deal page while its phase row is current and the deal is not lost. A recorded loss suppresses the receipt and refuses Undo even when the old phase says Closed. The receipt gives the original `event_id`, `prior_phase`, `phase`, `reason`, Chicago `evidence_date`, `recorded_at`, `automatic: true`, and `source: "copied"`. A current invoice application uses its own receipt and undo.
+A copied or fresh automatic call move appears as `phase_change` on the board and deal page while its phase row is current and the deal is not lost. A recorded loss suppresses the receipt and refuses Undo even when the old phase says Closed. A current invoice application uses its own receipt and undo.
+
+Both phase move receipts give `event_id` (UUID), `prior_phase`, `phase`, nullable `reason`, Chicago `evidence_date` (the phase's effective day), `recorded_at` (the save time), and `automatic: true`. A copied receipt gives `source: "copied"`, its original event ID, and `call: null`. It uses the phase row's reason if the copied reason is empty. A fresh call receipt gives `source: "call_capture"`, the phase save's idempotency key as its event ID, and `call: { activity_id, happened_at }` with the stored call's UUID and start timestamp. Use `evidence_date` for the move caption.
 
 The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. Undo returns the same status and error for a previous phase of Closed, Invoiced, or Dead, with a hint that Undo would return the deal to Closed deals or Lost deals. A same-key retry returns the original answer.
 
 ### Remaining Deals read work
 
 Deal watch settings and their target lookup are deferred. See [Deal watches and nightly checklist reminders](#deal-watches-and-nightly-checklist-reminders).
-
-### Call phase-move receipts
-
-A call proposes a phase move, and only a partner's click accepts it. The Deals screen spec needs to say whether that move should show an automatic receipt.
 
 ### App work for the Deals switch
 
@@ -1667,6 +1666,7 @@ Both saves answer `{ draft_id, version, status }` with the new revision. A stale
 
 `POST /jobs/deals` and `POST /api/engine/deals` add a deal.
 
+- `call_capture` cannot add a deal. Its request returns `422 database_refused_the_statement { rule: "deal_phase_change_call_source" }`.
 - Ordinary Add deal requires `idempotency_key` (UUID), `name` (nonblank text), `client_id` (an existing client's party UUID), `owner` (user slug), and `phase` (an open phase slug). It accepts `kind` and `reason` (slugs), `market_id` (market UUID), and `renews_lease_id` (lease UUID). Omit an unknown kind, reason, or market, or send null. A renewal reason requires the source lease. Any other reason, including an unknown one, requires the source lease field to be absent or null.
 - The deal, its client link, and its first phase save together. National status follows the client's account membership.
 - To turn a prospect into a deal, the signed-in form adds `prospect_id` (the prospect's party UUID). It sends either `client_id` (an existing party with a stored `how_found`) or `client: { name, kind, how_found }` for someone new. The new client's kind is `person` or `company`. See [Prospects and the Monday review](#prospects-and-the-monday-review).
@@ -1684,12 +1684,12 @@ For a renewal, Add deal reads `GET /api/engine/clients/{client_id}/leases` after
 
 `POST /jobs/deals/{deal_id}/changes` and `POST /api/engine/deals/{deal_id}/changes`
 
-| Field             | Type                                                                                                                                   | Required            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| `idempotency_key` | UUID                                                                                                                                   | yes                 |
-| `seen_change_id`  | integer: the deal's latest change the caller read, 0 for none                                                                          | yes                 |
-| `fields`          | any of `name`, `kind`, `reason`, `owner` (user slug), `market_id`, `closed_value`, `parking_reason`, `parking_note`, `needs_attention` | `fields` or `phase` |
-| `phase`           | `{ from, to, on?, reason? }`: the phase the caller saw, the new one, a date in Central time, and a reason                              | `fields` or `phase` |
+| Field             | Type                                                                                                                                          | Required            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `idempotency_key` | UUID                                                                                                                                          | yes                 |
+| `seen_change_id`  | integer: the deal's latest change the caller read, 0 for none                                                                                 | yes                 |
+| `fields`          | any of `name`, `kind`, `reason`, `owner` (user slug), `market_id`, `closed_value`, `parking_reason`, `parking_note`, `needs_attention`        | `fields` or `phase` |
+| `phase`           | `{ from, to, on?, reason?, activity_id? }`: the phase the caller saw, the new one, a date in Central time, a reason, and the source call UUID | `fields` or `phase` |
 
 - `changeDeal` applies `fields` with its rule: a later change to one of the same fields is `409 version_conflict { current_version }`; a later change to other fields stands and the answer is `{ deal_id, rebased: true, intervening_change_ids }`, so the caller re-reads. A phase move is refused `409 version_conflict { current_phase }` when the deal's phase is not `from`, as accepting a phase suggestion checks it, under the same row lock.
 - Answer: `{ deal_id, change_id }`, or the rebased answer, plus `phase_changed_at` for a move.
@@ -1697,6 +1697,9 @@ For a renewal, Add deal reads `GET /api/engine/clients/{client_id}/leases` after
 - With the new Deals reads on, a new loss shows the dead phase's date as `closed_on` and its reason as `lost_reason`. The deal page answers the recorded `closed_value` as a decimal string or null.
 - Stamp: the user, or a job for a partner. A job alone may not park, revive or flag a deal: `422 database_refused_the_statement { rule: "deal_parked_or_flagged_by_a_user" }`. `404 not_found` for an unknown deal; `400 unknown_owner`.
 - Callers: call capture's automatic phase moves (`call_capture`, with today's confidence bar, which moves into the engine in slice 35), the assistant (`agent`) and the app. The nightly lead stages use the invoice application below.
+- For an automatic phase move, `call_capture` must send the UUID from door 19 as `phase.activity_id`. An omitted ID returns `400 missing_required { fields: ["phase.activity_id"] }`. An automatic move must leave a previous phase for Undo, so a null `from` or a target identical to `from` returns `400 invalid_field_value { fields: ["phase.from"] }` and goes to suggestion review.
+- An unknown activity ID or a non-call activity returns `422 database_refused_the_statement { rule: "deal_phase_change_source_is_call" }`. A call without a link to this deal returns `422 database_refused_the_statement { rule: "deal_phase_change_call_on_deal" }`. If a partner or another job sends `phase.activity_id`, the save returns `422 database_refused_the_statement { rule: "deal_phase_change_call_source" }`.
+- When a partner accepts a call suggestion through door 21, the phase row has that partner's stamp and gives no automatic receipt. The call stays linked to the suggestion.
 
 #### Invoice application
 

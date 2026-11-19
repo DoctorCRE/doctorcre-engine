@@ -147,7 +147,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				select c.id::text, coalesce((c.source_event ->> 'recorded_at')::timestamptz, c.changed_at) as recorded_at,
 					coalesce(u.slug, c.changed_by_job) as actor,
 					c.source_event ->> 'verb' as verb, c.source_event ->> 'field' as field,
-					c.source_event -> 'old_value' as old_value, c.source_event -> 'new_value' as new_value,
+					${copiedDealEditValue("old_value")} as old_value, ${copiedDealEditValue("new_value")} as new_value,
 					case when c.table_name = 'activity' then c.record ->> 'id' end as activity_id
 				from (
 					select c.* from imported_change c
@@ -234,19 +234,25 @@ const correspondenceOf = (deal: Expression<string>) => sql<Correspondence[]>`(
 	where ab.deal_id = ${deal} and (a.kind = 'meeting' or e.activity_id is not null)
 )`;
 
+function copiedDealEditValue(side: "old_value" | "new_value") {
+	const value = sql`c.source_event -> ${sql.lit(side)}`;
+	const parking = sql`${value} -> 'operating_state'`;
+	return sql`case when c.source_event ->> 'field' = 'operating_state' and ${parking} is not null
+		then jsonb_strip_nulls(${parking})
+		else ${value}
+	end`;
+}
+
 function dealEditValue(column: "c.old_value" | "c.new_value") {
 	const value = sql.ref(column);
 	return sql`case edit.key
 		when 'owner_user_id' then to_jsonb((select slug from app_user where id = (${value} ->> edit.key)::uuid))
 		when 'market_id' then to_jsonb((select name from market where id = (${value} ->> edit.key)::uuid))
-		when 'operating_state' then to_jsonb(case
-			when ${value} -> 'parking_reason' = 'null'::jsonb then 'Active'
-			else concat_ws(' · ', 'Parked', case ${value} ->> 'parking_reason'
-				when 'client_paused' then 'Client paused'
-				when 'prospect_never_active' then 'Prospect never became active work'
-				when 'other' then 'Other'
-			end, ${value} ->> 'parking_note')
-		end)
+		when 'operating_state' then jsonb_strip_nulls(jsonb_build_object(
+			'state', case when ${value} -> 'parking_reason' = 'null'::jsonb then 'active' else 'parked' end,
+			'reason', ${value} -> 'parking_reason',
+			'note', ${value} -> 'parking_note'
+		))
 		else ${value} -> edit.key
 	end`;
 }

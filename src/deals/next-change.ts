@@ -31,6 +31,7 @@ import { SaveRefusal } from "../save.ts";
 import { latestChange, seenAnswer, unseenChanges } from "../seen-change.ts";
 import { UUID } from "../uuid.ts";
 import { linkMarketAgent, marketClient } from "./national-market.ts";
+import { automaticPhaseReceipt } from "./phase-receipt.ts";
 import { ENDED_PHASES, isLostDeal } from "./shared.ts";
 
 // The database checks each value against its own rules, such as a known kind.
@@ -52,6 +53,7 @@ const PHASE_MOVE = {
 	to: isText,
 	on: clearable(isCalendarDate),
 	reason: clearable(isText),
+	activity_id: optional(isUuid),
 };
 
 const DEAL_CHANGES = {
@@ -96,7 +98,11 @@ type DealFields = Partial<Fitted<typeof DEAL_FIELDS>>;
 type PhaseMove = NonNullable<DealChanges["phase"]>;
 type DealChanges = Exclude<ReturnType<typeof parseDealChanges>, Refusal>;
 
-function parseDealChanges(deal_id: string, body: JsonObject) {
+function parseDealChanges(
+	deal_id: string,
+	body: JsonObject,
+	callCapture: boolean,
+) {
 	if (!UUID.test(deal_id)) return new Refusal(404, "not_found");
 	const request = fit(
 		body,
@@ -108,6 +114,12 @@ function parseDealChanges(deal_id: string, body: JsonObject) {
 	const { idempotency_key, seen_change_id, phase } = request;
 	if (phase && (phase.to === "closed" || phase.to === "dead") && !phase.on)
 		return new Refusal(400, "missing_required", { fields: ["phase.on"] });
+	if (phase && callCapture && !phase.activity_id)
+		return new Refusal(400, "missing_required", {
+			fields: ["phase.activity_id"],
+		});
+	if (phase && callCapture && (phase.from === null || phase.from === phase.to))
+		return new Refusal(400, "invalid_field_value", { fields: ["phase.from"] });
 	const fields: DealFields = request.fields ?? {};
 	return {
 		idempotency_key,
@@ -116,8 +128,7 @@ function parseDealChanges(deal_id: string, body: JsonObject) {
 		fields,
 		phase: phase
 			? {
-					from: phase.from,
-					to: phase.to,
+					...phase,
 					on: phase.on ?? null,
 					reason: phase.reason ?? null,
 				}
@@ -321,7 +332,7 @@ async function addDeal(
 
 async function saveDealChanges(
 	tx: Transaction<DB>,
-	{ deal_id, seen_change_id, fields, phase }: DealChanges,
+	{ deal_id, seen_change_id, fields, phase, idempotency_key }: DealChanges,
 ): Promise<JsonObject> {
 	const { owner, ...rest } = fields;
 	const changes = owner
@@ -329,7 +340,15 @@ async function saveDealChanges(
 		: rest;
 	const answer = await changeDeal(tx, deal_id, seen_change_id, changes);
 	return phase
-		? { ...answer, phase_changed_at: await movePhase(tx, deal_id, phase) }
+		? {
+				...answer,
+				phase_changed_at: await movePhase(
+					tx,
+					deal_id,
+					phase,
+					phase.activity_id ? idempotency_key : undefined,
+				),
+			}
 		: answer;
 }
 
@@ -378,7 +397,8 @@ const latestDealPhase = (tx: Transaction<DB>, deal_id: string) =>
 async function movePhase(
 	tx: Transaction<DB>,
 	deal_id: string,
-	{ from, to, on, reason }: PhaseMove,
+	{ from, to, on, reason, activity_id }: PhaseMove,
+	call_move_id?: string,
 ): Promise<string> {
 	const latest = await latestDealPhase(tx, deal_id).executeTakeFirst();
 	const current = latest?.phase ?? null;
@@ -388,10 +408,10 @@ async function movePhase(
 		);
 	const after = latest?.happened_at ?? null;
 	const { rows } = await sql<{ happened_at: string }>`
-		insert into deal_phase_change (deal_id, happened_at, phase, reason)
+		insert into deal_phase_change (deal_id, happened_at, phase, reason, call_activity_id, call_move_id)
 		select ${deal_id}::uuid, greatest(${after}::timestamptz + interval '1 microsecond',
 			case when day is null or day = today then clock_timestamp() else day::timestamp at time zone 'America/Chicago' end),
-			${to}::text, ${reason}::text
+			${to}::text, ${reason}::text, ${activity_id ?? null}::uuid, ${call_move_id ?? null}::uuid
 		from (select ${on}::date as day, (now() at time zone 'America/Chicago')::date as today) days
 		where day is null or day between coalesce((${after}::timestamptz at time zone 'America/Chicago')::date, day) and today
 		returning to_jsonb(happened_at) #>> '{}' as happened_at`.execute(tx);
@@ -423,11 +443,14 @@ async function undoAutomaticPhaseMove(
 	const current_version = (await latestChange(tx, "deal", deal_id)) ?? 0;
 	const current = await tx
 		.selectFrom(latestDealPhase(tx, deal_id).as("latest"))
-		.innerJoin("imported_automatic_phase_move as receipt", (join) =>
-			join
-				.on("receipt.deal_id", "=", deal_id)
-				.onRef("receipt.happened_at", "=", "latest.happened_at")
-				.on("receipt.source_event_id", "=", event_id),
+		.innerJoinLateral(
+			(eb) =>
+				automaticPhaseReceipt(
+					tx,
+					eb.val(deal_id),
+					eb.ref("latest.happened_at"),
+				).as("receipt"),
+			(join) => join.on("receipt.event_id", "=", event_id),
 		)
 		.leftJoin("imported_deal_board as imported", (join) =>
 			join.on("imported.deal_id", "=", deal_id),
@@ -437,7 +460,7 @@ async function undoAutomaticPhaseMove(
 			eb.not(isLostDeal(eb.ref("latest.phase"), eb.ref("latest.happened_at"))),
 		)
 		.executeTakeFirst();
-	if (!current || current_version !== base_version)
+	if (!current?.prior_phase || current_version !== base_version)
 		throw new SaveRefusal(
 			new Refusal(409, "version_conflict", { current_version }),
 		);
@@ -492,7 +515,12 @@ export const nextDeals = new Hono<NextSaveEnv>()
 		answerNextSave(
 			c,
 			"deal-changes",
-			(body) => parseDealChanges(c.req.param("deal"), body),
+			(body) =>
+				parseDealChanges(
+					c.req.param("deal"),
+					body,
+					c.get("stamp").job === "call_capture",
+				),
 			saveDealChanges,
 		),
 	);
