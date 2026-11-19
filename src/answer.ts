@@ -26,6 +26,11 @@ const HINTS = {
 	not_a_deal: "Choose a deal record, not a client or lead.",
 	not_a_prospect: "This person or company is outside the Prospects lane.",
 	not_found: "The requested record was not found.",
+	portal_deal_not_found: "Choose a deal with a current client.",
+	portal_slug_taken: "Choose a different website name.",
+	portal_password_differs:
+		"This website is already set up with a different password.",
+	portal_deal_already_registered: "This deal already has a client website.",
 	home_item_not_found: "Choose a card from your Home inbox.",
 	invalid_snooze_time: "Choose a future snooze time.",
 	needs_disambiguation:
@@ -75,6 +80,10 @@ const HINTS = {
 		"The email matches no record and names none, so nothing was stored.",
 	message_id_invalid:
 		"Send the Message-ID without angle brackets or surrounding spaces.",
+	location_not_in_account: "Choose a location in this national account.",
+	location_name_exists:
+		"Choose the existing location in this national account.",
+	deal_name_exists: "Open the existing deal or use a different deal name.",
 	unknown_owner: "Owner is one of joe, dell or claude.",
 	field_required:
 		"Supply the required field using the documented operation shape.",
