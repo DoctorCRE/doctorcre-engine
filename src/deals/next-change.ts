@@ -260,6 +260,9 @@ async function convertProspect(
 				changed_at: sql<string>`now()`,
 			})
 			.execute();
+	await sql`select carry_weekly_review(${prospect_id}::uuid, ${added.deal_id}::uuid)`.execute(
+		tx,
+	);
 	return added;
 }
 

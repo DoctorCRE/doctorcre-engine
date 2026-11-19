@@ -87,6 +87,14 @@ begin
 		raise exception 'a change names the user or the job that made it'
 			using errcode = 'not_null_violation', constraint = 'change_names_who_made_it';
 	end if;
+	-- A conversion changes the mark's target. History stamps the move itself.
+	if tg_table_name = 'weekly_review' and tg_op = 'UPDATE' then
+		new.changed_by_user_id := old.changed_by_user_id;
+		new.changed_by_job := old.changed_by_job;
+		new.changed_for_user_id := old.changed_for_user_id;
+		new.changed_at := old.changed_at;
+		return new;
+	end if;
 	new.changed_by_user_id := case when acting_job is null then acting_user end;
 	new.changed_by_job := acting_job;
 	new.changed_for_user_id := case when acting_job is not null then acting_user end;
@@ -605,6 +613,37 @@ end $$;
 
 create trigger weekly_review_undo_by_partner before delete on weekly_review
 for each row execute function weekly_review_undo_by_partner();
+
+create function lock_weekly_review(week_of date, deal_id uuid, party_id uuid) returns void
+language sql
+begin atomic
+	select pg_advisory_xact_lock(hashtextextended(concat('weekly-review:', week_of, ':', deal_id, ':', party_id), 0));
+end;
+
+create function carry_weekly_review(prospect_id uuid, new_deal_id uuid) returns void
+language plpgsql security definer as $$
+declare
+	monday date := date_trunc('week', now() at time zone 'America/Chicago')::date;
+begin
+	if nullif(current_setting('engine.job', true), '') is not null
+		or nullif(current_setting('engine.user_id', true), '') is null
+		or not exists (
+			select from deal d join deal_party link on link.deal_id = d.id
+			where d.id = new_deal_id and d.created_at = now() and link.created_at = now()
+				and link.party_id = prospect_id and link.role in ('client', 'client_contact')
+		) then
+		raise exception 'a weekly review mark carries only with a prospect conversion'
+			using errcode = 'check_violation', constraint = 'weekly_review_carries_with_conversion';
+	end if;
+
+	perform lock_weekly_review(monday, null, prospect_id);
+	update weekly_review set deal_id = new_deal_id, party_id = null
+	where week_of = monday and party_id = prospect_id;
+end $$;
+
+do $$ begin
+	execute format('alter function carry_weekly_review set search_path = %I, pg_temp', current_schema());
+end $$;
 
 -- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
 
@@ -3001,6 +3040,10 @@ begin
 		if was is null then
 			return null;
 		end if;
+		if tg_table_name = 'weekly_review' then
+			was := was || jsonb_build_object('week_of', whole -> 'week_of');
+			became := became || jsonb_build_object('week_of', whole -> 'week_of');
+		end if;
 	end if;
 	insert into change (table_name, record, action, old_value, new_value, merge_of)
 	values (tg_table_name, row_key, lower(tg_op), was, became, (
@@ -3517,6 +3560,8 @@ revoke insert on imported_automatic_phase_move, imported_deal_party, imported_de
 revoke execute on function record_change from public;
 revoke execute on function merge_party from public;
 grant execute on function merge_party to engine;
+revoke execute on function carry_weekly_review from public;
+grant execute on function carry_weekly_review to engine;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;
