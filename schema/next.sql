@@ -3359,11 +3359,15 @@ create view deal_imported_history with (security_invoker = true) as
  ) order by h.recorded_at, h.id) as events
  from imported_deal_history h left join app_user u on u.id = h.changed_by_user_id
  cross join lateral (
-  select jsonb_object_agg(f.key, f.value) filter (where s.is_before) as old_value,
-   jsonb_object_agg(f.key, f.value) filter (where not s.is_before) as new_value
+  select jsonb_object_agg(label.key, f.value) filter (where s.is_before) as old_value,
+   jsonb_object_agg(label.key, f.value) filter (where not s.is_before) as new_value
   from (values (true, to_jsonb(h.old_value), h.old_keys), (false, to_jsonb(h.new_value), h.new_keys))
    s(is_before, payload, keys)
   cross join lateral jsonb_each(s.payload) f
+  cross join lateral (select case
+   when h.verb = 'new-deal' and f.key = 'deal_type'
+    and f.value #>> '{}' in ('relocation', 'startup', 'additional_office', 'expansion', 'renewal')
+   then 'reason' else f.key end as key) label
   where f.key = any(s.keys)
    and f.key not in ('client_portal_url', 'notes_path')
    and (h.verb, f.key) <> ('set-next-action', 'summary')

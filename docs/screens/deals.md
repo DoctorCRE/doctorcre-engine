@@ -58,7 +58,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Search finds deals by name, client, kind or close date.
 - [ ] Each deal opens its deal page.
 
-With the new read, Closed deals shows "Closed automatically: Invoice received" with a date in words, such as "Tue, Nov 17, 2026", when the nightly invoice job closed the deal. A recorded loss appears in Lost deals without an automatic close badge or Undo.
+When the nightly invoice job closes a deal, Closed deals shows "Closed automatically: Invoice received" with its date in words and offers Undo. A copied automatic move to Closed shows "Closed automatically" with its date in words and the same Undo as other copied moves. A recorded loss appears in Lost deals without an automatic close badge or Undo.
 
 ## Prospects
 
@@ -167,7 +167,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Compare terms: recorded terms from deals in the same submarket and use type, each value with where it came from.
 - **Open (question 7).** Whether Compare terms becomes a side-by-side of this deal's own offers. Recommended: keep today's comparison until the owner decides.
 - [ ] Timeline lists phase moves, notes, next steps, critical dates, documents, and changes, newest first. Each says which partner or job saved it and when. A note with a matching event appears once.
-- [ ] Timeline uses the card's parking reason labels: "Client paused", "Prospect never active", and "Other". It uses "Deal kind" and "Deal reason" as in Add deal and says "Not recorded" for unknown values in those fields.
+- [ ] Timeline uses the card's parking reason labels and note wording. An entry with no note shows only the reason. Timeline uses "Deal kind" and "Deal reason" as in Add deal, including in imported deal openings. It says "Not recorded" for unknown values in those fields.
 - [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. An attachment action already shown as a document event appears once. Copied notes show their words and dates in readable form. Empty notes and technical lines stay in the old system. Owner changes marked as automatic are credited to the move.
 - [ ] Correspondence & notes shows every email and meeting filed to the deal, newest first, and the deal's notes. An email shows its sender, date and subject and appears here even if it has a pending follow-up. A meeting shows its title and time.
 - [ ] Tours: the deal's tours, each with its date in words.
