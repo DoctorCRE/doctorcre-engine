@@ -15,6 +15,12 @@ const ordinary = randomUUID();
 const meeting = randomUUID();
 const proposal = randomUUID();
 const meetingDeal = randomUUID();
+const otherDealStep = randomUUID();
+const completedDealStep = randomUUID();
+const building = randomUUID();
+const sharedBuilding = randomUUID();
+const buildingStep = randomUUID();
+const sharedBuildingStep = randomUUID();
 const followUp = randomUUID();
 const held = randomUUID();
 const completed = randomUUID();
@@ -37,6 +43,10 @@ before(async () => {
 		insert into app_user (id, slug) values ('${owner}', '${user.user}'), ('${other}', 'other-partner');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental, Springfield', '${owner}');
 		insert into deal (id, name, owner_user_id) values ('${meetingDeal}', 'Example Renewal', '${owner}');
+		insert into property (id, address) values
+			('${building}', '100 Example Way'), ('${sharedBuilding}', '200 Example Way');
+		insert into deal_property (deal_id, property_id) values
+			('${deal}', '${building}'), ('${deal}', '${sharedBuilding}'), ('${meetingDeal}', '${sharedBuilding}');
 		insert into activity (id, kind, happened_at, from_party_id, summary) values
 			('${call}', 'call', '2026-11-17 22:30+00', '${contact}', 'Discussed the suite.'),
 			('${meeting}', 'meeting', '2026-11-17 17:00+00', '${contact}', 'Discussed renewal.');
@@ -53,7 +63,13 @@ before(async () => {
 			('${canceled}', '${client}', '${owner}', 'Tour the suite', null, null, 'cancelled', null, 'Client paused'),
 			('${otherStep}', '${client}', '${other}', 'Arrange a tour', null, null, null, null, null);
 		insert into next_step (id, deal_id, owner_party_id, what)
-			values ('${settled}', '${deal}', '${owner}', 'Check the lease term');
+			values ('${settled}', '${deal}', '${owner}', 'Check the lease term'),
+				('${otherDealStep}', '${meetingDeal}', '${other}', 'Confirm the renewal terms');
+		insert into next_step (id, deal_id, owner_party_id, what, resolution, done_at) values
+			('${completedDealStep}', '${meetingDeal}', '${other}', 'Check the renewal budget', 'done', now());
+		insert into next_step (id, property_id, owner_party_id, what) values
+			('${buildingStep}', '${building}', '${other}', 'Check the building access'),
+			('${sharedBuildingStep}', '${sharedBuilding}', '${other}', 'Check the site plan');
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values
 			('${owner}', '${ordinary}', 'snoozed', '2999-01-01T00:00Z'),
 			('${owner}', '${held}', 'snoozed', '2000-01-01T00:00Z'),
@@ -140,7 +156,16 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	assert.equal(items.get(settled)?.section, "settled");
 
 	const otherItems = await inbox({ user: "other-partner" });
-	assert.deepEqual([...otherItems.keys()], [otherStep]);
+	assert.deepEqual(
+		new Set(otherItems.keys()),
+		new Set([
+			otherStep,
+			otherDealStep,
+			completedDealStep,
+			buildingStep,
+			sharedBuildingStep,
+		]),
+	);
 	assert.equal(otherItems.get(otherStep)?.section, "settled");
 
 	const before = items.get(settled);
@@ -183,7 +208,31 @@ test("a call follow-up appears once with its call, deal and evidence", async () 
 test("a step created by a suggestion keeps the meeting source", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(proposal), {
 		title: "Check renewal dates",
-		open_url: `/deals?deal=${meetingDeal}&focus=next-step`,
 		source_activity: { kind: "meeting", id: meeting },
 	});
+});
+
+test("each partner's Home link names their open step on the same deal", async () => {
+	const ownerItems = await inbox();
+	const otherItems = await inbox({ user: "other-partner" });
+	assert.deepEqual(
+		[
+			ownerItems.get(proposal)?.open_url,
+			otherItems.get(otherDealStep)?.open_url,
+		],
+		[
+			`/deals?deal=${meetingDeal}&focus=next-step&step=${proposal}`,
+			`/deals?deal=${meetingDeal}&focus=next-step&step=${otherDealStep}`,
+		],
+	);
+	assert.equal(
+		otherItems.get(completedDealStep)?.open_url,
+		`/deals?deal=${meetingDeal}&focus=next-step`,
+	);
+});
+
+test("a building-only step links to its deal when the building is on one deal", async () => {
+	const items = await inbox({ user: "other-partner" });
+	assert.equal(items.get(buildingStep)?.open_url, `/deals?deal=${deal}`);
+	assert.equal(items.get(sharedBuildingStep)?.open_url, null);
 });

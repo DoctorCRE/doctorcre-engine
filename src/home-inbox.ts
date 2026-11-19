@@ -20,6 +20,7 @@ type Step = {
 	title: string;
 	status: string | null;
 	deal_id: string | null;
+	building_deal_id: string | null;
 	party_id: string | null;
 	prospect: boolean;
 	context_label: string;
@@ -43,6 +44,10 @@ type Step = {
 function stepRows(userId: string) {
 	return sql<Step>`
 		select s.id, s.what as title, s.status, s.deal_id, s.party_id,
+			case when s.property_id is not null and s.status = 'open' then (
+				select (array_agg(dp.deal_id))[1] from deal_property dp
+				where dp.property_id = s.property_id having count(*) = 1
+			) end as building_deal_id,
 			coalesce(d.name, p.name, property.name, property.address) as context_label,
 			exists (select from party_role r where r.party_id = s.party_id
 				and r.role = 'lead' and r.stage = 'opportunity'
@@ -103,12 +108,12 @@ function stepCard(step: Step) {
 	const open_url = step.call_id
 		? `/calls?session=${step.call_id}`
 		: step.deal_id
-			? `/deals?deal=${step.deal_id}&focus=next-step`
+			? `/deals?deal=${step.deal_id}&focus=next-step${done ? "" : `&step=${step.id}`}`
 			: step.party_id
 				? step.prospect
 					? `/deals?prospect=${step.party_id}&focus=follow-up`
 					: `/relationships?node=party:${step.party_id}`
-				: null;
+				: step.building_deal_id && `/deals?deal=${step.building_deal_id}`;
 
 	return {
 		item_id: `${source_type}:${step.id}`,
