@@ -302,6 +302,59 @@ for (const [evidenceKind, fileKind] of [
 	});
 }
 
+test("a deal keeps the earliest copy of identical bytes and versions different bytes in filed order", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`insert into ops.deal_deliverable (id, organization_tenant_id, deal_id, filename, mime, bytes, sha256, object_key, created_by, created_at, finalized_at, state, version, visibility)
+ values ${deliverable(240, "files/240")};
+ update ops.deal_deliverable set filename = 'Example plan.pdf', finalized_at = '2025-04-03' where id = '${id(240)}';
+ insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_by) values
+ ${attachment(241)}, ${attachment(242)}, ${attachment(243)}, ${attachment(244, 11)};
+ update public.attachment set filename = 'Example plan.pdf', created_at = case id
+  when '${id(242)}' then '2025-04-01'::timestamptz when '${id(241)}' then '2025-04-02' else '2025-04-03' end
+ where id in ('${id(241)}', '${id(242)}', '${id(244)}');
+ update public.attachment set created_at = '2025-04-04', sha256 = '${sha(242)}', bytes = 242
+ where id in ('${id(243)}', '${id(244)}');`);
+		await db.query(copy);
+		assert.deepEqual(
+			await rows(`select id, deal_id, r2_key, version, supersedes_id from document
+				where name = 'Example plan.pdf' or id = '${id(243)}' order by deal_id, version, id`),
+			[
+				{
+					id: id(242),
+					deal_id: id(10),
+					r2_key: "files/242",
+					version: 1,
+					supersedes_id: null,
+				},
+				{
+					id: id(241),
+					deal_id: id(10),
+					r2_key: "files/241",
+					version: 2,
+					supersedes_id: id(242),
+				},
+				{
+					id: id(240),
+					deal_id: id(10),
+					r2_key: "files/240",
+					version: 3,
+					supersedes_id: id(241),
+				},
+				{
+					id: id(244),
+					deal_id: id(11),
+					r2_key: "files/244",
+					version: 1,
+					supersedes_id: null,
+				},
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("a repeat with the same template list changes nothing", async () => {
 	const before = {
 		documents: await documents(),

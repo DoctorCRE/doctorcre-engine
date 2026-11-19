@@ -37,6 +37,7 @@ const proposals: [attachment: number, email: number, day: number][] = [
 	[25, 44, 1],
 	[26, 44, 1],
 	[27, 45, 1],
+	[28, 43, 1],
 ];
 const filed = [20, 21, 22, 24];
 const emails: [n: number, header: string | null][] = [
@@ -68,7 +69,8 @@ before(async () => {
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User');
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by)
  select ('00000000-0000-4000-8000-0000000000' || n)::uuid, 'deal', '${id(10)}', 'files/' || n,
-  'Example file.pdf', 'application/pdf', '${"0".repeat(64)}', 1000, '${id(1)}' from generate_series(20, 27) n;
+  'Example file.pdf', 'application/pdf', '${"0".repeat(64)}', 1000, '${id(1)}' from generate_series(20, 28) n;
+ update public.attachment set sha256 = repeat('36', 32) where id = '${id(28)}';
  insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at)
  select '${id(1)}', 'attach-deal-file', 'deal', '${id(10)}', jsonb_build_object('attachment_id', ('00000000-0000-4000-8000-0000000000' || n)::uuid), 'ingest_email', '2025-01-01'
  from unnest(array[${filed.join(", ")}]) n;
@@ -87,7 +89,7 @@ test("a copied file shows on every email it arrived with", async () => {
 		 from activity a order by a.id`),
 		[
 			{ id: id(41), documents: [id(20), id(24)] },
-			{ id: id(43), documents: [id(24)] },
+			{ id: id(43), documents: [id(24), id(36)] },
 			{ id: id(44), documents: [id(25), id(36)] },
 			{ id: id(45), documents: [id(27)] },
 		],

@@ -18,7 +18,12 @@ select row_number() over () as n, c.*, a.deleted_at, d.id as document_id, d.deal
   jsonb_build_object('contract', j.contract, 'receipt', j.receipt), j.actor_id
  from ops.deal_extraction_job j
 ) c join public.attachment a on a.id = c.document_ref
-left join document d on (d.r2_bucket, d.r2_key, d.deal_id::text) = ('deal_documents', a.r2_key, c.entity_ref) and a.deleted_at is null
+left join lateral (
+ select d.id, d.deal_id, d.sha256 from document d
+ where d.r2_bucket = 'deal_documents' and d.deal_id::text = c.entity_ref and a.deleted_at is null
+ and (d.r2_key = a.r2_key or (d.sha256, d.bytes) = (a.sha256, a.bytes))
+ order by (d.r2_key = a.r2_key) desc, d.created_at, d.id limit 1
+) d on true
 cross join lateral copy_event_attribution(c.author_id, null) w;
 
 create temp table refusal on commit drop as

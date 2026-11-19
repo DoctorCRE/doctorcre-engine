@@ -3,11 +3,16 @@
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
--- One row per emailed attachment and the email a proposal names; rows naming one key are one file, as in the deal-file copy.
+-- One row per emailed attachment and the email a proposal names, even when the attachment reused an earlier filing.
 create temp table emailed on commit drop as
 select a.id, n.id as document_id, p.activity_id, o.email_activity_id
 from public.attachment a
-join document n on (n.r2_bucket, n.r2_key, n.deal_id) = ('deal_documents', a.r2_key, a.subject_id)
+join lateral (
+ select d.id from document d
+ where d.r2_bucket = 'deal_documents' and d.deal_id = a.subject_id
+ and (d.r2_key = a.r2_key or (d.sha256, d.bytes) = (a.sha256, a.bytes))
+ order by (d.r2_key = a.r2_key) desc, d.created_at, d.id limit 1
+) n on true
 left join ops.requirement_reply_proposal p on p.attachment_id = a.id
 left join outside_id o on (o.source, o.value) = ('old_system', p.activity_id::text)
 where a.subject_type = 'deal' and a.deleted_at is null and (p.id is not null or exists (select from public.event v
