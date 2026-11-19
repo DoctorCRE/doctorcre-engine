@@ -537,3 +537,12 @@ test("an email with a stored summary cannot be deleted", async () => {
 		await db.query("rollback");
 	}
 });
+
+test("imported history excludes the invoice event represented by a copied payment change", async () => {
+	assert.deepEqual(
+		await rows(`select item ->> 'id' as id
+			from jsonb_array_elements(everything_about_deal('${id(34)}')->'imported_deal_history') item
+			where item ->> 'id' = '${id(37)}'`),
+		[],
+	);
+});

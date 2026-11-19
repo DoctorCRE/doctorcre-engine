@@ -152,29 +152,45 @@ select * from (values
 
 create temp table deal_history_candidate on commit drop as
 with candidates as (
- select e.*, d.id as deal_id, u.id as user_id, actor.kind as actor_kind,
+ select e.*, d.id as deal_id, a.changed_by_user_id, a.changed_by_job, u.id as user_id,
   string_to_array(s.keys, ' ') as keys
  from public.event e join public.v_deal_room_event visible using (id)
- join public.actor actor on actor.id = e.actor_id
+ cross join lateral copy_event_attribution(e.actor_id, e.id) a
  left join outside_id m on m.source = 'old_system' and m.value = e.subject_id::text
  left join deal d on d.id = m.deal_id
- left join app_user u on u.id = e.actor_id and actor.kind = 'human'
+ left join app_user u on u.id = a.changed_by_user_id
  join deal_history_shape s on s.verb = e.verb and s.field is not distinct from e.field
- where not exists (select from imported_change i where i.id = e.id)
-  and not exists (select from deal_phase_change p
+ where not exists (select from deal_phase_change p
    where p.deal_id = d.id and p.happened_at = e.occurred_at and p.changed_at = e.recorded_at
    and p.phase = case
     when e.field = 'phase' and e.old_value ->> 'phase' is distinct from e.new_value ->> 'phase'
      then e.new_value ->> 'phase'
-    when e.field = 'outcome' and e.new_value ->> 'outcome' = 'lost' then 'dead' end)
-  and not exists (select from next_step n where n.resolution_event_id = e.id and n.deal_id = d.id)
+    when e.field = 'outcome' and e.new_value ->> 'outcome' = 'lost' then 'dead'
+    when e.field = 'outcome' and e.new_value ->> 'outcome' = 'won' then 'closed' end)
+  and not exists (select from critical_date c join public.critical_date old using (id)
+   where e.verb = 'add-critical-date' and c.deal_id = d.id and old.deal_id = e.subject_id
+   and c.due_on::text = e.new_value ->> 'due_on' and old.kind = e.new_value ->> 'kind'
+   and c.created_at between e.occurred_at - interval '5 seconds' and e.occurred_at + interval '5 seconds')
+  and not exists (select from activity_about ab
+   where e.verb = 'log-activity' and ab.deal_id = d.id and ab.activity_id::text = e.new_value ->> 'activity')
+  and not exists (select from next_step n join public.next_action old using (id)
+   where e.verb = 'set-next-action' and e.field is null and n.deal_id = d.id
+   and old.subject_type = 'deal' and old.subject_id = e.subject_id
+   and n.what = regexp_replace(e.new_value ->> 'next_action', '^\s+|\s+$', '', 'g')
+   and n.due_on::text is not distinct from e.new_value ->> 'due'
+   and n.created_at between e.occurred_at - interval '5 seconds' and e.occurred_at + interval '5 seconds')
+  and not exists (select from next_step n
+   where e.verb = 'resolve-post-call-candidate' and n.deal_id = d.id and n.id::text = e.new_value ->> 'next_action_id')
+  and not exists (select from next_step n
+   where e.verb in ('complete-action', 'complete-one-action') and n.deal_id = d.id
+   and n.id::text = e.new_value ->> 'next_action_id' and n.status = 'done' and n.done_at = e.occurred_at)
   and not exists (select from public.deal_invoice_email old join invoice_email saved using (id)
    where old.invoice_event_id = e.id and saved.deal_id = d.id and saved.payment_change_id is not null)
   and not exists (select from imported_deal_history h where h.id = e.id)
 )
 select e.*, parsed.old_snapshot, parsed.new_snapshot,
  case when deal_id is null then 'deal_history_deal_not_copied'
-  when actor_kind = 'human' and user_id is null then 'deal_history_user_not_copied'
+  when changed_by_user_id is not null and user_id is null then 'deal_history_user_not_copied'
   when not checked.valid then 'deal_history_payload_invalid' end as refusal
 from candidates e
 cross join lateral (select
@@ -198,11 +214,11 @@ insert into listed
 select id, field, refusal from deal_history_candidate where refusal is not null;
 
 insert into imported_deal_history (
- id, deal_id, occurred_at, recorded_at, source_actor_id, source_deal_id, changed_by_user_id, verb, field,
+ id, deal_id, occurred_at, recorded_at, source_actor_id, source_deal_id, changed_by_user_id, changed_by_job, verb, field,
  old_value, new_value, old_keys, new_keys, cause, human_quote, agent_rationale, idempotency_key, via,
  client_id, sponsoring_human_slug, personal_scope, authorization_class, organization_tenant_id, correlation_id, mutation_order
 )
-select id, deal_id, occurred_at, recorded_at, actor_id, subject_id, user_id, verb, field,
+select id, deal_id, occurred_at, recorded_at, actor_id, subject_id, user_id, changed_by_job, verb, field,
  old_snapshot, new_snapshot,
  case when old_value is not null then array(select jsonb_object_keys(old_value)) end,
  case when new_value is not null then array(select jsonb_object_keys(new_value)) end,

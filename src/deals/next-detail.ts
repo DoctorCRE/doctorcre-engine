@@ -152,7 +152,9 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 					])
 					.whereRef("lease.deal_id", "=", "d.id"),
 			).as("lease"),
-			sql<ImportedDealEvent[]>`imported_deal_history_for(${eb.ref("d.id")})`.as(
+			sql<
+				ImportedDealEvent[]
+			>`coalesce((select events from deal_imported_history h where h.deal_id = d.id), '[]')`.as(
 				"imported_deal_history",
 			),
 			sql<

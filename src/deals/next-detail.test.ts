@@ -831,13 +831,15 @@ test("signed-in detail shows a revived deal as active", async () => {
 
 test("the deal page reads typed old events with no other history, once and in recorded order", async () => {
 	await db.query(`
+		insert into public.actor (id, slug, kind, display_name)
+		values ('${id(806)}', 'codex', 'automation', 'Example Agent');
 		insert into public.event (id, subject_type, subject_id, field, old_value, new_value,
 			occurred_at, recorded_at, actor_id, verb, cause)
 		values
 		 ('${id(802)}', 'deal', '${id(30)}', 'next_date', '{"next_date":"2025-01-06"}',
-		  '{"next_date":null}', '2025-01-04', '2025-01-06', '${id(1)}', 'set-next-action', 'human_stated'),
+		  '{"next_date":null}', '2025-01-04', '2025-01-05', '${id(1)}', 'set-next-action', 'human_stated'),
 		 ('${id(801)}', 'deal', '${id(30)}', 'address', null, '{"found":false,"expires_on":"2025-02-03"}',
-		  '2025-01-03', '2025-01-06', '${id(3)}', 'record-finding', 'automation_job'),
+		  '2025-01-03', '2025-01-06', '${id(806)}', 'record-finding', 'automation_job'),
 		 ('${id(803)}', 'deal', '${id(30)}', 'address', null, '{"found":"false","expires_on":"bad-date"}',
 		  '2025-01-07', '2025-01-08', '${id(3)}', 'record-finding', 'automation_job'),
 		 ('${id(804)}', 'deal', '${id(32)}', 'client_portal', null, '{"client_portal_url":"https://example.test"}',
@@ -848,25 +850,25 @@ test("the deal page reads typed old events with no other history, once and in re
 	const copy = await readSchema("copy-change-history.sql");
 	const expected = [
 		{
-			id: id(801),
-			recorded_at: "2025-01-06T00:00:00+00:00",
-			occurred_at: "2025-01-03T00:00:00+00:00",
-			actor: "old_system",
-			verb: "record-finding",
-			field: "address",
-			old_value: null,
-			new_value: { found: false, expires_on: "2025-02-03" },
-			imported: true,
-		},
-		{
 			id: id(802),
-			recorded_at: "2025-01-06T00:00:00+00:00",
+			recorded_at: "2025-01-05T00:00:00+00:00",
 			occurred_at: "2025-01-04T00:00:00+00:00",
 			actor: "partner_one",
 			verb: "set-next-action",
 			field: "next_date",
 			old_value: { next_date: "2025-01-06" },
 			new_value: { next_date: null },
+			imported: true,
+		},
+		{
+			id: id(801),
+			recorded_at: "2025-01-06T00:00:00+00:00",
+			occurred_at: "2025-01-03T00:00:00+00:00",
+			actor: "agent",
+			verb: "record-finding",
+			field: "address",
+			old_value: null,
+			new_value: { found: false, expires_on: "2025-02-03" },
 			imported: true,
 		},
 	];
@@ -910,4 +912,82 @@ test("the deal page reads typed old events with no other history, once and in re
 	assert.partialDeepStrictEqual(await history(id(32)), [{ id: id(804) }]);
 	assert.deepEqual(await history(id(33)), []);
 	assert.deepEqual(await history(id(36)), []);
+});
+
+test("imported history excludes events backed by copied deal records", async (t) => {
+	const deal = id(30);
+	const at = "2025-10-01T18:00:00Z";
+	const later = "2025-10-02T18:00:00Z";
+	await db.query("begin");
+	try {
+		await db.query(`
+			select set_config('engine.user_id', '${id(1)}', true);
+			insert into phase values ('closed', 'Closed'), ('dead', 'Dead') on conflict do nothing;
+			insert into deal_phase_change (deal_id, happened_at, phase, reason) values
+			 ('${deal}', '${at}', 'closed', 'Example close'),
+			 ('${deal}', '${later}', 'dead', 'Example loss');
+			insert into public.critical_date (id, deal_id, kind, due_on, source, created_by, created_at)
+			values ('${id(820)}', '${deal}', 'lease_expiration', '2030-02-01', 'Example source', '${id(1)}', '${at}');
+			insert into critical_date (id, deal_id, kind, due_on, source, created_at)
+			values ('${id(820)}', '${deal}', 'lease_end', '2030-02-01', 'Example source', '${at}');
+			insert into public.next_action (id, subject_type, subject_id, owner_id, description, created_by, created_at, status)
+			values ('${id(821)}', 'deal', '${deal}', '${id(1)}', 'Send example terms', '${id(1)}', '${at}', 'done');
+			insert into next_step (id, deal_id, what, created_at, resolution, done_at) values
+			 ('${id(821)}', '${deal}', 'Send example terms', '${at}', 'done', '${later}'),
+			 ('${id(822)}', '${deal}', 'Confirm example dates', '${later}', 'done', '${later}');
+		`);
+		// biome-ignore format: keep each event and its missing-record counterpart on one row
+		const cases = [
+			["phase move", "update-deal", "phase", { phase: "closed" }, at],
+			["won outcome", "update-deal", "outcome", { outcome: "won" }, at],
+			["lost outcome", "update-deal", "outcome", { outcome: "lost" }, later],
+			["critical date", "add-critical-date", null, { kind: "lease_expiration", due_on: "2030-02-01" }, at],
+			["activity", "log-activity", null, { activity: id(70), kind: "note" }, at, { activity: id(899), kind: "note" }],
+			["next action", "set-next-action", null, { next_action: "Send example terms" }, at],
+			["post-call action", "resolve-post-call-candidate", "next_action", { next_action_id: id(822) }, at, { next_action_id: id(899) }],
+			["completed action", "complete-action", "status", { next_action_id: id(821), status: "done" }, later],
+			["completed single action", "complete-one-action", "status", { next_action_id: id(822), status: "done" }, later],
+		] as const;
+		for (const [
+			index,
+			[, verb, field, value, time, missing],
+		] of cases.entries()) {
+			await db.query(
+				`insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause)
+				values ($1, 'deal', $3, $4, $5, $6,
+				 coalesce((select changed_at from deal_phase_change where deal_id = $3 and happened_at = $6), $6),
+				 $7, $8, 'human_stated'),
+				($2, 'deal', $3, $4, $9, '2025-10-03', '2025-10-03', $7, $8, 'human_stated')`,
+				[
+					id(830 + index),
+					id(850 + index),
+					deal,
+					field,
+					value,
+					time,
+					id(1),
+					verb,
+					missing ?? value,
+				],
+			);
+		}
+		await db.query(await readSchema("copy-change-history.sql"));
+		const result = await db.query<{ id: string }>(
+			"select item ->> 'id' as id from jsonb_array_elements(everything_about_deal($1)->'imported_deal_history') item",
+			[deal],
+		);
+		const seen = new Set(result.rows.map((row) => row.id));
+		for (const [index, [name]] of cases.entries()) {
+			await t.test(name, () => {
+				assert.equal(seen.has(id(830 + index)), false, "copied record");
+				assert.equal(
+					seen.has(id(850 + index)),
+					true,
+					"event without a copied record",
+				);
+			});
+		}
+	} finally {
+		await db.query("rollback");
+	}
 });

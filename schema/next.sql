@@ -3170,6 +3170,7 @@ create table imported_deal_history (
  source_actor_id uuid not null,
  source_deal_id uuid not null,
  changed_by_user_id uuid references app_user,
+ changed_by_job text references job,
  verb text not null check (verb ~ '\S'),
  field text,
  old_value imported_deal_values,
@@ -3188,25 +3189,23 @@ create table imported_deal_history (
  organization_tenant_id text,
  correlation_id uuid,
  mutation_order bigint not null,
+ check (num_nonnulls(changed_by_user_id, changed_by_job) = 1),
  check ((old_keys is not null) = (old_value is distinct from null)),
  check ((new_keys is not null) = (new_value is distinct from null))
 );
 create index imported_deal_history_order on imported_deal_history (deal_id, recorded_at, id);
 
-create function imported_deal_history_for(wanted uuid) returns jsonb
-language sql stable
-begin atomic
- select coalesce(jsonb_agg(jsonb_build_object(
+create view deal_imported_history with (security_invoker = true) as
+ select h.deal_id, jsonb_agg(jsonb_build_object(
   'id', h.id, 'occurred_at', h.occurred_at, 'recorded_at', h.recorded_at,
-  'actor', coalesce(u.slug, 'old_system'), 'verb', h.verb, 'field', h.field, 'imported', true,
+  'actor', coalesce(u.slug, h.changed_by_job), 'verb', h.verb, 'field', h.field, 'imported', true,
   'old_value', (select coalesce(jsonb_object_agg(k, to_jsonb(h.old_value) -> k), '{}'::jsonb)
    from unnest(h.old_keys) k having h.old_keys is not null),
   'new_value', (select coalesce(jsonb_object_agg(k, to_jsonb(h.new_value) -> k), '{}'::jsonb)
    from unnest(h.new_keys) k having h.new_keys is not null)
- ) order by h.recorded_at, h.id), '[]')
+ ) order by h.recorded_at, h.id) as events
  from imported_deal_history h left join app_user u on u.id = h.changed_by_user_id
- where h.deal_id = wanted;
-end;
+ group by h.deal_id;
 
 -- A save's answer under its key, so a retry gets the same answer instead of saving twice.
 -- The hash covers who saved and what, so a key reused for another save is refused.
@@ -3290,7 +3289,7 @@ begin atomic
 			where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
 				or c.table_name = 'deal_party' and (c.record ->> 'deal_id')::uuid = d.id
 		),
-		'imported_deal_history', imported_deal_history_for(d.id),
+		'imported_deal_history', coalesce((select events from deal_imported_history h where h.deal_id = d.id), '[]'),
 		'imported_history', (
 			select coalesce(jsonb_agg(to_jsonb(c) order by c.changed_at, c.id), '[]')
 			from imported_change c
@@ -3468,7 +3467,6 @@ revoke insert on app_user, job from engine;
 revoke insert on merged_party from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change, imported_change, imported_deal_history from engine;
-grant execute on function imported_deal_history_for(uuid) to engine, engine_reader;
 -- Only the owner's copy adds the old system's earlier people, owners and board facts.
 revoke insert on imported_automatic_phase_move, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board from engine;
 -- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
