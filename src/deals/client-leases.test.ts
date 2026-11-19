@@ -14,8 +14,13 @@ const property = randomUUID();
 const signedLease = randomUUID();
 const leaseWithoutTerms = randomUUID();
 const unrelatedLease = randomUUID();
+const previouslyLostLease = randomUUID();
+const renewedLease = randomUUID();
 const document = randomUUID();
 const renewalDeal = randomUUID();
+const lostDeal = randomUUID();
+const importedLostDeal = randomUUID();
+const wonDeal = randomUUID();
 const search = "parties/search?query=EXAMPLE&role=client";
 const leases = (client: string) => `clients/${client}/leases`;
 
@@ -25,7 +30,7 @@ before(async () => {
 		select set_config('engine.job', 'old_system', true);
 		insert into role values ('client', 'Client');
 		insert into how_found values ('referral', 'Referral');
-		insert into phase values ('research', 'Research');
+		insert into phase values ('research', 'Research'), ('dead', 'Dead'), ('closed', 'Closed');
 		insert into deal_reason values ('renewal', 'Renewal');
 		insert into party (id, kind, name, how_found) values
 			('${partner}', 'person', 'Example Partner', null),
@@ -43,6 +48,8 @@ before(async () => {
 			('${signedLease}', '${person}', '${property}'),
 			('${leaseWithoutTerms}', '${person}', '${property}'),
 			('${unrelatedLease}', '${company}', '${property}'),
+			('${previouslyLostLease}', '${company}', '${property}'),
+			('${renewedLease}', '${company}', '${property}'),
 			(gen_random_uuid(), '${nonClient}', '${property}');
 		insert into document (id, name, r2_key, r2_bucket, content_type)
 		values ('${document}', 'Example lease', 'example-lease', 'deal_documents', 'application/pdf');
@@ -51,7 +58,17 @@ before(async () => {
 			('${signedLease}', 2, '${document}', '2031-06-01');
 		insert into deal (id, name, owner_user_id, reason, renews_lease_id, created_at) values
 			('${renewalDeal}', 'Example Later Renewal', '${partner}', 'renewal', '${signedLease}', '2026-01-01'),
-			(gen_random_uuid(), 'Example Earlier Renewal', '${partner}', 'renewal', '${signedLease}', '2025-01-01');
+			(gen_random_uuid(), 'Example Earlier Renewal', '${partner}', 'renewal', '${signedLease}', '2025-01-01'),
+			('${lostDeal}', 'Example Newer Lost Renewal', '${partner}', 'renewal', '${signedLease}', '2026-02-01'),
+			('${importedLostDeal}', 'Example Imported Lost Renewal', '${partner}', 'renewal', '${previouslyLostLease}', '2026-01-01'),
+			('${wonDeal}', 'Example Won Renewal', '${partner}', 'renewal', '${renewedLease}', '2026-01-01');
+		insert into deal_phase_change (deal_id, happened_at, phase, reason) values
+			('${renewalDeal}', '2026-01-01', 'research', null),
+			('${lostDeal}', '2026-02-01', 'research', null),
+			('${lostDeal}', '2026-03-01', 'dead', 'Example tenant withdrew'),
+			('${wonDeal}', '2026-02-01', 'closed', null);
+		insert into imported_deal_board (deal_id, phase, outcome)
+		values ('${importedLostDeal}', 'research', 'lost'), ('${renewalDeal}', 'research', 'lost');
 		commit;`);
 });
 after(async () => {
@@ -107,6 +124,23 @@ test("lists the selected client's leases with the latest expiration and accepts 
 		});
 		assert.equal(status, 201, JSON.stringify(body));
 	}
+});
+
+test("the lease picker skips lost renewals and still names a closed won renewal", async () => {
+	const result = await save(user, leases(company), {}, "GET");
+	assert.partialDeepStrictEqual(result, [
+		200,
+		[{ lease_id: previouslyLostLease, renewed_by: null }],
+	]);
+	assert.partialDeepStrictEqual(result, [
+		200,
+		[
+			{
+				lease_id: renewedLease,
+				renewed_by: { deal_id: wonDeal, name: "Example Won Renewal" },
+			},
+		],
+	]);
 });
 
 test("requires sign-in and checks lookup arguments", async () => {

@@ -27,10 +27,37 @@ export const clientLeases = new Hono<DatabaseEnv>().get(
 					jsonObjectFrom(
 						eb
 							.selectFrom("deal")
-							.select(["id as deal_id", "name"])
+							.leftJoin(
+								"imported_deal_board as imported",
+								"imported.deal_id",
+								"deal.id",
+							)
+							.leftJoinLateral(
+								(renewal) =>
+									renewal
+										.selectFrom("deal_phase_change")
+										.select(["phase", "happened_at"])
+										.whereRef("deal_id", "=", "deal.id")
+										.orderBy("happened_at", "desc")
+										.limit(1)
+										.as("current_phase"),
+								(join) => join.onTrue(),
+							)
+							.select(["deal.id as deal_id", "deal.name"])
 							.whereRef("renews_lease_id", "=", "l.id")
-							.orderBy("created_at", "desc")
-							.orderBy("id", "desc")
+							.where("current_phase.phase", "is distinct from", "dead")
+							.where((renewal) =>
+								renewal.or([
+									renewal("imported.outcome", "is distinct from", "lost"),
+									renewal(
+										"imported.phase_at",
+										"is distinct from",
+										renewal.ref("current_phase.happened_at"),
+									),
+								]),
+							)
+							.orderBy("deal.created_at", "desc")
+							.orderBy("deal.id", "desc")
 							.limit(1),
 					).as("renewed_by"),
 				)

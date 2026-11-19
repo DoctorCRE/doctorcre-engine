@@ -6,9 +6,9 @@ export function partyMatchFields(eb: ExpressionBuilder<DB, "party">) {
 		eb.ref("party.city").as("city"),
 		eb
 			.selectFrom("deal_party")
-			.select((eb) =>
-				eb
-					.cast<number>(eb.fn.count("deal_id").distinct(), "integer")
+			.select((link) =>
+				link
+					.cast<number>(link.fn.count("deal_id").distinct(), "integer")
 					.as("count"),
 			)
 			.whereRef("party_id", "=", "party.id")
