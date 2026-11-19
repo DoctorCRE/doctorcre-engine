@@ -333,4 +333,6 @@
 
 175\. **Either partner can change a shared weekly review mark (2026-11-18).** The database keeps one mark for each deal or prospect and week, with the partner and time. Mark and Undo check the last change for that week and item, including a deletion. Both saves replay a successful request with the same key. Undo removes the mark and keeps the deletion in change history (#765).
 
-179\. **Client research and practice types come with the move (2026-11-19).** A client role can hold one recorded practice type without a fixed vocabulary. The approved client research kinds keep their original source, date, author, result and individual facts. The copy follows client merges and keeps the existing activity notes in place (#783).
+176\. **An old vendor ruling can say its reason was never recorded (2026-11-18).** The copy keeps a parked or avoided ruling with the reason “not recorded, set before the new system” when no reviewed reason exists. New rulings require a recorded reason. The copy keeps each vendor's recorded relationship partner so their next steps can follow the vendor (#760).
+
+179\. **Client research and practice types come with the move (2026-11-19).** A client role can hold one recorded practice type without a fixed vocabulary. The approved client research kinds keep their source, date, user or job attribution, result and individual facts. The copy follows client merges and keeps the existing activity notes in place (#783).

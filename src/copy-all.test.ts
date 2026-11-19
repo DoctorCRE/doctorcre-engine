@@ -458,7 +458,7 @@ test("client research keeps named facts and follows the surviving client with it
 	);
 	assert.deepEqual(
 		await rows(`select r.id, r.party_id, r.kind, r.source, r.found, r.observed_at::date::text, r.expires_on::text,
-			r.changed_by_user_id, r.old_author_id, jsonb_object_agg(f.field, f.value) as facts
+			r.changed_by_user_id, jsonb_object_agg(f.field, f.value) as facts
 			from client_research r join client_research_fact f on f.research_id = r.id group by r.id order by r.id`),
 		[
 			{
@@ -470,7 +470,6 @@ test("client research keeps named facts and follows the surviving client with it
 				observed_at: "2025-01-06",
 				expires_on: "2027-01-06",
 				changed_by_user_id: id(1),
-				old_author_id: id(1),
 				facts: { finding: "Example finding", evidence: { pages: [1, 2] } },
 			},
 			{
@@ -482,7 +481,6 @@ test("client research keeps named facts and follows the surviving client with it
 				observed_at: "2025-01-07",
 				expires_on: null,
 				changed_by_user_id: id(1),
-				old_author_id: id(1),
 				facts: { searched_for: "Example filing" },
 			},
 		],

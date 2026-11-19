@@ -167,7 +167,6 @@ create table client_research (
 	found boolean not null,
 	observed_at timestamptz not null check (isfinite(observed_at)),
 	expires_on date check (isfinite(expires_on)),
-	old_author_id uuid,
 	foreign key (party_id, role) references party_role on update cascade
 );
 create index client_research_party on client_research (party_id);
@@ -178,6 +177,21 @@ create table client_research_fact (
 	value jsonb not null,
 	primary key (research_id, field)
 );
+
+-- The copy and merge run as owner. A new ruling through the engine needs a real reason.
+create function vendor_reason_not_recorded_only_imported() returns trigger
+language plpgsql as $$
+begin
+	if not pg_has_role((select relowner from pg_catalog.pg_class where oid = tg_relid), 'USAGE') then
+		raise exception 'a new vendor ruling needs a recorded reason'
+			using errcode = 'check_violation', constraint = 'vendor_reason_not_recorded_only_imported';
+	end if;
+	return new;
+end $$;
+
+create trigger vendor_reason_not_recorded_only_imported before insert or update of disposition, disposition_reason on party_role
+	for each row when (lower(regexp_replace(new.disposition_reason, '^\s+|\s+$', '', 'g')) = 'not recorded, set before the new system')
+	execute function vendor_reason_not_recorded_only_imported();
 
 create table vendor_vertical (
 	party_id uuid not null,
@@ -2076,7 +2090,7 @@ create table critical_date (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	deal_id uuid not null references deal,
-	kind text not null check (kind in ('loi_expiry', 'option_notice', 'rent_start', 'lease_end', 'due_diligence', 'phase_effective_date', 'other')),
+	kind text not null check (kind in ('loi_expiry', 'option_notice', 'lease_commencement', 'rent_start', 'lease_end', 'due_diligence', 'phase_effective_date', 'other')),
 	due_on date not null,
 	source text not null check (source ~ '\S'),
 	offer_id uuid,
@@ -2767,6 +2781,11 @@ begin
 		or exists (select from national_account d join national_account s on s.party_id = survivor where d.party_id = duplicate) then
 		raise exception 'settle both client or national account profiles before merging'
 			using errcode = 'check_violation', constraint = 'merge_party_client_profiles';
+	end if;
+	if exists (select from client_vertical d join client_vertical s on s.party_id = survivor
+		where d.party_id = duplicate and d.vertical <> s.vertical) then
+		raise exception 'settle the different client practice types before merging'
+			using errcode = 'check_violation', constraint = 'merge_party_client_verticals';
 	end if;
 
 	update client set party_id = survivor where party_id = duplicate

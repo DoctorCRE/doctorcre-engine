@@ -63,9 +63,9 @@ with ready as materialized (
  select f.* from old_client_research f
  where not exists (select from not_copied r where r.old_id = f.id and r.field = 'research')
 ), copied as (
- insert into client_research (id, party_id, kind, source, found, observed_at, expires_on, old_author_id,
+ insert into client_research (id, party_id, kind, source, found, observed_at, expires_on,
   changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
- select f.id, f.party_id, f.kind, f.source, (f.value ->> 'found')::boolean, f.observed_at, f.expires_on, f.created_by, f.observed_at, a.*
+ select f.id, f.party_id, f.kind, f.source, (f.value ->> 'found')::boolean, f.observed_at, f.expires_on, f.observed_at, a.*
  from ready f cross join lateral copy_attribution('record_flag', f.id, f.created_by) a
  on conflict (id) do nothing
  returning id, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id

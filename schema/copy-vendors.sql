@@ -53,11 +53,11 @@ select v.*, map.party_id as record_id,
 	stage.slug as stage_slug, level.level, u.id as owner_user_id,
 	nullif(regexp_replace(v.offers, '^\s+|\s+$', '', 'g'), '') as typed_offers,
 	nullif(regexp_replace(v.seeking, '^\s+|\s+$', '', 'g'), '') as typed_seeking, nullif(v.disposition, 'active') as ruling,
-	case when v.disposition <> 'active' then reviewed.reason end as ruling_reason, case
+	case when v.disposition in ('parked', 'avoid')
+		then coalesce(reviewed.reason, 'not recorded, set before the new system') end as ruling_reason, case
 	when v.disposition = 'active' then null
 	when v.disposition not in ('parked', 'avoid') then 'not a ruling'
-	when reviewed.reasons > 1 then 'its reviewed reasons conflict'
-	when reviewed.reason is null then 'a ruling without a reason' end as ruling_refusal,
+	when reviewed.reasons > 1 then 'its reviewed reasons conflict' end as ruling_refusal,
 	exists (select from outside_id where source = 'old_system' and value = v.id::text) as copied_before, author.*
 from public.vendor v
 left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text
@@ -71,8 +71,7 @@ left join stage on stage.role = 'vendor' and stage.slug = v.stage
 left join relationship_level level on level.level = v.relationship_level
 cross join lateral copy_attribution('vendor', v.id, v.updated_by) author;
 
--- Today's rulings have no reason, and the new database keeps none without one, so a ruled vendor's record waits whole
--- until a partner reviews one. Copying it without the ruling would put it back in play.
+-- A conflicting ruling holds the whole record. Copying it without the ruling could put it back in play.
 create temp table copied on commit drop as
 select * from old_vendor v
 where not copied_before and record_id is not null and not record_had_vendor
