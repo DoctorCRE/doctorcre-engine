@@ -260,12 +260,32 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 			) vendor)`.as("vendors"),
 		]);
 
+export const selectNextDealsWithFacts = (db: Transaction<DB>) =>
+	selectNextDeals(db).select((eb) => [
+		"d.kind",
+		"d.reason",
+		jsonObjectFrom(
+			eb
+				.selectFrom("critical_date as cd")
+				.select((eb) => [
+					"cd.id",
+					"cd.kind",
+					asText(eb.ref("cd.due_on")).as("due_on"),
+				])
+				.whereRef("cd.deal_id", "=", "d.id")
+				.where("cd.status", "=", "open")
+				.orderBy("cd.due_on")
+				.orderBy("cd.id")
+				.limit(1),
+		).as("next_critical_date"),
+	]);
+
 function nextBoardQuery(
 	db: Transaction<DB>,
 	{ workspace, account }: Scope,
 	list: BoardList = "open",
 ) {
-	const rows = selectNextDeals(db)
+	const rows = selectNextDealsWithFacts(db)
 		.where("c.party_id", "is not", null)
 		.$if(workspace !== "all", (q) =>
 			q.where(
@@ -350,7 +370,10 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			count(b.id) filter (where b.operating_state = 'active')::int as open_deals,
 			count(b.id) filter (where b.operating_state = 'parked')::int as parked_deals,
 			count(b.id) filter (where b.operating_state = 'active' and b.attention)::int as attention_deals,
-			count(b.id) filter (where b.operating_state = 'active' and b.next_date::date < days.today)::int as overdue_deals,
+			count(b.id) filter (where b.operating_state = 'active' and exists (
+				select from next_step s where s.deal_id = b.id and s.status = 'open'
+				and s.item_title is null and s.due_on < days.today
+			))::int as overdue_deals,
 			count(b.id) filter (where b.operating_state = 'active' and (b.last_touch is null or b.last_touch::date < days.today - 14))::int as stale_deals
 		from national_account na join party p on p.id = na.party_id
 		cross join (select (now() at time zone 'America/Chicago')::date as today) days
