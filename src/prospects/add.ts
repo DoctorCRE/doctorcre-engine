@@ -56,6 +56,7 @@ async function prepareParty(tx: Transaction<DB>, request: ProspectRequest) {
 	}
 
 	const { party_id, how_found } = request;
+	// A deal link needs key-share on the party, so this lock holds lane membership during the save.
 	const party = await tx
 		.selectFrom("party")
 		.select("how_found")

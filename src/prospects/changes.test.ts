@@ -8,6 +8,7 @@ const joe = { user: "joe" };
 const dell = { user: "dell" };
 const joeId = randomUUID();
 const dellId = randomUUID();
+const otherUser = randomUUID();
 const lead = randomUUID();
 const toDrop = randomUUID();
 const onDeal = randomUUID();
@@ -22,8 +23,8 @@ before(async () => {
 		insert into how_found (slug, label) values ('referral', 'Referral');
 		insert into party (id, kind, name, how_found)
 			select id, 'person', 'Example Person', 'referral'
-			from unnest(array['${joeId}', '${dellId}', '${lead}', '${toDrop}', '${onDeal}']::uuid[]) as id;
-		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
+			from unnest(array['${joeId}', '${dellId}', '${otherUser}', '${lead}', '${toDrop}', '${onDeal}']::uuid[]) as id;
+		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell'), ('${otherUser}', 'claude');
 		insert into party_role (party_id, role, stage) values
 			('${lead}', 'lead', 'opportunity'), ('${toDrop}', 'lead', 'opportunity'),
 			('${onDeal}', 'lead', 'opportunity');
@@ -46,6 +47,16 @@ async function leadVersion(partyId: string) {
 test("partners can claim, hand off, unclaim and highlight without overwriting a stale field", async () => {
 	const path = `prospects/${lead}/changes`;
 	const initial = await leadVersion(lead);
+	const [invalidOwner, refusal] = await save(joe, path, {
+		...key(),
+		seen_change_id: initial,
+		fields: { owner: "claude" },
+	});
+	assert.equal(invalidOwner, 400);
+	assert.partialDeepStrictEqual(refusal, {
+		error: "unknown_owner",
+		hint: "Choose Joe or Dell, or leave it Unclaimed.",
+	});
 	const claim = { ...key(), seen_change_id: initial, fields: { owner: "joe" } };
 	const [status, claimed] = await save(joe, path, claim);
 	assert.equal(status, 200);
@@ -120,6 +131,7 @@ test("partners can claim, hand off, unclaim and highlight without overwriting a 
 
 test("drop archives the lead with the partner's reason and keeps the notes", async () => {
 	const path = `prospects/${toDrop}/drop`;
+	const seen_change_id = await leadVersion(toDrop);
 	const [noteStatus, note] = await save(joe, "activities", {
 		...key(),
 		kind: "note",
@@ -138,6 +150,13 @@ test("drop archives the lead with the partner's reason and keeps the notes", asy
 		[200, { party_id: toDrop, stage: "archived" }],
 	);
 	assert.equal((await save(joe, `prospects/${toDrop}`, {}, "GET"))[0], 404);
+	const [afterDrop, edit] = await save(joe, `prospects/${toDrop}/changes`, {
+		...key(),
+		seen_change_id,
+		fields: { owner: "joe" },
+	});
+	assert.equal(afterDrop, 409);
+	assert.equal(edit.error, "not_a_prospect");
 	assert.deepEqual(await save(dell, path, request), [
 		200,
 		{ ...dropped, replayed: true },

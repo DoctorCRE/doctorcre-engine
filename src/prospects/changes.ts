@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { Refusal } from "../answer.ts";
+import { PARTNERS } from "../clients/read.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
@@ -17,6 +18,8 @@ import {
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
 import { seenAnswer, unseenChanges } from "../seen-change.ts";
+
+const OWNER_REFUSAL = { hint: "Choose Joe or Dell, or leave it Unclaimed." };
 
 const FIELDS = {
 	owner: clearable(isText),
@@ -37,6 +40,9 @@ function parseChanges(party_id: string, body: JsonObject) {
 		"fields",
 	]);
 	if (request instanceof Refusal) return request;
+	const { owner } = request.fields;
+	if (owner != null && !PARTNERS.some((partner) => partner === owner))
+		return new Refusal(400, "unknown_owner", OWNER_REFUSAL);
 	if (!Object.keys(request.fields).length)
 		return new Refusal(400, "invalid_field_value", { fields: ["fields"] });
 	return { party_id, ...request };
@@ -51,6 +57,7 @@ function parseDrop(party_id: string, body: JsonObject) {
 }
 
 async function lockLead(tx: Transaction<DB>, partyId: string) {
+	// A deal link needs key-share on the party, so this lock holds lane membership during the save.
 	await tx
 		.selectFrom("party")
 		.select("id")
@@ -71,13 +78,11 @@ async function requireProspect(
 	partyId: string,
 	stage: string | null | undefined,
 ) {
-	const deal =
-		stage === "opportunity" &&
-		(await tx
-			.selectFrom("deal_party")
-			.select("deal_id")
-			.where("party_id", "=", partyId)
-			.executeTakeFirst());
+	const deal = await tx
+		.selectFrom("deal_party")
+		.select("deal_id")
+		.where("party_id", "=", partyId)
+		.executeTakeFirst();
 	if (stage !== "opportunity" || deal)
 		throw new SaveRefusal(
 			new Refusal(409, "not_a_prospect", { party_id: partyId }),
@@ -97,7 +102,8 @@ async function changeProspect(
 	const { owner, needs_attention } = fields;
 	const changed = {
 		...(owner !== undefined && {
-			owner_user_id: owner === null ? null : await userId(tx, owner),
+			owner_user_id:
+				owner === null ? null : await userId(tx, owner, OWNER_REFUSAL),
 		}),
 		...(needs_attention !== undefined && { needs_attention }),
 	};
