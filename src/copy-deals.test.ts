@@ -509,9 +509,10 @@ test("participant and vendor links keep their deal event's sponsoring user", asy
 test("a renewal without a source lease keeps its old type in the needs-a-user report", async () => {
 	assert.deepEqual(
 		await rows(
-			`select reason, renews_lease_id from deal where id = '${id(17)}'`,
+			`select d.reason, d.renews_lease_id, coalesce(b.renewal_lease_unrecorded, false) as renewal_lease_unrecorded
+ from deal d left join imported_deal_board b on b.deal_id = d.id where d.id = '${id(17)}'`,
 		),
-		[{ reason: null, renews_lease_id: null }],
+		[{ reason: null, renews_lease_id: null, renewal_lease_unrecorded: false }],
 	);
 	assert.ok(
 		report.some(
@@ -1035,8 +1036,11 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
  ('${id(402)}'::uuid, 'other', E' \t\n ', true),
  ('${id(403)}'::uuid, 'other', 'Example other reason', false)) v(id, reason, note, attention)
  where public.deal.id = v.id;
- insert into public.actor (id, slug, kind, display_name) values ('${id(200)}', 'codex', 'automation', 'Example agent');
+ insert into public.actor (id, slug, kind, display_name) values
+ ('${id(200)}', 'codex', 'automation', 'Example agent'),
+ ('${id(201)}', 'example_system', 'system', 'Example system');
  update public.deal set parked_by = '${id(200)}' where id = '${id(403)}';
+ update public.deal set parked_by = '${id(201)}' where id = '${id(402)}';
  update public.deal set attention = true where id = '${id(404)}';
  update public.deal set owner = null where id = '${id(406)}';`);
 		const first = await run();
@@ -1048,7 +1052,7 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
 		});
 		assert.deepEqual(
 			await rows(
-				`select id, parking_reason, parking_note, needs_attention, parked_at::text, parked_by_user_id
+				`select id, parking_reason, parking_note, needs_attention, parked_at::text, parked_by_user_id, parked_automatically
  from deal where id >= '${id(400)}' order by id`,
 			),
 			[
@@ -1059,6 +1063,7 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
 					needs_attention: true,
 					parked_at: "2025-01-15 00:00:00+00",
 					parked_by_user_id: id(1),
+					parked_automatically: false,
 				},
 				{
 					id: id(401),
@@ -1067,6 +1072,7 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
 					needs_attention: false,
 					parked_at: "2025-01-15 00:00:00+00",
 					parked_by_user_id: id(1),
+					parked_automatically: false,
 				},
 				{
 					id: id(402),
@@ -1074,7 +1080,8 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
 					parking_note: null,
 					needs_attention: true,
 					parked_at: "2025-01-15 00:00:00+00",
-					parked_by_user_id: id(1),
+					parked_by_user_id: null,
+					parked_automatically: false,
 				},
 				{
 					id: id(403),
@@ -1083,6 +1090,7 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
 					needs_attention: false,
 					parked_at: "2025-01-15 00:00:00+00",
 					parked_by_user_id: null,
+					parked_automatically: true,
 				},
 				{
 					id: id(404),
@@ -1091,6 +1099,7 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
 					needs_attention: true,
 					parked_at: null,
 					parked_by_user_id: null,
+					parked_automatically: false,
 				},
 				{
 					id: id(405),
@@ -1099,20 +1108,21 @@ test("parking reasons, trimmed notes, parking stamps and explicit attention flag
 					needs_attention: false,
 					parked_at: null,
 					parked_by_user_id: null,
+					parked_automatically: false,
 				},
 			],
 		);
 		assert.deepEqual(
 			first.filter((r) => r.old_id >= id(400)),
 			[
-				...[400, 401, 402].map(noPhaseHistory),
+				...[400, 401].map(noPhaseHistory),
 				{
-					old_id: id(403),
+					old_id: id(402),
 					field: "parked_by",
-					value: id(200),
+					value: id(201),
 					reason: "parker_not_a_user",
 				},
-				...[403, 404, 405].map(noPhaseHistory),
+				...[402, 403, 404, 405].map(noPhaseHistory),
 				{
 					old_id: id(406),
 					field: "deal",

@@ -12,6 +12,8 @@ export const isOpenBoardDeal = sql<boolean>`outcome is null and closed_on is nul
 // Today's board groups by brand and owner as they stand on the partners' calendar day.
 const covers = (from: Expression<string>, to: Expression<string | null>) =>
 	sql<boolean>`daterange(${from}, ${to}) @> (now() at time zone 'America/Chicago')::date`;
+const dealReason = sql<string | null>`coalesce(d.reason,
+	case when imported.renewal_lease_unrecorded then 'renewal' end)`;
 
 export const clientWebsiteOf = (
 	db: Transaction<DB>,
@@ -134,7 +136,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 				// Today's one deal type is the kind, else the reason, under its old slug.
 				sql<
 					string | null
-				>`coalesce(d.kind, case d.reason when 'start_up' then 'startup' else d.reason end)`.as(
+				>`coalesce(d.kind, case d.reason when 'start_up' then 'startup' else ${dealReason} end)`.as(
 					"type",
 				),
 				"owner.slug as owner",
@@ -198,6 +200,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 				"d.parking_note",
 				asText(eb.ref("d.parked_at")).as("parked_at"),
 				"parker.slug as parked_by",
+				"d.parked_automatically",
 			];
 		})
 		.select([
@@ -263,7 +266,10 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 export const selectNextDealsWithFacts = (db: Transaction<DB>) =>
 	selectNextDeals(db).select((eb) => [
 		"d.kind",
-		"d.reason",
+		dealReason.as("reason"),
+		sql<boolean>`d.reason is null and coalesce(imported.renewal_lease_unrecorded, false)`.as(
+			"renewal_lease_unrecorded",
+		),
 		jsonObjectFrom(
 			eb
 				.selectFrom("critical_date as cd")

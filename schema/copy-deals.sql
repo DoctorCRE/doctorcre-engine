@@ -23,6 +23,8 @@ insert into phase (slug, label) values ('dead', 'Dead') on conflict do nothing;
 
 create temp table old_deal on commit drop as
 select d.*, u.id as owner_user_id, m.id as market_id, parker.id as parked_by_user_id,
+ old_parker.kind is not distinct from 'automation' as parked_automatically,
+ (d.phase in ('closed', 'invoiced') or coalesce(d.outcome in ('won', 'lost'), false) or d.closed_on is not null) as ended,
  coalesce(nullif(btrim(d.city), ''), nullif(btrim(a.market), '')) as typed_market,
  exists (select from outside_id o where o.source = 'old_system' and o.value = d.id::text) as copied_before,
  author.*
@@ -35,12 +37,14 @@ left join public.actor owner on owner.slug = d.owner or (d.owner is null and (d.
  and 1 = (select count(*) from public.deal_participant q where q.deal_id = d.id and q.role = 'lead' and q.to_at is null)))
 left join outside_id owner_map on owner_map.source = 'old_system' and owner_map.value = owner.id::text
 left join app_user u on u.id = owner_map.party_id
-left join outside_id parker_map on parker_map.source = 'old_system' and parker_map.value = d.parked_by::text
+left join public.actor old_parker on old_parker.id = d.parked_by
+left join outside_id parker_map on parker_map.source = 'old_system' and parker_map.value = old_parker.id::text
+ and old_parker.kind = 'human'
 left join app_user parker on parker.id = parker_map.party_id
 cross join lateral copy_attribution('deal', d.id, coalesce(d.updated_by, d.created_by)) author;
 insert into not_copied select id, 'deal', id::text, 'no_deal_owner' from old_deal where owner_user_id is null and not copied_before;
 insert into deal (id, created_at, name, kind, reason, owner_user_id, market_id, closed_value,
- parking_reason, parking_note, needs_attention, parked_at, parked_by_user_id,
+ parking_reason, parking_note, needs_attention, parked_at, parked_by_user_id, parked_automatically,
  changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, created_at, name, (select slug from deal_kind where slug = deal_type),
  (select slug from deal_reason where slug = case deal_type when 'startup' then 'start_up' when 'renewal' then null else deal_type end),
@@ -48,6 +52,7 @@ select id, created_at, name, (select slug from deal_kind where slug = deal_type)
  case when operating_state = 'parked' then parking_reason end,
  case when operating_state = 'parked' then nullif(regexp_replace(parking_note, '^\s+|\s+$', '', 'g'), '') end, attention,
  case when operating_state = 'parked' then parked_at end, case when operating_state = 'parked' then parked_by_user_id end,
+ parked_automatically,
  changed_by_user_id, changed_by_job, changed_for_user_id, updated_at from old_deal where owner_user_id is not null and not copied_before;
 insert into outside_id (source, value, deal_id)
 select 'old_system', d.id::text, d.id from old_deal d join deal n on n.id = d.id where not d.copied_before;
@@ -79,7 +84,7 @@ select old_id, 'record_source', typed, reason from deal_outside_id_refusal where
 insert into not_copied
 select d.id, f.field, f.value, f.reason from old_deal d join deal n on n.id = d.id
 cross join lateral (values
- ('deal_type', d.deal_type, 'renewal_without_lease', d.deal_type = 'renewal'),
+ ('deal_type', d.deal_type, 'renewal_without_lease', d.deal_type = 'renewal' and n.renews_lease_id is null),
  ('market', d.typed_market, 'unknown_market', d.typed_market is not null and n.market_id is null),
  ('won_value', d.won_value::text, 'nonpositive_value', d.won_value is not null and n.closed_value is null)) f(field, value, reason, refused)
 where f.refused;
@@ -87,7 +92,7 @@ where f.refused;
 -- Only a copy leaves a parked deal without its parker; the engine's own parking always names one.
 insert into not_copied
 select d.id, 'parked_by', d.parked_by::text, 'parker_not_a_user' from public.deal d join deal n on n.id = d.id
-where n.parked_at is not null and n.parked_by_user_id is null;
+where n.parked_at is not null and n.parked_by_user_id is null and not n.parked_automatically;
 
 -- Lane is not copied: national follows from the location's brand membership on the day the deal opened.
 insert into not_copied
@@ -276,16 +281,17 @@ where (d.outcome = 'lost' or exists (select from deal_phase_change c where c.dea
  is distinct from case when d.outcome = 'lost' then 'dead' else d.phase end;
 
 -- Keep the board's source city and history without inventing a market or phase event.
-insert into imported_deal_board (deal_id, city, phase, outcome, closed_on, phase_at)
+insert into imported_deal_board (deal_id, city, phase, outcome, closed_on, phase_at, renewal_lease_unrecorded)
 select d.id, nullif(btrim(d.city), ''),
- case when d.phase in ('closed', 'invoiced') or d.outcome in ('won', 'lost') or d.closed_on is not null then d.phase end,
- case when d.outcome in ('won', 'lost') then d.outcome end, d.closed_on, p.happened_at
+ case when d.ended then d.phase end,
+ case when d.outcome in ('won', 'lost') then d.outcome end, d.closed_on, p.happened_at,
+ d.deal_type = 'renewal' and (d.ended or d.invoiced_on is not null)
 from old_deal d join deal n on n.id = d.id
 left join lateral (
  select happened_at from deal_phase_change where deal_id = d.id order by happened_at desc limit 1
 ) p on true
 where not d.copied_before and (d.city is not null or d.market_id is not null
- or d.phase in ('closed', 'invoiced') or d.outcome in ('won', 'lost') or d.closed_on is not null);
+ or d.ended or (d.deal_type = 'renewal' and d.invoiced_on is not null));
 
 -- Follow merged buildings to their survivor; several suites there remain one property.
 create temp table building_map on commit drop as

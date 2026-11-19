@@ -18,6 +18,7 @@ const order: [file: string, input?: string][] = [
 		`create temp table copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop;
  insert into copy_how_found values ('lead', 'Example referral', 'referral'), ('client', 'Example referral', 'referral');`,
 	],
+	["copy-client-research.sql"],
 	[
 		"copy-national-account-owners.sql",
 		`create temp table copy_account_owner_date (account_client_id uuid primary key, started_on date not null) on commit drop;
@@ -49,6 +50,7 @@ const order: [file: string, input?: string][] = [
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
 	["copy-emails.sql"],
+	["copy-email-summaries.sql"],
 	["copy-attachment-emails.sql"],
 	["copy-reply-drafts.sql"],
 	["copy-calls.sql"],
@@ -63,8 +65,14 @@ const order: [file: string, input?: string][] = [
 	["copy-change-history.sql"],
 ];
 
+const summaryHash = `sha256:${"a".repeat(64)}`;
+const newerSummaryHash = `sha256:${"b".repeat(64)}`;
+
 // One made-up snapshot of today's system: two partners and a clinic client leasing a suite, with its vendor and a lead.
 const OLD = `
+create table public.email_message_summary (activity_id uuid not null references public.activity, source_hash text not null,
+ generator_version text not null, status text not null, text text, provenance jsonb not null, updated_at timestamptz not null,
+ primary key (activity_id, source_hash, generator_version));
 create table ops.meeting_action (meeting_id uuid, action_number integer, state text not null, current_revision integer not null,
  decided_revision integer, decided_by_actor uuid, decided_at timestamptz, disposition text, assignee_actor uuid, operation_key uuid,
  primary key (meeting_id, action_number));
@@ -102,9 +110,21 @@ insert into public.party (id, kind, name, created_by, updated_by, created_at, up
 update public.party set org_id = '${id(16)}' where id = '${id(10)}';
 insert into public.client_type (slug, label) values ('national_account', 'Example account');
 insert into public.client_status (slug, label) values ('active_deal', 'Example active deal');
-insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by, created_at) values
- ('${id(20)}', '${id(10)}', 'active_deal', null, 'Example referral', '${id(1)}', '${id(1)}', '2024-01-01'),
- ('${id(23)}', '${id(16)}', 'active_deal', 'national_account', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-06');
+insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by, created_at, updated_at, vertical, subtype) values
+ ('${id(20)}', '${id(10)}', 'active_deal', null, 'Example referral', '${id(1)}', '${id(1)}', '2024-01-01', '2024-02-01', E'\t Example practice \n', 'Example subtype'),
+ ('${id(23)}', '${id(16)}', 'active_deal', 'national_account', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-06', '2024-02-06', null, null);
+insert into public.client (id, party_id, created_by, updated_by, merged_into, vertical)
+ values ('${id(25)}', '${id(10)}', '${id(1)}', '${id(1)}', '${id(20)}', 'Example practice');
+insert into public.record_flag (id, subject_type, subject_id, kind, value, source, observed_at, expires_on, created_by) values
+ ('${id(150)}', 'client', '${id(25)}', 'research_note', '{"found":true,"finding":"Example finding","evidence":{"pages":[1,2]}}',
+  'https://example.test/research', '2025-01-06', '2027-01-06', '${id(1)}'),
+ ('${id(151)}', 'client', '${id(20)}', 'verified', '{"found":true}', 'Example source', '2025-01-06', null, '${id(1)}'),
+ ('${id(152)}', 'lead', '${id(21)}', 'research_note', '{"found":true}', 'Example source', '2025-01-06', null, '${id(1)}'),
+ ('${id(153)}', 'client', '${id(999)}', 'leadership', '{"found":false}', 'Example source', '2025-01-06', null, '${id(1)}'),
+ ('${id(154)}', 'client', '${id(20)}', 'entity_filing', '{"found":false,"searched_for":"Example filing"}',
+  'Example registry locator', '2025-01-07', null, '${id(1)}'),
+ ('${id(155)}', 'client', '${id(20)}', 'practice_research', '["Example invalid finding"]',
+  'Example source', '2025-01-07', null, '${id(1)}');
 insert into public.national_account_owner (account_client_id, owner_actor_id, set_by) values ('${id(23)}', '${id(2)}', '${id(1)}');
 insert into public.lead_stage (slug, label) values ('qualified', 'Example qualified');
 insert into public.lead (id, party_id, stage, source_type, created_by, updated_by, created_at, updated_at) values
@@ -205,6 +225,16 @@ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, act
  select v, 'email_in', '2025-01-06', '2025-01-06', '2025-01-06', '${id(3)}', 'Email from Example Doctor: Example tour', 'Example email text',
   '{"mailbox_owner": "partner_one", "sender_email": "doctor@example.com"}', d, c
  from (values ('${id(120)}'::uuid, '${id(30)}'::uuid, null::uuid), ('${id(121)}', null, '${id(20)}')) f(v, d, c);
+insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, email_source, deal_id) values
+ ('${id(124)}', 'email_in', '2025-01-07', '2025-01-07', '2025-01-07', '${id(3)}', 'Example email without sender', null, '${id(30)}'),
+ ('${id(125)}', 'email_in', '2025-01-08', '2025-01-08', '2025-01-08', '${id(3)}', 'Example separate email',
+  '{"mailbox_owner": "partner_one", "sender_email": "doctor@example.com"}', '${id(30)}');
+insert into public.email_message_summary values
+ ('${id(120)}', '${summaryHash}', 'example.v1', 'unavailable', null, '{"reason":"empty_message"}', '2025-01-09 01:00:00Z'),
+ ('${id(120)}', '${newerSummaryHash}', 'example.v1', 'available', 'The sender asks to tour on Friday.', '{"model":"example-model"}', '2025-01-08'),
+ ('${id(121)}', '${summaryHash}', 'example.v1', 'available', 'The sender asks to tour.', '{"model":"example-model","evidence":"Example email text"}', '2025-01-07 00:00:00.123456Z'),
+ ('${id(124)}', '${summaryHash}', 'example.v1', 'available', 'An email without a sender.', '{"model":"example-model"}', '2025-01-08'),
+ ('${id(125)}', '${summaryHash}', 'example.v1', 'unavailable', null, '{"reason":"generation_failed"}', '2025-01-09');
 insert into ops.requirement_reply_proposal values ('${id(122)}', '${id(120)}', '${id(52)}', '2025-01-06');
 insert into public.email_proposal (id, kind, activity_id, evidence_quote, owner, confidence, created_by, draft_subject, draft_body)
  values ('${id(123)}', 'reply_draft', '${id(120)}', 'Example asks to tour', 'partner_one', 0.9, '${id(3)}', 'Re: Example tour', 'Example reply');
@@ -324,11 +354,12 @@ const counts = async () =>
 // Each table a copy writes holds what the snapshot gave it, so no copy passes by copying nothing.
 // biome-ignore format: one entry per copied table
 const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1, deal_client_website: 1,
+ client_vertical: 1, client_research: 2, client_research_fact: 3,
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, email_document: 1, lead_stage_move: 1, proposal: 4,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 7, activity_about: 8, email: 2, email_summary: 4, email_document: 1, lead_stage_move: 1, proposal: 4,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, home_update: 1, imported_change: 5 };
 // biome-ignore format: one row per correction
 const corrections = [
@@ -336,10 +367,15 @@ const corrections = [
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
  ["copy-markets.sql", "example-bay", "source", "Example review", "no_typed_destination"],
+ ["copy-leads-clients.sql", id(25), "client", id(20), "merged_client"],
+ ["copy-client-research.sql", id(153), "research", "client_role_not_copied"],
+ ["copy-client-research.sql", id(155), "research", "invalid_facts"],
  ["copy-deals.sql", id(34), "market", "Example Elsewhere", "unknown_market"],
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
+ ["copy-emails.sql", id(124), "sender", null, "no_message_id_or_sender"],
+ ["copy-email-summaries.sql", id(124), "email_summary", `example.v1:${summaryHash}`, "email_not_copied"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
  ["copy-email-suggestions.sql", null, "message_hash", "8".repeat(64), "message_not_stored"],
@@ -422,4 +458,172 @@ test("running every copy again changes no row or change history and lists the sa
 	const again = await runAll();
 	assert.deepEqual(await everything(), before);
 	assert.deepEqual(again, corrections);
+});
+
+test("client research keeps named facts and follows the surviving client with its practice type", async () => {
+	assert.deepEqual(
+		await rows(
+			`select party_id, vertical, created_at::date::text, changed_at::date::text, changed_by_user_id from client_vertical`,
+		),
+		[
+			{
+				party_id: id(10),
+				vertical: "Example practice",
+				created_at: "2024-01-01",
+				changed_at: "2024-02-01",
+				changed_by_user_id: id(1),
+			},
+		],
+	);
+	assert.deepEqual(
+		await rows(`select r.id, r.party_id, r.kind, r.source, r.found, r.observed_at::date::text, r.expires_on::text,
+			r.changed_by_user_id, jsonb_object_agg(f.field, f.value) as facts
+			from client_research r join client_research_fact f on f.research_id = r.id group by r.id order by r.id`),
+		[
+			{
+				id: id(150),
+				party_id: id(10),
+				kind: "research_note",
+				source: "https://example.test/research",
+				found: true,
+				observed_at: "2025-01-06",
+				expires_on: "2027-01-06",
+				changed_by_user_id: id(1),
+				facts: { finding: "Example finding", evidence: { pages: [1, 2] } },
+			},
+			{
+				id: id(154),
+				party_id: id(10),
+				kind: "entity_filing",
+				source: "Example registry locator",
+				found: false,
+				observed_at: "2025-01-07",
+				expires_on: null,
+				changed_by_user_id: id(1),
+				facts: { searched_for: "Example filing" },
+			},
+		],
+	);
+});
+
+test("conflicting practice types wait without replacing a copied value", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.client set vertical = 'Example conflicting practice' where id = '${id(25)}'`,
+		);
+		const result = await db.query(await readSchema("copy-client-research.sql"));
+		assert.ok(Array.isArray(result));
+		assert.deepEqual(
+			result
+				.at(-1)
+				?.rows.filter((row: { field: string }) => row.field === "vertical")
+				.map(Object.values),
+			[
+				[id(20), "vertical", "conflicting_verticals"],
+				[id(25), "vertical", "conflicting_verticals"],
+				[id(25), "vertical", "existing_vertical_differs"],
+			],
+		);
+		assert.deepEqual(await rows("select vertical from client_vertical"), [
+			{ vertical: "Example practice" },
+		]);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("email results retain their original record and the newest available text becomes current", async () => {
+	assert.deepEqual(
+		await rows(`select s.source_activity_id, s.source_hash, s.activity_id,
+			(s.status, s.text, s.provenance, s.recorded_at) is not distinct from
+			(m.status, m.text, m.provenance, m.updated_at) as unchanged
+			from email_summary s join public.email_message_summary m
+			on (s.source_activity_id, s.source_hash, s.generator_version) = (m.activity_id, m.source_hash, m.generator_version)
+			order by s.source_activity_id, s.source_hash`),
+		[
+			{
+				source_activity_id: id(120),
+				source_hash: summaryHash,
+				activity_id: id(120),
+				unchanged: true,
+			},
+			{
+				source_activity_id: id(120),
+				source_hash: newerSummaryHash,
+				activity_id: id(120),
+				unchanged: true,
+			},
+			{
+				source_activity_id: id(121),
+				source_hash: summaryHash,
+				activity_id: id(120),
+				unchanged: true,
+			},
+			{
+				source_activity_id: id(125),
+				source_hash: summaryHash,
+				activity_id: id(125),
+				unchanged: true,
+			},
+		],
+	);
+	assert.deepEqual(
+		await rows("select activity_id, text from email_current_summary"),
+		[{ activity_id: id(120), text: "The sender asks to tour on Friday." }],
+	);
+});
+
+test("a changed source result is listed and the first copied result stays", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.email_message_summary set text = 'The sender wants to reschedule.'
+			where activity_id = $1 and source_hash = $2`,
+			[id(120), newerSummaryHash],
+		);
+		const results = await db.query(
+			await readSchema("copy-email-summaries.sql"),
+		);
+		assert.ok(Array.isArray(results));
+		assert.deepEqual(results.at(-1)?.rows, [
+			{
+				old_id: id(120),
+				field: "email_summary",
+				value: `example.v1:${newerSummaryHash}`,
+				reason: "summary_copy_conflict",
+			},
+			{
+				old_id: id(124),
+				field: "email_summary",
+				value: `example.v1:${summaryHash}`,
+				reason: "email_not_copied",
+			},
+		]);
+		assert.deepEqual(await rows("select text from email_current_summary"), [
+			{ text: "The sender asks to tour on Friday." },
+		]);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("an email with a stored summary cannot be deleted", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+			insert into activity (id, kind, happened_at) values ('${id(126)}', 'email', '2025-01-06');
+			insert into activity_about (activity_id, deal_id) values ('${id(126)}', '${id(30)}');
+			insert into email (activity_id, message_id, sender, subject, body)
+			values ('${id(126)}', '<example-summary@example.com>', 'doctor@example.com', 'Example subject', 'Example body');
+			insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, provenance, recorded_at)
+			values ('${id(126)}', '${id(126)}', '${summaryHash}', 'example.v1', 'unavailable', '{"reason":"empty_message"}', '2025-01-06');
+			set constraints all immediate;`);
+		await assert.rejects(
+			db.query("delete from email where activity_id = $1", [id(126)]),
+			{ code: "23503", constraint: "email_summary_activity_id_fkey" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
 });
