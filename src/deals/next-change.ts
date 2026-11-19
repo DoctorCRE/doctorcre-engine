@@ -118,10 +118,6 @@ function parseDealChanges(
 		return new Refusal(400, "missing_required", {
 			fields: ["phase.activity_id"],
 		});
-	if (phase?.activity_id && !callCapture)
-		return new Refusal(400, "invalid_field_value", {
-			fields: ["phase.activity_id"],
-		});
 	if (phase && callCapture && (phase.from === null || phase.from === phase.to))
 		return new Refusal(400, "invalid_field_value", { fields: ["phase.from"] });
 	const fields: DealFields = request.fields ?? {};

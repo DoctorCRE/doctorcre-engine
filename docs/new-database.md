@@ -1,6 +1,6 @@
 # The new database
 
-The engine will move to a new, cleanly connected database in one planned step, after it serves every screen from today's database. This note designs the core. `schema/next.sql` holds the first slice. Tests load it into its own namespace in a throwaway database with made-up data. Nothing applies it to a live database.
+The engine will move to a new, cleanly connected database in one planned step, after it serves every screen from today's database. This note designs the core. `schema/next.sql` defines the new schema. Tests load it into its own namespace in a throwaway database with made-up data. The production rebuild follows the [switch plan](system.md#the-switch-plan).
 
 ## Records
 
@@ -1402,7 +1402,7 @@ When the nightly invoice job moved the deal to its current Closed phase, the boa
 
 A copied or fresh automatic call move appears as `phase_change` on the board and deal page while its phase row is current and the deal is not lost. A recorded loss suppresses the receipt and refuses Undo even when the old phase says Closed. A current invoice application uses its own receipt and undo.
 
-Both phase move receipts give `event_id` (UUID), `prior_phase`, `phase`, nullable `reason`, Chicago `evidence_date` (the phase's effective day), `recorded_at` (the save time), and `automatic: true`. A copied receipt gives `source: "copied"`, its original event ID, and `call: null`. A fresh call receipt gives `source: "call_capture"`, the phase save's idempotency key as its event ID, and `call: { activity_id, happened_at }` with the stored call's UUID and start timestamp. Use `evidence_date` for the move caption.
+Both phase move receipts give `event_id` (UUID), `prior_phase`, `phase`, nullable `reason`, Chicago `evidence_date` (the phase's effective day), `recorded_at` (the save time), and `automatic: true`. A copied receipt gives `source: "copied"`, its original event ID, and `call: null`. It uses the phase row's reason if the copied reason is empty. A fresh call receipt gives `source: "call_capture"`, the phase save's idempotency key as its event ID, and `call: { activity_id, happened_at }` with the stored call's UUID and start timestamp. Use `evidence_date` for the move caption.
 
 The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. Undo returns the same status and error for a previous phase of Closed, Invoiced, or Dead, with a hint that Undo would return the deal to Closed deals or Lost deals. A same-key retry returns the original answer.
 
@@ -1664,6 +1664,7 @@ Both saves answer `{ draft_id, version, status }` with the new revision. A stale
 
 `POST /jobs/deals` and `POST /api/engine/deals` add a deal.
 
+- `call_capture` cannot add a deal. Its request returns `422 database_refused_the_statement { rule: "deal_phase_change_call_source" }`.
 - Ordinary Add deal requires `idempotency_key` (UUID), `name` (nonblank text), `client_id` (an existing client's party UUID), `owner` (user slug), and `phase` (an open phase slug). It accepts `kind` and `reason` (slugs), `market_id` (market UUID), and `renews_lease_id` (lease UUID). Omit an unknown kind, reason, or market, or send null. A renewal reason requires the source lease. Any other reason, including an unknown one, requires the source lease field to be absent or null.
 - The deal, its client link, and its first phase save together. National status follows the client's account membership.
 - To turn a prospect into a deal, the signed-in form adds `prospect_id` (the prospect's party UUID). It sends either `client_id` (an existing party with a stored `how_found`) or `client: { name, kind, how_found }` for someone new. The new client's kind is `person` or `company`. See [Prospects and the Monday review](#prospects-and-the-monday-review).
@@ -1694,7 +1695,8 @@ For a renewal, Add deal reads `GET /api/engine/clients/{client_id}/leases` after
 - With the new Deals reads on, a new loss shows the dead phase's date as `closed_on` and its reason as `lost_reason`. The deal page answers the recorded `closed_value` as a decimal string or null.
 - Stamp: the user, or a job for a partner. A job alone may not park, revive or flag a deal: `422 database_refused_the_statement { rule: "deal_parked_or_flagged_by_a_user" }`. `404 not_found` for an unknown deal; `400 unknown_owner`.
 - Callers: call capture's automatic phase moves (`call_capture`, with today's confidence bar, which moves into the engine in slice 35), the assistant (`agent`) and the app. The nightly lead stages use the invoice application below.
-- For an automatic phase move, `call_capture` must send the UUID from door 19 as `phase.activity_id`. Only this job may send the field. An omitted ID returns `400 missing_required { fields: ["phase.activity_id"] }`. An automatic move must leave a previous phase for Undo, so a null `from` or a target identical to `from` returns `400 invalid_field_value { fields: ["phase.from"] }` and goes to suggestion review. The database requires each phase row stamped by the job to link a call filed to the same deal.
+- For an automatic phase move, `call_capture` must send the UUID from door 19 as `phase.activity_id`. An omitted ID returns `400 missing_required { fields: ["phase.activity_id"] }`. An automatic move must leave a previous phase for Undo, so a null `from` or a target identical to `from` returns `400 invalid_field_value { fields: ["phase.from"] }` and goes to suggestion review.
+- An unknown activity ID or a non-call activity returns `422 database_refused_the_statement { rule: "deal_phase_change_source_is_call" }`. A call without a link to this deal returns `422 database_refused_the_statement { rule: "deal_phase_change_call_on_deal" }`. If a partner or another job sends `phase.activity_id`, the save returns `422 database_refused_the_statement { rule: "deal_phase_change_call_source" }`.
 - When a partner accepts a call suggestion through door 21, the phase row has that partner's stamp and gives no automatic receipt. The call stays linked to the suggestion.
 
 #### Invoice application

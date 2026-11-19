@@ -1,7 +1,25 @@
-import { type Expression, sql, type Transaction } from "kysely";
+import {
+	type AliasableExpression,
+	type Expression,
+	sql,
+	type Transaction,
+} from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
+
+export const phaseReceiptFields = (
+	phase: AliasableExpression<string | null>,
+	happenedAt: Expression<string | null>,
+	changedAt: Expression<string | null>,
+) => [
+	phase.as("phase"),
+	asText(sql`(${happenedAt} at time zone 'America/Chicago')::date`).as(
+		"evidence_date",
+	),
+	asText(changedAt).as("recorded_at"),
+	sql.lit(true).as("automatic"),
+];
 
 export const automaticPhaseReceipt = (
 	db: Transaction<DB>,
@@ -39,13 +57,17 @@ export const automaticPhaseReceipt = (
 						.limit(1),
 				)
 				.as("prior_phase"),
-			"move.phase",
-			eb.fn.coalesce("copied.reason", "move.reason").as("reason"),
-			asText(sql`(move.happened_at at time zone 'America/Chicago')::date`).as(
-				"evidence_date",
+			eb.fn
+				.coalesce(
+					sql<string | null>`nullif(${eb.ref("copied.reason")}, '')`,
+					"move.reason",
+				)
+				.as("reason"),
+			...phaseReceiptFields(
+				eb.ref("move.phase"),
+				eb.ref("move.happened_at"),
+				eb.ref("move.changed_at"),
 			),
-			asText(eb.ref("move.changed_at")).as("recorded_at"),
-			sql.lit(true).as("automatic"),
 			eb
 				.case()
 				.when("copied.source_event_id", "is not", null)

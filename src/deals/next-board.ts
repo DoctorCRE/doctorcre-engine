@@ -4,7 +4,7 @@ import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
-import { automaticPhaseReceipt } from "./phase-receipt.ts";
+import { automaticPhaseReceipt, phaseReceiptFields } from "./phase-receipt.ts";
 import {
 	CLOSED_PHASES,
 	ENDED_PHASES,
@@ -103,14 +103,6 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 			const phaseAt = eb.ref("p.happened_at");
 			const importedHistory = importedPhaseIsCurrent(phaseAt);
 			const lost = isLostDeal(eb.ref("p.phase"), phaseAt);
-			const phaseReceiptFacts = [
-				eb.ref("p.phase").as("phase"),
-				asText(sql`(p.happened_at at time zone 'America/Chicago')::date`).as(
-					"evidence_date",
-				),
-				asText(eb.ref("p.changed_at")).as("recorded_at"),
-				sql.lit(true).as("automatic"),
-			];
 			const outcome = sql<
 				"won" | "lost" | null
 			>`case when ${lost} then 'lost' when ${importedHistory} then imported.outcome
@@ -169,7 +161,11 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 										"invoice.id as event_id",
 										"prior.phase as prior_phase",
 										"p.reason",
-										...phaseReceiptFacts,
+										...phaseReceiptFields(
+											eb.ref("p.phase"),
+											phaseAt,
+											eb.ref("p.changed_at"),
+										),
 									])
 									.whereRef("invoice.deal_id", "=", "d.id")
 									.whereRef("invoice.applied_phase_at", "=", "p.happened_at")

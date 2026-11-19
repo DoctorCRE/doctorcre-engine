@@ -213,6 +213,13 @@ test("only an automatic phase move shows its source call and can be undone", asy
 		seen_change_id: await seen(automaticDeal),
 		phase: { ...phase, activity_id },
 	};
+	const [partnerStatus, partnerRefusal] = await change(partner, automaticDeal, {
+		phase: saveArgs.phase,
+	});
+	assert.deepEqual(
+		[partnerStatus, partnerRefusal.error, partnerRefusal.rule],
+		[422, "database_refused_the_statement", "deal_phase_change_call_source"],
+	);
 	const [saved, answer] = await save(caller, automaticDeal, saveArgs);
 	assert.equal(saved, 200, JSON.stringify(answer));
 	assert.deepEqual(await save(caller, automaticDeal, saveArgs), [
@@ -349,7 +356,7 @@ for (const [name, number, phase, outcome] of [
 		"lost",
 	],
 	[
-		"a current copied win keeps its automatic move and allows Undo even with a dead phase",
+		"a copied win uses the phase reason if its receipt has none and allows Undo",
 		26,
 		"dead",
 		"won",
@@ -364,7 +371,7 @@ for (const [name, number, phase, outcome] of [
 		insert into imported_deal_board (deal_id, phase, phase_at, outcome)
 		values ('${deal}', '${phase}', '2026-01-06', '${outcome}');
 		insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
-		values ('${event_id}', '${deal}', '2026-01-06', 'touring', 'Example invoice received');
+		values ('${event_id}', '${deal}', '2026-01-06', 'touring', '');
 		commit;`);
 		const read = async (path: string) => {
 			const response = await request(
@@ -379,7 +386,12 @@ for (const [name, number, phase, outcome] of [
 			return response.json();
 		};
 		const lost = outcome === "lost";
-		const facts = { outcome, phase_change: lost ? null : { event_id } };
+		const facts = {
+			outcome,
+			phase_change: lost
+				? null
+				: { event_id, reason: "Example recorded phase" },
+		};
 		assert.partialDeepStrictEqual(await read("deals"), {
 			[lost ? "lost_deals" : "closed_deals"]: [{ id: deal, ...facts }],
 		});
