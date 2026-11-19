@@ -32,7 +32,10 @@
 		{ "binding": "POST_MEDIA", "bucket_name": "doctorcre-post-media" },
 		{ "binding": "DEAL_DOCUMENTS", "bucket_name": "carr-documents" }
 	],
-	"vars": { "POST_MEDIA_BUCKET": "doctorcre-post-media" },
+	"vars": {
+		"POST_MEDIA_BUCKET": "doctorcre-post-media",
+		"CLIENT_WEBSITE_ORIGIN": "https://share.doctorcre.com"
+	},
 	"env": {
 		"staging": {
 			"name": "doctorcre-engine-staging",
@@ -58,7 +61,10 @@
 					"bucket_name": "doctorcre-post-media-staging"
 				}
 			],
-			"vars": { "POST_MEDIA_BUCKET": "doctorcre-post-media-staging" }
+			"vars": {
+				"POST_MEDIA_BUCKET": "doctorcre-post-media-staging",
+				"CLIENT_WEBSITE_ORIGIN": "https://carr-share-staging.joe-bookout-carr-us.workers.dev"
+			}
 		}
 	}
 }

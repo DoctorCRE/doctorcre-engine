@@ -223,8 +223,16 @@ test("a partner's grant opens only its own website once, before expiry", async (
 		404,
 	);
 	assert.equal((await save(partner, `${path(unlinkedDeal)}/open`, {}))[0], 404);
-	for (const caller of [partner, { user: "alex" }]) {
-		const response = await request(caller, open, { method: "POST" });
+	for (const [caller, shareOrigin] of [
+		[partner, undefined],
+		[{ user: "alex" }, "https://share-staging.example.test"],
+	] as const) {
+		const response = await request(
+			caller,
+			open,
+			{ method: "POST" },
+			{ CLIENT_WEBSITE_ORIGIN: shareOrigin },
+		);
 		assert.equal(response.status, 200);
 		assert.equal(response.headers.get("cache-control"), "no-store");
 		const answer = await response.json();
@@ -237,7 +245,7 @@ test("a partner's grant opens only its own website once, before expiry", async (
 		const website = new URL(answer.url);
 		assert.equal(
 			website.origin + website.pathname,
-			"https://share.doctorcre.com/example-open/",
+			`${shareOrigin ?? "https://share.doctorcre.com"}/example-open/`,
 		);
 		const grant = website.searchParams.get("grant");
 		assert.ok(grant);

@@ -29,7 +29,11 @@ const activeWebsites = (tx: Transaction<DB>) =>
 		)
 		.where("w.disabled_at", "is", null);
 
-export const openClientWebsite = new Hono<NextSaveEnv>().post(
+type WebsiteAccessEnv = NextSaveEnv & {
+	Bindings: { CLIENT_WEBSITE_ORIGIN?: string };
+};
+
+export const openClientWebsite = new Hono<WebsiteAccessEnv>().post(
 	"/deals/:deal/client-website/open",
 	async (c) => {
 		const deal = c.req.param("deal");
@@ -39,6 +43,11 @@ export const openClientWebsite = new Hono<NextSaveEnv>().post(
 		const writer = c.env.DATABASE_WRITER;
 		if (!writer) return refuse(c, new Refusal(503, "database_unavailable"));
 		try {
+			const origin = new URL(
+				c.env.CLIENT_WEBSITE_ORIGIN ?? CLIENT_WEBSITE_ORIGIN,
+			);
+			if (origin.protocol !== "https:" || origin.href !== `${origin.origin}/`)
+				throw new Error("Invalid client website origin");
 			const grant = randomUUID();
 			const registration = await nextTransaction(
 				writer.connectionString,
@@ -71,7 +80,7 @@ export const openClientWebsite = new Hono<NextSaveEnv>().post(
 				},
 			);
 			if (!registration) return refuse(c, new Refusal(404, "not_found"));
-			const url = new URL(`/${registration.slug}/`, CLIENT_WEBSITE_ORIGIN);
+			const url = new URL(`/${registration.slug}/`, origin);
 			url.searchParams.set("grant", grant);
 			return c.json({ url: url.href });
 		} catch (error) {

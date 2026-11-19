@@ -1391,7 +1391,7 @@ The save refuses a name reserved by another registration (`409 portal_slug_taken
 
 ### Open a client website
 
-`POST /api/engine/deals/{deal_id}/client-website/open` uses the signed-in session and CSRF token and returns `200 { url }` for the new tab. Either partner can request it. A deal with no active registration for its current client returns 404. The URL carries a one-use grant that expires after 60 seconds. The engine stores only its digest, tied to the website and signed-in user.
+`POST /api/engine/deals/{deal_id}/client-website/open` uses the signed-in session and CSRF token and returns `200 { url }` for the new tab. Either partner can request it. A deal with no active registration for its current client returns 404. The URL uses the engine's `CLIENT_WEBSITE_ORIGIN`, which defaults to `https://share.doctorcre.com`. It carries a one-use grant that expires after 60 seconds. The engine stores only its digest, tied to the website and signed-in user.
 
 The share Worker calls the engine's private `ClientWebsiteAccess` service binding. `redeemGrant(slug, grant)` rechecks the current registration and consumes the matching grant atomically. The share Worker starts its own secure site session and redirects to the address with the grant removed. `verifyPassword(slug, password)` checks the same registration's stored verifier. The fifth failed password locks that website's password check for the rest of its 15-minute window. A correct password clears the failure count. The share Worker still owns the session cookie and the asset-decryption key.
 

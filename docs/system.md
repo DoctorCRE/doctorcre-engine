@@ -68,6 +68,8 @@ Each switch moves where requests go. None of them builds anything, and none move
 
 The share Worker's `CLIENT_WEBSITE_ENGINE_SLUG` selects the verified website whose password checks and grant exchanges use the engine. The share Worker still serves and decrypts the site's files. See [the switch plan](#the-switch-plan) for when to set it.
 
+The app and engine use the same `CLIENT_WEBSITE_ORIGIN` for signed-in website links. In production it points to `carr-share` at `https://share.doctorcre.com`. In staging it points to `carr-share-staging`, which calls `doctorcre-engine-staging`.
+
 Still on the old API with no switch yet:
 
 - Deal watch settings and updates, nightly checklist reminders, and the deal room page.
