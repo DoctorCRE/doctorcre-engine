@@ -171,16 +171,16 @@ test("phase events retain effective dates, save times and actors; without them t
 		report.some((r) => r.old_id === id(11) && r.reason === "no_phase_history"),
 	);
 	assert.deepEqual(
-		await rows(
-			`select phase from deal_phase_change where deal_id = '${id(28)}'`,
-		),
-		[],
-		"a lost deal without events gets no phase",
-	);
-	assert.ok(
-		report.some(
-			(r) => r.old_id === id(28) && r.reason === "lost_without_dated_reason",
-		),
+		await rows(`select p.phase, p.reason, b.outcome, b.closed_on
+			from deal_phase_change p join imported_deal_board b using (deal_id) where p.deal_id = '${id(28)}'`),
+		[
+			{
+				phase: "dead",
+				reason: "not recorded before this system",
+				outcome: "lost",
+				closed_on: null,
+			},
+		],
 	);
 });
 test("an invoiced deal keeps today's invoiced date without a commission", async () => {
@@ -382,7 +382,6 @@ test("unmappable links and phase history are listed instead of lost", async () =
 			"same_time_phase_changes",
 			"existing_phase_conflict",
 			"current_phase_differs",
-			"lost_without_dated_reason",
 			"deal_has_another_client",
 		])
 			assert.ok(

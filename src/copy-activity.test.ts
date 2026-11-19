@@ -353,7 +353,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 
 test("a record copied later gains its activity and link on the next run", async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
- insert into deal (id, name, owner_user_id) values ('${id(31)}', 'Example Deal', '${id(1)}');
+ insert into deal (id, name, owner_user_id) values ('${id(31)}', 'Example Later Deal', '${id(1)}');
  insert into party (id, kind, name) values ('${id(15)}', 'person', 'Example Party');
  insert into outside_id (source, value, deal_id) values ('old_system', '${id(31)}', '${id(31)}');
  insert into outside_id (source, value, party_id) values ('old_system', '${id(15)}', '${id(15)}');

@@ -36,7 +36,7 @@ before(async () => {
 		insert into role values ('client', 'Client');
 		insert into party (id, kind, name, how_found) values ('${client}', 'company', 'Example Clinic', 'referral');
 		insert into party_role (party_id, role) values ('${client}', 'client');
-		insert into deal (id, name, owner_user_id) select d, 'Example deal', '${alex}'
+		insert into deal (id, name, owner_user_id) select d, 'Example deal ' || d, '${alex}'
 			from unnest(array['${setupDeal}', '${retryDeal}', '${otherDeal}', '${raceDeal}', '${unlinkedDeal}', '${openDeal}', '${passwordDeal}']::uuid[]) d;
 		insert into deal_party (deal_id, party_id, role)
 			select id, '${client}', 'client' from deal where id <> '${unlinkedDeal}';

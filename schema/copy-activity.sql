@@ -15,6 +15,7 @@ select a.id, a.kind as old_kind, a.occurred_at as happened_at, a.recorded_at as 
   or a.kind = 'note' and a.summary like 'Full text of email: %' as is_mail, s.*
 from public.activity a left join activity_event e on e.activity_id = a.id
 cross join lateral copy_event_attribution(coalesce(a.updated_by, a.actor_id), e.event_id) s
+where not (a.kind = 'note' and a.source = 'import' and a.summary = 'last-touch stamp (imported)')
 union all
 -- A written next step is history only: it opens with its label and makes no next step.
 select n.id, n.kind, n.created_at, n.created_at, n.created_at,
@@ -25,6 +26,10 @@ cross join lateral copy_event_attribution(n.actor_id, case n.kind when 'note' th
  where e.verb = 'add-deal-note' and e.subject_type = 'deal' and e.subject_id = n.deal_id
   and e.actor_id = n.actor_id and e.occurred_at = n.created_at and e.new_value ->> 'note' = n.text
  order by e.mutation_order desc limit 1) else p.event_id end) s;
+
+insert into not_copied
+select id, 'kind', kind, 'imported_last_touch_stamp'
+from public.activity where kind = 'note' and source = 'import' and summary = 'last-touch stamp (imported)';
 
 create temp table old_link on commit drop as select * from copy_activity_link();
 

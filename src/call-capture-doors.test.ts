@@ -34,7 +34,7 @@ before(async () => {
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
 		insert into phase values ('research', 'Research'), ('legal', 'Legal');
 		insert into deal (id, name, owner_user_id)
-		select id, 'Example Deal', '${ALEX}'
+		select id, 'Example Deal ' || id, '${ALEX}'
 		from unnest(array['${AUTOMATIC}', '${REVIEW}', '${STEPS}', '${EARLY}', '${FUTURE}', '${CROSSED}',
 			'${NO_PHASE}', '${SUGGESTED}', '${EDITED_OWNER}', '${BACKDATED}', '${MEETING_DEAL}', '${EMAIL_DEAL}']::uuid[]) as fixture(id);
 		insert into deal_phase_change (deal_id, phase, happened_at)

@@ -209,7 +209,9 @@ cross join lateral (
 where r.kind = 'lead' and ((r.fields ->> 'suppressed')::boolean or r.fields ->> 'stage' = 'do_not_contact');
 create temp table examined_lead_restriction on commit drop as
 select r.*, case
- when reasons = 0 or blank_reason then 'restriction_needs_reason'
+ when blank_reason then 'restriction_needs_reason'
+ when reasons = 0 and exists (select from lead_restriction other where other.mapped_id = r.mapped_id
+  and (other.reasons > 0 or other.blank_reason)) then null
  when reasons > 1 or exists (select from lead_restriction other
   where other.mapped_id = r.mapped_id and other.id <> r.id
    and other.reasons > 0 and not other.blank_reason and (other.reasons > 1 or other.reason <> r.reason))
@@ -220,10 +222,12 @@ select r.*, case
 from lead_restriction r;
 insert into do_not_contact (party_id, reason, created_at, changed_at,
  changed_by_user_id, changed_by_job, changed_for_user_id)
-select distinct on (mapped_id) mapped_id, reason, updated_at, updated_at,
+select distinct on (mapped_id) mapped_id, coalesce(reason, 'not recorded before this system'), updated_at, updated_at,
  changed_by_user_id, changed_by_job, changed_for_user_id
-from examined_lead_restriction where restriction_refusal is null
-order by mapped_id, updated_at desc, id
+from examined_lead_restriction r where restriction_refusal is null
+ and (reasons > 0 or not exists (select from lead_restriction other where other.mapped_id = r.mapped_id
+  and (other.reasons > 0 or other.blank_reason)))
+order by mapped_id, reason is null, updated_at desc, id
 on conflict do nothing;
 insert into not_copied
 select id, 'do_not_contact', fields ->> 'stage', restriction_refusal
@@ -276,12 +280,14 @@ where r.owner_refusal is not null;
 -- Today's lead export shows next_action rows; lead.next_action_date is only a fallback for a lead without any.
 -- Actions of records copied earlier are retried, so a corrected or newer action still arrives.
 create temp table old_next_action on commit drop as
-select n.id, n.status, nullif(regexp_replace(n.description, '^\s+|\s+$', '', 'g'), '') as what, n.description, n.due_on, n.hold_until, n.source_ref,
- n.owner_id, u.id as owner, n.created_at, n.updated_at, r.mapped_id, a.*,
+select n.id, n.subject_type, n.status, nullif(regexp_replace(n.description, '^\s+|\s+$', '', 'g'), '') as what, n.description, n.due_on, n.hold_until, n.source_ref,
+ n.owner_id, coalesce(u.id, c.owner_user_id, lead.owner_user_id) as owner, n.created_at, n.updated_at, r.mapped_id, a.*,
  e.resolution, e.proven, e.done_at, e.resolved_at, e.resolution_reason, e.resolution_event_id, e.refusal,
  exists (select from outside_id copied where copied.source = 'old_system' and copied.value = r.id::text) as copied
 from public.next_action n join classified_relationship r on r.kind = n.subject_type and r.id = n.subject_id
 left join copy_action_end() e on e.id = n.id
+left join client c on r.kind = 'client' and c.party_id = r.mapped_id
+left join party_role lead on r.kind = 'lead' and lead.party_id = r.mapped_id and lead.role = 'lead'
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
 cross join lateral copy_attribution('next_action', n.id, coalesce(n.updated_by, n.created_by)) a;
@@ -315,7 +321,7 @@ cross join lateral (values
  ('description', n.description, 'blank_next_action', n.what is null),
  ('status', n.status, n.refusal, n.refusal is not null),
  ('resolution_event_id', null, 'expiry_unproven', n.resolution = 'expired' and not n.proven),
- ('owner_id', n.owner_id::text, 'owner_not_a_user', n.owner is null),
+ ('owner_id', n.owner_id::text, 'owner_not_a_user', n.owner is null and n.owner_id is not null and n.subject_type <> 'lead'),
  ('source_ref', n.source_ref, 'reference_not_copied', n.source_ref ~ '\S')
 ) f(field, value, reason, refused) where f.refused;
 

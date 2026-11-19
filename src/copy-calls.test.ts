@@ -231,7 +231,7 @@ test("copies each call and meeting capture with its report, once, about the reco
 
 test("a call about a record copied later, and a logged meeting copied later, arrive on the next run", async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
- insert into deal (id, name, owner_user_id) values ('${id(31)}', 'Example Deal', '${id(1)}');
+ insert into deal (id, name, owner_user_id) values ('${id(31)}', 'Example Later Deal', '${id(1)}');
  insert into outside_id (source, value, deal_id) values ('old_system', '${id(31)}', '${id(31)}');
  commit;`);
 	const report = await run();

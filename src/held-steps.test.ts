@@ -27,7 +27,7 @@ async function fixture(kind: "note" | "call", current = true) {
 	const activity_id = randomUUID();
 	const next_step_id = randomUUID();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into deal (id, name, owner_user_id) values ('${deal_id}', 'Example Deal', '${ownerId}');
+		insert into deal (id, name, owner_user_id) values ('${deal_id}', 'Example Deal ' || '${deal_id}', '${ownerId}');
 		insert into activity (id, kind, happened_at, summary) values
 			('${activity_id}', '${kind}', '2001-02-03T15:00:00Z', 'The client received the survey.');
 		insert into activity_about (activity_id, deal_id) values ('${activity_id}', '${deal_id}');
@@ -115,7 +115,7 @@ const assistantNote = (args: object) =>
 async function dealWithoutStep() {
 	const id = randomUUID();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into deal (id, name, owner_user_id) values ('${id}', 'Example Deal', '${ownerId}'); commit;`);
+		insert into deal (id, name, owner_user_id) values ('${id}', 'Example Deal ' || '${id}', '${ownerId}'); commit;`);
 	return id;
 }
 
@@ -394,7 +394,7 @@ test("Home shows the partner's pending holds with the linked update or call", as
 		{
 			...call,
 			proposal_id: p.proposal_id,
-			deal_name: "Example Deal",
+			deal_name: `Example Deal ${call.deal_id}`,
 			what: "Send the survey",
 			due_on: "2001-02-01",
 			evidence: "The survey was sent.",

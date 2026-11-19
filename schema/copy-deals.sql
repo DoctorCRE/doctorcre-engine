@@ -235,10 +235,14 @@ end $$;
 create temp table old_phase on commit drop as
 select e.id as old_id, e.subject_id as deal_id, e.occurred_at as happened_at, case when e.field = 'outcome' then 'dead' else e.new_value ->> 'phase' end as phase,
  e.recorded_at as changed_at,
- coalesce(nullif(e.human_quote, ''), nullif(e.agent_rationale, '')) as reason,
+ coalesce(case when e.human_quote ~ '\S' then e.human_quote end,
+  case when e.agent_rationale ~ '\S' then e.agent_rationale end,
+  case when d.outcome = 'lost' and (e.field = 'outcome' or e.new_value ->> 'phase' = 'dead')
+   then 'not recorded before this system' end) as reason,
  a.*
 -- History takes its own event's cause and sponsor, rather than a later change to the same deal.
-from public.event e cross join lateral copy_event_attribution(e.actor_id, e.id) a
+from public.event e left join public.deal d on d.id = e.subject_id
+cross join lateral copy_event_attribution(e.actor_id, e.id) a
 where e.subject_type = 'deal' and (e.field = 'phase' and e.old_value ->> 'phase' is distinct from e.new_value ->> 'phase'
  or e.field = 'outcome' and e.new_value ->> 'outcome' = 'lost');
 insert into not_copied select d.id, 'phase', d.phase, 'no_phase_history' from public.deal d
@@ -273,6 +277,14 @@ insert into deal_phase_change (deal_id, happened_at, phase, changed_by_job, chan
 select d.id, d.updated_at, d.phase, 'old_system', d.updated_at from public.deal d join deal n on n.id = d.id
 where d.outcome is distinct from 'lost' and not exists (select from deal_phase_change c where c.deal_id = d.id)
  and not exists (select from public.event e where e.subject_type = 'deal' and e.subject_id = d.id and e.field = 'phase');
+-- A source row can establish a loss without recording when it happened.
+insert into deal_phase_change (deal_id, happened_at, phase, reason, changed_by_job, changed_at)
+select d.id, d.updated_at, 'dead', 'not recorded before this system', 'old_system', d.updated_at
+from public.deal d join deal n on n.id = d.id
+where d.outcome = 'lost'
+ and not exists (select from deal_phase_change c where c.deal_id = d.id and c.happened_at >= d.updated_at)
+ and (select phase from deal_phase_change c where c.deal_id = d.id order by happened_at desc limit 1) is distinct from 'dead';
+
 insert into not_copied
 select d.id, 'phase', d.phase, case when d.outcome = 'lost' then 'lost_without_dated_reason' else 'current_phase_differs' end
 from public.deal d join deal n on n.id = d.id

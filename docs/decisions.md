@@ -350,3 +350,7 @@
 184\. **Name matches show the party's recorded city and deal count (2026-11-19).** The copy keeps the live source party's city, trimmed, with null for a blank or missing value. Each picker counts distinct linked deals and identifies existing national accounts. The renewal picker shows the name of a deal already linked to the source lease (#797).
 
 186\. **A partner can file an uploaded document to a deal (2026-11-19).** Both partners can see the filed document. Filing uses the shared upload by hash and stamps the signed-in partner. The same deal and hash return the original filing when the name, kind and predecessor match. A replacement adds the next version on the same deal and kind without removing earlier versions. The shared save receipt makes retries safe (#802).
+
+187\. **Copied losses, steps and contact restrictions keep their recorded state (2026-11-19).** An old loss, cancellation or do-not-contact flag with no reason says “not recorded before this system.” Steps without a partner owner follow the copied deal, client, lead or vendor owner when there is one. Spreadsheet Last Touch date stamps stay out of partner notes (#815).
+
+188\. **A deal name can be reused after the first deal ends (2026-11-19).** The database reserves a name while a deal is open, including while it is parked. Closing, invoicing or losing it frees the name. The rule covers both partners and all ways of adding, renaming or reopening a deal (#815).

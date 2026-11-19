@@ -117,7 +117,7 @@ test("lists the selected client's leases with the latest expiration and accepts 
 			idempotency_key: randomUUID(),
 			client_id: person,
 			renews_lease_id: lease_id,
-			name: "Example Renewal",
+			name: `Example Renewal ${lease_id}`,
 			owner: user.user,
 			phase: "research",
 			reason: "renewal",

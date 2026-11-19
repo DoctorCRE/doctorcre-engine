@@ -224,11 +224,10 @@ test("roles, profiles, details and estimates follow the old records without inve
 	];
 	for (const [sql, result] of expected)
 		assert.deepEqual((await rows(sql)).map(Object.values), result, sql);
-	for (const table of [
-		"client_brand",
-		"national_account_owner",
-		"do_not_contact",
-	])
+	assert.deepEqual(await rows("select party_id, reason from do_not_contact"), [
+		{ party_id: id(13), reason: "not recorded before this system" },
+	]);
+	for (const table of ["client_brand", "national_account_owner"])
 		assert.deepEqual(await rows(`select * from ${table}`), []);
 	for (const table of ["party_role", "activity_about", "next_step"])
 		assert.deepEqual(
@@ -249,7 +248,6 @@ test("unresolved facts remain listed on every rerun and copied rows and stamps s
 		"sources_disagree",
 		"several_records_on_one_party",
 		"source_needs_mapping",
-		"restriction_needs_reason",
 		"file_not_copied",
 		"contact_activity_copy_required",
 		"owner_label_only",
@@ -550,6 +548,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 		const copied = [
 			[id(110), id(90), "Call back", "2027-01-05", id(1), null],
 			[id(112), id(90), "Call back", "2027-02-05", id(1), "2025-05-15 00:00:00+00"],
+			[id(106), id(90), "Example replaced", null, id(1), null],
 			[id(107), id(90), "Example finished", null, id(1), null],
 			[id(113), id(90), "Old plan", null, id(1), null],
 			[id(118), id(90), "Example expired", null, id(1), null],
@@ -566,6 +565,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 		// biome-ignore format: one row per ended action
 		assert.deepEqual((await rows(`select id,status,resolved_at::text,resolution_reason,resolution_event_id from next_step where party_id in ('${id(90)}','${id(92)}') and status <> 'open' order by id`)).map(Object.values), [
 			[id(105), "expired", null, null, null],
+			[id(106), "cancelled", null, "not recorded before this system", null],
 			[id(107), "done", null, null, null],
 			[id(112), "done", null, null, null],
 			[id(113), "cancelled", "2025-02-01 00:00:00+00", "Example no longer needed", id(601)],
@@ -612,10 +612,8 @@ test("next actions, reference numbers and roster wording are copied once or list
 				"verbatim_label_not_stored",
 			],
 			[id(105), "resolution_event_id", null, "expiry_unproven"],
-			[id(106), "status", "dropped", "cancellation_reason_missing"],
 			[id(111), "next_step", id(110), "open_step_exists"],
 			[id(114), "description", "\t\n", "blank_next_action"],
-			[id(114), "owner_id", id(119), "owner_not_a_user"],
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],
 		];
 		assert.deepEqual(listed(report), expected);
@@ -625,9 +623,9 @@ test("next actions, reference numbers and roster wording are copied once or list
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,due_on,created_at,created_by) values ('${id(117)}','lead','${id(104)}','${id(1)}','Call back','2027-01-05','2020-01-01','${id(1)}');`);
 		assert.deepEqual((await steps()).map(Object.values), copied);
 		const corrected = [
-			...copied.slice(0, 4),
+			...copied.slice(0, 5),
 			[id(114), id(90), "Ask for plans", null, null, null],
-			...copied.slice(4),
+			...copied.slice(5),
 		];
 		for (const correction of [
 			`update public.next_action set description = 'Ask for plans' where id = '${id(114)}'`,

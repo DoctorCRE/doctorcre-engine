@@ -26,11 +26,7 @@ import {
 import { SaveRefusal } from "../save.ts";
 import { latestChange, seenAnswer, unseenChanges } from "../seen-change.ts";
 import { UUID } from "../uuid.ts";
-import {
-	checkMarketDealName,
-	linkMarketAgent,
-	marketClient,
-} from "./national-market.ts";
+import { linkMarketAgent, marketClient } from "./national-market.ts";
 import { ENDED_PHASES, isLostDeal } from "./shared.ts";
 
 // The database checks each value against its own rules, such as a known kind.
@@ -202,7 +198,6 @@ async function saveNewDeal(
 	if ("prospect_id" in request) return convertProspect(tx, request);
 	if (!("national_account_id" in request)) return addDeal(tx, request);
 
-	await checkMarketDealName(tx, request.name);
 	const client_id = await marketClient(
 		tx,
 		request.national_account_id,

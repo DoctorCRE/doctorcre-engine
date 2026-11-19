@@ -94,7 +94,7 @@ const create = (caller: Caller, args: object) =>
 async function newStep(args: object = {}) {
 	const deal = randomUUID();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${ALEX}'); commit;`);
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal ' || '${deal}', '${ALEX}'); commit;`);
 	const [status, body] = await create(
 		{ user: "alex" },
 		{ deal_id: deal, what: "Call the example clinic", ...args },

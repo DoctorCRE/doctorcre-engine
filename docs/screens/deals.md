@@ -33,7 +33,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Needs attention shows only when a partner set it on the deal.
 - [ ] Client website shows when the deal has one and opens it as the deal page does.
 - [ ] A phase move made automatically, by a call or an invoice, shows "Moved automatically" with its date in words.
-- [ ] The 16 automatic phase moves copied from today's system keep the "Moved automatically" mark and show Undo on the card (owner, 2026-11-18).
+- [ ] The 16 automatic phase moves copied from today's system keep the "Moved automatically" mark and show Undo on the Board card. List shows the automatic move without Undo (owner, 2026-11-18).
 - [ ] If Undo would return a deal to Closed deals or Lost deals, the deal stays in its current phase and the card explains why.
 - [ ] Dragging a card to another column, or the same move by keyboard, asks for the phase move's details and moves it only on Move to [phase].
 
@@ -169,7 +169,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 1. Answered on 2026-11-18 (#728). The new database keeps each deal's client website registration.
 2. Answered on 2026-11-18 (#718): Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move.
-3. Answered on 2026-11-18. Copied automatic phase moves keep the "Moved automatically" mark and Undo on the card.
+3. Answered on 2026-11-18. Copied automatic phase moves keep the "Moved automatically" mark and Undo on the Board card. List shows the mark.
 4. Answered on 2026-11-18. A person who is a client may belong to a national account.
 5. Answered on 2026-11-19. When both partners have an open next step on one deal, the card shows the deal owner's step and the deal page shows both.
 6. Answered on 2026-11-18. Set up client website stays below the deal's facts and asks for a website name and a password.
@@ -187,10 +187,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 Seen on the live Deals screen on 2026-11-18 (screen), or read in the app's Deals code (code).
 
 - Every save on Deals goes to the old database (code). App #953 is a partial move to the new one, switched off until the switch. The engine has saves for participant changes and critical dates (`docs/new-database.md` § "Deals participants and critical dates"). App #953 still needs to call them. Deal creation and closing still have no new-database save.
-- A deal page shows four open next actions, and an "Overdue action" different from the card's next step. The client shows twice, and website setup sits in the opening facts (screen).
 - The deal page says "Watch state not confirmed" when nothing failed (screen).
-- App #950, in review, shows one next step and hides the watch line until the watch is read. It shows the client once and moves website setup below the snapshot. Its board and deal page still choose the next step from different inputs, so they can differ (code).
-- "Moved automatically" shows `10/19` on the app screen. The app still needs to format the date in words and connect the card's Undo to the new engine save.
 - On a deal Dell owns, Joe's Documents tab says "Request unavailable or version changed" (screen, old system #3232).
 - Email follow-ups on a deal page offer "File email to this deal", with File to existing deal and New deal. Many say "Sender unavailable" or "Summary unavailable", and show role words such as `landlord_side` (screen).
 - Critical dates read "lease expiration estimated" and "864 days" in lower case (screen).

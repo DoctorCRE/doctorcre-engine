@@ -56,6 +56,11 @@ export async function answerNextSave<Request extends JsonObject>(
 		);
 	} catch (error) {
 		if (error instanceof SaveRefusal) return refused(error.refusal);
+		if (
+			error instanceof pg.DatabaseError &&
+			error.constraint === "deal_open_name_unique"
+		)
+			return refused(new Refusal(409, "deal_name_exists"));
 		console.warn("save failed:", correlation_id, failureKind(error));
 		if (error instanceof pg.DatabaseError && sqlState(error)?.startsWith("23"))
 			return refused(

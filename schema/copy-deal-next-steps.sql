@@ -33,7 +33,7 @@ select e.* from copy_action_end() e join old_action n using (id);
 
 create temp table step_candidate on commit drop as
 select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
- regexp_replace(n.description, '^\s+|\s+$', '', 'g') as what, n.due_on, n.hold_until, u.id as owner,
+ regexp_replace(n.description, '^\s+|\s+$', '', 'g') as what, n.due_on, n.hold_until, coalesce(u.id, d.owner_user_id, v.owner_user_id) as owner,
  case when n.source = 'capture_post_call_action' then n.item_title end as item_title,
  case when n.source = 'capture_post_call_action' then n.item_bullets else '[]'::jsonb end as item_bullets,
  case when n.source = 'capture_post_call_action' then n.source_ref end as source_ref,
@@ -43,6 +43,8 @@ from old_action n
 left join action_end e using (id)
 -- A vendor's next steps are about the person or company it became, merged-away vendors' too.
 left join outside_id vendor on vendor.source = 'old_system' and vendor.value = n.vendor_id::text
+left join party_role v on v.party_id = vendor.party_id and v.role = 'vendor'
+left join deal d on d.id = n.deal_id
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
 union all
@@ -119,9 +121,9 @@ where s.resolution is null and s.item_title is null and kept.status = 'open' and
  and not exists (select from step_refusal r where r.id = s.id)
  and not exists (select from next_step done where done.id = s.id);
 
-insert into not_copied select n.id, f.field, f.value, f.reason from old_action n
+insert into not_copied select n.id, f.field, f.value, f.reason from old_action n join step_candidate s using (id)
 cross join lateral (values
- ('owner_id', n.owner_id::text, 'owner_not_a_user', not exists (select from outside_id o join app_user u on u.id = o.party_id where o.source = 'old_system' and o.value = n.owner_id::text)),
+ ('owner_id', n.owner_id::text, 'owner_not_a_user', s.owner is null),
  ('source_ref', n.source_ref, 'reference_not_copied', n.source_ref ~ '\S'),
  ('item_title', n.item_title, 'display_title_not_copied', n.item_title is not null),
  ('item_bullets', n.item_bullets::text, 'display_bullets_not_copied', n.item_bullets <> '[]'::jsonb)

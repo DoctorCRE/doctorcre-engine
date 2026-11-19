@@ -61,7 +61,7 @@ before(async () => {
  insert into public.lead_stage (slug,label) values ('new','new');
  insert into public.lead (id,party_id,stage,source_type,created_by,updated_by) values ('${id(30)}','${id(10)}','new','Example referral','${id(1)}','${id(1)}');
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,status,created_by) values
- ${actions.map((n) => `('${id(n)}','lead','${id(30)}','${id(1)}','Example step ${n}','${n === 100 ? "open" : n === 105 ? "dropped" : "done"}','${id(1)}')`).join(",")};
+ ${actions.map((n) => `('${id(n)}','lead','${id(30)}','${id(1)}','${n === 105 ? " " : `Example step ${n}`}','${n === 100 ? "open" : n === 105 ? "dropped" : "done"}','${id(1)}')`).join(",")};
  insert into ops.notification_preference (actor,device_opt_in,quiet_hours_start,quiet_hours_end,timezone,version) values
  ('${id(1)}',true,'22:00','06:00','America/Chicago',3),
  ('${id(2)}',false,null,null,'UTC',1),

@@ -111,9 +111,9 @@ update public.party set org_id = '${id(16)}' where id = '${id(10)}';
 update public.party set npi = '9000000015' where id = '${id(10)}';
 insert into public.client_type (slug, label) values ('national_account', 'Example account');
 insert into public.client_status (slug, label) values ('active_deal', 'Example active deal');
-insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by, created_at, updated_at, vertical, subtype) values
- ('${id(20)}', '${id(10)}', 'active_deal', null, 'Example referral', '${id(1)}', '${id(1)}', '2024-01-01', '2024-02-01', E'\t Example practice \n', ' Example subtype '),
- ('${id(23)}', '${id(16)}', 'active_deal', 'national_account', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-06', '2024-02-06', null, null);
+insert into public.client (id, party_id, status, client_type, acquisition_source, owner_id, created_by, updated_by, created_at, updated_at, vertical, subtype) values
+ ('${id(20)}', '${id(10)}', 'active_deal', null, 'Example referral', '${id(2)}', '${id(1)}', '${id(1)}', '2024-01-01', '2024-02-01', E'\t Example practice \n', ' Example subtype '),
+ ('${id(23)}', '${id(16)}', 'active_deal', 'national_account', 'Example referral', null, '${id(1)}', '${id(1)}', '2024-01-06', '2024-02-06', null, null);
 insert into public.client (id, party_id, created_by, updated_by, merged_into, vertical)
  values ('${id(25)}', '${id(10)}', '${id(1)}', '${id(1)}', '${id(20)}', 'Example practice');
 insert into public.record_flag (id, subject_type, subject_id, kind, value, source, observed_at, expires_on, created_by) values
@@ -231,6 +231,11 @@ insert into public.activity_kind (slug, label, is_contact) values ('call', 'Exam
 insert into public.lead_stage (slug, label) values ('new', 'Example new'), ('outreach_active', 'Example outreach');
 insert into public.lead_lane (slug, label) values ('example_lane', 'Example lane');
 update public.lead set lane = 'example_lane';
+insert into public.lead (id, party_id, stage, suppressed, source_type, created_by, updated_by, created_at, updated_at) values
+ ('${id(24)}', '${id(11)}', 'new', true, 'Example referral', '${id(1)}', '${id(1)}', '2024-01-05', '2024-02-05');
+insert into public.activity_kind (slug, label, is_contact) values ('note', 'Example note', false);
+insert into public.activity (id, kind, occurred_at, actor_id, summary, lead_id, source) values
+ ('${id(166)}', 'note', '2024-06-01', '${id(1)}', 'last-touch stamp (imported)', '${id(21)}', 'import');
 insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id, client_id, lead_id) values
  ('${id(82)}', 'call', '2025-01-03', '2025-01-03', '2025-01-03', '${id(1)}', 'Example call', '${id(30)}', '${id(20)}', null),
  ('${id(83)}', 'call', '2025-01-05', '2025-01-05', '2025-01-05', '${id(1)}', 'Example prospect call', null, null, '${id(21)}');
@@ -264,9 +269,10 @@ insert into public.candidate_pool (id, source, source_key, source_seq, source_ro
 insert into public.lead_contact_draft (id, lead_id, party_id, owner_id, subject, body, scheduled_for, time_zone, created_by, created_at) values
  ('${id(87)}', '${id(21)}', '${id(14)}', '${id(1)}', 'Example subject', 'Example body', '2025-04-01', 'America/Chicago', '${id(1)}', '2025-01-01');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, created_by) values
- ('${id(88)}', 'lead', '${id(21)}', '${id(1)}', 'Example step', 'open', '${id(1)}'),
- ('${id(89)}', 'deal', '${id(30)}', '${id(1)}', 'Example deal step', 'open', '${id(1)}'),
- ('${id(96)}', 'vendor', '${id(22)}', '${id(1)}', 'Example vendor step', 'open', '${id(1)}');
+ ('${id(88)}', 'lead', '${id(21)}', '${id(3)}', 'Example step', 'open', '${id(1)}'),
+ ('${id(89)}', 'deal', '${id(30)}', '${id(3)}', 'Example deal step', 'open', '${id(1)}'),
+ ('${id(96)}', 'vendor', '${id(22)}', '${id(3)}', 'Example vendor step', 'open', '${id(1)}'),
+ ('${id(97)}', 'client', '${id(20)}', '${id(3)}', 'Example cancelled step', 'dropped', '${id(1)}');
 insert into ops.home_inbox_disposition (actor_id, item_id, disposition, source_version, material_version, updated_at) values
  ('${id(1)}', 'next_action:${id(89)}', 'settled', '1', 'm', '2026-10-04');
 insert into public.deal_invoice_email (id, evidence_ref, from_address, deal_name, client_name, property_address, occurred_at, email_date, created_by, status,
@@ -366,14 +372,14 @@ const counts = async () =>
 	);
 // Each table a copy writes holds what the snapshot gave it, so no copy passes by copying nothing.
 // biome-ignore format: one entry per copied table
-const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1, deal_client_website: 1,
+const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 7, party_specialty: 1, deal_client_website: 1,
  client_vertical: 1, client_research: 6, client_research_fact: 11,
- specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
+ specialty: 1, do_not_contact: 2, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
  commission_payment: 1, invoice_email: 2, space_need: 2, activity: 7, activity_about: 8, email: 2, email_summary: 4, email_document: 1, lead_stage_move: 1, proposal: 4,
- candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, home_update: 1, imported_change: 5 };
+ candidate: 1, lead_contact_draft: 1, next_step: 4, user_preference: 1, home_mark: 2, home_update: 1, imported_change: 5 };
 // biome-ignore format: one row per correction
 const corrections = [
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
@@ -389,6 +395,7 @@ const corrections = [
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
+ ["copy-activity.sql", id(166), "kind", "note", "imported_last_touch_stamp"],
  ["copy-emails.sql", id(124), "sender", null, "no_message_id_or_sender"],
  ["copy-email-summaries.sql", id(124), "email_summary", `example.v1:${summaryHash}`, "email_not_copied"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
@@ -469,6 +476,19 @@ test("every copy runs in order on one snapshot and lists only the expected corre
 		await rows("select document_id, email_activity_id from email_document"),
 		[{ document_id: id(52), email_activity_id: id(120) }],
 		"a file names the email without a Message-ID it arrived with",
+	);
+	assert.deepEqual(
+		(
+			await rows(
+				"select id, owner_party_id, resolution_reason from next_step order by id",
+			)
+		).map(Object.values),
+		[
+			[id(88), null, null],
+			[id(89), id(1), null],
+			[id(96), id(1), null],
+			[id(97), id(2), "not recorded before this system"],
+		],
 	);
 });
 
