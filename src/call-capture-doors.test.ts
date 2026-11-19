@@ -23,7 +23,8 @@ const ALEX = id(1),
 	MEETING = id(14),
 	MEETING_DEAL = id(15),
 	EMAIL = id(16),
-	EMAIL_DEAL = id(17);
+	EMAIL_DEAL = id(17),
+	CLIENT = id(18);
 const job = { job: "call_capture", for_user: "alex" };
 
 before(async () => {
@@ -32,6 +33,10 @@ before(async () => {
 		insert into job values ('call_capture', 'Example call capture');
 		insert into party (id, kind, name) values ('${ALEX}', 'person', 'Alex Example'), ('${BLAIR}', 'person', 'Blair Example');
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
+		insert into how_found values ('referral', 'Referral');
+		insert into party (id, kind, name, how_found) values ('${CLIENT}', 'company', 'Example Client', 'referral');
+		insert into role (slug, label) values ('client', 'Client');
+		insert into party_role (party_id, role) values ('${CLIENT}', 'client');
 		insert into phase values ('research', 'Research'), ('legal', 'Legal');
 		insert into deal (id, name, owner_user_id)
 		select id, 'Example Deal ' || id, '${ALEX}'
@@ -175,7 +180,7 @@ test("a registered job reads a deal and uses the answer to save a phase move", a
 	assert.equal((await read(randomUUID()))[0], 404);
 	const [saved] = await post(`deals/${AUTOMATIC}/changes`, {
 		seen_change_id: deal.change_id,
-		phase: { from: deal.phase, to: "legal" },
+		phase: { from: deal.phase, to: "legal", activity_id: CALL },
 	});
 	assert.equal(saved, 200);
 	const [, latest] = await read(AUTOMATIC);
@@ -183,6 +188,11 @@ test("a registered job reads a deal and uses the answer to save a phase move", a
 	const [, noPhase] = await read(NO_PHASE);
 	assert.equal(noPhase.phase, null);
 	assert.equal(noPhase.phase_saved_at, null);
+	const [initial, invalid] = await post(`deals/${NO_PHASE}/changes`, {
+		seen_change_id: noPhase.change_id,
+		phase: { from: null, to: "legal", activity_id: CALL },
+	});
+	assert.deepEqual([initial, invalid.fields], [400, ["phase.from"]]);
 });
 
 test("a backdated phase move reports when the partner saved it", async () => {
@@ -210,6 +220,34 @@ test("a backdated phase move reports when the partner saved it", async () => {
 	assert.equal(status, 200);
 	assert.equal(deal.phase, "legal");
 	assert.equal(deal.phase_saved_at, phase.saved_at);
+});
+
+test("call capture needs a recorded call to move a phase and cannot add a deal", async () => {
+	for (const activity_id of [EMAIL, randomUUID()]) {
+		const [, deal] = await read(EMAIL_DEAL);
+		const [status, refusal] = await post(`deals/${EMAIL_DEAL}/changes`, {
+			seen_change_id: deal.change_id,
+			phase: { from: deal.phase, to: "legal", activity_id },
+		});
+		assert.deepEqual(
+			[status, refusal.error, refusal.rule],
+			[
+				422,
+				"database_refused_the_statement",
+				"deal_phase_change_source_is_call",
+			],
+		);
+	}
+	const [status, refusal] = await post("deals", {
+		name: "Example Call Capture Deal",
+		client_id: CLIENT,
+		owner: "alex",
+		phase: "research",
+	});
+	assert.deepEqual(
+		[status, refusal.error, refusal.rule],
+		[422, "database_refused_the_statement", "deal_phase_change_call_source"],
+	);
 });
 
 test("call capture reads the original save time of a copied backdated phase", async () => {
