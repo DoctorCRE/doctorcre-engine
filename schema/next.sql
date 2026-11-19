@@ -3367,7 +3367,7 @@ create view deal_imported_history with (security_invoker = true) as
   where f.key = any(s.keys)
    and f.key not in ('client_portal_url', 'notes_path')
    and (h.verb, f.key) <> ('set-next-action', 'summary')
-   and not (f.key = 'source' and f.value #>> '{}' ~* '^[[:space:]]*https?://')
+   and not (f.key = 'source' and f.value #>> '{}' ~* '^\s*https?://\S+\s*$')
    and (f.value not in ('null', '"None"', '""', '{"pdf":null,"working":null}')
     or (not s.is_before and f.value = 'null' and f.key = any(h.old_keys)
      and to_jsonb(h.old_value) -> f.key not in ('null', '"None"', '""', '{"pdf":null,"working":null}')))
