@@ -15,11 +15,13 @@ const ordinary = randomUUID();
 const meeting = randomUUID();
 const proposal = randomUUID();
 const meetingDeal = randomUUID();
+const lostDeal = randomUUID();
 const otherDealStep = randomUUID();
 const completedDealStep = randomUUID();
 const building = randomUUID();
 const sharedBuilding = randomUUID();
 const buildingStep = randomUUID();
+const completedBuildingStep = randomUUID();
 const sharedBuildingStep = randomUUID();
 const followUp = randomUUID();
 const held = randomUUID();
@@ -43,10 +45,15 @@ before(async () => {
 		insert into app_user (id, slug) values ('${owner}', '${user.user}'), ('${other}', 'other-partner');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental, Springfield', '${owner}');
 		insert into deal (id, name, owner_user_id) values ('${meetingDeal}', 'Example Renewal', '${owner}');
+		insert into deal (id, name, owner_user_id) values ('${lostDeal}', 'Example Lost Deal', '${owner}');
+		insert into phase (slug, label) values ('dead', 'Dead');
+		insert into deal_phase_change (deal_id, happened_at, phase, reason)
+			values ('${lostDeal}', now(), 'dead', 'Client withdrew');
 		insert into property (id, address) values
 			('${building}', '100 Example Way'), ('${sharedBuilding}', '200 Example Way');
 		insert into deal_property (deal_id, property_id) values
-			('${deal}', '${building}'), ('${deal}', '${sharedBuilding}'), ('${meetingDeal}', '${sharedBuilding}');
+			('${deal}', '${building}'), ('${lostDeal}', '${building}'),
+			('${deal}', '${sharedBuilding}'), ('${meetingDeal}', '${sharedBuilding}');
 		insert into activity (id, kind, happened_at, from_party_id, summary) values
 			('${call}', 'call', '2026-11-17 22:30+00', '${contact}', 'Discussed the suite.'),
 			('${meeting}', 'meeting', '2026-11-17 17:00+00', '${contact}', 'Discussed renewal.');
@@ -67,9 +74,10 @@ before(async () => {
 				('${otherDealStep}', '${meetingDeal}', '${other}', 'Confirm the renewal terms');
 		insert into next_step (id, deal_id, owner_party_id, what, resolution, done_at) values
 			('${completedDealStep}', '${meetingDeal}', '${other}', 'Check the renewal budget', 'done', now());
-		insert into next_step (id, property_id, owner_party_id, what) values
-			('${buildingStep}', '${building}', '${other}', 'Check the building access'),
-			('${sharedBuildingStep}', '${sharedBuilding}', '${other}', 'Check the site plan');
+		insert into next_step (id, property_id, owner_party_id, what, resolution, done_at) values
+			('${buildingStep}', '${building}', '${other}', 'Check the building access', null, null),
+			('${completedBuildingStep}', '${building}', '${other}', 'Confirm the suite', 'done', now()),
+			('${sharedBuildingStep}', '${sharedBuilding}', '${other}', 'Check the site plan', null, null);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values
 			('${owner}', '${ordinary}', 'snoozed', '2999-01-01T00:00Z'),
 			('${owner}', '${held}', 'snoozed', '2000-01-01T00:00Z'),
@@ -163,6 +171,7 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 			otherDealStep,
 			completedDealStep,
 			buildingStep,
+			completedBuildingStep,
 			sharedBuildingStep,
 		]),
 	);
@@ -231,8 +240,13 @@ test("each partner's Home link names their open step on the same deal", async ()
 	);
 });
 
-test("a building-only step links to its deal when the building is on one deal", async () => {
+test("open and done building-only steps link to their building's sole open deal", async () => {
 	const items = await inbox({ user: "other-partner" });
 	assert.equal(items.get(buildingStep)?.open_url, `/deals?deal=${deal}`);
+	assert.partialDeepStrictEqual(items.get(completedBuildingStep), {
+		source_state: "done",
+		section: "settled",
+		open_url: `/deals?deal=${deal}`,
+	});
 	assert.equal(items.get(sharedBuildingStep)?.open_url, null);
 });

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, refuse } from "./answer.ts";
+import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	readHomeMailPriorities,
 	readHomeReviewCards,
@@ -41,12 +42,17 @@ type Step = {
 	source_kind: string | null;
 };
 
-function stepRows(userId: string) {
+function stepRows(db: Transaction<DB>, userId: string) {
+	const openDeals = db
+		.selectFrom(selectNextDeals(db).as("board"))
+		.select("id")
+		.where(isOpenBoardDeal);
 	return sql<Step>`
 		select s.id, s.what as title, s.status, s.deal_id, s.party_id,
-			case when s.property_id is not null and s.status = 'open' then (
+			case when s.property_id is not null then (
 				select (array_agg(dp.deal_id))[1] from deal_property dp
-				where dp.property_id = s.property_id having count(*) = 1
+				where dp.property_id = s.property_id and dp.deal_id in (${openDeals})
+				having count(*) = 1
 			) end as building_deal_id,
 			coalesce(d.name, p.name, property.name, property.address) as context_label,
 			exists (select from party_role r where r.party_id = s.party_id
@@ -159,7 +165,7 @@ function stepCard(step: Step) {
 }
 
 async function readHomeInbox(db: Transaction<DB>, userId: string) {
-	const { rows } = await stepRows(userId).execute(db);
+	const { rows } = await stepRows(db, userId).execute(db);
 	const reviews = await readCompletionReviews(
 		db,
 		rows.filter((step) => step.status === "open").map((step) => step.id),
