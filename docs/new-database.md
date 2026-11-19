@@ -15,6 +15,8 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
 - **`outside_id`**: another system's id for a person, company or deal, such as a Salesforce or roster id, or of a row of today's mail for the email it became, kept as import history.
 - **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record. A vendor's category, such as lender, is a role whose `category_of` is vendor.
+- **`client_vertical`**: the client's recorded practice type, one value per client role.
+- **`client_research`**: a client research observation with its kind, result, source, observation date and any expiry. `client_research_fact` keeps each named fact on the observation.
 - **`stage`**: each role's list of stages, such as a vendor's or a lead's. Like roles, a label can be renamed.
 - **`how_found`**: the short list of how a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
 - **`relationship_level`**: the four levels of how well the team knows a vendor, from 0, Prospective, to 3, Core.
@@ -51,7 +53,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`commission_tier`**: one tier of a user's ladder: the count of closed deals it starts from, the closing user's part and their partner.
 - **`change`**: one row for each insert, update or delete of a row above, with who made it and when.
 
-Each record and link carries `created_at`, when its row was stored, so moving today's records across can keep their dates. Lists such as roles and phases do not, and neither do rows that carry their own time: activities and their emails, rounds, phase changes, posts and readings. An outside id has none either; only a merge changes it, so its stamp's time is when it was imported or last merged.
+Each record and link carries `created_at`, when its row was stored, so moving today's records across can keep their dates. Lists such as roles and phases do not, and neither do rows that carry their own time, including activities and their emails, rounds, phase changes, client research and its facts, posts and readings. An outside id has none either. Only a merge changes it, so its stamp's time is when it was imported or last merged.
 
 ## Users, jobs and who changed what
 
@@ -207,6 +209,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 97. A direct user may classify a filed document from `other` to a real kind once. Every other stored field stays fixed during classification. Jobs, including those working for a user, cannot classify; real kinds never change through this path. Change history records the kind change, user and save time.
 98. A property's known name, class and type are never blank. A known year built is from 1800 to 2100 and known stories from 1 to 60, the old system's ranges.
 99. A reply draft answers one email for one owner, once. A job drafts it pending. Only its owner edits its text, recipients and attachments, while pending or as they approve it, and approves it with one recipient and one copy, or dismisses it with a reason; a job may also dismiss it. Only a job working for the owner records a try as sent or failed, and a try changes nothing that was approved. An owner change is allowed only while pending or when approving a failed draft again. A failure whose reason is `aborted_before_dispatch` or `submission_recipients_invalid` may be approved again, one matching `unconfirmed_after_<n>` may only become sent, and any other stays failed. Sent and dismissed are final, and one sent message settles one draft.
+100. A practice type is trimmed and nonblank and belongs to an existing client role. A client role has at most one. Research also belongs to an existing client role. Each item has a nonblank kind and source, a yes-or-no result, a finite observation time and a finite expiry if supplied. Each fact names its research item and has a distinct, nonblank field name. The result has its own column, so no fact repeats the `found` field.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -284,7 +287,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 
 1. `copy-parties.sql`: every other copy finds its people and companies, and the partners as users, through this map.
 2. `copy-markets.sql`, with `copy_market_county`: the deal copy matches a deal's market by name.
-3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role.
+3. `copy-leads-clients.sql`, with `copy_how_found`: the deal copy needs each client's role. Then run `copy-client-research.sql` in its own transaction.
 4. `copy-national-account-owners.sql`, with `copy_account_owner_date`: needs the national accounts and mapped human owners.
 5. `copy-client-brands.sql`, with `copy_client_brand_date`: needs the client locations and their brand companies. A person client without a reviewed date uses their first old deal's Chicago opening date.
 6. `copy-candidates-drafts.sql`: drafts and candidates find their leads and mailbox users.
@@ -343,7 +346,7 @@ For #273, national on a date means a `client_brand` membership covering that dat
 Moving today's rows across:
 
 - Each client becomes its party's client role and client row. Roster, cold, engaged and paused map directly. Active deal and past client are recomputed; those old labels supply no manual status, so start those records at roster.
-- The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. Vertical and subtype do not move as free text.
+- The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. The separate practice type copies to `client_vertical` with surrounding whitespace removed and no fixed vocabulary. Subtype stays behind.
 - A company location's `party.org_id` becomes its brand membership. A person client's `party.org_id` also becomes a brand membership when the old account view identifies that client as a member. The party copy still keeps the person's company link. Existing `national_account_owner` rows map their human actor to the same signed-in partner. The copy takes the partners' reviewed first-recorded dates, as the owner decided on 2026-11-18.
 - Client owner and acquisition source belong to the lead and attribution slice, not account ownership. ETL status and agreements are excluded by the owner's B9 answer. No representation agreement table is added.
 
@@ -952,6 +955,39 @@ For suppressed or `do_not_contact` leads, an optional `pg_temp.copy_lead_restric
 A reviewed restriction follows the old party's `outside_id` mapping to the surviving party, independently of whether the lead's source or stage can be copied. It has no end date because the old suppression instruction has none. It uses the lead's last update for both restriction timestamps and keeps its attribution, because the old system records no suppression time. Rerunning can fill a missing restriction after review, even if the lead role was already copied; it never updates an existing restriction or adds duplicate history.
 
 This is the first part of #329, tracked in #333. `schema/copy-candidates-drafts.sql` copies candidates and outreach drafts (#334), and `schema/copy-lead-stage-moves.sql` copies stage evidence (#335). Copy contact activities before resolving listed last-touch dates.
+
+### Copying today's client research and practice types
+
+Run `schema/copy-client-research.sql` after the lead and client copy, as the owner in a separate transaction with the new schema on `search_path`. Research and practice types follow old client merges to the surviving client role. Identical practice types collapse to one row with the surviving client's stamp when present. Conflicting types wait for review. The copy lists missing roles and invalid values by ID and reason.
+
+Research keeps the old finding ID, source locator or URL, observation time and expiry. The stamp uses the usual user or job attribution and the observation time. Each named fact has its own row and retains its original JSON type, including any nested facts. The observation and its facts copy together. Reruns leave copied rows and history as they were. A later party merge carries research forward and keeps one copy of a shared practice type. If the practice types differ, `merge_party_client_verticals` refuses the merge until a user settles them.
+
+The rehearsal counts for #783 are below. Counts describe that snapshot.
+
+| Old source                                         | Count | Destination or reason                                                                                              |
+| -------------------------------------------------- | ----: | ------------------------------------------------------------------------------------------------------------------ |
+| `client.vertical`                                  |    51 | `client_vertical`, 50 distinct client roles after one identical pair collapses                                     |
+| `client.subtype`                                   |     7 | Not copied. Outside the ruling.                                                                                    |
+| `activity.analysis` with a client                  |   128 | Already copied as notes with their client links by `copy-activity.sql`.                                            |
+| `record_flag.business-model`                       |     1 | `client_research` and its facts                                                                                    |
+| `record_flag.business-reverse-engineering-dossier` |     1 | `client_research` and its facts                                                                                    |
+| `record_flag.entity_filing`                        |     4 | `client_research` and its facts                                                                                    |
+| `record_flag.leadership`                           |     1 | `client_research` and its facts                                                                                    |
+| `record_flag.practice_acquisition_signal`          |     1 | `client_research` and its facts                                                                                    |
+| `record_flag.practice_profile`                     |     1 | `client_research` and its facts                                                                                    |
+| `record_flag.practice_research`                    |     1 | `client_research` and its facts                                                                                    |
+| `record_flag.research_note`                        |     5 | `client_research` and its facts                                                                                    |
+| `record_flag.address`                              |    11 | Not copied. The building copy takes property addresses from building records. No copy reads these client findings. |
+| `record_flag.npi`                                  |    24 | Not copied. The party copy takes only the NPI on the party record. None of these findings had a copied client NPI. |
+| `record_flag.social`                               |     9 | Not copied. No copy brings across these client social findings.                                                    |
+| `record_flag.website`                              |     2 | Not copied. The client website copy takes deal portal registrations. Neither finding is copied by it.              |
+| `record_flag.ambiguous_candidates`                 |    10 | Not copied by any copy. Pending owner call.                                                                        |
+| `record_flag.calendar_intake_disambiguation`       |     1 | Not copied by any copy. Pending owner call.                                                                        |
+| `record_flag.discrepancy`                          |    59 | Not copied by any copy. Pending owner call.                                                                        |
+| `record_flag.license_status`                       |     1 | Not copied by any copy. Pending owner call.                                                                        |
+| `record_flag.property_update`                      |     1 | Not copied by any copy. Pending owner call.                                                                        |
+| `record_flag.status_superseded`                    |     1 | Not copied by any copy. Pending owner call.                                                                        |
+| `record_flag.verified`                             |   107 | Not copied by any copy. Pending owner call.                                                                        |
 
 ## Copying today's candidates and outreach drafts
 
