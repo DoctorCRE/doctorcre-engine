@@ -1028,7 +1028,7 @@ create table email (
 );
 
 create table email_summary (
-	activity_id uuid not null references email on delete cascade,
+	activity_id uuid not null references email,
 	source_activity_id uuid not null,
 	source_hash text not null check (source_hash ~ '^sha256:[a-f0-9]{64}$'),
 	generator_version text not null check (generator_version ~ '\S'),
