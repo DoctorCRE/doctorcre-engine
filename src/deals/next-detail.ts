@@ -7,8 +7,7 @@ import {
 import type { DB, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
-import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
-import { selectNextDeals } from "./next-board.ts";
+import { clientWebsiteOf, selectNextDeals } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
 
@@ -29,17 +28,9 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			sql.lit("deal-items.v1").as("item_schema_version"),
 			"d.id as deal_id",
 			"d.closed_value",
-			eb
-				.selectFrom("deal_client_website as website")
-				.select(
-					sql<string>`${CLIENT_WEBSITE_ORIGIN} || '/' || website.slug`.as(
-						"url",
-					),
-				)
-				.whereRef("website.deal_id", "=", "d.id")
-				.whereRef("website.client_party_id", "=", "c.party_id")
-				.where("website.disabled_at", "is", null)
-				.as("client_portal_url"),
+			clientWebsiteOf(db, eb.ref("d.id"), eb.ref("c.party_id")).as(
+				"client_portal_url",
+			),
 			"d.reason",
 			asText(sql`(now() at time zone 'America/Chicago')::date`)
 				.$notNull()

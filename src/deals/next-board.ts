@@ -3,6 +3,7 @@ import { jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
+import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
 import { CLOSED_PHASES, ENDED_PHASES } from "./shared.ts";
 
 type BoardList = "open" | "closed" | "lost";
@@ -11,6 +12,20 @@ export const isOpenBoardDeal = sql<boolean>`outcome is null and closed_on is nul
 // Today's board groups by brand and owner as they stand on the partners' calendar day.
 const covers = (from: Expression<string>, to: Expression<string | null>) =>
 	sql<boolean>`daterange(${from}, ${to}) @> (now() at time zone 'America/Chicago')::date`;
+
+export const clientWebsiteOf = (
+	db: Transaction<DB>,
+	deal: Expression<string>,
+	client: Expression<string | null>,
+) =>
+	db
+		.selectFrom("deal_client_website as website")
+		.select(
+			sql<string>`${CLIENT_WEBSITE_ORIGIN} || '/' || website.slug`.as("url"),
+		)
+		.where("website.deal_id", "=", deal)
+		.where("website.client_party_id", "=", client)
+		.where("website.disabled_at", "is", null);
 
 // What the board and the deal page both show of a deal. A deal can have no client yet.
 export const selectNextDeals = (db: Transaction<DB>) =>
@@ -301,7 +316,10 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 		account: input.account_client_id || null,
 	};
 	const deals = await nextBoardQuery(db, scope)
-		.select([
+		.select((eb) => [
+			clientWebsiteOf(db, eb.ref("board.id"), eb.ref("board.client_id")).as(
+				"client_portal_url",
+			),
 			sql`(select coalesce(json_agg(action order by due_on nulls last, id), '[]') from (
 				select s.id, u.slug as owner, s.due_on, 'next_action:' || s.id as item_id, s.what as description
 				from next_step s left join app_user u on u.id = s.owner_party_id
