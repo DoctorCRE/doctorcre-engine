@@ -82,6 +82,7 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 - [ ] It is never refused because the person or practice is not a client or not in the system yet. A blank name, or a save that fails, keeps the line open with the typed name and note and says what is missing or what went wrong.
 - [ ] While the partner types, people and companies already in the system with that name are offered. Picking one puts it in the lane, asking how found only when it has none. Picking a prospect already in the lane adds the note to it. Picking a client who is on no deal offers Add deal for them instead.
 - [ ] Picking someone already on a deal keeps the add line open, says they are already on a deal and offers to open their deals.
+- [ ] Adding a dropped person or company through Add prospect brings them back to the lane.
 - [ ] A new prospect is unclaimed until a partner clicks Claim (owner, 2026-11-18: leads "go to no one until they are claimed").
 
 ### A prospect
@@ -95,7 +96,7 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Claim makes the signed-in partner its owner. The owner can be changed to the other partner or back to Unclaimed.
 - [ ] Turn into deal opens Add deal with the prospect's name, newest note and claimed owner filled in and editable (owner, 2026-11-19, question 11). The partner sets the client, phase and owner before saving. The client may be the prospect or another party, such as the practice a doctor runs. On save, the deal opens and the prospect leaves the lane. The prospect keeps its notes and follow-ups in its history.
-- [ ] Drop asks a reason and takes it off the lane. It stays a lead, archived with that reason, on the Leads screen.
+- [ ] Drop asks for a reason and takes it off the lane. Its prospect page stays available, read-only, and shows "Dropped <date>: <reason>".
 - [ ] If the other partner saved the same field since the prospect opened, the save says so and offers to reload. Nothing is overwritten.
 
 ## Monday review
@@ -106,7 +107,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] It covers every open deal on Local Deals and National Accounts and every prospect, whoever owns or claimed it. The board's All, Joe and Dell choice and its collapsed columns do not narrow it.
 - [ ] Order: deals by the phase each was in when the week began, in board column order, then by name; then prospects, oldest added first. Active deals and prospects that arrive during the week join just before parked deals. A phase move, a new follow-up or Needs attention never moves an item.
 - [ ] Turn into deal carries the prospect's mark for that week to the new deal, with the same reviewer and time (owner, 2026-11-19).
-- **Open.** Should the new deal take the prospect's place in the review? Today it joins as an arrival before parked deals.
+- [ ] A new deal takes its prospect's place in the review for the week it was turned into a deal (owner, 2026-11-19).
 - [ ] A deal closed or lost and a prospect dropped this week stay in place, saying so, so the count holds.
 - [ ] Parked deals come last in the Monday review, after prospects (owner, 2026-11-18).
 - [ ] The top says how far along it is: "31 of 47 reviewed this week". Not reviewed only hides the reviewed ones.
@@ -115,6 +116,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] Change next step on a deal and Follow-up on a prospect save as they do on the deal page and the prospect. A note saved here shows on the other partner's open review within five seconds, as on a prospect.
 - [ ] Reviewed marks the item reviewed this week, saying who and when, and goes to the next. Undo removes the mark, also after a reload.
 - [ ] Opening a name goes to the deal page or the prospect. Back returns to the same place in the review.
+- [ ] Opening a Dropped row goes to the read-only prospect page. The row has no prospect save or review mark controls.
 - [ ] Each deal or prospect has one review mark per week. Both partners see who marked it, and either can Undo it (owner, 2026-11-18).
 - [ ] Monday review replaces the old pipeline call sittings. The deal page keeps its call recorder (owner, 2026-11-18).
 

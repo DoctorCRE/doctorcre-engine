@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { etag } from "hono/etag";
-import { type Expression, sql } from "kysely";
+import { sql } from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { PARTNERS } from "../clients/read.ts";
 import type { DatabaseEnv } from "../reader.ts";
@@ -11,6 +11,12 @@ type Note = {
 	summary: string | null;
 	by: string | null;
 	at: string;
+};
+
+type Drop = {
+	at: string;
+	by: string | null;
+	reason: string;
 };
 
 type Prospect = {
@@ -29,30 +35,48 @@ type Prospect = {
 	}[];
 	change_id: number;
 	notes: Note[];
+	entered_at: string | null;
+	dropped: Drop | null;
 };
 
-export const isProspect = sql<boolean>`r.stage = 'opportunity'
+const isProspect = sql<boolean>`r.stage = 'opportunity'
 	and not exists (select from deal_party d where d.party_id = r.party_id)`;
 
 export function prospectQuery({
 	partyId = null,
 	owner = "all",
-	qualifies = isProspect,
+	includeDropped = false,
 }: {
 	partyId?: string | null;
 	owner?: string;
-	qualifies?: Expression<boolean>;
+	includeDropped?: boolean;
 } = {}) {
+	const qualifies = includeDropped
+		? sql<boolean>`(${isProspect} or archive.changed_at is not null)`
+		: isProspect;
 	return sql<Prospect>`
 		select p.id as party_id, p.name, p.kind, p.how_found, owner.slug as owner,
 			r.needs_attention, coalesce(history.change_id, 0)::float8 as change_id,
-			notes.items as notes, follow_ups.items as follow_ups
+			notes.items as notes, follow_ups.items as follow_ups, history.entered_at,
+			case when archive.changed_at is not null then
+				jsonb_build_object('at', archive.changed_at, 'by', archive.by, 'reason', archive.reason)
+			end as dropped
 		from party_role r
 		join party p on p.id = r.party_id
 		left join app_user owner on owner.id = r.owner_user_id
+		left join lateral (
+			select m.from_stage, m.changed_at, u.slug as by, m.reason
+			from lead_stage_move m left join app_user u on u.id = m.changed_by_user_id
+			where ${includeDropped} and r.stage = 'archived'
+				and m.party_id = r.party_id and m.to_stage = 'archived'
+			order by m.changed_at desc, m.id limit 1
+		) archive on archive.from_stage = 'opportunity'
+			and not exists (select from deal_party d where d.party_id = r.party_id
+				and d.created_at <= archive.changed_at)
 		cross join lateral (
 			select max(c.id) as change_id,
-				max(c.changed_at) filter (where c.action = 'update' and c.new_value->>'stage' = 'opportunity') as entered_at
+				max(coalesce((c.new_value->>'created_at')::timestamptz, c.changed_at))
+					filter (where c.new_value->>'stage' = 'opportunity') as entered_at
 			from change c
 			where c.table_name = 'party_role'
 				and c.record = jsonb_build_object('party_id', p.id, 'role', 'lead')
@@ -92,7 +116,12 @@ export function prospectQuery({
 	`;
 }
 
-function prospectCard({ notes, ...prospect }: Prospect) {
+function prospectCard({
+	notes,
+	entered_at: _enteredAt,
+	dropped: _drop,
+	...prospect
+}: Prospect) {
 	const note = notes[0];
 	return {
 		...prospect,
@@ -126,9 +155,16 @@ export const prospectReads = new Hono<DatabaseEnv>()
 		return answerNextRead(c, "read-prospects", async (db) => {
 			const {
 				rows: [row],
-			} = await prospectQuery({ partyId }).execute(db);
+			} = await prospectQuery({
+				partyId,
+				includeDropped: true,
+			}).execute(db);
 			return row
-				? { ...prospectCard(row), notes: row.notes }
+				? {
+						...prospectCard(row),
+						notes: row.notes,
+						...(row.dropped && { state: "dropped", dropped: row.dropped }),
+					}
 				: new Refusal(404, "not_found");
 		});
 	});

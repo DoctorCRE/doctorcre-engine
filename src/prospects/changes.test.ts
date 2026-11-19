@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { isArguments } from "../save-door.ts";
 import { doorTest } from "../test-door.ts";
 
 const { db, setup, cleanup, save } = doorTest();
@@ -129,9 +130,17 @@ test("partners can claim, hand off, unclaim and highlight without overwriting a 
 	);
 });
 
-test("drop archives the lead with the partner's reason and keeps the notes", async () => {
+test("a dropped prospect still opens with its reason and history and refuses prospect saves", async () => {
 	const path = `prospects/${toDrop}/drop`;
 	const seen_change_id = await leadVersion(toDrop);
+	const week_of = "2026-11-16";
+	const [markStatus, mark] = await save(joe, "weekly-reviews", {
+		...key(),
+		week_of,
+		party_id: toDrop,
+		seen_change_id: 0,
+	});
+	assert.equal(markStatus, 201);
 	const [noteStatus, note] = await save(joe, "activities", {
 		...key(),
 		kind: "note",
@@ -149,7 +158,29 @@ test("drop archives the lead with the partner's reason and keeps the notes", asy
 		[status, dropped],
 		[200, { party_id: toDrop, stage: "archived" }],
 	);
-	assert.equal((await save(joe, `prospects/${toDrop}`, {}, "GET"))[0], 404);
+	const [readStatus, detail] = await save(
+		joe,
+		`prospects/${toDrop}`,
+		{},
+		"GET",
+	);
+	assert.equal(readStatus, 200);
+	assert.partialDeepStrictEqual(detail, {
+		party_id: toDrop,
+		state: "dropped",
+		dropped: { by: "dell", reason: "No longer looking" },
+		latest_note: { summary: "Example history" },
+	});
+	assert.ok(isArguments(detail.dropped));
+	assert.ok(Number.isFinite(Date.parse(String(detail.dropped.at))));
+	const [laneStatus, lane] = await save(joe, "prospects", {}, "GET");
+	assert.equal(laneStatus, 200);
+	assert.ok(Array.isArray(lane.prospects));
+	assert.ok(
+		!lane.prospects.some(
+			(item) => isArguments(item) && item.party_id === toDrop,
+		),
+	);
 	const [afterDrop, edit] = await save(joe, `prospects/${toDrop}/changes`, {
 		...key(),
 		seen_change_id,
@@ -178,6 +209,36 @@ test("drop archives the lead with the partner's reason and keeps the notes", asy
 	const [again, refusal] = await save(dell, path, { ...request, ...key() });
 	assert.equal(again, 409);
 	assert.equal(refusal.error, "not_a_prospect");
+	for (const [door, args] of [
+		[
+			"weekly-reviews",
+			{ week_of: "2026-11-23", party_id: toDrop, seen_change_id: 0 },
+		],
+		[`weekly-reviews/${mark.review_id}/remove`, { seen_change_id: 0 }],
+		[
+			"next-steps",
+			{
+				party_id: toDrop,
+				what: "Follow up",
+				due_on: "2026-11-24",
+				replaces: "current",
+				seen_current_step: null,
+			},
+		],
+		[
+			"deals",
+			{
+				prospect_id: toDrop,
+				client_id: toDrop,
+				name: "Example New Deal",
+				phase: "pending",
+				owner: "joe",
+			},
+		],
+	] as const) {
+		const [status, answer] = await save(joe, door, { ...key(), ...args });
+		assert.deepEqual([status, answer.error], [409, "not_a_prospect"], door);
+	}
 });
 
 test("owner and attention changes require a real lead and at least one field", async () => {
