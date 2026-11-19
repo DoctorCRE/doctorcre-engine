@@ -9,7 +9,7 @@ import { isProspect, prospectQuery } from "../prospects/read.ts";
 
 import type { DatabaseEnv } from "../reader.ts";
 
-const isMonday = (day: unknown): day is string =>
+export const isMonday = (day: unknown): day is string =>
 	isCalendarDate(day) &&
 	// PostgreSQL dates have no year zero.
 	!day.startsWith("0000") &&
@@ -25,7 +25,7 @@ const boardPhases = [
 	"closing",
 ];
 
-function reviewVersion(
+export function reviewVersion(
 	week: Expression<unknown>,
 	deal: Expression<unknown>,
 	prospect: Expression<unknown>,
