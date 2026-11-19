@@ -57,7 +57,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Search finds deals by name, client, kind or close date.
 - [ ] Each deal opens its deal page.
 
-With the new read, Closed deals shows "Closed automatically: Invoice received" with an `11/17`-style date when the nightly invoice job closed the deal. A recorded loss appears in Lost deals without an automatic close badge or Undo.
+With the new read, Closed deals shows "Closed automatically: Invoice received" with a date in words, such as "Tue, Nov 17, 2026", when the nightly invoice job closed the deal. A recorded loss appears in Lost deals without an automatic close badge or Undo.
 
 ## Prospects
 
@@ -167,7 +167,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Correspondence & notes: the deal's emails and meetings together, newest first, and the deal's notes. An email shows its sender, date and subject. A meeting shows its title and time. An email already on this deal never asks to be filed again.
 - [ ] Tours: the deal's tours, each with its date in words.
 - [ ] Documents: every file on the deal, opening on click, for both partners on every deal.
-- [ ] Client view: what the client sees on their website, for both partners on every deal. Sharing files to the client's website is not part of it: the owner dropped it (`docs/new-database.md` § "Deal files and extracted text").
+- [ ] Client view gives both partners the same Client website button as Overview. It opens the client's website unlocked in a new tab. The tab says "No client website linked." when the deal has no website. The owner dropped file sharing from Client view (`docs/new-database.md` § "Deal files and extracted text").
 
 ## Questions for the owner
 
@@ -188,15 +188,13 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ## Not yet true
 
-Seen on the live Deals screen on 2026-11-18 (screen), or read in the app's Deals code (code).
+Checked against app main on 2026-11-19. The new Deals paths depend on the switches in [The system](../system.md#switches).
 
-- Every save on Deals goes to the old database (code). App #953 is a partial move to the new one, switched off until the switch. The engine has saves for participant changes and critical dates (`docs/new-database.md` § "Deals participants and critical dates"). App #953 still needs to call them. Deal creation and closing still have no new-database save.
-- The deal page says "Watch state not confirmed" when nothing failed (screen).
-- On a deal Dell owns, Joe's Documents tab says "Request unavailable or version changed" (screen, old system #3232).
-- Email follow-ups on a deal page offer "File email to this deal", with File to existing deal and New deal. Many say "Sender unavailable" or "Summary unavailable", and show role words such as `landlord_side` (screen).
-- Critical dates read "lease expiration estimated" and "864 days" in lower case (screen).
-- Documents and Client view use "Deliverables", "retained text", "0 matching of 0 loaded documents", "client portal" and "while CARR allows them" (screen).
-- National Accounts is titled "The Deal Room", its tab reads "All Deals", and its account card shows a client code, "Sub-clients" and "Last account review: not captured" (screen).
-- Lost deals show no reason, and most show "Close date: Not recorded" (screen, roadmap ask 4).
-- Add deal asks "Type", which mixes kind and reason, labels the phase "Stage", and takes the client as "C-ref or exact client name" (code).
-- The phase move offers a Paused outcome, and asks "Next item (2–4 words)", "Evidence" and "In your words" (code).
+- Deal watch settings still save to the old database and cover only copied deals (#805).
+- With the old read, the Documents tab's Deliverables section can say "Request unavailable or version changed" when it cannot list files (old system #3232). The tab also says "retained text" and "loaded documents".
+- With the old read, email follow-ups can offer File to existing deal and New deal. They can also show "Sender unavailable", "Summary unavailable" or a role code such as `landlord_side`. The new read offers Accept and Dismiss when the new saves are on.
+- With the old read, a critical date filed as Other can show a lowercase note as its label. The countdown still uses a bare day count for future dates, such as "864 days".
+- The National Accounts page still calls its Local Deals tab "All Deals". With the new saves off, cards can show a client code and say "Sub-clients". A missing review time shows as "Last account review: not captured" on those cards.
+- With the old read, Lost deals say "Not recorded" when the close date is missing. The new read says "Close date not recorded" and shows the reason when the deal has one.
+- With the new saves off, regular Add deal still asks for "Type", labels the phase "Stage" and takes the client as "C-ref or exact client name".
+- Closing on the old path still offers Paused. Phase moves still ask for "Evidence" and "In your words". The new save path calls the step "Your next step". The old path calls it "Next item (2–4 words)".
