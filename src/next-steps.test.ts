@@ -366,7 +366,13 @@ test("a deal replacement uses the signed-in partner's version from the deal page
 	assert.equal((await stepNow(first.next_step_id)).status, "cancelled");
 	assert.equal((await stepNow(other.next_step_id)).status, "open");
 	assert.equal((await stepNow(item.next_step_id)).status, "open");
-	await act(String(winner.next_step_id), "end", { resolution: "done" });
+	const [endStatus] = await act(String(winner.next_step_id), "end", {
+		resolution: "done",
+	});
+	assert.equal(endStatus, 200);
+	assert.partialDeepStrictEqual(await read(), {
+		next_actions: [{ id: winner.next_step_id, change_id: null }],
+	});
 	const [ended, endedConflict] = await create(alex, {
 		...replace,
 		seen_current_step: version(winner),
@@ -375,6 +381,19 @@ test("a deal replacement uses the signed-in partner's version from the deal page
 		[ended, endedConflict.error, endedConflict.current_version],
 		[409, "version_conflict", null],
 	);
+});
+
+test("a versioned deal replacement requires a job to name a partner", async () => {
+	const [status, answer] = await create(
+		{ job: "agent" },
+		{
+			deal_id: REPLACEMENT_DEAL,
+			what: "Send the survey",
+			replaces: "current",
+			seen_current_step: null,
+		},
+	);
+	assert.deepEqual([status, answer.error], [422, "actor_not_provisioned"]);
 });
 
 for (const { kind, id, party_id } of OLD_ROLES) {

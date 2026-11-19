@@ -188,19 +188,21 @@ export async function cancelCurrentStep(
 	await lockSubject(tx, subject, prospect);
 	const subjectColumn = `${subject.kind}_id` as const;
 	const ownerId = sql<string>`coalesce(${owner}::uuid, ${ACTING_USER})`;
-	if (prospect) {
+	if (seen !== undefined) {
 		const {
 			rows: [context],
-		} = await sql<{ has_user: boolean; prospect: boolean }>`
+		} = await sql<{ has_user: boolean; subject_eligible: boolean }>`
 			select ${ACTING_USER} is not null as has_user,
-				exists (select from party_role r where r.party_id = ${subject.id}::uuid
+				case when ${prospect}::boolean then exists (
+					select from party_role r where r.party_id = ${subject.id}::uuid
 					and r.role = 'lead' and r.stage = 'opportunity'
 					and not exists (select from deal_party d where d.party_id = r.party_id)
-					for no key update of r) as prospect
+					for no key update of r
+				) else true end as subject_eligible
 		`.execute(tx);
 		if (!context?.has_user)
 			throw new SaveRefusal(new Refusal(422, "actor_not_provisioned"));
-		if (!context.prospect)
+		if (!context.subject_eligible)
 			throw new SaveRefusal(new Refusal(409, "not_a_prospect"));
 	}
 	const openStep = (eb: ExpressionBuilder<DB, "next_step">) =>
@@ -575,19 +577,15 @@ export const nextSteps = new Hono<NextSaveEnv>()
 					[...RECORDS, "old_role"],
 				);
 				if (request instanceof Refusal) return request;
-				const stamp = c.get("stamp");
-				if (request.deal_id && request.replaces) {
-					if (stamp.user && request.seen_current_step === undefined)
-						return new Refusal(400, "missing_required", {
-							fields: ["seen_current_step"],
-						});
-					if (
-						request.seen_current_step !== undefined &&
-						stamp.user === undefined &&
-						!stamp.for_user
-					)
-						return new Refusal(422, "actor_not_provisioned");
-				}
+				if (
+					c.get("stamp").user &&
+					request.replaces &&
+					(request.deal_id || request.party_id) &&
+					request.seen_current_step === undefined
+				)
+					return new Refusal(400, "missing_required", {
+						fields: ["seen_current_step"],
+					});
 				return request;
 			},
 			createStep,

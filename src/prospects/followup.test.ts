@@ -169,6 +169,19 @@ const replacement = {
 	what: "Call for timing",
 };
 
+test("a signed-in prospect follow-up requires the step version", async () => {
+	const [status, answer] = await save(joe, "next-steps", {
+		...key(),
+		...replacement,
+		seen_current_step: undefined,
+		party_id: await newProspect(),
+	});
+	assert.deepEqual(
+		[status, answer.error, answer.fields],
+		[400, "missing_required", ["seen_current_step"]],
+	);
+});
+
 test("a follow-up refuses a lead that has left Prospects", async () => {
 	const [status, answer] = await save(joe, "next-steps", {
 		...key(),
