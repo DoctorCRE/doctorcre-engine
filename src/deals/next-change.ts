@@ -8,7 +8,11 @@ import { nextTransaction } from "../next-connection.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { stampNextSave, userId } from "../next-save.ts";
-import { lockLead, requireProspect } from "../prospects/membership.ts";
+import {
+	isActiveProspect,
+	lockLead,
+	requireProspect,
+} from "../prospects/membership.ts";
 import {
 	clearable,
 	type Fitted,
@@ -194,16 +198,18 @@ function parseMarketDeal(body: JsonObject) {
 async function saveNewDeal(
 	tx: Transaction<DB>,
 	request: Exclude<ReturnType<typeof parseNewDeal>, Refusal>,
+	signedIn: boolean,
 ) {
 	if ("prospect_id" in request) return convertProspect(tx, request);
-	if (!("national_account_id" in request)) return addDeal(tx, request);
+	if (!("national_account_id" in request))
+		return addDeal(tx, request, signedIn);
 
 	const client_id = await marketClient(
 		tx,
 		request.national_account_id,
 		request,
 	);
-	const added = await addDeal(tx, { ...request, client_id });
+	const added = await addDeal(tx, { ...request, client_id }, signedIn);
 	if (request.market_agent_id)
 		await linkMarketAgent(tx, added.deal_id, request.market_agent_id);
 	return added;
@@ -255,10 +261,18 @@ async function convertProspect(
 				changed_at: sql<string>`now()`,
 			})
 			.execute();
-	await sql`select carry_weekly_review(${prospect_id}::uuid, ${added.deal_id}::uuid)`.execute(
+	await carryReview(tx, prospect_id, added.deal_id);
+	return added;
+}
+
+async function carryReview(
+	tx: Transaction<DB>,
+	prospectId: string,
+	dealId: string,
+) {
+	await sql`select carry_weekly_review(${prospectId}::uuid, ${dealId}::uuid)`.execute(
 		tx,
 	);
-	return added;
 }
 
 async function addDeal(
@@ -273,8 +287,11 @@ async function addDeal(
 		market_id,
 		renews_lease_id,
 	}: Fitted<typeof NEW_DEAL>,
+	carryClientReview = false,
 ) {
 	const owner_id = await userId(tx, owner);
+	const lead = carryClientReview ? await lockLead(tx, client_id) : undefined;
+	const isProspect = await isActiveProspect(tx, client_id, lead?.stage);
 	const {
 		rows: [added],
 	} = await sql<{ deal_id: string }>`
@@ -288,6 +305,7 @@ async function addDeal(
 		returning deal_id`.execute(tx);
 	if (!added) throw new Error("Deal insert returned no id");
 	const { deal_id } = added;
+	if (isProspect) await carryReview(tx, client_id, deal_id);
 	const phase_changed_at = await movePhase(tx, deal_id, {
 		from: null,
 		to: phase,
@@ -460,15 +478,16 @@ export const automaticPhaseUndo = new Hono<NextSaveEnv>().post(
 );
 
 export const nextDeals = new Hono<NextSaveEnv>()
-	.post("/deals", (c) =>
-		answerNextSave(
+	.post("/deals", (c) => {
+		const signedIn = c.get("stamp").user !== undefined;
+		return answerNextSave(
 			c,
 			"add-deal",
-			(body) => parseNewDeal(body, c.get("stamp").user !== undefined),
-			saveNewDeal,
+			(body) => parseNewDeal(body, signedIn),
+			(tx, request) => saveNewDeal(tx, request, signedIn),
 			(result) => (result.replayed ? 200 : 201),
-		),
-	)
+		);
+	})
 	.post("/deals/:deal/changes", (c) =>
 		answerNextSave(
 			c,

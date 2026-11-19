@@ -25,17 +25,26 @@ export async function lockLead(
 		.executeTakeFirst();
 }
 
-export async function requireProspect(
+export async function isActiveProspect(
 	tx: Transaction<DB>,
 	partyId: string,
 	stage: string | null | undefined,
 ) {
+	if (stage !== "opportunity") return false;
 	const deal = await tx
 		.selectFrom("deal_party")
 		.select("deal_id")
 		.where("party_id", "=", partyId)
 		.executeTakeFirst();
-	if (stage !== "opportunity" || deal)
+	return !deal;
+}
+
+export async function requireProspect(
+	tx: Transaction<DB>,
+	partyId: string,
+	stage: string | null | undefined,
+) {
+	if (!(await isActiveProspect(tx, partyId, stage)))
 		throw new SaveRefusal(
 			new Refusal(409, "not_a_prospect", { party_id: partyId }),
 		);

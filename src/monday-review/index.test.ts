@@ -22,6 +22,12 @@ const [
 	onDeal,
 ] = Array.from({ length: 12 }, randomUUID);
 const brand = randomUUID();
+const mondayProspect = randomUUID();
+const mondayConversion = randomUUID();
+const laterContact = randomUUID();
+const lateLinkDeal = randomUUID();
+const secondClientDeal = randomUUID();
+const archivedLeadDeal = randomUUID();
 const undated = randomUUID();
 const unconfirmed = randomUUID();
 const clientless = randomUUID();
@@ -43,7 +49,8 @@ before(async () => {
 		insert into phase (slug, label) values ('pending', 'Prospective Client'),
 			('research', 'Research'), ('closing', 'Closing'), ('closed', 'Closed'), ('dead', 'Lost');
 		insert into party (id, kind, name, how_found) select id, 'person', 'Example', 'referral'
-			from unnest(array['${joeId}', '${dellId}', '${oldLead}', '${dropped}', '${newLead}', '${onDeal}']::uuid[]) id;
+			from unnest(array['${joeId}', '${dellId}', '${oldLead}', '${dropped}', '${newLead}',
+				'${onDeal}', '${mondayProspect}', '${laterContact}']::uuid[]) id;
 		insert into party (id, kind, name) values ('${brand}', 'company', 'Example Franchisor');
 		insert into party (id, kind, name, how_found)
 			values ('${localClient}', 'company', 'Example Practice', 'referral');
@@ -52,7 +59,9 @@ before(async () => {
 		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
 		insert into party_role (party_id, role, stage, created_at) values
 			('${oldLead}', 'lead', 'opportunity', '2026-11-01'),
+			('${mondayProspect}', 'lead', 'opportunity', '2026-11-01 12:00Z'),
 			('${dropped}', 'lead', 'opportunity', '2026-11-02'),
+			('${laterContact}', 'lead', 'opportunity', '2026-11-03'),
 			('${newLead}', 'lead', 'opportunity', '2026-11-16 07:00Z'),
 			('${onDeal}', 'lead', 'opportunity', '2026-11-01'),
 			('${onDeal}', 'client', null, '2026-11-01'),
@@ -63,7 +72,17 @@ before(async () => {
 		set local engine.job = ''; set local engine.user_id = '${dellId}';
 		insert into lead_stage_move (party_id, from_stage, to_stage, strength, reason)
 			values ('${dropped}', 'opportunity', 'archived', 'strong', 'Example changed plans');
-		update change set changed_at = '2026-11-17 14:00Z' where table_name = 'party_role' and action = 'update';
+		set constraints all immediate;
+		alter table lead_stage_move disable trigger stamp_change;
+		update lead_stage_move set changed_at = '2026-11-17 14:00Z' where party_id = '${dropped}';
+		alter table lead_stage_move enable trigger stamp_change;
+		update change set changed_at = '2026-11-17 14:00Z'
+			where table_name = 'party_role' and action = 'update' and record->>'party_id' = '${dropped}';
+		set constraints all deferred;
+		insert into party_role (party_id, role, created_at)
+			values ('${mondayProspect}', 'client', '2026-11-17 09:00Z'),
+				('${dropped}', 'client', '2026-11-19 09:00Z');
+		insert into client (party_id) values ('${mondayProspect}'), ('${dropped}');
 		insert into deal (id, name, owner_user_id, created_at) values
 			('${first}', 'Alpha', '${joeId}', '2026-11-16 05:00Z'),
 			('${moved}', 'Zulu', '${dellId}', '2026-11-01'),
@@ -73,13 +92,22 @@ before(async () => {
 			('${parkedAble}', 'Parked Able', '${dellId}', '2026-11-01'),
 			('${parkedZulu}', 'Parked Zulu', '${dellId}', '2026-11-01'),
 			('${newDeal}', 'New deal', '${dellId}', '2026-11-16 08:00Z'),
+			('${mondayConversion}', 'Converted Monday prospect', '${dellId}', '2026-11-17 09:00Z'),
+			('${lateLinkDeal}', 'Deal with a contact added later', '${dellId}', '2026-11-18 08:00Z'),
+			('${secondClientDeal}', 'Second deal for converted client', '${dellId}', '2026-11-18 09:00Z'),
+			('${archivedLeadDeal}', 'Deal for an archived lead', '${dellId}', '2026-11-19 09:00Z'),
 			('${undated}', 'Old terminal deal', '${dellId}', '2026-11-01'),
 			('${unconfirmed}', 'Undated Monday phase', '${dellId}', '2026-11-01'),
 			('${clientless}', 'Deal without a client', '${dellId}', '2026-11-01');
 		update deal set parking_reason = 'client_paused' where id in ('${parked}', '${parkedAble}', '${parkedZulu}');
 		insert into deal_party (deal_id, party_id, role)
 			select id, case when id = '${first}' then '${onDeal}'::uuid else '${localClient}'::uuid end, 'client'
-			from deal where id <> '${clientless}';
+			from deal where id not in ('${clientless}', '${mondayConversion}', '${secondClientDeal}', '${archivedLeadDeal}');
+		insert into deal_party (deal_id, party_id, role, created_at)
+			values ('${mondayConversion}', '${mondayProspect}', 'client', '2026-11-17 09:00Z'),
+				('${secondClientDeal}', '${mondayProspect}', 'client', '2026-11-18 09:00Z'),
+				('${archivedLeadDeal}', '${dropped}', 'client', '2026-11-19 09:00Z'),
+				('${lateLinkDeal}', '${laterContact}', 'client_contact', '2026-11-20 09:00Z');
 		alter table deal_phase_change disable trigger stamp_change;
 		insert into deal_phase_change (deal_id, phase, happened_at, changed_at, changed_by_user_id, reason)
 			select id, case when id in ('${closed}', '${parked}') then 'research' else 'pending' end,
@@ -126,9 +154,13 @@ test("the review keeps Monday order, retains departures and adds arrivals ahead 
 			[closed, "closed"],
 			[unconfirmed, "open"],
 			[oldLead, "open"],
+			[mondayConversion, "open"],
 			[dropped, "dropped"],
 			[newLead, "open"],
 			[newDeal, "open"],
+			[lateLinkDeal, "open"],
+			[secondClientDeal, "open"],
+			[archivedLeadDeal, "open"],
 			[parkedAble, "open"],
 			[parkedZulu, "open"],
 			[parked, "open"],
@@ -147,6 +179,49 @@ test("the review keeps Monday order, retains departures and adds arrivals ahead 
 	);
 	assert.equal(firstItem?.reviewed, null);
 	assert.equal(firstItem?.seen_change_id, 0);
+	assert.equal(
+		review.find((item) => item.deal_id === mondayConversion)?.reviewed,
+		null,
+	);
+	assert.deepEqual(review.find((item) => item.party_id === dropped)?.dropped, {
+		at: "2026-11-17T14:00:00+00:00",
+		by: "dell",
+		reason: "Example changed plans",
+	});
+	assert.ok(
+		!(await items(joe, "2026-11-23")).some((item) => item.party_id === dropped),
+	);
+});
+
+test("either partner can mark or undo a Dropped review row", async () => {
+	const before = (await items()).find((item) => item.party_id === dropped);
+	assert.equal(before?.state, "dropped");
+	assert.equal(before.reviewed, null);
+	const [added, mark] = await save(joe, door, {
+		...key(),
+		week_of: week,
+		party_id: dropped,
+		seen_change_id: before.seen_change_id,
+	});
+	assert.equal(added, 201, JSON.stringify(mark));
+	const marked = (await items(dell)).find((item) => item.party_id === dropped);
+	assert.equal(marked?.state, "dropped");
+	assert.ok(isArguments(marked.reviewed));
+	assert.partialDeepStrictEqual(marked.reviewed, {
+		review_id: mark.review_id,
+		by: "joe",
+	});
+	assert.deepEqual(
+		await save(dell, `${door}/${mark.review_id}/remove`, {
+			...key(),
+			seen_change_id: marked.seen_change_id,
+		}),
+		[200, mark],
+	);
+	assert.equal(
+		(await items()).find((item) => item.party_id === dropped)?.reviewed,
+		null,
+	);
 });
 
 test("the review refuses a non-Monday or a repeated week_of", async () => {
@@ -293,6 +368,13 @@ test("conversion moves this week's mark with its author and time, and replay can
 		from (select date_trunc('week', now() at time zone 'America/Chicago')::date as monday) week`,
 	);
 	assert.ok(weeks);
+	const [arrivalStatus] = await save(joe, "prospects", {
+		...key(),
+		name: "Example Later Prospect",
+		kind: "person",
+		how_found: "referral",
+	});
+	assert.equal(arrivalStatus, 201);
 	for (const monday of [weeks.previous, weeks.current]) {
 		const [status, marked] = await save(joe, door, {
 			...key(),
@@ -302,7 +384,8 @@ test("conversion moves this week's mark with its author and time, and replay can
 		});
 		assert.equal(status, 201, JSON.stringify(marked));
 	}
-	const prospectItem = (await items(dell, weeks.current)).find(
+	const beforeConversion = await items(dell, weeks.current);
+	const prospectItem = beforeConversion.find(
 		(item) => item.party_id === prospect.party_id,
 	);
 	assert.ok(prospectItem && isArguments(prospectItem.reviewed));
@@ -318,7 +401,14 @@ test("conversion moves this week's mark with its author and time, and replay can
 	const [converted, deal] = await save(dell, "deals", args);
 	assert.equal(converted, 201, JSON.stringify(deal));
 	const review = await items(dell, weeks.current);
-	assert.ok(!review.some((item) => item.party_id === prospect.party_id));
+	assert.deepEqual(
+		review.map((item) => item.deal_id ?? item.party_id),
+		beforeConversion.map((item) =>
+			item.party_id === prospect.party_id
+				? deal.deal_id
+				: (item.deal_id ?? item.party_id),
+		),
+	);
 	const dealItem = review.find((item) => item.deal_id === deal.deal_id);
 	assert.ok(dealItem);
 	assert.deepEqual(dealItem.reviewed, prospectItem.reviewed);
@@ -369,10 +459,13 @@ test("conversion moves this week's mark with its author and time, and replay can
 		200,
 		{ ...deal, replayed: true },
 	]);
+	const afterUndo = await items(dell, weeks.current);
+	assert.deepEqual(
+		afterUndo.map((item) => item.deal_id ?? item.party_id),
+		review.map((item) => item.deal_id ?? item.party_id),
+	);
 	assert.equal(
-		(await items(dell, weeks.current)).find(
-			(item) => item.deal_id === deal.deal_id,
-		)?.reviewed,
+		afterUndo.find((item) => item.deal_id === deal.deal_id)?.reviewed,
 		null,
 	);
 });
@@ -393,4 +486,69 @@ test("the database rejects another mark for the same week and a job's Undo", asy
 	} finally {
 		await db.query("rollback");
 	}
+});
+
+test("plain Add deal takes an active prospect's place and carries its review mark", async () => {
+	const [added, prospect] = await save(joe, "prospects", {
+		...key(),
+		name: "Example Prospect with Client Role",
+		kind: "company",
+		how_found: "referral",
+	});
+	assert.equal(added, 201, JSON.stringify(prospect));
+	assert.ok(typeof prospect.party_id === "string");
+	await db.query("begin");
+	try {
+		await db.query("select set_config('engine.user_id', $1, true)", [joeId]);
+		await db.query(
+			"insert into party_role (party_id, role) values ($1, 'client')",
+			[prospect.party_id],
+		);
+		await db.query("insert into client (party_id) values ($1)", [
+			prospect.party_id,
+		]);
+		await db.query("commit");
+	} finally {
+		await db.query("rollback");
+	}
+	const {
+		rows: [calendar],
+	} = await db.query<{ monday: string }>(
+		"select date_trunc('week', now() at time zone 'America/Chicago')::date::text as monday",
+	);
+	assert.ok(calendar);
+	const { monday } = calendar;
+	const [marked, mark] = await save(joe, door, {
+		...key(),
+		week_of: monday,
+		party_id: prospect.party_id,
+		seen_change_id: 0,
+	});
+	assert.equal(marked, 201, JSON.stringify(mark));
+	const before = await items(dell, monday);
+	const prospectRow = before.find(
+		(item) => item.party_id === prospect.party_id,
+	);
+	assert.ok(prospectRow && isArguments(prospectRow.reviewed));
+	const [status, deal] = await save(dell, "deals", {
+		...key(),
+		client_id: prospect.party_id,
+		name: "Example Plain Deal",
+		phase: "pending",
+		owner: "dell",
+	});
+	assert.equal(status, 201, JSON.stringify(deal));
+	const after = await items(dell, monday);
+	assert.deepEqual(
+		after.map((item) => item.deal_id ?? item.party_id),
+		before.map((item) =>
+			item.party_id === prospect.party_id
+				? deal.deal_id
+				: (item.deal_id ?? item.party_id),
+		),
+	);
+	assert.deepEqual(
+		after.find((item) => item.deal_id === deal.deal_id)?.reviewed,
+		prospectRow.reviewed,
+	);
 });

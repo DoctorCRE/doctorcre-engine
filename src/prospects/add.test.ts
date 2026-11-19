@@ -23,7 +23,8 @@ before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
 		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('client_contact', 'Client contact'), ('listing_agent', 'Listing agent');
-		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity'), ('lead', 'qualified', 'Qualified');
+		insert into stage (role, slug, label) values
+			('lead', 'opportunity', 'Opportunity'), ('lead', 'qualified', 'Qualified'), ('lead', 'archived', 'Archived');
 		insert into how_found (slug, label) values ('referral', 'Referral'), ('own_research', 'Own research'), ('not_recorded', 'Not recorded');
 		insert into party (id, kind, name, how_found) values
 			('${joeId}', 'person', 'Example Partner One', null),
@@ -148,6 +149,46 @@ test("an existing lead keeps its owner and a client is sent to Add deal", async 
 	assert.equal(clientStatus, 409);
 	assert.equal(answer.error, "already_client");
 	assert.equal(answer.party_id, client);
+});
+
+test("quick add returns a dropped prospect to the lane with its history", async () => {
+	const [added, original] = await save(joe, "prospects", {
+		...key(),
+		name: "Example Returning Prospect",
+		kind: "person",
+		how_found: "referral",
+		note: "Initial note",
+	});
+	assert.equal(added, 201);
+	assert.ok(typeof original.party_id === "string");
+	const partyId = original.party_id;
+	assert.equal(
+		(
+			await save(dell, `prospects/${partyId}/drop`, {
+				...key(),
+				reason: "Work paused",
+			})
+		)[0],
+		200,
+	);
+	assert.equal((await readProspect(partyId)).state, "dropped");
+
+	const [revived, answer] = await pick(partyId, { note: "Ready to resume" });
+	assert.equal(revived, 201);
+	assert.equal(answer.party_id, partyId);
+	const [read, lane] = await save(joe, "prospects", {}, "GET");
+	assert.equal(read, 200);
+	assert.ok(Array.isArray(lane.prospects));
+	assert.ok(
+		lane.prospects.some(
+			(item) => isArguments(item) && item.party_id === partyId,
+		),
+	);
+	const detail = await readProspect(partyId);
+	assert.equal(detail.state, undefined);
+	assert.partialDeepStrictEqual(detail, {
+		notes: [{ summary: "Ready to resume" }, { summary: "Initial note" }],
+	});
 });
 
 test("a party on a deal offers each deal without saving a lead or a note", async () => {
