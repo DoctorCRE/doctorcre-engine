@@ -318,3 +318,5 @@
 160\. **A pending draft leads one card for its conversation (2026-11-18).** Home and Mail priorities use that card for the draft and all visible suggestions. Once the draft is approved, sent, failed or declined, the suggestions lead, with any sending or failure state carried on their card (#745).
 
 161\. **Phase effective dates have their own kind, and undated person memberships start with the first deal (2026-11-18).** The deal page saves phase effective dates as `phase_effective_date`. The membership copy uses the first deal's Chicago opening date when a person client belongs to a national account and has no reviewed membership date (#734).
+
+163\. **A partner sets up a deal's client website once (2026-11-18).** Either signed-in partner can register the website name and password. Repeating setup with the same name and password keeps the original registration. The credential is a bcrypt verifier of the hex SHA-256 password digest, compatible with copied registrations. The save receipt identifies the deal and name and carries no password fingerprint (#729).

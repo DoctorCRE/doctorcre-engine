@@ -1290,7 +1290,13 @@ The detail sends `checklist` as `deal-checklist.v1`. The template lives in engin
 
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
-Both partners' detail reads return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The detail database role can read the fields used to form the link. The website setup save and the signed-in handoff to the website are separate steps in #729 and #730.
+Both partners' detail reads return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The detail database role can read the fields used to form the link. The signed-in handoff to the website is tracked in #730.
+
+### Set up a client website
+
+`POST /api/engine/deals/{deal_id}/client-website` is a signed-in partner save. It takes `idempotency_key`, `slug` (1 to 63 lowercase letters, digits and hyphens, starting with a letter or digit), and `password` (1 to 1,024 characters). It returns `200 { ok, deal_id, client_portal_url, created }`. A repeat with the same name and password and a fresh key returns `created: false`. A transport retry with the same key returns the original answer and `replayed: true`. The receipt fingerprint uses the deal and name, omitting the password as the old save did.
+
+The save refuses a name reserved by another registration (`409 portal_slug_taken`), a different password for the same registration (`409 portal_password_differs`), or a new name for a deal with an active registration (`409 portal_deal_already_registered`). A missing deal or current client returns `404 portal_deal_not_found`. The database stores a bcrypt cost-12 verifier of the hex SHA-256 password digest, compatible with the copied registration. Setup registers the website's address and credential. Publishing the website remains a separate operation.
 
 Each `email_follow_ups` entry is one pending email suggestion targeting the deal, from either partner's mailbox. It gives `proposal_id`, `kind`, `deal_id`, `evidence`, the proposed step fields (`what`, `owner`, `due_on`) or phase fields (`from_phase`, `to_phase`), and an `email` with `activity_id`, `sender`, `sender_name`, `subject`, `happened_at` and `summary`. The `owner` field gives the app user slug. A filing suggestion drops from this list once the email is on the deal. Use the proposal ID to accept or dismiss through door 21. Accepting a filing suggestion files the email.
 
