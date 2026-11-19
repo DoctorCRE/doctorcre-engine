@@ -52,20 +52,26 @@ cross join lateral (values
 where f.refused;
 insert into not_copied select distinct id, field, value, reason from file_refusal;
 create temp table copyable on commit drop as
-select distinct on (c.r2_key) c.*, coalesce(max(c.kind) over (partition by c.r2_key), 'other') as file_kind,
- max(c.note) over (partition by c.r2_key) as file_note, min(c.changed_at) over (partition by c.r2_key) as filed_at
+select distinct on (c.r2_key) c.*, nullif(max(c.kind) over storage_key, 'other') as key_kind,
+ max(c.note) over storage_key as key_note
 from candidate c where not exists (select from file_refusal r where r.r2_key = c.r2_key)
-order by c.r2_key, c.created_at, c.id;
+window storage_key as (partition by c.r2_key)
+order by c.r2_key, c.changed_at, c.id;
 
 create temp table file_version on commit drop as
 with first_filing as (
- select distinct on (c.deal_id, c.sha256) c.*, coalesce(n.id, c.id) as document_id
+ select distinct on (c.deal_id, c.sha256) c.*, coalesce(n.id, c.id) as document_id,
+  coalesce(c.key_kind, case when min(c.key_kind) over identical = max(c.key_kind) over identical
+   then min(c.key_kind) over identical end, 'other') as file_kind,
+  coalesce(c.key_note, case when min(c.key_note) over identical = max(c.key_note) over identical
+   then min(c.key_note) over identical end) as file_note
  from copyable c left join document n on (n.r2_bucket, n.r2_key) = ('deal_documents', c.r2_key)
- order by c.deal_id, c.sha256, c.filed_at, c.id
+ window identical as (partition by c.deal_id, c.sha256)
+ order by c.deal_id, c.sha256, c.changed_at, c.id
 )
 select f.*, (row_number() over filed)::integer as version, lag(f.document_id) over filed as supersedes_id
 from first_filing f
-window filed as (partition by f.deal_id, f.name, f.file_kind order by f.filed_at, f.id);
+window filed as (partition by f.deal_id, f.name, f.file_kind order by f.changed_at, f.id);
 
 -- A lease source can already exist without its deal. File it in the same statement as its neighbors.
 insert into document (id, created_at, name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind, note, version, supersedes_id,
@@ -78,6 +84,15 @@ on conflict (id) do update set deal_id = excluded.deal_id, kind = excluded.kind,
  content_type = excluded.content_type, sha256 = excluded.sha256, bytes = excluded.bytes,
  version = excluded.version, supersedes_id = excluded.supersedes_id
 where document.deal_id is null;
+insert into not_copied
+select c.id, difference.field, difference.value, difference.reason
+from copyable c join file_version f on (f.deal_id, f.sha256) = (c.deal_id, c.sha256)
+join document n on n.id = f.document_id
+cross join lateral (values
+ ('kind', c.key_kind, n.kind, 'duplicate_kind_conflict'),
+ ('note', c.key_note, n.note, 'duplicate_note_conflict')
+) difference(field, value, retained, reason)
+where difference.value is not null and difference.value is distinct from difference.retained;
 insert into not_copied select n.id, 'kind', n.kind, 'kind_unclassified'
 from file_version c join document n on (n.id, n.deal_id) = (c.document_id, c.deal_id) where n.kind = 'other';
 insert into not_copied select id, 'deleted_at', deleted_at::text, 'attachment_deleted' from public.attachment

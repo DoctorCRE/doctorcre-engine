@@ -38,8 +38,12 @@ const proposals: [attachment: number, email: number, day: number][] = [
 	[26, 44, 1],
 	[27, 45, 1],
 	[28, 43, 1],
+	[28, 42, 2],
+	[29, 41, 1],
+	[30, 43, 1],
+	[32, 43, 1],
 ];
-const filed = [20, 21, 22, 24];
+const filed = [20, 21, 22, 24, 31];
 const emails: [n: number, header: string | null][] = [
 	[41, "<First@example.test>"],
 	[43, "<Second@example.test>"],
@@ -69,8 +73,10 @@ before(async () => {
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User');
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by)
  select ('00000000-0000-4000-8000-0000000000' || n)::uuid, 'deal', '${id(10)}', 'files/' || n,
-  'Example file.pdf', 'application/pdf', '${"0".repeat(64)}', 1000, '${id(1)}' from generate_series(20, 28) n;
- update public.attachment set sha256 = repeat('36', 32) where id = '${id(28)}';
+  'Example file.pdf', 'application/pdf', '${"0".repeat(64)}', 1000, '${id(1)}' from unnest(array[20,21,22,23,24,25,26,27,28,29,30,32]) n;
+ update public.attachment set sha256 = repeat('36', 32) where id in ('${id(28)}', '${id(30)}');
+ update public.attachment set deleted_at = '2025-01-15' where id = '${id(30)}';
+ update public.attachment set subject_type = 'client' where id = '${id(32)}';
  insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at)
  select '${id(1)}', 'attach-deal-file', 'deal', '${id(10)}', jsonb_build_object('attachment_id', ('00000000-0000-4000-8000-0000000000' || n)::uuid), 'ingest_email', '2025-01-01'
  from unnest(array[${filed.join(", ")}]) n;
@@ -104,6 +110,13 @@ test("a copied file shows on every email it arrived with", async () => {
 		[
 			[id(21), "email", null, "email_unknown"],
 			[id(22), "activity_id", id(42), "email_not_copied"],
+			[id(24), "activity_id", id(42), "email_not_copied"],
+			[id(28), "activity_id", id(42), "email_not_copied"],
+			[id(29), "activity_id", id(41), "document_not_copied"],
+			[id(30), "activity_id", id(43), "attachment_deleted"],
+			[id(31), "email", null, "attachment_missing"],
+			[id(31), "email", null, "email_unknown"],
+			[id(32), "activity_id", id(43), "document_not_copied"],
 		],
 	);
 	const linkHistory =
