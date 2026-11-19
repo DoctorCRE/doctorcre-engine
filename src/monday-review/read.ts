@@ -11,7 +11,7 @@ import { isProspect, prospectQuery } from "../prospects/read.ts";
 
 import type { DatabaseEnv } from "../reader.ts";
 
-const isMonday = (day: unknown): day is string =>
+export const isMonday = (day: unknown): day is string =>
 	isCalendarDate(day) &&
 	!day.startsWith("0000") &&
 	new Date(`${day}T00:00:00Z`).getUTCDay() === 1;
@@ -26,7 +26,7 @@ const boardPhases = [
 	"closing",
 ];
 
-function reviewVersion(
+export function reviewVersion(
 	week: Expression<unknown>,
 	deal: Expression<unknown>,
 	prospect: Expression<unknown>,
@@ -119,7 +119,7 @@ async function readReview(db: Transaction<DB>, week: string) {
 	return { items: rows.map(({ item }) => item) };
 }
 
-const reviewPartner = createMiddleware<DatabaseEnv>(async (c, next) => {
+export const reviewPartner = createMiddleware<DatabaseEnv>(async (c, next) => {
 	if (!PARTNERS.some((slug) => slug === c.get("partner").slug))
 		return refuse(c, new Refusal(403, "AUTHORIZATION_REFUSED"));
 	await next();

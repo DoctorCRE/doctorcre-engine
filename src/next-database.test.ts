@@ -2736,6 +2736,7 @@ const REMOVABLE = [
 	"activity",
 	"email",
 	"commission_tier",
+	"weekly_review",
 ];
 
 // Each case runs in a transaction it rolls back, so a broken rule leaves nothing behind.

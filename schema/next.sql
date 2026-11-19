@@ -543,6 +543,22 @@ create table weekly_review (
 	unique nulls not distinct (week_of, deal_id, party_id)
 );
 
+create function weekly_review_undo_by_partner() returns trigger
+language plpgsql as $$
+begin
+	if nullif(current_setting('engine.job', true), '') is not null or not exists (
+		select from app_user where is_account_partner
+			and id = nullif(current_setting('engine.user_id', true), '')::uuid
+	) then
+		raise exception 'a partner undoes a weekly review mark'
+			using errcode = 'check_violation', constraint = 'weekly_review_undo_by_partner';
+	end if;
+	return old;
+end $$;
+
+create trigger weekly_review_undo_by_partner before delete on weekly_review
+for each row execute function weekly_review_undo_by_partner();
+
 -- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
 
 -- How a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
@@ -3366,7 +3382,7 @@ grant insert (id, created_at, platform, owner_party_id, handle, platform_account
 
 grant delete on vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, party_territory_review, deal, party_role, party_company, deal_property, deal_party, activity,
-	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link to engine;
+	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link, weekly_review to engine;
 
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
