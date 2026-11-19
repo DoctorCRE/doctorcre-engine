@@ -55,7 +55,8 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
  ('${id(40)}', 'deal', '${id(30)}', 'phase', null, '{"phase":"touring"}', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(41)}', 'deal', '${id(31)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(42)}', 'deal', '${id(30)}', 'attention', '{"attention":false}', '{"attention":true}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated'),
- ('${id(43)}', 'deal', '${id(35)}', 'phase', '{"phase":"touring"}', '{"phase":"negotiation"}', '2025-03-02T02:00Z', '${id(1)}', 'update-deal', 'automation_job');
+ ('${id(43)}', 'deal', '${id(35)}', 'phase', '{"phase":"touring"}', '{"phase":"negotiation"}', '2025-03-02T02:00Z', '${id(1)}', 'update-deal', 'automation_job'),
+ ('${id(44)}', 'deal', '${id(32)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-04', '${id(1)}', 'update-deal', 'automation_job');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, due_on, status, created_at, created_by, updated_by) values
  ('${id(50)}', 'deal', '${id(30)}', '${id(1)}', 'Example send the survey', '2030-01-15', 'open', '2025-01-04', ${by}),
  ('${id(51)}', 'deal', '${id(30)}', '${id(2)}', 'Example book the tour', '2025-01-20', 'done', '2025-01-05', ${by}),
@@ -85,6 +86,7 @@ const COPIES: [file: string, input?: string][] = [
 ];
 
 const { db, setup, cleanup, connectionString } = copyTest();
+let dealCopyCorrections: unknown;
 
 before(async () => {
 	await setup();
@@ -100,7 +102,11 @@ before(async () => {
 		await db.query(
 			`begin; select set_config('engine.job', 'old_system', true); ${input}`,
 		);
-		await db.query(await readSchema(file));
+		const results = await db.query(await readSchema(file));
+		if (file === "copy-deals.sql") {
+			assert.ok(Array.isArray(results));
+			dealCopyCorrections = results.at(-1)?.rows;
+		}
 		await db.query("commit");
 	}
 	await db.query(`begin;
@@ -260,6 +266,22 @@ const get = (path: string, schema?: string, partner = "partner_one") =>
 			},
 		},
 	);
+
+test("the copy lists an automatic move with an unknown prior phase and keeps no receipt", async () => {
+	assert.partialDeepStrictEqual(dealCopyCorrections, [
+		{
+			old_id: id(44),
+			field: "phase",
+			value: null,
+			reason: "automatic_move_prior_phase_unknown",
+		},
+	]);
+	const { rows } = await db.query(
+		"select source_event_id from imported_automatic_phase_move where deal_id = $1",
+		[id(32)],
+	);
+	assert.deepEqual(rows, []);
+});
 
 test("the board and detail carry the same imported automatic phase move", async () => {
 	const board = await get("/deals?workspace=all", "next");

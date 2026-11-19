@@ -33,6 +33,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Client website shows when the deal has one and opens it as the deal page does.
 - [ ] A phase move made automatically, by a call or an invoice, shows "Moved automatically" with its date in words.
 - [ ] The 16 automatic phase moves copied from today's system keep the "Moved automatically" mark and show Undo on the card (owner, 2026-11-18).
+- [ ] If Undo would return a deal to Closed deals or Lost deals, the deal stays in its current phase and the card explains why.
 - [ ] Dragging a card to another column, or the same move by keyboard, asks for the phase move's details and moves it only on Move to [phase].
 
 ### Moving a phase

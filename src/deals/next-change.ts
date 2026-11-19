@@ -269,6 +269,13 @@ async function undoAutomaticPhaseMove(
 		throw new SaveRefusal(
 			new Refusal(409, "version_conflict", { current_version }),
 		);
+	if (ENDED_PHASES.includes(current.prior_phase))
+		throw new SaveRefusal(
+			new Refusal(409, "version_conflict", {
+				current_version,
+				hint: "Undo would return this deal to Closed deals or Lost deals.",
+			}),
+		);
 	const phase_changed_at = await movePhase(tx, deal_id, {
 		from: current.phase,
 		to: current.prior_phase,

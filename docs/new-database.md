@@ -1302,7 +1302,7 @@ When the nightly invoice job moved the deal to its current Closed phase, the boa
 
 A copied automatic move also appears as `phase_change` on the board and deal page while its phase row is current. It gives the original `event_id`, `prior_phase`, `phase`, `reason`, Chicago `evidence_date`, `recorded_at`, `automatic: true`, and `source: "copied"`. A current invoice application uses its own receipt and undo.
 
-The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. A same-key retry returns the original answer.
+The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. Undo returns the same status and error for a previous phase of Closed, Invoiced, or Dead, with a hint that Undo would return the deal to Closed deals or Lost deals. A same-key retry returns the original answer.
 
 ### Remaining Deals read work
 
