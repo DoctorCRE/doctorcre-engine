@@ -32,8 +32,8 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] A late next step says how late: "Send the floor plan · 3 days late".
 - [ ] Needs attention shows only when a partner set it on the deal.
 - [ ] Client website shows when the deal has one and opens it as the deal page does.
-- [ ] A phase move made automatically, by a call or an invoice, shows "Moved automatically" with its date in words.
-- [ ] The 16 automatic phase moves copied from today's system keep the "Moved automatically" mark and show Undo on the Board card. List shows the automatic move without Undo (owner, 2026-11-18).
+- [ ] A phase move saved by call capture itself shows "Moved automatically" with its date in words. Accepting a call suggestion shows as the partner's move.
+- [ ] A fresh automatic call move and the 16 copied automatic moves show "Moved automatically" with Undo on the Board card. List shows the automatic move without Undo (owner, 2026-11-18, and #822).
 - [ ] If Undo would return a deal to Closed deals or Lost deals, the deal stays in its current phase and the card explains why.
 - [ ] Dragging a card to another column, or the same move by keyboard, asks for the phase move's details and moves it only on Move to [phase].
 
@@ -146,6 +146,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Change next step saves the partner's new step and date, replacing their own open step. A step saved without an owner belongs to the partner who saved it.
 - [ ] Facts: deal kind, deal reason, market, closed value when closed, and the market agent on a national-account deal. Closed and lost cards and the deal page keep the Renewal label for copied renewals with an unrecorded source lease and show a note that the lease wasn't recorded.
 - [ ] Phase, deal owner and Park, with the same rules as the board. Park asks the reason (client paused, prospect never active, or other) and takes an optional note.
+- [ ] The current automatic call move shows "Moved automatically" with its date in words and offers Undo, using the same receipt as the board.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Checklist: the deal's checklist items, each with its due date in words. Clicking one opens it.
 - [ ] Checklist progress uses plain labels like "Lease expiration for renewal", "Invoice" and "Commission received". It shows which confirmed dates are due. Commission received is complete when all saved payments have receipt dates, even if the deal still has an expected amount.

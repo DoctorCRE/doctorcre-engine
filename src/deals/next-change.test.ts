@@ -15,6 +15,7 @@ const assistant = { job: "agent", for_user: "blair" };
 before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into job values ('call_capture', 'Example call capture');
 		insert into party (id, kind, name) values ('${ALEX}', 'person', 'Alex Example'), ('${BLAIR}', 'person', 'Blair Example');
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
 		insert into phase values ('touring', 'Touring'), ('negotiation', 'Negotiation'), ('closed', 'Closed'), ('dead', 'Dead');
@@ -30,10 +31,10 @@ before(async () => {
 		insert into deal_reason values ('renewal', 'Renewal');
 		insert into deal (id, name, owner_user_id)
 			select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid, 'Example Deal ' || n, '${ALEX}'
-			from generate_series(10, 27) n;
+			from generate_series(10, 30) n;
 		insert into deal_party (deal_id, party_id, role)
 			select id, '${CLIENT}', 'client' from deal
-			where id between '${id(15)}' and '${id(17)}' or id in ('${id(25)}', '${id(26)}');
+			where id between '${id(15)}' and '${id(17)}' or id in ('${id(25)}', '${id(26)}', '${id(28)}', '${id(29)}');
 		commit;`);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into deal_phase_change select id, '2026-01-05T15:00:00Z', 'touring', null from deal; commit;`);
@@ -166,6 +167,130 @@ test("a move from a phase the deal has left is refused with the deal's phase", a
 	);
 });
 
+test("only an automatic phase move shows its source call and can be undone", async () => {
+	const automaticDeal = id(28);
+	const suggestedDeal = id(29);
+	const caller = { job: "call_capture", for_user: "alex" };
+	const happened_at = "2026-01-06T01:15:00+00:00";
+	const [logged, call] = await saveAt(caller, "activities", {
+		idempotency_key: randomUUID(),
+		kind: "call",
+		happened_at,
+		about: [{ deal_id: automaticDeal }, { deal_id: suggestedDeal }],
+	});
+	assert.equal(logged, 201, JSON.stringify(call));
+	const { activity_id } = call;
+	const phase = { from: "touring", to: "negotiation", on: "2026-01-06" };
+	const [missing, refusal] = await change(caller, automaticDeal, { phase });
+	assert.deepEqual(
+		[missing, refusal.error, refusal.fields],
+		[400, "missing_required", ["phase.activity_id"]],
+	);
+	await db.query(
+		"begin; select set_config('engine.job', 'call_capture', true)",
+	);
+	try {
+		await assert.rejects(
+			db.query(
+				"insert into deal_phase_change (deal_id, happened_at, phase) values ($1, now(), 'negotiation')",
+				[automaticDeal],
+			),
+			{ constraint: "deal_phase_change_call_source" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
+	const [wrongDeal, wrongCall] = await change(caller, id(30), {
+		phase: { ...phase, activity_id },
+	});
+	assert.deepEqual(
+		[wrongDeal, wrongCall.rule],
+		[422, "deal_phase_change_call_on_deal"],
+	);
+	const event_id = randomUUID();
+	const saveArgs = {
+		idempotency_key: event_id,
+		seen_change_id: await seen(automaticDeal),
+		phase: { ...phase, activity_id },
+	};
+	const [partnerStatus, partnerRefusal] = await change(partner, automaticDeal, {
+		phase: saveArgs.phase,
+	});
+	assert.deepEqual(
+		[partnerStatus, partnerRefusal.error, partnerRefusal.rule],
+		[422, "database_refused_the_statement", "deal_phase_change_call_source"],
+	);
+	const [saved, answer] = await save(caller, automaticDeal, saveArgs);
+	assert.equal(saved, 200, JSON.stringify(answer));
+	assert.deepEqual(await save(caller, automaticDeal, saveArgs), [
+		200,
+		{ ...answer, replayed: true },
+	]);
+	const [proposed, proposal] = await saveAt(caller, "proposals", {
+		idempotency_key: randomUUID(),
+		kind: "phase_move",
+		deal_id: suggestedDeal,
+		activity_id,
+		evidence: "The client asked us to negotiate.",
+		to: phase.to,
+		on: phase.on,
+	});
+	assert.equal(proposed, 201, JSON.stringify(proposal));
+	const [accepted, decision] = await saveAt(
+		partner,
+		`proposals/${proposal.proposal_id}/decision`,
+		{ idempotency_key: randomUUID(), decision: "accept" },
+	);
+	assert.equal(accepted, 200, JSON.stringify(decision));
+	const read = async (path: string) => {
+		const response = await request(
+			partner,
+			path,
+			{ method: "GET" },
+			{ DEALS_READ_SCHEMA: "next" },
+		);
+		assert.equal(response.status, 200);
+		const body: unknown = await response.json();
+		assert.ok(isArguments(body));
+		return body;
+	};
+	const automatic = await read(`deals/${automaticDeal}`);
+	const receipt = automatic.phase_change;
+	assert.ok(isArguments(receipt));
+	assert.deepEqual(receipt, {
+		event_id,
+		prior_phase: phase.from,
+		phase: phase.to,
+		reason: null,
+		evidence_date: phase.on,
+		recorded_at: receipt.recorded_at,
+		automatic: true,
+		source: "call_capture",
+		call: { activity_id, happened_at },
+	});
+	assert.ok(Number.isFinite(Date.parse(String(receipt.recorded_at))));
+	assert.deepEqual((await read(`deals/${suggestedDeal}`)).phase_change, null);
+	assert.partialDeepStrictEqual(await read("deals"), {
+		deals: [
+			{ id: automaticDeal, phase_change: receipt },
+			{ id: suggestedDeal, phase: phase.to, phase_change: null },
+		],
+	});
+	const undo = () =>
+		saveAt(partner, `deals/${automaticDeal}/phase/undo`, {
+			idempotency_key: randomUUID(),
+			event_id,
+			base_version: automatic.seen,
+		});
+	const [undone, restored] = await undo();
+	assert.equal(undone, 200, JSON.stringify(restored));
+	assert.partialDeepStrictEqual(await read(`deals/${automaticDeal}`), {
+		phase: phase.from,
+		phase_change: null,
+	});
+	assert.equal((await undo())[0], 409);
+});
+
 test("a partner can undo the current copied move once with a fresh card version", async () => {
 	const deal = id(22);
 	const event_id = id(23);
@@ -231,7 +356,7 @@ for (const [name, number, phase, outcome] of [
 		"lost",
 	],
 	[
-		"a current copied win keeps its automatic move and allows Undo even with a dead phase",
+		"a copied win uses the phase reason if its receipt has none and allows Undo",
 		26,
 		"dead",
 		"won",
@@ -246,7 +371,7 @@ for (const [name, number, phase, outcome] of [
 		insert into imported_deal_board (deal_id, phase, phase_at, outcome)
 		values ('${deal}', '${phase}', '2026-01-06', '${outcome}');
 		insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
-		values ('${event_id}', '${deal}', '2026-01-06', 'touring', 'Example invoice received');
+		values ('${event_id}', '${deal}', '2026-01-06', 'touring', '');
 		commit;`);
 		const read = async (path: string) => {
 			const response = await request(
@@ -261,7 +386,12 @@ for (const [name, number, phase, outcome] of [
 			return response.json();
 		};
 		const lost = outcome === "lost";
-		const facts = { outcome, phase_change: lost ? null : { event_id } };
+		const facts = {
+			outcome,
+			phase_change: lost
+				? null
+				: { event_id, reason: "Example recorded phase" },
+		};
 		assert.partialDeepStrictEqual(await read("deals"), {
 			[lost ? "lost_deals" : "closed_deals"]: [{ id: deal, ...facts }],
 		});

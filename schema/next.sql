@@ -535,6 +535,9 @@ create table deal_phase_change (
 	happened_at timestamptz not null,
 	phase text not null references phase,
 	reason text,
+	call_activity_id uuid,
+	call_move_id uuid unique,
+	call_kind text generated always as ('call') stored,
 	primary key (deal_id, happened_at),
 	constraint deal_phase_change_dead_has_reason check (phase <> 'dead' or reason is not null)
 );
@@ -1189,6 +1192,12 @@ create constraint trigger email_about_a_record after delete on activity_about
 
 alter table activity_about add constraint activity_about_activity_party_key unique (activity_id, party_id);
 alter table activity_about add constraint activity_about_activity_deal_key unique (activity_id, deal_id);
+
+alter table deal_phase_change
+	add constraint deal_phase_change_source_is_call
+		foreign key (call_activity_id, call_kind) references activity (id, kind),
+	add constraint deal_phase_change_call_on_deal
+		foreign key (call_activity_id, deal_id) references activity_about (activity_id, deal_id);
 
 -- Evidence is separate from ordinary stage edits, whose author and time are already in change history.
 create table lead_stage_move (
@@ -3141,6 +3150,9 @@ end $$;
 
 
 
+alter table deal_phase_change add constraint deal_phase_change_call_source check (
+	num_nonnulls(call_activity_id, call_move_id) = case when changed_by_job = 'call_capture' then 2 else 0 end);
+
 alter table weekly_review
 	add reviewer_is_partner boolean generated always as (true) stored,
 	add constraint weekly_review_by_a_user check (changed_by_user_id is not null),
@@ -3384,7 +3396,8 @@ begin atomic
 	select jsonb_build_object(
 		'deal', to_jsonb(d),
 		'phases', (
-			select coalesce(jsonb_agg(to_jsonb(c) - 'deal_id' order by c.happened_at), '[]')
+			select coalesce(jsonb_agg(to_jsonb(c) - array['deal_id', 'call_activity_id', 'call_kind', 'call_move_id']
+				order by c.happened_at), '[]')
 			from deal_phase_change c
 			where c.deal_id = d.id
 		),
