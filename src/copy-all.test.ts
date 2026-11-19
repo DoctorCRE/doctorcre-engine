@@ -126,8 +126,8 @@ insert into public.record_flag (id, subject_type, subject_id, kind, value, sourc
   'Example registry locator', '2025-01-07', null, '${id(1)}'),
  ('${id(155)}', 'client', '${id(20)}', 'practice_research', '["Example invalid finding"]',
   'Example source', '2025-01-07', null, '${id(1)}'),
- ('${id(156)}', 'client', '${id(25)}', 'npi', '{"found":true,"individual_npi":"9000000015","organisation_npi":"9000000023"}',
-  'Example source', '2025-01-07', null, '${id(1)}'),
+ ('${id(156)}', 'client', '${id(25)}', 'npi', '{"found":true,"individual_npi":9000000015,"organisation_npi":9000000023}',
+  'Example registry entry 23', '2025-01-07', null, '${id(1)}'),
  ('${id(157)}', 'client', '${id(20)}', 'npi', '{"found":true,"npi":"9000000015"}',
   'Example source', '2025-01-07', null, '${id(1)}'),
  ('${id(158)}', 'client', '${id(20)}', 'npi', '{"found":false,"searched_for":"Example search"}',
@@ -137,7 +137,7 @@ insert into public.record_flag (id, subject_type, subject_id, kind, value, sourc
  ('${id(160)}', 'client', '${id(20)}', 'social', '{"found":true,"instagram":"https://social.example/example"}',
   'Example source', '2025-01-07', null, '${id(1)}'),
  ('${id(161)}', 'client', '${id(20)}', 'website', '{"found":true,"website":"https://office.example"}',
-  'Example source', '2025-01-07', null, '${id(1)}');
+  'https://office.example/about', '2025-01-07', null, '${id(1)}');
 insert into public.national_account_owner (account_client_id, owner_actor_id, set_by) values ('${id(23)}', '${id(2)}', '${id(1)}');
 insert into public.lead_stage (slug, label) values ('qualified', 'Example qualified');
 insert into public.lead (id, party_id, stage, source_type, created_by, updated_by, created_at, updated_at) values
@@ -367,7 +367,7 @@ const counts = async () =>
 // Each table a copy writes holds what the snapshot gave it, so no copy passes by copying nothing.
 // biome-ignore format: one entry per copied table
 const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1, deal_client_website: 1,
- client_vertical: 1, client_research: 6, client_research_fact: 7,
+ client_vertical: 1, client_research: 6, client_research_fact: 11,
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
@@ -524,20 +524,34 @@ test("client research keeps named facts and follows the surviving client with it
 	);
 });
 
-test("identity candidates follow the client without changing its confirmed NPI", async () => {
+test("identity candidates preserve their locators and keep numeric NPIs as digits", async () => {
 	assert.deepEqual(
-		await rows(`select f.field, f.value from client_research r
-			join client_research_fact f on f.research_id = r.id
+		await rows(`select f.field, f.value, locator.value as locator from client_research r
+			join client_research_fact f on f.research_id = r.id and f.field = r.kind
+			left join client_research_fact locator on locator.research_id = r.id and locator.field = 'locator'
 			where r.party_id = '${id(10)}' and r.source = 'found by research tool' and r.found
 			order by f.field`),
 		[
-			{ field: "address", value: { street: "1 Example Place" } },
-			{ field: "npi", value: { organisation_npi: "9000000023" } },
+			{
+				field: "address",
+				value: { street: "1 Example Place" },
+				locator: "Example source",
+			},
+			{
+				field: "npi",
+				value: { organisation_npi: "9000000023" },
+				locator: "Example registry entry 23",
+			},
 			{
 				field: "social",
 				value: { instagram: "https://social.example/example" },
+				locator: "Example source",
 			},
-			{ field: "website", value: { website: "https://office.example" } },
+			{
+				field: "website",
+				value: { website: "https://office.example" },
+				locator: "https://office.example/about",
+			},
 		],
 	);
 	assert.deepEqual(await rows(`select npi from party where id = '${id(10)}'`), [
@@ -580,6 +594,60 @@ test("conflicting practice types wait without replacing a copied value", async (
 		);
 		assert.deepEqual(await rows("select vertical from client_vertical"), [
 			{ vertical: "Example practice" },
+		]);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("conflicting source subtypes are listed while the shared practice type copies", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+			delete from client_vertical where party_id = '${id(10)}';
+			update public.client set subtype = 'Example different subtype' where id = '${id(25)}'`);
+		const result = await db.query(await readSchema("copy-client-research.sql"));
+		assert.ok(Array.isArray(result));
+		assert.deepEqual(
+			result
+				.at(-1)
+				?.rows.filter((row: { field: string }) => row.field === "subtype"),
+			[
+				{ old_id: id(20), field: "subtype", reason: "conflicting_subtypes" },
+				{ old_id: id(25), field: "subtype", reason: "conflicting_subtypes" },
+			],
+		);
+		assert.deepEqual(
+			await rows("select vertical, subtype from client_vertical"),
+			[{ vertical: "Example practice", subtype: null }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("a different already-copied subtype is listed and kept", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.client set subtype = 'Example different subtype' where id = '${id(20)}'`,
+		);
+		const result = await db.query(await readSchema("copy-client-research.sql"));
+		assert.ok(Array.isArray(result));
+		assert.deepEqual(
+			result
+				.at(-1)
+				?.rows.filter((row: { field: string }) => row.field === "subtype"),
+			[
+				{
+					old_id: id(20),
+					field: "subtype",
+					reason: "existing_subtype_differs",
+				},
+			],
+		);
+		assert.deepEqual(await rows("select subtype from client_vertical"), [
+			{ subtype: "Example subtype" },
 		]);
 	} finally {
 		await db.query("rollback");

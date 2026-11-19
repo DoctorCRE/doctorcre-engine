@@ -73,7 +73,10 @@ left join (values
 left join party on party.id = p.party_id
 cross join lateral (select array(
  select field from unnest(i.fields) as fields(field)
- where f.value -> 'found' = 'true' and jsonb_typeof(f.value -> field) = 'string' and f.value ->> field ~ '\S'
+ where f.value -> 'found' = 'true' and (
+  (jsonb_typeof(f.value -> field) = 'string' and f.value ->> field ~ '\S')
+  or (f.kind = 'npi' and jsonb_typeof(f.value -> field) = 'number' and f.value ->> field ~ '^[0-9]+$')
+ )
 ) as fields) present
 cross join lateral (select array(
  select field from unnest(present.fields) as fields(field)
@@ -119,7 +122,10 @@ insert into client_research_fact (research_id, field, value, changed_at, changed
 select c.id, fact.key, fact.value, c.changed_at, c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id
 from copied c join ready f using (id)
 cross join lateral jsonb_each(case when not f.is_identity then f.value - 'found'
- else jsonb_build_object(f.kind, f.value - 'found' - f.already_held) end) fact;
+ else jsonb_build_object(f.kind, (f.value - 'found' - f.already_held) || coalesce((
+  select jsonb_object_agg(field, f.value ->> field) from unnest(f.identity_fields) as npis(field)
+  where f.kind = 'npi' and field <> all(f.already_held)
+ ), '{}'::jsonb), 'locator', f.source) end) fact;
 
 alter table client_vertical enable trigger stamp_change;
 alter table client_research enable trigger stamp_change;

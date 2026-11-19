@@ -6648,6 +6648,21 @@ test("a merge refuses different client practice types by name", async () => {
 	});
 });
 
+test("a merge refuses different subtypes of the same practice type", async () => {
+	await rolledBack(async () => {
+		await db.query(`${CLIENT_PROFILE}
+			update party set how_found = 'referral' where id = '${NEXT_BRAND}';
+			insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
+			insert into client_vertical (party_id, vertical, subtype) values
+				('${CLIENT}', 'Example practice', 'First subtype'),
+				('${NEXT_BRAND}', 'Example practice', 'Second subtype')`);
+		await assert.rejects(
+			db.query(`select merge_party('${CLIENT}', '${NEXT_BRAND}')`),
+			expected("merge_party_client_verticals"),
+		);
+	});
+});
+
 test("a merge refuses two national account profiles", async () => {
 	await rolledBack(async () => {
 		await db.query(CLIENT_PROFILE);
