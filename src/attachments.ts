@@ -57,7 +57,10 @@ async function lockedDealFiles(
 	return tx
 		.selectFrom("document")
 		.where("deal_id", "=", dealId)
-		.where("sha256", "=", sha256);
+		.where("sha256", "=", sha256)
+		.orderBy("created_at")
+		.orderBy("id")
+		.limit(1);
 }
 
 const filingFields = [
@@ -234,10 +237,7 @@ export const attachments = new Hono<AttachmentEnv>().post("/attachments", (c) =>
 			if (message_id && !email)
 				throw new SaveRefusal(new Refusal(409, "email_not_stored"));
 			const filed = await lockedDealFiles(tx, deal_id, sha256);
-			const prior = await filed
-				.select("id as document_id")
-				.limit(1)
-				.executeTakeFirst();
+			const prior = await filed.select("id as document_id").executeTakeFirst();
 			const { document_id } =
 				prior ??
 				(await insertDealFile(tx, bucket, { name, sha256, deal_id, kind }));
@@ -281,12 +281,7 @@ export const dealDocuments = new Hono<AttachmentEnv>().post(
 					throw new SaveRefusal(
 						new Refusal(400, "invalid_field_value", { fields: ["kind"] }),
 					);
-				const prior = await filed
-					.select(filingFields)
-					.orderBy("created_at")
-					.orderBy("id")
-					.limit(1)
-					.executeTakeFirst();
+				const prior = await filed.select(filingFields).executeTakeFirst();
 				if (
 					prior &&
 					(prior.name !== name ||

@@ -101,9 +101,9 @@ const upload = (
 before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
-	insert into party (id, kind, name) values ('${id(1)}', 'person', 'Alex Example');
-	insert into app_user (id, slug) values ('${id(1)}', 'alex');
-	insert into deal (id, name, owner_user_id) values ('${id(2)}', 'Example Deal', '${id(1)}'), ('${id(3)}', 'Another Deal', '${id(1)}');
+	insert into party (id, kind, name) values ('${id(1)}', 'person', 'Alex Example'), ('${id(6)}', 'person', 'Casey Example');
+	insert into app_user (id, slug) values ('${id(1)}', 'alex'), ('${id(6)}', 'casey');
+	insert into deal (id, name, owner_user_id) values ('${id(2)}', 'Example Deal', '${id(6)}'), ('${id(3)}', 'Another Deal', '${id(1)}');
 	insert into document_kind values ('other', 'Other'), ('lease', 'Lease');
 	insert into activity (id, kind, happened_at) values ('${id(4)}', 'email', now()), ('${id(5)}', 'email', now());
 	insert into email (activity_id, message_id, sender, subject, body) values ('${id(4)}', 'Example@example.test', 'sender@example.test', 'Example', 'Example body'), ('${id(5)}', 'Second@example.test', 'sender@example.test', 'Second', 'Second body');
@@ -187,26 +187,28 @@ test("a signed-in partner files an upload and sees both versions on the deal", a
 		"predecessor_replaced",
 	);
 
-	const detail = await request(
-		{ user: "alex" },
-		`deals/${id(2)}`,
-		{},
-		{
-			DEALS_READ_SCHEMA: "next",
-		},
-	);
-	assert.equal(detail.status, 200);
-	assert.partialDeepStrictEqual(await json(detail), {
-		documents: [
+	for (const user of ["alex", "casey"]) {
+		const detail = await request(
+			{ user },
+			`deals/${id(2)}`,
+			{},
 			{
-				id: filed.document_id,
-				version: 2,
-				actor: "alex",
-				prepared_at: filed.filed_at,
+				DEALS_READ_SCHEMA: "next",
 			},
-			{ id: document_id, version: 1, actor: "alex" },
-		],
-	});
+		);
+		assert.equal(detail.status, 200);
+		assert.partialDeepStrictEqual(await json(detail), {
+			documents: [
+				{
+					id: filed.document_id,
+					version: 2,
+					actor: "alex",
+					prepared_at: filed.filed_at,
+				},
+				{ id: document_id, version: 1, actor: "alex" },
+			],
+		});
+	}
 });
 
 test("signed-in filing checks the existing hash before checking replacement lineage", async (t) => {
@@ -224,6 +226,7 @@ test("signed-in filing checks the existing hash before checking replacement line
 	for (const [deal, hash, args, status, error] of [
 		[id(3), sha256, { supersedes_id: id(99) }, 409, "already_filed"],
 		[id(3), sha256, { kind: "other" }, 409, "already_filed"],
+		[id(3), sha256, { name: "Other.pdf" }, 409, "already_filed"],
 		[id(99), sha256, {}, 404, "not_found"],
 		[id(3), missing, {}, 409, "file_not_uploaded"],
 		[id(3), missing, { supersedes_id: id(99) }, 409, "predecessor_not_found"],
@@ -260,6 +263,56 @@ test("signed-in filing checks the existing hash before checking replacement line
 		bindings,
 	);
 	assert.equal(job.status, 404);
+});
+
+test("copied filings keep a shared first match and accept uppercase predecessor IDs", async (t) => {
+	const deal = id(8);
+	const sha256 = "a".repeat(64);
+	const earliest = "a0000000-0000-4000-8000-000000000001";
+	const tied = "b0000000-0000-4000-8000-000000000001";
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Imported Example Deal', '${id(1)}');
+		insert into document (id, deal_id, name, r2_bucket, r2_key, content_type, sha256, bytes, kind, created_at) values
+		('${id(7)}', '${deal}', 'Example lease.pdf', 'deal_documents', 'legacy/later', 'application/pdf', '${sha256}', 15, 'lease', '2026-01-02'),
+		('${tied}', '${deal}', 'Example lease.pdf', 'deal_documents', 'legacy/tied', 'application/pdf', '${sha256}', 15, 'lease', '2026-01-01'),
+		('${earliest}', '${deal}', 'Example lease.pdf', 'deal_documents', 'legacy/first', 'application/pdf', '${sha256}', 15, 'lease', '2026-01-01');
+		commit;`);
+	await t.test(
+		"both filing routes select the earliest copied row and break ties by ID",
+		async () => {
+			const partner = await fileToDeal(sha256, {}, deal);
+			assert.equal(partner.status, 200);
+			assert.equal((await json(partner)).document_id, earliest);
+			const job = await tie({ sha256, deal_id: deal });
+			assert.equal(job.status, 201);
+			assert.deepEqual(await json(job), {
+				document_id: earliest,
+				existing: true,
+			});
+		},
+	);
+	await t.test(
+		"a fresh key with an uppercase predecessor finds the same replacement",
+		async (t) => {
+			const replacement = await uploadDealFile(
+				t,
+				"Replacement of a copied lease",
+			);
+			const first = await fileToDeal(
+				replacement,
+				{ supersedes_id: earliest },
+				deal,
+			);
+			assert.equal(first.status, 201);
+			const retry = await fileToDeal(
+				replacement,
+				{ supersedes_id: earliest.toUpperCase() },
+				deal,
+			);
+			assert.equal(retry.status, 200);
+			assert.deepEqual(await json(retry), await json(first));
+		},
+	);
 });
 
 test("two overlapping replacements of one predecessor leave one new version", async (t) => {
