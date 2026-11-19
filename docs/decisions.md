@@ -297,7 +297,7 @@
 
 150\. **A person who is a client can belong to a brand (2026-11-18).** The owner approved national-account deals with a person as the client. The brand is a company. The copy takes the old account link for a person client and the reviewed date the old system first recorded that membership. The Deals board uses the current membership for open and closed deals (#697).
 
-151\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one saves its summary as a note on the call's deal or party at the recorded call's time. The owner left the twelve old work alerts behind (#698).
+151\. **Pending call logs move and old work alerts stay behind (2026-11-18).** The owner approved a log-a-call suggestion kind so the ten pending call logs stay available for review. Accepting one saves its summary as a note on the call's deal or party at the recorded call's time. Home uses the reviewer kept on the copied suggestion when the call itself has no partner stamp (#743). The owner left the twelve old work alerts behind (#698).
 
 152\. **Home uses the step's revision to finish and reopen it (2026-11-18).** This updates the end and reopen rules in decision 111. Mark done checks the revision Home read. Undo checks the completion's change ID. Snooze and its undo check the separate Home mark version, including on a completion review. Jobs and the Deals checklist keep their existing versionless completion calls (#711).
 
@@ -315,4 +315,8 @@
 
 159\. **The new database keeps each deal's client website registration (2026-11-18).** A website name belongs to one registration, and a deal can have one active registration. The copied site keeps its verifier and its binding to the deal and client. Both partners get the address when the registration is active and the client matches. The verifier stays out of deal reads and change history (#728).
 
-162\. **Joe or Dell owns a national account (2026-11-18).** A composite foreign key limits dated ownership to the two signed-in partner identities. A handoff ends the previous period on the new owner's start date in Central time. Changes on the same date keep one dated period and preserve each handoff in change history (#738).
+160\. **A pending draft leads one card for its conversation (2026-11-18).** Home and Mail priorities use that card for the draft and all visible suggestions. Once the draft is approved, sent, failed or declined, the suggestions lead, with any sending or failure state carried on their card (#745).
+
+161\. **Phase effective dates have their own kind, and undated person memberships start with the first deal (2026-11-18).** The deal page saves phase effective dates as `phase_effective_date`. The membership copy uses the first deal's Chicago opening date when a person client belongs to a national account and has no reviewed membership date (#734).
+
+162\. **Joe or Dell owns a national account (2026-11-18).** This replaces the part of decision 51 that allowed an outside agent to own a national account. A composite foreign key limits dated ownership to the two signed-in partner identities. A handoff ends the previous period on the new owner's start date in Central time. Changes on the same date keep one dated period and preserve each handoff in change history (#738).

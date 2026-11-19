@@ -121,9 +121,8 @@ async function changeOwner(
 	} = await sql<{
 		id: string;
 		owner_id: string;
-		ended_on: string | null;
 		started_today: boolean;
-	}>`select id, owner_id, ended_on::text, started_on = ${today} as started_today
+	}>`select id, owner_id, started_on = ${today} as started_today
 		from national_account_owner where account_id = ${account_client_id}::uuid
 		and daterange(started_on, ended_on) @> ${today}`.execute(tx);
 	const version = current
@@ -148,9 +147,7 @@ async function changeOwner(
 			.where("id", "=", current.id)
 			.execute();
 	await sql`insert into national_account_owner (account_id, owner_id, started_on, ended_on)
-		values (${account_client_id}::uuid, ${owner_id}::uuid, ${today}, coalesce(${current?.ended_on ?? null}::date,
-			(select min(started_on) from national_account_owner
-			where account_id = ${account_client_id}::uuid and started_on > ${today})))`.execute(
+		values (${account_client_id}::uuid, ${owner_id}::uuid, ${today}, null)`.execute(
 		tx,
 	);
 	return { account_client_id, owner };

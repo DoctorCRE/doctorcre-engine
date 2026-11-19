@@ -141,6 +141,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Checklist: the deal's checklist items, each with its due date in words. Clicking one opens it.
 - [ ] Checklist progress uses plain labels like "Lease expiration for renewal", "Invoice" and "Commission received". It shows which confirmed dates are due. Commission received is complete when all saved payments have receipt dates, even if the deal still has an expected amount.
 - [ ] Critical dates: each with its name in plain words, its date in words and its state. A proposed date, such as one read from a lease, shows Confirm and Drop. Confirm makes it a confirmed date. Drop asks a reason. A confirmed date can be marked done, dropped or passed, each with a reason. Only a partner's click decides.
+- [ ] Phase effective date is a kind the partner can choose when adding a critical date.
 - [ ] Terms: Show sourced terms lists each lease term found in the deal's documents, with its document, pages and quoted text. Approve, Correct and Reject each take a reason and save the partner's choice, as on Home's lease fact card.
 - [ ] Email follow-ups: each suggestion from an email on this deal, with that email. Accept and Dismiss work as on Home's email suggestion.
 - [ ] Update: a note saved to the deal's history with its author and time.

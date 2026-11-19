@@ -1997,7 +1997,7 @@ create table critical_date (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
 	deal_id uuid not null references deal,
-	kind text not null check (kind in ('loi_expiry', 'option_notice', 'rent_start', 'lease_end', 'due_diligence', 'other')),
+	kind text not null check (kind in ('loi_expiry', 'option_notice', 'rent_start', 'lease_end', 'due_diligence', 'phase_effective_date', 'other')),
 	due_on date not null,
 	source text not null check (source ~ '\S'),
 	offer_id uuid,

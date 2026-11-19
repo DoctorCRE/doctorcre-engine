@@ -6,20 +6,26 @@ import { doorTest } from "../test-door.ts";
 const { db, setup, cleanup, save, request } = doorTest();
 const joe = { user: "joe" };
 const accounts = "national-accounts";
-const [JOE, DELL, OTHER, BRAND] = Array.from({ length: 4 }, randomUUID);
+const [JOE, DELL, OTHER, BRAND, SAME_OWNER_BRAND] = Array.from(
+	{ length: 5 },
+	randomUUID,
+);
 
 before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${JOE}', 'person', 'Example One'),
 			('${DELL}', 'person', 'Example Two'), ('${OTHER}', 'person', 'Example Other'),
-			('${BRAND}', 'company', 'Example Established Brand');
+			('${BRAND}', 'company', 'Example Established Brand'),
+			('${SAME_OWNER_BRAND}', 'company', 'Example Second Brand');
 		insert into app_user (id, slug) values ('${JOE}', 'joe'), ('${DELL}', 'dell'), ('${OTHER}', 'example');
 		insert into role (slug, label) values ('national_account', 'National account');
-		insert into party_role (party_id, role) values ('${BRAND}', 'national_account');
-		insert into national_account (party_id) values ('${BRAND}');
+		insert into party_role (party_id, role) values ('${BRAND}', 'national_account'),
+			('${SAME_OWNER_BRAND}', 'national_account');
+		insert into national_account (party_id) values ('${BRAND}'), ('${SAME_OWNER_BRAND}');
 		insert into national_account_owner (account_id, owner_id, started_on)
-			values ('${BRAND}', '${JOE}', '2020-01-01');
+			values ('${BRAND}', '${JOE}', '2020-01-01'),
+				('${SAME_OWNER_BRAND}', '${JOE}', '2020-01-01');
 		commit;`);
 });
 after(cleanup);
@@ -105,6 +111,25 @@ test("a handoff keeps the last period and stale board versions cannot undo it", 
 		[DELL, BRAND],
 	);
 	assert.equal(history.rowCount, 1);
+});
+
+test("a handoff to the current owner leaves the dated ownership rows unchanged", async () => {
+	const { base_version } = await boardAccount(SAME_OWNER_BRAND);
+	const [status] = await save(
+		joe,
+		`${accounts}/${SAME_OWNER_BRAND}/owner`,
+		args({ owner: "joe", base_version }),
+	);
+	assert.equal(status, 200);
+
+	const dates = await db.query(
+		`select owner_id, started_on::text, ended_on::text
+		from national_account_owner where account_id = $1 order by started_on`,
+		[SAME_OWNER_BRAND],
+	);
+	assert.deepEqual(dates.rows, [
+		{ owner_id: JOE, started_on: "2020-01-01", ended_on: null },
+	]);
 });
 
 test("the door and the database reject an app user outside Joe and Dell", async () => {
