@@ -4,7 +4,7 @@
 - **Must** show every real thing that needs the partner once, open each to what it is, let the partner finish it from Home, and stay current by itself.
 - **Must never** show the same thing twice, a card that cannot be opened or finished, an internal code, a raw timestamp or a system word; never send mail or decide a suggestion without the partner's click. What changes by itself, such as a step a call closed or a reply recorded from Outlook, never shows as the partner's click.
 
-The owner's test, in his words: "each real thing shows once, every card opens to what it is, every card can be finished, and it stays current without you cleaning it up." Each checkbox line is checked on the real screen, signed in, against a copy of production. Lines marked **Open** wait on an owner question below and are not checked until he answers. Examples use made-up names.
+The owner's test, in his words: "each real thing shows once, every card opens to what it is, every card can be finished, and it stays current without you cleaning it up." Each checkbox line is checked on the real screen, signed in, against a copy of production. Examples use made-up names.
 
 ## Every card
 
@@ -21,9 +21,9 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Refresh inbox reloads the cards. The line beside it says whether Home is current, updating, or offline.
 - [ ] Each card has a checkbox. With cards selected, Home shows how many, Snooze selected and Clear selection. After a batch it lists each card's result, with Undo whole batch, Undo selected results, Retry same batch when a result is uncertain, and Finish reviewing batch.
 - [ ] Home has no "set waiting person" control.
-- **Open (question 2).** Recommended: Home has no Hide; every card is finished, snoozed to a date, or dropped with a reason, and the selection bar's Hide button (today "Settle selected") goes too. Otherwise Hide from inbox sets a card aside unfinished, and it shows under "Hidden from inbox" with Show in inbox.
+- [ ] Home has no Hide. Every card is finished, snoozed to a date, or dropped with a reason. There is no "Hide from inbox", no "Hidden from inbox" list, and no Hide button on the selection bar (today "Settle selected") (owner, 2026-11-19).
 
-When app routing moves to the new database, Home uses door 24 for snooze, settlement and undo on steps, call follow-ups, updates, suggestions and reply drafts. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
+When app routing moves to the new database, Home uses door 24 for snooze and undo on steps, call follow-ups, updates, suggestions and reply drafts. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
 
 ## Inbox sections
 
@@ -33,7 +33,7 @@ When app routing moves to the new database, Home uses door 24 for snooze, settle
 - [ ] In motion and waiting: calls still being read, cards on hold, snoozed cards, each saying when it comes back.
 - [ ] Done today, then earlier completions, each with the time it was done in words.
 - [ ] Search finds cards by title and by the name of the client, lead, vendor or deal.
-- **Open (question 1).** Steps dated after today, such as automatic check-ins months ahead. Recommended: they show only on their day. Otherwise they show in a separate "Coming up" list.
+- [ ] A step dated after today, such as an automatic check-in months ahead, stays off Home until its day. Home has no "Coming up" list (owner, 2026-11-19).
 
 ## Card kinds
 
@@ -120,13 +120,14 @@ A lease value read from a document that needs the partner's eye.
 A client's comment on a toured property, or a property added to or removed from their shortlist.
 
 - [ ] Opens to the property, the comment or the shortlist change, and when it was left.
-- **Open (question 4).** Whether tour feedback stays on Home, and which button finishes it.
+- [ ] Stays on Home until the partner finishes it. Done finishes it, and the card leaves (owner, 2026-11-19).
 
 ## Today panel
 
 - [ ] Shows today's meetings and the partner's dated reminders, with a choice of both partners or either one.
 - [ ] Does not repeat a step that is already a card in the inbox. A reminder with a card opens that card.
 - [ ] Each section either shows its items or says plainly why it cannot. It never stays on "Checking…".
+- [ ] A reminder dated before today is listed under "Late" and says how late, such as "3 days late", as the deal's next step does. The panel never says "Overdue" (coordinator, 2026-11-19).
 
 ## Mail priorities
 
@@ -136,24 +137,15 @@ A client's comment on a toured property, or a property added to or removed from 
 - [ ] Each row names the sender, the subject, what is suggested, and the date in words.
 - [ ] Opening a row opens the same thing its inbox card opens.
 - [ ] No coverage line in system words, such as "Mailbox Example · Recorded inbound pending proposals".
-- **Open (question 3).** Recommended: each email lives once on Home, as an inbox card, and Mail priorities only orders those cards. Otherwise both panels stay as they are.
+- [ ] Each email shows once on Home, as its inbox card. Mail priorities only orders those cards and shows no email of its own (owner, 2026-11-19).
 
-## Upcoming meetings
+## Meetings
 
+- [ ] Each meeting shows once, in the Today panel. Home has no Upcoming meetings, Your working week or Your schedule panel (owner, 2026-11-19).
 - [ ] Each meeting shows its time in words, its title, and the client or deal it is about.
 - [ ] Opens to the meeting with its attendees, and to its deal when it has one.
 - [ ] After a meeting ends, Home asks once whether it happened. It happened logs it; Dismiss drops the question.
 - [ ] When Home's calendar may differ from Outlook, it says when it last matched.
-- **Open (question 3).** Recommended: each meeting lives once, in the Today panel. Otherwise Upcoming meetings, Your working week and Your schedule stay as they are.
-
-## Questions for the owner
-
-Questions 1 to 3 are asks 12 to 14 on the roadmap's "What we need from you" list. Question 4 is not on it yet.
-
-1. Automatic check-ins with vendors and clients dated months ahead sit in Needs your attention today. Recommended: they show only on their day. Or they go in a separate "Coming up" list.
-2. "Hide from inbox" sets a step aside unfinished. Recommended: remove it, so every card is finished, snoozed to a date, or dropped with a reason. Or keep it.
-3. Mail shows in both Mail priorities and the inbox, and today's meetings show in three panels. Recommended: each email lives once, as an inbox card, and Mail priorities only orders those cards; meetings live once, in the Today panel. Or keep the panels as they are.
-4. Should tour feedback stay on Home, and if so, what finishes it?
 
 ## Not yet true
 
@@ -166,8 +158,10 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - Every card carries a "needs attention" badge and "Ready for your attention". The inbox says "91 matching loaded cards of 91 loaded" and "Partner inbox".
 - Steps due in 2027, and one on hold until 2027, sit in Needs your attention.
 - Mail priorities rows are titled only "Next step", "Email filing" or "Possible new deal", with no sender or subject, and almost all link to the same email follow-ups page.
+- Mail shows both in Mail priorities and as inbox cards.
 - The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs, marks and sent draft history. Opening the email and deciding a suggestion from Home still need app routing.
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
+- Home still offers Hide from inbox, the Hidden from inbox list and the selection bar's Settle selected.
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.
 - The Today panel's Deal pulse stayed on "Checking recent deal changes…".
