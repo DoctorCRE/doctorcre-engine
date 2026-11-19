@@ -150,6 +150,21 @@ create table party_role (
 	constraint party_role_capabilities_on_vendor check (role = 'vendor' or num_nonnulls(offers, seeking) = 0)
 );
 
+-- The copy and merge run as owner. A new ruling through the engine needs a real reason.
+create function vendor_reason_not_recorded_only_imported() returns trigger
+language plpgsql as $$
+begin
+	if not pg_has_role((select relowner from pg_catalog.pg_class where oid = tg_relid), 'USAGE') then
+		raise exception 'a new vendor ruling needs a recorded reason'
+			using errcode = 'check_violation', constraint = 'vendor_reason_not_recorded_only_imported';
+	end if;
+	return new;
+end $$;
+
+create trigger vendor_reason_not_recorded_only_imported before insert or update of disposition, disposition_reason on party_role
+	for each row when (lower(regexp_replace(new.disposition_reason, '^\s+|\s+$', '', 'g')) = 'not recorded, set before the new system')
+	execute function vendor_reason_not_recorded_only_imported();
+
 create table vendor_vertical (
 	party_id uuid not null,
 	role text not null default 'vendor' check (role = 'vendor'),
