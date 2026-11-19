@@ -19,6 +19,7 @@ import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
+import { dealClientWebsite } from "./deals/client-website.ts";
 import { criticalDates } from "./deals/critical-dates.ts";
 import {
 	automaticPhaseUndo,
@@ -96,6 +97,7 @@ app.route("/api/engine", prospectReads);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", automaticPhaseUndo);
 app.route("/api/engine", dealParticipants);
+app.route("/api/engine", dealClientWebsite);
 app.route("/api/engine", criticalDates);
 app.route("/api/engine", nextSteps);
 app.route("/api/engine", heldStepReviews);

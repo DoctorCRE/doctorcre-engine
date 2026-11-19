@@ -24,6 +24,11 @@ const HINTS = {
 	unauthenticated: "The authenticated actor could not be resolved.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
 	not_found: "The requested record was not found.",
+	portal_deal_not_found: "Choose a deal with a current client.",
+	portal_slug_taken: "Choose a different website name.",
+	portal_password_differs:
+		"This website is already set up with a different password.",
+	portal_deal_already_registered: "This deal already has a client website.",
 	home_item_not_found: "Choose a card from your Home inbox.",
 	invalid_snooze_time: "Choose a future snooze time.",
 	needs_disambiguation:

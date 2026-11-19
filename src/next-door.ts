@@ -28,13 +28,14 @@ export const jobStamp = createMiddleware<NextSaveEnv>(async (c, next) => {
 	await next();
 });
 
-// A save whose arguments parse into its request, which is also what its receipt hashes.
+// A save parses its request once and can leave credentials out of its receipt.
 export async function answerNextSave<Request extends JsonObject>(
 	c: Context<NextSaveEnv>,
 	verb: string,
 	parse: (body: JsonObject) => Refusal | Request,
 	change: (tx: Transaction<DB>, request: Request) => Promise<JsonObject>,
 	status: 200 | 201 | ((result: JsonObject) => 200 | 201) = 200,
+	receiptArgs: (request: Request) => JsonObject = (request) => request,
 ): Promise<Response> {
 	const correlation_id = crypto.randomUUID();
 	const refused = (refusal: Refusal) => refuse(c, refusal, correlation_id);
@@ -45,7 +46,7 @@ export async function answerNextSave<Request extends JsonObject>(
 	const writer = c.env.DATABASE_WRITER;
 	if (!writer) return refused(new Refusal(503, "database_unavailable"));
 	try {
-		const save = { stamp: c.get("stamp"), verb, args: request };
+		const save = { stamp: c.get("stamp"), verb, args: receiptArgs(request) };
 		const result = await runNextSave(writer.connectionString, save, (tx) =>
 			change(tx, request),
 		);

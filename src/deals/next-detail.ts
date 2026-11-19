@@ -7,6 +7,7 @@ import {
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
+import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
 import { selectNextDeals } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
@@ -21,7 +22,9 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			eb
 				.selectFrom("deal_client_website as website")
 				.select(
-					sql<string>`'https://share.doctorcre.com/' || website.slug`.as("url"),
+					sql<string>`${CLIENT_WEBSITE_ORIGIN} || '/' || website.slug`.as(
+						"url",
+					),
 				)
 				.whereRef("website.deal_id", "=", "d.id")
 				.whereRef("website.client_party_id", "=", "c.party_id")
