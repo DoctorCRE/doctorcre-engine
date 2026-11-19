@@ -180,8 +180,11 @@ with candidates as (
   and not exists (select from next_step n join public.next_action old using (id)
    where e.verb = 'set-next-action' and e.field is null and n.deal_id = d.id
    and old.subject_type = 'deal' and old.subject_id = e.subject_id
-   and n.what = regexp_replace(e.new_value ->> 'next_action', '^\s+|\s+$', '', 'g')
-   and n.due_on::text is not distinct from e.new_value ->> 'due'
+   and ((n.what = regexp_replace(e.new_value ->> 'next_action', '^\s+|\s+$', '', 'g')
+     and n.due_on::text is not distinct from e.new_value ->> 'due')
+    or (n.created_at = old.created_at
+     and old.description = e.new_value ->> 'next_action'
+     and old.due_on::text is not distinct from e.new_value ->> 'due'))
    and n.created_at between e.occurred_at - interval '5 seconds' and e.occurred_at + interval '5 seconds')
   and not exists (select from next_step n
    where e.verb = 'resolve-post-call-candidate' and n.deal_id = d.id and n.id::text = e.new_value ->> 'next_action_id')

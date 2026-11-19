@@ -203,6 +203,28 @@ test("deal history keeps business text on each side of an event", async () => {
 	}
 });
 
+test("a reformatted action and its legacy creation appear once in the Timeline", async () => {
+	const serialized =
+		"{'text': 'Example lease follow-up', 'due': '2025-04-02', 'waiting_on': None}";
+	await db.query(`begin;
+  insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, created_at, updated_at, created_by)
+  values ('${id(88)}', 'deal', '${id(20)}', '${id(1)}', $legacy$${serialized}$legacy$, 'done', '2025-04-01', '2025-04-01', '${id(1)}');
+  select set_config('engine.job','old_system',true);
+  insert into next_step (id, deal_id, what, due_on, resolution, created_at)
+  values ('${id(88)}', '${id(20)}', 'Example lease follow-up', '2025-04-02', 'done', '2025-04-01');
+  commit;`);
+	await db.query(
+		`insert into public.event (id, actor_id, subject_type, subject_id, verb, new_value, cause, occurred_at)
+   values ($1, $2, 'deal', $3, 'set-next-action', $4, 'human_stated', '2025-04-01')`,
+		[id(89), id(1), id(20), { next_action: serialized, due: null }],
+	);
+	await run();
+	assert.deepEqual(
+		await rows(`select id from imported_deal_history where id = '${id(89)}'`),
+		[],
+	);
+});
+
 test("copied history removes only separable references and placeholder markets", async () => {
 	const original =
 		"Checked ~/Recordings/example/transcript.txt against the existing party row";
