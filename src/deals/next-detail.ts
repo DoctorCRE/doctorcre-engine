@@ -234,25 +234,11 @@ const correspondenceOf = (deal: Expression<string>) => sql<Correspondence[]>`(
 	where ab.deal_id = ${deal} and (a.kind = 'meeting' or e.activity_id is not null)
 )`;
 
-function parkingTimelineValue(
-	active: Expression<unknown>,
-	reason: Expression<unknown>,
-	note: Expression<unknown> = sql`null::text`,
-) {
-	return sql`to_jsonb(case when ${active} then 'Active'
-		else concat_ws(' · ', 'Parked', case ${reason}
-			when 'client_paused' then 'Client paused'
-			when 'prospect_never_active' then 'Prospect never active'
-			when 'other' then 'Other'
-		end, ${note})
-	end)`;
-}
-
 function copiedDealEditValue(side: "old_value" | "new_value") {
 	const value = sql`c.source_event -> ${sql.lit(side)}`;
 	const parking = sql`${value} -> 'operating_state'`;
 	return sql`case when c.source_event ->> 'field' = 'operating_state' and ${parking} is not null
-		then ${parkingTimelineValue(sql`${parking} ->> 'state' = 'active'`, sql`${parking} ->> 'reason'`)}
+		then jsonb_strip_nulls(${parking})
 		else ${value}
 	end`;
 }
@@ -262,11 +248,11 @@ function dealEditValue(column: "c.old_value" | "c.new_value") {
 	return sql`case edit.key
 		when 'owner_user_id' then to_jsonb((select slug from app_user where id = (${value} ->> edit.key)::uuid))
 		when 'market_id' then to_jsonb((select name from market where id = (${value} ->> edit.key)::uuid))
-		when 'operating_state' then ${parkingTimelineValue(
-			sql`${value} -> 'parking_reason' = 'null'::jsonb`,
-			sql`${value} ->> 'parking_reason'`,
-			sql`${value} ->> 'parking_note'`,
-		)}
+		when 'operating_state' then jsonb_strip_nulls(jsonb_build_object(
+			'state', case when ${value} -> 'parking_reason' = 'null'::jsonb then 'active' else 'parked' end,
+			'reason', ${value} -> 'parking_reason',
+			'note', ${value} -> 'parking_note'
+		))
 		else ${value} -> edit.key
 	end`;
 }

@@ -172,7 +172,8 @@ before(async () => {
 		where id = '${id(31)}';
 		update deal set owner_user_id = '${id(2)}', market_id = '${id(92)}' where id = '${id(32)}';
 		update deal set parking_reason = 'client_paused' where id = '${id(32)}';
-		update deal set parking_reason = null where id = '${id(32)}';
+		update deal set parking_note = 'Example pause' where id = '${id(32)}';
+		update deal set parking_reason = null, parking_note = null where id = '${id(32)}';
 		commit;`);
 });
 after(cleanup);
@@ -792,8 +793,12 @@ test("signed-in detail names every field changed by one new-schema save", async 
 		{
 			verb: "update-deal",
 			field: "operating_state",
-			old_value: "Active",
-			new_value: "Parked · Other · Example waiting for plans",
+			old_value: { state: "active" },
+			new_value: {
+				state: "parked",
+				reason: "other",
+				note: "Example waiting for plans",
+			},
 		},
 		{
 			verb: "update-deal",
@@ -831,14 +836,22 @@ test("signed-in detail shows a revived deal as active", async () => {
 		events: [
 			{
 				field: "operating_state",
-				old_value: "Parked · Client paused",
-				new_value: "Active",
+				old_value: {
+					state: "parked",
+					reason: "client_paused",
+					note: "Example pause",
+				},
+				new_value: { state: "active" },
+			},
+			{
+				field: "operating_state",
+				new_value: { state: "parked", note: "Example pause" },
 			},
 		],
 	});
 });
 
-test("signed-in detail uses the parking card's reason labels for copied Timeline events", async () => {
+test("signed-in detail returns the parking reason codes in copied Timeline events", async () => {
 	const response = await get(`/deals/${id(37)}`, "next");
 	assert.equal(response.status, 200);
 	const detail = await response.json();
@@ -848,20 +861,20 @@ test("signed-in detail uses the parking card's reason labels for copied Timeline
 			"events" in detail &&
 			Array.isArray(detail.events),
 	);
-	assert.partialDeepStrictEqual(
-		detail.events.filter(({ field }) => field === "operating_state"),
+	assert.deepEqual(
+		detail.events
+			.filter(({ field }) => field === "operating_state")
+			.map(({ id, old_value, new_value }) => ({ id, old_value, new_value })),
 		[
 			{
 				id: id(49),
-				field: "operating_state",
-				old_value: "Parked · Prospect never active",
-				new_value: "Active",
+				old_value: { state: "parked", reason: "prospect_never_active" },
+				new_value: { state: "active" },
 			},
 			{
 				id: id(48),
-				field: "operating_state",
-				old_value: "Active",
-				new_value: "Parked · Other",
+				old_value: { state: "active" },
+				new_value: { state: "parked", reason: "other" },
 			},
 		],
 	);
