@@ -1350,11 +1350,13 @@ The app does not display premises or offer-round summaries. Deal links use the U
 
 ### People and company search for the deal page
 
-`GET /api/engine/parties/search` uses the signed-in partner's session and reads through `DATABASE` as `engine_reader`. It takes one `query` of 1 to 100 characters and an optional `kind` of `person` or `company`. The read trims the query and matches a literal name prefix without regard to case.
+`GET /api/engine/parties/search` uses the signed-in partner's session and reads through `DATABASE` as `engine_reader`. It takes one `query` of 1 to 100 characters, an optional `kind` of `person` or `company`, and an optional `role=client`. The read trims the query and matches a literal name prefix without regard to case.
 
 The response is `200 { ok: true, schema_version: "party-search.v1", parties }`. Each result carries `id`, `display_name`, and `kind`. The read returns the first 25 matches in case-insensitive name order, with ties ordered by ID. With no `kind`, the list can contain both people and companies. The Market agent picker will send `kind=person` so the limit applies to matching people. The list includes live parties, including do-not-contact records, and excludes merged-away duplicates.
 
-No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated kinds return 400. Session and database refusals use the shared read rules. App #977 routes the deal-page picker to this door.
+Add deal sends `role=client` so the limit applies to people and companies with the client role. Use their `id` as `client_id` when saving the deal.
+
+No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated `kind` or `role` values return 400. Session and database refusals use the shared read rules. App #977 routes the deal-page picker to this door.
 
 ## Home inbox reads for the app
 
@@ -1589,6 +1591,8 @@ Both saves answer `{ draft_id, version, status }` with the new revision. A stale
 - The answer is `201 { deal_id, change_id, phase_changed_at }`. A retry answers `200` with the same fields and `replayed: true`. An unknown owner returns `400 unknown_owner`. An ended phase returns `400 invalid_field_value { fields: ["phase"] }`. The database refuses an unknown vocabulary value, a party without the client role, or an invalid renewal link.
 
 The signed-in market deal form reads its choices from the new schema. `GET /api/engine/markets` returns every market as an array of `{ market_id, name }`. `GET /api/engine/national-accounts/{account_id}/locations` returns an array of `{ party_id, name, kind }`, where kind is `person` or `company`. It includes only memberships current today in Central time, with an inclusive start and an exclusive end. An unknown account returns `404 not_found`. Both lists are ordered by name and return an empty array when there are no choices.
+
+For a renewal, Add deal reads `GET /api/engine/clients/{client_id}/leases` after the partner picks a client. This signed-in read takes no query parameters and uses `DATABASE` as `engine_reader`. It returns an array of `{ lease_id, address, expiration_on }` for leases whose recorded tenant is that client, including leases negotiated elsewhere. The address is the property's address. The expiration comes from the latest version and is null when the lease has no version. The list is ordered by address, latest expiration first at the same address, then lease ID. Use `lease_id` as `renews_lease_id` in the save. A malformed client ID returns `404 not_found`. A valid ID with no eligible leases returns an empty array. A successor tenant's renewal cannot be picked through this list. The save still accepts a successor tenant's source lease as described in [Leases and options](#leases-and-options).
 
 `GET /jobs/deals/{deal_id}` answers `{ deal_id, phase, phase_saved_at, change_id, next_step: { id, due_on } | null }` for a registered job. Use `phase` as `phase.from` and `change_id` as `seen_change_id` on a save. `phase_saved_at` is the current phase's save timestamp with an offset. It comes from `changed_at` on the same `deal_phase_change` row. Call capture can compare this timestamp with the call time even when a move has a backdated `on` date. Both phase fields are null before the first move, and the change id is 0 before the first deal change. The next step is the newest open step outside the checklist, with a null date when undated. An unknown job gets `403 unknown_job`, and an unknown deal gets `404 not_found`.
 
