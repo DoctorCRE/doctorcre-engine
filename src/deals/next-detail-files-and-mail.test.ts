@@ -46,15 +46,22 @@ before(async () => {
 		insert into activity (id, kind, happened_at, summary) values
 			('${id(20)}', 'email', '2026-01-10T16:00:00Z', 'A request for the plan.'),
 			('${id(21)}', 'email', '2026-01-11T16:00:00Z', 'The plan is attached.'),
-			('${id(22)}', 'call', '2026-01-12T16:00:00Z', 'A call about the plan.');
+			('${id(22)}', 'call', '2026-01-12T16:00:00Z', 'A call about the plan.'),
+			('${id(23)}', 'meeting', '2026-01-13T16:00:00Z', E'Plan review\n\nDiscussed the layout.'),
+			('${id(24)}', 'email', '2026-01-14T16:00:00Z', 'A reply about the layout.'),
+			('${id(25)}', 'meeting', '2026-01-15T16:00:00Z', null);
 		insert into email (activity_id, message_id, sender, sender_name, subject, body, conversation_id) values
 			('${id(20)}', 'plan@example.test', 'pat@example.test', 'Pat Example',
 				'Example plan request', 'Could you send the plan?', 'example-plan-thread'),
 			('${id(21)}', 'attached@example.test', 'sam@example.test', null,
-				'Example attached plan', 'I attached the plan.', 'example-plan-thread');
+				'Example attached plan', 'I attached the plan.', 'example-plan-thread'),
+			('${id(24)}', 'layout@example.test', 'sam@example.test', null,
+				'Example layout reply', 'The layout works.', 'example-plan-thread');
 		insert into email_mailbox (activity_id, user_id) values ('${id(20)}', '${id(1)}'), ('${id(21)}', '${id(2)}');
-		insert into activity_about (activity_id, deal_id) values ('${id(20)}', '${dealId}'), ('${id(22)}', '${dealId}');
-		insert into activity_about (activity_id, party_id) values ('${id(21)}', '${id(3)}');
+		insert into activity_about (activity_id, deal_id) values
+			('${id(20)}', '${dealId}'), ('${id(22)}', '${dealId}'), ('${id(23)}', '${dealId}'),
+			('${id(24)}', '${dealId}'), ('${id(25)}', '${otherDealId}');
+		insert into activity_about (activity_id, party_id) values ('${id(20)}', '${id(3)}'), ('${id(21)}', '${id(3)}');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id, due_on, created_at)
 			values ('${id(30)}', 'next_step', '${id(20)}', 'email', 'Could you send the plan?', 'old_system',
 				'${dealId}', 'Send the plan', '${id(1)}', '2026-02-01', '2026-01-10'),
@@ -167,9 +174,35 @@ test("both partners see who saved a critical date or next step", async () => {
 	}
 });
 
-test("both partners see the deal's pending email suggestions and can decide them", async () => {
+test("both partners see individual correspondence and can decide email suggestions", async () => {
+	const expected = [
+		{
+			activity_id: id(24),
+			kind: "email",
+			happened_at: "2026-01-14T16:00:00+00:00",
+			sender: "sam@example.test",
+			sender_name: null,
+			subject: "Example layout reply",
+		},
+		{
+			activity_id: id(23),
+			kind: "meeting",
+			happened_at: "2026-01-13T16:00:00+00:00",
+			title: "Plan review",
+		},
+		{
+			activity_id: id(20),
+			kind: "email",
+			happened_at: "2026-01-10T16:00:00+00:00",
+			sender: "pat@example.test",
+			sender_name: "Pat Example",
+			subject: "Example plan request",
+		},
+	];
 	for (const caller of [alex, casey]) {
 		const page = await detail(caller);
+		assert.ok("correspondence" in page);
+		assert.deepEqual(page.correspondence, expected);
 		assert.ok(
 			"email_follow_ups" in page && Array.isArray(page.email_follow_ups),
 		);
@@ -210,6 +243,16 @@ test("both partners see the deal's pending email suggestions and can decide them
 	assert.partialDeepStrictEqual(await detail(alex, otherDealId), {
 		email_follow_ups: [{ proposal_id: id(31), owner: null }],
 	});
+	const other = await detail(alex, otherDealId);
+	assert.ok("correspondence" in other);
+	assert.deepEqual(other.correspondence, [
+		{
+			activity_id: id(25),
+			kind: "meeting",
+			happened_at: "2026-01-15T16:00:00+00:00",
+			title: null,
+		},
+	]);
 	const decide = (proposal: string, decision: "accept" | "dismiss") =>
 		save(casey, `proposals/${proposal}/decision`, {
 			decision,
@@ -239,4 +282,11 @@ test("both partners see the deal's pending email suggestions and can decide them
 	const refreshed = await detail(alex);
 	assert.ok("email_follow_ups" in refreshed);
 	assert.deepEqual(refreshed.email_follow_ups, []);
+	assert.ok(
+		"correspondence" in refreshed && Array.isArray(refreshed.correspondence),
+	);
+	assert.deepEqual(
+		refreshed.correspondence.map((entry) => entry.activity_id),
+		[id(24), id(23), id(21), id(20)],
+	);
 });

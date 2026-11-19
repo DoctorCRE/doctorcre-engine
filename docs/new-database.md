@@ -1306,6 +1306,8 @@ The detail sends `checklist` as `deal-checklist.v1`. The template lives in engin
 
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
+The new detail read returns `correspondence`, an array of email messages and meetings linked directly to the deal by `activity_about`, newest first by `happened_at`. Each entry gives `activity_id`, `kind`, and `happened_at`. An `email` also gives `sender`, `sender_name`, and `subject` from the stored message. Messages in the same Outlook conversation have their own entries. A `meeting` gives `title` from the part of the stored activity summary before the first blank line. The meeting notes copy puts the recorded title there. Other meetings use the saved summary caption, and an absent or blank caption returns null. Deal notes still come from `thread`.
+
 Both partners' open board cards and deal pages return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The reader database role can read the fields used to form the link.
 
 ### Set up a client website

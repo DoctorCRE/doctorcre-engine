@@ -22,6 +22,19 @@ type DealEvent = {
 	new_value: JsonValue;
 };
 
+type Correspondence = {
+	activity_id: string;
+	happened_at: string;
+} & (
+	| {
+			kind: "email";
+			sender: string;
+			sender_name: string | null;
+			subject: string;
+	  }
+	| { kind: "meeting"; title: string | null }
+);
+
 export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 	const record = await selectNextDealsWithFacts(db)
 		.select((eb) => [
@@ -85,6 +98,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 						a.happened_at desc, a.id desc
 				) t
 			)`.as("email_threads"),
+			correspondenceOf(eb.ref("d.id")).as("correspondence"),
 			jsonArrayFrom(
 				eb
 					.selectFrom("critical_date as cd")
@@ -203,6 +217,21 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		checklist,
 	};
 }
+
+const correspondenceOf = (deal: Expression<string>) => sql<Correspondence[]>`(
+	select coalesce(jsonb_agg(
+		jsonb_build_object('activity_id', a.id, 'kind', a.kind, 'happened_at', a.happened_at)
+		|| case when a.kind = 'meeting' then jsonb_build_object('title',
+			nullif(btrim(split_part(replace(a.summary, chr(13), ''), E'\\n\\n', 1), E' \\t\\n'), ''))
+		else jsonb_build_object('sender', e.sender, 'sender_name', e.sender_name, 'subject', e.subject)
+		end
+		order by a.happened_at desc, a.id desc
+	), '[]')
+	from activity_about ab
+	join activity a on a.id = ab.activity_id
+	left join email e on e.activity_id = a.id
+	where ab.deal_id = ${deal} and (a.kind = 'meeting' or e.activity_id is not null)
+)`;
 
 function dealEditValue(column: "c.old_value" | "c.new_value") {
 	const value = sql.ref(column);
