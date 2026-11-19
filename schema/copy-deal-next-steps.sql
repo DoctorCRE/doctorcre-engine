@@ -123,7 +123,8 @@ where d.next_date is not null
 
 create temp table step_refusal on commit drop as
 select s.id, f.field, f.value, f.reason from step_candidate s cross join lateral (values
- (case when s.resolution is not null then 'status' when s.source = 'deal_note' then 'text' else 'source' end,
+ (case when s.refusal = 'automation_note_step' then 'text'
+  when s.resolution is not null then 'status' when s.source = 'deal_note' then 'text' else 'source' end,
  case when s.refusal = 'automation_note_step' then null
   when s.resolution is not null then (select status from old_action a where a.id = s.id) when s.source = 'deal_note' then s.what else s.source end, s.refusal, s.refusal is not null),
  ('what', s.what, 'blank_next_step', s.what !~ '\S'),

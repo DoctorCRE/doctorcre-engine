@@ -152,6 +152,7 @@ test("deal history keeps business text on each side of an event", async () => {
 		["import", null, null, { summary: `${header}; ${decision}` }, null, { summary: decision }, "summary"],
 		["import", null, null, { summary: `${header} (${decision})` }, null, { summary: `${header} (${decision})` }, null],
 		["import", null, null, { summary: `${header}\n${decision}` }, null, { summary: decision }, "summary"],
+		["import", null, null, { summary: "Partner confirmed access (2025-04-01)." }, null, { summary: "Partner confirmed access (April 1, 2025)." }, null],
 		["update-deal", "salesforce_id", null, { salesforce_id: "EXAMPLE-42" }, null, null, "technical_deal_history"],
 		["update-deal", "notes_path", null, { notes_path: "/example/deal.md" }, null, null, "technical_deal_history"],
 		["set-next-action", "next_date", { next_date: null }, { next_date: null }, null, null, "empty_deal_history"],

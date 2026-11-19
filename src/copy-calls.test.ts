@@ -84,7 +84,7 @@ before(async () => {
 	].join(",\n  ")};
  insert into public.phone_call_session (id, owner_id, sha256, byte_count, duration_seconds, mime_type, started_at, consent_announced_at, projection, studio_status)
   values ('${id(60)}', '${id(1)}', '${hash("a")}', 1000, 60, 'audio/mp4', '2024-01-01 15:00', '2024-01-01 15:00',
-  '{"summary": " Example summary ", "decisions": ["Example decision", " "], "open_questions": ["Example question"]}',
+  '{"summary": " Example summary from 2024-01-03. ", "decisions": ["Example decision", " "], "open_questions": ["Example question"]}',
   '{"state": "held_review", "reason": "open_review_questions", "open_questions": 1}');
  insert into public.capture_post_call_report (session_id, idempotency_key, report_sha256, candidate_count) values
   ('${id(60)}', 'report-60', '${hash("b")}', 1), ('${id(61)}', 'report-61', '${hash("c")}', 1);
@@ -111,7 +111,11 @@ before(async () => {
 			76,
 			63,
 			"meeting_record",
-			{ ref: id(30), summary: "Example record", detail: "Example detail" },
+			{
+				ref: id(30),
+				summary: "Example record",
+				detail: "Example detail from 2024-01-04.",
+			},
 			49,
 		),
 		candidate(78, 64, "meeting_record", { ref: id(30), summary: "Example" }),
@@ -153,7 +157,7 @@ test("copies each call and meeting capture with its report, once, about the reco
 				id(60),
 				"call",
 				"2024-01-01 15:00:00+00",
-				"Example summary\n\nDecisions:\n- Example decision\n\nOpen questions:\n- Example question",
+				"Example summary from January 3, 2024.\n\nDecisions:\n- Example decision\n\nOpen questions:\n- Example question",
 				id(1),
 				null,
 				null,
@@ -163,7 +167,7 @@ test("copies each call and meeting capture with its report, once, about the reco
 				id(63),
 				"meeting",
 				"2024-01-04 15:00:00+00",
-				"Example record\n\nExample detail",
+				"Example record\n\nExample detail from January 4, 2024.",
 				null,
 				"old_system",
 				null,

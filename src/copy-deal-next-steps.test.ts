@@ -815,14 +815,18 @@ test("leaves an automation-only step and its event behind while keeping partner 
  values ($1, 'deal', $2, $3, $4, 'set-next-action', 'automation_job', '2025-02-01', '2025-02-01')`,
 			[id(814), id(15), { next_action: housekeeping }, id(2)],
 		);
-		assert.ok(
-			(await run()).some(
-				(row) =>
-					row.old_id === id(811) &&
-					row.reason === "automation_note_step" &&
-					row.value === null,
-			),
-		);
+		for (const _ of [1, 2]) {
+			await db.query("discard temp");
+			assert.ok(
+				(await run()).some(
+					(row) =>
+						row.old_id === id(811) &&
+						row.field === "text" &&
+						row.reason === "automation_note_step" &&
+						row.value === null,
+				),
+			);
+		}
 		const steps = await rows(
 			`select id, what from next_step where id between '${id(811)}' and '${id(813)}' order by id`,
 		);

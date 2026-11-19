@@ -76,7 +76,7 @@ before(async () => {
  insert into outside_id (source,value,party_id) values ('old_system','${id(n)}','${id(n)}');`;
  }).join("\n")}
  insert into public.lead (id,party_id,stage,source_type,created_by,updated_by,created_at,updated_at,owner_id,source_detail,notes,next_action_date,lane,segment,est_lease_event,event_source,event_confidence,last_touch,notes_path) values
- ('${id(30)}','${id(10)}','qualified','Example referral','${id(1)}','${id(1)}','2024-01-01','2025-02-01','${id(1)}','Example lead detail','Example note','2026-12-01','example_lane','Example segment','2027-01-01','Example lease source','high','2025-01-01','example/file.md');
+ ('${id(30)}','${id(10)}','qualified','Example referral','${id(1)}','${id(1)}','2024-01-01','2025-02-01','${id(1)}','Example lead detail','Example note from 2025-01-04.','2026-12-01','example_lane','Example segment','2027-01-01','Example lease source','high','2025-01-01','example/file.md');
  insert into public.client (id,party_id,status,client_type,acquisition_source,acquisition_detail,created_by,updated_by,created_at) values
  ('${id(40)}','${id(10)}','active_deal','franchise','Example client source','Example client detail','${id(1)}','${id(1)}','2024-02-01'),
  ('${id(41)}','${id(11)}','past_client','franchise','Example client source',null,'${id(1)}','${id(1)}','2024-01-01'),
@@ -202,7 +202,11 @@ test("roles, profiles, details and estimates follow the old records without inve
 		],
 		[
 			"select summary from activity order by summary",
-			[["Example lead detail"], ["Example note"], ["Unrelated source detail"]],
+			[
+				["Example lead detail"],
+				["Example note from January 4, 2025."],
+				["Unrelated source detail"],
+			],
 		],
 		[
 			"select what,due_on::text,owner_party_id from next_step",
@@ -520,7 +524,7 @@ test("next actions, reference numbers and roster wording are copied once or list
  ('${id(112)}','lead','${id(100)}','${id(1)}','Call back','2027-02-05','done',null,null,'2025-01-01','2025-06-01','${id(1)}'),
  ('${id(113)}','lead','${id(100)}','${id(1)}','Old plan',null,'dropped',null,null,'2025-01-01','2025-01-01','${id(1)}'),
  ('${id(114)}','lead','${id(100)}','${id(119)}',E'\\t\\n',null,'open',null,null,'2025-01-01','2025-01-01','${id(1)}'),
- ('${id(109)}','client','${id(103)}','${id(119)}','Earlier proposal follow-up',null,'open',null,null,'2024-12-31','2025-01-01','${id(1)}'),
+ ('${id(109)}','client','${id(103)}','${id(119)}','Earlier proposal follow-up 2025-01-04.',null,'open',null,null,'2024-12-31','2025-01-01','${id(1)}'),
  ('${id(115)}','client','${id(103)}','${id(1)}','Send proposal','2027-04-01','open','2027-03-01','example-ref','2025-01-01','2025-01-01','${id(1)}'),
  ('${id(105)}','client','${id(103)}','${id(1)}','Example lapsed',null,'expired',null,null,'2025-01-01','2025-01-01','${id(1)}'),
  ('${id(106)}','lead','${id(100)}','${id(1)}','Example replaced',null,'dropped',null,null,'2025-01-01','2025-01-01','${id(1)}'),
@@ -555,7 +559,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(118), id(90), "Example expired", null, id(1), null],
 			[id(115), id(92), "Send proposal", "2027-04-01", id(1), null],
 			[id(105), id(92), "Example lapsed", null, id(1), null],
-			[id(109), id(92), "Earlier proposal follow-up", null, id(1), null],
+			[id(109), id(92), "Earlier proposal follow-up January 4, 2025.", null, id(1), null],
 		];
 		assert.deepEqual((await steps()).map(Object.values), copied);
 		assert.deepEqual(

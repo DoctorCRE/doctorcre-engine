@@ -71,7 +71,7 @@ before(async () => {
  insert into public.vendor (id, party_id, category, created_by, updated_by) values ('${id(23)}', '${id(10)}', 'lender', '${id(1)}', '${id(1)}');
  insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
  insert into public.deal_phase (slug, label) values ('loi', 'Example LOI'), ('negotiation', 'Negotiation'),
-  ('due_diligence', 'Due Diligence'), ('pending', 'Pending');
+  ('due_diligence', 'Due Diligence'), ('site_selection', 'Site selection'), ('pending', 'Pending');
  insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
   select v, '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}' from unnest(array['${id(30)}', '${id(31)}']::uuid[]) v;
  insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
@@ -86,7 +86,7 @@ before(async () => {
 			40,
 			"call",
 			{ deal: 30, client: 20 },
-			"'Example call notes', null, null, null",
+			"'Example call notes from 2024-04-09. Keep 2024-04-09.txt.', null, null, null",
 		),
 		activity(41, "tour", { lead: 21 }),
 		activity(42, "note", { party: 13 }),
@@ -105,7 +105,12 @@ before(async () => {
 			{ deal: 30, lead: 25 },
 			`'{"match": "exact"}', 'Example figure', false, null`,
 		),
-		activity(48, "meeting", { client: 20, vendor: 23 }),
+		activity(
+			48,
+			"meeting",
+			{ client: 20, vendor: 23 },
+			"'Met on (2024-04-09).', null, null, null",
+		),
 		activity(49, "note", { deal: 30 }),
 		activity(
 			54,
@@ -125,10 +130,10 @@ before(async () => {
  insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug)
   values ('${id(2)}', 'log-activity', 'party', '${id(13)}', '{"activity": "${id(42)}"}', 'automation_job', '2024-01-06', 'partner_one');
  insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
-  ('${id(50)}', '${id(30)}', 'note', '2024-04-09 phase moved negotiation to due_diligence. Still pending. Keep due_diligence.pdf, 2024-04-09.txt and 2024-02-31.', '${id(1)}', '2024-05-01'),
+  ('${id(50)}', '${id(30)}', 'note', '2024-04-09 phase moved negotiation to due_diligence. Revisit site_selection. Still pending. Keep due_diligence.pdf, 2024-04-09.txt and 2024-02-31.', '${id(1)}', '2024-05-01'),
   ('${id(51)}', '${id(30)}', 'next_step', 'Example next step', '${id(1)}', '2024-05-02'),
   ('${id(52)}', '${id(30)}', 'note', 'Example agent note', '${id(2)}', '2024-05-03'),
-  ('${id(53)}', '${id(30)}', 'note', 'Example unsigned note', '${id(2)}', '2024-05-04');
+  ('${id(53)}', '${id(30)}', 'note', ' pending ', '${id(2)}', '2024-05-04');
  insert into public.event (actor_id, verb, subject_type, subject_id, field, new_value, cause, occurred_at, sponsoring_human_slug) values
   ('${id(2)}', 'add-deal-note', 'deal', '${id(30)}', 'note', '{"note": "Example agent note"}', 'automation_job', '2024-05-03', 'partner_one'),
   ('${id(2)}', 'add-deal-note', 'deal', '${id(30)}', 'note', '{"note": "Example other note"}', 'automation_job', '2024-05-04', 'partner_one');
@@ -159,7 +164,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 				id(40),
 				"call",
 				"2024-01-04 00:00:00+00",
-				"Example call\n\nExample call notes",
+				"Example call\n\nExample call notes from April 9, 2024. Keep 2024-04-09.txt.",
 				id(1),
 				null,
 				null,
@@ -209,7 +214,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 				id(48),
 				"meeting",
 				"2024-01-03 00:00:00+00",
-				"Example meeting",
+				"Example meeting\n\nMet on (April 9, 2024).",
 				id(1),
 				null,
 				null,
@@ -219,7 +224,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 				id(50),
 				"note",
 				"2024-05-01 00:00:00+00",
-				"April 9, 2024 phase moved Negotiation to Due Diligence. Still pending. Keep due_diligence.pdf, 2024-04-09.txt and 2024-02-31.",
+				"April 9, 2024 phase moved negotiation to Due Diligence. Revisit Site selection. Still pending. Keep due_diligence.pdf, 2024-04-09.txt and 2024-02-31.",
 				id(1),
 				null,
 				null,
@@ -249,7 +254,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 				id(53),
 				"note",
 				"2024-05-04 00:00:00+00",
-				"Example unsigned note",
+				" Pending ",
 				null,
 				"agent",
 				null,

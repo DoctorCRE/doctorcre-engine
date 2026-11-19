@@ -197,7 +197,7 @@ begin atomic
   $re$^([(\[{"']*)(\d{4}-\d\d-\d\d|[a-z_]+)([)\]}"',;:!?]*\.?)$$re$) as parts) token
  -- A phase slug that is also an ordinary word needs a standalone phase value.
  left join public.deal_phase p on render_phases and p.slug = token.parts[2]
-  and (p.slug in ('negotiation', 'site_selection', 'due_diligence')
+  and (p.slug in ('site_selection', 'due_diligence')
    or btrim(value) = p.slug)
  where value !~ $re$^\s*\{\s*['"]text['"]\s*:$re$;
 end;
