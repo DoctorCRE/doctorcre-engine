@@ -1550,7 +1550,12 @@ The "Links from matched email" note stays an ordinary note through this door, ab
 - The attachment converges on the deal and hash. The same bytes on two emails of one deal are one deal file linked to both emails; different deals have separate filings. The same file again answers the stored document with `existing: true`. Stamp: `mail_capture` for the mailbox's partner, or the user.
 - Refusals: upload `411 length_required`, `422 sha256_mismatch`, `422 unsupported_file`, `422 too_large`; attachment `409 email_not_stored`, retried after the email is sent, `409 file_not_uploaded`, `404 not_found` for the deal; open `404 not_found`. A missing bucket binding answers `503 database_unavailable`.
 
-A partner's own deal file uses the same upload and then `POST /api/engine/deals/{deal_id}/documents` with `{ idempotency_key, sha256, name, kind, supersedes_id? }`; that door belongs to the app's step 29.
+A partner files privately with `PUT /api/engine/files/{sha256}` and then `POST /api/engine/deals/{deal_id}/documents`. The JSON body is `{ idempotency_key, sha256, name, kind, supersedes_id? }`. The name is nonblank, the kind is a `document_kind` slug, and the optional predecessor is a document UUID. The signed-in partner stamps the new row.
+
+- A new filing answers `201 { document_id, deal_id, name, kind, sha256, supersedes_id, filed_at, filed_by }`. The predecessor is null for a first version. `filed_at` is the document's creation time in UTC. `filed_by` is the stamped user or job slug. A same-key replay answers `200` with the original receipt and `replayed: true`. A changed request or stamp reusing the key returns `409 key_reuse`.
+- The same hash on the same deal with matching name, kind and predecessor answers `200` with the existing filing. A difference returns `409 already_filed { document_id }`. This check precedes the predecessor checks. The same bytes may be filed separately on another deal.
+- A replacement adds the next version and keeps its predecessor. A missing predecessor or one on another deal returns `409 predecessor_not_found`. A different kind returns `409 predecessor_kind_differs`. A predecessor with a replacement returns `409 predecessor_replaced`, including when two replacements race.
+- A missing deal returns `404 not_found`. Invalid input, including an unknown kind, follows the shared validation refusals. An unfiled hash with no uploaded object returns `409 file_not_uploaded`. Uploaded bytes are shared by hash.
 
 ### 21. Suggestions stored and decided
 

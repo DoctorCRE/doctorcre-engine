@@ -19,6 +19,11 @@ const HINTS = {
 	unsupported_file: "Use a supported file type.",
 	email_not_stored: "Store the email before attaching its file.",
 	file_not_uploaded: "Upload the file before attaching it.",
+	already_filed: "Open the existing filing for this file.",
+	predecessor_not_found: "Choose a document on this deal to replace.",
+	predecessor_kind_differs: "Choose a document of the same kind to replace.",
+	predecessor_replaced:
+		"Refresh the deal and choose the current document to replace.",
 	not_mailbox_owner: "Use the mailbox owner identity.",
 	draft_changed: "Read the draft again before recording delivery.",
 	already_sent: "This draft already has a sent message.",

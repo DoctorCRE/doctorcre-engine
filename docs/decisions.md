@@ -346,3 +346,5 @@
 181\. **An existing company can become a national account (2026-11-19).** When the add form finds a matching company, the partner can choose that company. The save adds the national account role and its dated owner to the same company. A separate company with the same name requires confirmation (#790).
 
 183\. **Client identity research waits for a partner to confirm it (2026-11-19).** The database move saves found NPIs, addresses, social links and public websites as research observations with source “found by research tool.” The copy skips a number the client already holds. Confirmation will write the fact to its proper home and record the partner and time (#796).
+
+186\. **A partner can file an uploaded document privately to a deal (2026-11-19).** Filing uses the shared upload by hash and stamps the signed-in partner. The same deal and hash return the original filing when the name, kind and predecessor match. A replacement adds the next version on the same deal and kind without removing earlier versions. The shared save receipt makes retries safe (#802).
