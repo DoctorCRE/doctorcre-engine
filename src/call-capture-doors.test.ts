@@ -175,7 +175,7 @@ test("a registered job reads a deal and uses the answer to save a phase move", a
 	assert.equal((await read(randomUUID()))[0], 404);
 	const [saved] = await post(`deals/${AUTOMATIC}/changes`, {
 		seen_change_id: deal.change_id,
-		phase: { from: deal.phase, to: "legal" },
+		phase: { from: deal.phase, to: "legal", activity_id: CALL },
 	});
 	assert.equal(saved, 200);
 	const [, latest] = await read(AUTOMATIC);
@@ -183,6 +183,11 @@ test("a registered job reads a deal and uses the answer to save a phase move", a
 	const [, noPhase] = await read(NO_PHASE);
 	assert.equal(noPhase.phase, null);
 	assert.equal(noPhase.phase_saved_at, null);
+	const [initial, invalid] = await post(`deals/${NO_PHASE}/changes`, {
+		seen_change_id: noPhase.change_id,
+		phase: { from: null, to: "legal", activity_id: CALL },
+	});
+	assert.deepEqual([initial, invalid.fields], [400, ["phase.from"]]);
 });
 
 test("a backdated phase move reports when the partner saved it", async () => {

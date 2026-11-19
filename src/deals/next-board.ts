@@ -4,6 +4,7 @@ import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
+import { automaticPhaseReceipt } from "./phase-receipt.ts";
 import {
 	CLOSED_PHASES,
 	ENDED_PHASES,
@@ -176,17 +177,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 									.where("p.changed_by_job", "=", "lead_stage"),
 							),
 							jsonObjectFrom(
-								eb
-									.selectFrom("imported_automatic_phase_move as receipt")
-									.select([
-										"receipt.source_event_id as event_id",
-										"receipt.prior_phase",
-										"receipt.reason",
-										sql.lit("copied").as("source"),
-										...phaseReceiptFacts,
-									])
-									.whereRef("receipt.deal_id", "=", "d.id")
-									.whereRef("receipt.happened_at", "=", "p.happened_at"),
+								automaticPhaseReceipt(db, eb.ref("d.id"), phaseAt),
 							),
 						),
 					)

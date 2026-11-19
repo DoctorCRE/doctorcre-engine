@@ -1400,17 +1400,15 @@ Each row in `critical_dates`, `documents`, and `next_actions` gives an `actor` w
 
 When the nightly invoice job moved the deal to its current Closed phase, the board and detail reads carry its receipt. The app shows the automatic close in Closed deals. The receipt uses the invoice application ID and its linked prior phase. Its date comes from the closing phase row in Central time, the same source as the close date. Partner applications, invoices on already-closed deals, later phase moves and invoice undos leave the current phase without that label.
 
-A copied automatic move appears as `phase_change` on the board and deal page while its phase row is current and the deal is not lost. A recorded loss suppresses the receipt and refuses Undo even when the old phase says Closed. The receipt gives the original `event_id`, `prior_phase`, `phase`, `reason`, Chicago `evidence_date`, `recorded_at`, `automatic: true`, and `source: "copied"`. A current invoice application uses its own receipt and undo.
+A copied or fresh automatic call move appears as `phase_change` on the board and deal page while its phase row is current and the deal is not lost. A recorded loss suppresses the receipt and refuses Undo even when the old phase says Closed. A current invoice application uses its own receipt and undo.
+
+Both phase move receipts give `event_id` (UUID), `prior_phase`, `phase`, nullable `reason`, Chicago `evidence_date` (the phase's effective day), `recorded_at` (the save time), and `automatic: true`. A copied receipt gives `source: "copied"`, its original event ID, and `call: null`. A fresh call receipt gives `source: "call_capture"`, the phase save's idempotency key as its event ID, and `call: { activity_id, happened_at }` with the stored call's UUID and start timestamp. Use `evidence_date` for the move caption.
 
 The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. Undo returns the same status and error for a previous phase of Closed, Invoiced, or Dead, with a hint that Undo would return the deal to Closed deals or Lost deals. A same-key retry returns the original answer.
 
 ### Remaining Deals read work
 
 Deal watch settings and their target lookup are deferred. See [Deal watches and nightly checklist reminders](#deal-watches-and-nightly-checklist-reminders).
-
-### Call phase-move receipts
-
-A call proposes a phase move, and only a partner's click accepts it. The Deals screen spec needs to say whether that move should show an automatic receipt.
 
 ### App work for the Deals switch
 
@@ -1683,12 +1681,12 @@ For a renewal, Add deal reads `GET /api/engine/clients/{client_id}/leases` after
 
 `POST /jobs/deals/{deal_id}/changes` and `POST /api/engine/deals/{deal_id}/changes`
 
-| Field             | Type                                                                                                                                   | Required            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| `idempotency_key` | UUID                                                                                                                                   | yes                 |
-| `seen_change_id`  | integer: the deal's latest change the caller read, 0 for none                                                                          | yes                 |
-| `fields`          | any of `name`, `kind`, `reason`, `owner` (user slug), `market_id`, `closed_value`, `parking_reason`, `parking_note`, `needs_attention` | `fields` or `phase` |
-| `phase`           | `{ from, to, on?, reason? }`: the phase the caller saw, the new one, a date in Central time, and a reason                              | `fields` or `phase` |
+| Field             | Type                                                                                                                                          | Required            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `idempotency_key` | UUID                                                                                                                                          | yes                 |
+| `seen_change_id`  | integer: the deal's latest change the caller read, 0 for none                                                                                 | yes                 |
+| `fields`          | any of `name`, `kind`, `reason`, `owner` (user slug), `market_id`, `closed_value`, `parking_reason`, `parking_note`, `needs_attention`        | `fields` or `phase` |
+| `phase`           | `{ from, to, on?, reason?, activity_id? }`: the phase the caller saw, the new one, a date in Central time, a reason, and the source call UUID | `fields` or `phase` |
 
 - `changeDeal` applies `fields` with its rule: a later change to one of the same fields is `409 version_conflict { current_version }`; a later change to other fields stands and the answer is `{ deal_id, rebased: true, intervening_change_ids }`, so the caller re-reads. A phase move is refused `409 version_conflict { current_phase }` when the deal's phase is not `from`, as accepting a phase suggestion checks it, under the same row lock.
 - Answer: `{ deal_id, change_id }`, or the rebased answer, plus `phase_changed_at` for a move.
@@ -1696,6 +1694,8 @@ For a renewal, Add deal reads `GET /api/engine/clients/{client_id}/leases` after
 - With the new Deals reads on, a new loss shows the dead phase's date as `closed_on` and its reason as `lost_reason`. The deal page answers the recorded `closed_value` as a decimal string or null.
 - Stamp: the user, or a job for a partner. A job alone may not park, revive or flag a deal: `422 database_refused_the_statement { rule: "deal_parked_or_flagged_by_a_user" }`. `404 not_found` for an unknown deal; `400 unknown_owner`.
 - Callers: call capture's automatic phase moves (`call_capture`, with today's confidence bar, which moves into the engine in slice 35), the assistant (`agent`) and the app. The nightly lead stages use the invoice application below.
+- For an automatic phase move, `call_capture` must send the UUID from door 19 as `phase.activity_id`. Only this job may send the field. An omitted ID returns `400 missing_required { fields: ["phase.activity_id"] }`. An automatic move must leave a previous phase for Undo, so a null `from` or a target identical to `from` returns `400 invalid_field_value { fields: ["phase.from"] }` and goes to suggestion review. The database requires each phase row stamped by the job to link a call filed to the same deal.
+- When a partner accepts a call suggestion through door 21, the phase row has that partner's stamp and gives no automatic receipt. The call stays linked to the suggestion.
 
 #### Invoice application
 
