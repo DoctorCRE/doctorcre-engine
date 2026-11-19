@@ -32,7 +32,7 @@ before(async () => {
  insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
- insert into public.lead_stage (slug,label) values ('new','New'),('do_not_contact','Do not contact');
+ insert into public.lead_stage (slug,label) values ('new','New'),('do_not_contact','Do not contact'),('active_deal','Active deal');
  insert into public.party (id,kind,name,created_by,updated_by)
  values ('${id(10)}','person','Example person','${id(1)}','${id(1)}');
  commit;`);
@@ -47,6 +47,34 @@ before(async () => {
  commit;`);
 });
 after(cleanup);
+
+test("a suppressed active-deal lead keeps its reviewed restriction reason", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.lead set stage = 'active_deal', suppressed = true where id = '${id(32)}'`,
+		);
+		const input = reviewed(
+			`('${id(30)}','Example request'),('${id(31)}','Example request'),('${id(32)}','Example request')`,
+		);
+		assert.deepEqual(await run(input), []);
+		assert.deepEqual(
+			await rows(`select r.stage, d.reason as restriction_reason, c.new_value->>'reason' as stage_reason
+ from party_role r join do_not_contact d using (party_id)
+ join change c on c.record = jsonb_build_object('party_id', r.party_id, 'role', r.role)
+ where r.party_id = '${id(20)}' and r.role = 'lead' and c.table_name = 'party_role' and c.action = 'insert'`),
+			[
+				{
+					stage: "archived",
+					restriction_reason: "Example request",
+					stage_reason: null,
+				},
+			],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
 
 test("without reviewed input suppression still waits for reasons", async () => {
 	await db.query("begin");

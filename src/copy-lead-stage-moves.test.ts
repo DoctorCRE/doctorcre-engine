@@ -200,19 +200,20 @@ test("copies evidence, pending proposals and creation, approval and undo history
  ('${id(96)}','2025-03-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"engaged"}','{"stage":"closed_won"}','human_stated'),
  ('${id(97)}','2025-04-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"closed_won"}','{"stage":"closed_lost"}','human_stated'),
  ('${id(98)}','2025-05-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"closed_lost"}','{"stage":"nurture_drip"}','human_stated'),
- ('${id(99)}','2025-06-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"active_deal"}','{"stage":"do_not_contact"}','human_stated');`);
+ ('${id(99)}','2025-05-15','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"nurture_drip"}','{"stage":"active_deal"}','human_stated'),
+ ('${id(100)}','2025-06-01','${id(1)}','example-edit','lead','${id(30)}','stage','{"stage":"active_deal"}','{"stage":"do_not_contact"}','human_stated');`);
 	await run();
 	assert.deepEqual(await rows(undo), history);
 	assert.deepEqual(
 		(
 			await rows(
-				`select old_value->>'stage' as was,new_value->>'stage' as became from change where table_name='party_role' and changed_at between '2025-03-01' and '2025-06-01' order by changed_at`,
+				`select old_value->>'stage' as was,new_value->>'stage' as became,new_value->>'reason' as reason from change where table_name='party_role' and changed_at between '2025-03-01' and '2025-06-01' order by changed_at`,
 			)
 		).map(Object.values),
 		[
-			["engaged", "opportunity"],
-			["opportunity", "nurture"],
-			["opportunity", "archived"],
+			["engaged", "archived", "became a deal in the old system"],
+			["archived", "nurture", null],
+			["nurture", "archived", "became a deal in the old system"],
 		],
 	);
 	const final = await rows("select * from change order by id");
