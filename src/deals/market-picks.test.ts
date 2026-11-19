@@ -82,6 +82,19 @@ test("both partners see only the account's current people and companies, ordered
 	}
 });
 
+test("locations return not found for a missing account or a location party", async () => {
+	for (const account of [id(12), PERSON]) {
+		const [status, body] = await save(
+			firstPartner,
+			locations(account),
+			{},
+			"GET",
+		);
+		assert.equal(status, 404);
+		assert.equal(body.error, "not_found");
+	}
+});
+
 test("the market deal choices require a signed-in partner", async () => {
 	for (const path of ["markets", locations(ACCOUNT)]) {
 		const response = await request(firstPartner, path, {

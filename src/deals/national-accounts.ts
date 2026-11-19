@@ -171,14 +171,20 @@ export const nationalAccounts = new Hono<NextSaveEnv>()
 		if (refused) return refuse(c, refused);
 		const account = c.req.param("account");
 		if (!isUuid(account)) return refuse(c, new Refusal(404, "not_found"));
-		return answerNextRead(c, "read-national-account-locations", (db) =>
-			currentAccountLocations(db, account)
-				.innerJoin("national_account as a", "a.party_id", "b.brand_id")
+		return answerNextRead(c, "read-national-account-locations", async (db) => {
+			const brand = await db
+				.selectFrom("national_account")
+				.select("party_id")
+				.where("party_id", "=", account)
+				.executeTakeFirst();
+			if (!brand) return new Refusal(404, "not_found");
+
+			return currentAccountLocations(db, account)
 				.innerJoin("party as p", "p.id", "b.location_id")
 				.select(["p.id as party_id", "p.name", "p.kind"])
 				.orderBy("p.name")
-				.execute(),
-		);
+				.execute();
+		});
 	})
 	.post("/national-accounts", (c) =>
 		answerNextSave(
