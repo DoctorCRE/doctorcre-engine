@@ -285,8 +285,35 @@ test("the hosted password check keeps five attempts in a 15-minute window", asyn
 	const slug = "example-password";
 	const password = "example legacy password";
 	assert.equal(await verifyWebsitePassword(writerUrl, slug, password), true);
+	assert.equal(
+		await verifyWebsitePassword(writerUrl, slug, "incorrect"),
+		false,
+	);
+	const first = await db.query(
+		"select failed_attempts from deal_client_website_attempt where slug = $1",
+		[slug],
+	);
+	assert.deepEqual(first.rows, [{ failed_attempts: 1 }]);
+
+	const expired = await db.query(
+		`update deal_client_website_attempt
+		set window_started_at = clock_timestamp() - interval '16 minutes'
+		where slug = $1 returning clock_timestamp()::text as reset_after`,
+		[slug],
+	);
+	assert.equal(
+		await verifyWebsitePassword(writerUrl, slug, "incorrect"),
+		false,
+	);
+	const reset = await db.query(
+		`select failed_attempts, window_started_at >= $2::timestamptz as fresh_window
+		from deal_client_website_attempt where slug = $1`,
+		[slug, expired.rows[0].reset_after],
+	);
+	assert.deepEqual(reset.rows, [{ failed_attempts: 1, fresh_window: true }]);
+
 	await db.query(
-		"insert into deal_client_website_attempt values ($1, 4, clock_timestamp())",
+		"update deal_client_website_attempt set failed_attempts = 4 where slug = $1",
 		[slug],
 	);
 	assert.equal(

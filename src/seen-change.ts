@@ -3,7 +3,11 @@ import { Refusal } from "./answer.ts";
 import type { DB } from "./next-database.d.ts";
 import { SaveRefusal } from "./save.ts";
 
-type Recorded = "commission_payment" | "deal" | "next_step";
+type Recorded =
+	| "commission_payment"
+	| "deal"
+	| "national_account_owner"
+	| "next_step";
 
 const history = (tx: Transaction<DB>, table: Recorded, id: string) =>
 	tx

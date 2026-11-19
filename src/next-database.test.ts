@@ -250,7 +250,7 @@ const TERMS = [
 // Only the owner adds users.
 const USERS = `insert into party (id, kind, name) values
 	('${USER}', 'person', 'Jordan Example'), ('${TEAMMATE}', 'person', 'Riley Example');
-insert into app_user (id, slug) values ('${USER}', 'user-${USER}'), ('${TEAMMATE}', 'user-${TEAMMATE}')`;
+insert into app_user (id, slug) values ('${USER}', 'joe'), ('${TEAMMATE}', 'dell')`;
 const asUser = (user: string) =>
 	`select set_config('engine.user_id', '${user}', true), set_config('engine.job', '', true)`;
 const asJob = (job: string, forUser = "") =>
@@ -2411,7 +2411,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 		],
 		[
 			`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
-			insert into app_user (id, slug) values ('${DUPLICATE}', 'user-${USER}')`,
+			insert into app_user (id, slug) values ('${DUPLICATE}', 'joe')`,
 			"app_user_slug_key",
 		],
 	],
@@ -3609,18 +3609,18 @@ test("national account ownership reads both ends and preserves former owners in 
 			('${COMPANY}', 'national_account'), ('${BROKERAGES[0]}', 'national_account');
 			insert into national_account (party_id) values ('${COMPANY}'), ('${BROKERAGES[0]}');
 			insert into national_account_owner (id, account_id, owner_id, started_on, ended_on) values
-			('${id(9111)}', '${COMPANY}', '${SUBJECT}', '2021-01-01', null),
-			('${id(9112)}', '${COMPANY}', '${AGENT}', '2020-01-01', '2021-01-01'),
-			('${id(9110)}', '${BROKERAGES[0]}', '${SUBJECT}', '2021-01-01', null)`);
+			('${id(9111)}', '${COMPANY}', '${USER}', '2021-01-01', null),
+			('${id(9112)}', '${COMPANY}', '${TEAMMATE}', '2020-01-01', '2021-01-01'),
+			('${id(9110)}', '${BROKERAGES[0]}', '${USER}', '2021-01-01', null)`);
 		const owners = (await readParty(COMPANY)).national_account_owners;
 		assert.deepEqual(
 			owners.map((o: { id: string }) => o.id),
 			[id(9112), id(9111)],
 		);
 		assert.equal(owners[0].ended_on, "2021-01-01");
-		assert.equal(owners[1].party.id, SUBJECT);
-		assert.equal(owners[1].owner_kind, undefined);
-		const accounts = (await readParty()).national_account_owners;
+		assert.equal(owners[1].party.id, USER);
+		assert.equal(owners[1].owner_is_partner, undefined);
+		const accounts = (await readParty(USER)).national_account_owners;
 		assert.deepEqual(
 			accounts.map((o: { id: string }) => o.id),
 			[id(9110), id(9111)],
@@ -5540,6 +5540,7 @@ test("only the engine and the owner run a merge", async () => {
 const MERGE_KEYS = [
 	"activity_about_activity_id_deal_id_party_id_property_id_key",
 	"activity_about_activity_party_key",
+	"app_user_id_is_account_partner_key",
 	"app_user_pkey",
 	"building_ownership_property_id_party_id_kind_started_on_key",
 	"deal_party_pkey",
@@ -6406,7 +6407,7 @@ insert into national_account (party_id) values ('${BRAND}');
 insert into client_brand (id, location_id, brand_id, started_on, ended_on)
 values ('${id(702)}', '${CLIENT}', '${BRAND}', '2020-01-01', '2026-01-01');
 insert into national_account_owner (id, account_id, owner_id, started_on, ended_on)
-values ('${id(703)}', '${BRAND}', '${AGENT}', '2020-01-01', '2026-01-01');
+values ('${id(703)}', '${BRAND}', '${TEAMMATE}', '2020-01-01', '2026-01-01');
 `;
 
 test("clients derive active and past status from deals, keeping the manual status", async () => {
@@ -6441,7 +6442,7 @@ test("clients derive active and past status from deals, keeping the manual statu
 	});
 });
 
-test("a rebrand and a new outside owner keep the previous dated membership", async () => {
+test("a rebrand and a new account owner keep the previous dated membership", async () => {
 	await rolledBack(async () => {
 		await db.query(CLIENT_PROFILE);
 		await db.query(`insert into client_brand (location_id, brand_id, started_on)
@@ -6469,7 +6470,7 @@ test("a rebrand and a new outside owner keep the previous dated membership", asy
 					`select owner_id from national_account_owner order by started_on`,
 				)
 			).rows,
-			[{ owner_id: AGENT }, { owner_id: USER }],
+			[{ owner_id: TEAMMATE }, { owner_id: USER }],
 		);
 	});
 });
@@ -6491,8 +6492,8 @@ const CLIENT_REFUSALS: Case[] = [
 	[`insert into client_brand (location_id, brand_id, started_on) values ('${USER}', '${BRAND}', '2026-01-01')`, "client_brand_location_id_fkey"],
 	[`update client_brand set ended_on = '2020-01-01'`, "client_brand_check"],
 	[`update national_account_owner set ended_on = '2020-01-01'`, "national_account_owner_check"],
-	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${BRAND}', '${CLIENT}', '2026-01-01')`, "national_account_owner_owner_id_owner_kind_fkey"],
-	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${NEXT_BRAND}', '${AGENT}', '2026-01-01')`, "national_account_owner_account_id_fkey"],
+	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${BRAND}', '${CLIENT}', '2026-01-01')`, "national_account_owner_owner_id_owner_is_partner_fkey"],
+	[`insert into national_account_owner (account_id, owner_id, started_on) values ('${NEXT_BRAND}', '${USER}', '2026-01-01')`, "national_account_owner_account_id_fkey"],
 	...(["client_brand", "national_account_owner"] as const).flatMap(
 		(table): Case[] => {
 			const columns =

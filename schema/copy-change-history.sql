@@ -8,6 +8,7 @@ select * from (values
  ('party', 'party', 'name', 'name'), ('party', 'party', 'npi', 'npi'), ('deal', 'deal', 'owner', 'owner_user_id'),
  ('deal', 'deal', 'won_value', 'closed_value'), ('deal', 'deal', 'city', 'market_id'),
  ('deal', 'deal', 'operating_state', 'parking_reason'), ('deal', 'deal', 'attention', 'needs_attention'),
+ ('deal', 'activity', 'note', 'summary'),
  ('lead', 'party_role', 'stage', 'stage'), ('lead', 'party_role', 'owner', 'owner_user_id'),
  ('lead', 'party_role', 'owner_id', 'owner_user_id'), ('lead', 'party_role', 'lane', 'lane'),
  ('lead', 'party_role', 'segment', 'segment'), ('lead', 'party_role', 'est_lease_event', 'estimated_lease_on'),
@@ -38,6 +39,15 @@ from public.event e cross join lateral (values (e.old_value), (e.new_value)) v(p
 where e.subject_type = 'deal' and e.field in ('operating_state', 'attention')
 group by e.id;
 
+create temp table deal_note_event on commit drop as
+select event_id, note_id from (
+ select e.id as event_id, n.id as note_id,
+  count(*) over (partition by e.id) as notes, count(*) over (partition by n.id) as events
+ from public.event e join public.deal_note n on n.deal_id = e.subject_id and n.actor_id = e.actor_id
+  and n.created_at = e.occurred_at and n.text = e.new_value ->> 'note'
+ where e.subject_type = 'deal' and e.field = 'note' and e.verb = 'add-deal-note' and n.kind = 'note'
+) pairs where notes = 1 and events = 1;
+
 create temp table history_event on commit drop as
 select e.id, e.field as old_field, f.table_name,
  case when e.field = 'operating_state' and payload.has_note then 'parking_note' else f.field end as field, to_jsonb(e) as source_event,
@@ -53,6 +63,7 @@ select e.id, e.field as old_field, f.table_name,
   when a.changed_by_job in ('agent', 'mail_capture') and e.sponsoring_human_slug is not null and sponsor.id is null then 'unknown_sponsor'
   when a.changed_for_user_id is not null and su.id is null then 'sponsor_not_copied' end as actor_problem,
  payload.known_shape = false as unknown_payload,
+ e.subject_type = 'deal' and e.verb = 'add-deal-note' and dn.note_id is null as note_not_matched,
  a.changed_by_job = 'agent' and e.sponsoring_human_slug is null as unknown_agent_user
 from public.event e
 left join deal_history_payload payload on payload.id = e.id
@@ -62,9 +73,12 @@ left join party p on p.id = m.party_id
 left join deal d on d.id = m.deal_id
 left join party_role r on r.party_id = m.party_id and r.role = e.subject_type
 left join client c on c.party_id = m.party_id
+left join deal_note_event dn on dn.event_id = e.id
 left join activity note on f.table_name = 'activity'
- and note.id = md5('old_system:vendor:' || e.subject_id || ':intro_notes')::uuid and note.kind = 'note'
- and exists (select from activity_about about where about.activity_id = note.id and about.party_id = m.party_id)
+ and note.id = case when e.subject_type = 'deal' then dn.note_id
+  else md5('old_system:vendor:' || e.subject_id || ':intro_notes')::uuid end and note.kind = 'note'
+ and exists (select from activity_about about where about.activity_id = note.id
+  and (e.subject_type = 'deal' and about.deal_id = d.id or e.subject_type = 'vendor' and about.party_id = m.party_id))
 left join public.actor actor on actor.id = e.actor_id
 left join public.actor sponsor on sponsor.slug = e.sponsoring_human_slug and sponsor.kind = 'human'
 cross join lateral copy_event_attribution(e.actor_id, e.id) a
@@ -75,7 +89,8 @@ insert into listed
 select id, old_field, problem from history_event
 cross join lateral (values
  (case when table_name is null then 'field_has_no_mapping' end),
- (case when table_name is not null and record is null then 'record_not_copied' end),
+ (case when table_name is not null and record is null
+  then case when note_not_matched then 'note_not_matched' else 'record_not_copied' end end),
  (case when unknown_payload then 'payload_shape_unknown' end),
  (actor_problem), (case when unknown_agent_user then 'agent_user_unknown' end)
 ) p(problem) where problem is not null;

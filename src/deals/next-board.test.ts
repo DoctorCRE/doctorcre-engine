@@ -18,7 +18,7 @@ const id = (n: number) =>
 const OLD = `
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
- ('${id(2)}', 'partner_two', 'human', 'Example Partner Two');
+ ('${id(2)}', 'dell', 'human', 'Example Partner Two');
 insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
 insert into public.party (id, kind, name, created_by, updated_by) values
  ('${id(16)}', 'org', 'Example National Brand', '${id(1)}', '${id(1)}'),
@@ -46,7 +46,7 @@ insert into public.deal_phase (slug, label) values ('touring', 'Example touring'
 insert into public.deal_lane (slug, label, sort) values ('national', 'Example national', 1);
 insert into public.deal (id, client_id, name, deal_type, phase, owner, city, attention, created_by, updated_by, created_at) values
  ('${id(34)}', '${id(24)}', 'Example former brand lease', 'lease', 'touring', 'partner_one', null, false, '${id(1)}', '${id(1)}', '2025-01-05'),
- ('${id(31)}', '${id(21)}', 'Example startup office', 'startup', 'touring', 'partner_two', 'Example Bay', true, '${id(1)}', '${id(1)}', '2025-01-02'),
+ ('${id(31)}', '${id(21)}', 'Example startup office', 'startup', 'touring', 'dell', 'Example Bay', true, '${id(1)}', '${id(1)}', '2025-01-02'),
  ('${id(33)}', '${id(22)}', 'Example closed lease', 'lease', 'closed', 'partner_one', 'Example Bay', false, '${id(1)}', '${id(1)}', '2024-06-01');
 -- National with no city, so today's market is empty though the copy takes the assignment's.
 insert into public.deal (id, client_id, name, deal_type, phase, owner, lane, created_by, updated_by, created_at) values
@@ -122,7 +122,9 @@ const COPIES: [file: string, input?: string][] = [
 // History today's tables no longer hold: the former location's brand and the account's earlier owner.
 const HISTORY = `
 insert into client_brand (location_id, brand_id, started_on, ended_on) values ('${id(13)}', '${id(16)}', '2023-01-01', '2024-01-01');
-insert into national_account_owner (account_id, owner_id, started_on, ended_on) values ('${id(16)}', '${id(1)}', '2023-01-01', '2024-03-01');
+insert into party (id, kind, name) values ('${id(450)}', 'person', 'Example Former Owner');
+insert into app_user (id, slug) values ('${id(450)}', 'joe');
+insert into national_account_owner (account_id, owner_id, started_on, ended_on) values ('${id(16)}', '${id(450)}', '2023-01-01', '2024-03-01');
 `;
 
 const COVERED = new Set([
@@ -222,12 +224,12 @@ test("the comparison covers every open deal, owner, parking, national account, f
 	assert.deepEqual(
 		deals.map((d) => [d.name, d.owner, d.parked_by, d.account_owner]),
 		[
-			["Example startup office", "partner_two", null, "partner_two"],
-			["Example clinic lease", "partner_one", null, "partner_two"],
-			["Example dental move", "partner_one", "partner_two", null],
+			["Example startup office", "dell", null, "dell"],
+			["Example clinic lease", "partner_one", null, "dell"],
+			["Example dental move", "partner_one", "dell", null],
 			["Example former brand lease", "partner_one", null, null],
 			["Example lease paid before invoice", "partner_one", null, null],
-			["Example other office", "partner_one", null, "partner_two"],
+			["Example other office", "partner_one", null, "dell"],
 		],
 	);
 });

@@ -22,7 +22,10 @@ const HINTS = {
 	draft_changed: "Read the draft again before recording delivery.",
 	already_sent: "This draft already has a sent message.",
 	unauthenticated: "The authenticated actor could not be resolved.",
+	account_name_exists:
+		"Confirm a separate company or choose an existing account.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
+	not_a_prospect: "This lead is no longer in Prospects.",
 	not_found: "The requested record was not found.",
 	portal_deal_not_found: "Choose a deal with a current client.",
 	portal_slug_taken: "Choose a different website name.",
@@ -78,6 +81,10 @@ const HINTS = {
 		"The email matches no record and names none, so nothing was stored.",
 	message_id_invalid:
 		"Send the Message-ID without angle brackets or surrounding spaces.",
+	location_not_in_account: "Choose a location in this national account.",
+	location_name_exists:
+		"Choose the existing location in this national account.",
+	deal_name_exists: "Open the existing deal or use a different deal name.",
 	unknown_owner: "Owner is one of joe, dell or claude.",
 	field_required:
 		"Supply the required field using the documented operation shape.",

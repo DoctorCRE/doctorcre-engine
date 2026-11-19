@@ -19,7 +19,8 @@ alter table public.activity add column email_id uuid references public.email;
 insert into public.email values ('${id(90)}', 'partner-one@example.test', '<tour@example.test>');
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
- ('${id(2)}', 'partner_two', 'human', 'Example Partner Two');
+ ('${id(2)}', 'partner_two', 'human', 'Example Partner Two'),
+ ('${id(3)}', 'example-automation', 'automation', 'Example Automation');
 insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
 insert into public.party (id, kind, name, created_by, updated_by) values
  ('${id(11)}', 'person', 'Dr. Jo Example', ${by}),
@@ -66,6 +67,16 @@ insert into public.activity (id, kind, occurred_at, actor_id, summary, deal_id, 
   '{"sender": {"email": "doctor@example.test"}, "subject": "Example tour times", "conversation_id": "example-thread"}', '${id(90)}');
 insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
  ('${id(70)}', '${id(30)}', 'note', 'Example note about parking', '${id(2)}', '2025-02-03T17:00:00Z');
+update public.event set recorded_at = '2025-01-02T18:00:00Z' where id = '${id(40)}';
+update public.event set recorded_at = '2025-01-03' where id = '${id(42)}';
+insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause) values
+ ('${id(43)}', 'deal', '${id(30)}', 'note', '{"note":"Example note about parking"}',
+  '2025-02-03T17:00:00Z', '2025-02-03T17:00:01Z', '${id(2)}', 'add-deal-note', 'human_stated');
+insert into public.event (id, subject_type, subject_id, field, old_value, new_value, occurred_at, recorded_at, actor_id, verb, cause) values
+ ('${id(44)}', 'deal', '${id(35)}', 'phase', null, '{"phase":"touring"}',
+  '2025-01-04T18:00:00Z', '2025-01-04T18:00:00Z', '${id(1)}', 'update-deal', 'human_stated'),
+ ('${id(45)}', 'deal', '${id(35)}', 'phase', '{"phase":"touring"}', '{"phase":"negotiation"}',
+  '2025-01-05T18:00:00Z', '2025-01-05T18:00:00Z', '${id(3)}', 'update-deal', 'automation_job');
 `;
 
 const COPIES: [file: string, input?: string][] = [
@@ -104,6 +115,7 @@ before(async () => {
 	}
 	await db.query(`begin;
 		select set_config('engine.user_id', '${id(1)}', true);
+		insert into activity_about (activity_id, deal_id) values ('${id(70)}', '${id(32)}');
 		insert into deal_client_website (slug, deal_id, client_party_id, password_hash)
 		values ('example-former-client', '${id(32)}', '${id(14)}', '$2a$12$${"C".repeat(53)}');
 		insert into next_step (id, deal_id, what, item_title, source_ref, due_on)
@@ -241,6 +253,70 @@ test("an unknown deal is not found", async () => {
 		readNextDealDetail(tx, id(99)),
 	);
 	assert.deepEqual(page, { error: "not_found" });
+});
+
+test("deal events include the copied note and phase move, with their saved time and author", async () => {
+	const page = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(30)),
+	);
+	assert.ok(!("error" in page));
+	assert.partialDeepStrictEqual(page.events, [
+		{
+			id: id(43),
+			recorded_at: "2025-02-03T17:00:01+00:00",
+			actor: "partner_two",
+			verb: "add-deal-note",
+			field: "note",
+			new_value: { note: "Example note about parking" },
+		},
+		{ id: id(42), field: "attention" },
+		{
+			recorded_at: "2025-01-02T18:00:00+00:00",
+			actor: "partner_one",
+			field: "phase",
+			new_value: "touring",
+		},
+	]);
+});
+
+test("a shared note's event appears only on its source deal", async () => {
+	const other = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(32)),
+	);
+	assert.ok(!("error" in other));
+	assert.ok(other.thread.some(({ id: noteId }) => noteId === id(70)));
+	assert.deepEqual(
+		other.events.filter(({ field }) => field === "note"),
+		[],
+	);
+});
+
+test("an equal-time automatic move shows in history and a copied phase without a move stays hidden", async () => {
+	const moved = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(35)),
+	);
+	assert.ok(!("error" in moved));
+	assert.partialDeepStrictEqual(
+		moved.events.filter(({ field }) => field === "phase"),
+		[
+			{
+				recorded_at: "2025-01-05T18:00:00+00:00",
+				actor: "old_system",
+				verb: "move-phase",
+				new_value: "negotiation",
+			},
+			{ actor: "partner_one", new_value: "touring" },
+		],
+	);
+	const seeded = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(32)),
+	);
+	assert.ok(!("error" in seeded));
+	assert.equal(seeded.phase, "negotiation");
+	assert.deepEqual(
+		seeded.events.filter(({ field }) => field === "phase"),
+		[],
+	);
 });
 
 const get = (path: string, schema?: string, partner = "partner_one") =>
@@ -618,7 +694,7 @@ test("signed-in detail names every field changed by one new-schema save", async 
 			"events" in detail &&
 			Array.isArray(detail.events),
 	);
-	const { events } = detail;
+	const events = detail.events.filter(({ verb }) => verb === "update-deal");
 	assert.equal(events.length, 2);
 	assert.notEqual(events[0].id, events[1].id);
 	assert.partialDeepStrictEqual(events, [
