@@ -199,7 +199,7 @@ A deal that is not active work for now, with a reason. Parking keeps the deal; r
 _Avoid_: on hold, inactive, archived, paused
 _Database_: `deal.operating_state` (`active` or `parked`), `parking_reason` (`prospect_never_active`, `client_paused`, `other`), `parking_note`, `parked_at`, `parked_by`.
 _Engine_: `operating_state`.
-_New database_: `deal.parking_reason`, none when active, `deal.parking_note`, and who last parked it and when in `deal.parked_by_user_id` and `deal.parked_at`.
+_New database_: `deal.parking_reason`, none when active, `deal.parking_note`, and who last parked it and when in `deal.parked_by_user_id`, `deal.parked_automatically` and `deal.parked_at`.
 
 **Needs attention**:
 A flag a user sets on a deal to say it needs a look. Nothing sets it on its own.

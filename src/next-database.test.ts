@@ -2323,6 +2323,17 @@ const OWNER_RULES: Record<string, Case[]> = {
 				"deal_parked_stamps_when_parked",
 			],
 		],
+	"only a parked deal can name automation, which excludes a user as parker": [
+		[
+			`update deal set parked_automatically = true where id = '${DEAL}'`,
+			"deal_automatic_parking_has_no_user",
+		],
+		[
+			`update deal set parking_reason = 'other' where id = '${DEAL}';
+			update deal set parked_automatically = true where id = '${DEAL}'`,
+			"deal_automatic_parking_has_no_user",
+		],
+	],
 	"loaded outreach drafts still cannot send themselves": [
 		[
 			newLeadDraft({ requires_human_send: "false" }),
@@ -3879,6 +3890,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 			needs_attention: false,
 			parked_at: null,
 			parked_by_user_id: null,
+			parked_automatically: false,
 		},
 		phases,
 		properties: [
@@ -4445,6 +4457,7 @@ test("each insert, update and delete leaves history: the record, its fields from
 					needs_attention: false,
 					parked_at: null,
 					parked_by_user_id: null,
+					parked_automatically: false,
 				},
 				...by(TEAMMATE, null),
 			},
