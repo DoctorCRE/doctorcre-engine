@@ -69,6 +69,8 @@ const STEP_FIELDS = {
 	hold_until: clearable(isCalendarDate),
 };
 
+const SEEN_CURRENT_STEP = { next_step_id: isUuid, change_id: isChangeId };
+
 const NEW_STEP = {
 	idempotency_key: isUuid,
 	...STEP_SUBJECT,
@@ -76,6 +78,7 @@ const NEW_STEP = {
 	...STEP_FIELDS,
 	owner: optional(isText),
 	replaces: optional((value): value is "current" => value === "current"),
+	seen_current_step: clearable(fitting(SEEN_CURRENT_STEP)),
 	what: isText,
 	item: optional(
 		fitting({ title: isText, bullets: isBullets, source_ref: isText }),
@@ -161,13 +164,17 @@ async function resolveOldRole(
 	return match.party_id;
 }
 
-async function lockSubject(tx: Transaction<DB>, { kind, id }: CurrentSubject) {
-	const record = await tx
-		.selectFrom(kind)
-		.select("id")
-		.where("id", "=", id)
-		.forNoKeyUpdate()
-		.executeTakeFirst();
+async function lockSubject(
+	tx: Transaction<DB>,
+	{ kind, id }: CurrentSubject,
+	exclusive = false,
+) {
+	const query = tx.selectFrom(kind).select("id").where("id", "=", id);
+	// A deal link takes key-share on the party, so the exclusive lock guards eligibility.
+	const record = await (exclusive
+		? query.forUpdate()
+		: query.forNoKeyUpdate()
+	).executeTakeFirst();
 	if (!record) throw new SaveRefusal(new Refusal(404, "not_found"));
 }
 
@@ -175,8 +182,45 @@ export async function cancelCurrentStep(
 	tx: Transaction<DB>,
 	subject: CurrentSubject,
 	owner: string | null,
+	seen?: Fitted<typeof SEEN_CURRENT_STEP> | null,
 ) {
-	await lockSubject(tx, subject);
+	await lockSubject(tx, subject, seen !== undefined);
+	const subjectColumn = `${subject.kind}_id` as const;
+	const ownerId = sql<string>`coalesce(${owner}::uuid, ${ACTING_USER})`;
+	if (seen !== undefined) {
+		const {
+			rows: [context],
+		} = await sql<{ has_user: boolean; prospect: boolean }>`
+			select ${ACTING_USER} is not null as has_user,
+				exists (select from party_role r where r.party_id = ${subject.id}::uuid
+					and r.role = 'lead' and r.stage = 'opportunity'
+					and not exists (select from deal_party d where d.party_id = r.party_id)
+					for no key update of r) as prospect
+		`.execute(tx);
+		if (!context?.has_user)
+			throw new SaveRefusal(new Refusal(422, "actor_not_provisioned"));
+		if (!context.prospect)
+			throw new SaveRefusal(new Refusal(409, "not_a_prospect"));
+		const current = await tx
+			.selectFrom("next_step")
+			.select("id")
+			.where(subjectColumn, "=", subject.id)
+			.where("status", "=", "open")
+			.where("item_title", "is", null)
+			.where("owner_party_id", "=", ownerId)
+			.forNoKeyUpdate()
+			.executeTakeFirst();
+		const current_version = current
+			? ((await latestChange(tx, "next_step", current.id)) ?? 0)
+			: null;
+		if (
+			seen?.next_step_id !== current?.id ||
+			(seen && seen.change_id !== current_version)
+		)
+			throw new SaveRefusal(
+				new Refusal(409, "version_conflict", { current_version }),
+			);
+	}
 	await tx
 		.updateTable("next_step")
 		.set({
@@ -184,14 +228,10 @@ export async function cancelCurrentStep(
 			resolved_at: sql<string>`clock_timestamp()`,
 			resolution_reason: "Replaced by a new next step",
 		})
-		.where(`${subject.kind}_id`, "=", subject.id)
+		.where(subjectColumn, "=", subject.id)
 		.where("status", "=", "open")
 		.where("item_title", "is", null)
-		.where(
-			"owner_party_id",
-			"=",
-			sql<string>`coalesce(${owner}::uuid, ${ACTING_USER})`,
-		)
+		.where("owner_party_id", "=", ownerId)
 		.execute();
 }
 
@@ -201,7 +241,24 @@ export async function createStep(
 	request: Omit<Fitted<typeof NEW_STEP>, "idempotency_key">,
 ) {
 	const { deal_id, property_id, what, item, call, replaces } = request;
-	const { due_on, hold_until } = request;
+	const { due_on, hold_until, seen_current_step } = request;
+	if (seen_current_step !== undefined) {
+		if (
+			!request.party_id ||
+			!replaces ||
+			request.owner !== undefined ||
+			request.owner_party_id !== undefined
+		)
+			throw new SaveRefusal(
+				new Refusal(400, "invalid_field_value", {
+					fields: ["seen_current_step"],
+				}),
+			);
+		if (!due_on)
+			throw new SaveRefusal(
+				new Refusal(400, "missing_required", { fields: ["due_on"] }),
+			);
+	}
 	const copiedParty = await resolveOldRole(tx, request);
 	const party_id = copiedParty ?? request.party_id;
 	const owner_party_id = (await resolveStepOwner(tx, request)) ?? null;
@@ -211,7 +268,7 @@ export async function createStep(
 			throw new SaveRefusal(
 				new Refusal(400, "invalid_field_value", { fields: ["replaces"] }),
 			);
-		await cancelCurrentStep(tx, subject, owner_party_id);
+		await cancelCurrentStep(tx, subject, owner_party_id, seen_current_step);
 	}
 	const insert = sql<{ id: string }>`
 		insert into next_step (created_at, deal_id, party_id, property_id, what, owner_party_id, due_on, hold_until,

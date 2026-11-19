@@ -26,6 +26,7 @@ type Prospect = {
 		owner: string;
 		what: string;
 		due_on: string | null;
+		change_id: number;
 	}[];
 	change_id: number;
 	notes: Note[];
@@ -69,7 +70,9 @@ async function readProspects(
 		) notes
 		cross join lateral (
 			select coalesce(jsonb_agg(jsonb_build_object('next_step_id', s.id,
-				'owner', u.slug, 'what', s.what, 'due_on', s.due_on)
+				'owner', u.slug, 'what', s.what, 'due_on', s.due_on,
+				'change_id', coalesce((select max(c.id) from change c
+					where c.table_name = 'next_step' and c.record = jsonb_build_object('id', s.id)), 0))
 				order by s.due_on nulls last, s.id), '[]') as items,
 				min(s.due_on) as soonest
 			from next_step s
