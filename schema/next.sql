@@ -150,6 +150,35 @@ create table party_role (
 	constraint party_role_capabilities_on_vendor check (role = 'vendor' or num_nonnulls(offers, seeking) = 0)
 );
 
+create table client_vertical (
+	party_id uuid primary key,
+	role text not null default 'client' check (role = 'client'),
+	vertical text not null check (vertical = regexp_replace(vertical, '^\s+|\s+$', '', 'g') and vertical ~ '\S'),
+	created_at timestamptz not null default now(),
+	foreign key (party_id, role) references party_role on update cascade
+);
+
+create table client_research (
+	id uuid primary key default gen_random_uuid(),
+	party_id uuid not null,
+	role text not null default 'client' check (role = 'client'),
+	kind text not null check (kind ~ '\S'),
+	source text not null check (source ~ '\S'),
+	found boolean not null,
+	observed_at timestamptz not null check (isfinite(observed_at)),
+	expires_on date check (isfinite(expires_on)),
+	old_author_id uuid,
+	foreign key (party_id, role) references party_role on update cascade
+);
+create index client_research_party on client_research (party_id);
+
+create table client_research_fact (
+	research_id uuid references client_research,
+	field text check (field ~ '\S' and field <> 'found'),
+	value jsonb not null,
+	primary key (research_id, field)
+);
+
 create table vendor_vertical (
 	party_id uuid not null,
 	role text not null default 'vendor' check (role = 'vendor'),
@@ -2793,6 +2822,12 @@ begin
 		lease_estimate_confidence = case when s.estimated_lease_on is null then d.lease_estimate_confidence else s.lease_estimate_confidence end,
 		estimated_lease_on = coalesce(s.estimated_lease_on, d.estimated_lease_on)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
+	delete from client_vertical d using client_vertical s
+	where d.party_id = duplicate and s.party_id = survivor and d.vertical = s.vertical;
+	update client_vertical set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'client');
+	update client_research set party_id = survivor where party_id = duplicate
+		and exists (select from party_role where party_id = survivor and role = 'client');
 	delete from vendor_vertical d using vendor_vertical s
 	where d.party_id = duplicate and s.party_id = survivor and d.vertical = s.vertical;
 	update vendor_vertical set party_id = survivor where party_id = duplicate
@@ -2942,7 +2977,7 @@ begin
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement', 'weekly_review',
-		'party_document', 'email_document',
+		'party_document', 'email_document', 'client_vertical', 'client_research', 'client_research_fact',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'invoice_email', 'invoice_mailbox', 'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
 		execute format('alter table %1$I add changed_by_user_id uuid references app_user %2$s,
@@ -3380,7 +3415,7 @@ grant execute on function merge_party to engine;
 revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
-grant delete on vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
+grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
 	territory, territory_piece, party_territory, party_territory_review, deal, party_role, party_company, deal_property, deal_party, activity,
 	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link, weekly_review to engine;
 

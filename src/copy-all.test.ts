@@ -18,6 +18,7 @@ const order: [file: string, input?: string][] = [
 		`create temp table copy_how_found (old_type text, source text, how_found text, primary key (old_type, source)) on commit drop;
  insert into copy_how_found values ('lead', 'Example referral', 'referral'), ('client', 'Example referral', 'referral');`,
 	],
+	["copy-client-research.sql"],
 	[
 		"copy-national-account-owners.sql",
 		`create temp table copy_account_owner_date (account_client_id uuid primary key, started_on date not null) on commit drop;
@@ -102,9 +103,21 @@ insert into public.party (id, kind, name, created_by, updated_by, created_at, up
 update public.party set org_id = '${id(16)}' where id = '${id(10)}';
 insert into public.client_type (slug, label) values ('national_account', 'Example account');
 insert into public.client_status (slug, label) values ('active_deal', 'Example active deal');
-insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by, created_at) values
- ('${id(20)}', '${id(10)}', 'active_deal', null, 'Example referral', '${id(1)}', '${id(1)}', '2024-01-01'),
- ('${id(23)}', '${id(16)}', 'active_deal', 'national_account', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-06');
+insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by, created_at, updated_at, vertical, subtype) values
+ ('${id(20)}', '${id(10)}', 'active_deal', null, 'Example referral', '${id(1)}', '${id(1)}', '2024-01-01', '2024-02-01', E'\t Example practice \n', 'Example subtype'),
+ ('${id(23)}', '${id(16)}', 'active_deal', 'national_account', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-06', '2024-02-06', null, null);
+insert into public.client (id, party_id, created_by, updated_by, merged_into, vertical)
+ values ('${id(25)}', '${id(10)}', '${id(1)}', '${id(1)}', '${id(20)}', 'Example practice');
+insert into public.record_flag (id, subject_type, subject_id, kind, value, source, observed_at, expires_on, created_by) values
+ ('${id(150)}', 'client', '${id(25)}', 'research_note', '{"found":true,"finding":"Example finding","evidence":{"pages":[1,2]}}',
+  'https://example.test/research', '2025-01-06', '2027-01-06', '${id(1)}'),
+ ('${id(151)}', 'client', '${id(20)}', 'verified', '{"found":true}', 'Example source', '2025-01-06', null, '${id(1)}'),
+ ('${id(152)}', 'lead', '${id(21)}', 'research_note', '{"found":true}', 'Example source', '2025-01-06', null, '${id(1)}'),
+ ('${id(153)}', 'client', '${id(999)}', 'leadership', '{"found":false}', 'Example source', '2025-01-06', null, '${id(1)}'),
+ ('${id(154)}', 'client', '${id(20)}', 'entity_filing', '{"found":false,"searched_for":"Example filing"}',
+  'Example registry locator', '2025-01-07', null, '${id(1)}'),
+ ('${id(155)}', 'client', '${id(20)}', 'practice_research', '["Example invalid finding"]',
+  'Example source', '2025-01-07', null, '${id(1)}');
 insert into public.national_account_owner (account_client_id, owner_actor_id, set_by) values ('${id(23)}', '${id(2)}', '${id(1)}');
 insert into public.lead_stage (slug, label) values ('qualified', 'Example qualified');
 insert into public.lead (id, party_id, stage, source_type, created_by, updated_by, created_at, updated_at) values
@@ -324,6 +337,7 @@ const counts = async () =>
 // Each table a copy writes holds what the snapshot gave it, so no copy passes by copying nothing.
 // biome-ignore format: one entry per copied table
 const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, party_role: 6, party_specialty: 1, deal_client_website: 1,
+ client_vertical: 1, client_research: 2, client_research_fact: 3,
  specialty: 1, do_not_contact: 1, client: 2, national_account: 1, national_account_owner: 1, client_brand: 1, lead_lane: 1, market: 1, market_county: 1, territory: 1,
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
@@ -336,6 +350,9 @@ const corrections = [
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
  ["copy-markets.sql", "example-bay", "source", "Example review", "no_typed_destination"],
+ ["copy-leads-clients.sql", id(25), "client", id(20), "merged_client"],
+ ["copy-client-research.sql", id(153), "research", "client_role_not_copied"],
+ ["copy-client-research.sql", id(155), "research", "invalid_facts"],
  ["copy-deals.sql", id(34), "market", "Example Elsewhere", "unknown_market"],
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
@@ -422,4 +439,79 @@ test("running every copy again changes no row or change history and lists the sa
 	const again = await runAll();
 	assert.deepEqual(await everything(), before);
 	assert.deepEqual(again, corrections);
+});
+
+test("client research keeps named facts and follows the surviving client with its practice type", async () => {
+	assert.deepEqual(
+		await rows(
+			`select party_id, vertical, created_at::date::text, changed_at::date::text, changed_by_user_id from client_vertical`,
+		),
+		[
+			{
+				party_id: id(10),
+				vertical: "Example practice",
+				created_at: "2024-01-01",
+				changed_at: "2024-02-01",
+				changed_by_user_id: id(1),
+			},
+		],
+	);
+	assert.deepEqual(
+		await rows(`select r.id, r.party_id, r.kind, r.source, r.found, r.observed_at::date::text, r.expires_on::text,
+			r.changed_by_user_id, r.old_author_id, jsonb_object_agg(f.field, f.value) as facts
+			from client_research r join client_research_fact f on f.research_id = r.id group by r.id order by r.id`),
+		[
+			{
+				id: id(150),
+				party_id: id(10),
+				kind: "research_note",
+				source: "https://example.test/research",
+				found: true,
+				observed_at: "2025-01-06",
+				expires_on: "2027-01-06",
+				changed_by_user_id: id(1),
+				old_author_id: id(1),
+				facts: { finding: "Example finding", evidence: { pages: [1, 2] } },
+			},
+			{
+				id: id(154),
+				party_id: id(10),
+				kind: "entity_filing",
+				source: "Example registry locator",
+				found: false,
+				observed_at: "2025-01-07",
+				expires_on: null,
+				changed_by_user_id: id(1),
+				old_author_id: id(1),
+				facts: { searched_for: "Example filing" },
+			},
+		],
+	);
+});
+
+test("conflicting practice types wait without replacing a copied value", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.client set vertical = 'Example conflicting practice' where id = '${id(25)}'`,
+		);
+		const result = await db.query(await readSchema("copy-client-research.sql"));
+		assert.ok(Array.isArray(result));
+		assert.deepEqual(
+			result
+				.at(-1)
+				?.rows.filter((row: { field: string }) => row.field === "vertical")
+				.map(Object.values),
+			[
+				[id(20), "vertical", "conflicting_verticals"],
+				[id(25), "vertical", "conflicting_verticals"],
+				[id(25), "vertical", "existing_vertical_differs"],
+			],
+		);
+		assert.deepEqual(await rows("select vertical from client_vertical"), [
+			{ vertical: "Example practice" },
+		]);
+	} finally {
+		await db.query("rollback");
+	}
 });
