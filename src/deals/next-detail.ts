@@ -94,6 +94,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 						"cd.id",
 						"cd.kind",
 						eb.fn.coalesce("by.slug", "cd.changed_by_job").as("actor"),
+						asText(eb.ref("cd.changed_at")).as("updated_at"),
 						asText(eb.ref("cd.due_on")).as("due_on"),
 						"cd.note",
 						"cd.source",

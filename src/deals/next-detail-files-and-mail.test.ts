@@ -74,8 +74,8 @@ before(async () => {
 		insert into document (id, deal_id, name, r2_bucket, r2_key, content_type, sha256, bytes, kind, version, supersedes_id, created_at)
 			values ('${documents[20]}', '${dealId}', 'Example plan.pdf', 'deal_documents', 'example/updated',
 				'application/pdf', repeat('b', 64), 15, 'other', 2, '${documents[0]}', '2026-01-22');
-		insert into critical_date (id, deal_id, kind, due_on, source)
-			values ('${id(40)}', '${dealId}', 'loi_expiry', '2026-02-01', 'Example offer');
+		insert into critical_date (id, deal_id, kind, due_on, source, created_at)
+			values ('${id(40)}', '${dealId}', 'loi_expiry', '2026-02-01', 'Example offer', '2026-01-01');
 		insert into next_step (id, deal_id, what, owner_party_id)
 			values ('${id(42)}', '${dealId}', 'Confirm the plan', '${id(2)}');
 		select set_config('engine.job', 'old_system', true);
@@ -148,10 +148,15 @@ test("both partners can list every deal file and open an earlier version", async
 });
 
 test("both partners see who saved a critical date or next step", async () => {
+	const { rows } = await db.query<{ saved_at: string }>(
+		"select to_jsonb(changed_at) as saved_at from critical_date where id = $1",
+		[id(40)],
+	);
+	assert.ok(rows[0]);
 	for (const caller of [alex, casey]) {
 		assert.partialDeepStrictEqual(await detail(caller), {
 			critical_dates: [
-				{ id: id(40), actor: "alex" },
+				{ id: id(40), actor: "alex", updated_at: rows[0].saved_at },
 				{ id: id(41), actor: "old_system" },
 			],
 			next_actions: [
