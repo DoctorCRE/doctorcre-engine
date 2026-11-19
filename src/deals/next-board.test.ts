@@ -6,7 +6,7 @@ import { stampNextSave } from "../next-save.ts";
 import { readSnapshot } from "../reader.ts";
 import { copyTest, readSchema } from "../test-copy.ts";
 import { readBoard, type Scope } from "./board.ts";
-import { readNextBoardDeals } from "./next-board.ts";
+import { readNextBoard, readNextBoardDeals } from "./next-board.ts";
 import { readNextDealDetail } from "./next-detail.ts";
 
 const id = (n: number) =>
@@ -328,6 +328,112 @@ test("the deal page shares the card's copied phase, outcome and close date", asy
 			);
 		}
 	});
+});
+
+test("Deals reads show separate kind and reason and the earliest confirmed open date", async () => {
+	const rollback = new Error("roll back example deal facts");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			await sql`insert into property (id, address) values (${id(500)}, '100 Example Road')`.execute(
+				tx,
+			);
+			await sql`insert into lease (id, party_id, property_id)
+				values (${id(501)}, ${id(12)}, ${id(500)})`.execute(tx);
+			await sql`update deal set kind = 'purchase', reason = 'renewal', renews_lease_id = ${id(501)}
+				where id = ${id(33)}`.execute(tx);
+			await sql`insert into critical_date (id, deal_id, kind, due_on, source) values
+				(${id(502)}, ${id(33)}, 'loi_expiry', '2000-01-01', 'Example proposal'),
+				(${id(503)}, ${id(33)}, 'due_diligence', '2000-01-02', 'Example completed date'),
+				(${id(504)}, ${id(33)}, 'option_notice', '2000-01-03', 'Example open date'),
+				(${id(505)}, ${id(33)}, 'lease_end', '2000-01-04', 'Example later date')`.execute(
+				tx,
+			);
+			await sql`update critical_date set status = 'open' where id in (${id(503)}, ${id(504)}, ${id(505)})`.execute(
+				tx,
+			);
+			await sql`update critical_date set status = 'done', resolution_reason = 'Example completed'
+				where id = ${id(503)}`.execute(tx);
+
+			const board = await readNextBoard(tx, { partner: "partner_one" });
+			const facts = {
+				kind: "purchase",
+				reason: "renewal",
+				type: "purchase",
+				next_critical_date: {
+					id: id(504),
+					kind: "option_notice",
+					due_on: "2000-01-03",
+				},
+			};
+			assert.partialDeepStrictEqual(
+				board.closed_deals.find((deal) => deal.id === id(33)),
+				facts,
+			);
+			assert.partialDeepStrictEqual(
+				await readNextDealDetail(tx, id(33)),
+				facts,
+			);
+			assert.partialDeepStrictEqual(
+				board.deals.find((deal) => deal.id === id(31)),
+				{
+					kind: null,
+					reason: "start_up",
+					type: "startup",
+					next_critical_date: null,
+				},
+			);
+			throw rollback;
+		}),
+		rollback,
+	);
+});
+
+test("National counts a late open step once and skips retained completion and checklist dates", async () => {
+	const rollback = new Error("roll back example next steps");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			await sql`insert into next_step (id, deal_id, owner_party_id, what, due_on) values
+				(${id(509)}, ${id(30)}, ${id(1)}, 'Example send survey', '2000-01-01'),
+				(${id(510)}, ${id(30)}, ${id(2)}, 'Example send plans', '2000-01-02'),
+				(${id(506)}, ${id(31)}, ${id(1)}, 'Example confirm terms', '2000-01-03')`.execute(
+				tx,
+			);
+			await sql`insert into next_step (deal_id, what, item_title, source_ref, due_on)
+				values (${id(37)}, 'Example add file', 'Add file', 'Example checklist', '2000-01-04')`.execute(
+				tx,
+			);
+			await sql`insert into activity (id, kind, happened_at)
+				values (${id(507)}, 'call', '2000-01-10T18:00:00Z')`.execute(tx);
+			await sql`insert into activity_about (activity_id, deal_id) values (${id(507)}, ${id(31)})`.execute(
+				tx,
+			);
+			await stampNextSave(tx, { job: "old_system", for_user: "partner_one" });
+			await sql`insert into proposal (id, kind, activity_id, activity_kind, deal_id, next_step_id, proposed_by_job, evidence)
+				values (${id(508)}, 'next_step_done', ${id(507)}, 'call', ${id(31)}, ${id(506)}, 'old_system', 'Example terms confirmed')`.execute(
+				tx,
+			);
+			await sql`select set_config('engine.job', '', true)`.execute(tx);
+			await sql`update proposal set status = 'accepted' where id = ${id(508)}`.execute(
+				tx,
+			);
+
+			const board = await readNextBoard(tx, { partner: "partner_one" });
+			assert.partialDeepStrictEqual(
+				board.deals.find((deal) => deal.id === id(31)),
+				{
+					next_date: "2000-01-03",
+					next_step: null,
+				},
+			);
+			assert.partialDeepStrictEqual(board.accounts, [
+				{ account_client_id: id(16), overdue_deals: 1 },
+			]);
+			throw rollback;
+		}),
+		rollback,
+	);
 });
 
 test("a deal stays won with its latest close date when it moves to Invoiced", async () => {

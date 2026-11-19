@@ -7,7 +7,7 @@ import {
 import type { DB, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
-import { clientWebsiteOf, selectNextDeals } from "./next-board.ts";
+import { clientWebsiteOf, selectNextDealsWithFacts } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
 
@@ -22,8 +22,21 @@ type DealEvent = {
 	new_value: JsonValue;
 };
 
+type Correspondence = {
+	activity_id: string;
+	happened_at: string;
+} & (
+	| {
+			kind: "email";
+			sender: string;
+			sender_name: string | null;
+			subject: string;
+	  }
+	| { kind: "meeting"; title: string | null }
+);
+
 export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
-	const record = await selectNextDeals(db)
+	const record = await selectNextDealsWithFacts(db)
 		.select((eb) => [
 			sql.lit("deal-timeline.v1").as("schema_version"),
 			sql.lit("deal-items.v1").as("item_schema_version"),
@@ -32,7 +45,6 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			clientWebsiteOf(db, eb.ref("d.id"), eb.ref("c.party_id")).as(
 				"client_portal_url",
 			),
-			"d.reason",
 			asText(sql`(now() at time zone 'America/Chicago')::date`)
 				.$notNull()
 				.as("today"),
@@ -86,6 +98,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 						a.happened_at desc, a.id desc
 				) t
 			)`.as("email_threads"),
+			correspondenceOf(eb.ref("d.id")).as("correspondence"),
 			jsonArrayFrom(
 				eb
 					.selectFrom("critical_date as cd")
@@ -180,12 +193,12 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
-	const { today, commissions, reason, critical_dates, ...detail } = record;
+	const { today, commissions, critical_dates, ...detail } = record;
 	const checklist = checklistOf({
 		deal: {
 			id: detail.deal_id,
 			owner: detail.owner,
-			type: reason === "renewal" ? reason : detail.type,
+			type: detail.reason === "renewal" ? detail.reason : detail.type,
 			invoiced_on: detail.invoiced_on,
 		},
 		lease: detail.lease,
@@ -204,6 +217,21 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		checklist,
 	};
 }
+
+const correspondenceOf = (deal: Expression<string>) => sql<Correspondence[]>`(
+	select coalesce(jsonb_agg(
+		jsonb_build_object('activity_id', a.id, 'kind', a.kind, 'happened_at', a.happened_at)
+		|| case when a.kind = 'meeting' then jsonb_build_object('title',
+			nullif(btrim(split_part(replace(a.summary, chr(13), ''), E'\\n\\n', 1), E' \\t\\n'), ''))
+		else jsonb_build_object('sender', e.sender, 'sender_name', e.sender_name, 'subject', e.subject)
+		end
+		order by a.happened_at desc, a.id desc
+	), '[]')
+	from activity_about ab
+	join activity a on a.id = ab.activity_id
+	left join email e on e.activity_id = a.id
+	where ab.deal_id = ${deal} and (a.kind = 'meeting' or e.activity_id is not null)
+)`;
 
 function dealEditValue(column: "c.old_value" | "c.new_value") {
 	const value = sql.ref(column);
