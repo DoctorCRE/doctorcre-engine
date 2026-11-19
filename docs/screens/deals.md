@@ -93,7 +93,7 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 - [ ] Home shows a due follow-up as a step for the partner who set it. Opening it on Home opens this prospect with the follow-up in view.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Claim makes the signed-in partner its owner. The owner can be changed to the other partner or back to Unclaimed.
-- [ ] Turn into deal opens Add deal with the prospect's name, newest note and claimed owner filled in and editable (owner, 2026-11-19, question 11). The partner sets the client, phase and owner before saving. The client may be the prospect or another party, such as the practice a doctor runs. On save, the deal opens and the prospect leaves the lane. The prospect keeps its notes in its history.
+- [ ] Turn into deal opens Add deal with the prospect's name, newest note and claimed owner filled in and editable (owner, 2026-11-19, question 11). The partner sets the client, phase and owner before saving. The client may be the prospect or another party, such as the practice a doctor runs. On save, the deal opens and the prospect leaves the lane. The prospect keeps its notes and follow-ups in its history.
 - [ ] Drop asks a reason and takes it off the lane. It stays a lead, archived with that reason, on the Leads screen.
 - [ ] If the other partner saved the same field since the prospect opened, the save says so and offers to reload. Nothing is overwritten.
 

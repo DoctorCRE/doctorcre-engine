@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { isArguments } from "../save-door.ts";
 import { type Caller, doorTest } from "../test-door.ts";
 
 const { db, setup, cleanup, save: saveAt, request } = doorTest();
@@ -18,7 +19,8 @@ before(async () => {
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
 		insert into phase values ('touring', 'Touring'), ('negotiation', 'Negotiation'), ('closed', 'Closed'), ('dead', 'Dead');
 		insert into how_found values ('referral', 'Referral');
-		insert into role values ('client', 'Client');
+		insert into role values ('client', 'Client'), ('client_contact', 'Client contact'), ('lead', 'Lead');
+		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity');
 		insert into party (id, kind, name, how_found) values ('${CLIENT}', 'company', 'Example Clinic', 'referral');
 		insert into party_role (party_id, role) values ('${CLIENT}', 'client');
 		insert into market (id, name) values ('${MARKET}', 'Example Market');
@@ -279,6 +281,223 @@ const addArgs = {
 	owner: "blair",
 	phase: "touring",
 };
+
+async function addProspect(name: string, note?: string) {
+	const [status, prospect] = await saveAt(partner, "prospects", {
+		idempotency_key: randomUUID(),
+		name,
+		kind: "person",
+		how_found: "referral",
+		note,
+	});
+	assert.equal(status, 201);
+	assert.equal(typeof prospect.party_id, "string");
+	return prospect;
+}
+
+const conversion = (name: string) => ({
+	...addArgs,
+	idempotency_key: randomUUID(),
+	name,
+});
+
+test("turning a prospect into its own deal keeps its notes and follow-ups and can be retried", async () => {
+	const note = "Example prospect note";
+	const prospect = await addProspect("Example Prospect Client", note);
+	const [stepStatus, step] = await saveAt(partner, "next-steps", {
+		idempotency_key: randomUUID(),
+		party_id: prospect.party_id,
+		replaces: "current",
+		seen_current_step: null,
+		due_on: "2026-11-19",
+		what: "Example follow-up",
+	});
+	assert.equal(stepStatus, 201);
+	const inLane = async () => {
+		const [status, lane] = await saveAt(partner, "prospects", {}, "GET");
+		assert.equal(status, 200);
+		assert.ok(Array.isArray(lane.prospects));
+		return lane.prospects.some(
+			(card: unknown) =>
+				isArguments(card) && card.party_id === prospect.party_id,
+		);
+	};
+	assert.equal(await inLane(), true);
+
+	const args = {
+		...conversion("Example Prospect's Deal"),
+		prospect_id: prospect.party_id,
+		client_id: String(prospect.party_id).toUpperCase(),
+	};
+	const [status, answer] = await saveAt(partner, "deals", args);
+	assert.equal(status, 201);
+	assert.equal(typeof answer.phase_changed_at, "string");
+	assert.equal(answer.change_id, await seen(String(answer.deal_id)));
+	assert.deepEqual(await saveAt(partner, "deals", args), [
+		200,
+		{ ...answer, replayed: true },
+	]);
+	assert.equal(await inLane(), false);
+	assert.deepEqual(await dealNow(String(answer.deal_id)), {
+		owner: "blair",
+		needs_attention: false,
+		by_user: "alex",
+		by_job: null,
+		for_user: null,
+		phase: "touring",
+	});
+	assert.deepEqual(
+		(
+			await db.query(
+				"select party_id, role, changed_by_user_id from deal_party where deal_id = $1",
+				[answer.deal_id],
+			)
+		).rows,
+		[{ party_id: prospect.party_id, role: "client", changed_by_user_id: ALEX }],
+	);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select a.summary from activity a join activity_about link on link.activity_id = a.id
+			where a.id = $1 and link.party_id = $2`,
+				[prospect.activity_id, prospect.party_id],
+			)
+		).rows,
+		[{ summary: note }],
+	);
+	assert.deepEqual(
+		(
+			await db.query("select party_id, status from next_step where id = $1", [
+				step.next_step_id,
+			])
+		).rows,
+		[{ party_id: prospect.party_id, status: "open" }],
+	);
+	assert.equal(
+		(await db.query("select id from deal where name = $1", [args.name]))
+			.rowCount,
+		1,
+	);
+});
+
+test("a different existing party gains the client role and the prospect joins as client contact", async () => {
+	const prospect = await addProspect("Example Prospect Contact");
+	const clientId = randomUUID();
+	await db.query("begin; set local engine.job = 'old_system'");
+	await db.query(
+		"insert into party (id, kind, name, how_found) values ($1, 'company', 'Example Selected Practice', 'referral')",
+		[clientId],
+	);
+	await db.query("commit");
+	const [status, answer] = await saveAt(partner, "deals", {
+		...conversion("Example Existing Client Deal"),
+		prospect_id: prospect.party_id,
+		client_id: clientId,
+	});
+	assert.equal(status, 201);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select p.party_id, p.role from deal_party p
+			where p.deal_id = $1 order by p.role`,
+				[answer.deal_id],
+			)
+		).rows,
+		[
+			{ party_id: clientId, role: "client" },
+			{ party_id: prospect.party_id, role: "client_contact" },
+		],
+	);
+	assert.deepEqual(
+		(
+			await db.query(
+				"select role, changed_by_user_id from party_role where party_id = $1",
+				[clientId],
+			)
+		).rows,
+		[{ role: "client", changed_by_user_id: ALEX }],
+	);
+});
+
+test("a new client, the deal and its prospect contact save together", async () => {
+	const prospect = await addProspect("Example Prospect for New Client");
+	const args = {
+		idempotency_key: randomUUID(),
+		name: "Example New Client Deal",
+		owner: "blair",
+		phase: "touring",
+		prospect_id: prospect.party_id,
+		client: {
+			name: "Example New Practice",
+			kind: "company",
+			how_found: "referral",
+		},
+	};
+	const [refused, error] = await saveAt(partner, "deals", {
+		...args,
+		phase: "made_up",
+	});
+	assert.deepEqual(
+		[refused, error.rule],
+		[422, "deal_phase_change_phase_fkey"],
+	);
+	assert.equal(
+		(await db.query("select id from party where name = $1", [args.client.name]))
+			.rowCount,
+		0,
+	);
+	assert.equal(
+		(await db.query("select id from deal where name = $1", [args.name]))
+			.rowCount,
+		0,
+	);
+
+	const [status, answer] = await saveAt(partner, "deals", args);
+	assert.equal(status, 201);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select p.name, p.kind, p.how_found from deal_party link
+			join party p on p.id = link.party_id where link.deal_id = $1 and link.role = 'client'`,
+				[answer.deal_id],
+			)
+		).rows,
+		[args.client],
+	);
+	assert.deepEqual(
+		(
+			await db.query(
+				"select party_id from deal_party where deal_id = $1 and role = 'client_contact'",
+				[answer.deal_id],
+			)
+		).rows,
+		[{ party_id: prospect.party_id }],
+	);
+});
+
+test("a conversion refuses a party outside the lane and only one concurrent save can convert a prospect", async () => {
+	const [status, refusal] = await saveAt(partner, "deals", {
+		...conversion("Example Refused Conversion"),
+		prospect_id: randomUUID(),
+	});
+	assert.deepEqual([status, refusal.error], [409, "not_a_prospect"]);
+	const prospect = await addProspect("Example Concurrent Prospect");
+	const args = {
+		...conversion("Example Concurrent Conversion"),
+		prospect_id: prospect.party_id,
+	};
+	const [jobStatus, jobRefusal] = await saveAt(assistant, "deals", args);
+	assert.deepEqual([jobStatus, jobRefusal.error], [400, "invalid_field_value"]);
+	const results = await Promise.all([
+		saveAt(partner, "deals", args),
+		saveAt(partner, "deals", { ...args, idempotency_key: randomUUID() }),
+	]);
+	assert.deepEqual(results.map(([code]) => code).sort(), [201, 409]);
+	assert.equal(
+		results.find(([code]) => code === 409)?.[1].error,
+		"not_a_prospect",
+	);
+});
 
 for (const { title, caller, extras } of [
 	{

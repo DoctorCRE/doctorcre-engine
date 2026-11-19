@@ -18,6 +18,7 @@ import {
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
 import { seenAnswer, unseenChanges } from "../seen-change.ts";
+import { lockLead, requireProspect } from "./membership.ts";
 
 const OWNER_REFUSAL = { hint: "Choose Joe or Dell, or leave it Unclaimed." };
 
@@ -54,39 +55,6 @@ function parseDrop(party_id: string, body: JsonObject) {
 		return new Refusal(400, "missing_required", { fields: ["reason"] });
 	const request = fit(body, DROP, ["idempotency_key", "reason"]);
 	return request instanceof Refusal ? request : { party_id, ...request };
-}
-
-async function lockLead(tx: Transaction<DB>, partyId: string) {
-	// A deal link needs key-share on the party, so this lock holds lane membership during the save.
-	await tx
-		.selectFrom("party")
-		.select("id")
-		.where("id", "=", partyId)
-		.forUpdate()
-		.executeTakeFirst();
-	return tx
-		.selectFrom("party_role")
-		.select("stage")
-		.where("party_id", "=", partyId)
-		.where("role", "=", "lead")
-		.forNoKeyUpdate()
-		.executeTakeFirst();
-}
-
-async function requireProspect(
-	tx: Transaction<DB>,
-	partyId: string,
-	stage: string | null | undefined,
-) {
-	const deal = await tx
-		.selectFrom("deal_party")
-		.select("deal_id")
-		.where("party_id", "=", partyId)
-		.executeTakeFirst();
-	if (stage !== "opportunity" || deal)
-		throw new SaveRefusal(
-			new Refusal(409, "not_a_prospect", { party_id: partyId }),
-		);
 }
 
 type Changes = Exclude<ReturnType<typeof parseChanges>, Refusal>;
