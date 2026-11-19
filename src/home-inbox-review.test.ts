@@ -146,9 +146,10 @@ test("Home shows a sent draft once in Done at the recorded send time", async () 
 		{
 			item_id: `reply_draft:${id(24)}`,
 			reply_draft_status: "sent",
-			disposition: "settled",
+			disposition: "inbox",
+			section: "done",
 			completed_at: draft.sent_at.toISOString(),
-			auto_settled: true,
+			auto_settled: false,
 		},
 	]);
 });
@@ -186,29 +187,9 @@ for (const item_id of [`suggestion:${id(32)}`, `reply_draft:${id(21)}`]) {
 			idempotency_key: randomUUID(),
 		});
 		assert.equal(stale, 409);
-		const [undone, receipt] = await save(user, "home/marks", {
-			idempotency_key: randomUUID(),
-			item_id,
-			base_version: answer.base_version,
-			action: "unsettle",
-		});
-		assert.equal(undone, 200);
-		assert.partialDeepStrictEqual(await card(), {
-			section: "inbox",
-			snoozed_until: null,
-			base_version: receipt.base_version,
-		});
-		assert.notEqual(receipt.base_version, original.base_version);
 		if (item_id === `reply_draft:${id(21)}`) {
-			const [settled, mark] = await save(user, "home/marks", {
-				idempotency_key: randomUUID(),
-				item_id,
-				base_version: receipt.base_version,
-				action: "settle",
-			});
-			assert.equal(settled, 200);
 			assert.partialDeepStrictEqual(await card(), {
-				section: "settled",
+				section: "snoozed",
 				suggestions: [{ id: id(30) }, { id: id(31) }, { id: id(38) }],
 			});
 			assert.ok(
@@ -230,22 +211,24 @@ for (const item_id of [`suggestion:${id(32)}`, `reply_draft:${id(21)}`]) {
 					.filter(isArguments)
 					.some((row) => row.conversation_id === "Thread"),
 			);
-			assert.equal(
-				(
-					await save(user, "home/marks", {
-						idempotency_key: randomUUID(),
-						item_id,
-						base_version: mark.base_version,
-						action: "unsettle",
-					})
-				)[0],
-				200,
-			);
 		}
+		const [undone, receipt] = await save(user, "home/marks", {
+			idempotency_key: randomUUID(),
+			item_id,
+			base_version: answer.base_version,
+			action: "unsnooze",
+		});
+		assert.equal(undone, 200);
+		assert.partialDeepStrictEqual(await card(), {
+			section: "inbox",
+			snoozed_until: null,
+			base_version: receipt.base_version,
+		});
+		assert.notEqual(receipt.base_version, original.base_version);
 	});
 }
 
-test("A new suggestion keeps the conversation snoozed and a later decision clears its settlement", async () => {
+test("A new suggestion keeps the conversation snoozed and unsnooze returns it to the inbox", async () => {
 	const user = { user: "mail-reviewer" };
 	const reviewer = id(9);
 	await db.query(`begin;
@@ -295,11 +278,9 @@ test("A new suggestion keeps the conversation snoozed and a later decision clear
 		section: "snoozed",
 		snoozed_until: until,
 	});
-	assert.equal((await mark("unsettle"))[0], 200);
+	const [unsnoozed, receipt] = await mark("unsnooze");
+	assert.equal(unsnoozed, 200);
 	assert.equal((await card()).section, "inbox");
-	const [settled, receipt] = await mark("settle");
-	assert.equal(settled, 200);
-	assert.equal((await card())?.section, "settled");
 	const [decided] = await save(user, `proposals/${id(51)}/decision`, {
 		idempotency_key: randomUUID(),
 		decision: "dismiss",
@@ -309,8 +290,8 @@ test("A new suggestion keeps the conversation snoozed and a later decision clear
 		section: "inbox",
 		merged_source_ids: [id(52), id(50)],
 	});
-	const [undo] = await mark("unsettle", receipt);
-	assert.equal(undo, 409);
+	const [stale] = await mark("snooze", receipt, until);
+	assert.equal(stale, 409);
 });
 
 test("Home groups pending suggestions from each email conversation or call and keeps their targets", async () => {

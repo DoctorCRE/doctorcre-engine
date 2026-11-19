@@ -25,7 +25,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Every card hidden before Hide went is back in the inbox, including the 11 hidden marks copied from the old system (coordinator, 2026-11-19).
 - [ ] Every card kind has Drop beside Snooze. Drop asks for a reason, and the card leaves. Steps, call follow-ups, updates, reply drafts, suggestions and tour feedback offer the same actions. A lease fact is the one exception: its Reject asks a reason and finishes the card, and it has no separate Drop (coordinator, 2026-11-19).
 
-When app routing moves to the new database, Home uses door 24 for snooze and undo on steps, call follow-ups, updates, suggestions and reply drafts. Door 24's `settle` and `unsettle` saves and the Home read's settled shelf are deleted in the engine change that builds Home's side. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
+When app routing moves to the new database, Home uses door 24 for `snooze` and `unsnooze` (wake and Undo) on steps, call follow-ups, updates, suggestions and reply drafts. Door 24 has no `settle` or `unsettle`, and the Home read has no settled shelf. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
 
 ## Inbox sections
 

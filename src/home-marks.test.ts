@@ -87,8 +87,13 @@ async function cardVersion(item_id: string) {
 	return items.find((card) => card.item_id === item_id)?.base_version;
 }
 
-const command = (body: object, action: string, user = alex) =>
-	save(user, path, { idempotency_key: randomUUID(), action, ...body });
+const command = (body: object, action: string, user = alex, extra = {}) =>
+	save(user, path, {
+		idempotency_key: randomUUID(),
+		action,
+		...body,
+		...extra,
+	});
 
 for (const [index, prefix] of kinds.entries()) {
 	test(`saves and clears each mark on ${prefix}`, async () => {
@@ -119,31 +124,29 @@ for (const [index, prefix] of kinds.entries()) {
 		await edit("snooze", { until });
 		assert.equal(version, first.base_version);
 		await edit("set-waiting", waiting);
-		const settled = await edit("settle");
 		const kind = ["next_step", "call_follow_up", "home_update"][index];
 		assert.deepEqual(await rows(), [
-			[kind, "settled", company, waiting.reason, owner],
+			[kind, "snoozed", company, waiting.reason, owner],
 		]);
-		assert.deepEqual(settled.previous, {
+		const unsnoozed = await edit("unsnooze");
+		assert.deepEqual(unsnoozed.previous, {
 			disposition: "snoozed",
 			snoozed_until: "2099-11-20T06:00:00+00:00",
 			waiting_on_party_id: company,
 			waiting_reason: waiting.reason,
 		});
-		await edit("unsettle");
 		assert.deepEqual(await rows(), [
 			[kind, null, company, waiting.reason, owner],
 		]);
 		await edit("clear-waiting");
 		assert.deepEqual(await rows(), []);
-		if (prefix !== "notification")
-			assert.equal(await cardVersion(item_id), version);
-		const [stale, conflict] = await command(card, "settle");
+		assert.equal(await cardVersion(item_id), version);
+		const [stale, conflict] = await command(card, "snooze", alex, { until });
 		assert.equal(stale, 409);
 		assert.equal(conflict.current_version, version);
 		const [foreign, refusal] = await command(
 			{ item_id, base_version: version },
-			"settle",
+			"unsnooze",
 			blair,
 		);
 		assert.equal(foreign, 404);
@@ -151,40 +154,36 @@ for (const [index, prefix] of kinds.entries()) {
 	});
 }
 
-test("a crossed save fails and a waiting edit cannot renew a settlement", async () => {
-	const { id, item_id, base_version } = await fixture("next_action");
-	const card = { item_id, base_version };
+test("a crossed save fails and unsnooze clears a lone snooze mark", async () => {
+	const { item_id, base_version, rows } = await fixture("next_action");
+	const card = { item_id, base_version, until };
 	const crossed = await Promise.all([
-		command(card, "settle"),
-		command(card, "settle"),
+		command(card, "snooze"),
+		command(card, "snooze"),
 	]);
 	assert.deepEqual(crossed.map(([code]) => code).sort(), [200, 409]);
-	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		update next_step set what = 'Check the updated lease' where id = '${id}'; commit;`);
-	const [waitCode, waited] = await command(
-		{
-			item_id,
-			base_version: await cardVersion(item_id),
-			...waiting,
-		},
-		"set-waiting",
+	const winner = crossed.find(([code]) => code === 200)?.[1];
+	assert.ok(winner);
+	assert.match(String(winner.base_version), /:snoozed$/);
+	assert.equal(await cardVersion(item_id), winner.base_version);
+	const [status, unsnoozed] = await command(
+		{ item_id, base_version: winner.base_version },
+		"unsnooze",
 	);
-	assert.equal(waitCode, 200, JSON.stringify(waited));
-	assert.match(String(waited.base_version), /:inbox$/);
-	assert.equal(await cardVersion(item_id), waited.base_version);
-	const [status, settled] = await command(
-		{ item_id, base_version: waited.base_version },
-		"settle",
-	);
-	assert.equal(status, 200, JSON.stringify(settled));
-	assert.match(String(settled.base_version), /:settled$/);
-	assert.equal(await cardVersion(item_id), settled.base_version);
+	assert.equal(status, 200, JSON.stringify(unsnoozed));
+	assert.match(String(unsnoozed.base_version), /:inbox$/);
+	assert.equal(await cardVersion(item_id), unsnoozed.base_version);
+	assert.deepEqual(await rows(), []);
 });
 
-test("refuses unknown cards, past snoozes and waiting without a reason", async () => {
+test("refuses settle, unsettle, unknown cards, past snoozes and waiting without a reason", async () => {
 	const { item_id, base_version } = await fixture("notification");
 	for (const [action, fields, expected] of [
-		["unsettle", { item_id: `notification:${randomUUID()}` }, 404],
+		["settle", {}, 400],
+		["unsettle", {}, 400],
+		["unsnooze", { base_version: "1:0:settled" }, 400],
+		["unsnooze", { until }, 400],
+		["unsnooze", { item_id: `notification:${randomUUID()}` }, 404],
 		["snooze", { until: "2001-01-01T06:00:00Z" }, 422],
 		["set-waiting", { target: waiting.target }, 400],
 	] as const) {

@@ -1387,7 +1387,7 @@ create table home_mark (
 			when proposal_id is not null then 'proposal'
 			when reply_draft_id is not null then 'reply_draft' end) stored,
 	created_at timestamptz not null default now(),
-	disposition text check (disposition in ('snoozed', 'settled')),
+	disposition text check (disposition = 'snoozed'),
 	snoozed_until timestamptz,
 	waiting_on_party_id uuid references party,
 	waiting_reason text check (waiting_reason ~ '\S'),

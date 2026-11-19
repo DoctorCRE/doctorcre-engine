@@ -273,8 +273,9 @@ insert into public.next_action (id, subject_type, subject_id, owner_id, descript
  ('${id(89)}', 'deal', '${id(30)}', '${id(3)}', 'Example deal step', 'open', '${id(1)}'),
  ('${id(96)}', 'vendor', '${id(22)}', '${id(3)}', 'Example vendor step', 'open', '${id(1)}'),
  ('${id(97)}', 'client', '${id(20)}', '${id(3)}', 'Example cancelled step', 'dropped', '${id(1)}');
-insert into ops.home_inbox_disposition (actor_id, item_id, disposition, source_version, material_version, updated_at) values
- ('${id(1)}', 'next_action:${id(89)}', 'settled', '1', 'm', '2026-10-04');
+insert into ops.home_inbox_disposition (actor_id, item_id, disposition, snoozed_until, source_version, material_version, updated_at) values
+ ('${id(1)}', 'next_action:${id(89)}', 'snoozed', '2026-12-01', '1', 'm', '2026-10-04'),
+ ('${id(1)}', 'next_action:${id(96)}', 'settled', null, '1', 'm', '2026-10-04');
 insert into public.deal_invoice_email (id, evidence_ref, from_address, deal_name, client_name, property_address, occurred_at, email_date, created_by, status,
  deal_id, prior_phase, phase_event_id, invoice_event_id, applied_at, applied_by, reason) values
  ('${id(90)}', 'local-mail:example-90', 'billing@example.test', 'Example clinic lease', 'Example Clinic Group', '100 Example Way',

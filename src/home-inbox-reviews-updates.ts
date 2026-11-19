@@ -18,17 +18,15 @@ function noticeCard(
 		kind_label,
 		source_version,
 		snoozed_until = null,
-		settled = false,
 	}: {
 		item_id: string;
 		open_url: string;
 		kind_label: "Task" | "Update";
 		source_version: string;
 		snoozed_until?: string | null;
-		settled?: boolean;
 	},
 ) {
-	const disposition = settled ? "settled" : snoozed_until ? "snoozed" : "inbox";
+	const disposition = snoozed_until ? "snoozed" : "inbox";
 	return {
 		item_id,
 		source_type: "notification",
@@ -132,7 +130,6 @@ type HomeUpdate = DealNotice & {
 	source_version: string;
 	mark_version: string;
 	snoozed_until: string | null;
-	settled: boolean;
 };
 
 export async function readHomeUpdates(
@@ -145,9 +142,7 @@ export async function readHomeUpdates(
 			u.created_at as activity_at, u.checklist_item_ref,
 			coalesce(update_change.id, 0)::text as source_version,
 			coalesce(mark_change.id, 0)::text as mark_version,
-			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
-			coalesce(m.disposition = 'settled'
-				and coalesce(mark_change.disposition_id, 0) >= coalesce(update_change.id, 0), false) as settled
+			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
 		from home_update u
 		join deal d on d.id = u.deal_id
 		left join home_mark m on (m.user_id, m.item_kind, m.item_id) = (u.user_id, 'home_update', u.id)
@@ -156,9 +151,7 @@ export async function readHomeUpdates(
 			where table_name = 'home_update' and record = jsonb_build_object('id', u.id)
 		) update_change
 		cross join lateral (
-			select max(id) as id, max(id) filter (
-				where old_value->>'disposition' is distinct from new_value->>'disposition'
-			) as disposition_id from change
+			select max(id) as id from change
 			where table_name = 'home_mark'
 				and record = jsonb_build_object('user_id', u.user_id, 'item_kind', 'home_update', 'item_id', u.id)
 		) mark_change
@@ -173,7 +166,6 @@ export async function readHomeUpdates(
 			kind_label: "Update",
 			source_version: update.source_version,
 			snoozed_until: update.snoozed_until,
-			settled: update.settled,
 		});
 		return {
 			...card,

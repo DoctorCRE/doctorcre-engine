@@ -276,7 +276,6 @@ type ReviewKind = "proposal" | "reply_draft";
 type ReviewMark = {
 	mark_item_id: string;
 	mark_version: string | null;
-	settled: boolean;
 	snoozed_until: string | null;
 };
 
@@ -287,12 +286,10 @@ function markedReviews<Row extends ReviewRow>(
 ) {
 	return sql<Row & ReviewMark>`
 		select card.*, history.mark_version, coalesce(history.item_id, card.id) as mark_item_id,
-			coalesce(m.disposition = 'settled' and history.settled_version >= card.source_change_id, false) as settled,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
 		from (${rows}) card
 		left join lateral (
-			select member.item_id, max(h.id) as mark_version,
-				max(h.id) filter (where h.new_value ->> 'disposition' = 'settled') as settled_version
+			select member.item_id, max(h.id) as mark_version
 			from unnest(${kind === "proposal" ? sql`card.member_ids` : sql`array[card.id]`}) member(item_id)
 			join change h on h.table_name = 'home_mark'
 				and h.record = jsonb_build_object('user_id', ${userId}::uuid, 'item_kind', ${kind}::text, 'item_id', member.item_id)
@@ -359,12 +356,13 @@ function reviewCard(
 		row.snoozed_until && !completed_at
 			? new Date(row.snoozed_until).toISOString()
 			: null;
-	const disposition =
-		completed_at || row.settled
-			? "settled"
-			: snoozed_until
-				? "snoozed"
-				: "inbox";
+	const disposition = snoozed_until ? "snoozed" : "inbox";
+	const section =
+		source_state === "done"
+			? "done"
+			: source_state === "working"
+				? "working"
+				: disposition;
 	return {
 		item_id: `${kind === "proposal" ? "suggestion" : kind}:${row.id}`,
 		source_type,
@@ -378,10 +376,10 @@ function reviewCard(
 		hold_until: null,
 		snoozed_until,
 		disposition,
-		section: source_state === "working" ? "working" : disposition,
+		section,
 		unseen: false,
 		explicit_unsettle: false,
-		auto_settled: source_state === "done",
+		auto_settled: false,
 		context_label: row.context_label,
 		open_url: row.open_url,
 		action_id: null,
@@ -520,14 +518,14 @@ export async function readHomeMailPriorities(
 			cross join lateral jsonb_to_recordset(card.suggestions)
 				ref(id uuid, kind text, activity_id uuid, due_on date, suggestion_title text)
 			where card.activity_kind = 'email'
-				and case when draft.id is not null then not draft.settled and draft.snoozed_until is null
-					else not standalone.settled and standalone.snoozed_until is null end
+				and case when draft.id is not null then draft.snoozed_until is null
+					else standalone.snoozed_until is null end
 				and ref.kind in ('next_step', 'file_to_deal', 'possible_new_deal', 'phase_move')
 			union all
 			select 'reply_draft:' || card.id, card.source_change_id, card.mark_version,
 				card.email_activity_id, null, card.id, 'reply_draft', card.email_activity_id, card.email_activity_id, null, 'Review reply draft'
 			from marked_drafts card
-			where card.status = 'pending' and not card.settled and card.snoozed_until is null
+			where card.status = 'pending' and card.snoozed_until is null
 		), ranked as (
 			select cards.*, e.conversation_id, a.happened_at, review.happened_at as review_happened_at,
 				coalesce(nullif(btrim(title_email.sender_name), ''), title_email.sender::text) as sender,

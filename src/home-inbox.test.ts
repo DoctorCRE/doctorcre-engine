@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { isArguments } from "./save-door.ts";
+import { readSchema } from "./test-copy.ts";
 import { doorTest } from "./test-door.ts";
 
 const { db, setup, cleanup, request } = doorTest();
@@ -30,7 +31,7 @@ const completedWithoutTime = randomUUID();
 const completedEightDaysAgo = randomUUID();
 const canceled = randomUUID();
 const otherStep = randomUUID();
-const settled = randomUUID();
+const formerlyHidden = randomUUID();
 const path = "home/inbox";
 const reader = { HOME_INBOX_READ_SCHEMA: "next" };
 const user = { user: "example-partner" };
@@ -70,7 +71,7 @@ before(async () => {
 			('${canceled}', '${client}', '${owner}', 'Tour the suite', null, null, 'cancelled', null, 'Client paused'),
 			('${otherStep}', '${client}', '${other}', 'Arrange a tour', null, null, null, null, null);
 		insert into next_step (id, deal_id, owner_party_id, what)
-			values ('${settled}', '${deal}', '${owner}', 'Check the lease term'),
+			values ('${formerlyHidden}', '${deal}', '${owner}', 'Check the lease term'),
 				('${otherDealStep}', '${meetingDeal}', '${other}', 'Confirm the renewal terms');
 		insert into next_step (id, deal_id, owner_party_id, what, resolution, done_at) values
 			('${completedDealStep}', '${meetingDeal}', '${other}', 'Check the renewal budget', 'done', now());
@@ -80,17 +81,21 @@ before(async () => {
 			('${sharedBuildingStep}', '${sharedBuilding}', '${other}', 'Check the site plan', null, null);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values
 			('${owner}', '${ordinary}', 'snoozed', '2999-01-01T00:00Z'),
-			('${owner}', '${held}', 'snoozed', '2000-01-01T00:00Z'),
-			('${owner}', '${settled}', 'settled', null),
-			('${other}', '${otherStep}', 'settled', null);
-		insert into home_mark (user_id, call_follow_up_id, disposition) values
-			('${other}', '${followUp}', 'settled');
+			('${owner}', '${held}', 'snoozed', '2000-01-01T00:00Z');
+		insert into public.actor (id, slug, kind, display_name) values ('${owner}', '${user.user}', 'human', 'Example Partner');
+		insert into outside_id (source, value, party_id) values ('old_system', '${owner}', '${owner}');
+		insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, created_by)
+			values ('${formerlyHidden}', 'deal', '${deal}', '${owner}', 'Check the lease term', 'open', '${owner}');
+		insert into ops.home_inbox_disposition (actor_id, item_id, disposition, snoozed_until, source_version, material_version, updated_at)
+			values ('${owner}', 'next_action:${formerlyHidden}', 'settled', null, '1', 'm', '2026-10-04');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
 			values ('${proposal}', 'next_step', '${meeting}', 'meeting', 'Please check our dates.',
 				'old_system', '${meetingDeal}', 'Check renewal dates', '${owner}');
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${owner}', true);
 		update proposal set status = 'accepted' where id = '${proposal}';
 		commit;`);
+	const copyPreferences = await readSchema("copy-preferences.sql");
+	await db.query(`begin; ${copyPreferences}; commit;`);
 });
 after(async () => {
 	await db.query("rollback");
@@ -138,7 +143,7 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	);
 	assert.deepEqual(
 		new Set(items.keys()),
-		new Set([ordinary, followUp, held, completed, settled, proposal]),
+		new Set([ordinary, followUp, held, completed, formerlyHidden, proposal]),
 	);
 	assert.partialDeepStrictEqual(items.get(ordinary), {
 		item_id: `next_action:${ordinary}`,
@@ -157,11 +162,23 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	});
 	assert.partialDeepStrictEqual(items.get(completed), {
 		source_state: "done",
-		section: "settled",
-		auto_settled: true,
+		disposition: "inbox",
+		section: "done",
+		auto_settled: false,
 	});
 	assert.equal(typeof items.get(completed)?.completed_at, "string");
-	assert.equal(items.get(settled)?.section, "settled");
+	assert.partialDeepStrictEqual(items.get(formerlyHidden), {
+		disposition: "inbox",
+		section: "inbox",
+	});
+	assert.equal(
+		(
+			await db.query("select from home_mark where next_step_id = $1", [
+				formerlyHidden,
+			])
+		).rowCount,
+		0,
+	);
 
 	const otherItems = await inbox({ user: "other-partner" });
 	assert.deepEqual(
@@ -175,19 +192,7 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 			sharedBuildingStep,
 		]),
 	);
-	assert.equal(otherItems.get(otherStep)?.section, "settled");
-
-	const before = items.get(settled);
-	await db.query(`begin;
-		select set_config('engine.user_id', '${owner}', true);
-		update next_step set what = 'Confirm the lease term' where id = '${settled}';
-		commit;`);
-	const after = (await inbox()).get(settled);
-	assert.partialDeepStrictEqual(after, {
-		title: "Confirm the lease term",
-		section: "inbox",
-	});
-	assert.notEqual(after?.base_version, before?.base_version);
+	assert.equal(otherItems.get(otherStep)?.section, "inbox");
 });
 
 test("a call follow-up appears once with its call, deal and evidence", async () => {
@@ -245,7 +250,8 @@ test("open and done building-only steps link to their building's sole open deal"
 	assert.equal(items.get(buildingStep)?.open_url, `/deals?deal=${deal}`);
 	assert.partialDeepStrictEqual(items.get(completedBuildingStep), {
 		source_state: "done",
-		section: "settled",
+		disposition: "inbox",
+		section: "done",
 		open_url: `/deals?deal=${deal}`,
 	});
 	assert.equal(items.get(sharedBuildingStep)?.open_url, null);

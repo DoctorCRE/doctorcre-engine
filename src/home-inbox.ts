@@ -30,7 +30,6 @@ type Step = {
 	completed_at: string | null;
 	hold_until: string | null;
 	snoozed_until: string | null;
-	settled: boolean;
 	step_version: string;
 	mark_version: string | null;
 	call_id: string | null;
@@ -62,8 +61,6 @@ function stepRows(db: Transaction<DB>, userId: string) {
 			case when s.hold_until > (now() at time zone 'America/Chicago')::date
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
-			coalesce(m.disposition = 'settled'
-				and mark_change.settled_id >= step_change.id, false) as settled,
 			step_change.id as step_version, mark_change.id as mark_version,
 			c.id as call_id, c.happened_at as call_at, contact.name as call_contact,
 			c.summary as call_summary, s.call_evidence_quote as call_quote,
@@ -84,8 +81,7 @@ function stepRows(db: Transaction<DB>, userId: string) {
 				and record = jsonb_build_object('id', s.id)
 		) step_change
 		left join lateral (
-			select max(id) as id,
-				coalesce(max(id) filter (where new_value ->> 'disposition' = 'settled'), 0) as settled_id
+			select max(id) as id
 			from change where table_name = 'home_mark'
 				and record = jsonb_build_object('user_id', s.owner_party_id, 'item_id', s.id,
 					'item_kind', case when c.id is null then 'next_step' else 'call_follow_up' end)
@@ -104,11 +100,14 @@ const optionalIso = (timestamp: string | null) =>
 function stepCard(step: Step) {
 	const completed_at = optionalIso(step.completed_at);
 	const done = step.status === "done";
-	const auto_settled = done && !step.settled;
 	const snoozed_until = done ? null : optionalIso(step.snoozed_until);
 	const hold_until = done ? null : optionalIso(step.hold_until);
-	const disposition =
-		done || step.settled ? "settled" : snoozed_until ? "snoozed" : "inbox";
+	const disposition = snoozed_until ? "snoozed" : "inbox";
+	const section = done
+		? "done"
+		: disposition === "inbox" && hold_until
+			? "held"
+			: disposition;
 	const source_type = step.call_id ? "capture_post_call_action" : "next_action";
 	const source_version = step.step_version;
 	const open_url = step.call_id
@@ -135,10 +134,10 @@ function stepCard(step: Step) {
 		due_on: step.due_on,
 		snoozed_until,
 		disposition,
-		section: disposition === "inbox" && hold_until ? "held" : disposition,
+		section,
 		unseen: false,
 		explicit_unsettle: false,
-		auto_settled,
+		auto_settled: false,
 		context_label: step.context_label,
 		open_url,
 		kind_label: step.call_id ? "Call follow-up" : "Task",
@@ -173,7 +172,7 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 	const steps = rows.map((step) => {
 		const review = reviews.get(step.id);
 		const card = stepCard(step);
-		if (!review || step.settled || step.snoozed_until) return card;
+		if (!review || step.snoozed_until) return card;
 		return completionReviewCard(review, card);
 	});
 	const updates = await readHomeUpdates(db, userId, LIMIT + 1);
