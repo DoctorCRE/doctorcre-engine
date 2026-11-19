@@ -15,11 +15,12 @@ cross join lateral (select case
  when m.source ~* (reference.pattern || '(, observed \d{4}-\d\d-\d\d)?\s*$') then null
  else regexp_replace(m.source, reference.pattern || '[,;][[:blank:]]+(?=\S)', '', 'i') end as source_note) plain
 cross join lateral (
- select string_agg(case when part[1] is not null and pg_input_is_valid(part[1], 'date')
-  then to_char(part[1]::date, 'FMMonth FMDD, YYYY') else coalesce(part[1], part[2]) end, '' order by position) as text
- from regexp_matches(plain.source_note,
-  '(?<![[:alnum:]_./:+-])(\d{4}-\d\d-\d\d)(?![[:alnum:]_/:+-]|\.[[:alnum:]])|([^0-9]+|[0-9]+)', 'g')
- with ordinality as parts(part, position)
+ select string_agg(case when pg_input_is_valid(day.parts[2], 'date')
+  then day.parts[1] || to_char(day.parts[2]::date, 'FMMonth FMDD, YYYY') || day.parts[3]
+  else token[1] end, '' order by position) as text
+ from regexp_matches(plain.source_note, '\S+|\s+', 'g') with ordinality as tokens(token, position)
+ cross join lateral (select regexp_match(token[1],
+  $re$^([(\[{"']*)(\d{4}-\d\d-\d\d)([)\]}"',;:!?]*\.?)$$re$) as parts) day
 ) dates
 cross join lateral copy_event_attribution(m.set_by, (select e.id from public.event e
  where e.subject_type = 'deal' and e.subject_id = m.deal_id

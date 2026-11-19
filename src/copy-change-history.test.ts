@@ -229,9 +229,9 @@ test("copied history removes only separable references and placeholder markets",
 	const original =
 		"Checked ~/Recordings/example/transcript.txt against the existing party row";
 	const source = "Checked against the existing party row";
-	const other =
-		"Compare ~/Recordings/example/transcript.txt.backup and (id pending).";
-	for (const [n, verb, field, value] of [
+	const other = `Compare ~/Recordings/example/transcript.txt.backup and (id pending).
+Keep ~/Recordings/example/transcript.txt../attachment.pdf and Lease(id ${id(1)})Amendment.`;
+	for (const [n, verb, field, after, before] of [
 		[
 			81,
 			"record-finding",
@@ -253,21 +253,49 @@ test("copied history removes only separable references and placeholder markets",
 			null,
 			{ market: "Market unspecified until next week" },
 		],
+		[
+			87,
+			"record-finding",
+			"discrepancy",
+			{ source: `Checked the party row (id ${id(1)}).` },
+			{ source: "https://example.test" },
+		],
+		[
+			90,
+			"record-finding",
+			"discrepancy",
+			{ source: `(id ${id(1)})` },
+			{ source: "https://example.test" },
+		],
 	] as const) {
 		await db.query(
-			"insert into public.event (id, actor_id, subject_type, subject_id, verb, field, new_value, cause, occurred_at) values ($1, $2, 'deal', $3, $4, $5, $6, 'human_stated', '2025-04-01')",
-			[id(n), id(1), id(20), verb, field, value],
+			"insert into public.event (id, actor_id, subject_type, subject_id, verb, field, old_value, new_value, cause, occurred_at) values ($1, $2, 'deal', $3, $4, $5, $6, $7, 'human_stated', '2025-04-01')",
+			[id(n), id(1), id(20), verb, field, before ?? null, after],
 		);
 	}
 	for (const _ of [1, 2]) {
 		assert.deepEqual(
 			(await run()).filter(({ reason }) =>
-				/^(technical_finding_|placeholder_market)/.test(reason),
+				/^(technical_finding_|technical_deal_history_field|placeholder_market)/.test(
+					reason,
+				),
 			),
 			[
 				{ old_id: id(81), field: "source", reason: "technical_finding_path" },
 				{ old_id: id(81), field: "source", reason: "technical_finding_row_id" },
 				{ old_id: id(85), field: "market", reason: "placeholder_market" },
+				{
+					old_id: id(87),
+					field: "source",
+					reason: "technical_deal_history_field",
+				},
+				{ old_id: id(87), field: "source", reason: "technical_finding_row_id" },
+				{
+					old_id: id(90),
+					field: "source",
+					reason: "technical_deal_history_field",
+				},
+				{ old_id: id(90), field: "source", reason: "technical_finding_row_id" },
 			],
 		);
 		assert.deepEqual(
@@ -282,6 +310,7 @@ test("copied history removes only separable references and placeholder markets",
 				{ template: "LOI lease" },
 				{ name: "Example location" },
 				{ market: "Market unspecified until next week" },
+				{ source: "Checked the party row." },
 			],
 		);
 	}
