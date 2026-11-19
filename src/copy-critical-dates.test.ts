@@ -49,6 +49,7 @@ before(async () => {
 		date(307, 1, "lease_end", "open"),
 		date(308, 2, "loi_expiry", "dropped"),
 		date(309, 1, "lease_end", "dropped"),
+		date(310, 1, "lease commencement", "open"),
  ].join(", ")};
  update public.critical_date set source = ' ' where id = '${id(307)}';
  insert into public.event (subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause) values
@@ -65,7 +66,7 @@ test("a partner's date stays confirmed by them, and an agent's date waits for a 
 	// biome-ignore format: one row per copied date
 	assert.deepEqual((await rows(`select id, kind, status, note, confirmed_by_user_id, confirmed_at::text, changed_at::text from critical_date where id in ('${id(300)}', '${id(301)}') order by id`)).map(Object.values), [
  [id(300), "option_notice", "open", "Example note 300", id(1), "2025-01-01 00:00:00+00", "2025-02-01 00:00:00+00"],
- [id(301), "other", "proposed", "Kind: attorney_review\nExample note 301", null, null, "2025-02-01 00:00:00+00"],
+ [id(301), "other", "proposed", "Example note 301", null, null, "2025-02-01 00:00:00+00"],
  ]);
 	await db.query(
 		`begin; select set_config('engine.user_id', '${id(1)}', true); update critical_date set status = 'open' where id = '${id(301)}'`,
@@ -79,6 +80,24 @@ test("a partner's date stays confirmed by them, and an agent's date waits for a 
 		id(1),
 	);
 	await db.query("rollback");
+});
+
+test("a confirmed lease commencement keeps its kind, date, source and note", async () => {
+	assert.deepEqual(
+		await rows(
+			`select kind, due_on::text, source, note, status, confirmed_by_user_id from critical_date where id = '${id(310)}'`,
+		),
+		[
+			{
+				kind: "lease_commencement",
+				due_on: "2026-03-01",
+				source: "Example source",
+				note: "Example note 310",
+				status: "open",
+				confirmed_by_user_id: id(1),
+			},
+		],
+	);
 });
 
 test("resolved dates keep their user, time and reason from the event log, and cleared becomes done", async () => {
