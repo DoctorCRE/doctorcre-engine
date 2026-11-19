@@ -504,6 +504,9 @@ const STAMPED = [
 	"email_recipient",
 	"invoice_email",
 	"invoice_mailbox",
+	"client_vertical",
+	"client_research",
+	"client_research_fact",
 	"vendor_vertical",
 	"weekly_review",
 	"vendor_loan_program",
@@ -637,6 +640,7 @@ const notGranted = (table: string) => ({
 const STORED_AT = [
 	"reply_draft_document",
 	"invoice_email",
+	"client_vertical",
 	"vendor_vertical",
 	"vendor_loan_program",
 	"lease_suite",
@@ -6492,6 +6496,18 @@ test("a rebrand and a new account owner keep the previous dated membership", asy
 	});
 });
 
+const RESEARCH = id(711);
+const newResearch = (fields: Record<string, string | number | null> = {}) =>
+	insert("client_research", {
+		id: RESEARCH,
+		party_id: CLIENT,
+		kind: "research_note",
+		source: "https://example.test/source",
+		found: "true",
+		observed_at: "2025-01-01",
+		...fields,
+	});
+
 // biome-ignore format: one row per refusal
 const CLIENT_REFUSALS: Case[] = [
 	[`update client set status = 'active_deal'`, "client_status_check"],
@@ -6499,6 +6515,21 @@ const CLIENT_REFUSALS: Case[] = [
 	[`update client set client_type = 'unknown'`, "client_client_type_fkey"],
 	[`insert into client (party_id) values ('${AGENT}')`, "client_party_id_role_fkey"],
 	[`insert into client (party_id, role) values ('${AGENT}', 'listing_agent')`, "client_role_check"],
+	[`insert into client_vertical (party_id, vertical) values ('${CLIENT}', ' ')`, "client_vertical_vertical_check"],
+	[`insert into client_vertical (party_id, vertical) values ('${CLIENT}', ' Example')`, "client_vertical_vertical_check"],
+	[`insert into client_vertical (party_id, vertical) values ('${CLIENT}', 'Example A'), ('${CLIENT}', 'Example B')`, "client_vertical_pkey"],
+	[`insert into client_vertical (party_id, vertical) values ('${AGENT}', 'Example')`, "client_vertical_party_id_role_fkey"],
+	[`insert into client_vertical (party_id, role, vertical) values ('${AGENT}', 'listing_agent', 'Example')`, "client_vertical_role_check"],
+	[newResearch({ party_id: AGENT }), "client_research_party_id_role_fkey"],
+	[newResearch({ party_id: AGENT, role: "listing_agent" }), "client_research_role_check"],
+	[newResearch({ kind: " " }), "client_research_kind_check"],
+	[newResearch({ source: " " }), "client_research_source_check"],
+	[newResearch({ observed_at: "infinity" }), "client_research_observed_at_check"],
+	[newResearch({ expires_on: "infinity" }), "client_research_expires_on_check"],
+	[`insert into client_research_fact values ('${RESEARCH}', 'finding', 'true')`, "client_research_fact_research_id_fkey"],
+	[`${newResearch()}; insert into client_research_fact values ('${RESEARCH}', ' ', 'true')`, "client_research_fact_field_check"],
+	[`${newResearch()}; insert into client_research_fact values ('${RESEARCH}', 'found', 'true')`, "client_research_fact_field_check"],
+	[`${newResearch()}; insert into client_research_fact values ('${RESEARCH}', 'finding', 'true'), ('${RESEARCH}', 'finding', 'false')`, "client_research_fact_pkey"],
 	[`insert into party_role (party_id, role) values ('${USER}', 'national_account');
 	insert into national_account (party_id) values ('${USER}')`, "national_account_party_id_kind_fkey"],
 	[`insert into national_account (party_id) values ('${NEXT_BRAND}')`, "national_account_party_id_role_fkey"],
@@ -6562,6 +6593,43 @@ test("a merge carries a client and its brand, and refuses conflicting profiles",
 		await assert.rejects(
 			db.query(`select merge_party('${CLIENT}', '${NEXT_BRAND}')`),
 			expected("merge_party_client_profiles"),
+		);
+	});
+});
+
+test("a merge carries client research and keeps a shared practice type once", async () => {
+	await rolledBack(async () => {
+		await db.query(`${CLIENT_PROFILE}
+			update party set how_found = 'referral' where id = '${NEXT_BRAND}';
+			insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
+			insert into client_vertical (party_id, vertical) values ('${CLIENT}', 'Example practice'), ('${NEXT_BRAND}', 'Example practice');
+			${newResearch()};
+			insert into client_research_fact values ('${RESEARCH}', 'finding', 'true');
+			select merge_party('${CLIENT}', '${NEXT_BRAND}')`);
+		assert.deepEqual(
+			(await db.query("select party_id, vertical from client_vertical")).rows,
+			[{ party_id: NEXT_BRAND, vertical: "Example practice" }],
+		);
+		assert.deepEqual(
+			(
+				await db.query(`select r.party_id, f.value from client_research r
+			join client_research_fact f on f.research_id = r.id`)
+			).rows,
+			[{ party_id: NEXT_BRAND, value: true }],
+		);
+	});
+});
+
+test("a merge refuses different client practice types by name", async () => {
+	await rolledBack(async () => {
+		await db.query(`${CLIENT_PROFILE}
+			update party set how_found = 'referral' where id = '${NEXT_BRAND}';
+			insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
+			insert into client_vertical (party_id, vertical) values
+				('${CLIENT}', 'Example practice'), ('${NEXT_BRAND}', 'Example different practice')`);
+		await assert.rejects(
+			db.query(`select merge_party('${CLIENT}', '${NEXT_BRAND}')`),
+			{ code: "23514", constraint: "merge_party_client_verticals" },
 		);
 	});
 });
