@@ -22,7 +22,11 @@
 		}
 	],
 	"hyperdrive": [
-		{ "binding": "DATABASE", "id": "371e07c33382489c9ffc401a05f2358e" }
+		{ "binding": "DATABASE", "id": "371e07c33382489c9ffc401a05f2358e" },
+		{
+			"binding": "DATABASE_WRITER",
+			"id": "d46799ae4b584b4d9fe954b7cc0ddf43"
+		}
 	],
 	"r2_buckets": [
 		{ "binding": "POST_MEDIA", "bucket_name": "doctorcre-post-media" },
