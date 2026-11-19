@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { Refusal } from "../answer.ts";
+import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
@@ -15,6 +15,7 @@ import {
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
 import { latestChange } from "../seen-change.ts";
+import { currentAccountLocations } from "./national-market.ts";
 
 const isAccountOwner = (value: unknown): value is "joe" | "dell" =>
 	value === "joe" || value === "dell";
@@ -154,6 +155,31 @@ async function changeOwner(
 }
 
 export const nationalAccounts = new Hono<NextSaveEnv>()
+	.get("/markets", async (c) => {
+		const refused = checkFields(new URL(c.req.url).searchParams, []);
+		if (refused) return refuse(c, refused);
+		return answerNextRead(c, "read-markets", (db) =>
+			db
+				.selectFrom("market")
+				.select(["id as market_id", "name"])
+				.orderBy("name")
+				.execute(),
+		);
+	})
+	.get("/national-accounts/:account/locations", async (c) => {
+		const refused = checkFields(new URL(c.req.url).searchParams, []);
+		if (refused) return refuse(c, refused);
+		const account = c.req.param("account");
+		if (!isUuid(account)) return refuse(c, new Refusal(404, "not_found"));
+		return answerNextRead(c, "read-national-account-locations", (db) =>
+			currentAccountLocations(db, account)
+				.innerJoin("national_account as a", "a.party_id", "b.brand_id")
+				.innerJoin("party as p", "p.id", "b.location_id")
+				.select(["p.id as party_id", "p.name", "p.kind"])
+				.orderBy("p.name")
+				.execute(),
+		);
+	})
 	.post("/national-accounts", (c) =>
 		answerNextSave(
 			c,
