@@ -505,6 +505,7 @@ const STAMPED = [
 	"invoice_email",
 	"invoice_mailbox",
 	"vendor_vertical",
+	"weekly_review",
 	"vendor_loan_program",
 	"commission",
 	"commission_payment",

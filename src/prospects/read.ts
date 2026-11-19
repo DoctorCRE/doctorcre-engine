@@ -1,9 +1,8 @@
 import { Hono } from "hono";
 import { etag } from "hono/etag";
-import { sql, type Transaction } from "kysely";
+import { type Expression, sql } from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { PARTNERS } from "../clients/read.ts";
-import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../request-shape.ts";
 
@@ -32,14 +31,19 @@ type Prospect = {
 	notes: Note[];
 };
 
-async function readProspects(
-	db: Transaction<DB>,
-	{
-		partyId = null,
-		owner = "all",
-	}: { partyId?: string | null; owner?: string } = {},
-) {
-	const { rows } = await sql<Prospect>`
+export const isProspect = sql<boolean>`r.stage = 'opportunity'
+	and not exists (select from deal_party d where d.party_id = r.party_id)`;
+
+export function prospectQuery({
+	partyId = null,
+	owner = "all",
+	qualifies = isProspect,
+}: {
+	partyId?: string | null;
+	owner?: string;
+	qualifies?: Expression<boolean>;
+} = {}) {
+	return sql<Prospect>`
 		select p.id as party_id, p.name, p.kind, p.how_found, owner.slug as owner,
 			r.needs_attention, coalesce(history.change_id, 0)::float8 as change_id,
 			notes.items as notes, follow_ups.items as follow_ups
@@ -80,17 +84,15 @@ async function readProspects(
 			where s.deal_id is null and s.party_id = p.id and s.property_id is null
 				and s.status = 'open' and s.item_title is null
 		) follow_ups
-		where r.role = 'lead' and r.stage = 'opportunity'
-			and not exists (select from deal_party d where d.party_id = p.id)
+		where r.role = 'lead' and ${qualifies}
 			and (${partyId}::uuid is null or p.id = ${partyId}::uuid)
 			and (${owner} = 'all' or owner.slug is null or owner.slug = ${owner})
 		order by r.needs_attention desc, follow_ups.soonest nulls last,
 			coalesce(history.entered_at, r.created_at) desc, p.id
-	`.execute(db);
-	return rows;
+	`;
 }
 
-function card({ notes, ...prospect }: Prospect) {
+function prospectCard({ notes, ...prospect }: Prospect) {
 	const note = notes[0];
 	return {
 		...prospect,
@@ -108,10 +110,10 @@ export const prospectReads = new Hono<DatabaseEnv>()
 		});
 		if (error) return refuse(c, error);
 		return answerNextRead(c, "read-prospects", async (db) => {
-			const rows = await readProspects(db, {
+			const { rows } = await prospectQuery({
 				owner: params.get("owner") ?? "all",
-			});
-			return { prospects: rows.map(card), count: rows.length };
+			}).execute(db);
+			return { prospects: rows.map(prospectCard), count: rows.length };
 		});
 	})
 	.get("/prospects/:party_id", etag(), async (c): Promise<Response> => {
@@ -122,9 +124,11 @@ export const prospectReads = new Hono<DatabaseEnv>()
 				new Refusal(400, "invalid_field_value", { fields: ["party_id"] }),
 			);
 		return answerNextRead(c, "read-prospects", async (db) => {
-			const [row] = await readProspects(db, { partyId });
+			const {
+				rows: [row],
+			} = await prospectQuery({ partyId }).execute(db);
 			return row
-				? { ...card(row), notes: row.notes }
+				? { ...prospectCard(row), notes: row.notes }
 				: new Refusal(404, "not_found");
 		});
 	});
