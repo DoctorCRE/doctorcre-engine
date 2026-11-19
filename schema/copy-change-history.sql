@@ -191,12 +191,13 @@ with candidates as (
   and not exists (select from public.deal_invoice_email old join invoice_email saved using (id)
    where old.invoice_event_id = e.id and saved.deal_id = d.id and saved.payment_change_id is not null)
 )
-select e.*, cleaned.old_value as plain_old, cleaned.new_value as plain_new, omitted.keys as omitted_keys,
+select e.*, cleaned.payloads[1] as plain_old, cleaned.payloads[2] as plain_new,
  case when deal_id is null then 'deal_history_deal_not_copied'
   when changed_by_user_id is not null and user_id is null then 'deal_history_user_not_copied'
   when not checked.valid then 'deal_history_payload_invalid'
-  when verb = 'import' or field in ('salesforce_id', 'notes_path')
-   or (cardinality(omitted.keys) > 0 and cleaned.old_value is null and cleaned.new_value is null)
+  when field in ('salesforce_id', 'notes_path')
+   or (cleaned.payloads[1] is null and cleaned.payloads[2] is null
+    and (coalesce(e.old_value, '{}') <> '{}' or coalesce(e.new_value, '{}') <> '{}'))
    then 'technical_deal_history'
   when field = 'next_date' and coalesce(e.old_value ->> 'next_date', e.new_value ->> 'next_date') is null
    then 'empty_deal_history' end as refusal
@@ -218,23 +219,38 @@ cross join lateral (
  from (values (e.old_value, to_jsonb(parsed.old_snapshot)), (e.new_value, to_jsonb(parsed.new_snapshot))) v(payload, snapshot)
 ) checked
 cross join lateral (
- select array(select distinct f.key
-  from (values (e.old_value), (e.new_value)) v(payload)
-  cross join lateral jsonb_each_text(case when jsonb_typeof(v.payload) = 'object' then v.payload end) f
-  where f.key = 'salesforce_id' or f.key = 'source' and
-   f.value ~* '\mcarr\M|(^|[[:space:],])([~.]?/|[a-z]:\\)|\.(json|md|txt|log|csv)\M|https?://'
- ) as keys
-) omitted
-cross join lateral (
- select case when checked.valid then nullif(e.old_value - omitted.keys, '{}'::jsonb) end as old_value,
-  case when checked.valid then nullif(e.new_value - omitted.keys, '{}'::jsonb) end as new_value
+ select array_agg(side.payload order by v.position) as payloads
+ from (values (1, e.old_value), (2, e.new_value)) v(position, payload)
+ cross join lateral (
+  select jsonb_object_agg(f.key, plain.value) filter (where plain.value is not null) as payload
+  from jsonb_each(case when checked.valid then v.payload end) f
+  cross join lateral (select f.value #>> '{}' as text) raw
+  left join lateral (
+   select written.line
+   from public.record_source r
+   cross join lateral (select format('imported ''%s'' from panhandle-team-deals.json', r.external_key) as line) written
+   where e.verb = 'import' and f.key = 'summary' and r.entity_type = 'deal'
+    and r.entity_id = e.subject_id and r.source_system = 'panhandle-team-deals' and r.external_key !~ '[\r\n]'
+    and (raw.text = written.line or starts_with(raw.text, written.line || E'\n')
+     or starts_with(raw.text, written.line || '; '))
+   limit 1
+  ) origin on true
+  cross join lateral (select case
+   when f.key = 'salesforce_id' then null
+   when f.key = 'source' and raw.text ~* '^\s*(carr|https?://\S+|([~.]?/|[a-z]:\\)\S+)\s*$' then null
+   when raw.text = origin.line then null
+   when origin.line is not null then to_jsonb(nullif(ltrim(substr(raw.text, length(origin.line) + 2), E' \t\r\n'), ''))
+   else f.value end as value) plain
+ ) side
 ) cleaned;
 
 insert into listed
 select id, field, refusal from deal_history_candidate where refusal is not null;
 insert into listed
 select id, key, 'technical_deal_history_field' from deal_history_candidate
-cross join lateral unnest(omitted_keys) key where refusal is null;
+cross join (values ('salesforce_id'), ('source'), ('summary')) field(key)
+where refusal is null and ((old_value -> key, new_value -> key) is distinct from (plain_old -> key, plain_new -> key)
+ and (key <> 'summary' or verb = 'import'));
 
 insert into imported_deal_history (
  id, deal_id, occurred_at, recorded_at, source_actor_id, source_deal_id, changed_by_user_id, changed_by_job, verb, field,

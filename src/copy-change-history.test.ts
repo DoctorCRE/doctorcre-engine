@@ -78,7 +78,7 @@ before(async () => {
  commit;`);
 });
 beforeEach(async () => {
-	await db.query(`begin; select set_config('engine.job','old_system',true); delete from imported_change; delete from imported_deal_history; delete from public.event;
+	await db.query(`begin; select set_config('engine.job','old_system',true); delete from imported_change; delete from imported_deal_history; delete from public.event; delete from public.record_source;
  delete from outside_id where source = 'old_system' and value = '${id(99)}';
  insert into party_role (party_id,role) values ('${id(10)}','vendor') on conflict do nothing; commit`);
 });
@@ -129,102 +129,77 @@ test("imports a unique deal note event and lists ambiguous and unmatched events 
 	assert.deepEqual(await imported(), [{ id: id(35), record: { id: id(32) } }]);
 });
 
-test("deal history lists technical details and empty date events while keeping business facts", async () => {
+test("deal history keeps business text on each side of an event", async () => {
+	const header = "imported 'Example key' from panhandle-team-deals.json";
+	const decision = "Landlord extended the deadline to May 1.";
+	const mixed = {
+		source: "CARR recorded landlord approval at https://example.test",
+	};
+	const urlFirst = { source: "https://example.test Landlord confirmed access" };
+	const confirmed = { source: "Partner confirmed access on April 1" };
+	const reason = { phase: "pending", deal_type: "relocation" };
+	await db.query(
+		"insert into public.record_source (entity_type, entity_id, source_system, external_key) values ('deal', $1, 'panhandle-team-deals', 'Example key')",
+		[id(20)],
+	);
+	// biome-ignore format: each row pairs an event with its expected display.
 	const events = [
-		[
-			"new-deal",
-			null,
-			null,
-			{
-				phase: "pending",
-				deal_type: "relocation",
-				salesforce_id: "EXAMPLE-42",
-			},
-		],
-		[
-			"record-finding",
-			"discrepancy",
-			null,
-			{ found: false, source: "CARR call transcript, ~/example.txt" },
-		],
-		[
-			"record-finding",
-			"verified",
-			null,
-			{ found: true, source: "Partner confirmed by phone" },
-		],
-		["import", null, null, { summary: "Imported from example.json" }],
-		["update-deal", "salesforce_id", null, { salesforce_id: "EXAMPLE-42" }],
-		["update-deal", "notes_path", null, { notes_path: "/example/deal.md" }],
-		["set-next-action", "next_date", { next_date: null }, { next_date: null }],
-		[
-			"set-next-action",
-			"next_date",
-			{ next_date: "2025-02-01" },
-			{ next_date: null },
-		],
+		["new-deal", null, null, { ...reason, salesforce_id: "EXAMPLE-42" }, null, reason, "salesforce_id"],
+		["record-finding", "discrepancy", null, { found: false, source: "~/example.txt" }, null, { found: false }, "source"],
+		["record-finding", "verified", mixed, urlFirst, mixed, urlFirst, null],
+		["record-finding", "verified", confirmed, { source: "https://example.test" }, confirmed, null, "source"],
+		["import", null, null, { summary: header }, null, null, "technical_deal_history"],
+		["import", null, null, { summary: header + "; " + decision }, null, { summary: decision }, "summary"],
+		["import", null, null, { summary: header + " (" + decision + ")" }, null, { summary: header + " (" + decision + ")" }, null],
+		["import", null, null, { summary: header + "\n" + decision }, null, { summary: decision }, "summary"],
+		["update-deal", "salesforce_id", null, { salesforce_id: "EXAMPLE-42" }, null, null, "technical_deal_history"],
+		["update-deal", "notes_path", null, { notes_path: "/example/deal.md" }, null, null, "technical_deal_history"],
+		["set-next-action", "next_date", { next_date: null }, { next_date: null }, null, null, "empty_deal_history"],
+		["set-next-action", "next_date", { next_date: "2025-02-01" }, { next_date: null }, { next_date: "2025-02-01" }, { next_date: null }, null],
 	] as const;
-	for (const [index, [verb, field, before, after]] of events.entries()) {
+	const expectedHistory = [];
+	const expectedReport = [];
+	for (const [
+		index,
+		[verb, field, before, after, shownBefore, shownAfter, omission],
+	] of events.entries()) {
+		const eventId = id(60 + index);
 		await db.query(
 			"insert into public.event (id, actor_id, subject_type, subject_id, verb, field, old_value, new_value, cause, occurred_at) values ($1, $2, 'deal', $3, $4, $5, $6, $7, 'human_stated', '2025-04-01')",
-			[id(60 + index), id(1), id(20), verb, field, before, after],
+			[eventId, id(1), id(20), verb, field, before, after],
 		);
+		if (shownBefore || shownAfter) {
+			expectedHistory.push({
+				id: eventId,
+				before: shownBefore,
+				after: shownAfter,
+			});
+			if (omission)
+				expectedReport.push({
+					old_id: eventId,
+					field: omission,
+					reason: "technical_deal_history_field",
+				});
+		} else {
+			expectedReport.push({ old_id: eventId, field, reason: omission });
+		}
 	}
-	const copied = async () =>
-		(
-			await db.query(
-				"select event->>'id' as id, event->'old_value' as before, event->'new_value' as after from deal_imported_history cross join jsonb_array_elements(events) event where deal_id = $1 order by 1",
-				[id(20)],
-			)
-		).rows;
 	for (const _ of [1, 2]) {
 		assert.deepEqual(
 			(await run()).filter(({ reason }) =>
 				/^(technical|empty)_deal_history/.test(reason),
 			),
-			[
-				{
-					old_id: id(60),
-					field: "salesforce_id",
-					reason: "technical_deal_history_field",
-				},
-				{
-					old_id: id(61),
-					field: "source",
-					reason: "technical_deal_history_field",
-				},
-				{ old_id: id(63), field: null, reason: "technical_deal_history" },
-				{
-					old_id: id(64),
-					field: "salesforce_id",
-					reason: "technical_deal_history",
-				},
-				{
-					old_id: id(65),
-					field: "notes_path",
-					reason: "technical_deal_history",
-				},
-				{ old_id: id(66), field: "next_date", reason: "empty_deal_history" },
-			],
+			expectedReport,
 		);
-		assert.deepEqual(await copied(), [
-			{
-				id: id(60),
-				before: null,
-				after: { phase: "pending", deal_type: "relocation" },
-			},
-			{ id: id(61), before: null, after: { found: false } },
-			{
-				id: id(62),
-				before: null,
-				after: { found: true, source: "Partner confirmed by phone" },
-			},
-			{
-				id: id(67),
-				before: { next_date: "2025-02-01" },
-				after: { next_date: null },
-			},
-		]);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select event->>'id' as id, event->'old_value' as before, event->'new_value' as after from deal_imported_history cross join jsonb_array_elements(events) event where deal_id = $1 order by 1",
+					[id(20)],
+				)
+			).rows,
+			expectedHistory,
+		);
 	}
 });
 

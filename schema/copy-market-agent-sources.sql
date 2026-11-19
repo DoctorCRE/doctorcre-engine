@@ -7,9 +7,13 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 
 create temp table old_market_agent_source on commit drop as
 select m.*, md5('old_system:market_agent_source:' || m.deal_id)::uuid as activity_id,
- o.deal_id as mapped_deal_id, 'Market agent source' || E'\n\n' || m.source as summary, author.*
+ o.deal_id as mapped_deal_id, plain.source_note, 'Market agent source' || E'\n\n' || plain.source_note as summary, author.*
 from public.deal_market_assignment m
 left join outside_id o on o.source = 'old_system' and o.value = m.deal_id::text
+cross join (values ('^\s*salesforce (opportunity|record) 006[[:alnum:]]{12}([[:alnum:]]{3})?')) reference(pattern)
+cross join lateral (select case
+ when m.source ~* (reference.pattern || '(, observed \d{4}-\d\d-\d\d)?\s*$') then null
+ else regexp_replace(m.source, reference.pattern || '[,;][[:blank:]]+(?=\S)', '', 'i') end as source_note) plain
 cross join lateral copy_event_attribution(m.set_by, (select e.id from public.event e
  where e.subject_type = 'deal' and e.subject_id = m.deal_id
  and (e.verb, coalesce(e.field, '')) in (('set-market-agent', 'market_agent'), ('create-national-market-deal', ''))
@@ -18,7 +22,7 @@ cross join lateral copy_event_attribution(m.set_by, (select e.id from public.eve
 
 create temp table examined_market_agent_source on commit drop as
 select m.*, case when source !~ '\S' then 'empty_deal_note'
- when source ~* '^\s*salesforce\M' then 'technical_deal_note'
+ when source_note is null then 'technical_deal_note'
  when mapped_deal_id is null then 'deal_not_copied'
  when exists (select from activity a where a.id = m.activity_id and
   (a.kind, a.happened_at, a.summary, a.from_party_id, a.changed_at,
@@ -44,6 +48,8 @@ from examined_market_agent_source where refusal is null on conflict do nothing;
 insert into not_copied select deal_id, 'market_agent_source',
  case when refusal not in ('empty_deal_note', 'technical_deal_note') then source end, refusal
 from examined_market_agent_source where refusal is not null;
+insert into not_copied select deal_id, 'market_agent_source', null, 'technical_deal_note_prefix'
+from examined_market_agent_source where refusal is null and source_note <> source;
 insert into not_copied select deal_id, 'changed_for_user_id', null, 'agent_user_unknown'
 from old_market_agent_source where changed_by_job = 'agent' and changed_for_user_id is null;
 set constraints all immediate;

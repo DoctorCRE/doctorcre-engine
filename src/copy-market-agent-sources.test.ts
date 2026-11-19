@@ -221,11 +221,19 @@ test("a missing deal can be copied later with its plain source text", async () =
 	});
 });
 
-test("blank and technical sources are listed without copying their text", async () => {
+test("market sources keep business text after a Salesforce reference", async () => {
 	await transaction(async () => {
 		for (const [deal, source] of [
 			[id(10), " \t "],
-			[id(11), "Salesforce record EXAMPLE-42, observed 2025-04-01"],
+			[
+				id(11),
+				"Salesforce opportunity 006000000000001AAA, observed 2025-04-01",
+			],
+			[
+				id(13),
+				"Salesforce opportunity 006000000000001AAA, partner confirmed the assignment",
+			],
+			[id(14), "Salesforce shows a draft. Partner confirmed the assignment."],
 		]) {
 			await db.query(
 				"update public.deal_market_assignment set source=$1 where deal_id=$2",
@@ -234,7 +242,9 @@ test("blank and technical sources are listed without copying their text", async 
 		}
 		const report = await run();
 		assert.deepEqual(
-			report.filter((r) => r.old_id === id(10) || r.old_id === id(11)),
+			report.filter(
+				(r) => r.field === "market_agent_source" && r.old_id !== id(12),
+			),
 			[
 				{
 					old_id: id(10),
@@ -248,6 +258,12 @@ test("blank and technical sources are listed without copying their text", async 
 					value: null,
 					reason: "technical_deal_note",
 				},
+				{
+					old_id: id(13),
+					field: "market_agent_source",
+					value: null,
+					reason: "technical_deal_note_prefix",
+				},
 			],
 		);
 		assert.deepEqual(
@@ -257,6 +273,21 @@ test("blank and technical sources are listed without copying their text", async 
 				])
 			).rows,
 			[],
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select summary from activity where id = any($1::uuid[]) order by summary collate "C"`,
+					[[noteId(13), noteId(14)]],
+				)
+			).rows,
+			[
+				{
+					summary:
+						"Market agent source\n\nSalesforce shows a draft. Partner confirmed the assignment.",
+				},
+				{ summary: "Market agent source\n\npartner confirmed the assignment" },
+			],
 		);
 	});
 });
