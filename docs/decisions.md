@@ -340,3 +340,5 @@
 178\. **Copied deals keep automatic parking and historical Renewal labels (2026-11-19).** Verified automation parking keeps the source time, reason and note with automatic attribution. Ended renewal deals with no recorded source lease keep their Renewal label and show that the lease was unrecorded. New renewals still require a source lease (#782).
 
 179\. **Client research and practice types come with the move (2026-11-19).** A client role can hold one recorded practice type without a fixed vocabulary. The approved client research kinds keep their source, date, user or job attribution, result and individual facts. The copy follows client merges and keeps the existing activity notes in place (#783).
+
+180\. **Old deal-page events with no other home stay in imported history (2026-11-19).** The copy keys each event by its old ID and keeps its recorded facts in typed fields. The deal page reads them in recorded order with the same user or job attribution as the Timeline. The engine can read this history and only the owner can load it (#789).
