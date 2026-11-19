@@ -10,6 +10,7 @@ import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 const HINTS = {
 	phase_not_eligible:
 		"The quote does not support a move from the current phase.",
+	already_client: "Choose Add deal for this client.",
 	already_decided: "This suggestion has already been decided.",
 	user_decides: "A partner must decide this suggestion directly.",
 	length_required: "Supply the file length.",
@@ -25,7 +26,7 @@ const HINTS = {
 	account_name_exists:
 		"Confirm a separate company or choose an existing account.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
-	not_a_prospect: "This lead is no longer in Prospects.",
+	not_a_prospect: "This person or company is outside the Prospects lane.",
 	not_found: "The requested record was not found.",
 	portal_deal_not_found: "Choose a deal with a current client.",
 	portal_slug_taken: "Choose a different website name.",

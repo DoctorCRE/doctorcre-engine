@@ -325,4 +325,6 @@
 
 165\. **Copied automatic phase moves keep their receipts (2026-11-18).** Each actual move marked automatic by the old board keeps its event and previous phase against the same copied phase row. Undo checks the card's version and appends the previous phase only while that exact move is current (#746).
 
+167\. **A signed-in partner opens a client website with a one-use link (2026-11-18).** The engine issues a short-lived site grant and checks the client's password through a private Worker binding. The share Worker exchanges the grant for its existing cookie and serves the site's encrypted files using its own key. Its switch selects one verified website and ships empty (#730).
+
 169\. **Deal events include recorded phase moves and matched note history (2026-11-18).** The deal page reads phase moves from their typed rows and keeps the observed current phase out of the event list when there is no evidence of a move. An old note event has history on the copied activity's summary only when the source note and event match one to one on the same deal (#747).

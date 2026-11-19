@@ -3,19 +3,22 @@ import { sql } from "kysely";
 import { isoMillis, Refusal, refuse } from "./answer.ts";
 import { nextTransaction } from "./next-connection.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
-import { clearable, fit, isInstant, isText, isUuid } from "./request-shape.ts";
-
-const invoiceText = (value: unknown): value is string =>
-	isText(value) && !value.includes("\0");
+import {
+	clearable,
+	fit,
+	isInstant,
+	isStoredText,
+	isUuid,
+} from "./request-shape.ts";
 
 // PostgreSQL rejects NUL and dates JS parses (Feb 31, year 0000, +23:00), yielding a 503.
 const captureRequest = {
 	idempotency_key: isUuid,
-	evidence_ref: invoiceText,
-	sender: invoiceText,
-	deal_name: invoiceText,
-	client_name: clearable(invoiceText),
-	property_address: clearable(invoiceText),
+	evidence_ref: isStoredText,
+	sender: isStoredText,
+	deal_name: isStoredText,
+	client_name: clearable(isStoredText),
+	property_address: clearable(isStoredText),
 	occurred_at: isInstant,
 };
 

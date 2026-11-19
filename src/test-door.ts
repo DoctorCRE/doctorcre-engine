@@ -112,6 +112,7 @@ export function doorTest() {
 	return {
 		db: copy.db,
 		readerUrl: login(reader),
+		writerUrl: login(),
 		setup,
 		cleanup,
 		save,
