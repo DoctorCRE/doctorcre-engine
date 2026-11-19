@@ -17,6 +17,8 @@ export type Fitted<S extends Shape> = {
 
 export const isText: Check<string> = (value): value is string =>
 	typeof value === "string" && value.trim() !== "";
+export const isStoredText: Check<string> = (value): value is string =>
+	isText(value) && !value.includes("\0");
 export const isUuid: Check<string> = (value): value is string =>
 	typeof value === "string" && UUID.test(value);
 export const isChangeId: Check<number> = (value): value is number =>

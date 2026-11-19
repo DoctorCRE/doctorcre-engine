@@ -69,7 +69,7 @@ Still on the old API with no switch yet:
 - The app's Home, email and calendar calls (slice 30), including routing Home marks to `POST /api/engine/home/marks` (door 24), and its Deals saves outside the two save switches above (slice 29).
 - Sign-in.
 
-The signed-in Prospects lane and detail read directly from the new schema. App routing for them belongs to the Deals switch.
+The signed-in Prospects lane, detail and quick add use the new schema directly. App routing for them belongs to the Deals switch.
 
 The deal page's checklist and progress use the new schema with `DEALS_READ_SCHEMA=next`. See § "Deals reads for the app".
 

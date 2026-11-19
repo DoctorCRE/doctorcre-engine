@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { isArguments } from "../save-door.ts";
 import { doorTest } from "../test-door.ts";
 
 const { db, setup, cleanup, save } = doorTest();
@@ -10,29 +11,39 @@ const key = () => ({ idempotency_key: randomUUID() });
 const joeId = randomUUID();
 const dellId = randomUUID();
 const known = randomUUID();
+const copied = randomUUID();
 const earlierLead = randomUUID();
 const client = randomUUID();
 const onDeal = randomUUID();
 const deal = randomUUID();
+const secondDeal = randomUUID();
+const clientOnDeal = randomUUID();
 
 before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
-		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('client_contact', 'Client contact');
+		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('client_contact', 'Client contact'), ('listing_agent', 'Listing agent');
 		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity'), ('lead', 'qualified', 'Qualified');
-		insert into how_found (slug, label) values ('referral', 'Referral'), ('own_research', 'Own research');
+		insert into how_found (slug, label) values ('referral', 'Referral'), ('own_research', 'Own research'), ('not_recorded', 'Not recorded');
 		insert into party (id, kind, name, how_found) values
 			('${joeId}', 'person', 'Example Partner One', null),
 			('${dellId}', 'person', 'Example Partner Two', null),
 			('${known}', 'person', 'Example Known', null),
+			('${copied}', 'person', 'Example Copied', 'not_recorded'),
 			('${earlierLead}', 'company', 'Example Lead', 'referral'),
 			('${client}', 'company', 'Example Client', 'referral'),
+			('${clientOnDeal}', 'company', 'Example Deal Client', 'referral'),
 			('${onDeal}', 'person', 'Example Contact', 'referral');
 		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
+		insert into outside_id (source, value, party_id) values ('old_system', '${randomUUID()}', '${copied}');
 		insert into party_role (party_id, role, stage, owner_user_id) values
-			('${earlierLead}', 'lead', 'qualified', '${dellId}'), ('${client}', 'client', null, null);
-		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${joeId}');
-		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${onDeal}', 'client_contact');
+			('${earlierLead}', 'lead', 'qualified', '${dellId}'), ('${client}', 'client', null, null),
+			('${clientOnDeal}', 'client', null, null);
+		insert into deal (id, name, owner_user_id) values
+			('${deal}', 'Example Deal', '${joeId}'), ('${secondDeal}', 'Example Second Deal', '${joeId}');
+		insert into deal_party (deal_id, party_id, role) values
+			('${deal}', '${onDeal}', 'client_contact'), ('${deal}', '${onDeal}', 'listing_agent'),
+			('${secondDeal}', '${onDeal}', 'client_contact'), ('${deal}', '${clientOnDeal}', 'client');
 		commit;`);
 });
 after(async () => {
@@ -40,15 +51,13 @@ after(async () => {
 	await cleanup();
 });
 
-async function savedProspect(id: unknown) {
-	const { rows } = await db.query({
-		text: `select p.name, p.kind, p.how_found, r.stage, r.owner_user_id
-			from party p join party_role r on r.party_id = p.id and r.role = 'lead'
-			where p.id = $1`,
-		values: [id],
-	});
-	assert.equal(rows.length, 1);
-	return rows[0];
+const pick = (party_id: string, fields = {}) =>
+	save(joe, "prospects", { ...key(), party_id, ...fields });
+
+async function readProspect(id: unknown) {
+	const [status, prospect] = await save(joe, `prospects/${id}`, {}, "GET");
+	assert.equal(status, 200);
+	return prospect;
 }
 
 test("a quick add stores the new party, unclaimed Opportunity and note and replays them", async () => {
@@ -71,110 +80,97 @@ test("a quick add stores the new party, unclaimed Opportunity and note and repla
 		(await save(joe, "prospects", { ...args, note: "Different" }))[0],
 		409,
 	);
-	assert.deepEqual(await savedProspect(answer.party_id), {
+	assert.partialDeepStrictEqual(await readProspect(answer.party_id), {
 		name: "Example New Practice",
 		kind: "company",
 		how_found: "referral",
-		stage: "opportunity",
-		owner_user_id: null,
+		owner: null,
+		notes: [
+			{ activity_id: answer.activity_id, summary: "Quick note", by: "joe" },
+		],
 	});
-	const { rows } = await db.query({
-		text: `select a.id, a.summary, a.changed_by_user_id from activity_about l
-			join activity a on a.id = l.activity_id where l.party_id = $1 and a.kind = 'note'`,
-		values: [answer.party_id],
-	});
-	assert.deepEqual(rows, [
-		{
-			id: answer.activity_id,
-			summary: "Quick note",
-			changed_by_user_id: joeId,
-		},
-	]);
 });
 
-test("two partners selecting the same known party get one lead and both notes", async () => {
-	const missing = await save(joe, "prospects", { ...key(), party_id: known });
-	assert.equal(missing[0], 400);
-	assert.equal(missing[1].error, "missing_required");
-	assert.deepEqual(missing[1].fields, ["how_found"]);
-	const results = await Promise.all(
-		[joe, dell].map((caller) =>
-			save(caller, "prospects", {
-				...key(),
-				party_id: known,
-				how_found: "own_research",
-				note: "Example note",
-			}),
-		),
-	);
-	assert.deepEqual(
-		results.map(([status, answer]) => [status, answer.party_id]),
-		[
-			[201, known],
-			[201, known],
-		],
-	);
-	assert.deepEqual(results.map(([, answer]) => answer.existing).sort(), [
-		false,
-		true,
-	]);
-	const { rows } = await db.query({
-		text: `select a.changed_by_user_id from activity a join activity_about l on l.activity_id = a.id where l.party_id = $1`,
-		values: [known],
+for (const [label, partyId, how_found] of [
+	["known party", known, "own_research"],
+	["copied party with no recorded source", copied, "referral"],
+] as const) {
+	test(`two partners selecting a ${label} get one lead and both notes`, async () => {
+		const [missing, refusal] = await pick(partyId);
+		assert.equal(missing, 400);
+		assert.partialDeepStrictEqual(refusal, {
+			error: "missing_required",
+			fields: ["how_found"],
+		});
+		const args = { party_id: partyId, how_found, note: "Example note" };
+		const results = await Promise.all(
+			[joe, dell].map((caller) =>
+				save(caller, "prospects", { ...key(), ...args }),
+			),
+		);
+		assert.deepEqual(
+			results.map(([status, answer]) => [status, answer.party_id]),
+			[
+				[201, partyId],
+				[201, partyId],
+			],
+		);
+		assert.deepEqual(results.map(([, answer]) => answer.existing).sort(), [
+			false,
+			true,
+		]);
+		const prospect = await readProspect(partyId);
+		assert.partialDeepStrictEqual(prospect, { how_found, owner: null });
+		assert.ok(Array.isArray(prospect.notes));
+		assert.equal(prospect.notes.length, 2);
+		assert.ok(prospect.notes.every(isArguments));
+		assert.deepEqual(prospect.notes.map(({ by }) => by).sort(), [
+			"dell",
+			"joe",
+		]);
 	});
-	assert.deepEqual(
-		rows.map((row) => row.changed_by_user_id).sort(),
-		[joeId, dellId].sort(),
-	);
-	assert.deepEqual(await savedProspect(known), {
-		name: "Example Known",
-		kind: "person",
-		how_found: "own_research",
-		stage: "opportunity",
-		owner_user_id: null,
-	});
-});
+}
 
 test("an existing lead keeps its owner and a client is sent to Add deal", async () => {
-	const [status, lead] = await save(joe, "prospects", {
-		...key(),
-		party_id: earlierLead,
-		how_found: "own_research",
-	});
+	const [status, lead] = await pick(earlierLead, { how_found: "own_research" });
 	assert.equal(status, 201);
-	assert.equal(lead.party_id, earlierLead);
-	assert.equal(lead.activity_id, null);
-	assert.equal(lead.existing, false);
-	assert.deepEqual(await savedProspect(earlierLead), {
-		name: "Example Lead",
-		kind: "company",
+	assert.partialDeepStrictEqual(lead, {
+		party_id: earlierLead,
+		activity_id: null,
+		existing: false,
+	});
+	assert.partialDeepStrictEqual(await readProspect(earlierLead), {
 		how_found: "referral",
-		stage: "opportunity",
-		owner_user_id: dellId,
+		owner: "dell",
 	});
 
-	const [clientStatus, answer] = await save(joe, "prospects", {
-		...key(),
-		party_id: client,
-		note: "Example note",
-	});
+	const [clientStatus, answer] = await pick(client, { note: "Example note" });
 	assert.equal(clientStatus, 409);
 	assert.equal(answer.error, "already_client");
 	assert.equal(answer.party_id, client);
 });
 
-test("a party already on a deal cannot enter the lane", async () => {
-	const [status, answer] = await save(joe, "prospects", {
-		...key(),
-		party_id: onDeal,
-	});
-	assert.equal(status, 409);
-	assert.equal(answer.error, "not_a_prospect");
-	assert.equal(
-		(await db.query("select from party_role where party_id = $1", [onDeal]))
-			.rowCount,
-		0,
-	);
+test("a party on a deal offers each deal without saving a lead or a note", async () => {
+	for (const [partyId, dealIds] of [
+		[onDeal, [deal, secondDeal].sort()],
+		[clientOnDeal, [deal]],
+	] as const) {
+		const [status, answer] = await pick(partyId, { note: "Unsaved note" });
+		assert.equal(status, 409);
+		assert.partialDeepStrictEqual(answer, {
+			error: "not_a_prospect",
+			party_id: partyId,
+			deal_ids: dealIds,
+		});
+		const { rows } = await db.query(
+			`
+			select exists (select from party_role where party_id = $1 and role = 'lead') as lead,
+				exists (select from activity_about where party_id = $1) as note
+		`,
+			[partyId],
+		);
+		assert.deepEqual(rows, [{ lead: false, note: false }]);
+	}
 });
 
 test("quick add refuses incomplete new parties and the old-system stand-in", async () => {

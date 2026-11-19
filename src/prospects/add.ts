@@ -5,20 +5,18 @@ import { Refusal } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
-import { fit, isText, isUuid, optional } from "../request-shape.ts";
+import { fit, isStoredText, isUuid, optional } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
 import { latestChange } from "../seen-change.ts";
 
-const usableText = (value: unknown): value is string =>
-	isText(value) && !value.includes("\0");
 const attribution = (value: unknown): value is string =>
-	usableText(value) && value !== "not_recorded";
+	isStoredText(value) && value !== "not_recorded";
 const isPartyKind = (value: unknown): value is "person" | "company" =>
 	value === "person" || value === "company";
 
 const COMMON = {
 	idempotency_key: isUuid,
-	note: optional(usableText),
+	note: optional(isStoredText),
 };
 
 function parseProspect(body: JsonObject) {
@@ -32,7 +30,7 @@ function parseProspect(body: JsonObject) {
 				body,
 				{
 					...COMMON,
-					name: usableText,
+					name: isStoredText,
 					kind: isPartyKind,
 					how_found: attribution,
 				},
@@ -66,6 +64,20 @@ async function prepareParty(tx: Transaction<DB>, request: ProspectRequest) {
 		.executeTakeFirst();
 	if (!party) throw new SaveRefusal(new Refusal(404, "not_found"));
 
+	const deals = await tx
+		.selectFrom("deal_party")
+		.select("deal_id")
+		.distinct()
+		.where("party_id", "=", party_id)
+		.orderBy("deal_id")
+		.execute();
+	if (deals.length)
+		throw new SaveRefusal(
+			new Refusal(409, "not_a_prospect", {
+				party_id,
+				deal_ids: deals.map(({ deal_id }) => deal_id),
+			}),
+		);
 	const roles = await tx
 		.selectFrom("party_role")
 		.select(["role", "stage"])
@@ -75,13 +87,6 @@ async function prepareParty(tx: Transaction<DB>, request: ProspectRequest) {
 		.execute();
 	if (roles.some(({ role }) => role === "client"))
 		throw new SaveRefusal(new Refusal(409, "already_client", { party_id }));
-	const deal = await tx
-		.selectFrom("deal_party")
-		.select("deal_id")
-		.where("party_id", "=", party_id)
-		.executeTakeFirst();
-	if (deal)
-		throw new SaveRefusal(new Refusal(409, "not_a_prospect", { party_id }));
 
 	if (party.how_found === null || party.how_found === "not_recorded") {
 		if (!how_found)
