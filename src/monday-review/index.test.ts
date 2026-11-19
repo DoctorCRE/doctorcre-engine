@@ -24,6 +24,10 @@ const [
 const brand = randomUUID();
 const undated = randomUUID();
 const unconfirmed = randomUUID();
+const clientless = randomUUID();
+const localClient = randomUUID();
+const parkedAble = "ecaee528-9e80-4e43-a988-d1977e921782";
+const parkedZulu = "65ed2ced-a347-480b-831a-40dcff6a6312";
 const week = "2026-11-16";
 const door = "weekly-reviews";
 
@@ -39,6 +43,8 @@ before(async () => {
 		insert into party (id, kind, name, how_found) select id, 'person', 'Example', 'referral'
 			from unnest(array['${joeId}', '${dellId}', '${oldLead}', '${dropped}', '${newLead}', '${onDeal}']::uuid[]) id;
 		insert into party (id, kind, name) values ('${brand}', 'company', 'Example Franchisor');
+		insert into party (id, kind, name, how_found)
+			values ('${localClient}', 'company', 'Example Practice', 'referral');
 		insert into party_role (party_id, role) values ('${brand}', 'national_account');
 		insert into national_account (party_id) values ('${brand}');
 		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
@@ -47,8 +53,9 @@ before(async () => {
 			('${dropped}', 'lead', 'opportunity', '2026-11-02'),
 			('${newLead}', 'lead', 'opportunity', '2026-11-16 07:00Z'),
 			('${onDeal}', 'lead', 'opportunity', '2026-11-01'),
-			('${onDeal}', 'client', null, '2026-11-01');
-		insert into client (party_id) values ('${onDeal}');
+			('${onDeal}', 'client', null, '2026-11-01'),
+			('${localClient}', 'client', null, '2026-11-01');
+		insert into client (party_id) values ('${onDeal}'), ('${localClient}');
 		insert into client_brand (location_id, brand_id, started_on) values ('${onDeal}', '${brand}', '2026-11-01');
 		update change set changed_at = (new_value->>'created_at')::timestamptz where table_name = 'party_role';
 		set local engine.job = ''; set local engine.user_id = '${dellId}';
@@ -61,14 +68,19 @@ before(async () => {
 			('${closed}', 'Beta', '${joeId}', '2026-11-01'),
 			('${lost}', 'Gamma', '${joeId}', '2026-11-01'),
 			('${parked}', 'AAA', '${dellId}', '2026-11-01'),
+			('${parkedAble}', 'Parked Able', '${dellId}', '2026-11-01'),
+			('${parkedZulu}', 'Parked Zulu', '${dellId}', '2026-11-01'),
 			('${newDeal}', 'New deal', '${dellId}', '2026-11-16 08:00Z'),
 			('${undated}', 'Old terminal deal', '${dellId}', '2026-11-01'),
-			('${unconfirmed}', 'Undated Monday phase', '${dellId}', '2026-11-01');
-		update deal set parking_reason = 'client_paused' where id = '${parked}';
-		insert into deal_party (deal_id, party_id, role) values ('${first}', '${onDeal}', 'client');
+			('${unconfirmed}', 'Undated Monday phase', '${dellId}', '2026-11-01'),
+			('${clientless}', 'Deal without a client', '${dellId}', '2026-11-01');
+		update deal set parking_reason = 'client_paused' where id in ('${parked}', '${parkedAble}', '${parkedZulu}');
+		insert into deal_party (deal_id, party_id, role)
+			select id, case when id = '${first}' then '${onDeal}'::uuid else '${localClient}'::uuid end, 'client'
+			from deal where id <> '${clientless}';
 		alter table deal_phase_change disable trigger stamp_change;
 		insert into deal_phase_change (deal_id, phase, happened_at, changed_at, changed_by_user_id, reason)
-			select id, case when id = '${closed}' then 'research' else 'pending' end,
+			select id, case when id in ('${closed}', '${parked}') then 'research' else 'pending' end,
 				created_at, created_at, '${joeId}'::uuid, null from deal
 			where id not in ('${undated}', '${unconfirmed}')
 			union all values
@@ -115,14 +127,49 @@ test("the review keeps Monday order, retains departures and adds arrivals ahead 
 			[dropped, "dropped"],
 			[newLead, "open"],
 			[newDeal, "open"],
+			[parkedAble, "open"],
+			[parkedZulu, "open"],
 			[parked, "open"],
 		],
 	);
 	const [firstItem] = review;
 	assert.equal(firstItem?.workspace_kind, "national_account");
-	const parkedItem = review.at(-1);
+	assert.equal(review.find((i) => i.deal_id === moved)?.workspace_kind, "team");
+	const parkedItem = review.find((i) => i.deal_id === parked);
 	assert.ok(parkedItem && isArguments(parkedItem.reviewed));
 	assert.equal(parkedItem.reviewed.by, "dell");
 	assert.ok(Number.isFinite(Date.parse(String(parkedItem.reviewed.at))));
+	assert.ok(
+		typeof parkedItem.seen_change_id === "number" &&
+			parkedItem.seen_change_id > 0,
+	);
 	assert.equal(firstItem?.reviewed, null);
+	assert.equal(firstItem?.seen_change_id, 0);
+});
+
+test("the review refuses a non-Monday or a repeated week_of", async () => {
+	for (const query of [
+		"week_of=2026-11-17",
+		`week_of=${week}&week_of=${week}`,
+	]) {
+		const [status, body] = await save(joe, `${door}?${query}`, {}, "GET");
+		assert.equal(status, 400);
+		assert.equal(body.error, "invalid_field_value");
+		assert.deepEqual(body.fields, ["week_of"]);
+	}
+});
+
+test("the database refuses infinity as a review week", async () => {
+	await db.query(`begin; set local engine.user_id = '${joeId}';`);
+	try {
+		await assert.rejects(
+			db.query(
+				"insert into weekly_review (week_of, deal_id) values ('infinity', $1)",
+				[first],
+			),
+			{ constraint: "weekly_review_week_of_check" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
 });
