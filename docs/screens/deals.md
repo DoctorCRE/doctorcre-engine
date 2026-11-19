@@ -46,7 +46,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 ### Parked lane
 
-- [ ] Each parked card shows the deal's name, deal owner, why it is parked (client paused, prospect never active, or other), the partner's note when there is one, and when it was parked.
+- [ ] Each parked card shows the deal's name, deal owner, why it is parked (client paused, prospect never active, or other), the parking note when there is one, and when it was parked. When the old automation parked it, the card and deal page say “Parked automatically.”
 - [ ] Clicking the title opens the deal page.
 - [ ] Revive makes the deal active again in the phase it was in, and the card moves back to that column.
 
@@ -139,7 +139,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Set up client website stays below the deal's facts and asks for the website name and a password (owner, 2026-11-18).
 - [ ] Next steps: each person's open next step on the deal, with its owner and due date in words. A Home card for one of them opens here with that step in view.
 - [ ] Change next step saves the partner's new step and date, replacing their own open step. A step saved without an owner belongs to the partner who saved it.
-- [ ] Facts: deal kind, deal reason, market, closed value when closed, and the market agent on a national-account deal.
+- [ ] Facts: deal kind, deal reason, market, closed value when closed, and the market agent on a national-account deal. Closed and lost cards and the deal page keep the Renewal label for copied renewals with an unrecorded source lease and show a note that the lease wasn't recorded.
 - [ ] Phase, deal owner and Park, with the same rules as the board. Park asks the reason (client paused, prospect never active, or other) and takes an optional note.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Checklist: the deal's checklist items, each with its due date in words. Clicking one opens it.

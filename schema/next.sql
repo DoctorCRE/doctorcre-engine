@@ -465,12 +465,15 @@ create table deal (
 	parking_note text check (parking_note ~ '\S'),
 	-- A flag a user sets, never worked out from anything else.
 	needs_attention boolean not null default false,
-	-- Who last parked the deal and when, apart from its last change. A copied parker no user matches stays empty.
+	-- Who last parked the deal and when, apart from its last change.
 	parked_at timestamptz,
 	parked_by_user_id uuid references app_user,
+	parked_automatically boolean not null default false,
 	constraint deal_parking_note_when_parked check (parking_note is null or parking_reason is not null),
 	constraint deal_parked_stamps_when_parked check ((parking_reason is null) = (parked_at is null)
-		and (parked_by_user_id is null or parked_at is not null))
+		and (parked_by_user_id is null or parked_at is not null)),
+	constraint deal_automatic_parking_has_no_user check (not parked_automatically
+		or (parked_at is not null and parked_by_user_id is null))
 );
 
 -- A job alone never parks, revives or flags a deal; one working for a user, such as the agent, does.
@@ -492,6 +495,7 @@ begin
 	if tg_op = 'INSERT' or (new.parking_reason, new.parking_note) is distinct from (old.parking_reason, old.parking_note) then
 		new.parked_at := case when new.parking_reason is not null then now() end;
 		new.parked_by_user_id := case when new.parking_reason is not null then acting_user end;
+		new.parked_automatically := false;
 	end if;
 	return new;
 end $$;
@@ -741,6 +745,7 @@ create table imported_deal_board (
 	outcome text check (outcome in ('won', 'lost')),
 	closed_on date,
 	phase_at timestamptz,
+	renewal_lease_unrecorded boolean not null default false,
 	foreign key (deal_id, phase_at) references deal_phase_change (deal_id, happened_at)
 );
 
@@ -1069,6 +1074,26 @@ create table email (
 	constraint email_message_id_unless_imported check (message_id is not null or imported),
 	foreign key (activity_id, activity_kind) references activity (id, kind)
 );
+
+create table email_summary (
+	activity_id uuid not null references email,
+	source_activity_id uuid not null,
+	source_hash text not null check (source_hash ~ '^sha256:[a-f0-9]{64}$'),
+	generator_version text not null check (generator_version ~ '\S'),
+	status text not null,
+	text text,
+	provenance jsonb not null check (jsonb_typeof(provenance) = 'object'),
+	recorded_at timestamptz not null,
+	primary key (source_activity_id, source_hash, generator_version),
+	check ((status = 'available' and text is not null and length(text) between 1 and 300)
+		or (status = 'unavailable' and text is null))
+);
+create index email_summary_email on email_summary (activity_id);
+
+create view email_current_summary as
+select distinct on (activity_id) activity_id, source_activity_id, source_hash, generator_version, text, provenance, recorded_at
+from email_summary where status = 'available'
+order by activity_id, recorded_at desc, source_activity_id, source_hash, generator_version;
 
 create table email_recipient (
 	activity_id uuid not null references email,
@@ -3470,6 +3495,7 @@ grant insert (id, deal_id, property_id, round, answers_round, from_party_id, fro
 grant update (status) on offer to engine;
 revoke insert on email from engine;
 grant insert (activity_id, message_id, conversation_id, sender, sender_name, subject, body) on email to engine;
+revoke insert on email_summary, email_current_summary from engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;
