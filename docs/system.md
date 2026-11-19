@@ -96,7 +96,23 @@ The owner updated the switch plan on 2026-11-19.
 
 Production's `next` schema, `engine` role and grants, and job registrations are set up. The app and program switches are off, so saves still go to the old system. Before routing saves to the new database, verify that the production writer can assume `engine` on the populated `next` schema.
 
-Not yet written down, so a brief that needs one reports the gap and does not decide it: the order of the switches after the Deals pair, how long the pause lasts, and going back after new saves.
+On switch day, follow this order:
+
+1. Rebuild production `next` from main's `schema/next.sql`, then reapply the engine role grants and job registrations.
+2. Pause mail intake and saving. Keep the pause until the copy and checks below pass; allow a two-hour window and extend it if needed (coordinator to confirm).
+3. Run the final copy in the order in [Running the copies](new-database.md#running-the-copies). Check the copy results and resolve outstanding corrections before proceeding.
+4. Verify that the production writer can assume `engine` on the populated `next` schema.
+5. Set `DEALS_READ_SCHEMA=next`, then turn `deals-from-engine` on. Check the Deals board and a deal page after each change.
+6. Set `HOME_INBOX_READ_SCHEMA=next` and `INVOICES_READ_SCHEMA=next`. Check each engine read after its change (coordinator to confirm this order).
+7. Turn on each remaining `ENGINE_ROUTING` read key in the order listed in [Switches](#switches). Check the corresponding screen after each key (coordinator to confirm this order).
+8. Set `CLIENT_WEBSITE_ENGINE_SLUG` on production carr-share to the verified website name. Open the website from a signed-in deal page and check that it opens without a password.
+9. Turn off the nightly checklist reminder step in `carr-system/bin/nightly.sh`. Check that the nightly job no longer runs that step.
+10. Turn on `deal-saves-to-engine`, then `deals-saves-from-engine`. Check each route after its change (coordinator to confirm this order).
+11. Turn on `engine_mail`, `engine_router`, `engine_outbox`, `engine_cadence`, and `engine_lead_stage` in that order. Check each program's engine route after its change (coordinator to confirm this order).
+12. Turn on `engine_calls` with `engine_credentials`. Check that call capture reaches the engine.
+13. Set `ENGINE_ASSISTANT="true"`. Check an assistant save through the engine.
+14. If a check fails before new saves, pause and return the affected switch to its old setting. After new saves, keep saving paused, account for those saves, and agree a reconciliation before routing back; switches do not copy saves back (coordinator to confirm).
+15. End the pause after all checks pass.
 
 The coordinator deferred both moves on 2026-11-19 (#805). On switch day, turn off only the nightly deal checklist reminder step in `carr-system/bin/nightly.sh`. The old checklist freezes once saves move, so the job could remind a partner about an item they already finished. Deal watch settings and updates stay on the old tables, which only cover copied deals. [Deal watches and nightly checklist reminders](new-database.md#deal-watches-and-nightly-checklist-reminders).
 
