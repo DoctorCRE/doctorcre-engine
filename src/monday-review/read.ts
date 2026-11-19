@@ -30,10 +30,10 @@ export function reviewVersion(
 	deal: Expression<unknown>,
 	prospect: Expression<unknown>,
 ) {
+	const target = sql`jsonb_strip_nulls(jsonb_build_object('week_of', ${week}::date,
+		'deal_id', ${deal}::uuid, 'party_id', ${prospect}::uuid))`;
 	return sql<number>`(select coalesce(max(id), 0)::float8 from change
-		where table_name = 'weekly_review' and coalesce(new_value, old_value) @>
-			jsonb_strip_nulls(jsonb_build_object('week_of', ${week}::date,
-				'deal_id', ${deal}::uuid, 'party_id', ${prospect}::uuid)))`;
+		where table_name = 'weekly_review' and (new_value @> ${target} or old_value @> ${target}))`;
 }
 
 function reviewItems(db: Transaction<DB>, week: string) {

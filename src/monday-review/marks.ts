@@ -39,7 +39,7 @@ function parseMark(body: JsonObject) {
 		});
 	return {
 		...args,
-		// Match the UUID text that Undo uses for the advisory lock.
+		// Normalize UUIDs before hashing the request.
 		deal_id: args.deal_id?.toLowerCase() ?? null,
 		party_id: args.party_id?.toLowerCase() ?? null,
 	};
@@ -51,8 +51,7 @@ async function checkVersion(
 	seen: number,
 ) {
 	const { week_of, deal_id, party_id } = target;
-	const key = `weekly-review:${week_of}:${deal_id ?? ""}:${party_id ?? ""}`;
-	await sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`.execute(
+	await sql`select lock_weekly_review(${week_of}::date, ${deal_id}::uuid, ${party_id}::uuid)`.execute(
 		tx,
 	);
 	const version = reviewVersion(

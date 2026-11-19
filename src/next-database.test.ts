@@ -6522,6 +6522,7 @@ const CLIENT_REFUSALS: Case[] = [
 	[`insert into client (party_id, role) values ('${AGENT}', 'listing_agent')`, "client_role_check"],
 	[`insert into client_vertical (party_id, vertical) values ('${CLIENT}', ' ')`, "client_vertical_vertical_check"],
 	[`insert into client_vertical (party_id, vertical) values ('${CLIENT}', ' Example')`, "client_vertical_vertical_check"],
+	[`insert into client_vertical (party_id, vertical, subtype) values ('${CLIENT}', 'Example', ' ')`, "client_vertical_subtype_check"],
 	[`insert into client_vertical (party_id, vertical) values ('${CLIENT}', 'Example A'), ('${CLIENT}', 'Example B')`, "client_vertical_pkey"],
 	[`insert into client_vertical (party_id, vertical) values ('${AGENT}', 'Example')`, "client_vertical_party_id_role_fkey"],
 	[`insert into client_vertical (party_id, role, vertical) values ('${AGENT}', 'listing_agent', 'Example')`, "client_vertical_role_check"],
@@ -6602,18 +6603,29 @@ test("a merge carries a client and its brand, and refuses conflicting profiles",
 	});
 });
 
-test("a merge carries client research and keeps a shared practice type once", async () => {
+test("a merge carries client research and fills a missing subtype on a shared practice type", async () => {
 	await rolledBack(async () => {
 		await db.query(`${CLIENT_PROFILE}
 			update party set how_found = 'referral' where id = '${NEXT_BRAND}';
 			insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
-			insert into client_vertical (party_id, vertical) values ('${CLIENT}', 'Example practice'), ('${NEXT_BRAND}', 'Example practice');
+			insert into client_vertical (party_id, vertical, subtype) values
+				('${CLIENT}', 'Example practice', 'Example subtype'), ('${NEXT_BRAND}', 'Example practice', null);
 			${newResearch()};
 			insert into client_research_fact values ('${RESEARCH}', 'finding', 'true');
 			select merge_party('${CLIENT}', '${NEXT_BRAND}')`);
 		assert.deepEqual(
-			(await db.query("select party_id, vertical from client_vertical")).rows,
-			[{ party_id: NEXT_BRAND, vertical: "Example practice" }],
+			(
+				await db.query(
+					"select party_id, vertical, subtype from client_vertical",
+				)
+			).rows,
+			[
+				{
+					party_id: NEXT_BRAND,
+					vertical: "Example practice",
+					subtype: "Example subtype",
+				},
+			],
 		);
 		assert.deepEqual(
 			(
@@ -6635,6 +6647,21 @@ test("a merge refuses different client practice types by name", async () => {
 		await assert.rejects(
 			db.query(`select merge_party('${CLIENT}', '${NEXT_BRAND}')`),
 			{ code: "23514", constraint: "merge_party_client_verticals" },
+		);
+	});
+});
+
+test("a merge refuses different subtypes of the same practice type", async () => {
+	await rolledBack(async () => {
+		await db.query(`${CLIENT_PROFILE}
+			update party set how_found = 'referral' where id = '${NEXT_BRAND}';
+			insert into party_role (party_id, role) values ('${NEXT_BRAND}', 'client');
+			insert into client_vertical (party_id, vertical, subtype) values
+				('${CLIENT}', 'Example practice', 'First subtype'),
+				('${NEXT_BRAND}', 'Example practice', 'Second subtype')`);
+		await assert.rejects(
+			db.query(`select merge_party('${CLIENT}', '${NEXT_BRAND}')`),
+			expected("merge_party_client_verticals"),
 		);
 	});
 });

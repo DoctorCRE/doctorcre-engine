@@ -88,6 +88,14 @@ begin
 		raise exception 'a change names the user or the job that made it'
 			using errcode = 'not_null_violation', constraint = 'change_names_who_made_it';
 	end if;
+	-- A conversion changes the mark's target. History stamps the move itself.
+	if tg_table_name = 'weekly_review' and tg_op = 'UPDATE' then
+		new.changed_by_user_id := old.changed_by_user_id;
+		new.changed_by_job := old.changed_by_job;
+		new.changed_for_user_id := old.changed_for_user_id;
+		new.changed_at := old.changed_at;
+		return new;
+	end if;
 	new.changed_by_user_id := case when acting_job is null then acting_user end;
 	new.changed_by_job := acting_job;
 	new.changed_for_user_id := case when acting_job is not null then acting_user end;
@@ -155,6 +163,7 @@ create table client_vertical (
 	party_id uuid primary key,
 	role text not null default 'client' check (role = 'client'),
 	vertical text not null check (vertical = regexp_replace(vertical, '^\s+|\s+$', '', 'g') and vertical ~ '\S'),
+	subtype text check (subtype = regexp_replace(subtype, '^\s+|\s+$', '', 'g') and subtype ~ '\S'),
 	created_at timestamptz not null default now(),
 	foreign key (party_id, role) references party_role on update cascade
 );
@@ -606,6 +615,37 @@ end $$;
 
 create trigger weekly_review_undo_by_partner before delete on weekly_review
 for each row execute function weekly_review_undo_by_partner();
+
+create function lock_weekly_review(week_of date, deal_id uuid, party_id uuid) returns void
+language sql
+begin atomic
+	select pg_advisory_xact_lock(hashtextextended(concat('weekly-review:', week_of, ':', deal_id, ':', party_id), 0));
+end;
+
+create function carry_weekly_review(prospect_id uuid, new_deal_id uuid) returns void
+language plpgsql security definer as $$
+declare
+	monday date := date_trunc('week', now() at time zone 'America/Chicago')::date;
+begin
+	if nullif(current_setting('engine.job', true), '') is not null
+		or nullif(current_setting('engine.user_id', true), '') is null
+		or not exists (
+			select from deal d join deal_party link on link.deal_id = d.id
+			where d.id = new_deal_id and d.created_at = now() and link.created_at = now()
+				and link.party_id = prospect_id and link.role in ('client', 'client_contact')
+		) then
+		raise exception 'a weekly review mark carries only with a prospect conversion'
+			using errcode = 'check_violation', constraint = 'weekly_review_carries_with_conversion';
+	end if;
+
+	perform lock_weekly_review(monday, null, prospect_id);
+	update weekly_review set deal_id = new_deal_id, party_id = null
+	where week_of = monday and party_id = prospect_id;
+end $$;
+
+do $$ begin
+	execute format('alter function carry_weekly_review set search_path = %I, pg_temp', current_schema());
+end $$;
 
 -- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
 
@@ -2809,8 +2849,8 @@ begin
 			using errcode = 'check_violation', constraint = 'merge_party_client_profiles';
 	end if;
 	if exists (select from client_vertical d join client_vertical s on s.party_id = survivor
-		where d.party_id = duplicate and d.vertical <> s.vertical) then
-		raise exception 'settle the different client practice types before merging'
+		where d.party_id = duplicate and (d.vertical <> s.vertical or d.subtype <> s.subtype)) then
+		raise exception 'settle the different client practice types or subtypes before merging'
 			using errcode = 'check_violation', constraint = 'merge_party_client_verticals';
 	end if;
 
@@ -2867,8 +2907,10 @@ begin
 		lease_estimate_confidence = case when s.estimated_lease_on is null then d.lease_estimate_confidence else s.lease_estimate_confidence end,
 		estimated_lease_on = coalesce(s.estimated_lease_on, d.estimated_lease_on)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
+	update client_vertical s set subtype = d.subtype from client_vertical d
+	where s.party_id = survivor and d.party_id = duplicate and s.subtype is null and d.subtype is not null;
 	delete from client_vertical d using client_vertical s
-	where d.party_id = duplicate and s.party_id = survivor and d.vertical = s.vertical;
+	where d.party_id = duplicate and s.party_id = survivor;
 	update client_vertical set party_id = survivor where party_id = duplicate
 		and exists (select from party_role where party_id = survivor and role = 'client');
 	update client_research set party_id = survivor where party_id = duplicate
@@ -3001,6 +3043,10 @@ begin
 		-- A statement that changes nothing leaves no history.
 		if was is null then
 			return null;
+		end if;
+		if tg_table_name = 'weekly_review' then
+			was := was || jsonb_build_object('week_of', whole -> 'week_of');
+			became := became || jsonb_build_object('week_of', whole -> 'week_of');
 		end if;
 	end if;
 	insert into change (table_name, record, action, old_value, new_value, merge_of)
@@ -3518,6 +3564,8 @@ revoke insert on imported_automatic_phase_move, imported_deal_party, imported_de
 revoke execute on function record_change from public;
 revoke execute on function merge_party from public;
 grant execute on function merge_party to engine;
+revoke execute on function carry_weekly_review from public;
+grant execute on function carry_weekly_review to engine;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;

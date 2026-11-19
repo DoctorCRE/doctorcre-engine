@@ -35,7 +35,8 @@ const key = () => ({ idempotency_key: randomUUID() });
 before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
-		insert into role values ('lead', 'Lead'), ('client', 'Client'), ('national_account', 'National account');
+		insert into role values ('lead', 'Lead'), ('client', 'Client'), ('client_contact', 'Client contact'),
+			('national_account', 'National account');
 		insert into stage (role, slug, label) values
 			('lead', 'opportunity', 'Opportunity'), ('lead', 'archived', 'Archived');
 		insert into how_found (slug, label) values ('referral', 'Referral');
@@ -274,6 +275,105 @@ test("concurrent marks for the same deal accept the first screen version only", 
 	assert.equal(
 		item.reviewed.review_id,
 		responses.find(([status]) => status === 201)?.[1].review_id,
+	);
+});
+
+test("conversion moves this week's mark with its author and time, and replay cannot restore an undone mark", async () => {
+	const [added, prospect] = await save(joe, "prospects", {
+		...key(),
+		name: "Example Reviewed Prospect",
+		kind: "person",
+		how_found: "referral",
+	});
+	assert.equal(added, 201, JSON.stringify(prospect));
+	const {
+		rows: [weeks],
+	} = await db.query<{ current: string; previous: string }>(
+		`select monday::text as current, (monday - 7)::text as previous
+		from (select date_trunc('week', now() at time zone 'America/Chicago')::date as monday) week`,
+	);
+	assert.ok(weeks);
+	for (const monday of [weeks.previous, weeks.current]) {
+		const [status, marked] = await save(joe, door, {
+			...key(),
+			week_of: monday,
+			party_id: prospect.party_id,
+			seen_change_id: 0,
+		});
+		assert.equal(status, 201, JSON.stringify(marked));
+	}
+	const prospectItem = (await items(dell, weeks.current)).find(
+		(item) => item.party_id === prospect.party_id,
+	);
+	assert.ok(prospectItem && isArguments(prospectItem.reviewed));
+	assert.equal(prospectItem.reviewed.by, "joe");
+	const args = {
+		...key(),
+		prospect_id: prospect.party_id,
+		client_id: localClient,
+		name: "Example Converted Deal",
+		phase: "pending",
+		owner: "dell",
+	};
+	const [converted, deal] = await save(dell, "deals", args);
+	assert.equal(converted, 201, JSON.stringify(deal));
+	const review = await items(dell, weeks.current);
+	assert.ok(!review.some((item) => item.party_id === prospect.party_id));
+	const dealItem = review.find((item) => item.deal_id === deal.deal_id);
+	assert.ok(dealItem);
+	assert.deepEqual(dealItem.reviewed, prospectItem.reviewed);
+	assert.ok(
+		Number(dealItem.seen_change_id) > Number(prospectItem.seen_change_id),
+	);
+	assert.deepEqual(
+		(
+			await db.query(
+				"select week_of::text, deal_id from weekly_review where party_id = $1",
+				[prospect.party_id],
+			)
+		).rows,
+		[{ week_of: weeks.previous, deal_id: null }],
+	);
+
+	const [staleMark, conflict] = await save(dell, door, {
+		...key(),
+		week_of: weeks.current,
+		party_id: prospect.party_id,
+		seen_change_id: prospectItem.seen_change_id,
+	});
+	assert.deepEqual(
+		[staleMark, conflict.error, conflict.current_version],
+		[409, "version_conflict", dealItem.seen_change_id],
+	);
+
+	const undoDoor = `${door}/${prospectItem.reviewed.review_id}/remove`;
+	assert.equal(
+		(
+			await save(dell, undoDoor, {
+				...key(),
+				seen_change_id: prospectItem.seen_change_id,
+			})
+		)[0],
+		409,
+	);
+	assert.equal(
+		(
+			await save(dell, undoDoor, {
+				...key(),
+				seen_change_id: dealItem.seen_change_id,
+			})
+		)[0],
+		200,
+	);
+	assert.deepEqual(await save(dell, "deals", args), [
+		200,
+		{ ...deal, replayed: true },
+	]);
+	assert.equal(
+		(await items(dell, weeks.current)).find(
+			(item) => item.deal_id === deal.deal_id,
+		)?.reviewed,
+		null,
 	);
 });
 
