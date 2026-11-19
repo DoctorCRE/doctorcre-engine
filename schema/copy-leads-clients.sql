@@ -90,10 +90,11 @@ where s.mapped_source <> 'not_recorded' and p.how_found <> s.mapped_source;
 create temp table examined_relationship on commit drop as
 select r.*, p.how_found, p.how_found_detail,
  case fields ->> 'client_type' when 'group' then 'group_practice' else fields ->> 'client_type' end as mapped_type,
- case when (fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact' then 'archived'
- when fields ->> 'stage' in ('active_deal','closed_won') then 'archived'
+ case when (fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact'
+  or conversion.stage_reason is not null then 'archived'
  when fields ->> 'stage' in ('nurture_drip','closed_lost') then 'nurture'
  else fields ->> 'stage' end as mapped_stage,
+ conversion.stage_reason,
  case when reviewed.owner_actor_id is null and old_owner.kind <> 'human' then deal_owner.id else u.id end as owner,
  case when reviewed.owner_actor_id is not null then
   case when u.id is null then 'reviewed_owner_not_a_user' end
@@ -107,6 +108,11 @@ select r.*, p.how_found, p.how_found_detail,
  (select case when count(*) = 1 then min(nullif(btrim(est_basis), '')) end
   from public.candidate_pool where promoted_lead_id = r.id)) as estimate_source
 from old_relationship r join party p on p.id = r.mapped_id
+cross join lateral (
+ select case when r.kind = 'lead' and not (r.fields ->> 'suppressed')::boolean
+  and r.fields ->> 'stage' in ('active_deal','closed_won')
+  then 'became a deal in the old system' end as stage_reason
+) conversion
 left join public.actor old_owner on old_owner.id = (r.fields ->> 'owner_id')::uuid
 left join pg_temp.copy_client_owner reviewed on r.kind = 'client' and reviewed.old_id = r.id
 left join outside_id o on o.source = 'old_system' and o.value = coalesce(reviewed.owner_actor_id::text, r.fields ->> 'owner_id')
@@ -158,9 +164,7 @@ with copied_role as (
 insert into change (table_name, record, action, new_value)
 select 'party_role', jsonb_build_object('party_id', c.party_id, 'role', c.role), 'insert',
  (to_jsonb(c) - array['changed_by_user_id','changed_by_job','changed_for_user_id','changed_at']) ||
- case when r.kind = 'lead' and not (r.fields ->> 'suppressed')::boolean
-  and r.fields ->> 'stage' in ('active_deal','closed_won')
-  then jsonb_build_object('reason', 'became a deal in the old system') else '{}'::jsonb end
+ jsonb_strip_nulls(jsonb_build_object('reason', r.stage_reason))
 from copied_role c left join ready_relationship r on r.mapped_id = c.party_id and r.kind = c.role and r.rank = 1;
 -- Client responsibility is independent of national-account ownership; labels never identify users.
 create temp table client_owner on commit drop as
