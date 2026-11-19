@@ -30,9 +30,10 @@ before(async () => {
 		insert into deal_reason values ('renewal', 'Renewal');
 		insert into deal (id, name, owner_user_id)
 			select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid, 'Example Deal ' || n, '${ALEX}'
-			from generate_series(10, 24) n;
+			from generate_series(10, 26) n;
 		insert into deal_party (deal_id, party_id, role)
-			select id, '${CLIENT}', 'client' from deal where id between '${id(15)}' and '${id(17)}';
+			select id, '${CLIENT}', 'client' from deal
+			where id between '${id(15)}' and '${id(17)}' or id in ('${id(25)}', '${id(26)}');
 		commit;`);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into deal_phase_change select id, '2026-01-05T15:00:00Z', 'touring', null from deal; commit;`);
@@ -182,6 +183,63 @@ test("a partner can undo the current copied move once with a fresh card version"
 		{ phase: "touring", changed_by_user_id: BLAIR },
 	]);
 });
+
+for (const [name, number, phase, outcome] of [
+	[
+		"a copied loss stays in Lost without an automatic close or Undo",
+		25,
+		"closed",
+		"lost",
+	],
+	[
+		"a current copied win keeps its automatic move and allows Undo even with a dead phase",
+		26,
+		"dead",
+		"won",
+	],
+] as const) {
+	test(name, async () => {
+		const deal = id(number);
+		const event_id = randomUUID();
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal_phase_change (deal_id, happened_at, phase, reason)
+		values ('${deal}', '2026-01-06', '${phase}', 'Example recorded phase');
+		insert into imported_deal_board (deal_id, phase, phase_at, outcome)
+		values ('${deal}', '${phase}', '2026-01-06', '${outcome}');
+		insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
+		values ('${event_id}', '${deal}', '2026-01-06', 'touring', 'Example invoice received');
+		commit;`);
+		const read = async (path: string) => {
+			const response = await request(
+				partner,
+				path,
+				{ method: "GET" },
+				{
+					DEALS_READ_SCHEMA: "next",
+				},
+			);
+			assert.equal(response.status, 200);
+			return response.json();
+		};
+		const lost = outcome === "lost";
+		const facts = { outcome, phase_change: lost ? null : { event_id } };
+		assert.partialDeepStrictEqual(await read("deals"), {
+			[lost ? "lost_deals" : "closed_deals"]: [{ id: deal, ...facts }],
+		});
+		assert.partialDeepStrictEqual(await read(`deals/${deal}`), facts);
+		const [status, answer] = await saveAt(partner, `deals/${deal}/phase/undo`, {
+			idempotency_key: randomUUID(),
+			event_id,
+			base_version: await seen(deal),
+		});
+		if (lost) {
+			assert.deepEqual([status, answer.error], [409, "version_conflict"]);
+		} else {
+			assert.equal(status, 200, JSON.stringify(answer));
+		}
+		assert.equal((await dealNow(deal)).phase, lost ? phase : "touring");
+	});
+}
 
 for (const { deal, priorPhase } of [
 	{ deal: id(23), priorPhase: "closed" },

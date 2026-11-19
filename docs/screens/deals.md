@@ -57,7 +57,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Search finds deals by name, client, kind or close date.
 - [ ] Each deal opens its deal page.
 
-With the new read, Closed deals shows "Closed automatically: Invoice received" with an `11/17`-style date when the nightly invoice job closed the deal.
+With the new read, Closed deals shows "Closed automatically: Invoice received" with an `11/17`-style date when the nightly invoice job closed the deal. A recorded loss appears in Lost deals without an automatic close badge or Undo.
 
 ## Prospects
 
@@ -159,7 +159,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Compare terms: recorded terms from deals in the same submarket and use type, each value with where it came from.
 - **Open (question 7).** Whether Compare terms becomes a side-by-side of this deal's own offers. Recommended: keep today's comparison until the owner decides.
 - [ ] Timeline lists phase moves, notes, next steps, critical dates, documents, and changes, newest first. Each says which partner or job saved it and when. A note with a matching event appears once.
-- [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened.
+- [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. An attachment action already shown as a document event appears once.
 - [ ] Correspondence & notes: the deal's emails and meetings together, newest first, and the deal's notes. An email shows its sender, date and subject. A meeting shows its title and time. An email already on this deal never asks to be filed again.
 - [ ] Tours: the deal's tours, each with its date in words.
 - [ ] Documents: every file on the deal, opening on click, for both partners on every deal.
@@ -190,7 +190,6 @@ Seen on the live Deals screen on 2026-11-18 (screen), or read in the app's Deals
 - A deal page shows four open next actions, and an "Overdue action" different from the card's next step. The client shows twice, and website setup sits in the opening facts (screen).
 - The deal page says "Watch state not confirmed" when nothing failed (screen).
 - App #950, in review, shows one next step and hides the watch line until the watch is read. It shows the client once and moves website setup below the snapshot. Its board and deal page still choose the next step from different inputs, so they can differ (code).
-- A parked card's title is not a link or button. The card opens on a click outside its buttons, or on Enter or Space when focused (code).
 - "Moved automatically" shows `10/19` on the app screen. The app still needs to format the date in words and connect the card's Undo to the new engine save.
 - On a deal Dell owns, Joe's Documents tab says "Request unavailable or version changed" (screen, old system #3232).
 - Email follow-ups on a deal page offer "File email to this deal", with File to existing deal and New deal. Many say "Sender unavailable" or "Summary unavailable", and show role words such as `landlord_side` (screen).

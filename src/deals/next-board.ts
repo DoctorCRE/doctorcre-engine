@@ -4,7 +4,12 @@ import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
-import { CLOSED_PHASES, ENDED_PHASES } from "./shared.ts";
+import {
+	CLOSED_PHASES,
+	ENDED_PHASES,
+	importedPhaseIsCurrent,
+	isLostDeal,
+} from "./shared.ts";
 
 type BoardList = "open" | "closed" | "lost";
 export const isOpenBoardDeal = sql<boolean>`outcome is null and closed_on is null
@@ -93,14 +98,9 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 			(join) => join.onTrue(),
 		)
 		.select((eb) => {
-			const importedHistory = eb.and([
-				eb("imported.phase", "is not", null),
-				eb(
-					"imported.phase_at",
-					"is not distinct from",
-					eb.ref("p.happened_at"),
-				),
-			]);
+			const phaseAt = eb.ref("p.happened_at");
+			const importedHistory = importedPhaseIsCurrent(phaseAt);
+			const lost = isLostDeal(eb.ref("p.phase"), phaseAt);
 			const phaseReceiptFacts = [
 				eb.ref("p.phase").as("phase"),
 				asText(sql`(p.happened_at at time zone 'America/Chicago')::date`).as(
@@ -109,6 +109,10 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 				asText(eb.ref("p.changed_at")).as("recorded_at"),
 				sql.lit(true).as("automatic"),
 			];
+			const outcome = sql<
+				"won" | "lost" | null
+			>`case when ${lost} then 'lost' when ${importedHistory} then imported.outcome
+				when last_close.happened_at is not null then 'won' end`;
 			return [
 				eb
 					.case()
@@ -117,12 +121,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 					.else(eb.ref("p.phase"))
 					.end()
 					.as("phase"),
-				sql<
-					"won" | "lost" | null
-				>`case when ${importedHistory} then imported.outcome
-					when p.phase = 'dead' then 'lost' when last_close.happened_at is not null then 'won' end`.as(
-					"outcome",
-				),
+				outcome.as("outcome"),
 				sql<string | null>`(case when ${importedHistory} then imported.closed_on
 					when p.phase = 'dead' then (p.happened_at at time zone 'America/Chicago')::date
 					else (last_close.happened_at at time zone 'America/Chicago')::date end)::text`.as(
@@ -146,41 +145,51 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 				"a.account_client_id",
 				"a.account_name",
 				"a.account_owner",
-				eb.fn
-					.coalesce(
-						jsonObjectFrom(
-							eb
-								.selectFrom("invoice_email as invoice")
-								.innerJoin("deal_phase_change as prior", (join) =>
-									join
-										.onRef("prior.deal_id", "=", "invoice.deal_id")
-										.onRef("prior.happened_at", "=", "invoice.prior_phase_at"),
-								)
-								.select([
-									"invoice.id as event_id",
-									"prior.phase as prior_phase",
-									"p.reason",
-									...phaseReceiptFacts,
-								])
-								.whereRef("invoice.deal_id", "=", "d.id")
-								.whereRef("invoice.applied_phase_at", "=", "p.happened_at")
-								.whereRef("prior.phase", "<>", "p.phase")
-								.where("p.changed_by_job", "=", "lead_stage"),
-						),
-						jsonObjectFrom(
-							eb
-								.selectFrom("imported_automatic_phase_move as receipt")
-								.select([
-									"receipt.source_event_id as event_id",
-									"receipt.prior_phase",
-									"receipt.reason",
-									sql.lit("copied").as("source"),
-									...phaseReceiptFacts,
-								])
-								.whereRef("receipt.deal_id", "=", "d.id")
-								.whereRef("receipt.happened_at", "=", "p.happened_at"),
+				eb
+					.case()
+					.when(lost)
+					.then(null)
+					.else(
+						eb.fn.coalesce(
+							jsonObjectFrom(
+								eb
+									.selectFrom("invoice_email as invoice")
+									.innerJoin("deal_phase_change as prior", (join) =>
+										join
+											.onRef("prior.deal_id", "=", "invoice.deal_id")
+											.onRef(
+												"prior.happened_at",
+												"=",
+												"invoice.prior_phase_at",
+											),
+									)
+									.select([
+										"invoice.id as event_id",
+										"prior.phase as prior_phase",
+										"p.reason",
+										...phaseReceiptFacts,
+									])
+									.whereRef("invoice.deal_id", "=", "d.id")
+									.whereRef("invoice.applied_phase_at", "=", "p.happened_at")
+									.whereRef("prior.phase", "<>", "p.phase")
+									.where("p.changed_by_job", "=", "lead_stage"),
+							),
+							jsonObjectFrom(
+								eb
+									.selectFrom("imported_automatic_phase_move as receipt")
+									.select([
+										"receipt.source_event_id as event_id",
+										"receipt.prior_phase",
+										"receipt.reason",
+										sql.lit("copied").as("source"),
+										...phaseReceiptFacts,
+									])
+									.whereRef("receipt.deal_id", "=", "d.id")
+									.whereRef("receipt.happened_at", "=", "p.happened_at"),
+							),
 						),
 					)
+					.end()
 					.as("phase_change"),
 				eb
 					.case()

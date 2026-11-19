@@ -170,6 +170,21 @@ test("snoozed, settled and waiting marks land on the next steps the earlier copi
 	);
 });
 
+test("the engine can save a copied user's time zone with owner-only defaults", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`set local role engine;
+			select set_config('engine.user_id', '${id(1)}', true)`);
+		assert.deepEqual(
+			await rows(`update user_preference set time_zone = 'America/Denver'
+				where user_id = '${id(1)}' returning time_zone`),
+			[["America/Denver"]],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
 test("a rerun changes nothing, and picks up a mark once its next step is copied", async () => {
 	const history =
 		"select count(*) from change where table_name in ('user_preference', 'home_mark')";

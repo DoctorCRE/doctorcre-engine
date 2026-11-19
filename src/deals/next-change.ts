@@ -31,7 +31,7 @@ import {
 	linkMarketAgent,
 	marketClient,
 } from "./national-market.ts";
-import { ENDED_PHASES } from "./shared.ts";
+import { ENDED_PHASES, isLostDeal } from "./shared.ts";
 
 // The database checks each value against its own rules, such as a known kind.
 const DEAL_FIELDS = {
@@ -416,7 +416,13 @@ async function undoAutomaticPhaseMove(
 				.onRef("receipt.happened_at", "=", "latest.happened_at")
 				.on("receipt.source_event_id", "=", event_id),
 		)
+		.leftJoin("imported_deal_board as imported", (join) =>
+			join.on("imported.deal_id", "=", deal_id),
+		)
 		.select(["latest.phase", "receipt.prior_phase"])
+		.where((eb) =>
+			eb.not(isLostDeal(eb.ref("latest.phase"), eb.ref("latest.happened_at"))),
+		)
 		.executeTakeFirst();
 	if (!current || current_version !== base_version)
 		throw new SaveRefusal(

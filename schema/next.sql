@@ -3290,12 +3290,29 @@ create view deal_imported_history with (security_invoker = true) as
  select h.deal_id, jsonb_agg(jsonb_build_object(
   'id', h.id, 'occurred_at', h.occurred_at, 'recorded_at', h.recorded_at,
   'actor', coalesce(u.slug, h.changed_by_job), 'verb', h.verb, 'field', h.field, 'imported', true,
-  'old_value', (select coalesce(jsonb_object_agg(k, to_jsonb(h.old_value) -> k), '{}'::jsonb)
-   from unnest(h.old_keys) k having h.old_keys is not null),
-  'new_value', (select coalesce(jsonb_object_agg(k, to_jsonb(h.new_value) -> k), '{}'::jsonb)
-   from unnest(h.new_keys) k having h.new_keys is not null)
+  'old_value', display.old_value, 'new_value', display.new_value
  ) order by h.recorded_at, h.id) as events
  from imported_deal_history h left join app_user u on u.id = h.changed_by_user_id
+ cross join lateral (
+  select jsonb_object_agg(f.key, f.value) filter (where s.is_before) as old_value,
+   jsonb_object_agg(f.key, f.value) filter (where not s.is_before) as new_value
+  from (values (true, to_jsonb(h.old_value), h.old_keys), (false, to_jsonb(h.new_value), h.new_keys))
+   s(is_before, payload, keys)
+  cross join lateral jsonb_each(s.payload) f
+  where f.key = any(s.keys)
+   and f.key not in ('client_portal_url', 'notes_path')
+   and (h.verb, f.key) <> ('set-next-action', 'summary')
+   and not (f.key = 'source' and f.value #>> '{}' ~* '^[[:space:]]*https?://')
+   and (f.value not in ('null', '"None"', '""', '{"pdf":null,"working":null}')
+    or (not s.is_before and f.value = 'null' and f.key = any(h.old_keys)
+     and to_jsonb(h.old_value) -> f.key not in ('null', '"None"', '""', '{"pdf":null,"working":null}')))
+ ) display
+ where not exists (
+  select from unnest(array[((h.new_value).attachments).pdf, ((h.new_value).attachments).working]) attachment(id)
+  left join document doc on doc.id = attachment.id and doc.deal_id = h.deal_id
+  where h.verb = 'backfill-document-attachments' and attachment.id is not null
+  having count(*) > 0 and count(*) = count(doc.id)
+ )
  group by h.deal_id;
 
 -- A save's answer under its key, so a retry gets the same answer instead of saving twice.
@@ -3566,6 +3583,9 @@ revoke execute on function merge_party from public;
 grant execute on function merge_party to engine;
 revoke execute on function carry_weekly_review from public;
 grant execute on function carry_weekly_review to engine;
+grant execute on function lock_weekly_review(date, uuid, uuid) to engine;
+grant execute on function npi_check_digit_holds(text), is_time_zone(text) to engine;
+grant execute on function invoice_email_target(invoice_email), invoice_name(text) to engine, engine_reader;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;
