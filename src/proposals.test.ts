@@ -874,6 +874,10 @@ test("dismissing any proposal kind persists a nonblank reason and refuses a blan
 		400,
 	);
 	assert.equal(
+		(await decide(proposals[1], { decision: "dismiss", reason: "\u00a0" }))[0],
+		400,
+	);
+	assert.equal(
 		(
 			await decide(proposals[1], { decision: "accept", reason: "Not a filing" })
 		)[0],

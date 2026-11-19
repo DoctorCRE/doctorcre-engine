@@ -3481,6 +3481,7 @@ test("a dropped Home mark requires a nonblank reason, forbids waiting and is per
 	for (const [sql, constraint] of [
 		[drop("", ""), "home_mark_drop_reason"],
 		[drop(", drop_reason", ", ' '"), "home_mark_drop_reason_check"],
+		[drop(", drop_reason", ", chr(160)"), "home_mark_drop_reason_check"],
 		[
 			drop(
 				", drop_reason, waiting_on_party_id, waiting_reason",
@@ -7397,6 +7398,7 @@ const SHARED_PROPOSAL_REFUSALS: [string, string, Refusal][] = [
 	["job decision", `${newProposal()}; update proposal set status = 'accepted'`, "proposal_user_decides"],
 	["agent decision", `${newProposal()}; ${asJob("agent", USER)}; update proposal set status = 'dismissed'`, "proposal_user_decides"],
 	["blank dismiss reason", `${newProposal()}; ${asUser(USER)}; update proposal set status = 'dismissed', dismiss_reason = ' '`, "proposal_dismiss_reason_check"],
+	["nonbreaking-space dismiss reason", `${newProposal()}; ${asUser(USER)}; update proposal set status = 'dismissed', dismiss_reason = chr(160)`, "proposal_dismiss_reason_check"],
 	["dismiss reason on acceptance", `${newProposal()}; ${asUser(TEAMMATE)}; update proposal set status = 'accepted', dismiss_reason = 'Not needed'`, "proposal_dismiss_reason"],
 	["repeat decision", `${newProposal()}; ${decide()}; ${decide()}`, "proposal_final"],
 	["rewrite", `${newProposal()}; update proposal set evidence = 'replacement'`, notGranted("proposal")],

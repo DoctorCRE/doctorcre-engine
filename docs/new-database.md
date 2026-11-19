@@ -229,7 +229,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary;
 - a next step's text, owner, due date and done time;
-- a user's time zone, quiet hours and device notifications, and a Home mark's disposition, snooze time and whom it waits on and why;
+- a user's time zone, quiet hours and device notifications, a Home mark's disposition, snooze time, drop reason and whom it waits on and why, and a Home update's `read_at` (`read_at` is the only updatable column on `home_update`);
 - a round's status, and a critical date's status and resolution reason;
 - a do-not-contact row's until-date;
 - a social account's handle and platform account id, and an idea's angle, hook and pillar;

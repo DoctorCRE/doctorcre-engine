@@ -74,9 +74,9 @@ async function fixture(kind: (typeof kinds)[number]) {
 	};
 }
 
-async function cardVersion(item_id: string) {
+async function cardVersion(item_id: string, user = alex) {
 	const response = await request(
-		alex,
+		user,
 		"home/inbox",
 		{ method: "GET" },
 		{ HOME_INBOX_READ_SCHEMA: "next" },
@@ -189,6 +189,7 @@ test("refuses settle, unsettle, unknown cards, past snoozes and waiting without 
 		["set-waiting", { target: waiting.target }, 400],
 		["drop", {}, 400],
 		["drop", { reason: "   " }, 400],
+		["drop", { reason: "\u00a0" }, 400],
 		[
 			"drop",
 			{
@@ -234,24 +235,36 @@ async function tourFixture(what: string, address: string) {
 }
 
 test("drops call follow-ups, updates and tour feedback with a reason for good", async () => {
+	const tour = await tourFixture(
+		"Example Dental commented on 100 Example Street",
+		"100 Example Street",
+	);
+	const blairTourId = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into home_update (id, user_id, deal_id, kind, what, property_id)
+			values ('${blairTourId}', '${other}', '${tour.deal}', 'tour_feedback',
+				'Example Dental commented on 100 Example Street', '${tour.property}');
+		commit;`);
 	const targets = [
-		await fixture("capture_post_call_action"),
-		await fixture("notification"),
-		await tourFixture(
-			"Example Dental commented on 100 Example Street",
-			"100 Example Street",
-		),
+		{ ...(await fixture("capture_post_call_action")), snoozeFirst: true },
+		{ ...(await fixture("notification")), snoozeFirst: false },
+		{ ...tour, snoozeFirst: true },
 	];
 	for (const target of targets) {
-		const [snoozed, mark] = await command(
-			{ item_id: target.item_id, base_version: target.base_version, until },
-			"snooze",
-		);
-		assert.equal(snoozed, 200);
+		let base_version = target.base_version;
+		if (target.snoozeFirst) {
+			const [snoozed, mark] = await command(
+				{ item_id: target.item_id, base_version, until },
+				"snooze",
+			);
+			assert.equal(snoozed, 200);
+			assert.ok(typeof mark.base_version === "string");
+			base_version = mark.base_version;
+		}
 		const dropReq = {
 			idempotency_key: randomUUID(),
 			item_id: target.item_id,
-			base_version: mark.base_version,
+			base_version,
 			action: "drop",
 			reason: "  No longer relevant  ",
 		};
@@ -281,15 +294,14 @@ test("drops call follow-ups, updates and tour feedback with a reason for good", 
 			history_reason: "No longer relevant",
 		});
 		assert.equal(
-			(
-				await command(
-					{ item_id: target.item_id, base_version: mark.base_version },
-					"unsnooze",
-				)
-			)[0],
+			(await command({ item_id: target.item_id, base_version }, "unsnooze"))[0],
 			404,
 		);
 	}
+	assert.match(
+		String(await cardVersion(`notification:${blairTourId}`, blair)),
+		/:0:inbox$/,
+	);
 });
 
 test("tour feedback appears on Home and supports Done and Undo through door 24", async () => {
