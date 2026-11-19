@@ -10,20 +10,25 @@ const joeId = randomUUID();
 const dellId = randomUUID();
 const lead = randomUUID();
 const toDrop = randomUUID();
+const onDeal = randomUUID();
+const deal = randomUUID();
 const key = () => ({ idempotency_key: randomUUID() });
 
 before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
-		insert into role (slug, label) values ('lead', 'Lead');
+		insert into role (slug, label) values ('lead', 'Lead'), ('client_contact', 'Client contact');
 		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity'), ('lead', 'archived', 'Archived');
 		insert into how_found (slug, label) values ('referral', 'Referral');
 		insert into party (id, kind, name, how_found)
 			select id, 'person', 'Example Person', 'referral'
-			from unnest(array['${joeId}', '${dellId}', '${lead}', '${toDrop}']::uuid[]) as id;
+			from unnest(array['${joeId}', '${dellId}', '${lead}', '${toDrop}', '${onDeal}']::uuid[]) as id;
 		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
 		insert into party_role (party_id, role, stage) values
-			('${lead}', 'lead', 'opportunity'), ('${toDrop}', 'lead', 'opportunity');
+			('${lead}', 'lead', 'opportunity'), ('${toDrop}', 'lead', 'opportunity'),
+			('${onDeal}', 'lead', 'opportunity');
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${joeId}');
+		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${onDeal}', 'client_contact');
 		commit;`);
 });
 after(async () => {
@@ -154,4 +159,44 @@ test("drop archives the lead with the partner's reason and keeps the notes", asy
 	const [again, refusal] = await save(dell, path, { ...request, ...key() });
 	assert.equal(again, 409);
 	assert.equal(refusal.error, "not_a_prospect");
+});
+
+test("owner and attention changes require a real lead and at least one field", async () => {
+	const request = { ...key(), seen_change_id: 0, fields: { owner: "joe" } };
+	assert.equal(
+		(await save(joe, `prospects/${randomUUID()}/changes`, request))[0],
+		404,
+	);
+	const [status, error] = await save(joe, `prospects/${lead}/changes`, {
+		...request,
+		fields: {},
+	});
+	assert.equal(status, 400);
+	assert.partialDeepStrictEqual(error, {
+		error: "invalid_field_value",
+		fields: ["fields"],
+	});
+});
+
+test("a lead already on a deal cannot be claimed or dropped from Prospects", async () => {
+	const path = `prospects/${onDeal}`;
+	const { rows } = await db.query(
+		"select max(id) from change where table_name = 'party_role' and record = jsonb_build_object('party_id', $1::uuid, 'role', 'lead')",
+		[onDeal],
+	);
+	const seen_change_id = Number(rows[0]?.max);
+	for (const [operation, fields] of [
+		["changes", { seen_change_id, fields: { owner: "joe" } }],
+		["drop", { reason: "Example reason" }],
+	] as const) {
+		const [status, answer] = await save(joe, `${path}/${operation}`, {
+			...key(),
+			...fields,
+		});
+		assert.equal(status, 409);
+		assert.partialDeepStrictEqual(answer, {
+			error: "not_a_prospect",
+			party_id: onDeal,
+		});
+	}
 });
