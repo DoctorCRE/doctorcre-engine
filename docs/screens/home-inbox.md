@@ -23,7 +23,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Home has no "set waiting person" control.
 - [ ] Home has no Hide. Every card is finished, snoozed to a date, or dropped with a reason. There is no "Hide from inbox", no "Hidden from inbox" list, and no Hide button on the selection bar (today "Settle selected") (owner, 2026-11-19).
 - [ ] Every card hidden before Hide went is back in the inbox, including the 11 hidden marks copied from the old system (coordinator, 2026-11-19).
-- [ ] Every card kind has Drop beside Snooze. Drop asks for a reason, and the card leaves. Steps, call follow-ups, updates, lease facts, mail, suggestions and tour feedback offer the same actions (coordinator, 2026-11-19).
+- [ ] Every card kind has Drop beside Snooze. Drop asks for a reason, and the card leaves. Steps, call follow-ups, updates, reply drafts, suggestions and tour feedback offer the same actions. A lease fact is the one exception: its Reject asks a reason and finishes the card, and it has no separate Drop (coordinator, 2026-11-19).
 
 When app routing moves to the new database, Home uses door 24 for snooze and undo on steps, call follow-ups, updates, suggestions and reply drafts. Door 24's `settle` and `unsettle` saves and the Home read's settled shelf are deleted in the engine change that builds Home's side. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
 
@@ -65,9 +65,9 @@ A recorded call whose suggestions wait for the partner.
 
 - [ ] While the call is still being read, it sits in In motion and asks for nothing.
 - [ ] Then says "Call with Dr. Example, Tue, Nov 17: 3 suggestions".
-- [ ] Opens to each suggestion with Accept and Dismiss. Neither has Undo.
+- [ ] Opens to each suggestion with Accept and Drop. Drop asks for a reason. Neither has Undo.
 - [ ] Next steps and phase moves the call made by itself show as made automatically, each with Undo.
-- [ ] Leaves when every suggestion is accepted or dismissed.
+- [ ] Leaves when every suggestion is accepted or dropped.
 
 ### Reply draft
 
@@ -75,7 +75,7 @@ A reply Dr. CRE drafted to an email.
 
 - [ ] Says "Reply to Pat Example: Floor plan for suite 200". One card per email conversation.
 - [ ] Opens to the email being answered (who wrote, when, what they said), then the draft with To and CC.
-- [ ] Save draft sends nothing. Decline asks for a reason, and the card leaves.
+- [ ] Save draft sends nothing. Drop asks for a reason, and the card leaves.
 - [ ] Send reply approves this exact text to be sent once from the partner's own mailbox. The card shows "Sending" until the outbox records it, then appears once in Done as sent, using the recorded send time. Send reply has no Undo.
 - [ ] When the outbox records a failure, the card says "Didn't send" and why, in plain words. If nothing went out, Send reply is offered again. If it may have gone out, the card says it is checking the Sent folder and offers no Send reply. Any other failure is never sent again on its own; the partner answers from Outlook.
 - [ ] Leaves by itself, with no click, when the partner's own reply in that conversation is recorded from Outlook, or when a newer email in the conversation brings a newer draft.
@@ -86,9 +86,9 @@ A next step, a deal to file the email to, a possible new deal, or a deal's progr
 
 - [ ] Shows the sender and subject as its title, such as "Pat Example · Floor plan". A grouped card uses the latest email among its suggestions.
 - [ ] Opens to the email and the deal, client or lead it would change.
-- [ ] Accept saves the suggestion, and lets the partner edit a step's words and date first. Dismiss drops it for good. Neither has Undo. Only the partner's click decides, never the assistant.
-- [ ] Leaves when accepted or dismissed. One card per email conversation.
-- [ ] When a pending reply draft and pending suggestions share a conversation, the draft leads one card and the partner can decide each suggestion inside it. Snooze and settle apply to that card. Mail priorities opens the same card. When the draft is approved, sent, failed or declined, any remaining suggestions lead the card. An approved or failed draft carries its delivery status on that card, including “Didn't send” and Retry when eligible. A sent reply appears in Done (coordinator, 2026-11-18).
+- [ ] Accept saves the suggestion, and lets the partner edit a step's words and date first. Drop asks for a reason and drops it for good. Neither has Undo. Only the partner's click decides, never the assistant.
+- [ ] Leaves when accepted or dropped. One card per email conversation.
+- [ ] When a pending reply draft and pending suggestions share a conversation, the draft leads one card and the partner can decide each suggestion inside it. Snooze and Drop apply to that card. Mail priorities opens the same card. When the draft is approved, sent, failed or dropped, any remaining suggestions lead the card. An approved or failed draft carries its delivery status on that card, including “Didn't send” and Retry when eligible. A sent reply appears in Done (coordinator, 2026-11-18).
 
 ### Step that may be done
 
@@ -115,7 +115,7 @@ A lease value read from a document that needs the partner's eye.
 
 - [ ] Says the deal and the fact: "Example Dental: check the base rent".
 - [ ] Opens to each value found, with its document, pages and quoted text.
-- [ ] Approve, Correct or Reject, each with a reason. Leaves when saved.
+- [ ] Approve, Correct or Reject, each with a reason. Reject records that the fact is wrong and finishes the card; the card has no separate Drop. Leaves when saved.
 
 ### Tour feedback
 
@@ -165,7 +165,7 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs, marks and sent draft history. Opening the email and deciding a suggestion from Home still need app routing.
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
 - Home still offers Hide from inbox, the Hidden from inbox list and the selection bar's Settle selected.
-- No card has Drop with a reason. Steps, call follow-ups, updates and tour feedback have no way to drop; a suggestion has Dismiss with no reason, a reply draft has "Decline draft", and a lease fact has Reject (code).
+- No card has Drop with a reason. Steps, call follow-ups, updates and tour feedback have no way to drop; a suggestion has Dismiss with no reason, and a reply draft has "Decline draft" (code).
 - The inbox's past-due section is titled "Overdue" (code).
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
 - The Today panel calls a past-due reminder "overdue". The deal's next step uses "late" (app code).
