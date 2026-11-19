@@ -43,7 +43,8 @@ A next step the partner owns.
 
 - [ ] Uses the full step text as its title and shows who or what it is for and when it is due.
 - [ ] Opens to the deal, client, lead or vendor page with the step in view: who set it, when, and from what (a call, an email, a meeting, or the automatic follow-up schedule).
-- [ ] A step about a building alone opens the deal that building is on (owner, 2026-11-18).
+- [ ] With the new database, an open step on a deal opens `/deals?deal={deal_id}&focus=next-step&step={next_step_id}`. When both partners have open steps on that deal, each link puts its own step in view.
+- [ ] A step about a building alone opens the building's sole open deal, including from Done. The card has no link if the building is on zero or several open deals.
 - [ ] A prospect's follow-up opens that prospect on Deals with the follow-up in view (`docs/screens/deals.md` § "A prospect"). It reaches Home only once Home reads the new database; the Deals switch alone does not bring it.
 - [ ] Mark done finishes the step. Undo reopens it.
 - [ ] Leaves when done or dropped anywhere, or when a newer step replaces it for the same person on the same client or deal.
