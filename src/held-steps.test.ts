@@ -258,6 +258,10 @@ test("a job cannot hold another partner's step or a step due the day of the upda
 		idempotency_key: randomUUID(),
 		deal_id: source.deal_id,
 		replaces: "current",
+		seen_current_step: {
+			next_step_id: source.next_step_id,
+			change_id: await stepChange(source.next_step_id),
+		},
 		what: "Discuss the survey",
 		due_on: "2001-02-03",
 	});

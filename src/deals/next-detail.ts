@@ -300,6 +300,10 @@ const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			"s.source_ref",
 			asText(eb.ref("s.due_on")).as("due_on"),
 			"s.status",
+			sql<number | null>`case when s.status = 'open' then (
+				select coalesce(max(c.id), 0) from change c
+				where c.table_name = 'next_step' and c.record = jsonb_build_object('id', s.id)
+			) end`.as("change_id"),
 			asText(eb.ref("s.hold_until")).as("hold_until"),
 			asText(eb.ref("s.changed_at")).as("updated_at"),
 		])
