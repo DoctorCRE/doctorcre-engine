@@ -34,7 +34,8 @@ before(async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into party (id, kind, name) values ('${id(1)}', 'person', 'Example User');
  insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
- insert into deal (id, name, owner_user_id) values ('${id(10)}', 'Example deal', '${id(1)}'), ('${id(11)}', 'Example other deal', '${id(1)}');
+ insert into deal (id, name, owner_user_id) values ('${id(10)}', 'Example deal', '${id(1)}'), ('${id(11)}', 'Example other deal', '${id(1)}'),
+ ('${id(13)}', 'Example versioned deal', '${id(1)}'), ('${id(14)}', 'Example separate deal', '${id(1)}');
  insert into document (id, name, r2_bucket, r2_key, content_type, sha256, bytes) values
  ('${id(218)}', 'Example lease 218.pdf', 'deal_documents', 'files/218', 'application/pdf', '${sha(218)}', 218),
  ('${id(219)}', 'Example lease 219.pdf', 'deal_documents', 'files/219', 'application/pdf', '${sha(219)}', 1),
@@ -46,7 +47,7 @@ before(async () => {
  insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
  insert into public.deal_phase (slug, label) values ('closed', 'Example closed');
  insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by) select v, '${id(3)}', 'Example deal', 'lease', 'closed', 'partner_one', '${id(1)}', '${id(1)}'
- from unnest(array['${id(10)}'::uuid, '${id(11)}'::uuid, '${id(12)}'::uuid]) v;
+ from unnest(array['${id(10)}'::uuid, '${id(11)}'::uuid, '${id(12)}'::uuid, '${id(13)}'::uuid, '${id(14)}'::uuid]) v;
  insert into ops.deal_deliverable (id, organization_tenant_id, deal_id, filename, mime, bytes, sha256, object_key, created_by, created_at, finalized_at, state, version, visibility) values
  ${deliverable(200, "deliverables/example-tenant/10/200")}, ${deliverable(201, "deliverables/example-tenant/10/201", "started")},
  ${deliverable(202, "files/202")}, ${deliverable(215, "files/216")}, ${deliverable(228, "files/228")},
@@ -80,6 +81,32 @@ before(async () => {
  ('${id(407)}', '${id(302)}', '${id(10)}', null, '${id(1)}', null, '${id(227)}', null),
  ('${id(408)}', '${id(300)}', null, null, '${id(1)}', null, '${id(223)}', null),
  ('${id(409)}', '${id(301)}', '${id(10)}', null, '${id(1)}', null, '${id(218)}', 'Example source note');
+ insert into ops.deal_deliverable (id, organization_tenant_id, deal_id, filename, mime, bytes, sha256, object_key, created_by, created_at, finalized_at, state, version, visibility)
+ values ${deliverable(240, "files/240")}, ${deliverable(245, "files/242")}, ${deliverable(246, "files/241")};
+ update ops.deal_deliverable set deal_id = '${id(13)}', finalized_at = case id
+  when '${id(245)}' then '2025-04-03'::timestamptz else '2025-04-02' end
+ where id in ('${id(240)}', '${id(245)}', '${id(246)}');
+ update ops.deal_deliverable set filename = 'Example plan.pdf' where id = '${id(240)}';
+ update ops.deal_deliverable set sha256 = '${sha(242)}', bytes = 242 where id = '${id(245)}';
+ update ops.deal_deliverable set sha256 = '${sha(241)}', bytes = 241 where id = '${id(246)}';
+ insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_at, created_by) values
+ ${attachment(241, 13)}, ${attachment(242, 13)}, ${attachment(243, 13)}, ${attachment(244, 14)},
+ ${[250, 251, 252, 253, 254, 255, 256].map((n) => attachment(n, 13)).join(", ")};
+ update public.attachment set filename = 'Example plan.pdf', created_at = case id
+  when '${id(242)}' then '2025-04-01'::timestamptz else '2025-04-02' end
+ where id in ('${id(241)}', '${id(242)}', '${id(244)}');
+ update public.attachment set created_at = '2025-04-01', sha256 = '${sha(242)}', bytes = 242 where id in ('${id(243)}', '${id(244)}');
+ update public.attachment set created_at = date '2025-05-01' + right(id::text, 2)::integer
+ where id between '${id(250)}' and '${id(256)}';
+ update public.attachment set sha256 = '${sha(250)}', bytes = 250 where id = '${id(251)}';
+ update public.attachment set sha256 = '${sha(252)}', bytes = 252 where id = '${id(253)}';
+ update public.attachment set sha256 = '${sha(254)}', bytes = 254 where id in ('${id(255)}', '${id(256)}');
+ insert into public.document (id, template_id, deal_id, prepared_by, pdf_attachment, note) values
+ ('${id(410)}', '${id(300)}', '${id(13)}', '${id(1)}', '${id(251)}', 'Example inherited note'),
+ ('${id(411)}', '${id(300)}', '${id(13)}', '${id(1)}', '${id(252)}', 'Example first note'),
+ ('${id(412)}', '${id(303)}', '${id(13)}', '${id(1)}', '${id(253)}', 'Example later note'),
+ ('${id(413)}', '${id(300)}', '${id(13)}', '${id(1)}', '${id(255)}', 'Example note A'),
+ ('${id(414)}', '${id(303)}', '${id(13)}', '${id(1)}', '${id(256)}', 'Example note B');
  commit;`);
 	report = await run(mapping);
 });
@@ -194,7 +221,9 @@ test("generated files take their template's reviewed kind and keep the generated
 		],
 	);
 	assert.deepEqual(
-		await rows("select source, value, deal_id from outside_id order by value"),
+		await rows(
+			`select source, value, deal_id from outside_id where deal_id = '${id(10)}' order by value`,
+		),
 		[
 			{ source: "old_generated_document", value: id(400), deal_id: id(10) },
 			{ source: "old_generated_document", value: id(401), deal_id: id(10) },
@@ -302,13 +331,60 @@ for (const [evidenceKind, fileKind] of [
 	});
 }
 
-test("a repeat with the same template list changes nothing", async () => {
+test("filing time and then source id pick the retained file and order its versions", async () => {
+	assert.deepEqual(
+		(
+			await rows(`select id, deal_id, r2_key, version, supersedes_id from document
+			where id between '${id(240)}' and '${id(246)}' order by deal_id, version, id`)
+		).map(Object.values),
+		[
+			[id(242), id(13), "files/242", 1, null],
+			[id(240), id(13), "files/240", 2, id(242)],
+			[id(241), id(13), "files/241", 3, id(240)],
+			[id(244), id(14), "files/244", 1, null],
+		],
+	);
+});
+
+test("duplicate bytes keep known metadata and list every discarded conflicting value", async () => {
+	assert.deepEqual(
+		(
+			await rows(`select id, kind, note from document where id between '${id(250)}' and '${id(256)}'
+			order by id`)
+		).map(Object.values),
+		[
+			[id(250), "loi", "Example inherited note"],
+			[id(252), "loi", "Example first note"],
+			[id(254), "other", null],
+		],
+	);
+	assert.deepEqual(
+		report
+			.filter((r) => [253, 255, 256].map(id).includes(r.old_id))
+			.map(Object.values),
+		[
+			[id(253), "kind", "invoice", "duplicate_kind_conflict"],
+			[id(253), "note", "Example later note", "duplicate_note_conflict"],
+			[id(255), "kind", "loi", "duplicate_kind_conflict"],
+			[id(255), "note", "Example note A", "duplicate_note_conflict"],
+			[id(256), "kind", "invoice", "duplicate_kind_conflict"],
+			[id(256), "note", "Example note B", "duplicate_note_conflict"],
+		],
+	);
+});
+
+test("a rerun keeps duplicate filings, version links, notes and corrections stable", async () => {
 	const before = {
 		documents: await documents(),
+		notes: await rows("select id, note from document order by id"),
 		outside: await rows("select * from outside_id order by value"),
 	};
 	const again = await run(mapping);
 	assert.deepEqual(await documents(), before.documents);
+	assert.deepEqual(
+		await rows("select id, note from document order by id"),
+		before.notes,
+	);
 	assert.deepEqual(
 		await rows("select * from outside_id order by value"),
 		before.outside,

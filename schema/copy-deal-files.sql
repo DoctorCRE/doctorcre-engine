@@ -1,5 +1,5 @@
 -- Load copy-attribution.sql after next.sql first. Run after copy-deals.sql and copy-leases.sql, in a separate transaction, with search_path set to the new schema.
--- Only reads public and ops. A file keeps its old id and R2 key, and a repeat files only what is not yet on its deal. No bytes move.
+-- Only reads public and ops. The first filing keeps its id and R2 key. No bytes move.
 -- Optional pg_temp.copy_template_kind maps a reviewed template slug to the kind of every file it generated.
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 create temp table if not exists copy_template_kind (template_slug text primary key, kind text not null) on commit drop;
@@ -10,7 +10,6 @@ insert into document_kind (slug, label) values ('loi', 'LOI'), ('counter', 'Coun
 insert into not_copied select t.id, 'slug', t.slug, 'unknown_kind' from public.doc_template t
 join copy_template_kind m on m.template_slug = t.slug where m.kind not in (select slug from document_kind);
 
--- A deliverable's version counts its sharing changes, not replacements, so each file is its own first version.
 -- A finalized document upload is also its attachment, so deleting the attachment removes the upload too.
 create temp table candidate on commit drop as
 select f.*, exists (select from deal n where n.id = f.deal_id) as deal_copied from (
@@ -53,30 +52,57 @@ cross join lateral (values
 where f.refused;
 insert into not_copied select distinct id, field, value, reason from file_refusal;
 create temp table copyable on commit drop as
-select distinct on (c.r2_key) c.*, coalesce(max(c.kind) over (partition by c.r2_key), 'other') as file_kind,
- max(c.note) over (partition by c.r2_key) as file_note
+select distinct on (c.r2_key) c.*, nullif(max(c.kind) over storage_key, 'other') as key_kind,
+ max(c.note) over storage_key as key_note
 from candidate c where not exists (select from file_refusal r where r.r2_key = c.r2_key)
+window storage_key as (partition by c.r2_key)
+order by c.r2_key, c.changed_at, c.id;
 
-order by c.r2_key, c.created_at, c.id;
+create temp table file_version on commit drop as
+with first_filing as (
+ select distinct on (c.deal_id, c.sha256) c.*, coalesce(n.id, c.id) as document_id,
+  coalesce(c.key_kind, case when min(c.key_kind) over identical = max(c.key_kind) over identical
+   then min(c.key_kind) over identical end, 'other') as file_kind,
+  coalesce(c.key_note, case when min(c.key_note) over identical = max(c.key_note) over identical
+   then min(c.key_note) over identical end) as file_note
+ from copyable c left join document n on (n.r2_bucket, n.r2_key) = ('deal_documents', c.r2_key)
+ window identical as (partition by c.deal_id, c.sha256)
+ order by c.deal_id, c.sha256, c.changed_at, c.id
+)
+select f.*, (row_number() over filed)::integer as version, lag(f.document_id) over filed as supersedes_id
+from first_filing f
+window filed as (partition by f.deal_id, f.name, f.file_kind order by f.changed_at, f.id);
 
-insert into document (id, created_at, name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind, note,
+-- A lease source can already exist without its deal. File it in the same statement as its neighbors.
+insert into document (id, created_at, name, r2_bucket, r2_key, content_type, sha256, bytes, deal_id, kind, note, version, supersedes_id,
  changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select c.id, c.created_at, c.name, 'deal_documents', c.r2_key, c.mime, c.sha256, c.bytes, c.deal_id, c.file_kind, c.file_note, c.changed_at, a.*
-from copyable c cross join lateral copy_attribution('attachment', c.id, c.author_id) a
-where not exists (select from document n where (n.r2_bucket, n.r2_key) = ('deal_documents', c.r2_key));
--- A lease's source file was stored without its deal.
-update document n set deal_id = c.deal_id, kind = c.file_kind, note = coalesce(n.note, c.file_note),
- content_type = c.mime, sha256 = c.sha256, bytes = c.bytes
-from copyable c where (n.r2_bucket, n.r2_key) = ('deal_documents', c.r2_key) and n.deal_id is null;
-insert into not_copied select distinct n.id, 'kind', n.kind, 'kind_unclassified' from document n
-join candidate c on (n.r2_bucket, n.r2_key, n.deal_id) = ('deal_documents', c.r2_key, c.deal_id) where n.kind = 'other';
+select c.document_id, c.created_at, c.name, 'deal_documents', c.r2_key, c.mime, c.sha256, c.bytes, c.deal_id, c.file_kind,
+ c.file_note, c.version, c.supersedes_id, c.changed_at, a.*
+from file_version c cross join lateral copy_attribution('attachment', c.id, c.author_id) a
+where not exists (select from document n where n.id = c.document_id and n.deal_id is not null)
+on conflict (id) do update set deal_id = excluded.deal_id, kind = excluded.kind, note = coalesce(document.note, excluded.note),
+ content_type = excluded.content_type, sha256 = excluded.sha256, bytes = excluded.bytes,
+ version = excluded.version, supersedes_id = excluded.supersedes_id
+where document.deal_id is null;
+insert into not_copied
+select c.id, difference.field, difference.value, difference.reason
+from copyable c join file_version f on (f.deal_id, f.sha256) = (c.deal_id, c.sha256)
+join document n on n.id = f.document_id
+cross join lateral (values
+ ('kind', c.key_kind, n.kind, 'duplicate_kind_conflict'),
+ ('note', c.key_note, n.note, 'duplicate_note_conflict')
+) difference(field, value, retained, reason)
+where difference.value is not null and difference.value is distinct from difference.retained;
+insert into not_copied select n.id, 'kind', n.kind, 'kind_unclassified'
+from file_version c join document n on (n.id, n.deal_id) = (c.document_id, c.deal_id) where n.kind = 'other';
 insert into not_copied select id, 'deleted_at', deleted_at::text, 'attachment_deleted' from public.attachment
 where subject_type = 'deal' and deleted_at is not null;
 
 insert into outside_id (source, value, deal_id)
 select distinct 'old_generated_document', g.id::text, g.deal_id from public.document g
-join public.attachment a on a.id in (g.working_attachment, g.pdf_attachment)
-join document n on (n.r2_bucket, n.r2_key, n.deal_id) = ('deal_documents', a.r2_key, g.deal_id)
+join public.attachment a on a.id in (g.working_attachment, g.pdf_attachment) and a.deleted_at is null
+join copyable c on (c.r2_key, c.deal_id) = (a.r2_key, g.deal_id)
+join file_version f on (f.deal_id, f.sha256) = (c.deal_id, c.sha256)
 on conflict do nothing;
 insert into not_copied select g.id, f.field, f.value, f.reason from public.document g
 left join public.attachment w on w.id = g.working_attachment left join public.attachment p on p.id = g.pdf_attachment

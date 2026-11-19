@@ -56,10 +56,12 @@ before(async () => {
  insert into public.actor (id, slug, kind, display_name) values ('${id(1)}', 'partner_one', 'human', 'Example User'),
  ('${id(2)}', 'claude', 'automation', 'Example agent');
  insert into public.attachment (id, subject_type, subject_id, r2_key, filename, mime, sha256, bytes, created_by) values
- ${[20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].map((n) => attachment(n)).join(", ")};
+ ${[20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31].map((n) => attachment(n)).join(", ")};
+ update public.attachment set sha256 = '${sha(20)}', bytes = 20 where id = '${id(31)}';
  update public.attachment set deleted_at = '2025-03-01' where id = '${id(25)}';
  insert into ops.deal_document_text (document_ref, entity_ref, content_hash, text_format_version, status, pages, text_hash, created_at) values
- ${text(20, "produced", ["Example page one", "", "Example page three"])}, ${text(21, "no_text", ["", " "])},
+ ('${id(31)}', '${id(10)}', '${sha(20)}', 'page-text.v1', 'produced', '["Example page one", "", "Example page three"]', 'example-digest', '2025-03-02'),
+ ${text(21, "no_text", ["", " "])},
  ${text(22, "produced", ["Example uncopied page"])}, ${text(23, "unavailable", [])},
  ${text(23, "produced", ["Example stale page"], sha(99))}, ${text(24, "produced", ["Example lease page"])},
  ${text(25, "produced", ["Example deleted page"])}, ${text(26, "produced", ["Example different page"])},

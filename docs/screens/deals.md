@@ -171,7 +171,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. An attachment action already shown as a document event appears once.
 - [ ] Correspondence & notes shows every email and meeting filed to the deal, newest first, and the deal's notes. An email shows its sender, date and subject and appears here even if it has a pending follow-up. A meeting shows its title and time.
 - [ ] Tours: the deal's tours, each with its date in words.
-- [ ] Documents: every file on the deal, opening on click, for both partners on every deal.
+- [ ] Documents show every file on the deal and open it on click for either partner. When old uploads contain identical bytes, the earliest filing appears once. Different files with the same name and kind show their version numbers in filed order.
 - [ ] Client view gives both partners the same Client website button as Overview. It opens the client's website unlocked in a new tab. The tab says "No client website linked." when the deal has no website. The owner dropped file sharing from Client view (`docs/new-database.md` § "Deal files and extracted text").
 
 ## Questions for the owner
