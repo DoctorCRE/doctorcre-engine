@@ -13,13 +13,13 @@ from public.deal_note n where kind = 'next_step';
 create temp table old_action on commit drop as
 select n.id, 'next_action'::text as source, case n.subject_type when 'deal' then n.subject_id end as deal_id,
  case n.subject_type when 'vendor' then n.subject_id end as vendor_id, n.description, n.status, n.due_on,
- n.owner_id, n.created_at, n.updated_at, n.hold_until, n.source_ref, n.item_title, n.item_bullets, a.*
+ n.owner_id, n.created_by, n.created_at, n.updated_at, n.hold_until, n.source_ref, n.item_title, n.item_bullets, a.*
 from public.next_action n
 cross join lateral copy_attribution('next_action', n.id, coalesce(n.updated_by, n.created_by)) a
 where n.subject_type in ('deal', 'vendor')
 union all
 select n.id, 'capture_post_call_action', n.deal_id, null, n.description, n.status, n.due_on,
- n.owner_id, n.accepted_at, n.updated_at, null, n.source_ref, n.item_title, n.item_bullets, a.*
+ n.owner_id, n.accepted_by, n.accepted_at, n.updated_at, null, n.source_ref, n.item_title, n.item_bullets, a.*
 from public.capture_post_call_action n
 left join lateral (select e.id, e.actor_id from public.event e
  where e.subject_type = 'deal' and e.subject_id = n.deal_id
@@ -31,9 +31,32 @@ cross join lateral copy_event_attribution(coalesce(event.actor_id, n.accepted_by
 create temp table action_end on commit drop as
 select e.* from copy_action_end() e join old_action n using (id);
 
+create temp table vendor_last_work on commit drop as
+with work as (
+ select v.party_id, a.occurred_at as worked_at, u.id as user_id
+ from public.activity a
+ join outside_id v on v.source = 'old_system' and v.value = a.vendor_id::text
+ left join copy_activity_event() e on e.activity_id = a.id
+ cross join lateral copy_event_attribution(a.actor_id, e.event_id) stamp
+ left join copy_email_mailboxes() mail on a.kind = 'email_out' and mail.activity_id = a.id
+ join app_user u on u.id = coalesce(stamp.changed_by_user_id, stamp.changed_for_user_id, mail.user_id)
+ where a.kind <> 'task' and coalesce(a.email_context #>> '{lifecycle,state}', 'live') = 'live'
+  and not (a.kind = 'note' and a.source = 'import' and a.summary = 'last-touch stamp (imported)')
+ union all
+ select v.party_id, n.created_at, u.id
+ from old_action n
+ join outside_id v on v.source = 'old_system' and v.value = n.vendor_id::text
+ join app_user u on u.id = n.created_by
+), latest as (
+ select *, rank() over (partition by party_id order by worked_at desc) as recency from work
+)
+select party_id, (array_agg(distinct user_id))[1] as user_id
+from latest where recency = 1 group by party_id having count(distinct user_id) = 1;
+
 create temp table step_candidate on commit drop as
 select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
- regexp_replace(n.description, '^\s+|\s+$', '', 'g') as what, n.due_on, n.hold_until, coalesce(u.id, d.owner_user_id, v.owner_user_id) as owner,
+ regexp_replace(n.description, '^\s+|\s+$', '', 'g') as what, n.due_on, n.hold_until,
+ coalesce(u.id, d.owner_user_id, v.owner_user_id, creator.id, worked.user_id) as owner,
  u.id is null as owner_inferred,
  case when n.source = 'capture_post_call_action' then n.item_title end as item_title,
  case when n.source = 'capture_post_call_action' then n.item_bullets else '[]'::jsonb end as item_bullets,
@@ -45,6 +68,8 @@ left join action_end e using (id)
 -- A vendor's next steps are about the person or company it became, merged-away vendors' too.
 left join outside_id vendor on vendor.source = 'old_system' and vendor.value = n.vendor_id::text
 left join party_role v on v.party_id = vendor.party_id and v.role = 'vendor'
+left join app_user creator on n.vendor_id is not null and creator.id = n.created_by
+left join vendor_last_work worked on worked.party_id = vendor.party_id
 left join deal d on d.id = n.deal_id
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
@@ -115,15 +140,17 @@ with ready as (
 insert into next_step (id, deal_id, party_id, what, due_on, hold_until, owner_party_id, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
  resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
  call_activity_id, call_evidence_quote, call_contact_party_id)
-select s.id, deal_id, party_id, what, due_on, hold_until,
- case when owner_inferred and resolution is null and item_title is null and (rank > 1 or exists (
+select s.id, deal_id, party_id, what, due_on, hold_until, owner, item_title, item_bullets, source_ref,
+ case when replaced then 'cancelled' else resolution end, done_at, resolved_at,
+ case when replaced then 'replaced at the move' else resolution_reason end, resolution_event_id,
+ created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
+ c.session_id, c.evidence_quote, c.contact_id
+from ready s left join post_call_source c on c.id = s.id and s.source = 'capture_post_call_action'
+cross join lateral (values (owner_inferred and owner is not null and resolution is null and item_title is null and (rank > 1 or exists (
   select from next_step kept where kept.id <> s.id and kept.owner_party_id = s.owner
    and (kept.deal_id, kept.party_id) is not distinct from (s.deal_id, s.party_id)
    and kept.status = 'open' and kept.item_title is null
- )) then null else owner end, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
- resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
- c.session_id, c.evidence_quote, c.contact_id
-from ready s left join post_call_source c on c.id = s.id and s.source = 'capture_post_call_action'
+ )))) moved(replaced)
 order by owner_inferred, source <> 'deal_note', created_at, s.id on conflict do nothing;
 
 insert into not_copied
@@ -132,12 +159,11 @@ from step_candidate s join next_step kept on kept.owner_party_id = s.owner
  and (kept.deal_id, kept.party_id) is not distinct from (s.deal_id, s.party_id)
 where kept.id <> s.id and s.resolution is null and s.item_title is null and kept.status = 'open' and kept.item_title is null
  and not exists (select from step_refusal r where r.id = s.id)
- and not exists (select from next_step done where done.id = s.id
-  and (not s.owner_inferred or done.owner_party_id is not null or done.status <> 'open'));
+ and not exists (select from next_step copied where copied.id = s.id);
 
 insert into not_copied select n.id, f.field, f.value, f.reason from old_action n join step_candidate s using (id)
 cross join lateral (values
- ('owner_id', n.owner_id::text, 'owner_not_a_user', s.owner is null),
+ ('owner_id', n.owner_id::text, case when n.vendor_id is not null then 'vendor_owner_unknown' else 'owner_not_a_user' end, s.owner is null),
  ('source_ref', n.source_ref, 'reference_not_copied', n.source_ref ~ '\S'),
  ('item_title', n.item_title, 'display_title_not_copied', n.item_title is not null),
  ('item_bullets', n.item_bullets::text, 'display_bullets_not_copied', n.item_bullets <> '[]'::jsonb)

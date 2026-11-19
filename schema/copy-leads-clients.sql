@@ -304,7 +304,7 @@ create temp table relationship_step on commit drop as
 with distinct_steps as (
  select distinct on (mapped_id, what, due_on, separate_id) s.*
  from relationship_step s
- cross join lateral (values (case when owner_inferred and old_id = id and owner is not null and resolution is null then id end)) k(separate_id)
+ cross join lateral (values (case when owner_inferred and owner is not null and resolution is null then id end)) k(separate_id)
  where separate_id is not null or not exists (
   select from next_step done where done.party_id = s.mapped_id and done.what = s.what and done.due_on is not distinct from s.due_on
  )
@@ -318,20 +318,22 @@ with distinct_steps as (
 )
 insert into next_step (id, party_id, what, due_on, hold_until, owner_party_id, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
  created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select id, mapped_id, what, due_on, hold_until,
- case when owner_inferred and old_id = id and resolution is null and (rank > 1 or exists (
+select id, mapped_id, what, due_on, hold_until, owner,
+ case when replaced then 'cancelled' else resolution end, done_at, resolved_at,
+ case when replaced then 'replaced at the move' else resolution_reason end, resolution_event_id,
+ created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+from ready s
+cross join lateral (values (owner_inferred and owner is not null and resolution is null and (rank > 1 or exists (
   select from next_step kept where kept.id <> s.id and kept.party_id = s.mapped_id and kept.owner_party_id = s.owner
    and kept.status = 'open' and kept.item_title is null
- )) then null else owner end, resolution, done_at, resolved_at, resolution_reason, resolution_event_id,
- created_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
-from ready s order by owner_inferred, old_id <> id, created_at, id on conflict do nothing;
+ )))) moved(replaced)
+order by owner_inferred, old_id <> id, created_at, id on conflict do nothing;
 
 insert into not_copied
 select s.old_id, 'next_step', kept.id::text, 'open_step_exists'
 from relationship_step s join next_step kept on kept.party_id = s.mapped_id and kept.owner_party_id = s.owner
 where kept.id <> s.id and s.resolution is null and kept.status = 'open' and kept.item_title is null
- and not exists (select from next_step done where done.id = s.id
-  and (not s.owner_inferred or done.owner_party_id is not null or done.status <> 'open'));
+ and not exists (select from next_step copied where copied.id = s.id);
 insert into not_copied select n.id, f.field, f.value, f.reason from old_next_action n
 cross join lateral (values
  ('description', n.description, 'blank_next_action', n.what is null),
