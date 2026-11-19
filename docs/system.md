@@ -92,6 +92,7 @@ The owner updated the switch plan on 2026-11-19.
 - For Friday's practice, set `CLIENT_WEBSITE_ENGINE_SLUG` on the staging share Worker to the verified website name. On switch day, set it on the production share Worker. In each environment, open the website from a signed-in deal page and check that it opens without asking for a password.
 - Switch on Saturday, November 21, after a clean rehearsal. If Friday's practice run finds problems, switch on Sunday, November 22.
 - On switch day, mail intake and saving pause briefly for the move, then the switches above flip. Switch day builds nothing: every old-system and app change ships before it, switched off.
+- Production's `next` schema holds no business records before the switch. On switch day, rebuild it from main's `schema/next.sql` before the final copy, then reapply the engine role grants and job registrations. Staging rehearsals always load a fresh schema.
 
 Production's `next` schema, `engine` role and grants, and job registrations are set up. The app and program switches are off, so saves still go to the old system. Before routing saves to the new database, verify that the production writer can assume `engine` on the populated `next` schema.
 
