@@ -22,6 +22,15 @@ const covers = (from: Expression<string>, to: Expression<string | null>) =>
 const dealReason = sql<string | null>`coalesce(d.reason,
 	case when imported.renewal_lease_unrecorded then 'renewal' end)`;
 
+export function parkingNoteForDisplay(note: Expression<string | null>) {
+	const trimmed = sql`nullif(regexp_replace(${note}, '^[[:space:]]+|[[:space:]]+$', '', 'g'), '')`;
+	return sql<string | null>`case ${trimmed}
+		when 'unverified import — 2026-10-01 records audit; revive if active'
+			then 'Imported Oct 1, not yet confirmed. Revive if still active.'
+		else ${trimmed}
+	end`;
+}
+
 export const clientWebsiteOf = (
 	db: Transaction<DB>,
 	deal: Expression<string>,
@@ -161,6 +170,9 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 										"invoice.id as event_id",
 										"prior.phase as prior_phase",
 										"p.reason",
+										sql.lit("invoice").as("source"),
+										sql.lit(null).as("call"),
+										sql.lit(true).as("undoable"),
 										...phaseReceiptFields(
 											eb.ref("p.phase"),
 											phaseAt,
@@ -194,7 +206,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 					.end()
 					.as("operating_state"),
 				"d.parking_reason",
-				"d.parking_note",
+				parkingNoteForDisplay(eb.ref("d.parking_note")).as("parking_note"),
 				asText(eb.ref("d.parked_at")).as("parked_at"),
 				"parker.slug as parked_by",
 				"d.parked_automatically",

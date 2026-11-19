@@ -137,14 +137,14 @@ test("deal history keeps business text on each side of an event", async () => {
 	};
 	const urlFirst = { source: "https://example.test Landlord confirmed access" };
 	const confirmed = { source: "Partner confirmed access on April 1" };
-	const reason = { phase: "pending", deal_type: "relocation" };
+	const opening = { phase: "pending", deal_type: "relocation" };
 	await db.query(
 		"insert into public.record_source (entity_type, entity_id, source_system, external_key) values ('deal', $1, 'panhandle-team-deals', 'Example key')",
 		[id(20)],
 	);
 	// biome-ignore format: each row pairs an event with its expected display.
 	const events = [
-		["new-deal", null, null, { ...reason, salesforce_id: "EXAMPLE-42" }, null, reason, "salesforce_id"],
+		["new-deal", null, null, { ...opening, salesforce_id: "EXAMPLE-42" }, null, { phase: "pending", reason: "relocation" }, "salesforce_id"],
 		["record-finding", "discrepancy", null, { found: false, source: "~/example.txt" }, null, { found: false }, "source"],
 		["record-finding", "verified", mixed, urlFirst, mixed, urlFirst, null],
 		["record-finding", "verified", confirmed, { source: "https://example.test" }, confirmed, null, "source"],

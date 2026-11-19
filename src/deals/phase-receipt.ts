@@ -75,6 +75,20 @@ export const automaticPhaseReceipt = (
 				.else(sql.lit("call_capture"))
 				.end()
 				.as("source"),
+			eb
+				.not(
+					eb.and([
+						eb("copied.source_event_id", "is not", null),
+						eb("move.phase", "=", "closed"),
+						eb.exists(
+							eb
+								.selectFrom("deal_invoiced as invoice")
+								.select("invoice.deal_id")
+								.whereRef("invoice.deal_id", "=", "move.deal_id"),
+						),
+					]),
+				)
+				.as("undoable"),
 			jsonObjectFrom(
 				eb
 					.selectFrom("activity as call")

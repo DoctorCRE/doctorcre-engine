@@ -10,6 +10,8 @@ import { readNextDealDetail } from "./next-detail.ts";
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const by = `'${id(1)}', '${id(1)}'`;
+const auditNote =
+	"unverified import — 2026-10-01 records audit; revive if active";
 
 // A doctor's deal with a broker, a partner helping, an open and a newer done step, a call, a note and an email,
 // and a clinic's deal whose client the copy holds back because its source is not mapped yet.
@@ -68,7 +70,13 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
  ('${id(49)}', 'deal', '${id(37)}', 'operating_state',
   '{"operating_state":{"state":"parked","reason":"prospect_never_active","note":null}}',
   '{"operating_state":{"state":"active","reason":null,"note":null}}',
-  '2025-01-07', '${id(1)}', 'update-deal', 'human_stated');
+  '2025-01-07', '${id(1)}', 'update-deal', 'human_stated'),
+ ('${id(53)}', 'deal', '${id(37)}', 'operating_state',
+  '{"operating_state":{"state":"active","reason":null,"note":null}}',
+  '{"operating_state":{"state":"parked","reason":"other","note":"${auditNote}"}}',
+  '2025-01-08', '${id(1)}', 'update-deal', 'human_stated');
+update public.deal set operating_state = 'parked', parking_reason = 'other',
+ parking_note = '${auditNote}', parked_at = '2025-01-08', parked_by = '${id(1)}' where id = '${id(37)}';
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, due_on, status, created_at, created_by, updated_by) values
  ('${id(50)}', 'deal', '${id(30)}', '${id(1)}', 'Example send the survey', '2030-01-15', 'open', '2025-01-04', ${by}),
  ('${id(51)}', 'deal', '${id(30)}', '${id(2)}', 'Example book the tour', '2025-01-20', 'done', '2025-01-05', ${by}),
@@ -388,6 +396,7 @@ test("the board and detail carry the same imported automatic phase move", async 
 			phase: "negotiation",
 			automatic: true,
 			source: "copied",
+			undoable: true,
 			evidence_date: "2025-03-01",
 		},
 	});
@@ -851,7 +860,7 @@ test("signed-in detail shows a revived deal as active", async () => {
 	});
 });
 
-test("signed-in detail returns the parking reason codes in copied Timeline events", async () => {
+test("copied Timeline parking uses the card note and leaves absent notes out", async () => {
 	const response = await get(`/deals/${id(37)}`, "next");
 	assert.equal(response.status, 200);
 	const detail = await response.json();
@@ -861,11 +870,22 @@ test("signed-in detail returns the parking reason codes in copied Timeline event
 			"events" in detail &&
 			Array.isArray(detail.events),
 	);
+	const note = "Imported Oct 1, not yet confirmed. Revive if still active.";
+	const board = await (await get("/deals", "next")).json();
+	assert.partialDeepStrictEqual(board, {
+		deals: [{ id: id(37), parking_note: note }],
+	});
+	assert.partialDeepStrictEqual(detail, { parking_note: note });
 	assert.deepEqual(
 		detail.events
 			.filter(({ field }) => field === "operating_state")
 			.map(({ id, old_value, new_value }) => ({ id, old_value, new_value })),
 		[
+			{
+				id: id(53),
+				old_value: { state: "active" },
+				new_value: { state: "parked", reason: "other", note },
+			},
 			{
 				id: id(49),
 				old_value: { state: "parked", reason: "prospect_never_active" },
@@ -960,6 +980,23 @@ test("the deal page reads typed old events with no other history, once and in re
 		);
 		return page.imported_deal_history;
 	};
+	const reasons = [
+		"relocation",
+		"startup",
+		"additional_office",
+		"expansion",
+		"renewal",
+	];
+	const types = [...reasons, "lease"];
+	for (const [index, type] of types.entries()) {
+		await db.query(
+			`insert into public.event (id, subject_type, subject_id, new_value, occurred_at,
+				recorded_at, actor_id, verb, cause)
+			values ($1, 'deal', $2, jsonb_build_object('deal_type', $3::text), '2025-01-01',
+				'2025-01-01', $4, 'new-deal', 'human_stated')`,
+			[id(810 + index), id(37), type, id(1)],
+		);
+	}
 	for (const _ of [1, 2]) {
 		await db.query("begin");
 		const result = await db.query(copy);
@@ -992,6 +1029,14 @@ test("the deal page reads typed old events with no other history, once and in re
 	]);
 	assert.deepEqual(await history(id(33)), []);
 	assert.deepEqual(await history(id(36)), []);
+	assert.partialDeepStrictEqual(
+		await history(id(37)),
+		types.map((type, index) => ({
+			id: id(810 + index),
+			new_value:
+				index < reasons.length ? { reason: type } : { deal_type: type },
+		})),
+	);
 });
 
 test("imported history excludes events backed by copied deal records", async (t) => {

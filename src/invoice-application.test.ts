@@ -224,6 +224,9 @@ test("lead stages close and date an invoice once, and a partner can undo both ch
 		reason: "Invoice received",
 		evidence_date: close.closed_on,
 		automatic: true,
+		source: "invoice",
+		call: null,
+		undoable: true,
 	};
 	assert.partialDeepStrictEqual(await readDeals("deals"), {
 		closed_deals: [{ id: deal, closed_on: close.closed_on, phase_change }],

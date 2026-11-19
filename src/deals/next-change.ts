@@ -455,7 +455,7 @@ async function undoAutomaticPhaseMove(
 		.leftJoin("imported_deal_board as imported", (join) =>
 			join.on("imported.deal_id", "=", deal_id),
 		)
-		.select(["latest.phase", "receipt.prior_phase"])
+		.select(["latest.phase", "receipt.prior_phase", "receipt.undoable"])
 		.where((eb) =>
 			eb.not(isLostDeal(eb.ref("latest.phase"), eb.ref("latest.happened_at"))),
 		)
@@ -463,6 +463,13 @@ async function undoAutomaticPhaseMove(
 	if (!current?.prior_phase || current_version !== base_version)
 		throw new SaveRefusal(
 			new Refusal(409, "version_conflict", { current_version }),
+		);
+	if (!current.undoable)
+		throw new SaveRefusal(
+			new Refusal(409, "version_conflict", {
+				current_version,
+				hint: "Closed because an invoice was recorded; Undo isn't available",
+			}),
 		);
 	if (ENDED_PHASES.includes(current.prior_phase))
 		throw new SaveRefusal(

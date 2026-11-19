@@ -7,7 +7,11 @@ import {
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
-import { clientWebsiteOf, selectNextDealsWithFacts } from "./next-board.ts";
+import {
+	clientWebsiteOf,
+	parkingNoteForDisplay,
+	selectNextDealsWithFacts,
+} from "./next-board.ts";
 
 const HISTORY_CAP = 500;
 
@@ -238,7 +242,11 @@ function copiedDealEditValue(side: "old_value" | "new_value") {
 	const value = sql`c.source_event -> ${sql.lit(side)}`;
 	const parking = sql`${value} -> 'operating_state'`;
 	return sql`case when c.source_event ->> 'field' = 'operating_state' and ${parking} is not null
-		then jsonb_strip_nulls(${parking})
+		then jsonb_strip_nulls(jsonb_build_object(
+			'state', ${parking} -> 'state',
+			'reason', ${parking} -> 'reason',
+			'note', ${parkingNoteForDisplay(sql`${parking} ->> 'note'`)}
+		))
 		else ${value}
 	end`;
 }
@@ -251,7 +259,7 @@ function dealEditValue(column: "c.old_value" | "c.new_value") {
 		when 'operating_state' then jsonb_strip_nulls(jsonb_build_object(
 			'state', case when ${value} -> 'parking_reason' = 'null'::jsonb then 'active' else 'parked' end,
 			'reason', ${value} -> 'parking_reason',
-			'note', ${value} -> 'parking_note'
+			'note', ${parkingNoteForDisplay(sql`${value} ->> 'parking_note'`)}
 		))
 		else ${value} -> edit.key
 	end`;
