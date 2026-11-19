@@ -291,3 +291,37 @@ test("market sources keep business text after a Salesforce reference", async () 
 		);
 	});
 });
+
+test("source notes render whole valid dates and keep dates inside identifiers", async () => {
+	await transaction(async () => {
+		await db.query(
+			"update public.deal_market_assignment set source = $1 where deal_id = $2",
+			[
+				"Observed 2025-04-01, confirmed (2025-04-02). Keep file/2025-04-03, 2025-04-04.csv, 2025-02-30 and 2025-04-05T09:00. Keep 2025-04-01@2x.pdf and 2025-04-01#revision.",
+				id(10),
+			],
+		);
+		for (const _ of [1, 2]) {
+			await db.query("discard temp");
+			assert.ok(
+				(await run()).some(
+					({ old_id, reason }) =>
+						old_id === id(10) && reason === "iso_date_rendered",
+				),
+			);
+			assert.deepEqual(
+				(
+					await db.query("select summary from activity where id = $1", [
+						noteId(10),
+					])
+				).rows,
+				[
+					{
+						summary:
+							"Market agent source\n\nObserved April 1, 2025, confirmed (April 2, 2025). Keep file/2025-04-03, 2025-04-04.csv, 2025-02-30 and 2025-04-05T09:00. Keep 2025-04-01@2x.pdf and 2025-04-01#revision.",
+					},
+				],
+			);
+		}
+	});
+});

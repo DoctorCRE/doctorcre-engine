@@ -180,8 +180,11 @@ with candidates as (
   and not exists (select from next_step n join public.next_action old using (id)
    where e.verb = 'set-next-action' and e.field is null and n.deal_id = d.id
    and old.subject_type = 'deal' and old.subject_id = e.subject_id
-   and n.what = regexp_replace(e.new_value ->> 'next_action', '^\s+|\s+$', '', 'g')
-   and n.due_on::text is not distinct from e.new_value ->> 'due'
+   and ((n.what = regexp_replace(e.new_value ->> 'next_action', '^\s+|\s+$', '', 'g')
+     and n.due_on::text is not distinct from e.new_value ->> 'due')
+    or (n.created_at = old.created_at
+     and old.description = e.new_value ->> 'next_action'
+     and old.due_on::text is not distinct from e.new_value ->> 'due'))
    and n.created_at between e.occurred_at - interval '5 seconds' and e.occurred_at + interval '5 seconds')
   and not exists (select from next_step n
    where e.verb = 'resolve-post-call-candidate' and n.deal_id = d.id and n.id::text = e.new_value ->> 'next_action_id')
@@ -192,6 +195,7 @@ with candidates as (
    where old.invoice_event_id = e.id and saved.deal_id = d.id and saved.payment_change_id is not null)
 )
 select e.*, cleaned.payloads[1] as plain_old, cleaned.payloads[2] as plain_new,
+ cleaned.bare_source, cleaned.file_path, cleaned.row_id, cleaned.placeholder_market,
  case when deal_id is null then 'deal_history_deal_not_copied'
   when changed_by_user_id is not null and user_id is null then 'deal_history_user_not_copied'
   when not checked.valid then 'deal_history_payload_invalid'
@@ -202,6 +206,10 @@ select e.*, cleaned.payloads[1] as plain_old, cleaned.payloads[2] as plain_new,
   when field = 'next_date' and coalesce(e.old_value ->> 'next_date', e.new_value ->> 'next_date') is null
    then 'empty_deal_history' end as refusal
 from candidates e
+cross join (values (
+ '(?<!\S)~/Recordings/[^[:space:]()]+/transcript\.txt(?=$|\s|[),;:.!?](?!\S))[[:blank:]]*',
+ '(?:[[:blank:]]+|(?<!\S))\(id [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}\)(?=$|\s|[,;:.!?](?!\S))'
+)) technical(path, row_id)
 cross join lateral (select
  case when jsonb_typeof(e.old_value) = 'object'
   and jsonb_populate_record_valid(null::imported_deal_values, e.old_value)
@@ -219,12 +227,24 @@ cross join lateral (
  from (values (e.old_value, to_jsonb(parsed.old_snapshot)), (e.new_value, to_jsonb(parsed.new_snapshot))) v(payload, snapshot)
 ) checked
 cross join lateral (
- select array_agg(side.payload order by v.position) as payloads
+ select array_agg(side.payload order by v.position) as payloads,
+  bool_or(side.bare_source) as bare_source,
+  bool_or(side.file_path) as file_path, bool_or(side.row_id) as row_id,
+  bool_or(side.placeholder_market) as placeholder_market
  from (values (1, e.old_value), (2, e.new_value)) v(position, payload)
  cross join lateral (
-  select jsonb_object_agg(f.key, plain.value) filter (where plain.value is not null) as payload
+  select jsonb_object_agg(f.key, plain.value) filter (where plain.value is not null) as payload,
+   bool_or(source_kind.bare) as bare_source,
+   bool_or(finding.file_path) as file_path, bool_or(finding.row_id) as row_id,
+   bool_or(market.placeholder) as placeholder_market
   from jsonb_each(case when checked.valid then v.payload end) f
   cross join lateral (select f.value #>> '{}' as text) raw
+  cross join lateral (select f.key = 'source' and raw.text ~*
+   '^\s*(carr|https?://\S+|([~.]?/|[a-z]:\\)\S+)\s*$' as bare) source_kind
+  cross join lateral (select
+   e.verb = 'record-finding' and f.key = 'source' and not source_kind.bare and raw.text ~ technical.path as file_path,
+   e.verb = 'record-finding' and f.key = 'source' and not source_kind.bare and raw.text ~* technical.row_id as row_id) finding
+  cross join lateral (select f.key = 'market' and copy_unspecified_market(raw.text) as placeholder) market
   left join lateral (
    select written.line
    from public.record_source r
@@ -236,8 +256,11 @@ cross join lateral (
    limit 1
   ) origin on true
   cross join lateral (select case
-   when f.key = 'salesforce_id' then null
-   when f.key = 'source' and raw.text ~* '^\s*(carr|https?://\S+|([~.]?/|[a-z]:\\)\S+)\s*$' then null
+   when f.key = 'salesforce_id' or source_kind.bare then null
+   when finding.file_path or finding.row_id then to_jsonb(nullif(btrim(
+    regexp_replace(regexp_replace(raw.text, technical.path, '', 'g'), technical.row_id, '', 'gi')), ''))
+   when market.placeholder then null
+   when f.key = 'template' and raw.text = 'loi-lease' then to_jsonb('LOI lease'::text)
    when raw.text = origin.line then null
    when origin.line is not null then to_jsonb(nullif(ltrim(substr(raw.text, length(origin.line) + 2), E' \t\r\n'), ''))
    else f.value end as value) plain
@@ -249,8 +272,15 @@ select id, field, refusal from deal_history_candidate where refusal is not null;
 insert into listed
 select id, key, 'technical_deal_history_field' from deal_history_candidate
 cross join (values ('salesforce_id'), ('source'), ('summary')) field(key)
-where refusal is null and ((old_value -> key, new_value -> key) is distinct from (plain_old -> key, plain_new -> key)
- and (key <> 'summary' or verb = 'import'));
+where case when key = 'source' then bare_source and (refusal is null or refusal = 'technical_deal_history')
+ else refusal is null and (key <> 'summary' or verb = 'import') and
+  (old_value -> key, new_value -> key) is distinct from (plain_old -> key, plain_new -> key) end;
+insert into listed
+select id, f.field, f.reason from deal_history_candidate cross join lateral (values
+ ('source', 'technical_finding_path', file_path),
+ ('source', 'technical_finding_row_id', row_id),
+ ('market', 'placeholder_market', placeholder_market)
+) f(field, reason, changed) where f.changed;
 
 insert into imported_deal_history (
  id, deal_id, occurred_at, recorded_at, source_actor_id, source_deal_id, changed_by_user_id, changed_by_job, verb, field,
@@ -268,5 +298,6 @@ from deal_history_candidate where refusal is null
 on conflict (id) do nothing;
 
 delete from listed l using imported_deal_history h
-where h.id = l.old_id and l.reason not in ('technical_deal_history_field', 'technical_deal_history', 'empty_deal_history');
+where h.id = l.old_id and l.reason not in ('technical_deal_history_field', 'technical_deal_history', 'empty_deal_history',
+ 'technical_finding_path', 'technical_finding_row_id', 'placeholder_market');
 select * from listed order by old_id, field, reason;

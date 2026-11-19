@@ -1763,3 +1763,44 @@ test("earlier owners colliding with existing history or an id in the other histo
 		await db.query("rollback");
 	}
 });
+
+test("placeholder markets are listed and leave the deal's market and board city empty", async () => {
+	await db.query(`begin;
+ insert into public.deal_lane (slug, label, sort) values ('national', 'Example national', 20) on conflict do nothing;
+ ${deal(940)} ${deal(941)} ${deal(942)}
+ update public.deal set city = 'Location #2 — market unspecified' where id = '${id(940)}';
+ update public.deal set city = 'Market unspecified until reviewed' where id = '${id(941)}';
+ update public.deal set lane = 'national', city = ' Market unspecified ' where id = '${id(942)}';
+ insert into public.deal_market_assignment (deal_id, agent_name, market, set_by, source)
+ values ('${id(942)}', 'Example Agent', 'Example Market', '${id(1)}', 'Example source');`);
+	try {
+		for (const _ of [1, 2]) {
+			const corrections = (await run()).filter(
+				(r) =>
+					r.field === "market" &&
+					[id(940), id(941), id(942)].includes(r.old_id),
+			);
+			assert.deepEqual(
+				corrections.map((r) => [r.old_id, r.reason]),
+				[
+					[id(940), "placeholder_market"],
+					[id(941), "unknown_market"],
+					[id(942), "placeholder_market"],
+				],
+			);
+			assert.deepEqual(
+				(
+					await rows(`select b.city, m.name from deal d left join imported_deal_board b on b.deal_id = d.id
+     left join market m on m.id = d.market_id where d.id between '${id(940)}' and '${id(942)}' order by d.id`)
+				).map(Object.values),
+				[
+					[null, null],
+					["Market unspecified until reviewed", null],
+					[null, "Example Market"],
+				],
+			);
+		}
+	} finally {
+		await db.query("rollback");
+	}
+});

@@ -203,6 +203,119 @@ test("deal history keeps business text on each side of an event", async () => {
 	}
 });
 
+test("a reformatted action and its legacy creation appear once in the Timeline", async () => {
+	const serialized =
+		"{'text': 'Example lease follow-up', 'due': '2025-04-02', 'waiting_on': None}";
+	await db.query(`begin;
+  insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, created_at, updated_at, created_by)
+  values ('${id(88)}', 'deal', '${id(20)}', '${id(1)}', $legacy$${serialized}$legacy$, 'done', '2025-04-01', '2025-04-01', '${id(1)}');
+  select set_config('engine.job','old_system',true);
+  insert into next_step (id, deal_id, what, due_on, resolution, created_at)
+  values ('${id(88)}', '${id(20)}', 'Example lease follow-up', '2025-04-02', 'done', '2025-04-01');
+  commit;`);
+	await db.query(
+		`insert into public.event (id, actor_id, subject_type, subject_id, verb, new_value, cause, occurred_at)
+   values ($1, $2, 'deal', $3, 'set-next-action', $4, 'human_stated', '2025-04-01')`,
+		[id(89), id(1), id(20), { next_action: serialized, due: null }],
+	);
+	await run();
+	assert.deepEqual(
+		await rows(`select id from imported_deal_history where id = '${id(89)}'`),
+		[],
+	);
+});
+
+test("copied history removes only separable references and placeholder markets", async () => {
+	const original =
+		"Checked ~/Recordings/example/transcript.txt against the existing party row";
+	const source = "Checked against the existing party row";
+	const other = `Compare ~/Recordings/example/transcript.txt.backup and (id pending).
+Keep ~/Recordings/example/transcript.txt../attachment.pdf and Lease(id ${id(1)})Amendment.`;
+	for (const [n, verb, field, after, before] of [
+		[
+			81,
+			"record-finding",
+			"discrepancy",
+			{ source: `${original} (id ${id(1)})` },
+		],
+		[82, "record-finding", "discrepancy", { source: other }],
+		[83, "dismiss-email-proposal", null, { reason: "Already handled" }],
+		[84, "prepare-document", "document", { template: "loi-lease" }],
+		[
+			85,
+			"create-national-market-deal",
+			null,
+			{ name: "Example location", market: "Location #9 — market unspecified" },
+		],
+		[
+			86,
+			"create-national-market-deal",
+			null,
+			{ market: "Market unspecified until next week" },
+		],
+		[
+			87,
+			"record-finding",
+			"discrepancy",
+			{ source: `Checked the party row (id ${id(1)}).` },
+			{ source: "https://example.test" },
+		],
+		[
+			90,
+			"record-finding",
+			"discrepancy",
+			{ source: `(id ${id(1)})` },
+			{ source: "https://example.test" },
+		],
+	] as const) {
+		await db.query(
+			"insert into public.event (id, actor_id, subject_type, subject_id, verb, field, old_value, new_value, cause, occurred_at) values ($1, $2, 'deal', $3, $4, $5, $6, $7, 'human_stated', '2025-04-01')",
+			[id(n), id(1), id(20), verb, field, before ?? null, after],
+		);
+	}
+	for (const _ of [1, 2]) {
+		assert.deepEqual(
+			(await run()).filter(({ reason }) =>
+				/^(technical_finding_|technical_deal_history_field|placeholder_market)/.test(
+					reason,
+				),
+			),
+			[
+				{ old_id: id(81), field: "source", reason: "technical_finding_path" },
+				{ old_id: id(81), field: "source", reason: "technical_finding_row_id" },
+				{ old_id: id(85), field: "market", reason: "placeholder_market" },
+				{
+					old_id: id(87),
+					field: "source",
+					reason: "technical_deal_history_field",
+				},
+				{ old_id: id(87), field: "source", reason: "technical_finding_row_id" },
+				{
+					old_id: id(90),
+					field: "source",
+					reason: "technical_deal_history_field",
+				},
+				{ old_id: id(90), field: "source", reason: "technical_finding_row_id" },
+			],
+		);
+		assert.deepEqual(
+			(
+				await rows(`select event->'new_value' as value from deal_imported_history
+    cross join jsonb_array_elements(events) event order by event->>'id'`)
+			).map(({ value }) => value),
+			[
+				{ source },
+				{ source: other },
+				{ reason: "Already handled" },
+				{ template: "LOI lease" },
+				{ name: "Example location" },
+				{ market: "Market unspecified until next week" },
+				{ source: "Checked the party row." },
+			],
+		);
+	}
+});
+
 test("deal owner history credits the move when the event records automation", async () => {
 	for (const [n, cause] of [
 		[70, "automation_job"],
