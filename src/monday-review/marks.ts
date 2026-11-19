@@ -39,6 +39,7 @@ function parseMark(body: JsonObject) {
 		});
 	return {
 		...args,
+		// Match the UUID text that Undo uses for the advisory lock.
 		deal_id: args.deal_id?.toLowerCase() ?? null,
 		party_id: args.party_id?.toLowerCase() ?? null,
 	};

@@ -248,7 +248,7 @@ test("both partners see who reviewed an item, and Undo advances that week's vers
 	);
 });
 
-test("the job entrance and a week that starts on Tuesday are refused", async () => {
+test("marking refuses jobs, non-Mondays and requests with both item IDs", async () => {
 	const mark = { ...key(), week_of: week, deal_id: first, seen_change_id: 0 };
 	assert.equal(
 		(await save({ job: "agent", for_user: "joe" }, door, mark))[0],
