@@ -15,7 +15,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
 - **`outside_id`**: another system's id for a person, company or deal, such as a Salesforce or roster id, or of a row of today's mail for the email it became, kept as import history.
 - **`role`**: the short list of roles, such as client, lead, vendor, lender, listing agent and property owner. A user can rename a label without touching any record. A vendor's category, such as lender, is a role whose `category_of` is vendor.
-- **`client_vertical`**: the client's recorded practice type, one value per client role.
+- **`client_vertical`**: the client's recorded practice type and optional subtype, one row per client role.
 - **`client_research`**: a client research observation with its kind, result, source, observation date and any expiry. `client_research_fact` keeps each named fact on the observation.
 - **`stage`**: each role's list of stages, such as a vendor's or a lead's. Like roles, a label can be renamed.
 - **`how_found`**: the short list of how a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
@@ -209,7 +209,9 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 97. A direct user may classify a filed document from `other` to a real kind once. Every other stored field stays fixed during classification. Jobs, including those working for a user, cannot classify; real kinds never change through this path. Change history records the kind change, user and save time.
 98. A property's known name, class and type are never blank. A known year built is from 1800 to 2100 and known stories from 1 to 60, the old system's ranges.
 99. A reply draft answers one email for one owner, once. A job drafts it pending. Only its owner edits its text, recipients and attachments, while pending or as they approve it, and approves it with one recipient and one copy, or dismisses it with a reason; a job may also dismiss it. Only a job working for the owner records a try as sent or failed, and a try changes nothing that was approved. An owner change is allowed only while pending or when approving a failed draft again. A failure whose reason is `aborted_before_dispatch` or `submission_recipients_invalid` may be approved again, one matching `unconfirmed_after_<n>` may only become sent, and any other stays failed. Sent and dismissed are final, and one sent message settles one draft.
-100. A practice type is trimmed and nonblank and belongs to an existing client role. A client role has at most one. Research also belongs to an existing client role. Each item has a nonblank kind and source, a yes-or-no result, a finite observation time and a finite expiry if supplied. Each fact names its research item and has a distinct, nonblank field name. The result has its own column, so no fact repeats the `found` field.
+100. A practice type is trimmed and nonblank and belongs to an existing client role. A client role has at most one. Its subtype, when present, is also trimmed and nonblank. Research also belongs to an existing client role. Each item has a nonblank kind and source, a yes-or-no result, a finite observation time and a finite expiry if supplied. Each fact names its research item and has a distinct, nonblank field name. The result has its own column, so no fact repeats the `found` field.
+
+Research facts are unconfirmed candidates. For an identity observation, `found` says the tool found a candidate. The candidate stays in research until a partner confirms it. Confirmation will save the value to its proper client record and record who confirmed it and when.
 
 Two people adding different links to one deal at the same time both keep theirs, because each link is its own row. A test proves it with two open sessions.
 
@@ -346,7 +348,7 @@ For #273, national on a date means a `client_brand` membership covering that dat
 Moving today's rows across:
 
 - Each client becomes its party's client role and client row. Roster, cold, engaged and paused map directly. Active deal and past client are recomputed; those old labels supply no manual status, so start those records at roster.
-- The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. The separate practice type copies to `client_vertical` with surrounding whitespace removed and no fixed vocabulary. Subtype stays behind.
+- The five client types map to the short list. National account becomes the national_account role and row on its company, not a sixth type. Unknown types wait for correction. The separate practice type copies to `client_vertical` with surrounding whitespace removed and no fixed vocabulary. A recorded subtype copies alongside its practice type, with surrounding whitespace removed.
 - A company location's `party.org_id` becomes its brand membership. A person client's `party.org_id` also becomes a brand membership when the old account view identifies that client as a member. The party copy still keeps the person's company link. Existing `national_account_owner` rows map their human actor to the same signed-in partner. The copy takes the partners' reviewed first-recorded dates, as the owner decided on 2026-11-18.
 - Client owner and acquisition source belong to the lead and attribution slice, not account ownership. ETL status and agreements are excluded by the owner's B9 answer. No representation agreement table is added.
 
@@ -964,36 +966,38 @@ This is the first part of #329, tracked in #333. `schema/copy-candidates-drafts.
 
 ### Copying today's client research and practice types
 
-Run `schema/copy-client-research.sql` after the lead and client copy, as the owner in a separate transaction with the new schema on `search_path`. Research and practice types follow old client merges to the surviving client role. Identical practice types collapse to one row with the surviving client's stamp when present. Conflicting types wait for review. The copy lists missing roles and invalid values by ID and reason.
+Run `schema/copy-client-research.sql` after the lead and client copy, as the owner in a separate transaction with the new schema on `search_path`. Research and practice types follow old client merges to the surviving client role. Identical practice types collapse to one row with the surviving client's stamp when present. A single recorded subtype follows that practice type, including when the practice type was already copied. Conflicting practice types or subtypes wait for review. The copy lists missing roles and invalid values by ID and reason.
 
-Research keeps the old finding ID, source locator or URL, observation time and expiry. The stamp uses the usual user or job attribution and the observation time. Each named fact has its own row and retains its original JSON type, including any nested facts. The observation and its facts copy together. Reruns leave copied rows and history as they were. A later party merge carries research forward and keeps one copy of a shared practice type. If the practice types differ, `merge_party_client_verticals` refuses the merge until a user settles them.
+Research keeps the old finding ID, observation time and expiry. The original research kinds keep their source locator or URL. The stamp uses the usual user or job attribution and the observation time. Each named fact has its own row. The original research kinds retain their JSON types, including nested facts. The observation and its facts copy together. Reruns leave copied rows and history as they were. A later party merge carries research forward and keeps one copy of a shared practice type. A missing subtype takes the other client's subtype. If the practice types or two recorded subtypes differ, `merge_party_client_verticals` refuses the merge until a user settles them.
 
-The rehearsal counts for #783 are below. Counts describe that snapshot.
+Identity candidates use the same observation ID, dates and attribution as other imported research. Each successful old result stores one named fact (`npi`, `address`, `social` or `website`) containing the structured result, plus a `locator` fact with the old source URL or registry reference. The observation uses source `found by research tool`. An NPI recorded as a JSON number is stored as text digits. An NPI already held by the client is omitted and counted, including when the result has other candidate numbers. A search with no candidate is listed by ID. Client addresses, research social links and public websites have no authoritative client fields in this schema. The property, publishing and deal portal records serve their own purposes.
 
-| Old source                                         | Count | Destination or reason                                                                                              |
-| -------------------------------------------------- | ----: | ------------------------------------------------------------------------------------------------------------------ |
-| `client.vertical`                                  |    51 | `client_vertical`, 50 distinct client roles after one identical pair collapses                                     |
-| `client.subtype`                                   |     7 | Not copied. Outside the ruling.                                                                                    |
-| `activity.analysis` with a client                  |   128 | Already copied as notes with their client links by `copy-activity.sql`.                                            |
-| `record_flag.business-model`                       |     1 | `client_research` and its facts                                                                                    |
-| `record_flag.business-reverse-engineering-dossier` |     1 | `client_research` and its facts                                                                                    |
-| `record_flag.entity_filing`                        |     4 | `client_research` and its facts                                                                                    |
-| `record_flag.leadership`                           |     1 | `client_research` and its facts                                                                                    |
-| `record_flag.practice_acquisition_signal`          |     1 | `client_research` and its facts                                                                                    |
-| `record_flag.practice_profile`                     |     1 | `client_research` and its facts                                                                                    |
-| `record_flag.practice_research`                    |     1 | `client_research` and its facts                                                                                    |
-| `record_flag.research_note`                        |     5 | `client_research` and its facts                                                                                    |
-| `record_flag.address`                              |    11 | Not copied. The building copy takes property addresses from building records. No copy reads these client findings. |
-| `record_flag.npi`                                  |    24 | Not copied. The party copy takes only the NPI on the party record. None of these findings had a copied client NPI. |
-| `record_flag.social`                               |     9 | Not copied. No copy brings across these client social findings.                                                    |
-| `record_flag.website`                              |     2 | Not copied. The client website copy takes deal portal registrations. Neither finding is copied by it.              |
-| `record_flag.ambiguous_candidates`                 |    10 | Not copied by any copy. Pending owner call.                                                                        |
-| `record_flag.calendar_intake_disambiguation`       |     1 | Not copied by any copy. Pending owner call.                                                                        |
-| `record_flag.discrepancy`                          |    59 | Not copied by any copy. Pending owner call.                                                                        |
-| `record_flag.license_status`                       |     1 | Not copied by any copy. Pending owner call.                                                                        |
-| `record_flag.property_update`                      |     1 | Not copied by any copy. Pending owner call.                                                                        |
-| `record_flag.status_superseded`                    |     1 | Not copied by any copy. Pending owner call.                                                                        |
-| `record_flag.verified`                             |   107 | Not copied by any copy. Pending owner call.                                                                        |
+The rehearsal counts below describe the #783 and #796 practice snapshot. The research tool's 180 check marks are left behind.
+
+| Old source                                         | Count | Destination or reason                                                                                                 |
+| -------------------------------------------------- | ----: | --------------------------------------------------------------------------------------------------------------------- |
+| `client.vertical`                                  |    51 | `client_vertical`, 50 distinct client roles after one identical pair collapses                                        |
+| `client.subtype`                                   |     7 | Copies beside the practice type in `client_vertical`.                                                                 |
+| `activity.analysis` with a client                  |   128 | Already copied as notes with their client links by `copy-activity.sql`.                                               |
+| `record_flag.business-model`                       |     1 | `client_research` and its facts                                                                                       |
+| `record_flag.business-reverse-engineering-dossier` |     1 | `client_research` and its facts                                                                                       |
+| `record_flag.entity_filing`                        |     4 | `client_research` and its facts                                                                                       |
+| `record_flag.leadership`                           |     1 | `client_research` and its facts                                                                                       |
+| `record_flag.practice_acquisition_signal`          |     1 | `client_research` and its facts                                                                                       |
+| `record_flag.practice_profile`                     |     1 | `client_research` and its facts                                                                                       |
+| `record_flag.practice_research`                    |     1 | `client_research` and its facts                                                                                       |
+| `record_flag.research_note`                        |     5 | `client_research` and its facts                                                                                       |
+| `record_flag.address`                              |    11 | 11 unconfirmed address observations.                                                                                  |
+| `record_flag.npi`                                  |    24 | 23 unconfirmed observations with 24 candidate numbers. One search found nothing. Zero numbers matched the client NPI. |
+| `record_flag.social`                               |     9 | 9 unconfirmed social observations.                                                                                    |
+| `record_flag.website`                              |     2 | 2 unconfirmed website observations.                                                                                   |
+| `record_flag.ambiguous_candidates`                 |    10 | Left behind.                                                                                                          |
+| `record_flag.calendar_intake_disambiguation`       |     1 | Left behind.                                                                                                          |
+| `record_flag.discrepancy`                          |    59 | Left behind.                                                                                                          |
+| `record_flag.license_status`                       |     1 | Left behind.                                                                                                          |
+| `record_flag.property_update`                      |     1 | Left behind.                                                                                                          |
+| `record_flag.status_superseded`                    |     1 | Left behind.                                                                                                          |
+| `record_flag.verified`                             |   107 | Left behind.                                                                                                          |
 
 ## Copying today's candidates and outreach drafts
 

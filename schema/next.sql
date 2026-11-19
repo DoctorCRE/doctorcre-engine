@@ -162,6 +162,7 @@ create table client_vertical (
 	party_id uuid primary key,
 	role text not null default 'client' check (role = 'client'),
 	vertical text not null check (vertical = regexp_replace(vertical, '^\s+|\s+$', '', 'g') and vertical ~ '\S'),
+	subtype text check (subtype = regexp_replace(subtype, '^\s+|\s+$', '', 'g') and subtype ~ '\S'),
 	created_at timestamptz not null default now(),
 	foreign key (party_id, role) references party_role on update cascade
 );
@@ -2847,8 +2848,8 @@ begin
 			using errcode = 'check_violation', constraint = 'merge_party_client_profiles';
 	end if;
 	if exists (select from client_vertical d join client_vertical s on s.party_id = survivor
-		where d.party_id = duplicate and d.vertical <> s.vertical) then
-		raise exception 'settle the different client practice types before merging'
+		where d.party_id = duplicate and (d.vertical <> s.vertical or d.subtype <> s.subtype)) then
+		raise exception 'settle the different client practice types or subtypes before merging'
 			using errcode = 'check_violation', constraint = 'merge_party_client_verticals';
 	end if;
 
@@ -2905,8 +2906,10 @@ begin
 		lease_estimate_confidence = case when s.estimated_lease_on is null then d.lease_estimate_confidence else s.lease_estimate_confidence end,
 		estimated_lease_on = coalesce(s.estimated_lease_on, d.estimated_lease_on)
 	from party_role d where s.party_id = survivor and d.party_id = duplicate and d.role = s.role;
+	update client_vertical s set subtype = d.subtype from client_vertical d
+	where s.party_id = survivor and d.party_id = duplicate and s.subtype is null and d.subtype is not null;
 	delete from client_vertical d using client_vertical s
-	where d.party_id = duplicate and s.party_id = survivor and d.vertical = s.vertical;
+	where d.party_id = duplicate and s.party_id = survivor;
 	update client_vertical set party_id = survivor where party_id = duplicate
 		and exists (select from party_role where party_id = survivor and role = 'client');
 	update client_research set party_id = survivor where party_id = duplicate
