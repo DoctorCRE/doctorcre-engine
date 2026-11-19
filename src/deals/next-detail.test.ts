@@ -269,16 +269,18 @@ test("deal events include the copied note and phase move, with their saved time 
 		readNextDealDetail(tx, id(30)),
 	);
 	assert.ok(!("error" in page));
+	assert.partialDeepStrictEqual(page.thread, [{ id: id(70) }]);
 	assert.partialDeepStrictEqual(page.events, [
 		{
 			id: id(43),
+			activity_id: id(70),
 			recorded_at: "2025-02-03T17:00:01+00:00",
 			actor: "partner_two",
 			verb: "add-deal-note",
 			field: "note",
 			new_value: { note: "Example note about parking" },
 		},
-		{ id: id(42), field: "attention" },
+		{ id: id(42), activity_id: null, field: "attention" },
 		{
 			recorded_at: "2025-01-02T18:00:00+00:00",
 			actor: "partner_one",

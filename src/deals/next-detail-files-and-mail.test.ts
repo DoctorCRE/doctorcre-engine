@@ -39,9 +39,6 @@ before(async () => {
 			select doc.id, '${dealId}', 'Example plan.pdf', 'deal_documents', 'example/' || doc.id,
 				'application/pdf', repeat('a', 64), 12, 'other', '2026-01-01'::date + doc.n::int
 			from unnest(array[${documents.slice(0, 20).map((value) => `'${value}'`)}]::uuid[]) with ordinality doc(id, n);
-		insert into document (id, deal_id, name, r2_bucket, r2_key, content_type, sha256, bytes, kind, version, supersedes_id, created_at)
-			values ('${documents[20]}', '${dealId}', 'Example plan.pdf', 'deal_documents', 'example/updated',
-				'application/pdf', repeat('b', 64), 15, 'other', 2, '${documents[0]}', '2026-01-22');
 		insert into document (deal_id, name, r2_bucket, r2_key, content_type, sha256, bytes, kind)
 			values ('${otherDealId}', 'Example different plan.pdf', 'deal_documents', 'example/other',
 				'application/pdf', repeat('c', 64), 19, 'other');
@@ -74,6 +71,18 @@ before(async () => {
 				'${dealId}', '2026-01-10');
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${id(1)}', true);
 		update proposal set status = 'dismissed' where id = '${id(33)}';
+		insert into document (id, deal_id, name, r2_bucket, r2_key, content_type, sha256, bytes, kind, version, supersedes_id, created_at)
+			values ('${documents[20]}', '${dealId}', 'Example plan.pdf', 'deal_documents', 'example/updated',
+				'application/pdf', repeat('b', 64), 15, 'other', 2, '${documents[0]}', '2026-01-22');
+		insert into critical_date (id, deal_id, kind, due_on, source)
+			values ('${id(40)}', '${dealId}', 'loi_expiry', '2026-02-01', 'Example offer');
+		insert into next_step (id, deal_id, what, owner_party_id)
+			values ('${id(42)}', '${dealId}', 'Confirm the plan', '${id(2)}');
+		select set_config('engine.job', 'old_system', true);
+		insert into critical_date (id, deal_id, kind, due_on, source)
+			values ('${id(41)}', '${dealId}', 'due_diligence', '2026-02-02', 'Example contract');
+		insert into next_step (id, deal_id, what, owner_party_id)
+			values ('${id(43)}', '${dealId}', 'Send the offer', '${id(1)}');
 		commit;`);
 });
 after(async () => {
@@ -107,13 +116,18 @@ test("both partners can list every deal file and open an earlier version", async
 			page.documents.map((doc) => doc.id),
 			documents.toReversed(),
 		);
-		assert.partialDeepStrictEqual(page.documents[0], { version: 2, bytes: 15 });
+		assert.partialDeepStrictEqual(page.documents[0], {
+			version: 2,
+			bytes: 15,
+			actor: "alex",
+		});
 		const first = page.documents.at(-1);
 		assert.partialDeepStrictEqual(first, {
 			name: "Example plan.pdf",
 			version: 1,
 			bytes: 12,
 			content_type: "application/pdf",
+			actor: "old_system",
 		});
 		const open = await request(
 			caller,
@@ -130,6 +144,21 @@ test("both partners can list every deal file and open an earlier version", async
 			/Example%20plan\.pdf/,
 		);
 		assert.equal(await open.text(), bytes);
+	}
+});
+
+test("both partners see who saved a critical date or next step", async () => {
+	for (const caller of [alex, casey]) {
+		assert.partialDeepStrictEqual(await detail(caller), {
+			critical_dates: [
+				{ id: id(40), actor: "alex" },
+				{ id: id(41), actor: "old_system" },
+			],
+			next_actions: [
+				{ id: id(42), owner: "casey", actor: "alex" },
+				{ id: id(43), owner: "alex", actor: "old_system" },
+			],
+		});
 	}
 });
 
