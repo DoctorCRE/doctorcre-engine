@@ -26,6 +26,7 @@ const ITEM = {
 	bullets: ["First example point"],
 	source_ref: "example:call",
 };
+const REPLACEMENT_DEAL = id(13);
 // The dated facts the old system writes on a post-call item, which the copy keeps.
 const FACTS = [
 	{ date: null, kind: "call", text: "Example first fact" },
@@ -40,7 +41,8 @@ before(async () => {
 			('${BLAIR}', 'person', 'Blair Example'), ('${CLIENT}', 'company', 'Example Clinic'),
 			('${CADENCE_CLIENT}', 'company', 'Example Practice');
 		insert into app_user (id, slug) values ('${ALEX}', 'alex'), ('${BLAIR}', 'blair');
-		insert into deal (id, name, owner_user_id) values ('${DEAL}', 'Example Deal', '${ALEX}');
+		insert into deal (id, name, owner_user_id) values ('${DEAL}', 'Example Deal', '${ALEX}'),
+			('${REPLACEMENT_DEAL}', 'Example Replacement Deal', '${ALEX}');
 		insert into property (id, address) values ('${PROPERTY}', 'Example Property');
 		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('vendor', 'Vendor');
 		insert into stage (role, slug, label) values ('lead', 'new', 'New');
@@ -279,6 +281,119 @@ test("replacing a held party step spares the other owner and replay spares the n
 		{ ...answer, replayed: true },
 	]);
 	assert.equal((await stepNow(latest.next_step_id)).status, "open");
+});
+
+test("a deal replacement uses the signed-in partner's version from the deal page", async () => {
+	const alex = { user: "alex" };
+	const blair = { user: "blair" };
+	const target = { deal_id: REPLACEMENT_DEAL, what: "Send the survey" };
+	const [otherStatus, other] = await create(blair, target);
+	const [itemStatus, item] = await create(alex, { ...target, item: ITEM });
+	assert.deepEqual([otherStatus, itemStatus], [201, 201]);
+	const replace = { ...target, replaces: "current" };
+	const [missing, required] = await create(alex, replace);
+	assert.deepEqual(
+		[missing, required.error, required.fields],
+		[400, "missing_required", ["seen_current_step"]],
+	);
+	const [firstStatus, first] = await create(alex, {
+		...replace,
+		seen_current_step: null,
+	});
+	assert.equal(firstStatus, 201);
+	const read = async () => {
+		const response = await request(
+			alex,
+			`deals/${REPLACEMENT_DEAL}`,
+			{ method: "GET" },
+			{ DEALS_READ_SCHEMA: "next" },
+		);
+		assert.equal(response.status, 200);
+		return response.json();
+	};
+	assert.partialDeepStrictEqual(await read(), {
+		next_actions: [
+			{ id: other.next_step_id, owner: "blair", change_id: other.change_id },
+			{ id: item.next_step_id, title: ITEM.title, change_id: item.change_id },
+			{ id: first.next_step_id, owner: "alex", change_id: first.change_id },
+		],
+	});
+	const version = (step: typeof first) => ({
+		next_step_id: step.next_step_id,
+		change_id: step.change_id,
+	});
+	const [wrongOwner, invalid] = await create(alex, {
+		...replace,
+		owner: blair.user,
+		seen_current_step: version(other),
+	});
+	assert.deepEqual([wrongOwner, invalid.error], [400, "invalid_field_value"]);
+	const [editStatus, edit] = await act(String(first.next_step_id), "changes", {
+		seen_change_id: first.change_id,
+		what: "Send the revised survey",
+	});
+	assert.equal(editStatus, 200);
+	for (const stale of [
+		null,
+		{ ...version(other), change_id: edit.change_id },
+		version(first),
+	]) {
+		const [status, conflict] = await create(alex, {
+			...replace,
+			seen_current_step: stale,
+		});
+		assert.deepEqual(
+			[status, conflict.error, conflict.current_version],
+			[409, "version_conflict", edit.change_id],
+		);
+	}
+	assert.partialDeepStrictEqual(await read(), {
+		next_actions: [{ id: first.next_step_id, change_id: edit.change_id }],
+	});
+	const current = { ...replace, seen_current_step: version(edit) };
+	const answers = await Promise.all([
+		create(alex, current),
+		create(alex, current),
+	]);
+	assert.deepEqual(answers.map(([status]) => status).sort(), [201, 409]);
+	const winner = answers.find(([status]) => status === 201)?.[1];
+	const conflict = answers.find(([status]) => status === 409)?.[1];
+	assert.ok(winner && conflict);
+	assert.deepEqual(
+		[conflict.error, conflict.current_version],
+		["version_conflict", winner.change_id],
+	);
+	assert.equal((await stepNow(first.next_step_id)).status, "cancelled");
+	assert.equal((await stepNow(other.next_step_id)).status, "open");
+	assert.equal((await stepNow(item.next_step_id)).status, "open");
+	const [endStatus] = await act(String(winner.next_step_id), "end", {
+		resolution: "done",
+	});
+	assert.equal(endStatus, 200);
+	assert.partialDeepStrictEqual(await read(), {
+		next_actions: [{ id: winner.next_step_id, change_id: null }],
+	});
+	const [ended, endedConflict] = await create(alex, {
+		...replace,
+		seen_current_step: version(winner),
+	});
+	assert.deepEqual(
+		[ended, endedConflict.error, endedConflict.current_version],
+		[409, "version_conflict", null],
+	);
+});
+
+test("a versioned deal replacement requires a job to name a partner", async () => {
+	const [status, answer] = await create(
+		{ job: "agent" },
+		{
+			deal_id: REPLACEMENT_DEAL,
+			what: "Send the survey",
+			replaces: "current",
+			seen_current_step: null,
+		},
+	);
+	assert.deepEqual([status, answer.error], [422, "actor_not_provisioned"]);
 });
 
 for (const { kind, id, party_id } of OLD_ROLES) {

@@ -1,5 +1,5 @@
 import { type Context, Hono } from "hono";
-import { sql, type Transaction } from "kysely";
+import { type ExpressionBuilder, sql, type Transaction } from "kysely";
 import pg from "pg";
 import { Refusal } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
@@ -184,30 +184,47 @@ export async function cancelCurrentStep(
 	owner: string | null,
 	seen?: Fitted<typeof SEEN_CURRENT_STEP> | null,
 ) {
-	await lockSubject(tx, subject, seen !== undefined);
+	const prospect = subject.kind === "party" && seen !== undefined;
+	await lockSubject(tx, subject, prospect);
 	const subjectColumn = `${subject.kind}_id` as const;
 	const ownerId = sql<string>`coalesce(${owner}::uuid, ${ACTING_USER})`;
 	if (seen !== undefined) {
 		const {
 			rows: [context],
-		} = await sql<{ has_user: boolean; prospect: boolean }>`
+		} = await sql<{ has_user: boolean; subject_eligible: boolean }>`
 			select ${ACTING_USER} is not null as has_user,
-				exists (select from party_role r where r.party_id = ${subject.id}::uuid
+				case when ${prospect}::boolean then exists (
+					select from party_role r where r.party_id = ${subject.id}::uuid
 					and r.role = 'lead' and r.stage = 'opportunity'
 					and not exists (select from deal_party d where d.party_id = r.party_id)
-					for no key update of r) as prospect
+					for no key update of r
+				) else true end as subject_eligible
 		`.execute(tx);
 		if (!context?.has_user)
 			throw new SaveRefusal(new Refusal(422, "actor_not_provisioned"));
-		if (!context.prospect)
+		if (!context.subject_eligible)
 			throw new SaveRefusal(new Refusal(409, "not_a_prospect"));
+	}
+	const openStep = (eb: ExpressionBuilder<DB, "next_step">) =>
+		eb.and([
+			eb(subjectColumn, "=", subject.id),
+			eb("status", "=", "open"),
+			eb("item_title", "is", null),
+			eb("owner_party_id", "=", ownerId),
+		]);
+	let cancel = tx
+		.updateTable("next_step")
+		.set({
+			resolution: "cancelled",
+			resolved_at: sql<string>`clock_timestamp()`,
+			resolution_reason: "Replaced by a new next step",
+		})
+		.where(openStep);
+	if (seen !== undefined) {
 		const current = await tx
 			.selectFrom("next_step")
 			.select("id")
-			.where(subjectColumn, "=", subject.id)
-			.where("status", "=", "open")
-			.where("item_title", "is", null)
-			.where("owner_party_id", "=", ownerId)
+			.where(openStep)
 			.forNoKeyUpdate()
 			.executeTakeFirst();
 		const current_version = current
@@ -220,19 +237,10 @@ export async function cancelCurrentStep(
 			throw new SaveRefusal(
 				new Refusal(409, "version_conflict", { current_version }),
 			);
+		if (!current) return;
+		cancel = cancel.where("id", "=", current.id);
 	}
-	await tx
-		.updateTable("next_step")
-		.set({
-			resolution: "cancelled",
-			resolved_at: sql<string>`clock_timestamp()`,
-			resolution_reason: "Replaced by a new next step",
-		})
-		.where(subjectColumn, "=", subject.id)
-		.where("status", "=", "open")
-		.where("item_title", "is", null)
-		.where("owner_party_id", "=", ownerId)
-		.execute();
+	await cancel.execute();
 }
 
 // Written out, because the generated row type asks for the stamp the database sets.
@@ -244,7 +252,7 @@ export async function createStep(
 	const { due_on, hold_until, seen_current_step } = request;
 	if (seen_current_step !== undefined) {
 		if (
-			!request.party_id ||
+			(!deal_id && !request.party_id) ||
 			!replaces ||
 			request.owner !== undefined ||
 			request.owner_party_id !== undefined
@@ -254,7 +262,7 @@ export async function createStep(
 					fields: ["seen_current_step"],
 				}),
 			);
-		if (!due_on)
+		if (request.party_id && !due_on)
 			throw new SaveRefusal(
 				new Refusal(400, "missing_required", { fields: ["due_on"] }),
 			);
@@ -561,13 +569,25 @@ export const nextSteps = new Hono<NextSaveEnv>()
 		answerNextSave(
 			c,
 			"next-step-create",
-			(body) =>
-				fit(
+			(body) => {
+				const request = fit(
 					body,
 					NEW_STEP,
 					["idempotency_key", "what"],
 					[...RECORDS, "old_role"],
-				),
+				);
+				if (request instanceof Refusal) return request;
+				if (
+					c.get("stamp").user &&
+					request.replaces &&
+					(request.deal_id || request.party_id) &&
+					request.seen_current_step === undefined
+				)
+					return new Refusal(400, "missing_required", {
+						fields: ["seen_current_step"],
+					});
+				return request;
+			},
 			createStep,
 			201,
 		),
