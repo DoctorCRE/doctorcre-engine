@@ -169,6 +169,7 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs, marks and sent draft history. Opening the email and deciding a suggestion from Home still need app routing.
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
+- The Today panel calls a past-due reminder "overdue". The deal's next step uses "late" (app code).
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.
 - The Today panel's Deal pulse stayed on "Checking recent deal changes…".
 - Overdue steps to confirm ("Overdue tasks to review") did not appear on Home. The engine read can return completion reviews with a link to the deal's next step. Home still needs to route the read and wire the decision buttons.
