@@ -23,9 +23,11 @@ Today:
 
 ```text
 partner ─▶ app ─┬─▶ old API (mcp-server) ─▶ old tables     sign-in, page checks, most reads and saves
-                └─▶ engine /api/engine ─┬─▶ old tables      reads and deal saves whose app switch is on
+                └─▶ engine /api/engine ─┬─▶ old tables      reads, deal saves with the app switch on, key_reuse replays with it off
                                         └─▶ next schema     Deals and invoice tracker reads, with their engine switches
                                                             Mark paid with invoices-from-engine on
+signed-in partner ─▶ engine /api/engine ─▶ old tables        own calls with CSRF to patch-deal-field, update-deal, add-deal-note,
+                                                            set-next-step, and presence
 engine ─▶ old API /auth/session                             every partner call's sign-in check
 Studio programs ─▶ old API ─▶ old tables                    every program whose switch is off
 Studio programs, assistant ─▶ engine /jobs ─▶ next schema   only where a switch below is on
@@ -91,7 +93,7 @@ The owner's rulings of 2026-11-17:
 - Switch day is Sat 2026-11-28. Thu 2026-11-26 is allowed only if the practice run is clean; the coordinator tells the owner which day by Wednesday evening.
 - On switch day, mail intake and saving pause briefly for the move, then the switches above flip. Switch day builds nothing: every old-system and app change ships before it, switched off.
 
-The owner approved binding the production writer before switch day on 2026-11-19. With the app and program switches off, their new saves stay on the old system. Before routing saves to the new database, verify that the production writer can assume `engine` on the populated `next` schema.
+The owner approved binding the production writer before switch day on 2026-11-19. With the app and program switches off, the app's screens and the programs still send new saves to the old system. Production has no `next` schema or `engine` role yet, so new-schema saves, including Mark paid, are unavailable there. Before routing those saves to the new database, verify that the production writer can assume `engine` on the populated `next` schema.
 
 Not yet written down, so a brief that needs one reports the gap and does not decide it: the order of the switches after the Deals pair, how long the pause lasts, and going back after new saves.
 
