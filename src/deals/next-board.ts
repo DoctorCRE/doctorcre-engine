@@ -172,6 +172,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 										"p.reason",
 										sql.lit("invoice").as("source"),
 										sql.lit(null).as("call"),
+										sql.lit(true).as("undoable"),
 										...phaseReceiptFields(
 											eb.ref("p.phase"),
 											phaseAt,

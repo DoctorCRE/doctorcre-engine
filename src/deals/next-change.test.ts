@@ -267,6 +267,7 @@ test("only an automatic phase move shows its source call and can be undone", asy
 		automatic: true,
 		source: "call_capture",
 		call: { activity_id, happened_at },
+		undoable: true,
 	});
 	assert.ok(Number.isFinite(Date.parse(String(receipt.recorded_at))));
 	assert.deepEqual((await read(`deals/${suggestedDeal}`)).phase_change, null);
@@ -409,6 +410,55 @@ for (const [name, number, phase, outcome] of [
 		assert.equal((await dealNow(deal)).phase, lost ? phase : "touring");
 	});
 }
+
+test("an invoice-dated copied close keeps its receipt and refuses phase Undo", async () => {
+	const deal = id(30);
+	const event_id = randomUUID();
+	const invoiced_on = "2026-01-05";
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${CLIENT}', 'client');
+		insert into deal_phase_change (deal_id, happened_at, phase)
+		values ('${deal}', '2026-01-06T15:00Z', 'closed');
+		insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
+		values ('${event_id}', '${deal}', '2026-01-06T15:00Z', 'touring', 'Example automatic close');
+		insert into imported_deal_invoiced (deal_id, invoiced_on) values ('${deal}', '${invoiced_on}');
+		commit;`);
+	const read = async (path: string) => {
+		const response = await request(
+			partner,
+			path,
+			{ method: "GET" },
+			{ DEALS_READ_SCHEMA: "next" },
+		);
+		assert.equal(response.status, 200);
+		const body: unknown = await response.json();
+		assert.ok(isArguments(body));
+		return body;
+	};
+	const beforeUndo = await read(`deals/${deal}`);
+	const [status, body] = await saveAt(partner, `deals/${deal}/phase/undo`, {
+		idempotency_key: randomUUID(),
+		event_id,
+		base_version: beforeUndo.seen,
+	});
+	assert.equal(status, 409, JSON.stringify(body));
+	assert.partialDeepStrictEqual(body, {
+		error: "version_conflict",
+		current_version: beforeUndo.seen,
+		hint: "Closed because an invoice was recorded; Undo isn't available",
+	});
+	assert.partialDeepStrictEqual(beforeUndo, {
+		phase: "closed",
+		invoiced_on,
+		phase_change: { event_id, source: "copied", undoable: false },
+	});
+	const { phase, phase_change, seen: currentVersion } = beforeUndo;
+	const facts = { phase, phase_change, invoiced_on, seen: currentVersion };
+	assert.partialDeepStrictEqual(await read(`deals/${deal}`), facts);
+	assert.partialDeepStrictEqual(await read("deals"), {
+		closed_deals: [{ id: deal, ...facts }],
+	});
+});
 
 for (const { deal, priorPhase } of [
 	{ deal: id(23), priorPhase: "closed" },

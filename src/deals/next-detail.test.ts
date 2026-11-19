@@ -396,6 +396,7 @@ test("the board and detail carry the same imported automatic phase move", async 
 			phase: "negotiation",
 			automatic: true,
 			source: "copied",
+			undoable: true,
 			evidence_date: "2025-03-01",
 		},
 	});

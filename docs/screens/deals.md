@@ -58,7 +58,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Search finds deals by name, client, kind or close date.
 - [ ] Each deal opens its deal page.
 
-When the nightly invoice job closes a deal, Closed deals shows "Closed automatically: Invoice received" with its date in words and offers Undo. A copied automatic move to Closed shows "Closed automatically" with its date in words and the same Undo as other copied moves. A recorded loss appears in Lost deals without an automatic close badge or Undo.
+When the nightly invoice job closes a deal, Closed deals shows "Closed automatically: Invoice received" with its date in words and offers Undo. A copied automatic move to Closed shows "Closed automatically" with its date in words. When it has an invoice date and no invoice application to reverse, it keeps the date and caption, and Undo is hidden. Other copied closes offer phase Undo. A recorded loss appears in Lost deals without an automatic close badge or Undo.
 
 ## Prospects
 
