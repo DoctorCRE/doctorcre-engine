@@ -68,7 +68,7 @@ The share Worker's `CLIENT_WEBSITE_ENGINE_SLUG` is empty until cutover. After th
 
 Still on the old API with no switch yet:
 
-- The nightly checklist reminders and the deal room page.
+- Deal watch settings and updates, nightly checklist reminders, and the deal room page.
 - The app's Home, email and calendar calls (slice 30), including routing Home marks to `POST /api/engine/home/marks` (door 24), and its Deals saves outside the two save switches above (slice 29).
 - Sign-in.
 
@@ -90,6 +90,8 @@ The owner's rulings of 2026-11-17:
 - The practice run is Wed 2026-11-25: the whole move on a fresh copy of production (slice 32), with the copies in the order of § "Running the copies". Until then, the practice move reruns on a fresh copy after each merge that changes a copy or a read.
 - Switch day is Sat 2026-11-28. Thu 2026-11-26 is allowed only if the practice run is clean; the coordinator tells the owner which day by Wednesday evening.
 - On switch day, mail intake and saving pause briefly for the move, then the switches above flip. Switch day builds nothing: every old-system and app change ships before it, switched off.
+
+On switch day, turn off only the nightly deal checklist reminder step in `carr-system/bin/nightly.sh`. The old checklist freezes once saves move, so the job could remind a partner about an item they already finished. An aggregate check of the rehearsal copy on 2026-11-19 found one historical checklist reminder, zero active deal or lease watches, and zero deal watch updates. Both moves are deferred. Deal watch settings and updates stay on the old tables, which only cover copied deals. [Deal watches and nightly checklist reminders](new-database.md#deal-watches-and-nightly-checklist-reminders).
 
 Not yet written down, so a brief that needs one reports the gap and does not decide it: the order of the switches after the Deals pair, how long the pause lasts, and going back after new saves.
 
