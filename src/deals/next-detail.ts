@@ -7,7 +7,7 @@ import {
 import type { DB, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
-import { clientWebsiteOf, selectNextDeals } from "./next-board.ts";
+import { clientWebsiteOf, selectNextDealsWithFacts } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
 
@@ -23,7 +23,7 @@ type DealEvent = {
 };
 
 export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
-	const record = await selectNextDeals(db)
+	const record = await selectNextDealsWithFacts(db)
 		.select((eb) => [
 			sql.lit("deal-timeline.v1").as("schema_version"),
 			sql.lit("deal-items.v1").as("item_schema_version"),
@@ -32,7 +32,6 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			clientWebsiteOf(db, eb.ref("d.id"), eb.ref("c.party_id")).as(
 				"client_portal_url",
 			),
-			"d.reason",
 			asText(sql`(now() at time zone 'America/Chicago')::date`)
 				.$notNull()
 				.as("today"),
@@ -180,12 +179,12 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
-	const { today, commissions, reason, critical_dates, ...detail } = record;
+	const { today, commissions, critical_dates, ...detail } = record;
 	const checklist = checklistOf({
 		deal: {
 			id: detail.deal_id,
 			owner: detail.owner,
-			type: reason === "renewal" ? reason : detail.type,
+			type: detail.reason === "renewal" ? detail.reason : detail.type,
 			invoiced_on: detail.invoiced_on,
 		},
 		lease: detail.lease,
