@@ -551,7 +551,8 @@ test("market and phase edits supersede the imported display values", async () =>
 				.where("id", "=", id(31))
 				.execute();
 			await sql`insert into deal_phase_change (deal_id, happened_at, phase)
-				values (${id(40)}, '2025-04-01T12:00:00Z', 'touring')`.execute(tx);
+				select ${id(40)}::uuid, max(happened_at) + interval '1 day', 'touring'
+				from deal_phase_change where deal_id = ${id(40)}`.execute(tx);
 
 			const deals = await readNextBoardDeals(tx, allBoards);
 			assert.equal(deals.find((d) => d.id === id(31))?.market, null);

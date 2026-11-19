@@ -40,7 +40,7 @@ async function fixture(kind: (typeof kinds)[number]) {
 	const update = kind === "notification";
 	const followUp = kind === "capture_post_call_action";
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${owner}');
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal ' || '${deal}', '${owner}');
 		insert into activity (id, kind, happened_at) values ('${call}', 'call', '2001-01-01T12:00:00Z');
 		insert into activity_about (activity_id, deal_id) values ('${call}', '${deal}');
 		${

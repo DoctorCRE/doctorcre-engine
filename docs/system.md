@@ -86,14 +86,13 @@ The deal page's checklist and progress use the new schema with `DEALS_READ_SCHEM
 
 ## The switch plan
 
-The owner's rulings of 2026-11-17:
+The owner updated the switch plan on 2026-11-19.
 
-- The switch happens by 2026-11-30.
-- The practice run is Wed 2026-11-25: the whole move on a fresh copy of production (slice 32), with the copies in the order of § "Running the copies". Until then, the practice move reruns on a fresh copy after each merge that changes a copy or a read.
-- Switch day is Sat 2026-11-28. Thu 2026-11-26 is allowed only if the practice run is clean; the coordinator tells the owner which day by Wednesday evening.
+- Rehearse the full move on a fresh copy of production on Friday evening, November 20, in the order under "Running the copies". Until then, rerun the practice move after each merge that changes a copy or a read.
+- Switch on Saturday, November 21, after a clean rehearsal. If Friday's practice run finds problems, switch on Sunday, November 22.
 - On switch day, mail intake and saving pause briefly for the move, then the switches above flip. Switch day builds nothing: every old-system and app change ships before it, switched off.
 
-The owner approved binding the production writer before switch day on 2026-11-19. With the app and program switches off, the app's screens and the programs still send new saves to the old system. Production has no `next` schema or `engine` role yet, so new-schema saves, including Mark paid, are unavailable there. Before routing those saves to the new database, verify that the production writer can assume `engine` on the populated `next` schema.
+Production's `next` schema, `engine` role and grants, and job registrations are set up. The app and program switches are off, so saves still go to the old system. Before routing saves to the new database, verify that the production writer can assume `engine` on the populated `next` schema.
 
 Not yet written down, so a brief that needs one reports the gap and does not decide it: the order of the switches after the Deals pair, how long the pause lasts, and going back after new saves.
 

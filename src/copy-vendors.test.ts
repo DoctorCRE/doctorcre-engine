@@ -779,7 +779,7 @@ const evidence = (vendor: number, ...entries: [string, number][]) =>
 // Old deals 70 and 72 were copied, 71 was not, and each is the deal of client 60, who is record 20.
 const DEALS = `select set_config('engine.job', 'old_system', true);
 insert into party (id, kind, name) values ('${id(20)}', 'person', 'Example Client');
-insert into deal (id, name, owner_user_id) values ('${id(70)}', 'Example deal', '${PARTNER}'), ('${id(72)}', 'Example deal', '${PARTNER}');
+insert into deal (id, name, owner_user_id) values ('${id(70)}', 'Example deal', '${PARTNER}'), ('${id(72)}', 'Example referred deal', '${PARTNER}');
 insert into outside_id (source, value, party_id, deal_id) values ('old_system', '${id(20)}', '${id(20)}', null),
 	('old_system', '${id(70)}', null, '${id(70)}'), ('old_system', '${id(72)}', null, '${id(72)}');
 insert into public.party (id, kind, name, created_by, updated_by) values ('${id(1)}', 'person', 'Example', '${SYSTEM}', '${SYSTEM}'),

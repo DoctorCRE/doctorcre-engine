@@ -45,7 +45,7 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	const item_id = `${callFollowUp ? "capture_post_call_action" : "next_action"}:${step}`;
 	await db.query(`begin;
 		select set_config('engine.user_id', '${owner}', true);
-		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${owner}');
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental ' || '${deal}', '${owner}');
 		insert into activity (id, kind, happened_at, summary) values
 			('${note}', 'note', '2001-02-03T15:00Z', 'The client asked for the survey.'),
 			('${call}', 'call', '2001-02-04T15:00Z', 'The client received the survey.');
@@ -74,7 +74,7 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.partialDeepStrictEqual(card, {
 		item_id,
 		title: "Did this happen? Send the survey",
-		context_label: "Example Dental",
+		context_label: `Example Dental ${deal}`,
 		due_on: "2001-02-01",
 		open_url: `/deals?deal=${deal}&focus=next-step`,
 		action_id: null,
@@ -150,7 +150,7 @@ test("updates respect recipient, read time, snoozes and the latest disposition c
 	const update = randomUUID();
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
-		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${other}');
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental ' || '${deal}', '${other}');
 		insert into home_update (id, user_id, deal_id, what, checklist_item_ref, due_on, read_at) values
 			('${update}', '${owner}', '${deal}', 'Review the survey', 'survey/item', '2001-02-01', null),
 			(gen_random_uuid(), '${owner}', '${deal}', 'Read already', null, null, now());
@@ -161,7 +161,7 @@ test("updates respect recipient, read time, snoozes and the latest disposition c
 		item_id: `notification:${update}`,
 		kind_label: "Update",
 		title: "Review the survey",
-		context_label: "Example Dental",
+		context_label: `Example Dental ${deal}`,
 		open_url: `/deals?deal=${deal}`,
 		checklist_item_ref: "survey/item",
 		due_on: "2001-02-01",

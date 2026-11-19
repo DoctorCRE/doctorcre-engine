@@ -2713,6 +2713,59 @@ from (select deal_id, invoiced_on from commission_payment where invoiced_on is n
 	union all select deal_id, invoiced_on from imported_deal_invoiced) dated
 group by deal_id;
 
+-- Keep the reservation in step with isOpenBoardDeal in src/deals/next-board.ts.
+create table deal_open_name (
+	deal_id uuid primary key references deal on delete cascade,
+	name_key text,
+	constraint deal_open_name_unique unique (name_key) deferrable initially deferred
+);
+
+create function sync_deal_open_name() returns trigger
+language plpgsql security definer as $$
+declare
+	target uuid := (to_jsonb(case when tg_op = 'DELETE' then old else new end) ->> tg_argv[0])::uuid;
+	deal_name text;
+begin
+	if tg_table_name = 'deal' and tg_op = 'INSERT' then
+		insert into deal_open_name (deal_id) values (target);
+	end if;
+	-- Lock the name row without locking the deal or its invoice payments.
+	perform from deal_open_name where deal_id = target for update;
+	if not (exists (select from deal_invoiced where deal_id = target) or exists (
+		select from (select phase, happened_at from deal_phase_change
+			where deal_id = target order by happened_at desc limit 1) latest
+		where latest.phase in ('closed', 'invoiced', 'dead')
+	) or exists (
+		select from imported_deal_board b where b.deal_id = target and b.phase is not null
+			and b.phase_at is not distinct from (select max(happened_at) from deal_phase_change where deal_id = target)
+			and (b.outcome is not null or b.closed_on is not null or b.phase in ('closed', 'invoiced', 'dead'))
+	)) then
+		select lower(regexp_replace(name, '^\s+|\s+$', '', 'g')) into deal_name from deal where id = target;
+	end if;
+	update deal_open_name set name_key = deal_name where deal_id = target and name_key is distinct from deal_name;
+	return null;
+end $$;
+
+do $$ begin
+	execute format('alter function sync_deal_open_name set search_path = %I, pg_temp', current_schema());
+end $$;
+revoke execute on function sync_deal_open_name from public;
+
+create trigger sync_deal_open_name after insert or update of name on deal
+	for each row execute function sync_deal_open_name('id');
+create trigger sync_deal_open_name after insert or delete on deal_phase_change
+	for each row execute function sync_deal_open_name('deal_id');
+create trigger sync_deal_open_name after insert on imported_deal_board
+	for each row execute function sync_deal_open_name('deal_id');
+create trigger sync_deal_open_name after insert on imported_deal_invoiced
+	for each row execute function sync_deal_open_name('deal_id');
+create trigger sync_deal_open_name_on_invoice after insert on commission_payment
+	for each row when (new.invoiced_on is not null) execute function sync_deal_open_name('deal_id');
+create trigger sync_deal_open_name_on_invoice_removal after delete on commission_payment
+	for each row when (old.invoiced_on is not null) execute function sync_deal_open_name('deal_id');
+create trigger sync_deal_open_name_on_invoice_change after update of invoiced_on on commission_payment
+	for each row when (old.invoiced_on is distinct from new.invoiced_on) execute function sync_deal_open_name('deal_id');
+
 create function invoice_name(value text) returns text
 language sql immutable return lower(regexp_replace(btrim(value), '\s+', ' ', 'g'));
 
@@ -3573,6 +3626,7 @@ revoke insert on platform_metric, platform_format, relationship_level from engin
 revoke insert on app_user, job from engine;
 -- Only a merge leaves a pointer.
 revoke insert on merged_party from engine;
+revoke insert on deal_open_name from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change, imported_change, imported_deal_history from engine;
 -- Only the owner's copy adds the old system's earlier people, owners and board facts.

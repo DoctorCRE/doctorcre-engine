@@ -76,16 +76,25 @@ test("a suppressed active-deal lead keeps its reviewed restriction reason", asyn
 	}
 });
 
-test("without reviewed input suppression still waits for reasons", async () => {
+test("without reviewed input suppression keeps the approved reason through reruns", async () => {
 	await db.query("begin");
 	try {
-		const report = await run();
-		assert.deepEqual(report.map(Object.values), [
-			[id(30), "do_not_contact", "do_not_contact", "restriction_needs_reason"],
-			[id(31), "do_not_contact", "new", "restriction_needs_reason"],
-		]);
-		assert.deepEqual(await rows("select * from do_not_contact"), []);
-		assert.deepEqual(await run(), report);
+		assert.deepEqual(await run(), []);
+		assert.deepEqual(
+			await rows(
+				"select party_id, reason, until_date from active_do_not_contact",
+			),
+			[
+				{
+					party_id: id(20),
+					reason: "not recorded before this system",
+					until_date: null,
+				},
+			],
+		);
+		const before = await snapshot();
+		assert.deepEqual(await run(), []);
+		assert.deepEqual(await snapshot(), before);
 	} finally {
 		await db.query("rollback");
 	}
@@ -94,26 +103,22 @@ test("without reviewed input suppression still waits for reasons", async () => {
 test("reviewed suppression follows merged parties even after the lead was copied", async () => {
 	await db.query("begin");
 	try {
+		await db.query("update public.lead set suppressed = false, stage = 'new'");
 		await run();
+		await db.query(
+			`update public.lead set suppressed = true where id in ('${id(30)}','${id(31)}')`,
+		);
 		const input = reviewed(`('${id(30)}',E' \\tExample request\\n'),
  ('${id(30)}','Example request'), ('${id(31)}','Example request'),
  ('${id(32)}','Ignored unsuppressed lead'), ('${id(99)}','Ignored missing lead')`);
 		assert.deepEqual(await run(input), []);
 		assert.deepEqual(
 			(
-				await rows(`select party_id,reason,until_date,created_at::text,changed_at::text,changed_by_user_id
- from do_not_contact`)
+				await rows(`select d.party_id,d.reason,d.until_date,d.created_at = l.updated_at as created_on_source,
+ d.changed_at = l.updated_at as changed_on_source,d.changed_by_user_id
+ from do_not_contact d cross join public.lead l where l.id = '${id(31)}'`)
 			).map(Object.values),
-			[
-				[
-					id(20),
-					"Example request",
-					null,
-					"2025-02-01 00:00:00+00",
-					"2025-02-01 00:00:00+00",
-					id(1),
-				],
-			],
+			[[id(20), "Example request", null, true, true, id(1)]],
 		);
 		const before = await snapshot();
 		assert.deepEqual(await run(input), []);

@@ -3,7 +3,6 @@ import { Refusal } from "../answer.ts";
 import type { DB } from "../next-database.d.ts";
 import { ACTING_USER } from "../next-save.ts";
 import { SaveRefusal } from "../save.ts";
-import { ENDED_PHASES } from "./shared.ts";
 
 type NewLocation = { name: string; kind: "person" | "company" };
 
@@ -72,26 +71,6 @@ export async function marketClient(
 		returning location_id`.execute(tx);
 	if (!added) throw new Error("Location insert returned no id");
 	return added.location_id;
-}
-
-export async function checkMarketDealName(tx: Transaction<DB>, name: string) {
-	await sql`select pg_advisory_xact_lock(hashtextextended('market deal name:' || lower(${name}), 0))`.execute(
-		tx,
-	);
-	const existing = await tx
-		.selectFrom("deal as d")
-		.select(["d.id", "d.name"])
-		.where(sql`lower(d.name)`, "=", sql`lower(${name})`)
-		.where(
-			sql<string>`coalesce((select phase from deal_phase_change where deal_id = d.id
-				order by happened_at desc limit 1), '')`,
-			"not in",
-			ENDED_PHASES,
-		)
-		.orderBy("d.id")
-		.execute();
-	if (existing.length)
-		throw new SaveRefusal(new Refusal(409, "deal_name_exists", { existing }));
 }
 
 export async function linkMarketAgent(

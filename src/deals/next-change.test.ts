@@ -30,7 +30,7 @@ before(async () => {
 		insert into deal_reason values ('renewal', 'Renewal');
 		insert into deal (id, name, owner_user_id)
 			select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid, 'Example Deal ' || n, '${ALEX}'
-			from generate_series(10, 26) n;
+			from generate_series(10, 27) n;
 		insert into deal_party (deal_id, party_id, role)
 			select id, '${CLIENT}', 'client' from deal
 			where id between '${id(15)}' and '${id(17)}' or id in ('${id(25)}', '${id(26)}');
@@ -75,6 +75,45 @@ const dealNow = async (deal: string) =>
 			[deal],
 		)
 	).rows[0];
+
+test("the database reserves open names across partners and allows reuse after closing", async () => {
+	const original = id(27);
+	const name = "  example deal 27  ";
+	const args = { name, client_id: CLIENT, owner: "blair", phase: "touring" };
+	const add = () =>
+		saveAt({ user: "blair" }, "deals", {
+			...args,
+			idempotency_key: randomUUID(),
+		});
+
+	const [duplicate, refusal] = await add();
+	assert.deepEqual([duplicate, refusal.error], [409, "deal_name_exists"]);
+	await db.query(
+		"begin; select set_config('engine.job', 'old_system', true); set local role engine",
+	);
+	try {
+		await db.query("set constraints deal_open_name_unique immediate");
+		await assert.rejects(
+			db.query("insert into deal (name, owner_user_id) values ($1, $2)", [
+				name,
+				BLAIR,
+			]),
+			{ code: "23505", constraint: "deal_open_name_unique" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
+
+	const [closed] = await change(partner, original, {
+		phase: { from: "touring", to: "closed", on: "2026-04-01" },
+	});
+	assert.equal(closed, 200);
+	assert.equal((await add())[0], 201);
+	const [reopened, conflict] = await change(partner, original, {
+		phase: { from: "closed", to: "touring" },
+	});
+	assert.deepEqual([reopened, conflict.error], [409, "deal_name_exists"]);
+});
 
 test("a partner's field change and phase move land once, stamped with the partner", async () => {
 	const deal = id(10);

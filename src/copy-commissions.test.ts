@@ -47,7 +47,7 @@ before(async () => {
  insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Lease', 1);
  insert into public.deal_phase (slug, label) values ('negotiation', 'Negotiation');
  insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
- select v, '${id(3)}', 'Example deal', 'lease', 'negotiation', 'partner_one', '${id(1)}', '${id(1)}'
+ select v, '${id(3)}', 'Example deal ' || v, 'lease', 'negotiation', 'partner_one', '${id(1)}', '${id(1)}'
  from unnest(array[${Array.from({ length: 13 }, (_, i) => `'${id(10 + i)}'::uuid`).join(",")}]) v;
  update public.deal set owner = 'partner_two' where id = '${id(16)}';
  update public.deal set owner = null where id = '${id(21)}';
