@@ -21,6 +21,7 @@ type Step = {
 	status: string | null;
 	deal_id: string | null;
 	party_id: string | null;
+	prospect: boolean;
 	context_label: string;
 	due_on: string | null;
 	activity_at: string;
@@ -43,6 +44,9 @@ function stepRows(userId: string) {
 	return sql<Step>`
 		select s.id, s.what as title, s.status, s.deal_id, s.party_id,
 			coalesce(d.name, p.name, property.name, property.address) as context_label,
+			exists (select from party_role r where r.party_id = s.party_id
+				and r.role = 'lead' and r.stage = 'opportunity'
+				and not exists (select from deal_party dp where dp.party_id = r.party_id)) as prospect,
 			s.due_on, coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
 			case when s.hold_until > (now() at time zone 'America/Chicago')::date
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
@@ -101,7 +105,9 @@ function stepCard(step: Step) {
 		: step.deal_id
 			? `/deals?deal=${step.deal_id}&focus=next-step`
 			: step.party_id
-				? `/relationships?node=party:${step.party_id}`
+				? step.prospect
+					? `/deals?prospect=${step.party_id}&focus=follow-up`
+					: `/relationships?node=party:${step.party_id}`
 				: null;
 
 	return {

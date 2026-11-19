@@ -23,6 +23,7 @@ const HINTS = {
 	already_sent: "This draft already has a sent message.",
 	unauthenticated: "The authenticated actor could not be resolved.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
+	not_a_prospect: "This lead is no longer in Prospects.",
 	not_found: "The requested record was not found.",
 	portal_deal_not_found: "Choose a deal with a current client.",
 	portal_slug_taken: "Choose a different website name.",
