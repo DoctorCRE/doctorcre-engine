@@ -17,7 +17,9 @@ cross join lateral copy_event_attribution(m.set_by, (select e.id from public.eve
  order by e.mutation_order desc limit 1)) author;
 
 create temp table examined_market_agent_source on commit drop as
-select m.*, case when mapped_deal_id is null then 'deal_not_copied'
+select m.*, case when source !~ '\S' then 'empty_deal_note'
+ when source ~* '^\s*salesforce\M' then 'technical_deal_note'
+ when mapped_deal_id is null then 'deal_not_copied'
  when exists (select from activity a where a.id = m.activity_id and
   (a.kind, a.happened_at, a.summary, a.from_party_id, a.changed_at,
    a.changed_by_user_id, a.changed_by_job, a.changed_for_user_id) is distinct from
@@ -39,7 +41,8 @@ select activity_id, mapped_deal_id, set_at, set_at,
  changed_by_user_id, changed_by_job, changed_for_user_id
 from examined_market_agent_source where refusal is null on conflict do nothing;
 
-insert into not_copied select deal_id, 'market_agent_source', source, refusal
+insert into not_copied select deal_id, 'market_agent_source',
+ case when refusal not in ('empty_deal_note', 'technical_deal_note') then source end, refusal
 from examined_market_agent_source where refusal is not null;
 insert into not_copied select deal_id, 'changed_for_user_id', null, 'agent_user_unknown'
 from old_market_agent_source where changed_by_job = 'agent' and changed_for_user_id is null;

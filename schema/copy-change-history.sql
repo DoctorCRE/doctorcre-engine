@@ -81,7 +81,9 @@ left join activity note on f.table_name = 'activity'
   and (e.subject_type = 'deal' and about.deal_id = d.id or e.subject_type = 'vendor' and about.party_id = m.party_id))
 left join public.actor actor on actor.id = e.actor_id
 left join public.actor sponsor on sponsor.slug = e.sponsoring_human_slug and sponsor.kind = 'human'
-cross join lateral copy_event_attribution(e.actor_id, e.id) a
+cross join lateral copy_event_attribution(case
+ when e.subject_type = 'deal' and e.field = 'owner' and e.cause = 'automation_job' then null
+ else e.actor_id end, e.id) a
 left join app_user u on u.id = a.changed_by_user_id
 left join app_user su on su.id = a.changed_for_user_id;
 
@@ -155,7 +157,9 @@ with candidates as (
  select e.*, d.id as deal_id, a.changed_by_user_id, a.changed_by_job, u.id as user_id,
   string_to_array(s.keys, ' ') as keys
  from public.event e join public.v_deal_room_event visible using (id)
- cross join lateral copy_event_attribution(e.actor_id, e.id) a
+ cross join lateral copy_event_attribution(case
+  when e.verb = 'set-lead' and e.field is null and e.cause = 'automation_job' then null
+  else e.actor_id end, e.id) a
  left join outside_id m on m.source = 'old_system' and m.value = e.subject_id::text
  left join deal d on d.id = m.deal_id
  left join app_user u on u.id = a.changed_by_user_id
@@ -186,12 +190,16 @@ with candidates as (
    and n.id::text = e.new_value ->> 'next_action_id' and n.status = 'done' and n.done_at = e.occurred_at)
   and not exists (select from public.deal_invoice_email old join invoice_email saved using (id)
    where old.invoice_event_id = e.id and saved.deal_id = d.id and saved.payment_change_id is not null)
-  and not exists (select from imported_deal_history h where h.id = e.id)
 )
-select e.*, parsed.old_snapshot, parsed.new_snapshot,
+select e.*, cleaned.old_value as plain_old, cleaned.new_value as plain_new, omitted.keys as omitted_keys,
  case when deal_id is null then 'deal_history_deal_not_copied'
   when changed_by_user_id is not null and user_id is null then 'deal_history_user_not_copied'
-  when not checked.valid then 'deal_history_payload_invalid' end as refusal
+  when not checked.valid then 'deal_history_payload_invalid'
+  when verb = 'import' or field in ('salesforce_id', 'notes_path')
+   or (cardinality(omitted.keys) > 0 and cleaned.old_value is null and cleaned.new_value is null)
+   then 'technical_deal_history'
+  when field = 'next_date' and coalesce(e.old_value ->> 'next_date', e.new_value ->> 'next_date') is null
+   then 'empty_deal_history' end as refusal
 from candidates e
 cross join lateral (select
  case when jsonb_typeof(e.old_value) = 'object'
@@ -208,10 +216,25 @@ cross join lateral (
    and (not payload ? 'attachments' or payload -> 'attachments' = snapshot -> 'attachments')
   end) as valid
  from (values (e.old_value, to_jsonb(parsed.old_snapshot)), (e.new_value, to_jsonb(parsed.new_snapshot))) v(payload, snapshot)
-) checked;
+) checked
+cross join lateral (
+ select array(select distinct f.key
+  from (values (e.old_value), (e.new_value)) v(payload)
+  cross join lateral jsonb_each_text(case when jsonb_typeof(v.payload) = 'object' then v.payload end) f
+  where f.key = 'salesforce_id' or f.key = 'source' and
+   f.value ~* '\mcarr\M|(^|[[:space:],])([~.]?/|[a-z]:\\)|\.(json|md|txt|log|csv)\M|https?://'
+ ) as keys
+) omitted
+cross join lateral (
+ select case when checked.valid then nullif(e.old_value - omitted.keys, '{}'::jsonb) end as old_value,
+  case when checked.valid then nullif(e.new_value - omitted.keys, '{}'::jsonb) end as new_value
+) cleaned;
 
 insert into listed
 select id, field, refusal from deal_history_candidate where refusal is not null;
+insert into listed
+select id, key, 'technical_deal_history_field' from deal_history_candidate
+cross join lateral unnest(omitted_keys) key where refusal is null;
 
 insert into imported_deal_history (
  id, deal_id, occurred_at, recorded_at, source_actor_id, source_deal_id, changed_by_user_id, changed_by_job, verb, field,
@@ -219,13 +242,15 @@ insert into imported_deal_history (
  client_id, sponsoring_human_slug, personal_scope, authorization_class, organization_tenant_id, correlation_id, mutation_order
 )
 select id, deal_id, occurred_at, recorded_at, actor_id, subject_id, user_id, changed_by_job, verb, field,
- old_snapshot, new_snapshot,
- case when old_value is not null then array(select jsonb_object_keys(old_value)) end,
- case when new_value is not null then array(select jsonb_object_keys(new_value)) end,
+ jsonb_populate_record(null::imported_deal_values, plain_old),
+ jsonb_populate_record(null::imported_deal_values, plain_new),
+ case when plain_old is not null then array(select jsonb_object_keys(plain_old)) end,
+ case when plain_new is not null then array(select jsonb_object_keys(plain_new)) end,
  cause, human_quote, agent_rationale, idempotency_key, via, client_id, sponsoring_human_slug,
  personal_scope, authorization_class, organization_tenant_id, correlation_id, mutation_order
 from deal_history_candidate where refusal is null
 on conflict (id) do nothing;
 
-delete from listed l using imported_deal_history h where h.id = l.old_id;
+delete from listed l using imported_deal_history h
+where h.id = l.old_id and l.reason not in ('technical_deal_history_field', 'technical_deal_history', 'empty_deal_history');
 select * from listed order by old_id, field, reason;

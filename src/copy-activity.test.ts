@@ -476,6 +476,60 @@ test("keeps what is still missing under its label after the summary and detail, 
 	);
 });
 
+test("copies readable dated notes and lists empty or unreadable notes by ID", async () => {
+	const notes = [
+		"[{'date': '2025-02-01', 'text': 'Sent the survey'}, {'date': '2025-02-03', 'text': \"We're ready\"}, {'date': 'mid March 2025', 'text': 'Followed up'}]",
+		'[{"date": "2025-03-04", "text": "Received terms"}]',
+		"[{'date': '2025-02-01', 'text': 'Sent the survey'}, {'date': '2025-02",
+		"[]",
+		'[{"date": "2025-02-01", "text": "Sent the survey"}, {"date": "2025-02-30", "text": "Not a real day"}]',
+		'[{"date": "2025-02-01", "text": "Sent the survey"}, null]',
+	];
+	for (const [index, note] of notes.entries()) {
+		await db.query(
+			"insert into public.activity (id, kind, occurred_at, actor_id, deal_id, summary) values ($1, 'note', '2025-04-01', $2, $3, $4)",
+			[id(100 + index), id(1), id(30), note],
+		);
+	}
+	await db.query(
+		"insert into public.deal_note (id, deal_id, kind, text, actor_id) values ($1, $2, 'note', $3, $4)",
+		[id(106), id(30), "\t\n", id(1)],
+	);
+	const copied = async () =>
+		(
+			await db.query(
+				"select a.id, a.summary, b.deal_id from activity a join activity_about b on b.activity_id = a.id where a.id between $1 and $2 order by a.id",
+				[id(100), id(106)],
+			)
+		).rows;
+	const expected = [
+		{
+			id: id(100),
+			summary:
+				"February 1, 2025\nSent the survey\n\nFebruary 3, 2025\nWe're ready\n\nmid March 2025\nFollowed up",
+			deal_id: id(30),
+		},
+		{ id: id(101), summary: "March 4, 2025\nReceived terms", deal_id: id(30) },
+	];
+	const listed = [
+		"02 summary unreadable_dated_note",
+		"03 summary empty_deal_note",
+		"04 summary unreadable_dated_note",
+		"05 summary unreadable_dated_note",
+		"06 summary empty_deal_note",
+	];
+	for (const _ of [1, 2]) {
+		const report = await run();
+		assert.deepEqual(
+			reasons(
+				report.filter(({ old_id }) => old_id >= id(100) && old_id <= id(106)),
+			),
+			listed,
+		);
+		assert.deepEqual(await copied(), expected);
+	}
+});
+
 test("keeps every written next step as a recorded note about its deal, making no next step", async () => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)

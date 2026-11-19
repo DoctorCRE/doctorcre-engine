@@ -78,7 +78,7 @@ before(async () => {
  commit;`);
 });
 beforeEach(async () => {
-	await db.query(`begin; select set_config('engine.job','old_system',true); delete from imported_change; delete from public.event;
+	await db.query(`begin; select set_config('engine.job','old_system',true); delete from imported_change; delete from imported_deal_history; delete from public.event;
  delete from outside_id where source = 'old_system' and value = '${id(99)}';
  insert into party_role (party_id,role) values ('${id(10)}','vendor') on conflict do nothing; commit`);
 });
@@ -127,6 +127,149 @@ test("imports a unique deal note event and lists ambiguous and unmatched events 
 	assert.deepEqual(first, listed);
 	assert.deepEqual(await run(), listed);
 	assert.deepEqual(await imported(), [{ id: id(35), record: { id: id(32) } }]);
+});
+
+test("deal history lists technical details and empty date events while keeping business facts", async () => {
+	const events = [
+		[
+			"new-deal",
+			null,
+			null,
+			{
+				phase: "pending",
+				deal_type: "relocation",
+				salesforce_id: "EXAMPLE-42",
+			},
+		],
+		[
+			"record-finding",
+			"discrepancy",
+			null,
+			{ found: false, source: "CARR call transcript, ~/example.txt" },
+		],
+		[
+			"record-finding",
+			"verified",
+			null,
+			{ found: true, source: "Partner confirmed by phone" },
+		],
+		["import", null, null, { summary: "Imported from example.json" }],
+		["update-deal", "salesforce_id", null, { salesforce_id: "EXAMPLE-42" }],
+		["update-deal", "notes_path", null, { notes_path: "/example/deal.md" }],
+		["set-next-action", "next_date", { next_date: null }, { next_date: null }],
+		[
+			"set-next-action",
+			"next_date",
+			{ next_date: "2025-02-01" },
+			{ next_date: null },
+		],
+	] as const;
+	for (const [index, [verb, field, before, after]] of events.entries()) {
+		await db.query(
+			"insert into public.event (id, actor_id, subject_type, subject_id, verb, field, old_value, new_value, cause, occurred_at) values ($1, $2, 'deal', $3, $4, $5, $6, $7, 'human_stated', '2025-04-01')",
+			[id(60 + index), id(1), id(20), verb, field, before, after],
+		);
+	}
+	const copied = async () =>
+		(
+			await db.query(
+				"select event->>'id' as id, event->'old_value' as before, event->'new_value' as after from deal_imported_history cross join jsonb_array_elements(events) event where deal_id = $1 order by 1",
+				[id(20)],
+			)
+		).rows;
+	for (const _ of [1, 2]) {
+		assert.deepEqual(
+			(await run()).filter(({ reason }) =>
+				/^(technical|empty)_deal_history/.test(reason),
+			),
+			[
+				{
+					old_id: id(60),
+					field: "salesforce_id",
+					reason: "technical_deal_history_field",
+				},
+				{
+					old_id: id(61),
+					field: "source",
+					reason: "technical_deal_history_field",
+				},
+				{ old_id: id(63), field: null, reason: "technical_deal_history" },
+				{
+					old_id: id(64),
+					field: "salesforce_id",
+					reason: "technical_deal_history",
+				},
+				{
+					old_id: id(65),
+					field: "notes_path",
+					reason: "technical_deal_history",
+				},
+				{ old_id: id(66), field: "next_date", reason: "empty_deal_history" },
+			],
+		);
+		assert.deepEqual(await copied(), [
+			{
+				id: id(60),
+				before: null,
+				after: { phase: "pending", deal_type: "relocation" },
+			},
+			{ id: id(61), before: null, after: { found: false } },
+			{
+				id: id(62),
+				before: null,
+				after: { found: true, source: "Partner confirmed by phone" },
+			},
+			{
+				id: id(67),
+				before: { next_date: "2025-02-01" },
+				after: { next_date: null },
+			},
+		]);
+	}
+});
+
+test("deal owner history credits the move when the event records automation", async () => {
+	for (const [n, cause] of [
+		[70, "automation_job"],
+		[71, "human_stated"],
+	] as const) {
+		await db.query(
+			"insert into public.event (id, actor_id, subject_type, subject_id, verb, field, new_value, cause, occurred_at) values ($1, $2, 'deal', $3, 'set-lead', 'owner', $4, $5, '2025-04-01')",
+			[id(n), id(1), id(20), { owner: "partner_two" }, cause],
+		);
+	}
+	await db.query(
+		"insert into public.event (id, actor_id, subject_type, subject_id, verb, new_value, cause, occurred_at) values ($1, $2, 'deal', $3, 'set-lead', $4, 'automation_job', '2025-04-01')",
+		[id(72), id(2), id(20), { lead: "partner_two" }],
+	);
+	const copied = () =>
+		rows(
+			"select id, changed_by_user_id, changed_by_job, source_event->>'actor_id' as source_actor from imported_change order by id",
+		);
+	const expected = [
+		{
+			id: id(70),
+			changed_by_user_id: null,
+			changed_by_job: "old_system",
+			source_actor: id(1),
+		},
+		{
+			id: id(71),
+			changed_by_user_id: id(1),
+			changed_by_job: null,
+			source_actor: id(1),
+		},
+	];
+	for (const _ of [1, 2]) {
+		assert.deepEqual(await run(), []);
+		assert.deepEqual(await copied(), expected);
+		assert.deepEqual(
+			await rows(
+				"select source_actor_id, changed_by_job from imported_deal_history",
+			),
+			[{ source_actor_id: id(2), changed_by_job: "old_system" }],
+		);
+	}
 });
 
 test("copies field evidence for every supported record kind without replay or invented snapshots", async () => {

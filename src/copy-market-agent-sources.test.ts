@@ -194,12 +194,12 @@ test("an unrelated activity or link holding the fixed id is listed", async () =>
 	});
 });
 
-test("a missing deal can be copied later and blank source text stays exact", async () => {
+test("a missing deal can be copied later with its plain source text", async () => {
 	await transaction(async () => {
 		await run();
 		await db.query(`${restart} select set_config('engine.job','old_system',true);
    insert into outside_id (source,value,deal_id) values ('old_system','${id(12)}','${id(20)}');
-   update public.deal_market_assignment set source=E' \t ' where deal_id='${id(12)}';`);
+   update public.deal_market_assignment set source='Confirmed in a call' where deal_id='${id(12)}';`);
 		const report = await run();
 		assert.equal(
 			report.some(
@@ -211,7 +211,52 @@ test("a missing deal can be copied later and blank source text stays exact", asy
 			await rows(
 				`select a.summary,b.deal_id from activity a join activity_about b on b.activity_id=a.id where a.id='${noteId(12)}'`,
 			),
-			[{ summary: "Market agent source\n\n \t ", deal_id: id(20) }],
+			[
+				{
+					summary: "Market agent source\n\nConfirmed in a call",
+					deal_id: id(20),
+				},
+			],
+		);
+	});
+});
+
+test("blank and technical sources are listed without copying their text", async () => {
+	await transaction(async () => {
+		for (const [deal, source] of [
+			[id(10), " \t "],
+			[id(11), "Salesforce record EXAMPLE-42, observed 2025-04-01"],
+		]) {
+			await db.query(
+				"update public.deal_market_assignment set source=$1 where deal_id=$2",
+				[source, deal],
+			);
+		}
+		const report = await run();
+		assert.deepEqual(
+			report.filter((r) => r.old_id === id(10) || r.old_id === id(11)),
+			[
+				{
+					old_id: id(10),
+					field: "market_agent_source",
+					value: null,
+					reason: "empty_deal_note",
+				},
+				{
+					old_id: id(11),
+					field: "market_agent_source",
+					value: null,
+					reason: "technical_deal_note",
+				},
+			],
+		);
+		assert.deepEqual(
+			(
+				await db.query("select id from activity where id = any($1::uuid[])", [
+					[noteId(10), noteId(11)],
+				])
+			).rows,
+			[],
 		);
 	});
 });
