@@ -62,6 +62,7 @@ before(async () => {
  ('${id(1)}','partner_one','human','Example User'), ('${id(2)}','codex','automation','Example Agent'),
  ('${id(3)}','example-system','system','Example System'), ('${id(4)}','partner_two','human','Example Other User'),
  ('${id(5)}','example-mail','automation','Example Mail');
+ insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,10);
  insert into how_found values ('referral','Referral');
  insert into party (id,kind,name,how_found) values ('${id(1)}','person','Example User',null),
  ('${id(10)}','person','Example Party','referral');
@@ -86,6 +87,47 @@ const baseline = async () => {
 	await run();
 };
 after(cleanup);
+
+test("imports a unique deal note event and lists ambiguous and unmatched events on every copy", async () => {
+	const copyActivity = await readSchema("copy-activity.sql");
+	await db.query(`begin;
+ insert into public.party (id, kind, name, created_by, updated_by)
+ values ('${id(10)}', 'person', 'Example Client', '${id(1)}', '${id(1)}');
+ insert into public.client (id, party_id, created_by, updated_by)
+ values ('${id(10)}', '${id(10)}', '${id(1)}', '${id(1)}');
+ insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
+ insert into public.deal_phase (slug, label) values ('touring', 'Example touring');
+ insert into public.deal (id, client_id, name, deal_type, phase, created_by, updated_by)
+ values ('${id(20)}', '${id(10)}', 'Example Deal', 'lease', 'touring', '${id(1)}', '${id(1)}');
+ insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at)
+ select note_id, '${id(20)}', 'note', note, '${id(1)}', '2024-01-01' from (values
+ ('${id(30)}'::uuid, 'Example repeated'), ('${id(31)}', 'Example repeated'),
+ ('${id(32)}', 'Example unique')) n(note_id, note);
+ insert into public.event (id, actor_id, verb, subject_type, subject_id, field, new_value, cause, occurred_at, recorded_at)
+ select event_id, '${id(1)}', 'add-deal-note', 'deal', '${id(20)}', 'note',
+ jsonb_build_object('note', note), 'human_stated', '2024-01-01', '2024-01-02' from (values
+ ('${id(33)}'::uuid, 'Example repeated'), ('${id(34)}', 'Example missing'),
+ ('${id(35)}', 'Example unique')) e(event_id, note);
+ ${copyActivity} commit;`);
+	assert.deepEqual(
+		await rows(
+			`select count(*)::int as count from activity_about where deal_id = '${id(20)}'`,
+		),
+		[{ count: 3 }],
+	);
+	const listed = [
+		{ old_id: id(33), field: "note", reason: "note_not_matched" },
+		{ old_id: id(34), field: "note", reason: "note_not_matched" },
+	];
+	const imported = () =>
+		rows("select id, record from imported_change order by id");
+	assert.deepEqual(await imported(), []);
+	const first = await run();
+	assert.deepEqual(await imported(), [{ id: id(35), record: { id: id(32) } }]);
+	assert.deepEqual(first, listed);
+	assert.deepEqual(await run(), listed);
+	assert.deepEqual(await imported(), [{ id: id(35), record: { id: id(32) } }]);
+});
 
 test("copies field evidence for every supported record kind without replay or invented snapshots", async () => {
 	const cases: [string, number, string, string, object, string][] = [
@@ -230,7 +272,6 @@ test("vendor note history follows exactly the copied notes without changing thei
 	await db.query(`begin; select set_config('engine.job','old_system',true);
  insert into party (id,kind,name) values ('${id(60)}','company','Example Vendor');
  insert into outside_id (source,value,party_id) values ('old_system','${id(60)}','${id(60)}');
- insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,10);
  insert into public.vendor_disposition (slug,label,workable,sort) values ('active','Example active',true,10);
  insert into public.party (id,kind,name,created_by,updated_by)
  values ('${id(60)}','person','Example Vendor','${id(1)}','${id(1)}');

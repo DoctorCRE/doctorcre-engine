@@ -63,6 +63,7 @@ select e.id, e.field as old_field, f.table_name,
   when a.changed_by_job in ('agent', 'mail_capture') and e.sponsoring_human_slug is not null and sponsor.id is null then 'unknown_sponsor'
   when a.changed_for_user_id is not null and su.id is null then 'sponsor_not_copied' end as actor_problem,
  payload.known_shape = false as unknown_payload,
+ e.subject_type = 'deal' and e.verb = 'add-deal-note' and dn.note_id is null as note_not_matched,
  a.changed_by_job = 'agent' and e.sponsoring_human_slug is null as unknown_agent_user
 from public.event e
 left join deal_history_payload payload on payload.id = e.id
@@ -88,7 +89,8 @@ insert into listed
 select id, old_field, problem from history_event
 cross join lateral (values
  (case when table_name is null then 'field_has_no_mapping' end),
- (case when table_name is not null and record is null then 'record_not_copied' end),
+ (case when table_name is not null and record is null
+  then case when note_not_matched then 'note_not_matched' else 'record_not_copied' end end),
  (case when unknown_payload then 'payload_shape_unknown' end),
  (actor_problem), (case when unknown_agent_user then 'agent_user_unknown' end)
 ) p(problem) where problem is not null;

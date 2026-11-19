@@ -154,7 +154,9 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				from deal_phase_change p left join app_user u on u.id = p.changed_by_user_id
 				where p.deal_id = d.id
 					-- An import can seed the phase at the last observed time without move evidence.
-					and (p.changed_by_job is distinct from 'old_system' or p.happened_at <> p.changed_at)
+					and (p.changed_by_job is distinct from 'old_system' or p.happened_at <> p.changed_at
+						or exists (select from deal_phase_change prior
+							where prior.deal_id = p.deal_id and prior.happened_at < p.happened_at))
 				union all
 				select c.id || ':' || edit.key, c.changed_at, coalesce(u.slug, c.changed_by_job), 'update-deal',
 					case edit.key
