@@ -11,6 +11,8 @@ const SYSTEM = id(2);
 const OTHER_PARTNER = id(4);
 
 const COPY = await readSchema("copy-vendors.sql");
+const COPY_STEPS = await readSchema("copy-deal-next-steps.sql");
+const IMPORTED_REASON = "not recorded, set before the new system";
 
 // A row shaped like today's vendor, last changed by the system unless it says otherwise.
 const oldVendor = (
@@ -103,7 +105,7 @@ ${oldVendor(41, 15, {
 })}
 ${oldVendor(42, 11, { vendor_ref: "P-0010", category: "Misc", relationship_level: "4", enrich: "true", referral_active: "false", owner_id: SYSTEM, owner_label: "partner_one" })}
 ${oldVendor(43, 16, { owner_label: "Unassigned" })}
-${oldVendor(44, 17, { disposition: "parked", category_slug: "cpa" })}
+${oldVendor(44, 17, { disposition: "parked", category_slug: "cpa", owner_id: OTHER_PARTNER })}
 ${oldVendor(45, 18, { vendor_ref: "V-0045" })}
 ${oldVendor(46, 19, { disposition: "avoid", is_target: "false" })}
 ${oldVendor(47, 10, {
@@ -178,7 +180,7 @@ test("today's stages are vendor stages, but not the nine that migration 0047 spl
 	]);
 });
 
-test("a record's vendors become one vendor role with each category, and a ruled vendor waits whole", async () => {
+test("a record's vendors become one vendor role with each category", async () => {
 	// biome-ignore format: one row per role
 	assert.deepEqual(await rows("select party_id, role, stage, relationship_level, disposition, is_target from party_role order by party_id, role"), [
 		{ party_id: id(10), role: "contractor", stage: null, relationship_level: null, disposition: null, is_target: false },
@@ -186,6 +188,9 @@ test("a record's vendors become one vendor role with each category, and a ruled 
 		{ party_id: id(10), role: "lender", stage: null, relationship_level: null, disposition: null, is_target: false },
 		{ party_id: id(10), role: "vendor", stage: "example", relationship_level: 2, disposition: null, is_target: true },
 		{ party_id: id(11), role: "vendor", stage: null, relationship_level: null, disposition: null, is_target: false },
+		{ party_id: id(17), role: "cpa", stage: null, relationship_level: null, disposition: null, is_target: false },
+		{ party_id: id(17), role: "vendor", stage: null, relationship_level: null, disposition: "parked", is_target: false },
+		{ party_id: id(19), role: "vendor", stage: null, relationship_level: null, disposition: "avoid", is_target: false },
 	]);
 });
 
@@ -234,9 +239,8 @@ test("each value it does not copy is listed, with why", () => {
 		[id(42), "relationship_level", "4", "not a relationship level"],
 		[id(42), "vendor_ref", "P-0010", `also the id of ${id(10)}`],
 		[id(43), "vendor", null, "its record is not copied"],
-		[id(44), "disposition", "parked", "a ruling without a reason"],
-		[id(45), "vendor", "V-0045", "another vendor of its record waits for a ruling"],
-		[id(46), "disposition", "avoid", "a ruling without a reason"],
+		[id(45), "category", "Example category", "not a vendor category"],
+		[id(46), "category", "Example category", "not a vendor category"],
 		[id(47), "offers", "Different offer", "its record holds another value"],
 		[id(47), "originated", "Merged origin", "its record holds another value"],
 		[id(47), "owner_label", "Shared", "relationship owner has no actor id"],
@@ -254,6 +258,8 @@ test("vendor relationship owners must map to a user and reruns keep a partner's 
 		assert.deepEqual(await owners(), [
 			{ party_id: id(10), owner_user_id: PARTNER },
 			{ party_id: id(11), owner_user_id: null },
+			{ party_id: id(17), owner_user_id: OTHER_PARTNER },
+			{ party_id: id(19), owner_user_id: null },
 		]);
 		await db.query(`select set_config('engine.user_id', '${PARTNER}', true);
 			update party_role set owner_user_id = null where party_id = '${id(10)}' and role = 'vendor';
@@ -262,6 +268,8 @@ test("vendor relationship owners must map to a user and reruns keep a partner's 
 		assert.deepEqual(await owners(), [
 			{ party_id: id(10), owner_user_id: null },
 			{ party_id: id(11), owner_user_id: null },
+			{ party_id: id(17), owner_user_id: OTHER_PARTNER },
+			{ party_id: id(19), owner_user_id: null },
 		]);
 	}));
 
@@ -419,18 +427,97 @@ const RULING_FIELDS = [
 const rulingRows = async (sql: string) =>
 	(await copy(sql))?.filter((row) => RULING_FIELDS.includes(row[1] as string));
 
+test("vendors with unrecorded reasons keep their rulings and their partner's dated and settled tasks", () =>
+	rolledBack(async () => {
+		assert.deepEqual(
+			await rows(`select party_id, disposition, disposition_reason, owner_user_id from party_role
+			where role = 'vendor' and party_id in ('${id(17)}', '${id(19)}') order by party_id`),
+			[
+				{
+					party_id: id(17),
+					disposition: "parked",
+					disposition_reason: IMPORTED_REASON,
+					owner_user_id: OTHER_PARTNER,
+				},
+				{
+					party_id: id(19),
+					disposition: "avoid",
+					disposition_reason: IMPORTED_REASON,
+					owner_user_id: null,
+				},
+			],
+		);
+		await db.query(`insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, due_on, created_by) values
+			('${id(60)}', 'vendor', '${id(44)}', '${OTHER_PARTNER}', 'Example dated check-in', 'open', '2026-12-01', '${OTHER_PARTNER}'),
+			('${id(61)}', 'vendor', '${id(46)}', '${OTHER_PARTNER}', 'Example completed check-in', 'done', null, '${OTHER_PARTNER}');
+			insert into public.event (subject_type, subject_id, field, new_value, actor_id, verb, cause, occurred_at) values
+			('vendor', '${id(46)}', 'status', '{"next_action_id":"${id(61)}","status":"done"}',
+			 '${OTHER_PARTNER}', 'complete-one-action', 'human_stated', '2026-11-18 15:00:00+00');
+			${COPY_STEPS}`);
+		assert.deepEqual(
+			await rows(
+				`select id, party_id, owner_party_id, due_on::text, status, done_at::text from next_step order by id`,
+			),
+			[
+				{
+					id: id(60),
+					party_id: id(17),
+					owner_party_id: OTHER_PARTNER,
+					due_on: "2026-12-01",
+					status: "open",
+					done_at: null,
+				},
+				{
+					id: id(61),
+					party_id: id(19),
+					owner_party_id: OTHER_PARTNER,
+					due_on: null,
+					status: "done",
+					done_at: "2026-11-18 15:00:00+00",
+				},
+			],
+		);
+	}));
+
+for (const [operation, sql] of [
+	[
+		"adding a ruling",
+		`insert into party_role (party_id, role, disposition, disposition_reason)
+		values ('${PARTNER}', 'vendor', 'parked', '${IMPORTED_REASON}')`,
+	],
+	[
+		"changing an imported ruling",
+		`update party_role set disposition = 'avoid', is_target = false
+		where party_id = '${id(17)}' and role = 'vendor'`,
+	],
+] satisfies [string, string][]) {
+	test(`the engine requires a real reason when ${operation}`, () =>
+		rolledBack(async () => {
+			await db.query(
+				`set local role engine; select set_config('engine.user_id', '${PARTNER}', true);`,
+			);
+			await assert.rejects(db.query(sql), {
+				constraint: "vendor_reason_not_recorded_only_imported",
+			});
+		}));
+}
+
 test("a ruled vendor comes across with its reviewed reason, the strictest on its record, and then brings its note and introductions", () =>
 	rolledBack(async () => {
-		await db.query(`alter table public.vendor disable trigger vendor_touch;
+		await db.query(`select set_config('engine.job', 'old_system', true);
+		set constraints all immediate;
+		delete from outside_id where source = 'old_system' and value in ('${id(44)}', '${id(45)}', '${id(46)}');
+		delete from party_role where party_id in ('${id(17)}', '${id(19)}');
+		alter table public.vendor disable trigger vendor_touch;
 		update public.vendor set intro_notes = 'Example parked note' where id = '${id(44)}';
 		update public.vendor set disposition = 'avoid', is_target = true where id = '${id(45)}';
 		insert into public.party_link_kind (slug, label, sort) values ('introduced', 'Example', 1);
 		${link(93, 17, 11, "introduced", 17)}`);
 		// biome-ignore format: one row per value
-		assert.deepEqual(await rulingRows(reviewed([46, "Example reason one"], [46, "Example reason two"])), [
+		assert.deepEqual(await rulingRows(reviewed(...[44, 46].flatMap((n): [number, string][] => [[n, "Example reason one"], [n, "Example reason two"]]))), [
 			[id(43), "vendor", null, "its record is not copied"],
-			[id(44), "disposition", "parked", "a ruling without a reason"],
-			[id(45), "disposition", "avoid", "a ruling without a reason"],
+			[id(44), "disposition", "parked", "its reviewed reasons conflict"],
+			[id(45), "vendor", "V-0045", "another vendor of its record waits for a ruling"],
 			[id(46), "disposition", "avoid", "its reviewed reasons conflict"],
 			[id(93), "party_link", "introduced", "made by neither a copied vendor nor a user"],
 		]);
@@ -638,9 +725,16 @@ test("merging vendor roles keeps the survivor's owner and text, fills missing va
 		);
 		await db.query(`update party_role set relationship_origin = null, rivalry_note = null, refers_business = null, owner_user_id = null
 			where party_id = '${id(10)}' and role = 'vendor';
-			insert into party_role (party_id, role, relationship_origin, rivalry_note, refers_business, owner_user_id)
-			values ('${id(17)}', 'vendor', 'Filled origin', 'Filled rivalry', false, '${OTHER_PARTNER}');
+			update party_role set relationship_origin = 'Filled origin', rivalry_note = 'Filled rivalry', refers_business = false
+			where party_id = '${id(17)}' and role = 'vendor';
 			select merge_party('${id(17)}', '${id(10)}');`);
+		assert.deepEqual(
+			await rows(`select disposition, disposition_reason from party_role
+			where party_id = '${id(10)}' and role = 'vendor'`),
+			[{ disposition: "parked", disposition_reason: IMPORTED_REASON }],
+		);
+		await db.query(`update party_role set disposition = 'avoid', disposition_reason = 'Example reason', is_target = false
+			where party_id = '${id(10)}' and role = 'vendor';`);
 		assert.deepEqual(
 			await rows(`select relationship_origin, rivalry_note, refers_business, owner_user_id
 			from party_role where party_id = '${id(10)}' and role = 'vendor'`),
@@ -736,6 +830,7 @@ test("introductions either way, and the deals a vendor worked or referred, are c
 				{ deal_id: id(70), party_id: id(10), role: "contractor" },
 				{ deal_id: id(72), party_id: id(10), role: "cpa" },
 				{ deal_id: id(70), party_id: id(11), role: "vendor" },
+				{ deal_id: id(70), party_id: id(17), role: "cpa" },
 			],
 		);
 		// biome-ignore format: one row per value
@@ -744,7 +839,7 @@ test("introductions either way, and the deals a vendor worked or referred, are c
 			[id(40), "deal_evidence", `worked ${id(71)}`, "its deal is not copied"],
 			[id(41), "deal_evidence", `referred ${id(20)}`, "its deal is not copied"],
 			[id(53), "party_link", "referred", "who made it is not recorded"],
-			[id(55), "party_link", "introduced", "made by neither a copied vendor nor a user"],
+			[id(55), "party_link", "introduced", "whom it introduced cannot be told"],
 			[id(56), "party_link", "introduced", "a party it links is not copied"],
 			[id(57), "party_link", "intro", "no single copied vendor on either side"],
 		]);
@@ -767,20 +862,6 @@ test("introductions either way, and the deals a vendor worked or referred, are c
 			listed,
 		);
 		assert.deepEqual(await rows("select * from change order by id"), history);
-
-		const released = `select to_jsonb(p) from deal_party p union all select to_jsonb(c) from change c`;
-		await db.query("discard temp");
-		await copy(reviewed([44, "Example parked reason"]));
-		assert.deepEqual(
-			await rows(
-				`select deal_id, role from deal_party where party_id = '${id(17)}'`,
-			),
-			[{ deal_id: id(70), role: "cpa" }],
-		);
-		const kept = await rows(released);
-		await db.query("discard temp");
-		await copy(reviewed([44, "Example parked reason"]));
-		assert.deepEqual(await rows(released), kept);
 	}));
 
 // Party 12 is a second user, and 16 is the party that was not copied.

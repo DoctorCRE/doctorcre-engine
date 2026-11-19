@@ -40,16 +40,18 @@ insert into not_copied select * from date_refusal;
 
 insert into critical_date (id, created_at, deal_id, kind, due_on, source, note, status, confirmed_by_user_id, confirmed_at,
  resolved_by_user_id, resolved_at, resolution_reason, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select d.id, d.created_at, d.deal_id, k.kind, d.due_on, d.source,
- case when k.kind = 'other' and d.kind <> 'other' then concat_ws(E'\n', 'Kind: ' || d.kind, d.note) else d.note end,
+select d.id, d.created_at, d.deal_id,
+ case when d.kind = 'option_window' then 'option_notice'
+  when d.kind = 'lease commencement' then 'lease_commencement'
+  when d.kind in ('loi_expiry', 'option_notice', 'rent_start', 'lease_end', 'due_diligence') then d.kind
+  else 'other' end,
+ d.due_on, d.source, d.note,
  case d.status when 'open' then case when d.author_user_id is null then 'proposed' else 'open' end when 'cleared' then 'done' else d.status end,
  d.author_user_id, case when d.author_user_id is not null then d.created_at end,
  case when d.status <> 'open' then d.resolved_by_user_id end, case when d.status <> 'open' then d.resolved_at end,
  case when d.status <> 'open' then d.resolution_reason end,
  d.updated_at, d.changed_by_user_id, d.changed_by_job, d.changed_for_user_id
 from old_date d
-cross join lateral (select case when d.kind = 'option_window' then 'option_notice'
- when d.kind in ('loi_expiry', 'option_notice', 'rent_start', 'lease_end', 'due_diligence') then d.kind else 'other' end as kind) k
 where not exists (select from date_refusal r where r.id = d.id);
 alter table critical_date enable trigger stamp_change;
 alter table critical_date enable trigger critical_date_transition;
