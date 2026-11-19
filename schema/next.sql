@@ -52,6 +52,8 @@ create table app_user (
 	created_at timestamptz not null default now(),
 	-- The name the user signs in under, which today's answers show wherever they name a user.
 	slug text not null unique check (slug ~ '\S'),
+	is_account_partner boolean generated always as (slug in ('joe', 'dell')) stored,
+	unique (id, is_account_partner),
 	foreign key (id, kind) references party (id, kind)
 );
 
@@ -885,10 +887,10 @@ create table national_account_owner (
 	created_at timestamptz not null default now(),
 	account_id uuid not null references national_account (party_id) on update cascade,
 	owner_id uuid not null,
-	owner_kind text generated always as ('person') stored,
+	owner_is_partner boolean generated always as (true) stored,
 	started_on date not null,
 	ended_on date check (ended_on > started_on),
-	foreign key (owner_id, owner_kind) references party (id, kind),
+	foreign key (owner_id, owner_is_partner) references app_user (id, is_account_partner),
 	exclude using gist (account_id with =, daterange(started_on, ended_on) with &&)
 );
 
@@ -3181,7 +3183,7 @@ begin atomic
 			where p.id in (b.location_id, b.brand_id)
 		),
 		'national_account_owners', (
-			select coalesce(jsonb_agg(to_jsonb(o) - 'owner_kind'
+			select coalesce(jsonb_agg(to_jsonb(o) - 'owner_is_partner'
 				|| jsonb_build_object('party', to_jsonb(other)) order by o.started_on, o.id), '[]')
 			from national_account_owner o join party other on other.id = case when o.account_id = p.id then o.owner_id else o.account_id end
 			where p.id in (o.account_id, o.owner_id)

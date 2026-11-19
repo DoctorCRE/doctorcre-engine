@@ -52,7 +52,6 @@ _New database_: no prospect status. Someone is a client once a deal is opened fo
 
 **National account**:
 A franchise or multi-location brand that we serve as one main client. One partner is its account owner. Each location is a franchisee with its own deals. A deal outside our territory is likely a national-account deal.
-_Referral_: another Carr agent who owns a national account can refer one of its deals to a partner. The deal is then in our market, but that agent owns the account, not us.
 _Avoid_: account client, parent client, brand, portfolio
 _Database_: `client` with `client_type = 'national_account'`; `v_client_account.account_client_id`; `v_deal_room_account`; `national_account_owner`. The old Salesforce flag `deal.lane` (`territory` or `national`) can disagree with whether the client sits under a national account.
 _Engine_: `account_client_id`, `account_name`, `account_owner`, and the `accounts` list on the board.
@@ -261,7 +260,7 @@ A visit to properties. In the new database a completed tour is a meeting about t
 
 **Brand membership** joins a person or company with a client profile to its brand company for dates in `client_brand`. A franchisee is a client of type franchise with its own deals. Rebranding ends the old membership and begins another.
 
-**National account owner** is the person responsible for the account, including an outside referring agent. `national_account_owner` keeps dated ownership; a deal's owner is separate. `national_account` identifies the brand company, independently of client type.
+**National account owner** is the partner responsible for the account, Joe or Dell. `national_account_owner` keeps dated ownership; a deal's owner is separate. `national_account` identifies the brand company, independently of client type.
 
 **Lead stage evidence**:
 An activity and its reference supporting a proposed or applied lead stage move. Weak job evidence waits for a user. Archiving always needs a user and a reason.

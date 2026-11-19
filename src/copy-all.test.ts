@@ -82,7 +82,7 @@ create table ops.notification_read (notification_id uuid references ops.notifica
 
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
- ('${id(2)}', 'partner_two', 'human', 'Example Partner Two'),
+ ('${id(2)}', 'dell', 'human', 'Example Partner Two'),
  ('${id(3)}', 'example-mail', 'automation', 'Example mail job');
 insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1),
  ('do_not_contact', 'Example do not contact', false, 2);
@@ -105,7 +105,7 @@ insert into public.client_status (slug, label) values ('active_deal', 'Example a
 insert into public.client (id, party_id, status, client_type, acquisition_source, created_by, updated_by, created_at) values
  ('${id(20)}', '${id(10)}', 'active_deal', null, 'Example referral', '${id(1)}', '${id(1)}', '2024-01-01'),
  ('${id(23)}', '${id(16)}', 'active_deal', 'national_account', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-06');
-insert into public.national_account_owner (account_client_id, owner_actor_id, set_by) values ('${id(23)}', '${id(1)}', '${id(1)}');
+insert into public.national_account_owner (account_client_id, owner_actor_id, set_by) values ('${id(23)}', '${id(2)}', '${id(1)}');
 insert into public.lead_stage (slug, label) values ('qualified', 'Example qualified');
 insert into public.lead (id, party_id, stage, source_type, created_by, updated_by, created_at, updated_at) values
  ('${id(21)}', '${id(14)}', 'qualified', 'Example referral', '${id(1)}', '${id(1)}', '2024-01-05', '2024-02-05');

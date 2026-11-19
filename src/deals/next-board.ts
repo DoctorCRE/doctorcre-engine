@@ -308,6 +308,8 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 	// The client copy leaves prospects outside national_account.
 	const { rows: accounts } = await sql`
 		select na.party_id as account_client_id, p.name as account_name, u.slug as account_owner,
+			(select coalesce(max(ch.id), 0)::float8 from change ch
+				where ch.table_name = 'national_account_owner' and ch.record = jsonb_build_object('id', o.id)) as base_version,
 			(select min(value) from outside_id where party_id = na.party_id
 				and source = 'old_system_ref' and value like 'C-%' having count(*) = 1) as account_client_ref,
 			count(b.id) filter (where b.operating_state = 'active')::int as open_deals,
@@ -320,7 +322,7 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 		left join national_account_owner o on o.account_id = na.party_id and daterange(o.started_on, o.ended_on) @> days.today
 		left join app_user u on u.id = o.owner_id
 		left join (${nextBoardQuery(db, { workspace: "all", account: null })}) b on b.account_client_id = na.party_id
-		group by na.party_id, p.name, u.slug order by p.name`.execute(db);
+		group by na.party_id, p.name, u.slug, o.id order by p.name`.execute(db);
 	return {
 		schema_version: "local-deals-board.v2",
 		actor: input.partner,
