@@ -46,7 +46,9 @@ insert into public.deal (id, client_id, name, deal_type, phase, owner, attention
  ('${id(30)}', '${id(20)}', 'Example startup office', 'startup', 'touring', 'partner_one', true, '2030-01-15', ${by}, '2025-01-01'),
  ('${id(31)}', '${id(21)}', 'Example clinic lease', 'lease', 'negotiation', 'partner_two', false, null, ${by}, '2025-01-02'),
  ('${id(32)}', '${id(20)}', 'Z Example earlier lease', 'lease', 'negotiation', 'partner_one', true, '2029-12-01', ${by}, '2025-01-03'),
- ('${id(35)}', '${id(20)}', 'Example copied renewal', 'renewal', 'negotiation', 'partner_one', false, null, ${by}, '2025-01-04');
+ ('${id(35)}', '${id(20)}', 'Example copied renewal', 'renewal', 'negotiation', 'partner_one', false, null, ${by}, '2025-01-04'),
+ ('${id(36)}', '${id(20)}', 'Example deal with a copied automatic move', 'renewal', 'negotiation', 'partner_one', false, null, ${by}, '2025-01-04'),
+ ('${id(37)}', '${id(20)}', 'Example deal without a prior phase', 'lease', 'negotiation', 'partner_one', false, null, ${by}, '2025-01-03');
 update public.deal set city = 'Example West' where id = '${id(32)}';
 insert into public.deal_participant (deal_id, actor_id, party_id, role, from_at, set_by) values
  ('${id(30)}', '${id(1)}', null, 'lead', '2025-01-01', '${id(1)}'),
@@ -55,7 +57,9 @@ insert into public.deal_participant (deal_id, actor_id, party_id, role, from_at,
 insert into public.event (id, subject_type, subject_id, field, old_value, new_value, occurred_at, actor_id, verb, cause) values
  ('${id(40)}', 'deal', '${id(30)}', 'phase', null, '{"phase":"touring"}', '2025-01-02', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(41)}', 'deal', '${id(31)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated'),
- ('${id(42)}', 'deal', '${id(30)}', 'attention', '{"attention":false}', '{"attention":true}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated');
+ ('${id(42)}', 'deal', '${id(30)}', 'attention', '{"attention":false}', '{"attention":true}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated'),
+ ('${id(46)}', 'deal', '${id(36)}', 'phase', '{"phase":"touring"}', '{"phase":"negotiation"}', '2025-03-02T02:00Z', '${id(1)}', 'update-deal', 'automation_job'),
+ ('${id(47)}', 'deal', '${id(37)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-04', '${id(1)}', 'update-deal', 'automation_job');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, due_on, status, created_at, created_by, updated_by) values
  ('${id(50)}', 'deal', '${id(30)}', '${id(1)}', 'Example send the survey', '2030-01-15', 'open', '2025-01-04', ${by}),
  ('${id(51)}', 'deal', '${id(30)}', '${id(2)}', 'Example book the tour', '2025-01-20', 'done', '2025-01-05', ${by}),
@@ -95,6 +99,7 @@ const COPIES: [file: string, input?: string][] = [
 ];
 
 const { db, setup, cleanup, connectionString } = copyTest();
+let dealCopyCorrections: unknown;
 
 before(async () => {
 	await setup();
@@ -110,7 +115,11 @@ before(async () => {
 		await db.query(
 			`begin; select set_config('engine.job', 'old_system', true); ${input}`,
 		);
-		await db.query(await readSchema(file));
+		const results = await db.query(await readSchema(file));
+		if (file === "copy-deals.sql") {
+			assert.ok(Array.isArray(results));
+			dealCopyCorrections = results.at(-1)?.rows;
+		}
 		await db.query("commit");
 	}
 	await db.query(`begin;
@@ -336,6 +345,54 @@ const get = (path: string, schema?: string, partner = "partner_one") =>
 		},
 	);
 
+test("the copy lists an automatic move with an unknown prior phase and keeps no receipt", async () => {
+	assert.partialDeepStrictEqual(dealCopyCorrections, [
+		{
+			old_id: id(47),
+			field: "phase",
+			value: null,
+			reason: "automatic_move_prior_phase_unknown",
+		},
+	]);
+	const { rows } = await db.query(
+		"select source_event_id from imported_automatic_phase_move where deal_id = $1",
+		[id(37)],
+	);
+	assert.deepEqual(rows, []);
+});
+
+test("the board and detail carry the same imported automatic phase move", async () => {
+	const board = await get("/deals?workspace=all", "next");
+	const detail = await get(`/deals/${id(36)}`, "next");
+	assert.equal(board.status, 200);
+	assert.equal(detail.status, 200);
+	const page = await detail.json();
+	const boardData = await board.json();
+	assert.ok(
+		page &&
+			typeof page === "object" &&
+			"phase_change" in page &&
+			"seen" in page,
+	);
+	assert.partialDeepStrictEqual(page, {
+		phase_change: {
+			event_id: id(46),
+			prior_phase: "touring",
+			phase: "negotiation",
+			automatic: true,
+			source: "copied",
+			evidence_date: "2025-03-01",
+		},
+	});
+	assert.equal(typeof page.seen, "number");
+	assert.partialDeepStrictEqual(boardData, {
+		deals: [{ id: id(36), phase_change: page.phase_change, seen: page.seen }],
+	});
+	assert.partialDeepStrictEqual(boardData, {
+		deals: [{ id: id(30), phase_change: null }],
+	});
+});
+
 for (const schema of [undefined, "next"]) {
 	test(`signed-in board uses ${schema ?? "the old schema"}`, async () => {
 		const response = await get("/deals?workspace=all", schema);
@@ -383,11 +440,11 @@ for (const schema of [undefined, "next"]) {
 				Array.isArray(board.accounts),
 		);
 		assert.equal(board.accounts.length, 1);
-		assert.equal(board.deals.length, schema ? 3 : 4);
+		assert.equal(board.deals.length, schema ? 5 : 6);
 		if (schema) {
 			assert.deepEqual(
 				board.deals.map((deal) => deal.id),
-				[id(32), id(30), id(35)],
+				[id(32), id(30), id(35), id(36), id(37)],
 			);
 			assert.deepEqual(board.deals[0].last_step, {
 				kind: "completed_action",

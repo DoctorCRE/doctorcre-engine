@@ -33,6 +33,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Client website shows when the deal has one and opens it as the deal page does.
 - [ ] A phase move made automatically, by a call or an invoice, shows "Moved automatically" with its date in words.
 - [ ] The 16 automatic phase moves copied from today's system keep the "Moved automatically" mark and show Undo on the card (owner, 2026-11-18).
+- [ ] If Undo would return a deal to Closed deals or Lost deals, the deal stays in its current phase and the card explains why.
 - [ ] Dragging a card to another column, or the same move by keyboard, asks for the phase move's details and moves it only on Move to [phase].
 
 ### Moving a phase
@@ -186,8 +187,7 @@ Seen on the live Deals screen on 2026-11-18 (screen), or read in the app's Deals
 - The deal page says "Watch state not confirmed" when nothing failed (screen).
 - App #950, in review, shows one next step and hides the watch line until the watch is read. It shows the client once and moves website setup below the snapshot. Its board and deal page still choose the next step from different inputs, so they can differ (code).
 - A parked card's title is not a link or button. The card opens on a click outside its buttons, or on Enter or Space when focused (code).
-- "Moved automatically" shows `10/19`, and the card has no Undo (screen).
-- Copied phase moves show no automatic mark in the new read.
+- "Moved automatically" shows `10/19` on the app screen. The app still needs to format the date in words and connect the card's Undo to the new engine save.
 - On a deal Dell owns, Joe's Documents tab says "Request unavailable or version changed" (screen, old system #3232).
 - Email follow-ups on a deal page offer "File email to this deal", with File to existing deal and New deal. Many say "Sender unavailable" or "Summary unavailable", and show role words such as `landlord_side` (screen).
 - Critical dates read "lease expiration estimated" and "864 days" in lower case (screen).

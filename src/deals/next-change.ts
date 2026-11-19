@@ -246,14 +246,7 @@ export async function changeDeal(
 	fields: Updateable<DB["deal"]>,
 ) {
 	const keys = Object.keys(fields);
-	// The row lock queues crossed saves, so the later one sees the earlier one's change.
-	const deal = await tx
-		.selectFrom("deal")
-		.select("id")
-		.where("id", "=", deal_id)
-		.forUpdate()
-		.executeTakeFirst();
-	if (!deal) throw new SaveRefusal(new Refusal(404, "not_found"));
+	await lockDeal(tx, deal_id);
 	const unseen = await unseenChanges(tx, "deal", deal_id, seen, keys);
 	if (keys.length)
 		await tx
@@ -264,20 +257,33 @@ export async function changeDeal(
 	return { deal_id, ...(await seenAnswer(tx, "deal", deal_id, seen, unseen)) };
 }
 
-// Called under changeDeal's row lock, so two moves from one phase cannot both pass.
+async function lockDeal(tx: Transaction<DB>, deal_id: string) {
+	// The row lock queues crossed saves, so the later one sees the earlier one's change.
+	const deal = await tx
+		.selectFrom("deal")
+		.select("id")
+		.where("id", "=", deal_id)
+		.forUpdate()
+		.executeTakeFirst();
+	if (!deal) throw new SaveRefusal(new Refusal(404, "not_found"));
+}
+
+const latestDealPhase = (tx: Transaction<DB>, deal_id: string) =>
+	tx
+		.selectFrom("deal_phase_change")
+		.select(["phase", "happened_at"])
+		.where("deal_id", "=", deal_id)
+		.orderBy("happened_at", "desc")
+		.limit(1);
+
+// Called under the deal row lock, so two moves from one phase cannot both pass.
 // A move lands after the deal's latest, on its day in Central time, never before that day or after today.
 async function movePhase(
 	tx: Transaction<DB>,
 	deal_id: string,
 	{ from, to, on, reason }: PhaseMove,
 ): Promise<string> {
-	const latest = await tx
-		.selectFrom("deal_phase_change")
-		.select(["phase", "happened_at"])
-		.where("deal_id", "=", deal_id)
-		.orderBy("happened_at", "desc")
-		.limit(1)
-		.executeTakeFirst();
+	const latest = await latestDealPhase(tx, deal_id).executeTakeFirst();
 	const current = latest?.phase ?? null;
 	if (current !== from)
 		throw new SaveRefusal(
@@ -299,6 +305,74 @@ async function movePhase(
 		);
 	return moved.happened_at;
 }
+
+const UNDO_PHASE_MOVE = {
+	idempotency_key: isUuid,
+	event_id: isUuid,
+	base_version: isChangeId,
+};
+
+async function undoAutomaticPhaseMove(
+	tx: Transaction<DB>,
+	{
+		deal_id,
+		event_id,
+		base_version,
+	}: Fitted<typeof UNDO_PHASE_MOVE> & {
+		deal_id: string;
+	},
+): Promise<JsonObject> {
+	await lockDeal(tx, deal_id);
+	const current_version = (await latestChange(tx, "deal", deal_id)) ?? 0;
+	const current = await tx
+		.selectFrom(latestDealPhase(tx, deal_id).as("latest"))
+		.innerJoin("imported_automatic_phase_move as receipt", (join) =>
+			join
+				.on("receipt.deal_id", "=", deal_id)
+				.onRef("receipt.happened_at", "=", "latest.happened_at")
+				.on("receipt.source_event_id", "=", event_id),
+		)
+		.select(["latest.phase", "receipt.prior_phase"])
+		.executeTakeFirst();
+	if (!current || current_version !== base_version)
+		throw new SaveRefusal(
+			new Refusal(409, "version_conflict", { current_version }),
+		);
+	if (ENDED_PHASES.includes(current.prior_phase))
+		throw new SaveRefusal(
+			new Refusal(409, "version_conflict", {
+				current_version,
+				hint: "Undo would return this deal to Closed deals or Lost deals.",
+			}),
+		);
+	const phase_changed_at = await movePhase(tx, deal_id, {
+		from: current.phase,
+		to: current.prior_phase,
+		on: null,
+		reason: null,
+	});
+	return { deal_id, phase: current.prior_phase, phase_changed_at };
+}
+
+export const automaticPhaseUndo = new Hono<NextSaveEnv>().post(
+	"/deals/:deal/phase/undo",
+	(c) =>
+		answerNextSave(
+			c,
+			"undo-automatic-phase-move",
+			(body) => {
+				const deal_id = c.req.param("deal");
+				if (!isUuid(deal_id)) return new Refusal(404, "not_found");
+				const undo = fit(body, UNDO_PHASE_MOVE, [
+					"idempotency_key",
+					"event_id",
+					"base_version",
+				]);
+				return undo instanceof Refusal ? undo : { ...undo, deal_id };
+			},
+			undoAutomaticPhaseMove,
+		),
+);
 
 export const nextDeals = new Hono<NextSaveEnv>()
 	.post("/deals", (c) =>

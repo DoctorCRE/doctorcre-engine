@@ -505,6 +505,16 @@ create table deal_client_website_grant (
 	expires_at timestamptz not null
 );
 
+create table imported_automatic_phase_move (
+	source_event_id uuid primary key,
+	deal_id uuid not null,
+	happened_at timestamptz not null,
+	prior_phase text not null references phase,
+	reason text not null,
+	unique (deal_id, happened_at),
+	foreign key (deal_id, happened_at) references deal_phase_change
+);
+
 create table deal_property (
 	deal_id uuid not null references deal,
 	property_id uuid not null references property,
@@ -3328,7 +3338,7 @@ revoke insert on merged_party from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
 revoke insert on change, imported_change from engine;
 -- Only the owner's copy adds the old system's earlier people, owners and board facts.
-revoke insert on imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board from engine;
+revoke insert on imported_automatic_phase_move, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board from engine;
 -- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
 revoke execute on function record_change from public;
 revoke execute on function merge_party from public;

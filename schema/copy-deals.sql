@@ -250,6 +250,19 @@ select p.deal_id, p.happened_at, p.phase, p.reason, p.changed_by_user_id, p.chan
 from mapped_phase p where refusal is null
  and not exists (select from deal_phase_change c where (c.deal_id, c.happened_at) = (p.deal_id, p.happened_at));
 insert into not_copied select old_id, 'phase', phase, refusal from mapped_phase where refusal is not null;
+
+insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
+select p.old_id, p.deal_id, p.happened_at, prior.slug, receipt.reason
+from mapped_phase p join public.v_deal_room_phase_change receipt on receipt.event_id = p.old_id and receipt.automatic
+join phase prior on prior.slug = receipt.prior_phase
+where p.refusal is null
+on conflict do nothing;
+
+insert into not_copied
+select p.old_id, 'phase', receipt.prior_phase, 'automatic_move_prior_phase_unknown'
+from mapped_phase p join public.v_deal_room_phase_change receipt on receipt.event_id = p.old_id and receipt.automatic
+where p.refusal is null and not exists (select from phase prior where prior.slug = receipt.prior_phase);
+
 -- With no phase events, the current phase is known only to hold at the deal's last change.
 insert into deal_phase_change (deal_id, happened_at, phase, changed_by_job, changed_at)
 select d.id, d.updated_at, d.phase, 'old_system', d.updated_at from public.deal d join deal n on n.id = d.id

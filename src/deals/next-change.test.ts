@@ -28,7 +28,7 @@ before(async () => {
 		insert into deal_reason values ('renewal', 'Renewal');
 		insert into deal (id, name, owner_user_id)
 			select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid, 'Example Deal ' || n, '${ALEX}'
-			from generate_series(10, 21) n;
+			from generate_series(10, 24) n;
 		insert into deal_party (deal_id, party_id, role)
 			select id, '${CLIENT}', 'client' from deal where id between '${id(15)}' and '${id(17)}';
 		commit;`);
@@ -123,6 +123,92 @@ test("a move from a phase the deal has left is refused with the deal's phase", a
 		[409, "version_conflict", "negotiation"],
 	);
 });
+
+test("a partner can undo the current copied move once with a fresh card version", async () => {
+	const deal = id(22);
+	const event_id = id(23);
+	const path = `deals/${deal}/phase/undo`;
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal_phase_change (deal_id, happened_at, phase)
+		values ('${deal}', '2026-01-06', 'negotiation');
+		insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
+		values ('${event_id}', '${deal}', '2026-01-06', 'touring', 'Example automatic move');
+		commit;`);
+	const args = {
+		idempotency_key: randomUUID(),
+		event_id,
+		base_version: await seen(deal),
+	};
+	assert.equal((await saveAt(assistant, path, args))[0], 404);
+	assert.equal(
+		(await change(partner, deal, { fields: { needs_attention: true } }))[0],
+		200,
+	);
+	assert.equal((await saveAt(partner, path, args))[0], 409);
+
+	const fresh = { ...args, base_version: await seen(deal) };
+	const [wrongEventStatus, wrongEvent] = await saveAt(partner, path, {
+		...fresh,
+		idempotency_key: randomUUID(),
+		event_id: randomUUID(),
+	});
+	assert.deepEqual(
+		[wrongEventStatus, wrongEvent.error, wrongEvent.current_version],
+		[409, "version_conflict", fresh.base_version],
+	);
+	const [status, answer] = await saveAt({ user: "blair" }, path, fresh);
+	assert.equal(status, 200, JSON.stringify(answer));
+	assert.partialDeepStrictEqual(answer, { deal_id: deal, phase: "touring" });
+	assert.equal((await dealNow(deal)).phase, "touring");
+	assert.deepEqual(await saveAt({ user: "blair" }, path, fresh), [
+		200,
+		{ ...answer, replayed: true },
+	]);
+	assert.equal(
+		(
+			await saveAt(partner, path, { ...fresh, idempotency_key: randomUUID() })
+		)[0],
+		409,
+	);
+	const history = await db.query(
+		`select new_value ->> 'phase' as phase, changed_by_user_id
+		from change where table_name = 'deal_phase_change'
+		and record ->> 'deal_id' = $1 and changed_by_user_id is not null`,
+		[deal],
+	);
+	assert.deepEqual(history.rows, [
+		{ phase: "touring", changed_by_user_id: BLAIR },
+	]);
+});
+
+for (const { deal, priorPhase } of [
+	{ deal: id(23), priorPhase: "closed" },
+	{ deal: id(24), priorPhase: "dead" },
+]) {
+	test(`undo refuses to put a deal back in ${priorPhase}`, async () => {
+		const event_id = randomUUID();
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+			insert into deal_phase_change (deal_id, happened_at, phase, reason)
+			values ('${deal}', '2026-01-06', '${priorPhase}', 'Example deal ended'),
+			       ('${deal}', '2026-01-07', 'negotiation', null);
+			insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
+			values ('${event_id}', '${deal}', '2026-01-07', '${priorPhase}', 'Example automatic move');
+			commit;`);
+		const base_version = await seen(deal);
+		const [status, body] = await saveAt(partner, `deals/${deal}/phase/undo`, {
+			idempotency_key: randomUUID(),
+			event_id,
+			base_version,
+		});
+		assert.equal(status, 409, JSON.stringify(body));
+		assert.partialDeepStrictEqual(body, {
+			error: "version_conflict",
+			current_version: base_version,
+			hint: "Undo would return this deal to Closed deals or Lost deals.",
+		});
+		assert.equal((await dealNow(deal)).phase, "negotiation");
+	});
+}
 
 test("a job alone cannot park or flag a deal, but one working for a partner can", async () => {
 	const deal = id(12);

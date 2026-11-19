@@ -23,7 +23,11 @@ import { dealClientWebsite } from "./deals/client-website.ts";
 import { openClientWebsite } from "./deals/client-website-access.ts";
 import { criticalDates } from "./deals/critical-dates.ts";
 import { nationalAccounts } from "./deals/national-accounts.ts";
-import { dealJobs, nextDeals } from "./deals/next-change.ts";
+import {
+	automaticPhaseUndo,
+	dealJobs,
+	nextDeals,
+} from "./deals/next-change.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
 import { heldStepReviews } from "./held-steps.ts";
@@ -94,6 +98,7 @@ app.route("/api/engine", engine);
 app.route("/api/engine", partySearch);
 app.route("/api/engine", prospectReads);
 app.route("/api/engine", nextDeals);
+app.route("/api/engine", automaticPhaseUndo);
 app.route("/api/engine", nationalAccounts);
 app.route("/api/engine", dealParticipants);
 app.route("/api/engine", dealClientWebsite);
