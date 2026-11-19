@@ -9,6 +9,12 @@ type NewLocation = { name: string; kind: "person" | "company" };
 
 const today = sql`(now() at time zone 'America/Chicago')::date`;
 
+export const currentAccountLocations = (db: Transaction<DB>, account: string) =>
+	db
+		.selectFrom("client_brand as b")
+		.where("b.brand_id", "=", account)
+		.where(sql<boolean>`daterange(b.started_on, b.ended_on) @> ${today}`);
+
 export async function marketClient(
 	tx: Transaction<DB>,
 	account: string,
@@ -21,10 +27,7 @@ export async function marketClient(
 		.executeTakeFirst();
 	if (!brand) throw new SaveRefusal(new Refusal(404, "not_found"));
 
-	const locations = tx
-		.selectFrom("client_brand as b")
-		.where("b.brand_id", "=", account)
-		.where(sql<boolean>`daterange(b.started_on, b.ended_on) @> ${today}`);
+	const locations = currentAccountLocations(tx, account);
 	if ("client_id" in location) {
 		const member = await locations
 			.select("b.location_id")

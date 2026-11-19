@@ -296,6 +296,8 @@ type Verb =
 	| "read-home-inbox-v5"
 	| "read-home-mail-priorities-v1"
 	| "read-invoice-tracker"
+	| "read-markets"
+	| "read-national-account-locations"
 	| "read-proposal"
 	| "read-prospects"
 	| "read-weekly-reviews"
