@@ -152,7 +152,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Email follow-ups: each suggestion from an email on this deal, with that email. Accept and Dismiss work as on Home's email suggestion.
 - [ ] Update: a note saved to the deal's history with its author and time.
 - [ ] Vendors on the deal, each opening its vendor page.
-- **Open (question 8).** How deal watch settings and the deal page's call recorder work. Recommended: keep today's behavior for both.
+- [ ] Watch settings and the deal page's call recorder work as they do today. After the switch, watch settings use the old tables and cover copied deals only (#805).
 
 ### Tabs
 
@@ -174,7 +174,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 5. Answered on 2026-11-19. When both partners have an open next step on one deal, the card shows the deal owner's step and the deal page shows both.
 6. Answered on 2026-11-18. Set up client website stays below the deal's facts and asks for a website name and a password.
 7. Compare terms compares recorded terms across deals in one submarket and use type. Should it compare this deal's own offers instead? Recommended: keep today's comparison until you decide.
-8. How should deal watch settings and the deal page's call recorder work? Recommended: watch settings choose whether deal changes reach Home, and each item the recorder proposes waits for Confirm or Skip, as today.
+8. Answered on 2026-11-19. The owner ruled that "deal watch settings and the deal page call recorder stay as they work today".
 9. Answered on 2026-11-18. For someone new, Add prospect requires one tap for person or company and one for how found on the add line.
 10. Answered on 2026-11-18. A prospect is a lead at stage Opportunity that is on no deal. Adding a lead from the lane puts it at Opportunity.
 11. Answered on 2026-11-19. Turn into deal opens Add deal with the prospect's name, newest note and claimed owner filled in. The partner sets the client, phase and owner before saving.
