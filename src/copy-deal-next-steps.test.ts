@@ -543,18 +543,25 @@ test("vendor ownership uses the creator, then the latest attributed work, and li
  insert into party (id,kind,name) values ('${id(7)}','person','Example Second Partner');
  insert into app_user (id,slug) values ('${id(7)}','partner_two');
  insert into public.actor (id,slug,kind,display_name) values ('${id(7)}','partner_two','human','Example Second Partner');
+ insert into outside_id (source,value,party_id) values ('old_system','${id(7)}','${id(7)}');
  insert into public.activity_kind (slug,label,is_contact) values ('call','Example call',true), ('email_out','Example outgoing mail',true);
  insert into public.vendor_disposition (slug,label,workable,sort) values ('active','Example active',true,1);
  insert into party (id,kind,name)
- select v,'company','Example vendor ' || v from unnest(array[${[70, 71, 72, 73, 74, 75, 76].map((n) => `'${id(n)}'::uuid`).join(",")}]) v;
+ select v,'company','Example vendor ' || v from unnest(array[${[70, 71, 72, 73, 74, 75, 76, 77].map((n) => `'${id(n)}'::uuid`).join(",")}]) v;
  insert into public.party (id,kind,name,created_by,updated_by)
- select id,'org',name,'${id(1)}','${id(1)}' from party where id between '${id(70)}' and '${id(76)}';
+ select id,'org',name,'${id(1)}','${id(1)}' from party where id between '${id(70)}' and '${id(77)}';
  insert into public.vendor (id,party_id,category,created_by,updated_by)
- select id,id,'Example category','${id(1)}','${id(1)}' from public.party where id between '${id(70)}' and '${id(76)}';
+ select id,id,'Example category','${id(1)}','${id(1)}' from public.party where id between '${id(70)}' and '${id(77)}';
  insert into role (slug,label) values ('vendor','Vendor');
  insert into party_role (party_id,role,owner_user_id) values ('${id(74)}','vendor','${id(1)}');
  insert into outside_id (source,value,party_id) select 'old_system',id::text,id from party
- where id between '${id(70)}' and '${id(76)}';
+ where id between '${id(70)}' and '${id(77)}';
+ insert into public.activity_kind (slug,label,is_contact) values ('note','Example note',false);
+ insert into public.activity (id,kind,occurred_at,actor_id,summary,vendor_id,source) values
+ ('${id(310)}','call','2025-01-01','${id(2)}','Example sponsored call','${id(77)}','stated'),
+ ('${id(311)}','note','2025-02-01','${id(7)}','last-touch stamp (imported)','${id(72)}','import');
+ insert into public.event (subject_type,subject_id,new_value,actor_id,verb,cause,sponsoring_human_slug,occurred_at) values
+ ('vendor','${id(77)}','{"activity":"${id(310)}"}','${id(2)}','log-activity','automation_job','partner_one','2025-01-01');
  insert into public.activity (kind,occurred_at,actor_id,updated_by,summary,vendor_id,email_context) values
  ('call','2025-01-01','${id(7)}','${id(1)}','Example work','${id(71)}',null),
  ('call','2024-01-01','${id(1)}',null,'Example earlier work','${id(71)}',null),
@@ -573,12 +580,13 @@ test("vendor ownership uses the creator, then the latest attributed work, and li
  ('${id(136)}','vendor','${id(73)}','${id(7)}','Example simultaneous work','2025-01-01','2025-01-01','${id(7)}','${id(7)}','done'),
  ('${id(137)}','vendor','${id(75)}','${id(2)}','Example next-step evidence','2024-01-01','2025-01-01','${id(2)}',null,'open'),
  ('${id(138)}','vendor','${id(75)}','${id(7)}','Example prior step','2025-01-01','2025-01-01','${id(7)}',null,'done'),
- ('${id(139)}','vendor','${id(76)}','${id(2)}','Example sent mail evidence','2024-01-01','2025-01-01','${id(2)}',null,'open');`);
+ ('${id(139)}','vendor','${id(76)}','${id(2)}','Example sent mail evidence','2024-01-01','2025-01-01','${id(2)}',null,'open'),
+ ('${id(143)}','vendor','${id(77)}','${id(2)}','Example sponsored work evidence','2024-01-01','2025-01-01','${id(2)}',null,'open');`);
 		const listed = await run();
 		assert.deepEqual(
 			(
 				await rows(`select id, owner_party_id, status from next_step
-				where id between '${id(130)}' and '${id(139)}' and status = 'open' order by id`)
+				where id between '${id(130)}' and '${id(143)}' and status = 'open' order by id`)
 			).map(Object.values),
 			[
 				[id(130), id(7), "open"],
@@ -588,6 +596,7 @@ test("vendor ownership uses the creator, then the latest attributed work, and li
 				[id(134), id(1), "open"],
 				[id(137), id(7), "open"],
 				[id(139), id(7), "open"],
+				[id(143), id(1), "open"],
 			],
 		);
 		assert.deepEqual(reasons(listed, 132), ["vendor_owner_unknown"]);
@@ -596,8 +605,20 @@ test("vendor ownership uses the creator, then the latest attributed work, and li
  insert into public.actor (id,slug,kind,display_name) values ('${id(9)}','example-system','system','Example System');
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,created_at,created_by) values
  ('${id(140)}','vendor','${id(70)}','${id(1)}','Example new recorded step','2025-02-01','${id(1)}'),
- ('${id(141)}','vendor','${id(70)}','${id(9)}','Example new inferred step','2025-02-01','${id(7)}');`);
-		await run();
+ ('${id(141)}','vendor','${id(70)}','${id(9)}','Example new inferred step','2025-02-01','${id(7)}'),
+ ('${id(142)}','vendor','${id(70)}','${id(7)}','Example conflicting recorded step','2025-02-01','${id(7)}');`);
+		const retried = await run();
+		assert.deepEqual(
+			retried.filter((row) => row.old_id === id(142)),
+			[
+				{
+					old_id: id(142),
+					field: "next_step",
+					value: id(130),
+					reason: "open_step_exists",
+				},
+			],
+		);
 		assert.deepEqual(
 			(
 				await rows(`select id, owner_party_id, status, resolution_reason from next_step

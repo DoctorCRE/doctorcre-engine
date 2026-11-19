@@ -684,6 +684,28 @@ test("a converted lead keeps the recorded client action over a date-only follow-
 			report.filter((row) => row.old_id === lead && row.field === "next_step"),
 			[],
 		);
+		const nextAction = id(123);
+		const retried = await freshCopy(
+			`insert into public.next_action (id,subject_type,subject_id,owner_id,description,created_by) values
+ ('${nextAction}','lead','${lead}','${owner}','Example recorded lead action','${owner}')`,
+		);
+		assert.deepEqual(
+			retried.filter((row) => row.old_id === nextAction),
+			[
+				{
+					old_id: nextAction,
+					field: "next_step",
+					value: action,
+					reason: "open_step_exists",
+				},
+			],
+		);
+		assert.deepEqual(
+			await rows(
+				`select id, status from next_step where id in ('${action}', '${nextAction}') order by id`,
+			),
+			[{ id: action, status: "open" }],
+		);
 	} finally {
 		await db.query("rollback");
 	}

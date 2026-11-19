@@ -304,7 +304,7 @@ create temp table relationship_step on commit drop as
 with distinct_steps as (
  select distinct on (mapped_id, what, due_on, separate_id) s.*
  from relationship_step s
- cross join lateral (values (case when owner_inferred and owner is not null and resolution is null then id end)) k(separate_id)
+ cross join lateral (values (case when owner_inferred and old_id = id and owner is not null and resolution is null then id end)) k(separate_id)
  where separate_id is not null or not exists (
   select from next_step done where done.party_id = s.mapped_id and done.what = s.what and done.due_on is not distinct from s.due_on
  )
