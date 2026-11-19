@@ -49,6 +49,7 @@ const order: [file: string, input?: string][] = [
 	["copy-space-needs.sql"],
 	["copy-activity.sql"],
 	["copy-emails.sql"],
+	["copy-email-summaries.sql"],
 	["copy-attachment-emails.sql"],
 	["copy-reply-drafts.sql"],
 	["copy-calls.sql"],
@@ -63,8 +64,14 @@ const order: [file: string, input?: string][] = [
 	["copy-change-history.sql"],
 ];
 
+const summaryHash = `sha256:${"a".repeat(64)}`;
+const newerSummaryHash = `sha256:${"b".repeat(64)}`;
+
 // One made-up snapshot of today's system: two partners and a clinic client leasing a suite, with its vendor and a lead.
 const OLD = `
+create table public.email_message_summary (activity_id uuid not null references public.activity, source_hash text not null,
+ generator_version text not null, status text not null, text text, provenance jsonb not null, updated_at timestamptz not null,
+ primary key (activity_id, source_hash, generator_version));
 create table ops.meeting_action (meeting_id uuid, action_number integer, state text not null, current_revision integer not null,
  decided_revision integer, decided_by_actor uuid, decided_at timestamptz, disposition text, assignee_actor uuid, operation_key uuid,
  primary key (meeting_id, action_number));
@@ -205,6 +212,16 @@ insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, act
  select v, 'email_in', '2025-01-06', '2025-01-06', '2025-01-06', '${id(3)}', 'Email from Example Doctor: Example tour', 'Example email text',
   '{"mailbox_owner": "partner_one", "sender_email": "doctor@example.com"}', d, c
  from (values ('${id(120)}'::uuid, '${id(30)}'::uuid, null::uuid), ('${id(121)}', null, '${id(20)}')) f(v, d, c);
+insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, email_source, deal_id) values
+ ('${id(124)}', 'email_in', '2025-01-07', '2025-01-07', '2025-01-07', '${id(3)}', 'Example email without sender', null, '${id(30)}'),
+ ('${id(125)}', 'email_in', '2025-01-08', '2025-01-08', '2025-01-08', '${id(3)}', 'Example separate email',
+  '{"mailbox_owner": "partner_one", "sender_email": "doctor@example.com"}', '${id(30)}');
+insert into public.email_message_summary values
+ ('${id(120)}', '${summaryHash}', 'example.v1', 'unavailable', null, '{"reason":"empty_message"}', '2025-01-09 01:00:00Z'),
+ ('${id(120)}', '${newerSummaryHash}', 'example.v1', 'available', 'The sender asks to tour on Friday.', '{"model":"example-model"}', '2025-01-08'),
+ ('${id(121)}', '${summaryHash}', 'example.v1', 'available', 'The sender asks to tour.', '{"model":"example-model","evidence":"Example email text"}', '2025-01-07 00:00:00.123456Z'),
+ ('${id(124)}', '${summaryHash}', 'example.v1', 'available', 'An email without a sender.', '{"model":"example-model"}', '2025-01-08'),
+ ('${id(125)}', '${summaryHash}', 'example.v1', 'unavailable', null, '{"reason":"generation_failed"}', '2025-01-09');
 insert into ops.requirement_reply_proposal values ('${id(122)}', '${id(120)}', '${id(52)}', '2025-01-06');
 insert into public.email_proposal (id, kind, activity_id, evidence_quote, owner, confidence, created_by, draft_subject, draft_body)
  values ('${id(123)}', 'reply_draft', '${id(120)}', 'Example asks to tour', 'partner_one', 0.9, '${id(3)}', 'Re: Example tour', 'Example reply');
@@ -328,7 +345,7 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  territory_piece: 1, party_territory: 1, party_territory_review: 1, vendor_vertical: 1, vendor_loan_program: 1, deal: 2, deal_party: 4,
  deal_property: 1, deal_phase_change: 3, imported_deal_invoiced: 1, offer: 1, offer_claim: 1, claim_type: 1, party_link: 1, introduction: 1, property: 1, suite: 1, building_ownership: 1, lease: 1,
  lease_version: 1, lease_suite: 1, critical_date: 1, document: 3, party_document: 1, document_extraction: 1, commission: 2,
- commission_payment: 1, invoice_email: 2, space_need: 2, activity: 6, activity_about: 7, email: 1, email_document: 1, lead_stage_move: 1, proposal: 4,
+ commission_payment: 1, invoice_email: 2, space_need: 2, activity: 7, activity_about: 8, email: 2, email_summary: 4, email_document: 1, lead_stage_move: 1, proposal: 4,
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, home_update: 1, imported_change: 5 };
 // biome-ignore format: one row per correction
 const corrections = [
@@ -340,6 +357,8 @@ const corrections = [
  ["copy-leases.sql", id(51), "evidence", '{"source": "stated", "status": "legacy_unverified"}', "no_typed_destination"],
  ["copy-deal-files.sql", id(50), "kind", "other", "kind_unclassified"],
  ["copy-deal-files.sql", id(52), "kind", "other", "kind_unclassified"],
+ ["copy-emails.sql", id(124), "sender", null, "no_message_id_or_sender"],
+ ["copy-email-summaries.sql", id(124), "email_summary", `example.v1:${summaryHash}`, "email_not_copied"],
  ["copy-calls.sql", id(95), "recording", "7".repeat(64), "recording_not_copied"],
  ["copy-meetings.sql", id(110), "activity", id(110), "about_nothing_copied"],
  ["copy-email-suggestions.sql", null, "message_hash", "8".repeat(64), "message_not_stored"],
@@ -422,4 +441,99 @@ test("running every copy again changes no row or change history and lists the sa
 	const again = await runAll();
 	assert.deepEqual(await everything(), before);
 	assert.deepEqual(again, corrections);
+});
+
+test("email results retain their original record and the newest available text becomes current", async () => {
+	assert.deepEqual(
+		await rows(`select s.source_activity_id, s.source_hash, s.activity_id,
+			(s.status, s.text, s.provenance, s.recorded_at) is not distinct from
+			(m.status, m.text, m.provenance, m.updated_at) as unchanged
+			from email_summary s join public.email_message_summary m
+			on (s.source_activity_id, s.source_hash, s.generator_version) = (m.activity_id, m.source_hash, m.generator_version)
+			order by s.source_activity_id, s.source_hash`),
+		[
+			{
+				source_activity_id: id(120),
+				source_hash: summaryHash,
+				activity_id: id(120),
+				unchanged: true,
+			},
+			{
+				source_activity_id: id(120),
+				source_hash: newerSummaryHash,
+				activity_id: id(120),
+				unchanged: true,
+			},
+			{
+				source_activity_id: id(121),
+				source_hash: summaryHash,
+				activity_id: id(120),
+				unchanged: true,
+			},
+			{
+				source_activity_id: id(125),
+				source_hash: summaryHash,
+				activity_id: id(125),
+				unchanged: true,
+			},
+		],
+	);
+	assert.deepEqual(
+		await rows("select activity_id, text from email_current_summary"),
+		[{ activity_id: id(120), text: "The sender asks to tour on Friday." }],
+	);
+});
+
+test("a changed source result is listed and the first copied result stays", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`update public.email_message_summary set text = 'The sender wants to reschedule.'
+			where activity_id = $1 and source_hash = $2`,
+			[id(120), newerSummaryHash],
+		);
+		const results = await db.query(
+			await readSchema("copy-email-summaries.sql"),
+		);
+		assert.ok(Array.isArray(results));
+		assert.deepEqual(results.at(-1)?.rows, [
+			{
+				old_id: id(120),
+				field: "email_summary",
+				value: `example.v1:${newerSummaryHash}`,
+				reason: "summary_copy_conflict",
+			},
+			{
+				old_id: id(124),
+				field: "email_summary",
+				value: `example.v1:${summaryHash}`,
+				reason: "email_not_copied",
+			},
+		]);
+		assert.deepEqual(await rows("select text from email_current_summary"), [
+			{ text: "The sender asks to tour on Friday." },
+		]);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("an email with a stored summary cannot be deleted", async () => {
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.job', 'old_system', true);
+			insert into activity (id, kind, happened_at) values ('${id(126)}', 'email', '2025-01-06');
+			insert into activity_about (activity_id, deal_id) values ('${id(126)}', '${id(30)}');
+			insert into email (activity_id, message_id, sender, subject, body)
+			values ('${id(126)}', '<example-summary@example.com>', 'doctor@example.com', 'Example subject', 'Example body');
+			insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, provenance, recorded_at)
+			values ('${id(126)}', '${id(126)}', '${summaryHash}', 'example.v1', 'unavailable', '{"reason":"empty_message"}', '2025-01-06');
+			set constraints all immediate;`);
+		await assert.rejects(
+			db.query("delete from email where activity_id = $1", [id(126)]),
+			{ code: "23503", constraint: "email_summary_activity_id_fkey" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
 });

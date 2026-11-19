@@ -42,6 +42,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`email_document`**: one link for each email a file came with.
 - **`activity`**: something that happened: an email, a call, a meeting or a note, with when, who it came from and a summary.
 - **`email`**: the email behind an email activity.
+- **`email_summary`**: a recorded summary result for that email, with its source, generator and recorded time. `email_current_summary` gives the one current text when any result has text.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
 - **`weekly_review`**: one deal or prospect marked reviewed in one week's Monday review.
 - **`commission`**: a deal's commission, once: what an open deal is expected to bring, the gross the brokerage collects, and the closing user's part on this deal when it overrides their ladder.
@@ -213,7 +214,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 `schema/next.sql` defines `engine`, the role the engine will use on this database. A login takes it with `grant engine to <login>`. The engine connects with `role=engine` set, or as a login created in SQL. A role made in the Neon console belongs to `neon_superuser`, and its own rights would bypass these grants. Loading the schema refuses an existing `engine` role that is a member of any role, is a superuser, bypasses row security, or can create roles or databases or replicate.
 
-The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `imported_change`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
+The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `imported_change`, `email_summary`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's, a how-found's or a claim type's label;
 - a vendor role's stage, relationship level, relationship partner, disposition, reason and target, a lead role's stage, owner and Needs attention flag, an introduction's date, deal and note, and a knows or can-introduce link's dates and note;
@@ -298,7 +299,7 @@ Load `schema/next.sql` and then `schema/copy-attribution.sql` into the new schem
 15. `copy-commissions.sql`, after the partners enter their ladders.
 16. `copy-invoice-emails.sql`: needs the deals and their payments.
 17. `copy-space-needs.sql`, with `copy_space_need_county` and `copy_space_need_deal`: needs markets, deals and vendors.
-18. `copy-activity.sql`, then `copy-emails.sql`: need parties, users and deals. Then `copy-attachment-emails.sql`: needs the deal files and emails. Then `copy-reply-drafts.sql`: needs the emails and the partners as users.
+18. `copy-activity.sql`, then `copy-emails.sql`: need parties, users and deals. Then `copy-email-summaries.sql`: needs the copied email mappings. Then `copy-attachment-emails.sql`: needs the deal files and emails. Then `copy-reply-drafts.sql`: needs the emails and the partners as users.
 19. `copy-calls.sql`: needs the activity a logged meeting already is.
 20. `copy-meetings.sql`: needs logged activities, with reviewed reuse or distinct-pair inputs when needed.
 21. `copy-lead-stage-moves.sql`: needs the activity each move cites.
@@ -430,6 +431,7 @@ A round's status records what happened to that round, and the deal's phase recor
 - **`activity`** records something that happened. **`activity_about`** links it to each deal, person or company, or property it concerns, one row each. One email about a deal, its client and its lender shows on all three timelines. `activity.reached` records whether the person was reached: true means reached, false means attempt only, and null means unknown. It is never inferred from the summary.
 - **`email`** holds the message's own Message-ID header (Outlook's `internetMessageId`), never an id one mailbox gives it, so mail both users received is stored once. Only today's mail copied without it lacks one. The id is unique, keeps its case, and is refused when blank or space-padded. The row also holds the Outlook conversation id when known, the sender, the subject and the new text only, with quoted history removed. The date is the activity's time. The agent stores only an email it ties to a record. Mail that matches nothing stays in the mailbox and is not copied, and the database refuses an email that is about no record. The original mailbox stays the full record.
 - **Attachments** go to R2. Each becomes a `document` that names the email it arrived with.
+- **Email summaries.** An `email_summary` belongs to one stored email. The database refuses to delete an email while it has any summary results. Each available result has its original text. An unavailable result records that it had no text. Each result identifies its source activity, captured-content hash and generator version, and keeps the recorded provenance (including the model when recorded) and time. The database view `email_current_summary` gives at most one text per email. It picks the latest available result by recorded time, breaking ties by source activity id, hash and generator version. An email with only unavailable results has no current text (decision 177).
 - **`next_step`** is about exactly one deal, person or company, or property. Its owner is a party. A deal checklist item also keeps `item_title`, ordered `item_bullets` and `source_ref`. A titled item requires a deal, a two-to-four-word title, a nonblank source and an array of bullets, checked by the database. Untitled steps default to no title, empty bullets and no source. Its generated `status` is `resolution`, or open when that is null, so each state has one encoding. Done can have no known completion time. Only done has `done_at`; only cancelled or expired has `resolved_at`, nullable when the actual decision time is unknown. Cancelled requires a nonblank `resolution_reason`, and other states have none. `resolution_event_id` optionally holds the UUID of the old event that closed the step. Only the owner's import can insert or update it; open steps cannot have it. New app cancellations are recorded in change history. All ended steps remain in detail reads. A held step's `hold_until` is the first day it may show on Home, in Central time as today's system counts it. `home_next_step` includes only open steps past their hold. The Home inbox also reads held steps for In motion and waiting, and recent steps with a known completion time for Done. Detail reads show held steps with their hold.
 
 For a later copier, retain each source row's id, text, owner and due date alongside its end state. A dropped `public.next_action` maps to cancelled using the matching `drop-action` event's `new_value.reason` or `human_quote`, tied by `next_action_id`, with the event id in `resolution_event_id` and its actual `occurred_at` in `resolved_at`. Missing or conflicting cancellation evidence waits for correction. An expired action maps to expired, with the matching `clear-the-deck-apply` event id in `resolution_event_id` when its item proves the expiry. Several steps can name the same deck event. Use its decision time only when the item proves that expiry; a stale deadline is not an expiry decision. Without reliable time or evidence, leave those fields null and list the gap. Done actions keep an explicit completion time when present, such as a post-call action's `completed_at` or the matching `complete-one-action` event's `occurred_at` for a `next_action`; otherwise record done with a null `done_at`. Neither a row's last edit nor the copy time proves completion. The deal, vendor, lead and client copies follow this (#479, #480).
@@ -991,6 +993,12 @@ Run `schema/copy-emails.sql` as the owner right after `copy-activity.sql`, in it
 - `outside_id` maps each row of a copied email, under `old_system`, to the email activity it became, so a later copy that names one of today's rows finds its email.
 - A rerun adds any new record links and mailbox memberships. It fills a missing Message-ID or Outlook conversation id when a source row supplies it.
 
+## Copying today's email summaries
+
+Run `schema/copy-email-summaries.sql` as the owner after `copy-emails.sql`, in its own transaction with the new schema on `search_path`. It looks up each `public.email_message_summary` result using the source activity's `old_system` email mapping in `outside_id`. It copies each result's original key, status, text, provenance and `updated_at` without changes. When several source activities became the same email, their results stay distinct on that email.
+
+The copy lists an unmapped source as `email_not_copied`. The list names the source activity, generator version and source hash. A stored result with the same original key but different values or email is listed as `summary_copy_conflict` and stays as stored. A repeat with the same input adds nothing.
+
 ## Copying today's email attachments
 
 Run `schema/copy-attachment-emails.sql` as the owner right after `copy-emails.sql`, in its own transaction with the new schema on `search_path`. It only reads `public` and `ops`, and ends with `not_copied`.
@@ -1204,7 +1212,7 @@ Paths are under `doctorcre-app/`.
 
 ### Where each populated kind goes
 
-Aggregate counts from production on 2026-11-17. The file-to-deal and possible-new-deal counts come from the pass D rehearsal copy on 2026-11-18.
+Aggregate counts from production on 2026-11-17. The file-to-deal, possible-new-deal and email-summary counts come from the rehearsal copy on 2026-11-18.
 
 | Old kind                                                    |            Rows | Goes to                                                            | Copy or gap                                                                                  |
 | ----------------------------------------------------------- | --------------: | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
@@ -1216,7 +1224,7 @@ Aggregate counts from production on 2026-11-17. The file-to-deal and possible-ne
 | `activity` analysis                                         |             138 | `activity` note under its label                                    | `copy-activity.sql`                                                                          |
 | `activity` email in / out                                   |       172 / 134 | `activity`, `email`                                                | `copy-emails.sql`; without a Message-ID, matched by sender, sent time and subject (2, 4)     |
 | `activity` task                                             |               1 | Waits for an owner ruling                                          | Listed (31)                                                                                  |
-| `email_message_summary` available / unavailable             |         27 / 32 | No place yet                                                       | Gap: kept or regenerated, decided with the email copy (4)                                    |
+| `email_message_summary` available / unavailable             |         28 / 38 | `email_summary`                                                    | `copy-email-summaries.sql`, mapped by source activity (4, 33)                                |
 | `attachment` on a deal                                      |               6 | `document`                                                         | `copy-deal-files.sql`, then `copy-attachment-emails.sql` for the email it came with          |
 | `ops.deal_document_text`                                    |               6 | `document_extraction`                                              | `copy-deal-file-text.sql`                                                                    |
 | `email_proposal` next step pending / dismissed              |          22 / 1 | `proposal`                                                         | `copy-email-suggestions.sql`                                                                 |
@@ -1539,7 +1547,7 @@ The suggestion kinds:
 - Only the step's owner can click Resolve (`accept`) or Dismiss (`dismiss`). The decision answers with `next_step_id` and an empty `created` object. Resolving stamps and completes the step in the same save. An edited or ended step refuses resolution with `422 database_refused_the_statement { rule: "proposal_step_changed" }`. Dismissal closes the suggestion and leaves the step intact.
 - The deal detail derives its date from the current step. A note's resolution advances that date only if it completes the current step. A call or recorded meeting's resolution preserves the current date until a newer ordinary step takes its place.
 - **Read on Home (35).** `GET /api/engine/home/held-steps` answers `{ proposals, automatic_resolutions }` for the signed-in partner. Each pending hold on an open step includes `proposal_id`, `deal_id`, `deal_name`, `next_step_id`, `what`, `due_on`, `evidence`, `activity_id`, `activity_kind`, `happened_at`, `summary` and `can_resolve`. An edited step can still be dismissed. Resolved and dismissed holds and ended steps leave the list. The Undo list shows automatic completions recorded in the last seven days while the completion is still the step's latest change. It omits a completion if the partner already has an open ordinary step on that deal. Each entry includes `next_step_id`, `what`, `done_at`, `change_id`, `changed_by_job`, `deal_id` and `deal_name`. App wiring is step 30.
-- Snoozing a suggestion is a Home mark (slices 10, 24). Email summaries wait for slice 4's decision and have no door yet.
+- Snoozing a suggestion is a Home mark (slices 10, 24). Stored email summaries move in the email copy (decision 177).
 
 #### Open a suggestion from Home
 
