@@ -78,7 +78,8 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 - [ ] Add prospect is one line at the top of the lane: a name, then an optional note. Enter saves.
 - [ ] For someone new, the same line requires one tap to choose person or company and one to choose how found (owner, 2026-11-18).
 - [ ] It is never refused because the person or practice is not a client or not in the system yet. A blank name, or a save that fails, keeps the line open with the typed name and note and says what is missing or what went wrong.
-- [ ] While the partner types, people and companies already in the system with that name are offered. Picking one puts it in the lane, asking how found only when it has none. Picking a prospect already in the lane adds the note to it. Picking a client offers Add deal for them instead.
+- [ ] While the partner types, people and companies already in the system with that name are offered. Picking one puts it in the lane, asking how found only when it has none. Picking a prospect already in the lane adds the note to it. Picking a client who is on no deal offers Add deal for them instead.
+- [ ] Picking someone already on a deal keeps the add line open, says they are already on a deal and offers to open their deals.
 - [ ] A new prospect is unclaimed until a partner clicks Claim (owner, 2026-11-18: leads "go to no one until they are claimed").
 
 ### A prospect
