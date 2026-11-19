@@ -7,13 +7,20 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 
 create temp table old_market_agent_source on commit drop as
 select m.*, md5('old_system:market_agent_source:' || m.deal_id)::uuid as activity_id,
- o.deal_id as mapped_deal_id, plain.source_note, 'Market agent source' || E'\n\n' || plain.source_note as summary, author.*
+ o.deal_id as mapped_deal_id, plain.source_note, dates.text as dated_note, 'Market agent source' || E'\n\n' || dates.text as summary, author.*
 from public.deal_market_assignment m
 left join outside_id o on o.source = 'old_system' and o.value = m.deal_id::text
 cross join (values ('^\s*salesforce (opportunity|record) 006[[:alnum:]]{12}([[:alnum:]]{3})?')) reference(pattern)
 cross join lateral (select case
  when m.source ~* (reference.pattern || '(, observed \d{4}-\d\d-\d\d)?\s*$') then null
  else regexp_replace(m.source, reference.pattern || '[,;][[:blank:]]+(?=\S)', '', 'i') end as source_note) plain
+cross join lateral (
+ select string_agg(case when part[1] is not null and pg_input_is_valid(part[1], 'date')
+  then to_char(part[1]::date, 'FMMonth FMDD, YYYY') else coalesce(part[1], part[2]) end, '' order by position) as text
+ from regexp_matches(plain.source_note,
+  '(?<![[:alnum:]_./:+-])(\d{4}-\d\d-\d\d)(?![[:alnum:]_/:+-]|\.[[:alnum:]])|([^0-9]+|[0-9]+)', 'g')
+ with ordinality as parts(part, position)
+) dates
 cross join lateral copy_event_attribution(m.set_by, (select e.id from public.event e
  where e.subject_type = 'deal' and e.subject_id = m.deal_id
  and (e.verb, coalesce(e.field, '')) in (('set-market-agent', 'market_agent'), ('create-national-market-deal', ''))
@@ -50,6 +57,8 @@ insert into not_copied select deal_id, 'market_agent_source',
 from examined_market_agent_source where refusal is not null;
 insert into not_copied select deal_id, 'market_agent_source', null, 'technical_deal_note_prefix'
 from examined_market_agent_source where refusal is null and source_note <> source;
+insert into not_copied select deal_id, 'market_agent_source', null, 'iso_date_rendered'
+from examined_market_agent_source where refusal is null and dated_note <> source_note;
 insert into not_copied select deal_id, 'changed_for_user_id', null, 'agent_user_unknown'
 from old_market_agent_source where changed_by_job = 'agent' and changed_for_user_id is null;
 set constraints all immediate;

@@ -721,3 +721,64 @@ for (const [subject, record] of [
 		}
 	});
 }
+
+test("copies a recorded step's words and due date and only removes a proven step code", async () => {
+	const code = "abcdef12";
+	const retained =
+		"Nothing outstanding on the agent side. Keep (abcdef13, waiting for a reply).";
+	const unknown =
+		"{'text': 'Keep this as written', 'due': '2026-02-29', 'waiting_on': None}";
+	const steps = [
+		[`${code}-0000-4000-8000-000000000001`, 15, "Example earlier action"],
+		[
+			id(801),
+			15,
+			`Nothing outstanding on the agent side. Keep (${code}, waiting for a reply).`,
+		],
+		[id(802), 15, retained],
+		[
+			id(803),
+			15,
+			`{'text': "Check the landlord's response", 'due': '2026-07-31', 'waiting_on': 'Broker to reply'}`,
+		],
+		[id(804), 15, unknown],
+	] as const;
+	await db.query("begin");
+	try {
+		for (const [stepId, deal, text] of steps) {
+			await db.query(
+				`insert into public.next_action (id, subject_type, subject_id, owner_id, description, status, created_at, updated_at, created_by)
+     values ($1, 'deal', $2, $3, $4, 'done', '2025-02-01', '2025-02-02', $3)`,
+				[stepId, id(deal), id(1), text],
+			);
+		}
+		for (const _ of [1, 2]) {
+			await db.query("discard temp");
+			const result = await run();
+			assert.deepEqual(reasons(result, 801), ["technical_step_code"]);
+			assert.deepEqual(reasons(result, 803), ["serialized_next_step"]);
+			assert.deepEqual(
+				(
+					await rows(`select what, due_on::text, status from next_step
+     where id between '${id(801)}' and '${id(804)}' order by id`)
+				).map(Object.values),
+				[
+					[
+						"Nothing outstanding on the agent side. Keep (waiting for a reply).",
+						null,
+						"done",
+					],
+					[retained, null, "done"],
+					[
+						"Check the landlord's response\nBroker to reply",
+						"2026-07-31",
+						"done",
+					],
+					[unknown, null, "done"],
+				],
+			);
+		}
+	} finally {
+		await db.query("rollback");
+	}
+});

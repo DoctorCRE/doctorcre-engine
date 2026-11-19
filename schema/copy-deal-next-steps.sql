@@ -55,7 +55,8 @@ from latest where recency = 1 group by party_id having count(distinct user_id) =
 
 create temp table step_candidate on commit drop as
 select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
- regexp_replace(n.description, '^\s+|\s+$', '', 'g') as what, n.due_on, n.hold_until,
+ coalesce(plain.what, regexp_replace(stripped.description, '^\s+|\s+$', '', 'g')) as what,
+ coalesce(n.due_on, plain.due_on) as due_on, n.hold_until,
  coalesce(u.id, d.owner_user_id, v.owner_user_id, creator.id, worked.user_id) as owner,
  u.id is null as owner_inferred,
  case when n.source = 'capture_post_call_action' then n.item_title end as item_title,
@@ -64,6 +65,25 @@ select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
  e.resolution, e.done_at, e.resolved_at, e.resolution_reason, e.resolution_event_id,
  n.created_at, n.updated_at as changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id, e.refusal
 from old_action n
+cross join lateral (select case
+ when n.source = 'next_action' and n.deal_id is not null and n.description like 'Nothing outstanding on the agent side.%'
+ then (regexp_match(n.description, '\(([0-9a-f]{8}),[[:blank:]]+(?=\S)', 'i'))[1] end as prefix) code
+cross join lateral (select case when exists (
+ select from public.next_action a where a.subject_type = 'deal' and a.subject_id = n.deal_id
+  and a.id <> n.id and left(a.id::text, 8) = lower(code.prefix)
+) then regexp_replace(n.description, '\(' || code.prefix || ',[[:blank:]]+', '(')
+ else n.description end as description) stripped
+cross join lateral (select case when n.source = 'next_action' and n.deal_id is not null then regexp_match(stripped.description,
+ $re$^\s*\{\s*'text':\s*('[^'\\]*'|"[^"\\]*")\s*,\s*'due':\s*'(\d{4}-\d\d-\d\d)'\s*,\s*'waiting_on':\s*('[^'\\]*'|"[^"\\]*"|None)\s*\}\s*$$re$)
+ end as parts) structured
+cross join lateral (select
+ substr(structured.parts[1], 2, length(structured.parts[1]) - 2) as words,
+ substr(structured.parts[3], 2, length(structured.parts[3]) - 2) as waiting,
+ case when pg_input_is_valid(structured.parts[2], 'date') then structured.parts[2]::date end as due_on) parsed
+left join lateral (select concat_ws(E'\n', parsed.words, case when structured.parts[3] <> 'None'
+ and parsed.waiting ~ '\S' then parsed.waiting end) as what, parsed.due_on
+ where parsed.words ~ '\S' and parsed.due_on is not null
+  and (n.due_on is null or n.due_on = parsed.due_on)) plain on true
 left join action_end e using (id)
 -- A vendor's next steps are about the person or company it became, merged-away vendors' too.
 left join outside_id vendor on vendor.source = 'old_system' and vendor.value = n.vendor_id::text
@@ -152,6 +172,12 @@ cross join lateral (values (owner_inferred and owner is not null and resolution 
    and kept.status = 'open' and kept.item_title is null
  )))) moved(replaced)
 order by owner_inferred, source <> 'deal_note', created_at, s.id on conflict do nothing;
+
+insert into not_copied
+select n.id, 'text', null,
+ case when n.description ~ '^\s*\{' then 'serialized_next_step' else 'technical_step_code' end
+from old_action n join step_candidate s using (id) join next_step copied using (id)
+where copied.what = s.what and s.what <> regexp_replace(n.description, '^\s+|\s+$', '', 'g');
 
 insert into not_copied
 select s.id, 'next_step', kept.id::text, 'open_step_exists'

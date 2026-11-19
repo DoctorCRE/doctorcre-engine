@@ -203,6 +203,68 @@ test("deal history keeps business text on each side of an event", async () => {
 	}
 });
 
+test("copied history removes only separable references and placeholder markets", async () => {
+	const original =
+		"Checked ~/Recordings/example/transcript.txt against the existing party row";
+	const source = "Checked against the existing party row";
+	const other =
+		"Compare ~/Recordings/example/transcript.txt.backup and (id pending).";
+	for (const [n, verb, field, value] of [
+		[
+			81,
+			"record-finding",
+			"discrepancy",
+			{ source: `${original} (id ${id(1)})` },
+		],
+		[82, "record-finding", "discrepancy", { source: other }],
+		[83, "dismiss-email-proposal", null, { reason: "Already handled" }],
+		[84, "prepare-document", "document", { template: "loi-lease" }],
+		[
+			85,
+			"create-national-market-deal",
+			null,
+			{ name: "Example location", market: "Location #9 — market unspecified" },
+		],
+		[
+			86,
+			"create-national-market-deal",
+			null,
+			{ market: "Market unspecified until next week" },
+		],
+	] as const) {
+		await db.query(
+			"insert into public.event (id, actor_id, subject_type, subject_id, verb, field, new_value, cause, occurred_at) values ($1, $2, 'deal', $3, $4, $5, $6, 'human_stated', '2025-04-01')",
+			[id(n), id(1), id(20), verb, field, value],
+		);
+	}
+	for (const _ of [1, 2]) {
+		assert.deepEqual(
+			(await run()).filter(({ reason }) =>
+				/^(technical_finding_|placeholder_market)/.test(reason),
+			),
+			[
+				{ old_id: id(81), field: "source", reason: "technical_finding_path" },
+				{ old_id: id(81), field: "source", reason: "technical_finding_row_id" },
+				{ old_id: id(85), field: "market", reason: "placeholder_market" },
+			],
+		);
+		assert.deepEqual(
+			(
+				await rows(`select event->'new_value' as value from deal_imported_history
+    cross join jsonb_array_elements(events) event order by event->>'id'`)
+			).map(({ value }) => value),
+			[
+				{ source },
+				{ source: other },
+				{ reason: "Already handled" },
+				{ template: "LOI lease" },
+				{ name: "Example location" },
+				{ market: "Market unspecified until next week" },
+			],
+		);
+	}
+});
+
 test("deal owner history credits the move when the event records automation", async () => {
 	for (const [n, cause] of [
 		[70, "automation_job"],

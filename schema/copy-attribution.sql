@@ -179,3 +179,7 @@ begin atomic
 		select id, 'deal_id', deal_id, deal_id from public.deal_note
 	) k left join outside_id o on o.source = 'old_system' and o.value = k.lookup::text;
 end;
+
+create or replace function copy_unspecified_market(value text) returns boolean
+language sql immutable strict
+return btrim(value) ~* '^(location #[0-9]+ [—–-] )?market unspecified$';
