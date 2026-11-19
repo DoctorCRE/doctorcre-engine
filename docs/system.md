@@ -91,9 +91,9 @@ The owner's rulings of 2026-11-17:
 - Switch day is Sat 2026-11-28. Thu 2026-11-26 is allowed only if the practice run is clean; the coordinator tells the owner which day by Wednesday evening.
 - On switch day, mail intake and saving pause briefly for the move, then the switches above flip. Switch day builds nothing: every old-system and app change ships before it, switched off.
 
-On switch day, turn off only the nightly deal checklist reminder step in `carr-system/bin/nightly.sh`. The old checklist freezes once saves move, so the job could remind a partner about an item they already finished. An aggregate check of the rehearsal copy on 2026-11-19 found one historical checklist reminder, zero active deal or lease watches, and zero deal watch updates. Both moves are deferred. Deal watch settings and updates stay on the old tables, which only cover copied deals. [Deal watches and nightly checklist reminders](new-database.md#deal-watches-and-nightly-checklist-reminders).
-
 Not yet written down, so a brief that needs one reports the gap and does not decide it: the order of the switches after the Deals pair, how long the pause lasts, and going back after new saves.
+
+The coordinator deferred both moves on 2026-11-19 (#805). On switch day, turn off only the nightly deal checklist reminder step in `carr-system/bin/nightly.sh`. The old checklist freezes once saves move, so the job could remind a partner about an item they already finished. Deal watch settings and updates stay on the old tables, which only cover copied deals. [Deal watches and nightly checklist reminders](new-database.md#deal-watches-and-nightly-checklist-reminders).
 
 ## Going back
 
