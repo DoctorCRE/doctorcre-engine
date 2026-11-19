@@ -22,12 +22,14 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Each card has a checkbox. With cards selected, Home shows how many, Snooze selected and Clear selection. After a batch it lists each card's result, with Undo whole batch, Undo selected results, Retry same batch when a result is uncertain, and Finish reviewing batch.
 - [ ] Home has no "set waiting person" control.
 - [ ] Home has no Hide. Every card is finished, snoozed to a date, or dropped with a reason. There is no "Hide from inbox", no "Hidden from inbox" list, and no Hide button on the selection bar (today "Settle selected") (owner, 2026-11-19).
+- [ ] Every card hidden before Hide went is back in the inbox, including the 11 hidden marks copied from the old system (coordinator, 2026-11-19).
+- [ ] Every card kind has Drop beside Snooze. Drop asks for a reason, and the card leaves. Steps, call follow-ups, updates, lease facts, mail, suggestions and tour feedback offer the same actions (coordinator, 2026-11-19).
 
-When app routing moves to the new database, Home uses door 24 for snooze and undo on steps, call follow-ups, updates, suggestions and reply drafts. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
+When app routing moves to the new database, Home uses door 24 for snooze and undo on steps, call follow-ups, updates, suggestions and reply drafts. Door 24's `settle` and `unsettle` saves and the Home read's settled shelf are deleted in the engine change that builds Home's side. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
 
 ## Inbox sections
 
-- [ ] Overdue: the partner's steps dated before today.
+- [ ] Late: the partner's steps dated before today, each saying how late, such as "3 days late". Home never says "Overdue" (coordinator, 2026-11-19).
 - [ ] Needs your attention: everything else waiting on the partner today.
 - [ ] Today: steps dated today.
 - [ ] In motion and waiting: calls still being read, cards on hold, snoozed cards, each saying when it comes back.
@@ -90,7 +92,7 @@ A next step, a deal to file the email to, a possible new deal, or a deal's progr
 
 ### Step that may be done
 
-A note, deal update or call suggests an overdue step already happened.
+A note, deal update or call suggests a late step already happened.
 
 - [ ] Says "Did this happen? Send the lease draft (Example Dental, Springfield)" with the words that suggest it.
 - [ ] Opens to the deal and the note or call it came from.
@@ -119,12 +121,13 @@ A lease value read from a document that needs the partner's eye.
 
 A client's comment on a toured property, or a property added to or removed from their shortlist.
 
+- [ ] The title says who did what to which property, such as "Example Dental commented on 100 Example Street" or "Example Dental added 100 Example Street to the shortlist" (coordinator, 2026-11-19).
 - [ ] Opens to the property, the comment or the shortlist change, and when it was left.
-- [ ] Stays on Home until the partner finishes it. Done finishes it, and the card leaves (owner, 2026-11-19).
+- [ ] Stays on Home until the partner finishes it. Done finishes it, and the card leaves (owner, 2026-11-19). Undo brings it back, as on every other Done (coordinator, 2026-11-19).
 
 ## Today panel
 
-- [ ] Shows today's meetings and the partner's dated reminders, with a choice of both partners or either one.
+- [ ] Shows today's meetings and the partner's dated reminders, with a choice of both partners or either one. Meetings after today stay in Outlook and do not show on Home (coordinator, 2026-11-19).
 - [ ] Does not repeat a step that is already a card in the inbox. A reminder with a card opens that card.
 - [ ] Each section either shows its items or says plainly why it cannot. It never stays on "Checking…".
 - [ ] A reminder dated before today is listed under "Late" and says how late, such as "3 days late", as the deal's next step does. The panel never says "Overdue" (coordinator, 2026-11-19).
@@ -162,6 +165,8 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs, marks and sent draft history. Opening the email and deciding a suggestion from Home still need app routing.
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
 - Home still offers Hide from inbox, the Hidden from inbox list and the selection bar's Settle selected.
+- No card has Drop with a reason. Steps, call follow-ups, updates and tour feedback have no way to drop; a suggestion has Dismiss with no reason, a reply draft has "Decline draft", and a lease fact has Reject (code).
+- The inbox's past-due section is titled "Overdue" (code).
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
 - The Today panel calls a past-due reminder "overdue". The deal's next step uses "late" (app code).
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.
