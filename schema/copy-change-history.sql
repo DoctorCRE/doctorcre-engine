@@ -112,4 +112,104 @@ where table_name is not null and record is not null and actor_problem is null
  and not coalesce(unknown_payload, false)
 on conflict (id) do nothing;
 alter table imported_change enable trigger stamp_imported_change;
+-- Checklist pings already copy to Home updates.
+create temp table deal_history_shape on commit drop as
+select * from (values
+ ('add-critical-date', null, 'due_on kind'),
+ ('add-premises', null, 'building building_created ownership premises spaces'),
+ ('backfill-document-attachments', 'document.attachments', 'attachments document_id'),
+ ('complete-action', 'status', 'next_action next_action_id outcome status'),
+ ('complete-one-action', 'status', 'next_action next_action_id outcome owner_id status version'),
+ ('create-national-market-deal', null, 'account_client_id agent_name client_ref market name'),
+ ('dismiss-email-proposal', null, 'activity_id kind proposal_id reason'),
+ ('import', null, 'summary'),
+ ('log-activity', null, 'activity kind'),
+ ('log-decision', 'decision', 'decision_event_id decision_id summary'),
+ ('new-deal', null, 'client deal_type name phase salesforce_id'),
+ ('prepare-document', 'document', 'document_id filled owed template'),
+ ('reattach-deal', 'client_id', 'client_name client_ref matched_on party_ref'),
+ ('record-counter', null, 'basis rate round side'),
+ ('record-finding', 'address', 'expires_on found proposes_correction source'),
+ ('record-finding', 'code_requirement', 'expires_on found proposes_correction source'),
+ ('record-finding', 'discrepancy', 'expires_on found proposes_correction source'),
+ ('record-finding', 'market_study', 'expires_on found proposes_correction source'),
+ ('record-finding', 'verified', 'expires_on found proposes_correction source'),
+ ('register-client-portal', 'client_portal', 'client_portal_url'),
+ ('resolve-post-call-candidate', 'next_action', 'assignee description due_on next_action_id'),
+ ('set-lead', null, 'lead'),
+ ('set-market-agent', 'market_agent', 'market market_agent'),
+ ('set-next-action', 'next_date', 'next_date'),
+ ('set-next-action', null, 'dropped_post_call_action_ids due next_action owner set_by summary'),
+ ('set-next-step', 'next_step', 'next_date next_step'),
+ ('update-deal', 'closed_on', 'closed_on'),
+ ('update-deal', 'invoiced_on', 'invoiced_on'),
+ ('update-deal', 'lane', 'lane'),
+ ('update-deal', 'notes_path', 'notes_path'),
+ ('update-deal', 'outcome', 'outcome'),
+ ('update-deal', 'phase', 'phase'),
+ ('update-deal', 'salesforce_id', 'salesforce_id')
+) s(verb, field, keys);
+
+create temp table deal_history_candidate on commit drop as
+with candidates as (
+ select e.*, d.id as deal_id, u.id as user_id, actor.kind as actor_kind,
+  string_to_array(s.keys, ' ') as keys
+ from public.event e join public.v_deal_room_event visible using (id)
+ join public.actor actor on actor.id = e.actor_id
+ left join outside_id m on m.source = 'old_system' and m.value = e.subject_id::text
+ left join deal d on d.id = m.deal_id
+ left join app_user u on u.id = e.actor_id and actor.kind = 'human'
+ join deal_history_shape s on s.verb = e.verb and s.field is not distinct from e.field
+ where not exists (select from imported_change i where i.id = e.id)
+  and not exists (select from deal_phase_change p
+   where p.deal_id = d.id and p.happened_at = e.occurred_at and p.changed_at = e.recorded_at
+   and p.phase = case
+    when e.field = 'phase' and e.old_value ->> 'phase' is distinct from e.new_value ->> 'phase'
+     then e.new_value ->> 'phase'
+    when e.field = 'outcome' and e.new_value ->> 'outcome' = 'lost' then 'dead' end)
+  and not exists (select from next_step n where n.resolution_event_id = e.id and n.deal_id = d.id)
+  and not exists (select from public.deal_invoice_email old join invoice_email saved using (id)
+   where old.invoice_event_id = e.id and saved.deal_id = d.id and saved.payment_change_id is not null)
+  and not exists (select from imported_deal_history h where h.id = e.id)
+)
+select e.*, parsed.old_snapshot, parsed.new_snapshot,
+ case when deal_id is null then 'deal_history_deal_not_copied'
+  when actor_kind = 'human' and user_id is null then 'deal_history_user_not_copied'
+  when not checked.valid then 'deal_history_payload_invalid' end as refusal
+from candidates e
+cross join lateral (select
+ case when jsonb_typeof(e.old_value) = 'object'
+  and jsonb_populate_record_valid(null::imported_deal_values, e.old_value)
+  then jsonb_populate_record(null::imported_deal_values, e.old_value) end as old_snapshot,
+ case when jsonb_typeof(e.new_value) = 'object'
+  and jsonb_populate_record_valid(null::imported_deal_values, e.new_value)
+  then jsonb_populate_record(null::imported_deal_values, e.new_value) end as new_snapshot
+) parsed
+cross join lateral (
+ select bool_and(case when payload is null then true
+  when snapshot is null then false
+  else payload - e.keys = '{}'::jsonb and jsonb_strip_nulls(payload) = jsonb_strip_nulls(snapshot)
+   and (not payload ? 'attachments' or payload -> 'attachments' = snapshot -> 'attachments')
+  end) as valid
+ from (values (e.old_value, to_jsonb(parsed.old_snapshot)), (e.new_value, to_jsonb(parsed.new_snapshot))) v(payload, snapshot)
+) checked;
+
+insert into listed
+select id, field, refusal from deal_history_candidate where refusal is not null;
+
+insert into imported_deal_history (
+ id, deal_id, occurred_at, recorded_at, source_actor_id, source_deal_id, changed_by_user_id, verb, field,
+ old_value, new_value, old_keys, new_keys, cause, human_quote, agent_rationale, idempotency_key, via,
+ client_id, sponsoring_human_slug, personal_scope, authorization_class, organization_tenant_id, correlation_id, mutation_order
+)
+select id, deal_id, occurred_at, recorded_at, actor_id, subject_id, user_id, verb, field,
+ old_snapshot, new_snapshot,
+ case when old_value is not null then array(select jsonb_object_keys(old_value)) end,
+ case when new_value is not null then array(select jsonb_object_keys(new_value)) end,
+ cause, human_quote, agent_rationale, idempotency_key, via, client_id, sponsoring_human_slug,
+ personal_scope, authorization_class, organization_tenant_id, correlation_id, mutation_order
+from deal_history_candidate where refusal is null
+on conflict (id) do nothing;
+
+delete from listed l using imported_deal_history h where h.id = l.old_id;
 select * from listed order by old_id, field, reason;

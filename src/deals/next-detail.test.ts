@@ -828,3 +828,86 @@ test("signed-in detail shows a revived deal as active", async () => {
 		],
 	});
 });
+
+test("the deal page reads typed old events with no other history, once and in recorded order", async () => {
+	await db.query(`
+		insert into public.event (id, subject_type, subject_id, field, old_value, new_value,
+			occurred_at, recorded_at, actor_id, verb, cause)
+		values
+		 ('${id(802)}', 'deal', '${id(30)}', 'next_date', '{"next_date":"2025-01-06"}',
+		  '{"next_date":null}', '2025-01-04', '2025-01-06', '${id(1)}', 'set-next-action', 'human_stated'),
+		 ('${id(801)}', 'deal', '${id(30)}', 'address', null, '{"found":false,"expires_on":"2025-02-03"}',
+		  '2025-01-03', '2025-01-06', '${id(3)}', 'record-finding', 'automation_job'),
+		 ('${id(803)}', 'deal', '${id(30)}', 'address', null, '{"found":"false","expires_on":"bad-date"}',
+		  '2025-01-07', '2025-01-08', '${id(3)}', 'record-finding', 'automation_job'),
+		 ('${id(804)}', 'deal', '${id(32)}', 'client_portal', null, '{"client_portal_url":"https://example.test"}',
+		  '2025-01-03', '2025-01-05', '${id(1)}', 'register-client-portal', 'human_stated'),
+		 ('${id(805)}', 'deal', '${id(30)}', 'client_portal', null, '{"password":"example-secret"}',
+		  '2025-01-07', '2025-01-08', '${id(3)}', 'register-client-portal', 'automation_job');
+	`);
+	const copy = await readSchema("copy-change-history.sql");
+	const expected = [
+		{
+			id: id(801),
+			recorded_at: "2025-01-06T00:00:00+00:00",
+			occurred_at: "2025-01-03T00:00:00+00:00",
+			actor: "old_system",
+			verb: "record-finding",
+			field: "address",
+			old_value: null,
+			new_value: { found: false, expires_on: "2025-02-03" },
+			imported: true,
+		},
+		{
+			id: id(802),
+			recorded_at: "2025-01-06T00:00:00+00:00",
+			occurred_at: "2025-01-04T00:00:00+00:00",
+			actor: "partner_one",
+			verb: "set-next-action",
+			field: "next_date",
+			old_value: { next_date: "2025-01-06" },
+			new_value: { next_date: null },
+			imported: true,
+		},
+	];
+
+	const history = async (deal: string) => {
+		const response = await get(`/deals/${deal}`, "next");
+		assert.equal(response.status, 200);
+		const page: unknown = await response.json();
+		assert.ok(
+			page && typeof page === "object" && "imported_deal_history" in page,
+		);
+		return page.imported_deal_history;
+	};
+	for (const _ of [1, 2]) {
+		await db.query("begin");
+		const result = await db.query(copy);
+		assert.ok(Array.isArray(result));
+		assert.deepEqual(
+			result
+				.at(-1)
+				?.rows.filter(
+					(row: { reason: string }) =>
+						row.reason === "deal_history_payload_invalid",
+				),
+			[
+				{
+					old_id: id(803),
+					field: "address",
+					reason: "deal_history_payload_invalid",
+				},
+				{
+					old_id: id(805),
+					field: "client_portal",
+					reason: "deal_history_payload_invalid",
+				},
+			],
+		);
+		await db.query("commit");
+		assert.deepEqual(await history(id(30)), expected);
+	}
+	assert.partialDeepStrictEqual(await history(id(32)), [{ id: id(804) }]);
+	assert.deepEqual(await history(id(33)), []);
+	assert.deepEqual(await history(id(36)), []);
+});

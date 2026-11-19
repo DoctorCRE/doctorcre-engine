@@ -334,3 +334,5 @@
 175\. **Either partner can change a shared weekly review mark (2026-11-18).** The database keeps one mark for each deal or prospect and week, with the partner and time. Mark and Undo check the last change for that week and item, including a deletion. Both saves replay a successful request with the same key. Undo removes the mark and keeps the deletion in change history (#765).
 
 176\. **An old vendor ruling can say its reason was never recorded (2026-11-18).** The copy keeps a parked or avoided ruling with the reason “not recorded, set before the new system” when no reviewed reason exists. New rulings require a recorded reason. The copy keeps each vendor's recorded relationship partner so their next steps can follow the vendor (#760).
+
+180\. **Old deal-page events with no other home stay in imported history (2026-11-19).** The copy keys each event by its old ID and keeps its recorded facts in typed fields. The deal page reads them in recorded order with attribution to the user or Old system. The engine can read this history and only the owner can load it (#789).

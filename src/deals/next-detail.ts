@@ -4,7 +4,7 @@ import {
 	jsonBuildObject,
 	jsonObjectFrom,
 } from "kysely/helpers/postgres";
-import type { DB, JsonValue } from "../next-database.d.ts";
+import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
 import { clientWebsiteOf, selectNextDealsWithFacts } from "./next-board.ts";
@@ -20,6 +20,16 @@ type DealEvent = {
 	field: string | null;
 	old_value: JsonValue;
 	new_value: JsonValue;
+};
+
+type ImportedDealEvent = Omit<
+	DealEvent,
+	"activity_id" | "old_value" | "new_value"
+> & {
+	occurred_at: string;
+	imported: true;
+	old_value: JsonObject | null;
+	new_value: JsonObject | null;
 };
 
 type Correspondence = {
@@ -142,6 +152,9 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 					])
 					.whereRef("lease.deal_id", "=", "d.id"),
 			).as("lease"),
+			sql<ImportedDealEvent[]>`imported_deal_history_for(${eb.ref("d.id")})`.as(
+				"imported_deal_history",
+			),
 			sql<
 				DealEvent[]
 			>`(select coalesce(json_agg(e order by recorded_at desc, id desc), '[]') from (

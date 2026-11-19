@@ -3981,6 +3981,7 @@ test("everything about the LOI deal comes back in one read, each list in order",
 		critical_date_proposals: [],
 		earlier_parties: [],
 		earlier_owners: [],
+		imported_deal_history: [],
 		imported_history: [],
 	});
 });
@@ -4275,6 +4276,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 				"imported_automatic_phase_move",
 				"imported_change",
 				"imported_deal_board",
+				"imported_deal_history",
 				"imported_deal_party",
 				"imported_deal_owner",
 				"imported_deal_invoiced",
