@@ -13,6 +13,7 @@ const HISTORY_CAP = 500;
 
 type DealEvent = {
 	id: string;
+	activity_id: string | null;
 	recorded_at: string;
 	actor: string;
 	verb: string;
@@ -88,9 +89,12 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			jsonArrayFrom(
 				eb
 					.selectFrom("critical_date as cd")
+					.leftJoin("app_user as by", "by.id", "cd.changed_by_user_id")
 					.select((eb) => [
 						"cd.id",
 						"cd.kind",
+						eb.fn.coalesce("by.slug", "cd.changed_by_job").as("actor"),
+						asText(eb.ref("cd.changed_at")).as("updated_at"),
 						asText(eb.ref("cd.due_on")).as("due_on"),
 						"cd.note",
 						"cd.source",
@@ -131,7 +135,8 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				select c.id::text, coalesce((c.source_event ->> 'recorded_at')::timestamptz, c.changed_at) as recorded_at,
 					coalesce(u.slug, c.changed_by_job) as actor,
 					c.source_event ->> 'verb' as verb, c.source_event ->> 'field' as field,
-					c.source_event -> 'old_value' as old_value, c.source_event -> 'new_value' as new_value
+					c.source_event -> 'old_value' as old_value, c.source_event -> 'new_value' as new_value,
+					case when c.table_name = 'activity' then c.record ->> 'id' end as activity_id
 				from (
 					select c.* from imported_change c
 					where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
@@ -144,7 +149,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				union all
 				select p.deal_id || ':phase:' || (to_jsonb(p.happened_at) #>> '{}'),
 					p.changed_at, coalesce(u.slug, p.changed_by_job), 'move-phase',
-					'phase', null::jsonb, to_jsonb(p.phase)
+					'phase', null::jsonb, to_jsonb(p.phase), null::text
 				from deal_phase_change p left join app_user u on u.id = p.changed_by_user_id
 				where p.deal_id = d.id
 					-- An import can seed the phase at the last observed time without move evidence.
@@ -160,7 +165,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 						when 'closed_value' then 'won_value'
 						else edit.key
 					end,
-					${dealEditValue("c.old_value")}, ${dealEditValue("c.new_value")}
+					${dealEditValue("c.old_value")}, ${dealEditValue("c.new_value")}, null::text
 				from change c left join app_user u on u.id = c.changed_by_user_id
 				cross join lateral (
 					select key from jsonb_object_keys(c.new_value) as fields(key)
@@ -219,20 +224,22 @@ function dealEditValue(column: "c.old_value" | "c.new_value") {
 
 const documentsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db
-		.selectFrom("document")
+		.selectFrom("document as doc")
+		.leftJoin("app_user as by", "by.id", "doc.changed_by_user_id")
 		.select((eb) => [
-			"id",
-			"name",
-			"kind",
-			"note",
-			"version",
-			eb.ref("bytes").$castTo<number>().as("bytes"),
-			"content_type",
-			asText(eb.ref("created_at")).as("prepared_at"),
+			"doc.id",
+			"doc.name",
+			"doc.kind",
+			"doc.note",
+			"doc.version",
+			eb.ref("doc.bytes").$castTo<number>().as("bytes"),
+			"doc.content_type",
+			eb.fn.coalesce("by.slug", "doc.changed_by_job").as("actor"),
+			asText(eb.ref("doc.created_at")).as("prepared_at"),
 		])
-		.where("deal_id", "=", deal)
-		.orderBy("created_at", "desc")
-		.orderBy("id");
+		.where("doc.deal_id", "=", deal)
+		.orderBy("doc.created_at", "desc")
+		.orderBy("doc.id");
 
 const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db
@@ -282,9 +289,11 @@ const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db
 		.selectFrom("next_step as s")
 		.leftJoin("app_user as o", "o.id", "s.owner_party_id")
+		.leftJoin("app_user as by", "by.id", "s.changed_by_user_id")
 		.select((eb) => [
 			"s.id",
 			"o.slug as owner",
+			eb.fn.coalesce("by.slug", "s.changed_by_job").as("actor"),
 			"s.what as description",
 			"s.item_title as title",
 			"s.item_bullets as bullets",

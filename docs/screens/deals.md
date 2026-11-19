@@ -156,7 +156,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 - [ ] Compare terms: recorded terms from deals in the same submarket and use type, each value with where it came from.
 - **Open (question 7).** Whether Compare terms becomes a side-by-side of this deal's own offers. Recommended: keep today's comparison until the owner decides.
-- [ ] Timeline: every dated thing on the deal, newest first: phase moves, notes, next steps, critical dates and changes, each saying who and when in words.
+- [ ] Timeline lists phase moves, notes, next steps, critical dates, documents, and changes, newest first. Each says which partner or job saved it and when. A note with a matching event appears once.
 - [ ] Correspondence & notes: the deal's emails and meetings together, newest first, and the deal's notes. An email shows its sender, date and subject. A meeting shows its title and time. An email already on this deal never asks to be filed again.
 - [ ] Tours: the deal's tours, each with its date in words.
 - [ ] Documents: every file on the deal, opening on click, for both partners on every deal.
