@@ -21,6 +21,7 @@ import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
 import { dealClientWebsite } from "./deals/client-website.ts";
 import { criticalDates } from "./deals/critical-dates.ts";
+import { nationalAccounts } from "./deals/national-accounts.ts";
 import {
 	automaticPhaseUndo,
 	dealJobs,
@@ -96,6 +97,7 @@ app.route("/api/engine", partySearch);
 app.route("/api/engine", prospectReads);
 app.route("/api/engine", nextDeals);
 app.route("/api/engine", automaticPhaseUndo);
+app.route("/api/engine", nationalAccounts);
 app.route("/api/engine", dealParticipants);
 app.route("/api/engine", dealClientWebsite);
 app.route("/api/engine", criticalDates);
