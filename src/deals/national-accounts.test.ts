@@ -19,6 +19,12 @@ before(async () => {
 			('${SAME_OWNER_BRAND}', 'company', 'Example Second Brand'),
 			('${MATCHING_COMPANY}', 'company', '${matchingName}');
 		insert into app_user (id, slug) values ('${JOE}', 'joe'), ('${DELL}', 'dell'), ('${OTHER}', 'example');
+		update party set city = 'Example City' where id = '${MATCHING_COMPANY}';
+		insert into role (slug, label) values ('landlord', 'Landlord');
+		with added as (
+			insert into deal (name, owner_user_id) values ('Example Deal', '${JOE}') returning id
+		)
+		insert into deal_party (deal_id, party_id, role) select id, '${MATCHING_COMPANY}', 'landlord' from added;
 		insert into role (slug, label) values ('national_account', 'National account');
 		insert into party_role (party_id, role) values ('${BRAND}', 'national_account'),
 			('${SAME_OWNER_BRAND}', 'national_account');
@@ -71,7 +77,15 @@ test("adding an account saves its owner once and checks for duplicate company na
 	const [duplicate, conflict] = await add(args(sameName));
 	assert.equal(duplicate, 409);
 	assert.equal(conflict.error, "account_name_exists");
-	assert.deepEqual(conflict.candidates, [{ id: card.account_client_id, name }]);
+	assert.deepEqual(conflict.candidates, [
+		{
+			id: card.account_client_id,
+			name,
+			city: null,
+			deal_count: 0,
+			is_national_account: true,
+		},
+	]);
 	assert.equal((await add(args({ ...sameName, force_new: true })))[0], 201);
 });
 
@@ -80,7 +94,13 @@ test("choosing a matching company saves while its name lock is held and replays 
 	const [conflict, matches] = await add(args(fields));
 	assert.equal(conflict, 409);
 	assert.deepEqual(matches.candidates, [
-		{ id: MATCHING_COMPANY, name: matchingName },
+		{
+			id: MATCHING_COMPANY,
+			name: matchingName,
+			city: "Example City",
+			deal_count: 1,
+			is_national_account: false,
+		},
 	]);
 	const picked = args({ ...fields, company_id: MATCHING_COMPANY });
 	const answer = {

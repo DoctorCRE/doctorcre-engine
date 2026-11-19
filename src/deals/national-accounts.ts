@@ -5,6 +5,7 @@ import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { userId } from "../next-save.ts";
+import { partyMatchFields } from "../party-match.ts";
 import {
 	fit,
 	isBoolean,
@@ -84,6 +85,7 @@ async function accountCompany(
 		const candidates = await tx
 			.selectFrom("party")
 			.select(["id", "name"])
+			.select(partyMatchFields)
 			.where("kind", "=", "company")
 			.where(sql`lower(name)`, "=", sql`lower(${name})`)
 			.orderBy("id")

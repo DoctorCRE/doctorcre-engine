@@ -172,7 +172,7 @@ const byId = <T extends { id: string | null }>(rows: T[]) =>
 	rows.toSorted((a, b) => String(a.id).localeCompare(String(b.id)));
 const ROLES: Record<string, string> = { listing_side: "listing_agent" };
 
-// What a partner reads on the page: the header, next steps, parties, the timeline and the emails.
+// What both versions of the page show in the header and timeline.
 async function oldPage(deal: string) {
 	const page = await readSnapshot(connectionString, (tx) =>
 		readDealDetail(tx, deal),
@@ -196,7 +196,6 @@ async function oldPage(deal: string) {
 			...page.activities.map((a) => ({ ...a, text: a.summary })),
 			...page.thread.map((n) => ({ ...n, occurred_at: n.created_at })),
 		]).map((a) => [a.id, a.occurred_at, a.actor, a.text]),
-		emails: page.email_threads.map((e) => [e.subject, e.latest_message_at]),
 	};
 }
 
@@ -221,7 +220,6 @@ async function newPage(deal: string) {
 				summary: n.text,
 			})),
 		]).map((a) => [a.id, a.occurred_at, a.actor, a.summary]),
-		emails: page.email_threads.map((e) => [e.subject, e.latest_message_at]),
 	};
 }
 
@@ -229,7 +227,7 @@ test("the new section answers a deal page as today's tables do", async () => {
 	assert.deepEqual(await newPage(id(30)), await oldPage(id(30)));
 });
 
-test("the page shows the steps, parties, timeline and email the copy brought", async () => {
+test("the page shows the steps, parties and timeline the copy brought", async () => {
 	const page = await newPage(id(30));
 	assert.deepEqual(page.client, "Dr. Jo Example");
 	assert.deepEqual(page.next_step, ["Example send the survey", "2030-01-15"]);
@@ -245,9 +243,6 @@ test("the page shows the steps, parties, timeline and email the copy brought", a
 			["partner_two", "Example note about parking"],
 		],
 	);
-	assert.deepEqual(page.emails, [
-		["Example tour times", "2025-02-02T16:00:00+00:00"],
-	]);
 });
 
 test("a deal whose client is not copied shows no client and the rest of its page", async () => {
@@ -465,7 +460,6 @@ for (const schema of [undefined, "next"]) {
 			schema_version: "deal-timeline.v1",
 			deal_id: id(30),
 			next_step: "Example send the survey",
-			email_threads: [{ conversation_id: "example-thread" }],
 			events: [{ id: id(42), verb: "update-deal", field: "attention" }],
 			thread: [
 				{
@@ -478,6 +472,8 @@ for (const schema of [undefined, "next"]) {
 			],
 			...(schema
 				? {
+						renews_lease_id: null,
+						correspondence: [{ kind: "email", subject: "Example tour times" }],
 						critical_dates: [
 							{
 								kind: "phase_effective_date",
@@ -488,6 +484,7 @@ for (const schema of [undefined, "next"]) {
 						activities: [{ id: id(61) }, { id: id(60) }],
 					}
 				: {
+						email_threads: [{ conversation_id: "example-thread" }],
 						critical_dates: [],
 					}),
 		});
@@ -497,6 +494,7 @@ for (const schema of [undefined, "next"]) {
 				"activities" in detail &&
 				Array.isArray(detail.activities),
 		);
+		if (schema) assert.equal("email_threads" in detail, false);
 		assert.equal(detail.activities.length, 2);
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
 	});
@@ -653,6 +651,7 @@ test("the renewal checklist tracks confirmed deadlines and a saved receipt", asy
 	const response = await get(`/deals/${id(33)}`, "next");
 	assert.equal(response.status, 200);
 	assert.partialDeepStrictEqual(await response.json(), {
+		renews_lease_id: id(85),
 		critical_dates: [
 			{ id: id(82), kind: "option_notice", label: "Option notice" },
 			{
@@ -702,6 +701,7 @@ test("a copied renewal without a source lease shows only the common checklist", 
 	assert.equal(response.status, 200);
 	const detail = await response.json();
 	assert.partialDeepStrictEqual(detail, {
+		renews_lease_id: null,
 		checklist: { template_state: "deal_type_unknown", deal_type: null },
 	});
 	assert.ok(detail && typeof detail === "object" && "checklist" in detail);

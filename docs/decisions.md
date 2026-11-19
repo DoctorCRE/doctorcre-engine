@@ -347,4 +347,6 @@
 
 183\. **Client identity research waits for a partner to confirm it (2026-11-19).** The database move saves found NPIs, addresses, social links and public websites as research observations with source “found by research tool.” The copy skips a number the client already holds. Confirmation will write the fact to its proper home and record the partner and time (#796).
 
+184\. **Name matches show the party's recorded city and deal count (2026-11-19).** The copy keeps the live source party's city, trimmed, with null for a blank or missing value. Each picker counts distinct linked deals and identifies existing national accounts. The renewal picker shows the name of a deal already linked to the source lease (#797).
+
 186\. **A partner can file an uploaded document to a deal (2026-11-19).** Both partners can see the filed document. Filing uses the shared upload by hash and stamps the signed-in partner. The same deal and hash return the original filing when the name, kind and predecessor match. A replacement adds the next version on the same deal and kind without removing earlier versions. The shared save receipt makes retries safe (#802).
