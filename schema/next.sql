@@ -19,6 +19,7 @@ create table party (
 	created_at timestamptz not null default now(),
 	kind text not null check (kind in ('person', 'company')),
 	name text not null,
+	city text check (city ~ '^\S' and city ~ '\S$'),
 	-- A person's is their individual NPI and a company's its organization NPI. A number is issued once, to one of them.
 	npi npi unique,
 	unique (id, kind)

@@ -346,3 +346,5 @@
 181\. **An existing company can become a national account (2026-11-19).** When the add form finds a matching company, the partner can choose that company. The save adds the national account role and its dated owner to the same company. A separate company with the same name requires confirmation (#790).
 
 183\. **Client identity research waits for a partner to confirm it (2026-11-19).** The database move saves found NPIs, addresses, social links and public websites as research observations with source “found by research tool.” The copy skips a number the client already holds. Confirmation will write the fact to its proper home and record the partner and time (#796).
+
+184\. **Name matches show the party's recorded city and deal count (2026-11-19).** The copy keeps the live source party's city, trimmed, with null for a blank or missing value. Each picker counts distinct linked deals and identifies existing national accounts. The renewal picker shows the name of a deal already linked to the source lease (#797).

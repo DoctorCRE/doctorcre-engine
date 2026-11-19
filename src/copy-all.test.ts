@@ -376,7 +376,6 @@ const copied = { party: 8, party_email: 1, party_phone: 1, party_company: 1, par
  candidate: 1, lead_contact_draft: 1, next_step: 3, user_preference: 1, home_mark: 2, home_update: 1, imported_change: 5 };
 // biome-ignore format: one row per correction
 const corrections = [
- ["copy-parties.sql", id(11), "city", "Example City", "no place in the new database"],
  ["copy-parties.sql", id(15), "party", "Example Removed", "deleted"],
  ["copy-markets.sql", "example-bay", "market_key", "example-bay", "no_alias_destination"],
  ["copy-markets.sql", "example-bay", "source", "Example review", "no_typed_destination"],
@@ -415,6 +414,10 @@ const corrections = [
 test("every copy runs in order on one snapshot and lists only the expected corrections", async () => {
 	assert.deepEqual(first, corrections);
 	assert.deepEqual(await counts(), copied);
+	assert.deepEqual(
+		await rows(`select city from party where id = '${id(11)}'`),
+		[{ city: "Example City" }],
+	);
 	assert.deepEqual(
 		await rows(`select w.deal_id, w.created_at::date::text, w.changed_at::date::text,
 			w.password_hash = p.password_hash as same_verifier

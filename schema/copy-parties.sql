@@ -71,8 +71,9 @@ select s.id, s.record_id, s.copy_values, s.npi as typed, btrim(s.npi) as npi, s.
 from chain s left join party held on held.npi = btrim(s.npi)
 where btrim(s.npi) <> '';
 
-insert into party (id, created_at, kind, name, npi, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+insert into party (id, created_at, kind, name, city, npi, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select id, created_at, case kind when 'org' then 'company' else kind end, name,
+	nullif(regexp_replace(city, '^\s+|\s+$', '', 'g'), ''),
 	(select npi from npi_claim c where c.record_id = p.id and c.valid and c.copy_values and c.copy_holder = p.id order by c.rank limit 1),
 	changed_by_user_id, changed_by_job, changed_for_user_id, updated_at
 from copied p;
@@ -288,9 +289,14 @@ where v.title is not null
 -- These have no place in the new database yet (#271).
 insert into not_copied
 select s.id, f.field, f.value, 'no place in the new database'
-from chain s cross join lateral (values ('city', s.city), ('state', s.state), ('county', s.county),
+from chain s cross join lateral (values ('state', s.state), ('county', s.county),
 	('contact_state_cadence', s.contact_state_cadence), ('notes_path', s.notes_path)) as f (field, value)
 where f.value ~ '\S';
+
+insert into not_copied
+select s.id, 'city', s.city, 'its record does not hold this city'
+from chain s join party p on p.id = s.record_id
+where s.city ~ '\S' and p.city is distinct from regexp_replace(s.city, '^\s+|\s+$', '', 'g');
 
 -- Today's import history and its own reference numbers become outside ids of the record each old one became.
 create temp table typed_outside_id on commit drop as

@@ -21,13 +21,14 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] The headline counts every open deal, including those in collapsed columns, and every parked deal, whether the Parked lane is open or not: "38 open deals · 27 parked".
 - [ ] Each open deal shows once, in its phase column. A parked deal shows only in the Parked lane.
 - [ ] List: one row per open deal with its name, deal owner, phase and next step, the same as its card.
-- [ ] Add deal asks for the deal name, the client (picked by name), the deal kind, the deal reason, the phase and the deal owner. Kind and reason may each be left unknown. When the reason is renewal, it also asks which existing lease the deal renews, and saves only with one.
+- [ ] Add deal asks for the deal name, the client (picked by name), the deal kind, the deal reason, the phase and the deal owner. Kind and reason may each be left unknown. When the reason is renewal, it also asks which existing lease the deal renews, and saves only with one. The lease picker shows "already renewed by <deal>" when a deal already links to that lease (owner, 2026-11-19).
+- [ ] In each name picker, a match shows its city when known and how many deals it is on. A company that is already a national account offers "Open account" (owner, 2026-11-19).
 
 ### Card
 
 - [ ] The title is the deal's short name, such as "Dr. Example's Springfield Deal". Clicking it opens the deal page.
 - [ ] Under the title, the deal owner, then a next step and its due date in words. "No next step set" when the deal has none.
-- **Open (question 5).** When both partners have an open next step on the deal. Recommended: the card shows the deal owner's.
+- [ ] When both partners have an open next step on the deal, the card shows the deal owner's step (owner, 2026-11-19, question 5).
 - [ ] A late next step says how late: "Send the floor plan · 3 days late".
 - [ ] Needs attention shows only when a partner set it on the deal.
 - [ ] Client website shows when the deal has one and opens it as the deal page does.
@@ -120,7 +121,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 ## National Accounts
 
 - [ ] One card per national account: its name, its account owner, and how many open deals, deals with a late next step and parked deals it has. No client codes.
-- [ ] Add national account saves its company name and account owner. When a name matches an existing company, offer "Make this company a national account". Ask for confirmation to add a separate company with the same name (owner, 2026-11-19).
+- [ ] Add national account saves its company name and account owner. When a name matches an existing company, offer "Make this company a national account". Open an existing national account from its match. Ask for confirmation to add a separate company with the same name (owner, 2026-11-19).
 - [ ] Change account owner offers Joe and Dell. It changes only the account owner (owner, 2026-11-18).
 - [ ] Opening an account lists its deals, one row per location deal: name, market, phase, next step and market agent.
 - [ ] Add market deal lists markets and the account's current locations by name. Pick a market and a location, or add a person or company as the location. An optional market agent is picked from existing people.
@@ -170,7 +171,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 2. Answered on 2026-11-18 (#718): Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move.
 3. Answered on 2026-11-18. Copied automatic phase moves keep the "Moved automatically" mark and Undo on the card.
 4. Answered on 2026-11-18. A person who is a client may belong to a national account.
-5. When both partners have an open next step on one deal, which shows on the card? Recommended: the deal owner's, with both steps on the deal page.
+5. Answered on 2026-11-19. When both partners have an open next step on one deal, the card shows the deal owner's step and the deal page shows both.
 6. Answered on 2026-11-18. Set up client website stays below the deal's facts and asks for a website name and a password.
 7. Compare terms compares recorded terms across deals in one submarket and use type. Should it compare this deal's own offers instead? Recommended: keep today's comparison until you decide.
 8. How should deal watch settings and the deal page's call recorder work? Recommended: watch settings choose whether deal changes reach Home, and each item the recorder proposes waits for Confirm or Skip, as today.

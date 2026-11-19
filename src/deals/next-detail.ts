@@ -52,6 +52,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			sql.lit("deal-items.v1").as("item_schema_version"),
 			"d.id as deal_id",
 			"d.closed_value",
+			"d.renews_lease_id",
 			clientWebsiteOf(db, eb.ref("d.id"), eb.ref("c.party_id")).as(
 				"client_portal_url",
 			),
@@ -91,23 +92,6 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 						asText(eb.ref("a.happened_at")).as("created_at"),
 					]),
 			).as("thread"),
-			sql<
-				{
-					conversation_id: string | null;
-					subject: string;
-					latest_message_at: string;
-				}[]
-			>`(
-				select coalesce(jsonb_agg(to_jsonb(t) - 'email_id' order by latest_message_at desc, email_id desc), '[]')
-				from (
-					select distinct on (coalesce('thread:' || e.conversation_id, 'email:' || a.id))
-						e.conversation_id, e.subject, a.happened_at as latest_message_at, a.id as email_id
-					from activity_about ab join email e on e.activity_id = ab.activity_id
-					join activity a on a.id = ab.activity_id where ab.deal_id = d.id
-					order by coalesce('thread:' || e.conversation_id, 'email:' || a.id),
-						a.happened_at desc, a.id desc
-				) t
-			)`.as("email_threads"),
 			correspondenceOf(eb.ref("d.id")).as("correspondence"),
 			jsonArrayFrom(
 				eb

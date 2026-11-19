@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sql } from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "./answer.ts";
+import { partyMatchFields } from "./party-match.ts";
 import type { DatabaseEnv } from "./reader.ts";
 
 export const partySearch = new Hono<DatabaseEnv>().get(
@@ -32,6 +33,7 @@ export const partySearch = new Hono<DatabaseEnv>().get(
 			let matches = db
 				.selectFrom("party")
 				.select(["id", "name as display_name", "kind"])
+				.select(partyMatchFields)
 				.where(sql<boolean>`starts_with(${sortName}, lower(${prefix}))`);
 			if (kind !== null) matches = matches.where("kind", "=", kind);
 			if (clientOnly)
