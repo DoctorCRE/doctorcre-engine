@@ -838,8 +838,13 @@ test("the deal page reads typed old events with no other history, once and in re
 		values
 		 ('${id(802)}', 'deal', '${id(30)}', 'next_date', '{"next_date":"2025-01-06"}',
 		  '{"next_date":null}', '2025-01-04', '2025-01-05', '${id(1)}', 'set-next-action', 'human_stated'),
-		 ('${id(801)}', 'deal', '${id(30)}', 'address', null, '{"found":false,"expires_on":"2025-02-03"}',
+		 ('${id(801)}', 'deal', '${id(30)}', 'address', null, '{"found":false,"expires_on":"2025-02-03","proposes_correction":null,"source":"https://example.test/finding"}',
 		  '2025-01-03', '2025-01-06', '${id(806)}', 'record-finding', 'automation_job'),
+		 ('${id(807)}', 'deal', '${id(30)}', 'next_date', '{"next_date":null}',
+		  '{"next_date":"2025-01-08"}', '2025-01-03', '2025-01-06', '${id(1)}', 'set-next-action', 'human_stated'),
+		 ('${id(808)}', 'deal', '${id(30)}', null, '{"owner":"None"}',
+		  '{"owner":"partner_one","next_action":"Send the survey","summary":"queue → partner_one: Send the survey"}',
+		  '2025-01-03', '2025-01-06', '${id(1)}', 'set-next-action', 'human_stated'),
 		 ('${id(803)}', 'deal', '${id(30)}', 'address', null, '{"found":"false","expires_on":"bad-date"}',
 		  '2025-01-07', '2025-01-08', '${id(3)}', 'record-finding', 'automation_job'),
 		 ('${id(804)}', 'deal', '${id(32)}', 'client_portal', null, '{"client_portal_url":"https://example.test"}',
@@ -869,6 +874,28 @@ test("the deal page reads typed old events with no other history, once and in re
 			field: "address",
 			old_value: null,
 			new_value: { found: false, expires_on: "2025-02-03" },
+			imported: true,
+		},
+		{
+			id: id(807),
+			recorded_at: "2025-01-06T00:00:00+00:00",
+			occurred_at: "2025-01-03T00:00:00+00:00",
+			actor: "partner_one",
+			verb: "set-next-action",
+			field: "next_date",
+			old_value: null,
+			new_value: { next_date: "2025-01-08" },
+			imported: true,
+		},
+		{
+			id: id(808),
+			recorded_at: "2025-01-06T00:00:00+00:00",
+			occurred_at: "2025-01-03T00:00:00+00:00",
+			actor: "partner_one",
+			verb: "set-next-action",
+			field: null,
+			old_value: null,
+			new_value: { owner: "partner_one", next_action: "Send the survey" },
 			imported: true,
 		},
 	];
@@ -909,7 +936,9 @@ test("the deal page reads typed old events with no other history, once and in re
 		await db.query("commit");
 		assert.deepEqual(await history(id(30)), expected);
 	}
-	assert.partialDeepStrictEqual(await history(id(32)), [{ id: id(804) }]);
+	assert.partialDeepStrictEqual(await history(id(32)), [
+		{ id: id(804), new_value: null },
+	]);
 	assert.deepEqual(await history(id(33)), []);
 	assert.deepEqual(await history(id(36)), []);
 });
@@ -935,6 +964,10 @@ test("imported history excludes events backed by copied deal records", async (t)
 			insert into next_step (id, deal_id, what, created_at, resolution, done_at) values
 			 ('${id(821)}', '${deal}', 'Send example terms', '${at}', 'done', '${later}'),
 			 ('${id(822)}', '${deal}', 'Confirm example dates', '${later}', 'done', '${later}');
+			insert into document_kind (slug, label) values ('other', 'Other') on conflict do nothing;
+			insert into document (id, deal_id, kind, name, r2_bucket, r2_key, content_type, sha256, bytes, created_at)
+			values ('${id(823)}', '${deal}', 'other', 'Example terms.pdf', 'deal_documents', 'example.pdf',
+			 'application/pdf', repeat('a', 64), 10, '${at}');
 		`);
 		// biome-ignore format: keep each event and its missing-record counterpart on one row
 		const cases = [
@@ -947,6 +980,7 @@ test("imported history excludes events backed by copied deal records", async (t)
 			["post-call action", "resolve-post-call-candidate", "next_action", { next_action_id: id(822) }, at, { next_action_id: id(899) }],
 			["completed action", "complete-action", "status", { next_action_id: id(821), status: "done" }, later],
 			["completed single action", "complete-one-action", "status", { next_action_id: id(822), status: "done" }, later],
+			["document attachments", "backfill-document-attachments", "document.attachments", { document_id: id(824), attachments: { pdf: id(823), working: null } }, at, { document_id: id(824), attachments: { pdf: id(823), working: id(899) } }],
 		] as const;
 		for (const [
 			index,

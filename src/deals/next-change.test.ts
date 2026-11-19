@@ -30,9 +30,10 @@ before(async () => {
 		insert into deal_reason values ('renewal', 'Renewal');
 		insert into deal (id, name, owner_user_id)
 			select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid, 'Example Deal ' || n, '${ALEX}'
-			from generate_series(10, 24) n;
+			from generate_series(10, 25) n;
 		insert into deal_party (deal_id, party_id, role)
-			select id, '${CLIENT}', 'client' from deal where id between '${id(15)}' and '${id(17)}';
+			select id, '${CLIENT}', 'client' from deal
+			where id between '${id(15)}' and '${id(17)}' or id = '${id(25)}';
 		commit;`);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into deal_phase_change select id, '2026-01-05T15:00:00Z', 'touring', null from deal; commit;`);
@@ -181,6 +182,45 @@ test("a partner can undo the current copied move once with a fresh card version"
 	assert.deepEqual(history.rows, [
 		{ phase: "touring", changed_by_user_id: BLAIR },
 	]);
+});
+
+test("a copied loss stays in Lost without an automatic close or Undo", async () => {
+	const deal = id(25);
+	const event_id = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal_phase_change (deal_id, happened_at, phase)
+		values ('${deal}', '2026-01-06', 'closed');
+		insert into imported_deal_board (deal_id, phase, phase_at, outcome)
+		values ('${deal}', 'closed', '2026-01-06', 'lost');
+		insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
+		values ('${event_id}', '${deal}', '2026-01-06', 'touring', 'Example invoice received');
+		commit;`);
+	const read = async (path: string) => {
+		const response = await request(
+			partner,
+			path,
+			{ method: "GET" },
+			{
+				DEALS_READ_SCHEMA: "next",
+			},
+		);
+		assert.equal(response.status, 200);
+		return response.json();
+	};
+	assert.partialDeepStrictEqual(await read("deals"), {
+		lost_deals: [{ id: deal, outcome: "lost", phase_change: null }],
+	});
+	assert.partialDeepStrictEqual(await read(`deals/${deal}`), {
+		outcome: "lost",
+		phase_change: null,
+	});
+	const [status, answer] = await saveAt(partner, `deals/${deal}/phase/undo`, {
+		idempotency_key: randomUUID(),
+		event_id,
+		base_version: await seen(deal),
+	});
+	assert.deepEqual([status, answer.error], [409, "version_conflict"]);
+	assert.equal((await dealNow(deal)).phase, "closed");
 });
 
 for (const { deal, priorPhase } of [

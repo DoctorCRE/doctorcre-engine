@@ -29,6 +29,9 @@ const list = () => save(nightly, path, {}, "GET");
 
 before(async () => {
 	await setup();
+	await db.query(
+		"revoke execute on function invoice_email_target(invoice_email), invoice_name(text) from public",
+	);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values
 			('${owner}', 'person', 'Alex Example'), ('${partner}', 'person', 'Blair Example'),
@@ -95,7 +98,7 @@ test("only the mail job for a provisioned mailbox partner can capture invoice fa
 	assert.equal((await save(mail, path, {}, "GET"))[0], 403);
 });
 
-test("capture converges by reference and the nightly list gives only captured evidence", async (t) => {
+test("the nightly reader and writer use captured invoice evidence without public function grants", async (t) => {
 	const evidence = request();
 	const freshKey = { ...evidence, idempotency_key: randomUUID() };
 	const [first, second] = await Promise.all([

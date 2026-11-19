@@ -416,7 +416,15 @@ async function undoAutomaticPhaseMove(
 				.onRef("receipt.happened_at", "=", "latest.happened_at")
 				.on("receipt.source_event_id", "=", event_id),
 		)
+		.leftJoin("imported_deal_board as imported", (join) =>
+			join
+				.on("imported.deal_id", "=", deal_id)
+				.onRef("imported.phase_at", "=", "latest.happened_at")
+				.on("imported.phase", "is not", null),
+		)
 		.select(["latest.phase", "receipt.prior_phase"])
+		.where("latest.phase", "<>", "dead")
+		.where("imported.outcome", "is distinct from", "lost")
 		.executeTakeFirst();
 	if (!current || current_version !== base_version)
 		throw new SaveRefusal(
