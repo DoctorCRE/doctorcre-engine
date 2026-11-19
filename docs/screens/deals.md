@@ -12,6 +12,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] No internal codes or system words: no client, lead or vendor codes, "The Deal Room", "workspace", "loaded", "retained text", "portal", "CARR", "landlord_side", "Request unavailable or version changed".
 - [ ] A section that has nothing says so in plain words. "Unavailable" shows only when a read really failed, with Retry.
 - [ ] If someone else saved the same field since the partner opened the deal, the save says so and offers to reload the deal. Nothing is overwritten.
+- [ ] Every deal requires an owner. The deal's Owner list offers only the partners.
 
 ## Deal board
 
@@ -40,7 +41,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 ### Moving a phase
 
 - [ ] The move asks what changed, the next step and its date, and an optional critical date with where it came from. The new step replaces the partner's own open next step on the deal, not counting checklist items.
-- [ ] Closing a deal, from its deal page, asks Won or Lost, and the date.
+- [ ] Choosing Closed anywhere opens the deal page's closing form. The form asks Won or Lost, and the date.
 - [ ] Won asks the closed value, which may be left empty until known and is never zero. The deal leaves the board for Closed deals.
 - [ ] Lost asks the reason and the date. The deal keeps everything and leaves the board for Lost deals.
 - [ ] Setting a deal aside is Park, never a Paused outcome.
@@ -53,7 +54,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 ### Closed deals and Lost deals
 
-- [ ] Each lists its deals with client, deal kind, deal owner and the close date in words. A deal with no recorded close date says "Close date not recorded". Lost deals also show the reason.
+- [ ] Each lists its deals with client, deal owner and the close date in words. Both sets of cards show "Deal kind" and "Deal reason", as in Add deal, with "Not recorded" for each unknown value. A deal with no recorded close date says "Close date not recorded". Lost deals also show the reason for loss.
 - [ ] Search finds deals by name, client, kind or close date.
 - [ ] Each deal opens its deal page.
 
@@ -127,6 +128,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] Add national account saves its company name and account owner. When a name matches an existing company, offer "Make this company a national account". Open an existing national account from its match. Ask for confirmation to add a separate company with the same name (owner, 2026-11-19).
 - [ ] Change account owner offers Joe and Dell. It changes only the account owner (owner, 2026-11-18).
 - [ ] Opening an account lists its deals, one row per location deal: name, market, phase, next step and market agent.
+- [ ] A location with no market says "No market recorded".
 - [ ] Add market deal lists markets and the account's current locations by name. Pick a market and a location, or add a person or company as the location. An optional market agent is picked from existing people.
 - [ ] A new location client under a national account has "national account or corporate lead" as how found (owner, 2026-11-18).
 - [ ] National-account deals whose client is a person show under their account (owner answer, 2026-11-18).
@@ -142,9 +144,11 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] The new database keeps each deal's client website registration so the deal page can still show its Client website link after the switch (owner, 2026-11-18, #728).
 - [ ] A deal with no website says "No client website linked."
 - [ ] Set up client website stays below the deal's facts and asks for the website name and a password (owner, 2026-11-18).
-- [ ] Next steps: each person's open next step on the deal, with its owner and due date in words. A Home card for one of them opens here with that step in view.
+- [ ] Each person's open step on the deal is labeled "Next step" and shows its owner and due date in words. A late step also shows "N days late". A Home card for one of the steps opens here with that step in view.
+- [ ] "Still needed" shows the step's owner and date.
 - [ ] Change next step saves the partner's new step and date, replacing their own open step. A step saved without an owner belongs to the partner who saved it.
 - [ ] Facts: deal kind, deal reason, market, closed value when closed, and the market agent on a national-account deal. Closed and lost cards and the deal page keep the Renewal label for copied renewals with an unrecorded source lease and show a note that the lease wasn't recorded.
+- [ ] A lost deal's page shows the reason for loss and the close date in words. If there is no close date, it says "Close date not recorded".
 - [ ] Phase, deal owner and Park, with the same rules as the board. Park asks the reason (client paused, prospect never active, or other) and takes an optional note.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Checklist: the deal's checklist items, each with its due date in words. Clicking one opens it.
@@ -152,7 +156,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Critical dates: each with its name in plain words, its date in words and its state. A proposed date, such as one read from a lease, shows Confirm and Drop. Confirm makes it a confirmed date. Drop asks a reason. A confirmed date can be marked done, dropped or passed, each with a reason. Only a partner's click decides.
 - [ ] Phase effective date is a kind the partner can choose when adding a critical date.
 - [ ] Terms: Show sourced terms lists each lease term found in the deal's documents, with its document, pages and quoted text. Approve, Correct and Reject each take a reason and save the partner's choice, as on Home's lease fact card.
-- [ ] Email follow-ups: each suggestion from an email on this deal, with that email. Accept and Dismiss work as on Home's email suggestion.
+- [ ] Email follow-ups show each email suggestion targeting the deal, with its email. Accept and Dismiss work as on Home's email suggestion. An email already filed to the deal has no "File email to this deal" action. An email without a subject shows its sender and "(No subject)".
 - [ ] Update: a note saved to the deal's history with its author and time.
 - [ ] Vendors on the deal, each opening its vendor page.
 - [ ] Watch settings and the deal page's call recorder work as they do today. After the switch, watch settings use the old tables and cover copied deals only (#805).
@@ -162,8 +166,9 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Compare terms: recorded terms from deals in the same submarket and use type, each value with where it came from.
 - **Open (question 7).** Whether Compare terms becomes a side-by-side of this deal's own offers. Recommended: keep today's comparison until the owner decides.
 - [ ] Timeline lists phase moves, notes, next steps, critical dates, documents, and changes, newest first. Each says which partner or job saved it and when. A note with a matching event appears once.
+- [ ] Timeline uses the card's parking reason labels: "Client paused", "Prospect never active", and "Other". It uses "Deal kind" and "Deal reason" as in Add deal and says "Not recorded" for unknown values in those fields.
 - [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. An attachment action already shown as a document event appears once.
-- [ ] Correspondence & notes: the deal's emails and meetings together, newest first, and the deal's notes. An email shows its sender, date and subject. A meeting shows its title and time. An email already on this deal never asks to be filed again.
+- [ ] Correspondence & notes shows every email and meeting filed to the deal, newest first, and the deal's notes. An email shows its sender, date and subject and appears here even if it has a pending follow-up. A meeting shows its title and time.
 - [ ] Tours: the deal's tours, each with its date in words.
 - [ ] Documents: every file on the deal, opening on click, for both partners on every deal.
 - [ ] Client view gives both partners the same Client website button as Overview. It opens the client's website unlocked in a new tab. The tab says "No client website linked." when the deal has no website. The owner dropped file sharing from Client view (`docs/new-database.md` § "Deal files and extracted text").

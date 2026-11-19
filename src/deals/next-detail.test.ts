@@ -60,6 +60,15 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
  ('${id(42)}', 'deal', '${id(30)}', 'attention', '{"attention":false}', '{"attention":true}', '2025-01-03', '${id(1)}', 'update-deal', 'human_stated'),
  ('${id(46)}', 'deal', '${id(36)}', 'phase', '{"phase":"touring"}', '{"phase":"negotiation"}', '2025-03-02T02:00Z', '${id(1)}', 'update-deal', 'automation_job'),
  ('${id(47)}', 'deal', '${id(37)}', 'phase', null, '{"phase":"negotiation"}', '2025-01-04', '${id(1)}', 'update-deal', 'automation_job');
+insert into public.event (id, subject_type, subject_id, field, old_value, new_value, occurred_at, actor_id, verb, cause) values
+ ('${id(48)}', 'deal', '${id(37)}', 'operating_state',
+  '{"operating_state":{"state":"active","reason":null,"note":null}}',
+  '{"operating_state":{"state":"parked","reason":"other","note":null}}',
+  '2025-01-06', '${id(1)}', 'update-deal', 'human_stated'),
+ ('${id(49)}', 'deal', '${id(37)}', 'operating_state',
+  '{"operating_state":{"state":"parked","reason":"prospect_never_active","note":null}}',
+  '{"operating_state":{"state":"active","reason":null,"note":null}}',
+  '2025-01-07', '${id(1)}', 'update-deal', 'human_stated');
 insert into public.next_action (id, subject_type, subject_id, owner_id, description, due_on, status, created_at, created_by, updated_by) values
  ('${id(50)}', 'deal', '${id(30)}', '${id(1)}', 'Example send the survey', '2030-01-15', 'open', '2025-01-04', ${by}),
  ('${id(51)}', 'deal', '${id(30)}', '${id(2)}', 'Example book the tour', '2025-01-20', 'done', '2025-01-05', ${by}),
@@ -827,6 +836,35 @@ test("signed-in detail shows a revived deal as active", async () => {
 			},
 		],
 	});
+});
+
+test("signed-in detail uses the parking card's reason labels for copied Timeline events", async () => {
+	const response = await get(`/deals/${id(37)}`, "next");
+	assert.equal(response.status, 200);
+	const detail = await response.json();
+	assert.ok(
+		detail &&
+			typeof detail === "object" &&
+			"events" in detail &&
+			Array.isArray(detail.events),
+	);
+	assert.partialDeepStrictEqual(
+		detail.events.filter(({ field }) => field === "operating_state"),
+		[
+			{
+				id: id(49),
+				field: "operating_state",
+				old_value: "Parked · Prospect never active",
+				new_value: "Active",
+			},
+			{
+				id: id(48),
+				field: "operating_state",
+				old_value: "Active",
+				new_value: "Parked · Other",
+			},
+		],
+	);
 });
 
 test("the deal page reads typed old events with no other history, once and in recorded order", async () => {

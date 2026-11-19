@@ -66,7 +66,7 @@ Each switch moves where requests go. None of them builds anything, and none move
 | `engine_calls`                         | Studio, `~/.config/carr-capture/config.json`, or the file `CARR_CAPTURE_CONFIG` names | Call capture sends calls, suggestions and automatic changes to doors 16, 18, 19 and 21.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `ENGINE_ASSISTANT="true"`              | Old API Worker, `mcp-server/wrangler.toml` (checked in as `"false"`)                  | Four assistant saves go to `/jobs` as the `agent` job: a call, meeting or note on a deal, a deal's next step, completing a deal's or party's step, and a deal note. The old API still finds the deal or party in the old tables first. Every other assistant save and every assistant read stays on the old API. Once carr-system #3246 merges (open today), it also sends invoice captures to the engine, skips the old invoice closes in `advance-leads` and refuses the old invoice undo, so it then needs `engine_lead_stage` on too. |
 
-The share Worker's `CLIENT_WEBSITE_ENGINE_SLUG` is empty until cutover. After the app can request signed-in grants, set it to the verified website name to use the engine for that site's password checks and grant exchanges. The share Worker still serves and decrypts the site's files.
+The share Worker's `CLIENT_WEBSITE_ENGINE_SLUG` selects the verified website whose password checks and grant exchanges use the engine. The share Worker still serves and decrypts the site's files. See [the switch plan](#the-switch-plan) for when to set it.
 
 Still on the old API with no switch yet:
 
@@ -89,6 +89,7 @@ The deal page's checklist and progress use the new schema with `DEALS_READ_SCHEM
 The owner updated the switch plan on 2026-11-19.
 
 - Rehearse the full move on a fresh copy of production on Friday evening, November 20, in the order under "Running the copies". Until then, rerun the practice move after each merge that changes a copy or a read.
+- For Friday's practice, set `CLIENT_WEBSITE_ENGINE_SLUG` on the staging share Worker to the verified website name. On switch day, set it on the production share Worker. In each environment, open the website from a signed-in deal page and check that it opens without asking for a password.
 - Switch on Saturday, November 21, after a clean rehearsal. If Friday's practice run finds problems, switch on Sunday, November 22.
 - On switch day, mail intake and saving pause briefly for the move, then the switches above flip. Switch day builds nothing: every old-system and app change ships before it, switched off.
 
