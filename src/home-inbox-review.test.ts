@@ -94,7 +94,13 @@ async function inbox(user = "example") {
 	assert.equal(response.status, 200);
 	const result: unknown = await response.json();
 	assert.ok(isArguments(result) && Array.isArray(result.items));
-	return result.items.filter(isArguments);
+	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);
+	const items = result.items.filter(isArguments);
+	for (const item of items) {
+		assert.equal(Object.hasOwn(item, "auto_settled"), false);
+		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
+	}
+	return items;
 }
 
 test("Home shows only its partner's active drafts and one per known conversation", async () => {
@@ -149,7 +155,6 @@ test("Home shows a sent draft once in Done at the recorded send time", async () 
 			disposition: "inbox",
 			section: "done",
 			completed_at: draft.sent_at.toISOString(),
-			auto_settled: false,
 		},
 	]);
 });

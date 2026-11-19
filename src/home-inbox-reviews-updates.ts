@@ -42,8 +42,6 @@ function noticeCard(
 		disposition,
 		section: disposition,
 		unseen: true,
-		explicit_unsettle: false,
-		auto_settled: false,
 		context_label: notice.deal_name,
 		open_url,
 		kind_label,

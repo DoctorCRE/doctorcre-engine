@@ -112,9 +112,13 @@ async function inbox(caller = user) {
 		schema_version: "home-inbox.v5",
 		truncated: false,
 	});
-	return new Map(
-		result.items.filter(isArguments).map((item) => [item.source_id, item]),
-	);
+	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);
+	const items = result.items.filter(isArguments);
+	for (const item of items) {
+		assert.equal(Object.hasOwn(item, "auto_settled"), false);
+		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
+	}
+	return new Map(items.map((item) => [item.source_id, item]));
 }
 
 test("switch off leaves the inbox on CARR and the read refuses a caller-supplied actor", async () => {
@@ -164,7 +168,6 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 		source_state: "done",
 		disposition: "inbox",
 		section: "done",
-		auto_settled: false,
 	});
 	assert.equal(typeof items.get(completed)?.completed_at, "string");
 	assert.partialDeepStrictEqual(items.get(formerlyHidden), {

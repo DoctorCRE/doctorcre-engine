@@ -136,8 +136,6 @@ function stepCard(step: Step) {
 		disposition,
 		section,
 		unseen: false,
-		explicit_unsettle: false,
-		auto_settled: false,
 		context_label: step.context_label,
 		open_url,
 		kind_label: step.call_id ? "Call follow-up" : "Task",
@@ -193,7 +191,6 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 		truncated: rows.length > LIMIT || items.length > LIMIT,
 		limit: LIMIT,
 		working_collapsed: true,
-		auto_settle_enabled: true,
 	};
 }
 

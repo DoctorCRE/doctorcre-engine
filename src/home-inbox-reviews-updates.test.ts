@@ -32,9 +32,13 @@ async function cards(caller: typeof alex, dealId: string) {
 	assert.equal(response.status, 200);
 	const result: unknown = await response.json();
 	assert.ok(isArguments(result) && Array.isArray(result.items));
-	return result.items
-		.filter(isArguments)
-		.filter((item) => item.deal_id === dealId);
+	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);
+	const items = result.items.filter(isArguments);
+	for (const item of items) {
+		assert.equal(Object.hasOwn(item, "auto_settled"), false);
+		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
+	}
+	return items.filter((item) => item.deal_id === dealId);
 }
 
 async function checkCompletionReview(callFollowUp: boolean) {

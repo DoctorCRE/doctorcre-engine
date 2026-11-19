@@ -378,8 +378,6 @@ function reviewCard(
 		disposition,
 		section,
 		unseen: false,
-		explicit_unsettle: false,
-		auto_settled: false,
 		context_label: row.context_label,
 		open_url: row.open_url,
 		action_id: null,
