@@ -7,6 +7,8 @@ import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
 import { CLOSED_PHASES, ENDED_PHASES } from "./shared.ts";
 
 type BoardList = "open" | "closed" | "lost";
+export const isOpenBoardDeal = sql<boolean>`outcome is null and closed_on is null
+	and invoiced_on is null and (phase is null or phase not in (${sql.join(ENDED_PHASES)}))`;
 // Today's board groups by brand and owner as they stand on the partners' calendar day.
 const covers = (from: Expression<string>, to: Expression<string | null>) =>
 	sql<boolean>`daterange(${from}, ${to}) @> (now() at time zone 'America/Chicago')::date`;
@@ -279,12 +281,7 @@ function nextBoardQuery(
 		.selectAll()
 		.$if(list === "open", (q) =>
 			q
-				.where("outcome", "is", null)
-				.where("closed_on", "is", null)
-				.where("invoiced_on", "is", null)
-				.where((eb) =>
-					eb.or([eb("phase", "is", null), eb("phase", "not in", ENDED_PHASES)]),
-				)
+				.where(isOpenBoardDeal)
 				.orderBy("attention", "desc")
 				.orderBy("next_date", (o) => o.asc().nullsLast()),
 		)

@@ -532,6 +532,17 @@ create table deal_party (
 
 create index deal_party_by_party on deal_party (party_id);
 
+create table weekly_review (
+	id uuid primary key default gen_random_uuid(),
+	week_of date not null check (isfinite(week_of) and extract(isodow from week_of) = 1),
+	deal_id uuid references deal,
+	party_id uuid,
+	lead_role text generated always as (case when party_id is not null then 'lead' end) stored,
+	foreign key (party_id, lead_role) references party_role,
+	constraint weekly_review_one_item check (num_nonnulls(deal_id, party_id) = 1),
+	unique nulls not distinct (week_of, deal_id, party_id)
+);
+
 -- Leads and clients. A lead is the lead role on a person or company, and becoming a client adds the client role.
 
 -- How a lead or client was found, such as referral or public records. Like roles, a label can be renamed.
@@ -2914,7 +2925,7 @@ begin
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
-		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement',
+		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement', 'weekly_review',
 		'party_document', 'email_document',
 		'lease_suite', 'suite', 'space_need', 'building_ownership', 'merged_party', 'change', 'client_type', 'client', 'national_account', 'client_brand', 'national_account_owner',
 		'invoice_email', 'invoice_mailbox', 'commission', 'commission_payment', 'commission_share', 'commission_tier'] loop
@@ -2934,6 +2945,11 @@ begin
 end $$;
 
 
+
+alter table weekly_review
+	add reviewer_is_partner boolean generated always as (true) stored,
+	add constraint weekly_review_by_a_user check (changed_by_user_id is not null),
+	add foreign key (changed_by_user_id, reviewer_is_partner) references app_user (id, is_account_partner);
 
 -- A text edit, an edit's review and a cancel name a user, as its author or the one a job worked for.
 alter table post_text add constraint post_text_edit_by_a_user

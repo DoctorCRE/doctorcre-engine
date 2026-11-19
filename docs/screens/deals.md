@@ -104,7 +104,8 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] Monday review opens from the Deals board on any day and covers the week that began that Monday, in Central time.
 - [ ] It covers every open deal on Local Deals and National Accounts and every prospect, whoever owns or claimed it. The board's All, Joe and Dell choice and its collapsed columns do not narrow it.
 - [ ] Order: deals by the phase each was in when the week began, in board column order, then by name; then prospects, oldest added first. Active deals and prospects that arrive during the week join just before parked deals. A phase move, a new follow-up or Needs attention never moves an item.
-- [ ] A prospect turned into a deal this week stays in its place as that deal, with its mark. A deal closed or lost and a prospect dropped this week stay in place, saying so, so the count holds.
+- **Open (owner ask 18).** Carry a prospect’s place and mark to the deal it becomes. This also needs a recorded link from the prospect to the new deal.
+- [ ] A deal closed or lost and a prospect dropped this week stay in place, saying so, so the count holds.
 - [ ] Parked deals come last in the Monday review, after prospects (owner, 2026-11-18).
 - [ ] The top says how far along it is: "31 of 47 reviewed this week". Not reviewed only hides the reviewed ones.
 - [ ] One at a time shows one deal or prospect: its name, owner, phase or "Prospect", Needs attention, next step or follow-up, its latest notes and the note box. Next and Back move through the list.

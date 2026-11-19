@@ -298,6 +298,7 @@ type Verb =
 	| "read-invoice-tracker"
 	| "read-proposal"
 	| "read-prospects"
+	| "read-weekly-reviews"
 	| "read-reply-draft"
 	| "read-vendor-meetings"
 	| "read-vendor-markets-v1"
