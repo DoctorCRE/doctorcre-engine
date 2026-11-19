@@ -77,12 +77,16 @@ export async function stampNextSave(tx: Transaction<DB>, stamp: Stamp) {
 	}
 }
 
-export async function userId(tx: Transaction<DB>, slug: string) {
+export async function userId(
+	tx: Transaction<DB>,
+	slug: string,
+	details: { hint?: string } = {},
+) {
 	const user = await tx
 		.selectFrom("app_user")
 		.select("id")
 		.where("slug", "=", slug)
 		.executeTakeFirst();
-	if (!user) throw new SaveRefusal(new Refusal(400, "unknown_owner"));
+	if (!user) throw new SaveRefusal(new Refusal(400, "unknown_owner", details));
 	return user.id;
 }
