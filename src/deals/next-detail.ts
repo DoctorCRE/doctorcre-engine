@@ -6,7 +6,7 @@ import {
 } from "kysely/helpers/postgres";
 import type { DB, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
-import { checklistOf } from "./checklist.ts";
+import { checklistOf, criticalDateLabel } from "./checklist.ts";
 import { selectNextDeals } from "./next-board.ts";
 
 const HISTORY_CAP = 500;
@@ -179,7 +179,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
-	const { today, commissions, reason, ...detail } = record;
+	const { today, commissions, reason, critical_dates, ...detail } = record;
 	const checklist = checklistOf({
 		deal: {
 			id: detail.deal_id,
@@ -188,13 +188,20 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 			invoiced_on: detail.invoiced_on,
 		},
 		lease: detail.lease,
-		criticalDates: detail.critical_dates,
+		criticalDates: critical_dates,
 		templateCurrent: true,
 		commissions,
 		requests: [],
 		today,
 	});
-	return { ...detail, checklist };
+	return {
+		...detail,
+		critical_dates: critical_dates.map((date) => ({
+			...date,
+			label: criticalDateLabel(date.kind),
+		})),
+		checklist,
+	};
 }
 
 function dealEditValue(column: "c.old_value" | "c.new_value") {
