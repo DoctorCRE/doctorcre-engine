@@ -28,7 +28,8 @@ export function copyTest() {
 			`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
 		);
 		await db.connect();
-		await db.query(`create schema next; ${schema}; ${attribution}`);
+		await db.query(`alter default privileges revoke execute on functions from public;
+			create schema next; ${schema}; ${attribution}`);
 	};
 	const cleanup = async () => {
 		await db.end();

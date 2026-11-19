@@ -190,7 +190,6 @@ Seen on the live Deals screen on 2026-11-18 (screen), or read in the app's Deals
 - A deal page shows four open next actions, and an "Overdue action" different from the card's next step. The client shows twice, and website setup sits in the opening facts (screen).
 - The deal page says "Watch state not confirmed" when nothing failed (screen).
 - App #950, in review, shows one next step and hides the watch line until the watch is read. It shows the client once and moves website setup below the snapshot. Its board and deal page still choose the next step from different inputs, so they can differ (code).
-- A parked card's title is not a link or button. The card opens on a click outside its buttons, or on Enter or Space when focused (code).
 - "Moved automatically" shows `10/19` on the app screen. The app still needs to format the date in words and connect the card's Undo to the new engine save.
 - On a deal Dell owns, Joe's Documents tab says "Request unavailable or version changed" (screen, old system #3232).
 - Email follow-ups on a deal page offer "File email to this deal", with File to existing deal and New deal. Many say "Sender unavailable" or "Summary unavailable", and show role words such as `landlord_side` (screen).

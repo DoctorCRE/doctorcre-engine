@@ -29,9 +29,6 @@ const list = () => save(nightly, path, {}, "GET");
 
 before(async () => {
 	await setup();
-	await db.query(
-		"revoke execute on function invoice_email_target(invoice_email), invoice_name(text) from public",
-	);
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values
 			('${owner}', 'person', 'Alex Example'), ('${partner}', 'person', 'Blair Example'),

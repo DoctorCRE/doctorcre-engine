@@ -8,6 +8,15 @@ export const RETIRED_ITEM_STATUSES = ["dropped", "expired"] as const;
 export const CLOSED_PHASES = ["closed", "invoiced"];
 export const ENDED_PHASES = [...CLOSED_PHASES, "dead"];
 
+export const importedPhaseIsCurrent = (phaseAt: Expression<string | null>) =>
+	sql<boolean>`imported.phase is not null and imported.phase_at is not distinct from ${phaseAt}`;
+
+export const isLostDeal = (
+	phase: Expression<string | null>,
+	phaseAt: Expression<string | null>,
+) => sql<boolean>`case when ${importedPhaseIsCurrent(phaseAt)} then imported.outcome is not distinct from 'lost'
+	else ${phase} is not distinct from 'dead' end`;
+
 // Over a deal board view aliased "b".
 export const nextStepRequired =
 	sql<boolean>`(${sql.ref("b.next_step")} is null or ${sql.ref("b.next_date")} is null)`.as(

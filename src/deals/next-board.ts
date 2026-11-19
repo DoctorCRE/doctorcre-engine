@@ -4,7 +4,12 @@ import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
-import { CLOSED_PHASES, ENDED_PHASES } from "./shared.ts";
+import {
+	CLOSED_PHASES,
+	ENDED_PHASES,
+	importedPhaseIsCurrent,
+	isLostDeal,
+} from "./shared.ts";
 
 type BoardList = "open" | "closed" | "lost";
 export const isOpenBoardDeal = sql<boolean>`outcome is null and closed_on is null
@@ -93,14 +98,9 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 			(join) => join.onTrue(),
 		)
 		.select((eb) => {
-			const importedHistory = eb.and([
-				eb("imported.phase", "is not", null),
-				eb(
-					"imported.phase_at",
-					"is not distinct from",
-					eb.ref("p.happened_at"),
-				),
-			]);
+			const phaseAt = eb.ref("p.happened_at");
+			const importedHistory = importedPhaseIsCurrent(phaseAt);
+			const lost = isLostDeal(eb.ref("p.phase"), phaseAt);
 			const phaseReceiptFacts = [
 				eb.ref("p.phase").as("phase"),
 				asText(sql`(p.happened_at at time zone 'America/Chicago')::date`).as(
@@ -111,8 +111,8 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 			];
 			const outcome = sql<
 				"won" | "lost" | null
-			>`case when ${importedHistory} then imported.outcome
-				when p.phase = 'dead' then 'lost' when last_close.happened_at is not null then 'won' end`;
+			>`case when ${lost} then 'lost' when ${importedHistory} then imported.outcome
+				when last_close.happened_at is not null then 'won' end`;
 			return [
 				eb
 					.case()
@@ -147,7 +147,7 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 				"a.account_owner",
 				eb
 					.case()
-					.when(outcome, "=", "lost")
+					.when(lost)
 					.then(null)
 					.else(
 						eb.fn.coalesce(

@@ -967,7 +967,7 @@ test("imported history excludes events backed by copied deal records", async (t)
 			insert into document_kind (slug, label) values ('other', 'Other') on conflict do nothing;
 			insert into document (id, deal_id, kind, name, r2_bucket, r2_key, content_type, sha256, bytes, created_at)
 			values ('${id(823)}', '${deal}', 'other', 'Example terms.pdf', 'deal_documents', 'example.pdf',
-			 'application/pdf', repeat('a', 64), 10, '${at}');
+			 'application/pdf', repeat('a', 64), 10, '${later}');
 		`);
 		// biome-ignore format: keep each event and its missing-record counterpart on one row
 		const cases = [
@@ -991,7 +991,7 @@ test("imported history excludes events backed by copied deal records", async (t)
 				values ($1, 'deal', $3, $4, $5, $6,
 				 coalesce((select changed_at from deal_phase_change where deal_id = $3 and happened_at = $6), $6),
 				 $7, $8, 'human_stated'),
-				($2, 'deal', $3, $4, $9, '2025-10-03', '2025-10-03', $7, $8, 'human_stated')`,
+				($2, 'deal', $3, $4, $9, $10, $10, $7, $8, 'human_stated')`,
 				[
 					id(830 + index),
 					id(850 + index),
@@ -1002,6 +1002,7 @@ test("imported history excludes events backed by copied deal records", async (t)
 					id(1),
 					verb,
 					missing ?? value,
+					verb === "backfill-document-attachments" ? time : "2025-10-03",
 				],
 			);
 		}

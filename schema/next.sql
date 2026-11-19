@@ -3310,7 +3310,6 @@ create view deal_imported_history with (security_invoker = true) as
  where not exists (
   select from unnest(array[((h.new_value).attachments).pdf, ((h.new_value).attachments).working]) attachment(id)
   left join document doc on doc.id = attachment.id and doc.deal_id = h.deal_id
-   and doc.created_at between h.occurred_at - interval '5 seconds' and h.occurred_at + interval '5 seconds'
   where h.verb = 'backfill-document-attachments' and attachment.id is not null
   having count(*) > 0 and count(*) = count(doc.id)
  )
@@ -3585,6 +3584,7 @@ grant execute on function merge_party to engine;
 revoke execute on function carry_weekly_review from public;
 grant execute on function carry_weekly_review to engine;
 grant execute on function lock_weekly_review(date, uuid, uuid) to engine;
+grant execute on function npi_check_digit_holds(text), is_time_zone(text) to engine;
 grant execute on function invoice_email_target(invoice_email), invoice_name(text) to engine, engine_reader;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.

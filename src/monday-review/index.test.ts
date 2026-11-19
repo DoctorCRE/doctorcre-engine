@@ -34,9 +34,6 @@ const key = () => ({ idempotency_key: randomUUID() });
 
 before(async () => {
 	await setup();
-	await db.query(
-		"revoke execute on function lock_weekly_review(date, uuid, uuid) from public",
-	);
 	await db.query(`begin; set local engine.job = 'old_system';
 		insert into role values ('lead', 'Lead'), ('client', 'Client'), ('client_contact', 'Client contact'),
 			('national_account', 'National account');
