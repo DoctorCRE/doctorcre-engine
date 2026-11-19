@@ -163,6 +163,7 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
 - Home still offers Hide from inbox, the Hidden from inbox list and the selection bar's Settle selected.
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
+- The Today panel calls a past-due reminder "overdue". The deal's next step uses "late" (app code).
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.
 - The Today panel's Deal pulse stayed on "Checking recent deal changes…".
 - Overdue steps to confirm ("Overdue tasks to review") did not appear on Home. The engine read can return completion reviews with a link to the deal's next step. Home still needs to route the read and wire the decision buttons.
