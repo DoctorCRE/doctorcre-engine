@@ -194,15 +194,13 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		.executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
 	const { today, commissions, critical_dates, ...detail } = record;
+	const checklistType =
+		detail.reason === "renewal" ? detail.reason : detail.type;
 	const checklist = checklistOf({
 		deal: {
 			id: detail.deal_id,
 			owner: detail.owner,
-			type: detail.renewal_lease_unrecorded
-				? detail.kind
-				: detail.reason === "renewal"
-					? detail.reason
-					: detail.type,
+			type: detail.renewal_lease_unrecorded ? detail.kind : checklistType,
 			invoiced_on: detail.invoiced_on,
 		},
 		lease: detail.lease,

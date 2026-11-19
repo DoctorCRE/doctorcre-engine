@@ -333,4 +333,6 @@
 
 175\. **Either partner can change a shared weekly review mark (2026-11-18).** The database keeps one mark for each deal or prospect and week, with the partner and time. Mark and Undo check the last change for that week and item, including a deletion. Both saves replay a successful request with the same key. Undo removes the mark and keeps the deletion in change history (#765).
 
+176\. **An old vendor ruling can say its reason was never recorded (2026-11-18).** The copy keeps a parked or avoided ruling with the reason “not recorded, set before the new system” when no reviewed reason exists. New rulings require a recorded reason. The copy keeps each vendor's recorded relationship partner so their next steps can follow the vendor (#760).
+
 178\. **Copied deals keep automatic parking and historical Renewal labels (2026-11-19).** Verified automation parking keeps the source time, reason and note with automatic attribution. Ended renewal deals with no recorded source lease keep their Renewal label and show that the lease was unrecorded. New renewals still require a source lease (#782).
