@@ -342,3 +342,5 @@
 179\. **Client research and practice types come with the move (2026-11-19).** A client role can hold one recorded practice type without a fixed vocabulary. The approved client research kinds keep their source, date, user or job attribution, result and individual facts. The copy follows client merges and keeps the existing activity notes in place (#783).
 
 180\. **Old deal-page events with no other home stay in imported history (2026-11-19).** The copy keys each event by its old ID and keeps its recorded facts in typed fields. The deal page reads them in recorded order with the same user or job attribution as the Timeline. The engine can read this history and only the owner can load it (#789).
+
+181\. **An existing company can become a national account (2026-11-19).** When the add form finds a matching company, the partner can choose that company. The save adds the national account role and its dated owner to the same company. A separate company with the same name requires confirmation (#790).

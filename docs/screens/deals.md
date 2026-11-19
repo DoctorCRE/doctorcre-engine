@@ -119,7 +119,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 ## National Accounts
 
 - [ ] One card per national account: its name, its account owner, and how many open deals, deals with a late next step and parked deals it has. No client codes.
-- [ ] Add national account saves its company name and account owner. Confirm a matching company name only for a separate company.
+- [ ] Add national account saves its company name and account owner. When a name matches an existing company, offer "Make this company a national account". Ask for confirmation to add a separate company with the same name (owner, 2026-11-19).
 - [ ] Change account owner offers Joe and Dell. It changes only the account owner (owner, 2026-11-18).
 - [ ] Opening an account lists its deals, one row per location deal: name, market, phase, next step and market agent.
 - [ ] Add market deal lists markets and the account's current locations by name. Pick a market and a location, or add a person or company as the location. An optional market agent is picked from existing people.

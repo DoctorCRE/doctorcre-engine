@@ -24,6 +24,7 @@ const NEW_ACCOUNT = {
 	idempotency_key: isUuid,
 	name: isText,
 	owner: isAccountOwner,
+	company_id: optional(isUuid),
 	force_new: optional(isBoolean),
 };
 
@@ -37,9 +38,12 @@ const today = sql<string>`(now() at time zone 'America/Chicago')::date`;
 
 function parseNewAccount(body: JsonObject) {
 	const request = fit(body, NEW_ACCOUNT, ["idempotency_key", "name", "owner"]);
-	return request instanceof Refusal
-		? request
-		: { ...request, name: request.name.trim() };
+	if (request instanceof Refusal) return request;
+	if (request.company_id && request.force_new !== undefined)
+		return new Refusal(400, "invalid_field_value", {
+			fields: ["company_id", "force_new"],
+		});
+	return { ...request, name: request.name.trim() };
 }
 
 function parseOwner(account_client_id: string, body: JsonObject) {
@@ -54,15 +58,25 @@ function parseOwner(account_client_id: string, body: JsonObject) {
 		: { ...request, account_client_id };
 }
 
-async function addAccount(
+async function accountCompany(
 	tx: Transaction<DB>,
 	{
 		name,
-		owner,
+		company_id,
 		force_new,
 	}: Exclude<ReturnType<typeof parseNewAccount>, Refusal>,
 ) {
-	const owner_id = await userId(tx, owner);
+	if (company_id) {
+		const company = await tx
+			.selectFrom("party")
+			.select(["id", "name"])
+			.where("id", "=", company_id)
+			.where("kind", "=", "company")
+			.forUpdate()
+			.executeTakeFirst();
+		if (!company) throw new SaveRefusal(new Refusal(404, "not_found"));
+		return company;
+	}
 	await sql`select pg_advisory_xact_lock(hashtextextended('national account name:' || lower(${name}), 0))`.execute(
 		tx,
 	);
@@ -79,15 +93,28 @@ async function addAccount(
 				new Refusal(409, "account_name_exists", { candidates }),
 			);
 	}
+	return tx
+		.insertInto("party")
+		.values({ kind: "company", name, changed_at: sql<string>`now()` })
+		.returning(["id", "name"])
+		.executeTakeFirstOrThrow();
+}
 
+async function addAccount(
+	tx: Transaction<DB>,
+	request: Exclude<ReturnType<typeof parseNewAccount>, Refusal>,
+) {
+	const { owner } = request;
+	const owner_id = await userId(tx, owner);
+	const { id, name } = await accountCompany(tx, request);
 	const {
 		rows: [added],
 	} = await sql<{ account_client_id: string }>`
-		with company as (
-			insert into party (kind, name) values ('company', ${name}) returning id
-		), account_role as (
+		with account_role as (
 			insert into party_role (party_id, role)
-			select id, 'national_account' from company returning party_id
+			values (${id}::uuid, 'national_account')
+			on conflict (party_id, role) do nothing
+			returning party_id
 		), account as (
 			insert into national_account (party_id)
 			select party_id from account_role returning party_id
@@ -95,7 +122,8 @@ async function addAccount(
 		insert into national_account_owner (account_id, owner_id, started_on)
 		select party_id, ${owner_id}::uuid, ${today} from account
 		returning account_id as account_client_id`.execute(tx);
-	if (!added) throw new Error("Account insert returned no id");
+	if (!added)
+		throw new SaveRefusal(new Refusal(409, "already_national_account"));
 	return { ...added, name, owner };
 }
 
