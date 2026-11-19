@@ -12,7 +12,7 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 
 create temp table stage_mapping on commit drop as
 select old, mapped from (values ('nurture_drip','nurture'), ('closed_lost','nurture'),
- ('active_deal','opportunity'), ('closed_won','opportunity'), ('do_not_contact','archived')) v(old, mapped);
+ ('active_deal','archived'), ('closed_won','archived'), ('do_not_contact','archived')) v(old, mapped);
 
 create temp table old_move on commit drop as
 select m.*, p.party_id, a.kind as activity_kind,
@@ -133,7 +133,8 @@ where m.status <> 'proposed' and r.stage <> case when m.status = 'undone' then m
 -- Undo and ordinary edits are role history, with only real changed fields in each payload.
 create temp table stage_event on commit drop as
 select e.id, p.party_id, e.occurred_at, a.*,
- coalesce(f.mapped, e.was) as was, coalesce(t.mapped, e.became) as became, actor.id as actor_id
+ coalesce(f.mapped, e.was) as was, coalesce(t.mapped, e.became) as became, actor.id as actor_id,
+ case when e.became in ('active_deal','closed_won') then 'became a deal in the old system' end as reason
 from (
  select id, subject_id as lead_id, actor_id, occurred_at, old_value ->> 'stage' as was, new_value ->> 'stage' as became
  from public.event where subject_type = 'lead' and field = 'stage'
@@ -156,14 +157,17 @@ where e.party_id is null or e.actor_id is null
 insert into change (table_name, record, action, old_value, new_value,
  changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select 'party_role', jsonb_build_object('party_id',e.party_id,'role','lead'), 'update',
- jsonb_build_object('stage',e.was), jsonb_build_object('stage',e.became),
+ jsonb_build_object('stage',e.was), payload.new_value,
  e.changed_by_user_id, e.changed_by_job, e.changed_for_user_id, e.occurred_at
-from stage_event e where not exists (select from not_copied where old_id = e.id and field = 'stage_event')
+from stage_event e cross join lateral (
+ select jsonb_strip_nulls(jsonb_build_object('stage',e.became,'reason',e.reason)) as new_value
+) payload
+where not exists (select from not_copied where old_id = e.id and field = 'stage_event')
  and e.was is distinct from e.became
  and not exists (select from change c where c.table_name = 'party_role'
   and c.record = jsonb_build_object('party_id',e.party_id,'role','lead') and c.action = 'update'
   and c.changed_at = e.occurred_at and c.old_value = jsonb_build_object('stage',e.was)
-  and c.new_value = jsonb_build_object('stage',e.became)
+  and c.new_value = payload.new_value
   and (c.changed_by_user_id,c.changed_by_job,c.changed_for_user_id) is not distinct from
    (e.changed_by_user_id,e.changed_by_job,e.changed_for_user_id));
 

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import type pg from "pg";
-import { copyTest, readSchema } from "./test-copy.ts";
+import { readSchema } from "./test-copy.ts";
+import { doorTest } from "./test-door.ts";
 import {
 	assertCompletionDates,
 	completionEvents,
@@ -9,7 +10,7 @@ import {
 	stepsAndHistory,
 } from "./test-step-completions.ts";
 
-const { db, setup, cleanup } = copyTest();
+const { db, setup, cleanup, save } = doorTest();
 const copy = await readSchema("copy-leads-clients.sql");
 const rows = async (sql: string) => (await db.query(sql)).rows;
 const clients = async () => {
@@ -64,11 +65,11 @@ before(async () => {
  insert into app_user (id, slug) values ('${id(1)}', 'user-${id(1)}');
  insert into outside_id (source,value,party_id) values ('old_system','${id(1)}','${id(1)}');
  insert into public.contact_state (slug,label,contactable,sort) values ('active','Example active',true,1);
- insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','nurture_drip','closed_lost','closed_won','active_deal','do_not_contact','engaged','other']) s;
+ insert into public.lead_stage (slug,label) select s,s from unnest(array['new','qualified','nurture_drip','closed_lost','closed_won','active_deal','do_not_contact','engaged','opportunity','other']) s;
  insert into public.client_status (slug,label) select s,s from unnest(array['roster','active_deal','past_client','cold','prospect']) s;
  insert into public.client_type (slug,label) values ('franchise','Example franchise'),('national_account','Example account'), ('group','Example group'), ('other','Example unknown');
  insert into public.lead_lane (slug,label) values ('example_lane','Example lane');
- ${Array.from({ length: 16 }, (_, i) => {
+ ${Array.from({ length: 17 }, (_, i) => {
 		const n = i + 10;
 		return `insert into public.party (id,kind,name,created_by,updated_by) values ('${id(n)}','${n === 11 || n === 12 ? "org" : "person"}','Example ${n}','${id(1)}','${id(1)}');
  insert into party (id,kind,name) values ('${id(n)}','${n === 11 || n === 12 ? "company" : "person"}','Example ${n}');
@@ -117,6 +118,7 @@ before(async () => {
  insert into public.lead (id,party_id,stage,source_type,source_detail,notes,next_action_date,created_by,updated_by) values
  ('${id(62)}','${id(24)}','other','Example referral',null,'Refused note','2027-01-01','${id(1)}','${id(1)}'),
  ('${id(63)}','${id(25)}','new','prospect-pool','  Pool detail  ',null,null,'${id(1)}','${id(1)}'),
+ ('${id(65)}','${id(26)}','opportunity','Example referral',null,null,null,'${id(1)}','${id(1)}'),
  ('${id(64)}','${id(12)}','new','Example referral','Unrelated source detail',null,null,'${id(1)}','${id(1)}');
  insert into public.candidate_pool (id,source,source_key,source_row,name,status,promoted_lead_id,score_basis,est_lease_event,est_basis,created_by,updated_by) values
  ('${id(70)}','Example pool','example-key','{}','Example candidate','promoted','${id(63)}','Example qualification','2027-02-01','Example basis','${id(1)}','${id(1)}');
@@ -126,6 +128,33 @@ before(async () => {
 	report = await run();
 });
 after(cleanup);
+
+test("old converted leads with no deal link stay out of the Prospects lane", async () => {
+	const [status, lane] = await save(
+		{ user: `user-${id(1)}` },
+		"prospects",
+		{},
+		"GET",
+	);
+	assert.equal(status, 200);
+	assert.equal(lane.count, 1);
+	assert.ok(Array.isArray(lane.prospects));
+	assert.deepEqual(
+		lane.prospects.map((row) => row.party_id),
+		[id(26)],
+	);
+	assert.deepEqual(
+		await rows(`select r.party_id, r.stage, c.new_value->>'reason' as reason
+ from party_role r join change c on c.record = jsonb_build_object('party_id', r.party_id, 'role', r.role)
+ where r.role = 'lead' and r.party_id in ('${id(16)}','${id(17)}')
+ and c.table_name = 'party_role' and c.action = 'insert' order by r.party_id`),
+		[16, 17].map((n) => ({
+			party_id: id(n),
+			stage: "archived",
+			reason: "became a deal in the old system",
+		})),
+	);
+});
 
 test("roles, profiles, details and estimates follow the old records without inventing missing facts", async () => {
 	assert.deepEqual(
@@ -166,8 +195,8 @@ test("roles, profiles, details and estimates follow the old records without inve
 				["archived"],
 				["nurture"],
 				["nurture"],
-				["opportunity"],
-				["opportunity"],
+				["archived"],
+				["archived"],
 				["engaged"],
 			],
 		],

@@ -13,6 +13,7 @@ do $$ declare t text; begin
  end loop;
 end $$;
 alter table party_role disable trigger lead_stage_needs_evidence;
+alter table party_role disable trigger record_change;
 create temp table not_copied (old_id uuid, field text, value text, reason text) on commit drop;
 insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('national_account', 'National account') on conflict do nothing;
 insert into how_found (slug, label) values ('referral', 'Referral'), ('vendor', 'Vendor'),
@@ -90,8 +91,9 @@ create temp table examined_relationship on commit drop as
 select r.*, p.how_found, p.how_found_detail,
  case fields ->> 'client_type' when 'group' then 'group_practice' else fields ->> 'client_type' end as mapped_type,
  case when (fields ->> 'suppressed')::boolean or fields ->> 'stage' = 'do_not_contact' then 'archived'
+ when fields ->> 'stage' in ('active_deal','closed_won') then 'archived'
  when fields ->> 'stage' in ('nurture_drip','closed_lost') then 'nurture'
- when fields ->> 'stage' in ('active_deal','closed_won') then 'opportunity' else fields ->> 'stage' end as mapped_stage,
+ else fields ->> 'stage' end as mapped_stage,
  case when reviewed.owner_actor_id is null and old_owner.kind <> 'human' then deal_owner.id else u.id end as owner,
  case when reviewed.owner_actor_id is not null then
   case when u.id is null then 'reviewed_owner_not_a_user' end
@@ -133,18 +135,33 @@ select r.* from classified_relationship r where refusal is null
  and exists (select from classified_relationship latest where latest.mapped_id = r.mapped_id
   and latest.kind = r.kind and latest.rank = 1 and latest.refusal is null)
  and not exists (select from outside_id done where done.source = 'old_system' and done.value = r.id::text);
-insert into party_role (party_id, role, stage, owner_user_id, lane, segment,
- estimated_lease_on, lease_estimate_source, lease_estimate_confidence,
- created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select mapped_id, kind, case when kind = 'lead' then mapped_stage end, case when kind = 'lead' then owner end,
- (select slug from lead_lane where slug = fields ->> 'lane'), nullif(btrim(fields ->> 'segment'), ''),
- case when estimate_source is not null then (fields ->> 'est_lease_event')::date end,
- case when fields ->> 'est_lease_event' is not null then estimate_source end,
- case when estimate_source is not null and fields ->> 'est_lease_event' is not null
- and fields ->> 'event_confidence' in ('high','medium','low') then fields ->> 'event_confidence' end,
- first_created, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
-from ready_relationship r where rank = 1
-on conflict do nothing;
+-- Record the migration reason on the imported snapshot without inventing a prior stage.
+with copied_role as (
+ insert into party_role (party_id, role, stage, owner_user_id, lane, segment,
+  estimated_lease_on, lease_estimate_source, lease_estimate_confidence,
+  created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
+ select mapped_id, kind, case when kind = 'lead' then mapped_stage end, case when kind = 'lead' then owner end,
+  (select slug from lead_lane where slug = fields ->> 'lane'), nullif(btrim(fields ->> 'segment'), ''),
+  case when estimate_source is not null then (fields ->> 'est_lease_event')::date end,
+  case when fields ->> 'est_lease_event' is not null then estimate_source end,
+  case when estimate_source is not null and fields ->> 'est_lease_event' is not null
+   and fields ->> 'event_confidence' in ('high','medium','low') then fields ->> 'event_confidence' end,
+  first_created, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+ from ready_relationship where rank = 1
+ union all
+ select r.mapped_id, 'national_account', null, null, null, null, null, null, null,
+  r.first_created, r.updated_at, r.changed_by_user_id, r.changed_by_job, r.changed_for_user_id
+ from ready_relationship r join party p on p.id = r.mapped_id
+ where r.rank = 1 and r.kind = 'client' and r.fields ->> 'client_type' = 'national_account' and p.kind = 'company'
+ on conflict do nothing returning *
+)
+insert into change (table_name, record, action, new_value)
+select 'party_role', jsonb_build_object('party_id', c.party_id, 'role', c.role), 'insert',
+ (to_jsonb(c) - array['changed_by_user_id','changed_by_job','changed_for_user_id','changed_at']) ||
+ case when r.kind = 'lead' and not (r.fields ->> 'suppressed')::boolean
+  and r.fields ->> 'stage' in ('active_deal','closed_won')
+  then jsonb_build_object('reason', 'became a deal in the old system') else '{}'::jsonb end
+from copied_role c left join ready_relationship r on r.mapped_id = c.party_id and r.kind = c.role and r.rank = 1;
 -- Client responsibility is independent of national-account ownership; labels never identify users.
 create temp table client_owner on commit drop as
 select r.*, case
@@ -163,10 +180,6 @@ select mapped_id, case when fields ->> 'status' in ('roster','cold','engaged','p
  (select distinct owner from client_owner o where o.mapped_id = r.mapped_id and o.owner is not null and o.owner_refusal is null),
  first_created, updated_at,
  changed_by_user_id, changed_by_job, changed_for_user_id from ready_relationship r where kind = 'client' and rank = 1 on conflict do nothing;
-insert into party_role (party_id, role, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select r.mapped_id, 'national_account', r.first_created, r.updated_at, r.changed_by_user_id, r.changed_by_job, r.changed_for_user_id
-from ready_relationship r join party p on p.id = r.mapped_id
-where r.rank = 1 and r.kind = 'client' and r.fields ->> 'client_type' = 'national_account' and p.kind = 'company' on conflict do nothing;
 insert into national_account (party_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select r.mapped_id, r.first_created, r.updated_at, r.changed_by_user_id, r.changed_by_job, r.changed_for_user_id
 from ready_relationship r join party_role pr on pr.party_id = r.mapped_id and pr.role = 'national_account'
@@ -334,4 +347,5 @@ do $$ declare t text; begin
  end loop;
 end $$;
 alter table party_role enable trigger lead_stage_needs_evidence;
+alter table party_role enable trigger record_change;
 select * from not_copied order by old_id, field, value, reason;
