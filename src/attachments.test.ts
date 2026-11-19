@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { after, before, test } from "node:test";
+import { after, before, type TestContext, test } from "node:test";
 import { doorTest } from "./test-door.ts";
 
 Object.assign(globalThis, {
@@ -101,15 +101,255 @@ const upload = (
 before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
-	insert into party (id, kind, name) values ('${id(1)}', 'person', 'Alex Example');
-	insert into app_user (id, slug) values ('${id(1)}', 'alex');
-	insert into deal (id, name, owner_user_id) values ('${id(2)}', 'Example Deal', '${id(1)}'), ('${id(3)}', 'Another Deal', '${id(1)}');
-	insert into document_kind values ('other', 'Other');
+	insert into party (id, kind, name) values ('${id(1)}', 'person', 'Alex Example'), ('${id(6)}', 'person', 'Casey Example');
+	insert into app_user (id, slug) values ('${id(1)}', 'alex'), ('${id(6)}', 'casey');
+	insert into deal (id, name, owner_user_id) values ('${id(2)}', 'Example Deal', '${id(6)}'), ('${id(3)}', 'Another Deal', '${id(1)}');
+	insert into document_kind values ('other', 'Other'), ('lease', 'Lease');
 	insert into activity (id, kind, happened_at) values ('${id(4)}', 'email', now()), ('${id(5)}', 'email', now());
 	insert into email (activity_id, message_id, sender, subject, body) values ('${id(4)}', 'Example@example.test', 'sender@example.test', 'Example', 'Example body'), ('${id(5)}', 'Second@example.test', 'sender@example.test', 'Second', 'Second body');
 	insert into activity_about (activity_id, deal_id) values ('${id(4)}', '${id(2)}'), ('${id(5)}', '${id(2)}'); commit;`);
 });
 after(cleanup);
+
+const fileToDeal = (
+	sha256: string,
+	args: object = {},
+	deal = id(2),
+	storage = bucket,
+) =>
+	request(
+		{ user: "alex" },
+		`deals/${deal}/documents`,
+		{
+			method: "POST",
+			body: JSON.stringify({
+				idempotency_key: randomUUID(),
+				sha256,
+				name: "Example lease.pdf",
+				kind: "lease",
+				...args,
+			}),
+		},
+		{ DEAL_DOCUMENTS: storage },
+	);
+
+async function uploadDealFile(t: TestContext, label: string) {
+	const data = new TextEncoder().encode(`%PDF-1.7\n${label}\n%%EOF`);
+	const sha256 = createHash("sha256").update(data).digest("hex");
+	assert.equal((await upload({ data, hash: sha256, user: true })).status, 201);
+	t.after(() => {
+		files.delete(`sha256/${sha256}`);
+	});
+	return sha256;
+}
+
+async function assertRefusal(response: Response, error: string, status = 409) {
+	const answer = await json(response);
+	assert.deepEqual([response.status, answer.error], [status, error]);
+	return answer;
+}
+
+test("a signed-in partner files an upload and sees both versions on the deal", async (t) => {
+	const sha256 = await uploadDealFile(t, "Original lease");
+	const first = await fileToDeal(sha256);
+	assert.equal(first.status, 201);
+	const { document_id } = await json(first);
+	const replacement = await uploadDealFile(t, "Replacement lease");
+	const args = { supersedes_id: document_id, idempotency_key: randomUUID() };
+	const response = await fileToDeal(replacement, args);
+	assert.equal(response.status, 201);
+	const filed = await json(response);
+	assert.equal(typeof filed.filed_at, "string");
+	assert.deepEqual(filed, {
+		document_id: filed.document_id,
+		deal_id: id(2),
+		name: "Example lease.pdf",
+		kind: "lease",
+		sha256: replacement,
+		supersedes_id: document_id,
+		filed_at: filed.filed_at,
+		filed_by: "alex",
+	});
+	for (const [retry, expected] of [
+		[args, { ...filed, replayed: true }],
+		[{ supersedes_id: document_id }, filed],
+	] as const) {
+		const result = await fileToDeal(replacement, retry);
+		assert.equal(result.status, 200);
+		assert.deepEqual(await json(result), expected);
+	}
+	await assertRefusal(
+		await fileToDeal(replacement, { ...args, name: "Changed.pdf" }),
+		"key_reuse",
+	);
+	await assertRefusal(
+		await fileToDeal("1".repeat(64), { supersedes_id: document_id }),
+		"predecessor_replaced",
+	);
+
+	for (const user of ["alex", "casey"]) {
+		const detail = await request(
+			{ user },
+			`deals/${id(2)}`,
+			{},
+			{
+				DEALS_READ_SCHEMA: "next",
+			},
+		);
+		assert.equal(detail.status, 200);
+		assert.partialDeepStrictEqual(await json(detail), {
+			documents: [
+				{
+					id: filed.document_id,
+					version: 2,
+					actor: "alex",
+					prepared_at: filed.filed_at,
+				},
+				{ id: document_id, version: 1, actor: "alex" },
+			],
+		});
+	}
+});
+
+test("signed-in filing checks the existing hash before checking replacement lineage", async (t) => {
+	const sha256 = await uploadDealFile(t, "Shared lease");
+	const first = await json(await fileToDeal(sha256, {}, id(3)));
+	const crossed = await fileToDeal(sha256, {}, id(2));
+	assert.equal(crossed.status, 201);
+	const { document_id } = await json(crossed);
+	assert.notEqual(document_id, first.document_id);
+	const alternative = await uploadDealFile(t, "Another lease");
+	const other = await json(
+		await fileToDeal(alternative, { kind: "other" }, id(3)),
+	);
+	const missing = "1".repeat(64);
+	for (const [deal, hash, args, status, error] of [
+		[id(3), sha256, { supersedes_id: id(99) }, 409, "already_filed"],
+		[id(3), sha256, { kind: "other" }, 409, "already_filed"],
+		[id(3), sha256, { name: "Other.pdf" }, 409, "already_filed"],
+		[id(99), sha256, {}, 404, "not_found"],
+		[id(3), missing, {}, 409, "file_not_uploaded"],
+		[id(3), missing, { supersedes_id: id(99) }, 409, "predecessor_not_found"],
+		[
+			id(3),
+			missing,
+			{ supersedes_id: document_id },
+			409,
+			"predecessor_not_found",
+		],
+		[
+			id(3),
+			missing,
+			{ supersedes_id: other.document_id },
+			409,
+			"predecessor_kind_differs",
+		],
+		[id(3), missing, { kind: "unknown" }, 400, "invalid_field_value"],
+		[id(3), missing, { name: " " }, 400, "invalid_field_value"],
+		[id(3), "invalid", {}, 400, "invalid_field_value"],
+	] as const) {
+		const answer = await assertRefusal(
+			await fileToDeal(hash, args, deal),
+			error,
+			status,
+		);
+		if (error === "already_filed")
+			assert.equal(answer.document_id, first.document_id);
+	}
+	const job = await request(
+		caller,
+		`deals/${id(3)}/documents`,
+		{ method: "POST", body: "{}" },
+		bindings,
+	);
+	assert.equal(job.status, 404);
+});
+
+test("copied filings keep a shared first match and accept uppercase predecessor IDs", async (t) => {
+	const deal = id(8);
+	const sha256 = "a".repeat(64);
+	const earliest = "a0000000-0000-4000-8000-000000000001";
+	const tied = "b0000000-0000-4000-8000-000000000001";
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Imported Example Deal', '${id(1)}');
+		insert into document (id, deal_id, name, r2_bucket, r2_key, content_type, sha256, bytes, kind, created_at) values
+		('${id(7)}', '${deal}', 'Example lease.pdf', 'deal_documents', 'legacy/later', 'application/pdf', '${sha256}', 15, 'lease', '2026-01-02'),
+		('${tied}', '${deal}', 'Example lease.pdf', 'deal_documents', 'legacy/tied', 'application/pdf', '${sha256}', 15, 'lease', '2026-01-01'),
+		('${earliest}', '${deal}', 'Example lease.pdf', 'deal_documents', 'legacy/first', 'application/pdf', '${sha256}', 15, 'lease', '2026-01-01');
+		commit;`);
+	await t.test(
+		"both filing routes select the earliest copied row and break ties by ID",
+		async () => {
+			const partner = await fileToDeal(sha256, {}, deal);
+			assert.equal(partner.status, 200);
+			assert.equal((await json(partner)).document_id, earliest);
+			const job = await tie({ sha256, deal_id: deal });
+			assert.equal(job.status, 201);
+			assert.deepEqual(await json(job), {
+				document_id: earliest,
+				existing: true,
+			});
+		},
+	);
+	await t.test(
+		"a fresh key with an uppercase predecessor finds the same replacement",
+		async (t) => {
+			const replacement = await uploadDealFile(
+				t,
+				"Replacement of a copied lease",
+			);
+			const first = await fileToDeal(
+				replacement,
+				{ supersedes_id: earliest },
+				deal,
+			);
+			assert.equal(first.status, 201);
+			const retry = await fileToDeal(
+				replacement,
+				{ supersedes_id: earliest.toUpperCase() },
+				deal,
+			);
+			assert.equal(retry.status, 200);
+			assert.deepEqual(await json(retry), await json(first));
+		},
+	);
+});
+
+test("two overlapping replacements of one predecessor leave one new version", async (t) => {
+	const original = await uploadDealFile(t, "Original plan");
+	const first = await fileToDeal(original);
+	assert.equal(first.status, 201);
+	const { document_id } = await json(first);
+	const candidates = [
+		await uploadDealFile(t, "New plan"),
+		await uploadDealFile(t, "Alternate plan"),
+	];
+	const { promise, resolve } = Promise.withResolvers<void>();
+	let waiting = 0;
+	const storage = {
+		...bucket,
+		async head(key: string) {
+			if (++waiting === 2) resolve();
+			await promise;
+			return bucket.head(key);
+		},
+	};
+	const responses = await Promise.all(
+		candidates.map((sha256) =>
+			fileToDeal(
+				sha256,
+				{ supersedes_id: document_id },
+				id(2),
+				storage,
+			).finally(resolve),
+		),
+	);
+	assert.equal(waiting, 2);
+	assert.deepEqual(responses.map((r) => r.status).sort(), [201, 409]);
+	const refused = responses.find((response) => response.status === 409);
+	assert.ok(refused);
+	await assertRefusal(refused, "predecessor_replaced");
+});
 
 test("files upload, attach and open through door 20", async (t) => {
 	await t.test(

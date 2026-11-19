@@ -4,7 +4,7 @@ import { dealNoteDoor } from "./activity/deal-note.ts";
 import { filedEmails } from "./activity/filed-emails.ts";
 import { activityDoor } from "./activity/next-record.ts";
 import { activity } from "./activity/routes.ts";
-import { attachmentFiles, attachments } from "./attachments.ts";
+import { attachmentFiles, attachments, dealDocuments } from "./attachments.ts";
 import { cadence } from "./cadence.ts";
 import { calendarDismissal, nextAgenda } from "./calendar/next-agenda.ts";
 import { calendar } from "./calendar/routes.ts";
@@ -124,6 +124,7 @@ app.route("/api/engine", calendarDismissal);
 app.route("/api/engine", activityDoor);
 app.route("/api/engine", prospectAdd);
 app.route("/api/engine", attachmentFiles);
+app.route("/api/engine", dealDocuments);
 app.route("/api/engine", replyDrafts);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
