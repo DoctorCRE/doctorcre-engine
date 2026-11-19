@@ -216,15 +216,53 @@ test("disabled and former-client websites keep their names reserved", async () =
 	);
 });
 
+test("an unconfigured share origin refuses before issuing a grant", async () => {
+	for (const origin of [undefined, "", "http://share.example.test"]) {
+		const response = await request(
+			partner,
+			`${path(passwordDeal)}/open`,
+			{ method: "POST" },
+			{ CLIENT_WEBSITE_ORIGIN: origin },
+		);
+		assert.equal(response.status, 503);
+		assert.deepEqual(await response.json(), {
+			error: "client_website_origin_unconfigured",
+		});
+	}
+	const grants = await db.query(
+		"select slug from deal_client_website_grant where slug = 'example-password'",
+	);
+	assert.deepEqual(grants.rows, []);
+});
+
 test("a partner's grant opens only its own website once, before expiry", async () => {
 	const open = `${path(openDeal)}/open`;
+	const productionOrigin = "https://share.doctorcre.com";
+	const openAsPartner = (deal: string) =>
+		request(
+			partner,
+			`${path(deal)}/open`,
+			{ method: "POST" },
+			{ CLIENT_WEBSITE_ORIGIN: productionOrigin },
+		);
+	const grantUrlFrom = async (response: Response) => {
+		assert.equal(response.status, 200);
+		const answer = await response.json();
+		assert.ok(
+			typeof answer === "object" &&
+				answer !== null &&
+				"url" in answer &&
+				typeof answer.url === "string",
+		);
+		return new URL(answer.url);
+	};
 	assert.equal(
 		(await save({ job: "agent", for_user: "blair" }, open, {}))[0],
 		404,
 	);
-	assert.equal((await save(partner, `${path(unlinkedDeal)}/open`, {}))[0], 404);
+	assert.equal((await openAsPartner(unlinkedDeal)).status, 404);
 	for (const [caller, shareOrigin] of [
-		[partner, undefined],
+		[partner, productionOrigin],
 		[{ user: "alex" }, "https://share-staging.example.test"],
 	] as const) {
 		const response = await request(
@@ -233,19 +271,11 @@ test("a partner's grant opens only its own website once, before expiry", async (
 			{ method: "POST" },
 			{ CLIENT_WEBSITE_ORIGIN: shareOrigin },
 		);
-		assert.equal(response.status, 200);
 		assert.equal(response.headers.get("cache-control"), "no-store");
-		const answer = await response.json();
-		assert.ok(
-			typeof answer === "object" &&
-				answer !== null &&
-				"url" in answer &&
-				typeof answer.url === "string",
-		);
-		const website = new URL(answer.url);
+		const website = await grantUrlFrom(response);
 		assert.equal(
 			website.origin + website.pathname,
-			`${shareOrigin ?? "https://share.doctorcre.com"}/example-open/`,
+			`${shareOrigin}/example-open/`,
 		);
 		const grant = website.searchParams.get("grant");
 		assert.ok(grant);
@@ -265,9 +295,9 @@ test("a partner's grant opens only its own website once, before expiry", async (
 		]);
 		assert.deepEqual(uses.toSorted(), [false, true]);
 	}
-	const [, { url }] = await save(partner, open, {});
-	assert.equal(typeof url, "string");
-	const expired = new URL(String(url)).searchParams.get("grant");
+	const expired = (
+		await grantUrlFrom(await openAsPartner(openDeal))
+	).searchParams.get("grant");
 	assert.ok(expired);
 	await db.query(
 		"update deal_client_website_grant set expires_at = now() where slug = 'example-open'",
@@ -276,8 +306,9 @@ test("a partner's grant opens only its own website once, before expiry", async (
 		await redeemWebsiteGrant(writerUrl, "example-open", expired),
 		false,
 	);
-	const [, disabledLink] = await save(partner, open, {});
-	const unspent = new URL(String(disabledLink.url)).searchParams.get("grant");
+	const unspent = (
+		await grantUrlFrom(await openAsPartner(openDeal))
+	).searchParams.get("grant");
 	assert.ok(unspent);
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);

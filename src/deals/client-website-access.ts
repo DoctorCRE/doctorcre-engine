@@ -8,7 +8,6 @@ import type { DB } from "../next-database.d.ts";
 import type { NextSaveEnv } from "../next-door.ts";
 import { isUuid } from "../request-shape.ts";
 import {
-	CLIENT_WEBSITE_ORIGIN,
 	isWebsitePassword,
 	isWebsiteSlug,
 	matchesPassword,
@@ -40,14 +39,12 @@ export const openClientWebsite = new Hono<WebsiteAccessEnv>().post(
 		if (!isUuid(deal)) return refuse(c, new Refusal(404, "not_found"));
 		const user = c.get("stamp").user;
 		if (!user) return refuse(c, new Refusal(403, "AUTHORIZATION_REFUSED"));
+		const origin = URL.parse(c.env.CLIENT_WEBSITE_ORIGIN ?? "");
+		if (origin?.protocol !== "https:" || origin.href !== `${origin.origin}/`)
+			return c.json({ error: "client_website_origin_unconfigured" }, 503);
 		const writer = c.env.DATABASE_WRITER;
 		if (!writer) return refuse(c, new Refusal(503, "database_unavailable"));
 		try {
-			const origin = new URL(
-				c.env.CLIENT_WEBSITE_ORIGIN ?? CLIENT_WEBSITE_ORIGIN,
-			);
-			if (origin.protocol !== "https:" || origin.href !== `${origin.origin}/`)
-				throw new Error("Invalid client website origin");
 			const grant = randomUUID();
 			const registration = await nextTransaction(
 				writer.connectionString,
