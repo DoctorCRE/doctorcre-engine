@@ -68,7 +68,7 @@ before(async () => {
  ]
 		.map(
 			([n, d, o, text, status, due]) =>
-				`('${id(Number(n))}', 'deal', '${id(Number(d))}', '${id(Number(o))}', '${text}', '${status}', ${due}, '2025-01-01', '${n === 110 ? "2025-01-01" : "2025-02-01"}', '${id(1)}')`,
+				`('${id(Number(n))}', 'deal', '${id(Number(d))}', '${id(Number(o))}', '${text}', '${status}', ${due}, '${n === 106 ? "2024-12-31" : "2025-01-01"}', '${n === 110 ? "2025-01-01" : "2025-02-01"}', '${id(1)}')`,
 		)
 		.join(",")};
  update public.next_action set hold_until='2026-04-01', source_ref='example:source', item_title='Example display', item_bullets='["Example bullet"]' where id='${id(100)}';
@@ -151,9 +151,10 @@ after(cleanup);
 
 test("actions keep their own due dates and done time, never the deal date", async () => {
 	// biome-ignore format: one row per source action
-	assert.deepEqual((await rows(`select id, due_on::text, done_at::text, owner_party_id, created_at::text from next_step where id in ('${id(100)}','${id(101)}','${id(106)}') order by id`)).map(Object.values), [
- [id(100), "2026-02-01", null, id(1), "2025-01-01 00:00:00+00"],
- [id(101), null, "2025-01-15 00:00:00+00", id(1), "2025-01-01 00:00:00+00"],
+	assert.deepEqual((await rows(`select id, status, due_on::text, done_at::text, owner_party_id, created_at::text from next_step where id in ('${id(100)}','${id(101)}','${id(106)}') order by id`)).map(Object.values), [
+ [id(100), "open", "2026-02-01", null, id(1), "2025-01-01 00:00:00+00"],
+ [id(101), "done", null, "2025-01-15 00:00:00+00", id(1), "2025-01-01 00:00:00+00"],
+ [id(106), "open", null, null, null, "2024-12-31 00:00:00+00"],
  ]);
 	assert.deepEqual(
 		await rows(
@@ -584,7 +585,7 @@ test("the record constraint and stamp still apply after copying", async () => {
 });
 
 for (const [subject, record] of [
-	["deal", 10],
+	["deal", 15],
 	["vendor", 60],
 ] as const) {
 	test(`${subject} completion events date only the named done actions and survive reruns`, async () => {
@@ -594,8 +595,6 @@ for (const [subject, record] of [
 				await db.query(
 					`update public.next_action set status='done' where id='${id(124)}'`,
 				);
-			else
-				await db.query(`delete from public.next_action where id='${id(106)}'`);
 			await db.query(completionEvents(subject, record));
 			await run();
 			await assertCompletionDates(rows);

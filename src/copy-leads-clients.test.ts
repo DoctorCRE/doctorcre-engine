@@ -520,6 +520,7 @@ test("next actions, reference numbers and roster wording are copied once or list
  ('${id(112)}','lead','${id(100)}','${id(1)}','Call back','2027-02-05','done',null,null,'2025-01-01','2025-06-01','${id(1)}'),
  ('${id(113)}','lead','${id(100)}','${id(1)}','Old plan',null,'dropped',null,null,'2025-01-01','2025-01-01','${id(1)}'),
  ('${id(114)}','lead','${id(100)}','${id(119)}',E'\\t\\n',null,'open',null,null,'2025-01-01','2025-01-01','${id(1)}'),
+ ('${id(109)}','client','${id(103)}','${id(119)}','Earlier proposal follow-up',null,'open',null,null,'2024-12-31','2025-01-01','${id(1)}'),
  ('${id(115)}','client','${id(103)}','${id(1)}','Send proposal','2027-04-01','open','2027-03-01','example-ref','2025-01-01','2025-01-01','${id(1)}'),
  ('${id(105)}','client','${id(103)}','${id(1)}','Example lapsed',null,'expired',null,null,'2025-01-01','2025-01-01','${id(1)}'),
  ('${id(106)}','lead','${id(100)}','${id(1)}','Example replaced',null,'dropped',null,null,'2025-01-01','2025-01-01','${id(1)}'),
@@ -554,6 +555,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 			[id(118), id(90), "Example expired", null, id(1), null],
 			[id(115), id(92), "Send proposal", "2027-04-01", id(1), null],
 			[id(105), id(92), "Example lapsed", null, id(1), null],
+			[id(109), id(92), "Earlier proposal follow-up", null, null, null],
 		];
 		assert.deepEqual((await steps()).map(Object.values), copied);
 		assert.deepEqual(
@@ -612,6 +614,7 @@ test("next actions, reference numbers and roster wording are copied once or list
 				"verbatim_label_not_stored",
 			],
 			[id(105), "resolution_event_id", null, "expiry_unproven"],
+			[id(109), "next_step", id(115), "open_step_exists"],
 			[id(111), "next_step", id(110), "open_step_exists"],
 			[id(114), "description", "\t\n", "blank_next_action"],
 			[id(115), "source_ref", "example-ref", "reference_not_copied"],

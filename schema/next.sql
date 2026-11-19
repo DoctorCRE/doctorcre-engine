@@ -2713,7 +2713,7 @@ from (select deal_id, invoiced_on from commission_payment where invoiced_on is n
 	union all select deal_id, invoiced_on from imported_deal_invoiced) dated
 group by deal_id;
 
--- A deal reserves its name only while it is in the Open list.
+-- Keep the reservation in step with isOpenBoardDeal in src/deals/next-board.ts.
 create table deal_open_name (
 	deal_id uuid primary key references deal on delete cascade,
 	name_key text,

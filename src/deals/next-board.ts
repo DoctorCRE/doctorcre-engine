@@ -12,6 +12,7 @@ import {
 } from "./shared.ts";
 
 type BoardList = "open" | "closed" | "lost";
+// Keep this in step with sync_deal_open_name in schema/next.sql.
 export const isOpenBoardDeal = sql<boolean>`outcome is null and closed_on is null
 	and invoiced_on is null and (phase is null or phase not in (${sql.join(ENDED_PHASES)}))`;
 // Today's board groups by brand and owner as they stand on the partners' calendar day.

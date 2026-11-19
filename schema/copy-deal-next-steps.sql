@@ -34,6 +34,7 @@ select e.* from copy_action_end() e join old_action n using (id);
 create temp table step_candidate on commit drop as
 select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
  regexp_replace(n.description, '^\s+|\s+$', '', 'g') as what, n.due_on, n.hold_until, coalesce(u.id, d.owner_user_id, v.owner_user_id) as owner,
+ u.id is null as owner_inferred,
  case when n.source = 'capture_post_call_action' then n.item_title end as item_title,
  case when n.source = 'capture_post_call_action' then n.item_bullets else '[]'::jsonb end as item_bullets,
  case when n.source = 'capture_post_call_action' then n.source_ref end as source_ref,
@@ -48,7 +49,7 @@ left join deal d on d.id = n.deal_id
 left join outside_id o on o.source = 'old_system' and o.value = n.owner_id::text
 left join app_user u on u.id = o.party_id
 union all
-select n.id, 'deal_note', n.deal_id, null, null, n.text, d.next_date, null, owner.id, null, '[]'::jsonb, null, null, null, null, null, null,
+select n.id, 'deal_note', n.deal_id, null, null, n.text, d.next_date, null, owner.id, true, null, '[]'::jsonb, null, null, null, null, null, null,
  n.created_at, n.created_at, a.*,
  case when n.superseded then 'superseded_note' when n.rank <> 1 then 'older_next_step_note'
  when current.status = 'done' then 'plan_already_done'
@@ -63,7 +64,7 @@ left join copy_next_step_event() event on event.note_id = n.id
 cross join lateral copy_event_attribution(n.actor_id, event.event_id) a
 union all
 select md5('old_system:deal:' || d.id || ':follow_up')::uuid, 'deal_date', d.id, null, null,
- 'Imported deal follow-up', d.next_date, null, owner.id, null, '[]'::jsonb, null, null, null, null, null, null, d.created_at, d.updated_at, a.*, null
+ 'Imported deal follow-up', d.next_date, null, owner.id, true, null, '[]'::jsonb, null, null, null, null, null, null, d.created_at, d.updated_at, a.*, null
 from public.deal d
 left join public.actor actor on actor.slug = d.owner
 left join outside_id o on o.source = 'old_system' and o.value = actor.id::text
@@ -103,23 +104,36 @@ insert into not_copied
 select id, 'call_contact_party_id', contact_party_id::text, 'call_contact_not_copied'
 from post_call_source where contact_party_id is not null and contact_id is null;
 
+with ready as (
+ select s.*, row_number() over (
+  partition by deal_id, party_id, owner, resolution is null and item_title is null
+  order by owner_inferred, source <> 'deal_note', created_at, id
+ ) as rank
+ from step_candidate s where not exists (select from step_refusal r where r.id = s.id)
+  and not exists (select from next_step copied where copied.id = s.id)
+)
 insert into next_step (id, deal_id, party_id, what, due_on, hold_until, owner_party_id, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
  resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
  call_activity_id, call_evidence_quote, call_contact_party_id)
-select s.id, deal_id, party_id, what, due_on, hold_until, owner, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
+select s.id, deal_id, party_id, what, due_on, hold_until,
+ case when owner_inferred and resolution is null and item_title is null and (rank > 1 or exists (
+  select from next_step kept where kept.id <> s.id and kept.owner_party_id = s.owner
+   and (kept.deal_id, kept.party_id) is not distinct from (s.deal_id, s.party_id)
+   and kept.status = 'open' and kept.item_title is null
+ )) then null else owner end, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
  resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
  c.session_id, c.evidence_quote, c.contact_id
-from step_candidate s left join post_call_source c on c.id = s.id and s.source = 'capture_post_call_action'
-where not exists (select from step_refusal r where r.id = s.id)
-order by source <> 'deal_note', created_at, s.id on conflict do nothing;
+from ready s left join post_call_source c on c.id = s.id and s.source = 'capture_post_call_action'
+order by owner_inferred, source <> 'deal_note', created_at, s.id on conflict do nothing;
 
 insert into not_copied
 select s.id, 'next_step', kept.id::text, 'open_step_exists'
 from step_candidate s join next_step kept on kept.owner_party_id = s.owner
  and (kept.deal_id, kept.party_id) is not distinct from (s.deal_id, s.party_id)
-where s.resolution is null and s.item_title is null and kept.status = 'open' and kept.item_title is null
+where kept.id <> s.id and s.resolution is null and s.item_title is null and kept.status = 'open' and kept.item_title is null
  and not exists (select from step_refusal r where r.id = s.id)
- and not exists (select from next_step done where done.id = s.id);
+ and not exists (select from next_step done where done.id = s.id
+  and (not s.owner_inferred or done.owner_party_id is not null or done.status <> 'open'));
 
 insert into not_copied select n.id, f.field, f.value, f.reason from old_action n join step_candidate s using (id)
 cross join lateral (values
