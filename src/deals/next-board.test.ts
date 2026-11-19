@@ -18,7 +18,8 @@ const id = (n: number) =>
 const OLD = `
 insert into public.actor (id, slug, kind, display_name) values
  ('${id(1)}', 'partner_one', 'human', 'Example Partner One'),
- ('${id(2)}', 'dell', 'human', 'Example Partner Two');
+ ('${id(2)}', 'dell', 'human', 'Example Partner Two'),
+ ('${id(3)}', 'example_job', 'automation', 'Example job');
 insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Example active', true, 1);
 insert into public.party (id, kind, name, created_by, updated_by) values
  ('${id(16)}', 'org', 'Example National Brand', '${id(1)}', '${id(1)}'),
@@ -40,7 +41,7 @@ insert into public.national_account_owner (account_client_id, owner_actor_id, se
 insert into public.vendor_market (slug, name, kind, boundary, source, reviewed_by, reviewed_at) values
  ('example-bay', 'Example Bay', 'market', 'Example counties', 'Example review', '${id(1)}', '2025-01-01');
 insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1), ('startup', 'Example startup', 2),
- ('relocation', 'Example relocation', 3), ('other', 'Example other', 4);
+ ('relocation', 'Example relocation', 3), ('other', 'Example other', 4), ('renewal', 'Example renewal', 5);
 insert into public.deal_phase (slug, label) values ('touring', 'Example touring'), ('negotiation', 'Example negotiation'),
  ('closed', 'Example closed'), ('invoiced', 'Example invoiced');
 insert into public.deal_lane (slug, label, sort) values ('national', 'Example national', 1);
@@ -80,8 +81,10 @@ insert into public.event (id, subject_type, subject_id, field, old_value, new_va
 update public.deal set closed_on = '2024-09-01' where id = '${id(33)}';
 update public.deal set city = 'Unmapped Example City' where id = '${id(37)}';
 insert into public.deal (id, client_id, name, deal_type, phase, outcome, owner, created_by, updated_by, created_at) values
- ('${id(39)}', '${id(22)}', 'Example undated won lease', 'lease', 'closed', 'won', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-03'),
- ('${id(40)}', '${id(22)}', 'Example undated lost lease', 'lease', 'negotiation', 'lost', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-04');
+ ('${id(39)}', '${id(22)}', 'Example undated won lease', 'renewal', 'closed', 'won', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-03'),
+ ('${id(40)}', '${id(22)}', 'Example undated lost lease', 'renewal', 'negotiation', 'lost', 'partner_one', '${id(1)}', '${id(1)}', '2024-06-04');
+update public.deal set operating_state = 'parked', parking_reason = 'other', parking_note = 'Example old pause',
+ parked_at = '2024-07-01T14:00:00Z', parked_by = '${id(3)}' where id = '${id(39)}';
 insert into public.deal (id, client_id, name, deal_type, phase, owner, closed_on, created_by, updated_by) values
  ('${id(41)}', '${id(22)}', 'Example closed without a date', 'lease', 'closed', 'partner_one', null, '${id(1)}', '${id(1)}'),
  ('${id(42)}', '${id(22)}', 'Example invoiced without a date', 'lease', 'invoiced', 'partner_one', null, '${id(1)}', '${id(1)}'),
@@ -330,6 +333,68 @@ test("the deal page shares the card's copied phase, outcome and close date", asy
 	});
 });
 
+test("copied ended renewals show the unrecorded lease and copied parking names automation", async () => {
+	await nextTransaction(connectionString, "read", async (tx) => {
+		const board = await readNextBoard(tx, { partner: "partner_one" });
+		const closed = board.closed_deals.find((deal) => deal.id === id(39));
+		const renewal = {
+			kind: null,
+			type: "renewal",
+			reason: "renewal",
+			renewal_lease_unrecorded: true,
+		};
+		const parking = {
+			operating_state: "parked",
+			parking_reason: "other",
+			parking_note: "Example old pause",
+			parked_at: "2024-07-01T14:00:00+00:00",
+			parked_by: null,
+			parked_automatically: true,
+		};
+		assert.partialDeepStrictEqual(closed, { ...renewal, ...parking });
+		assert.partialDeepStrictEqual(await readNextDealDetail(tx, id(39)), {
+			...renewal,
+			...parking,
+			checklist: { template_state: "deal_type_unknown", deal_type: null },
+		});
+		assert.partialDeepStrictEqual(
+			board.lost_deals.find((deal) => deal.id === id(40)),
+			renewal,
+		);
+		assert.partialDeepStrictEqual(
+			await readNextDealDetail(tx, id(40)),
+			renewal,
+		);
+		assert.partialDeepStrictEqual(
+			board.deals.find((deal) => deal.id === id(32)),
+			{
+				parked_by: "dell",
+				parked_automatically: false,
+			},
+		);
+	});
+});
+
+test("changing a copied parking note replaces the automatic parker with the partner", async () => {
+	const rollback = new Error("roll back example parking");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			await tx
+				.updateTable("deal")
+				.set({ parking_note: "Example new pause" })
+				.where("id", "=", id(39))
+				.execute();
+			assert.partialDeepStrictEqual(await readNextDealDetail(tx, id(39)), {
+				parked_by: "partner_one",
+				parked_automatically: false,
+			});
+			throw rollback;
+		}),
+		rollback,
+	);
+});
+
 test("Deals reads show separate kind and reason and the earliest confirmed open date", async () => {
 	const rollback = new Error("roll back example deal facts");
 	await assert.rejects(
@@ -341,12 +406,12 @@ test("Deals reads show separate kind and reason and the earliest confirmed open 
 			await sql`insert into lease (id, party_id, property_id)
 				values (${id(501)}, ${id(12)}, ${id(500)})`.execute(tx);
 			await sql`update deal set kind = 'purchase', reason = 'renewal', renews_lease_id = ${id(501)}
-				where id = ${id(33)}`.execute(tx);
+				where id = ${id(39)}`.execute(tx);
 			await sql`insert into critical_date (id, deal_id, kind, due_on, source) values
-				(${id(502)}, ${id(33)}, 'loi_expiry', '2000-01-01', 'Example proposal'),
-				(${id(503)}, ${id(33)}, 'due_diligence', '2000-01-02', 'Example completed date'),
-				(${id(504)}, ${id(33)}, 'option_notice', '2000-01-03', 'Example open date'),
-				(${id(505)}, ${id(33)}, 'lease_end', '2000-01-04', 'Example later date')`.execute(
+				(${id(502)}, ${id(39)}, 'loi_expiry', '2000-01-01', 'Example proposal'),
+				(${id(503)}, ${id(39)}, 'due_diligence', '2000-01-02', 'Example completed date'),
+				(${id(504)}, ${id(39)}, 'option_notice', '2000-01-03', 'Example open date'),
+				(${id(505)}, ${id(39)}, 'lease_end', '2000-01-04', 'Example later date')`.execute(
 				tx,
 			);
 			await sql`update critical_date set status = 'open' where id in (${id(503)}, ${id(504)}, ${id(505)})`.execute(
@@ -360,6 +425,7 @@ test("Deals reads show separate kind and reason and the earliest confirmed open 
 				kind: "purchase",
 				reason: "renewal",
 				type: "purchase",
+				renewal_lease_unrecorded: false,
 				next_critical_date: {
 					id: id(504),
 					kind: "option_notice",
@@ -367,11 +433,11 @@ test("Deals reads show separate kind and reason and the earliest confirmed open 
 				},
 			};
 			assert.partialDeepStrictEqual(
-				board.closed_deals.find((deal) => deal.id === id(33)),
+				board.closed_deals.find((deal) => deal.id === id(39)),
 				facts,
 			);
 			assert.partialDeepStrictEqual(
-				await readNextDealDetail(tx, id(33)),
+				await readNextDealDetail(tx, id(39)),
 				facts,
 			);
 			assert.partialDeepStrictEqual(

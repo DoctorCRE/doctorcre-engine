@@ -197,7 +197,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				from change c left join app_user u on u.id = c.changed_by_user_id
 				cross join lateral (
 					select key from jsonb_object_keys(c.new_value) as fields(key)
-					where key not in ('parking_reason', 'parking_note', 'parked_at', 'parked_by_user_id')
+					where key not in ('parking_reason', 'parking_note', 'parked_at', 'parked_by_user_id', 'parked_automatically')
 					union all
 					select 'operating_state' where c.new_value ?| array['parking_reason', 'parking_note']
 				) edit
@@ -209,11 +209,13 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		.executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
 	const { today, commissions, critical_dates, ...detail } = record;
+	const checklistType =
+		detail.reason === "renewal" ? detail.reason : detail.type;
 	const checklist = checklistOf({
 		deal: {
 			id: detail.deal_id,
 			owner: detail.owner,
-			type: detail.reason === "renewal" ? detail.reason : detail.type,
+			type: detail.renewal_lease_unrecorded ? detail.kind : checklistType,
 			invoiced_on: detail.invoiced_on,
 		},
 		lease: detail.lease,
