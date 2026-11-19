@@ -512,6 +512,29 @@ test("both partners see a deal's active client website", async () => {
 	}
 });
 
+test("both partners see the current client's website on the deal card", async () => {
+	for (const partner of ["partner_one", "partner_two"]) {
+		const response = await get("/deals", "next", partner);
+		assert.equal(response.status, 200);
+		const body = await response.text();
+		const {
+			deals,
+		}: { deals: { id: string; client_portal_url: string | null }[] } =
+			JSON.parse(body);
+		assert.equal(
+			deals.find((deal) => deal.id === id(30))?.client_portal_url,
+			"https://share.doctorcre.com/example-startup",
+		);
+		for (const dealId of [id(32), id(35)]) {
+			assert.equal(
+				deals.find((deal) => deal.id === dealId)?.client_portal_url,
+				null,
+			);
+		}
+		assert.doesNotMatch(body, /password_hash|\$2a\$12\$/);
+	}
+});
+
 test("a missing, disabled or client-mismatched website stays off the deal page", async () => {
 	for (const deal of [id(31), id(32)]) {
 		const response = await get(`/deals/${deal}`, "next");

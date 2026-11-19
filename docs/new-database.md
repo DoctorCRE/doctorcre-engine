@@ -1301,7 +1301,7 @@ The detail sends `checklist` as `deal-checklist.v1`. The template lives in engin
 
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
-Both partners' detail reads return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The detail database role can read the fields used to form the link.
+Both partners' open board cards and deal pages return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The reader database role can read the fields used to form the link.
 
 ### Set up a client website
 
