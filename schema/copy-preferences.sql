@@ -24,14 +24,15 @@ where not exists (select from preference_refusal r where r.actor = p.actor);
 
 -- Both action copies keep their ids; inherited v2 dispositions use the old Home's exact-id precedence.
 create temp table old_mark on commit drop as
-select k.actor_id, k.item_id, nullif(d.disposition, 'inbox') as disposition, d.snoozed_until, w.identity_id, w.reason,
+select k.actor_id, k.item_id, case when d.disposition = 'snoozed' then 'snoozed' end as disposition, d.snoozed_until, w.identity_id, w.reason,
  least(d.updated_at, w.updated_at) as created_at, greatest(d.updated_at, w.updated_at) as changed_at,
  u.id as user_id, s.id as step_id, s.home_step_id, s.home_call_follow_up_id, waiting_on.id as waiting_on_party_id
-from (select actor_id, item_id from ops.home_inbox_disposition where disposition <> 'inbox'
- union select actor_id, v2_item_id from ops.home_inbox_disposition where disposition <> 'inbox' and v2_item_id is not null
+from (select actor_id, item_id from ops.home_inbox_disposition where disposition = 'snoozed'
+ union select actor_id, v2_item_id from ops.home_inbox_disposition where disposition = 'snoozed' and v2_item_id is not null
  union select actor_id, item_id from ops.home_waiting where identity_id is not null) k
 left join lateral (
- select d.disposition, d.snoozed_until, case when d.disposition <> 'inbox' then d.updated_at end as updated_at
+ select d.disposition, case when d.disposition = 'snoozed' then d.snoozed_until end as snoozed_until,
+  case when d.disposition = 'snoozed' then d.updated_at end as updated_at
  from ops.home_inbox_disposition d where d.actor_id = k.actor_id
  and (d.item_id = k.item_id or d.v2_item_id = k.item_id)
  order by (d.item_id = k.item_id) desc, d.updated_at desc, d.item_id limit 1
@@ -49,7 +50,7 @@ left join next_step s on s.id = coalesce(n.id, a.id)
   case when n.subject_type = 'deal' then s.deal_id = n.subject_id else s.party_id = subject.party_id end end
 left join outside_id wo on wo.source = 'old_system' and wo.value = w.identity_id::text
 left join party waiting_on on waiting_on.id = wo.party_id
-where (d.disposition <> 'inbox' or w.identity_id is not null)
+where (d.disposition = 'snoozed' or w.identity_id is not null)
  and not exists (select from home_mark done where done.user_id = u.id
   and (done.next_step_id = s.home_step_id or done.call_follow_up_id = s.home_call_follow_up_id));
 create temp table mark_refusal on commit drop as

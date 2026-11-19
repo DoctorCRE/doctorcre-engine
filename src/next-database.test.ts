@@ -402,7 +402,8 @@ const newMark = (row: Record<string, string | null>) =>
 	insert("home_mark", {
 		user_id: USER,
 		next_step_id: id(402),
-		disposition: "settled",
+		disposition: "snoozed",
+		snoozed_until: "2026-03-21T14:00:00+00:00",
 		...row,
 	});
 const newLink = (row: Record<string, string | null>) =>
@@ -2126,12 +2127,15 @@ const RULES: Record<string, Case[]> = {
 			],
 			["delete from user_preference", notGranted("user_preference")],
 		],
-	"a Home mark is one user's, on one item, snoozed until a time or settled, and waiting on someone for a reason":
+	"a Home mark is one user's, on one item, snoozed until a time, and waiting on someone for a reason":
 		[
 			[newMark({ disposition: "done" }), "home_mark_disposition_check"],
-			[newMark({ disposition: "snoozed" }), "home_mark_snoozed_until"],
 			[
-				newMark({ snoozed_until: "2026-03-21T14:00:00+00:00" }),
+				newMark({ disposition: "settled", snoozed_until: null }),
+				"home_mark_disposition_check",
+			],
+			[
+				newMark({ disposition: "snoozed", snoozed_until: null }),
 				"home_mark_snoozed_until",
 			],
 			[
@@ -2155,7 +2159,10 @@ const RULES: Record<string, Case[]> = {
 				newMark({ waiting_on_party_id: CLIENT, waiting_reason: " " }),
 				"home_mark_waiting_reason_check",
 			],
-			[newMark({ disposition: null }), "home_mark_marks_something"],
+			[
+				newMark({ disposition: null, snoozed_until: null }),
+				"home_mark_marks_something",
+			],
 			[newMark({ next_step_id: id(400) }), "home_mark_pkey"],
 			[newMark({ user_id: CLIENT }), "home_mark_user_id_fkey"],
 			[newMark({ next_step_id: MISSING }), "home_mark_next_step_id_fkey"],
@@ -7680,7 +7687,7 @@ test("a merge collapses matching suggestions, clears their removed mark and keep
 		insert into activity_about (activity_id, party_id) values ('${CALL}', '${id(905)}');
 		${stageProposal()}; ${stageProposal({ id: id(901), party_id: id(905) })};
 		${asUser(USER)};
-		insert into home_mark (user_id, proposal_id, disposition) values ('${USER}', '${id(901)}', 'settled');
+		insert into home_mark (user_id, proposal_id, disposition, snoozed_until) values ('${USER}', '${id(901)}', 'snoozed', '2026-03-21T14:00:00+00:00');
 		select merge_party('${id(905)}', '${LEAD}'); ${CHECK_AT_COMMIT}`);
 		assert.equal(
 			(

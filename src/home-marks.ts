@@ -31,14 +31,8 @@ const itemKinds = new Map<string, ItemKind>([
 ]);
 
 const isVersion = (value: unknown): value is string =>
-	typeof value === "string" && /^\d+:\d+:(inbox|snoozed|settled)$/.test(value);
-const actions = [
-	"snooze",
-	"settle",
-	"unsettle",
-	"set-waiting",
-	"clear-waiting",
-] as const;
+	typeof value === "string" && /^\d+:\d+:(inbox|snoozed)$/.test(value);
+const actions = ["snooze", "unsnooze", "set-waiting", "clear-waiting"] as const;
 const isAction = (value: unknown): value is (typeof actions)[number] =>
 	actions.some((action) => value === action);
 const isParty = (value: unknown): value is "party" => value === "party";
@@ -92,7 +86,7 @@ function parse(body: JsonObject) {
 	return {
 		...item,
 		mark: {
-			disposition: action === "settle" ? "settled" : null,
+			disposition: null,
 			snoozed_until: null,
 		},
 	};
@@ -108,7 +102,6 @@ type MarkState = Mark & {
 	snoozed: boolean;
 	valid_snooze: boolean;
 	mark_version: string | null;
-	settled_version: string;
 };
 
 async function lockItem(tx: Transaction<DB>, id: string, kind: ItemKind) {
@@ -162,10 +155,9 @@ async function readMarkState(
 			to_jsonb(m.snoozed_until)#>>'{}' as snoozed_until,
 			coalesce(m.snoozed_until > now(), false) as snoozed,
 			coalesce(${snoozedUntil}::timestamptz > now(), true) as valid_snooze,
-			h.version as mark_version, h.settled_version
+			h.version as mark_version
 		from (
-			select max(id) as version,
-				coalesce(max(id) filter (where new_value ->> 'disposition' = 'settled'), 0) as settled_version
+			select max(id) as version
 			from change where table_name = 'home_mark' and record = ${record}
 		) h
 		left join home_mark m on m.user_id = ${record.user_id}
@@ -191,29 +183,12 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 		.selectFrom("change")
 		.where("table_name", "=", "home_mark")
 		.where("record", "=", record);
-	const {
-		created_at,
-		snoozed,
-		valid_snooze,
-		mark_version,
-		settled_version,
-		...before
-	} = state;
-	const staleSettlement =
-		before.disposition === "settled" &&
-		BigInt(settled_version) < BigInt(source_version);
-	const visible = (mark: string | null | undefined, activeSnooze: boolean) =>
-		item.done || mark === "settled"
-			? "settled"
-			: activeSnooze
-				? "snoozed"
-				: "inbox";
+	const { created_at, snoozed, valid_snooze, mark_version, ...before } = state;
+	const visible = (activeSnooze: boolean) =>
+		!item.done && activeSnooze ? "snoozed" : "inbox";
 	const version = (markVersion: string | null, disposition: string) =>
 		`${source_version}:${markVersion ?? 0}:${disposition}`;
-	const currentVersion = version(
-		mark_version,
-		visible(staleSettlement ? null : before.disposition, snoozed),
-	);
+	const currentVersion = version(mark_version, visible(snoozed));
 	if (request.base_version !== currentVersion)
 		throw new SaveRefusal(
 			new Refusal(409, "version_conflict", { current_version: currentVersion }),
@@ -222,11 +197,8 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 	if (!valid_snooze)
 		throw new SaveRefusal(new Refusal(422, "invalid_snooze_time"));
 	const mark: Mark = { ...before, ...request.mark };
-	// An unchanged disposition would leave no new settlement in history.
-	const renewSettlement =
-		staleSettlement && request.mark.disposition === "settled";
 	const empty = mark.disposition === null && mark.waiting_on_party_id === null;
-	if (created_at && (empty || renewSettlement))
+	if (created_at && empty)
 		await tx
 			.deleteFrom("home_mark")
 			.where((eb) => eb.and(record))
@@ -253,15 +225,11 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 		base_version: version(
 			saved.id,
 			visible(
-				staleSettlement && !renewSettlement ? null : mark.disposition,
 				request.mark.snoozed_until != null ||
 					(mark.disposition === "snoozed" && snoozed),
 			),
 		),
-		previous: {
-			...before,
-			disposition: staleSettlement ? null : before.disposition,
-		},
+		previous: before,
 	};
 }
 

@@ -32,9 +32,13 @@ async function cards(caller: typeof alex, dealId: string) {
 	assert.equal(response.status, 200);
 	const result: unknown = await response.json();
 	assert.ok(isArguments(result) && Array.isArray(result.items));
-	return result.items
-		.filter(isArguments)
-		.filter((item) => item.deal_id === dealId);
+	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);
+	const items = result.items.filter(isArguments);
+	for (const item of items) {
+		assert.equal(Object.hasOwn(item, "auto_settled"), false);
+		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
+	}
+	return items.filter((item) => item.deal_id === dealId);
 }
 
 async function checkCompletionReview(callFollowUp: boolean) {
@@ -121,12 +125,6 @@ async function checkCompletionReview(callFollowUp: boolean) {
 		card?.completion_review,
 	);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
-		update home_mark set disposition = 'settled', snoozed_until = null where item_id = '${step}';
-		commit;`);
-	assert.partialDeepStrictEqual(await cards(alex, deal), [
-		{ item_id, section: "settled" },
-	]);
-	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		delete from home_mark where item_id = '${step}';
 		commit;`);
 	const [status] = await save(alex, `proposals/${card?.source_id}/decision`, {
@@ -145,7 +143,7 @@ test("a completion review can be snoozed and dismissed", () =>
 test("a call follow-up completion review can be snoozed and dismissed", () =>
 	checkCompletionReview(true));
 
-test("updates respect recipient, read time, snoozes and the latest disposition change", async () => {
+test("updates respect recipient, read time, snoozes and mark revisions", async () => {
 	const deal = randomUUID();
 	const update = randomUUID();
 	await db.query(`begin;
@@ -191,20 +189,6 @@ test("updates respect recipient, read time, snoozes and the latest disposition c
 		section: "inbox",
 		snoozed_until: null,
 	});
-	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
-		update home_mark set disposition = 'settled', snoozed_until = null where home_update_id = '${update}';
-		commit;`);
-	const [settled] = await cards(alex, deal);
-	assert.partialDeepStrictEqual(settled, {
-		item_id: `notification:${update}`,
-		section: "settled",
-		disposition: "settled",
-		snoozed_until: null,
-	});
-	assert.match(
-		String(settled?.base_version),
-		new RegExp(`^${card?.source_version}:[1-9][0-9]*:settled$`),
-	);
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
 		update home_update set what = 'Review the revised survey' where id = '${update}';
 		update home_mark set waiting_on_party_id = '${other}', waiting_reason = 'For review' where home_update_id = '${update}';

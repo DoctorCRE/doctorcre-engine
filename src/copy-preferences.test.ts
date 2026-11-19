@@ -73,10 +73,10 @@ before(async () => {
  ('${id(1)}','${item(102)}','inbox',null,'1','m','2026-10-03'),
  ('${id(1)}','${item(103)}','inbox',null,'1','m','2026-10-03'),
  ('${id(1)}','${item(104)}','settled',null,'1','m','2026-10-04'),
- ('${id(1)}','${item(105)}','settled',null,'1','m','2026-10-04'),
- ('${id(1)}','${item(108)}','settled',null,'1','m','2026-10-04'),
- ('${id(1)}','capture_session:${id(200)}','settled',null,'1','m','2026-10-04'),
- ('${id(2)}','${item(101)}','settled',null,'1','m','2026-10-04');
+ ('${id(1)}','${item(105)}','snoozed','2026-12-01','1','m','2026-10-04'),
+ ('${id(1)}','${item(108)}','snoozed','2026-12-01','1','m','2026-10-04'),
+ ('${id(1)}','capture_session:${id(200)}','snoozed','2026-12-01','1','m','2026-10-04'),
+ ('${id(2)}','${item(101)}','snoozed','2026-12-01','1','m','2026-10-04');
  insert into ops.home_waiting (actor_id,item_id,identity_kind,identity_id,reason,evidence,version,updated_at) values
  ('${id(1)}','${item(100)}','party','${id(11)}','Example landlord reply','["Example evidence"]',1,'2026-10-05'),
  ('${id(1)}','${item(102)}','actor','${id(3)}','Example partner review','["Example evidence"]',1,'2026-10-06'),
@@ -111,7 +111,7 @@ test("each user's settings become their preferences, and unknown zones and equal
 	);
 });
 
-test("snoozed, settled and waiting marks land on the next steps the earlier copies made", async () => {
+test("snoozed and waiting marks land on copied next steps, and settled dispositions produce no marks", async () => {
 	assert.deepEqual(await marks(), [
 		[
 			id(100),
@@ -125,17 +125,6 @@ test("snoozed, settled and waiting marks land on the next steps the earlier copi
 			null,
 		],
 		[
-			id(101),
-			"settled",
-			null,
-			null,
-			null,
-			"2026-10-02 00:00:00+00",
-			"2026-10-02 00:00:00+00",
-			id(1),
-			null,
-		],
-		[
 			id(102),
 			null,
 			null,
@@ -143,17 +132,6 @@ test("snoozed, settled and waiting marks land on the next steps the earlier copi
 			"Example partner review",
 			"2026-10-06 00:00:00+00",
 			"2026-10-06 00:00:00+00",
-			id(1),
-			null,
-		],
-		[
-			id(104),
-			"settled",
-			null,
-			null,
-			null,
-			"2026-10-04 00:00:00+00",
-			"2026-10-04 00:00:00+00",
 			id(1),
 			null,
 		],
@@ -205,7 +183,7 @@ test("a rerun changes nothing, and picks up a mark once its next step is copied"
 		);
 		assert.deepEqual(
 			(await marks()).map(([step, disposition]) => [step, disposition]).at(-1),
-			[id(105), "settled"],
+			[id(105), "snoozed"],
 		);
 	} finally {
 		await db.query("rollback");
@@ -241,12 +219,12 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
  insert into ops.home_inbox_disposition (actor_id,item_id,v2_item_id,disposition,snoozed_until,source_version,material_version,updated_at) values
  ('${id(1)}','${callItem(501)}',null,'snoozed','2026-12-01','1','m','2026-10-01'),
  ('${id(1)}','${callItem(502)}',null,'settled',null,'1','m','2026-10-02'),
- ('${id(1)}','${callItem(504)}',null,'settled',null,'1','m','2026-10-02'),
- ('${id(1)}','${callItem(505)}',null,'settled',null,'1','m','2026-10-02'),
- ('${id(1)}','${callItem(506)}',null,'settled',null,'1','m','2026-10-02'),
+ ('${id(1)}','${callItem(504)}',null,'snoozed','2026-12-01','1','m','2026-10-02'),
+ ('${id(1)}','${callItem(505)}',null,'snoozed','2026-12-01','1','m','2026-10-02'),
+ ('${id(1)}','${callItem(506)}',null,'snoozed','2026-12-01','1','m','2026-10-02'),
  ('${id(1)}','${callItem(503)}',null,'settled',null,'1','m','2026-10-02'),
- ('${id(1)}','${item(120)}','${item(110)}','settled',null,'1','m','2026-10-02'),
- ('${id(1)}','${item(121)}','${item(111)}','settled',null,'1','m','2026-10-03'),
+ ('${id(1)}','${item(120)}','${item(110)}','snoozed','2026-12-01','1','m','2026-10-02'),
+ ('${id(1)}','${item(121)}','${item(111)}','snoozed','2026-12-01','1','m','2026-10-03'),
  ('${id(1)}','${item(111)}',null,'inbox',null,'1','m','2026-10-01'),
  ('${id(1)}','${item(122)}','${item(112)}','snoozed','2026-12-01','1','m','2026-10-01'),
  ('${id(1)}','${item(123)}','${item(112)}','settled',null,'1','m','2026-10-02'),
@@ -267,7 +245,7 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
 				"next_step_not_copied",
 			]),
 			...report.slice(1, 4),
-			...[113, 120, 121, 122, 123, 124, 125].map((n) => [
+			...[120, 121, 122, 124].map((n) => [
 				id(1),
 				"item_id",
 				item(n),
@@ -282,28 +260,17 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
 			await rows(
 				"select call_follow_up_id from home_mark where call_follow_up_id is not null order by call_follow_up_id",
 			),
-			[[id(501)], [id(502)], [id(503)]],
+			[[id(501)], [id(503)]],
 		);
 		assert.deepEqual(addedMarks, [
 			[
 				id(110),
-				"settled",
-				null,
+				"snoozed",
+				"2026-12-01 00:00:00+00",
 				id(11),
 				"Example inherited wait",
 				"2026-10-02 00:00:00+00",
 				"2026-10-05 00:00:00+00",
-				id(1),
-				null,
-			],
-			[
-				id(112),
-				"settled",
-				null,
-				null,
-				null,
-				"2026-10-02 00:00:00+00",
-				"2026-10-02 00:00:00+00",
 				id(1),
 				null,
 			],
@@ -319,23 +286,12 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
 				null,
 			],
 			[
-				id(502),
-				"settled",
-				null,
-				null,
-				null,
-				"2026-10-02 00:00:00+00",
-				"2026-10-02 00:00:00+00",
-				id(1),
-				null,
-			],
-			[
 				id(503),
-				"settled",
+				null,
 				null,
 				id(3),
 				"Example review",
-				"2026-10-02 00:00:00+00",
+				"2026-10-06 00:00:00+00",
 				"2026-10-06 00:00:00+00",
 				id(1),
 				null,
@@ -361,7 +317,7 @@ test("call follow-ups and inherited v2 marks keep the old Home's identity and pr
 			corrected.at(-1)?.rows.map(Object.values),
 			firstReport.filter(([, , value]) => value !== callItem(504)),
 		);
-		assert.deepEqual((await marks()).at(-1)?.slice(0, 2), [id(504), "settled"]);
+		assert.deepEqual((await marks()).at(-1)?.slice(0, 2), [id(504), "snoozed"]);
 	} finally {
 		await db.query("rollback");
 	}
