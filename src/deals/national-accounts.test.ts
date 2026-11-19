@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { doorTest } from "../test-door.ts";
 
-const { db, setup, cleanup, save, request } = doorTest();
+const { db, setup, cleanup, save, request, writerUrl } = doorTest();
 const joe = { user: "joe" };
 const accounts = "national-accounts";
 const [JOE, DELL, OTHER, BRAND, SAME_OWNER_BRAND, MATCHING_COMPANY] =
@@ -75,7 +75,7 @@ test("adding an account saves its owner once and checks for duplicate company na
 	assert.equal((await add(args({ ...sameName, force_new: true })))[0], 201);
 });
 
-test("choosing a matching company gives it the account role and replays the first save", async () => {
+test("choosing a matching company saves while its name lock is held and replays the first save", async () => {
 	const fields = { name: matchingName.toLowerCase(), owner: "dell" };
 	const [conflict, matches] = await add(args(fields));
 	assert.equal(conflict, 409);
@@ -88,7 +88,18 @@ test("choosing a matching company gives it the account role and replays the firs
 		name: matchingName,
 		owner: "dell",
 	};
-	assert.deepEqual(await add(picked), [201, answer]);
+	const writer = new URL(writerUrl).username;
+	await db.query(`alter role ${writer} set lock_timeout = '2s'`);
+	try {
+		await db.query("begin");
+		await db.query(
+			"select pg_advisory_xact_lock(hashtextextended('national account name:' || lower($1), 0))",
+			[matchingName],
+		);
+		assert.deepEqual(await add(picked), [201, answer]);
+	} finally {
+		await db.query(`rollback; alter role ${writer} reset lock_timeout`);
+	}
 	assert.deepEqual(await add(picked), [200, { ...answer, replayed: true }]);
 	assert.equal((await boardAccount(MATCHING_COMPANY)).account_owner, "dell");
 	const companies = await db.query(

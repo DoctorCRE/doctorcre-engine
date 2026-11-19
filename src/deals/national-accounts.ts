@@ -66,9 +66,6 @@ async function accountCompany(
 		force_new,
 	}: Exclude<ReturnType<typeof parseNewAccount>, Refusal>,
 ) {
-	await sql`select pg_advisory_xact_lock(hashtextextended('national account name:' || lower(${name}), 0))`.execute(
-		tx,
-	);
 	if (company_id) {
 		const company = await tx
 			.selectFrom("party")
@@ -80,6 +77,9 @@ async function accountCompany(
 		if (!company) throw new SaveRefusal(new Refusal(404, "not_found"));
 		return company;
 	}
+	await sql`select pg_advisory_xact_lock(hashtextextended('national account name:' || lower(${name}), 0))`.execute(
+		tx,
+	);
 	if (!force_new) {
 		const candidates = await tx
 			.selectFrom("party")
