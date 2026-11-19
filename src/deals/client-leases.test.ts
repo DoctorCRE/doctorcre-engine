@@ -15,6 +15,7 @@ const signedLease = randomUUID();
 const leaseWithoutTerms = randomUUID();
 const unrelatedLease = randomUUID();
 const document = randomUUID();
+const renewalDeal = randomUUID();
 const search = "parties/search?query=EXAMPLE&role=client";
 const leases = (client: string) => `clients/${client}/leases`;
 
@@ -48,6 +49,9 @@ before(async () => {
 		insert into lease_version (lease_id, version, document_id, expiration_on)
 		values ('${signedLease}', 1, '${document}', '2030-06-01'),
 			('${signedLease}', 2, '${document}', '2031-06-01');
+		insert into deal (id, name, owner_user_id, reason, renews_lease_id, created_at) values
+			('${renewalDeal}', 'Example Later Renewal', '${partner}', 'renewal', '${signedLease}', '2026-01-01'),
+			(gen_random_uuid(), 'Example Earlier Renewal', '${partner}', 'renewal', '${signedLease}', '2025-01-01');
 		commit;`);
 });
 after(async () => {
@@ -56,7 +60,7 @@ after(async () => {
 });
 
 test("finds person and company clients by name before applying the result limit", async () => {
-	assert.deepEqual(await save(user, search, {}, "GET"), [
+	assert.partialDeepStrictEqual(await save(user, search, {}, "GET"), [
 		200,
 		{
 			ok: true,
@@ -78,11 +82,13 @@ test("lists the selected client's leases with the latest expiration and accepts 
 			lease_id: signedLease,
 			address: "10 Example Road",
 			expiration_on: "2031-06-01",
+			renewed_by: { deal_id: renewalDeal, name: "Example Later Renewal" },
 		},
 		{
 			lease_id: leaseWithoutTerms,
 			address: "10 Example Road",
 			expiration_on: null,
+			renewed_by: null,
 		},
 	]);
 	assert.deepEqual(await save(user, leases(noLeases), {}, "GET"), [200, []]);

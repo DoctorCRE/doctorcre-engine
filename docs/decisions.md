@@ -344,3 +344,5 @@
 180\. **Old deal-page events with no other home stay in imported history (2026-11-19).** The copy keys each event by its old ID and keeps its recorded facts in typed fields. The deal page reads them in recorded order with the same user or job attribution as the Timeline. The engine can read this history and only the owner can load it (#789).
 
 181\. **An existing company can become a national account (2026-11-19).** When the add form finds a matching company, the partner can choose that company. The save adds the national account role and its dated owner to the same company. A separate company with the same name requires confirmation (#790).
+
+184\. **Name matches show the party's recorded city and deal count (2026-11-19).** The copy keeps the live source party's city, trimmed, with null for a blank or missing value. Each picker counts distinct linked deals and identifies existing national accounts. The renewal picker shows the name of a deal already linked to the source lease (#797).

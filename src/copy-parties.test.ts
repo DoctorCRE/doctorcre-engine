@@ -38,6 +38,7 @@ ${oldParty(14, { deleted_at: "2026-01-05T00:00:00Z" })} ${oldParty(15, { merged_
 ${oldParty(11, {
 	kind: "org",
 	name: "Example Dental Group",
+	city: " \t ",
 	npi: NPI,
 	created_at: "2025-01-01T00:00:00Z",
 	updated_by: AUTOMATION,
@@ -69,7 +70,7 @@ ${oldParty(10, {
 	ref: "P-0010",
 	org_id: id(11),
 	title: " Office Manager ",
-	city: "Springfield",
+	city: " Springfield \t",
 	state: "IL",
 	county: "Example County",
 	contact_state_cadence: "quarterly",
@@ -191,11 +192,35 @@ test("each old id maps to the record it became, a merged-away one to where its m
 	);
 });
 
+test("the copy trims the recorded city and leaves missing or blank cities null", async () => {
+	assert.deepEqual(
+		await rows(
+			`select id, city from party where id in ('${id(10)}', '${id(11)}', '${id(16)}') order by id`,
+		),
+		[
+			{ id: id(10), city: "Springfield" },
+			{ id: id(11), city: null },
+			{ id: id(16), city: null },
+		],
+	);
+});
+
+test("the database refuses an untrimmed or blank city", async () => {
+	for (const city of [" Example", "Example\t", "", " \t "]) {
+		await rolledBack(async () => {
+			await db.query("select set_config('engine.job', 'old_system', true)");
+			await assert.rejects(
+				db.query("update party set city = $1 where id = $2", [city, id(10)]),
+				{ code: "23514", constraint: "party_city_check" },
+			);
+		});
+	}
+});
+
 test("each value it does not copy is listed, with why", async () => {
 	assert.deepEqual(await rows("select * from party_role"), []);
 	// biome-ignore format: one row per value
 	assert.deepEqual(report, [
-		[id(10), "city", "Springfield", "no place in the new database"],
 		[id(10), "contact_state", "do_not_contact", "do not contact without a reason"],
 		[id(10), "contact_state_cadence", "quarterly", "no place in the new database"],
 		[id(10), "county", "Example County", "no place in the new database"],
@@ -438,7 +463,7 @@ test("a second run copies only what is new, finds a record merged since through 
 		);
 		// biome-ignore format: one row per value
 		assert.deepEqual(again?.filter((row) => [20, 21, 22, 23, 24, 28, 29].some((n) => row[0] === id(n))), [
-			[id(20), "city", "Example City", "no place in the new database"],
+			[id(20), "city", "Example City", "its record does not hold this city"],
 			[id(20), "email", "late@example.com", "its record does not hold this value"],
 			[id(21), "npi", ` ${NPI} `, `also held by ${id(10)}`],
 			[id(22), "specialty", "Example", "its record does not hold this specialty"],
