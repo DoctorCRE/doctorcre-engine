@@ -1461,7 +1461,7 @@ Home and Invoices use `GET /api/engine/invoices` when `invoices-from-engine` is 
 
 The tracker lists each commission payment on an included deal. An undated payment has status `expected` and shows as Awaiting invoice, including when another payment on the deal has been invoiced. A dated payment shows as paid when it has a receipt date. The amount and due date come from the payment. A closed or invoiced deal with no payments has one row with a blank amount. If the copy kept an invoice date for that deal, the row shows as invoiced. Undo uses the restored phase and invoice date on the next read. Expected commission is a pipeline estimate. Home shows only unpaid rows with an explicit past due date.
 
-The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. With `invoices-from-engine` on, the app also routes Mark paid to the engine (app #958). Keep the production tracker on the old read until the production writer is available.
+The payment's `base_version` in `invoice-tracker.v1` is its latest change ID from the new database. With `invoices-from-engine` on, the app also routes Mark paid to the engine (app #958). Keep the production tracker on the old read until the production writer can save to the populated new schema.
 
 ### Mark paid
 
