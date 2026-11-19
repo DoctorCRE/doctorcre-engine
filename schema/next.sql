@@ -534,7 +534,7 @@ create index deal_party_by_party on deal_party (party_id);
 
 create table weekly_review (
 	id uuid primary key default gen_random_uuid(),
-	week_of date not null check (extract(isodow from week_of) is not distinct from 1),
+	week_of date not null check (isfinite(week_of) and extract(isodow from week_of) = 1),
 	deal_id uuid references deal,
 	party_id uuid,
 	lead_role text generated always as (case when party_id is not null then 'lead' end) stored,

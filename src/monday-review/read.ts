@@ -1,9 +1,7 @@
 import { Hono } from "hono";
-import { createMiddleware } from "hono/factory";
 import { type Expression, sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { isCalendarDate } from "../calendar-date.ts";
-import { PARTNERS } from "../clients/read.ts";
 import { isOpenBoardDeal, selectNextDeals } from "../deals/next-board.ts";
 import { ENDED_PHASES } from "../deals/shared.ts";
 import type { DB } from "../next-database.d.ts";
@@ -13,6 +11,7 @@ import type { DatabaseEnv } from "../reader.ts";
 
 export const isMonday = (day: unknown): day is string =>
 	isCalendarDate(day) &&
+	// PostgreSQL dates have no year zero.
 	!day.startsWith("0000") &&
 	new Date(`${day}T00:00:00Z`).getUTCDay() === 1;
 
@@ -38,11 +37,13 @@ export function reviewVersion(
 }
 
 function reviewItems(db: Transaction<DB>, week: string) {
-	const board = selectNextDeals(db).select([
-		"d.created_at as arrived_at",
-		"p.happened_at as phase_at",
-		"p.changed_at as phase_saved_at",
-	]);
+	const board = selectNextDeals(db)
+		.where("c.party_id", "is not", null)
+		.select([
+			"d.created_at as arrived_at",
+			"p.happened_at as phase_at",
+			"p.changed_at as phase_saved_at",
+		]);
 	const prospects = prospectQuery({
 		qualifies: sql<boolean>`p.id in (select party_id from lead_items)`,
 	});
@@ -87,7 +88,7 @@ function reviewItems(db: Transaction<DB>, week: string) {
 		select d.id as deal_id, null::uuid as party_id, d.state, d.name, d.arrived_at,
 			case when d.operating_state = 'parked' then 4 when d.arrived_at >= d.starts_at then 3 else 1 end as section,
 			array_position(array[${sql.join(boardPhases)}]::text[], d.monday_phase) as phase_order,
-			to_jsonb(d) - array['arrived_at','phase_at','phase_saved_at','starts_at','ends_at',
+			to_jsonb(d) - array['id','arrived_at','phase_at','phase_saved_at','starts_at','ends_at',
 				'monday_phase','state','ended_this_week'] as fields
 		from deal_items d cross join bounds w
 		where d.state = 'open' or ((d.monday_phase is null or d.monday_phase not in (${sql.join(ENDED_PHASES)}))
@@ -112,22 +113,15 @@ async function readReview(db: Transaction<DB>, week: string) {
 		left join weekly_review mark on mark.week_of = ${week}::date
 			and (mark.deal_id = i.deal_id or mark.party_id = i.party_id)
 		left join app_user reviewer on reviewer.id = mark.changed_by_user_id
-		order by i.section, case when i.section = 1 then i.phase_order end nulls last,
+		order by i.section, case when i.section in (1, 4) then i.phase_order end nulls last,
 			case when i.section in (2, 3) then i.arrived_at end,
-			case when i.section = 1 then i.name end, coalesce(i.deal_id, i.party_id)
+			case when i.section in (1, 4) then i.name end, coalesce(i.deal_id, i.party_id)
 	`.execute(db);
 	return { items: rows.map(({ item }) => item) };
 }
 
-export const reviewPartner = createMiddleware<DatabaseEnv>(async (c, next) => {
-	if (!PARTNERS.some((slug) => slug === c.get("partner").slug))
-		return refuse(c, new Refusal(403, "AUTHORIZATION_REFUSED"));
-	await next();
-});
-
 export const mondayReviewReads = new Hono<DatabaseEnv>().get(
 	"/weekly-reviews",
-	reviewPartner,
 	async (c): Promise<Response> => {
 		const params = new URL(c.req.url).searchParams;
 		const error = checkFields(params, ["week_of"]);

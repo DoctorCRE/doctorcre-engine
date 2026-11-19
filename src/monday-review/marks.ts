@@ -1,13 +1,15 @@
 import { Hono } from "hono";
+import { createMiddleware } from "hono/factory";
 import { sql, type Transaction } from "kysely";
-import { Refusal } from "../answer.ts";
+import { Refusal, refuse } from "../answer.ts";
+import { PARTNERS } from "../clients/read.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { fit, isChangeId, isUuid, optional } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
-import { isMonday, reviewPartner, reviewVersion } from "./read.ts";
+import { isMonday, reviewVersion } from "./read.ts";
 
 type ReviewTarget = {
 	week_of: string;
@@ -114,6 +116,12 @@ async function undo(
 	if (!removed) throw missing;
 	return removed;
 }
+
+const reviewPartner = createMiddleware<DatabaseEnv>(async (c, next) => {
+	if (!PARTNERS.some((slug) => slug === c.get("partner").slug))
+		return refuse(c, new Refusal(403, "AUTHORIZATION_REFUSED"));
+	await next();
+});
 
 export const mondayReviewMarks = new Hono<DatabaseEnv & NextSaveEnv>()
 	.post("/weekly-reviews", reviewPartner, (c) =>
