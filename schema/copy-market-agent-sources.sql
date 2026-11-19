@@ -7,21 +7,14 @@ create temp table not_copied (old_id uuid, field text, value text, reason text) 
 
 create temp table old_market_agent_source on commit drop as
 select m.*, md5('old_system:market_agent_source:' || m.deal_id)::uuid as activity_id,
- o.deal_id as mapped_deal_id, plain.source_note, dates.text as dated_note, 'Market agent source' || E'\n\n' || dates.text as summary, author.*
+ o.deal_id as mapped_deal_id, plain.source_note, copy_note_text(plain.source_note, false) as dated_note,
+ 'Market agent source' || E'\n\n' || copy_note_text(plain.source_note) as summary, author.*
 from public.deal_market_assignment m
 left join outside_id o on o.source = 'old_system' and o.value = m.deal_id::text
 cross join (values ('^\s*salesforce (opportunity|record) 006[[:alnum:]]{12}([[:alnum:]]{3})?')) reference(pattern)
 cross join lateral (select case
  when m.source ~* (reference.pattern || '(, observed \d{4}-\d\d-\d\d)?\s*$') then null
  else regexp_replace(m.source, reference.pattern || '[,;][[:blank:]]+(?=\S)', '', 'i') end as source_note) plain
-cross join lateral (
- select string_agg(case when pg_input_is_valid(day.parts[2], 'date')
-  then day.parts[1] || to_char(day.parts[2]::date, 'FMMonth FMDD, YYYY') || day.parts[3]
-  else token[1] end, '' order by position) as text
- from regexp_matches(plain.source_note, '\S+|\s+', 'g') with ordinality as tokens(token, position)
- cross join lateral (select regexp_match(token[1],
-  $re$^([(\[{"']*)(\d{4}-\d\d-\d\d)([)\]}"',;:!?]*\.?)$$re$) as parts) day
-) dates
 cross join lateral copy_event_attribution(m.set_by, (select e.id from public.event e
  where e.subject_type = 'deal' and e.subject_id = m.deal_id
  and (e.verb, coalesce(e.field, '')) in (('set-market-agent', 'market_agent'), ('create-national-market-deal', ''))

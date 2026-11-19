@@ -196,7 +196,13 @@ with candidates as (
 )
 select e.*, cleaned.payloads[1] as plain_old, cleaned.payloads[2] as plain_new,
  cleaned.bare_source, cleaned.file_path, cleaned.row_id, cleaned.placeholder_market,
- case when deal_id is null then 'deal_history_deal_not_copied'
+ case when verb = 'set-next-action' and field is null and exists (
+   select from public.next_action n where n.subject_type = 'deal' and n.subject_id = e.subject_id
+    and n.created_by = e.actor_id and n.description = e.new_value ->> 'next_action'
+    and e.occurred_at between n.created_at - interval '5 seconds' and n.created_at + interval '5 seconds'
+    and copy_automation_note_step(n.description, n.created_by)
+  ) then 'automation_note_step'
+  when deal_id is null then 'deal_history_deal_not_copied'
   when changed_by_user_id is not null and user_id is null then 'deal_history_user_not_copied'
   when not checked.valid then 'deal_history_payload_invalid'
   when field in ('salesforce_id', 'notes_path')
@@ -263,7 +269,11 @@ cross join lateral (
    when f.key = 'template' and raw.text = 'loi-lease' then to_jsonb('LOI lease'::text)
    when raw.text = origin.line then null
    when origin.line is not null then to_jsonb(nullif(ltrim(substr(raw.text, length(origin.line) + 2), E' \t\r\n'), ''))
-   else f.value end as value) plain
+   else f.value end as value) cleaned_field
+  cross join lateral (select case
+   when f.key in ('summary', 'next_action', 'next_step', 'description') and jsonb_typeof(cleaned_field.value) = 'string'
+    then to_jsonb(copy_note_text(cleaned_field.value #>> '{}'))
+   else cleaned_field.value end as value) plain
  ) side
 ) cleaned;
 
@@ -273,8 +283,10 @@ insert into listed
 select id, key, 'technical_deal_history_field' from deal_history_candidate
 cross join (values ('salesforce_id'), ('source'), ('summary')) field(key)
 where case when key = 'source' then bare_source and (refusal is null or refusal = 'technical_deal_history')
- else refusal is null and (key <> 'summary' or verb = 'import') and
-  (old_value -> key, new_value -> key) is distinct from (plain_old -> key, plain_new -> key) end;
+ when key = 'summary' then refusal is null and verb = 'import' and
+  (copy_note_text(old_value ->> key), copy_note_text(new_value ->> key))
+   is distinct from (plain_old ->> key, plain_new ->> key)
+ else refusal is null and (old_value -> key, new_value -> key) is distinct from (plain_old -> key, plain_new -> key) end;
 insert into listed
 select id, f.field, f.reason from deal_history_candidate cross join lateral (values
  ('source', 'technical_finding_path', file_path),

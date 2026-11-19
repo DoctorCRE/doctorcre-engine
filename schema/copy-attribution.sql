@@ -183,3 +183,28 @@ end;
 create or replace function copy_unspecified_market(value text) returns boolean
 language sql immutable strict
 return btrim(value) ~* '^(location #[0-9]+ [—–-] )?market unspecified$';
+
+create or replace function copy_note_text(value text, render_phases boolean default true) returns text
+language sql stable strict
+begin atomic
+ select coalesce(string_agg(case
+  when token.parts[2] ~ '^\d' and pg_input_is_valid(token.parts[2], 'date')
+   then token.parts[1] || to_char(token.parts[2]::date, 'FMMonth FMDD, YYYY') || token.parts[3]
+  when p.label is not null then token.parts[1] || p.label || token.parts[3]
+  else words.word[1] end, '' order by words.position), value)
+ from regexp_matches(value, '\S+|\s+', 'g') with ordinality as words(word, position)
+ cross join lateral (select regexp_match(words.word[1],
+  $re$^([(\[{"']*)(\d{4}-\d\d-\d\d|[a-z_]+)([)\]}"',;:!?]*\.?)$$re$) as parts) token
+ -- A phase slug that is also an ordinary word needs a standalone phase value.
+ left join public.deal_phase p on render_phases and p.slug = token.parts[2]
+  and (p.slug in ('negotiation', 'site_selection', 'due_diligence')
+   or btrim(value) = p.slug)
+ where value !~ $re$^\s*\{\s*['"]text['"]\s*:$re$;
+end;
+
+create or replace function copy_automation_note_step(value text, creator uuid) returns boolean
+language sql stable strict
+begin atomic
+ select value ~ $re$^Nothing outstanding on the agent side\. The live ball on this deal is [A-Z][a-z]+'s \(([a-f0-9]{8}, )?due \d{4}-\d\d-\d\d\)\. This row exists only because an agent-owned ball cannot be cleared by the partner surface, and it should be ignored when reading the board\.$$re$
+  and exists (select from public.actor a where a.id = creator and a.kind = 'automation');
+end;

@@ -63,7 +63,9 @@ select n.id, n.source, n.deal_id, n.vendor_id, vendor.party_id,
  case when n.source = 'capture_post_call_action' then n.item_bullets else '[]'::jsonb end as item_bullets,
  case when n.source = 'capture_post_call_action' then n.source_ref end as source_ref,
  e.resolution, e.done_at, e.resolved_at, e.resolution_reason, e.resolution_event_id,
- n.created_at, n.updated_at as changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id, e.refusal
+ n.created_at, n.updated_at as changed_at, n.changed_by_user_id, n.changed_by_job, n.changed_for_user_id,
+ case when n.source = 'next_action' and n.deal_id is not null and copy_automation_note_step(n.description, n.created_by)
+  then 'automation_note_step' else e.refusal end as refusal
 from old_action n
 cross join lateral (select case
  when n.source = 'next_action' and n.deal_id is not null and n.description like 'Nothing outstanding on the agent side.%'
@@ -122,7 +124,8 @@ where d.next_date is not null
 create temp table step_refusal on commit drop as
 select s.id, f.field, f.value, f.reason from step_candidate s cross join lateral (values
  (case when s.resolution is not null then 'status' when s.source = 'deal_note' then 'text' else 'source' end,
- case when s.resolution is not null then (select status from old_action a where a.id = s.id) when s.source = 'deal_note' then s.what else s.source end, s.refusal, s.refusal is not null),
+ case when s.refusal = 'automation_note_step' then null
+  when s.resolution is not null then (select status from old_action a where a.id = s.id) when s.source = 'deal_note' then s.what else s.source end, s.refusal, s.refusal is not null),
  ('what', s.what, 'blank_next_step', s.what !~ '\S'),
  ('deal_id', s.deal_id::text, 'deal_not_copied', s.deal_id is not null and not exists (select from deal d where d.id = s.deal_id)),
  ('vendor_id', s.vendor_id::text, 'vendor_not_copied', s.vendor_id is not null and s.party_id is null),
@@ -160,7 +163,7 @@ with ready as (
 insert into next_step (id, deal_id, party_id, what, due_on, hold_until, owner_party_id, item_title, item_bullets, source_ref, resolution, done_at, resolved_at,
  resolution_reason, resolution_event_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
  call_activity_id, call_evidence_quote, call_contact_party_id)
-select s.id, deal_id, party_id, what, due_on, hold_until, owner, item_title, item_bullets, source_ref,
+select s.id, deal_id, party_id, copy_note_text(what), due_on, hold_until, owner, item_title, item_bullets, source_ref,
  case when replaced then 'cancelled' else resolution end, done_at, resolved_at,
  case when replaced then 'replaced at the move' else resolution_reason end, resolution_event_id,
  created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id,
@@ -177,7 +180,7 @@ insert into not_copied
 select n.id, 'text', null,
  case when n.description ~ '^\s*\{' then 'serialized_next_step' else 'technical_step_code' end
 from old_action n join step_candidate s using (id) join next_step copied using (id)
-where copied.what = s.what and s.what <> regexp_replace(n.description, '^\s+|\s+$', '', 'g');
+where copied.what = copy_note_text(s.what) and s.what <> regexp_replace(n.description, '^\s+|\s+$', '', 'g');
 
 insert into not_copied
 select s.id, 'next_step', kept.id::text, 'open_step_exists'

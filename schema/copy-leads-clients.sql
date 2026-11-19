@@ -259,7 +259,7 @@ from ready_relationship r cross join lateral (values ('notes', fields ->> 'notes
  ('source_detail', case when kind = 'lead' and nullif(btrim(fields ->> 'source_detail'), '') is distinct from how_found_detail then fields ->> 'source_detail' end)) n(field, text)
 where n.text ~ '\S';
 insert into activity (id, kind, happened_at, summary, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
-select activity_id, 'note', updated_at, text, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
+select activity_id, 'note', updated_at, copy_note_text(text), updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
 from relationship_note on conflict do nothing;
 insert into activity_about (activity_id, party_id, created_at, changed_at, changed_by_user_id, changed_by_job, changed_for_user_id)
 select activity_id, mapped_id, updated_at, updated_at, changed_by_user_id, changed_by_job, changed_for_user_id
@@ -280,7 +280,7 @@ where r.owner_refusal is not null;
 -- Today's lead export shows next_action rows; lead.next_action_date is only a fallback for a lead without any.
 -- Actions of records copied earlier are retried, so a corrected or newer action still arrives.
 create temp table old_next_action on commit drop as
-select n.id, n.subject_type, n.status, nullif(regexp_replace(n.description, '^\s+|\s+$', '', 'g'), '') as what, n.description, n.due_on, n.hold_until, n.source_ref,
+select n.id, n.subject_type, n.status, copy_note_text(nullif(regexp_replace(n.description, '^\s+|\s+$', '', 'g'), '')) as what, n.description, n.due_on, n.hold_until, n.source_ref,
  n.owner_id, coalesce(u.id, c.owner_user_id, lead.owner_user_id) as owner, u.id is null as owner_inferred, n.created_at, n.updated_at, r.mapped_id, a.*,
  e.resolution, e.proven, e.done_at, e.resolved_at, e.resolution_reason, e.resolution_event_id, e.refusal,
  exists (select from outside_id copied where copied.source = 'old_system' and copied.value = r.id::text) as copied

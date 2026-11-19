@@ -70,7 +70,8 @@ before(async () => {
  insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Example active', true, 1);
  insert into public.vendor (id, party_id, category, created_by, updated_by) values ('${id(23)}', '${id(10)}', 'lender', '${id(1)}', '${id(1)}');
  insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Example lease', 1);
- insert into public.deal_phase (slug, label) values ('loi', 'Example LOI');
+ insert into public.deal_phase (slug, label) values ('loi', 'Example LOI'), ('negotiation', 'Negotiation'),
+  ('due_diligence', 'Due Diligence'), ('pending', 'Pending');
  insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
   select v, '${id(20)}', 'Example Deal', 'lease', 'loi', 'partner_one', '${id(1)}', '${id(1)}' from unnest(array['${id(30)}', '${id(31)}']::uuid[]) v;
  insert into deal (id, name, owner_user_id) values ('${id(30)}', 'Example Deal', '${id(1)}');
@@ -124,7 +125,7 @@ before(async () => {
  insert into public.event (actor_id, verb, subject_type, subject_id, new_value, cause, occurred_at, sponsoring_human_slug)
   values ('${id(2)}', 'log-activity', 'party', '${id(13)}', '{"activity": "${id(42)}"}', 'automation_job', '2024-01-06', 'partner_one');
  insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
-  ('${id(50)}', '${id(30)}', 'note', 'Example deal note', '${id(1)}', '2024-05-01'),
+  ('${id(50)}', '${id(30)}', 'note', '2024-04-09 phase moved negotiation to due_diligence. Still pending. Keep due_diligence.pdf, 2024-04-09.txt and 2024-02-31.', '${id(1)}', '2024-05-01'),
   ('${id(51)}', '${id(30)}', 'next_step', 'Example next step', '${id(1)}', '2024-05-02'),
   ('${id(52)}', '${id(30)}', 'note', 'Example agent note', '${id(2)}', '2024-05-03'),
   ('${id(53)}', '${id(30)}', 'note', 'Example unsigned note', '${id(2)}', '2024-05-04');
@@ -218,7 +219,7 @@ test("copies calls, meetings, tours and notes, and other kinds as notes that kee
 				id(50),
 				"note",
 				"2024-05-01 00:00:00+00",
-				"Example deal note",
+				"April 9, 2024 phase moved Negotiation to Due Diligence. Still pending. Keep due_diligence.pdf, 2024-04-09.txt and 2024-02-31.",
 				id(1),
 				null,
 				null,

@@ -156,6 +156,7 @@ test("deal history keeps business text on each side of an event", async () => {
 		["update-deal", "notes_path", null, { notes_path: "/example/deal.md" }, null, null, "technical_deal_history"],
 		["set-next-action", "next_date", { next_date: null }, { next_date: null }, null, null, "empty_deal_history"],
 		["set-next-action", "next_date", { next_date: "2025-02-01" }, { next_date: null }, { next_date: "2025-02-01" }, { next_date: null }, null],
+		["set-next-action", null, null, { next_action: "Send terms (2025-02-01)." }, null, { next_action: "Send terms (February 1, 2025)." }, null],
 	] as const;
 	const expectedHistory = [];
 	const expectedReport = [];
