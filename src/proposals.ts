@@ -347,13 +347,12 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						status: p.status,
 						decided_by: p.decided_by_user_id,
 					});
+				const accepts = r.decision === "accept";
 				const filing = ["file_to_deal", "possible_new_deal"].includes(p.kind);
-				const dismissEmailLead =
-					r.decision === "dismiss" && p.kind === "email_lead";
 				if (
 					(r.edits && p.kind !== "next_step") ||
 					(r.deal_id && !filing) ||
-					(r.reason && !filing && !dismissEmailLead)
+					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
 				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
@@ -387,7 +386,6 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					await dealNow(tx, filingDeal);
 				}
 
-				const accepts = r.decision === "accept";
 				const { owner_party_id: editedOwner, ...stepEdits } = r.edits ?? {};
 				const ownerEdit = isUuid(editedOwner) ? editedOwner : undefined;
 				const owner = ownerEdit ?? p.owner_party_id;
@@ -399,7 +397,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					}>`update proposal
    set status = ${accepts ? "accepted" : "dismissed"}, filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
     filing_reason = ${accepts ? (r.reason ?? null) : null},
-    dismiss_reason = ${dismissEmailLead ? (r.reason ?? null) : null} where id = ${p.id}::uuid
+    dismiss_reason = ${accepts ? null : (r.reason?.trim() ?? null)} where id = ${p.id}::uuid
    returning status, decided_at::text, filed_deal_id`.execute(tx);
 				const { rows } =
 					accepts && p.kind === "next_step"

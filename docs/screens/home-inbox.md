@@ -25,7 +25,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Every live card hidden before Hide went is back in the inbox. Of the 11 old hidden marks, 5 come back as inbox cards, and the other 6 have no live card (one cancelled step and five notifications with no copied card) (coordinator, 2026-11-19).
 - [ ] Every card kind has Drop beside Snooze. Drop asks for a reason, and the card leaves. Steps, call follow-ups, updates, reply drafts, suggestions and tour feedback offer the same actions. A lease fact is the one exception: its Reject asks a reason and finishes the card, and it has no separate Drop (coordinator, 2026-11-19).
 
-When app routing moves to the new database, Home uses door 24 for `snooze` and `unsnooze` (wake and Undo) on steps, call follow-ups, updates, suggestions and reply drafts. Door 24 has no `settle` or `unsettle`, and the Home read has no settled shelf. Door 18 handles Mark done and reopening the step. Door 21 handles suggestion decisions, including completion reviews (see `docs/new-database.md`).
+When app routing moves to the new database, Home uses door 24 for `snooze` and `unsnooze` (wake and Undo) on steps, call follow-ups, updates, suggestions and reply drafts, `drop` with a nonblank reason on call follow-ups, updates and tour feedback, and `done` and `undo_done` on tour feedback. Door 24 has no `settle` or `unsettle`, and the Home read has no settled shelf and advertises `home_mark_drop: true` and `home_proposal_drop: true`. Door 18 handles Mark done, reopening and cancelling steps with a reason. Door 21 handles suggestion decisions, including completion reviews and reason-bearing dismissal for every suggestion kind (see `docs/new-database.md`).
 
 ## Inbox sections
 
@@ -165,7 +165,7 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs, marks and sent draft history. Opening the email and deciding a suggestion from Home still need app routing.
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
 - Home still offers Hide from inbox, the Hidden from inbox list and the selection bar's Settle selected.
-- No card has Drop with a reason. Steps, call follow-ups, updates and tour feedback have no way to drop; a suggestion has Dismiss with no reason, and a reply draft has "Decline draft" (code).
+- No card has Drop with a reason on the live CARR-backed screen. The engine now supplies reasoned Drop for every Home card kind (doors 18, 21, 22 and 24) and tour feedback Done/Undo (door 24); app routing still waits.
 - The inbox's past-due section is titled "Overdue" (code).
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
 - The Today panel calls a past-due reminder "overdue". The deal's next step uses "late" (app code).

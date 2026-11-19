@@ -1361,12 +1361,16 @@ create table home_update (
 	id uuid primary key default gen_random_uuid(),
 	user_id uuid not null references app_user,
 	deal_id uuid not null references deal,
+	kind text not null default 'update' check (kind in ('update', 'tour_feedback')),
 	what text not null check (what ~ '\S'),
 	checklist_item_ref text check (checklist_item_ref ~ '\S'),
 	due_on date,
+	property_id uuid references property,
 	created_at timestamptz not null default now(),
 	read_at timestamptz check (read_at >= created_at),
-	constraint home_update_checklist_due_date check ((checklist_item_ref is null) = (due_on is null)),
+	constraint home_update_checklist_due_date check ((checklist_item_ref is null) = (due_on is null)
+		and (kind = 'update' or checklist_item_ref is null)),
+	constraint home_update_property_kind check (property_id is null or kind = 'tour_feedback'),
 	unique (user_id, deal_id, checklist_item_ref, due_on),
 	unique (id, user_id)
 );
@@ -1387,17 +1391,31 @@ create table home_mark (
 			when proposal_id is not null then 'proposal'
 			when reply_draft_id is not null then 'reply_draft' end) stored,
 	created_at timestamptz not null default now(),
-	disposition text check (disposition = 'snoozed'),
+	disposition text check (disposition in ('snoozed', 'dropped')),
 	snoozed_until timestamptz,
+	drop_reason text check (drop_reason ~ '\S'),
 	waiting_on_party_id uuid references party,
 	waiting_reason text check (waiting_reason ~ '\S'),
 	primary key (user_id, item_kind, item_id),
 	foreign key (home_update_id, user_id) references home_update (id, user_id),
 	constraint home_mark_one_item check (num_nonnulls(next_step_id, call_follow_up_id, home_update_id, proposal_id, reply_draft_id) = 1),
 	constraint home_mark_snoozed_until check ((disposition is not distinct from 'snoozed') = (snoozed_until is not null)),
+	constraint home_mark_drop_reason check ((disposition is not distinct from 'dropped') = (drop_reason is not null)
+		and (disposition is distinct from 'dropped' or waiting_on_party_id is null)),
+	constraint home_mark_drop_kind check (disposition is distinct from 'dropped' or item_kind in ('call_follow_up', 'home_update')),
 	constraint home_mark_waiting_has_a_reason check ((waiting_on_party_id is null) = (waiting_reason is null)),
 	constraint home_mark_marks_something check (disposition is not null or waiting_on_party_id is not null)
 );
+
+create function home_mark_dropped_final() returns trigger
+language plpgsql as $$
+begin
+	raise exception 'a dropped Home item stays dropped'
+		using errcode = 'check_violation', constraint = 'home_mark_dropped_final';
+end $$;
+
+create trigger home_mark_dropped_final before update or delete on home_mark
+	for each row when (old.disposition = 'dropped') execute function home_mark_dropped_final();
 
 -- Suggestions from mail, calls and meetings share one decision queue, including weak lead moves.
 create table proposal (
@@ -1449,7 +1467,7 @@ create table proposal (
 	filing_reason text check (filing_reason ~ '\S'),
 	dismiss_reason text check (dismiss_reason ~ '\S'),
 	constraint proposal_filing_decision check ((filed_deal_id is null and filing_reason is null) or (status = 'accepted' and kind in ('file_to_deal', 'possible_new_deal'))),
-	constraint proposal_dismiss_reason check (dismiss_reason is null or (status = 'dismissed' and kind = 'email_lead')),
+	constraint proposal_dismiss_reason check (dismiss_reason is null or status = 'dismissed'),
 	constraint proposal_decision_whole check (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
 		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
@@ -3684,7 +3702,8 @@ grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
 grant update (what, owner_party_id, due_on, hold_until, item_bullets, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
-grant update (disposition, snoozed_until, waiting_on_party_id, waiting_reason) on home_mark to engine;
+grant update (disposition, snoozed_until, drop_reason, waiting_on_party_id, waiting_reason) on home_mark to engine;
+grant update (read_at) on home_update to engine;
 -- Only the owner's import supplies the old event that closed a step.
 revoke insert on next_step from engine;
 grant insert (id, created_at, what, owner_party_id, due_on, hold_until, item_title, item_bullets, source_ref,

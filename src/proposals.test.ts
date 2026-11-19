@@ -803,3 +803,99 @@ test("the queue follows Outlook conversations and falls back to subject for mail
 	assert.deepEqual(people(prior.recipients), [outside, clinic]);
 	assert.deepEqual(subject.recipients, []);
 });
+
+test("dismissing any proposal kind persists a nonblank reason and refuses a blank one", async () => {
+	const [call, step, leadParty, freshEmail] = [id(60), id(61), id(62), id(63)];
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${leadParty}', 'person', 'Dismiss Example');
+		insert into activity (id, kind, happened_at) values
+			('${call}', 'call', now() - interval '1 hour'),
+			('${freshEmail}', 'email', now() - interval '1 hour');
+		insert into email (activity_id, message_id, sender, subject, body)
+			values ('${freshEmail}', 'dismiss-test@example.test', 'clinic@example.test', 'Dismiss test', 'Example');
+		insert into activity_about (activity_id, deal_id) values ('${call}', '${DEAL}');
+		insert into activity_about (activity_id, party_id) values ('${call}', '${leadParty}'), ('${freshEmail}', '${CLIENT}');
+		insert into next_step (id, deal_id, owner_party_id, what, due_on)
+			values ('${step}', '${DEAL}', '${USER}', 'Overdue step for dismiss test', '2001-01-01');
+		commit;`);
+	const specs: object[] = [
+		{
+			kind: "next_step",
+			activity_id: freshEmail,
+			deal_id: DEAL,
+			what: "Dismissed next step",
+		},
+		{
+			kind: "next_step_done",
+			deal_id: DEAL,
+			next_step_id: step,
+			activity_id: call,
+			evidence: "Done.",
+		},
+		{
+			kind: "phase_move",
+			deal_id: DEAL,
+			activity_id: call,
+			to: "legal",
+			evidence: "Lease in legal.",
+		},
+		{
+			kind: "new_lead",
+			activity_id: call,
+			party_id: leadParty,
+			how_found: "inbound",
+		},
+		{
+			kind: "lead_stage_move",
+			activity_id: freshEmail,
+			party_id: CLIENT,
+			from_stage: "qualified",
+			to_stage: "new",
+			strength: "weak",
+		},
+		{ kind: "file_to_deal", activity_id: freshEmail, deal_id: DEAL },
+		{ kind: "possible_new_deal", activity_id: freshEmail },
+		{
+			kind: "log_call",
+			activity_id: call,
+			deal_id: DEAL,
+			what: "Spoke briefly about timing",
+		},
+	];
+	const proposals = [
+		(await suggestSender(emailLead("dismiss-reason@example.test")))[1]
+			.proposal_id,
+		...(await Promise.all(
+			specs.map(async (spec) => (await propose(spec))[1].proposal_id),
+		)),
+	];
+	assert.equal(
+		(await decide(proposals[1], { decision: "dismiss", reason: "   " }))[0],
+		400,
+	);
+	assert.equal(
+		(
+			await decide(proposals[1], { decision: "accept", reason: "Not a filing" })
+		)[0],
+		422,
+	);
+	for (const [index, proposalId] of proposals.entries()) {
+		const reason = `Dropped reason ${index}`;
+		const [status, result] = await decide(proposalId, {
+			decision: "dismiss",
+			reason: `  ${reason}  `,
+		});
+		assert.equal(status, 200, `${index}: ${JSON.stringify(result)}`);
+		const {
+			rows: [saved],
+		} = await db.query(
+			"select status, dismiss_reason, filing_reason from proposal where id = $1",
+			[proposalId],
+		);
+		assert.deepEqual(saved, {
+			status: "dismissed",
+			dismiss_reason: reason,
+			filing_reason: null,
+		});
+	}
+});

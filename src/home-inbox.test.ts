@@ -110,6 +110,8 @@ async function inbox(caller = user) {
 	assert.partialDeepStrictEqual(result, {
 		ok: true,
 		schema_version: "home-inbox.v5",
+		home_mark_drop: true,
+		home_proposal_drop: true,
 		truncated: false,
 	});
 	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);

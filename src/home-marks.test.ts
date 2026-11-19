@@ -178,6 +178,7 @@ test("a crossed save fails and unsnooze clears a lone snooze mark", async () => 
 
 test("refuses settle, unsettle, unknown cards, past snoozes and waiting without a reason", async () => {
 	const { item_id, base_version } = await fixture("notification");
+	const step = await fixture("next_action");
 	for (const [action, fields, expected] of [
 		["settle", {}, 400],
 		["unsettle", {}, 400],
@@ -186,6 +187,20 @@ test("refuses settle, unsettle, unknown cards, past snoozes and waiting without 
 		["unsnooze", { item_id: `notification:${randomUUID()}` }, 404],
 		["snooze", { until: "2001-01-01T06:00:00Z" }, 422],
 		["set-waiting", { target: waiting.target }, 400],
+		["drop", {}, 400],
+		["drop", { reason: "   " }, 400],
+		[
+			"drop",
+			{
+				item_id: step.item_id,
+				base_version: step.base_version,
+				reason: "Not allowed on step",
+			},
+			400,
+		],
+		["done", {}, 422],
+		["undo_done", {}, 422],
+		["done", { item_id: step.item_id, base_version: step.base_version }, 400],
 	] as const) {
 		const [status] = await command(
 			{ item_id, base_version, ...fields },
@@ -193,4 +208,129 @@ test("refuses settle, unsettle, unknown cards, past snoozes and waiting without 
 		);
 		assert.equal(status, expected, action);
 	}
+});
+
+async function tourFixture(what: string, address: string) {
+	const [deal, property, id] = [randomUUID(), randomUUID(), randomUUID()];
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Tour Deal ' || '${deal}', '${owner}');
+		insert into property (id, address) values ('${property}', '${address}');
+		insert into home_update (id, user_id, deal_id, kind, what, property_id)
+			values ('${id}', '${owner}', '${deal}', 'tour_feedback', '${what}', '${property}');
+		commit;`);
+	const {
+		rows: [src],
+	} = await db.query(
+		"select max(id) as id from change where table_name = 'home_update' and record = $1",
+		[{ id }],
+	);
+	return {
+		id,
+		deal,
+		property,
+		item_id: `notification:${id}`,
+		base_version: `${src.id}:0:inbox`,
+	};
+}
+
+test("drops call follow-ups, updates and tour feedback with a reason for good", async () => {
+	const targets = [
+		await fixture("capture_post_call_action"),
+		await fixture("notification"),
+		await tourFixture(
+			"Example Dental commented on 100 Example Street",
+			"100 Example Street",
+		),
+	];
+	for (const target of targets) {
+		const [snoozed, mark] = await command(
+			{ item_id: target.item_id, base_version: target.base_version, until },
+			"snooze",
+		);
+		assert.equal(snoozed, 200);
+		const dropReq = {
+			idempotency_key: randomUUID(),
+			item_id: target.item_id,
+			base_version: mark.base_version,
+			action: "drop",
+			reason: "  No longer relevant  ",
+		};
+		assert.deepEqual(await save(alex, path, dropReq), [
+			200,
+			{ ok: true, item_id: target.item_id },
+		]);
+		assert.deepEqual(await save(alex, path, dropReq), [
+			200,
+			{ ok: true, item_id: target.item_id, replayed: true },
+		]);
+		assert.equal(await cardVersion(target.item_id), undefined);
+		const {
+			rows: [saved],
+		} = await db.query(
+			`select m.disposition, m.snoozed_until, m.drop_reason, m.changed_by_user_id,
+				(select new_value ->> 'drop_reason' from change
+					where table_name = 'home_mark' and record ->> 'item_id' = $1::text order by id desc limit 1) as history_reason
+			from home_mark m where m.item_id = $1::uuid`,
+			[target.id],
+		);
+		assert.deepEqual(saved, {
+			disposition: "dropped",
+			snoozed_until: null,
+			drop_reason: "No longer relevant",
+			changed_by_user_id: owner,
+			history_reason: "No longer relevant",
+		});
+		assert.equal(
+			(
+				await command(
+					{ item_id: target.item_id, base_version: mark.base_version },
+					"unsnooze",
+				)
+			)[0],
+			404,
+		);
+	}
+});
+
+test("tour feedback appears on Home and supports Done and Undo through door 24", async () => {
+	const { deal, property, item_id } = await tourFixture(
+		"Example Dental added 200 Example Street to the shortlist",
+		"200 Example Street",
+	);
+	const readCard = async () => {
+		const res = await request(
+			alex,
+			"home/inbox",
+			{ method: "GET" },
+			{ HOME_INBOX_READ_SCHEMA: "next" },
+		);
+		const body: { items: Record<string, unknown>[] } = await res.json();
+		return body.items.find((item) => item.item_id === item_id);
+	};
+	const card = await readCard();
+	assert.partialDeepStrictEqual(card, {
+		item_id,
+		kind: "tour_feedback",
+		kind_label: "Tour feedback",
+		open_url: `/deals?deal=${deal}&property=${property}`,
+		property_id: property,
+	});
+	const [doneStatus, done] = await command(
+		{ item_id, base_version: card?.base_version },
+		"done",
+	);
+	assert.equal(doneStatus, 200, JSON.stringify(done));
+	assert.match(String(done.base_version), /:0:done$/);
+	assert.equal(await readCard(), undefined);
+	assert.equal(
+		(await command({ item_id, base_version: card?.base_version }, "done"))[0],
+		409,
+	);
+	const [undoneStatus, undone] = await command(
+		{ item_id, base_version: done.base_version },
+		"undo_done",
+	);
+	assert.equal(undoneStatus, 200, JSON.stringify(undone));
+	assert.match(String(undone.base_version), /:0:inbox$/);
+	assert.equal((await readCard())?.base_version, undone.base_version);
 });
