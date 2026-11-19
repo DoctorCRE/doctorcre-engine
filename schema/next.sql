@@ -3189,6 +3189,68 @@ create index imported_change_record on imported_change (table_name, record);
 create trigger stamp_imported_change before insert on imported_change
  for each row execute function stamp_change();
 
+create type imported_deal_attachments as (pdf uuid, working uuid);
+
+create type imported_deal_values as (
+ account_client_id uuid, activity uuid, activity_id uuid, agent_name text, assignee text,
+ attachments imported_deal_attachments, basis text, building uuid, building_created boolean,
+ client text, client_name text, client_portal_url text, client_ref text,
+ closed_on date, deal_type text, decision_event_id uuid, decision_id uuid, description text,
+ document_id uuid, dropped_post_call_action_ids uuid[], due date, due_on date, expires_on date,
+ filled integer, found boolean, invoiced_on date, kind text, lane text, lead text, market text,
+ market_agent text, matched_on text, name text, next_action text, next_action_id uuid, next_date date,
+ next_step text, notes_path text, outcome text, owed integer, owner text, owner_id uuid,
+ ownership integer, party_ref text, phase text, premises uuid, proposal_id uuid,
+ proposes_correction text, rate numeric, reason text, round integer,
+ salesforce_id text, set_by text, side text, source text, spaces integer, status text,
+ summary text, template text, version integer
+);
+
+create table imported_deal_history (
+ id uuid primary key,
+ deal_id uuid not null references deal,
+ occurred_at timestamptz not null,
+ recorded_at timestamptz not null,
+ source_actor_id uuid not null,
+ source_deal_id uuid not null,
+ changed_by_user_id uuid references app_user,
+ changed_by_job text references job,
+ verb text not null check (verb ~ '\S'),
+ field text,
+ old_value imported_deal_values,
+ new_value imported_deal_values,
+ old_keys text[],
+ new_keys text[],
+ cause text not null,
+ human_quote text,
+ agent_rationale text,
+ idempotency_key text,
+ via text,
+ client_id text,
+ sponsoring_human_slug text,
+ personal_scope text,
+ authorization_class text,
+ organization_tenant_id text,
+ correlation_id uuid,
+ mutation_order bigint not null,
+ check (num_nonnulls(changed_by_user_id, changed_by_job) = 1),
+ check ((old_keys is not null) = (old_value is distinct from null)),
+ check ((new_keys is not null) = (new_value is distinct from null))
+);
+create index imported_deal_history_order on imported_deal_history (deal_id, recorded_at, id);
+
+create view deal_imported_history with (security_invoker = true) as
+ select h.deal_id, jsonb_agg(jsonb_build_object(
+  'id', h.id, 'occurred_at', h.occurred_at, 'recorded_at', h.recorded_at,
+  'actor', coalesce(u.slug, h.changed_by_job), 'verb', h.verb, 'field', h.field, 'imported', true,
+  'old_value', (select coalesce(jsonb_object_agg(k, to_jsonb(h.old_value) -> k), '{}'::jsonb)
+   from unnest(h.old_keys) k having h.old_keys is not null),
+  'new_value', (select coalesce(jsonb_object_agg(k, to_jsonb(h.new_value) -> k), '{}'::jsonb)
+   from unnest(h.new_keys) k having h.new_keys is not null)
+ ) order by h.recorded_at, h.id) as events
+ from imported_deal_history h left join app_user u on u.id = h.changed_by_user_id
+ group by h.deal_id;
+
 -- A save's answer under its key, so a retry gets the same answer instead of saving twice.
 -- The hash covers who saved and what, so a key reused for another save is refused.
 create table save_receipt (
@@ -3271,6 +3333,7 @@ begin atomic
 			where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id)
 				or c.table_name = 'deal_party' and (c.record ->> 'deal_id')::uuid = d.id
 		),
+		'imported_deal_history', coalesce((select events from deal_imported_history h where h.deal_id = d.id), '[]'),
 		'imported_history', (
 			select coalesce(jsonb_agg(to_jsonb(c) order by c.changed_at, c.id), '[]')
 			from imported_change c
@@ -3418,8 +3481,8 @@ begin atomic
 end;
 
 -- The engine's role. A login takes it with "grant engine to <login>"; the owner's own login is not the engine's concern.
--- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
--- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change, imported_change, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board) is never removed.
+-- It reads everywhere, adds everywhere but app_user, job, merged_party, change, imported_change, imported_deal_history, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board, platform_metric, platform_format and relationship_level, never empties a table, and changes or removes only what the grants below name.
+-- History (document, document_extraction, lease, lease_version, lease_option, critical_date, deal_phase_change, offer, offer_document, offer_claim, post and its text, media and reviews, measurement, social_sign_in, outside_id, change, imported_change, imported_deal_history, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board) is never removed.
 do $$ declare role_name text; begin
 	foreach role_name in array array['engine', 'engine_reader'] loop
 		begin
@@ -3447,7 +3510,7 @@ revoke insert on app_user, job from engine;
 -- Only a merge leaves a pointer.
 revoke insert on merged_party from engine;
 -- Only a change to a row writes history, so the engine never adds, rewrites or removes it.
-revoke insert on change, imported_change from engine;
+revoke insert on change, imported_change, imported_deal_history from engine;
 -- Only the owner's copy adds the old system's earlier people, owners and board facts.
 revoke insert on imported_automatic_phase_move, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board from engine;
 -- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
