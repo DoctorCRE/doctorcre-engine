@@ -24,7 +24,8 @@ const HINTS = {
 	already_sent: "This draft already has a sent message.",
 	unauthenticated: "The authenticated actor could not be resolved.",
 	account_name_exists:
-		"Confirm a separate company or choose an existing account.",
+		"Choose an existing company or confirm a separate company.",
+	already_national_account: "This company is already a national account.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
 	not_a_prospect: "This person or company is outside the Prospects lane.",
 	not_found: "The requested record was not found.",
