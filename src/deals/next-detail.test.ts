@@ -1132,25 +1132,32 @@ test("copied next-step events link only the note named by their save receipt", a
 	const repeated = id(874);
 	const missing = id(875);
 	const reusedKey = id(876);
+	const plannedNote = id(877);
+	const plannedEvent = id(878);
 	const text = "Example request the floor plan";
 	await db.query(`
 		insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by) values
 		 ('${deal}', '${id(20)}', 'Example timeline deal', 'lease', 'touring', 'partner_one', ${by});
 		insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
 		 ('${note}', '${deal}', 'next_step', '${text}', '${id(1)}', now() - interval '2 days' + interval '1 second'),
-		 ('${unpaired}', '${deal}', 'next_step', '${text}', '${id(1)}', now() - interval '1 day' + interval '1 second');
+		 ('${unpaired}', '${deal}', 'next_step', '${text}', '${id(1)}', now() - interval '1 day' + interval '1 second'),
+		 ('${plannedNote}', '${deal}', 'next_step', '${text}', '${id(1)}', now() - interval '3 days' + interval '1 second');
 		insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause, idempotency_key) values
 		 ('${event}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}","next_date":"2025-08-08"}',
 		  now() - interval '2 days', now() - interval '2 days' + interval '2 seconds', '${id(1)}', 'set-next-step', 'human_stated', 'example-next-step'),
 		 ('${repeated}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}"}',
 		  now() - interval '1 day', now() - interval '1 day' + interval '2 seconds', '${id(1)}', 'set-next-step', 'human_stated', 'example-missing-note'),
 		 ('${reusedKey}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}"}',
-		  now() - interval '40 days', now() - interval '40 days', '${id(1)}', 'set-next-step', 'human_stated', 'example-next-step');
+		  now() - interval '40 days', now() - interval '40 days', '${id(1)}', 'set-next-step', 'human_stated', 'example-next-step'),
+		 ('${plannedEvent}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}"}',
+		  now() - interval '3 days', now() - interval '3 days' + interval '2 seconds', '${id(1)}', 'set-next-step', 'human_stated', 'example-note-with-step');
 		insert into public.tool_call (idempotency_key, verb, actor_id, request_hash, response, created_at) values
 		 ('example-next-step', 'set-next-step', '${id(1)}', 'example',
 		  '{"ok":true,"deal_id":"${deal}","next_step_id":"${note}"}', now() - interval '2 days'),
 		 ('example-missing-note', 'set-next-step', '${id(1)}', 'example',
-		  '{"ok":true,"deal_id":"${deal}","next_step_id":"${missing}"}', now() - interval '1 day');
+		  '{"ok":true,"deal_id":"${deal}","next_step_id":"${missing}"}', now() - interval '1 day'),
+		 ('example-note-with-step', 'add-deal-note', '${id(1)}', 'example',
+		  '{"ok":true,"deal_id":"${deal}","next_step_id":"${plannedNote}"}', now() - interval '3 days');
 	`);
 	for (const file of [
 		"copy-deals.sql",
@@ -1171,22 +1178,27 @@ test("copied next-step events link only the note named by their save receipt", a
 	assert.ok("thread" in before);
 	assert.deepEqual(
 		before.thread.map((entry) => entry.id),
-		[unpaired, note],
+		[unpaired, note, plannedNote],
 	);
 	assert.deepEqual(
 		before.imported_deal_history.map((entry) => entry.id),
-		[reusedKey, event, repeated],
+		[reusedKey, plannedEvent, event, repeated],
 	);
+	const linkedNotes = new Map([
+		[event, note],
+		[plannedEvent, plannedNote],
+	]);
 	const withLink = {
 		...before,
-		imported_deal_history: before.imported_deal_history.map((entry) =>
-			entry.id === event ? { ...entry, activity_id: note } : entry,
-		),
+		imported_deal_history: before.imported_deal_history.map((entry) => {
+			const activity_id = linkedNotes.get(entry.id);
+			return activity_id ? { ...entry, activity_id } : entry;
+		}),
 	};
 	await t.test(
-		"the copy keeps the proven link and both unmatched events",
+		"the copy keeps proven links and leaves unmatched events unlinked",
 		async () => {
-			assert.deepEqual(await linkNotes(), [{ links_added: "1" }]);
+			assert.deepEqual(await linkNotes(), [{ links_added: "2" }]);
 			assert.deepEqual(await read(), withLink);
 		},
 	);
@@ -1216,7 +1228,7 @@ test("copied next-step events link only the note named by their save receipt", a
 				await db.query(delta);
 				await db.query("begin");
 				try {
-					assert.deepEqual(await linkNotes(), [{ links_added: "1" }]);
+					assert.deepEqual(await linkNotes(), [{ links_added: "2" }]);
 					await reader.query(
 						"begin; lock table next.imported_deal_history in access share mode nowait",
 					);

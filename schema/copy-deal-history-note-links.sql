@@ -4,7 +4,7 @@ with proven as (
   e.new_value ->> 'next_step' as next_step, n.id as note_id, count(*) over (partition by n.id) as claims
  from public.event e
  join public.tool_call t on t.idempotency_key = e.idempotency_key and t.actor_id = e.actor_id
-  and t.verb = e.verb and t.response ->> 'deal_id' = e.subject_id::text
+  and t.verb in ('set-next-step', 'add-deal-note') and t.response ->> 'deal_id' = e.subject_id::text
   -- The event and receipt share a transaction timestamp, even if the retry key is later reused.
   and t.created_at = e.occurred_at
  join public.deal_note n on n.id = case when pg_input_is_valid(t.response ->> 'next_step_id', 'uuid')

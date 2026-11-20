@@ -322,16 +322,16 @@ const runAll = async () => {
 		);
 		await db.query(input);
 		const result = await db.query(scripts[i] ?? "");
-		assert.ok(Array.isArray(result));
 		await db.query("commit");
+		if (file === "copy-deal-history-note-links.sql") {
+			assert.deepEqual(result.rows, [{ links_added: "0" }]);
+			continue;
+		}
+		assert.ok(Array.isArray(result));
 		if (file === "copy-home-updates.sql") {
 			assert.deepEqual(result.at(-2)?.rows, [
 				{ kind: "old_work_alert", left_behind: "1" },
 			]);
-		}
-		if (file === "copy-deal-history-note-links.sql") {
-			assert.deepEqual(result.at(-1)?.rows, [{ links_added: "0" }]);
-			continue;
 		}
 		listed.set(file, result.at(-1)?.rows.map(Object.values) ?? []);
 	}
