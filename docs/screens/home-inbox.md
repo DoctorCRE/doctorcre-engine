@@ -168,9 +168,8 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - No card has Drop with a reason on the live CARR-backed screen. The engine now supplies reasoned Drop for every Home card kind (doors 18, 21, 22 and 24) and tour feedback Done/Undo (door 24); app routing still waits.
 - The inbox's past-due section is titled "Overdue" (code).
 - One overdue step shows both under Hidden from inbox and in the Today panel's Overdue list.
-- The Today panel calls a past-due reminder "overdue". The deal's next step uses "late" (app code).
+- The Today panel calls a past-due reminder "overdue" and its Deal pulse stayed on "Checking recent deal changes…" on the live CARR-backed screen. The engine now supplies `GET /api/engine/home/today` with today's meetings from door 25 and partner-scoped dated reminders (with Home card links and `N days late`, and no Deal pulse); app routing still waits.
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.
-- The Today panel's Deal pulse stayed on "Checking recent deal changes…".
 - Overdue steps to confirm ("Overdue tasks to review") did not appear on Home. The engine read can return completion reviews with a link to the deal's next step. Home still needs to route the read and wire the decision buttons.
 - Update cards offer "Open" and the page the update names, or "Open Updates" when it names none, and never Got it (code). The engine read links each unread Home update to its deal. Home still needs to route the read and wire Got it.
 - A card with no page to open and no finishing button says "Read it, then hide it from your inbox." (code).

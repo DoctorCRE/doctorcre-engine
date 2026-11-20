@@ -1,9 +1,10 @@
 import { Hono } from "hono";
-import { sql } from "kysely";
+import { sql, type Transaction } from "kysely";
 import pg from "pg";
 import { Refusal, refuse } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
 import { nextTransaction } from "../next-connection.ts";
+import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { stampNextSave } from "../next-save.ts";
 import { fit, isInstant, isText, isUuid, optional } from "../request-shape.ts";
@@ -86,22 +87,29 @@ nextAgenda.put("/calendar/agenda", async (c) => {
 	});
 });
 
+export async function readStoredAgenda(db: Transaction<DB>, userId?: string) {
+	const user = userId
+		? sql`${userId}::uuid`
+		: sql`current_setting('engine.user_id')::uuid`;
+	const result = await sql<{ snapshot: unknown }>`
+		select a.snapshot::jsonb || jsonb_build_object(
+			'dismissed', (select coalesce(jsonb_agg(d.key order by d.key), '[]')
+				from calendar_review_dismissal d where d.user_id = a.user_id
+				and a.snapshot::jsonb -> 'follow_up_reviews' @> jsonb_build_array(jsonb_build_object('key', d.key))),
+			'confirmed', (select coalesce(jsonb_agg(m.calendar_review_key order by m.calendar_review_key), '[]')
+				from activity m where m.calendar_review_user_id = a.user_id
+				and a.snapshot::jsonb -> 'follow_up_reviews' @> jsonb_build_array(jsonb_build_object('key', m.calendar_review_key)))) as snapshot
+		from calendar_agenda a
+		where a.user_id = ${user}`.execute(db);
+	return result.rows[0]?.snapshot ?? null;
+}
+
 nextAgenda.get("/calendar/agenda", async (c) => {
 	const reader = c.env.DATABASE;
 	if (!reader) return refuse(c, new Refusal(503, "database_unavailable"));
 	return nextTransaction(reader.connectionString, "read", async (tx) => {
 		await stampNextSave(tx, c.get("stamp"));
-		const result = await sql<{ snapshot: unknown }>`
-			select a.snapshot::jsonb || jsonb_build_object(
-				'dismissed', (select coalesce(jsonb_agg(d.key order by d.key), '[]')
-					from calendar_review_dismissal d where d.user_id = a.user_id
-					and a.snapshot::jsonb -> 'follow_up_reviews' @> jsonb_build_array(jsonb_build_object('key', d.key))),
-				'confirmed', (select coalesce(jsonb_agg(m.calendar_review_key order by m.calendar_review_key), '[]')
-					from activity m where m.calendar_review_user_id = a.user_id
-					and a.snapshot::jsonb -> 'follow_up_reviews' @> jsonb_build_array(jsonb_build_object('key', m.calendar_review_key)))) as snapshot
-			from calendar_agenda a
-			where a.user_id = current_setting('engine.user_id')::uuid`.execute(tx);
-		return c.json(result.rows[0]?.snapshot ?? null);
+		return c.json(await readStoredAgenda(tx));
 	});
 });
 

@@ -198,9 +198,14 @@ function reviewFrom(row: unknown) {
 
 // Null when the partner never published a snapshot, so each caller says that
 // its own way.
-export function meetingsFromSnapshot(snapshot: unknown, now: Date) {
+export function meetingsFromSnapshot(
+	snapshot: unknown,
+	now: Date,
+	{ untilMs }: { untilMs?: number } = {},
+) {
 	if (snapshot === undefined || snapshot === null) return null;
 	const nowMs = now.getTime();
+	const endWindowMs = untilMs ?? nowMs + 7 * DAY_MS;
 	const observed = instant(field(snapshot, "observed_at"));
 	const rows = field(snapshot, "items");
 	const schema = field(snapshot, "schema");
@@ -214,7 +219,7 @@ export function meetingsFromSnapshot(snapshot: unknown, now: Date) {
 		const end = instant(field(row, "end"));
 		const title = text(field(row, "title"));
 		if (start === null || end === null || end < start || !title) malformed++;
-		else if (end > nowMs && start < nowMs + 7 * DAY_MS) {
+		else if (end > nowMs && start < endWindowMs) {
 			const times = alternateTimes(field(row, "times"));
 			meetings.push(meetingFrom(row, { start, end, title }, times.shown));
 			unread += times.unread;

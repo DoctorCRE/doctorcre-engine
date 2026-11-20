@@ -302,6 +302,7 @@ type Verb =
 	| "read-client-leases"
 	| "read-home-inbox-v5"
 	| "read-home-mail-priorities-v1"
+	| "read-home-today-v1"
 	| "read-invoice-tracker"
 	| "read-markets"
 	| "read-national-account-locations"
