@@ -333,6 +333,30 @@ const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.selectFrom("next_step as s")
 		.leftJoin("app_user as o", "o.id", "s.owner_party_id")
 		.leftJoin("app_user as by", "by.id", "s.changed_by_user_id")
+		.leftJoinLateral(
+			(eb) =>
+				eb
+					.selectFrom("change as creation")
+					.select(["creation.changed_by_user_id", "creation.changed_by_job"])
+					.where("creation.table_name", "=", "next_step")
+					.where(
+						"creation.record",
+						"=",
+						sql<JsonObject>`jsonb_build_object('id', s.id)`,
+					)
+					.where("creation.action", "=", "insert")
+					.orderBy("creation.id", "asc")
+					.limit(1)
+					.as("origin"),
+			(join) => join.onTrue(),
+		)
+		.leftJoin("party as setter", "setter.id", "origin.changed_by_user_id")
+		.leftJoin("proposal as accepted", (join) =>
+			join
+				.onRef("accepted.id", "=", "s.id")
+				.on("accepted.kind", "=", "next_step")
+				.on("accepted.status", "=", "accepted"),
+		)
 		.select((eb) => [
 			"s.id",
 			"o.slug as owner",
@@ -341,6 +365,13 @@ const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			"s.item_title as title",
 			"s.item_bullets as bullets",
 			"s.source_ref",
+			"setter.name as set_by",
+			asText(eb.ref("s.created_at")).as("set_at"),
+			sql<string | null>`case
+				when s.call_activity_id is not null then 'call'
+				when accepted.activity_kind is not null then accepted.activity_kind
+				when origin.changed_by_job = 'cadence' then 'cadence'
+			end`.as("set_from"),
 			asText(eb.ref("s.due_on")).as("due_on"),
 			"s.status",
 			sql<number | null>`case when s.status = 'open' then (

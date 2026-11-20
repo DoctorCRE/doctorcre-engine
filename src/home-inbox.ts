@@ -31,6 +31,7 @@ type Step = {
 	hold_until: string | null;
 	snoozed_until: string | null;
 	step_version: string;
+	undo_completion: boolean;
 	mark_version: string | null;
 	call_id: string | null;
 	call_at: string | null;
@@ -49,7 +50,14 @@ function stepRows(db: Transaction<DB>, userId: string) {
 			case when s.hold_until > (now() at time zone 'America/Chicago')::date
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
-			step_change.id as step_version, mark_change.id as mark_version,
+			coalesce(step_change.id, 0) as step_version, mark_change.id as mark_version,
+			coalesce(s.status = 'done' and step_change.changed_by_user_id = s.owner_party_id
+				and step_change.old_value @> '{"resolution":null}'
+				and step_change.new_value @> '{"resolution":"done"}'
+				and not exists (
+					select from proposal p where p.next_step_id = s.id and p.kind = 'next_step_done'
+						and p.status = 'accepted' and p.decided_at = s.done_at
+				), false) as undo_completion,
 			c.id as call_id, c.happened_at as call_at, contact.name as call_contact,
 			c.summary as call_summary, s.call_evidence_quote as call_quote,
 			accepted.activity_id as source_id, accepted.activity_kind as source_kind
@@ -64,10 +72,11 @@ function stepRows(db: Transaction<DB>, userId: string) {
 		left join home_mark m on m.user_id = ${userId}::uuid
 			and m.item_id = s.id
 			and m.item_kind = case when c.id is null then 'next_step' else 'call_follow_up' end
-		cross join lateral (
-			select coalesce(max(id), 0) as id from change where table_name = 'next_step'
-				and record = jsonb_build_object('id', s.id)
-		) step_change
+		left join lateral (
+			select id, changed_by_user_id, old_value, new_value from change
+			where table_name = 'next_step' and record = jsonb_build_object('id', s.id)
+			order by id desc limit 1
+		) step_change on true
 		left join lateral (
 			select max(id) as id
 			from change where table_name = 'home_mark'
@@ -122,6 +131,7 @@ function stepCard(step: Step) {
 		kind_label: step.call_id ? "Call follow-up" : "Task",
 		action_id: step.id,
 		action_version: Number(step.step_version),
+		undo_completion: step.undo_completion,
 		deal_id: step.deal_id,
 		merged_source_ids: [step.id],
 		waiting_version: 0,
