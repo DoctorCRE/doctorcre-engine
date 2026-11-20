@@ -94,7 +94,7 @@ function recipient(value: JsonValue): Email["recipients"][number] | undefined {
 		: undefined;
 }
 
-function parseEmail(value: JsonValue): Email | undefined {
+export function parseEmail(value: unknown): Email | undefined {
 	if (!isArguments(value)) return undefined;
 	const {
 		message_id,
@@ -261,7 +261,13 @@ async function insertActivity(
 
 // Links an email to every party, other than the users, whose address sent or
 // received it. A second copy of a stored email only adds its new links.
-async function recordEmail(
+export async function lockEmail(tx: Transaction<DB>, messageId: string) {
+	await sql`select pg_advisory_xact_lock(hashtextextended(${`email ${messageId}`}, 0))`.execute(
+		tx,
+	);
+}
+
+export async function recordEmail(
 	tx: Transaction<DB>,
 	activity: ActivityFields,
 	records: About[],
@@ -286,9 +292,7 @@ async function recordEmail(
 		...records,
 	];
 	// Queues the other mailbox's copy of this email behind this one.
-	await sql`select pg_advisory_xact_lock(hashtextextended(${`email ${message_id}`}, 0))`.execute(
-		tx,
-	);
+	await lockEmail(tx, message_id);
 	const stored = await tx
 		.selectFrom("email")
 		.select("activity_id")
