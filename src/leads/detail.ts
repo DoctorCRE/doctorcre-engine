@@ -1,8 +1,9 @@
-import { sql } from "kysely";
+import { type RawBuilder, sql, type Transaction } from "kysely";
 import { isCalendarDate } from "../calendar-date.ts";
+import type { DB as NextDB } from "../next-database.d.ts";
 import { inJsonbOrder, type Reader } from "../reader.ts";
 import { UUID } from "../uuid.ts";
-import { readLeadBoard } from "./board.ts";
+import { readLeadBoard, readNextLeadBoard } from "./board.ts";
 
 type CorrespondenceCursor = { occurred_at: string; id: string };
 export type HistoryCursors = {
@@ -18,9 +19,9 @@ type Page<Cursor> = {
 // One captured activity and one stage change, as `jsonb` printed them.
 type Correspondence = CorrespondenceCursor & {
 	kind: string;
-	summary: string;
+	summary: string | null;
 	detail: string | null;
-	source: string;
+	source: string | null;
 	connected: boolean | null;
 };
 type StageChange = {
@@ -113,15 +114,20 @@ export function historyCursors(
 // The old detail also re-sent `est_lease_event` and `segment` from `lead`,
 // the same values the board row already carries.
 const detailFields = (
-	db: Reader,
-	leadId: string,
+	db: Reader | Transaction<NextDB>,
+	sources: {
+		lead: RawBuilder<unknown>;
+		correspondence: RawBuilder<unknown>;
+		stages: RawBuilder<unknown>;
+	},
 	{ correspondence, stageHistory }: HistoryCursors,
 ) =>
 	sql<{
 		id: string;
 		fields: DetailFields;
-	}>`with correspondence as materialized (
-		select * from v_lead_workspace_correspondence where lead_id = ${leadId}::uuid
+	}>`with opened_lead as materialized (${sources.lead}),
+	correspondence as materialized (
+		${sources.correspondence}
 	), correspondence_tail as materialized (
 		select * from correspondence where ${correspondence?.occurred_at ?? null}::timestamptz is null
 			or (occurred_at, id) < (${correspondence?.occurred_at ?? null}::timestamptz, ${correspondence?.id ?? null}::uuid)
@@ -129,13 +135,13 @@ const detailFields = (
 	), correspondence_page as materialized (
 		select * from correspondence_tail order by occurred_at desc, id desc limit 100
 	), stage_history as materialized (
-		select * from v_lead_workspace_stage_history where lead_id = ${leadId}::uuid
+		${sources.stages}
 	), stage_tail as materialized (
 		select * from stage_history where ${stageHistory}::bigint is null or mutation_order < ${stageHistory}::bigint
 		order by mutation_order desc limit 101
 	), stage_page as materialized (
 		select * from stage_tail order by mutation_order desc limit 100
-	) select l.id, jsonb_build_object('phone', p.phone, 'email', p.email, 'notes', l.notes,
+	) select l.id, jsonb_build_object('phone', l.phone, 'email', l.email, 'notes', l.notes,
 		'correspondence_coverage', 'captured_entries_only', 'history_limit', 100,
 		'correspondence', coalesce((select jsonb_agg(to_jsonb(a) - 'lead_id' order by a.occurred_at desc, a.id desc)
 			from correspondence_page a), '[]'),
@@ -152,9 +158,55 @@ const detailFields = (
 			'next_cursor', case when (select count(*) > 100 from stage_tail) then
 				(select e.mutation_order::text from stage_page e order by e.mutation_order limit 1) end)
 	) as fields
-	from lead l join party p on p.id = l.party_id where l.id = ${leadId}::uuid`.execute(
-		db,
-	);
+	from opened_lead l`.execute(db);
+
+const legacyDetail = (leadId: string) => ({
+	lead: sql`select l.id, p.phone, p.email, l.notes
+		from lead l join party p on p.id = l.party_id where l.id = ${leadId}::uuid`,
+	correspondence: sql`select * from v_lead_workspace_correspondence where lead_id = ${leadId}::uuid`,
+	stages: sql`select * from v_lead_workspace_stage_history where lead_id = ${leadId}::uuid`,
+});
+
+const nextDetail = (leadId: string) => ({
+	lead: sql`select r.party_id as id,
+		(select number from party_phone where party_id = r.party_id and is_primary) as phone,
+		(select address from party_email where party_id = r.party_id and is_primary) as email,
+		(select a.summary from activity_about link join activity a on a.id = link.activity_id
+			where link.party_id = r.party_id and a.kind = 'note' and a.summary is not null
+			order by a.happened_at desc, a.id desc limit 1) as notes
+	from party_role r where r.role = 'lead' and r.party_id = coalesce(
+		(select party_id from outside_id where source = 'old_system_lead' and value = ${leadId}),
+		${leadId}::uuid)`,
+	correspondence: sql`select a.id, a.kind, a.happened_at as occurred_at, a.reached as connected,
+		coalesce(es.text, a.summary, e.subject) as summary, e.body as detail, a.changed_by_job as source
+	from opened_lead l join activity_about link on link.party_id = l.id
+	join activity a on a.id = link.activity_id
+	left join email e on e.activity_id = a.id
+	left join email_current_summary es on es.activity_id = a.id
+	where a.kind in ('email', 'call', 'meeting')`,
+	stages: sql`with moves as (
+		select m.id::text as event_id, c.id as mutation_order, m.changed_at as occurred_at,
+			m.from_stage as prior_stage, m.to_stage as stage, m.reason
+		from opened_lead l join lead_stage_move m on m.party_id = l.id
+		join change c on c.table_name = 'lead_stage_move' and c.record = jsonb_build_object('id', m.id)
+			and c.action = 'insert'
+	), history as (
+		select c.id::text as event_id, c.id as mutation_order, c.changed_at as occurred_at,
+			c.old_value->>'stage' as prior_stage, c.new_value->>'stage' as stage,
+			c.new_value->>'reason' as reason
+		from opened_lead l join change c on c.table_name = 'party_role'
+			and c.record = jsonb_build_object('party_id', l.id, 'role', 'lead')
+		where c.new_value->>'stage' is not null and (c.action = 'update' or c.new_value ? 'reason')
+	), entries as (
+		select * from moves union all
+		select h.* from history h where not exists (select from moves m
+			where m.occurred_at = h.occurred_at and m.prior_stage = h.prior_stage and m.stage = h.stage)
+	)
+	select event_id, mutation_order, occurred_at, reason,
+		case when prior_stage = 'nurture' then 'nurture_drip' else prior_stage end as prior_stage,
+		case when stage = 'nurture' then 'nurture_drip' else stage end as stage
+	from entries`,
+});
 
 // The old detail merged the board row and the detail fields as one jsonb
 // object, then appended the advice, the label and the research summary.
@@ -183,12 +235,30 @@ export async function readLeadDetail(
 ) {
 	// The id cast runs first, so a malformed id is refused before any board
 	// limit, as in the old single statement.
-	const [opened] = (await detailFields(db, leadId, cursors)).rows;
+	const [opened] = (await detailFields(db, legacyDetail(leadId), cursors)).rows;
 	const board = await readLeadBoard(db);
 	if ("error" in board) return board;
 	const lead = board.leads.find((l) => l.id === opened?.id);
 	return {
 		...board,
 		detail: opened && lead ? openLead(lead, opened.fields) : null,
+	};
+}
+
+export async function readNextLeadDetail(
+	db: Transaction<NextDB>,
+	leadId: string,
+	cursors: HistoryCursors,
+) {
+	const [opened] = (
+		await detailFields(db, nextDetail(leadId.toLowerCase()), cursors)
+	).rows;
+	const board = await readNextLeadBoard(db);
+	if ("error" in board) return board;
+	const lead = board.leads.find((l) => l.party_id === opened?.id);
+	return {
+		...board,
+		detail:
+			opened && lead ? openLead({ ...lead, id: leadId }, opened.fields) : null,
 	};
 }

@@ -1,8 +1,18 @@
 import { Hono } from "hono";
-import { answer, checkFields, Refusal, refuse } from "../answer.ts";
+import {
+	answer,
+	answerNextRead,
+	checkFields,
+	Refusal,
+	refuse,
+} from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
-import { readLeadBoard } from "./board.ts";
-import { historyCursors, readLeadDetail } from "./detail.ts";
+import { readLeadBoard, readNextLeadBoard } from "./board.ts";
+import {
+	historyCursors,
+	readLeadDetail,
+	readNextLeadDetail,
+} from "./detail.ts";
 import { readQuietFollowUps } from "./quiet-follow-ups.ts";
 import { readReasonsToReachOut } from "./reasons-to-reach-out.ts";
 import { readTerritory } from "./territory.ts";
@@ -18,7 +28,9 @@ const REASON_FIELDS = ["limit", "before_id"];
 const BEFORE_ID = /^[1-9][0-9]{0,18}$/u;
 const TERRITORY_FIELDS = ["vertical", "city", "state"];
 
-export const leads = new Hono<DatabaseEnv>();
+export const leads = new Hono<
+	DatabaseEnv & { Bindings: { LEADS_READ_SCHEMA?: string } }
+>();
 
 leads.get("/leads", async (c) => {
 	const params = new URL(c.req.url).searchParams;
@@ -31,6 +43,15 @@ leads.get("/leads", async (c) => {
 	// The old refusal of a cursor was not public, so it answered generically.
 	if (!cursors) return refuse(c, new Refusal(400, "unhandled_verb_failure"));
 	const leadId = params.get("lead_id");
+	if (c.env.LEADS_READ_SCHEMA === "next")
+		return answerNextRead(c, "lead-board", async (db) => {
+			const board = leadId
+				? await readNextLeadDetail(db, leadId, cursors)
+				: await readNextLeadBoard(db);
+			return "error" in board
+				? new Refusal(422, "unhandled_verb_failure")
+				: board;
+		});
 	return answer(c, "lead-board", async (db) => {
 		const board = leadId
 			? await readLeadDetail(db, leadId, cursors)
