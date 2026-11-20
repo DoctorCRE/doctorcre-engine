@@ -208,6 +208,8 @@ test("the switched graph shows current owners and opens Home steps on new and co
 	const newClient = id(814);
 	const blankVendor = id(815);
 	const blankDeal = id(816);
+	const personStep = id(818);
+	const copiedStep = id(819);
 	const clientId = id(302);
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
@@ -270,11 +272,17 @@ test("the switched graph shows current owners and opens Home steps on new and co
 		insert into introduction (vendor_id, made_by, introduced_party_id, introduced_by_user_id, note) values
 			('${vendor}', 'team', '${person}', '${ME}', 'Partner made the introduction'),
 			('${vendor}', 'team', '${ME}', '${ME}', 'Partner already an endpoint');
-		insert into next_step (party_id, owner_party_id, what) values
-			('${person}', '${ME}', 'Call the new contact');
-		insert into next_step (party_id, owner_party_id, what)
-			select party_id, '${ME}', 'Call the copied client' from outside_id
+		insert into next_step (id, party_id, owner_party_id, what)
+			select '${copiedStep}', party_id, '${ME}', 'Call the copied client' from outside_id
 			where source = 'old_system' and value = '${clientId}';
+		insert into activity (id, kind, happened_at, summary) values
+			('${id(820)}', 'meeting', '2026-01-04', 'Talked about the new contact');
+		insert into activity_about (activity_id, party_id) values ('${id(820)}', '${person}');
+		insert into proposal (id, kind, party_id, activity_id, activity_kind, owner_party_id, what, evidence, proposed_by_job)
+			values ('${personStep}', 'next_step', '${person}', '${id(820)}', 'meeting', '${ME}', 'Call the new contact', 'Follow up after the meeting', 'old_system');
+		set local engine.job = '';
+		set local engine.user_id = '${ME}';
+		update proposal set status = 'accepted' where id = '${personStep}';
 		commit;`);
 
 	const caller = { user: "joe" };
@@ -409,7 +417,36 @@ test("the switched graph shows current owners and opens Home steps on new and co
 		return item.open_url;
 	});
 	assert.deepEqual(links.sort(), [
-		`/relationships?node=party:${copied}`,
-		`/relationships?node=party:${person}`,
+		`/relationships?node=party:${copied}&step=${copiedStep}`,
+		`/relationships?node=party:${person}&step=${personStep}`,
 	]);
+	assert.equal(snapshot.focused_step, undefined);
+	const focused = async (user: string, step: string) => {
+		const response = await request(
+			{ user },
+			`relationships?contract=relationship-network.v1&step=${step}`,
+			{ method: "GET" },
+			{ RELATIONSHIPS_READ_SCHEMA: "next" },
+		);
+		assert.equal(response.status, 200);
+		const page: unknown = await response.json();
+		assert.ok(isArguments(page));
+		return page.focused_step;
+	};
+	const step = await focused("joe", personStep);
+	assert.ok(isArguments(step) && typeof step.set_at === "string");
+	assert.partialDeepStrictEqual(step, {
+		id: personStep,
+		party_id: person,
+		what: "Call the new contact",
+		set_by: "Example Partner",
+		set_from: "meeting",
+	});
+	assert.ok(Number.isFinite(Date.parse(step.set_at)));
+	assert.partialDeepStrictEqual(await focused("joe", copiedStep), {
+		id: copiedStep,
+		set_by: null,
+		set_from: null,
+	});
+	assert.equal(await focused("dell", personStep), null);
 });

@@ -16,6 +16,7 @@ const leadPath = `prospects/${lead}`;
 before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
+		insert into job values ('cadence', 'Example follow-up schedule') on conflict do nothing;
 		insert into role (slug, label) values ('lead', 'Lead');
 		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity'), ('lead', 'qualified', 'Qualified');
 		insert into how_found (slug, label) values ('referral', 'Referral');
@@ -41,7 +42,7 @@ async function followUps() {
 test("a dated follow-up replaces only the setting partner's step and opens that prospect from Home", async () => {
 	const day = "2023-08-21";
 	const [autoStatus, automatic] = await save(
-		{ job: "agent", for_user: "joe" },
+		{ job: "cadence", for_user: "joe" },
 		"next-steps",
 		{
 			...key(),
@@ -74,6 +75,13 @@ test("a dated follow-up replaces only the setting partner's step and opens that 
 	const current = open.find((step) => step.owner === "joe");
 	assert.equal(current?.next_step_id, automatic.next_step_id);
 	assert.equal(current?.change_id, automatic.change_id);
+	assert.equal(current?.set_by, null);
+	assert.equal(current?.set_from, "cadence");
+	const direct = open.find((step) => step.owner === "dell");
+	assert.ok(direct && typeof direct.set_at === "string");
+	assert.equal(direct.set_by, "Example Person");
+	assert.equal(direct.set_from, null);
+	assert.ok(Number.isFinite(Date.parse(direct.set_at)));
 
 	const version = {
 		next_step_id: current?.next_step_id,
@@ -133,7 +141,10 @@ test("a dated follow-up replaces only the setting partner's step and opens that 
 	const card = home.items
 		.filter(isArguments)
 		.find((item) => item.action_id === added.next_step_id);
-	assert.equal(card?.open_url, `/deals?prospect=${lead}&focus=follow-up`);
+	assert.equal(
+		card?.open_url,
+		`/deals?prospect=${lead}&focus=follow-up&step=${added.next_step_id}`,
+	);
 	assert.equal(card?.action_version, added.change_id);
 	assert.equal(
 		(

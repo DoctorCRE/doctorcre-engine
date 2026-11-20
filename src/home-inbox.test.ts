@@ -157,7 +157,7 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 		primary_action: "Mark done",
 		context_label: "Example Dental",
 		due_on: "2026-11-19",
-		open_url: `/relationships?node=party:${client}`,
+		open_url: `/relationships?node=party:${client}&step=${ordinary}`,
 		section: "snoozed",
 		snoozed_until: "2999-01-01T00:00:00.000Z",
 		action_id: ordinary,
@@ -311,7 +311,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 					why: "No reason was recorded.",
 					primary_action: "Mark done",
 					due_on: null,
-					open_url: `/relationships?node=party:${example.party}`,
+					open_url: `/relationships?node=party:${example.party}&step=${example.id}`,
 				},
 			],
 		);
