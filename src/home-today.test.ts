@@ -61,7 +61,8 @@ before(async () => {
 			('${id(28)}', '${id(8)}', null, null, '${id(2)}', 'Review counter', -2, null, null, null),
 			('${id(29)}', null, '${id(6)}', null, '${id(2)}', 'Call prospect', 0, null, null, null),
 			('${id(30)}', null, null, '${id(10)}', '${id(1)}', 'Check building', 0, null, null, null),
-			('${id(31)}', '${id(7)}', null, null, '${id(12)}', 'Non-partner reminder', -1, null, null, null)
+			('${id(31)}', '${id(7)}', null, null, '${id(12)}', 'Non-partner reminder', -1, null, null, null),
+			('${id(32)}', '${id(9)}', null, null, '${id(2)}', 'Review the ended deal', -5, null, null, null)
 		) v(id, deal_id, party_id, property_id, owner_id, what, due_offset, hold_offset, call_id, quote);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values ('${id(1)}', '${id(27)}', 'snoozed', now() + interval '2 days');
 		insert into home_mark (user_id, call_follow_up_id, disposition, drop_reason) values ('${id(1)}', '${id(24)}', 'dropped', 'Already handled.');
@@ -103,7 +104,7 @@ test("switch off returns 404, non-partners are refused, and invalid owners fail"
 	]);
 });
 
-test("reminders include only the two partners' dated steps through today, never critical dates", async () => {
+test("Today keeps reminders on ended deals and marks them for Deals", async () => {
 	const [status, body] = await today();
 	assert.equal(status, 200);
 	assert.partialDeepStrictEqual(body, {
@@ -122,6 +123,7 @@ test("reminders include only the two partners' dated steps through today, never 
 	const row = (i: Row) =>
 		`${i.id}|${i.title}|${i.late_label}|${i.owner}|${i.home_item_id}|${i.open_url}`;
 	assert.deepEqual(body.reminders?.late.map(row), [
+		`${id(32)}|Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
 		`${id(21)}|Send revised LOI|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
 		`${id(28)}|Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
 		`${id(23)}|Email floor plan|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
@@ -131,6 +133,15 @@ test("reminders include only the two partners' dated steps through today, never 
 		`${id(29)}|Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up`,
 		`${id(30)}|Check building|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
+	assert.deepEqual(
+		body.reminders?.late.map((item) => [item.id, item.deal_ended]),
+		[
+			[id(32), true],
+			[id(21), undefined],
+			[id(28), undefined],
+			[id(23), undefined],
+		],
+	);
 	const inboxRes = await request(joe, "home/inbox", get, reader);
 	const inbox = (await inboxRes.json()) as { items: Row[] };
 	const ids = new Set(inbox.items.map((i) => i.item_id));
@@ -141,7 +152,7 @@ test("reminders include only the two partners' dated steps through today, never 
 	const dr = dell.reminders;
 	assert.deepEqual(
 		[dr?.late.map((i) => i.id), dr?.upcoming.map((i) => i.id)],
-		[[id(28)], [id(29)]],
+		[[id(32), id(28)], [id(29)]],
 	);
 });
 
@@ -233,7 +244,10 @@ test("meetings and reminders fail independently with plain unavailable reasons",
 			const ok = em === "unavailable" ? b.reminders?.late : b.meetings?.items;
 			const states = [s, b.meetings?.state, b.reminders?.state];
 			assert.deepEqual(states, [200, em, er]);
-			assert.deepEqual([typeof bad?.reason, ok?.length], ["string", 3]);
+			assert.deepEqual(
+				[typeof bad?.reason, ok?.length],
+				["string", em === "unavailable" ? 4 : 3],
+			);
 		} finally {
 			await db.query(`grant select on ${table} to engine_reader`);
 		}
@@ -258,7 +272,10 @@ test("reminder home_item_id does not depend on the inbox page limit", async () =
 			false,
 		);
 		const [, body] = await today();
-		assert.equal(body.reminders?.late[0]?.home_item_id, cardId);
+		assert.equal(
+			body.reminders?.late.find((item) => item.id === id(21))?.home_item_id,
+			cardId,
+		);
 	} finally {
 		await db.query(`begin; select set_config('engine.job', 'old_system', true);
 			delete from home_update where user_id = '${id(1)}'; commit;`);
