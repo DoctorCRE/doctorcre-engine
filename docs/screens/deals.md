@@ -42,7 +42,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 ### Parked lane
 
-- [ ] Each parked card shows the deal's name and owner, with the parking reason as its only badge (client paused, prospect never active, or other).
+- [ ] Each parked card shows the deal's name and owner, with one badge. Client paused and Prospect never active show their reason. Other shows as Parked.
 - [ ] Open the deal page to see the parking details and Revive. Revive makes the deal active again in the phase it was in, and the card moves back to that column.
 
 ### Closed deals and Lost deals
