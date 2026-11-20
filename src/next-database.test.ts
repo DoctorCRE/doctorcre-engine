@@ -9140,9 +9140,10 @@ test("the selected payment stays locked between the undo snapshot and date updat
 		let paused = false;
 		while (!applied && !paused)
 			paused = (
-				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
-					writerPid,
-				])
+				await db.query(
+					"select pg_backend_pid() = any(pg_blocking_pids($1)) as blocked",
+					[writerPid],
+				)
 			).rows[0].blocked;
 		let edited = false;
 		const editing = owner
@@ -9155,14 +9156,17 @@ test("the selected payment stays locked between the undo snapshot and date updat
 		let blocked = false;
 		while (!edited && !blocked)
 			blocked = (
-				await db.query("select pg_blocking_pids($1) <> '{}' as blocked", [
+				await db.query("select $2 = any(pg_blocking_pids($1)) as blocked", [
 					ownerPid,
+					writerPid,
 				])
 			).rows[0].blocked;
 		await db.query("select pg_advisory_unlock(324980)");
 		await applying;
 		await writer.query("commit");
 		await editing;
+		assert.equal(paused, true, "invoice application reached the advisory lock");
+		assert.equal(blocked, true, "invoice application blocked the payment edit");
 		await assert.rejects(
 			writer.query(UNDO_INVOICE),
 			expected("invoice_email_undo_current"),
@@ -9175,8 +9179,6 @@ test("the selected payment stays locked between the undo snapshot and date updat
 			).rows[0].invoiced_on,
 			"2026-03-31",
 		);
-		assert.equal(paused, true);
-		assert.equal(blocked, true);
 	} finally {
 		await db.query("select pg_advisory_unlock(324980)");
 		await writer.query("rollback");
