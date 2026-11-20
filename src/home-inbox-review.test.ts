@@ -462,6 +462,37 @@ test("Home stops offering a lead when its sender is verified as a partner", asyn
 	assert.equal(await card(), undefined);
 });
 
+test("Home keeps a possible lead when a partner shares the sender address with an outside party", async () => {
+	const address = "shared-address@example.test";
+	const [status, proposal] = await save(
+		{ job: "mail_capture", for_user: "example" },
+		"proposals/email-lead",
+		{
+			idempotency_key: randomUUID(),
+			address,
+			display_name: "Example Sender",
+			summary: "Asked about leasing a suite.",
+			first_seen_at: "2026-01-08T12:00:00Z",
+			message_ref: "example-mail-shared-address",
+			applies_to: "new_matter",
+			confidence: 0.9,
+		},
+	);
+	assert.equal(status, 201);
+
+	const account = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${account}', 'person', 'Another Example Account Partner');
+		insert into app_user (id, slug) values ('${account}', 'dell');
+		insert into party_email (party_id, address, label) values
+			('${account}', '${address}', 'personal'), ('${knownContact}', '${address}', 'work');
+		commit;`);
+	assert.ok(
+		(await inbox()).some((row) => row.proposal_id === proposal.proposal_id),
+	);
+});
+
 for (const match of [
 	"message_id",
 	"conversation_id",

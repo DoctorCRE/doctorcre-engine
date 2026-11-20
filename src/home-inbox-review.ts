@@ -248,8 +248,9 @@ function suggestionRows(userId: string, forMail: boolean) {
 			where p.kind <> 'next_step_done'
 				and ${visibleSuggestion(userId)}
 				and (p.kind <> 'email_lead' or not exists (
-					select from party_email pe join app_user u on u.id = pe.party_id
-					where u.is_account_partner and pe.address = candidate.source_row->>'address'
+					select from party_email pe left join app_user u on u.id = pe.party_id
+					where pe.address = candidate.source_row->>'address'
+					having count(*) = 1 and bool_or(u.is_account_partner)
 				))
 		), grouped as (
 			select visible.*,
