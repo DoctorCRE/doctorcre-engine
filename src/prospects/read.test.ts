@@ -22,6 +22,7 @@ const [
 	note,
 	olderNote,
 ] = Array.from({ length: 13 }, () => randomUUID());
+const property = randomUUID();
 
 before(async () => {
 	await setup();
@@ -57,6 +58,13 @@ before(async () => {
 			('${note}', 'note', '${dellId}', '2024-02-01', E'Newest note\\nMore text'),
 			('${olderNote}', 'note', '${joeId}', '2023-11-30', 'Older note');
 		insert into activity_about (activity_id, party_id) values ('${note}', '${earlier}'), ('${olderNote}', '${earlier}'), ('${note}', '${newest}'), ('${olderNote}', '${newest}');
+		-- Exercise the reader's scope independently of the storage constraints.
+		alter table next_step drop constraint next_step_one_record, drop constraint next_step_item_shape;
+		insert into property (id, address) values ('${property}', '100 Example Way');
+		insert into next_step (party_id, owner_party_id, what, due_on, deal_id, property_id, item_title) values
+			('${newest}', '${joeId}', 'Deal step', '2024-01-10', '${deal}', null, null),
+			('${newest}', '${joeId}', 'Property step', '2024-01-11', null, '${property}', null),
+			('${newest}', '${joeId}', 'Checklist step', '2024-01-12', null, null, 'Example checklist');
 		commit;`);
 });
 after(async () => {
@@ -115,6 +123,12 @@ test("lane includes only eligible leads and orders attention, follow-up date, th
 		(await request({ job: "agent" }, "prospects", { method: "GET" })).status,
 		404,
 	);
+});
+
+test("only ordinary party steps appear as a prospect's follow-ups", async () => {
+	const response = await request(joe, `prospects/${newest}`, { method: "GET" });
+	assert.equal(response.status, 200);
+	assert.deepEqual(steps(await response.json()), []);
 });
 
 test("detail includes older notes and a second partner's poll picks up a new note", async () => {

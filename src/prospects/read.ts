@@ -83,6 +83,9 @@ export function prospectQuery(
 			),
 		])
 		.where("s.party_id", "=", sql.ref<string>("p.id"))
+		.where("s.deal_id", "is", null)
+		.where("s.property_id", "is", null)
+		.where("s.item_title", "is", null)
 		.where("s.status", "=", "open");
 	return sql<Prospect>`
 		select p.id as party_id, p.name, p.kind, p.how_found, owner.slug as owner,
