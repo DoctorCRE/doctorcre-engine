@@ -239,3 +239,28 @@ test("meetings and reminders fail independently with plain unavailable reasons",
 		}
 	}
 });
+
+test("reminder home_item_id does not depend on the inbox page limit", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into home_update (user_id, deal_id, what, created_at)
+		select '${id(1)}', '${id(7)}', 'Update ' || g, now() + interval '1 hour'
+		from generate_series(1, 1001) g; commit;`);
+	try {
+		const inboxRes = await request(joe, "home/inbox", get, reader);
+		const inbox = (await inboxRes.json()) as {
+			truncated: boolean;
+			items: Row[];
+		};
+		const cardId = `next_action:${id(21)}`;
+		assert.equal(inbox.truncated, true);
+		assert.equal(
+			inbox.items.some((i) => i.item_id === cardId),
+			false,
+		);
+		const [, body] = await today();
+		assert.equal(body.reminders?.late[0]?.home_item_id, cardId);
+	} finally {
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+			delete from home_update where user_id = '${id(1)}'; commit;`);
+	}
+});

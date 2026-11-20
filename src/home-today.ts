@@ -5,7 +5,7 @@ import { type Meeting, meetingsFromSnapshot } from "./calendar/meetings.ts";
 import { readStoredAgenda } from "./calendar/next-agenda.ts";
 import { PARTNERS } from "./clients/read.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
-import { stepItemId, stepOpenUrl, stepTargetFields } from "./home-inbox.ts";
+import { stepItemId, stepOpenUrl, stepTargetFields } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
 import { isArguments } from "./save-door.ts";
