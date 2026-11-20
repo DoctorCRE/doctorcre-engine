@@ -656,3 +656,96 @@ test("signs a recorded next step only from the event written with it, even when 
 		[id(90), "agent", id(1)],
 	]);
 });
+
+test("formats dates next to Markdown and punctuation in copied analysis notes while keeping filenames intact", async () => {
+	const detail = [
+		"- 2025-04-01, **2025-04-02**, **2025-04-03.** and **2025-04-04**. Also **2025-04-05**, (2025-04-06)** and **Checked (2025-04-07):**",
+		"- *Updated 2025-04-08.* *[2025-04-09]* ~2025-04-10; (2025-04-11), (2025-04-12.) and 2025-04-13.",
+		"* [2025-04-14](https://example.com/2025-04-14.pdf) and [Notes 2025-04-15](https://example.com/notes), [**2025-04-16**](https://example.com/notes). [2025-04-17][ref]",
+		'Keep `files/report-2025-04-18.md`, ~/notes/summary-2025-04-19.txt, docs/2025-04-20/., "2025-04-21.pdf", [See file](https://example.com/2025-04-22.pdf), [2025-04-23.pdf](https://example.com/2025-04-23.pdf), 2025-04-24T09:00 and **2025-02-30**.',
+	].join("\n");
+	const expected = [
+		"Analysis",
+		"",
+		"Example analysis",
+		"",
+		"- April 1, 2025, **April 2, 2025**, **April 3, 2025.** and **April 4, 2025**. Also **April 5, 2025**, (April 6, 2025)** and **Checked (April 7, 2025):**",
+		"- *Updated April 8, 2025.* *[April 9, 2025]* ~April 10, 2025; (April 11, 2025), (April 12, 2025.) and April 13, 2025.",
+		"* [April 14, 2025](https://example.com/2025-04-14.pdf) and [Notes April 15, 2025](https://example.com/notes), [**April 16, 2025**](https://example.com/notes). [April 17, 2025][ref]",
+		'Keep `files/report-2025-04-18.md`, ~/notes/summary-2025-04-19.txt, docs/2025-04-20/., "2025-04-21.pdf", [See file](https://example.com/2025-04-22.pdf), [2025-04-23.pdf](https://example.com/2025-04-23.pdf), 2025-04-24T09:00 and **2025-02-30**.',
+	].join("\n");
+	await db.query(
+		`insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id, detail)
+		values ($1, 'analysis', '2025-04-25', '2025-04-25', '2025-04-25', $2, 'Example analysis', $3, $4)`,
+		[id(95), id(1), id(30), detail],
+	);
+	await run();
+	assert.deepEqual(
+		await rows(`select summary from activity where id = '${id(95)}'`),
+		[{ summary: expected }],
+	);
+});
+
+for (const [offset, name, detail, expected] of [
+	[
+		200,
+		"multiword and multi-backtick inline code spans",
+		"Use `run **2025-04-01** now` and ``use `2025-04-02` here`` on 2025-04-03.",
+		"Use `run **2025-04-01** now` and ``use `2025-04-02` here`` on April 3, 2025.",
+	],
+	[
+		201,
+		"backtick and tilde fenced code blocks",
+		"Before 2025-04-01\n```sql\nselect '2025-04-02';\n```\nMiddle 2025-04-03\n~~~\n2025-04-04\n~~~\nAfter 2025-04-05",
+		"Before April 1, 2025\n```sql\nselect '2025-04-02';\n```\nMiddle April 3, 2025\n~~~\n2025-04-04\n~~~\nAfter April 5, 2025",
+	],
+	[
+		202,
+		"space-separated timestamps",
+		"Logged 2025-04-01 09:00:00+00 and (2025-04-02 14:30) before 2025-04-03.",
+		"Logged 2025-04-01 09:00:00+00 and (2025-04-02 14:30) before April 3, 2025.",
+	],
+	[
+		203,
+		"link destinations and angle-bracketed paths",
+		'See [Open]( 2025-04-01 ), [File](<files/2025-04-02 report.pdf> "2025-04-03") and <files/2025-04-04 report.pdf> on 2025-04-05.',
+		'See [Open]( 2025-04-01 ), [File](<files/2025-04-02 report.pdf> "2025-04-03") and <files/2025-04-04 report.pdf> on April 5, 2025.',
+	],
+	[
+		204,
+		"reference keys and matching reference definitions",
+		"[Open][**2025-04-01**] and [2025-04-02][] on 2025-04-03.\n\n[**2025-04-01**]: https://example.com/2025-04-01\n[2025-04-02]: <files/2025-04-02 report.pdf>",
+		"[Open][**2025-04-01**] and [2025-04-02][] on April 3, 2025.\n\n[**2025-04-01**]: https://example.com/2025-04-01\n[2025-04-02]: <files/2025-04-02 report.pdf>",
+	],
+	[
+		205,
+		"underscore bold dates without touching single-underscore identifiers",
+		"__2025-04-01__, __2025-04-02.__ and __2025-04-03__. Keep _2025-04-04_ and 2025-04-05_v2.",
+		"__April 1, 2025__, __April 2, 2025.__ and __April 3, 2025__. Keep _2025-04-04_ and 2025-04-05_v2.",
+	],
+	[
+		206,
+		"titled inline link labels",
+		"[2025-04-01](https://example.com/2025-04-01 \"Updated 2025-04-02\") and [Notes 2025-04-03](<files/2025-04-03 report.pdf> '2025-04-04').",
+		"[April 1, 2025](https://example.com/2025-04-01 \"Updated 2025-04-02\") and [Notes April 3, 2025](<files/2025-04-03 report.pdf> '2025-04-04').",
+	],
+	[
+		207,
+		"reference labels with spaced keys",
+		"[2025-04-01][ref key 2025-04-02]\n\n[ref key 2025-04-02]: https://example.com/2025-04-02",
+		"[April 1, 2025][ref key 2025-04-02]\n\n[ref key 2025-04-02]: https://example.com/2025-04-02",
+	],
+] as const) {
+	test(`copy_note_text handles ${name}`, async () => {
+		await db.query(
+			`insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id, detail)
+			values ($1, 'analysis', '2025-04-25', '2025-04-25', '2025-04-25', $2, 'Example analysis', $3, $4)`,
+			[id(offset), id(1), id(30), detail],
+		);
+		await run();
+		assert.deepEqual(
+			await rows(`select summary from activity where id = '${id(offset)}'`),
+			[{ summary: `Analysis\n\nExample analysis\n\n${expected}` }],
+		);
+	});
+}
