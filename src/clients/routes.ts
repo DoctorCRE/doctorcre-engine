@@ -1,7 +1,12 @@
 import { type Context, Hono } from "hono";
+import type { Transaction } from "kysely";
+import { nextTransaction } from "../next-connection.ts";
+import type { DB as NextDB } from "../next-database.d.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import {
+	readNextVendor,
+	readNextVendorList,
 	readVendor,
 	readVendorList,
 	VENDOR_SORTS,
@@ -184,7 +189,11 @@ async function answer(
 	}
 }
 
-export const directory = new Hono<DatabaseEnv>();
+type DirectoryEnv = DatabaseEnv & {
+	Bindings: { DIRECTORY_READ_SCHEMA?: string };
+};
+
+export const directory = new Hono<DirectoryEnv>();
 
 directory.get("/clients", (c) =>
 	answer(c, (params, viewer) => {
@@ -218,12 +227,53 @@ const ID_PATTERN = ":id{[0-9A-Fa-f-]+}";
 directory.get(`/clients/${ID_PATTERN}`, (c) =>
 	record(c, c.req.param("id"), readClient),
 );
-directory.get("/vendors", (c) =>
-	answer(c, (params, viewer) => {
+async function answerNextVendor(
+	c: Context<DirectoryEnv>,
+	parse: (
+		params: URLSearchParams,
+		viewer: string,
+	) => (db: Transaction<NextDB>, stamp: Stamp) => Promise<object>,
+): Promise<Response> {
+	const viewer = c.get("partner").slug;
+	const database = c.env.DATABASE;
+	try {
+		if (!database)
+			throw new BusinessRefusal({ error: "DEPENDENCY_UNAVAILABLE" });
+		const read = parse(new URL(c.req.url).searchParams, viewer);
+		if (!isOneOf(PARTNERS, viewer))
+			throw new BusinessRefusal({ error: "AUTHORIZATION_REFUSED" });
+		const stamp = stampOf(c);
+		return c.json(
+			await nextTransaction(database.connectionString, "read", (db) =>
+				read(db, stamp),
+			),
+		);
+	} catch (error) {
+		const refusal = refusalOf(error);
+		return c.json(refusal.body, refusal.status);
+	}
+}
+
+directory.get("/vendors", async (c): Promise<Response> => {
+	if (c.env.DIRECTORY_READ_SCHEMA === "next")
+		return answerNextVendor(c, (params, viewer) => {
+			const query = vendorQuery(params, viewer);
+			return (db, stamp) => readNextVendorList(db, viewer, query, stamp);
+		});
+	return answer(c, (params, viewer) => {
 		const query = vendorQuery(params, viewer);
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
-	}),
-);
-directory.get(`/vendors/${ID_PATTERN}`, (c) =>
-	record(c, c.req.param("id"), readVendor),
-);
+	});
+});
+directory.get(`/vendors/${ID_PATTERN}`, async (c): Promise<Response> => {
+	const id = c.req.param("id");
+	if (c.env.DIRECTORY_READ_SCHEMA === "next") {
+		if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
+		return answerNextVendor(c, (params, viewer) => {
+			checkFields(params, RECORD_FIELDS, viewer);
+			const contract = oneOf(params, "contract", CONTRACTS, null);
+			return (db, stamp) => readNextVendor(db, viewer, id, contract, stamp);
+		});
+	}
+	return record(c, id, readVendor);
+});

@@ -1487,6 +1487,12 @@ The save locks the payment, checks the version and stamps only the receipt. It a
 
 An unknown payment returns `404 invoice_not_found`. An outdated version returns `409 version_conflict { current_version }`. A payment already received or awaiting an invoice returns `422 invoice_not_unpaid`. A date before the invoice or after today returns `422 payment_date_out_of_range`. Invoice-email application and undo control when the deal was invoiced. Mark paid records when the money was received.
 
+## Vendors directory reads for the app
+
+The Vendors directory (`GET /api/engine/vendors`) and drawer (`GET /api/engine/vendors/:id`) read from the new schema through `DATABASE` as `engine_reader` when the engine Worker's `DIRECTORY_READ_SCHEMA` variable is `next` (and `clients-vendors-from-engine` is `on` in the app). When `DIRECTORY_READ_SCHEMA` is absent or any other value, the old-table read stays active.
+
+The read lists live parties holding the `vendor` role, reading categories from vendor category roles, owner from `party_role.owner_user_id`, active territories from `party_territory`, verticals and loan programs from `vendor_vertical` and `vendor_loan_program`, contact details and active people from `party_email`, `party_phone`, `party_company`, and `active_do_not_contact`, and live activity and introductions from `activity`, `activity_about`, `introduction`, and `party_link`. Track record counts come from `vendor_track_record` and rate the computed tier directly without a legacy verification timestamp. `coverage_verified_at` and `override` have no home in the new database and return `null` (the app's rating editor is frozen after cutover). Copied vendors keep their copied typed ref (`outside_id` under `old_system_ref`, preferring `V-...`) and open by either their legacy `outside_id` or their new party ID; new vendors use their party ID as both `id` and `ref`.
+
 ## Doors the old system calls
 
 These are the engine requests old-system programs 26, 27 and 28 will make, fixed before either side is built so both can be built at once. Where the engine side is unbuilt, this is the shape it implements. Old callers were read at `carr-system` `e5966a7`, which already keeps each email's Message-ID (slice 2).
