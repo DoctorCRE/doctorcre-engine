@@ -146,6 +146,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] A deal with no website says "No client website linked."
 - [ ] Set up client website stays below the deal's facts and asks for the website name and a password (owner, 2026-11-18).
 - [ ] Each person's open step on the deal is labeled "Next step" and shows its owner and due date in words. A late step also shows "N days late". A Home card for one of the steps opens here with that step in view.
+- [ ] Closing or losing a deal leaves its steps unchanged. On the deal page, steps still open appear under "Open before this deal ended" with their due dates. Ended deals never count a step as late anywhere on Deals.
 - [ ] "Still needed" shows the step's owner and date.
 - [ ] Change next step saves the partner's new step and date, replacing their own open step. A step saved without an owner belongs to the partner who saved it.
 - [ ] Facts: deal kind, deal reason, market, closed value when closed, and the market agent on a national-account deal. Closed and lost cards and the deal page keep the Renewal label for copied renewals with an unrecorded source lease and show a note that the lease wasn't recorded.
