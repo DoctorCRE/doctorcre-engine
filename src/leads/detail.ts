@@ -121,8 +121,20 @@ const detailFields = (
 		stages: RawBuilder<unknown>;
 	},
 	{ correspondence, stageHistory }: HistoryCursors,
-) =>
-	sql<{
+	stageOrder: "mutation_order" | "occurred_at" = "mutation_order",
+) => {
+	const byTime = stageOrder === "occurred_at";
+	const stageDescending = byTime
+		? sql`occurred_at desc, mutation_order desc`
+		: sql`mutation_order desc`;
+	const stageAscending = byTime
+		? sql`e.occurred_at, e.mutation_order`
+		: sql`e.mutation_order`;
+	const beforeStageCursor = byTime
+		? sql`(occurred_at, mutation_order) < (select occurred_at, mutation_order
+			from stage_history where mutation_order = ${stageHistory}::bigint)`
+		: sql`mutation_order < ${stageHistory}::bigint`;
+	return sql<{
 		id: string;
 		fields: DetailFields;
 	}>`with opened_lead as materialized (${sources.lead}),
@@ -137,17 +149,17 @@ const detailFields = (
 	), stage_history as materialized (
 		${sources.stages}
 	), stage_tail as materialized (
-		select * from stage_history where ${stageHistory}::bigint is null or mutation_order < ${stageHistory}::bigint
-		order by mutation_order desc limit 101
+		select * from stage_history where ${stageHistory}::bigint is null or ${beforeStageCursor}
+		order by ${stageDescending} limit 101
 	), stage_page as materialized (
-		select * from stage_tail order by mutation_order desc limit 100
+		select * from stage_tail order by ${stageDescending} limit 100
 	) select l.id, jsonb_build_object('phone', l.phone, 'email', l.email, 'notes', l.notes,
 		'correspondence_coverage', 'captured_entries_only', 'history_limit', 100,
 		'correspondence', coalesce((select jsonb_agg(to_jsonb(a) - 'lead_id' order by a.occurred_at desc, a.id desc)
 			from correspondence_page a), '[]'),
 		'stage_history', coalesce((select jsonb_agg(to_jsonb(e) - 'lead_id'
 				|| jsonb_build_object('mutation_order', e.mutation_order::text)
-				order by e.mutation_order desc) from stage_page e), '[]'),
+				order by ${stageDescending}) from stage_page e), '[]'),
 		'correspondence_page', jsonb_build_object('total', (select count(*) from correspondence),
 			'has_more', (select count(*) > 100 from correspondence_tail),
 			'next_cursor', case when (select count(*) > 100 from correspondence_tail) then
@@ -156,9 +168,10 @@ const detailFields = (
 		'stage_history_page', jsonb_build_object('total', (select count(*) from stage_history),
 			'has_more', (select count(*) > 100 from stage_tail),
 			'next_cursor', case when (select count(*) > 100 from stage_tail) then
-				(select e.mutation_order::text from stage_page e order by e.mutation_order limit 1) end)
+				(select e.mutation_order::text from stage_page e order by ${stageAscending} limit 1) end)
 	) as fields
 	from opened_lead l`.execute(db);
+};
 
 const legacyDetail = (leadId: string) => ({
 	lead: sql`select l.id, p.phone, p.email, l.notes
@@ -169,7 +182,8 @@ const legacyDetail = (leadId: string) => ({
 
 const nextDetail = (leadId: string) => ({
 	lead: sql`select r.party_id as id,
-		(select number from party_phone where party_id = r.party_id and is_primary) as phone,
+		(select concat(number, ' x' || extension) from party_phone
+			where party_id = r.party_id and is_primary) as phone,
 		(select address from party_email where party_id = r.party_id and is_primary) as email,
 		(select a.summary from activity_about link join activity a on a.id = link.activity_id
 			where link.party_id = r.party_id and a.kind = 'note' and a.summary is not null
@@ -251,7 +265,12 @@ export async function readNextLeadDetail(
 	cursors: HistoryCursors,
 ) {
 	const [opened] = (
-		await detailFields(db, nextDetail(leadId.toLowerCase()), cursors)
+		await detailFields(
+			db,
+			nextDetail(leadId.toLowerCase()),
+			cursors,
+			"occurred_at",
+		)
 	).rows;
 	const board = await readNextLeadBoard(db);
 	if ("error" in board) return board;

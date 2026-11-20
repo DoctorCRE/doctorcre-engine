@@ -8,6 +8,7 @@ import {
 	timingEvents,
 } from "./opportunity-timing.ts";
 import {
+	CONTACT_FRESHNESS_DAYS,
 	type ContactInputs,
 	EVIDENCE_LIMIT,
 	type Finding,
@@ -223,7 +224,7 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 					where link.party_id = p.id and a.kind in ('email', 'call', 'meeting')) as last_touch,
 				false as suppressed, '[]'::jsonb as possible_clients,
 				null as score, null as score_reason, null as last_stage_move,
-				null as state, null as county, null as registry_ref, null as prospect_client_id,
+				null as state, null as county, legacy.registry_ref, null as prospect_client_id,
 				null as prospect_client_version, null as prospect_engagement_status,
 				client.party_id as client_id, client.party_id is not null as linked_client,
 				jsonb_build_object('contract', 'lead-opportunity-timing.v1', 'record_added_at', r.created_at,
@@ -235,15 +236,30 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 			left join active_do_not_contact dnc on dnc.party_id = p.id
 			left join client on client.party_id = p.id
 			left join lateral (
-				select min(value) as value from outside_id where source = 'old_system_lead' and party_id = p.id
+				select min(value) filter (where source = 'old_system_lead') as value,
+					min(value) filter (where source = 'old_system_ref' and value like 'L-%') as registry_ref
+				from outside_id where party_id = p.id and source in ('old_system_lead', 'old_system_ref')
 			) legacy on true
 			where r.role = 'lead'
 		)
 		select to_jsonb(b) as lead, '[]'::jsonb as findings,
 			jsonb_build_object('party_id', b.party_id, 'created_at', b.created_at,
 				'email', (select address from party_email where party_id = b.party_id and is_primary),
-				'phone', (select number from party_phone where party_id = b.party_id and is_primary),
-				'cell', null, 'activities', '[]'::jsonb) as contact
+				'phone', (select concat(number, ' x' || extension) from party_phone
+					where party_id = b.party_id and is_primary),
+				'cell', (select concat(number, ' x' || extension) from party_phone
+					where party_id = b.party_id and label = 'mobile'
+					order by is_primary desc, created_at desc, id limit 1),
+				'activities', coalesce((select jsonb_agg(to_jsonb(a) order by a.occurred_at desc, a.id)
+					from (select a.id, b.id as lead_id, a.kind, a.reached as connected,
+						a.happened_at as occurred_at, coalesce(a.changed_by_job, u.slug) as source,
+						null as detail
+					from activity_about link join activity a on a.id = link.activity_id
+					left join app_user u on u.id = a.changed_by_user_id
+					where link.party_id = b.party_id and a.kind in ('email', 'call', 'meeting')
+						and a.happened_at >= greatest(b.created_at, now() - make_interval(days => ${CONTACT_FRESHNESS_DAYS}))
+						and a.happened_at <= now()
+					order by a.happened_at desc, a.id limit ${EVIDENCE_LIMIT + 1}) a), '[]')) as contact
 		from board b order by b.stage_sort, b.name, b.id`.execute(db);
 	return leadBoard(rows);
 }

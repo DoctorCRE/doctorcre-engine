@@ -949,7 +949,9 @@ Moving today's `deal_invoice_email` rows across maps created_by through the exis
 
 `LEADS_READ_SCHEMA=next` moves the Leads board and drawer to the new database. The board reads the lead role and the owner's user record. An unclaimed lead has no owner or owner label. A lead that becomes a client or joins the client side of a deal keeps its lead history and leaves the visible board.
 
-The board uses the copied lead ID when available and otherwise uses the party ID. The drawer accepts either, including multiple copied lead IDs that resolve to one party. It reads mail, calls and meetings linked to that party, and pages applied moves and ordinary stage changes in the existing history format. It reads the latest linked note for Plans. The score and old prospect engagement fields are empty. Timing events, research findings and possible client matches are empty lists, and the legacy Undo control is absent. Claim, stage and link saves in Leads need their own app and engine wiring.
+The board uses the copied lead ID when available and otherwise uses the party ID. It shows the copied lead registry reference for Quiet follow-ups links. The drawer accepts either ID, including multiple copied lead IDs that resolve to one party. The drawer and reachability keep stored phone extensions, and reachability uses a stored mobile number when available. The drawer reads mail, calls and meetings linked to the party. Recent linked activity carries its recorded user or job into reachability. A reached call counts as successful contact, while mail still needs proof of an exact nonautomated inbound match. Stage history pages applied moves and ordinary stage changes by recorded event time, with the audit ID as the tie-breaker and cursor. The drawer reads the latest linked note for Plans.
+
+The score and old prospect engagement fields are empty. Timing events, research findings and possible client matches are empty lists, and the legacy Undo control is absent. Claim, stage and link saves in Leads need their own app and engine wiring.
 
 ## Copying today's leads and clients
 
