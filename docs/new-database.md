@@ -1451,6 +1451,16 @@ Add deal sends `role=client` so the limit applies to people and companies with t
 
 No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated `kind` or `role` values return 400. Session and database refusals use the shared read rules. App #977 routes the deal-page picker to this door.
 
+## Global Search and Recent Activity
+
+Set `SEARCH_READ_SCHEMA=next` for `GET /api/engine/find` and `ACTIVITY_READ_SCHEMA=next` for `GET /api/engine/recent-activity`. Each read uses the public schema until its variable is set to `next`.
+
+Search finds current deals by case-insensitive name. It finds contacts by name, including fuzzy matches ranked by similarity, or by exact email address. The response carries the deal owner's current user slug, the contact's current role, and the specialty label. Search matches and connection endpoints use the copied typed reference from `outside_id` when unique for the role, or the next ID. Merged-away names stay out of the results. Lead and client links come from shared roles or a current company relationship. Related deals include those that name a matching party as a client contact.
+
+Recent Activity requires `query` and accepts an optional `ref` on both paths. The next read resolves `ref` first, preferring a canonical reference over a shared ID or a copied alias. If `ref` is missing or has no match, the read uses `query`. A query prefers an exact reference or ID, then an exact name. Multiple matching targets return a list to disambiguate. The public read uses `query` as before.
+
+The next timeline shows calls, emails, meetings, notes, and next steps linked to the selected deal or contact. Email `detail` carries the stored body. Other rows have null `detail`, and `owed` is null for all rows. Calendar history contains the signed-in partner's confirmed meetings for that record.
+
 ## Relationships read for the app
 
 The app uses `GET /api/engine/relationships?contract=relationship-network.v1` when `relationships-from-engine` is on. Set `RELATIONSHIPS_READ_SCHEMA=next` on the engine to read the new database as `engine_reader`. An absent or different value uses the old tables.
