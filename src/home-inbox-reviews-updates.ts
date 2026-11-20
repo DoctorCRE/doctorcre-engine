@@ -1,4 +1,10 @@
 import { sql, type Transaction } from "kysely";
+import {
+	dealStepUrl,
+	homeDate,
+	homeDisplayText,
+	homeWhy,
+} from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 
 type DealNotice = {
@@ -98,16 +104,24 @@ export function completionReviewCard(
 	},
 ) {
 	const { item_id, base_version, source_version, action_version } = step;
+	const action = homeDisplayText(review.title);
+	const deal = homeDisplayText(review.deal_name);
 	return {
 		...noticeCard(review, {
 			item_id,
-			open_url: `/deals?deal=${review.deal_id}&focus=next-step`,
+			open_url: dealStepUrl(review.deal_id, review.next_step_id),
 			kind_label: "Task",
 			source_version,
 		}),
 		base_version,
 		action_version,
-		title: `Did this happen? ${review.title}`,
+		title: `A ${review.activity_kind} may confirm a step for ${deal} — ${action ? `check whether this is done: ${action}` : "review completion"}`,
+		why: homeWhy(
+			homeDisplayText(review.evidence) ||
+				homeDisplayText(review.summary) ||
+				`The ${review.activity_kind} was recorded on ${homeDate(review.happened_at)}`,
+		),
+		primary_action: "Review completion",
 		completion_review: {
 			proposal_id: review.id,
 			next_step_id: review.next_step_id,
@@ -126,11 +140,39 @@ export function completionReviewCard(
 type HomeUpdate = DealNotice & {
 	kind: "update" | "tour_feedback";
 	checklist_item_ref: string | null;
+	checklist_item_title: string | null;
 	property_id: string | null;
+	property_label: string | null;
 	source_version: string;
 	mark_version: string;
 	snoozed_until: string | null;
 };
+
+function updateText(update: HomeUpdate) {
+	const text = homeDisplayText(update.title);
+	const deal = homeDisplayText(update.deal_name);
+	if (update.kind === "tour_feedback") {
+		const property = homeDisplayText(update.property_label);
+		const target = property ? `${property} for ${deal}` : deal;
+		const shortlistChange = /\b(?:added|removed)\b.*\bshortlist\b/i.test(text);
+		return {
+			title: shortlistChange
+				? `${text} — review the change`
+				: `Tour feedback on ${target} — review feedback`,
+			why: homeWhy(text, `Recorded ${homeDate(update.activity_at)}`),
+			primary_action: "Review feedback",
+		};
+	}
+	if (update.due_on) {
+		const item = homeDisplayText(update.checklist_item_title) || text;
+		return {
+			title: `Checklist item due for ${deal} — ${item || "open the checklist item"}`,
+			why: homeWhy(item, `Due ${homeDate(update.due_on)}`),
+			primary_action: "Open checklist item",
+		};
+	}
+	return {};
+}
 
 export async function readHomeUpdates(
 	db: Transaction<DB>,
@@ -140,11 +182,16 @@ export async function readHomeUpdates(
 	const { rows } = await sql<HomeUpdate>`
 		select u.id, u.deal_id, d.name as deal_name, u.kind, u.what as title, u.due_on,
 			u.created_at as activity_at, u.checklist_item_ref, u.property_id,
+			item.item_title as checklist_item_title,
+			coalesce(property.name, property.address) as property_label,
 			coalesce(update_change.id, 0)::text as source_version,
 			coalesce(mark_change.id, 0)::text as mark_version,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
 		from home_update u
 		join deal d on d.id = u.deal_id
+		left join next_step item on item.deal_id = u.deal_id
+			and 'deal-item:' || item.id::text = u.checklist_item_ref
+		left join property on property.id = u.property_id
 		left join home_mark m on (m.user_id, m.item_kind, m.item_id) = (u.user_id, 'home_update', u.id)
 		cross join lateral (
 			select max(id) as id from change
@@ -175,6 +222,7 @@ export async function readHomeUpdates(
 		});
 		return {
 			...card,
+			...updateText(update),
 			kind: update.kind,
 			base_version: `${update.source_version}:${update.mark_version}:${card.disposition}`,
 			checklist_item_ref: update.checklist_item_ref,

@@ -330,7 +330,9 @@ test("Home groups pending suggestions from each email conversation or call and k
 		{
 			source_type: "capture_session",
 			kind_label: "Call",
-			title: "Call with Known Contact, Fri, Jan 2: 2 suggestions",
+			title: "Call with Known Contact left 2 decisions — review suggestions",
+			why: "Call on Jan 2, 2026. Send a budget.",
+			primary_action: "Review suggestions",
 			merged_source_ids: [id(34), id(33)],
 			open_url: `/calls?session=${call}`,
 			source_activity: { kind: "call", id: call },
@@ -342,6 +344,31 @@ test("Home groups pending suggestions from each email conversation or call and k
 			.map((card) => card.merged_source_ids),
 		[[id(38)]],
 	);
+});
+
+test("Home names a meeting's recorded decision with the deal and meeting date", async () => {
+	const proposal = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
+			values ('${proposal}', 'next_step', '${meeting}', 'meeting', 'L-223', 'old_system', '${deal}', 'Confirm the tour', '${other}');
+		commit;`);
+	assert.partialDeepStrictEqual(
+		(await inbox("other")).find((card) => card.proposal_id === proposal),
+		{
+			title:
+				"Meeting about Example Dental on Jan 3, 2026 left a decision — review suggestions",
+			why: "Meeting on Jan 3, 2026. Confirm the tour.",
+			primary_action: "Review suggestions",
+			open_url: `/deals?deal=${deal}`,
+			source_activity: {
+				kind: "meeting",
+				id: meeting,
+				happened_at: "2026-01-03T12:00:00.000Z",
+			},
+		},
+	);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		delete from proposal where id = '${proposal}'; commit;`);
 });
 
 for (const decision of ["accept", "dismiss"]) {
@@ -701,7 +728,10 @@ test("Home shows one pending call log with the proposal to decide", async () => 
 	assert.partialDeepStrictEqual(cards, [
 		{
 			item_id: `suggestion:${proposal.proposal_id}`,
-			title: "Call on Tue, Jan 6: 1 suggestion",
+			title:
+				"Call about Example Dental on Jan 6, 2026 left a decision — review suggestions",
+			why: "Call on Jan 6, 2026. Let's review the example plan. Proposed: Agreed to review the example plan.",
+			primary_action: "Review suggestions",
 			proposal_id: proposal.proposal_id,
 			suggestions: [
 				{ id: proposal.proposal_id, kind: "log_call", deal_id: deal },

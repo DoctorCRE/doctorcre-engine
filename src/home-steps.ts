@@ -2,6 +2,50 @@ import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import type { DB } from "./next-database.d.ts";
 
+export function homeDisplayText(text: string | null) {
+	return (text ?? "")
+		.replace(
+			/\(?(?:\bL-\d+\b|\bV-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d+\b|\bT\s*[-−]\s*\d+\s*(?:days?|weeks?|months?|years?)\b|\bloop\s*#\s*\d+\b)\)?/gi,
+			"",
+		)
+		.replace(/\(\s*\)|\[\s*\]/g, "")
+		.replace(/\s+/g, " ")
+		.replace(/^[\s:;,·–—-]+|[\s:;,·–—-]+$/g, "");
+}
+
+const dateLabel = new Intl.DateTimeFormat("en-US", {
+	dateStyle: "medium",
+	timeZone: "America/Chicago",
+});
+
+export function homeDate(date: string) {
+	return dateLabel.format(
+		new Date(date.length === 10 ? `${date}T12:00:00Z` : date),
+	);
+}
+
+export function homeWhy(...facts: (string | null)[]) {
+	return facts
+		.filter((fact): fact is string => Boolean(fact))
+		.map((fact) => (/[.!?]$/.test(fact) ? fact : `${fact}.`))
+		.join(" ");
+}
+
+export function undatedPartyStep(action: string) {
+	if (
+		/^(?:schedule|set|calculate|update)\s+(?:the\s+)?next\s+(?:follow[- ]?up|check[- ]?in|outreach|reminder|date)\b/i.test(
+			action,
+		)
+	) {
+		return "schedule";
+	}
+	return /^(?:please\s+)?(?:arrange|ask|book|call|check|confirm|connect|contact|decide|discuss|email|find|follow up|introduce|meet|prepare|reach out|reconnect|request|respond|review|send|share|text|tour|verify)\b/i.test(
+		action,
+	)
+		? "action"
+		: "unclear";
+}
+
 export function stepTargetFields(db: Transaction<DB>) {
 	const openDeals = db
 		.selectFrom(selectNextDeals(db).as("board"))
@@ -23,6 +67,10 @@ export function stepTargetFields(db: Transaction<DB>) {
 export const stepItemId = (step: { id: string; call_id: string | null }) =>
 	`${step.call_id ? "capture_post_call_action" : "next_action"}:${step.id}`;
 
+export function dealStepUrl(dealId: string, stepId?: string) {
+	return `/deals?deal=${dealId}&focus=next-step${stepId ? `&step=${stepId}` : ""}`;
+}
+
 export function stepOpenUrl(
 	step: {
 		id: string;
@@ -37,7 +85,7 @@ export function stepOpenUrl(
 	return step.call_id
 		? `/calls?session=${step.call_id}`
 		: step.deal_id
-			? `/deals?deal=${step.deal_id}&focus=next-step${done ? "" : `&step=${step.id}`}`
+			? dealStepUrl(step.deal_id, done ? undefined : step.id)
 			: step.party_id
 				? step.prospect
 					? `/deals?prospect=${step.party_id}&focus=follow-up`

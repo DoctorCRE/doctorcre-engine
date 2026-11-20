@@ -10,7 +10,15 @@ import {
 	readCompletionReviews,
 	readHomeUpdates,
 } from "./home-inbox-reviews-updates.ts";
-import { stepItemId, stepOpenUrl, stepTargetFields } from "./home-steps.ts";
+import {
+	homeDate,
+	homeDisplayText,
+	homeWhy,
+	stepItemId,
+	stepOpenUrl,
+	stepTargetFields,
+	undatedPartyStep,
+} from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
 
@@ -24,8 +32,10 @@ type Step = {
 	building_deal_id: string | null;
 	party_id: string | null;
 	prospect: boolean;
-	context_label: string;
+	context_label: string | null;
 	due_on: string | null;
+	created_at: string;
+	set_by: string | null;
 	activity_at: string;
 	completed_at: string | null;
 	hold_until: string | null;
@@ -39,14 +49,16 @@ type Step = {
 	call_summary: string | null;
 	call_quote: string | null;
 	source_id: string | null;
-	source_kind: string | null;
+	source_kind: "call" | "email" | "meeting" | null;
+	source_evidence: string | null;
 };
 
 function stepRows(db: Transaction<DB>, userId: string) {
 	return sql<Step>`
 		select s.id, s.what as title, s.status, s.deal_id, s.party_id,
 			${stepTargetFields(db)},
-			s.due_on, coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
+			s.due_on, s.created_at, setter.name as set_by,
+			coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
 			case when s.hold_until > (now() at time zone 'America/Chicago')::date
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
@@ -60,7 +72,8 @@ function stepRows(db: Transaction<DB>, userId: string) {
 				), false) as undo_completion,
 			c.id as call_id, c.happened_at as call_at, contact.name as call_contact,
 			c.summary as call_summary, s.call_evidence_quote as call_quote,
-			accepted.activity_id as source_id, accepted.activity_kind as source_kind
+			accepted.activity_id as source_id, accepted.activity_kind as source_kind,
+			accepted.evidence as source_evidence
 		from next_step s
 		left join deal d on d.id = s.deal_id
 		left join party p on p.id = s.party_id
@@ -69,6 +82,12 @@ function stepRows(db: Transaction<DB>, userId: string) {
 		left join party contact on contact.id = coalesce(s.call_contact_party_id, c.from_party_id)
 		left join proposal accepted on accepted.id = s.id and accepted.kind = 'next_step'
 			and accepted.status = 'accepted'
+		left join lateral (
+			select changed_by_user_id from change
+			where table_name = 'next_step' and record = jsonb_build_object('id', s.id) and action = 'insert'
+			order by id limit 1
+		) origin on true
+		left join party setter on setter.id = origin.changed_by_user_id
 		left join home_mark m on m.user_id = ${userId}::uuid
 			and m.item_id = s.id
 			and m.item_kind = case when c.id is null then 'next_step' else 'call_follow_up' end
@@ -95,7 +114,43 @@ const iso = (timestamp: string) => new Date(timestamp).toISOString();
 const optionalIso = (timestamp: string | null) =>
 	timestamp === null ? null : iso(timestamp);
 
-function stepCard(step: Step) {
+function stepText(step: Step, action: string) {
+	const target = homeDisplayText(step.context_label);
+	const forTarget = target ? ` for ${target}` : "";
+	const primary_action = step.status === "done" ? "Open" : "Mark done";
+	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
+	if (step.call_at) {
+		const contact = homeDisplayText(step.call_contact);
+		const date = homeDate(step.call_at);
+		const call = contact
+			? `Call with ${contact}`
+			: `Call${forTarget} on ${date}`;
+		return {
+			title: `${call} left a follow-up — ${action || "open the saved step"}`,
+			why: homeWhy(
+				`Call on ${date}`,
+				homeDisplayText(step.call_quote) ||
+					homeDisplayText(step.call_summary) ||
+					"Call details unavailable",
+				due,
+			),
+			primary_action,
+		};
+	}
+	const setter = homeDisplayText(step.set_by);
+	const set = step.source_kind
+		? `Follow-up set from the ${step.source_kind}`
+		: setter
+			? `Follow-up set by ${setter}`
+			: `Follow-up set on ${homeDate(step.created_at)}`;
+	return {
+		title: `${step.status === "done" ? "Follow-up completed" : due ? "Follow-up due" : "Follow-up set"}${forTarget} — ${action || "open the saved step"}`,
+		why: homeWhy(set, homeDisplayText(step.source_evidence), due),
+		primary_action,
+	};
+}
+
+function stepCard(step: Step, action: string) {
 	const completed_at = optionalIso(step.completed_at);
 	const done = step.status === "done";
 	const snoozed_until = done ? null : optionalIso(step.snoozed_until);
@@ -117,7 +172,7 @@ function stepCard(step: Step) {
 		source_version,
 		source_state: done ? "done" : "needs_attention",
 		base_version: `${source_version}:${step.mark_version ?? "0"}:${disposition}`,
-		title: step.title,
+		...stepText(step, action),
 		activity_at: iso(step.activity_at),
 		completed_at,
 		hold_until,
@@ -158,12 +213,33 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 		db,
 		rows.filter((step) => step.status === "open").map((step) => step.id),
 	);
-	const steps = rows.map((step) => {
+	let unexplained_step_count = 0;
+	const steps: (
+		| ReturnType<typeof stepCard>
+		| ReturnType<typeof completionReviewCard>
+	)[] = [];
+	for (const step of rows) {
 		const review = reviews.get(step.id);
-		const card = stepCard(step);
-		if (!review || step.snoozed_until) return card;
-		return completionReviewCard(review, card);
-	});
+		const action = homeDisplayText(step.title);
+		if (review && !step.snoozed_until) {
+			steps.push(completionReviewCard(review, stepCard(step, action)));
+			continue;
+		}
+		if (step.status === "open") {
+			const partyStep =
+				step.party_id && !step.due_on ? undatedPartyStep(action) : null;
+			if (partyStep === "schedule") continue;
+			if (
+				!action ||
+				partyStep === "unclear" ||
+				(partyStep && !homeDisplayText(step.context_label))
+			) {
+				unexplained_step_count++;
+				continue;
+			}
+		}
+		steps.push(stepCard(step, action));
+	}
 	const updates = await readHomeUpdates(db, userId, LIMIT + 1);
 	const items = [
 		...steps,
@@ -180,6 +256,7 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 		schema_version: "home-inbox.v5",
 		home_mark_drop: true,
 		home_proposal_drop: true,
+		unexplained_step_count,
 		items: items.slice(0, LIMIT),
 		truncated: rows.length > LIMIT || items.length > LIMIT,
 		limit: LIMIT,

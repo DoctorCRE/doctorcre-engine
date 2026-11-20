@@ -1,6 +1,7 @@
 import { type RawBuilder, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import { isoMillis, Refusal } from "./answer.ts";
+import { homeDate, homeDisplayText, homeWhy } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {
@@ -43,6 +44,10 @@ type Suggestion = ReviewRow &
 	Pick<SuggestionReference, "activity_kind"> & {
 		latest_activity_id: string | null;
 		latest_source_at: string | null;
+		contact_name: string | null;
+		source_summary: string | null;
+		evidence: string;
+		what: string | null;
 		due_on: string | null;
 		fallback_reply_draft: {
 			id: string;
@@ -204,6 +209,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 	return sql`
 		with visible as (
 			select p.id, p.kind, p.status, a.id as activity_id, a.kind as activity_kind, p.created_at as activity_at, p.due_on,
+				contact.name as contact_name, a.summary as source_summary, p.evidence, p.what,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
 				coalesce(d.name, party.name, property.name, property.address, candidate.name,
@@ -212,8 +218,6 @@ function suggestionRows(userId: string, forMail: boolean) {
 					when d.id is not null then '/deals?deal=' || d.id
 					when party.id is not null then '/relationships?node=party:' || party.id end as open_url,
 				case
-					when p.activity_kind = 'call' then coalesce('Call with ' || contact.name || ', ', 'Call on ')
-						|| to_char(a.happened_at at time zone 'America/Chicago', 'Dy, Mon FMDD')
 					when p.kind = 'next_step' then p.what
 					when p.kind = 'phase_move' then 'Move to ' || phase.label
 					when p.kind = 'file_to_deal' then 'File email to ' || d.name
@@ -439,6 +443,41 @@ function reviewCard(
 	};
 }
 
+function conversationReviewText(
+	suggestion: Suggestion,
+	kind: "Call" | "Meeting",
+) {
+	const contact = homeDisplayText(suggestion.contact_name);
+	const context = homeDisplayText(suggestion.context_label);
+	const source = contact
+		? `${kind} with ${contact}`
+		: context
+			? `${kind} about ${context}`
+			: kind;
+	const date = suggestion.latest_source_at
+		? homeDate(suggestion.latest_source_at)
+		: null;
+	const when = !contact && date ? ` on ${date}` : "";
+	const count = suggestion.suggestions.length;
+	const proposed = homeDisplayText(suggestion.what);
+	const evidence =
+		homeDisplayText(suggestion.evidence) ||
+		homeDisplayText(suggestion.source_summary);
+	return {
+		title: `${source}${when} left ${count === 1 ? "a decision" : `${count} decisions`} — review suggestions`,
+		why: homeWhy(
+			date ? `${kind} on ${date}` : null,
+			evidence || proposed || "Source details unavailable",
+			proposed &&
+				!evidence.toLowerCase().includes(proposed.toLowerCase()) &&
+				evidence
+				? `Proposed: ${proposed}`
+				: null,
+		),
+		primary_action: "Review suggestions",
+	};
+}
+
 export async function readHomeReviewCards(
 	db: Transaction<DB>,
 	userId: string,
@@ -489,16 +528,16 @@ export async function readHomeReviewCards(
 		})),
 		...suggestions.rows.map((suggestion) => {
 			const call = suggestion.activity_kind === "call";
+			const meeting = suggestion.activity_kind === "meeting";
 			const sourceType = call
 				? "capture_session"
-				: suggestion.activity_kind === "meeting"
+				: meeting
 					? "notification"
 					: "email_proposal";
 			return {
 				...reviewCard(suggestion, "proposal", sourceType, "needs_attention"),
-				title: call
-					? `${suggestion.title}: ${suggestion.suggestions.length} ${suggestion.suggestions.length === 1 ? "suggestion" : "suggestions"}`
-					: suggestion.title,
+				...((call || meeting) &&
+					conversationReviewText(suggestion, call ? "Call" : "Meeting")),
 				kind_label: call ? "Call" : "Suggestion",
 				deal_id: null,
 				due_on: suggestion.due_on,
@@ -512,8 +551,7 @@ export async function readHomeReviewCards(
 					? {
 							kind: suggestion.activity_kind,
 							id: suggestion.latest_activity_id,
-							...(suggestion.activity_kind === "email" &&
-							suggestion.latest_source_at
+							...(suggestion.latest_source_at
 								? {
 										happened_at: new Date(
 											suggestion.latest_source_at,
