@@ -190,3 +190,18 @@ test("meetings that ended in the last day ask for an outcome review", () => {
 	assert.deepEqual(stale.follow_up_reviews, []);
 	assert.equal("follow_up_reviews" in shown(snapshot([])), false);
 });
+
+test("a calendar-day window includes ended meetings today and excludes both midnight edges", () => {
+	const items = [
+		meeting(-10, 1, "Yesterday edge"),
+		meeting(-9, 1, "Early ended"),
+		meeting(1, 1, "Later today"),
+		meeting(15, 1, "Tomorrow edge"),
+	];
+	const read = meetingsFromSnapshot(snapshot(items), NOW, {
+		fromMs: Date.parse(at(-9)),
+		untilMs: Date.parse(at(15)),
+	});
+	assert.ok(read && read.state !== "unavailable");
+	assert.deepEqual(titles(read.items), ["Early ended", "Later today"]);
+});

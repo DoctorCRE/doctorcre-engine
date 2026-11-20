@@ -1,0 +1,266 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { after, before, test } from "node:test";
+import { doorTest } from "./test-door.ts";
+
+type Row = Record<string, unknown>;
+type Section<T> = { state: string; reason: string | null } & T;
+type TodayBody = {
+	error?: string;
+	meetings?: Section<{
+		observed_at: string | null;
+		items: Row[];
+		follow_up_reviews: Row[];
+	}>;
+	reminders?: Section<{ late: Row[]; upcoming: Row[] }>;
+};
+
+const { db, setup, cleanup, request, save } = doorTest();
+const id = (n: number) =>
+	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const reader: Record<string, string> = { HOME_INBOX_READ_SCHEMA: "next" };
+const joe = { user: "joe" };
+const get = { method: "GET" } as const;
+
+before(async () => {
+	await setup();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client');
+		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity');
+		insert into how_found (slug, label) values ('referral', 'Referral'); insert into phase (slug, label) values ('dead', 'Dead');
+		insert into party (id, kind, name, how_found) values
+			('${id(1)}', 'person', 'Example Partner One', null), ('${id(2)}', 'person', 'Example Partner Two', null),
+			('${id(3)}', 'company', 'Example Dental', 'referral'), ('${id(4)}', 'person', 'Dr. Example', null),
+			('${id(5)}', 'company', 'Solo Clinic', 'referral'), ('${id(6)}', 'company', 'Prospect Dental', 'referral'),
+			('${id(12)}', 'person', 'Example Assistant', null);
+		insert into app_user (id, slug) values ('${id(1)}', 'joe'), ('${id(2)}', 'dell'), ('${id(12)}', 'claude');
+		insert into party_email (party_id, address, label) values ('${id(1)}', 'joe@example.test', 'work'),
+			('${id(4)}', 'dr.example@example.test', 'work'), ('${id(5)}', 'solo@example.test', 'work');
+		insert into party_company (person_id, company_id) values ('${id(4)}', '${id(3)}');
+		insert into party_role (party_id, role, stage) values ('${id(3)}', 'client', null), ('${id(6)}', 'lead', 'opportunity');
+		insert into deal (id, name, owner_user_id) values ('${id(7)}', 'Example Dental, Springfield', '${id(1)}'),
+			('${id(8)}', 'Other Clinic, Austin', '${id(2)}'), ('${id(9)}', 'Closed Clinic', '${id(1)}');
+		insert into deal_party (deal_id, party_id, role) values ('${id(7)}', '${id(3)}', 'client'), ('${id(9)}', '${id(3)}', 'client');
+		insert into deal_phase_change (deal_id, happened_at, phase, reason) values ('${id(9)}', now(), 'dead', 'Client withdrew');
+		insert into property (id, address) values ('${id(10)}', '100 Example Way');
+		insert into deal_property (deal_id, property_id) values ('${id(7)}', '${id(10)}');
+		insert into activity (id, kind, happened_at, from_party_id, summary) values ('${id(11)}', 'call', now() - interval '1 day', '${id(4)}', 'Discussed lease.');
+		insert into activity_about (activity_id, deal_id) values ('${id(11)}', '${id(8)}'), ('${id(11)}', '${id(9)}');
+		with day as (select (now() at time zone 'America/Chicago')::date as d)
+		insert into next_step (id, deal_id, party_id, property_id, owner_party_id, what, due_on, hold_until, call_activity_id, call_evidence_quote)
+		select v.id, v.deal_id, v.party_id, v.property_id, v.owner_id, v.what, day.d + v.due_offset,
+			case when v.hold_offset is not null then day.d + v.hold_offset end, v.call_id, v.quote
+		from day cross join (values
+			('${id(21)}'::uuid, '${id(7)}'::uuid, null::uuid, null::uuid, '${id(1)}'::uuid, 'Send revised LOI', -3, null::int, null::uuid, null::text),
+			('${id(22)}', null, '${id(3)}', null, '${id(1)}', 'Confirm suite size', 0, null, null, null),
+			('${id(23)}', '${id(8)}', null, null, '${id(1)}', 'Email floor plan', -1, null, '${id(11)}', 'Send floor plan.'),
+			('${id(24)}', '${id(9)}', null, null, '${id(1)}', 'Dropped follow-up', -2, null, '${id(11)}', 'Old follow-up.'),
+			('${id(25)}', null, '${id(5)}', null, '${id(1)}', 'Check in next month', 30, null, null, null),
+			('${id(26)}', null, '${id(4)}', null, '${id(1)}', 'Wait for contractor', -2, 5, null, null),
+			('${id(27)}', null, '${id(6)}', null, '${id(1)}', 'Snoozed reminder', -4, null, null, null),
+			('${id(28)}', '${id(8)}', null, null, '${id(2)}', 'Review counter', -2, null, null, null),
+			('${id(29)}', null, '${id(6)}', null, '${id(2)}', 'Call prospect', 0, null, null, null),
+			('${id(30)}', null, null, '${id(10)}', '${id(1)}', 'Check building', 0, null, null, null),
+			('${id(31)}', '${id(7)}', null, null, '${id(12)}', 'Non-partner reminder', -1, null, null, null)
+		) v(id, deal_id, party_id, property_id, owner_id, what, due_offset, hold_offset, call_id, quote);
+		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values ('${id(1)}', '${id(27)}', 'snoozed', now() + interval '2 days');
+		insert into home_mark (user_id, call_follow_up_id, disposition, drop_reason) values ('${id(1)}', '${id(24)}', 'dropped', 'Already handled.');
+		with day as (select (now() at time zone 'America/Chicago')::date as d)
+		insert into critical_date (id, deal_id, kind, due_on, source)
+		select v.id, '${id(7)}'::uuid, v.kind, day.d + v.due_offset, 'Lease draft'
+		from day cross join (values ('${id(41)}'::uuid, 'loi_expiry', -2), ('${id(42)}', 'due_diligence', 5)) v(id, kind, due_offset);
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${id(1)}', true);
+		update critical_date set status = 'open' where id in ('${id(41)}', '${id(42)}'); commit;`);
+});
+after(async () => {
+	await db.query("rollback");
+	await cleanup();
+});
+
+async function today(search = "", caller = joe, env = reader) {
+	const r = await request(caller, `home/today${search}`, get, env);
+	return [r.status, (await r.json()) as TodayBody] as const;
+}
+
+test("switch off returns 404, non-partners are refused, and invalid owners fail", async () => {
+	const got = await Promise.all([
+		today("", joe, {}),
+		today("?actor=dell"),
+		today("?extra=1"),
+		today("?owner="),
+		today("?owner=joe&owner=dell"),
+		today("?owner=nobody"),
+		today("?owner=claude"),
+		today("", { user: "claude" }),
+	]);
+	const codes = got.map(([s]) => s);
+	const errs = got.slice(5).map(([, b]) => b.error);
+	assert.deepEqual(codes, [404, 403, 400, 400, 400, 400, 400, 403]);
+	assert.deepEqual(errs, [
+		"unknown_owner",
+		"unknown_owner",
+		"AUTHORIZATION_REFUSED",
+	]);
+});
+
+test("reminders include only the two partners' dated steps through today, never critical dates", async () => {
+	const [status, body] = await today();
+	assert.equal(status, 200);
+	assert.partialDeepStrictEqual(body, {
+		ok: true,
+		schema_version: "home-today.v1",
+		viewer: "joe",
+		owner: "all",
+		partners: [
+			{ slug: "dell", name: "Example Partner Two" },
+			{ slug: "joe", name: "Example Partner One" },
+		],
+		meetings: { state: "unavailable", observed_at: null, items: [] },
+		reminders: { state: "ready", reason: null },
+	});
+	assert.equal(typeof body.meetings?.reason, "string");
+	const row = (i: Row) =>
+		`${i.id}|${i.title}|${i.late_label}|${i.owner}|${i.home_item_id}|${i.open_url}`;
+	assert.deepEqual(body.reminders?.late.map(row), [
+		`${id(21)}|Send revised LOI|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
+		`${id(28)}|Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
+		`${id(23)}|Email floor plan|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
+	]);
+	assert.deepEqual(body.reminders?.upcoming.map(row), [
+		`${id(22)}|Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}`,
+		`${id(29)}|Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up`,
+		`${id(30)}|Check building|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
+	]);
+	const inboxRes = await request(joe, "home/inbox", get, reader);
+	const inbox = (await inboxRes.json()) as { items: Row[] };
+	const ids = new Set(inbox.items.map((i) => i.item_id));
+	const { late = [], upcoming = [] } = body.reminders ?? {};
+	for (const i of [...late, ...upcoming])
+		if (typeof i.home_item_id === "string") assert.ok(ids.has(i.home_item_id));
+	const [, dell] = await today("?owner=dell");
+	const dr = dell.reminders;
+	assert.deepEqual(
+		[dr?.late.map((i) => i.id), dr?.upcoming.map((i) => i.id)],
+		[[id(28)], [id(29)]],
+	);
+});
+
+test("meetings cover all of today in Central time including ended ones and hide handled reviews", async () => {
+	const q = `select now() as n, ((now() at time zone 'America/Chicago')::date::timestamp at time zone 'America/Chicago') as s,
+		(((now() at time zone 'America/Chicago')::date + 1)::timestamp at time zone 'America/Chicago') as e`;
+	const t = (await db.query<{ n: string; s: string; e: string }>(q)).rows[0];
+	assert.ok(t);
+	const now = Date.parse(t.n);
+	const start = Date.parse(t.s);
+	const end = Date.parse(t.e);
+	const hr = 3_600_000;
+	const iso = (ms: number) => new Date(ms).toISOString();
+	const mtg = (a: number, b: number, title: string, extra = {}) => ({
+		start: iso(a),
+		end: iso(b),
+		title,
+		...extra,
+	});
+	const p = (name: string, email: string) => ({ name, email });
+	const keys = ["0123456789abcdef", "fedcba9876543210", "abcdef0123456789"];
+	const agenda = {
+		schema: "carr-calendar-agenda.v1",
+		observed_at: iso(now - 60_000),
+		warnings: [],
+		items: [
+			mtg(start - hr, start, "Yesterday midnight"),
+			mtg(start, Math.max(start + 1_000, now - 60_000), "Ended earlier today"),
+			mtg(now - 300_000, now + 300_000, "Lease review", {
+				organizer: p("Example Partner One", "joe@example.test"),
+				attendees: [p("Dr. Example", "dr.example@example.test"), p("Bad", "x")],
+			}),
+			mtg(now - 200_000, now + 400_000, "Solo intro", {
+				attendees: [p("Solo Clinic", "solo@example.test")],
+			}),
+			mtg(end, end + hr, "Tomorrow midnight"),
+		],
+		follow_up_reviews: keys.map((key, i) => ({
+			key,
+			title: `Review ${i + 1}`,
+			start: iso(now - (i + 2) * hr),
+			end: iso(now - (i + 1) * hr),
+			state: "needs_review",
+			prompt: "Confirm whether this meeting happened.",
+		})),
+	};
+	const cap = { job: "mail_capture", for_user: "joe" };
+	const [saved] = await save(cap, "calendar/agenda", agenda, "PUT");
+	const dkey = { idempotency_key: randomUUID() };
+	const [dim] = await save(joe, `calendar/reviews/${keys[1]}/dismissal`, dkey);
+	assert.deepEqual([saved, dim], [200, 200]);
+	await db.query(`begin; select set_config('engine.user_id', '${id(1)}', true);
+		insert into activity (kind, happened_at, calendar_review_user_id, calendar_review_key)
+		values ('meeting', now() - interval '3 hours', '${id(1)}', '${keys[2]}'); commit;`);
+	const [status, body] = await today();
+	const m = body.meetings;
+	const [, dellBody] = await today("?owner=dell", { user: "dell" });
+	const lines = m?.items.map(
+		(x) => `${x.title}|${x.context_label}|${x.open_url}`,
+	);
+	const revs = m?.follow_up_reviews.map((r) => r.key);
+	assert.deepEqual(
+		[status, m?.state, m?.observed_at, revs, dellBody.meetings?.state],
+		[200, "partial", iso(now - 60_000), [keys[0]], "unavailable"],
+	);
+	assert.deepEqual(lines, [
+		"Ended earlier today|null|null",
+		`Lease review|Example Dental, Springfield|/deals?deal=${id(7)}`,
+		"Solo intro|Solo Clinic|null",
+	]);
+	const deal = {
+		id: id(7),
+		name: "Example Dental, Springfield",
+		client_name: "Example Dental",
+	};
+	assert.partialDeepStrictEqual(m?.items[1], { possible_deals: [deal] });
+});
+
+test("meetings and reminders fail independently with plain unavailable reasons", async () => {
+	const cases = [
+		["calendar_agenda", "unavailable", "ready"],
+		["next_step", "partial", "unavailable"],
+	] as const;
+	for (const [table, em, er] of cases) {
+		await db.query(`revoke select on ${table} from engine_reader`);
+		try {
+			const [s, b] = await today();
+			const bad = em === "unavailable" ? b.meetings : b.reminders;
+			const ok = em === "unavailable" ? b.reminders?.late : b.meetings?.items;
+			const states = [s, b.meetings?.state, b.reminders?.state];
+			assert.deepEqual(states, [200, em, er]);
+			assert.deepEqual([typeof bad?.reason, ok?.length], ["string", 3]);
+		} finally {
+			await db.query(`grant select on ${table} to engine_reader`);
+		}
+	}
+});
+
+test("reminder home_item_id does not depend on the inbox page limit", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into home_update (user_id, deal_id, what, created_at)
+		select '${id(1)}', '${id(7)}', 'Update ' || g, now() + interval '1 hour'
+		from generate_series(1, 1001) g; commit;`);
+	try {
+		const inboxRes = await request(joe, "home/inbox", get, reader);
+		const inbox = (await inboxRes.json()) as {
+			truncated: boolean;
+			items: Row[];
+		};
+		const cardId = `next_action:${id(21)}`;
+		assert.equal(inbox.truncated, true);
+		assert.equal(
+			inbox.items.some((i) => i.item_id === cardId),
+			false,
+		);
+		const [, body] = await today();
+		assert.equal(body.reminders?.late[0]?.home_item_id, cardId);
+	} finally {
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+			delete from home_update where user_id = '${id(1)}'; commit;`);
+	}
+});

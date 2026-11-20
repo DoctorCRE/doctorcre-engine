@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, refuse } from "./answer.ts";
-import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	readHomeMailPriorities,
 	readHomeReviewCards,
@@ -11,6 +10,7 @@ import {
 	readCompletionReviews,
 	readHomeUpdates,
 } from "./home-inbox-reviews-updates.ts";
+import { stepItemId, stepOpenUrl, stepTargetFields } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
 
@@ -42,21 +42,9 @@ type Step = {
 };
 
 function stepRows(db: Transaction<DB>, userId: string) {
-	const openDeals = db
-		.selectFrom(selectNextDeals(db).as("board"))
-		.select("id")
-		.where(isOpenBoardDeal);
 	return sql<Step>`
 		select s.id, s.what as title, s.status, s.deal_id, s.party_id,
-			case when s.property_id is not null then (
-				select (array_agg(dp.deal_id))[1] from deal_property dp
-				where dp.property_id = s.property_id and dp.deal_id in (${openDeals})
-				having count(*) = 1
-			) end as building_deal_id,
-			coalesce(d.name, p.name, property.name, property.address) as context_label,
-			exists (select from party_role r where r.party_id = s.party_id
-				and r.role = 'lead' and r.stage = 'opportunity'
-				and not exists (select from deal_party dp where dp.party_id = r.party_id)) as prospect,
+			${stepTargetFields(db)},
 			s.due_on, coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
 			case when s.hold_until > (now() at time zone 'America/Chicago')::date
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
@@ -111,18 +99,10 @@ function stepCard(step: Step) {
 			: disposition;
 	const source_type = step.call_id ? "capture_post_call_action" : "next_action";
 	const source_version = step.step_version;
-	const open_url = step.call_id
-		? `/calls?session=${step.call_id}`
-		: step.deal_id
-			? `/deals?deal=${step.deal_id}&focus=next-step${done ? "" : `&step=${step.id}`}`
-			: step.party_id
-				? step.prospect
-					? `/deals?prospect=${step.party_id}&focus=follow-up`
-					: `/relationships?node=party:${step.party_id}`
-				: step.building_deal_id && `/deals?deal=${step.building_deal_id}`;
+	const open_url = stepOpenUrl(step, done);
 
 	return {
-		item_id: `${source_type}:${step.id}`,
+		item_id: stepItemId(step),
 		source_type,
 		source_id: step.id,
 		source_version,
