@@ -65,7 +65,7 @@ import { vendorMeetings } from "./vendors/meeting-routes.ts";
 type WorkerEnv = NextSaveEnv &
 	CompareEnv &
 	IntakeEnv & {
-		Bindings: { CF_VERSION_METADATA: { id: string } };
+		Bindings: { CF_VERSION_METADATA: { id: string; tag?: string } };
 	};
 
 // Routes match the raw path as the old door did, but still decode their values.
@@ -74,9 +74,14 @@ const app = new Hono<WorkerEnv>({
 });
 app.notFound((c) => c.json({ error: "not_found" }, 404));
 
-app.get("/health", (c) =>
-	c.json({ ok: true, version: c.env.CF_VERSION_METADATA.id }),
-);
+app.get("/health", (c) => {
+	const { id, tag } = c.env.CF_VERSION_METADATA;
+	return c.json({
+		ok: true,
+		version: id,
+		...(tag?.trim() && { release: tag }),
+	});
+});
 
 const engine = new Hono<WorkerEnv>()
 	.get("/whoami", (c) => c.json(c.get("partner")))
