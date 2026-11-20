@@ -29,7 +29,9 @@ const prospectShape = fitting({
 	kind: optional(
 		(v): v is "person" | "company" => v === "person" || v === "company",
 	),
-	name: optional(isStoredText),
+	name: optional(
+		(v): v is string => typeof v === "string" && !v.includes("\0"),
+	),
 	email: optional(isStoredText),
 	phone: optional(isStoredText),
 	street_address: optional(isStoredText),
@@ -63,30 +65,35 @@ function parseIntake(body: JsonObject) {
 
 type Intake = Exclude<ReturnType<typeof parseIntake>, Refusal>;
 
+function quotesFact(evidence: string, fact: string) {
+	const literal = fact.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const word = "[\\p{L}\\p{M}\\p{N}_]";
+	return new RegExp(`(?<!${word})${literal}(?!${word})`, "u").test(evidence);
+}
+
 function identified(
 	{ kind, evidence, prospect }: Intake,
 	source: Intake["email"],
 ) {
-	if (
-		!prospect?.kind ||
-		!prospect.name ||
-		!evidence ||
-		!source.body.includes(evidence)
-	)
+	const name = prospect?.name?.trim();
+	if (!prospect?.kind || !name || !evidence || !source.body.includes(evidence))
 		return;
-	const { name, phone, street_address, city } = prospect;
+	const { phone, street_address, city } = prospect;
 	const email = prospect.email?.trim().toLowerCase();
 	const body = source.body.toLowerCase();
 	const has = (value: string) => body.includes(value.trim().toLowerCase());
 	if (kind === "direct_inquiry") {
 		if (
 			email !== source.sender ||
-			(name.trim() !== source.sender_name?.trim() && !has(name))
+			(name !== source.sender_name?.trim() && !has(name))
 		)
 			return;
 	} else if (kind !== "lead_source" || !has(name) || email === source.sender)
 		return;
-	if (email && kind === "lead_source" && !has(email)) return;
+	if (email && kind === "lead_source") {
+		const tokens = body.match(/[\p{L}\p{M}\p{N}.!#$%&'*+/=?^_`{|}~@-]+/gu);
+		if (!tokens?.some((token) => token.replace(/\.+$/, "") === email)) return;
+	}
 	const digits = phone?.replace(/^\+1(?=\d{10}$)|^\+/, "");
 	if (
 		digits &&
@@ -96,15 +103,21 @@ function identified(
 		return;
 	if (
 		(street_address || city) &&
-		!(street_address && city && has(street_address) && has(city))
+		!(
+			street_address &&
+			city &&
+			quotesFact(evidence, street_address) &&
+			quotesFact(evidence, city)
+		)
 	)
 		return;
 	if (!email && !phone && !street_address) return;
 	return {
 		...prospect,
 		kind: prospect.kind,
-		name: name.trim(),
+		name,
 		email,
+		street_address: street_address?.trim(),
 		city: city?.trim(),
 		evidence,
 	};
@@ -194,6 +207,16 @@ async function saveIntake(tx: Transaction<DB>, request: Intake) {
 		return reject("The prospect details belong to an existing relationship.");
 	const party_id = match?.party_id ?? (await createLead(tx, prospect));
 	const { evidence, ...facts } = prospect;
+	if (facts.email)
+		await sql`insert into party_email (party_id, address, label, is_primary)
+		values (${party_id}, ${facts.email}, 'work', ${!match}) on conflict do nothing`.execute(
+			tx,
+		);
+	if (facts.phone)
+		await sql`insert into party_phone (party_id, number, label, is_primary)
+		select ${party_id}::uuid, ${facts.phone}, 'work', ${!match}
+		where not exists (select from party_phone where party_id = ${party_id} and number = ${facts.phone})
+		on conflict do nothing`.execute(tx);
 	const { activity_id } = await recordEmail(
 		tx,
 		{
@@ -230,12 +253,6 @@ async function createLead(
 	await sql`insert into party_role (party_id, role, stage) values (${party.id}, 'lead', 'new')`.execute(
 		tx,
 	);
-	if (prospect.email)
-		await sql`insert into party_email (party_id, address, label, is_primary)
-		values (${party.id}, ${prospect.email}, 'work', true)`.execute(tx);
-	if (prospect.phone)
-		await sql`insert into party_phone (party_id, number, label, is_primary)
-		values (${party.id}, ${prospect.phone}, 'work', true)`.execute(tx);
 	return party.id;
 }
 

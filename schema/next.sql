@@ -1213,12 +1213,24 @@ create table lead_email_source (
 	party_id uuid not null references party,
 	lead_role text generated always as ('lead') stored,
 	mailbox_user_id uuid not null,
-	prospect jsonb not null check (jsonb_typeof(prospect) = 'object'),
+	prospect jsonb not null,
 	evidence text not null check (evidence ~ '\S'),
 	foreign key (party_id, lead_role) references party_role deferrable initially deferred,
 	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
 	foreign key (activity_id, mailbox_user_id) references email_mailbox,
-	unique (activity_id, party_id)
+	unique (activity_id, party_id),
+	constraint lead_email_source_prospect_identity check ((
+		jsonb_typeof(prospect) = 'object'
+		and jsonb_typeof(prospect->'name') = 'string' and prospect->>'name' ~ '\S'
+		and (
+			(jsonb_typeof(prospect->'email') = 'string'
+				and pg_input_is_valid(prospect->>'email', pg_typeof(null::email_address)::text))
+			or (jsonb_typeof(prospect->'phone') = 'string'
+				and pg_input_is_valid(prospect->>'phone', pg_typeof(null::phone_number)::text))
+			or (jsonb_typeof(prospect->'street_address') = 'string' and prospect->>'street_address' ~ '\S'
+				and jsonb_typeof(prospect->'city') = 'string' and prospect->>'city' ~ '\S')
+		)
+	) is true)
 );
 
 create table lead_email_attention (

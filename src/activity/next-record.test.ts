@@ -218,9 +218,29 @@ test("concurrent phone matches converge and later intake preserves claim and ack
 	);
 });
 
+test("later notices match contact facts first recorded on an existing lead", async () => {
+	const phone = "+15125550102";
+	const first = await intake(notice("contact-original"));
+	assert.equal(first.status, 201);
+	const combined = notice("contact-combined", {
+		email: "contact-original@clinic.example.test",
+		phone,
+	});
+	combined.email.body +=
+		" Contact contact-original@clinic.example.test or (512) 555-0102.";
+	const second = await intake(combined);
+	assert.equal(second.status, 200);
+	assert.equal(second.body.party_id, first.body.party_id);
+	const last = await intake(
+		notice("contact-phone", { email: undefined, phone }, "(512) 555-0102"),
+	);
+	assert.equal(last.status, 200);
+	assert.equal(last.body.party_id, first.body.party_id);
+});
+
 test("a street and city qualify a notice and reuse email already stored by Message-ID", async () => {
-	const address = (id: string) =>
-		notice(
+	const address = (id: string) => {
+		const request = notice(
 			id,
 			{
 				email: undefined,
@@ -229,6 +249,8 @@ test("a street and city qualify a notice and reuse email already stored by Messa
 			},
 			"42 Example Way, Sample City",
 		);
+		return { ...request, evidence: request.email.body };
+	};
 	const request = address("address");
 	const { email, happened_at } = request;
 	const filed = await viaJob({
@@ -267,7 +289,7 @@ test("a street and city qualify a notice and reuse email already stored by Messa
 	);
 });
 
-test("ineligible email leaves evidence only", async () => {
+test("ineligible email leaves evidence only", async (t) => {
 	const internal = notice("internal");
 	internal.email.sender = "joe@example.com";
 	const cases = [
@@ -276,21 +298,80 @@ test("ineligible email leaves evidence only", async () => {
 		{ ...notice("uncertain"), kind: "uncertain" },
 		notice("no-contact", { email: undefined }),
 		notice("no-name", { name: undefined }),
+		notice("blank-name", { name: " \t\n " }),
 		notice("invalid-address", {}, "invalid-address"),
+		notice(
+			"email-substring",
+			{ email: "clinic@example.test" },
+			"new.clinic@example.test",
+		),
+		notice(
+			"address-outside-quote",
+			{
+				email: undefined,
+				street_address: "42 Example Way",
+				city: "Sample City",
+			},
+			"42 Example Way, Sample City",
+		),
 	];
+	const partialAddress = notice(
+		"address-substring",
+		{ email: undefined, street_address: "42 Example Way", city: "Sample City" },
+		"142 Example Way, Sample City",
+	);
+	cases.push({ ...partialAddress, evidence: partialAddress.email.body });
 	for (const item of cases) {
-		const result = await intake(item);
-		assert.equal(result.status, 422);
-		assert.equal(result.body.error, "lead_email_not_eligible");
-		await assertRows(
-			1,
-			`select from lead_email_evidence where message_id = $1 and source->'email'->>'body' = $2
-				and not exists (select from email where message_id = $1)`,
-			item.email.message_id,
-			item.email.body,
-		);
+		await t.test(item.email.message_id, async () => {
+			const result = await intake(item);
+			assert.equal(result.status, 422);
+			assert.equal(result.body.error, "lead_email_not_eligible");
+			assert.ok(result.body.hint);
+			await assertRows(
+				1,
+				`select from lead_email_evidence where message_id = $1 and source->'email'->>'body' = $2
+					and not exists (select from email where message_id = $1)`,
+				item.email.message_id,
+				item.email.body,
+			);
+		});
 	}
 	await assertRows(0, "select from proposal");
+});
+
+test("the database requires a prospect name and valid contact facts on a lead source", async () => {
+	const lead = await intake(notice("source-constraint"));
+	assert.equal(lead.status, 201);
+	const { party_id } = lead.body;
+	const filed = await viaJob(
+		mail(
+			"source-constraint-followup@example.test",
+			{},
+			{ about: [{ party_id }] },
+		),
+	);
+	assert.equal(filed.status, 201);
+	await db.query("set role engine");
+	try {
+		for (const facts of [
+			{},
+			{ name: " \t", email: "clinic@example.test" },
+			{ name: "Example Clinic" },
+			{ name: "Example Clinic", email: "invalid", phone: "123" },
+			{ name: "Example Clinic", street_address: "42 Example Way" },
+		]) {
+			await assert.rejects(
+				db.query(
+					`insert into lead_email_source (activity_id, party_id, mailbox_user_id, prospect, evidence)
+					values ($1, $2, $3, $4, 'Example body')`,
+					[filed.body.activity_id, party_id, JOE, facts],
+				),
+				{ constraint: "lead_email_source_prospect_identity" },
+			);
+		}
+	} finally {
+		await db.query("reset role");
+	}
 });
 
 test("a failed attention insert rolls back the lead and email, then the same save can succeed", async () => {
