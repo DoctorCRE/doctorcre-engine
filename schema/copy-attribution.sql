@@ -192,9 +192,25 @@ begin atomic
    then token.parts[1] || to_char(token.parts[2]::date, 'FMMonth FMDD, YYYY') || token.parts[3]
   when p.label is not null then token.parts[1] || p.label || token.parts[3]
   else words.word[1] end, '' order by words.position), value)
- from regexp_matches(value, '\S+|\s+', 'g') with ordinality as words(word, position)
+ from regexp_matches(value, concat_ws('|',
+  -- Fenced and inline code, link definitions/targets/keys, angle-bracketed paths, and spaced timestamps stay verbatim.
+  $re$^[ \t]*`{3,}[^\n]*(?:\n(?![ \t]*`{3,}[ \t\r]*$)[^\n]*)*(?:\n[ \t]*`{3,}[ \t\r]*$)?$re$,
+  $re$^[ \t]*~{3,}[^\n]*(?:\n(?![ \t]*~{3,}[ \t\r]*$)[^\n]*)*(?:\n[ \t]*~{3,}[ \t\r]*$)?$re$,
+  $re$```(?:(?!```)(?:[^\n]|\n(?![ \t]*\n)))*```$re$,
+  $re$``(?:(?!``)(?:[^\n]|\n(?![ \t]*\n)))*``$re$,
+  $re$`[^`\n]*(?:\n(?![ \t]*\n)[^`\n]*)*`$re$,
+  $re$^[ \t]*\[[^\]\n]+\]:[ \t]*(?:<[^>\n]+>|\S+)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t\r]*$$re$,
+  $re$\[[^\]\n]+\]\[\]$re$,
+  $re$\]\([ \t]*(?:(?:<[^>\n]+>|(?:[^()\s]+|\([^()\s]*\))+)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?)?[ \t]*\)$re$,
+  $re$\]\[[^\]\n]+\]$re$,
+  $re$[(\[{"'*~]*<[^\s<>][^>\n<]*(?:/|\\|://|\.[A-Za-z0-9]{1,6})[^>\n<]*[^\s<>]>$re$,
+  $re$[(\[{"'*~_]*\d{4}-\d\d-\d\d[ \t]+\d{1,2}:\d\d\S*$re$,
+  $re$(?:[^\s\]`]|](?![(\[]))+$re$,
+  $re$\s+$re$,
+  $re$[^\s]$re$
+ ), 'gn') with ordinality as words(word, position)
  cross join lateral (select regexp_match(words.word[1],
-  $re$^([(\[{"'*~]*)(\d{4}-\d\d-\d\d|[a-z_]+)([)\]}"',;:!?*~.]*(?:\](?:\([^)\s]+\)|\[[^\]\s]+\])[)\]}"',;:!?*~.]*)?)$$re$) as parts) token
+  $re$^((?:[(\[{"'*~]|__)*)(\d{4}-\d\d-\d\d|[a-z_]+)((?:[)\]}"',;:!?*~.]|__)*)$$re$) as parts) token
  -- A phase slug that is also an ordinary word needs a standalone phase value.
  left join public.deal_phase p on render_phases and p.slug = token.parts[2]
   and (p.slug in ('site_selection', 'due_diligence')
