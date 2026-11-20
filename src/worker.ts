@@ -68,9 +68,19 @@ type WorkerEnv = NextSaveEnv &
 		Bindings: { CF_VERSION_METADATA: { id: string; tag?: string } };
 	};
 
+let startedAt: string | undefined;
+
+export function recordWorkerStart() {
+	startedAt ??= new Date().toISOString();
+}
+
 // Routes match the raw path as the old door did, but still decode their values.
 const app = new Hono<WorkerEnv>({
 	getPath: (request) => new URL(request.url).pathname,
+});
+app.use("*", (_c, next) => {
+	recordWorkerStart();
+	return next();
 });
 app.notFound((c) => c.json({ error: "not_found" }, 404));
 
@@ -79,7 +89,7 @@ app.get("/health", (c) => {
 	return c.json({
 		ok: true,
 		version: id,
-		...(tag?.trim() && { release: tag }),
+		...(tag?.trim() && { release: tag, started_at: startedAt }),
 	});
 });
 
