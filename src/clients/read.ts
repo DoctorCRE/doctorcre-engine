@@ -4,6 +4,7 @@ import { selectNextDeals } from "../deals/next-board.ts";
 import { failureKind } from "../failure.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
+import { UUID } from "../uuid.ts";
 
 export const PARTNERS = ["joe", "dell"] as const;
 export const SORTS = [
@@ -401,6 +402,9 @@ const activeStatuses = nextStatuses
 	.filter((status) => status.is_active_pipeline)
 	.map((status) => status.slug);
 const nextPipeline = sql<boolean>`cs.status in (${sql.join(activeStatuses)})`;
+const nextClientType = sql<
+	string | null
+>`coalesce(account.role, client.client_type)`;
 const clientRef = sql<string>`coalesce((
 	select min(value) from outside_id where party_id = client.party_id
 		and source = 'old_system_ref' and value like 'C-%' having count(*) = 1
@@ -421,6 +425,12 @@ const nextClients = (db: Transaction<NextDB>) =>
 		.innerJoin("party as p", "p.id", "client.party_id")
 		.innerJoin("client_status as cs", "cs.party_id", "client.party_id")
 		.leftJoin("client_type as ct", "ct.slug", "client.client_type")
+		.leftJoin("party_role as account", (join) =>
+			join
+				.onRef("account.party_id", "=", "client.party_id")
+				.on("account.role", "=", "national_account"),
+		)
+		.leftJoin("role as account_type", "account_type.slug", "account.role")
 		.leftJoin("client_vertical as v", "v.party_id", "client.party_id")
 		.leftJoin("party as owner", "owner.id", "client.owner_user_id");
 
@@ -446,8 +456,10 @@ const nextClientRows = (
 		),
 		nextPipeline.as("recorded_status_active_pipeline"),
 		sql<null>`null`.as("recorded_etl_status"),
-		"client.client_type as recorded_client_type",
-		"ct.label as recorded_client_type_label",
+		nextClientType.as("recorded_client_type"),
+		eb.fn
+			.coalesce("account_type.label", "ct.label")
+			.as("recorded_client_type_label"),
 		"v.vertical",
 		sql<string | null>`(select max(closed_on) from ${selectNextDeals(db)
 			.whereRef("c.party_id", "=", sql.ref("client.party_id"))
@@ -489,7 +501,7 @@ function matchingNextClients(
 		);
 	}
 	if (status !== null) clients = clients.where("cs.status", "=", status);
-	if (type !== null) clients = clients.where("client.client_type", "=", type);
+	if (type !== null) clients = clients.where(nextClientType, "=", type);
 	if (pipeline !== "any")
 		clients = clients.where(nextPipeline, "is", PIPELINE[pipeline]);
 	return clients;
@@ -517,6 +529,12 @@ export async function readNextClientList(
 	const types = await db
 		.selectFrom("client_type")
 		.select(["slug", "label"])
+		.unionAll(
+			db
+				.selectFrom("role")
+				.select(["slug", "label"])
+				.where("slug", "=", "national_account"),
+		)
 		.orderBy("label")
 		.orderBy("slug")
 		.execute();
@@ -543,19 +561,20 @@ export async function readNextClient(
 ) {
 	const viewerId =
 		(await nextPartnerId(db, viewer).executeTakeFirst())?.id ?? null;
+	const requestedUuid = UUID.test(id) ? id : null;
 	const alias = db
 		.selectFrom("outside_id")
 		.select("party_id")
-		.where("source", "=", "old_system")
-		.where("value", "=", id.toLowerCase());
+		.where("source", "=", requestedUuid ? "old_system" : "old_system_ref")
+		.where("value", "=", requestedUuid?.toLowerCase() ?? id);
 	const record = await nextClientRows(db, nextClients(db), viewerId)
 		.where((eb) =>
 			eb.or([
-				eb("client.party_id", "=", id),
+				eb("client.party_id", "=", requestedUuid),
 				eb("client.party_id", "=", alias),
 			]),
 		)
-		.orderBy(sql`client.party_id = ${id}::uuid`, "desc")
+		.orderBy(sql`client.party_id = ${requestedUuid}::uuid`, "desc")
 		.leftJoin("active_do_not_contact as dnc", "dnc.party_id", "client.party_id")
 		.select((eb) => [
 			sql<null>`null`.as("county"),
@@ -573,11 +592,11 @@ export async function readNextClient(
 			"p.npi",
 			sql<
 				string | null
-			>`(select number from party_phone where party_id = p.id and label = 'work'
+			>`(select concat(number, ' x' || extension) from party_phone where party_id = p.id and label = 'work'
 				order by is_primary desc, created_at, id limit 1)`.as("phone"),
 			sql<
 				string | null
-			>`(select number from party_phone where party_id = p.id and label = 'mobile'
+			>`(select concat(number, ' x' || extension) from party_phone where party_id = p.id and label = 'mobile'
 				order by is_primary desc, created_at, id limit 1)`.as("cell"),
 			sql<string | null>`(select address from party_email where party_id = p.id
 				order by is_primary desc, created_at, id limit 1)`.as("email"),
@@ -610,7 +629,7 @@ export async function readNextClient(
 	return recordAnswer(
 		"clients",
 		viewer,
-		shaped(record, contract),
+		shaped({ ...record, id: requestedUuid ?? record.id }, contract),
 		null,
 		stamp,
 		nextClientDataset,

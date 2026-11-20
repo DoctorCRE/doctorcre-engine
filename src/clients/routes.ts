@@ -218,27 +218,28 @@ type RecordRead<Db> = (
 	stamp: Stamp,
 ) => Promise<object>;
 
-// The old door answered any id that is not a UUID before anything else.
 async function record(
 	c: Context<DirectoryEnv>,
 	id: string,
 	read: RecordRead<Reader>,
 	readNext?: RecordRead<NextReader>,
 ) {
-	if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
+	const next = c.env.DIRECTORY_READ_SCHEMA === "next" ? readNext : undefined;
+	if (!UUID.test(id) && !(next && id.startsWith("C-")))
+		return c.json({ error: "not_found" }, 404);
 	return answer(c, (params, viewer) => {
 		checkFields(params, RECORD_FIELDS, viewer);
 		const contract = oneOf(params, "contract", CONTRACTS, null);
-		if (readNext && c.env.DIRECTORY_READ_SCHEMA === "next")
-			return { next: (db, stamp) => readNext(db, viewer, id, contract, stamp) };
+		if (next)
+			return { next: (db, stamp) => next(db, viewer, id, contract, stamp) };
 		return (db, stamp) => read(db, viewer, id, contract, stamp);
 	});
 }
 
 // Values are decoded, so only the pattern keeps an encoded id from passing as a UUID.
-const ID_PATTERN = ":id{[0-9A-Fa-f-]+}";
+const UUID_SEGMENT = "[0-9A-Fa-f-]+";
 
-directory.get(`/clients/${ID_PATTERN}`, (c) =>
+directory.get(`/clients/:id{(?:${UUID_SEGMENT}|C-[^/]+)}`, (c) =>
 	record(c, c.req.param("id"), readClient, readNextClient),
 );
 directory.get("/vendors", (c) =>
@@ -247,6 +248,6 @@ directory.get("/vendors", (c) =>
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
 );
-directory.get(`/vendors/${ID_PATTERN}`, (c) =>
+directory.get(`/vendors/:id{${UUID_SEGMENT}}`, (c) =>
 	record(c, c.req.param("id"), readVendor),
 );

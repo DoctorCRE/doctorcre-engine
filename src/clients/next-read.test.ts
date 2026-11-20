@@ -16,14 +16,21 @@ type ClientRow = {
 	ref: string;
 	owner_label: string;
 	owned_by_viewer: boolean;
+	recorded_client_type: string | null;
+	recorded_client_type_label: string | null;
 };
-type ClientRecord = ClientRow & { acquisition_source: string };
+type TypeFacet = { slug: string; label: string };
+type ClientRecord = ClientRow & {
+	acquisition_source: string;
+	phone: string | null;
+	cell: string | null;
+};
 const caller = { user: "joe" };
 
 before(setup);
 after(cleanup);
 
-test("Clients opens a location saved through Deals and shows the next owner of a copied client", async () => {
+test("Clients opens a location saved through Deals and shows the next owner of a copied client", async (t) => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into phase values ('pending', 'Pending');
 		insert into how_found values ('national_account', 'National account or corporate lead');
@@ -36,12 +43,16 @@ test("Clients opens a location saved through Deals and shows the next owner of a
 			('${copied}', 'company', 'Example Copied Client');
 		update party set how_found = 'national_account' where id = '${copied}';
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
-		insert into party_role (party_id, role) values ('${brand}', 'national_account'), ('${copied}', 'client');
-		insert into national_account (party_id) values ('${brand}');
+		insert into party_role (party_id, role) values
+			('${brand}', 'national_account'), ('${copied}', 'client'), ('${copied}', 'national_account');
+		insert into national_account (party_id) values ('${brand}'), ('${copied}');
 		insert into client (party_id, owner_user_id) values ('${copied}', '${dell}');
 		insert into outside_id (source, value, party_id) values
 			('old_system', '${oldClient}', '${copied}'),
 			('old_system_ref', 'C-001', '${copied}');
+		insert into party_phone (party_id, number, extension, label) values
+			('${copied}', '+12025550101', '45', 'work'),
+			('${copied}', '+12025550102', null, 'mobile');
 		insert into market (id, name) values ('${market}', 'Example Market');
 		commit;`);
 
@@ -83,13 +94,57 @@ test("Clients opens a location saved through Deals and shows the next owner of a
 	assert.ok(copiedRow);
 	assert.equal(copiedRow.owner_label, "Example Corrected Owner");
 	assert.equal(copiedRow.ref, "C-001");
-	for (const id of [oldClient.toUpperCase(), copiedRow.id]) {
-		const response = await get(`clients/${id}`);
-		assert.equal(response.status, 200);
+	await t.test("drawer echoes the requested old UUID", async () => {
+		const requestedId = oldClient.toUpperCase();
+		const response = await get(`clients/${requestedId}`);
+		assert.equal(response.status, 200, await response.clone().text());
 		const { record }: { record: ClientRecord } = await response.json();
+		assert.equal(record.id, requestedId);
 		assert.equal(record.name, "Example Copied Client");
 		assert.equal(record.owner_label, "Example Corrected Owner");
 		assert.equal(record.owned_by_viewer, false);
 		assert.equal(record.ref, "C-001");
-	}
+	});
+	await t.test("next drawer opens copied roster refs", async () => {
+		const response = await get("clients/C-001");
+		assert.equal(response.status, 200, await response.clone().text());
+		const { record }: { record: ClientRecord } = await response.json();
+		assert.equal(record.id, copiedRow.id);
+		assert.equal(record.ref, "C-001");
+		assert.equal(
+			(await get("clients/C-001", { DIRECTORY_READ_SCHEMA: "" })).status,
+			404,
+		);
+	});
+	await t.test("national account role sets type and facet", async () => {
+		const response = await get("clients?type=national_account");
+		assert.equal(response.status, 200, await response.clone().text());
+		const {
+			rows,
+			facets,
+		}: {
+			rows: ClientRow[];
+			facets: { types: TypeFacet[] };
+		} = await response.json();
+		assert.equal(rows.length, 1);
+		assert.partialDeepStrictEqual(rows[0], {
+			id: copiedRow.id,
+			recorded_client_type: "national_account",
+			recorded_client_type_label: "National account",
+		});
+		assert.deepEqual(
+			facets.types.find(({ slug }) => slug === "national_account"),
+			{
+				slug: "national_account",
+				label: "National account",
+			},
+		);
+	});
+	await t.test("drawer includes the stored phone extension", async () => {
+		const response = await get(`clients/${copiedRow.id}`);
+		assert.equal(response.status, 200, await response.clone().text());
+		const { record }: { record: ClientRecord } = await response.json();
+		assert.equal(record.phone, "+12025550101 x45");
+		assert.equal(record.cell, "+12025550102");
+	});
 });

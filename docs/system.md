@@ -108,7 +108,7 @@ On switch day, follow this order:
 4. Verify that the production writer can assume `engine` on the populated `next` schema.
 5. Set `DEALS_READ_SCHEMA=next`, then turn `deals-from-engine` on. Check the Deals board and a deal page after each change.
 6. Set `HOME_INBOX_READ_SCHEMA=next` and turn on the app Worker’s `home-from-engine` key together, before switching the Studio programs. Check Home in the app. Set `INVOICES_READ_SCHEMA=next` and check the engine invoice read.
-7. Set `DIRECTORY_READ_SCHEMA=next` before enabling `clients-vendors-from-engine`. Check the Clients list and open a copied client by its old link. Turn on each remaining `ENGINE_ROUTING` read key in the order listed in [Switches](#switches). Check the corresponding screen after each key.
+7. Set `DIRECTORY_READ_SCHEMA=next` before enabling `clients-vendors-from-engine`. Verify the flip by checking both the Clients and Vendors lists and opening a copied record by its old link in each drawer. Turn on each remaining `ENGINE_ROUTING` read key in the order listed in [Switches](#switches). Check the corresponding screen after each key.
 8. Set `CLIENT_WEBSITE_ENGINE_SLUG` on production carr-share to the verified website name. Open the website from a signed-in deal page and check that it opens without a password.
 9. Turn off the nightly checklist reminder step in `carr-system/bin/nightly.sh`. Check that the nightly job no longer runs that step.
 10. Turn on `deal-saves-to-engine`, then `deals-saves-from-engine`. Check each route after its change.
