@@ -131,6 +131,7 @@ A client's comment on a toured property, or a property added to or removed from 
 - [ ] Does not repeat a step that is already a card in the inbox. A reminder with a card opens that card.
 - [ ] Each section either shows its items or says plainly why it cannot. It never stays on "Checking…".
 - [ ] A reminder dated before today is listed under "Late" and says how late, such as "3 days late", as the deal's next step does. The panel never says "Overdue" (coordinator, 2026-11-19).
+- [ ] With `home-from-engine` on, every page that uses the shared side frame shows Home's engine Today panel for today's meetings and the partners' dated reminders. This replaces Your calendar, Upcoming meetings, Your working week, Your schedule, and Doc's Morning brief (coordinator, 2026-11-20).
 
 ## Mail priorities
 
