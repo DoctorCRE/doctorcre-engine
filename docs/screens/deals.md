@@ -86,7 +86,7 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 - [ ] Notes run newest first, all of them, including those from before it was a prospect, each saying who wrote it and when in words: "Dell · Mon, Nov 16, 9:40 AM".
 - [ ] With both partners on the same prospect, a note one saves shows on the other's screen within five seconds, with no reload. Checked with both partners signed in side by side.
 - [ ] Follow-up takes a date and a few words, such as "Call back about the second location". It is the setting partner's next step on this lead: it replaces their open step on it, including an automatic check-in, which stays in history as replaced. Mark done on Home finishes it.
-- [ ] Home shows a due follow-up as a step for the partner who set it. Opening it on Home opens this prospect with the follow-up in view.
+- [ ] Home shows a due follow-up as a step for its owner. Opening it on Home puts that follow-up in view, with the recorded setter, date and source.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Claim makes the signed-in partner its owner. The owner can be changed to the other partner or back to Unclaimed.
 - [ ] Turn into deal opens Add deal with the prospect's name, newest note and claimed owner filled in and editable (owner, 2026-11-19, question 11). The partner sets the client, phase and owner before saving. The client may be the prospect or another party, such as the practice a doctor runs. On save, the deal opens and the prospect leaves the lane. The prospect keeps its notes and follow-ups in its history.

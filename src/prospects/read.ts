@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import { etag } from "hono/etag";
-import { sql } from "kysely";
+import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { PARTNERS } from "../clients/read.ts";
+import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../request-shape.ts";
+import { type StepOrigin, selectStepsWithOrigin } from "../step-origin.ts";
 
 type Note = {
 	activity_id: string;
@@ -26,13 +28,13 @@ type Prospect = {
 	how_found: string;
 	owner: string | null;
 	needs_attention: boolean;
-	follow_ups: {
+	follow_ups: (StepOrigin & {
 		next_step_id: string;
 		owner: string;
 		what: string;
 		due_on: string | null;
 		change_id: number;
-	}[];
+	})[];
 	change_id: number;
 	notes: Note[];
 	entered_at: string | null;
@@ -42,15 +44,18 @@ type Prospect = {
 const isProspect = sql<boolean>`r.stage = 'opportunity'
 	and not exists (select from deal_party d where d.party_id = r.party_id)`;
 
-export function prospectQuery({
-	partyId = null,
-	owner = "all",
-	includeDropped = false,
-}: {
-	partyId?: string | null;
-	owner?: string;
-	includeDropped?: boolean;
-} = {}) {
+export function prospectQuery(
+	db: Transaction<DB>,
+	{
+		partyId = null,
+		owner = "all",
+		includeDropped = false,
+	}: {
+		partyId?: string | null;
+		owner?: string;
+		includeDropped?: boolean;
+	} = {},
+) {
 	const qualifies = includeDropped
 		? sql<boolean>`(${isProspect} or archive.changed_at is not null)`
 		: isProspect;
@@ -65,6 +70,20 @@ export function prospectQuery({
 			and not exists (select from deal_party d where d.party_id = r.party_id
 				and d.created_at <= archive.changed_at)`
 		: sql``;
+	const steps = selectStepsWithOrigin(db)
+		.innerJoin("app_user as u", "u.id", "s.owner_party_id")
+		.select([
+			"s.id as next_step_id",
+			"u.slug as owner",
+			"s.what",
+			"s.due_on",
+			sql<number>`coalesce((select max(c.id) from change c
+				where c.table_name = 'next_step' and c.record = jsonb_build_object('id', s.id)), 0)`.as(
+				"change_id",
+			),
+		])
+		.where("s.party_id", "=", sql.ref<string>("p.id"))
+		.where("s.status", "=", "open");
 	return sql<Prospect>`
 		select p.id as party_id, p.name, p.kind, p.how_found, owner.slug as owner,
 			r.needs_attention, coalesce(history.change_id, 0)::float8 as change_id,
@@ -98,16 +117,9 @@ export function prospectQuery({
 			) n
 		) notes
 		cross join lateral (
-			select coalesce(jsonb_agg(jsonb_build_object('next_step_id', s.id,
-				'owner', u.slug, 'what', s.what, 'due_on', s.due_on,
-				'change_id', coalesce((select max(c.id) from change c
-					where c.table_name = 'next_step' and c.record = jsonb_build_object('id', s.id)), 0))
-				order by s.due_on nulls last, s.id), '[]') as items,
+			select coalesce(jsonb_agg(to_jsonb(s) order by s.due_on nulls last, s.next_step_id), '[]') as items,
 				min(s.due_on) as soonest
-			from next_step s
-			join app_user u on u.id = s.owner_party_id
-			where s.deal_id is null and s.party_id = p.id and s.property_id is null
-				and s.status = 'open' and s.item_title is null
+			from (${steps}) s
 		) follow_ups
 		where r.role = 'lead' and ${qualifies}
 			and (${partyId}::uuid is null or p.id = ${partyId}::uuid)
@@ -140,7 +152,7 @@ export const prospectReads = new Hono<DatabaseEnv>()
 		});
 		if (error) return refuse(c, error);
 		return answerNextRead(c, "read-prospects", async (db) => {
-			const { rows } = await prospectQuery({
+			const { rows } = await prospectQuery(db, {
 				owner: params.get("owner") ?? "all",
 			}).execute(db);
 			return { prospects: rows.map(prospectCard), count: rows.length };
@@ -156,7 +168,7 @@ export const prospectReads = new Hono<DatabaseEnv>()
 		return answerNextRead(c, "read-prospects", async (db) => {
 			const {
 				rows: [row],
-			} = await prospectQuery({
+			} = await prospectQuery(db, {
 				partyId,
 				includeDropped: true,
 			}).execute(db);

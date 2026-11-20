@@ -129,8 +129,8 @@ test("Today keeps reminders on ended deals and marks them for Deals", async () =
 		`${id(23)}|Email floor plan|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
-		`${id(22)}|Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}`,
-		`${id(29)}|Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up`,
+		`${id(22)}|Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
+		`${id(29)}|Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
 		`${id(30)}|Check building|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
 	assert.deepEqual(

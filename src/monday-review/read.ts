@@ -44,7 +44,7 @@ function reviewItems(db: Transaction<DB>, week: string) {
 			"p.happened_at as phase_at",
 			"p.changed_at as phase_saved_at",
 		]);
-	const prospects = prospectQuery({ includeDropped: true });
+	const prospects = prospectQuery(db, { includeDropped: true });
 	return sql`
 		with bounds as (
 			select day, day::timestamp at time zone 'America/Chicago' as starts_at,

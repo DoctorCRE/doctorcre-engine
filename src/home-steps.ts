@@ -40,7 +40,7 @@ export function stepOpenUrl(
 			? `/deals?deal=${step.deal_id}&focus=next-step${done ? "" : `&step=${step.id}`}`
 			: step.party_id
 				? step.prospect
-					? `/deals?prospect=${step.party_id}&focus=follow-up`
-					: `/relationships?node=party:${step.party_id}`
+					? `/deals?prospect=${step.party_id}&focus=follow-up${done ? "" : `&step=${step.id}`}`
+					: `/relationships?node=party:${step.party_id}&step=${step.id}`
 				: step.building_deal_id && `/deals?deal=${step.building_deal_id}`;
 }
