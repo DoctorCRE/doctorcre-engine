@@ -16,6 +16,7 @@ import {
 	fitting,
 	isAmount,
 	isInstant,
+	isStoredText,
 	isText,
 	isUuid,
 	optional,
@@ -70,6 +71,10 @@ const emailLead = {
 	summary: textWithin(300),
 	first_seen_at: isInstant,
 	message_ref: textWithin(100),
+	message_id: optional(
+		(v): v is string => isStoredText(v) && v === v.trim() && !/[<>]/.test(v),
+	),
+	conversation_id: optional(isStoredText),
 	applies_to: (v: unknown): v is "new_matter" => v === "new_matter",
 	confidence: (v: unknown): v is number => isAmount(v) && v >= 0 && v <= 1,
 	evidence_quote: optional(textWithin(500, 10)),
@@ -195,6 +200,8 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 				const sourceKey = `email-sha256:${owner}:${createHash("sha256").update(address).digest("hex")}`;
 				const details = {
 					message_ref: r.message_ref,
+					message_id: r.message_id,
+					conversation_id: r.conversation_id,
 					first_seen_at: r.first_seen_at,
 					reading: {
 						applies_to: "new_matter",
