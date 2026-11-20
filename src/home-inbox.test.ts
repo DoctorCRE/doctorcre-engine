@@ -311,7 +311,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 					why: "No reason was recorded.",
 					primary_action: "Mark done",
 					due_on: null,
-					open_url: `/relationships?node=party:${example.party}`,
+					open_url: `/relationships?node=party:${example.party}&step=${example.id}`,
 				},
 			],
 		);
