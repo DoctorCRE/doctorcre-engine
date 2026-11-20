@@ -5641,6 +5641,8 @@ const MERGE_KEYS = [
 	"deal_party_pkey",
 	"do_not_contact_pkey",
 	"lead_contact_draft_party_id_key",
+	"lead_email_attention_pkey",
+	"lead_email_source_activity_id_party_id_key",
 	"lead_stage_move_party_id_from_stage_to_stage_activity_id_key",
 	"national_account_pkey",
 	"next_step_one_open_per_owner",

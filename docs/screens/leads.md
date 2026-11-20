@@ -23,7 +23,7 @@
 ## Leads from email
 
 - [ ] A clear inbound lead creates one lead at New, with no owner until a partner claims it. Both partners can find the unclaimed lead on Leads.
-- [ ] A recognized lead source with a recorded inquiry and an identifiable prospect qualifies. So does a direct inquiry from an identifiable prospect with a clear request for help. A lead-source notice identifies the prospect from the recorded inquiry. The sending service is never substituted for the prospect.
+- [ ] A recognized lead-source notice or a direct inquiry qualifies when it gives a prospect name, a clear request for help and an email address, phone number or street address with city. A lead-source notice takes the prospect's details from the body. An exact email or phone match can identify an existing lead.
 - [ ] Internal mail, system notices and mail about an existing deal or relationship do not create new leads. An unknown address or a subject alone is insufficient. Keep uncertain intake with its recorded evidence for reclassification. Work that needs a separate partner decision goes through its own Home kind.
 - [ ] The lead's correspondence includes the exact source email and its saved summary, when available. If the email has not been filed before, save it with the lead. Repeated intake of the same message links it once. More messages from the same verified prospect go to the same lead without changing its owner or resetting a cleared badge.
 - [ ] The Leads row shows **New from email** until either partner opens the lead's drawer successfully or claims it. Clearing this badge records a shared acknowledgement and does not assign an owner. Claim assigns the partner and clears the badge in the same save. Scanning the list or previewing a row leaves the badge set.

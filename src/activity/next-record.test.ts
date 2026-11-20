@@ -24,6 +24,9 @@ before(async () => {
 		begin; select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${JOE}', 'person', 'Joe Example'), ('${CASEY}', 'person', 'Casey Example'), ('${DELL}', 'person', 'Dell Example');
 		insert into app_user (id, slug) values ('${JOE}', 'joe'), ('${DELL}', 'dell');
+		insert into how_found (slug, label) values ('inbound', 'Inbound');
+		insert into role (slug, label) values ('lead', 'Lead');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New');
 		insert into party_email (party_id, address, label) values
 			('${JOE}', 'joe@example.com', 'work'), ('${CASEY}', 'casey@example.com', 'work');
 		insert into deal (id, name, owner_user_id) values ('${DEAL}', 'Example Deal', '${JOE}'); commit;`);
@@ -58,8 +61,8 @@ async function ask(path: string, body: object | undefined, headers: object) {
 	return { status: response.status, body: answer };
 }
 const MAIL_CAPTURE = { "Engine-Job": "mail_capture", "Engine-For-User": "joe" };
-const viaJob = async (body: object, job: object = MAIL_CAPTURE, path = "") =>
-	ask(`/jobs/activities${path}`, body, {
+async function jobPost(path: string, body: object, job: object) {
+	return ask(`/jobs/${path}`, body, {
 		"Cf-Access-Jwt-Assertion": await new SignJWT({})
 			.setProtectedHeader({ alg: "RS256", kid: "made-up-kid" })
 			.setIssuer(TEAM)
@@ -68,6 +71,9 @@ const viaJob = async (body: object, job: object = MAIL_CAPTURE, path = "") =>
 			.sign(access.privateKey),
 		...job,
 	});
+}
+const viaJob = (body: object, job: object = MAIL_CAPTURE, path = "") =>
+	jobPost(`activities${path}`, body, job);
 const viaApp = (body: object) =>
 	ask("/api/engine/activities", body, {
 		Cookie: "__Host-dealroom_session=made-up",
@@ -118,6 +124,199 @@ const stored = async (message_id: string) =>
 			[message_id],
 		)
 	).rows;
+
+const intake = (body: object, user = "joe") =>
+	jobPost("leads/email-intake", body, {
+		...MAIL_CAPTURE,
+		"Engine-For-User": user,
+	});
+function notice(id: string, facts = {}, contact = `${id}@clinic.example.test`) {
+	const evidence = "I need help opening Example Clinic.";
+	const email = mail(`${id}@example.test`, {
+		sender: "notices@example.test",
+		body: `${evidence} Contact ${contact}.`,
+	});
+	return {
+		...email,
+		kind: "lead_source",
+		evidence,
+		prospect: {
+			kind: "company",
+			name: "Example Clinic",
+			email: contact,
+			...facts,
+		},
+	};
+}
+async function assertRows(
+	count: number,
+	statement: string,
+	...values: unknown[]
+) {
+	assert.equal((await db.query(statement, values)).rowCount, count);
+}
+
+test("a notice files the named prospect and the exact source once for both mailboxes", async () => {
+	const request = notice("Intake-A");
+	const first = await intake(request);
+	assert.equal(first.status, 201);
+	assert.equal((await intake(request)).body.replayed, true);
+	const second = await intake(
+		{ ...request, idempotency_key: randomUUID() },
+		"dell",
+	);
+	assert.equal(second.status, 200);
+	assert.equal(second.body.party_id, first.body.party_id);
+	await assertRows(
+		1,
+		`select from lead_email_attention n join lead_email_source s using (activity_id, party_id)
+		join activity_about a using (activity_id, party_id) join email e using (activity_id)
+		join party p on p.id = a.party_id join party_role r on r.party_id = p.id
+		where e.message_id = $1 and e.sender = 'notices@example.test' and e.body = $2 and p.name = 'Example Clinic'
+			and r.stage = 'new' and p.how_found = 'inbound' and r.owner_user_id is null
+			and r.changed_by_job = 'mail_capture' and s.mailbox_user_id = $3
+			and n.acknowledged_at is null and (select count(*) from email_mailbox where activity_id = e.activity_id) = 2`,
+		request.email.message_id,
+		request.email.body,
+		JOE,
+	);
+});
+
+test("concurrent phone matches converge and later intake preserves claim and acknowledgement", async () => {
+	const phone = (id: string) =>
+		notice(id, { email: undefined, phone: "+15125550101" }, "(512) 555-0101");
+	const [a, b] = await Promise.all([
+		intake(phone("phone-a")),
+		intake(phone("phone-b"), "dell"),
+	]);
+	assert.deepEqual([a.status, b.status].sort(), [200, 201]);
+	const { party_id } = a.body;
+	assert.equal(b.body.party_id, party_id);
+	const acknowledge =
+		"update lead_email_attention set acknowledged_by_user_id = $2, acknowledged_at = now() where party_id = $1";
+	await assert.rejects(db.query(acknowledge, [party_id, DELL]), {
+		constraint: "lead_email_attention_acknowledged_once",
+	});
+	await db.query("begin");
+	await db.query("select set_config('engine.user_id', $1, true)", [DELL]);
+	await db.query(
+		"update party_role set owner_user_id = $2 where party_id = $1",
+		[party_id, DELL],
+	);
+	await db.query(acknowledge, [party_id, DELL]);
+	await db.query("commit");
+	const again = await intake(phone("phone-c"));
+	assert.equal(again.status, 200);
+	assert.equal(again.body.party_id, party_id);
+	await assertRows(
+		1,
+		`select from party_role join lead_email_attention using (party_id)
+		where party_id = $1 and owner_user_id = $2 and acknowledged_by_user_id = $2
+			and (select count(*) from lead_email_source where party_id = $1) = 3`,
+		party_id,
+		DELL,
+	);
+});
+
+test("a street and city qualify a notice and reuse email already stored by Message-ID", async () => {
+	const address = (id: string) =>
+		notice(
+			id,
+			{
+				email: undefined,
+				street_address: "42 Example Way",
+				city: "Sample City",
+			},
+			"42 Example Way, Sample City",
+		);
+	const request = address("address");
+	const { email, happened_at } = request;
+	const filed = await viaJob({
+		idempotency_key: randomUUID(),
+		kind: "email",
+		email,
+		happened_at,
+		about: [{ party_id: CASEY }],
+	});
+	assert.equal(filed.status, 201);
+	const result = await intake(request);
+	assert.equal(result.status, 201);
+	assert.equal(result.body.activity_id, filed.body.activity_id);
+	await assertRows(
+		1,
+		`select from party p join lead_email_source s on s.party_id = p.id where s.activity_id = $1
+			and p.city = 'Sample City' and s.prospect->>'street_address' = '42 Example Way'`,
+		result.body.activity_id,
+	);
+	const distinct = await intake(address("new-address"));
+	assert.equal(distinct.status, 201);
+	assert.notEqual(distinct.body.party_id, result.body.party_id);
+	await db.query("begin");
+	await db.query("select set_config('engine.user_id', $1, true)", [DELL]);
+	await db.query("select merge_party($1, $2)", [
+		distinct.body.party_id,
+		result.body.party_id,
+	]);
+	await db.query("commit");
+	await assertRows(
+		2,
+		`select from lead_email_attention n join lead_email_source s using (party_id)
+			where n.party_id = $1 and n.activity_id = $2`,
+		result.body.party_id,
+		result.body.activity_id,
+	);
+});
+
+test("ineligible email leaves evidence only", async () => {
+	const internal = notice("internal");
+	internal.email.sender = "joe@example.com";
+	const cases = [
+		internal,
+		{ ...notice("system"), kind: "system" },
+		{ ...notice("uncertain"), kind: "uncertain" },
+		notice("no-contact", { email: undefined }),
+		notice("no-name", { name: undefined }),
+		notice("invalid-address", {}, "invalid-address"),
+	];
+	for (const item of cases) {
+		const result = await intake(item);
+		assert.equal(result.status, 422);
+		assert.equal(result.body.error, "lead_email_not_eligible");
+		await assertRows(
+			1,
+			`select from lead_email_evidence where message_id = $1 and source->'email'->>'body' = $2
+				and not exists (select from email where message_id = $1)`,
+			item.email.message_id,
+			item.email.body,
+		);
+	}
+	await assertRows(0, "select from proposal");
+});
+
+test("a failed attention insert rolls back the lead and email, then the same save can succeed", async () => {
+	const request = notice("rollback");
+	request.kind = "direct_inquiry";
+	request.email.sender = request.prospect.email;
+	await db.query(
+		"alter table lead_email_attention add constraint test_reject check (false) not valid",
+	);
+	try {
+		await refused(intake(request), 422, "database_refused_the_statement", {
+			rule: "test_reject",
+		});
+		await assertRows(
+			0,
+			"select from party_email where address = $1",
+			request.prospect.email,
+		);
+		assert.deepEqual(await stored(request.email.message_id), []);
+	} finally {
+		await db.query(
+			"alter table lead_email_attention drop constraint test_reject",
+		);
+	}
+	assert.equal((await intake(request)).status, 201);
+});
 
 test("an email links its contacts, never the partners, and lists unknown addresses", async () => {
 	const about = [{ deal_id: DEAL }];
