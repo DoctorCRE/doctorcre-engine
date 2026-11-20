@@ -1437,6 +1437,14 @@ Add deal sends `role=client` so the limit applies to people and companies with t
 
 No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated `kind` or `role` values return 400. Session and database refusals use the shared read rules. App #977 routes the deal-page picker to this door.
 
+## Relationships read for the app
+
+The app uses `GET /api/engine/relationships?contract=relationship-network.v1` when `relationships-from-engine` is on. Set `RELATIONSHIPS_READ_SCHEMA=next` on the engine to read the new database as `engine_reader`. An absent or different value uses the old tables.
+
+The graph includes people, companies, and deals, including contacts with no links. Nodes use `party:{id}` and `deal:{id}` and carry that record's UUID in `record_id`. The copy keeps surviving party and deal IDs and uses `outside_id` to map imported role and participant references to those records. Home uses the same party ID for a step's destination, including a step copied from an old role. Party ownership comes from the current vendor, client, or lead records. An unclaimed lead has a null owner. The party summary shows vendor offers when recorded. Deal ownership, phase, and outcome match the Deals read.
+
+Edges show typed links during their active dates, recorded introductions, and deal participants. An introduction a vendor made counts toward referrals when it names a deal. The edge's `via` is null. Old brokered links and referral credit without a copied typed link or introduction stay out of the graph, as do uncopied `works_with` and `intro_requested` links.
+
 ## Home inbox reads for the app
 
 Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's work and marks. With the variable unset, the route returns 404 and the app still calls CARR.
@@ -1444,6 +1452,8 @@ Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` 
 The response uses the app's `home-inbox.v5` card fields and carries `home_mark_drop: true` and `home_proposal_drop: true`. It shows each step once, including call follow-ups as that step, with the full step text as the title. Dropped call follow-ups and Home updates stay off Home for that user. It includes the step's date, destination and linked source when known. A call source includes its date, contact when known, summary and quote. An accepted suggestion links a step to its email or meeting. The step's change ID gives `action_version`, and `base_version` includes the mark's revision and current disposition.
 
 An open deal-step card has `open_url` set to `/deals?deal={deal_id}&focus=next-step&step={next_step_id}`. The `step` value is the `next_step.id` of the card's step, also carried as `action_id`. Match it to the step row's `id` in the deal detail's `next_actions`. A done deal-step card uses `/deals?deal={deal_id}&focus=next-step`. Call follow-ups open the call. A building-only step uses `/deals?deal={deal_id}` when exactly one open deal is linked through `deal_property`, including when the step is done. Its `open_url` is null when zero or several linked deals are open.
+
+A person or company step that opens in Relationships uses `/relationships?node=party:{party_id}` with the step's canonical party ID. Turn on the app's Relationships routing and the engine's next-schema Relationships read when switching Home to the new database.
 
 An open step can be held, snoozed or in the inbox. A snooze ends at its saved time, and a hold ends on its date in Central time. Cancelled and expired steps leave the inbox. A step with status `done` appears in Done only if its completion time is known and within the last seven days. The read puts unfinished work first.
 

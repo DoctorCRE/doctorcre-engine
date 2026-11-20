@@ -5,6 +5,8 @@ import { URL } from "node:url";
 import { sql } from "kysely";
 import { withSnapshot } from "../../scripts/test-database.ts";
 import { BusinessRefusal } from "../clients/read.ts";
+import { isArguments } from "../save-door.ts";
+import { doorTest } from "../test-door.ts";
 import { withRollback } from "../test-rollback.ts";
 import worker from "../worker.ts";
 import { projectNetwork, readNetwork } from "./network.ts";
@@ -190,3 +192,132 @@ test("the network answers GET and an empty HEAD from the database", () =>
 			[200, ""],
 		);
 	}));
+
+test("the switched graph shows current owners and opens Home steps on new and copied parties", async (t) => {
+	const { db, setup, cleanup, request } = doorTest();
+	await setup();
+	t.after(async () => {
+		await db.query("rollback");
+		await cleanup();
+	});
+	const copied = id(102);
+	const person = id(810);
+	const vendor = id(811);
+	const lead = id(812);
+	const deal = id(813);
+	const newClient = id(814);
+	const clientId = id(302);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		set local search_path = public;
+		${SEED}
+		set local search_path = next;
+		insert into how_found (slug, label) values ('referral', 'Referral');
+		insert into role (slug, label, category_of) values ('vendor', 'Vendor', null),
+			('client', 'Client', null), ('lead', 'Lead', null), ('lender', 'Lender', 'vendor');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New');
+		insert into party (id, kind, name, how_found) values
+			('${ME}', 'person', 'Example Partner', null),
+			('${id(902)}', 'person', 'Other Partner', null),
+			('${copied}', 'company', 'Copied Practice', 'referral'),
+			('${person}', 'person', 'New Contact', null),
+			('${vendor}', 'company', 'Example Lender', null),
+			('${lead}', 'person', 'Unclaimed Lead', 'referral'),
+			('${newClient}', 'company', 'New Practice', 'referral');
+		insert into app_user (id, slug) values ('${ME}', 'joe'), ('${id(902)}', 'dell');
+		insert into outside_id (source, value, party_id) values
+			('old_system', '${copied}', '${copied}'),
+			('old_system', '${clientId}', '${copied}'),
+			('old_system_ref', 'C-EX-2', '${copied}');
+		insert into party_role (party_id, role) values ('${copied}', 'client'),
+			('${vendor}', 'vendor'), ('${newClient}', 'client');
+		insert into party_role (party_id, role, stage) values ('${lead}', 'lead', 'new');
+		insert into client (party_id, owner_user_id) values ('${copied}', '${id(902)}');
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'New Deal', '${ME}');
+		insert into phase (slug, label) values ('closed', 'Closed');
+		insert into deal_phase_change (deal_id, happened_at, phase) values ('${deal}', '2026-01-02', 'closed');
+		insert into deal_party (deal_id, party_id, role) values
+			('${deal}', '${newClient}', 'client'), ('${deal}', '${vendor}', 'lender');
+		insert into party_link (party_id, other_party_id, kind, note, ended_on) values
+			('${vendor}', '${lead}', 'can_introduce', 'Can make the introduction', null),
+			('${copied}', '${lead}', 'can_introduce', 'Offer expired', '2020-01-01'),
+			('${vendor}', '${copied}', 'can_introduce', 'Already introduced', null);
+		insert into introduction (vendor_id, made_by, introduced_party_id, deal_id)
+			values ('${vendor}', 'vendor', '${copied}', '${deal}');
+		insert into next_step (party_id, owner_party_id, what) values
+			('${person}', '${ME}', 'Call the new contact');
+		insert into next_step (party_id, owner_party_id, what)
+			select party_id, '${ME}', 'Call the copied client' from outside_id
+			where source = 'old_system' and value = '${clientId}';
+		commit;`);
+
+	const caller = { user: "joe" };
+	const graph = await request(
+		caller,
+		"relationships?contract=relationship-network.v1",
+		{ method: "GET" },
+		{ RELATIONSHIPS_READ_SCHEMA: "next" },
+	);
+	assert.equal(graph.status, 200);
+	const snapshot = await graph.json();
+	assert.ok(isArguments(snapshot));
+	const { nodes, edges, referrals, suggestions } = snapshot;
+	assert.ok(Array.isArray(nodes));
+	assert.ok(Array.isArray(edges));
+	assert.ok(Array.isArray(suggestions));
+	const node = (key: string) =>
+		nodes.filter(isArguments).find((row) => row.id === key);
+	assert.equal(node(`party:${person}`)?.kind, "contact");
+	assert.equal(node(`party:${newClient}`)?.kind, "client");
+	assert.equal(node(`party:${copied}`)?.owner, "dell");
+	assert.equal(node(`party:${copied}`)?.ref, "C-EX-2");
+	assert.equal(node(`party:${lead}`)?.owner, null);
+	assert.equal(node(`deal:${deal}`)?.owner, "joe");
+	assert.equal(node(`deal:${deal}`)?.outcome, "won");
+	assert.equal(node(`deal:${id(501)}`), undefined);
+	const edgeKinds = edges.map((edge) => {
+		assert.ok(isArguments(edge));
+		assert.ok(typeof edge.from === "string" && node(edge.from));
+		assert.ok(typeof edge.to === "string" && node(edge.to));
+		assert.equal(edge.via, null);
+		return edge.kind;
+	});
+	assert.deepEqual(edgeKinds.sort(), [
+		"can_introduce",
+		"can_introduce",
+		"client_deal",
+		"introduced",
+		"referred",
+		"worked",
+	]);
+	assert.deepEqual(referrals, [
+		{ node_id: `party:${vendor}`, deals: 1, won: 1, lost: 0, win_rate: 1 },
+	]);
+	assert.deepEqual(
+		suggestions.filter(isArguments).map((suggestion) => suggestion.to),
+		[`party:${lead}`],
+	);
+
+	const home = await request(
+		caller,
+		"home/inbox",
+		{ method: "GET" },
+		{ HOME_INBOX_READ_SCHEMA: "next" },
+	);
+	assert.equal(home.status, 200);
+	const inbox = await home.json();
+	assert.ok(isArguments(inbox));
+	const { items } = inbox;
+	assert.ok(Array.isArray(items));
+	const links = items.map((item) => {
+		assert.ok(isArguments(item) && typeof item.open_url === "string");
+		const url = new URL(item.open_url, "https://app.example.test");
+		assert.equal(url.pathname, "/relationships");
+		assert.ok(node(url.searchParams.get("node") ?? ""));
+		return item.open_url;
+	});
+	assert.deepEqual(links.sort(), [
+		`/relationships?node=party:${copied}`,
+		`/relationships?node=party:${person}`,
+	]);
+});
