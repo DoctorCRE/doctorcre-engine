@@ -74,7 +74,7 @@ A recorded call whose suggestions wait for the partner.
 
 A reply Dr. CRE drafted to an email.
 
-- [ ] Says "Reply to Pat Example: Floor plan for suite 200". One card per email conversation.
+- [ ] Says "Reply to Pat Example: Floor plan for suite 200" using the source email’s subject. One card per email conversation.
 - [ ] Opens to the email being answered (who wrote, when, what they said), then the draft with To and CC.
 - [ ] Save draft sends nothing. Drop asks for a reason, and the card leaves.
 - [ ] Send reply approves this exact text to be sent once from the partner's own mailbox. The card shows "Sending" until the outbox records it, then appears once in Done as sent, using the recorded send time. Send reply has no Undo.
@@ -85,7 +85,7 @@ A reply Dr. CRE drafted to an email.
 
 A next step, a deal to file the email to, a possible new deal, a deal's progress, or a possible lead that an email suggests.
 
-- [ ] Shows the sender and subject as its title, such as "Pat Example · Floor plan". A grouped card uses the latest email among its suggestions.
+- [ ] Shows the sender and subject as its title, such as "Pat Example · Floor plan". A grouped card uses the latest email among its suggestions. Reply drafts and email suggestions use the recorded sender name or the name of the only directory record with that exact address.
 - [ ] Opens to the email and the deal, client or lead it would change.
 - [ ] When a possible lead matches a stored Message-ID or Outlook conversation ID in the partner's mailbox, the partner sees it on that conversation's card and can decide each suggestion there. Without a match, the lead has its own card with the sender and "Possible lead".
 - [ ] The possible lead action opens the saved sender details, intake summary and any excerpt. The mailbox partner can accept it or drop it with a reason.
