@@ -1491,7 +1491,11 @@ An unknown payment returns `404 invoice_not_found`. An outdated version returns 
 
 The Vendors directory (`GET /api/engine/vendors`) and drawer (`GET /api/engine/vendors/:id`) read from the new schema through `DATABASE` as `engine_reader` when the engine Worker's `DIRECTORY_READ_SCHEMA` variable is `next` (and `clients-vendors-from-engine` is `on` in the app). When `DIRECTORY_READ_SCHEMA` is absent or any other value, the old-table read stays active.
 
-The read lists live parties holding the `vendor` role, reading categories from vendor category roles, owner from `party_role.owner_user_id`, active territories from `party_territory`, verticals and loan programs from `vendor_vertical` and `vendor_loan_program`, contact details and active people from `party_email`, `party_phone`, `party_company`, and `active_do_not_contact`, and live activity and introductions from `activity`, `activity_about`, `introduction`, and `party_link`. Track record counts come from `vendor_track_record` and rate the computed tier directly without a legacy verification timestamp. `coverage_verified_at` and `override` have no home in the new database and return `null` (the app's rating editor is frozen after cutover). Copied vendors keep their copied typed ref (`outside_id` under `old_system_ref`, preferring `V-...`) and open by either their legacy `outside_id` or their new party ID; new vendors use their party ID as both `id` and `ref`.
+The list and drawer show live vendors and their current relationship partner. Copied vendors open by their old UUID, their party UUID or their copied `V-*` ref. The drawer returns the requested UUID for UUID lookups and the party UUID for ref lookups. Intro notes show the copied intro text. Other notes appear in Conversations.
+
+Track record counts come from `vendor_track_record`. A deal counts even when its work date is unknown. The first and last work dates use participation saved through the new system. A dated introduction that led to a deal can also set the Last deal date. The old coverage verification timestamp, manual override and rating edit version return null.
+
+**Later.** The copy leaves vendor work dates unknown. Preserving them needs a design decision about a nullable participation date or a field for its source.
 
 ## Doors the old system calls
 

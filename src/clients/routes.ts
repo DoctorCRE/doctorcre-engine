@@ -220,8 +220,9 @@ async function record(
 	read: RecordRead<Reader>,
 	readNext?: RecordRead<NextReader>,
 ): Promise<Response> {
-	if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
 	const next = c.env.DIRECTORY_READ_SCHEMA === "next" ? readNext : undefined;
+	if (!UUID.test(id) && !(next && id.startsWith("V-")))
+		return c.json({ error: "not_found" }, 404);
 	return answer(c, (params, viewer) => {
 		checkFields(params, RECORD_FIELDS, viewer);
 		const contract = oneOf(params, "contract", CONTRACTS, null);
@@ -232,9 +233,9 @@ async function record(
 }
 
 // Values are decoded, so only the pattern keeps an encoded id from passing as a UUID.
-const ID_PATTERN = ":id{[0-9A-Fa-f-]+}";
+const UUID_SEGMENT = "[0-9A-Fa-f-]+";
 
-directory.get(`/clients/${ID_PATTERN}`, (c) =>
+directory.get(`/clients/:id{${UUID_SEGMENT}}`, (c) =>
 	record(c, c.req.param("id"), readClient),
 );
 directory.get(
@@ -250,7 +251,7 @@ directory.get(
 		}),
 );
 directory.get(
-	`/vendors/${ID_PATTERN}`,
+	`/vendors/:id{(?:${UUID_SEGMENT}|V-[^/]+)}`,
 	(c): Promise<Response> =>
 		record(c, c.req.param("id"), readVendor, readNextVendor),
 );

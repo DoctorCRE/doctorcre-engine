@@ -98,24 +98,18 @@ left join ${associations} e on e.party_id = v.party_id)`;
 
 const nextVendorActivity = sql`(a.from_party_id = p.id or exists (
 	select from activity_about aa where aa.activity_id = a.id and aa.party_id = p.id))`;
-const nextContacts = sql`${nextVendorActivity} and a.kind in ('email', 'call', 'meeting')`;
 
 // Join laterally beside vendor party `p` and `vendor_track_record vtr`.
-// Manual overrides and coverage verification timestamps have no home in next.
+// The audit insert distinguishes native participation from the copy’s vendor update timestamp.
 export const nextTrackRecordFacts = sql<{
 	last_deal_at: string | null;
 	last_touch: string | null;
 	facts: TrackRecordFacts;
 }>`(select
 	greatest(
-		(select max(coalesce(
-				(select max(pc.happened_at) from deal_phase_change pc where pc.deal_id = dp.deal_id),
-				dp.created_at))
-			from deal_party dp join role r on r.slug = dp.role
-			where dp.party_id = p.id and 'vendor' in (r.slug, r.category_of)),
-		(select max(coalesce(i.introduced_on::timestamp at time zone 'UTC', i.created_at))
-			from introduction i
-			where i.vendor_id = p.id and i.made_by = 'vendor' and i.deal_id is not null)
+		work.last_worked_at,
+		(select max(i.introduced_on::timestamp at time zone 'UTC')
+			from introduction i where i.vendor_id = p.id and i.made_by = 'vendor' and i.deal_id is not null)
 	) as last_deal_at,
 	(lc.happened_at at time zone 'America/Chicago')::date as last_touch,
 	json_build_object(
@@ -124,24 +118,17 @@ export const nextTrackRecordFacts = sql<{
 		'deals_worked', coalesce(vtr.deals_worked, 0)::int,
 		'won', coalesce(vtr.deals_closed, 0)::int,
 		'lost', coalesce(vtr.deals_dead, 0)::int,
-		'first_worked_at', (select min(least(dp.created_at, d.created_at))
-			from deal_party dp join deal d on d.id = dp.deal_id join role r on r.slug = dp.role
-			where dp.party_id = p.id and 'vendor' in (r.slug, r.category_of)),
+		'first_worked_at', work.first_worked_at,
 		'last_contacted_at', lc.happened_at,
 		'last_contact_note', lc.note,
 		'override', null,
-		'recent_entries', (select coalesce(json_agg(t.entry order by t.happened_at desc, t.id desc), '[]')
-			from (select a.happened_at, a.id, json_build_object('id', a.id, 'kind', a.kind,
-					'when', a.happened_at,
-					'summary', coalesce(nullif(a.summary, ''), e.subject, initcap(a.kind)),
-					'detail', null) as entry
+		'recent_entries', (select coalesce(json_agg(t order by t."when" desc, t.id desc), '[]')
+			from (select a.id, a.kind, a.happened_at as "when",
+					coalesce(nullif(a.summary, ''), e.subject, initcap(a.kind)) as summary, null as detail
 				from activity a left join email e on e.activity_id = a.id
 				where ${nextVendorActivity}
 				order by a.happened_at desc, a.id desc limit 20) t),
-		'introductions', (select coalesce(json_agg(json_build_object('id', x.id, 'kind', x.kind,
-				'from_name', x.from_name, 'to_name', x.to_name, 'note', x.note,
-				'occurred_at', x.occurred_at, 'via_party', x.via_party)
-				order by x.created_at desc, x.id desc), '[]')
+		'introductions', (select coalesce(jsonb_agg(to_jsonb(x) - 'created_at' order by x.created_at desc, x.id desc), '[]')
 			from (select i.id, 'introduced'::text as kind,
 					case when i.made_by = 'vendor' then vp.name else ip.name end as from_name,
 					case when i.made_by = 'vendor' then ip.name else vp.name end as to_name,
@@ -160,10 +147,16 @@ export const nextTrackRecordFacts = sql<{
 				where l.kind = 'can_introduce' and p.id in (l.party_id, l.other_party_id)
 					and (l.ended_on is null or l.ended_on >= (now() at time zone 'America/Chicago')::date)) x)
 	) as facts
-from (select 1) _
+from (select min(dp.created_at) as first_worked_at, max(dp.created_at) as last_worked_at
+	from deal_party dp join role r on r.slug = dp.role
+	where dp.party_id = p.id and 'vendor' in (r.slug, r.category_of)
+		and exists (select from change c where c.table_name = 'deal_party' and c.action = 'insert'
+			and c.record = jsonb_build_object('deal_id', dp.deal_id, 'party_id', dp.party_id, 'role', dp.role)
+			and c.changed_by_job is distinct from 'old_system' and (c.new_value->>'created_at')::timestamptz = dp.created_at)
+) work
 left join lateral (select a.happened_at, coalesce(nullif(a.summary, ''), e.subject) as note
 	from activity a left join email e on e.activity_id = a.id
-	where ${nextContacts}
+	where ${nextVendorActivity} and a.kind in ('email', 'call', 'meeting')
 	order by a.happened_at desc, a.id desc limit 1) lc on true)`;
 
 const DAY_MS = 86_400_000;
@@ -182,6 +175,24 @@ function microseconds(value: string | null) {
 	if (!match) return null;
 	const micros = (match[1] ?? "").padEnd(6, "0").slice(3);
 	return BigInt(Date.parse(value)) * 1000n + BigInt(micros);
+}
+
+// The SQL's counts are whole and won plus lost never exceeds worked, so the
+// old checks on them cannot fail.
+export function rateTrackRecord(facts: TrackRecordFacts, now: number) {
+	const coverage = microseconds(facts.coverage_verified_at);
+	if (coverage === null || coverage > BigInt(now) * 1000n)
+		return {
+			...facts,
+			computed_tier: "Unrated",
+			deals_worked: null,
+			deals_referred: null,
+			won: null,
+			lost: null,
+			win_rate: null,
+			formula_version: "vendor-trust.v1",
+		} as const;
+	return rateNextTrackRecord(facts, now);
 }
 
 export function rateNextTrackRecord(facts: TrackRecordFacts, now: number) {
@@ -208,22 +219,4 @@ export function rateNextTrackRecord(facts: TrackRecordFacts, now: number) {
 		win_rate,
 		formula_version: "vendor-trust.v1",
 	} as const;
-}
-
-// The SQL's counts are whole and won plus lost never exceeds worked, so the
-// old checks on them cannot fail.
-export function rateTrackRecord(facts: TrackRecordFacts, now: number) {
-	const coverage = microseconds(facts.coverage_verified_at);
-	if (coverage === null || coverage > BigInt(now) * 1000n)
-		return {
-			...facts,
-			computed_tier: "Unrated",
-			deals_worked: null,
-			deals_referred: null,
-			won: null,
-			lost: null,
-			win_rate: null,
-			formula_version: "vendor-trust.v1",
-		} as const;
-	return rateNextTrackRecord(facts, now);
 }

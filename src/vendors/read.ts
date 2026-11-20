@@ -16,11 +16,13 @@ import {
 import type { DB } from "../database.d.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText, inJsonbOrder } from "../reader.ts";
+import { UUID } from "../uuid.ts";
 import { people } from "./people.ts";
 import {
 	nextTrackRecordFacts,
 	rateNextTrackRecord,
 	rateTrackRecord,
+	type TrackRecordFacts,
 	trackRecordFacts,
 } from "./track-record.ts";
 
@@ -323,12 +325,15 @@ const nextDisposition = sql<string>`coalesce(pr.disposition, 'active')`;
 const nextDispositionLabel = sql<string>`case pr.disposition
 	when 'parked' then 'Parked' when 'avoid' then 'Avoid' else 'Active' end`;
 const nextUpdatedAt = sql`greatest(p.changed_at, pr.changed_at)`;
+const nextLoanPrograms = sql<
+	string[] | null
+>`(select array_agg(loan_program order by loan_program)
+	from vendor_loan_program where party_id = p.id)`;
 const nextEmail = (party: ReturnType<typeof sql.ref>) =>
 	sql<string | null>`(select pe.address::text from party_email pe
 		where pe.party_id = ${party} order by pe.is_primary desc, pe.created_at, pe.id limit 1)`;
 const nextPhone = (party: ReturnType<typeof sql.ref>, mobile: boolean) =>
-	sql<string | null>`(select case when pp.extension is not null
-			then pp.number || ' x' || pp.extension else pp.number::text end
+	sql<string | null>`(select concat(pp.number, ' x' || pp.extension)
 		from party_phone pp where pp.party_id = ${party}
 			and pp.label ${mobile ? sql.raw("=") : sql.raw("<>")} 'mobile'
 		order by pp.is_primary desc, pp.created_at, pp.id limit 1)`;
@@ -348,10 +353,9 @@ from (select p.id, p.name, (select jsonb_build_object('id', co.id, 'name', co.na
 		order by pc.started_on desc nulls last, pc.created_at desc, pc.id desc limit 1) as company
 	where p.kind = 'person' and btrim(p.name) <> ''
 	union all
-	(select distinct on (cp.id) cp.id, cp.name, jsonb_build_object('id', p.id, 'name', p.name)
+	select distinct cp.id, cp.name, jsonb_build_object('id', p.id, 'name', p.name)
 	from party_company pc join party cp on cp.id = pc.person_id
-	where p.kind = 'company' and pc.company_id = p.id and pc.ended_on is null and btrim(cp.name) <> ''
-	order by cp.id, pc.started_on desc nulls last, pc.created_at desc, pc.id desc)) c)`;
+	where p.kind = 'company' and pc.company_id = p.id and pc.ended_on is null and btrim(cp.name) <> '') c)`;
 
 const NEXT_ORDER = {
 	name: sql`lower(p.name) asc, p.id asc`,
@@ -363,92 +367,50 @@ const NEXT_ORDER = {
 	territory: sql`lower(${nextTerritory}) asc nulls last, lower(p.name), p.id`,
 };
 
-const nextPartnerId = (db: Transaction<NextDB>, slug: string) =>
-	db.selectFrom("app_user").select("id").where("slug", "=", slug);
+async function nextViewerId(db: Transaction<NextDB>, viewer: string) {
+	const user = await db
+		.selectFrom("app_user")
+		.select("id")
+		.where("slug", "=", viewer)
+		.executeTakeFirst();
+	return user?.id ?? null;
+}
 
 const liveNextVendors = (db: Transaction<NextDB>) =>
 	db
 		.selectFrom("party_role as pr")
 		.innerJoin("party as p", "p.id", "pr.party_id")
 		.leftJoin("app_user as ou", "ou.id", "pr.owner_user_id")
-		.leftJoin("party as op", "op.id", "ou.id")
+		.leftJoin("party as op", "op.id", "pr.owner_user_id")
 		.leftJoin("stage as s", (join) =>
 			join.on("s.role", "=", "vendor").onRef("s.slug", "=", "pr.stage"),
 		)
 		.leftJoin("relationship_level as rl", "rl.level", "pr.relationship_level")
 		.leftJoin("vendor_track_record as vtr", "vtr.party_id", "p.id")
 		.leftJoinLateral(
-			(eb) =>
-				eb
-					.selectFrom("party_role as cr")
-					.innerJoin("role as r", "r.slug", "cr.role")
-					.select(["r.slug", "r.label"])
-					.whereRef("cr.party_id", "=", "p.id")
-					.where("r.category_of", "=", "vendor")
-					.orderBy("r.slug")
-					.limit(1)
-					.as("cat"),
+			sql<{
+				slug: string;
+				label: string;
+			}>`(select r.slug, r.label from party_role cr
+				join role r on r.slug = cr.role where cr.party_id = p.id and r.category_of = 'vendor'
+				order by r.slug limit 1)`.as("cat"),
 			(join) => join.onTrue(),
 		)
 		.where("pr.role", "=", "vendor");
 
-function matchingNextVendors(
-	db: Transaction<NextDB>,
-	query: VendorQuery,
-	viewer: string,
+function nextVendorRows(
+	vendors: ReturnType<typeof liveNextVendors>,
+	ownerId: string | null,
+	contract: Contract | null | undefined,
 ) {
-	const { q, owner, territory } = query;
-	let vendors = liveNextVendors(db);
-	if (query.scope === "mine")
-		vendors = vendors.where("pr.owner_user_id", "=", nextPartnerId(db, viewer));
-	if (owner !== "all")
-		vendors = vendors.where("pr.owner_user_id", "=", nextPartnerId(db, owner));
-	if (territory !== null)
-		vendors = vendors.where(
-			sql<boolean>`(exists (select from party_territory pt join territory t on t.id = pt.territory_id
-				where pt.party_id = p.id and (${activeTerritory}) and t.name = ${territory})
-				or ${nextTerritory} = ${territory})`,
-		);
-	if (q !== null) {
-		const term = `%${q.replace(/([\\%_])/g, "\\$1")}%`;
-		vendors = vendors.where(
-			sql<boolean>`(p.name ilike ${term} escape '\\' or p.id::text ilike ${term} escape '\\'
-				or exists (select from outside_id o where o.party_id = p.id
-					and o.source = 'old_system_ref' and o.value ilike ${term} escape '\\'))`,
-		);
-	}
-	if (query.category !== null)
-		vendors = vendors.where(
-			sql<boolean>`exists (select from party_role cr join role r on r.slug = cr.role
-				where cr.party_id = p.id and r.category_of = 'vendor' and cr.role = ${query.category})`,
-		);
-	if (query.stage !== null)
-		vendors = vendors.where("pr.stage", "=", query.stage);
-	if (query.disposition !== null)
-		vendors = vendors.where(nextDisposition, "=", query.disposition);
-	return vendors;
-}
-
-export async function readNextVendorList(
-	db: Transaction<NextDB>,
-	viewer: string,
-	query: VendorQuery,
-	stamp: Stamp,
-) {
-	const ownerId =
-		(await nextPartnerId(db, viewer).executeTakeFirst())?.id ?? null;
-	const matching = matchingNextVendors(db, query, viewer);
-	const { total } = await matching
-		.select(sql<number>`count(*)::int`.as("total"))
-		.executeTakeFirstOrThrow();
-	const rows = await matching
+	return vendors
 		.innerJoinLateral(nextTrackRecordFacts.as("vr"), (join) => join.onTrue())
 		.select((eb) => [
 			"p.id",
-			nextRef.as("ref"),
 			"p.name",
-			nextPartyKind.as("party_kind"),
 			"p.city",
+			nextRef.as("ref"),
+			nextPartyKind.as("party_kind"),
 			sql<null>`null`.as("state"),
 			"cat.slug as recorded_category",
 			"cat.label as recorded_category_label",
@@ -463,76 +425,94 @@ export async function readNextVendorList(
 			"pr.is_target",
 			sql<null>`null`.as("out_of_market"),
 			asText(eb.ref("vr.last_touch")).as("last_touch"),
-			"vr.facts as relationship",
-			nextVertical.as("vertical"),
-			"cat.label as deal_type",
-			asText(eb.ref("vr.last_deal_at")).as("last_deal_at"),
-			nextTerritory.as("territory"),
 			"op.name as owner_label",
 			ownedByViewer(sql.ref("pr.owner_user_id"), ownerId).as("owned_by_viewer"),
 			asText(nextUpdatedAt).as("updated_at"),
 		])
-		.$if(query.contract === V2, (qb) => qb.select(nextPeople.as("people")))
+		.$if(Boolean(contract), (qb) => qb.select("vr.facts as relationship"))
+		.$if(contract === V2, (qb) => qb.select(nextPeople.as("people")));
+}
+
+function rateNextVendor<Row extends { relationship?: TrackRecordFacts }>(
+	row: Row,
+	now: number,
+) {
+	return row.relationship
+		? {
+				...row,
+				relationship: rateNextTrackRecord(row.relationship, now),
+			}
+		: row;
+}
+
+export async function readNextVendorList(
+	db: Transaction<NextDB>,
+	viewer: string,
+	query: VendorQuery,
+	stamp: Stamp,
+) {
+	const ownerId = await nextViewerId(db, viewer);
+	if (query.scope === "mine" && ownerId === null)
+		throw new BusinessRefusal({ error: "VIEWER_OWNER_UNKNOWN" });
+	const { category, disposition, owner, q, scope, stage, territory } = query;
+	const term = q === null ? null : `%${q.replace(/([\\%_])/g, "\\$1")}%`;
+	const matching = liveNextVendors(db).where(sql<boolean>`
+		(${scope === "team"} or pr.owner_user_id = ${ownerId}::uuid)
+		and (${owner === "all"} or ou.slug = ${owner})
+		and (${stage}::text is null or pr.stage = ${stage})
+		and (${disposition}::text is null or ${nextDisposition} = ${disposition})
+		and (${category}::text is null or exists (select from party_role cr join role r on r.slug = cr.role
+			where cr.party_id = p.id and r.category_of = 'vendor' and cr.role = ${category}))
+		and (${territory}::text is null or ${nextTerritory} = ${territory} or exists
+			(select from party_territory pt join territory t on t.id = pt.territory_id
+			where pt.party_id = p.id and (${activeTerritory}) and t.name = ${territory}))
+		and (${term}::text is null or p.name ilike ${term} or p.id::text ilike ${term} or exists
+			(select from outside_id o where o.party_id = p.id and o.source = 'old_system_ref' and o.value ilike ${term}))
+	`);
+	const { total } = await matching
+		.select(sql<number>`count(*)::int`.as("total"))
+		.executeTakeFirstOrThrow();
+	const rows = await nextVendorRows(matching, ownerId, query.contract)
+		.$if(Boolean(query.contract), (qb) =>
+			qb.select([
+				nextVertical.as("vertical"),
+				"cat.label as deal_type",
+				asText(sql.ref("vr.last_deal_at")).as("last_deal_at"),
+				nextTerritory.as("territory"),
+			]),
+		)
 		.orderBy(NEXT_ORDER[query.sort])
 		.limit(PAGE_SIZE)
 		.offset((query.page - 1) * PAGE_SIZE)
 		.execute();
-	const facets = {
-		categories: await db
-			.selectFrom("role")
-			.select(["slug", "label"])
-			.where("category_of", "=", "vendor")
-			.orderBy("label")
-			.orderBy("slug")
-			.execute(),
-		stages: await db
-			.selectFrom("stage")
-			.select(["slug", "label"])
-			.where("role", "=", "vendor")
-			.orderBy("label")
-			.orderBy("slug")
-			.execute(),
-		dispositions: NEXT_DISPOSITIONS,
-	};
-	const territories = query.contract
-		? await db
-				.selectFrom("party_role as pr")
-				.innerJoin("party_territory as pt", "pt.party_id", "pr.party_id")
-				.innerJoin("territory as t", "t.id", "pt.territory_id")
-				.where("pr.role", "=", "vendor")
-				.where(sql<boolean>`(${activeTerritory})`)
-				.select(["t.name as slug", "t.name as label"])
-				.distinct()
-				.orderBy("t.name")
-				.execute()
-		: null;
-	if (query.scope === "mine" && ownerId === null)
-		throw new BusinessRefusal({ error: "VIEWER_OWNER_UNKNOWN" });
-	const now = stamp.observedAt.valueOf();
+	const facets = await db
+		.selectNoFrom([
+			sql`(select coalesce(json_agg(r order by r.label, r.slug), '[]')
+			from (select slug, label from role where category_of = 'vendor') r)`.as(
+				"categories",
+			),
+			sql`(select coalesce(json_agg(s order by s.label, s.slug), '[]')
+			from (select slug, label from stage where role = 'vendor') s)`.as(
+				"stages",
+			),
+		])
+		.$if(Boolean(query.contract), (qb) =>
+			qb.select(
+				sql`(select coalesce(json_agg(t order by t.slug), '[]') from (
+			select distinct t.name as slug, t.name as label
+			from party_role pr join party_territory pt on pt.party_id = pr.party_id
+			join territory t on t.id = pt.territory_id where pr.role = 'vendor' and (${activeTerritory})
+		) t)`.as("territories"),
+			),
+		)
+		.executeTakeFirstOrThrow();
 	return listAnswer(
 		viewer,
 		query,
 		total,
 		{
-			rows: rows.map((row) => {
-				if (query.contract) {
-					const shaped = contracted(row, query.contract);
-					return {
-						...shaped,
-						relationship: rateNextTrackRecord(shaped.relationship, now),
-					};
-				}
-				const {
-					relationship,
-					vertical,
-					deal_type,
-					last_deal_at,
-					territory,
-					...legacy
-				} = row;
-				return legacy;
-			}),
-			facets: territories ? { ...facets, territories } : facets,
+			rows: rows.map((row) => rateNextVendor(row, stamp.observedAt.valueOf())),
+			facets: { ...facets, dispositions: NEXT_DISPOSITIONS },
 			partial: null,
 		},
 		stamp,
@@ -546,25 +526,17 @@ export async function readNextVendor(
 	contract: Contract | null,
 	stamp: Stamp,
 ) {
-	const wanted = id.toLowerCase();
-	const ownerId =
-		(await nextPartnerId(db, viewer).executeTakeFirst())?.id ?? null;
-	const record = await liveNextVendors(db)
+	const requestedUuid = UUID.test(id) ? id : null;
+	const source = requestedUuid ? "old_system" : "old_system_ref";
+	const value = requestedUuid?.toLowerCase() ?? id;
+	const ownerId = await nextViewerId(db, viewer);
+	const record = await nextVendorRows(liveNextVendors(db), ownerId, contract)
+		.where(sql<boolean>`p.id = ${requestedUuid}::uuid
+			or p.id = (select party_id from outside_id where source = ${source} and value = ${value})
+			or p.id = (select survivor_id from merged_party where id = ${requestedUuid}::uuid)`)
+		.orderBy(sql`p.id = ${requestedUuid}::uuid`, "desc")
 		.leftJoin("active_do_not_contact as dnc", "dnc.party_id", "p.id")
-		.innerJoinLateral(nextTrackRecordFacts.as("vr"), (join) => join.onTrue())
-		.where(
-			sql<boolean>`(p.id = ${wanted}::uuid
-				or p.id in (select o.party_id from outside_id o
-					where o.source = 'old_system' and o.value = ${wanted} and o.party_id is not null)
-				or p.id in (select m.survivor_id from merged_party m where m.id = ${wanted}::uuid))`,
-		)
 		.select((eb) => [
-			sql<string>`${wanted}`.as("id"),
-			nextRef.as("ref"),
-			"p.name",
-			nextPartyKind.as("party_kind"),
-			"p.city",
-			sql<null>`null`.as("state"),
 			sql<null>`null`.as("county"),
 			sql<string | null>`(select pc.title from party_company pc
 				where pc.person_id = p.id and pc.ended_on is null and pc.title is not null
@@ -580,15 +552,6 @@ export async function readNextVendor(
 			"dnc.reason as contact_state_reason",
 			asText(eb.ref("dnc.until_date")).as("contact_state_until"),
 			sql<null>`null`.as("contact_state_cadence"),
-			"cat.slug as recorded_category",
-			"cat.label as recorded_category_label",
-			"pr.stage as recorded_stage",
-			"s.label as recorded_stage_label",
-			nextDisposition.as("recorded_disposition"),
-			nextDispositionLabel.as("recorded_disposition_label"),
-			sql<boolean>`pr.disposition is null`.as("recorded_disposition_workable"),
-			"pr.relationship_level",
-			"rl.label as relationship_level_label",
 			"rl.meaning as relationship_level_note",
 			sql<string[] | null>`(select array_agg(vv.vertical order by vv.vertical)
 				from vendor_vertical vv where vv.party_id = p.id)`.as("verticals"),
@@ -597,52 +560,28 @@ export async function readNextVendor(
 			"pr.seeking",
 			"pr.rivalry_note as rivalry_group",
 			"pr.relationship_origin as originated",
-			"pr.refers_business as referral_active",
-			"pr.is_target",
-			sql<null>`null`.as("out_of_market"),
-			asText(eb.ref("vr.last_touch")).as("last_touch"),
-			"vr.facts as relationship",
 			sql<
-				string[] | null
-			>`(select array_agg(vlp.loan_program order by vlp.loan_program)
-				from vendor_loan_program vlp where vlp.party_id = p.id)`.as(
-				"loan_programs",
-			),
-			sql<string | null>`(select a.summary from activity a
-				join activity_about aa on aa.activity_id = a.id
-				where aa.party_id = p.id and a.kind = 'note' and a.summary is not null
-				order by a.happened_at desc, a.id desc limit 1)`.as("intro_notes"),
+				string | null
+			>`(select string_agg(a.summary, E'\n\n' order by a.happened_at, a.id)
+				from outside_id o join activity a on a.id = md5('old_system:vendor:' || o.value || ':intro_notes')::uuid
+				where o.source = 'old_system' and o.party_id = p.id)`.as("intro_notes"),
 			sql<null>`null`.as("links_label"),
-			"op.name as owner_label",
-			ownedByViewer(sql.ref("pr.owner_user_id"), ownerId).as("owned_by_viewer"),
-			sql<number>`coalesce((select max(ch.id)::float8 from change ch
-				where (ch.table_name = 'party' and ch.record = jsonb_build_object('id', p.id))
-					or (ch.table_name = 'party_role'
-						and ch.record = jsonb_build_object('party_id', p.id, 'role', 'vendor'))), 1)`.as(
-				"record_version",
-			),
+			sql<null>`null`.as("record_version"),
 			asText(eb.ref("pr.created_at")).as("created_at"),
-			asText(nextUpdatedAt).as("updated_at"),
 		])
-		.$if(contract === V2, (qb) => qb.select(nextPeople.as("people")))
+		.$if(Boolean(contract), (qb) =>
+			qb.select(nextLoanPrograms.as("loan_programs")),
+		)
 		.executeTakeFirst();
 	if (!record) throw new BusinessRefusal({ error: "RECORD_NOT_FOUND" });
-	if (contract) {
-		const shaped = contracted(record, contract);
-		return recordAnswer(
-			"vendors",
-			viewer,
-			{
-				...shaped,
-				relationship: rateNextTrackRecord(
-					shaped.relationship,
-					stamp.observedAt.valueOf(),
-				),
-			},
-			null,
-			stamp,
-		);
-	}
-	const { relationship, loan_programs, territory, ...legacy } = record;
-	return recordAnswer("vendors", viewer, { ...legacy, territory }, null, stamp);
+	return recordAnswer(
+		"vendors",
+		viewer,
+		rateNextVendor(
+			{ ...record, id: requestedUuid ?? record.id },
+			stamp.observedAt.valueOf(),
+		),
+		null,
+		stamp,
+	);
 }
