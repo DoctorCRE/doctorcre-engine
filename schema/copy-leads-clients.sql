@@ -270,6 +270,12 @@ join party_role pr on pr.party_id = r.mapped_id and pr.role = r.kind
 where (r.kind = 'lead' or exists (select from client c where c.party_id = r.mapped_id))
  and not exists (select from outside_id o where o.source = 'old_system' and o.value = r.id::text);
 
+insert into outside_id (source, value, party_id)
+select 'old_system_lead', m.value, m.party_id
+from public.lead l join outside_id m on m.source = 'old_system' and m.value = l.id::text
+join party_role r on r.party_id = m.party_id and r.role = 'lead'
+on conflict do nothing;
+
 update client c set owner_user_id = r.owner from client_owner r
 where c.party_id = r.mapped_id and c.owner_user_id is null and r.owner is not null and r.owner_refusal is null;
 insert into not_copied select r.id, 'owner_id', r.fields ->> 'owner_id', r.owner_refusal

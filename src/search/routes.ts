@@ -1,11 +1,20 @@
 import { Hono } from "hono";
-import { answer, checkFields, Refusal, refuse } from "../answer.ts";
+import {
+	answer,
+	answerNextRead,
+	checkFields,
+	Refusal,
+	refuse,
+} from "../answer.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { readFind } from "./find.ts";
+import { readNextFind } from "./next-find.ts";
 
-export const search = new Hono<DatabaseEnv>();
+export const search = new Hono<
+	DatabaseEnv & { Bindings: { SEARCH_READ_SCHEMA?: string } }
+>();
 
-search.get("/find", async (c) => {
+search.get("/find", async (c): Promise<Response> => {
 	const params = new URL(c.req.url).searchParams;
 	const refused = checkFields(params, ["query"]);
 	if (refused) return refuse(c, refused);
@@ -17,5 +26,11 @@ search.get("/find", async (c) => {
 			c,
 			new Refusal(400, "missing_required", { fields: ["query"] }),
 		);
-	return answer(c, "find", (db) => readFind(db, query));
+	if (c.env.SEARCH_READ_SCHEMA === "next")
+		return answerNextRead(
+			c,
+			"find",
+			async (db) => await readNextFind(db, query),
+		);
+	return answer(c, "find", async (db) => await readFind(db, query));
 });

@@ -13,14 +13,20 @@ const deal = id(3);
 const call = id(4);
 const meeting = id(5);
 const unstampedCall = id(6);
+const knownContact = randomUUID();
 
 before(async () => {
 	await setup();
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
+		insert into how_found (slug, label) values ('inbound', 'Inbound');
+		insert into role (slug, label) values ('lead', 'Lead');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New');
 		insert into party (id, kind, name) values
 			('${partner}', 'person', 'Example Partner'), ('${other}', 'person', 'Other Partner');
 		insert into app_user (id, slug) values ('${partner}', 'example'), ('${other}', 'other');
+		insert into party (id, kind, name) values ('${knownContact}', 'person', 'Known Contact');
+		insert into party_email (party_id, address, label) values ('${knownContact}', 'known-cc@example.test', 'work');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${partner}');
 		insert into activity (id, kind, happened_at)
 			select id, 'email', '2026-01-01'::date + offset_days::int
@@ -72,11 +78,6 @@ before(async () => {
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${partner}', true);
 		update proposal set status = 'dismissed' where id = '${id(35)}';
 		update proposal set status = 'accepted' where id = '${id(36)}';
-		select set_config('engine.job', 'mail_capture', true);
-		insert into candidate (id, source, source_key, source_row, name, qualification)
-			values ('${id(40)}', 'outlook-intake', 'made-up-key', '{"address":"new@example.test"}', 'New Example', 'Asks about a lease');
-		insert into proposal (id, kind, candidate_id, evidence, proposed_by_job)
-			values ('${id(41)}', 'email_lead', '${id(40)}', 'Asks about a lease', 'mail_capture');
 		commit;`);
 });
 after(async () => {
@@ -336,8 +337,271 @@ test("Home groups pending suggestions from each email conversation or call and k
 	);
 });
 
-test("Home leaves pending unknown-sender suggestions in the candidate queue", async () => {
-	assert.ok(!(await inbox()).some((card) => card.proposal_id === id(41)));
+for (const decision of ["accept", "dismiss"]) {
+	test(`The mailbox partner can ${decision} a new sender's suggestion from Home`, async () => {
+		const user = { user: "example" };
+		const job = { job: "mail_capture", for_user: user.user };
+		const address = `new-${decision}@example.test`;
+		const quote =
+			decision === "accept" ? "I am looking to lease a suite." : null;
+		const [stored, proposal] = await save(job, "proposals/email-lead", {
+			idempotency_key: randomUUID(),
+			address,
+			display_name: "New Example",
+			summary: "Asked about leasing a suite.",
+			first_seen_at: "2026-01-08T12:00:00Z",
+			message_ref: `example-mail-${decision}`,
+			applies_to: "new_matter",
+			confidence: 0.9,
+			...(quote && { evidence_quote: quote }),
+		});
+		assert.equal(stored, 201);
+		const proposalId = proposal.proposal_id;
+		assert.equal(typeof proposalId, "string");
+		const path = `proposals/${proposalId}`;
+		const findCards = async (viewer = user.user) =>
+			(await inbox(viewer)).filter((card) => card.proposal_id === proposalId);
+		assert.partialDeepStrictEqual(await findCards(), [
+			{
+				item_id: `suggestion:${proposalId}`,
+				title: "New Example · Possible lead",
+				source_type: "email_proposal",
+				section: "inbox",
+				source_activity: null,
+				open_url: null,
+				suggestions: [
+					{ id: proposalId, kind: "email_lead", activity_id: null },
+				],
+			},
+		]);
+		assert.deepEqual(await findCards("other"), []);
+		const detail = await request(user, path, { method: "GET" });
+		assert.equal(detail.status, 200);
+		assert.partialDeepStrictEqual(await detail.json(), {
+			proposal_id: proposalId,
+			kind: "email_lead",
+			target_name: "New Example",
+			evidence: "Asked about leasing a suite.",
+			evidence_quote: quote,
+			applies_to: "new_matter",
+			source_activity: {
+				kind: "email",
+				id: null,
+				happened_at: "2026-01-08T12:00:00Z",
+				sender: address,
+				sender_name: "New Example",
+				subject: null,
+				body: null,
+			},
+		});
+		assert.equal(
+			(await request({ user: "other" }, path, { method: "GET" })).status,
+			404,
+		);
+		const decide = (caller: typeof user | typeof job) =>
+			save(caller, `${path}/decision`, {
+				idempotency_key: randomUUID(),
+				decision,
+				...(decision === "dismiss" && { reason: "Outside our market" }),
+			});
+		assert.equal((await decide(job))[0], 403);
+		assert.equal((await decide({ user: "other" }))[0], 404);
+		const [decided, receipt] = await decide(user);
+		assert.equal(decided, 200);
+		assert.equal(
+			receipt.status,
+			decision === "accept" ? "accepted" : "dismissed",
+		);
+		if (decision === "accept") {
+			const role = await db.query(
+				`select role.stage, role.owner_user_id from party_role role
+				join party_email email on email.party_id = role.party_id
+				where role.role = 'lead' and email.address = $1`,
+				[address],
+			);
+			assert.deepEqual(role.rows, [{ stage: "new", owner_user_id: partner }]);
+		}
+		assert.deepEqual(await findCards(), []);
+		assert.equal((await request(user, path, { method: "GET" })).status, 404);
+	});
+}
+
+for (const match of [
+	"message_id",
+	"conversation_id",
+	"other_mailbox",
+	"mismatch",
+]) {
+	test(`Home groups a new sender's filing and lead suggestions by verified mail identity (${match})`, async () => {
+		const user = { user: "example" };
+		const job = { job: "mail_capture", for_user: user.user };
+		const otherMailbox = { ...job, for_user: "other" };
+		const sender = `${match}@example.test`.replaceAll("_", "-");
+		const messageId = `Exact-${sender}`;
+		const conversationId = `Outlook-${match}`;
+		const happenedAt = "2026-01-08T12:00:00Z";
+		const [proposed, lead] = await save(job, "proposals/email-lead", {
+			idempotency_key: randomUUID(),
+			address: sender,
+			display_name: "New Sender",
+			summary: "Asked about leasing a suite.",
+			first_seen_at: happenedAt,
+			message_ref: `local-${match}`,
+			applies_to: "new_matter",
+			confidence: 0.9,
+			...(match === "conversation_id"
+				? { conversation_id: conversationId }
+				: {
+						message_id:
+							match === "mismatch" ? messageId.toLowerCase() : messageId,
+					}),
+		});
+		assert.equal(proposed, 201);
+		const mail = {
+			kind: "email",
+			happened_at: happenedAt,
+			email: {
+				message_id: messageId,
+				...(match === "conversation_id" && { conversation_id: conversationId }),
+				sender,
+				sender_name: "New Sender",
+				recipients: [{ address: "known-cc@example.test", kind: "cc" }],
+				subject: "Floor plan",
+				body: "Text from the filed email.",
+			},
+		};
+		const [stored, email] = await save(otherMailbox, "activities", {
+			...mail,
+			idempotency_key: randomUUID(),
+		});
+		assert.equal(stored, 201);
+		if (match !== "other_mailbox")
+			assert.equal(
+				(
+					await save(job, "activities", {
+						...mail,
+						idempotency_key: randomUUID(),
+					})
+				)[0],
+				201,
+			);
+		const [suggested, filing] = await save(otherMailbox, "proposals", {
+			idempotency_key: randomUUID(),
+			kind: "file_to_deal",
+			activity_id: email.activity_id,
+			evidence: "The floor plan belongs to this deal.",
+			deal_id: deal,
+		});
+		assert.equal(suggested, 201);
+		const relevantCards = async (viewer = user.user) =>
+			(await inbox(viewer)).filter(
+				(card) =>
+					Array.isArray(card.merged_source_ids) &&
+					card.merged_source_ids.some(
+						(id) => id === lead.proposal_id || id === filing.proposal_id,
+					),
+			);
+		assert.partialDeepStrictEqual(await relevantCards("other"), [
+			{ suggestions: [{ id: filing.proposal_id, kind: "file_to_deal" }] },
+		]);
+		const cards = await relevantCards();
+		if (match === "other_mailbox" || match === "mismatch") {
+			const standalone = cards.find(
+				(card) => card.proposal_id === lead.proposal_id,
+			);
+			assert.equal(cards.length, match === "other_mailbox" ? 1 : 2);
+			assert.partialDeepStrictEqual(standalone, {
+				title: "New Sender · Possible lead",
+				source_activity: null,
+				suggestions: [
+					{ id: lead.proposal_id, kind: "email_lead", activity_id: null },
+				],
+			});
+			for (const [caller, proposal] of [
+				[user, lead],
+				[{ user: "other" }, filing],
+			] as const) {
+				assert.equal(
+					(
+						await save(caller, `proposals/${proposal.proposal_id}/decision`, {
+							idempotency_key: randomUUID(),
+							decision: "dismiss",
+							reason: "Outside our market.",
+						})
+					)[0],
+					200,
+				);
+			}
+			return;
+		}
+
+		assert.equal(
+			cards.length,
+			1,
+			"the filing and possible lead share one Home card",
+		);
+		assert.partialDeepStrictEqual(cards[0], {
+			proposal_id: filing.proposal_id,
+			title: "New Sender · Floor plan",
+			source_activity: { id: email.activity_id, kind: "email" },
+			suggestions: [
+				{
+					id: filing.proposal_id,
+					kind: "file_to_deal",
+					activity_id: email.activity_id,
+				},
+				{ id: lead.proposal_id, kind: "email_lead", activity_id: null },
+			],
+		});
+		const details = await request(user, `proposals/${lead.proposal_id}`, {
+			method: "GET",
+		});
+		assert.equal(details.status, 200);
+		assert.partialDeepStrictEqual(await details.json(), {
+			evidence: "Asked about leasing a suite.",
+			source_activity: { id: null, subject: null, body: null, summary: null },
+		});
+		for (const proposal of [lead, filing]) {
+			const [status] = await save(
+				user,
+				`proposals/${proposal.proposal_id}/decision`,
+				{
+					idempotency_key: randomUUID(),
+					decision: "accept",
+					...(proposal === filing && { reason: "File the floor plan." }),
+				},
+			);
+			assert.equal(status, 200);
+		}
+		assert.deepEqual(await relevantCards(), []);
+	});
+}
+
+test("A copied email lead suggestion keeps its mailbox and intake reading on Home", async () => {
+	const candidateId = id(40);
+	const proposalId = id(41);
+	await db.query(`begin;
+		select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${other}', true);
+		insert into candidate (id, source, source_key, source_row, name, qualification)
+			values ('${candidateId}', 'outlook-intake', 'example-copy', '{"address":"copied@example.test","reading":{"applies_to":"existing_deal"}}',
+				'Copied Example', 'Asked about the floor plan.');
+		insert into proposal (id, kind, candidate_id, proposed_by_job, evidence)
+			values ('${proposalId}', 'email_lead', '${candidateId}', 'mail_capture', 'Asked about the floor plan.');
+		commit;`);
+	assert.ok(!(await inbox()).some((card) => card.proposal_id === proposalId));
+	assert.partialDeepStrictEqual(
+		(await inbox("other")).find((card) => card.proposal_id === proposalId),
+		{ suggestions: [{ id: proposalId, candidate_id: candidateId }] },
+	);
+	const detail = await request({ user: "other" }, `proposals/${proposalId}`, {
+		method: "GET",
+	});
+	assert.equal(detail.status, 200);
+	assert.partialDeepStrictEqual(await detail.json(), {
+		applies_to: "existing_deal",
+		evidence_quote: null,
+		source_activity: { happened_at: null },
+	});
 });
 
 test("Home shows one pending call log with the proposal to decide", async () => {

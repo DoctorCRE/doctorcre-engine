@@ -24,6 +24,8 @@ import {
 	PIPELINES,
 	readClient,
 	readClientList,
+	readNextClient,
+	readNextClientList,
 	refusalOf,
 	SORTS,
 	type Stamp,
@@ -151,20 +153,6 @@ const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
 	disposition: slug(params, "disposition"),
 });
 
-type DirectoryEnv = DatabaseEnv & {
-	Bindings: { DIRECTORY_READ_SCHEMA?: string };
-};
-type LegacyRead = (db: Reader, stamp: Stamp) => Promise<object>;
-type NextReader = Parameters<typeof readNextVendor>[0];
-type NextRead = (db: NextReader, stamp: Stamp) => Promise<object>;
-type RecordRead<Db> = (
-	db: Db,
-	viewer: string,
-	id: string,
-	contract: Contract | null,
-	stamp: Stamp,
-) => Promise<object>;
-
 // The old door's correlation id: the caller's own, if it is a UUID.
 function stampOf(c: Context<DirectoryEnv>): Stamp {
 	const given = c.req.header("x-correlation-id")?.trim();
@@ -175,6 +163,13 @@ function stampOf(c: Context<DirectoryEnv>): Stamp {
 	};
 }
 
+type DirectoryEnv = DatabaseEnv & {
+	Bindings: { DIRECTORY_READ_SCHEMA?: string };
+};
+type LegacyRead = (db: Reader, stamp: Stamp) => Promise<object>;
+type NextReader = Parameters<typeof readNextClient>[0];
+type NextRead = (db: NextReader, stamp: Stamp) => Promise<object>;
+
 // The old door checked its database, then the query, then the partner.
 async function answer(
 	c: Context<DirectoryEnv>,
@@ -182,7 +177,7 @@ async function answer(
 		params: URLSearchParams,
 		viewer: string,
 	) => LegacyRead | { next: NextRead },
-): Promise<Response> {
+) {
 	const viewer = c.get("partner").slug;
 	const database = c.env.DATABASE;
 	try {
@@ -210,18 +205,29 @@ export const directory = new Hono<DirectoryEnv>();
 directory.get("/clients", (c) =>
 	answer(c, (params, viewer) => {
 		const query = clientQuery(params, viewer);
+		if (c.env.DIRECTORY_READ_SCHEMA === "next")
+			return {
+				next: (db, stamp) => readNextClientList(db, viewer, query, stamp),
+			};
 		return (db, stamp) => readClientList(db, viewer, query, stamp);
 	}),
 );
-// The old door answered any id that is not a UUID before anything else.
+type RecordRead<Db> = (
+	db: Db,
+	viewer: string,
+	id: string,
+	contract: Contract | null,
+	stamp: Stamp,
+) => Promise<object>;
+
 async function record(
 	c: Context<DirectoryEnv>,
 	id: string,
 	read: RecordRead<Reader>,
 	readNext?: RecordRead<NextReader>,
-): Promise<Response> {
+) {
 	const next = c.env.DIRECTORY_READ_SCHEMA === "next" ? readNext : undefined;
-	if (!UUID.test(id) && !(next && id.startsWith("V-")))
+	if (!UUID.test(id) && !(next && (id.startsWith("C-") || id.startsWith("V-"))))
 		return c.json({ error: "not_found" }, 404);
 	return answer(c, (params, viewer) => {
 		checkFields(params, RECORD_FIELDS, viewer);
@@ -235,23 +241,19 @@ async function record(
 // Values are decoded, so only the pattern keeps an encoded id from passing as a UUID.
 const UUID_SEGMENT = "[0-9A-Fa-f-]+";
 
-directory.get(`/clients/:id{${UUID_SEGMENT}}`, (c) =>
-	record(c, c.req.param("id"), readClient),
+directory.get(`/clients/:id{(?:${UUID_SEGMENT}|C-[^/]+)}`, (c) =>
+	record(c, c.req.param("id"), readClient, readNextClient),
 );
-directory.get(
-	"/vendors",
-	(c): Promise<Response> =>
-		answer(c, (params, viewer) => {
-			const query = vendorQuery(params, viewer);
-			if (c.env.DIRECTORY_READ_SCHEMA === "next")
-				return {
-					next: (db, stamp) => readNextVendorList(db, viewer, query, stamp),
-				};
-			return (db, stamp) => readVendorList(db, viewer, query, stamp);
-		}),
+directory.get("/vendors", (c) =>
+	answer(c, (params, viewer) => {
+		const query = vendorQuery(params, viewer);
+		if (c.env.DIRECTORY_READ_SCHEMA === "next")
+			return {
+				next: (db, stamp) => readNextVendorList(db, viewer, query, stamp),
+			};
+		return (db, stamp) => readVendorList(db, viewer, query, stamp);
+	}),
 );
-directory.get(
-	`/vendors/:id{(?:${UUID_SEGMENT}|V-[^/]+)}`,
-	(c): Promise<Response> =>
-		record(c, c.req.param("id"), readVendor, readNextVendor),
+directory.get(`/vendors/:id{(?:${UUID_SEGMENT}|V-[^/]+)}`, (c) =>
+	record(c, c.req.param("id"), readVendor, readNextVendor),
 );

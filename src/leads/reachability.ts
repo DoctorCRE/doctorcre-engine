@@ -26,7 +26,7 @@ export type ContactInputs = {
 	party_id: string;
 	created_at: string;
 	email: string | null;
-	cell: null;
+	cell: string | null;
 	phone: string | null;
 	activities: ContactActivity[];
 };
@@ -34,7 +34,7 @@ export type ContactInputs = {
 type Lead = { base_version: number; contact_eligible: boolean };
 
 export const EVIDENCE_LIMIT = 500;
-const FRESHNESS_DAYS = 90;
+export const CONTACT_FRESHNESS_DAYS = 90;
 const DAY_MS = 86_400_000;
 const CONNECTED_KINDS = new Set([
 	"call",
@@ -101,7 +101,7 @@ function isSuccessfulContact(
 	if (
 		a.source.trim() === "" ||
 		!(at <= now) ||
-		at < now - FRESHNESS_DAYS * DAY_MS ||
+		at < now - CONTACT_FRESHNESS_DAYS * DAY_MS ||
 		at < Date.parse(input.created_at)
 	)
 		return false;
@@ -210,7 +210,7 @@ export async function reachability(
 				}
 			: null,
 		usable_route: route ? { flag_id: route.flag_id, kind: route.kind } : null,
-		contact_freshness_days: FRESHNESS_DAYS,
+		contact_freshness_days: CONTACT_FRESHNESS_DAYS,
 		source_inputs: input,
 	};
 }

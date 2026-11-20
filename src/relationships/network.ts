@@ -21,7 +21,7 @@ type Edge = {
 	summary: string | null;
 };
 type Referral = { won: number; lost: number; deals: number; node_id: string };
-type Snapshot = { edges: Edge[]; nodes: Node[]; referrals: Referral[] };
+export type Snapshot = { edges: Edge[]; nodes: Node[]; referrals: Referral[] };
 
 const SCHEMA = "carr-relationship-network.v1";
 // Two of the app's 60-second refreshes.
