@@ -153,7 +153,8 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	);
 	assert.partialDeepStrictEqual(items.get(ordinary), {
 		item_id: `next_action:${ordinary}`,
-		title: "Send the lease",
+		title: "Follow-up due for Example Dental — Send the lease",
+		primary_action: "Mark done",
 		context_label: "Example Dental",
 		due_on: "2026-11-19",
 		open_url: `/relationships?node=party:${client}`,
@@ -206,7 +207,10 @@ test("a call follow-up appears once with its call, deal and evidence", async () 
 	assert.equal(Object.hasOwn(item, "source_ref"), false);
 	assert.partialDeepStrictEqual(item, {
 		item_id: `capture_post_call_action:${followUp}`,
-		title: "Call Dr. Example about the second-floor suite",
+		title:
+			"Call with Dr. Example left a follow-up — Call Dr. Example about the second-floor suite",
+		why: "Call on Nov 17, 2026. Please send the floor plan.",
+		primary_action: "Mark done",
 		kind_label: "Call follow-up",
 		section: "inbox",
 		open_url: `/calls?session=${call}`,
@@ -226,9 +230,101 @@ test("a call follow-up appears once with its call, deal and evidence", async () 
 
 test("a step created by a suggestion keeps the meeting source", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(proposal), {
-		title: "Check renewal dates",
+		title: "Follow-up set for Example Renewal — Check renewal dates",
+		why: "Follow-up set from the meeting. Please check our dates.",
 		source_activity: { kind: "meeting", id: meeting },
 	});
+});
+
+test("Home keeps undated steps and cleans their titles without rewriting saved wording", async () => {
+	const examples = [
+		["L-223: **Call** about the suite", "Call about the suite"],
+		[
+			"Email about the report (V-ABC-012), then call.",
+			"Email about the report, then call.",
+		],
+		["T-3 months — Confirm lease timing", "Confirm lease timing"],
+		["Review the floor plan [loop #25]", "Review the floor plan"],
+		[
+			"Call (L-223, due Friday) about the suite",
+			"Call (due Friday) about the suite",
+		],
+		[
+			"Call (due Friday, C-026) about the suite",
+			"Call (due Friday) about the suite",
+		],
+		[
+			"Call (— if available) about the suite",
+			"Call (— if available) about the suite",
+		],
+		[
+			"Review the [plan](https://example.test/plan) with _the client_.",
+			"Review the plan with the client.",
+		],
+		["Draft the lease amendment", "Draft the lease amendment"],
+		[
+			"Schedule the next check-in with the office manager",
+			"Schedule the next check-in with the office manager",
+		],
+		["Schedule the next follow-up", "Schedule the next follow-up"],
+		["L-456 — Timing", "Timing"],
+		["C-026", "Follow-up for Example Vendor"],
+	].map(([what, title]) => ({
+		id: randomUUID(),
+		party: randomUUID(),
+		what,
+		title,
+	}));
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into role (slug, label) values ('vendor', 'Vendor');`);
+	for (const { id, party, what } of examples) {
+		await db.query(
+			"insert into party (id, kind, name) values ($1, 'company', 'Example Vendor')",
+			[party],
+		);
+		await db.query(
+			"insert into party_role (party_id, role) values ($1, 'vendor')",
+			[party],
+		);
+		await db.query(
+			"insert into next_step (id, party_id, owner_party_id, what, created_at) values ($1, $2, $3, $4, '2026-11-17T12:00Z')",
+			[id, party, other, what],
+		);
+	}
+	await db.query("commit");
+	const response = await request(
+		{ user: "other-partner" },
+		path,
+		{ method: "GET" },
+		reader,
+	);
+	assert.equal(response.status, 200);
+	const result: unknown = await response.json();
+	assert.ok(isArguments(result) && Array.isArray(result.items));
+	const items = result.items.filter(isArguments);
+	for (const example of examples) {
+		assert.partialDeepStrictEqual(
+			items.filter((item) => item.source_id === example.id),
+			[
+				{
+					title: example.title,
+					why: "No reason was recorded.",
+					primary_action: "Mark done",
+					due_on: null,
+					open_url: `/relationships?node=party:${example.party}`,
+				},
+			],
+		);
+		assert.deepEqual(
+			(
+				await db.query("select what, status from next_step where id = $1", [
+					example.id,
+				])
+			).rows,
+			[{ what: example.what, status: "open" }],
+		);
+	}
+	assert.equal(Object.hasOwn(result, "unexplained_step_count"), false);
 });
 
 test("the focused deal step names its creator and source after a later edit", async () => {

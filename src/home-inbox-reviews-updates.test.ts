@@ -77,10 +77,12 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.deepEqual(duplicates, []);
 	assert.partialDeepStrictEqual(card, {
 		item_id,
-		title: "Did this happen? Send the survey",
+		title: `A call may confirm a step for Example Dental ${deal} — check whether this is done: Send the survey`,
+		why: "I received the survey.",
+		primary_action: "Review completion",
 		context_label: `Example Dental ${deal}`,
 		due_on: "2001-02-01",
-		open_url: `/deals?deal=${deal}&focus=next-step`,
+		open_url: `/deals?deal=${deal}&focus=next-step&step=${step}`,
 		action_id: null,
 		source_activity: {
 			kind: "call",
@@ -136,6 +138,13 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.deepEqual(remaining, []);
 	assert.partialDeepStrictEqual(dismissed, { item_id, action_id: step });
 	assert.equal(dismissed?.completion_review, undefined);
+	if (callFollowUp) {
+		assert.partialDeepStrictEqual(dismissed, {
+			title: `Call for Example Dental ${deal} on Feb 4, 2001 left a follow-up — Send the survey`,
+			why: "Call on Feb 4, 2001. Send the survey. Due Feb 1, 2001.",
+			open_url: `/calls?session=${call}`,
+		});
+	}
 }
 
 test("a completion review can be snoozed and dismissed", () =>
@@ -158,7 +167,9 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 	assert.partialDeepStrictEqual(card, {
 		item_id: `notification:${update}`,
 		kind_label: "Update",
-		title: "Review the survey",
+		title: `Checklist item due for Example Dental ${deal} — Review the survey`,
+		why: "Review the survey. Due Feb 1, 2001.",
+		primary_action: "Open checklist item",
 		context_label: `Example Dental ${deal}`,
 		open_url: `/deals?deal=${deal}`,
 		checklist_item_ref: "survey/item",
@@ -195,7 +206,7 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 		commit;`);
 	const [revised] = await cards(alex, deal);
 	assert.partialDeepStrictEqual(revised, {
-		title: "Review the revised survey",
+		title: `Checklist item due for Example Dental ${deal} — Review the revised survey`,
 		section: "inbox",
 	});
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
@@ -207,4 +218,42 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 		new RegExp(`^${revised?.source_version}:[1-9][0-9]*:inbox$`),
 	);
 	assert.notEqual(cleared?.base_version, revised?.base_version);
+});
+
+test("tour comment and shortlist changes retain their saved property context", async () => {
+	const deal = randomUUID();
+	const property = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental Tour', '${owner}');
+		insert into property (id, name, address) values ('${property}', 'Cedar Suite', '100 Example Way');
+		insert into home_update (user_id, deal_id, kind, what, property_id, created_at) values
+			('${owner}', '${deal}', 'tour_feedback', 'Needs a larger waiting area.\nGood parking.', '${property}', '2026-11-17T12:00Z'),
+			('${owner}', '${deal}', 'tour_feedback', 'Example Dental added Cedar Suite to the shortlist', '${property}', '2026-11-18T12:00Z'),
+			('${owner}', '${deal}', 'tour_feedback', 'Example Dental removed Cedar Suite from the shortlist', '${property}', '2026-11-19T12:00Z');
+		commit;`);
+	const examples = await cards(alex, deal);
+	assert.partialDeepStrictEqual(examples, [
+		{
+			title:
+				"Example Dental removed Cedar Suite from the shortlist — review the change",
+			why: "Example Dental removed Cedar Suite from the shortlist. Recorded Nov 19, 2026.",
+		},
+		{
+			title:
+				"Example Dental added Cedar Suite to the shortlist — review the change",
+			why: "Example Dental added Cedar Suite to the shortlist. Recorded Nov 18, 2026.",
+		},
+		{
+			title:
+				"Tour feedback on Cedar Suite for Example Dental Tour — review feedback",
+			why: "Needs a larger waiting area. Good parking. Recorded Nov 17, 2026.",
+		},
+	]);
+	for (const card of examples) {
+		assert.partialDeepStrictEqual(card, {
+			property_id: property,
+			open_url: `/deals?deal=${deal}&property=${property}`,
+			primary_action: "Review feedback",
+		});
+	}
 });
