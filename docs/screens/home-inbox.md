@@ -14,7 +14,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Dates read as words in Central time: "Due Thu, Nov 19", "2 days late", "Today 12:00 PM". Never `2026-11-19` or `2026-11-02T15:41:50.000Z`.
 - [ ] No internal codes or system words: no `C-159`, `V-BNK-040`, `L-223`, loop numbers, "cadence", "needs attention" badges, "Ready for your attention", "loaded cards" or "Partner inbox". No markdown asterisks.
 - [ ] Clicking the title opens what the card is about, as each kind below says. Opening never just outlines the same card in the list.
-- [ ] A card waiting on the partner has its finishing button in the same place, named for what it does, with Snooze beside it. A card in In motion and waiting asks for nothing and has neither.
+- [ ] A card waiting on the partner has its finishing button in the same place, named for what it does, with Snooze beside it. A card in In motion and waiting asks for nothing and has neither, except that a snoozed card offers Wake (coordinator, 2026-11-20).
 - [ ] A card the partner finishes leaves at once. It shows Undo only where its kind below says so.
 - [ ] Work finished anywhere else (deal page, assistant, call capture, the other partner, Outlook) leaves Home on the next refresh without a click.
 - [ ] Snooze offers plain choices in Central time and brings the card back then. Undo brings it back at once.
