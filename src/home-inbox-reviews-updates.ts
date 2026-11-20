@@ -191,6 +191,7 @@ export async function readHomeUpdates(
 		join deal d on d.id = u.deal_id
 		left join next_step item on item.deal_id = u.deal_id
 			and 'deal-item:' || item.id::text = u.checklist_item_ref
+			and item.item_title is not null
 		left join property on property.id = u.property_id
 		left join home_mark m on (m.user_id, m.item_kind, m.item_id) = (u.user_id, 'home_update', u.id)
 		cross join lateral (
@@ -205,6 +206,7 @@ export async function readHomeUpdates(
 		where u.user_id = ${userId}::uuid
 			and u.read_at is null
 			and m.disposition is distinct from 'dropped'
+			and (item.status is null or item.status not in ('done', 'cancelled'))
 		order by u.created_at desc, u.id
 		limit ${limit}
 	`.execute(db);
