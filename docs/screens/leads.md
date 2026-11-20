@@ -17,7 +17,9 @@
 ## Drawer
 
 - [ ] The lead's name opens its drawer with stage, contact details, plans, timing, research, correspondence and stage history. Older correspondence and stage changes load on request.
+- [ ] A quiet lead's drawer shows its last contact date or when it was added if no contact was recorded. It also shows when follow-up is due.
 - [ ] Claim follows the board's rule. Link appears for suggested clients and uses the selected match. Once linked, the lead leaves the board.
+- [ ] If a Claim or Link save is unconfirmed, Check outcome is available in the drawer and checks the same request.
 - [ ] Stage changes open a review before saving. Archiving requires a reason. An automatic move offers Undo when it can be reversed.
 
 ## Leads from email
