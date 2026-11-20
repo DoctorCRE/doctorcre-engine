@@ -137,8 +137,11 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] The new database keeps each deal's client website registration so the deal page can still show its Client website link after the switch (owner, 2026-11-18, #728).
 - [ ] A deal with no website says "No client website linked."
 - [ ] Set up client website stays below the deal's facts and asks for the website name and a password (owner, 2026-11-18).
-- [ ] Each person's open step on the deal is labeled "Next step" and shows its owner and due date in words. A late step also shows "N days late". A Home card for one of the steps opens here with that step in view.
+- [ ] Next steps shows each person's open step with its owner and due date in words. A late step also shows "N days late". A Home card for one of the steps opens here with that step in view.
 - [ ] Closing or losing a deal leaves its steps unchanged. On the deal page, steps still open appear under "Open before this deal ended" with their due dates. Ended deals never count a step as late anywhere on Deals.
+- [ ] Either partner can choose Done on any open next step on a deal they can open, including a step owned by the other partner or still open on an ended deal. Each row puts the step text and its details next to a keyboard-accessible Done button with a touch target at least 44 pixels tall and wide. Rows use the app's colors in both themes without individual card outlines.
+- [ ] Done uses the same engine save as Home's Mark done (door 18, end by step ID). It sends the version shown on the deal page. After saving, the step leaves the open list and Timeline shows its completion and who marked it done.
+- [ ] If the step changed or was already finished, the save is refused. The page says "This step changed. Review the latest version." and reloads the deal so the partner can see the current steps and Timeline.
 - [ ] "Still needed" shows the step's owner and date.
 - [ ] Change next step saves the partner's new step and date, replacing their own open step. A step saved without an owner belongs to the partner who saved it.
 - [ ] Facts: deal kind, deal reason, market, closed value when closed, and the market agent on a national-account deal. A deal with no market says "No market recorded". Closed and lost cards and the deal page keep the Renewal label for copied renewals with an unrecorded source lease and show a note that the lease wasn't recorded.

@@ -127,7 +127,7 @@ async function saveLeadChange(tx: Transaction<DB>, change: LeadChange) {
 				and role in ('client', 'client_contact')) as excluded`.execute(tx);
 	const unavailable = eligibility?.excluded || lead.lead_client_id !== null;
 	if (change.action === "claim") {
-		if (unavailable || lead.stage !== "new" || lead.owner_user_id !== null)
+		if (unavailable || lead.stage === "archived" || lead.owner_user_id !== null)
 			throw new SaveRefusal(new Refusal(409, "lead_not_claimable"));
 		await role.set({ owner_user_id: ACTING_USER }).execute();
 	} else {
