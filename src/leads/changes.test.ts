@@ -9,6 +9,9 @@ const joe = randomUUID();
 const dell = randomUUID();
 const claim = randomUUID();
 const stage = randomUUID();
+const outreach = randomUUID();
+const nurture = randomUUID();
+const archived = randomUUID();
 const link = randomUUID();
 const client = randomUUID();
 const unrelatedClient = randomUUID();
@@ -23,18 +26,23 @@ before(async () => {
 		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client');
 		insert into stage values ('lead', 'new', 'New'), ('lead', 'qualified', 'Qualified'),
 			('lead', 'opportunity', 'Opportunity'), ('lead', 'nurture', 'Nurture'),
-			('lead', 'archived', 'Archived');
+			('lead', 'archived', 'Archived'), ('lead', 'outreach_active', 'Outreach');
 		insert into party (id, kind, name, how_found) values
 			('${joe}', 'person', 'Example Partner A', null),
 			('${dell}', 'person', 'Example Partner B', null),
 			('${claim}', 'person', 'Example Claim', 'referral'),
 			('${stage}', 'person', 'Example Stage', 'referral'),
+			('${outreach}', 'person', 'Example Outreach', 'referral'),
+			('${nurture}', 'person', 'Example Nurture', 'referral'),
+			('${archived}', 'person', 'Example Archived', 'referral'),
 			('${link}', 'company', 'Example Practice', 'referral'),
 			('${client}', 'company', 'EXAMPLE PRACTICE', 'referral'),
 			('${unrelatedClient}', 'company', 'Example Other Practice', 'referral');
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
 		insert into party_role (party_id, role, stage) values
 			('${claim}', 'lead', 'new'), ('${stage}', 'lead', 'qualified'),
+			('${outreach}', 'lead', 'outreach_active'), ('${nurture}', 'lead', 'nurture'),
+			('${archived}', 'lead', 'new'),
 			('${link}', 'lead', 'opportunity'), ('${client}', 'client', null),
 			('${unrelatedClient}', 'client', null);
 		insert into client (party_id) values ('${client}'), ('${unrelatedClient}');
@@ -118,6 +126,38 @@ test("a copied New lead can be claimed once by the signed-in partner", async () 
 	);
 	assert.equal(
 		(await save(legacy, command(claimed.base_version, "claim"))).error,
+		"lead_not_claimable",
+	);
+});
+
+test("unowned active leads can be claimed at any stage, but archived leads cannot", async () => {
+	for (const id of [outreach, nurture]) {
+		const before = (await board(id)).detail;
+		assert.equal(
+			(await save(id, command(before.base_version, "claim"))).ok,
+			true,
+		);
+		const claimed = (await board(id)).detail;
+		assert.equal(claimed.owner, "joe");
+		assert.equal(
+			(await save(id, command(claimed.base_version, "claim"))).error,
+			"lead_not_claimable",
+		);
+	}
+	const initial = (await board(archived)).detail;
+	assert.equal(
+		(
+			await save(archived, {
+				...command(initial.base_version, "stage"),
+				stage: "archived",
+				reason: "Example ended",
+			})
+		).ok,
+		true,
+	);
+	const before = (await board(archived)).detail;
+	assert.equal(
+		(await save(archived, command(before.base_version, "claim"))).error,
 		"lead_not_claimable",
 	);
 });

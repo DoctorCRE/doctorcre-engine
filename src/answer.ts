@@ -35,7 +35,7 @@ const HINTS = {
 	not_a_prospect: "This person or company is outside the Prospects lane.",
 	account_changed: "Reload Leads under the current account before saving.",
 	unknown_stage: "Choose a stage from the Leads board.",
-	lead_not_claimable: "Choose an unclaimed New lead.",
+	lead_not_claimable: "Choose an unclaimed lead that is not archived.",
 	lead_not_linkable: "Choose an eligible lead without a client link.",
 	client_not_found: "Choose the exact existing client to link.",
 	client_not_suggested: "Refresh the lead and choose a suggested client.",
