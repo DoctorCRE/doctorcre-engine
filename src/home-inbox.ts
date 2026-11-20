@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { answerNextRead, checkFields, Refusal, refuse } from "./answer.ts";
+import { answerNextRead, checkFields, refuse } from "./answer.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	readHomeMailPriorities,
@@ -11,7 +11,6 @@ import {
 	readCompletionReviews,
 	readHomeUpdates,
 } from "./home-inbox-reviews-updates.ts";
-import { readHomeToday } from "./home-today.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
 
@@ -64,14 +63,10 @@ export const stepItemId = (step: { id: string; call_id: string | null }) =>
 	`${step.call_id ? "capture_post_call_action" : "next_action"}:${step.id}`;
 
 export function stepOpenUrl(
-	step: {
-		id: string;
-		call_id: string | null;
-		deal_id: string | null;
-		party_id: string | null;
-		prospect: boolean;
-		building_deal_id: string | null;
-	},
+	step: Pick<
+		Step,
+		"id" | "call_id" | "deal_id" | "party_id" | "prospect" | "building_deal_id"
+	>,
 	done = false,
 ) {
 	return step.call_id
@@ -240,22 +235,5 @@ homeInbox.get("/home/mail-priorities", (c) => {
 		c,
 		"read-home-mail-priorities-v1",
 		readHomeMailPriorities,
-	);
-});
-
-homeInbox.get("/home/today", (c) => {
-	if (c.env.HOME_INBOX_READ_SCHEMA !== "next") return c.notFound();
-	const params = new URL(c.req.url).searchParams;
-	const refused = checkFields(params, ["owner"]);
-	if (refused) return refuse(c, refused);
-	const owners = params.getAll("owner");
-	const owner = owners[0] ?? "all";
-	if (owners.length > 1 || owner === "")
-		return refuse(
-			c,
-			new Refusal(400, "invalid_field_value", { fields: ["owner"] }),
-		);
-	return answerNextRead(c, "read-home-today-v1", (db, userId) =>
-		readHomeToday(db, userId, owner),
 	);
 });

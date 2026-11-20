@@ -34,6 +34,7 @@ import { deals } from "./deals/routes.ts";
 import { heldStepReviews } from "./held-steps.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { homeMarks } from "./home-marks.ts";
+import { homeToday } from "./home-today.ts";
 import { invoiceJobs, invoiceUndo } from "./invoice-application.ts";
 import { invoiceEvidence } from "./invoice-evidence.ts";
 import { invoicePayment } from "./invoice-payment.ts";
@@ -87,6 +88,7 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", dealClosing)
 	.route("/", dealUpdate)
 	.route("/", homeInbox)
+	.route("/", homeToday)
 	.route("/", invoices)
 	.route("/", leads)
 	.route("/", nextStep)

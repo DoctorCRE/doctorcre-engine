@@ -201,7 +201,7 @@ function reviewFrom(row: unknown) {
 export function meetingsFromSnapshot(
 	snapshot: unknown,
 	now: Date,
-	{ untilMs }: { untilMs?: number } = {},
+	{ fromMs, untilMs }: { fromMs?: number; untilMs?: number } = {},
 ) {
 	if (snapshot === undefined || snapshot === null) return null;
 	const nowMs = now.getTime();
@@ -219,7 +219,12 @@ export function meetingsFromSnapshot(
 		const end = instant(field(row, "end"));
 		const title = text(field(row, "title"));
 		if (start === null || end === null || end < start || !title) malformed++;
-		else if (end > nowMs && start < endWindowMs) {
+		else if (
+			(fromMs === undefined
+				? end > nowMs
+				: end > fromMs || (end === start && start >= fromMs)) &&
+			start < endWindowMs
+		) {
 			const times = alternateTimes(field(row, "times"));
 			meetings.push(meetingFrom(row, { start, end, title }, times.shown));
 			unread += times.unread;
