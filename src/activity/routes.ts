@@ -11,7 +11,7 @@ import type { DatabaseEnv } from "../reader.ts";
 import { readNextRecentActivity } from "./next-read.ts";
 import { readRecentActivity } from "./read.ts";
 
-const FIELDS = ["query", "limit"];
+const FIELDS = ["query", "limit", "ref"];
 const QUERY_MAX = 200;
 const LIMIT_MAX = 50;
 
@@ -43,7 +43,13 @@ activity.get("/recent-activity", async (c) => {
 		return refuse(c, generic());
 	if (c.env.ACTIVITY_READ_SCHEMA === "next")
 		return answerNextRead(c, "find-and-catch-up", async (db, userId) =>
-			activityAnswer(await readNextRecentActivity(db, userId, trimmed, limit)),
+			activityAnswer(
+				await readNextRecentActivity(db, userId, {
+					query: trimmed,
+					limit,
+					ref: params.get("ref")?.trim(),
+				}),
+			),
 		);
 	return answer(c, "find-and-catch-up", async (db) =>
 		activityAnswer(

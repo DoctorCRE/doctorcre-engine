@@ -3,23 +3,39 @@ import { hasToolCallMarkup, isoMillis } from "../answer.ts";
 import type { DB } from "../next-database.d.ts";
 import { matchingContacts, matchingDealSubjects } from "../search/next-find.ts";
 
+async function activityCandidates(
+	db: Transaction<DB>,
+	term: string,
+	exactOnly = false,
+) {
+	const [contacts, deals] = await Promise.all([
+		matchingContacts(db, term),
+		matchingDealSubjects(db, term),
+	]);
+	const matches = [...contacts, ...deals];
+	const lookup = term.toLowerCase();
+	const canonical = matches.filter(
+		(match) => match.ref.toLowerCase() === lookup,
+	);
+	if (canonical.length > 0) return canonical;
+	const exact = matches.filter((match) => match.exact_ref);
+	if (exactOnly || exact.length > 0) return exact;
+	const named = matches.filter((match) => match.name.toLowerCase() === lookup);
+	return named.length > 0 ? named : matches;
+}
+
 export async function readNextRecentActivity(
 	db: Transaction<DB>,
 	userId: string,
-	query: string,
-	limit: number,
+	{
+		query,
+		limit,
+		ref,
+	}: { query: string; limit: number; ref: string | undefined },
 ) {
-	const [contacts, deals] = await Promise.all([
-		matchingContacts(db, query),
-		matchingDealSubjects(db, query),
-	]);
-	const matches = [...contacts, ...deals];
-	const exact = matches.filter((match) => match.exact_ref);
-	const named = matches.filter(
-		(match) => match.name.toLowerCase() === query.toLowerCase(),
-	);
+	const byRef = ref ? await activityCandidates(db, ref, true) : [];
 	const matching =
-		exact.length > 0 ? exact : named.length > 0 ? named : matches;
+		byRef.length > 0 ? byRef : await activityCandidates(db, query);
 	const byTarget = new Map<string, (typeof matching)[number]>();
 	for (const match of matching) {
 		if (!byTarget.has(match.ref)) byTarget.set(match.ref, match);
@@ -60,17 +76,17 @@ export async function readNextRecentActivity(
 		return { error: "calendar_history_too_large" } as const;
 	const timeline = await sql`
 		select entry_kind, ${isoMillis(sql.ref("at"))} as occurred_at,
-			actor, verb, summary, null as detail, null as owed
+			actor, verb, summary, detail, null as owed
 		from (
 			select 'activity' as entry_kind, a.id, a.happened_at as at,
 				coalesce(u.slug, a.changed_by_job) as actor, a.kind as verb,
-				coalesce(nullif(btrim(a.summary), ''), e.subject) as summary
+				coalesce(nullif(btrim(a.summary), ''), e.subject) as summary, e.body as detail
 			${filed} left join app_user u on u.id = a.changed_by_user_id
 			left join email e on e.activity_id = a.id
 			where link.${subject} = ${id}
 			union all
 			select 'event', s.id, coalesce(s.done_at, s.resolved_at, s.created_at),
-				coalesce(u.slug, s.changed_by_job), 'next_step', s.what
+				coalesce(u.slug, s.changed_by_job), 'next_step', s.what, null
 			from next_step s left join app_user u on u.id = s.changed_by_user_id
 			where s.${subject} = ${id}
 		) entries order by at desc, entry_kind, id limit ${limit}`.execute(db);

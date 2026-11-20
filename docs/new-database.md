@@ -1441,9 +1441,11 @@ No match returns an empty `parties` list. Missing, blank, overlong, or repeated 
 
 Set `SEARCH_READ_SCHEMA=next` for `GET /api/engine/find` and `ACTIVITY_READ_SCHEMA=next` for `GET /api/engine/recent-activity`. Each read uses the public schema until its variable is set to `next`.
 
-Search finds current deals, clients, leads, vendors, and other people and companies by case-insensitive name. An exact email address can also find a contact. The existing response carries the deal owner's current user slug and the current client, lead, or vendor role. Copied contacts use their typed reference from `outside_id` when unique for that role. New contacts use their next ID. Merged-away names stay out of the results. Lead and client links come from shared roles or a current company relationship.
+Search finds current deals by case-insensitive name. It finds contacts by name, including fuzzy matches ranked by similarity, or by exact email address. The response carries the deal owner's current user slug, the contact's current role, and the specialty label. Search matches and connection endpoints use the copied typed reference from `outside_id` when unique for the role, or the next ID. Merged-away names stay out of the results. Lead and client links come from shared roles or a current company relationship. Related deals include those that name a matching party as a client contact.
 
-Recent Activity prefers an exact reference or ID, then an exact name. Multiple matching targets return a list to disambiguate. The read resolves copied IDs through `outside_id`, then shows calls, emails, meetings, notes, and next steps linked to the selected deal or contact. The response keeps `detail` and `owed` as null. Calendar history contains the signed-in partner's confirmed meetings for that record.
+Recent Activity requires `query` and accepts an optional `ref` on both paths. The next read resolves `ref` first, preferring a canonical reference over a shared ID or a copied alias. If `ref` is missing or has no match, the read uses `query`. A query prefers an exact reference or ID, then an exact name. Multiple matching targets return a list to disambiguate. The public read uses `query` as before.
+
+The next timeline shows calls, emails, meetings, notes, and next steps linked to the selected deal or contact. Email `detail` carries the stored body. Other rows have null `detail`, and `owed` is null for all rows. Calendar history contains the signed-in partner's confirmed meetings for that record.
 
 ## Home inbox reads for the app
 
