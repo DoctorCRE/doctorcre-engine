@@ -5,6 +5,7 @@ import {
 } from "./deals/client-website-access.ts";
 import { failureKind } from "./failure.ts";
 import type { WriterEnv } from "./save.ts";
+import { recordWorkerStart } from "./worker.ts";
 
 export { default } from "./worker.ts";
 
@@ -24,6 +25,7 @@ export class ClientWebsiteAccess extends WorkerEntrypoint<
 	}
 
 	async #access(check: (connection: string) => Promise<boolean>) {
+		recordWorkerStart();
 		const writer = this.env.DATABASE_WRITER;
 		if (!writer) throw new Error("Client website database unavailable");
 		try {

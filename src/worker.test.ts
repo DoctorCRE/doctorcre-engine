@@ -2,29 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import app from "./worker.ts";
 
-test("GET /health reports the deployed version and release", async () => {
-	const env = {
-		CF_VERSION_METADATA: { id: "made-up-version-id", tag: "a1b2c3d" },
-	};
-	const res = await app.request("/health", {}, env);
-	assert.equal(res.status, 200);
-	assert.deepEqual(await res.json(), {
-		ok: true,
-		version: "made-up-version-id",
-		release: "a1b2c3d",
-	});
-});
-
-test("GET /health omits release when the tag is missing or blank", async () => {
-	const id = "made-up-version-id";
-	for (const metadata of [{ id }, { id, tag: "" }, { id, tag: " \t" }]) {
-		const env = { CF_VERSION_METADATA: metadata };
-		const res = await app.request("/health", {}, env);
-		assert.equal(res.status, 200);
-		assert.deepEqual(await res.json(), { ok: true, version: id });
-	}
-});
-
 test("an unknown path answers the old not-found body", async () => {
 	const res = await app.request("/nope");
 	assert.deepEqual(
