@@ -23,7 +23,12 @@ type StepRow = Record<
 	Record<
 		"deal_id" | "party_id" | "call_id" | "building_deal_id",
 		string | null
-	> & { days_late: number | null; is_viewer: boolean; prospect: boolean };
+	> & {
+		days_late: number | null;
+		is_viewer: boolean;
+		prospect: boolean;
+		deal_ended: boolean;
+	};
 
 const emailsOf = (m: Meeting) =>
 	[m.organizer, ...m.attendees].flatMap((p) => p.email ?? []);
@@ -154,10 +159,17 @@ async function readTodayReminders(
 	today: string,
 	owner: string,
 ) {
+	const openDeals = db
+		.selectFrom(selectNextDeals(db).as("board"))
+		.select("id")
+		.where(isOpenBoardDeal);
 	const { rows } = await sql<StepRow>`
 		select s.id, s.what as title, ${stepTargetFields(db)}, s.due_on::text as due_on,
 			case when s.due_on < ${today}::date then (${today}::date - s.due_on)::int end as days_late,
-			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id, s.call_activity_id as call_id
+			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id, s.call_activity_id as call_id,
+			s.deal_id is not null and not exists (
+				select from (${openDeals}) as open_deal where open_deal.id = s.deal_id
+			) as deal_ended
 		from next_step s join app_user u on u.id = s.owner_party_id and u.is_account_partner
 		left join deal d on d.id = s.deal_id left join party p on p.id = s.party_id left join property on property.id = s.property_id
 		left join home_mark m on m.user_id = s.owner_party_id and m.item_id = s.id
@@ -180,6 +192,7 @@ async function readTodayReminders(
 			: null,
 		owner: r.owner,
 		deal_id: r.deal_id,
+		...(r.deal_ended && { deal_ended: true as const }),
 		home_item_id: r.is_viewer ? stepItemId(r) : null,
 		open_url: stepOpenUrl(r),
 	}));
