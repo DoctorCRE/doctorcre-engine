@@ -1437,6 +1437,14 @@ Add deal sends `role=client` so the limit applies to people and companies with t
 
 No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated `kind` or `role` values return 400. Session and database refusals use the shared read rules. App #977 routes the deal-page picker to this door.
 
+## Global Search and Recent Activity
+
+Set `SEARCH_READ_SCHEMA=next` for `GET /api/engine/find` and `ACTIVITY_READ_SCHEMA=next` for `GET /api/engine/recent-activity`. Each read uses the public schema until its variable is set to `next`.
+
+Search finds current deals, clients, leads, vendors, and other people and companies by case-insensitive name. An exact email address can also find a contact. The existing response carries the deal owner's current user slug and the current client, lead, or vendor role. Copied contacts use their typed reference from `outside_id` when unique for that role. New contacts use their next ID. Merged-away names stay out of the results. Lead and client links come from shared roles or a current company relationship.
+
+Recent Activity prefers an exact reference or ID, then an exact name. Multiple matching targets return a list to disambiguate. The read resolves copied IDs through `outside_id`, then shows calls, emails, meetings, notes, and next steps linked to the selected deal or contact. The response keeps `detail` and `owed` as null. Calendar history contains the signed-in partner's confirmed meetings for that record.
+
 ## Home inbox reads for the app
 
 Slice 23 starts with `GET /api/engine/home/inbox`. Set `HOME_INBOX_READ_SCHEMA` to `next` on the engine to enable the read. It uses `DATABASE` as `engine_reader`, takes no query parameters, and reads the signed-in partner's work and marks. With the variable unset, the route returns 404 and the app still calls CARR.
