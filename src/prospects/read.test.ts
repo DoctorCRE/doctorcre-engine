@@ -23,6 +23,7 @@ const [
 	olderNote,
 ] = Array.from({ length: 13 }, () => randomUUID());
 const property = randomUUID();
+const completedStep = randomUUID();
 
 before(async () => {
 	await setup();
@@ -52,8 +53,9 @@ before(async () => {
 		insert into next_step (party_id, owner_party_id, what, due_on, resolution) values
 			('${earlier}', '${dellId}', 'Email', '2024-03-05', null),
 			('${earlier}', '${joeId}', 'Call', '2024-03-03', null),
-			('${later}', '${dellId}', 'Ask', '2024-03-04', null),
-			('${later}', '${joeId}', 'Past step', '2024-02-02', 'done');
+			('${later}', '${dellId}', 'Ask', '2024-03-04', null);
+		insert into next_step (id, party_id, owner_party_id, what, due_on, created_at, resolution, done_at) values
+			('${completedStep}', '${later}', '${joeId}', 'Past step', '2024-02-02', '2024-02-01', 'done', now());
 		insert into activity (id, kind, from_party_id, happened_at, summary) values
 			('${note}', 'note', '${dellId}', '2024-02-01', E'Newest note\\nMore text'),
 			('${olderNote}', 'note', '${joeId}', '2023-11-30', 'Older note');
@@ -129,6 +131,51 @@ test("only ordinary party steps appear as a prospect's follow-ups", async () => 
 	const response = await request(joe, `prospects/${newest}`, { method: "GET" });
 	assert.equal(response.status, 200);
 	assert.deepEqual(steps(await response.json()), []);
+});
+
+test("a Done card links to the saved prospect follow-up", async () => {
+	const response = await request(
+		joe,
+		"home/inbox",
+		{ method: "GET" },
+		{
+			HOME_INBOX_READ_SCHEMA: "next",
+		},
+	);
+	assert.equal(response.status, 200);
+	const items = field(await response.json(), "items");
+	assert.ok(Array.isArray(items));
+	assert.partialDeepStrictEqual(
+		items.filter(isArguments).find((item) => item.source_id === completedStep),
+		{
+			section: "done",
+			open_url: `/deals?prospect=${later}&focus=follow-up&step=${completedStep}`,
+		},
+	);
+});
+
+test("prospect detail returns just the requested completion outside the open follow-ups", async () => {
+	const response = await request(
+		joe,
+		`prospects/${later}?step=${completedStep}`,
+		{ method: "GET" },
+	);
+	assert.equal(response.status, 200);
+	const detail: unknown = await response.json();
+	assert.deepEqual(steps(detail), ["Ask"]);
+	assert.partialDeepStrictEqual(field(detail, "completed_follow_up"), {
+		next_step_id: completedStep,
+		what: "Past step",
+		set_by: "Example Person",
+		set_at: "2024-02-01T00:00:00+00:00",
+	});
+	const other = await request(
+		joe,
+		`prospects/${earlier}?step=${completedStep}`,
+		{ method: "GET" },
+	);
+	assert.equal(other.status, 200);
+	assert.equal(field(await other.json(), "completed_follow_up"), null);
 });
 
 test("detail includes older notes and a second partner's poll picks up a new note", async () => {

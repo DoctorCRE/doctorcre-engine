@@ -21,6 +21,14 @@ type Drop = {
 	reason: string;
 };
 
+type FollowUp = StepOrigin & {
+	next_step_id: string;
+	owner: string;
+	what: string;
+	due_on: string | null;
+	change_id: number;
+};
+
 type Prospect = {
 	party_id: string;
 	name: string;
@@ -28,13 +36,8 @@ type Prospect = {
 	how_found: string;
 	owner: string | null;
 	needs_attention: boolean;
-	follow_ups: (StepOrigin & {
-		next_step_id: string;
-		owner: string;
-		what: string;
-		due_on: string | null;
-		change_id: number;
-	})[];
+	follow_ups: FollowUp[];
+	completed_follow_up: FollowUp | null;
 	change_id: number;
 	notes: Note[];
 	entered_at: string | null;
@@ -50,10 +53,12 @@ export function prospectQuery(
 		partyId = null,
 		owner = "all",
 		includeDropped = false,
+		stepId = null,
 	}: {
 		partyId?: string | null;
 		owner?: string;
 		includeDropped?: boolean;
+		stepId?: string | null;
 	} = {},
 ) {
 	const qualifies = includeDropped
@@ -85,12 +90,16 @@ export function prospectQuery(
 		.where("s.party_id", "=", sql.ref<string>("p.id"))
 		.where("s.deal_id", "is", null)
 		.where("s.property_id", "is", null)
-		.where("s.item_title", "is", null)
-		.where("s.status", "=", "open");
+		.where("s.item_title", "is", null);
+	const completed =
+		stepId === null
+			? sql`null::jsonb`
+			: sql`(select to_jsonb(s) from (${steps.where("s.id", "=", stepId).where("s.status", "=", "done")}) s)`;
 	return sql<Prospect>`
 		select p.id as party_id, p.name, p.kind, p.how_found, owner.slug as owner,
 			r.needs_attention, coalesce(history.change_id, 0)::float8 as change_id,
 			notes.items as notes, follow_ups.items as follow_ups, history.entered_at,
+			${completed} as completed_follow_up,
 			${includeDropped ? sql`archive.detail` : sql`null::jsonb`} as dropped
 		from party_role r
 		join party p on p.id = r.party_id
@@ -122,7 +131,7 @@ export function prospectQuery(
 		cross join lateral (
 			select coalesce(jsonb_agg(to_jsonb(s) order by s.due_on nulls last, s.next_step_id), '[]') as items,
 				min(s.due_on) as soonest
-			from (${steps}) s
+			from (${steps.where("s.status", "=", "open")}) s
 		) follow_ups
 		where r.role = 'lead' and ${qualifies}
 			and (${partyId}::uuid is null or p.id = ${partyId}::uuid)
@@ -134,6 +143,7 @@ export function prospectQuery(
 
 function prospectCard({
 	notes,
+	completed_follow_up: _completedFollowUp,
 	entered_at: _enteredAt,
 	dropped: _drop,
 	...prospect
@@ -168,17 +178,29 @@ export const prospectReads = new Hono<DatabaseEnv>()
 				c,
 				new Refusal(400, "invalid_field_value", { fields: ["party_id"] }),
 			);
+		const [stepId = null, ...extra] = new URL(c.req.url).searchParams.getAll(
+			"step",
+		);
+		if (stepId !== null && (extra.length || !isUuid(stepId)))
+			return refuse(
+				c,
+				new Refusal(400, "invalid_field_value", { fields: ["step"] }),
+			);
 		return answerNextRead(c, "read-prospects", async (db) => {
 			const {
 				rows: [row],
 			} = await prospectQuery(db, {
 				partyId,
 				includeDropped: true,
+				stepId,
 			}).execute(db);
 			return row
 				? {
 						...prospectCard(row),
 						notes: row.notes,
+						...(stepId !== null && {
+							completed_follow_up: row.completed_follow_up,
+						}),
 						...(row.dropped && { state: "dropped", dropped: row.dropped }),
 					}
 				: new Refusal(404, "not_found");

@@ -104,7 +104,7 @@ function reviewItems(db: Transaction<DB>, week: string) {
 		union all
 		select null, p.party_id, case when p.dropped is null then 'open' else 'dropped' end,
 			p.name, p.party_id, p.entered_at, case when p.entered_at >= w.starts_at then 3 else 2 end, null,
-			(to_jsonb(p) - array['notes', 'entered_at', 'dropped'])
+			(to_jsonb(p) - array['notes', 'entered_at', 'dropped', 'completed_follow_up'])
 				|| jsonb_build_object('latest_note', (p.notes->0) - 'activity_id')
 				|| case when p.dropped is null then '{}'::jsonb else jsonb_build_object('dropped', p.dropped) end
 		from (${prospects}) p cross join bounds w

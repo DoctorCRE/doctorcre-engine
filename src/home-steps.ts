@@ -85,7 +85,7 @@ export function stepOpenUrl(
 			? dealStepUrl(step.deal_id, done ? undefined : step.id)
 			: step.party_id
 				? step.prospect
-					? `/deals?prospect=${step.party_id}&focus=follow-up${done ? "" : `&step=${step.id}`}`
+					? `/deals?prospect=${step.party_id}&focus=follow-up&step=${step.id}`
 					: `/relationships?node=party:${step.party_id}&step=${step.id}`
 				: step.building_deal_id && `/deals?deal=${step.building_deal_id}`;
 }
