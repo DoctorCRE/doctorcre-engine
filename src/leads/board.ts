@@ -1,4 +1,5 @@
-import { sql } from "kysely";
+import { sql, type Transaction } from "kysely";
+import type { DB as NextDB } from "../next-database.d.ts";
 import type { Reader } from "../reader.ts";
 import {
 	isServable,
@@ -7,6 +8,7 @@ import {
 	timingEvents,
 } from "./opportunity-timing.ts";
 import {
+	CONTACT_FRESHNESS_DAYS,
 	type ContactInputs,
 	EVIDENCE_LIMIT,
 	type Finding,
@@ -29,6 +31,15 @@ type WorkspaceLead = {
 type Hold = { reason: "contact_ineligible" | "unsupported_stage" };
 
 const CONTACTABLE_STATES = new Set(["active", "nurture"]);
+const STAGE_ORDER = [
+	"new",
+	"qualified",
+	"outreach_active",
+	"engaged",
+	"nurture",
+	"opportunity",
+	"archived",
+];
 const DEAL_OBJECTIVE =
 	"Coordinate with the linked client and deal before creating competing follow-up.";
 const OPEN_OBJECTIVES = new Map([
@@ -181,7 +192,79 @@ function refusal(rows: Row[]) {
 }
 
 export async function readLeadBoard(db: Reader) {
-	const rows = await leadsInBoardOrder(db);
+	return leadBoard(await leadsInBoardOrder(db));
+}
+
+export async function readNextLeadBoard(db: Transaction<NextDB>) {
+	const { rows } = await sql<Row>`
+		with board as (
+			select coalesce(legacy.value, p.id::text) as id,
+				p.id as party_id, p.name, p.name as entity_name,
+				case when p.kind = 'person' then p.name end as doctor_name,
+				(select company.name from party_company pc join party company on company.id = pc.company_id
+					where pc.person_id = p.id and pc.ended_on is null
+					order by pc.started_on desc nulls last, company.id limit 1) as practice_name,
+				p.city, (select s.label from party_specialty ps join specialty s on s.slug = ps.specialty
+					where ps.person_id = p.id order by s.slug limit 1) as specialty,
+				r.created_at, r.changed_at as updated_at,
+				case when r.stage = 'nurture' then 'nurture_drip' else r.stage end as stage,
+				s.label as stage_label, array_position(${STAGE_ORDER}::text[], r.stage) as stage_sort,
+				r.lane, r.segment, r.estimated_lease_on as est_lease_event,
+				r.lease_estimate_confidence as event_confidence,
+				u.slug as owner, owner.name as owner_label,
+				(select max(c.id) from change c where c.table_name = 'party_role'
+					and c.record = jsonb_build_object('party_id', p.id, 'role', 'lead')) as base_version,
+				dnc.party_id is not null as do_not_contact,
+				case when dnc.party_id is null then 'active' else 'do_not_contact' end as contact_state,
+				client.party_id is not null as is_client,
+				exists (select from deal_party d where d.party_id = p.id
+					and d.role in ('client', 'client_contact')) as is_deal,
+				(select min(due_on) from next_step n where n.party_id = p.id and n.status = 'open') as next_action_date,
+				(select max(a.happened_at) from activity_about link join activity a on a.id = link.activity_id
+					where link.party_id = p.id and a.kind in ('email', 'call', 'meeting')) as last_touch,
+				false as suppressed, '[]'::jsonb as possible_clients,
+				null as score, null as score_reason, null as last_stage_move,
+				null as state, null as county, legacy.registry_ref, null as prospect_client_id,
+				null as prospect_client_version, null as prospect_engagement_status,
+				client.party_id as client_id, client.party_id is not null as linked_client,
+				jsonb_build_object('contract', 'lead-opportunity-timing.v1', 'record_added_at', r.created_at,
+					'status', 'unknown', 'events', '[]'::jsonb) as opportunity_timing
+			from party_role r join party p on p.id = r.party_id
+			join stage s on s.role = r.role and s.slug = r.stage
+			left join app_user u on u.id = r.owner_user_id
+			left join party owner on owner.id = u.id
+			left join active_do_not_contact dnc on dnc.party_id = p.id
+			left join client on client.party_id = p.id
+			left join lateral (
+				select min(value) filter (where source = 'old_system_lead') as value,
+					min(value) filter (where source = 'old_system_ref' and value like 'L-%') as registry_ref
+				from outside_id where party_id = p.id and source in ('old_system_lead', 'old_system_ref')
+			) legacy on true
+			where r.role = 'lead'
+		)
+		select to_jsonb(b) as lead, '[]'::jsonb as findings,
+			jsonb_build_object('party_id', b.party_id, 'created_at', b.created_at,
+				'email', (select address from party_email where party_id = b.party_id and is_primary),
+				'phone', (select concat(number, ' x' || extension) from party_phone
+					where party_id = b.party_id and is_primary),
+				'cell', (select concat(number, ' x' || extension) from party_phone
+					where party_id = b.party_id and label = 'mobile'
+					order by is_primary desc, created_at desc, id limit 1),
+				'activities', coalesce((select jsonb_agg(to_jsonb(a) order by a.occurred_at desc, a.id)
+					from (select a.id, b.id as lead_id, a.kind, a.reached as connected,
+						a.happened_at as occurred_at, coalesce(a.changed_by_job, u.slug) as source,
+						null as detail
+					from activity_about link join activity a on a.id = link.activity_id
+					left join app_user u on u.id = a.changed_by_user_id
+					where link.party_id = b.party_id and a.kind in ('email', 'call', 'meeting')
+						and a.happened_at >= greatest(b.created_at, now() - make_interval(days => ${CONTACT_FRESHNESS_DAYS}))
+						and a.happened_at <= now()
+					order by a.happened_at desc, a.id limit ${EVIDENCE_LIMIT + 1}) a), '[]')) as contact
+		from board b order by b.stage_sort, b.name, b.id`.execute(db);
+	return leadBoard(rows);
+}
+
+async function leadBoard(rows: Row[]) {
 	const error = refusal(rows);
 	if (error) return { error } as const;
 	const now = Date.now();
