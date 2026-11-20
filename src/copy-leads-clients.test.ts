@@ -129,6 +129,18 @@ before(async () => {
 });
 after(cleanup);
 
+test("only copied lead IDs receive a lead-specific outside ID, including on reruns", async () => {
+	const leadIds = () =>
+		rows(`select value, party_id from outside_id where source = 'old_system_lead'
+			and party_id = '${id(10)}' order by value`);
+	const expected = [30, 60].map((n) => ({ value: id(n), party_id: id(10) }));
+	assert.deepEqual(await leadIds(), expected);
+	await run(
+		`delete from outside_id where source = 'old_system_lead' and value = '${id(30)}'`,
+	);
+	assert.deepEqual(await leadIds(), expected);
+});
+
 test("old converted leads with no deal link stay out of the Prospects lane", async () => {
 	const [status, lane] = await save(
 		{ user: `user-${id(1)}` },
