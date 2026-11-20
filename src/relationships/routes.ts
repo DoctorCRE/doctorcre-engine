@@ -28,14 +28,18 @@ relationships.get("/relationships", async (c) => {
 			throw new BusinessRefusal({ error: "AUTHORIZATION_REFUSED" });
 		if ([...params].length !== 1 || params.get("contract") !== CONTRACT)
 			throw new BusinessRefusal({ error: "QUERY_INVALID" });
-		const snapshot =
-			c.env.RELATIONSHIPS_READ_SCHEMA === "next"
-				? await nextTransaction(
-						database.connectionString,
-						"read",
-						readNextNetwork,
-					)
-				: await readSnapshot(database.connectionString, readNetwork);
+		if (c.env.RELATIONSHIPS_READ_SCHEMA === "next") {
+			const snapshot = await nextTransaction(
+				database.connectionString,
+				"read",
+				readNextNetwork,
+			);
+			return c.json({
+				...projectNetwork(snapshot, new Date()),
+				can_request_introductions: false,
+			});
+		}
+		const snapshot = await readSnapshot(database.connectionString, readNetwork);
 		// The old clock is read after the query.
 		return c.json(projectNetwork(snapshot, new Date()));
 	} catch (error) {
