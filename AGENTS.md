@@ -54,9 +54,9 @@ This file wins over any skill or global rule. A skill's advice to add a lint, ch
 
 A Claude session coordinates: it slices issues, briefs workers, reviews and decides. It does not write the code. It starts each worker with T3's `delegate_task` in its own worktree, one worker per issue.
 
-Claude Opus 5.5 or Codex gpt-6.1-sol builds. Reasoning effort is high, never higher.
+Codex gpt-6.2-sol builds. Claude Opus 5.5 may also build. Codex gpt-6.1-terra may build routine work such as wording, docs, and small app fixes. Reasoning effort is high, never higher.
 
-Before a pull request merges, a separate session from the other family reviews it for correctness and for code quality: Claude reviews Codex's work, and Codex reviews Claude's. The builder fixes what the review finds. The owner does not review code.
+Before a pull request merges, a separate session that did not write the change reviews it for correctness and code quality. Codex may review Codex's work. Changes to `AGENTS.md`, `CLAUDE.md`, or `.github/` need a reviewer from the other family. The builder fixes what the review finds. The owner does not review code.
 
 Check which models are available each time you start a worker. Never write a provider's usage or balance into this repo.
 
