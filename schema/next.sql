@@ -1159,6 +1159,43 @@ create table email_mailbox (
 	primary key (activity_id, user_id)
 );
 
+create function record_email_summary(email_id uuid, captured_hash text, writer_version text,
+	result_status text, summary_text text, result_provenance jsonb, result_time timestamptz)
+returns email_summary
+language plpgsql security definer as $$
+declare
+	saved email_summary;
+begin
+	if current_setting('engine.job', true) is distinct from 'mail_capture' then
+		raise insufficient_privilege using message = 'only mail capture can record an email summary';
+	end if;
+	if not exists (
+		select from email_mailbox m join app_user u on u.id = m.user_id
+		where m.activity_id = email_id and u.is_account_partner
+			and u.id = nullif(current_setting('engine.user_id', true), '')::uuid
+	) then
+		return null;
+	end if;
+
+	insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, text, provenance, recorded_at)
+	values (email_id, email_id, captured_hash, writer_version, result_status, summary_text, result_provenance, result_time)
+	on conflict (source_activity_id, source_hash, generator_version) do nothing;
+
+	select * into strict saved from email_summary
+	where source_activity_id = email_id and source_hash = captured_hash and generator_version = writer_version;
+	if (saved.activity_id, saved.status, saved.text, saved.provenance)
+		is distinct from (email_id, result_status, summary_text, result_provenance) then
+		raise unique_violation using message = 'this source and writer already have a different summary result',
+			constraint = 'email_summary_result_conflict';
+	end if;
+	return saved;
+end $$;
+
+do $$ begin
+	execute format('alter function record_email_summary set search_path = pg_catalog, %I, pg_temp', current_schema());
+end $$;
+revoke execute on function record_email_summary from public;
+
 alter table outside_id add foreign key (email_activity_id) references email;
 
 -- Without its Message-ID, an email is its sender, sent time and subject, so it is stored once.
@@ -3845,6 +3882,7 @@ grant update (status) on offer to engine;
 revoke insert on email from engine;
 grant insert (activity_id, message_id, conversation_id, sender, sender_name, subject, body) on email to engine;
 revoke insert on email_summary, email_current_summary from engine;
+grant execute on function record_email_summary to engine;
 grant update (handle, platform_account_id) on social_account to engine;
 grant update (angle, hook, pillar) on idea to engine;
 grant update (status, reason, platform_post_id, published_at) on post to engine;

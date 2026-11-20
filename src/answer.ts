@@ -70,6 +70,8 @@ const HINTS = {
 	invalid_idempotency_key:
 		"Supply a UUID as idempotency_key and reuse it only for the same action.",
 	key_reuse: "Use a fresh idempotency_key for changed arguments.",
+	email_summary_result_conflict:
+		"The source and generator version already have a different summary result.",
 	version_conflict: "Re-read the record and ask the human before retrying.",
 	invoice_not_found: "Choose an invoice with a commission payment.",
 	invoice_not_unpaid: "Choose an invoiced payment that is still unpaid.",
