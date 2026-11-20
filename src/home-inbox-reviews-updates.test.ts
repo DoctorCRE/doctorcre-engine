@@ -220,6 +220,61 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 	assert.notEqual(cleared?.base_version, revised?.base_version);
 });
 
+test("checklist reminders follow the item through completion, drop and reopen", async () => {
+	const deal = randomUUID();
+	const step = randomUUID();
+	const reminder = randomUUID();
+	const dropped = randomUUID();
+	const noRef = randomUUID();
+	const unmatched = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.user_id', '${owner}', true);
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental Checklist', '${owner}');
+		insert into next_step (id, deal_id, what, item_title, source_ref)
+			values ('${step}', '${deal}', 'Review the site survey', 'Site survey', 'example-survey');
+		insert into home_update (id, user_id, deal_id, what, checklist_item_ref, due_on, read_at) values
+			('${reminder}', '${owner}', '${deal}', 'Review the site survey', 'deal-item:${step}', '2001-02-01', null),
+			('${dropped}', '${owner}', '${deal}', 'Earlier reminder', 'deal-item:${step}', '2001-01-01', null),
+			(gen_random_uuid(), '${owner}', '${deal}', 'Read already', 'deal-item:${step}', '2001-03-01', now()),
+			('${noRef}', '${owner}', '${deal}', 'Deal update', null, null, null),
+			('${unmatched}', '${owner}', '${deal}', 'Review the floor plan', 'deal-item:${randomUUID()}', '2001-02-01', null);
+		insert into home_mark (user_id, home_update_id, disposition, drop_reason)
+			values ('${owner}', '${dropped}', 'dropped', 'Duplicate reminder');
+		commit;`);
+
+	async function expectUpdates(ids: string[]) {
+		const updates = (await cards(alex, deal)).filter(
+			(card) => card.kind === "update",
+		);
+		assert.deepEqual(
+			updates.map((card) => card.item_id).sort(),
+			ids.map((id) => `notification:${id}`).sort(),
+		);
+	}
+
+	const otherUpdates = [noRef, unmatched];
+	const openUpdates = [reminder, ...otherUpdates];
+	await expectUpdates(openUpdates);
+	for (const end of [
+		{ resolution: "done" },
+		{ resolution: "cancelled", reason: "Survey no longer needed" },
+	]) {
+		const [ended, result] = await save(alex, `next-steps/${step}/end`, {
+			idempotency_key: randomUUID(),
+			...end,
+		});
+		assert.equal(ended, 200);
+		await expectUpdates(otherUpdates);
+
+		const [reopened] = await save(alex, `next-steps/${step}/reopen`, {
+			idempotency_key: randomUUID(),
+			base_version: result.change_id,
+		});
+		assert.equal(reopened, 200);
+		await expectUpdates(openUpdates);
+	}
+});
+
 test("tour comment and shortlist changes retain their saved property context", async () => {
 	const deal = randomUUID();
 	const property = randomUUID();
