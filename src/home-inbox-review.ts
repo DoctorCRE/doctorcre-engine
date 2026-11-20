@@ -56,6 +56,15 @@ type Suggestion = ReviewRow &
 
 const mailGroup = sql`coalesce('conversation:' || e.conversation_id, 'email:' || e.activity_id)`;
 
+function senderLabel(email: "e" | "title_email") {
+	return sql<string>`coalesce(nullif(btrim(${sql.ref(`${email}.sender_name`)}), ''),
+		(select min(party.name) from party_email
+			join party on party.id = party_email.party_id
+			where party_email.address = ${sql.ref(`${email}.sender`)}
+			having count(*) = 1),
+		${sql.ref(`${email}.sender`)}::text)`;
+}
+
 function draftRows(userId: string) {
 	return sql`
 		with drafts as (
@@ -65,8 +74,8 @@ function draftRows(userId: string) {
 				${mailGroup} as mail_group,
 				coalesce(r.sent_at, r.changed_at) as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
 				a.happened_at as email_at,
-				'Reply to ' || coalesce(nullif(btrim(e.sender_name), ''), e.sender::text) || ': ' || r.subject as title,
-				coalesce(d.name, nullif(btrim(e.sender_name), ''), e.sender::text) as context_label,
+				'Reply to ' || ${senderLabel("e")} || ': ' || coalesce(nullif(btrim(e.subject), ''), 'No subject') as title,
+				coalesce(d.name, ${senderLabel("e")}) as context_label,
 				'/deals?deal=' || d.id as open_url,
 				row_number() over (
 					partition by (r.status = 'sent'), e.conversation_id,
@@ -198,13 +207,13 @@ function suggestionRows(userId: string, forMail: boolean) {
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
 				coalesce(d.name, party.name, property.name, property.address, candidate.name,
-					nullif(btrim(e.sender_name), ''), e.sender::text) as context_label,
+					${senderLabel("e")}) as context_label,
 				case when p.activity_kind = 'call' then '/calls?session=' || a.id
 					when d.id is not null then '/deals?deal=' || d.id
 					when party.id is not null then '/relationships?node=party:' || party.id end as open_url,
 				case
-					when p.activity_kind = 'call' then 'Call' || coalesce(' with ' || contact.name, '')
-						|| ' on ' || to_char(a.happened_at at time zone 'America/Chicago', 'Dy, Mon FMDD')
+					when p.activity_kind = 'call' then coalesce('Call with ' || contact.name || ', ', 'Call on ')
+						|| to_char(a.happened_at at time zone 'America/Chicago', 'Dy, Mon FMDD')
 					when p.kind = 'next_step' then p.what
 					when p.kind = 'phase_move' then 'Move to ' || phase.label
 					when p.kind = 'file_to_deal' then 'File email to ' || d.name
@@ -214,7 +223,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 					else 'Review new lead'
 				end as suggestion_title,
 				case when e.activity_id is not null then
-					concat_ws(' · ', coalesce(nullif(btrim(e.sender_name), ''), e.sender::text), nullif(btrim(e.subject), ''))
+					concat_ws(' · ', ${senderLabel("e")}, nullif(btrim(e.subject), ''))
 				end as email_title,
 				a.happened_at as source_at,
 				${mailGroup} as mail_group,
@@ -581,7 +590,7 @@ export async function readHomeMailPriorities(
 			where card.status = 'pending' and card.snoozed_until is null
 		), ranked as (
 			select cards.*, e.conversation_id, a.happened_at, review.happened_at as review_happened_at,
-				coalesce(nullif(btrim(title_email.sender_name), ''), title_email.sender::text) as sender,
+				${senderLabel("title_email")} as sender,
 				coalesce(nullif(btrim(title_email.subject), ''), 'No subject') as subject,
 				row_number() over (
 					partition by e.conversation_id, case when e.conversation_id is null then e.activity_id end

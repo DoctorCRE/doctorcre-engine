@@ -26,7 +26,9 @@ before(async () => {
 			('${partner}', 'person', 'Example Partner'), ('${other}', 'person', 'Other Partner');
 		insert into app_user (id, slug) values ('${partner}', 'example'), ('${other}', 'other');
 		insert into party (id, kind, name) values ('${knownContact}', 'person', 'Known Contact');
-		insert into party_email (party_id, address, label) values ('${knownContact}', 'known-cc@example.test', 'work');
+		insert into party_email (party_id, address, label) values ('${knownContact}', 'known-cc@example.test', 'work'),
+			('${knownContact}', 'pat@example.test', 'work'),
+			('${knownContact}', 'shared@example.test', 'work'), ('${other}', 'shared@example.test', 'work');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${partner}');
 		insert into activity (id, kind, happened_at)
 			select id, 'email', '2026-01-01'::date + offset_days::int
@@ -34,8 +36,8 @@ before(async () => {
 			with ordinality t(id, offset_days);
 		insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
 			select id, '<'||id||'@example.test>', case when id in ('${id(10)}', '${id(11)}', '${id(14)}') then 'Thread' end,
-				'pat@example.test',
-				case when id = '${id(10)}' then 'Sam Example' when id <> '${id(12)}' then 'Pat Example' end,
+				case when id = '${id(16)}' then 'shared@example.test' else 'pat@example.test' end,
+				case when id = '${id(10)}' then 'Sam Example' when id not in ('${id(12)}', '${id(16)}') then 'Pat Example' end,
 				case when id = '${id(10)}' then 'Earlier floor plan' else 'Floor plan' end,
 				'Please send the plan.'
 			from activity;
@@ -48,12 +50,12 @@ before(async () => {
 			values ${[10, 11, 12, 13, 14, 15, 16]
 				.map(
 					(n) =>
-						`('${id(n + 10)}', '${id(n)}', '${n === 12 ? other : partner}', 'old_system', 'Floor plan', 'Here it is.', 'Please send the plan.')`,
+						`('${id(n + 10)}', '${id(n)}', '${n === 12 ? other : partner}', 'old_system', 'Re: Email from Pat Example: Re: Floor plan', 'Here it is.', 'Please send the plan.')`,
 				)
 				.join(",")};
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${partner}', true);
-		insert into activity (id, kind, happened_at) values
-			('${call}', 'call', '2026-01-02T12:00Z'), ('${meeting}', 'meeting', '2026-01-03T12:00Z');
+		insert into activity (id, kind, happened_at, from_party_id) values
+			('${call}', 'call', '2026-01-03T02:00Z', '${knownContact}'), ('${meeting}', 'meeting', '2026-01-03T12:00Z', null);
 		insert into activity_about (activity_id, deal_id) values ('${call}', '${deal}');
 		update reply_draft set status = 'dismissed', dismiss_reason = 'I already replied' where id = '${id(23)}';
 		update reply_draft set status = 'approved', to_address = 'pat@example.test', cc_address = 'copy@example.test'
@@ -328,7 +330,7 @@ test("Home groups pending suggestions from each email conversation or call and k
 		{
 			source_type: "capture_session",
 			kind_label: "Call",
-			title: "Call on Fri, Jan 2: 2 suggestions",
+			title: "Call with Known Contact, Fri, Jan 2: 2 suggestions",
 			merged_source_ids: [id(34), id(33)],
 			open_url: `/calls?session=${call}`,
 			source_activity: { kind: "call", id: call },
@@ -782,13 +784,19 @@ test("Home uses the copied call log's reviewer when the call has no partner stam
 	}
 });
 
-test("An email suggestion names its sender and subject", async () => {
+test("Home uses recorded sender names and matches an unambiguous address", async () => {
 	const filing = (await inbox("other")).find(
 		(card) => card.proposal_id === id(38),
 	);
 	assert.equal(filing?.title, "Pat Example · Floor plan");
 	const step = (await inbox()).find((card) => card.proposal_id === id(32));
-	assert.equal(step?.title, "pat@example.test · Floor plan");
+	assert.equal(step?.title, "Known Contact · Floor plan");
+	const draft = (await inbox("other")).find(
+		(card) => card.reply_draft_id === id(22),
+	);
+	assert.equal(draft?.title, "Reply to Known Contact: Floor plan");
+	const shared = (await inbox()).find((card) => card.reply_draft_id === id(26));
+	assert.equal(shared?.title, "Reply to shared@example.test: Floor plan");
 });
 
 test("Home opens each visible suggestion with its original evidence and proposed fields", async () => {
@@ -822,7 +830,7 @@ test("Home opens each visible suggestion with its original evidence and proposed
 		source_activity: {
 			id: call,
 			kind: "call",
-			happened_at: "2026-01-02T12:00:00.000Z",
+			happened_at: "2026-01-03T02:00:00.000Z",
 		},
 	});
 	assert.equal((await read(38, "other")).status, 200);
@@ -877,6 +885,10 @@ test("Mail priorities ranks inbound work once per Outlook conversation and opens
 		},
 	]);
 	assert.equal(priorities[0]?.item_id, matchingCard.item_id);
+	assert.equal(
+		priorities.find((row) => row.proposal_id === id(32))?.title,
+		"Known Contact · Floor plan",
+	);
 	const other: unknown = await (await get({ user: "other" })).json();
 	assert.ok(isArguments(other) && Array.isArray(other.items));
 	assert.partialDeepStrictEqual(
