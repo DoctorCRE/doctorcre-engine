@@ -2,14 +2,26 @@ import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import type { DB } from "./next-database.d.ts";
 
+const stepMetadata =
+	/\b(?:[CL]-\d+|V-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d+|T\s*[-−]\s*\d+\s*(?:days?|weeks?|months?|years?)|loop\s*#\s*\d+)\b/gi;
+
 export function homeDisplayText(text: string | null) {
 	return (text ?? "")
-		.replace(
-			/\(?(?:\bL-\d+\b|\bV-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d+\b|\bT\s*[-−]\s*\d+\s*(?:days?|weeks?|months?|years?)\b|\bloop\s*#\s*\d+\b)\)?/gi,
-			"",
-		)
-		.replace(/\(\s*\)|\[\s*\]/g, "")
+		.replace(/(^|\n)[ \t]*(?:#{1,6}|[-+*]|\d+[.)]|>)[ \t]+/g, "$1")
+		.replace(/\[([^\]]+)\]\([^\s)]+\)/g, "$1")
+		.replace(/(\*{1,3}|`{1,3}|~~)(?=\S)(.+?)(?<=\S)\1/g, "$2")
+		.replace(/(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)/g, "$2")
+		.replace(/\([^()]*\)|\[[^[\]]*\]/g, (aside) => {
+			const cleaned = aside.replace(stepMetadata, "");
+			if (cleaned === aside) return aside;
+			const label = cleaned
+				.slice(1, -1)
+				.replace(/^[\s,;:·–—-]+|[\s,;:·–—-]+$/g, "");
+			return label ? `${aside[0]}${label}${aside.at(-1)}` : "";
+		})
+		.replace(stepMetadata, "")
 		.replace(/\s+/g, " ")
+		.replace(/ +([,.;:!?])/g, "$1")
 		.replace(/^[\s:;,·–—-]+|[\s:;,·–—-]+$/g, "");
 }
 
@@ -29,21 +41,6 @@ export function homeWhy(...facts: (string | null)[]) {
 		.filter((fact): fact is string => Boolean(fact))
 		.map((fact) => (/[.!?]$/.test(fact) ? fact : `${fact}.`))
 		.join(" ");
-}
-
-export function undatedPartyStep(action: string) {
-	if (
-		/^(?:schedule|set|calculate|update)\s+(?:the\s+)?next\s+(?:follow[- ]?up|check[- ]?in|outreach|reminder|date)\b/i.test(
-			action,
-		)
-	) {
-		return "schedule";
-	}
-	return /^(?:please\s+)?(?:arrange|ask|book|call|check|confirm|connect|contact|decide|discuss|email|find|follow up|introduce|meet|prepare|reach out|reconnect|request|respond|review|send|share|text|tour|verify)\b/i.test(
-		action,
-	)
-		? "action"
-		: "unclear";
 }
 
 export function stepTargetFields(db: Transaction<DB>) {

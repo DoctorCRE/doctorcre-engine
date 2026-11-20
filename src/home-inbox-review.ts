@@ -41,13 +41,13 @@ type SuggestionReference = {
 };
 
 type Suggestion = ReviewRow &
-	Pick<SuggestionReference, "activity_kind"> & {
+	Pick<SuggestionReference, "activity_kind" | "kind"> & {
 		latest_activity_id: string | null;
 		latest_source_at: string | null;
 		contact_name: string | null;
 		source_summary: string | null;
 		evidence: string;
-		what: string | null;
+		suggestion_title: string | null;
 		due_on: string | null;
 		fallback_reply_draft: {
 			id: string;
@@ -209,7 +209,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 	return sql`
 		with visible as (
 			select p.id, p.kind, p.status, a.id as activity_id, a.kind as activity_kind, p.created_at as activity_at, p.due_on,
-				contact.name as contact_name, a.summary as source_summary, p.evidence, p.what,
+				contact.name as contact_name, a.summary as source_summary, p.evidence,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
 				coalesce(d.name, party.name, property.name, property.address, candidate.name,
@@ -218,7 +218,13 @@ function suggestionRows(userId: string, forMail: boolean) {
 					when d.id is not null then '/deals?deal=' || d.id
 					when party.id is not null then '/relationships?node=party:' || party.id end as open_url,
 				case
-					when p.kind = 'next_step' then p.what
+					when p.kind in ('next_step', 'log_call') then p.what
+					when p.kind = 'phase_move' and a.kind in ('call', 'meeting')
+						then 'Move ' || d.name || ' to ' || phase.label
+					when p.kind = 'lead_stage_move' and a.kind in ('call', 'meeting')
+						then 'Move ' || party.name || ' to ' || lead_stage.label
+					when p.kind = 'new_lead' and a.kind in ('call', 'meeting')
+						then 'Add ' || party.name || ' as a lead'
 					when p.kind = 'phase_move' then 'Move to ' || phase.label
 					when p.kind = 'file_to_deal' then 'File email to ' || d.name
 					when p.kind = 'possible_new_deal' then 'Review possible new deal'
@@ -258,6 +264,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 			left join party on party.id = p.party_id
 			left join property on property.id = p.property_id
 			left join phase on phase.slug = p.to_phase
+			left join stage lead_stage on lead_stage.role = 'lead' and lead_stage.slug = p.to_stage
 			where p.kind <> 'next_step_done'
 				and ${visibleSuggestion(userId)}
 				and (p.kind <> 'email_lead' or not exists (
@@ -449,28 +456,35 @@ function conversationReviewText(
 ) {
 	const contact = homeDisplayText(suggestion.contact_name);
 	const context = homeDisplayText(suggestion.context_label);
-	const source = contact
-		? `${kind} with ${contact}`
-		: context
-			? `${kind} about ${context}`
-			: kind;
+	const note = suggestion.kind === "log_call";
+	const nameTarget = note || suggestion.kind === "next_step";
+	const withContact = contact ? ` with ${contact}` : "";
+	const about =
+		nameTarget && context && context !== contact ? ` about ${context}` : "";
 	const date = suggestion.latest_source_at
 		? homeDate(suggestion.latest_source_at)
 		: null;
 	const when = !contact && date ? ` on ${date}` : "";
-	const count = suggestion.suggestions.length;
-	const proposed = homeDisplayText(suggestion.what);
+	const more = suggestion.suggestions.length - 1;
+	const remaining = more
+		? ` (+${more} more ${more === 1 ? "decision" : "decisions"})`
+		: "";
+	const proposed = homeDisplayText(suggestion.suggestion_title);
+	const review = proposed
+		? `${note ? "review call note" : "review"}: ${proposed}`
+		: "review suggestions";
 	const evidence =
 		homeDisplayText(suggestion.evidence) ||
 		homeDisplayText(suggestion.source_summary);
 	return {
-		title: `${source}${when} left ${count === 1 ? "a decision" : `${count} decisions`} — review suggestions`,
+		title: `${kind}${withContact}${about}${when} — ${review}${remaining}`,
 		why: homeWhy(
 			date ? `${kind} on ${date}` : null,
 			evidence || proposed || "Source details unavailable",
 			proposed &&
-				!evidence.toLowerCase().includes(proposed.toLowerCase()) &&
-				evidence
+				evidence &&
+				evidence !== proposed &&
+				evidence !== `${proposed}.`
 				? `Proposed: ${proposed}`
 				: null,
 		),

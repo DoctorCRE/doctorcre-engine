@@ -330,7 +330,8 @@ test("Home groups pending suggestions from each email conversation or call and k
 		{
 			source_type: "capture_session",
 			kind_label: "Call",
-			title: "Call with Known Contact left 2 decisions — review suggestions",
+			title:
+				"Call with Known Contact about Example Dental — review: Send a budget (+1 more decision)",
 			why: "Call on Jan 2, 2026. Send a budget.",
 			primary_action: "Review suggestions",
 			merged_source_ids: [id(34), id(33)],
@@ -346,18 +347,19 @@ test("Home groups pending suggestions from each email conversation or call and k
 	);
 });
 
-test("Home names a meeting's recorded decision with the deal and meeting date", async () => {
+test("Home names the deal and proposed phase even when the meeting proposal has no action text", async () => {
 	const proposal = randomUUID();
-	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
-			values ('${proposal}', 'next_step', '${meeting}', 'meeting', 'L-223', 'old_system', '${deal}', 'Confirm the tour', '${other}');
+	await db.query(`begin; select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${other}', true);
+		insert into phase (slug, label) values ('negotiation', 'Negotiating');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, to_phase)
+			values ('${proposal}', 'phase_move', '${meeting}', 'meeting', 'We received the LOI.', 'old_system', '${deal}', 'negotiation');
 		commit;`);
 	assert.partialDeepStrictEqual(
 		(await inbox("other")).find((card) => card.proposal_id === proposal),
 		{
 			title:
-				"Meeting about Example Dental on Jan 3, 2026 left a decision — review suggestions",
-			why: "Meeting on Jan 3, 2026. Confirm the tour.",
+				"Meeting on Jan 3, 2026 — review: Move Example Dental to Negotiating",
+			why: "Meeting on Jan 3, 2026. We received the LOI. Proposed: Move Example Dental to Negotiating.",
 			primary_action: "Review suggestions",
 			open_url: `/deals?deal=${deal}`,
 			source_activity: {
@@ -729,7 +731,7 @@ test("Home shows one pending call log with the proposal to decide", async () => 
 		{
 			item_id: `suggestion:${proposal.proposal_id}`,
 			title:
-				"Call about Example Dental on Jan 6, 2026 left a decision — review suggestions",
+				"Call about Example Dental on Jan 6, 2026 — review call note: Agreed to review the example plan.",
 			why: "Call on Jan 6, 2026. Let's review the example plan. Proposed: Agreed to review the example plan.",
 			primary_action: "Review suggestions",
 			proposal_id: proposal.proposal_id,

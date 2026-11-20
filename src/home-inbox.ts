@@ -17,7 +17,6 @@ import {
 	stepItemId,
 	stepOpenUrl,
 	stepTargetFields,
-	undatedPartyStep,
 } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
@@ -114,7 +113,8 @@ const iso = (timestamp: string) => new Date(timestamp).toISOString();
 const optionalIso = (timestamp: string | null) =>
 	timestamp === null ? null : iso(timestamp);
 
-function stepText(step: Step, action: string) {
+function stepText(step: Step) {
+	const action = homeDisplayText(step.title);
 	const target = homeDisplayText(step.context_label);
 	const forTarget = target ? ` for ${target}` : "";
 	const primary_action = step.status === "done" ? "Open" : "Mark done";
@@ -138,6 +138,13 @@ function stepText(step: Step, action: string) {
 		};
 	}
 	const setter = homeDisplayText(step.set_by);
+	if (step.status === "open" && !step.source_kind && !setter && !due) {
+		return {
+			title: action || `Follow-up${forTarget}`,
+			why: "No reason was recorded.",
+			primary_action,
+		};
+	}
 	const set = step.source_kind
 		? `Follow-up set from the ${step.source_kind}`
 		: setter
@@ -150,7 +157,7 @@ function stepText(step: Step, action: string) {
 	};
 }
 
-function stepCard(step: Step, action: string) {
+function stepCard(step: Step) {
 	const completed_at = optionalIso(step.completed_at);
 	const done = step.status === "done";
 	const snoozed_until = done ? null : optionalIso(step.snoozed_until);
@@ -172,7 +179,7 @@ function stepCard(step: Step, action: string) {
 		source_version,
 		source_state: done ? "done" : "needs_attention",
 		base_version: `${source_version}:${step.mark_version ?? "0"}:${disposition}`,
-		...stepText(step, action),
+		...stepText(step),
 		activity_at: iso(step.activity_at),
 		completed_at,
 		hold_until,
@@ -213,33 +220,13 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 		db,
 		rows.filter((step) => step.status === "open").map((step) => step.id),
 	);
-	let unexplained_step_count = 0;
-	const steps: (
-		| ReturnType<typeof stepCard>
-		| ReturnType<typeof completionReviewCard>
-	)[] = [];
-	for (const step of rows) {
+	const steps = rows.map((step) => {
 		const review = reviews.get(step.id);
-		const action = homeDisplayText(step.title);
-		if (review && !step.snoozed_until) {
-			steps.push(completionReviewCard(review, stepCard(step, action)));
-			continue;
-		}
-		if (step.status === "open") {
-			const partyStep =
-				step.party_id && !step.due_on ? undatedPartyStep(action) : null;
-			if (partyStep === "schedule") continue;
-			if (
-				!action ||
-				partyStep === "unclear" ||
-				(partyStep && !homeDisplayText(step.context_label))
-			) {
-				unexplained_step_count++;
-				continue;
-			}
-		}
-		steps.push(stepCard(step, action));
-	}
+		const card = stepCard(step);
+		return review && !step.snoozed_until
+			? completionReviewCard(review, card)
+			: card;
+	});
 	const updates = await readHomeUpdates(db, userId, LIMIT + 1);
 	const items = [
 		...steps,
@@ -256,7 +243,6 @@ async function readHomeInbox(db: Transaction<DB>, userId: string) {
 		schema_version: "home-inbox.v5",
 		home_mark_drop: true,
 		home_proposal_drop: true,
-		unexplained_step_count,
 		items: items.slice(0, LIMIT),
 		truncated: rows.length > LIMIT || items.length > LIMIT,
 		limit: LIMIT,

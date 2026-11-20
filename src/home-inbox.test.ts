@@ -236,38 +236,55 @@ test("a step created by a suggestion keeps the meeting source", async () => {
 	});
 });
 
-test("Home cleans copied step text and leaves undated bookkeeping and unclear steps on their parties", async () => {
+test("Home keeps undated steps and cleans their titles without rewriting saved wording", async () => {
 	const examples = [
-		["Example Lead", "L-223: Call about the suite", "Call about the suite"],
+		["L-223: **Call** about the suite", "Call about the suite"],
 		[
-			"Example Vendor",
-			"Email about the report (V-ABC-012)",
-			"Email about the report",
+			"Email about the report (V-ABC-012), then call.",
+			"Email about the report, then call.",
+		],
+		["T-3 months — Confirm lease timing", "Confirm lease timing"],
+		["Review the floor plan [loop #25]", "Review the floor plan"],
+		[
+			"Call (L-223, due Friday) about the suite",
+			"Call (due Friday) about the suite",
 		],
 		[
-			"Example Renewal",
-			"T-3 months — Confirm lease timing",
-			"Confirm lease timing",
+			"Call (due Friday, C-026) about the suite",
+			"Call (due Friday) about the suite",
 		],
 		[
-			"Example Clinic",
-			"Review the floor plan [loop #25]",
-			"Review the floor plan",
+			"Call (— if available) about the suite",
+			"Call (— if available) about the suite",
 		],
-		["Example Schedule", "Schedule the next follow-up", ""],
-		["Example Practice", "L-456 — Timing", ""],
-	].map(([name, what, action]) => ({
+		[
+			"Review the [plan](https://example.test/plan) with _the client_.",
+			"Review the plan with the client.",
+		],
+		["Draft the lease amendment", "Draft the lease amendment"],
+		[
+			"Schedule the next check-in with the office manager",
+			"Schedule the next check-in with the office manager",
+		],
+		["Schedule the next follow-up", "Schedule the next follow-up"],
+		["L-456 — Timing", "Timing"],
+		["C-026", "Follow-up for Example Vendor"],
+	].map(([what, title]) => ({
 		id: randomUUID(),
 		party: randomUUID(),
-		name,
 		what,
-		action,
+		title,
 	}));
-	await db.query(`begin; select set_config('engine.job', 'old_system', true);`);
-	for (const { id, party, name, what } of examples) {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into role (slug, label) values ('vendor', 'Vendor');`);
+	for (const { id, party, what } of examples) {
 		await db.query(
-			"insert into party (id, kind, name) values ($1, 'company', $2)",
-			[party, name],
+			"insert into party (id, kind, name) values ($1, 'company', 'Example Vendor')",
+			[party],
+		);
+		await db.query(
+			"insert into party_role (party_id, role) values ($1, 'vendor')",
+			[party],
 		);
 		await db.query(
 			"insert into next_step (id, party_id, owner_party_id, what, created_at) values ($1, $2, $3, $4, '2026-11-17T12:00Z')",
@@ -284,20 +301,20 @@ test("Home cleans copied step text and leaves undated bookkeeping and unclear st
 	assert.equal(response.status, 200);
 	const result: unknown = await response.json();
 	assert.ok(isArguments(result) && Array.isArray(result.items));
-	assert.equal(result.unexplained_step_count, 1);
 	const items = result.items.filter(isArguments);
 	for (const example of examples) {
-		const card = items.find((item) => item.source_id === example.id);
-		if (example.action) {
-			assert.partialDeepStrictEqual(card, {
-				title: `Follow-up set for ${example.name} — ${example.action}`,
-				why: "Follow-up set on Nov 17, 2026.",
-				primary_action: "Mark done",
-				due_on: null,
-			});
-		} else {
-			assert.equal(card, undefined);
-		}
+		assert.partialDeepStrictEqual(
+			items.filter((item) => item.source_id === example.id),
+			[
+				{
+					title: example.title,
+					why: "No reason was recorded.",
+					primary_action: "Mark done",
+					due_on: null,
+					open_url: `/relationships?node=party:${example.party}`,
+				},
+			],
+		);
 		assert.deepEqual(
 			(
 				await db.query("select what, status from next_step where id = $1", [
@@ -307,6 +324,7 @@ test("Home cleans copied step text and leaves undated bookkeeping and unclear st
 			[{ what: example.what, status: "open" }],
 		);
 	}
+	assert.equal(Object.hasOwn(result, "unexplained_step_count"), false);
 });
 
 test("the focused deal step names its creator and source after a later edit", async () => {
