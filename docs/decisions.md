@@ -356,3 +356,5 @@
 188\. **A deal name can be reused after the first deal ends (2026-11-19).** The database reserves a name while a deal is open, including while it is parked. Closing, invoicing or losing it frees the name. The rule covers both partners and all ways of adding, renaming or reopening a deal (#815).
 
 189\. **A partner confirms a lead's link to an existing client (2026-11-20).** The lead role holds the exact client party ID. Same-name matches are suggestions. The explicit Link save keeps both parties and their roles separate and takes the lead off Leads. Deals Prospects uses its existing membership rules (#877).
+
+190\. **The health check names the running release (2026-11-20).** `GET /health` reports the deployed short commit as `release` from `CF_VERSION_METADATA.tag`. It omits `release` when the tag is missing or blank. `ok` still reports health and `version` still gives the Cloudflare version ID used by deployment checks (#874).
