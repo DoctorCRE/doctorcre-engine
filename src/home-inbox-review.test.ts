@@ -330,7 +330,10 @@ test("Home groups pending suggestions from each email conversation or call and k
 		{
 			source_type: "capture_session",
 			kind_label: "Call",
-			title: "Call with Known Contact, Fri, Jan 2: 2 suggestions",
+			title:
+				"Call with Known Contact about Example Dental — review: Send a budget (+1 more decision)",
+			why: "Call on Jan 2, 2026. Send a budget.",
+			primary_action: "Review suggestions",
 			merged_source_ids: [id(34), id(33)],
 			open_url: `/calls?session=${call}`,
 			source_activity: { kind: "call", id: call },
@@ -342,6 +345,32 @@ test("Home groups pending suggestions from each email conversation or call and k
 			.map((card) => card.merged_source_ids),
 		[[id(38)]],
 	);
+});
+
+test("Home names the deal and proposed phase even when the meeting proposal has no action text", async () => {
+	const proposal = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${other}', true);
+		insert into phase (slug, label) values ('negotiation', 'Negotiating');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, to_phase)
+			values ('${proposal}', 'phase_move', '${meeting}', 'meeting', 'We received the LOI.', 'old_system', '${deal}', 'negotiation');
+		commit;`);
+	assert.partialDeepStrictEqual(
+		(await inbox("other")).find((card) => card.proposal_id === proposal),
+		{
+			title:
+				"Meeting on Jan 3, 2026 — review: Move Example Dental to Negotiating",
+			why: "Meeting on Jan 3, 2026. We received the LOI. Proposed: Move Example Dental to Negotiating.",
+			primary_action: "Review suggestions",
+			open_url: `/deals?deal=${deal}`,
+			source_activity: {
+				kind: "meeting",
+				id: meeting,
+				happened_at: "2026-01-03T12:00:00.000Z",
+			},
+		},
+	);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		delete from proposal where id = '${proposal}'; commit;`);
 });
 
 for (const decision of ["accept", "dismiss"]) {
@@ -701,7 +730,10 @@ test("Home shows one pending call log with the proposal to decide", async () => 
 	assert.partialDeepStrictEqual(cards, [
 		{
 			item_id: `suggestion:${proposal.proposal_id}`,
-			title: "Call on Tue, Jan 6: 1 suggestion",
+			title:
+				"Call about Example Dental on Jan 6, 2026 — review call note: Agreed to review the example plan.",
+			why: "Call on Jan 6, 2026. Let's review the example plan. Proposed: Agreed to review the example plan.",
+			primary_action: "Review suggestions",
 			proposal_id: proposal.proposal_id,
 			suggestions: [
 				{ id: proposal.proposal_id, kind: "log_call", deal_id: deal },

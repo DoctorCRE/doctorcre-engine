@@ -2,6 +2,47 @@ import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import type { DB } from "./next-database.d.ts";
 
+const stepMetadata =
+	/\b(?:[CL]-\d+|V-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d+|T\s*[-−]\s*\d+\s*(?:days?|weeks?|months?|years?)|loop\s*#\s*\d+)\b/gi;
+
+export function homeDisplayText(text: string | null) {
+	return (text ?? "")
+		.replace(/(^|\n)[ \t]*(?:#{1,6}|[-+*]|\d+[.)]|>)[ \t]+/g, "$1")
+		.replace(/\[([^\]]+)\]\([^\s)]+\)/g, "$1")
+		.replace(/(\*{1,3}|`{1,3}|~~)(?=\S)(.+?)(?<=\S)\1/g, "$2")
+		.replace(/(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)/g, "$2")
+		.replace(/\([^()]*\)|\[[^[\]]*\]/g, (aside) => {
+			const cleaned = aside.replace(stepMetadata, "");
+			if (cleaned === aside) return aside;
+			const label = cleaned
+				.slice(1, -1)
+				.replace(/^[\s,;:·–—-]+|[\s,;:·–—-]+$/g, "");
+			return label ? `${aside[0]}${label}${aside.at(-1)}` : "";
+		})
+		.replace(stepMetadata, "")
+		.replace(/\s+/g, " ")
+		.replace(/ +([,.;:!?])/g, "$1")
+		.replace(/^[\s:;,·–—-]+|[\s:;,·–—-]+$/g, "");
+}
+
+const dateLabel = new Intl.DateTimeFormat("en-US", {
+	dateStyle: "medium",
+	timeZone: "America/Chicago",
+});
+
+export function homeDate(date: string) {
+	return dateLabel.format(
+		new Date(date.length === 10 ? `${date}T12:00:00Z` : date),
+	);
+}
+
+export function homeWhy(...facts: (string | null)[]) {
+	return facts
+		.filter((fact): fact is string => Boolean(fact))
+		.map((fact) => (/[.!?]$/.test(fact) ? fact : `${fact}.`))
+		.join(" ");
+}
+
 export function stepTargetFields(db: Transaction<DB>) {
 	const openDeals = db
 		.selectFrom(selectNextDeals(db).as("board"))
@@ -23,6 +64,10 @@ export function stepTargetFields(db: Transaction<DB>) {
 export const stepItemId = (step: { id: string; call_id: string | null }) =>
 	`${step.call_id ? "capture_post_call_action" : "next_action"}:${step.id}`;
 
+export function dealStepUrl(dealId: string, stepId?: string) {
+	return `/deals?deal=${dealId}&focus=next-step${stepId ? `&step=${stepId}` : ""}`;
+}
+
 export function stepOpenUrl(
 	step: {
 		id: string;
@@ -37,7 +82,7 @@ export function stepOpenUrl(
 	return step.call_id
 		? `/calls?session=${step.call_id}`
 		: step.deal_id
-			? `/deals?deal=${step.deal_id}&focus=next-step${done ? "" : `&step=${step.id}`}`
+			? dealStepUrl(step.deal_id, done ? undefined : step.id)
 			: step.party_id
 				? step.prospect
 					? `/deals?prospect=${step.party_id}&focus=follow-up${done ? "" : `&step=${step.id}`}`
