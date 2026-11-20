@@ -1,4 +1,5 @@
 import { type Context, Hono } from "hono";
+import { nextTransaction } from "../next-connection.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import {
@@ -21,6 +22,8 @@ import {
 	PIPELINES,
 	readClient,
 	readClientList,
+	readNextClient,
+	readNextClientList,
 	refusalOf,
 	SORTS,
 	type Stamp,
@@ -149,7 +152,7 @@ const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
 });
 
 // The old door's correlation id: the caller's own, if it is a UUID.
-function stampOf(c: Context<DatabaseEnv>): Stamp {
+function stampOf(c: Context<DirectoryEnv>): Stamp {
 	const given = c.req.header("x-correlation-id")?.trim();
 	return {
 		observedAt: new Date(),
@@ -158,13 +161,20 @@ function stampOf(c: Context<DatabaseEnv>): Stamp {
 	};
 }
 
+type DirectoryEnv = DatabaseEnv & {
+	Bindings: { DIRECTORY_READ_SCHEMA?: string };
+};
+type LegacyRead = (db: Reader, stamp: Stamp) => Promise<object>;
+type NextReader = Parameters<typeof readNextClient>[0];
+type NextRead = (db: NextReader, stamp: Stamp) => Promise<object>;
+
 // The old door checked its database, then the query, then the partner.
 async function answer(
-	c: Context<DatabaseEnv>,
+	c: Context<DirectoryEnv>,
 	parse: (
 		params: URLSearchParams,
 		viewer: string,
-	) => (db: Reader, stamp: Stamp) => Promise<object>,
+	) => LegacyRead | { next: NextRead },
 ) {
 	const viewer = c.get("partner").slug;
 	const database = c.env.DATABASE;
@@ -176,7 +186,11 @@ async function answer(
 			throw new BusinessRefusal({ error: "AUTHORIZATION_REFUSED" });
 		const stamp = stampOf(c);
 		return c.json(
-			await readSnapshot(database.connectionString, (db) => read(db, stamp)),
+			typeof read === "function"
+				? await readSnapshot(database.connectionString, (db) => read(db, stamp))
+				: await nextTransaction(database.connectionString, "read", (db) =>
+						read.next(db, stamp),
+					),
 		);
 	} catch (error) {
 		const refusal = refusalOf(error);
@@ -184,39 +198,49 @@ async function answer(
 	}
 }
 
-export const directory = new Hono<DatabaseEnv>();
+export const directory = new Hono<DirectoryEnv>();
 
 directory.get("/clients", (c) =>
 	answer(c, (params, viewer) => {
 		const query = clientQuery(params, viewer);
+		if (c.env.DIRECTORY_READ_SCHEMA === "next")
+			return {
+				next: (db, stamp) => readNextClientList(db, viewer, query, stamp),
+			};
 		return (db, stamp) => readClientList(db, viewer, query, stamp);
 	}),
 );
-// The old door answered any id that is not a UUID before anything else.
-async function record(
-	c: Context<DatabaseEnv>,
+type RecordRead<Db> = (
+	db: Db,
+	viewer: string,
 	id: string,
-	read: (
-		db: Reader,
-		viewer: string,
-		id: string,
-		contract: Contract | null,
-		stamp: Stamp,
-	) => Promise<object>,
+	contract: Contract | null,
+	stamp: Stamp,
+) => Promise<object>;
+
+async function record(
+	c: Context<DirectoryEnv>,
+	id: string,
+	read: RecordRead<Reader>,
+	readNext?: RecordRead<NextReader>,
 ) {
-	if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
+	const next = c.env.DIRECTORY_READ_SCHEMA === "next" ? readNext : undefined;
+	if (!UUID.test(id) && !(next && id.startsWith("C-")))
+		return c.json({ error: "not_found" }, 404);
 	return answer(c, (params, viewer) => {
 		checkFields(params, RECORD_FIELDS, viewer);
 		const contract = oneOf(params, "contract", CONTRACTS, null);
+		if (next)
+			return { next: (db, stamp) => next(db, viewer, id, contract, stamp) };
 		return (db, stamp) => read(db, viewer, id, contract, stamp);
 	});
 }
 
 // Values are decoded, so only the pattern keeps an encoded id from passing as a UUID.
-const ID_PATTERN = ":id{[0-9A-Fa-f-]+}";
+const UUID_SEGMENT = "[0-9A-Fa-f-]+";
 
-directory.get(`/clients/${ID_PATTERN}`, (c) =>
-	record(c, c.req.param("id"), readClient),
+directory.get(`/clients/:id{(?:${UUID_SEGMENT}|C-[^/]+)}`, (c) =>
+	record(c, c.req.param("id"), readClient, readNextClient),
 );
 directory.get("/vendors", (c) =>
 	answer(c, (params, viewer) => {
@@ -224,6 +248,6 @@ directory.get("/vendors", (c) =>
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
 );
-directory.get(`/vendors/${ID_PATTERN}`, (c) =>
+directory.get(`/vendors/:id{${UUID_SEGMENT}}`, (c) =>
 	record(c, c.req.param("id"), readVendor),
 );
