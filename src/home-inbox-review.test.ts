@@ -321,6 +321,7 @@ test("Home groups pending suggestions from each email conversation or call and k
 		suggestions.find((card) => card.proposal_id === id(34)),
 		{
 			source_type: "capture_session",
+			kind_label: "Call",
 			title: "Call on Fri, Jan 2: 2 suggestions",
 			merged_source_ids: [id(34), id(33)],
 			open_url: `/calls?session=${call}`,
@@ -607,6 +608,7 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	assert.equal(declined, 200);
 	assert.partialDeepStrictEqual(await unkeyed(), {
 		item_id: `suggestion:${id(62)}`,
+		kind_label: "Suggestion",
 	});
 	const setDraft = (job: string, change: string) =>
 		db.query(`begin;

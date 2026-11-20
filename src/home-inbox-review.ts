@@ -446,7 +446,7 @@ export async function readHomeReviewCards(
 				title: call
 					? `${suggestion.title}: ${suggestion.suggestions.length} ${suggestion.suggestions.length === 1 ? "suggestion" : "suggestions"}`
 					: suggestion.title,
-				kind_label: call ? "Call" : "Task",
+				kind_label: call ? "Call" : "Suggestion",
 				deal_id: null,
 				due_on: suggestion.due_on,
 				proposal_id: suggestion.id,
