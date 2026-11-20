@@ -1,6 +1,8 @@
-import { type Kysely, type RawBuilder, sql } from "kysely";
+import { type Kysely, type RawBuilder, sql, type Transaction } from "kysely";
 import type { DB } from "../database.d.ts";
+import { selectNextDeals } from "../deals/next-board.ts";
 import { failureKind } from "../failure.ts";
+import type { DB as NextDB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 
 export const PARTNERS = ["joe", "dell"] as const;
@@ -146,9 +148,17 @@ const ORDER = {
 	last_deal_asc: sql`${lastDealAt} asc nulls last, lower(p.name), c.id`,
 };
 
-const source = (dataset: Dataset, { observedAt, correlationId }: Stamp) => ({
-	source: DATASETS[dataset].source,
-	source_ref: DATASETS[dataset].source_ref,
+const nextClientDataset = {
+	...DATASETS.clients,
+	note: "Status reflects the client's deals and their recorded relationship status.",
+};
+
+const source = (
+	dataset: (typeof DATASETS)[Dataset],
+	{ observedAt, correlationId }: Stamp,
+) => ({
+	source: dataset.source,
+	source_ref: dataset.source_ref,
 	observed_at: observedAt.toISOString(),
 	valid_until: new Date(observedAt.valueOf() + FRESH_FOR_MS).toISOString(),
 	freshness: "fresh",
@@ -166,6 +176,7 @@ export function listAnswer<
 	total: number,
 	body: Body,
 	stamp: Stamp,
+	dataset = DATASETS[query.dataset],
 ) {
 	const page_count = Math.max(1, Math.ceil(total / PAGE_SIZE));
 	return {
@@ -178,8 +189,8 @@ export function listAnswer<
 		page_count,
 		out_of_range: query.page > page_count,
 		...body,
-		recorded_field_note: DATASETS[query.dataset].note,
-		source: source(query.dataset, stamp),
+		recorded_field_note: dataset.note,
+		source: source(dataset, stamp),
 	};
 }
 
@@ -190,14 +201,15 @@ export const recordAnswer = <Row>(
 	record: Row,
 	partial: object | null,
 	stamp: Stamp,
+	metadata = DATASETS[dataset],
 ) => ({
 	viewer,
 	dataset,
 	record,
 	partial,
 	not_in_this_read: NOT_IN_THIS_READ,
-	recorded_field_note: DATASETS[dataset].note,
-	source: source(dataset, stamp),
+	recorded_field_note: metadata.note,
+	source: source(metadata, stamp),
 });
 
 const PIPELINE = { active: true, other: false, unknown: null } as const;
@@ -219,8 +231,10 @@ export const ownedByViewer = (owner: Column, viewerId: string | null) =>
 	sql<boolean | null>`(${owner} is not null and ${owner} = ${viewerId}::uuid)`;
 
 // The searcher's %, _ and \ match themselves.
+const directoryTerm = (q: string) => `%${q.replace(/([\\%_])/g, "\\$1")}%`;
+
 export function searched(q: string, ref: Column) {
-	const term = `%${q.replace(/([\\%_])/g, "\\$1")}%`;
+	const term = directoryTerm(q);
 	return sql<boolean>`(p.name ilike ${term} escape '\\' or ${ref} ilike ${term} escape '\\' or p.ref ilike ${term} escape '\\')`;
 }
 
@@ -372,4 +386,233 @@ export async function readClient(
 		.executeTakeFirst();
 	if (!record) throw new BusinessRefusal({ error: "RECORD_NOT_FOUND" });
 	return recordAnswer("clients", viewer, shaped(record, contract), null, stamp);
+}
+
+const nextStatuses = [
+	{ slug: "roster", label: "Roster", is_active_pipeline: false },
+	{ slug: "cold", label: "Cold", is_active_pipeline: false },
+	{ slug: "engaged", label: "Engaged", is_active_pipeline: true },
+	{ slug: "active_deal", label: "Active deal", is_active_pipeline: true },
+	{ slug: "paused", label: "Paused", is_active_pipeline: false },
+	{ slug: "past_client", label: "Past client", is_active_pipeline: false },
+];
+
+const activeStatuses = nextStatuses
+	.filter((status) => status.is_active_pipeline)
+	.map((status) => status.slug);
+const nextPipeline = sql<boolean>`cs.status in (${sql.join(activeStatuses)})`;
+const clientRef = sql<string>`coalesce((
+	select min(value) from outside_id where party_id = client.party_id
+		and source = 'old_system_ref' and value like 'C-%' having count(*) = 1
+), client.party_id::text)`;
+
+const nextOrder = {
+	name: sql`lower(p.name), client.party_id`,
+	recent: sql`client.changed_at desc, client.party_id`,
+	vertical: sql`lower(v.vertical) nulls last, lower(p.name), client.party_id`,
+	deal_type: sql`lower(p.name), client.party_id`,
+	last_deal_desc: sql`last_deal_at desc nulls last, lower(p.name), client.party_id`,
+	last_deal_asc: sql`last_deal_at asc nulls last, lower(p.name), client.party_id`,
+};
+
+const nextClients = (db: Transaction<NextDB>) =>
+	db
+		.selectFrom("client")
+		.innerJoin("party as p", "p.id", "client.party_id")
+		.innerJoin("client_status as cs", "cs.party_id", "client.party_id")
+		.leftJoin("client_type as ct", "ct.slug", "client.client_type")
+		.leftJoin("client_vertical as v", "v.party_id", "client.party_id")
+		.leftJoin("party as owner", "owner.id", "client.owner_user_id");
+
+type NextClients = ReturnType<typeof nextClients>;
+
+const nextClientRows = (
+	db: Transaction<NextDB>,
+	clients: NextClients,
+	viewerId: string | null,
+) =>
+	clients.select((eb) => [
+		"client.party_id as id",
+		clientRef.as("ref"),
+		"p.name",
+		sql<string>`case p.kind when 'company' then 'org' else p.kind end`.as(
+			"party_kind",
+		),
+		"p.city",
+		sql<null>`null`.as("state"),
+		"cs.status as recorded_status",
+		sql<string>`upper(left(cs.status, 1)) || replace(substr(cs.status, 2), '_', ' ')`.as(
+			"recorded_status_label",
+		),
+		nextPipeline.as("recorded_status_active_pipeline"),
+		sql<null>`null`.as("recorded_etl_status"),
+		"client.client_type as recorded_client_type",
+		"ct.label as recorded_client_type_label",
+		"v.vertical",
+		sql<string | null>`(select max(closed_on) from ${selectNextDeals(db)
+			.whereRef("c.party_id", "=", sql.ref("client.party_id"))
+			.as("deals")})`.as("last_deal_at"),
+		sql<null>`null`.as("deal_type"),
+		"owner.name as owner_label",
+		ownedByViewer(sql.ref("client.owner_user_id"), viewerId).as(
+			"owned_by_viewer",
+		),
+		asText(eb.ref("client.changed_at")).as("updated_at"),
+	]);
+
+const nextPartnerId = (db: Transaction<NextDB>, slug: string) =>
+	db.selectFrom("app_user").select("id").where("slug", "=", slug);
+
+function matchingNextClients(
+	db: Transaction<NextDB>,
+	query: ClientQuery,
+	viewer: string,
+) {
+	const { q, owner, status, type, pipeline } = query;
+	let clients = nextClients(db);
+	if (query.scope === "mine")
+		clients = clients.where(
+			"client.owner_user_id",
+			"=",
+			nextPartnerId(db, viewer),
+		);
+	if (owner !== "all")
+		clients = clients.where(
+			"client.owner_user_id",
+			"=",
+			nextPartnerId(db, owner),
+		);
+	if (q !== null) {
+		const term = directoryTerm(q);
+		clients = clients.where((eb) =>
+			eb.or([eb("p.name", "ilike", term), eb(clientRef, "ilike", term)]),
+		);
+	}
+	if (status !== null) clients = clients.where("cs.status", "=", status);
+	if (type !== null) clients = clients.where("client.client_type", "=", type);
+	if (pipeline !== "any")
+		clients = clients.where(nextPipeline, "is", PIPELINE[pipeline]);
+	return clients;
+}
+
+export async function readNextClientList(
+	db: Transaction<NextDB>,
+	viewer: string,
+	query: ClientQuery,
+	stamp: Stamp,
+) {
+	const viewerId =
+		(await nextPartnerId(db, viewer).executeTakeFirst())?.id ?? null;
+	if (query.scope === "mine" && viewerId === null)
+		throw new BusinessRefusal({ error: "VIEWER_OWNER_UNKNOWN" });
+	const matching = matchingNextClients(db, query, viewer);
+	const { total } = await matching
+		.select(sql<number>`count(*)::int`.as("total"))
+		.executeTakeFirstOrThrow();
+	const rows = await nextClientRows(db, matching, viewerId)
+		.orderBy(nextOrder[query.sort])
+		.limit(PAGE_SIZE)
+		.offset((query.page - 1) * PAGE_SIZE)
+		.execute();
+	const types = await db
+		.selectFrom("client_type")
+		.select(["slug", "label"])
+		.orderBy("label")
+		.orderBy("slug")
+		.execute();
+	return listAnswer(
+		viewer,
+		query,
+		total,
+		{
+			rows: rows.map((row) => shaped(row, query.contract)),
+			facets: { statuses: nextStatuses, types },
+			partial: null,
+		},
+		stamp,
+		nextClientDataset,
+	);
+}
+
+export async function readNextClient(
+	db: Transaction<NextDB>,
+	viewer: string,
+	id: string,
+	contract: Contract | null,
+	stamp: Stamp,
+) {
+	const viewerId =
+		(await nextPartnerId(db, viewer).executeTakeFirst())?.id ?? null;
+	const alias = db
+		.selectFrom("outside_id")
+		.select("party_id")
+		.where("source", "=", "old_system")
+		.where("value", "=", id.toLowerCase());
+	const record = await nextClientRows(db, nextClients(db), viewerId)
+		.where((eb) =>
+			eb.or([
+				eb("client.party_id", "=", id),
+				eb("client.party_id", "=", alias),
+			]),
+		)
+		.orderBy(sql`client.party_id = ${id}::uuid`, "desc")
+		.leftJoin("active_do_not_contact as dnc", "dnc.party_id", "client.party_id")
+		.select((eb) => [
+			sql<null>`null`.as("county"),
+			sql<
+				string | null
+			>`(select min(title) from party_company where person_id = p.id
+				and (started_on is null or started_on <= current_date)
+				and (ended_on is null or ended_on > current_date) having count(distinct title) = 1)`.as(
+				"title",
+			),
+			sql<string | null>`(select string_agg(s.label, ', ' order by s.label)
+				from party_specialty ps join specialty s on s.slug = ps.specialty where ps.person_id = p.id)`.as(
+				"specialty",
+			),
+			"p.npi",
+			sql<
+				string | null
+			>`(select number from party_phone where party_id = p.id and label = 'work'
+				order by is_primary desc, created_at, id limit 1)`.as("phone"),
+			sql<
+				string | null
+			>`(select number from party_phone where party_id = p.id and label = 'mobile'
+				order by is_primary desc, created_at, id limit 1)`.as("cell"),
+			sql<string | null>`(select address from party_email where party_id = p.id
+				order by is_primary desc, created_at, id limit 1)`.as("email"),
+			sql<
+				string | null
+			>`case when dnc.party_id is not null then 'do_not_contact' end`.as(
+				"contact_state",
+			),
+			"dnc.reason as contact_state_reason",
+			asText(eb.ref("dnc.until_date")).as("contact_state_until"),
+			sql<null>`null`.as("contact_state_cadence"),
+			sql<null>`null`.as("recorded_status_note"),
+			"v.subtype",
+			"p.how_found as acquisition_source",
+			"p.how_found_detail as acquisition_detail",
+			sql<null>`null`.as("contact_label"),
+			sql<null>`null`.as("deal_type_label"),
+			sql<null>`null`.as("specialty_type_label"),
+			sql<null>`null`.as("possible_duplicate_label"),
+			sql<
+				string | null
+			>`(select string_agg(a.summary, E'\n\n' order by a.happened_at, a.id)
+				from outside_id o join activity a on a.id = md5('old_system:client:' || o.value || ':notes')::uuid
+				where o.source = 'old_system' and o.party_id = p.id)`.as("notes"),
+			sql<null>`null`.as("record_version"),
+			asText(eb.ref("client.created_at")).as("created_at"),
+		])
+		.executeTakeFirst();
+	if (!record) throw new BusinessRefusal({ error: "RECORD_NOT_FOUND" });
+	return recordAnswer(
+		"clients",
+		viewer,
+		shaped(record, contract),
+		null,
+		stamp,
+		nextClientDataset,
+	);
 }
