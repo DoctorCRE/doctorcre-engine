@@ -190,7 +190,7 @@ export async function readProposal(
 function suggestionRows(userId: string, forMail: boolean) {
 	return sql`
 		with visible as (
-			select p.id, p.status, p.activity_id, p.activity_kind, p.created_at as activity_at, p.due_on,
+			select p.id, p.kind, p.status, a.id as activity_id, a.kind as activity_kind, p.created_at as activity_at, p.due_on,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
 				coalesce(d.name, party.name, property.name, property.address, candidate.name,
@@ -213,7 +213,6 @@ function suggestionRows(userId: string, forMail: boolean) {
 					concat_ws(' · ', coalesce(nullif(btrim(e.sender_name), ''), e.sender::text), nullif(btrim(e.subject), ''))
 				end as email_title,
 				a.happened_at as source_at,
-				e.conversation_id,
 				${mailGroup} as mail_group,
 				jsonb_build_object(
 					'id', p.id, 'kind', p.kind, 'activity_id', p.activity_id,
@@ -221,9 +220,22 @@ function suggestionRows(userId: string, forMail: boolean) {
 					'property_id', p.property_id, 'candidate_id', p.candidate_id
 				) as reference
 			from proposal p
-			left join activity a on a.id = p.activity_id
-			left join email e on e.activity_id = a.id
 			left join candidate on candidate.id = p.candidate_id
+			left join lateral (
+				select matched.activity_id
+				from email matched
+				join email_mailbox m on m.activity_id = matched.activity_id and m.user_id = ${userId}::uuid
+				join activity mail on mail.id = matched.activity_id
+				where p.kind = 'email_lead' and (
+					matched.message_id = candidate.source_row->>'message_id'
+					or matched.conversation_id = candidate.source_row->>'conversation_id'
+				)
+				order by (matched.message_id = candidate.source_row->>'message_id') desc nulls last,
+					mail.happened_at desc, matched.activity_id
+				limit 1
+			) lead_email on true
+			left join activity a on a.id = coalesce(p.activity_id, lead_email.activity_id)
+			left join email e on e.activity_id = a.id
 			left join party contact on contact.id = a.from_party_id
 			left join deal d on d.id = p.deal_id
 			left join party on party.id = p.party_id
@@ -243,10 +255,9 @@ function suggestionRows(userId: string, forMail: boolean) {
 					filter (where status = 'pending') over all_members as suggestions
 			from visible
 			window source_group as (
-				partition by activity_kind, conversation_id,
-					case when conversation_id is null then coalesce(activity_id, id) end
+				partition by activity_kind, coalesce(mail_group, activity_id::text, id::text)
 			), latest_source as (source_group order by (status = 'pending') desc, source_at desc, activity_id desc),
-			same_source as (source_group order by (status = 'pending') desc, activity_at desc, id),
+			same_source as (source_group order by (status = 'pending') desc, (kind = 'email_lead'), activity_at desc, id),
 			all_members as (same_source rows between unbounded preceding and unbounded following)
 		)
 		select * from grouped where position = 1 and status = 'pending'
