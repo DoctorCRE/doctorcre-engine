@@ -121,7 +121,12 @@ test("Home shows only its partner's active drafts and one per known conversation
 			title: "Reply to Pat Example: Floor plan",
 			open_url: `/deals?deal=${deal}`,
 			section: "inbox",
-			source_activity: { kind: "email", id: id(11), deal_id: deal },
+			source_activity: {
+				kind: "email",
+				id: id(11),
+				deal_id: deal,
+				happened_at: "2026-01-03T00:00:00.000Z",
+			},
 		},
 	);
 	assert.equal(
@@ -425,6 +430,37 @@ for (const decision of ["accept", "dismiss"]) {
 		assert.equal((await request(user, path, { method: "GET" })).status, 404);
 	});
 }
+
+test("Home stops offering a lead when its sender is verified as a partner", async () => {
+	const address = "example-partner-address@example.test";
+	const [status, proposal] = await save(
+		{ job: "mail_capture", for_user: "example" },
+		"proposals/email-lead",
+		{
+			idempotency_key: randomUUID(),
+			address,
+			display_name: "Example Sender",
+			summary: "Asked about leasing a suite.",
+			first_seen_at: "2026-01-08T12:00:00Z",
+			message_ref: "example-mail-partner",
+			applies_to: "new_matter",
+			confidence: 0.9,
+		},
+	);
+	assert.equal(status, 201);
+	const card = async () =>
+		(await inbox()).find((row) => row.proposal_id === proposal.proposal_id);
+	assert.ok(await card());
+
+	const account = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${account}', 'person', 'Example Account Partner');
+		insert into app_user (id, slug) values ('${account}', 'joe');
+		insert into party_email (party_id, address, label) values ('${account}', '${address}', 'personal');
+		commit;`);
+	assert.equal(await card(), undefined);
+});
 
 for (const match of [
 	"message_id",
@@ -884,6 +920,11 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `suggestion:${id(60)}`,
 		title: "Pat Example · Floor plan",
+		source_activity: {
+			kind: "email",
+			id: id(11),
+			happened_at: "2026-01-03T00:00:00.000Z",
+		},
 		fallback_reply_draft: {
 			id: draft,
 			version: "2",

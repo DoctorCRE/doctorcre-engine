@@ -91,7 +91,7 @@ A next step, a deal to file the email to, a possible new deal, a deal's progress
 - [ ] The possible lead action opens the saved sender details, intake summary and any excerpt. The mailbox partner can accept it or drop it with a reason.
 - [ ] Accept saves the suggestion, and lets the partner edit a step's words and date first. Drop asks for a reason and drops it for good. Neither has Undo. Only the partner's click decides, never the assistant.
 - [ ] Leaves when accepted or dropped. One card per email conversation.
-- [ ] When a pending reply draft and pending suggestions share a conversation, the draft leads one card and the partner can decide each suggestion inside it. Snooze and Drop apply to that card. Mail priorities opens the same card. When the draft is approved, sent, failed or dropped, any remaining suggestions lead the card. An approved or failed draft carries its delivery status on that card, including “Didn't send” and Retry when eligible. A sent reply appears in Done (coordinator, 2026-11-18).
+- [ ] When a pending reply draft and pending suggestions share a conversation, the draft leads one card and the partner can decide each suggestion inside it. Snooze and Drop apply to that card. Mail priorities orders that card in the inbox. When the draft is approved, sent, failed or dropped, any remaining suggestions lead the card. An approved or failed draft carries its delivery status on that card, including “Didn't send” and Retry when eligible. A sent reply appears in Done (coordinator, 2026-11-18).
 
 ### Step that may be done
 
@@ -141,8 +141,8 @@ A client's comment on a toured property, or a property added to or removed from 
 - With the Home read switched to the new database, the engine supplies one priority row per Outlook conversation. Each row links to its matching Home card and its source email.
 - An email without an Outlook conversation ID is its own group, keyed by its source email ID.
 - The panel orders up to 25 inbox cards and indicates when more qualify. The remaining conversations stay in the inbox, with no next page in the panel.
-- [ ] Each row names the sender, the subject, what is suggested, and the date in words.
-- [ ] Opening a row opens the same thing its inbox card opens.
+- [ ] Mail priorities moves matching cards to the front of their inbox sections. Partners open the existing cards to review the email and its suggestions.
+- [ ] Email cards show the source email's date in words so distinct emails with the same sender and subject can be told apart.
 - [ ] No coverage line in system words, such as "Mailbox Example · Recorded inbound pending proposals".
 - [ ] Each email shows once on Home, as its inbox card. Mail priorities only orders those cards and shows no email of its own (owner, 2026-11-19).
 
