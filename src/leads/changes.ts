@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import pg from "pg";
 import { Refusal, refuse } from "../answer.ts";
 import { PARTNERS } from "../clients/read.ts";
 import type { JsonObject } from "../database.d.ts";
@@ -139,7 +140,17 @@ async function saveLeadChange(tx: Transaction<DB>, change: LeadChange) {
 			.executeTakeFirst();
 		if (!target || target.party_id === party_id)
 			throw new SaveRefusal(new Refusal(404, "client_not_found"));
-		await role.set({ lead_client_id: target.party_id }).execute();
+		try {
+			await role.set({ lead_client_id: target.party_id }).execute();
+		} catch (error) {
+			if (
+				error instanceof pg.DatabaseError &&
+				error.constraint === "lead_client_link_suggested"
+			) {
+				throw new SaveRefusal(new Refusal(409, "client_not_suggested"));
+			}
+			throw error;
+		}
 	}
 	return answer;
 }

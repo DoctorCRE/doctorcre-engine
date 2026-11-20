@@ -961,7 +961,7 @@ The score and old prospect engagement fields are empty. Timing events and resear
 
 With `LEADS_READ_SCHEMA=next`, `POST /api/engine/leads/:lead_id/changes` accepts the board's UUID, the expected partner, the lead's `base_version`, and an idempotency key. Claim gives an eligible unowned New lead to the signed-in partner. Stage edits use change history. An archive records the partner's reason in `lead_stage_move`.
 
-The board suggests clients with the same name after trimming and ignoring case. Link stores the chosen client's exact party ID in `party_role.lead_client_id`. The database requires an existing client on a different party and lets a direct partner set the link once. The card leaves Leads. Both parties keep their roles and histories, and the link has no effect on Deals Prospects.
+The board suggests clients with the same name after trimming and ignoring case. Link stores the chosen client's exact party ID in `party_role.lead_client_id`. The database lets a direct partner set the link once to an existing same-name client on a different party. If the selected client exists and its name no longer matches or was never a match, the save returns `409 client_not_suggested`. The card leaves Leads. Both parties keep their roles and histories, and the link has no effect on Deals Prospects.
 
 On an existing `next` schema, apply `schema/add-lead-client-link.sql` as the schema owner before deploying the engine that serves these saves. Fresh schemas include the column and its constraints.
 

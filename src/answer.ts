@@ -38,6 +38,7 @@ const HINTS = {
 	lead_not_claimable: "Choose an unclaimed New lead.",
 	lead_not_linkable: "Choose an eligible lead without a client link.",
 	client_not_found: "Choose the exact existing client to link.",
+	client_not_suggested: "Refresh the lead and choose a suggested client.",
 	not_found: "The requested record was not found.",
 	portal_deal_not_found: "Choose a deal with a current client.",
 	portal_slug_taken: "Choose a different website name.",

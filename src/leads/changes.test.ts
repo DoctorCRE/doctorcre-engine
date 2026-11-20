@@ -11,6 +11,7 @@ const claim = randomUUID();
 const stage = randomUUID();
 const link = randomUUID();
 const client = randomUUID();
+const unrelatedClient = randomUUID();
 const legacy = randomUUID();
 const switched = { LEADS_READ_SCHEMA: "next" };
 
@@ -29,28 +30,44 @@ before(async () => {
 			('${claim}', 'person', 'Example Claim', 'referral'),
 			('${stage}', 'person', 'Example Stage', 'referral'),
 			('${link}', 'company', 'Example Practice', 'referral'),
-			('${client}', 'company', 'EXAMPLE PRACTICE', 'referral');
+			('${client}', 'company', 'EXAMPLE PRACTICE', 'referral'),
+			('${unrelatedClient}', 'company', 'Example Other Practice', 'referral');
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
 		insert into party_role (party_id, role, stage) values
 			('${claim}', 'lead', 'new'), ('${stage}', 'lead', 'qualified'),
-			('${link}', 'lead', 'opportunity'), ('${client}', 'client', null);
-		insert into client (party_id) values ('${client}');
+			('${link}', 'lead', 'opportunity'), ('${client}', 'client', null),
+			('${unrelatedClient}', 'client', null);
+		insert into client (party_id) values ('${client}'), ('${unrelatedClient}');
 		insert into outside_id (source, value, party_id) values ('old_system_lead', '${legacy}', '${claim}');
 		commit;`);
 });
 after(cleanup);
 
-async function board(id: string) {
+async function read(path: string) {
 	const response = await request(
 		{ user: "joe" },
-		`leads?workspace=leads&lead_id=${id}`,
+		path,
 		{ method: "GET" },
 		switched,
 	);
 	assert.equal(response.status, 200);
-	const detail = record(record(await response.json()).detail);
+	return record(await response.json());
+}
+
+async function board(id: string) {
+	const detail = record(
+		(await read(`leads?workspace=leads&lead_id=${id}`)).detail,
+	);
 	assert.ok(Array.isArray(detail.stage_history));
 	return { detail, lastStage: record(detail.stage_history[0] ?? {}) };
+}
+
+async function visibleOnLeads(id: string) {
+	const { leads } = await read("leads?workspace=leads");
+	assert.ok(Array.isArray(leads));
+	return leads
+		.map(record)
+		.some((lead) => lead.id === id && !lead.client_id && !lead.linked_client);
 }
 
 function record(value: unknown) {
@@ -131,6 +148,7 @@ test("ordinary stage changes and an archive appear in the drawer history", async
 
 test("an explicit link records the exact client without converting the lead", async () => {
 	const { detail: lead } = await board(link);
+	assert.equal(await visibleOnLeads(link), true);
 	assert.deepEqual(lead.possible_clients, [
 		{ client_id: client, name: "EXAMPLE PRACTICE" },
 	]);
@@ -156,6 +174,21 @@ test("an explicit link records the exact client without converting the lead", as
 		(await save(link, { ...body, client_id: claim })).error,
 		"client_not_found",
 	);
+	const refused = await save(link, { ...body, client_id: unrelatedClient });
+	assert.equal(refused.status, 409);
+	assert.equal(refused.error, "client_not_suggested");
+	await db.query(`begin; set local engine.user_id = '${joe}'`);
+	try {
+		await assert.rejects(
+			db.query(
+				"update party_role set lead_client_id = $1 where party_id = $2 and role = 'lead'",
+				[unrelatedClient, link],
+			),
+			{ constraint: "lead_client_link_suggested" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
 	assert.equal((await save(link, body)).ok, true);
 	const { detail: linked } = await board(link);
 	assert.equal(linked.linked_client, true);
@@ -163,6 +196,12 @@ test("an explicit link records the exact client without converting the lead", as
 	assert.equal(linked.is_client, false);
 	assert.equal(linked.is_deal, false);
 	assert.deepEqual(linked.possible_clients, []);
+	assert.equal(await visibleOnLeads(link), false);
+	const { prospects } = await read("prospects");
+	assert.ok(Array.isArray(prospects));
+	assert.ok(
+		prospects.map(record).some((prospect) => prospect.party_id === link),
+	);
 	const again = { ...body, ...command(linked.base_version, "link") };
 	assert.equal((await save(link, again)).error, "lead_not_linkable");
 

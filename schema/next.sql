@@ -2925,6 +2925,13 @@ begin
 		raise exception 'a partner can confirm an unlinked lead once'
 			using errcode = 'check_violation', constraint = 'lead_client_link_confirmation';
 	end if;
+	if not exists (
+		select from party lead join party target on target.id = new.lead_client_id
+		where lead.id = new.party_id and lower(btrim(lead.name)) = lower(btrim(target.name))
+	) then
+		raise exception 'a lead can link only to a same-name client'
+			using errcode = 'check_violation', constraint = 'lead_client_link_suggested';
+	end if;
 	return new;
 end $$;
 
