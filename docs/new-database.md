@@ -1525,6 +1525,16 @@ The save locks the payment, checks the version and stamps only the receipt. It a
 
 An unknown payment returns `404 invoice_not_found`. An outdated version returns `409 version_conflict { current_version }`. A payment already received or awaiting an invoice returns `422 invoice_not_unpaid`. A date before the invoice or after today returns `422 payment_date_out_of_range`. Invoice-email application and undo control when the deal was invoiced. Mark paid records when the money was received.
 
+## Vendors directory reads for the app
+
+The Vendors directory (`GET /api/engine/vendors`) and drawer (`GET /api/engine/vendors/:id`) read from the new schema through `DATABASE` as `engine_reader` when the engine Worker's `DIRECTORY_READ_SCHEMA` variable is `next` (and `clients-vendors-from-engine` is `on` in the app). When `DIRECTORY_READ_SCHEMA` is absent or any other value, the old-table read stays active.
+
+The list and drawer show live vendors and their current relationship partner. Copied vendors open by their old UUID, their party UUID or their copied `V-*` ref. The drawer returns the requested UUID for UUID lookups and the party UUID for ref lookups. Intro notes show the copied intro text. Other notes appear in Conversations.
+
+Track record counts come from `vendor_track_record`. A deal counts even when its work date is unknown. The first and last work dates use participation saved through the new system. A dated introduction that led to a deal can also set the Last deal date. The old coverage verification timestamp, manual override and rating edit version return null.
+
+**Later.** The copy leaves vendor work dates unknown. Preserving them needs a design decision about a nullable participation date or a field for its source.
+
 ## Doors the old system calls
 
 These are the engine requests old-system programs 26, 27 and 28 will make, fixed before either side is built so both can be built at once. Where the engine side is unbuilt, this is the shape it implements. Old callers were read at `carr-system` `e5966a7`, which already keeps each email's Message-ID (slice 2).

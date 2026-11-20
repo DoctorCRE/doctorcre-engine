@@ -3,6 +3,8 @@ import { nextTransaction } from "../next-connection.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import {
+	readNextVendor,
+	readNextVendorList,
 	readVendor,
 	readVendorList,
 	VENDOR_SORTS,
@@ -225,7 +227,7 @@ async function record(
 	readNext?: RecordRead<NextReader>,
 ) {
 	const next = c.env.DIRECTORY_READ_SCHEMA === "next" ? readNext : undefined;
-	if (!UUID.test(id) && !(next && id.startsWith("C-")))
+	if (!UUID.test(id) && !(next && (id.startsWith("C-") || id.startsWith("V-"))))
 		return c.json({ error: "not_found" }, 404);
 	return answer(c, (params, viewer) => {
 		checkFields(params, RECORD_FIELDS, viewer);
@@ -245,9 +247,13 @@ directory.get(`/clients/:id{(?:${UUID_SEGMENT}|C-[^/]+)}`, (c) =>
 directory.get("/vendors", (c) =>
 	answer(c, (params, viewer) => {
 		const query = vendorQuery(params, viewer);
+		if (c.env.DIRECTORY_READ_SCHEMA === "next")
+			return {
+				next: (db, stamp) => readNextVendorList(db, viewer, query, stamp),
+			};
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
 );
-directory.get(`/vendors/:id{${UUID_SEGMENT}}`, (c) =>
-	record(c, c.req.param("id"), readVendor),
+directory.get(`/vendors/:id{(?:${UUID_SEGMENT}|V-[^/]+)}`, (c) =>
+	record(c, c.req.param("id"), readVendor, readNextVendor),
 );
