@@ -959,7 +959,7 @@ The board uses the copied lead ID when available and otherwise uses the party ID
 
 The score and old prospect engagement fields are empty. Timing events and research findings are empty lists. The legacy Undo control is absent.
 
-With `LEADS_READ_SCHEMA=next`, `POST /api/engine/leads/:lead_id/changes` accepts the board's UUID, the expected partner, the lead's `base_version`, and an idempotency key. Claim gives an eligible unowned New lead to the signed-in partner. Stage edits use change history. An archive records the partner's reason in `lead_stage_move`.
+With `LEADS_READ_SCHEMA=next`, `POST /api/engine/leads/:lead_id/changes` accepts the board's UUID, the expected partner, the lead's `base_version`, and an idempotency key. Claim gives an eligible unowned lead that is not archived to the signed-in partner, whatever its stage. Stage edits use change history. An archive records the partner's reason in `lead_stage_move`.
 
 The board suggests clients with the same name after trimming and ignoring case. Link stores the chosen client's exact party ID in `party_role.lead_client_id`. The database lets a direct partner set the link once to an existing same-name client on a different party. If the selected client exists and its name no longer matches or was never a match, the save returns `409 client_not_suggested`. The card leaves Leads. Both parties keep their roles and histories, and the link has no effect on Deals Prospects.
 
