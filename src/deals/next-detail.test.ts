@@ -1122,3 +1122,76 @@ test("imported history excludes events backed by copied deal records", async (t)
 		await db.query("rollback");
 	}
 });
+
+test("copied next-step events identify their notes without pairing repeated text", async () => {
+	const deal = id(870);
+	const note = id(871);
+	const unpaired = id(872);
+	const event = id(873);
+	const repeated = id(874);
+	const text = "Example request the floor plan";
+	await db.query(`
+		insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by) values
+		 ('${deal}', '${id(20)}', 'Example timeline deal', 'lease', 'touring', 'partner_one', ${by});
+		insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
+		 ('${note}', '${deal}', 'next_step', '${text}', '${id(1)}', '2025-08-01T15:00:01Z'),
+		 ('${unpaired}', '${deal}', 'next_step', '${text}', '${id(1)}', '2025-08-02T15:00:01Z');
+		insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause) values
+		 ('${event}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}","next_date":"2025-08-08"}',
+		  '2025-08-01T15:00:00Z', '2025-08-01T15:00:02Z', '${id(1)}', 'set-next-step', 'human_stated'),
+		 ('${repeated}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}"}',
+		  '2025-08-03T15:00:00Z', '2025-08-03T15:00:02Z', '${id(1)}', 'set-next-step', 'human_stated');
+	`);
+	for (const file of [
+		"copy-deals.sql",
+		"copy-activity.sql",
+		"copy-change-history.sql",
+	]) {
+		await db.query(`begin; ${await readSchema(file)} commit;`);
+	}
+
+	const read = () =>
+		nextTransaction(connectionString, "read", (tx) =>
+			readNextDealDetail(tx, deal),
+		);
+	await db.query(
+		"alter table imported_deal_history drop column activity_id, drop column activity_kind",
+	);
+	const before = await read();
+	assert.ok("thread" in before);
+	assert.deepEqual(
+		before.thread.map((entry) => entry.id),
+		[unpaired, note],
+	);
+	assert.deepEqual(
+		before.imported_deal_history.map((entry) => entry.id),
+		[event, repeated],
+	);
+	assert.ok(
+		before.imported_deal_history.every((entry) => !("activity_id" in entry)),
+	);
+
+	const backfill = await readSchema("copy-deal-history-note-links.sql");
+	for (const expected of ["1", "0"]) {
+		const results = await db.query(`begin; ${backfill} commit;`);
+		assert.ok(Array.isArray(results));
+		assert.deepEqual(results.at(-2)?.rows, [{ links_added: expected }]);
+	}
+
+	const after = await read();
+	assert.ok("thread" in after);
+	assert.deepEqual(after.thread, before.thread);
+	assert.deepEqual(
+		after.imported_deal_history,
+		before.imported_deal_history.map((entry) =>
+			entry.id === event ? { ...entry, activity_id: note } : entry,
+		),
+	);
+	await assert.rejects(
+		db.query(
+			"update imported_deal_history set activity_id = $1 where id = $2",
+			[id(70), repeated],
+		),
+		{ code: "23503" },
+	);
+});

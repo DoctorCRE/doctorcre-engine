@@ -63,6 +63,7 @@ const order: [file: string, input?: string][] = [
 	["copy-preferences.sql"],
 	["copy-home-updates.sql"],
 	["copy-change-history.sql"],
+	["copy-deal-history-note-links.sql"],
 ];
 
 const summaryHash = `sha256:${"a".repeat(64)}`;
@@ -327,6 +328,10 @@ const runAll = async () => {
 			assert.deepEqual(result.at(-2)?.rows, [
 				{ kind: "old_work_alert", left_behind: "1" },
 			]);
+		}
+		if (file === "copy-deal-history-note-links.sql") {
+			assert.deepEqual(result.at(-1)?.rows, [{ links_added: "0" }]);
+			continue;
 		}
 		listed.set(file, result.at(-1)?.rows.map(Object.values) ?? []);
 	}

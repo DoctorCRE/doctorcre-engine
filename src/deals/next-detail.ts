@@ -30,6 +30,7 @@ type ImportedDealEvent = Omit<
 	DealEvent,
 	"activity_id" | "old_value" | "new_value"
 > & {
+	activity_id?: string;
 	occurred_at: string;
 	imported: true;
 	old_value: JsonObject | null;
@@ -140,11 +141,15 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 					])
 					.whereRef("lease.deal_id", "=", "d.id"),
 			).as("lease"),
-			sql<
-				ImportedDealEvent[]
-			>`coalesce((select events from deal_imported_history h where h.deal_id = d.id), '[]')`.as(
-				"imported_deal_history",
-			),
+			// Reading the whole row supports databases that have yet to add the link column.
+			sql<ImportedDealEvent[]>`(select coalesce(jsonb_agg(
+				entry.event || jsonb_strip_nulls(jsonb_build_object('activity_id', to_jsonb(h) -> 'activity_id'))
+				order by entry.position), '[]')
+				from deal_imported_history history
+				cross join lateral jsonb_array_elements(history.events) with ordinality as entry(event, position)
+				join imported_deal_history h on h.id = (entry.event ->> 'id')::uuid
+				where history.deal_id = d.id
+			)`.as("imported_deal_history"),
 			sql<
 				DealEvent[]
 			>`(select coalesce(json_agg(e order by recorded_at desc, id desc), '[]') from (

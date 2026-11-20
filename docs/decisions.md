@@ -360,3 +360,5 @@
 190\. **The health check names the running release (2026-11-20).** `GET /health` reports the deployed short commit as `release` from `CF_VERSION_METADATA.tag`. It omits `release` when the tag is missing or blank. `ok` still reports health and `version` still gives the Cloudflare version ID used by deployment checks (#874).
 
 191\. **The health check reports when a tagged Worker started serving requests (2026-11-20).** `GET /health` includes `started_at` alongside `release`. It reports the UTC time of the first HTTP request or `ClientWebsiteAccess` RPC served by that Worker instance, in ISO format. The same instance keeps that time for later requests. A missing or blank release tag omits both fields (#876).
+
+192\. **Timeline shows a copied next step once (2026-11-20).** An imported next-step event can link to the one copied note it wrote on the same deal. Timeline shows the event with its recorded facts and keeps the note in the deal’s notes. Notes with no matching imported event still show in Timeline (#903).
