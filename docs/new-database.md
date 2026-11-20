@@ -957,7 +957,13 @@ Moving today's `deal_invoice_email` rows across maps created_by through the exis
 
 The board uses the copied lead ID when available and otherwise uses the party ID. It shows the copied lead registry reference for Quiet follow-ups links. The drawer accepts either ID, including multiple copied lead IDs that resolve to one party. The drawer and reachability keep stored phone extensions, and reachability uses a stored mobile number when available. The drawer reads mail, calls and meetings linked to the party. Recent linked activity carries its recorded user or job into reachability. A reached call counts as successful contact, while mail still needs proof of an exact nonautomated inbound match. Stage history pages applied moves and ordinary stage changes by recorded event time, with the audit ID as the tie-breaker and cursor. The drawer reads the latest linked note for Plans.
 
-The score and old prospect engagement fields are empty. Timing events, research findings and possible client matches are empty lists, and the legacy Undo control is absent. Claim, stage and link saves in Leads need their own app and engine wiring.
+The score and old prospect engagement fields are empty. Timing events and research findings are empty lists. The legacy Undo control is absent.
+
+With `LEADS_READ_SCHEMA=next`, `POST /api/engine/leads/:lead_id/changes` accepts the board's UUID, the expected partner, the lead's `base_version`, and an idempotency key. Claim gives an eligible unowned New lead to the signed-in partner. Stage edits use change history. An archive records the partner's reason in `lead_stage_move`.
+
+The board suggests clients with the same name after trimming and ignoring case. Link stores the chosen client's exact party ID in `party_role.lead_client_id`. The database lets a direct partner set the link once to an existing same-name client on a different party. If the selected client exists and its name no longer matches or was never a match, the save returns `409 client_not_suggested`. The card leaves Leads. Both parties keep their roles and histories, and the link has no effect on Deals Prospects.
+
+On an existing `next` schema, apply `schema/add-lead-client-link.sql` as the schema owner before deploying the engine that serves these saves. Fresh schemas include the column and its constraints.
 
 ## Copying today's leads and clients
 

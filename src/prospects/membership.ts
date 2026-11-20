@@ -18,7 +18,7 @@ export async function lockLead(
 		.execute();
 	return tx
 		.selectFrom("party_role")
-		.select("stage")
+		.select(["stage", "owner_user_id", "lead_client_id"])
 		.where("party_id", "=", partyId)
 		.where("role", "=", "lead")
 		.forNoKeyUpdate()

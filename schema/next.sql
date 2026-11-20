@@ -1002,6 +1002,12 @@ create table client (
 	foreign key (party_id, role) references party_role on update cascade
 );
 
+alter table party_role
+	add column lead_client_id uuid,
+	add constraint lead_client_link_client foreign key (lead_client_id) references client (party_id) on update cascade,
+	add constraint lead_client_link_distinct check (
+		lead_client_id is null or (role = 'lead' and lead_client_id <> party_id));
+
 create table national_account (
 	party_id uuid primary key,
 	kind text generated always as ('company') stored,
@@ -2893,6 +2899,46 @@ end $$;
 create trigger invoice_email_transition before update on invoice_email
 	for each row execute function invoice_email_transition();
 
+create function confirm_lead_client_link() returns trigger
+language plpgsql as $$
+declare
+	survivor uuid;
+begin
+	if tg_op = 'DELETE' and old.lead_client_id is null then return old; end if;
+	if tg_op <> 'DELETE' and new.lead_client_id is null and old.lead_client_id is null then return new; end if;
+	select survivor_id into survivor from merged_party
+	where id = nullif(current_setting('engine.merge', true), '')::uuid and created_at = now();
+	if tg_op = 'DELETE' then
+		update party_role set lead_client_id = old.lead_client_id
+		where party_id = survivor and role = 'lead' and lead_client_id is null
+			and old.role = 'lead' and old.lead_client_id <> survivor;
+		return old;
+	end if;
+	if survivor is not null then
+		if new.lead_client_id = new.party_id then new.lead_client_id := null; end if;
+		return new;
+	end if;
+	if new.lead_client_id is not distinct from old.lead_client_id then return new; end if;
+	if tg_op <> 'UPDATE' or old.lead_client_id is not null
+		or new.changed_by_job is not null or not exists (
+			select from app_user where id = new.changed_by_user_id and is_account_partner) then
+		raise exception 'a partner can confirm an unlinked lead once'
+			using errcode = 'check_violation', constraint = 'lead_client_link_confirmation';
+	end if;
+	if not exists (
+		select from party lead join party target on target.id = new.lead_client_id
+		where lead.id = new.party_id and lower(btrim(lead.name)) = lower(btrim(target.name))
+	) then
+		raise exception 'a lead can link only to a same-name client'
+			using errcode = 'check_violation', constraint = 'lead_client_link_suggested';
+	end if;
+	return new;
+end $$;
+
+-- This runs after stamp_change, so it can check the database-written actor.
+create trigger validate_lead_client_link before insert or update of lead_client_id, party_id or delete on party_role
+	for each row execute function confirm_lead_client_link();
+
 -- Everything that points at the duplicate moves to the survivor, and the duplicate is removed (decision 39).
 -- It runs with the owner's rights, because it also moves history the engine never rewrites, such as rounds and outside ids.
 create function merge_party(duplicate uuid, survivor uuid) returns void
@@ -3687,6 +3733,7 @@ grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, pa
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
+grant update (lead_client_id) on party_role to engine;
 grant update (relationship_origin, rivalry_note, refers_business, offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id, needs_attention) on party_role to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (started_on, ended_on, note) on party_link to engine;

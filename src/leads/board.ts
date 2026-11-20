@@ -31,7 +31,7 @@ type WorkspaceLead = {
 type Hold = { reason: "contact_ineligible" | "unsupported_stage" };
 
 const CONTACTABLE_STATES = new Set(["active", "nurture"]);
-const STAGE_ORDER = [
+export const STAGE_ORDER = [
 	"new",
 	"qualified",
 	"outreach_active",
@@ -222,11 +222,14 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 				(select min(due_on) from next_step n where n.party_id = p.id and n.status = 'open') as next_action_date,
 				(select max(a.happened_at) from activity_about link join activity a on a.id = link.activity_id
 					where link.party_id = p.id and a.kind in ('email', 'call', 'meeting')) as last_touch,
-				false as suppressed, '[]'::jsonb as possible_clients,
+				false as suppressed,
+				case when client.party_id is null and r.lead_client_id is null
+					and dnc.party_id is null then coalesce(matches.items, '[]') else '[]' end as possible_clients,
 				null as score, null as score_reason, null as last_stage_move,
 				null as state, null as county, legacy.registry_ref, null as prospect_client_id,
 				null as prospect_client_version, null as prospect_engagement_status,
-				client.party_id as client_id, client.party_id is not null as linked_client,
+				coalesce(client.party_id, r.lead_client_id) as client_id,
+				coalesce(client.party_id, r.lead_client_id) is not null as linked_client,
 				jsonb_build_object('contract', 'lead-opportunity-timing.v1', 'record_added_at', r.created_at,
 					'status', 'unknown', 'events', '[]'::jsonb) as opportunity_timing
 			from party_role r join party p on p.id = r.party_id
@@ -235,6 +238,12 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 			left join party owner on owner.id = u.id
 			left join active_do_not_contact dnc on dnc.party_id = p.id
 			left join client on client.party_id = p.id
+			left join lateral (
+				select jsonb_agg(jsonb_build_object('client_id', cp.id, 'name', cp.name)
+					order by cp.id) as items
+				from client match join party cp on cp.id = match.party_id
+				where cp.id <> p.id and lower(btrim(cp.name)) = lower(btrim(p.name))
+			) matches on client.party_id is null and r.lead_client_id is null and dnc.party_id is null
 			left join lateral (
 				select min(value) filter (where source = 'old_system_lead') as value,
 					min(value) filter (where source = 'old_system_ref' and value like 'L-%') as registry_ref

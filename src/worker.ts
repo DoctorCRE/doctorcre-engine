@@ -39,6 +39,7 @@ import { invoiceJobs, invoiceUndo } from "./invoice-application.ts";
 import { invoiceEvidence } from "./invoice-evidence.ts";
 import { invoicePayment } from "./invoice-payment.ts";
 import { invoices } from "./invoices.ts";
+import { leadChanges } from "./leads/changes.ts";
 import { leads } from "./leads/routes.ts";
 import { mondayReviewMarks } from "./monday-review/marks.ts";
 import { mondayReviewReads } from "./monday-review/read.ts";
@@ -101,6 +102,7 @@ const engine = new Hono<WorkerEnv>()
 
 app.use("/api/engine/*", requireSession, userStamp);
 app.route("/api/engine", engine);
+app.route("/api/engine", leadChanges);
 app.route("/api/engine", partySearch);
 app.route("/api/engine", clientLeases);
 app.route("/api/engine", prospectReads);

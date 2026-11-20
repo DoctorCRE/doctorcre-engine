@@ -354,3 +354,5 @@
 187\. **Copied losses, steps and contact restrictions keep their recorded state (2026-11-19).** An old loss, cancellation or do-not-contact flag with no reason says “not recorded before this system.” Steps without a partner owner follow the copied deal, client, lead or vendor owner when there is one. Spreadsheet Last Touch date stamps stay out of partner notes (#815).
 
 188\. **A deal name can be reused after the first deal ends (2026-11-19).** The database reserves a name while a deal is open, including while it is parked. Closing, invoicing or losing it frees the name. The rule covers both partners and all ways of adding, renaming or reopening a deal (#815).
+
+189\. **A partner confirms a lead's link to an existing client (2026-11-20).** The lead role holds the exact client party ID. Same-name matches are suggestions. The explicit Link save keeps both parties and their roles separate and takes the lead off Leads. Deals Prospects uses its existing membership rules (#877).
