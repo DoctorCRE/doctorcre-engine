@@ -55,7 +55,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 ### Closed deals and Lost deals
 
-- [ ] Each lists its deals with client, deal owner and the close date in words. Both sets of cards show "Deal kind" and "Deal reason", as in Add deal, with "Not recorded" for each unknown value. A deal with no recorded close date says "Close date not recorded". Lost deals also show the reason for loss.
+- [ ] Each lists its deals with client, deal owner and the close date in words. Both sets of cards show "Deal kind" and "Deal reason", as in Add deal, with "Not recorded" for each unknown value. A deal with no recorded close date says "Close date not recorded". Lost deals also show the reason for loss. A copied loss with no recorded reason says "Not recorded before this system."
 - [ ] Search finds deals by name, client, kind or close date.
 - [ ] Each deal opens its deal page.
 
@@ -149,8 +149,8 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Closing or losing a deal leaves its steps unchanged. On the deal page, steps still open appear under "Open before this deal ended" with their due dates. Ended deals never count a step as late anywhere on Deals.
 - [ ] "Still needed" shows the step's owner and date.
 - [ ] Change next step saves the partner's new step and date, replacing their own open step. A step saved without an owner belongs to the partner who saved it.
-- [ ] Facts: deal kind, deal reason, market, closed value when closed, and the market agent on a national-account deal. Closed and lost cards and the deal page keep the Renewal label for copied renewals with an unrecorded source lease and show a note that the lease wasn't recorded.
-- [ ] A lost deal's page shows the reason for loss and the close date in words. If there is no close date, it says "Close date not recorded".
+- [ ] Facts: deal kind, deal reason, market, closed value when closed, and the market agent on a national-account deal. A deal with no market says "No market recorded". Closed and lost cards and the deal page keep the Renewal label for copied renewals with an unrecorded source lease and show a note that the lease wasn't recorded.
+- [ ] A lost deal's page shows the reason for loss and the close date in words. A copied loss with no recorded reason says "Not recorded before this system." If there is no close date, it says "Close date not recorded".
 - [ ] Phase, deal owner and Park, with the same rules as the board. Park asks the reason (client paused, prospect never active, or other) and takes an optional note.
 - [ ] The current automatic call move shows "Moved automatically" with its date in words and offers Undo, using the same receipt as the board.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
@@ -167,7 +167,6 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 ### Tabs
 
 - [ ] Compare terms: recorded terms from deals in the same submarket and use type, each value with where it came from.
-- **Open (question 7).** Whether Compare terms becomes a side-by-side of this deal's own offers. Recommended: keep today's comparison until the owner decides.
 - [ ] Timeline lists phase moves, notes, next steps, critical dates, documents, and changes, newest first. Each says which partner or job saved it and when. A note with a matching event appears once.
 - [ ] Timeline uses the card's parking reason labels and note wording. An entry with no note shows only the reason. Timeline uses "Deal kind" and "Deal reason" as in Add deal, including in imported deal openings. It says "Not recorded" for unknown values in those fields.
 - [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. An attachment action already shown as a document event appears once. Copied notes show their words and dates in readable form. Empty notes and technical lines stay in the old system. Owner changes marked as automatic are credited to the move.
@@ -184,7 +183,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 4. Answered on 2026-11-18. A person who is a client may belong to a national account.
 5. Answered on 2026-11-19. When both partners have an open next step on one deal, the card shows the deal owner's step and the deal page shows both.
 6. Answered on 2026-11-18. Set up client website stays below the deal's facts and asks for a website name and a password.
-7. Compare terms compares recorded terms across deals in one submarket and use type. Should it compare this deal's own offers instead? Recommended: keep today's comparison until you decide.
+7. Answered on 2026-11-19. Compare terms keeps the comparison of recorded terms from deals in the same submarket and use type.
 8. Answered on 2026-11-19. The owner ruled that "deal watch settings and the deal page call recorder stay as they work today".
 9. Answered on 2026-11-18. For someone new, Add prospect requires one tap for person or company and one for how found on the add line.
 10. Answered on 2026-11-18. A prospect is a lead at stage Opportunity that is on no deal. Adding a lead from the lane puts it at Opportunity.
@@ -201,7 +200,7 @@ Checked against app main on 2026-11-19. The new Deals paths depend on the switch
 - With the old read, the Documents tab's Deliverables section can say "Request unavailable or version changed" when it cannot list files (old system #3232). The tab also says "retained text" and "loaded documents".
 - With the old read, email follow-ups can offer File to existing deal and New deal. They can also show "Sender unavailable", "Summary unavailable" or a role code such as `landlord_side`. The new read offers Accept and Dismiss when the new saves are on.
 - With the old read, a critical date filed as Other can show a lowercase note as its label. The countdown still uses a bare day count for future dates, such as "864 days".
-- The National Accounts page still calls its Local Deals tab "All Deals". With the new saves off, cards can show a client code and say "Sub-clients". A missing review time shows as "Last account review: not captured" on those cards.
+- With the new saves off, national account cards can show a client code and say "Sub-clients". A missing review time shows as "Last account review: not captured" on those cards.
 - With the old read, Lost deals say "Not recorded" when the close date is missing. The new read says "Close date not recorded" and shows the reason when the deal has one.
 - With the new saves off, regular Add deal still asks for "Type", labels the phase "Stage" and takes the client as "C-ref or exact client name".
 - Closing on the old path still offers Paused. Phase moves still ask for "Evidence" and "In your words". The new save path calls the step "Your next step". The old path calls it "Next item (2–4 words)".
