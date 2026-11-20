@@ -34,7 +34,7 @@ export async function answerNextSave<Request extends JsonObject>(
 	verb: string,
 	parse: (body: JsonObject) => Refusal | Request,
 	change: (tx: Transaction<DB>, request: Request) => Promise<JsonObject>,
-	status: 200 | 201 | ((result: JsonObject) => 200 | 201) = 200,
+	status: 200 | 201 | ((result: JsonObject) => 200 | 201 | 422) = 200,
 	receiptArgs: (request: Request) => JsonObject = (request) => request,
 ): Promise<Response> {
 	const correlation_id = crypto.randomUUID();

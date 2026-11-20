@@ -1199,6 +1199,84 @@ create constraint trigger email_about_a_record after delete on activity_about
 alter table activity_about add constraint activity_about_activity_party_key unique (activity_id, party_id);
 alter table activity_about add constraint activity_about_activity_deal_key unique (activity_id, deal_id);
 
+create table lead_email_evidence (
+	message_id text not null check (message_id = btrim(message_id) and message_id ~ '\S'),
+	mailbox_user_id uuid not null references app_user,
+	source jsonb not null check (jsonb_typeof(source) = 'object'),
+	reason text not null check (reason ~ '\S'),
+	created_at timestamptz not null default now(),
+	primary key (message_id, mailbox_user_id)
+);
+
+create table lead_email_source (
+	activity_id uuid primary key,
+	party_id uuid not null references party,
+	lead_role text generated always as ('lead') stored,
+	mailbox_user_id uuid not null,
+	prospect jsonb not null,
+	evidence text not null check (evidence ~ '\S'),
+	foreign key (party_id, lead_role) references party_role deferrable initially deferred,
+	foreign key (activity_id, party_id) references activity_about (activity_id, party_id) deferrable initially deferred,
+	foreign key (activity_id, mailbox_user_id) references email_mailbox,
+	unique (activity_id, party_id),
+	constraint lead_email_source_prospect_identity check ((
+		jsonb_typeof(prospect) = 'object'
+		and jsonb_typeof(prospect->'name') = 'string' and prospect->>'name' ~ '\S'
+		and (
+			(jsonb_typeof(prospect->'email') = 'string'
+				and pg_input_is_valid(prospect->>'email', pg_typeof(null::email_address)::text))
+			or (jsonb_typeof(prospect->'phone') = 'string'
+				and pg_input_is_valid(prospect->>'phone', pg_typeof(null::phone_number)::text))
+			or (jsonb_typeof(prospect->'street_address') = 'string' and prospect->>'street_address' ~ '\S'
+				and jsonb_typeof(prospect->'city') = 'string' and prospect->>'city' ~ '\S')
+		)
+	) is true)
+);
+
+create table lead_email_attention (
+	party_id uuid primary key references party,
+	activity_id uuid not null,
+	created_at timestamptz not null default now(),
+	acknowledged_by_user_id uuid,
+	acknowledged_at timestamptz,
+	acknowledger_is_partner boolean generated always as (true) stored,
+	foreign key (activity_id, party_id) references lead_email_source (activity_id, party_id) deferrable initially deferred,
+	foreign key (acknowledged_by_user_id, acknowledger_is_partner) references app_user (id, is_account_partner),
+	check ((acknowledged_by_user_id is null) = (acknowledged_at is null))
+);
+
+create function lead_email_attention_change() returns trigger
+language plpgsql as $$
+begin
+	if tg_op = 'INSERT' then
+		if current_setting('engine.job', true) is distinct from 'mail_capture'
+			or new.acknowledged_by_user_id is not null or new.acknowledged_at is not null
+			or not exists (
+				select from party_role r join party p on p.id = r.party_id
+				join lead_email_source s on s.party_id = r.party_id join email e using (activity_id)
+				where r.party_id = new.party_id and r.role = 'lead' and r.created_at = now()
+					and r.stage = 'new' and r.owner_user_id is null and p.how_found = 'inbound'
+					and s.activity_id = new.activity_id and e.message_id is not null
+					and s.mailbox_user_id = nullif(current_setting('engine.user_id', true), '')::uuid
+			) then
+			raise exception 'only a new unclaimed inbound lead starts with email attention'
+				using errcode = 'check_violation', constraint = 'lead_email_attention_starts_at_intake';
+		end if;
+	elsif (new.acknowledged_by_user_id, new.acknowledged_at)
+		is distinct from (old.acknowledged_by_user_id, old.acknowledged_at) then
+		if old.acknowledged_by_user_id is not null or new.acknowledged_by_user_id is null
+			or nullif(current_setting('engine.job', true), '') is not null
+			or new.acknowledged_by_user_id is distinct from nullif(current_setting('engine.user_id', true), '')::uuid then
+			raise exception 'a partner acknowledges email attention once'
+				using errcode = 'check_violation', constraint = 'lead_email_attention_acknowledged_once';
+		end if;
+	end if;
+	return new;
+end $$;
+
+create trigger lead_email_attention_change before insert or update on lead_email_attention
+	for each row execute function lead_email_attention_change();
+
 alter table deal_phase_change
 	add constraint deal_phase_change_source_is_call
 		foreign key (call_activity_id, call_kind) references activity (id, kind),
@@ -3086,6 +3164,8 @@ begin
 	update deal_party set party_id = survivor where party_id = duplicate;
 	delete from activity_about d using activity_about s
 	where d.party_id = duplicate and s.party_id = survivor and s.activity_id = d.activity_id;
+	delete from lead_email_attention where party_id = duplicate
+		and exists (select from lead_email_attention where party_id = survivor);
 	-- A collapsing membership's review moves to the survivor's, so a merge of two reviewed ones is refused.
 	update party_territory_review r set party_territory_id = s.id from party_territory d, party_territory s
 	where r.party_territory_id = d.id and d.party_id = duplicate and s.party_id = survivor and s.territory_id = d.territory_id
@@ -3827,5 +3907,6 @@ revoke select on deal_client_website from engine_reader;
 grant select (slug, deal_id, client_party_id, disabled_at) on deal_client_website to engine_reader;
 
 revoke select on deal_client_website_attempt, deal_client_website_grant from engine_reader;
+revoke select on lead_email_evidence from engine_reader;
 grant update (failed_attempts, window_started_at) on deal_client_website_attempt to engine;
 grant delete on deal_client_website_attempt, deal_client_website_grant to engine;
