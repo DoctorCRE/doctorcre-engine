@@ -1,7 +1,5 @@
 import { type Context, Hono } from "hono";
-import type { Transaction } from "kysely";
 import { nextTransaction } from "../next-connection.ts";
-import type { DB as NextDB } from "../next-database.d.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import {
@@ -153,8 +151,22 @@ const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
 	disposition: slug(params, "disposition"),
 });
 
+type DirectoryEnv = DatabaseEnv & {
+	Bindings: { DIRECTORY_READ_SCHEMA?: string };
+};
+type LegacyRead = (db: Reader, stamp: Stamp) => Promise<object>;
+type NextReader = Parameters<typeof readNextVendor>[0];
+type NextRead = (db: NextReader, stamp: Stamp) => Promise<object>;
+type RecordRead<Db> = (
+	db: Db,
+	viewer: string,
+	id: string,
+	contract: Contract | null,
+	stamp: Stamp,
+) => Promise<object>;
+
 // The old door's correlation id: the caller's own, if it is a UUID.
-function stampOf(c: Context<DatabaseEnv>): Stamp {
+function stampOf(c: Context<DirectoryEnv>): Stamp {
 	const given = c.req.header("x-correlation-id")?.trim();
 	return {
 		observedAt: new Date(),
@@ -165,74 +177,11 @@ function stampOf(c: Context<DatabaseEnv>): Stamp {
 
 // The old door checked its database, then the query, then the partner.
 async function answer(
-	c: Context<DatabaseEnv>,
-	parse: (
-		params: URLSearchParams,
-		viewer: string,
-	) => (db: Reader, stamp: Stamp) => Promise<object>,
-) {
-	const viewer = c.get("partner").slug;
-	const database = c.env.DATABASE;
-	try {
-		if (!database)
-			throw new BusinessRefusal({ error: "DEPENDENCY_UNAVAILABLE" });
-		const read = parse(new URL(c.req.url).searchParams, viewer);
-		if (!isOneOf(PARTNERS, viewer))
-			throw new BusinessRefusal({ error: "AUTHORIZATION_REFUSED" });
-		const stamp = stampOf(c);
-		return c.json(
-			await readSnapshot(database.connectionString, (db) => read(db, stamp)),
-		);
-	} catch (error) {
-		const refusal = refusalOf(error);
-		return c.json(refusal.body, refusal.status);
-	}
-}
-
-type DirectoryEnv = DatabaseEnv & {
-	Bindings: { DIRECTORY_READ_SCHEMA?: string };
-};
-
-export const directory = new Hono<DirectoryEnv>();
-
-directory.get("/clients", (c) =>
-	answer(c, (params, viewer) => {
-		const query = clientQuery(params, viewer);
-		return (db, stamp) => readClientList(db, viewer, query, stamp);
-	}),
-);
-// The old door answered any id that is not a UUID before anything else.
-async function record(
-	c: Context<DatabaseEnv>,
-	id: string,
-	read: (
-		db: Reader,
-		viewer: string,
-		id: string,
-		contract: Contract | null,
-		stamp: Stamp,
-	) => Promise<object>,
-) {
-	if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
-	return answer(c, (params, viewer) => {
-		checkFields(params, RECORD_FIELDS, viewer);
-		const contract = oneOf(params, "contract", CONTRACTS, null);
-		return (db, stamp) => read(db, viewer, id, contract, stamp);
-	});
-}
-
-// Values are decoded, so only the pattern keeps an encoded id from passing as a UUID.
-const ID_PATTERN = ":id{[0-9A-Fa-f-]+}";
-
-directory.get(`/clients/${ID_PATTERN}`, (c) =>
-	record(c, c.req.param("id"), readClient),
-);
-async function answerNextVendor(
 	c: Context<DirectoryEnv>,
 	parse: (
 		params: URLSearchParams,
 		viewer: string,
-	) => (db: Transaction<NextDB>, stamp: Stamp) => Promise<object>,
+	) => LegacyRead | { next: NextRead },
 ): Promise<Response> {
 	const viewer = c.get("partner").slug;
 	const database = c.env.DATABASE;
@@ -244,9 +193,11 @@ async function answerNextVendor(
 			throw new BusinessRefusal({ error: "AUTHORIZATION_REFUSED" });
 		const stamp = stampOf(c);
 		return c.json(
-			await nextTransaction(database.connectionString, "read", (db) =>
-				read(db, stamp),
-			),
+			typeof read === "function"
+				? await readSnapshot(database.connectionString, (db) => read(db, stamp))
+				: await nextTransaction(database.connectionString, "read", (db) =>
+						read.next(db, stamp),
+					),
 		);
 	} catch (error) {
 		const refusal = refusalOf(error);
@@ -254,26 +205,52 @@ async function answerNextVendor(
 	}
 }
 
-directory.get("/vendors", async (c): Promise<Response> => {
-	if (c.env.DIRECTORY_READ_SCHEMA === "next")
-		return answerNextVendor(c, (params, viewer) => {
-			const query = vendorQuery(params, viewer);
-			return (db, stamp) => readNextVendorList(db, viewer, query, stamp);
-		});
+export const directory = new Hono<DirectoryEnv>();
+
+directory.get("/clients", (c) =>
+	answer(c, (params, viewer) => {
+		const query = clientQuery(params, viewer);
+		return (db, stamp) => readClientList(db, viewer, query, stamp);
+	}),
+);
+// The old door answered any id that is not a UUID before anything else.
+async function record(
+	c: Context<DirectoryEnv>,
+	id: string,
+	read: RecordRead<Reader>,
+	readNext?: RecordRead<NextReader>,
+): Promise<Response> {
+	if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
+	const next = c.env.DIRECTORY_READ_SCHEMA === "next" ? readNext : undefined;
 	return answer(c, (params, viewer) => {
-		const query = vendorQuery(params, viewer);
-		return (db, stamp) => readVendorList(db, viewer, query, stamp);
+		checkFields(params, RECORD_FIELDS, viewer);
+		const contract = oneOf(params, "contract", CONTRACTS, null);
+		if (next)
+			return { next: (db, stamp) => next(db, viewer, id, contract, stamp) };
+		return (db, stamp) => read(db, viewer, id, contract, stamp);
 	});
-});
-directory.get(`/vendors/${ID_PATTERN}`, async (c): Promise<Response> => {
-	const id = c.req.param("id");
-	if (c.env.DIRECTORY_READ_SCHEMA === "next") {
-		if (!UUID.test(id)) return c.json({ error: "not_found" }, 404);
-		return answerNextVendor(c, (params, viewer) => {
-			checkFields(params, RECORD_FIELDS, viewer);
-			const contract = oneOf(params, "contract", CONTRACTS, null);
-			return (db, stamp) => readNextVendor(db, viewer, id, contract, stamp);
-		});
-	}
-	return record(c, id, readVendor);
-});
+}
+
+// Values are decoded, so only the pattern keeps an encoded id from passing as a UUID.
+const ID_PATTERN = ":id{[0-9A-Fa-f-]+}";
+
+directory.get(`/clients/${ID_PATTERN}`, (c) =>
+	record(c, c.req.param("id"), readClient),
+);
+directory.get(
+	"/vendors",
+	(c): Promise<Response> =>
+		answer(c, (params, viewer) => {
+			const query = vendorQuery(params, viewer);
+			if (c.env.DIRECTORY_READ_SCHEMA === "next")
+				return {
+					next: (db, stamp) => readNextVendorList(db, viewer, query, stamp),
+				};
+			return (db, stamp) => readVendorList(db, viewer, query, stamp);
+		}),
+);
+directory.get(
+	`/vendors/${ID_PATTERN}`,
+	(c): Promise<Response> =>
+		record(c, c.req.param("id"), readVendor, readNextVendor),
+);
