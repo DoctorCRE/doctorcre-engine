@@ -5,7 +5,7 @@ import { isArguments } from "./save-door.ts";
 import { readSchema } from "./test-copy.ts";
 import { doorTest } from "./test-door.ts";
 
-const { db, setup, cleanup, request } = doorTest();
+const { db, setup, cleanup, request, save } = doorTest();
 const owner = randomUUID();
 const other = randomUUID();
 const client = randomUUID();
@@ -231,6 +231,34 @@ test("a step created by a suggestion keeps the meeting source", async () => {
 	});
 });
 
+test("the focused deal step names its creator and source after a later edit", async () => {
+	await db.query(`begin;
+		select set_config('engine.user_id', '${other}', true);
+		update next_step set due_on = '2026-12-02' where id = '${proposal}';
+	commit;`);
+	const response = await request(
+		user,
+		`deals/${meetingDeal}`,
+		{ method: "GET" },
+		{
+			DEALS_READ_SCHEMA: "next",
+		},
+	);
+	assert.equal(response.status, 200);
+	const page: unknown = await response.json();
+	assert.ok(isArguments(page) && Array.isArray(page.next_actions));
+	const step: unknown = page.next_actions.find(
+		(row: unknown) => isArguments(row) && row.id === proposal,
+	);
+	assert.ok(isArguments(step) && typeof step.set_at === "string");
+	assert.partialDeepStrictEqual(step, {
+		due_on: "2026-12-02",
+		set_by: "Example Partner",
+		set_from: "meeting",
+	});
+	assert.ok(Number.isFinite(Date.parse(step.set_at)));
+});
+
 test("each partner's Home link names their open step on the same deal", async () => {
 	const ownerItems = await inbox();
 	const otherItems = await inbox({ user: "other-partner" });
@@ -260,4 +288,38 @@ test("open and done building-only steps link to their building's sole open deal"
 		open_url: `/deals?deal=${deal}`,
 	});
 	assert.equal(items.get(sharedBuildingStep)?.open_url, null);
+});
+
+test("a partner can undo their own current completion after reloading Home", async () => {
+	const step = randomUUID();
+	const party = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.user_id', '${owner}', true);
+		insert into party (id, kind, name) values ('${party}', 'person', 'Example Contact');
+		insert into next_step (id, party_id, owner_party_id, what)
+			values ('${step}', '${party}', '${owner}', 'Confirm sample terms');
+		commit;`);
+	const before = (await inbox()).get(step);
+	const [status, receipt] = await save(user, `next-steps/${step}/end`, {
+		idempotency_key: randomUUID(),
+		base_version: before?.action_version,
+		resolution: "done",
+	});
+	assert.equal(status, 200);
+	const done = await inbox();
+	assert.equal(done.get(completed)?.undo_completion, false);
+	assert.partialDeepStrictEqual(done.get(step), {
+		section: "done",
+		action_version: receipt.change_id,
+		undo_completion: true,
+	});
+	const [reopened] = await save(user, `next-steps/${step}/reopen`, {
+		idempotency_key: randomUUID(),
+		base_version: done.get(step)?.action_version,
+	});
+	assert.equal(reopened, 200);
+	assert.partialDeepStrictEqual((await inbox()).get(step), {
+		source_state: "needs_attention",
+		undo_completion: false,
+	});
 });

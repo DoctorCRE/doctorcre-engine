@@ -14,7 +14,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Dates read as words in Central time: "Due Thu, Nov 19", "2 days late", "Today 12:00 PM". Never `2026-11-19` or `2026-11-02T15:41:50.000Z`.
 - [ ] No internal codes or system words: no `C-159`, `V-BNK-040`, `L-223`, loop numbers, "cadence", "needs attention" badges, "Ready for your attention", "loaded cards" or "Partner inbox". No markdown asterisks.
 - [ ] Clicking the title opens what the card is about, as each kind below says. Opening never just outlines the same card in the list.
-- [ ] A card waiting on the partner has its finishing button in the same place, named for what it does, with Snooze beside it. A card in In motion and waiting asks for nothing and has neither, except that a snoozed card offers Wake (coordinator, 2026-11-20).
+- [ ] A card waiting on the partner has its finishing button in the same place, named for what it does, with Snooze beside it. Reply drafts and suggestion groups put Review reply or Review suggestions in that position and open the decision there. A card in In motion and waiting asks for nothing and has neither, except that a snoozed card offers Wake (coordinator, 2026-11-20).
 - [ ] A card the partner finishes leaves at once. It shows Undo only where its kind below says so.
 - [ ] Work finished anywhere else (deal page, assistant, call capture, the other partner, Outlook) leaves Home on the next refresh without a click.
 - [ ] Snooze offers plain choices in Central time and brings the card back then. Undo brings it back at once.
@@ -49,7 +49,7 @@ A next step the partner owns.
 - [ ] A person or company step that links to Relationships opens that party's node, including a contact with no other links.
 - [ ] A step about a building alone opens the building's sole open deal, including from Done. The card has no link if the building is on zero or several open deals.
 - [ ] A prospect's follow-up opens that prospect on Deals with the follow-up in view (`docs/screens/deals.md` § "A prospect"). It reaches Home only once Home reads the new database; the Deals switch alone does not bring it.
-- [ ] Mark done finishes the step. Undo reopens it.
+- [ ] Mark done finishes the step. Undo on a Done card reopens the signed-in partner's own current completion.
 - [ ] Leaves when done or dropped anywhere, or when a newer step replaces it for the same person on the same client or deal.
 
 ### Call follow-up
@@ -131,7 +131,7 @@ A client's comment on a toured property, or a property added to or removed from 
 ## Today panel
 
 - [ ] Shows today's meetings and the partner's dated reminders, with a choice of both partners or either one. Meetings after today stay in Outlook and do not show on Home (coordinator, 2026-11-19).
-- [ ] Does not repeat a step that is already a card in the inbox. A reminder with a card opens that card.
+- [ ] Does not repeat a step that is already a card in the inbox. A reminder with a card brings that card into view and opens its inline review when it has one.
 - [ ] Each section either shows its items or says plainly why it cannot. It never stays on "Checking…".
 - [ ] A reminder dated before today is listed under "Late" and says how late, such as "3 days late", as the deal's next step does. The panel never says "Overdue" (coordinator, 2026-11-19).
 - [ ] With `home-from-engine` on, every page that uses the shared side frame shows Home's engine Today panel for today's meetings and the partners' dated reminders. This replaces Your calendar, Upcoming meetings, Your working week, Your schedule, and Doc's Morning brief (coordinator, 2026-11-20).
@@ -158,7 +158,7 @@ A client's comment on a toured property, or a property added to or removed from 
 
 Seen on the live Home screen on 2026-11-18, or read in the app's Home code where noted.
 
-- Clicking a card's title only outlines the same card. "See details" on a step repeats its title.
+- The prospect and Relationships views still lack the step's recorded creation details.
 - Step titles carry internal codes, loop numbers, cadence names and markdown asterisks.
 - Steps for a client, lead or vendor say "No linked deal".
 - Due dates show as `2026-10-01`. Mail priorities shows UTC timestamps and "Recorded overdue".
