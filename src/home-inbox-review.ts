@@ -24,6 +24,7 @@ type Draft = ReviewRow & {
 	sent_at: string | null;
 	failure_reason: string | null;
 	email_activity_id: string;
+	email_at: string;
 	deal_id: string | null;
 };
 
@@ -39,7 +40,9 @@ type SuggestionReference = {
 };
 
 type Suggestion = ReviewRow &
-	Pick<SuggestionReference, "activity_id" | "activity_kind"> & {
+	Pick<SuggestionReference, "activity_kind"> & {
+		latest_activity_id: string | null;
+		latest_source_at: string | null;
 		due_on: string | null;
 		fallback_reply_draft: {
 			id: string;
@@ -70,6 +73,7 @@ function draftRows(userId: string) {
 					and record = jsonb_build_object('id', r.id)) as draft_change_id,
 				${mailGroup} as mail_group,
 				coalesce(r.sent_at, r.changed_at) as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
+				a.happened_at as email_at,
 				'Reply to ' || ${senderLabel("e")} || ': ' || coalesce(nullif(btrim(e.subject), ''), 'No subject') as title,
 				coalesce(d.name, ${senderLabel("e")}) as context_label,
 				'/deals?deal=' || d.id as open_url,
@@ -252,10 +256,16 @@ function suggestionRows(userId: string, forMail: boolean) {
 			left join phase on phase.slug = p.to_phase
 			where p.kind <> 'next_step_done'
 				and ${visibleSuggestion(userId)}
+				and (p.kind <> 'email_lead' or not exists (
+					select from party_email pe left join app_user u on u.id = pe.party_id
+					where pe.address = candidate.source_row->>'address'
+					having count(*) = 1 and bool_or(u.is_account_partner)
+				))
 		), grouped as (
 			select visible.*,
 				coalesce(first_value(email_title) over latest_source, suggestion_title) as title,
 				first_value(activity_id) over latest_source as latest_activity_id,
+				first_value(source_at) over latest_source as latest_source_at,
 				row_number() over same_source as position,
 				max(proposal_version) over source_group as suggestion_change_id,
 				array_agg(id) over all_members as member_ids,
@@ -473,6 +483,7 @@ export async function readHomeReviewCards(
 			source_activity: {
 				kind: "email",
 				id: draft.email_activity_id,
+				happened_at: new Date(draft.email_at).toISOString(),
 				deal_id: draft.deal_id,
 			},
 		})),
@@ -497,8 +508,19 @@ export async function readHomeReviewCards(
 				...(suggestion.fallback_reply_draft && {
 					fallback_reply_draft: suggestion.fallback_reply_draft,
 				}),
-				source_activity: suggestion.activity_id
-					? { kind: suggestion.activity_kind, id: suggestion.activity_id }
+				source_activity: suggestion.latest_activity_id
+					? {
+							kind: suggestion.activity_kind,
+							id: suggestion.latest_activity_id,
+							...(suggestion.activity_kind === "email" &&
+							suggestion.latest_source_at
+								? {
+										happened_at: new Date(
+											suggestion.latest_source_at,
+										).toISOString(),
+									}
+								: {}),
+						}
 					: null,
 			};
 		}),
