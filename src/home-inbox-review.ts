@@ -90,6 +90,7 @@ function draftRows(userId: string) {
 const visibleSuggestion = (userId: string) => sql<boolean>`
 	case
 		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
+		when p.kind = 'email_lead' then p.changed_for_user_id = ${userId}::uuid
 		when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
 			or (p.proposed_by_job = 'old_system'
 				and a.changed_by_user_id is null and a.changed_for_user_id is null
@@ -112,7 +113,8 @@ export async function readProposal(
 ) {
 	const proposal = await db
 		.selectFrom("proposal as p")
-		.innerJoin("activity as a", "a.id", "p.activity_id")
+		.leftJoin("activity as a", "a.id", "p.activity_id")
+		.leftJoin("candidate", "candidate.id", "p.candidate_id")
 		.leftJoin("next_step as step", "step.id", "p.next_step_id")
 		.leftJoin("deal as d", "d.id", "p.deal_id")
 		.leftJoin("party", "party.id", "p.party_id")
@@ -139,24 +141,42 @@ export async function readProposal(
 			eb.fn.coalesce("p.what", "step.what").as("what"),
 			eb.fn.coalesce("p.due_on", "step.due_on").as("due_on"),
 			eb.fn
-				.coalesce("d.name", "party.name", "property.name", "property.address")
+				.coalesce(
+					"d.name",
+					"party.name",
+					"property.name",
+					"property.address",
+					"candidate.name",
+				)
 				.as("target_name"),
-			jsonObjectFrom(
-				eb
-					.selectFrom("activity as source")
-					.leftJoin("email as e", "e.activity_id", "source.id")
-					.whereRef("source.id", "=", "a.id")
-					.select((source) => [
-						"source.id",
-						"source.kind",
-						"source.summary",
-						"e.sender",
-						"e.sender_name",
-						"e.subject",
-						"e.body",
-						isoMillis(source.ref("source.happened_at")).as("happened_at"),
-					]),
-			).as("source_activity"),
+			sql<
+				string | null
+			>`candidate.source_row #>> '{reading,evidence_quote}'`.as(
+				"evidence_quote",
+			),
+			sql<string | null>`candidate.source_row #>> '{reading,applies_to}'`.as(
+				"applies_to",
+			),
+			sql`case when candidate.id is not null then json_build_object(
+					'kind', 'email', 'id', null, 'summary', null, 'subject', null, 'body', null,
+					'sender', candidate.source_row->>'address', 'sender_name', candidate.name,
+					'happened_at', candidate.source_row->>'first_seen_at'
+				) else ${jsonObjectFrom(
+					eb
+						.selectFrom("activity as source")
+						.leftJoin("email as e", "e.activity_id", "source.id")
+						.whereRef("source.id", "=", "a.id")
+						.select((source) => [
+							"source.id",
+							"source.kind",
+							"source.summary",
+							"e.sender",
+							"e.sender_name",
+							"e.subject",
+							"e.body",
+							isoMillis(source.ref("source.happened_at")).as("happened_at"),
+						]),
+				)} end`.as("source_activity"),
 		])
 		.where("p.id", "=", id)
 		.where("p.status", "=", "pending")
@@ -173,7 +193,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 			select p.id, p.status, p.activity_id, p.activity_kind, p.created_at as activity_at, p.due_on,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
-				coalesce(d.name, party.name, property.name, property.address,
+				coalesce(d.name, party.name, property.name, property.address, candidate.name,
 					nullif(btrim(e.sender_name), ''), e.sender::text) as context_label,
 				case when p.activity_kind = 'call' then '/calls?session=' || a.id
 					when d.id is not null then '/deals?deal=' || d.id
@@ -186,6 +206,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 					when p.kind = 'file_to_deal' then 'File email to ' || d.name
 					when p.kind = 'possible_new_deal' then 'Review possible new deal'
 					when p.kind = 'lead_stage_move' then 'Review lead stage'
+					when p.kind = 'email_lead' then candidate.name || ' · Possible lead'
 					else 'Review new lead'
 				end as suggestion_title,
 				case when e.activity_id is not null then
@@ -202,12 +223,13 @@ function suggestionRows(userId: string, forMail: boolean) {
 			from proposal p
 			left join activity a on a.id = p.activity_id
 			left join email e on e.activity_id = a.id
+			left join candidate on candidate.id = p.candidate_id
 			left join party contact on contact.id = a.from_party_id
 			left join deal d on d.id = p.deal_id
 			left join party on party.id = p.party_id
 			left join property on property.id = p.property_id
 			left join phase on phase.slug = p.to_phase
-			where p.kind not in ('next_step_done', 'email_lead')
+			where p.kind <> 'next_step_done'
 				and ${visibleSuggestion(userId)}
 		), grouped as (
 			select visible.*,
