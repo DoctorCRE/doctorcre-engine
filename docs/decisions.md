@@ -361,4 +361,4 @@
 
 191\. **The health check reports when a tagged Worker started serving requests (2026-11-20).** `GET /health` includes `started_at` alongside `release`. It reports the UTC time of the first HTTP request or `ClientWebsiteAccess` RPC served by that Worker instance, in ISO format. The same instance keeps that time for later requests. A missing or blank release tag omits both fields (#876).
 
-192\. **Timeline shows a copied next step once (2026-11-20).** An imported next-step event can link to the one copied note it wrote on the same deal. Timeline shows the event with its recorded facts and keeps the note in the deal’s notes. Notes with no matching imported event still show in Timeline (#903).
+192\. **Timeline shows a copied next step once (2026-11-20).** An imported next-step event can link to the copied note named by the same save's receipt on the same deal. Timeline shows the event with its recorded facts and keeps the note in the deal's notes. Notes without a proven link still show in Timeline (#903).

@@ -3409,16 +3409,18 @@ create table imported_deal_history (
  organization_tenant_id text,
  correlation_id uuid,
  mutation_order bigint not null,
- activity_id uuid unique,
- activity_kind text generated always as ('note') stored,
+ activity_id uuid,
+ activity_kind text not null default 'note' constraint imported_deal_history_note_kind check (activity_kind = 'note'),
  foreign key (activity_id, activity_kind) references activity (id, kind),
  foreign key (activity_id, deal_id) references activity_about (activity_id, deal_id) on delete set null (activity_id),
- check (activity_id is null or (verb = 'set-next-step' and field is not distinct from 'next_step')),
+ constraint imported_deal_history_note_event
+  check (activity_id is null or (verb = 'set-next-step' and field is not distinct from 'next_step')),
  check (num_nonnulls(changed_by_user_id, changed_by_job) = 1),
  check ((old_keys is not null) = (old_value is distinct from null)),
  check ((new_keys is not null) = (new_value is distinct from null))
 );
 create index imported_deal_history_order on imported_deal_history (deal_id, recorded_at, id);
+create unique index imported_deal_history_activity_id_key on imported_deal_history (activity_id) where activity_id is not null;
 
 create view deal_imported_history with (security_invoker = true) as
  select h.deal_id, jsonb_agg(jsonb_build_object(

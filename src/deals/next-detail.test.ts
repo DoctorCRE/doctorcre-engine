@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import pg from "pg";
 import { nextTransaction } from "../next-connection.ts";
 import { readSnapshot } from "../reader.ts";
 import { copyTest, readSchema } from "../test-copy.ts";
@@ -1123,24 +1124,33 @@ test("imported history excludes events backed by copied deal records", async (t)
 	}
 });
 
-test("copied next-step events identify their notes without pairing repeated text", async () => {
+test("copied next-step events link only the note named by their save receipt", async (t) => {
 	const deal = id(870);
 	const note = id(871);
 	const unpaired = id(872);
 	const event = id(873);
 	const repeated = id(874);
+	const missing = id(875);
+	const reusedKey = id(876);
 	const text = "Example request the floor plan";
 	await db.query(`
 		insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by) values
 		 ('${deal}', '${id(20)}', 'Example timeline deal', 'lease', 'touring', 'partner_one', ${by});
 		insert into public.deal_note (id, deal_id, kind, text, actor_id, created_at) values
-		 ('${note}', '${deal}', 'next_step', '${text}', '${id(1)}', '2025-08-01T15:00:01Z'),
-		 ('${unpaired}', '${deal}', 'next_step', '${text}', '${id(1)}', '2025-08-02T15:00:01Z');
-		insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause) values
+		 ('${note}', '${deal}', 'next_step', '${text}', '${id(1)}', now() - interval '2 days' + interval '1 second'),
+		 ('${unpaired}', '${deal}', 'next_step', '${text}', '${id(1)}', now() - interval '1 day' + interval '1 second');
+		insert into public.event (id, subject_type, subject_id, field, new_value, occurred_at, recorded_at, actor_id, verb, cause, idempotency_key) values
 		 ('${event}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}","next_date":"2025-08-08"}',
-		  '2025-08-01T15:00:00Z', '2025-08-01T15:00:02Z', '${id(1)}', 'set-next-step', 'human_stated'),
+		  now() - interval '2 days', now() - interval '2 days' + interval '2 seconds', '${id(1)}', 'set-next-step', 'human_stated', 'example-next-step'),
 		 ('${repeated}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}"}',
-		  '2025-08-03T15:00:00Z', '2025-08-03T15:00:02Z', '${id(1)}', 'set-next-step', 'human_stated');
+		  now() - interval '1 day', now() - interval '1 day' + interval '2 seconds', '${id(1)}', 'set-next-step', 'human_stated', 'example-missing-note'),
+		 ('${reusedKey}', 'deal', '${deal}', 'next_step', '{"next_step":"${text}"}',
+		  now() - interval '40 days', now() - interval '40 days', '${id(1)}', 'set-next-step', 'human_stated', 'example-next-step');
+		insert into public.tool_call (idempotency_key, verb, actor_id, request_hash, response, created_at) values
+		 ('example-next-step', 'set-next-step', '${id(1)}', 'example',
+		  '{"ok":true,"deal_id":"${deal}","next_step_id":"${note}"}', now() - interval '2 days'),
+		 ('example-missing-note', 'set-next-step', '${id(1)}', 'example',
+		  '{"ok":true,"deal_id":"${deal}","next_step_id":"${missing}"}', now() - interval '1 day');
 	`);
 	for (const file of [
 		"copy-deals.sql",
@@ -1154,9 +1164,9 @@ test("copied next-step events identify their notes without pairing repeated text
 		nextTransaction(connectionString, "read", (tx) =>
 			readNextDealDetail(tx, deal),
 		);
-	await db.query(
-		"alter table imported_deal_history drop column activity_id, drop column activity_kind",
-	);
+	const backfill = await readSchema("copy-deal-history-note-links.sql");
+	const linkNotes = async () =>
+		(await db.query<{ links_added: string }>(backfill)).rows;
 	const before = await read();
 	assert.ok("thread" in before);
 	assert.deepEqual(
@@ -1165,28 +1175,65 @@ test("copied next-step events identify their notes without pairing repeated text
 	);
 	assert.deepEqual(
 		before.imported_deal_history.map((entry) => entry.id),
-		[event, repeated],
+		[reusedKey, event, repeated],
 	);
-	assert.ok(
-		before.imported_deal_history.every((entry) => !("activity_id" in entry)),
-	);
-
-	const backfill = await readSchema("copy-deal-history-note-links.sql");
-	for (const expected of ["1", "0"]) {
-		const results = await db.query(`begin; ${backfill} commit;`);
-		assert.ok(Array.isArray(results));
-		assert.deepEqual(results.at(-2)?.rows, [{ links_added: expected }]);
-	}
-
-	const after = await read();
-	assert.ok("thread" in after);
-	assert.deepEqual(after.thread, before.thread);
-	assert.deepEqual(
-		after.imported_deal_history,
-		before.imported_deal_history.map((entry) =>
+	const withLink = {
+		...before,
+		imported_deal_history: before.imported_deal_history.map((entry) =>
 			entry.id === event ? { ...entry, activity_id: note } : entry,
 		),
+	};
+	await t.test(
+		"the copy keeps the proven link and both unmatched events",
+		async () => {
+			assert.deepEqual(await linkNotes(), [{ links_added: "1" }]);
+			assert.deepEqual(await read(), withLink);
+		},
 	);
+
+	await db.query(
+		"alter table imported_deal_history drop column activity_id, drop column activity_kind",
+	);
+	assert.deepEqual(await read(), before);
+
+	await t.test(
+		"the schema delta yields to a reader and commits before the backfill",
+		async () => {
+			const delta = await readSchema("add-deal-history-note-links.sql");
+			const reader = new pg.Client({ connectionString });
+			await reader.connect();
+			try {
+				await reader.query(
+					"begin; select from next.imported_deal_history limit 1",
+				);
+				try {
+					await assert.rejects(db.query(delta), { code: "55P03" });
+				} finally {
+					await db.query("rollback");
+					await reader.query("rollback");
+				}
+
+				await db.query(delta);
+				await db.query("begin");
+				try {
+					assert.deepEqual(await linkNotes(), [{ links_added: "1" }]);
+					await reader.query(
+						"begin; lock table next.imported_deal_history in access share mode nowait",
+					);
+					assert.deepEqual(await read(), before);
+					await reader.query("rollback");
+					await db.query("commit");
+				} finally {
+					await db.query("rollback");
+				}
+			} finally {
+				await reader.end();
+			}
+		},
+	);
+
+	assert.deepEqual(await read(), withLink);
+	assert.deepEqual(await linkNotes(), [{ links_added: "0" }]);
 	await assert.rejects(
 		db.query(
 			"update imported_deal_history set activity_id = $1 where id = $2",
