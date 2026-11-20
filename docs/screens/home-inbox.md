@@ -23,7 +23,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Home has no "set waiting person" control.
 - [ ] Home has no Hide. Every card is finished, snoozed to a date, or dropped with a reason. There is no "Hide from inbox", no "Hidden from inbox" list, and no Hide button on the selection bar (today "Settle selected") (owner, 2026-11-19).
 - [ ] Every live card hidden before Hide went is back in the inbox. Of the 11 old hidden marks, 5 come back as inbox cards, and the other 6 have no live card (one cancelled step and five notifications with no copied card) (coordinator, 2026-11-19).
-- [ ] Every card kind has Drop beside Snooze. Drop asks for a reason, and the card leaves. Steps, call follow-ups, updates, reply drafts, suggestions and tour feedback offer the same actions. A lease fact is the one exception: its Reject asks a reason and finishes the card, and it has no separate Drop (coordinator, 2026-11-19).
+- [ ] After the switch, every card kind has Drop beside Snooze. Drop asks for a reason, and the card leaves. Steps, call follow-ups, updates, reply drafts, suggestions and tour feedback offer the same actions.
 
 When app routing moves to the new database, Home uses door 24 for `snooze` and `unsnooze` (wake and Undo) on steps, call follow-ups, updates, suggestions and reply drafts, `drop` with a nonblank reason on call follow-ups, updates and tour feedback, and `done` and `undo_done` on tour feedback. Door 24 has no `settle` or `unsettle`, and the Home read has no settled shelf and advertises `home_mark_drop: true` and `home_proposal_drop: true`. Door 18 handles Mark done, reopening and cancelling steps with a reason. Door 21 handles suggestion decisions, including completion reviews and reason-bearing dismissal for every suggestion kind (see `docs/new-database.md`).
 
@@ -109,13 +109,9 @@ A change on a deal the partner follows.
 - [ ] Opens to the deal page at that change.
 - [ ] Got it marks it read. Leaves when read.
 
-### Lease fact to check
+### Lease fact reviews before the switch
 
-A lease value read from a document that needs the partner's eye.
-
-- [ ] Says the deal and the fact: "Example Dental: check the base rent".
-- [ ] Opens to each value found, with its document, pages and quoted text.
-- [ ] Approve, Correct or Reject, each with a reason. Reject records that the fact is wrong and finishes the card; the card has no separate Drop. Leaves when saved.
+The old Home inbox lets a partner approve, correct or reject observations from documents. That workflow stays in the old system. After the switch, signed terms appear on the deal page.
 
 ### Tour feedback
 

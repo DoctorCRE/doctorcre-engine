@@ -122,6 +122,7 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 					.orderBy("cd.id"),
 			).as("critical_dates"),
 			jsonArrayFrom(documentsOf(db, eb.ref("d.id"))).as("documents"),
+			jsonArrayFrom(leaseVersionsOf(db, eb.ref("d.id"))).as("lease_versions"),
 			jsonArrayFrom(emailFollowUpsOf(db, eb.ref("d.id"))).as(
 				"email_follow_ups",
 			),
@@ -193,7 +194,22 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				order by recorded_at desc, id desc limit ${HISTORY_CAP}
 			) e)`.as("events"),
 		])
-		.where("d.id", "=", deal)
+		.where((eb) =>
+			eb.or([
+				eb("d.id", "=", deal),
+				eb(
+					"d.id",
+					"=",
+					eb
+						.selectFrom("outside_id")
+						.select("deal_id")
+						.where("source", "=", "old_system")
+						.where("value", "=", deal.toLowerCase()),
+				),
+			]),
+		)
+		.orderBy((eb) => eb("d.id", "=", deal), "desc")
+		.limit(1)
 		.executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
 	const { today, commissions, critical_dates, ...detail } = record;
@@ -283,6 +299,49 @@ const documentsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.where("doc.deal_id", "=", deal)
 		.orderBy("doc.created_at", "desc")
 		.orderBy("doc.id");
+
+const leaseVersionsOf = (db: Transaction<DB>, deal: Expression<string>) =>
+	db
+		.selectFrom("lease as l")
+		.innerJoin("lease_version as v", "v.lease_id", "l.id")
+		.innerJoin("document as doc", "doc.id", "v.document_id")
+		.select((eb) => [
+			"v.id",
+			"v.lease_id",
+			"v.version",
+			"v.document_id",
+			"doc.name as document_name",
+			asText(eb.ref("v.executed_on")).as("executed_on"),
+			asText(eb.ref("v.commencement_on")).as("commencement_on"),
+			asText(eb.ref("v.expiration_on")).$notNull().as("expiration_on"),
+			eb.ref("v.rent_per_sf_yr").$castTo<number | null>().as("rent_per_sf_yr"),
+			eb.ref("v.nnn_per_sf_yr").$castTo<number | null>().as("nnn_per_sf_yr"),
+			"v.term_months",
+			eb.ref("v.ti_per_sf").$castTo<number | null>().as("ti_per_sf"),
+			eb
+				.ref("v.free_rent_months")
+				.$castTo<number | null>()
+				.as("free_rent_months"),
+			eb.ref("v.escalation_pct").$castTo<number | null>().as("escalation_pct"),
+			asText(eb.ref("v.rent_starts_on")).as("rent_starts_on"),
+			"v.rent_days_after_delivery",
+			"v.expense_structure",
+			"v.other_terms",
+			jsonArrayFrom(
+				eb
+					.selectFrom("lease_option as o")
+					.select((eb) => [
+						"o.number",
+						"o.kind",
+						asText(eb.ref("o.notice_on")).$notNull().as("notice_on"),
+						"o.terms",
+					])
+					.whereRef("o.lease_version_id", "=", "v.id")
+					.orderBy("o.number"),
+			).as("options"),
+		])
+		.where("l.deal_id", "=", deal)
+		.orderBy("v.version", "desc");
 
 const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db

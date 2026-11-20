@@ -159,7 +159,22 @@ before(async () => {
 		insert into deal_reason (slug, label) values ('renewal', 'Renewal') on conflict do nothing;
 		insert into deal (id, name, kind, reason, renews_lease_id, owner_user_id)
 		values ('${id(33)}', 'Example renewal', 'lease', 'renewal', '${id(85)}', '${id(2)}'),
-			('${id(34)}', 'Example unpaid deal', 'lease', null, null, '${id(2)}');
+			('${id(34)}', 'Example unpaid deal', 'lease', null, null, '${id(2)}'),
+			('${id(38)}', 'Example signed deal', 'lease', null, null, '${id(2)}');
+		insert into outside_id (source, value, deal_id)
+		values ('old_system', '${id(95)}', '${id(30)}'), ('old_system', '${id(96)}', '${id(32)}');
+		insert into deal_party (deal_id, party_id, role) values ('${id(38)}', '${id(11)}', 'client');
+		insert into deal_property (deal_id, property_id) values ('${id(38)}', '${id(83)}');
+		insert into lease (id, deal_id, party_id, property_id)
+		values ('${id(97)}', '${id(38)}', '${id(11)}', '${id(83)}');
+		insert into document (id, name, r2_key, r2_bucket, content_type) values
+			('${id(98)}', 'Example signed original.pdf', 'example-original', 'deal_documents', 'application/pdf'),
+			('${id(100)}', 'Example signed amendment.pdf', 'example-amendment', 'deal_documents', 'application/pdf');
+		insert into lease_version (id, lease_id, version, document_id, expiration_on, rent_per_sf_yr, rent_days_after_delivery, other_terms)
+		values ('${id(101)}', '${id(97)}', 1, '${id(98)}', '2030-01-01', 22.50, null, null),
+			('${id(102)}', '${id(97)}', 2, '${id(100)}', '2031-01-01', 24.75, 30, 'Example sign allowance');
+		insert into lease_option (lease_version_id, number, kind, notice_on, terms)
+		values ('${id(102)}', 1, 'renewal', '2030-07-01', 'Example five year extension');
 		insert into critical_date (id, deal_id, kind, due_on, source)
 		values ('${id(82)}', '${id(33)}', 'option_notice', '2000-01-03', 'Example option'),
 			('${id(86)}', '${id(33)}', 'phase_effective_date', '2999-01-01', 'Example phase record');
@@ -360,6 +375,62 @@ const get = (path: string, schema?: string, partner = "partner_one") =>
 		},
 	);
 
+test("a next-only deal returns its signed versions and each source document", async () => {
+	const response = await get(`/deals/${id(38)}`, "next", "partner_two");
+	assert.equal(response.status, 200);
+	const detail = await response.json();
+	assert.ok(detail && typeof detail === "object" && "lease_versions" in detail);
+	assert.ok(Array.isArray(detail.lease_versions));
+	assert.equal(detail.lease_versions.length, 2);
+	assert.partialDeepStrictEqual(detail, {
+		deal_id: id(38),
+		lease_versions: [
+			{
+				id: id(102),
+				version: 2,
+				document_id: id(100),
+				document_name: "Example signed amendment.pdf",
+				expiration_on: "2031-01-01",
+				executed_on: null,
+				rent_per_sf_yr: 24.75,
+				rent_days_after_delivery: 30,
+				other_terms: "Example sign allowance",
+				options: [
+					{
+						number: 1,
+						kind: "renewal",
+						notice_on: "2030-07-01",
+						terms: "Example five year extension",
+					},
+				],
+			},
+			{
+				id: id(101),
+				version: 1,
+				document_id: id(98),
+				rent_per_sf_yr: 22.5,
+				options: [],
+			},
+		],
+	});
+});
+
+test("the legacy deal ID opens the next deal page and its signed terms", async () => {
+	const response = await get(`/deals/${id(95)}`, "next");
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), {
+		deal_id: id(30),
+		lease_versions: [{ version: 1, document_id: id(84) }],
+	});
+	const corrected = await get(`/deals/${id(96)}`, "next");
+	assert.equal(corrected.status, 200);
+	assert.partialDeepStrictEqual(await corrected.json(), {
+		deal_id: id(32),
+		owner: "partner_two",
+		lease_versions: [],
+	});
+});
+
 test("the copy lists an automatic move with an unknown prior phase and keeps no receipt", async () => {
 	assert.partialDeepStrictEqual(dealCopyCorrections, [
 		{
@@ -456,11 +527,11 @@ for (const schema of [undefined, "next"]) {
 				Array.isArray(board.accounts),
 		);
 		assert.equal(board.accounts.length, 1);
-		assert.equal(board.deals.length, schema ? 5 : 6);
+		assert.equal(board.deals.length, 6);
 		if (schema) {
 			assert.deepEqual(
 				board.deals.map((deal) => deal.id),
-				[id(32), id(30), id(35), id(36), id(37)],
+				[id(32), id(30), id(35), id(36), id(37), id(38)],
 			);
 			assert.deepEqual(board.deals[0].last_step, {
 				kind: "completed_action",
@@ -514,6 +585,7 @@ for (const schema of [undefined, "next"]) {
 				Array.isArray(detail.activities),
 		);
 		if (schema) assert.equal("email_threads" in detail, false);
+		else assert.equal("lease_versions" in detail, false);
 		assert.equal(detail.activities.length, 2);
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
 	});
