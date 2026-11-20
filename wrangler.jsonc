@@ -34,7 +34,15 @@
 	],
 	"vars": {
 		"POST_MEDIA_BUCKET": "doctorcre-post-media",
-		"CLIENT_WEBSITE_ORIGIN": "https://share.doctorcre.com"
+		"CLIENT_WEBSITE_ORIGIN": "https://share.doctorcre.com",
+		"DEALS_READ_SCHEMA": "next",
+		"HOME_INBOX_READ_SCHEMA": "next",
+		"LEADS_READ_SCHEMA": "next",
+		"DIRECTORY_READ_SCHEMA": "next",
+		"INVOICES_READ_SCHEMA": "next",
+		"SEARCH_READ_SCHEMA": "next",
+		"ACTIVITY_READ_SCHEMA": "next",
+		"RELATIONSHIPS_READ_SCHEMA": "next"
 	},
 	"env": {
 		"staging": {
