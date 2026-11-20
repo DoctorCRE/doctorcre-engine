@@ -2,20 +2,23 @@
 
 - **For** each partner, signed in, on a computer or a phone. Each sees their own work and can look at the other partner's.
 - **Must** show every real thing that needs the partner once, open each to what it is, let the partner finish it from Home, and stay current by itself.
-- **Must never** show the same thing twice, a card that cannot be opened or finished, an internal code, a raw timestamp or a system word; never send mail or decide a suggestion without the partner's click. What changes by itself, such as a step a call closed or a reply recorded from Outlook, never shows as the partner's click.
+- **Must never** repeat work, show a card that cannot be opened or finished, or display internal codes or raw timestamps. Only a partner can approve a reply or decide a suggestion. The engine handles routine work as described below and records it under the job that did it.
 
 The owner's test, in his words: "each real thing shows once, every card opens to what it is, every card can be finished, and it stays current without you cleaning it up." Each checkbox line is checked on the real screen, signed in, against a copy of production. Examples use made-up names.
 
 ## Every card
 
-- [ ] One card per real thing: one step, one email conversation, one call, one meeting. Two records about the same thing make one card.
-- [ ] The title says what to do in plain words, such as "Call Dr. Example about the second-floor suite".
-- [ ] Under the title, the client, lead, vendor or deal it is for, by name. "No linked deal" never shows on a card that belongs to a person or company.
+- [ ] Show each saved step, email conversation, call or meeting once. See all expands the same list. A reminder or priority shortcut points to its existing card.
+- [ ] Match copies of the same work by their recorded source and target. Two steps with the same words stay separate when they belong to different people, records or events. Cancel a redundant copied step with a recorded reason only after confirming it came from the same work. If the source is unknown and the action is clear, keep the step and show the recorded person, deal, property or date that distinguishes it.
+- [ ] Each card asking for work says "<what happened> — <what to do>". The title names the person, deal or property and the action. One line underneath says why the action is needed. The partner can understand it without opening the source.
+- [ ] The title describes the primary button's action. Clicking the title opens the context. The review can offer the choices that finish it. A waiting or Done card says what is happening or what happened and has no action to finish it.
+- [ ] For email, use the saved current email summary to explain the request. Keep the subject in the source view. When the summary is missing, use an explicit saved request or a literal stored quote that explains the action. If neither supplies the fact, the card needs a summary. Save one from the stored message before writing a title that depends on it. Until then, identify the sender and the known decision, with "Email summary unavailable" on the why line. Use the recorded sender name, then the sole exact directory match, then the address.
+- [ ] Show the client, lead, vendor or deal by name when known. The title can supply that name. "No linked deal" never shows on a card that belongs to a person or company.
 - [ ] Dates read as words in Central time: "Due Thu, Nov 19", "2 days late", "Today 12:00 PM". Never `2026-11-19` or `2026-11-02T15:41:50.000Z`.
-- [ ] No internal codes or system words: no `C-159`, `V-BNK-040`, `L-223`, loop numbers, "cadence", "needs attention" badges, "Ready for your attention", "loaded cards" or "Partner inbox". No markdown asterisks.
+- [ ] Titles, why lines and review text use record names and dates in words. Omit internal client, lead and vendor codes, loop numbers, schedule-rule names, offset labels such as "T-3 months", and markdown markers. Preserve the saved evidence. A lease reminder uses the recorded date and action, such as "Cedar Suite reaches its lease decision date in March — confirm renewal plans". A missing action or date stays unknown until the step is corrected.
 - [ ] Clicking the title opens what the card is about, as each kind below says. Opening never just outlines the same card in the list.
-- [ ] A card waiting on the partner has its finishing button in the same place, named for what it does, with Snooze beside it. Reply drafts and suggestion groups put Review reply or Review suggestions in that position and open the decision there. A card in In motion and waiting asks for nothing and has neither, except that a snoozed card offers Wake (coordinator, 2026-11-20).
-- [ ] A card the partner finishes leaves at once. It shows Undo only where its kind below says so.
+- [ ] A card waiting on the partner has its finishing button in the same place, named for what it does, with Snooze beside it. Reply drafts and suggestion groups put their review action in that position and open the decision there. A card in In motion and waiting asks for nothing and has neither, except that a snoozed card offers Wake (coordinator, 2026-11-20).
+- [ ] Finished work leaves the active inbox at once. A Done card opens the saved work. It offers Undo only when the signed-in partner can reverse their own current step completion. A sent reply or a completed suggestion review has no Undo. Tour feedback offers Undo after the partner marks it done. An automatically closed step has its own Undo under Closed automatically when available.
 - [ ] Work finished anywhere else (deal page, assistant, call capture, the other partner, Outlook) leaves Home on the next refresh without a click.
 - [ ] Snooze offers plain choices in Central time and brings the card back then. Undo brings it back at once.
 - [ ] Refresh inbox reloads the cards. The line beside it says whether Home is current, updating, or offline.
@@ -23,7 +26,7 @@ The owner's test, in his words: "each real thing shows once, every card opens to
 - [ ] Home has no "set waiting person" control.
 - [ ] Home has no Hide. Every card is finished, snoozed to a date, or dropped with a reason. There is no "Hide from inbox", no "Hidden from inbox" list, and no Hide button on the selection bar (today "Settle selected") (owner, 2026-11-19).
 - [ ] Every live card hidden before Hide went is back in the inbox. Of the 11 old hidden marks, 5 come back as inbox cards, and the other 6 have no live card (one cancelled step and five notifications with no copied card) (coordinator, 2026-11-19).
-- [ ] Every card kind has Drop beside Snooze. Drop asks for a reason, and the card leaves. Steps, call follow-ups, updates, reply drafts, suggestions and tour feedback offer the same actions. A lease fact is the one exception: its Reject asks a reason and finishes the card, and it has no separate Drop (coordinator, 2026-11-19).
+- [ ] Each active kind with Snooze has Drop beside it. Drop asks for a reason, and the card leaves. Steps, call follow-ups, checklist reminders, reply drafts, suggestions and tour feedback offer these actions. A lease fact is the one exception: its Reject asks a reason and finishes the card, and it has no separate Drop (coordinator, 2026-11-19).
 
 When app routing moves to the new database, Home uses door 24 for `snooze` and `unsnooze` (wake and Undo) on steps, call follow-ups, updates, suggestions and reply drafts, `drop` with a nonblank reason on call follow-ups, updates and tour feedback, and `done` and `undo_done` on tour feedback. Door 24 has no `settle` or `unsettle`, and the Home read has no settled shelf and advertises `home_mark_drop: true` and `home_proposal_drop: true`. Door 18 handles Mark done, reopening and cancelling steps with a reason. Door 21 handles suggestion decisions, including completion reviews and reason-bearing dismissal for every suggestion kind (see `docs/new-database.md`).
 
@@ -37,96 +40,64 @@ When app routing moves to the new database, Home uses door 24 for `snooze` and `
 - [ ] Search finds cards by title and by the name of the client, lead, vendor or deal.
 - [ ] A step dated after today, such as an automatic check-in months ahead, stays off Home until its day. Home has no "Coming up" list (owner, 2026-11-19).
 
-## Card kinds
+## Card kinds that need a partner
 
-### Step
+Each row gives an example title, the source of its why line, and the single primary action. Use recorded facts in place of the examples.
 
-A next step the partner owns.
+| Card                             | Example title                                                             | One-line why                                                                                                                                                                                                              | Primary action      |
+| -------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| Step                             | Follow-up due for Example Dental — call about the suite                   | The saved reason or source, with the due date when set. For an undated step, say the follow-up was set. If the source is unknown, use the recorded date or who set the step when known.                                   | Mark done           |
+| Call follow-up                   | Call with Dr. Example left a follow-up — send the floor plan              | The call's saved evidence quote or summary and date.                                                                                                                                                                      | Mark done           |
+| Call or meeting with suggestions | Call with Dr. Example left two decisions — review follow-ups              | Give the recorded next step or decision driving the review. Use the call or meeting summary or its evidence. For a meeting, name that meeting instead of the call. Use the date and deal if the person's name is unknown. | Review suggestions  |
+| Reply draft                      | Dr. Example asked for tour times — review reply                           | The saved email summary says which property and when they want to tour.                                                                                                                                                   | Review reply        |
+| Reply that failed                | Reply to Dr. Example didn't send — review delivery                        | Give the saved failure reason in plain words.                                                                                                                                                                             | Review delivery     |
+| Step that may be done            | A call mentions the lease draft — confirm whether it was sent             | The saved quote or summary that suggests this specific step happened.                                                                                                                                                     | Review completion   |
+| Checklist reminder               | Lease review is due for Example Dental — check the lease                  | The saved checklist item and its due date.                                                                                                                                                                                | Open checklist item |
+| Lease fact to check              | Lease draft lists base rent for Example Dental — verify the amount        | The document and page that supplied the value.                                                                                                                                                                            | Review lease fact   |
+| Tour comment                     | Example Dental commented on Cedar Suite — review feedback                 | The saved comment in one line. When only the change notice was saved, use its recorded wording.                                                                                                                           | Review feedback     |
+| Shortlist addition               | Example Dental added Cedar Suite to the shortlist — review the change     | The saved property and when it was added.                                                                                                                                                                                 | Review feedback     |
+| Shortlist removal                | Example Dental removed Cedar Suite from the shortlist — review the change | The saved property and when it was removed.                                                                                                                                                                               | Review feedback     |
+| Meeting outcome                  | Site tour with Example Dental was scheduled today — confirm it happened   | The scheduled time and known attendees or deal from Outlook.                                                                                                                                                              | Review meeting      |
 
-- [ ] Uses the full step text as its title and shows who or what it is for and when it is due.
-- [ ] Opens to the deal, client, lead or vendor page with the step in view: who set it, when, and from what (a call, an email, a meeting, or the automatic follow-up schedule).
-- [ ] With the new database, an open step on a deal opens `/deals?deal={deal_id}&focus=next-step&step={next_step_id}`. When both partners have open steps on that deal, each link puts its own step in view.
-- [ ] A person or company step that links to Relationships opens that party's node, including a contact with no other links.
-- [ ] A step about a building alone opens the building's sole open deal, including from Done. The card has no link if the building is on zero or several open deals.
-- [ ] A prospect's follow-up opens that prospect on Deals with the follow-up in view (`docs/screens/deals.md` § "A prospect"). It reaches Home only once Home reads the new database; the Deals switch alone does not bring it.
-- [ ] Mark done finishes the step. Undo on a Done card reopens the signed-in partner's own current completion.
-- [ ] Leaves when done or dropped anywhere, or when a newer step replaces it for the same person on the same client or deal.
+- [ ] A step opens to the saved action and its creation details when available. On a deal, open `/deals?deal={deal_id}&focus=next-step&step={next_step_id}`. For a prospect, open its follow-up on Deals. For another person or company, open its Relationships node. A building-only step opens its sole open deal when there is one. Otherwise open the saved step and its building details inline. Mark done finishes the exact step. Undo reopens the partner's own current completion.
+- [ ] An undated older follow-up stays on Home when the saved words give the partner a clear action or decision and a known target. Show "Follow-up set for" and the action. Leave the date blank. A schedule-only entry stays with the party's follow-up record while the engine calculates any date it can derive from recorded facts. If the saved entry gives neither a clear action nor enough facts to calculate a date, keep it on the party for correction and leave it out of Home without closing it.
+- [ ] A call follow-up opens the source call, its date and evidence, and the deal. Mark done and Undo act on the underlying step once.
+- [ ] A pending call or meeting group opens its recording or notes and every remaining decision. Accept saves a suggestion. Drop asks for a reason. The group leaves when all decisions are finished. A recorded call still being read asks for no action while it is in motion.
+- [ ] Review reply opens the source and the exact draft with To and CC. Save draft saves edits. Send reply approves that text once from the partner's mailbox. Sending asks for no action. Sent appears once in Done at the recorded send time. There is no Undo for sending. A newer draft or a reply recorded from Outlook retires the superseded draft.
+- [ ] Review delivery offers Retry only when the outbox knows nothing went out. A possible send stays in motion while the system checks Sent. If the outbox cannot retry, the review directs the partner to Outlook.
+- [ ] Review completion opens the exact step and its evidence. Yes, it's done completes it. Not yet keeps it open. The review leaves after either decision. Snooze returns it if still pending. A step closed automatically keeps its seven-day Undo where available under Closed automatically.
+- [ ] Open checklist item goes to the saved item. The reminder leaves when the item is finished or dropped with a reason. Routine updates follow the rule below.
+- [ ] Review lease fact opens the proposed value, document, pages and quote. Approve, Correct or Reject save a reason and finish the card. Reject serves as Drop. This is an app review kind while its Home source is still on the old read.
+- [ ] Review feedback opens the saved property, comment or shortlist change and its date. Done closes the review and preserves the saved feedback and shortlist. Undo brings the card back.
+- [ ] Review meeting opens the scheduled meeting. It happened logs it once. Dismiss drops the question. Outlook's scheduled end alone does not confirm that the meeting happened.
 
-### Call follow-up
+### Suggestions on a card
 
-A step a recorded call produced.
+- [ ] Use one card per Outlook conversation, recorded call or recorded meeting. Without a conversation ID, match the exact stored email. Distinct messages with the same subject can ask for different work. Give each retained decision its own context and source date. Repeated proposals for the same action on the same source and target appear once.
+- [ ] A suggestion title still names the decision when it is late. "N days late" supplies timing next to the card's date. The one-line why explains the work.
+- [ ] A pending draft leads its conversation card. An approved or failed draft shares an existing suggestion card, with its delivery state available in the review. Otherwise one remaining decision leads the title and why line. If several decisions remain, use the first decision in review order for the context and say how many decisions to review. Use the source for the decision named on the card, even when a newer message is in the conversation. Mail priorities only orders existing cards.
+- [ ] The card's review shows each proposal with its evidence and destination. Partners can accept or drop each one. A next step's words and date can be edited before saving. Drop requires a reason. Neither choice has Undo.
 
-- [ ] Uses the full step text as its title and shows the deal and "From your call with Dr. Example on Tue, Nov 17".
-- [ ] Opens to the call's summary with the part of the call the step came from, and a link to the deal.
-- [ ] Mark done and Undo work as on a step. Leaves as a step does.
+| Suggestion                                | Example title when it leads an email card                           | One-line why                                                                                             | Primary action      |
+| ----------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------- |
+| Next step                                 | Dr. Example asked for the floor plan — review the follow-up         | Email summary or saved request, plus the proposed step. For calls and meetings use their saved evidence. | Review follow-up    |
+| Uncertain email filing                    | Dr. Example sent lease terms — choose the deal                      | Email summary or quote and the known reason the deal could not be matched.                               | Choose deal         |
+| Possible new deal                         | Dr. Example asked about a second location — decide where to file it | Email summary or quote explaining the possible deal.                                                     | Choose deal         |
+| Proposed phase change                     | Example Dental received an LOI — review move to Negotiating         | Saved milestone evidence and proposed phase.                                                             | Review phase change |
+| New lead role suggested for a known party | Dr. Example expressed interest — review adding a lead               | Saved evidence of interest and the party's name.                                                         | Review lead         |
+| Proposed lead-stage change                | Dr. Example replied about timing — review lead stage                | Saved evidence and proposed stage.                                                                       | Review lead stage   |
+| Log a call with a distinct suggested note | Example Dental discussed lease timing — review call note            | The saved note and the call evidence. This action only adds a note to the existing record.               | Review call note    |
 
-### Call
+### Work the engine handles
 
-A recorded call whose suggestions wait for the partner.
+- [ ] The automatic follow-up schedule checks eligibility, calculates the due date, and sets the next check-in once. Schedule bookkeeping needs no Home card. It stays with the follow-up record. If an existing save shows the work was already done, remove the request and keep the completion with the party or deal's history.
+- [ ] An automatic check-in that still requires a partner to contact someone or make a business decision appears on its due day. Its title names the person or company and the requested action. The why line gives the recorded reason and date. The schedule never sends outreach or marks it done without evidence.
 
-- [ ] While the call is still being read, it sits in In motion and asks for nothing.
-- [ ] Then says "Call with Dr. Example, Tue, Nov 17: 3 suggestions".
-- [ ] Opens to each suggestion with Accept and Drop. Drop asks for a reason. Neither has Undo.
-- [ ] Next steps and phase moves the call made by itself show as made automatically, each with Undo.
-- [ ] Leaves when every suggestion is accepted or dropped.
-
-### Reply draft
-
-A reply Dr. CRE drafted to an email.
-
-- [ ] Says "Reply to Pat Example: Floor plan for suite 200" using the source email’s subject. One card per email conversation.
-- [ ] Opens to the email being answered (who wrote, when, what they said), then the draft with To and CC.
-- [ ] Save draft sends nothing. Drop asks for a reason, and the card leaves.
-- [ ] Send reply approves this exact text to be sent once from the partner's own mailbox. The card shows "Sending" until the outbox records it, then appears once in Done as sent, using the recorded send time. Send reply has no Undo.
-- [ ] When the outbox records a failure, the card says "Didn't send" and why, in plain words. If nothing went out, Send reply is offered again. If it may have gone out, the card says it is checking the Sent folder and offers no Send reply. Any other failure is never sent again on its own; the partner answers from Outlook.
-- [ ] Leaves by itself, with no click, when the partner's own reply in that conversation is recorded from Outlook, or when a newer email in the conversation brings a newer draft.
-
-### Email suggestion
-
-A next step, a deal to file the email to, a possible new deal, a deal's progress, or a possible lead that an email suggests.
-
-- [ ] Shows the sender and subject as its title, such as "Pat Example · Floor plan". A grouped card uses the latest email among its suggestions. Reply drafts and email suggestions use the recorded sender name or the name of the only directory record with that exact address.
-- [ ] Opens to the email and the deal, client or lead it would change.
-- [ ] When a possible lead matches a stored Message-ID or Outlook conversation ID in the partner's mailbox, the partner sees it on that conversation's card and can decide each suggestion there. Without a match, the lead has its own card with the sender and "Possible lead".
-- [ ] The possible lead action opens the saved sender details, intake summary and any excerpt. The mailbox partner can accept it or drop it with a reason.
-- [ ] Accept saves the suggestion, and lets the partner edit a step's words and date first. Drop asks for a reason and drops it for good. Neither has Undo. Only the partner's click decides, never the assistant.
-- [ ] Leaves when accepted or dropped. One card per email conversation.
-- [ ] When a pending reply draft and pending suggestions share a conversation, the draft leads one card and the partner can decide each suggestion inside it. Snooze and Drop apply to that card. Mail priorities orders that card in the inbox. When the draft is approved, sent, failed or dropped, any remaining suggestions lead the card. An approved or failed draft carries its delivery status on that card, including “Didn't send” and Retry when eligible. A sent reply appears in Done (coordinator, 2026-11-18).
-
-### Step that may be done
-
-A note, deal update or call suggests a late step already happened.
-
-- [ ] Says "Did this happen? Send the lease draft (Example Dental, Springfield)" with the words that suggest it.
-- [ ] Opens to the deal and the note or call it came from.
-- [ ] Yes, it's done finishes the step. Not yet keeps it open. Neither has Undo.
-- [ ] Snooze puts the step on the snoozed shelf until the chosen time, then the review returns if it is still pending.
-- [ ] A step closed automatically shows under "Closed automatically" for seven days, with Undo.
-- [ ] Leaves when answered.
-
-### Update
-
-A change on a deal the partner follows.
-
-- [ ] Says the deal and what changed: "Example Dental, Springfield moved to Negotiating".
-- [ ] Opens to the deal page at that change.
-- [ ] Got it marks it read. Leaves when read.
-
-### Lease fact to check
-
-A lease value read from a document that needs the partner's eye.
-
-- [ ] Says the deal and the fact: "Example Dental: check the base rent".
-- [ ] Opens to each value found, with its document, pages and quoted text.
-- [ ] Approve, Correct or Reject, each with a reason. Reject records that the fact is wrong and finishes the card; the card has no separate Drop. Leaves when saved.
-
-### Tour feedback
-
-A client's comment on a toured property, or a property added to or removed from their shortlist.
-
-- [ ] The title says who did what to which property, such as "Example Dental commented on 100 Example Street" or "Example Dental added 100 Example Street to the shortlist" (coordinator, 2026-11-19).
-- [ ] Opens to the property, the comment or the shortlist change, and when it was left.
-- [ ] Stays on Home until the partner finishes it. Done finishes it, and the card leaves (owner, 2026-11-19). Undo brings it back, as on every other Done (coordinator, 2026-11-19).
+- [ ] A clear inbound lead goes straight to Leads as an unclaimed lead with its source email and a **New from email** badge. No Home card or Mail priorities row is created for that intake. Repeated lead-source notices about the same verified prospect keep one lead and its distinct source emails. Separate prospects from the same source each get their own lead. See [Leads](leads.md) for what qualifies and how the badge clears.
+- [ ] The engine files mail automatically when existing routing evidence identifies exactly one eligible open deal. It respects a partner's earlier unlink and leaves conflicting links for a partner to resolve. The email is visible on the deal's Timeline. An already-filed email needs no filing review. Other pending work in that conversation stays available.
+- [ ] An informational deal update stays on the deal's Timeline. Home asks for no acknowledgement. A dated reminder tied to an unfinished checklist item stays actionable.
+- [ ] A call already saved is visible in the call record and its linked Timeline. If a suggestion only repeats what is already saved there, Home asks for no second log. A suggestion that would add a distinct note still needs review.
+- [ ] Existing automatic actions, such as a closed step or recorded Outlook reply, never become a new request to mark them done. Keep the recorded event and any available Undo in its history.
 
 ## Today panel
 
@@ -151,12 +122,12 @@ A client's comment on a toured property, or a property added to or removed from 
 - [ ] Each meeting shows once, in the Today panel. Home has no Upcoming meetings, Your working week or Your schedule panel (owner, 2026-11-19).
 - [ ] Each meeting shows its time in words, its title, and the client or deal it is about.
 - [ ] Opens to the meeting with its attendees, and to its deal when it has one.
-- [ ] After a meeting ends, Home asks once whether it happened. It happened logs it; Dismiss drops the question.
+- [ ] After a meeting ends, Today shows its meeting outcome review once when Outlook supplies one.
 - [ ] When Home's calendar may differ from Outlook, it says when it last matched.
 
 ## Not yet true
 
-Seen on the live Home screen on 2026-11-18, or read in the app's Home code where noted.
+Baseline from the 2026-11-18 walkthrough and app code. The new card titles, why lines, automatic filing rules and Leads badge above describe the target behavior.
 
 - The prospect and Relationships views still lack the step's recorded creation details.
 - Step titles carry internal codes, loop numbers, cadence names and markdown asterisks.
@@ -175,6 +146,6 @@ Seen on the live Home screen on 2026-11-18, or read in the app's Home code where
 - The Today panel calls a past-due reminder "overdue" and its Deal pulse stayed on "Checking recent deal changes…" on the live CARR-backed screen. The engine now supplies `GET /api/engine/home/today` with today's meetings from door 25 and partner-scoped dated reminders (with Home card links and `N days late`, and no Deal pulse); app routing still waits.
 - Today's vendor lunch shows in Upcoming meetings, Your working week and Your schedule.
 - Overdue steps to confirm ("Overdue tasks to review") did not appear on Home. The engine read can return completion reviews with a link to the deal's next step. Home still needs to route the read and wire the decision buttons.
-- Update cards offer "Open" and the page the update names, or "Open Updates" when it names none, and never Got it (code). The engine read links each unread Home update to its deal. Home still needs to route the read and wire Got it.
+- The engine still reads informational updates as Home notices. The new behavior keeps these in the deal Timeline and retains reminders for unfinished checklist items.
 - A card with no page to open and no finishing button says "Read it, then hide it from your inbox." (code).
 - Tour feedback cards on Home have no review and no finishing button. Only an action link's page opens the feedback, and it only shows it (code).
