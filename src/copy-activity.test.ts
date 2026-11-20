@@ -656,3 +656,32 @@ test("signs a recorded next step only from the event written with it, even when 
 		[id(90), "agent", id(1)],
 	]);
 });
+
+test("formats dates next to Markdown and punctuation in copied analysis notes while keeping filenames intact", async () => {
+	const detail = [
+		"- 2025-04-01, **2025-04-02**, **2025-04-03.** and **2025-04-04**. Also **2025-04-05**, (2025-04-06)** and **Checked (2025-04-07):**",
+		"- *Updated 2025-04-08.* *[2025-04-09]* ~2025-04-10; (2025-04-11), (2025-04-12.) and 2025-04-13.",
+		"* [2025-04-14](https://example.com/2025-04-14.pdf) and [Notes 2025-04-15](https://example.com/notes), [**2025-04-16**](https://example.com/notes). [2025-04-17][ref]",
+		'Keep `files/report-2025-04-18.md`, ~/notes/summary-2025-04-19.txt, docs/2025-04-20/., "2025-04-21.pdf", [See file](https://example.com/2025-04-22.pdf), [2025-04-23.pdf](https://example.com/2025-04-23.pdf), 2025-04-24T09:00 and **2025-02-30**.',
+	].join("\n");
+	const expected = [
+		"Analysis",
+		"",
+		"Example analysis",
+		"",
+		"- April 1, 2025, **April 2, 2025**, **April 3, 2025.** and **April 4, 2025**. Also **April 5, 2025**, (April 6, 2025)** and **Checked (April 7, 2025):**",
+		"- *Updated April 8, 2025.* *[April 9, 2025]* ~April 10, 2025; (April 11, 2025), (April 12, 2025.) and April 13, 2025.",
+		"* [April 14, 2025](https://example.com/2025-04-14.pdf) and [Notes April 15, 2025](https://example.com/notes), [**April 16, 2025**](https://example.com/notes). [April 17, 2025][ref]",
+		'Keep `files/report-2025-04-18.md`, ~/notes/summary-2025-04-19.txt, docs/2025-04-20/., "2025-04-21.pdf", [See file](https://example.com/2025-04-22.pdf), [2025-04-23.pdf](https://example.com/2025-04-23.pdf), 2025-04-24T09:00 and **2025-02-30**.',
+	].join("\n");
+	await db.query(
+		`insert into public.activity (id, kind, occurred_at, recorded_at, updated_at, actor_id, summary, deal_id, detail)
+		values ($1, 'analysis', '2025-04-25', '2025-04-25', '2025-04-25', $2, 'Example analysis', $3, $4)`,
+		[id(95), id(1), id(30), detail],
+	);
+	await run();
+	assert.deepEqual(
+		await rows(`select summary from activity where id = '${id(95)}'`),
+		[{ summary: expected }],
+	);
+});

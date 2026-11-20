@@ -339,7 +339,7 @@ where coalesce(kind, '') not in ('worked', 'referred') or kind = 'worked' and de
 -- introduce the team, so it is the broker's to the end that is not a user.
 create temp table typed_link on commit drop as
 select l.id, l.kind, l.from_party, l.via_party, l.occurred_on, l.created_at, l.created_by,
-	nullif(regexp_replace(l.note, '^\s+|\s+$', '', 'g'), '') as note, ends.party_id, ends.other_party_id, case
+	copy_note_text(nullif(regexp_replace(l.note, '^\s+|\s+$', '', 'g'), '')) as note, ends.party_id, ends.other_party_id, case
 	when l.kind in ('works_with', 'intro_requested') then 'outside the owner''s ruling'
 	when l.kind not in ('knows', 'can_introduce') then 'not a kind of link'
 	when f.party_id is null or t.party_id is null or brokered and v.party_id is null then 'a party it links is not copied'

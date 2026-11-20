@@ -194,7 +194,7 @@ begin atomic
   else words.word[1] end, '' order by words.position), value)
  from regexp_matches(value, '\S+|\s+', 'g') with ordinality as words(word, position)
  cross join lateral (select regexp_match(words.word[1],
-  $re$^([(\[{"']*)(\d{4}-\d\d-\d\d|[a-z_]+)([)\]}"',;:!?]*\.?)$$re$) as parts) token
+  $re$^([(\[{"'*~]*)(\d{4}-\d\d-\d\d|[a-z_]+)([)\]}"',;:!?*~.]*(?:\](?:\([^)\s]+\)|\[[^\]\s]+\])[)\]}"',;:!?*~.]*)?)$$re$) as parts) token
  -- A phase slug that is also an ordinary word needs a standalone phase value.
  left join public.deal_phase p on render_phases and p.slug = token.parts[2]
   and (p.slug in ('site_selection', 'due_diligence')

@@ -951,3 +951,20 @@ for (const [sql, code] of [
 			await assert.rejects(db.query(sql), { code });
 		}));
 }
+
+test("relationship link notes format dates in words and keep filenames intact", () =>
+	rolledBack(async () => {
+		const note =
+			" Met on 2025-03-01, **2025-03-02**, [2025-03-03](https://example.com/2025-03-03.pdf); keep notes/2025-03-04.pdf. ";
+		await copy(
+			`${LINKS} update public.party_link set note = '${note}' where id = '${id(80)}';`,
+		);
+		assert.deepEqual(
+			await rows(`select note from party_link where id = '${id(80)}'`),
+			[
+				{
+					note: "Met on March 1, 2025, **March 2, 2025**, [March 3, 2025](https://example.com/2025-03-03.pdf); keep notes/2025-03-04.pdf.",
+				},
+			],
+		);
+	}));
