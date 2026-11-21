@@ -89,6 +89,14 @@ before(async () => {
 });
 after(cleanup);
 
+function rowIds(rows: unknown) {
+	assert.ok(Array.isArray(rows));
+	return rows.map((row: unknown) => {
+		assert.ok(isArguments(row));
+		return row.id;
+	});
+}
+
 const get = (
 	schema?: string,
 	partner?: string,
@@ -221,16 +229,8 @@ test("Calendar and Today still show dated steps when open steps have infinite du
 				assert.equal(response.status, 200);
 				const calendar = await response.json();
 				assert.ok(isArguments(calendar));
-				assert.ok(Array.isArray(calendar.critical_dates));
-				assert.deepEqual(
-					calendar.critical_dates.map((row) => row.id),
-					[date, otherDate],
-				);
-				assert.ok(Array.isArray(calendar.next_steps));
-				assert.deepEqual(
-					calendar.next_steps.map((step) => step.id),
-					[id(31), id(32)],
-				);
+				assert.deepEqual(rowIds(calendar.critical_dates), [date, otherDate]);
+				assert.deepEqual(rowIds(calendar.next_steps), [id(31), id(32)]);
 			},
 		);
 		await t.test("Today returns the finite reminders", async () => {
@@ -239,11 +239,7 @@ test("Calendar and Today still show dated steps when open steps have infinite du
 			const body = await response.json();
 			assert.ok(isArguments(body) && isArguments(body.reminders));
 			assert.equal(body.reminders.state, "ready");
-			assert.ok(Array.isArray(body.reminders.late));
-			assert.deepEqual(
-				body.reminders.late.map((step) => step.id),
-				[id(31), id(32)],
-			);
+			assert.deepEqual(rowIds(body.reminders.late), [id(31), id(32)]);
 		});
 	} finally {
 		await db.query(`begin;

@@ -59,10 +59,16 @@ export async function readCalendarDates(db: Reader) {
 export async function readNextCalendarDates(
 	db: Transaction<DB>,
 	viewerId: string,
+	today?: string,
 ) {
 	const viewer = await db
 		.selectFrom("app_user")
 		.select("is_account_partner")
+		.select(
+			sql<string>`coalesce(${today ?? null}::date, (now() at time zone 'America/Chicago')::date)::text`.as(
+				"today",
+			),
+		)
 		.where("id", "=", viewerId)
 		.executeTakeFirst();
 	if (!viewer?.is_account_partner)
@@ -86,7 +92,10 @@ export async function readNextCalendarDates(
 		.orderBy("due_on")
 		.orderBy("cd.id")
 		.execute();
-	return { ...calendarDates(rows), next_steps: await readCalendarSteps(db) };
+	return {
+		...calendarDates(rows),
+		next_steps: await readCalendarSteps(db, viewer.today),
+	};
 }
 
 type CalendarStep = Parameters<typeof stepRecordUrl>[0] & {
@@ -98,13 +107,12 @@ type CalendarStep = Parameters<typeof stepRecordUrl>[0] & {
 	days_late: number;
 };
 
-async function readCalendarSteps(db: Transaction<DB>) {
-	const today = sql`(now() at time zone 'America/Chicago')::date`;
+async function readCalendarSteps(db: Transaction<DB>, today: string) {
 	const { rows } = await sql<CalendarStep>`
 		select s.id, s.what, u.slug as owner, s.deal_id, s.party_id,
 			${stepTargetFields(db)}, s.due_on::text as due_on,
-			greatest(s.due_on, ${today})::text as display_on,
-			greatest(${today} - s.due_on, 0) as days_late
+			greatest(s.due_on, ${today}::date)::text as display_on,
+			greatest(${today}::date - s.due_on, 0) as days_late
 		${datedPartnerSteps}
 		order by s.due_on, s.id
 	`.execute(db);

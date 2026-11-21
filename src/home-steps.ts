@@ -114,7 +114,7 @@ export const datedPartnerSteps = sql`
 	left join property on property.id = s.property_id
 	left join home_mark m on m.user_id = s.owner_party_id and m.item_id = s.id
 		and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
-	where s.due_on is not null
+	where isfinite(s.due_on)
 		and m.disposition is distinct from 'dropped'
 		and (m.snoozed_until is null or m.snoozed_until <= now())
 `;
