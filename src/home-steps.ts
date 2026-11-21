@@ -14,6 +14,9 @@ const storedDate =
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
 const phoneNumber =
 	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
+const meetingSuffix =
+	/\s*\|\s*([^|]+, (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\p{L}*,? \p{L}{3,9} \d{1,2}(?:,? \d{4},?)? \d{1,2}:\d{2}\s*[AP]M\.?)$/iu;
+const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
 
 export function homeDisplayText(text: string | null) {
 	return (text ?? "")
@@ -76,32 +79,61 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
-	const wording = savedText
+	const meeting = meetingSuffix.exec(savedText);
+	const savedAction = meeting ? savedText.slice(0, meeting.index) : savedText;
+	const wording = savedAction
 		.replace(phoneNumber, " ")
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "");
-	const title =
-		savedHomeTitle(wording) ||
-		(contact
-			? homeTitle("call_follow_up", contact)
-			: homeTitle("follow_up", target));
-	const hiddenWording = savedText !== title;
+	const cadence = vendorCadence.exec(savedText)?.[1];
+	const title = cadence
+		? homeTitle("vendor_check_in", target)
+		: savedHomeTitle(wording) ||
+			(contact
+				? homeTitle("call_follow_up", contact)
+				: homeTitle("follow_up", target));
+	const instruction =
+		title === wording
+			? savedAction
+					.match(phoneNumber)
+					?.map((number) => number.replace(/^at\s+/i, ""))
+					.join(", ")
+			: savedAction;
+	const titleWords = title.replace(/[\p{P}\s]+$/gu, "").split(/\s+/);
+	const titlePrefix = new RegExp(
+		`^${titleWords.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+")}(?=$|[\\s\\p{P}])`,
+		"iu",
+	);
+	const remaining = instruction
+		?.replace(titlePrefix, "")
+		.replace(/^[\s\p{P}]+/u, "");
+	const detail =
+		instruction && titlePrefix.test(instruction)
+			? remaining
+				? remaining.charAt(0).toUpperCase() + remaining.slice(1)
+				: null
+			: instruction;
+	const details = homeWhy(cadence ?? detail ?? null, meeting?.[1] ?? null);
+	const action = title.replace(/[.!?]+$/, "");
+	const extraEvidence = (text: string) =>
+		text.replace(/[.!?]+$/, "") === action ? null : text;
 	if (step.call_at) {
 		return {
 			title,
 			why: homeWhy(
 				`Call${contact ? ` with ${contact}` : ""} on ${homeDate(step.call_at)}`,
-				homeDisplayText(evidence?.call_quote ?? null) ||
-					homeDisplayText(evidence?.call_summary ?? null) ||
-					"Call details unavailable",
-				hiddenWording ? savedText : null,
+				extraEvidence(
+					homeDisplayText(evidence?.call_quote ?? null) ||
+						homeDisplayText(evidence?.call_summary ?? null) ||
+						"Call details unavailable",
+				),
+				details,
 				hold,
 				due,
 			),
 		};
 	}
-	if (!evidence)
-		return { title, why: homeWhy(hiddenWording ? savedText : null) };
+	if (!evidence) return { title, why: details };
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
 		? `Follow-up set from the ${evidence.source_kind}`
@@ -112,11 +144,9 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		title,
 		why: homeWhy(
 			hold || set,
-			homeDisplayText(evidence.source_evidence),
+			extraEvidence(homeDisplayText(evidence.source_evidence)),
 			due,
-			hiddenWording || hold || (!evidence.source_kind && !setter && !due)
-				? savedText
-				: null,
+			details,
 		),
 	};
 }
@@ -144,7 +174,7 @@ export function homeWhy(...facts: (string | null)[]) {
 		.join(" ");
 }
 
-export function stepTargetFields(db: Transaction<DB>) {
+export function stepTargetFields(db: Transaction<DB>, today = homeDay) {
 	const openDeals = db
 		.selectFrom(selectNextDeals(db).as("board"))
 		.select("id")
@@ -156,8 +186,15 @@ export function stepTargetFields(db: Transaction<DB>) {
 			having count(*) = 1
 		) end as building_deal_id,
 		coalesce(d.name, p.name, property.name, property.address) as context_label,
-		exists (select from party_role r where r.party_id = s.party_id and r.role = 'lead') as lead_target,
-		exists (select from party_role r where r.party_id = s.party_id and r.role = 'vendor') as vendor_target,
+		exists (select from party_role r
+			where r.role = 'vendor' and r.party_id in (
+				select s.party_id
+				union all
+				select pc.company_id from party_company pc
+				where pc.person_id = s.party_id
+					and (pc.started_on is null or pc.started_on <= ${today})
+					and (pc.ended_on is null or pc.ended_on > ${today})
+			)) as has_vendor_role,
 		exists (select from party_role r where r.party_id = s.party_id
 			and r.role = 'lead' and r.stage = 'opportunity'
 			and not exists (select from deal_party dp where dp.party_id = r.party_id)) as prospect
@@ -188,19 +225,16 @@ export type HomeStepTarget = {
 	deal_id: string | null;
 	building_deal_id: string | null;
 	property_id: string | null;
-	lead_target: boolean;
-	vendor_target: boolean;
+	has_vendor_role: boolean;
 };
 
 export function homeStepTarget(step: HomeStepTarget) {
 	if (step.deal_id || step.building_deal_id) return "deal";
-	if (step.lead_target) return "lead";
-	if (step.vendor_target) return "vendor";
+	if (step.has_vendor_role) return "vendor";
 	if (step.property_id) return "building";
 	return "other";
 }
 
-// Lead steps live on Leads, so Home and Calendar show only these.
 export const homeStepShown = (step: HomeStepTarget) =>
 	["deal", "vendor", "building"].includes(homeStepTarget(step));
 
@@ -221,18 +255,19 @@ export function dealStepUrl(dealId: string, stepId: string) {
 	return `/deals?deal=${dealId}&focus=next-step&step=${stepId}`;
 }
 
-type StepTarget = {
+type StepTarget = Pick<
+	HomeStepTarget,
+	"deal_id" | "building_deal_id" | "has_vendor_role"
+> & {
 	id: string;
-	deal_id: string | null;
 	party_id: string | null;
 	prospect: boolean;
-	building_deal_id: string | null;
 };
 
 export function stepRecordUrl(step: StepTarget) {
 	if (step.deal_id) return dealStepUrl(step.deal_id, step.id);
 	if (step.party_id) {
-		return step.prospect
+		return step.prospect && !step.has_vendor_role
 			? `/deals?prospect=${step.party_id}&focus=follow-up&step=${step.id}`
 			: `/relationships?node=party:${step.party_id}&step=${step.id}`;
 	}

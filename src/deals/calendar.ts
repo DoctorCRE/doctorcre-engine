@@ -110,11 +110,12 @@ type CalendarStep = Parameters<typeof stepRecordUrl>[0] &
 
 async function readCalendarSteps(db: Transaction<DB>, now: string) {
 	const at = sql`${now}::timestamptz`;
+	const today = homeDayAt(at);
 	const { rows } = await sql<CalendarStep>`
 		select s.id, s.what, u.slug as owner, s.deal_id, s.party_id, s.property_id,
-			${stepTargetFields(db)}, contact.name as call_contact, s.due_on::text as due_on,
-			greatest(s.due_on, ${homeDayAt(at)})::text as display_on,
-			greatest(${homeDayAt(at)} - s.due_on, 0) as days_late
+			${stepTargetFields(db, today)}, contact.name as call_contact, s.due_on::text as due_on,
+			greatest(s.due_on, ${today})::text as display_on,
+			greatest(${today} - s.due_on, 0) as days_late
 		${datedPartnerSteps(at)}
 		order by s.due_on, s.id
 	`.execute(db);

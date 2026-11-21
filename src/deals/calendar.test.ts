@@ -26,6 +26,12 @@ const pastDate = id(25);
 const supplier = id(43);
 const movers = id(44);
 const lead = id(45);
+const vendorContact = id(46);
+const leadContact = id(47);
+const formerVendorContact = id(48);
+const futureVendorContact = id(52);
+const futureVendorStep = id(53);
+const cadence = "Relationship touch — Example Contact. 90-day vendor cadence.";
 const longWording =
 	"Ask Example Supply whether the expansion order can ship before the tenant improvements finish next spring";
 
@@ -68,10 +74,23 @@ before(async () => {
 			('${supplier}', 'company', 'Example Supply'), ('${movers}', 'company', 'Example Movers');
 		insert into how_found (slug, label) values ('referral', 'Referral');
 		insert into party (id, kind, name, how_found) values ('${lead}', 'company', 'Example Place', 'referral');
+		update party set how_found = 'referral' where id = '${clinic}';
+		insert into party (id, kind, name) values ('${vendorContact}', 'person', 'Example Contact'),
+			('${leadContact}', 'person', 'Example Lead Contact'), ('${formerVendorContact}', 'person', 'Example Former Contact'),
+			('${futureVendorContact}', 'person', 'Example Future Contact');
 		insert into role (slug, label) values ('vendor', 'Vendor'), ('lead', 'Lead');
-		insert into stage (role, slug, label) values ('lead', 'new', 'New');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New'), ('lead', 'opportunity', 'Opportunity');
 		insert into party_role (party_id, role, stage) values ('${clinic}', 'vendor', null),
-			('${supplier}', 'vendor', null), ('${movers}', 'vendor', null), ('${lead}', 'lead', 'new');
+			('${supplier}', 'vendor', null), ('${movers}', 'vendor', null), ('${lead}', 'lead', 'new'),
+			('${clinic}', 'lead', 'opportunity');
+		insert into party_company (person_id, company_id, started_on, ended_on) values
+			('${vendorContact}', '${lead}', '1999-01-01', '2000-01-01'),
+			('${vendorContact}', '${supplier}', '2000-01-01', null),
+			('${vendorContact}', '${lead}', '2001-01-15', null),
+			('${leadContact}', '${lead}', '2000-01-01', null),
+			('${formerVendorContact}', '${supplier}', '1999-01-01', '2001-01-15'),
+			('${futureVendorContact}', '${supplier}', '1999-01-01', '2000-01-01'),
+			('${futureVendorContact}', '${supplier}', '2099-01-16', null);
 		insert into outside_id (source, value, party_id)
 			values ('old_system', '${alex}', '${alex}'), ('old_system', '${casey}', '${casey}');
 		insert into deal_kind (slug, label) values ('lease', 'Lease');
@@ -94,7 +113,11 @@ before(async () => {
 			('${id(39)}', '${open}', null, '${casey}', 'JOE DECIDE: call Example Owner at (555) 010-0199 about the renewal', '2001-01-13', null, null),
 			('${id(40)}', null, '${supplier}', '${alex}', '${longWording}', '2001-01-18', null, null),
 			('${id(41)}', null, '${lead}', '${alex}', 'Lease event T-3 months — Example Place (L-001), est. 2001-04-01. Last window before leverage is gone.', '2001-01-10', null, null),
-			('${id(42)}', null, '${movers}', '${alex}', 'Confirm the move date', '2001-01-12', '2001-01-20', null);
+			('${id(42)}', null, '${movers}', '${alex}', 'Confirm the move date', '2001-01-12', '2001-01-20', null),
+			('${id(49)}', null, '${vendorContact}', '${alex}', '${cadence}', '2001-01-17', null, null),
+			('${id(50)}', null, '${leadContact}', '${alex}', 'Ask about the introduction', '2001-01-10', null, null),
+			('${id(51)}', null, '${formerVendorContact}', '${alex}', 'Ask about the move', '2001-01-10', null, null),
+			('${futureVendorStep}', null, '${futureVendorContact}', '${alex}', 'Confirm the delivery slot', '2001-01-10', null, null);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until)
 			values ('${casey}', '${id(34)}', 'snoozed', 'infinity');
 		commit;
@@ -206,6 +229,43 @@ for (const schema of [undefined, "next"]) {
 	});
 }
 
+test("Calendar includes both a dual-role vendor and a contact at separate lead and vendor companies", async () => {
+	const body = await nextTransaction(connectionString, "read", (tx) =>
+		readNextCalendarDates(tx, alex, "2001-01-15T18:00:00Z"),
+	);
+	assert.ok("next_steps" in body);
+	const links = new Map(
+		body.next_steps.map((step) => [step.id, step.open_url]),
+	);
+	assert.equal(
+		links.get(id(32)),
+		`/relationships?node=party:${clinic}&step=${id(32)}`,
+	);
+	assert.equal(
+		links.get(id(49)),
+		`/relationships?node=party:${vendorContact}&step=${id(49)}`,
+	);
+	assert.equal(links.has(id(41)), false);
+	assert.equal(links.has(id(50)), false);
+});
+
+test("Calendar includes company links starting on the request's Central day and excludes ended links", async () => {
+	for (const [now, futureShown, formerShown] of [
+		["2099-01-16T05:59:59Z", false, false],
+		["2099-01-16T06:00:00Z", true, false],
+		["2001-01-15T05:59:59Z", false, true],
+		["2001-01-15T06:00:00Z", false, false],
+	] as const) {
+		const body = await nextTransaction(connectionString, "read", (tx) =>
+			readNextCalendarDates(tx, alex, now),
+		);
+		assert.ok("next_steps" in body);
+		const ids = rowIds(body.next_steps);
+		assert.equal(ids.includes(futureVendorStep), futureShown, now);
+		assert.equal(ids.includes(id(51)), formerShown, now);
+	}
+});
+
 test("both partners see overdue steps on the request day and upcoming steps on their dates", async () => {
 	for (const [partner, now, today, daysLate] of [
 		[alex, "2001-01-15T18:00:00Z", "2001-01-15", 3],
@@ -230,13 +290,24 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			{
 				id: id(39),
 				what: "call Example Owner about the renewal",
-				why: "call Example Owner at (555) 010-0199 about the renewal.",
+				why: "(555) 010-0199.",
 				owner: "dell",
 				record_label: "Example lease",
 				due_on: "2001-01-13",
 				display_on: today,
 				days_late: daysLate - 1,
 				open_url: `/deals?deal=${open}&focus=next-step&step=${id(39)}`,
+			},
+			{
+				id: id(49),
+				what: "Check in with Example Contact",
+				why: "90-day vendor cadence.",
+				owner: "joe",
+				record_label: "Example Contact",
+				due_on: "2001-01-17",
+				display_on: "2001-01-17",
+				days_late: 0,
+				open_url: `/relationships?node=party:${vendorContact}&step=${id(49)}`,
 			},
 			{
 				id: id(40),
@@ -287,7 +358,7 @@ test("Calendar and Today still show dated steps when open steps have infinite du
 				]);
 				assert.deepEqual(
 					rowIds(calendar.next_steps),
-					[31, 42, 39, 40, 32].map(id),
+					[31, 42, 39, 49, 40, 32].map(id),
 				);
 			},
 		);
@@ -299,7 +370,7 @@ test("Calendar and Today still show dated steps when open steps have infinite du
 			assert.equal(body.reminders.state, "ready");
 			assert.deepEqual(
 				rowIds(body.reminders.late),
-				[31, 42, 39, 40, 32].map(id),
+				[31, 42, 39, 49, 40, 32].map(id),
 			);
 		});
 	} finally {

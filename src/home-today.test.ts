@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { isArguments } from "./save-door.ts";
 import { doorTest } from "./test-door.ts";
 
 type Row = Record<string, unknown>;
@@ -21,6 +22,7 @@ const id = (n: number) =>
 const reader: Record<string, string> = { HOME_INBOX_READ_SCHEMA: "next" };
 const joe = { user: "joe" };
 const get = { method: "GET" } as const;
+const review = "Review counter with Pat | Example Leasing, Tue Oct 27 4:30 PM";
 
 before(async () => {
 	await setup();
@@ -59,7 +61,7 @@ before(async () => {
 			('${id(25)}', null, '${id(5)}', null, '${id(1)}', 'Check in next month', 30, null, null, null),
 			('${id(26)}', null, '${id(4)}', null, '${id(1)}', 'Wait for contractor', -2, 5, null, null),
 			('${id(27)}', null, '${id(6)}', null, '${id(1)}', 'Snoozed reminder', -4, null, null, null),
-			('${id(28)}', '${id(8)}', null, null, '${id(2)}', 'Review counter', -2, null, null, null),
+			('${id(28)}', '${id(8)}', null, null, '${id(2)}', '${review}', -2, null, null, null),
 			('${id(29)}', null, '${id(6)}', null, '${id(2)}', 'Call prospect', 0, null, null, null),
 			('${id(30)}', null, null, '${id(10)}', '${id(1)}', 'V-ABC-012 (loop #12)', 0, null, null, null),
 			('${id(31)}', '${id(7)}', null, null, '${id(12)}', 'Non-partner reminder', -1, null, null, null),
@@ -141,7 +143,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		`${id(33)}|Call the office. If no one answers, leave a message and retry tomorrow.|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
 		`${id(32)}|Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
 		`${id(21)}|send status unknown — re-touch or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
-		`${id(28)}|Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
+		`${id(28)}|Review counter with Pat|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
 		`${id(23)}|Follow up with Dr. Example|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	// Client and lead steps live on their records, not on Today.
@@ -186,7 +188,8 @@ async function reminderAndCardTitles(caller: { user: string }, step: string) {
 	const { items } = (await inbox.json()) as { items: Row[] };
 	const reminder = body.reminders?.late.find((item) => item.id === step);
 	assert.ok(reminder);
-	return [reminder.title, items.find((item) => item.source_id === step)?.title];
+	const card = items.find((item) => item.source_id === step);
+	return { reminder: reminder.title, card: card?.title, why: card?.why };
 }
 
 for (const [example, caller, step, title] of [
@@ -203,12 +206,36 @@ for (const [example, caller, step, title] of [
 		id(33),
 		"Call the office. If no one answers, leave a message and retry tomorrow.",
 	],
-	["plain step wording", { user: "dell" }, id(28), "Review counter"],
+	["a meeting suffix", { user: "dell" }, id(28), "Review counter with Pat"],
 ] as const) {
 	test(`Today and the Home card share a title for ${example}`, async () => {
-		assert.deepEqual(await reminderAndCardTitles(caller, step), [title, title]);
+		const result = await reminderAndCardTitles(caller, step);
+		assert.partialDeepStrictEqual(result, { reminder: title, card: title });
 	});
 }
+
+test("Home and Calendar show meeting details in the why without repeating the step title", async () => {
+	const step = id(28);
+	const caller = { user: "dell" };
+	const title = "Review counter with Pat";
+	const details = "Example Leasing, Tue Oct 27 4:30 PM.";
+	const [home, calendar] = await Promise.all([
+		reminderAndCardTitles(caller, step),
+		request(caller, "calendar/critical-dates", get, {
+			DEALS_READ_SCHEMA: "next",
+		}),
+	]);
+	assert.equal(calendar.status, 200);
+	const body: unknown = await calendar.json();
+	assert.ok(isArguments(body) && Array.isArray(body.next_steps));
+	assert.partialDeepStrictEqual(
+		body.next_steps.filter(isArguments).find((item) => item.id === step),
+		{ what: title, why: details },
+	);
+	assert.equal(home.card, title);
+	assert.ok(typeof home.why === "string" && home.why.endsWith(details));
+	assert.ok(!home.why.includes(title), home.why);
+});
 
 test("today keeps each Outlook occurrence independently of its review", async (t) => {
 	const hr = 3_600_000;
