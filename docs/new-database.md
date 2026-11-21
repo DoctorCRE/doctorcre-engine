@@ -1637,6 +1637,20 @@ Run the Workers AI model through the engine's native `AI` binding. Keep the mode
 
 Doc uses only `next` readers. A failed read fails the ask rather than passing an empty result to the model. With no match, ask for a record the partner can name or open. With several plausible matches, ask which one. A reply proposal needs one exact, authorized email source. The synthetic staging rehearsal checks a first question and follow-up across all four kinds, exact links, ambiguous names, other-mailbox refusal, and mail text that tries to direct a save. Proceed only if the answers are grounded, the links open, and each ask finishes within its deadline.
 
+### Connect a Mac to Doc
+
+A signed-in partner issues a credential from the app and gives it to their Mac's installer. The named app door gets the owner from the partner session. The POSTs require the usual partner write proofs and take no arguments. Responses use `Cache-Control: no-store`.
+
+| App request                        | Answer                                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `GET /api/engine/doc/link`         | `200 { connected, issued_at }`. The issue time is null when the partner has no current credential.             |
+| `POST /api/engine/doc/link`        | `201 { credential }`. Shows the engine credential once. Replaces the old credential and closes its connection. |
+| `POST /api/engine/doc/link/revoke` | `204`. Revokes the partner's credential and closes its connection. Safe to repeat.                             |
+
+The Mac opens an outbound WebSocket over TLS on the engine's direct `GET /api/engine/doc/link/connect` with `Authorization: Bearer <credential>` and no cookie. The engine resolves the owner from the credential. Unknown and revoked credentials return `401`. One hibernating Durable Object per partner holds their live connection. A new authenticated connection replaces the previous socket. A disconnected Mac can reconnect with its current credential.
+
+Apply [the Doc link migration](../schema/add-doc-link.sql) before enabling these calls. `next.doc_link` keeps one row per account partner with an owner ID, a SHA-256 credential hash, and the issue time. Only the partner's stamped writer can manage that row. The engine matches the exact hash during credential authentication. General readers and jobs have no access.
+
 ### Confirmed saves and receipts
 
 The confirmation locks the partner's turn and uses the existing `runNextSave` receipt rules. It rechecks access and exact target, then writes the business record, receipt, and turn's `confirmation_key` in one transaction. The same key and edits return the original result, even if business state later changed. Same key and different edits return `409 key_reuse`. The model has no access to this route. The browser never sends job headers or credentials.
