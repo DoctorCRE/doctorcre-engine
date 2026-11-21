@@ -161,6 +161,18 @@ type HomeUpdate = DealNotice & {
 	mark_version: string;
 	snoozed_until: string | null;
 	waiting_reason: string | null;
+	read_at: string | null;
+};
+
+// Home shows unread updates; Updates lists them all with their read time.
+const viewFilters = {
+	inbox: sql`and u.read_at is null
+		and (item.status is null or item.status not in ('done', 'cancelled'))`,
+	dashboard: sql`and u.read_at is null
+		and (u.kind = 'tour_feedback' or u.checklist_item_ref is not null)
+		and (item.status is null or item.status = 'open')
+		and (item.due_on is null or item.due_on <= ${homeDay})`,
+	updates: sql``,
 };
 
 function updateText(update: HomeUpdate) {
@@ -192,8 +204,9 @@ export async function readHomeUpdates(
 	db: Transaction<DB>,
 	userId: string,
 	limit: number | null,
-	dashboard: boolean,
+	view: keyof typeof viewFilters,
 ) {
+	const dashboard = view === "dashboard";
 	const { rows } = await sql<HomeUpdate>`
 		select u.id, u.deal_id, d.name as deal_name, u.kind, u.what as title, u.due_on,
 			u.created_at as activity_at, u.checklist_item_ref, u.property_id,
@@ -202,7 +215,7 @@ export async function readHomeUpdates(
 			coalesce(update_change.id, 0)::text as source_version,
 			coalesce(mark_change.id, 0)::text as mark_version,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
-			m.waiting_reason
+			m.waiting_reason, u.read_at
 		from home_update u
 		join deal d on d.id = u.deal_id
 		left join next_step item on item.deal_id = u.deal_id
@@ -220,15 +233,8 @@ export async function readHomeUpdates(
 				and record = jsonb_build_object('user_id', u.user_id, 'item_kind', 'home_update', 'item_id', u.id)
 		) mark_change
 		where u.user_id = ${userId}::uuid
-			and u.read_at is null
 			and m.disposition is distinct from 'dropped'
-			${
-				dashboard
-					? sql`and (u.kind = 'tour_feedback' or u.checklist_item_ref is not null)
-					and (item.status is null or item.status = 'open')
-					and (item.due_on is null or item.due_on <= ${homeDay})`
-					: sql`and (item.status is null or item.status not in ('done', 'cancelled'))`
-			}
+			${viewFilters[view]}
 		order by u.created_at desc, u.id
 		limit ${limit}
 	`.execute(db);
@@ -244,17 +250,22 @@ export async function readHomeUpdates(
 			source_version: update.source_version,
 			snoozed_until: update.snoozed_until,
 		});
+		const disposition = update.read_at ? "done" : card.disposition;
 		return {
 			...card,
 			...updateText(update),
 			kind: update.kind,
-			base_version: `${update.source_version}:${update.mark_version}:${card.disposition}`,
+			base_version: `${update.source_version}:${update.mark_version}:${disposition}`,
 			checklist_item_ref: update.checklist_item_ref,
 			...(dashboard && {
 				waiting_reason: homeDisplayText(update.waiting_reason) || null,
 				late_target: !tourFeedback,
 			}),
 			...(update.property_id && { property_id: update.property_id }),
+			...(view === "updates" && {
+				unseen: !update.read_at,
+				read_at: update.read_at && new Date(update.read_at).toISOString(),
+			}),
 		};
 	});
 }
