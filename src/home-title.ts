@@ -1,12 +1,58 @@
 const decisionPrefix = /^(?:[A-Z][A-Z'.-]* )+DECIDE\s*:\s*/;
 const statusPrefix =
 	/^(?:(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)|review(?: follow-up| call note)?\s*:\s*)/i;
-const sentenceBoundary = /(?<!\b(?:[A-Z]|Dr|Mr|Mrs|Ms|St|Inc)\.)(?<=[.!?])\s+/i;
-const actionStart =
-	/^(?:please )?(?:(?:follow up|reach out)\b|(?:follow-up|add|approve|arrange|ask|book|call|check|choose|collect|compare|complete|confirm|contact|coordinate|decide|discuss|draft|email|file|find|get|introduce|look|meet|move|negotiate|obtain|prepare|refer|relocate|renew|reply|request|respond|review|schedule|send|share|sign|submit|update|verify|visit|wait) \S)/i;
+// Copied source labels belong with the evidence.
 const savedLabel =
-	/^(?:email from|call (?:from|with)|follow[- ]up (?:set|due|completed|scheduled|held|done))\b/i;
+	/^(?:call (?:from|with)|follow[- ]up (?:set|due|completed|scheduled|held|done)|send status unknown)\b/i;
 const titleCharacters = new Intl.Segmenter("en", { granularity: "grapheme" });
+
+const chooseDeal = (sender: string) =>
+	sender
+		? `Choose the deal for ${sender}'s email`
+		: "Choose the deal for this email";
+const reviewLead = (target: string) =>
+	target ? `Review adding ${target} as a lead` : "Review the possible lead";
+const forTarget = (action: string, target: string) =>
+	target ? `${action} for ${target}` : action;
+const replyTarget = (sender: string, deal: string) =>
+	`${sender ? ` to ${sender}` : ""}${deal ? ` about ${deal}` : ""}`;
+
+const templates = {
+	follow_up: (target) =>
+		target ? `Follow up on ${target}` : "Review the follow-up",
+	call_follow_up: (contact) =>
+		contact ? `Follow up with ${contact}` : "Review the call follow-up",
+	next_step: (target) => forTarget("Review the proposed follow-up", target),
+	file_to_deal: chooseDeal,
+	possible_new_deal: chooseDeal,
+	phase_move: (target, phase) =>
+		target && phase
+			? `Review moving ${target} to ${phase}`
+			: forTarget("Review the proposed phase change", target),
+	new_lead: reviewLead,
+	email_lead: reviewLead,
+	lead_stage_move: (target, stage) =>
+		target && stage
+			? `Review moving ${target} to ${stage}`
+			: forTarget("Review the proposed lead stage", target),
+	log_call: (target) => forTarget("Review the call note", target),
+	next_step_done: (deal) =>
+		deal
+			? `Check whether the step for ${deal} is done`
+			: "Check whether the step is done",
+	checklist: (deal) => forTarget("Review the checklist item", deal),
+	tour_feedback: (deal, property) =>
+		property
+			? `Review tour feedback on ${property}${deal ? ` for ${deal}` : ""}`
+			: forTarget("Review tour feedback", deal),
+	reply_pending: (sender, deal) =>
+		`Review the reply${replyTarget(sender, deal)}`,
+	reply_failed: (sender) =>
+		sender ? `Review reply delivery to ${sender}` : "Review reply delivery",
+	reply_approved: (sender, deal) =>
+		`Reply${replyTarget(sender, deal)} is sending`,
+	reply_sent: (sender, deal) => `Reply${replyTarget(sender, deal)} was sent`,
+} satisfies Record<string, (target: string, detail: string) => string>;
 
 export function stripHomeTitlePrefixes(text: string) {
 	let remaining = text;
@@ -19,16 +65,9 @@ export function stripHomeTitlePrefixes(text: string) {
 	}
 }
 
-export function homeSentences(text: string, limit?: number) {
-	return text.split(sentenceBoundary, limit);
-}
-
-export function isHomeAction(text: string) {
-	return actionStart.test(text) && !savedLabel.test(text);
-}
-
 function fitsTitle(text: string) {
-	if (!text || /…|\.\.\./.test(text)) return false;
+	if (!text || /…|\.\.\.|\bemail (?:received )?from\b/i.test(text))
+		return false;
 	let remaining = 90;
 	for (const _ of titleCharacters.segment(text)) {
 		if (--remaining < 0) return false;
@@ -36,27 +75,21 @@ function fitsTitle(text: string) {
 	return true;
 }
 
-export function homeTitle(fallback: string, ...candidates: string[]) {
-	return candidates.find(fitsTitle) ?? fallback;
+export function homeTitle(
+	kind: keyof typeof templates,
+	target = "",
+	detail = "",
+) {
+	const render = templates[kind];
+	const title = render(target, detail);
+	if (fitsTitle(title)) return title;
+	if (detail) {
+		const shorter = render(target, "");
+		if (fitsTitle(shorter)) return shorter;
+	}
+	return render("", "");
 }
 
-export function homeActionTitle(
-	action: string,
-	target: string,
-	fallback: string,
-) {
-	if (!isHomeAction(action)) return fallback;
-	const [first = ""] = homeSentences(action, 1);
-	const shorter = isHomeAction(first) ? first : "";
-	const withTarget = (text: string) =>
-		text && target && !text.toLowerCase().includes(target.toLowerCase())
-			? `${text.replace(/\.$/, "")} (${target})`
-			: text;
-	return homeTitle(
-		fallback,
-		withTarget(action),
-		withTarget(shorter),
-		action,
-		shorter,
-	);
+export function savedHomeTitle(text: string) {
+	return !savedLabel.test(text) && fitsTitle(text) ? text : "";
 }

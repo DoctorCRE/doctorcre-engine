@@ -79,13 +79,13 @@ before(async () => {
 		insert into next_step (id, deal_id, owner_party_id, what)
 			values ('${formerlyHidden}', '${deal}', '${owner}', 'Check the lease term'),
 				('${otherDealStep}', '${meetingDeal}', '${other}', 'Confirm the renewal terms');
-		insert into next_step (id, deal_id, owner_party_id, what, due_on, item_title, source_ref) values
+		insert into next_step (id, deal_id, owner_party_id, what, due_on, item_title, source_ref, created_at) values
 			('${leaseReminder}', '${deal}', '${owner}',
 				'Lease event — Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone.',
-				'2026-11-19', 'Lease event', 'lease-example'),
+				'2026-11-19', 'Lease event', 'lease-example', '2026-11-21T12:00Z'),
 			('${pastLeaseReminder}', '${deal}', '${owner}',
 				'Lease event — Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans.',
-				'2026-11-19', 'Lease event', 'past-lease-example');
+				'2026-11-19', 'Lease event', 'past-lease-example', '2026-11-21T12:00Z');
 		insert into next_step (id, deal_id, owner_party_id, what, resolution, done_at) values
 			('${completedDealStep}', '${meetingDeal}', '${other}', 'Check the renewal budget', 'done', now());
 		insert into next_step (id, property_id, owner_party_id, what, resolution, done_at) values
@@ -134,7 +134,7 @@ async function inbox(caller = user) {
 		assert.ok([...titleCharacters.segment(item.title)].length <= 90);
 		assert.doesNotMatch(
 			item.title,
-			/…|\.\.\.|^follow-up (?:set|due|completed)/i,
+			/…|\.\.\.|\bemail (?:received )?from|^follow-up (?:set|due|completed)/i,
 		);
 		assert.equal(Object.hasOwn(item, "auto_settled"), false);
 		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
@@ -322,7 +322,7 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	);
 	assert.partialDeepStrictEqual(items.get(ordinary), {
 		item_id: `next_action:${ordinary}`,
-		title: "Send the lease (Example Dental)",
+		title: "Send the lease",
 		primary_action: "Mark done",
 		context_label: "Example Dental",
 		due_on: "2026-11-19",
@@ -372,22 +372,22 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 
 test("A held follow-up explains the saved hold and action in plain words", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(held), {
-		title: "Call about the suite (Dr. Example)",
+		title: "Call about the suite",
 		why: "Held until Apr 1, 2999. Call about the suite.",
 	});
 });
 
-test("A lease reminder names the deal once and gives the decision and estimated date", async () => {
+test("A long lease reminder keeps the full event wording in the why line", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(leaseReminder), {
-		title: "Review lease timing for Example Dental, Springfield",
-		why: "Estimated lease event for Example Dental, Springfield on December 1, 2026. Last window before leverage is gone. Due Nov 19, 2026.",
+		title: "Follow up on Example Dental, Springfield",
+		why: "Follow-up set on Nov 21, 2026. Due Nov 19, 2026. Lease event — Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone.",
 	});
 });
 
-test("A lease reminder shows the estimated date and saved action when the window has passed", async () => {
+test("A long lease reminder keeps both the event and the saved instruction", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(pastLeaseReminder), {
-		title: "Confirm renewal plans (Example Dental, Springfield)",
-		why: "Estimated lease event for Example Dental, Springfield on October 1, 2026. The estimated renewal window has passed. Due Nov 19, 2026.",
+		title: "Follow up on Example Dental, Springfield",
+		why: "Follow-up set on Nov 21, 2026. Due Nov 19, 2026. Lease event — Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans.",
 	});
 });
 
@@ -419,7 +419,7 @@ test("a call follow-up appears once with its call, deal and evidence", async () 
 
 test("a step created by a suggestion keeps the meeting source", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(proposal), {
-		title: "Check renewal dates on Thursday, Nov 5, 2026 (Example Renewal)",
+		title: "Check renewal dates on Thursday, Nov 5, 2026",
 		why: "Follow-up set from the meeting. The meeting started at Nov 5, 2026, 7:00 PM.",
 		source_activity: { kind: "meeting", id: meeting },
 	});
@@ -502,9 +502,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 			items.filter((item) => item.source_id === example.id),
 			[
 				{
-					title: example.title.includes(" ")
-						? `${example.title.replace(/\.$/, "")} (Example Vendor)`
-						: "Review the follow-up for Example Vendor",
+					title: example.title || "Follow up on Example Vendor",
 					why: `Follow-up set on Nov 17, 2026.${example.title ? ` ${example.title.replace(/\.$/, "")}.` : ""}`,
 					primary_action: "Mark done",
 					due_on: null,
@@ -528,27 +526,38 @@ const longAction =
 	"Confirm the accessibility requirements for the proposed suite with the landlord and ask for the revised drawing in writing";
 const accentedAction =
 	"Send the revised plan to Rene\u0301e at Example Lost Deal with the extra icons 📐 📍 📎 🗂 🏢 🔑";
-const followUpFallback = "Review the follow-up for Example Lost Deal";
+const followUpFallback = "Follow up on Example Lost Deal";
 
 for (const [scenario, what, title, savedText = what] of [
 	[
-		"a shorter complete instruction",
+		"a long step with a short first sentence",
 		`Send the site plan. ${longAction}.`,
-		"Send the site plan (Example Lost Deal)",
+		followUpFallback,
 	],
 	["a long instruction", longAction, followUpFallback],
 	[
 		"an initial in a long instruction",
-		"Send the revised floor plan to A. Morgan and include the accessibility notes from the most recent walkthrough",
+		"Send the revised floor plan to Á. Morgan and include the accessibility notes from the most recent walkthrough",
 		followUpFallback,
 	],
 	[
-		"a complete instruction with common abbreviations",
+		"a long call with common abbreviations",
 		`Call Dr. Example and Mr. Reed at St. Example Inc. about the plan. ${longAction}.`,
-		"Call Dr. Example and Mr. Reed at St. Example Inc. about the plan (Example Lost Deal)",
+		followUpFallback,
 	],
-	["a copied sender name", "Morgan Example", followUpFallback],
 	["a copied sender label", "Email from Morgan Example", followUpFallback],
+	["a copied receipt label", "Email received from Morgan", followUpFallback],
+	[
+		"a step starting with Forward",
+		"Forward the revised floor plan to Morgan",
+		"Forward the revised floor plan to Morgan",
+	],
+	[
+		"a short step with two sentences",
+		"Call Á. Morgan. Confirm the date.",
+		"Call Á. Morgan. Confirm the date.",
+	],
+	["copied wording with an ellipsis", "Send the plan...", followUpFallback],
 	[
 		"a copied status label",
 		"Follow-up set for Morgan Example",
@@ -557,7 +566,7 @@ for (const [scenario, what, title, savedText = what] of [
 	[
 		"stacked copied prefixes",
 		"REVIEWER DECIDE: review follow-up: Send the plan",
-		"Send the plan (Example Lost Deal)",
+		"Send the plan",
 		"Send the plan",
 	],
 	["an action with an accented name and emoji", accentedAction, accentedAction],

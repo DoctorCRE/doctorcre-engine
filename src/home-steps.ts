@@ -1,10 +1,8 @@
 import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
-	homeActionTitle,
-	homeSentences,
 	homeTitle,
-	isHomeAction,
+	savedHomeTitle,
 	stripHomeTitlePrefixes,
 } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
@@ -14,8 +12,6 @@ const stepMetadata =
 const storedDate =
 	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
-const unknownSendDecision =
-	/^send status unknown\s*[,—–-]\s*re-touch or drop\.?$/i;
 const phoneNumber =
 	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
 
@@ -49,17 +45,7 @@ export function homeDisplayText(text: string | null) {
 }
 
 export function homeStepText(text: string) {
-	const prompt = stripHomeTitlePrefixes(homeDisplayText(text));
-	if (unknownSendDecision.test(prompt))
-		return { savedText: prompt, action: "Decide whether to follow up or drop" };
-	const withoutNumber = prompt.replace(phoneNumber, " ");
-	if (withoutNumber === prompt && !/^(?:please )?call\b/i.test(prompt))
-		return { savedText: prompt, action: prompt };
-	const [action = ""] = homeSentences(
-		withoutNumber.replace(/\s+/g, " ").replace(edgePunctuation, ""),
-		1,
-	);
-	return { savedText: prompt, action: action.replace(/\.$/, "") };
+	return stripHomeTitlePrefixes(homeDisplayText(text));
 }
 
 export type StepTitle = {
@@ -81,11 +67,8 @@ type StepEvidence = {
 	source_evidence: string | null;
 };
 
-const leaseEvent =
-	/^Lease event [—–-] (.+?), est\. (\w+ \d{1,2}, \d{4})(?:\.\s*|$)(.*)$/i;
-
 export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
-	const { action, savedText } = homeStepText(step.title);
+	const savedText = homeStepText(step.title);
 	const target = homeDisplayText(step.context_label);
 	const contact = homeDisplayText(step.call_contact);
 	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
@@ -93,40 +76,16 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
-	const [, name, date, details = ""] = savedText.match(leaseEvent) ?? [];
-	if (step.status === "open" && name && date) {
-		const label = target || name;
-		const sentences = homeSentences(details);
-		const savedAction = sentences.find(isHomeAction);
-		const fallback = homeTitle(
-			"Review lease timing",
-			`Review lease timing for ${label}`,
-		);
-		const title = homeActionTitle(
-			homeStepText(savedAction ?? "").action,
-			label,
-			fallback,
-		);
-		return {
-			title,
-			why: homeWhy(
-				`Estimated lease event for ${label} on ${date}`,
-				...sentences.filter(
-					(sentence) =>
-						sentence && !title.startsWith(sentence.replace(/\.$/, "")),
-				),
-				hold,
-				due,
-			),
-		};
-	}
-	const about = contact || target;
-	const fallback = homeTitle(
-		"Review the follow-up",
-		about && `Review the follow-up for ${about}`,
-	);
-	const title = homeActionTitle(action, about, fallback);
-	const hiddenWording = savedText !== action || !title.startsWith(action);
+	const wording = savedText
+		.replace(phoneNumber, " ")
+		.replace(/\s+/g, " ")
+		.replace(edgePunctuation, "");
+	const title =
+		savedHomeTitle(wording) ||
+		(contact
+			? homeTitle("call_follow_up", contact)
+			: homeTitle("follow_up", target));
+	const hiddenWording = savedText !== title;
 	if (step.call_at) {
 		return {
 			title,

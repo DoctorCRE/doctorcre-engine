@@ -488,7 +488,7 @@ test("Home groups pending suggestions from each email conversation or call and k
 		{
 			source_type: "capture_session",
 			kind_label: "Call",
-			title: "Send a budget (Example Dental)",
+			title: "Review the proposed follow-up for Example Dental",
 			why: "Call with Known Contact on Jan 2, 2026. Send a budget. 2 decisions to review.",
 			primary_action: "Review suggestions",
 			merged_source_ids: [id(34), id(33)],
@@ -1033,16 +1033,16 @@ test("Home keeps a confirmed tour date from the saved excerpt without a summary"
 	});
 });
 
-test("Home uses the saved follow-up when the email summary is unavailable", async () => {
+test("Home explains a proposed follow-up when the email summary is unavailable", async () => {
 	const step = (await inbox()).find((card) => card.proposal_id === id(32));
 	assert.partialDeepStrictEqual(step, {
-		title: "Check the drawing (Example Dental)",
+		title: "Review the proposed follow-up for Example Dental",
 		why: "Email from Known Contact received on Jan 3, 2026. Proposed follow-up: Check the drawing.",
 		primary_action: "Review follow-up",
 	});
 });
 
-test("a proposed follow-up keeps the copied sender label in the evidence", async () => {
+test("a proposed follow-up keeps copied sender wording in the evidence", async () => {
 	const proposal = id(32);
 	async function setWording(what: string) {
 		await db.query(
@@ -1054,13 +1054,17 @@ test("a proposed follow-up keeps the copied sender label in the evidence", async
 		]);
 		await db.query("commit");
 	}
-	await setWording("Email from Morgan Example");
 	try {
-		const step = (await inbox()).find((card) => card.proposal_id === proposal);
-		assert.partialDeepStrictEqual(step, {
-			title: "Review the proposed follow-up for Example Dental",
-			why: "Email from Known Contact received on Jan 3, 2026. Proposed follow-up: Email from Morgan Example.",
-		});
+		for (const wording of ["Morgan Example", "Email from Morgan Example"]) {
+			await setWording(wording);
+			const step = (await inbox()).find(
+				(card) => card.proposal_id === proposal,
+			);
+			assert.partialDeepStrictEqual(step, {
+				title: "Review the proposed follow-up for Example Dental",
+				why: `Email from Known Contact received on Jan 3, 2026. Proposed follow-up: ${wording}.`,
+			});
+		}
 	} finally {
 		await setWording("Check the drawing");
 	}
@@ -1406,7 +1410,7 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	assert.equal(afterCard?.card_id, beforeCard.card_id);
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `suggestion:${id(60)}`,
-		title: "Send the plan (Example Dental)",
+		title: "Review the proposed follow-up for Example Dental",
 		why: "Sam Example requested the floor plan before the tour. Proposed follow-up: Send the plan. 3 decisions to review.",
 		primary_action: "Review follow-up",
 		due_on: "2026-01-09",

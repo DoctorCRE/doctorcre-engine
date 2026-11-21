@@ -13,7 +13,7 @@ import {
 	homeStepText,
 	homeWhy,
 } from "./home-steps.ts";
-import { homeActionTitle, homeTitle } from "./home-title.ts";
+import { homeTitle } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {
@@ -590,50 +590,19 @@ const emailActions = {
 } as const;
 
 function suggestionTitle(suggestion: Suggestion, contact: string) {
-	const target = homeDisplayText(suggestion.context_label) || contact;
-	const destination = homeDisplayText(suggestion.decision_label);
-	const named = target ? ` for ${target}` : "";
-	switch (suggestion.kind) {
-		case "next_step": {
-			const fallback = homeTitle(
-				"Review the proposed follow-up",
-				`Review the proposed follow-up${named}`,
-			);
-			const { action } = homeStepText(suggestion.suggestion_title ?? "");
-			return homeActionTitle(action, target, fallback);
-		}
-		case "file_to_deal":
-		case "possible_new_deal":
-			return homeTitle(
-				"Choose the deal for this email",
-				contact && `Choose the deal for ${contact}'s email`,
-			);
-		case "phase_move":
-			return homeTitle(
-				"Review the proposed phase change",
-				target && destination && `Review moving ${target} to ${destination}`,
-			);
-		case "new_lead":
-		case "email_lead":
-			return homeTitle(
-				"Review the possible lead",
-				target && `Review adding ${target} as a lead`,
-			);
-		case "lead_stage_move":
-			return homeTitle(
-				"Review the proposed lead stage",
-				target && destination && `Review moving ${target} to ${destination}`,
-			);
-		case "log_call":
-			return homeTitle("Review the call note", `Review the call note${named}`);
-	}
+	const { kind } = suggestion;
+	const target =
+		kind === "file_to_deal" || kind === "possible_new_deal"
+			? contact
+			: homeDisplayText(suggestion.context_label) || contact;
+	return homeTitle(kind, target, homeDisplayText(suggestion.decision_label));
 }
 
 function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const sender = homeDisplayText(suggestion.email_sender);
 	const target = homeDisplayText(suggestion.context_label);
 	const destination = homeDisplayText(suggestion.decision_label);
-	const proposed = homeStepText(suggestion.suggestion_title ?? "").savedText;
+	const proposed = homeStepText(suggestion.suggestion_title ?? "");
 	const evidence = suggestion.email_quote
 		? ""
 		: homeDisplayText(suggestion.evidence);
@@ -710,9 +679,7 @@ function deliveryWhy(reason: string | null) {
 
 function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 	const sender = homeDisplayText(draft.email_sender);
-	const toSender = sender ? ` to ${sender}` : "";
-	const target = draft.deal_id && homeDisplayText(draft.context_label);
-	const about = target ? ` about ${target}` : "";
+	const target = draft.deal_id ? homeDisplayText(draft.context_label) : "";
 	const source = sender ? `Email from ${sender}` : "Email";
 	const { summary, quote } = emailRequest(draft);
 	const request = summary || quote;
@@ -722,47 +689,17 @@ function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 		!request && draft.status === "pending" ? "Review the drafted reply" : null,
 		decisions > 1 ? `${decisions} decisions to review` : null,
 	);
-	switch (draft.status) {
-		case "pending":
-			return {
-				title: homeTitle(
-					"Review the reply",
-					`Review the reply${toSender}${about}`,
-					sender && `Review the reply to ${sender}`,
-				),
-				why,
-				primary_action: draft.snoozed_until ? null : "Review reply",
-			};
-		case "failed":
-			return {
-				title: homeTitle(
-					"Review reply delivery",
-					sender && `Review reply delivery to ${sender}`,
-				),
-				why: deliveryWhy(draft.failure_reason),
-				primary_action: draft.snoozed_until ? null : "Review delivery",
-			};
-		case "approved":
-			return {
-				title: homeTitle(
-					"Reply is sending",
-					`Reply${toSender}${about} is sending`,
-					`Reply${toSender} is sending`,
-				),
-				why,
-				primary_action: null,
-			};
-		case "sent":
-			return {
-				title: homeTitle(
-					"Reply was sent",
-					`Reply${toSender}${about} was sent`,
-					`Reply${toSender} was sent`,
-				),
-				why,
-				primary_action: null,
-			};
-	}
+	const action =
+		draft.status === "pending"
+			? "Review reply"
+			: draft.status === "failed"
+				? "Review delivery"
+				: null;
+	return {
+		title: homeTitle(`reply_${draft.status}`, sender, target),
+		why: draft.status === "failed" ? deliveryWhy(draft.failure_reason) : why,
+		primary_action: draft.snoozed_until ? null : action,
+	};
 }
 
 export async function readHomeReviewCards(

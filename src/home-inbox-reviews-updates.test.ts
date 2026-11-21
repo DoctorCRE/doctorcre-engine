@@ -78,8 +78,8 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.deepEqual(duplicates, []);
 	assert.partialDeepStrictEqual(card, {
 		item_id,
-		title: `Check whether “Send the survey” is done (${dealName})`,
-		why: "I received the survey.",
+		title: `Check whether the step for ${dealName} is done`,
+		why: "I received the survey. Send the survey.",
 		primary_action: "Review completion",
 		context_label: dealName,
 		due_on: "2001-02-01",
@@ -158,7 +158,7 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.equal(dismissed?.completion_review, undefined);
 	if (callFollowUp) {
 		assert.partialDeepStrictEqual(dismissed, {
-			title: `Send the survey (${dealName})`,
+			title: "Send the survey",
 			why: "Call on Feb 4, 2001. Send the survey. Due Feb 1, 2001.",
 			open_url: `/calls?session=${call}`,
 		});
@@ -185,7 +185,7 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 	assert.partialDeepStrictEqual(card, {
 		item_id: `notification:${update}`,
 		kind_label: "Update",
-		title: "Review the survey (Example Survey)",
+		title: "Review the checklist item for Example Survey",
 		why: "Review the survey. Due Feb 1, 2001.",
 		primary_action: "Open checklist item",
 		context_label: "Example Survey",
@@ -224,7 +224,8 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 		commit;`);
 	const [revised] = await cards(alex, deal);
 	assert.partialDeepStrictEqual(revised, {
-		title: "Review the revised survey (Example Survey)",
+		title: "Review the checklist item for Example Survey",
+		why: "Review the revised survey. Due Feb 1, 2001.",
 		section: "inbox",
 	});
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
@@ -329,11 +330,11 @@ test("tour comment and shortlist changes retain their saved property context", a
 	const examples = await cards(alex, deal);
 	assert.partialDeepStrictEqual(examples, [
 		{
-			title: "Review the removal of Cedar Suite from the shortlist",
+			title: "Review tour feedback on Cedar Suite for Example Dental Tour",
 			why: "Example Dental removed Cedar Suite from the shortlist. Recorded Nov 19, 2026.",
 		},
 		{
-			title: "Review the addition of Cedar Suite to the shortlist",
+			title: "Review tour feedback on Cedar Suite for Example Dental Tour",
 			why: "Example Dental added Cedar Suite to the shortlist. Recorded Nov 18, 2026.",
 		},
 		{
