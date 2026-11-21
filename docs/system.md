@@ -173,6 +173,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Home screen                                              | `docs/screens/home-inbox.md`                                                                                                        |
 | Deals screen                                             | `docs/screens/deals.md`                                                                                                             |
 | Leads screen                                             | `docs/screens/leads.md`                                                                                                             |
+| Invoices screen                                          | [Invoices](screens/invoices.md)                                                                                                     |
 | Prospects lane and Monday review                         | `docs/screens/deals.md` § "Prospects" and § "Monday review"; § "Prospects and the Monday review"                                    |
 
 Every `§` without a file is in `docs/new-database.md`.
