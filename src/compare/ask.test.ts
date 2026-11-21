@@ -21,11 +21,7 @@ const activity: Ask = {
 	record: client,
 };
 const lead = "00000000-0000-4000-8000-000000000031";
-const leadReads: Ask[] = [
-	{ read: "lead board" },
-	{ read: "quiet follow-ups" },
-	{ read: "territory" },
-];
+const leadReads: Ask[] = [{ read: "lead board" }, { read: "quiet follow-ups" }];
 const opened: Ask = { read: "lead", lead };
 const reasons: Ask = { read: "reasons to reach out" };
 
@@ -323,7 +319,7 @@ test("an unavailable feed or one that never ends fails its read without stopping
 	assert.equal(sent.length, 25);
 });
 
-test("asks the Leads board, quiet follow-ups and territory with the app's inputs on both sides", async () => {
+test("asks the Leads board and quiet follow-ups with the app's inputs on both sides", async () => {
 	const engine = fake(() => json({ made_up: true }));
 	const old = fake(() => content({ made_up: true }));
 	for (const ask of leadReads) {
@@ -335,7 +331,6 @@ test("asks the Leads board, quiet follow-ups and territory with the app's inputs
 		[
 			"https://engine.example.test/compare/joe/engine/leads?workspace=leads",
 			"https://engine.example.test/compare/joe/engine/quiet-follow-ups",
-			"https://engine.example.test/compare/joe/engine/territory-state-board",
 		],
 	);
 	assert.deepEqual(
@@ -343,7 +338,6 @@ test("asks the Leads board, quiet follow-ups and territory with the app's inputs
 		[
 			{ name: "lead-board", arguments: { workspace: "leads" } },
 			{ name: "quiet-follow-ups", arguments: {} },
-			{ name: "territory-state-board", arguments: {} },
 		],
 	);
 });
@@ -774,12 +768,6 @@ test("mirrors each app filter in engine query text and old tool arguments", asyn
 			ask: { read: "client fit", [field]: "Made-up & 50%" } as const,
 			path: "/client-fit",
 			name: "ideal-client-profile",
-			args: { [field]: "Made-up & 50%" },
-		})),
-		...["vertical", "city", "state"].map((field) => ({
-			ask: { read: "territory", [field]: "Made-up & 50%" } as const,
-			path: "/territory-state-board",
-			name: "territory-state-board",
 			args: { [field]: "Made-up & 50%" },
 		})),
 		{
