@@ -90,6 +90,8 @@ When `data-deals-saves-from-engine` is on, Updates and its navigation badge use 
 
 The signed-in Prospects lane, detail, quick add and Monday review use the new schema directly. The app enables them when `deals-saves-from-engine` is on.
 
+Quiet leads and quiet vendor follow-ups use the new schema when `leads-from-engine` routes their shared read to the engine.
+
 The deal page's checklist and progress use the new schema with `DEALS_READ_SCHEMA=next`. See § "Deals reads for the app".
 
 ## Who owns which records

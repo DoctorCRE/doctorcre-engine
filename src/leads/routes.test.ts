@@ -82,39 +82,52 @@ test("quiet follow-ups refuse reserved fields, then unknown fields, then bad num
 
 test("quiet follow-ups answer with the old cadence, date text and refusals", () =>
 	withSnapshot(async (url) => {
-		const db = new pg.Client({ connectionString: url });
+		const db = new pg.Client({
+			connectionString: url,
+			options: "-c search_path=next",
+		});
 		await db.connect();
 		const leads = (from: number, to: number) =>
 			db.query(
 				`with g as (select ('00000000-0000-4000-9000-' || lpad(n::text, 12, '0'))::uuid as id
 					from generate_series($1::int, $2::int) n),
-				p as (insert into party (id, kind, name, created_by, updated_by)
-					select g.id, 'person', 'Example', a.id, a.id from g, actor a)
-				insert into lead (party_id, stage, next_action_date, created_by, updated_by)
-				select g.id, 'new', '2026-01-05', a.id, a.id from g, actor a`,
+				p as (insert into party (id, kind, name, how_found)
+					select id, 'person', 'Example', 'referral' from g),
+				r as (insert into party_role (party_id, role, stage, owner_user_id)
+					select g.id, 'lead', 'new', u.id from g, app_user u),
+				o as (insert into outside_id (source, value, party_id)
+					select 'old_system_lead', id::text, id from g)
+				insert into next_step (id, party_id, what, due_on)
+					select md5('old_system:lead:' || id || ':follow_up')::uuid, id, 'Imported lead follow-up', '2020-01-05' from g`,
 				[from, to],
 			);
 		try {
-			await db.query(`insert into actor (slug, kind, display_name)
-				values ('leads-route-partner', 'human', 'Example');
-				insert into contact_state (slug, label, contactable, sort)
-				values ('active', 'Example', true, 1);
-				insert into lead_stage (slug, label) values ('new', 'Example')`);
+			await db.query(`select set_config('engine.job', 'old_system', false);
+				with p as (insert into party (kind, name) values ('person', 'Example Partner') returning id)
+				insert into app_user (id, slug) select id, 'leads-route-partner' from p;
+				insert into how_found (slug, label) values ('referral', 'Referral');
+				insert into role (slug, label) values ('lead', 'Lead');
+				insert into stage (role, slug, label) values ('lead', 'new', 'New')`);
 			await leads(1, 1);
 			const answered = async (search: string) => {
 				const response = await quiet(search, url);
 				assert.equal(response.status, 200);
 				return (await response.json()) as {
 					cadence: unknown;
-					proposals: { next_action_date: string; due_on: string }[];
+					proposals: {
+						next_action_date: string;
+						due_on: string;
+						owner: string;
+					}[];
 				};
 			};
 			const plain = await answered("");
 			assert.deepEqual(plain.cadence, { lead_days: 45, vendor_days: 90 });
 			assert.deepEqual(
-				plain.proposals.map((p) => [p.next_action_date, p.due_on]),
-				[["2026-01-05", "2026-01-05"]],
+				plain.proposals.map((p) => [p.next_action_date, p.due_on, p.owner]),
+				[["2020-01-05", "2020-01-05", "leads-route-partner"]],
 			);
+			assert.deepEqual((await answered("?owner_slug=nobody")).proposals, []);
 			// The old system checked neither whole numbers nor the 1 to 365 range.
 			assert.deepEqual(
 				(await answered("?lead_days=%2030%20&vendor_days=0&owner_slug=nobody"))
@@ -137,7 +150,7 @@ test("quiet follow-ups answer with the old cadence, date text and refusals", () 
 		} finally {
 			await db.end();
 		}
-	}));
+	}, process.env.TEST_COPY_SNAPSHOT));
 
 test("the board refuses reserved fields, then a bad workspace, then unknown fields, then a malformed or leadless cursor, before any read", async () => {
 	const unread = "postgres://made-up@127.0.0.1:1/none";
