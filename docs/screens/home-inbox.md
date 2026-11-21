@@ -51,6 +51,7 @@ Use the existing step saves in door 18, suggestion decisions in door 21, reply d
 ## Work the engine handles
 
 - [ ] A clear inbound lead goes straight to Leads as an unclaimed lead with its source email and **New from email** badge. Repeated lead-source notices about the same verified prospect keep one lead with its distinct evidence. See [Leads](leads.md).
+- [ ] When a stored lead-source notice moves to Leads, its pending filing decisions finish with **Moved to Leads** in their history. The conversation keeps its reply drafts, other decisions, and filings for other messages.
 - [ ] The engine files mail when saved evidence identifies the destination, such as a known thread tied to one deal. A queued job can decide which facts belong on each verified record. An email filed this way adds no filing card. An independent action such as approving a reply still has one card. When the engine and the job cannot resolve the filing, a card says what needs a decision and why. The partner can ask Doc for help with it.
 - [ ] Routine schedule bookkeeping, informational deal updates, and work with a recorded completion stay with their record. An unfinished checklist reminder or distinct proposed call note can still need a partner. A scheduled check-in can ask the partner to contact someone on the due day.
 

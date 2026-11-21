@@ -3,12 +3,15 @@ import { sql, type Transaction } from "kysely";
 import { lockEmail, parseEmail, recordEmail } from "../activity/next-record.ts";
 import { Refusal, refuse } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
+import { beforeEmailHistory } from "../home-email-thread.ts";
+import { nextTransaction } from "../next-connection.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
-import { ACTING_USER } from "../next-save.ts";
+import { ACTING_USER, stampNextSave } from "../next-save.ts";
 import {
 	fit,
 	fitting,
+	isBoolean,
 	isInstant,
 	isStoredText,
 	isUuid,
@@ -64,16 +67,25 @@ function parseIntake(body: JsonObject) {
 }
 
 type Intake = Exclude<ReturnType<typeof parseIntake>, Refusal>;
+type IntakeFacts = Pick<Intake, "kind" | "evidence" | "prospect">;
+type StoredIntake = IntakeFacts & {
+	activity_id: string;
+	message_id: string | null;
+	preview: boolean;
+};
+
+const literal = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function quotesFact(evidence: string, fact: string) {
-	const literal = fact.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const word = "[\\p{L}\\p{M}\\p{N}_]";
-	return new RegExp(`(?<!${word})${literal}(?!${word})`, "u").test(evidence);
+	return new RegExp(`(?<!${word})${literal(fact.trim())}(?!${word})`, "u").test(
+		evidence,
+	);
 }
 
 function identified(
-	{ kind, evidence, prospect }: Intake,
-	source: Intake["email"],
+	{ kind, evidence, prospect }: IntakeFacts,
+	source: Pick<Intake["email"], "sender" | "sender_name" | "body">,
 ) {
 	const name = prospect?.name?.trim();
 	if (!prospect?.kind || !name || !evidence || !source.body.includes(evidence))
@@ -123,9 +135,10 @@ function identified(
 	};
 }
 
-async function saveIntake(tx: Transaction<DB>, request: Intake) {
-	const { email, happened_at, kind } = request;
-	const { message_id } = email;
+async function saveIntake(tx: Transaction<DB>, request: Intake | StoredIntake) {
+	const capture = "email" in request;
+	const message_id = capture ? request.email.message_id : request.message_id;
+	const preview = !capture && request.preview;
 	const {
 		rows: [sponsor],
 	} = await sql<{ id: string }>`
@@ -134,12 +147,13 @@ async function saveIntake(tx: Transaction<DB>, request: Intake) {
 	if (!sponsor)
 		throw new SaveRefusal(new Refusal(422, "actor_not_provisioned"));
 	const reject = async (reason: string) => {
-		await sql`insert into lead_email_evidence (message_id, mailbox_user_id, source, reason)
+		if (capture)
+			await sql`insert into lead_email_evidence (message_id, mailbox_user_id, source, reason)
 			values (${message_id}, ${sponsor.id}, ${JSON.stringify(request)}::jsonb, ${reason})
 			on conflict do nothing`.execute(tx);
 		return { error: "lead_email_not_eligible", hint: reason };
 	};
-	await lockEmail(tx, message_id);
+	if (message_id && !preview) await lockEmail(tx, message_id);
 	const {
 		rows: [stored],
 	} = await sql<{
@@ -152,13 +166,19 @@ async function saveIntake(tx: Transaction<DB>, request: Intake) {
 	}>`
 		select e.activity_id, e.sender, e.sender_name, e.body, s.party_id,
 			exists(select from activity_about a where a.activity_id = e.activity_id and a.deal_id is not null) as about_deal
-		from email e left join lead_email_source s using (activity_id) where e.message_id = ${message_id}
+		from email e left join lead_email_source s using (activity_id)
+		where ${capture ? sql`e.message_id = ${message_id}` : sql`e.activity_id = ${request.activity_id}`}
 	`.execute(tx);
-	const source = { ...email, ...stored };
+	const source = stored ?? (capture ? request.email : undefined);
+	if (!source) return reject("The source email is unavailable.");
 	const internal = await sql`
 		select from party_email e join app_user u on u.id = e.party_id where e.address = ${source.sender} limit 1
 	`.execute(tx);
-	if (internal.rows.length || kind === "internal" || kind === "system")
+	if (
+		internal.rows.length ||
+		request.kind === "internal" ||
+		request.kind === "system"
+	)
 		return reject("Internal and system email cannot create a lead.");
 	const prospect = identified(request, source);
 	if (!prospect)
@@ -174,10 +194,11 @@ async function saveIntake(tx: Transaction<DB>, request: Intake) {
 	if (!valid?.contacts)
 		return reject("The prospect's email or phone is invalid.");
 	if (stored?.party_id) {
-		await sql`insert into email_mailbox (activity_id, user_id)
+		if (capture)
+			await sql`insert into email_mailbox (activity_id, user_id)
 			values (${stored.activity_id}, ${sponsor.id}) on conflict do nothing`.execute(
-			tx,
-		);
+				tx,
+			);
 		return {
 			party_id: stored.party_id,
 			activity_id: stored.activity_id,
@@ -187,7 +208,7 @@ async function saveIntake(tx: Transaction<DB>, request: Intake) {
 	if (stored?.about_deal) return reject("This email is already about a deal.");
 
 	for (const contact of [prospect.email, prospect.phone]) {
-		if (contact)
+		if (contact && !preview)
 			await sql`select pg_advisory_xact_lock(hashtextextended(${`lead intake ${contact}`}, 0))`.execute(
 				tx,
 			);
@@ -205,6 +226,7 @@ async function saveIntake(tx: Transaction<DB>, request: Intake) {
 		return reject("The prospect details match more than one record.");
 	if (match && (!match.is_lead || match.is_internal))
 		return reject("The prospect details belong to an existing relationship.");
+	if (preview) return { party_id: match?.party_id ?? null };
 	const party_id = match?.party_id ?? (await createLead(tx, prospect));
 	const { evidence, ...facts } = prospect;
 	if (facts.email)
@@ -217,18 +239,25 @@ async function saveIntake(tx: Transaction<DB>, request: Intake) {
 		select ${party_id}::uuid, ${facts.phone}, 'work', ${!match}
 		where not exists (select from party_phone where party_id = ${party_id} and number = ${facts.phone})
 		on conflict do nothing`.execute(tx);
-	const { activity_id } = await recordEmail(
-		tx,
-		{
-			kind: "email",
-			happened_at,
-			from_party_id: null,
-			reached: null,
-			summary: null,
-		},
-		[{ party_id }],
-		source,
-	);
+	let activity_id: string;
+	if (capture) {
+		({ activity_id } = await recordEmail(
+			tx,
+			{
+				kind: "email",
+				happened_at: request.happened_at,
+				from_party_id: null,
+				reached: null,
+				summary: null,
+			},
+			[{ party_id }],
+			{ ...request.email, ...stored },
+		));
+	} else {
+		activity_id = request.activity_id;
+		await sql`insert into activity_about (activity_id, party_id)
+			values (${activity_id}, ${party_id}) on conflict do nothing`.execute(tx);
+	}
 	await sql`insert into lead_email_source (activity_id, party_id, mailbox_user_id, prospect, evidence)
 		values (${activity_id}, ${party_id}, ${sponsor.id}, ${JSON.stringify(facts)}::jsonb, ${evidence})`.execute(
 		tx,
@@ -270,3 +299,171 @@ export const leadEmailIntake = new Hono<NextSaveEnv>().post(
 		);
 	},
 );
+
+const defaultLabels = {
+	name: "Name",
+	email: "Email",
+	phone: "Phone",
+	street_address: "Street Address",
+	city: "City",
+	request: "Request",
+};
+
+function noticeFacts(
+	storedBody: string,
+	fields: Record<string, string> | null,
+) {
+	const [own = ""] = beforeEmailHistory(storedBody).split(/^[ \t]*>/m, 1);
+	const body = own.trimEnd();
+	const labels = new Map(
+		Object.entries(fields ?? defaultLabels).map(([key, label]) => [
+			label.trim().toLowerCase(),
+			key,
+		]),
+	);
+	const alternatives = [...labels.keys()]
+		.sort((a, b) => b.length - a.length)
+		.map(literal)
+		.join("|");
+	const start = fields || !/[\r\n]/.test(body) ? "(?<!\\S)" : "^[ \\t]*";
+	const matches = [
+		...body.matchAll(new RegExp(`${start}(${alternatives})[ \\t]*:`, "gimu")),
+	];
+	const facts = new Map<string, string>();
+	let end = 0;
+	for (const [i, match] of matches.entries()) {
+		const key = labels.get(match[1]?.toLowerCase() ?? "");
+		if (!key || facts.has(key)) return;
+		const offset = match.index + match[0].length;
+		const [line = ""] = body
+			.slice(offset, matches[i + 1]?.index)
+			.split(/[\r\n]/, 1);
+		const [value = "", ...extras] = line.split(" · ");
+		facts.set(key, value.trim());
+		end = offset + line.length;
+		for (const extra of key === "name" ? extras : []) {
+			const email = extra.match(/^\s*([^\s@]+@[^\s@]+)(?=\s|$)/)?.[1];
+			const phone = extra.match(/^\s*(\+?[(\d][\d ().-]*\d)/)?.[1];
+			const contact = email ? "email" : phone ? "phone" : undefined;
+			if (!contact) continue;
+			if (facts.has(contact)) return;
+			facts.set(contact, email ?? phone ?? "");
+		}
+	}
+	const name = facts.get("name");
+	if (!name || (fields?.request && !facts.get("request"))) return;
+	const email = facts.get("email")?.toLowerCase();
+	const digits = facts.get("phone")?.replace(/[ ().-]/g, "");
+	const phone = digits?.replace(/^1?(\d{10})$/, "+1$1");
+	const street_address = facts.get("street_address");
+	const city = facts.get("city");
+	return {
+		prospect: {
+			kind: "person" as const,
+			name,
+			...(email && { email }),
+			...(phone &&
+				/^\+(?:1[2-9]\d{2}[2-9]\d{6}|[2-9]\d{6,14})$/.test(phone) && { phone }),
+			...(street_address && city && { street_address, city }),
+		},
+		evidence: body.slice(matches[0]?.index, end).trim(),
+	};
+}
+
+const parseReconcile = (body: JsonObject) =>
+	fit(
+		body,
+		{
+			idempotency_key: isUuid,
+			activity_id: isUuid,
+			dry_run: optional(isBoolean),
+		},
+		["idempotency_key", "activity_id"],
+	);
+type Reconcile = Exclude<ReturnType<typeof parseReconcile>, Refusal>;
+
+async function reconcileEmail(tx: Transaction<DB>, request: Reconcile) {
+	const { activity_id, dry_run } = request;
+	const none = { eligible_emails: 0, filing_decisions: 0 };
+	const {
+		rows: [stored],
+	} = await sql<{
+		message_id: string | null;
+		body: string;
+		fields: Record<string, string> | null;
+	}>`
+		select e.message_id, e.body, source.fields
+		from email e
+		join email_mailbox m on m.activity_id = e.activity_id
+		join app_user u on u.id = m.user_id and u.is_account_partner
+		cross join lateral (
+			select fields from lead_source_sender
+			where lower(address) = e.sender or domain = split_part(e.sender, '@', 2)
+			order by (address is not null) desc limit 1
+		) source
+		where e.activity_id = ${activity_id} and u.id = ${ACTING_USER}
+	`.execute(tx);
+	if (!stored) return none;
+	const { rows: filings } = await sql<{ id: string }>`
+		select id from proposal where activity_id = ${activity_id} and status = 'pending'
+		and kind in ('file_to_deal', 'possible_new_deal') order by id ${dry_run ? sql`` : sql`for update`}
+	`.execute(tx);
+	if (!filings.length) {
+		const prior = await tx
+			.selectFrom("lead_email_source")
+			.select("party_id")
+			.where("activity_id", "=", activity_id)
+			.executeTakeFirst();
+		if (!prior || dry_run) return none;
+		return { ...none, ...prior, eligible_emails: 1 };
+	}
+	const facts = noticeFacts(stored.body, stored.fields);
+	if (!facts) return none;
+	const result = await saveIntake(tx, {
+		activity_id,
+		message_id: stored.message_id,
+		kind: "lead_source",
+		preview: dry_run === true,
+		...facts,
+	});
+	if ("error" in result) return none;
+	const counts = { eligible_emails: 1, filing_decisions: filings.length };
+	if (dry_run) return counts;
+	await sql`update proposal set status = 'superseded'
+		where id = any(${filings.map(({ id }) => id)}::uuid[])`.execute(tx);
+	return { ...counts, party_id: result.party_id };
+}
+
+leadEmailIntake.post("/leads/email-reconcile", async (c) => {
+	const stamp = c.get("stamp");
+	if (stamp.job !== "mail_capture" || !stamp.for_user)
+		return refuse(c, new Refusal(403, "unknown_job"));
+	const body: unknown = await c.req.json().catch(() => undefined);
+	if (!isArguments(body)) return refuse(c, new Refusal(400, "invalid_json"));
+	const request = parseReconcile(body);
+	if (request instanceof Refusal) return refuse(c, request);
+	if (!request.dry_run)
+		return answerNextSave(
+			c,
+			"lead-email-reconcile",
+			() => request,
+			reconcileEmail,
+		);
+	const database = c.env.DATABASE;
+	if (!database) return refuse(c, new Refusal(503, "database_unavailable"));
+	try {
+		return c.json(
+			await nextTransaction(database.connectionString, "read", async (tx) => {
+				await stampNextSave(tx, stamp);
+				return reconcileEmail(tx, request);
+			}),
+		);
+	} catch (error) {
+		return refuse(
+			c,
+			error instanceof SaveRefusal
+				? error.refusal
+				: new Refusal(503, "database_unavailable"),
+		);
+	}
+});
