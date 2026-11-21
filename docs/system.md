@@ -84,6 +84,8 @@ Still on the old API with no switch yet:
 - Email and calendar calls outside the Home routing above (slice 30), and Deals saves outside the two save switches above (slice 29).
 - Sign-in.
 
+The Updates page reads and saves on the new schema directly, once the app routes it to the engine (§ "Updates and notification settings").
+
 The signed-in Prospects lane, detail, quick add and Monday review use the new schema directly. The app enables them when `deals-saves-from-engine` is on.
 
 The deal page's checklist and progress use the new schema with `DEALS_READ_SCHEMA=next`. See § "Deals reads for the app".
@@ -159,6 +161,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Activity, emails, next steps                             | § "Activity, emails and next steps"; § "Worked example: an LOI response by email"                                                   |
 | Suggestions and reply drafts                             | § "Suggestions from mail, calls and meetings"; § "Reply drafts"                                                                     |
 | Home marks and preferences                               | § "Users' preferences and Home marks"; § "24. Home marks saved"                                                                     |
+| Updates page and notification settings                   | § "Updates and notification settings"                                                                                               |
 | Tours and marketing                                      | § "Tours as meetings"; § "Marketing"                                                                                                |
 | Commissions and invoices                                 | § "Commissions"; § "Invoices found in email"                                                                                        |
 | The copies: order, reruns and each copy's file           | § "Running the copies"                                                                                                              |

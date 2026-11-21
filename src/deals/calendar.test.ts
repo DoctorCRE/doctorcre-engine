@@ -22,6 +22,12 @@ const closedDate = id(22);
 const done = id(23);
 const automation = id(5);
 const automatedDate = id(24);
+const pastDate = id(25);
+const supplier = id(43);
+const movers = id(44);
+const lead = id(45);
+const longWording =
+	"Ask Example Supply whether the expansion order can ship before the tenant improvements finish next spring";
 
 before(async () => {
 	await setup();
@@ -47,7 +53,8 @@ before(async () => {
 			('${otherDate}', '${other}', 'option_window', '2030-02-01', 'open', 'Example option', '${casey}'),
 			('${closedDate}', '${closed}', 'lease_end', '2030-03-01', 'open', 'Example lease', '${alex}'),
 			('${done}', '${open}', 'rent_start', '2030-01-01', 'cleared', 'Example lease', '${alex}'),
-			('${automatedDate}', '${open}', 'due_diligence', '2030-02-10', 'open', 'Example checklist', '${automation}');
+			('${automatedDate}', '${open}', 'due_diligence', '2030-02-10', 'open', 'Example checklist', '${automation}'),
+			('${pastDate}', '${open}', 'lease commencement', '2001-01-05', 'open', 'Example lease', '${alex}');
 		insert into public.event (subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause)
 			values ('deal', '${open}', 'status', '{"critical_date_id":"${done}","status":"cleared","reason":"Example payment"}',
 				'2026-02-01', '${alex}', 'resolve-critical-date', 'human_stated');
@@ -57,7 +64,14 @@ before(async () => {
 		insert into party (id, kind, name) values ('${alex}', 'person', 'Alex Example'),
 			('${casey}', 'person', 'Casey Example');
 		insert into app_user (id, slug) values ('${alex}', 'joe'), ('${casey}', 'dell');
-		insert into party (id, kind, name) values ('${clinic}', 'company', 'Example Clinic');
+		insert into party (id, kind, name) values ('${clinic}', 'company', 'Example Clinic'),
+			('${supplier}', 'company', 'Example Supply'), ('${movers}', 'company', 'Example Movers');
+		insert into how_found (slug, label) values ('referral', 'Referral');
+		insert into party (id, kind, name, how_found) values ('${lead}', 'company', 'Example Place', 'referral');
+		insert into role (slug, label) values ('vendor', 'Vendor'), ('lead', 'Lead');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New');
+		insert into party_role (party_id, role, stage) values ('${clinic}', 'vendor', null),
+			('${supplier}', 'vendor', null), ('${movers}', 'vendor', null), ('${lead}', 'lead', 'new');
 		insert into outside_id (source, value, party_id)
 			values ('old_system', '${alex}', '${alex}'), ('old_system', '${casey}', '${casey}');
 		insert into deal_kind (slug, label) values ('lease', 'Lease');
@@ -76,7 +90,11 @@ before(async () => {
 			('${id(33)}', '${other}', null, '${alex}', 'Held step', '2001-01-14', 'infinity', null),
 			('${id(34)}', '${closed}', null, '${casey}', 'Snoozed step', '2001-01-14', null, null),
 			('${id(35)}', '${other}', null, '${casey}', 'Undated step', null, null, null),
-			('${id(36)}', '${open}', null, '${alex}', 'Finished step', '2001-01-14', null, 'done');
+			('${id(36)}', '${open}', null, '${alex}', 'Finished step', '2001-01-14', null, 'done'),
+			('${id(39)}', '${open}', null, '${casey}', 'JOE DECIDE: call Example Owner at (555) 010-0199 about the renewal', '2001-01-13', null, null),
+			('${id(40)}', null, '${supplier}', '${alex}', '${longWording}', '2001-01-18', null, null),
+			('${id(41)}', null, '${lead}', '${alex}', 'Lease event T-3 months — Example Place (L-001), est. 2001-04-01. Last window before leverage is gone.', '2001-01-10', null, null),
+			('${id(42)}', null, '${movers}', '${alex}', 'Confirm the move date', '2001-01-12', '2001-01-20', null);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until)
 			values ('${casey}', '${id(34)}', 'snoozed', 'infinity');
 		commit;
@@ -141,6 +159,15 @@ for (const schema of [undefined, "next"]) {
 					schema_version: "calendar-critical-dates.v1",
 					critical_dates: [
 						{
+							id: pastDate,
+							deal_id: open,
+							deal_name: "Example lease",
+							owner: schema === "next" ? "joe" : "alex",
+							kind: "Lease commencement",
+							due_on: "2001-01-05",
+							done: false,
+						},
+						{
 							id: date,
 							deal_id: open,
 							deal_name: "Example lease",
@@ -180,18 +207,19 @@ for (const schema of [undefined, "next"]) {
 }
 
 test("both partners see overdue steps on the request day and upcoming steps on their dates", async () => {
-	for (const [partner, today, daysLate] of [
-		[alex, "2001-01-15", 3],
-		[casey, "2001-01-16", 4],
+	for (const [partner, now, today, daysLate] of [
+		[alex, "2001-01-15T18:00:00Z", "2001-01-15", 3],
+		[casey, "2001-01-16T18:00:00Z", "2001-01-16", 4],
 	] as const) {
 		const body = await nextTransaction(connectionString, "read", (tx) =>
-			readNextCalendarDates(tx, partner, today),
+			readNextCalendarDates(tx, partner, now),
 		);
 		assert.ok("next_steps" in body);
 		assert.deepEqual(body.next_steps, [
 			{
 				id: id(31),
 				what: "Send revised offer",
+				why: null,
 				owner: "joe",
 				record_label: "Example lease",
 				due_on: "2001-01-12",
@@ -200,8 +228,31 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 				open_url: `/deals?deal=${open}&focus=next-step&step=${id(31)}`,
 			},
 			{
+				id: id(39),
+				what: "call Example Owner about the renewal",
+				why: "call Example Owner at (555) 010-0199 about the renewal.",
+				owner: "dell",
+				record_label: "Example lease",
+				due_on: "2001-01-13",
+				display_on: today,
+				days_late: daysLate - 1,
+				open_url: `/deals?deal=${open}&focus=next-step&step=${id(39)}`,
+			},
+			{
+				id: id(40),
+				what: "Follow up on Example Supply",
+				why: `${longWording}.`,
+				owner: "joe",
+				record_label: "Example Supply",
+				due_on: "2001-01-18",
+				display_on: "2001-01-18",
+				days_late: 0,
+				open_url: `/relationships?node=party:${supplier}&step=${id(40)}`,
+			},
+			{
 				id: id(32),
 				what: "Ask about the expansion",
+				why: null,
 				owner: "dell",
 				record_label: "Example Clinic",
 				due_on: "2001-01-20",
@@ -229,8 +280,15 @@ test("Calendar and Today still show dated steps when open steps have infinite du
 				assert.equal(response.status, 200);
 				const calendar = await response.json();
 				assert.ok(isArguments(calendar));
-				assert.deepEqual(rowIds(calendar.critical_dates), [date, otherDate]);
-				assert.deepEqual(rowIds(calendar.next_steps), [id(31), id(32)]);
+				assert.deepEqual(rowIds(calendar.critical_dates), [
+					pastDate,
+					date,
+					otherDate,
+				]);
+				assert.deepEqual(
+					rowIds(calendar.next_steps),
+					[31, 42, 39, 40, 32].map(id),
+				);
 			},
 		);
 		await t.test("Today returns the finite reminders", async () => {
@@ -239,7 +297,10 @@ test("Calendar and Today still show dated steps when open steps have infinite du
 			const body = await response.json();
 			assert.ok(isArguments(body) && isArguments(body.reminders));
 			assert.equal(body.reminders.state, "ready");
-			assert.deepEqual(rowIds(body.reminders.late), [id(31), id(32)]);
+			assert.deepEqual(
+				rowIds(body.reminders.late),
+				[31, 42, 39, 40, 32].map(id),
+			);
 		});
 	} finally {
 		await db.query(`begin;

@@ -217,7 +217,9 @@ async function readHomeInbox(
 	const checklistSteps = new Set(
 		eligibleSteps.map((step) => `deal-item:${step.id}`),
 	);
-	const updates = (await readHomeUpdates(db, userId, limit, dashboard)).filter(
+	const updates = (
+		await readHomeUpdates(db, userId, limit, dashboard ? "dashboard" : "inbox")
+	).filter(
 		(update) =>
 			!dashboard ||
 			!update.checklist_item_ref ||
