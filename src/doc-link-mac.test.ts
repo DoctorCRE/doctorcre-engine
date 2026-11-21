@@ -10,10 +10,13 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { test } from "node:test";
+import { afterEach, beforeEach, mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { readDocLinkConfig, runDocLink } from "../scripts/doc-link.ts";
+
+beforeEach(() => mock.timers.enable({ apis: ["setInterval"] }));
+afterEach(() => mock.timers.reset());
 
 const credential = "x".repeat(43);
 const engine = "https://engine.example.test";
@@ -68,6 +71,8 @@ function managedSettingsIn(directory: string) {
 
 async function runLink(replies: Reply[], binary = claude, directory?: string) {
 	let now = 60_000;
+	const maxWaits = replies.length;
+	let waits = 0;
 	const requests: Request[] = [];
 	await runDocLink(
 		{ engine, claude: binary, credential },
@@ -75,6 +80,10 @@ async function runLink(replies: Reply[], binary = claude, directory?: string) {
 			...(directory ? { managedSettings: managedSettingsIn(directory) } : {}),
 			now: () => now,
 			wait: async () => {
+				assert.ok(
+					++waits <= maxWaits,
+					"Doc link stopped consuming scripted replies",
+				);
 				now += 2_000;
 			},
 			async fetch(url, init) {
