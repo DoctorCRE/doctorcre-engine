@@ -6,6 +6,8 @@ import { docRoutes, recentDocTurns } from "./doc.ts";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
 import { docMcp } from "./doc-mcp.ts";
+import { findDocRecords } from "./doc-reads.ts";
+import { nextTransaction } from "./next-connection.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -31,6 +33,9 @@ before(async () => {
 			('${nonPartner}', 'person', 'Example Three');
 		insert into app_user (id, slug) values
 			('${owner}', 'joe'), ('${other}', 'dell'), ('${nonPartner}', 'former_partner');
+		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client');
+		insert into stage (role, slug, label) values ('lead', 'qualified', 'Qualified');
+		insert into how_found (slug, label) values ('referral', 'Referral');
 		commit;`);
 });
 afterEach(() =>
@@ -750,6 +755,37 @@ async function sharedDeal() {
 	return { ref: { kind: "deal", id }, href: `/deals?deal=${id}` };
 }
 
+async function exampleLead(
+	name: string,
+	kind: "person" | "company" = "company",
+) {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true)), lead as (
+			insert into party (id, kind, name, how_found)
+			select $1, $2, $3, 'referral' from stamp returning id
+		)
+		insert into party_role (party_id, role, stage) select id, 'lead', 'qualified' from lead`,
+		[id, kind, name],
+	);
+	return { ref: { kind: "lead", id }, href: `/leads?lead=${id}` };
+}
+
+async function exampleClient(name: string) {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true)), company as (
+			insert into party (id, kind, name, how_found)
+			select $1, 'company', $2, 'referral' from stamp returning id
+		), client_role as (
+			insert into party_role (party_id, role) select id, 'client' from company returning party_id
+		)
+		insert into client (party_id, owner_user_id) select party_id, $3 from client_role`,
+		[id, name, owner],
+	);
+	return id;
+}
+
 async function answeredProposal(proposal: object, partner = owner) {
 	const id = randomUUID();
 	const conversation_id = randomUUID();
@@ -822,14 +858,7 @@ test("Doc confirms exactly one edited note as the recorded partner", async () =>
 });
 
 test("Doc confirms a next step on a client with the confirming partner as owner", async () => {
-	const id = randomUUID();
-	await db.query(`begin; set local engine.job = 'old_system';
-		insert into role (slug, label) values ('client', 'Client');
-		insert into how_found (slug, label) values ('referral', 'Referral');
-		insert into party (id, kind, name, how_found) values ('${id}', 'company', 'Example Client', 'referral');
-		insert into party_role (party_id, role) values ('${id}', 'client');
-		insert into client (party_id, owner_user_id) values ('${id}', '${owner}');
-		commit;`);
+	const id = await exampleClient("Example Client");
 	const href = `/clients?record=${id}`;
 	const { path } = await answeredProposal(
 		{
@@ -933,6 +962,115 @@ test("Doc refuses a foreign turn and a proposal for a record that is gone", asyn
 		[target.ref.id],
 	);
 	assert.equal((await client()(path, 409, args)).error, "target_changed");
+});
+
+async function mergeDuringConfirmation(
+	target: Awaited<ReturnType<typeof exampleLead>>,
+	survivor: string,
+	prelockedParty: string,
+) {
+	const { path, conversation_id } = await answeredProposal({
+		...nextStepProposal,
+		target,
+	});
+	await db.query(`begin; set local engine.job = 'old_system';
+		set local statement_timeout = '5s'; set local deadlock_timeout = '10s'`);
+	await db.query("select id from party where id = $1 for update", [
+		prelockedParty,
+	]);
+	const idempotency_key = randomUUID();
+	const confirmed = client()(path, [200, 409, 503], {
+		idempotency_key,
+		edits: {},
+	});
+	try {
+		const deadline = AbortSignal.timeout(5_000);
+		while (true) {
+			const blocked = await db.query(`select from pg_locks
+				where locktype = 'transactionid' and not granted
+				and pg_backend_pid() = any(pg_blocking_pids(pid))`);
+			if (blocked.rowCount) break;
+			assert.ok(
+				!deadline.aborted,
+				"Doc confirmation did not wait on the merge",
+			);
+		}
+		if (prelockedParty === target.ref.id) {
+			// Keep the retry from masking a reversed lock order.
+			await db.query(
+				"select from party_role where party_id = $1 and role = 'lead' for update nowait",
+				[target.ref.id],
+			);
+		}
+		await db.query("select merge_party($1, $2)", [target.ref.id, survivor]);
+		await db.query("commit");
+	} catch (error) {
+		await db.query("rollback");
+		await Promise.allSettled([confirmed]);
+		throw error;
+	}
+	assert.equal((await confirmed).error, "target_changed");
+	const { turns } = await client()(`/conversations/${conversation_id}`, 200);
+	assert.equal(turns[0]?.confirmation, null);
+	assert.equal(
+		(
+			await db.query("select from save_receipt where idempotency_key = $1", [
+				idempotency_key,
+			])
+		).rowCount,
+		0,
+	);
+	assert.equal(
+		(
+			await db.query("select from next_step where party_id in ($1, $2)", [
+				target.ref.id,
+				survivor,
+			])
+		).rowCount,
+		0,
+	);
+}
+
+test("a lead merge can finish while Doc confirmation is waiting on the party", async () => {
+	const target = await exampleLead("Example Duplicate");
+	const survivor = (await exampleLead("Example Survivor")).ref.id;
+	await mergeDuringConfirmation(target, survivor, target.ref.id);
+});
+
+test("Doc retries when a lead merges into the confirming partner", async () => {
+	const target = await exampleLead("Example Partner Duplicate", "person");
+	await mergeDuringConfirmation(target, owner, owner);
+});
+
+test("Doc refuses a step when a lead was linked to a client after the proposal", async () => {
+	const name = "Example Linked Lead";
+	const {
+		ref: { id },
+	} = await exampleLead(name);
+	const clientId = await exampleClient(name);
+	const findLead = () =>
+		nextTransaction(connectionString, "read", (tx) =>
+			findDocRecords(tx, id, "lead"),
+		);
+	const [target] = await findLead();
+	assert.equal(target?.ref.id, id);
+	const { path } = await answeredProposal({ ...nextStepProposal, target });
+	await db.query(
+		`with stamp as (select set_config('engine.user_id', $1, true))
+		update party_role set lead_client_id = $2 from stamp where party_id = $3 and role = 'lead'`,
+		[owner, clientId, id],
+	);
+	assert.deepEqual(await findLead(), []);
+	assert.equal(
+		(await client()(path, 409, { idempotency_key: randomUUID(), edits: {} }))
+			.error,
+		"target_changed",
+	);
+	assert.equal(
+		(await db.query("select from next_step where party_id = $1", [id]))
+			.rowCount,
+		0,
+	);
 });
 
 test("Doc confirms an exact pending revision with the existing edit and receipt rules", async () => {

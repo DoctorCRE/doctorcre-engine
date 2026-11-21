@@ -21,6 +21,11 @@ const emailDomain =
 	/^@?((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z])$/;
 const emailAddress = /^[^\s@]+@[^\s@]+$/;
 
+export const searchableLead = sql<boolean>`r.role = 'lead'
+	and r.stage not in ('active_deal', 'closed_won') and r.lead_client_id is null
+	and not exists (select from client where party_id = r.party_id)
+	and not exists (select from deal_party where party_id = r.party_id and role in ('client', 'client_contact'))`;
+
 export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 	const query = input.trim();
 	const lower = query.toLowerCase();
@@ -76,10 +81,7 @@ export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 					select coalesce((
 						select min(value) from outside_id where party_id = p.id and source = 'old_system_lead'
 					), p.id::text)
-					from party_role r where r.party_id = p.id and r.role = 'lead'
-						and r.stage not in ('active_deal', 'closed_won') and r.lead_client_id is null
-						and not exists (select from client where party_id = p.id)
-						and not exists (select from deal_party where party_id = p.id and role in ('client', 'client_contact'))
+					from party_role r where r.party_id = p.id and ${searchableLead}
 				) as lead_id, coalesce((
 					select jsonb_agg(to_jsonb(link) order by lower(link.name), link.id) from (
 						select d.id, d.name from deal d where d.id in (

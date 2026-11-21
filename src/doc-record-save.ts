@@ -6,6 +6,7 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { DB } from "./next-database.d.ts";
 import { createStep } from "./next-steps.ts";
 import { SaveRefusal } from "./save.ts";
+import { searchableLead } from "./search/records.ts";
 import { isUuid } from "./uuid.ts";
 
 export const docText = z
@@ -59,10 +60,15 @@ async function lockTarget(
 	tx: Transaction<DB>,
 	{ kind, id }: z.infer<typeof target>["ref"],
 ) {
+	if (kind !== "deal") {
+		// Match merge_party's order. New deal links need key-share on a lead's party.
+		const lock = kind === "lead" ? sql`for update` : sql`for key share`;
+		await sql`select id from party where id = ${id} ${lock}`.execute(tx);
+	}
 	const query = {
 		deal: sql`select id from deal where id = ${id} for key share`,
-		lead: sql`select party_id from party_role
-			where party_id = ${id} and role = 'lead' and stage is not null for share`,
+		lead: sql`select r.party_id from party_role r
+			where r.party_id = ${id} and ${searchableLead} for share of r`,
 		client: sql`select party_id from client where party_id = ${id} for key share`,
 	};
 	const { rows } = await query[kind].execute(tx);
