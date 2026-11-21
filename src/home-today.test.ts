@@ -131,7 +131,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
 		`${id(22)}|Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
 		`${id(29)}|Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
-		`${id(30)}|open the saved step|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
+		`${id(30)}|Open the saved step|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
 	assert.deepEqual(
 		body.reminders?.late.map((item) => [item.id, item.deal_ended]),

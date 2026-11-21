@@ -188,7 +188,7 @@ async function readTodayReminders(
 	const list = rows.map((r) => ({
 		id: r.id,
 		kind: r.call_id ? ("call_follow_up" as const) : ("step" as const),
-		title: homeDisplayText(r.title) || "open the saved step",
+		title: homeDisplayText(r.title) || "Open the saved step",
 		context_label: r.context_label,
 		due_on: r.due_on,
 		days_late: r.days_late,
