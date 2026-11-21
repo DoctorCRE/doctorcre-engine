@@ -356,19 +356,8 @@ alter table party_company enable trigger stamp_change;
 alter table party_role enable trigger stamp_change;
 alter table party_role enable trigger lead_stage_needs_evidence;
 
--- A redirect can point to a real company, so only rows at the original employer count as present.
-with companies as (
-	select count(*) filter (where p.id is null) as skipped_companies,
-		count(p.id) as existing_placeholder_companies
-	from skipped_company s left join party p on p.id = s.id
-), affiliations as (
-	select count(*) filter (where c.person_id is null) as skipped_affiliations,
-		count(distinct c.id) as existing_placeholder_affiliations
-	from typed_company v
-	left join party_company c on c.person_id = v.person_id and c.company_id = v.skipped_company_id
-	where v.kind = 'person' and v.skipped_company_id is not null
-)
-select skipped_companies, skipped_affiliations, existing_placeholder_companies, existing_placeholder_affiliations
-from companies cross join affiliations;
+select (select count(*) from skipped_company) as skipped_companies, count(*) as skipped_affiliations
+from source_party p join source_party org on org.id = p.org_id
+where p.kind = 'person' and org.skipped_company_id is not null;
 
 select * from not_copied order by old_id, field, value;
