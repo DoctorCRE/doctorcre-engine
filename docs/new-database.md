@@ -1549,6 +1549,12 @@ The response is `{ ok: true, schema_version: "home-today.v1", today, viewer, own
 
 Each reminder's `title` uses the Home step card's title rules. When the linked card shows a completion review, it uses that review's title. Titles are at most 90 characters. The display cleanup leaves the saved step text intact.
 
+### Calendar read
+
+`GET /api/engine/calendar/critical-dates` returns `calendar-critical-dates.v1`. With `DEALS_READ_SCHEMA=next`, either signed-in partner can read both partners' dates and steps in one call. Each `critical_dates` row carries `id`, `deal_id`, `deal_name`, the deal owner's slug as `owner`, a display label as `kind`, `due_on` and `done: false`. The read includes only confirmed open dates on open deals. The legacy read retains its existing date scope and omits `next_steps`.
+
+The new-schema `next_steps` list uses the same rules as Today reminders for open status, partner ownership, a finite due date, holds, snoozes and dropped follow-ups. Calendar also includes future due dates. Each row carries `id`, `what`, `owner`, `record_label`, `due_on`, `display_on`, `days_late` and `open_url`. `display_on` is the later of the due day and today's Central day. Dates use `YYYY-MM-DD`, and `days_late` is zero unless the step is overdue. A deal step links to its deal, including a call follow-up. A party step links to the prospect or Relationships record. A building step links to its sole open deal when there is one and otherwise has `open_url: null`.
+
 ## Invoice tracker reads for the app
 
 Home and Invoices use `GET /api/engine/invoices` when `invoices-from-engine` is `on` in the app's `ENGINE_ROUTING` KV. Set the engine Worker's `INVOICES_READ_SCHEMA` to `next` to read through `DATABASE` as `engine_reader`, the same way the Deals reads do. An absent setting or any other value keeps the old-table read. Set the engine variable before routing the app to the new read. Remove the variable to return the engine to the old-table read, or set the app switch to `off` to route to CARR.

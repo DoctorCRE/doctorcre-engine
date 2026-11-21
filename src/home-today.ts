@@ -7,6 +7,7 @@ import { PARTNERS } from "./clients/read.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import { readCompletionReviews } from "./home-inbox-reviews-updates.ts";
 import {
+	datedPartnerSteps,
 	homeStepCopy,
 	type StepTitle,
 	stepItemId,
@@ -176,15 +177,7 @@ async function readTodayReminders(
 			s.deal_id is not null and not exists (
 				select from (${openDeals}) as open_deal where open_deal.id = s.deal_id
 			) as deal_ended
-		from next_step s join app_user u on u.id = s.owner_party_id and u.is_account_partner
-		left join deal d on d.id = s.deal_id left join party p on p.id = s.party_id left join property on property.id = s.property_id
-		left join activity c on c.id = s.call_activity_id
-		left join party contact on contact.id = coalesce(s.call_contact_party_id, c.from_party_id)
-		left join home_mark m on m.user_id = s.owner_party_id and m.item_id = s.id
-			and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
-		where s.status = 'open' and s.due_on is not null and s.due_on <= ${today}::date
-			and (s.hold_until is null or s.hold_until <= ${today}::date)
-			and m.disposition is distinct from 'dropped' and (m.snoozed_until is null or m.snoozed_until <= now())
+		${datedPartnerSteps} and s.due_on <= ${today}::date
 			${owner === "all" ? sql`` : sql`and u.slug = ${owner}`}
 		order by s.due_on, (s.call_activity_id is null), s.id
 	`.execute(db);

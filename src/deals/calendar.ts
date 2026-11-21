@@ -1,4 +1,11 @@
-import type { Transaction } from "kysely";
+import { sql, type Transaction } from "kysely";
+import { Refusal } from "../answer.ts";
+import {
+	datedPartnerSteps,
+	homeDisplayText,
+	stepRecordUrl,
+	stepTargetFields,
+} from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
 import { asText, type Reader } from "../reader.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./next-board.ts";
@@ -33,7 +40,13 @@ export async function readCalendarDates(db: Reader) {
 	const rows = await db
 		.selectFrom("v_open_deal_room_board as d")
 		.innerJoin("v_deal_room_critical_date as cd", "cd.deal_id", "d.id")
-		.select(["cd.id", "cd.deal_id", "d.name as deal_name", "cd.kind"])
+		.select([
+			"cd.id",
+			"cd.deal_id",
+			"d.name as deal_name",
+			"d.owner",
+			"cd.kind",
+		])
 		.select((eb) => asText(eb.ref("cd.due_on")).as("due_on"))
 		.where("cd.status", "=", "open")
 		.distinct()
@@ -43,19 +56,74 @@ export async function readCalendarDates(db: Reader) {
 	return calendarDates(rows);
 }
 
-export async function readNextCalendarDates(db: Transaction<DB>) {
+export async function readNextCalendarDates(
+	db: Transaction<DB>,
+	viewerId: string,
+	today?: string,
+) {
+	const viewer = await db
+		.selectFrom("app_user")
+		.select("is_account_partner")
+		.select(
+			sql<string>`coalesce(${today ?? null}::date, (now() at time zone 'America/Chicago')::date)::text`.as(
+				"today",
+			),
+		)
+		.where("id", "=", viewerId)
+		.executeTakeFirst();
+	if (!viewer?.is_account_partner)
+		return new Refusal(403, "AUTHORIZATION_REFUSED");
 	const deals = db
 		.selectFrom(selectNextDeals(db).as("board"))
 		.where(isOpenBoardDeal);
 	const rows = await db
-		.selectFrom(deals.select(["id", "name"]).as("d"))
+		.selectFrom(deals.select(["id", "name", "owner"]).as("d"))
 		.innerJoin("critical_date as cd", "cd.deal_id", "d.id")
-		.select(["cd.id", "cd.deal_id", "d.name as deal_name", "cd.kind"])
+		.select([
+			"cd.id",
+			"cd.deal_id",
+			"d.name as deal_name",
+			"d.owner",
+			"cd.kind",
+		])
 		.select((eb) => asText(eb.ref("cd.due_on")).as("due_on"))
 		.where("cd.status", "=", "open")
 		.distinct()
 		.orderBy("due_on")
 		.orderBy("cd.id")
 		.execute();
-	return calendarDates(rows);
+	return {
+		...calendarDates(rows),
+		next_steps: await readCalendarSteps(db, viewer.today),
+	};
+}
+
+type CalendarStep = Parameters<typeof stepRecordUrl>[0] & {
+	what: string;
+	context_label: string;
+	owner: string;
+	due_on: string;
+	display_on: string;
+	days_late: number;
+};
+
+async function readCalendarSteps(db: Transaction<DB>, today: string) {
+	const { rows } = await sql<CalendarStep>`
+		select s.id, s.what, u.slug as owner, s.deal_id, s.party_id,
+			${stepTargetFields(db)}, s.due_on::text as due_on,
+			greatest(s.due_on, ${today}::date)::text as display_on,
+			greatest(${today}::date - s.due_on, 0) as days_late
+		${datedPartnerSteps}
+		order by s.due_on, s.id
+	`.execute(db);
+	return rows.map((step) => ({
+		id: step.id,
+		what: homeDisplayText(step.what) || "Open the saved step",
+		owner: step.owner,
+		record_label: step.context_label,
+		due_on: step.due_on,
+		display_on: step.display_on,
+		days_late: step.days_late,
+		open_url: stepRecordUrl(step),
+	}));
 }
