@@ -47,6 +47,7 @@
 	"env": {
 		"staging": {
 			"name": "doctorcre-engine-staging",
+			"ai": { "binding": "AI" },
 			"version_metadata": { "binding": "CF_VERSION_METADATA" },
 			"services": [
 				{ "binding": "CARR", "service": "carr-mcp-staging" },
@@ -70,6 +71,7 @@
 				}
 			],
 			"vars": {
+				"DOC_MODEL": "@cf/zai-org/glm-5.3",
 				"POST_MEDIA_BUCKET": "doctorcre-post-media-staging",
 				"CLIENT_WEBSITE_ORIGIN": "https://carr-share-staging.joe-bookout-carr-us.workers.dev"
 			}

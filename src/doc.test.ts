@@ -3,12 +3,18 @@ import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { Hono } from "hono";
 import { docRoutes } from "./doc.ts";
+import type { DocModelBindings } from "./doc-model.ts";
 import { copyTest } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
 const owner = randomUUID();
 const other = randomUUID();
 const nonPartner = randomUUID();
+const rehearsalDeal = randomUUID();
+const rehearsalLead = randomUUID();
+const duplicateLead = randomUUID();
+const copiedLead = randomUUID();
+const rehearsalClient = randomUUID();
 const question = {
 	idempotency_key: randomUUID(),
 	question: "What should I review?",
@@ -28,6 +34,34 @@ before(async () => {
 			('${nonPartner}', 'person', 'Example Three');
 		insert into app_user (id, slug) values
 			('${owner}', 'joe'), ('${other}', 'dell'), ('${nonPartner}', 'former_partner');
+		insert into phase values ('pending', 'Pending');
+		insert into how_found values ('referral', 'Referral');
+		insert into role values ('lead', 'Lead'), ('client', 'Client');
+		insert into stage (role, slug, label) values ('lead', 'qualified', 'Qualified');
+		insert into party (id, kind, name, city, how_found) values
+			('${rehearsalLead}', 'person', 'Example Juniper', 'Sample North', 'referral'),
+			('${duplicateLead}', 'person', 'Example Juniper', 'Sample South', 'referral'),
+			('${rehearsalClient}', 'company', 'Example Elm Clinic', null, 'referral');
+		insert into party_role (party_id, role, stage, owner_user_id) values
+			('${rehearsalLead}', 'lead', 'qualified', '${owner}'),
+			('${duplicateLead}', 'lead', 'qualified', '${other}'),
+			('${rehearsalClient}', 'client', null, null);
+		insert into client (party_id, owner_user_id) values ('${rehearsalClient}', '${other}');
+		insert into outside_id (source, value, party_id) values ('old_system_lead', '${copiedLead}', '${rehearsalLead}');
+		insert into deal (id, name, owner_user_id) values ('${rehearsalDeal}', 'Example Cedar Lease', '${owner}');
+		insert into deal_phase_change (deal_id, happened_at, phase)
+			values ('${rehearsalDeal}', '2026-01-01', 'pending');
+		insert into next_step (deal_id, what, owner_party_id, due_on)
+			values ('${rehearsalDeal}', 'Review the floor plan', '${owner}', '2026-12-14');
+		with a as (insert into activity (kind, happened_at, summary)
+			values ('note', '2026-01-02', 'The west entrance needs a ramp.') returning id)
+		insert into activity_about (activity_id, deal_id) select id, '${rehearsalDeal}' from a;
+		with a as (insert into activity (kind, happened_at, summary)
+			values ('email', '2026-01-03', 'Private synthetic mail summary.') returning id),
+		mail as (insert into email (activity_id, message_id, sender, subject, body)
+			select id, 'doc-test@example.test', 'sender@example.test', 'Synthetic mail', 'Private synthetic mail body.'
+			from a returning activity_id)
+		insert into activity_about (activity_id, deal_id) select activity_id, '${rehearsalDeal}' from mail;
 		commit;`);
 });
 after(cleanup);
@@ -47,7 +81,11 @@ type Body<Path> = { error?: string } & (Path extends "/turns"
 		? { conversation: Chat; turns: Turn[] }
 		: { conversations: Chat[]; next_before: string | null });
 
-function client(model: Parameters<typeof docRoutes>[0], user = "joe") {
+function client(
+	model: Parameters<typeof docRoutes>[0],
+	user = "joe",
+	bindings?: DocModelBindings,
+) {
 	const api = docRoutes(model);
 	const app = new Hono<typeof api extends Hono<infer Env> ? Env : never>();
 	app.use("*", async (c, next) => {
@@ -63,7 +101,11 @@ function client(model: Parameters<typeof docRoutes>[0], user = "joe") {
 		const response = await app.request(
 			path,
 			body && { method: "POST", body: JSON.stringify(body) },
-			{ DATABASE_WRITER: { connectionString } },
+			{
+				DATABASE: { connectionString },
+				DATABASE_WRITER: { connectionString },
+				...bindings,
+			},
 		);
 		const result = await response.json<Body<Path>>();
 		if (typeof status === "number")
@@ -438,4 +480,215 @@ test("an answered proposal needs a matching save receipt at commit", async () =>
 	} finally {
 		await db.query("rollback");
 	}
+});
+
+const completion = (message: object, tool = false) => ({
+	choices: [{ message, finish_reason: tool ? "tool_calls" : "stop" }],
+});
+
+const call = (name: string, args: object) =>
+	completion(
+		{
+			tool_calls: [
+				{
+					id: randomUUID(),
+					type: "function",
+					function: { name, arguments: JSON.stringify(args) },
+				},
+			],
+		},
+		true,
+	);
+
+const reply = (
+	kind: string,
+	text: string,
+	sources: unknown[],
+	extra?: object,
+) => completion({ content: JSON.stringify({ kind, text, sources, ...extra }) });
+
+function withModel(run: NonNullable<DocModelBindings["AI"]>["run"]) {
+	return client(undefined, "joe", { DOC_MODEL: "fake", AI: { run } });
+}
+
+test("Doc answers the first question and a follow-up from fresh reads of the same deal", async () => {
+	const key = `deal:${rehearsalDeal}`;
+	const firstQuestion = "What phase is the Example Cedar Lease deal in?";
+	const firstAnswer = "Example Cedar Lease is pending.";
+	const followUp = "What is the next step on that deal and why?";
+	const send = withModel(async (_model, { messages }) => {
+		const ask = messages.findLast((message) => message.role === "user");
+		const results = messages
+			.slice(messages.lastIndexOf(ask ?? { role: "user", content: "" }) + 1)
+			.filter((message) => message.role === "tool");
+		if (!results.length) {
+			if (ask?.content === followUp)
+				assert.ok(
+					messages.some(
+						(message) =>
+							message.role === "assistant" &&
+							typeof message.content === "string" &&
+							message.content.includes(firstAnswer),
+					),
+				);
+			return call("find", {
+				kind: "deal",
+				query:
+					ask?.content === followUp ? rehearsalDeal : "Example Cedar Lease",
+			});
+		}
+		if (results.length === 1) {
+			assert.match(String(results[0]?.content), new RegExp(key));
+			return call("read", { source: key });
+		}
+		const facts = String(results[1]?.content);
+		assert.match(facts, /"phase":"pending"/);
+		assert.match(facts, /Review the floor plan/);
+		assert.match(facts, /The west entrance needs a ramp/);
+		assert.doesNotMatch(facts, /Private synthetic mail/);
+		return reply(
+			"answer",
+			ask?.content === followUp
+				? "Review the floor plan. The west entrance needs a ramp."
+				: firstAnswer,
+			ask?.content === followUp
+				? [
+						{
+							ref: { kind: "deal", id: rehearsalDeal },
+							href: "https://example.test",
+						},
+					]
+				: [key],
+		);
+	});
+	const cite = {
+		ref: { kind: "deal", id: rehearsalDeal },
+		label: "Example Cedar Lease",
+		href: `/deals?deal=${rehearsalDeal}`,
+	};
+	const first = await send("/turns", 200, {
+		idempotency_key: randomUUID(),
+		question: firstQuestion,
+	});
+	assert.deepEqual(first.turn.answer, {
+		kind: "answer",
+		text: firstAnswer,
+		sources: [cite],
+		proposal: null,
+	});
+	const second = await send("/turns", 200, {
+		conversation_id: first.conversation_id,
+		idempotency_key: randomUUID(),
+		question: followUp,
+	});
+	assert.deepEqual(second.turn.answer, {
+		kind: "answer",
+		text: "Review the floor plan. The west entrance needs a ramp.",
+		sources: [cite],
+		proposal: null,
+	});
+});
+
+test("Doc asks which lead when two names match, with exact links to both leads", async () => {
+	const send = withModel(async () =>
+		call("find", { query: "Example Juniper", kind: "lead" }),
+	);
+	const { turn } = await send("/turns", 200, {
+		idempotency_key: randomUUID(),
+		question: "Who owns the Example Juniper lead?",
+	});
+	assert.deepEqual(turn.answer, {
+		kind: "clarification",
+		text: "Which of these records did you mean?",
+		sources: [
+			{
+				ref: { kind: "lead", id: rehearsalLead },
+				label: "Example Juniper (Sample North)",
+				href: `/leads?lead=${copiedLead}`,
+			},
+			{
+				ref: { kind: "lead", id: duplicateLead },
+				label: "Example Juniper (Sample South)",
+				href: `/leads?lead=${duplicateLead}`,
+			},
+		].toSorted((a, b) => a.ref.id.localeCompare(b.ref.id)),
+		proposal: null,
+	});
+});
+
+test("Doc reads a client or a copied lead by canonical ID and returns its app link", async () => {
+	const cases = [
+		{
+			kind: "client",
+			id: rehearsalClient,
+			label: "Example Elm Clinic",
+			href: `/clients?record=${rehearsalClient}`,
+			owner: "Example Two",
+		},
+		{
+			kind: "lead",
+			id: rehearsalLead,
+			label: "Example Juniper",
+			href: `/leads?lead=${copiedLead}`,
+			owner: "Example One",
+		},
+	];
+	for (const { kind, id, label, href, owner } of cases) {
+		const key = `${kind}:${id}`;
+		const text = `${owner} is the recorded owner.`;
+		const send = withModel(async (_model, { messages }) => {
+			const results = messages.filter((message) => message.role === "tool");
+			if (!results.length) return call("find", { query: id, kind });
+			if (results.length === 1) return call("read", { source: key });
+			assert.match(
+				String(results[1]?.content),
+				new RegExp(`"owner":"${owner}"`),
+			);
+			return reply("answer", text, [key]);
+		});
+		const { turn } = await send("/turns", 200, {
+			idempotency_key: randomUUID(),
+			question: "Who owns this record?",
+			context: { kind, id },
+		});
+		assert.deepEqual(turn.answer, {
+			kind: "answer",
+			text,
+			sources: [{ ref: { kind, id }, label, href }],
+			proposal: null,
+		});
+	}
+});
+
+test("the model cannot call a save or supply its own source link", async () => {
+	const key = `deal:${rehearsalDeal}`;
+	const ask = () => ({
+		idempotency_key: randomUUID(),
+		question: "Save a note on Example Cedar Lease.",
+	});
+	const save = withModel(async () =>
+		call("save_note", { source: key, text: "Do not store this." }),
+	);
+	assert.equal((await save("/turns", 503, ask())).error, "doc_unavailable");
+	const forge = withModel(async () =>
+		reply("answer", "A fabricated claim.", [key]),
+	);
+	assert.equal((await forge("/turns", 503, ask())).error, "doc_unavailable");
+	const refuse = withModel(async () =>
+		reply("refusal", "I can answer questions about this deal.", [], {
+			proposal: { kind: "note", target: { href: "https://example.test" } },
+		}),
+	);
+	const { turn } = await refuse("/turns", 200, ask());
+	assert.deepEqual(turn.answer, {
+		kind: "refusal",
+		text: "I can answer questions about this deal.",
+		sources: [],
+		proposal: null,
+	});
+	const { rows } = await db.query(
+		"select summary from activity where summary = $1",
+		["Do not store this."],
+	);
+	assert.deepEqual(rows, []);
 });

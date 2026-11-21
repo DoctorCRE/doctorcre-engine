@@ -2,6 +2,11 @@ import { type Context, Hono } from "hono";
 import { type Selectable, sql, type Transaction } from "kysely";
 import { Refusal, refuse, unregisteredFields } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
+import {
+	answerDocQuestion,
+	type DocModelBindings,
+	type PriorTurn,
+} from "./doc-model.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
@@ -16,9 +21,12 @@ import {
 import { isArguments } from "./save-door.ts";
 import { isUuid } from "./uuid.ts";
 
-type DocEnv = WriterEnv & PartnerSessionEnv;
+type DocEnv = WriterEnv &
+	PartnerSessionEnv & {
+		Bindings: DocModelBindings & { DATABASE?: { connectionString: string } };
+	};
 type DocTransaction = Transaction<DB>;
-type DocAnswer = {
+export type DocAnswer = {
 	kind: "answer" | "clarification" | "refusal";
 	text: string;
 	sources: JsonObject[];
@@ -247,8 +255,7 @@ function transact<T>(
 	});
 }
 
-// The model is connected by #954. Until then the ask remains available to retry.
-export function docRoutes(model: AnswerQuestion = async () => null) {
+export function docRoutes(model?: AnswerQuestion) {
 	return new Hono<DocEnv>()
 		.onError((error, c) => {
 			if (error instanceof SaveRefusal) return refuse(c, error.refusal);
@@ -287,11 +294,30 @@ export function docRoutes(model: AnswerQuestion = async () => null) {
 					{ conversation_id, turn },
 					turn.state === "working" ? 202 : 200,
 				);
-			const answer = await askModel(model, {
-				partner: c.get("partner").slug,
-				conversation_id,
-				turn,
-			});
+			const partner = c.get("partner").slug;
+			const answer = await askModel(
+				model ??
+					(async (input, signal) => {
+						const { AI, DOC_MODEL, DATABASE } = c.env;
+						if (!AI || !DOC_MODEL || !DATABASE) return null;
+						const deadline = Date.now() + 45_000;
+						const { rows } = await transact(c, (tx) =>
+							sql<PriorTurn>`select t.question, t.answer - 'proposal' as answer
+							${turnInChat(conversation_id)} and t.position < ${turn.position}
+							and t.state = 'answered' order by t.position desc limit 12`.execute(
+								tx,
+							),
+						);
+						return answerDocQuestion((request) => AI.run(DOC_MODEL, request), {
+							...input,
+							connectionString: DATABASE.connectionString,
+							history: rows.reverse(),
+							deadline,
+							signal,
+						});
+					}),
+				{ partner, conversation_id, turn },
+			);
 			const saved = await transact(c, async (tx) => {
 				await lockChat(tx, conversation_id);
 				const {

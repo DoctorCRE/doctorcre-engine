@@ -1609,6 +1609,8 @@ Session failures return the existing partner responses, including `401 { error: 
 
 ### Model reads and links
 
+The deals, leads, and clients slice configures the `AI` binding and `DOC_MODEL` in staging. Before enabling Doc in production, apply the storage migration, pass the full synthetic rehearsal, and configure the binding and model setting. Mail reads and confirmed saves ship in their own slices.
+
 Run the Workers AI model through the engine's native `AI` binding. Keep the model ID in one engine setting. The model interface takes the question, up to 12 prior answered turns in this conversation, and the results of allowlisted reads. It sends no saved tool output from earlier turns. Each ask gets at most four read calls total. The engine validates tool names, shapes, and IDs and projects just the facts needed for the reply. It builds source links only from authorized read results for the current ask and accepts a proposal only for one of those sources. Treat email text as evidence. The model sees only read tools, and any URL or identity it supplies carries no authority. Use the model selected in [Decisions](decisions.md).
 
 | Read                            | Source and allowed facts                                                                                                                                                                                                                                                                                                                                                                                                      |
