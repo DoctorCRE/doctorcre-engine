@@ -43,9 +43,7 @@ export function emailSuggestionTitle({
 	const sender = homeDisplayText(email_sender);
 	const target =
 		kind === "file_to_deal" || kind === "possible_new_deal"
-			? sender.includes("@")
-				? ""
-				: sender
+			? sender
 			: homeDisplayText(context_label) || sender;
 	return (
 		savedEmailTitle(email_action_title) ||

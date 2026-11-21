@@ -206,7 +206,7 @@ test("deal follow-up uses the Home action title for the exact reply", async () =
 	assert.ok("email_follow_ups" in page && Array.isArray(page.email_follow_ups));
 	assert.deepEqual(
 		page.email_follow_ups.filter(isArguments).map(({ title }) => title),
-		["Choose the deal for this email", card.title],
+		["Choose the deal for sam@example.test's email", card.title],
 	);
 });
 
@@ -350,7 +350,7 @@ test("both partners see individual correspondence and can decide email suggestio
 	);
 });
 
-test("the deal page lists a filing suggested on every message of a conversation once", async () => {
+test("an unsummarized filing uses the sender address in the Home and deal titles", async () => {
 	const messages = `array['${id(60)}', '${id(61)}', '${id(62)}']::uuid[]`;
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
@@ -361,6 +361,8 @@ test("the deal page lists a filing suggested on every message of a conversation 
 			select message, message || '@example.test', 'pat@example.test', 'Suite question',
 				'About the suite.', 'example-suite-thread'
 			from unnest(${messages}) message;
+		insert into email_mailbox (activity_id, user_id)
+			select message, '${id(1)}' from unnest(${messages}) message;
 		insert into activity_about (activity_id, party_id)
 			select message, '${id(3)}' from unnest(${messages}) message;
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, created_at)
@@ -368,13 +370,18 @@ test("the deal page lists a filing suggested on every message of a conversation 
 				'${otherDealId}', '2026-01-20'::date + day::int
 			from unnest(${messages}) with ordinality m(message, day);
 		commit;`);
+	const card = (await homeReminders(alex)).find(
+		(item) =>
+			isArguments(item.source_activity) && item.source_activity.id === id(62),
+	);
+	assert.equal(card?.title, "Choose the deal for pat@example.test's email");
 	const page = await detail(alex, otherDealId);
 	assert.ok("email_follow_ups" in page && Array.isArray(page.email_follow_ups));
 	assert.deepEqual(
 		page.email_follow_ups
 			.filter((entry) => entry.kind === "file_to_deal")
-			.map((entry) => entry.email.activity_id),
-		[id(62)],
+			.map((entry) => [entry.email.activity_id, entry.title]),
+		[[id(62), card.title]],
 	);
 });
 
