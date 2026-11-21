@@ -7,15 +7,15 @@ import { doorTest } from "./test-door.ts";
 const { db, setup, cleanup, request, save } = doorTest();
 const owner = randomUUID();
 const other = randomUUID();
-const alex = { user: "alex" };
-const blair = { user: "blair" };
+const alex = { user: "joe" };
+const blair = { user: "dell" };
 
 before(async () => {
 	await setup();
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${owner}', 'person', 'Alex Example'), ('${other}', 'person', 'Blair Example');
-		insert into app_user (id, slug) values ('${owner}', 'alex'), ('${other}', 'blair');
+		insert into app_user (id, slug) values ('${owner}', '${alex.user}'), ('${other}', '${blair.user}');
 		commit;`);
 });
 after(cleanup);
@@ -92,6 +92,23 @@ async function checkCompletionReview(callFollowUp: boolean) {
 		},
 		completion_review: { next_step_id: step, can_resolve: true },
 	});
+	const today = await request(
+		alex,
+		"home/today",
+		{ method: "GET" },
+		{
+			HOME_INBOX_READ_SCHEMA: "next",
+		},
+	);
+	assert.equal(today.status, 200);
+	const { reminders } = (await today.json()) as {
+		reminders: { late: { home_item_id: string; title: string }[] };
+	};
+	assert.equal(
+		reminders.late.find((item) => item.home_item_id === item_id)?.title,
+		card?.title,
+	);
+
 	assert.deepEqual(await cards(blair, deal), []);
 	const detailPath = `proposals/${card?.source_id}`;
 	const [opened, detail] = await save(alex, detailPath, {}, "GET");

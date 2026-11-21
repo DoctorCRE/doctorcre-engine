@@ -6,6 +6,12 @@ const stepMetadata =
 	/\b(?:[CL]-\d+|V-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d+|T\s*[-−]\s*\d+\s*(?:days?|weeks?|months?|years?)|loop\s*#\s*\d+)\b/gi;
 const storedDate =
 	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
+const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
+const decisionPrefix = /^(?:[A-Z][A-Z'.-]* )+DECIDE\s*:\s*/;
+const unknownSendDecision =
+	/^send status unknown\s*[,—–-]\s*re-touch or drop\.?$/i;
+const phoneNumber =
+	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
 
 export function homeDisplayText(text: string | null) {
 	return (text ?? "")
@@ -33,11 +39,25 @@ export function homeDisplayText(text: string | null) {
 				: `${weekday ? `${weekday}, ` : ""}${dateLabel.format(timestamp)}`;
 		})
 		.replace(/ +([,.;:!?])/g, "$1")
-		.replace(/^[\s:;,·–—-]+|[\s:;,·–—-]+$/g, "");
+		.replace(edgePunctuation, "");
 }
 
 export function homeStepText(text: string) {
-	return homeDisplayText(text).replace(/^(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)/i, "");
+	const savedText = homeDisplayText(text).replace(
+		/^(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)/i,
+		"",
+	);
+	const prompt = savedText.replace(decisionPrefix, "");
+	if (unknownSendDecision.test(prompt))
+		return { savedText, action: "Decide whether to follow up or drop" };
+	const withoutNumber = prompt.replace(phoneNumber, " ");
+	if (withoutNumber === prompt && !/^(?:please )?call\b/i.test(prompt))
+		return { savedText, action: prompt };
+	const [firstSentence = ""] = withoutNumber
+		.replace(/\s+/g, " ")
+		.replace(edgePunctuation, "")
+		.split(/(?<!\b(?:Dr|Mr|Mrs|Ms)\.)(?<=[.!?])\s+/i, 1);
+	return { savedText, action: firstSentence.replace(/\.$/, "") };
 }
 
 const titleLength = 90;
@@ -63,6 +83,120 @@ export function homeTitle(event: string, action = "", fallbackEvent = event) {
 		separator +
 		decision
 	);
+}
+
+export type StepTitle = {
+	title: string;
+	status: string | null;
+	context_label: string | null;
+	due_on: string | null;
+	hold_until: string | null;
+	call_at: string | null;
+	call_contact: string | null;
+};
+
+type StepEvidence = {
+	call_quote: string | null;
+	call_summary: string | null;
+	created_at: string;
+	set_by: string | null;
+	source_kind: "call" | "email" | "meeting" | null;
+	source_evidence: string | null;
+};
+
+const leaseEvent =
+	/^Lease event [—–-] (.+?), est\. (\w+ \d{1,2}, \d{4})(?:\.\s*|$)(.*)$/i;
+const leaseAction =
+	/^(?:please )?(?:ask|call|check|confirm|contact|decide|discuss|follow up|reach out|relocate|renew|review|schedule|send)\b/i;
+
+export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
+	const { action, savedText } = homeStepText(step.title);
+	const target = homeDisplayText(step.context_label);
+	const forTarget = target ? ` for ${target}` : "";
+	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
+	if (step.status === "open" && step.hold_until) {
+		return {
+			title: homeTitle(`Follow-up on hold${forTarget}`),
+			why: homeWhy(`Held until ${homeDate(step.hold_until)}`, savedText),
+		};
+	}
+	const [, name, date, details = ""] = savedText.match(leaseEvent) ?? [];
+	if (step.status === "open" && name && date) {
+		const label = target || name;
+		const dateLabel = date.replace(/^(\w{3})\w*/, "$1");
+		const event = `${label} lease event est. ${dateLabel}`;
+		const sentences = details.split(/(?<=[.!?])\s+/);
+		const savedAction = sentences.find((sentence) =>
+			leaseAction.test(sentence),
+		);
+		const cleanedAction = homeStepText(savedAction ?? "").action;
+		const decision =
+			cleanedAction
+				.replace(/^./, (first) => first.toLowerCase())
+				.replace(/\.$/, "") || "decide on renewal or relocation";
+		const title = homeTitle(
+			event,
+			decision,
+			`Lease event est. ${dateLabel} for ${label}`,
+		);
+		return {
+			title,
+			why: homeWhy(
+				title.startsWith(event) ? null : event,
+				...sentences.filter(
+					(sentence) =>
+						sentence !== savedAction ||
+						cleanedAction !== savedAction ||
+						!title.endsWith(decision),
+				),
+				due,
+			),
+		};
+	}
+	if (step.call_at) {
+		const contact = homeDisplayText(step.call_contact);
+		const date = homeDate(step.call_at);
+		const call = contact
+			? `Call with ${contact}`
+			: `Call${forTarget} on ${date}`;
+		const title = homeTitle(
+			`${call} left a follow-up`,
+			action || "open the saved step",
+		);
+		return {
+			title,
+			why: homeWhy(
+				`Call on ${date}`,
+				homeDisplayText(evidence?.call_quote ?? null) ||
+					homeDisplayText(evidence?.call_summary ?? null) ||
+					"Call details unavailable",
+				savedText !== action || title.endsWith("…") ? savedText : null,
+				due,
+			),
+		};
+	}
+	const event = `${step.status === "done" ? "Follow-up completed" : due ? "Follow-up due" : "Follow-up set"}${forTarget}`;
+	const title = homeTitle(event, action || "open the saved step");
+	if (!evidence) return { title, why: "" };
+	const setter = homeDisplayText(evidence.set_by);
+	const set = evidence.source_kind
+		? `Follow-up set from the ${evidence.source_kind}`
+		: setter
+			? `Follow-up set by ${setter}`
+			: `Follow-up set on ${homeDate(evidence.created_at)}`;
+	return {
+		title,
+		why: homeWhy(
+			set,
+			homeDisplayText(evidence.source_evidence),
+			due,
+			savedText !== action ||
+				!title.endsWith(action) ||
+				(!evidence.source_kind && !setter && !due)
+				? savedText
+				: null,
+		),
+	};
 }
 
 const dateLabel = new Intl.DateTimeFormat("en-US", {

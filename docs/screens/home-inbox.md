@@ -103,6 +103,7 @@ Each row gives an example title, the source of its why line, and the single prim
 
 - [ ] Shows today's meetings and the partner's dated reminders, with a choice of both partners or either one. Meetings after today stay in Outlook and do not show on Home (coordinator, 2026-11-19).
 - [ ] Does not repeat a step that is already a card in the inbox. A reminder with a card brings that card into view and opens its inline review when it has one.
+- [ ] A reminder uses the same short title as its Home card, including a completion review when the card shows one. The title keeps the action in plain words and leaves phone numbers and detailed call instructions in the saved step.
 - [ ] Each section either shows its items or says plainly why it cannot. It never stays on "Checking…".
 - [ ] A reminder dated before today is listed under "Late" and says how late, such as "3 days late", as the deal's next step does. The panel never says "Overdue" (coordinator, 2026-11-19).
 - [ ] With `home-from-engine` on, every page that uses the shared side frame shows Home's engine Today panel for today's meetings and the partners' dated reminders. This replaces Your calendar, Upcoming meetings, Your working week, Your schedule, and Doc's Morning brief (coordinator, 2026-11-20).
