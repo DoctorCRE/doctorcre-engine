@@ -51,7 +51,8 @@ export function homeStepText(text: string) {
 	if (unknownSendDecision.test(prompt))
 		return { savedText, action: "Decide whether to follow up or drop" };
 	const withoutNumber = prompt.replace(phoneNumber, " ");
-	if (withoutNumber === prompt) return { savedText, action: prompt };
+	if (withoutNumber === prompt && !/^(?:please )?call\b/i.test(prompt))
+		return { savedText, action: prompt };
 	const [firstSentence = ""] = withoutNumber
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "")

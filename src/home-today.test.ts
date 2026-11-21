@@ -62,7 +62,8 @@ before(async () => {
 			('${id(29)}', null, '${id(6)}', null, '${id(2)}', 'Call prospect', 0, null, null, null),
 			('${id(30)}', null, null, '${id(10)}', '${id(1)}', 'V-ABC-012 (loop #12)', 0, null, null, null),
 			('${id(31)}', '${id(7)}', null, null, '${id(12)}', 'Non-partner reminder', -1, null, null, null),
-			('${id(32)}', '${id(9)}', null, null, '${id(2)}', 'Review the ended deal', -5, null, null, null)
+			('${id(32)}', '${id(9)}', null, null, '${id(2)}', 'Review the ended deal', -5, null, null, null),
+			('${id(33)}', null, '${id(5)}', null, '${id(2)}', 'Call the office. If no one answers, leave a message and retry tomorrow.', -6, null, null, null)
 		) v(id, deal_id, party_id, property_id, owner_id, what, due_offset, hold_offset, call_id, quote);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values ('${id(1)}', '${id(27)}', 'snoozed', now() + interval '2 days');
 		insert into home_mark (user_id, call_follow_up_id, disposition, drop_reason) values ('${id(1)}', '${id(24)}', 'dropped', 'Already handled.');
@@ -123,6 +124,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	const row = (i: Row) =>
 		`${i.id}|${i.title}|${i.late_label}|${i.owner}|${i.home_item_id}|${i.open_url}`;
 	assert.deepEqual(body.reminders?.late.map(row), [
+		`${id(33)}|Follow-up due for Solo Clinic — Call the office|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
 		`${id(32)}|Follow-up due for Closed Clinic — Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
 		`${id(21)}|Follow-up due for Example Dental, Springfield — Decide whether to follow up or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
 		`${id(28)}|Follow-up due for Other Clinic, Austin — Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
@@ -136,6 +138,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	assert.deepEqual(
 		body.reminders?.late.map((item) => [item.id, item.deal_ended]),
 		[
+			[id(33), undefined],
 			[id(32), true],
 			[id(21), undefined],
 			[id(28), undefined],
@@ -157,7 +160,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	const dr = dell.reminders;
 	assert.deepEqual(
 		[dr?.late.map((i) => i.id), dr?.upcoming.map((i) => i.id)],
-		[[id(32), id(28)], [id(29)]],
+		[[id(33), id(32), id(28)], [id(29)]],
 	);
 });
 
@@ -188,6 +191,12 @@ for (const [example, caller, step, title] of [
 		joe,
 		id(23),
 		"Call with Dr. Example left a follow-up — Call about the floor plan",
+	],
+	[
+		"call instructions without a phone number",
+		{ user: "dell" },
+		id(33),
+		"Follow-up due for Solo Clinic — Call the office",
 	],
 	[
 		"plain step wording",
@@ -291,7 +300,7 @@ test("meetings and reminders fail independently with plain unavailable reasons",
 			assert.deepEqual(states, [200, em, er]);
 			assert.deepEqual(
 				[typeof bad?.reason, ok?.length],
-				["string", em === "unavailable" ? 4 : 3],
+				["string", em === "unavailable" ? 5 : 3],
 			);
 		} finally {
 			await db.query(`grant select on ${table} to engine_reader`);
