@@ -34,7 +34,7 @@ after(cleanup);
 
 test("Clients opens a location saved through Deals and shows the next owner of a copied client", async (t) => {
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into phase values ('pending', 'Pending');
+		insert into phase values ('pending', 'Pending'), ('negotiation', 'Negotiation');
 		insert into how_found values ('national_account', 'National account or corporate lead');
 		insert into role values ('client', 'Client'), ('national_account', 'National account');
 		insert into client_type values ('franchise', 'Franchise');
@@ -68,6 +68,19 @@ test("Clients opens a location saved through Deals and shows the next owner of a
 		new_location: { kind: "company", name: "Example New Location" },
 	});
 	assert.equal(status, 201, JSON.stringify(receipt));
+
+	const invoicedDeal = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id, market_id) values
+			('${invoicedDeal}', 'Example Invoiced Deal', '${joe}', '${market}');
+		insert into deal_party (deal_id, party_id, role) select
+			'${invoicedDeal}', party_id, role from deal_party
+			where deal_id = '${receipt.deal_id}' and role = 'client';
+		insert into deal_phase_change (deal_id, happened_at, phase) values
+			('${invoicedDeal}', '2026-01-01', 'negotiation');
+		insert into imported_deal_invoiced (deal_id, invoiced_on) values
+			('${invoicedDeal}', '2026-01-02');
+		commit;`);
 
 	const get = (path: string, bindings = { DIRECTORY_READ_SCHEMA: "next" }) =>
 		request(caller, path, { method: "GET" }, bindings);

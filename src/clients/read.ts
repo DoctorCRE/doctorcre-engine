@@ -1,6 +1,6 @@
 import { type Kysely, type RawBuilder, sql, type Transaction } from "kysely";
 import type { DB } from "../database.d.ts";
-import { selectNextDeals } from "../deals/next-board.ts";
+import { isOpenBoardDeal, selectNextDeals } from "../deals/next-board.ts";
 import { failureKind } from "../failure.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
@@ -145,13 +145,15 @@ const oldActiveDeals = sql<ActiveDeal[]>`coalesce((
 		and d.phase not in ('closed', 'invoiced', 'dead')
 ), '[]'::jsonb)`;
 
-const nextActiveDeals = sql<ActiveDeal[]>`coalesce((
-	select jsonb_agg(jsonb_build_object('id', d.id, 'name', d.name) order by d.name, d.id)
-	from deal_party dp join deal d on d.id = dp.deal_id
-	where dp.party_id = client.party_id and dp.role = 'client'
-		and coalesce((select phase from deal_phase_change where deal_id = d.id
-			order by happened_at desc limit 1), '') not in ('closed', 'dead')
-), '[]'::jsonb)`;
+function nextActiveDeals(db: Transaction<NextDB>): RawBuilder<ActiveDeal[]> {
+	const deals = selectNextDeals(db)
+		.whereRef("c.party_id", "=", sql.ref("client.party_id"))
+		.as("deals");
+	return sql`coalesce((
+		select jsonb_agg(jsonb_build_object('id', id, 'name', name) order by name, id)
+		from ${deals} where ${isOpenBoardDeal}
+	), '[]'::jsonb)`;
+}
 
 const lastDealAt = sql<
 	string | null
@@ -545,7 +547,7 @@ export async function readNextClientList(
 		.executeTakeFirstOrThrow();
 	const rows = await nextClientRows(db, matching, viewerId)
 		.$if(query.contract === "vendor-directory.v2", (q) =>
-			q.select(nextActiveDeals.as("active_deals")),
+			q.select(nextActiveDeals(db).as("active_deals")),
 		)
 		.orderBy(nextOrder[query.sort])
 		.limit(PAGE_SIZE)
@@ -600,7 +602,7 @@ export async function readNextClient(
 			]),
 		)
 		.$if(contract === "vendor-directory.v2", (q) =>
-			q.select(nextActiveDeals.as("active_deals")),
+			q.select(nextActiveDeals(db).as("active_deals")),
 		)
 		.orderBy(sql`client.party_id = ${requestedUuid}::uuid`, "desc")
 		.leftJoin("active_do_not_contact as dnc", "dnc.party_id", "client.party_id")
