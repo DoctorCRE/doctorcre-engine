@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { copyTest } from "../test-copy.ts";
+import { copyTest, readSchema } from "../test-copy.ts";
 import worker from "../worker.ts";
 
 const { db, connectionString, setup, cleanup } = copyTest();
@@ -17,13 +17,16 @@ const date = id(20);
 const otherDate = id(21);
 const closedDate = id(22);
 const done = id(23);
+const automation = id(5);
+const automatedDate = id(24);
 
 before(async () => {
 	await setup();
 	await db.query(`
 		insert into public.actor (id, slug, kind, display_name) values
 			('${alex}', 'alex', 'human', 'Alex Example'),
-			('${casey}', 'casey', 'human', 'Casey Example');
+			('${casey}', 'casey', 'human', 'Casey Example'),
+			('${automation}', 'example-agent', 'automation', 'Example Agent');
 		insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Active', true, 1);
 		insert into public.party (id, kind, name, created_by, updated_by)
 			values ('${clinic}', 'org', 'Example Clinic', '${alex}', '${alex}');
@@ -38,15 +41,21 @@ before(async () => {
 			('${closed}', '${client}', 'Example closed lease', 'lease', 'closed', 'alex', '${alex}', '${alex}');
 		insert into public.critical_date (id, deal_id, kind, due_on, status, source, created_by) values
 			('${date}', '${open}', 'loi_expiry', '2030-01-15', 'open', 'Example offer', '${alex}'),
-			('${otherDate}', '${other}', 'option_notice', '2030-02-01', 'open', 'Example option', '${casey}'),
+			('${otherDate}', '${other}', 'option_window', '2030-02-01', 'open', 'Example option', '${casey}'),
 			('${closedDate}', '${closed}', 'lease_end', '2030-03-01', 'open', 'Example lease', '${alex}'),
-			('${done}', '${open}', 'rent_start', '2030-01-01', 'cleared', 'Example lease', '${alex}');
+			('${done}', '${open}', 'rent_start', '2030-01-01', 'cleared', 'Example lease', '${alex}'),
+			('${automatedDate}', '${open}', 'due_diligence', '2030-02-10', 'open', 'Example checklist', '${automation}');
+		insert into public.event (subject_type, subject_id, field, new_value, occurred_at, actor_id, verb, cause)
+			values ('deal', '${open}', 'status', '{"critical_date_id":"${done}","status":"cleared","reason":"Example payment"}',
+				'2026-02-01', '${alex}', 'resolve-critical-date', 'human_stated');
 
 		begin;
 		select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${alex}', 'person', 'Alex Example'),
 			('${casey}', 'person', 'Casey Example');
 		insert into app_user (id, slug) values ('${alex}', 'alex'), ('${casey}', 'casey');
+		insert into outside_id (source, value, party_id)
+			values ('old_system', '${alex}', '${alex}'), ('old_system', '${casey}', '${casey}');
 		insert into deal_kind (slug, label) values ('lease', 'Lease');
 		insert into phase (slug, label) values ('research', 'Research'), ('closed', 'Closed');
 		insert into deal (id, name, kind, owner_user_id) values
@@ -56,18 +65,13 @@ before(async () => {
 		insert into deal_phase_change (deal_id, happened_at, phase)
 			values ('${open}', '2026-01-01', 'research'), ('${other}', '2026-01-01', 'research'),
 			('${closed}', '2026-01-01', 'research'), ('${closed}', '2026-01-02', 'closed');
-		insert into critical_date (id, deal_id, kind, due_on, source)
-			values ('${id(24)}', '${other}', 'other', '2030-01-20', 'Example proposal');
-		select set_config('engine.job', '', true), set_config('engine.user_id', '${alex}', true);
-		insert into critical_date (id, deal_id, kind, due_on, source) values
-			('${date}', '${open}', 'loi_expiry', '2030-01-15', 'Example offer'),
-			('${otherDate}', '${other}', 'option_notice', '2030-02-03', 'Example option'),
-			('${closedDate}', '${closed}', 'lease_end', '2030-03-01', 'Example lease'),
-			('${done}', '${open}', 'rent_start', '2030-01-01', 'Example lease');
-		update critical_date set status = 'open' where id in ('${date}', '${otherDate}', '${closedDate}', '${done}');
-		update critical_date set status = 'done', resolution_reason = 'Example payment' where id = '${done}';
 		commit;
 	`);
+	await db.query("begin");
+	const results = await db.query(await readSchema("copy-critical-dates.sql"));
+	assert.ok(Array.isArray(results));
+	assert.deepEqual(results.at(-1)?.rows, []);
+	await db.query("commit");
 });
 after(cleanup);
 
@@ -113,9 +117,22 @@ for (const schema of [undefined, "next"]) {
 						deal_id: other,
 						deal_name: "Example expansion",
 						kind: "Option notice",
-						due_on: schema === "next" ? "2030-02-03" : "2030-02-01",
+						due_on: "2030-02-01",
 						done: false,
 					},
+					// The copy waits for a partner to confirm an automation-authored date.
+					...(schema === "next"
+						? []
+						: [
+								{
+									id: automatedDate,
+									deal_id: open,
+									deal_name: "Example lease",
+									kind: "Due diligence",
+									due_on: "2030-02-10",
+									done: false,
+								},
+							]),
 				],
 			});
 		}

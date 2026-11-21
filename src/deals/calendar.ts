@@ -5,7 +5,7 @@ import { isOpenBoardDeal, selectNextDeals } from "./next-board.ts";
 
 const labels = new Map([
 	["loi_expiry", "LOI expiry"],
-	["option_window", "Option window"],
+	["option_window", "Option notice"],
 	["lease_expiration", "Lease expiration"],
 ]);
 

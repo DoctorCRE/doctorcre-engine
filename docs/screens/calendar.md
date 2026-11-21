@@ -2,7 +2,7 @@
 
 - **For** both signed-in partners on a computer or phone.
 - **Must** show the open critical dates from every open deal, including overdue dates and deals owned by either partner.
-- **Must never** include proposals or resolved dates in the count, or present a failed read as an empty period.
+- **Must never** include resolved dates in the count, or present a failed read as an empty period.
 
 ## What a partner sees
 
@@ -10,6 +10,7 @@
 - [ ] Previous and Next move one month or week. Today returns to the current Central time day. Back restores the period and selected day.
 - [ ] Select a day or date to see that day's entries. Each entry gives the kind in plain words, the date, and a link to its deal page. The legend explains the urgency markers.
 - [ ] An empty period says “No critical dates this month” or “No critical dates this week.” Refresh reads the dates again. Month and week navigation reuse the dates already read.
+- [ ] On the new database, a proposed date, including an automation-added date copied from the old Calendar, appears as a proposal on its deal page. Calendar lists it after a partner confirms it if the deal is open.
 
 ## Where the dates come from
 
