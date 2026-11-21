@@ -21,7 +21,7 @@ import { isUuid, UUID } from "./uuid.ts";
 
 const source = z.string().max(48);
 const proposal = z.strictObject({
-	kind: z.enum(["note", "next_step", "reply_revision"]),
+	kind: z.enum(["note", "next_step", "reply_draft", "reply_revision"]),
 	...revisionEdits.shape,
 	source: source.optional(),
 	target: z.unknown().optional(),
@@ -84,15 +84,25 @@ function propose(payload: unknown, state: DocClaimState) {
 		target: ref,
 	} = proposal.parse(payload);
 	const target = sourceFor(state, source ?? ref);
-	if (!target || isMailSource(target) || state.choices)
+	if (!target || state.choices)
 		throw new Error("Choose an authorized source first");
+	const replyOnly =
+		text === undefined && what === undefined && due_on === undefined;
+	if (isMailSource(target)) {
+		if (
+			kind === "reply_draft" &&
+			replyOnly &&
+			subject !== undefined &&
+			body !== undefined
+		)
+			return { kind, target, subject, body };
+		throw new Error("Invalid save proposal");
+	}
 	if (
 		kind === "reply_revision" &&
 		"version" in target &&
 		(subject !== undefined || body !== undefined) &&
-		text === undefined &&
-		what === undefined &&
-		due_on === undefined
+		replyOnly
 	)
 		return {
 			kind,
@@ -286,7 +296,7 @@ export function registerDocTools(
 		"propose_save",
 		{
 			description:
-				"Propose a note, next step, or reply_revision for partner confirmation.",
+				"Propose a note, next step, reply_draft, or reply_revision for partner confirmation.",
 			inputSchema: proposal.omit({ target: true }).required({ source: true }),
 		},
 		(args) => toolResult(propose(args, state)),

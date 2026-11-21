@@ -11,7 +11,7 @@ import {
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { ACTING_USER } from "./next-save.ts";
-import { changePendingDraft } from "./reply-drafts.ts";
+import { changePendingDraft, storeReplyDraft } from "./reply-drafts.ts";
 import { fit, isStoredText } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 import { isUuid } from "./uuid.ts";
@@ -34,11 +34,19 @@ export const revisionEdits = z.strictObject({
 	subject: draftText.refine((value) => [...value].length <= 998).optional(),
 	body: draftText.optional(),
 });
-const revisionAnswer = z.object({
-	proposal: revisionEdits.extend({
-		kind: z.literal("reply_revision"),
-		target: z.object({ ref, version }),
-	}),
+const replyAnswer = z.object({
+	proposal: z.discriminatedUnion("kind", [
+		revisionEdits.extend({
+			kind: z.literal("reply_revision"),
+			target: z.object({ ref, version }),
+		}),
+		revisionEdits.required().extend({
+			kind: z.literal("reply_draft"),
+			target: z.object({
+				ref: z.object({ kind: z.literal("email"), id: uuid }),
+			}),
+		}),
+	]),
 });
 export const draftHref = (id: string) =>
 	`/inbox/card/${encodeURIComponent(`reply_draft:${id}`)}`;
@@ -124,23 +132,47 @@ export function confirmDocSave(c: Context<NextSaveEnv>) {
 			} = await sql<{
 				answer: Json;
 				context: Json;
+				owner_user_id: string;
 				confirmation_key: string | null;
 			}>`
-				select answer, context, confirmation_key from doc_turn
+				select answer, context, owner_user_id, confirmation_key from doc_turn
 				where id = ${turn_id} and owner_user_id = ${ACTING_USER} for update
 			`.execute(tx);
 			if (!turn) return fail(404, "not_found");
 			if (turn.confirmation_key) return fail(409, "already_confirmed");
-			const confirm = async (result: JsonObject) => {
+			const markConfirmed = async () => {
 				await sql`update doc_turn set confirmation_key = ${idempotency_key}
 				where id = ${turn_id} and owner_user_id = ${ACTING_USER}`.execute(tx);
+			};
+			const confirm = async (result: JsonObject) => {
+				await markConfirmed();
 				return { result };
 			};
-			const proposal = revisionAnswer.safeParse(turn.answer).data?.proposal;
+			const proposal = replyAnswer.safeParse(turn.answer).data?.proposal;
 			if (!proposal)
 				return confirm(
 					await saveDocRecord(tx, turn.answer, edits, idempotency_key),
 				);
+			if (proposal.kind === "reply_draft") {
+				const { subject, body } = readDocEdits(revisionEdits, edits);
+				// The draft's origin trigger checks the turn's key before the insert.
+				await markConfirmed();
+				const { id, existing } = await storeReplyDraft(
+					tx,
+					{
+						activity_id: proposal.target.ref.id,
+						owner_user_id: turn.owner_user_id,
+					},
+					{
+						confirmed_doc_turn_id: turn_id,
+						subject: subject ?? proposal.subject,
+						body: body ?? proposal.body,
+					},
+				);
+				return {
+					result: { kind: proposal.kind, id, existing, href: draftHref(id) },
+				};
+			}
 			const context = draftContext.safeParse(turn.context).data;
 			if (
 				!context ||

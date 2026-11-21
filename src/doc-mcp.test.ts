@@ -407,6 +407,30 @@ test("Doc cites the exact authorized mail review and treats the message as evide
 		{ ref: message.ref, label: "Tour confirmation", href },
 	]);
 	assert.equal(answer.proposal, null);
+	const reply = {
+		kind: "reply_draft",
+		subject: "Re: Tour",
+		body: "See you at 3.",
+	};
+	const proposed = await tool(request, "propose_save", { ...reply, source });
+	assert.deepEqual(proposed, { ...reply, target: answer.sources[0] });
+	assert.deepEqual(
+		(
+			await tool(request, "validate_answer", {
+				kind: "answer",
+				text: "Here is a reply.",
+				sources: [source],
+				proposal: proposed,
+			})
+		).proposal,
+		proposed,
+	);
+	const drafts = await db.query(
+		"select from reply_draft where email_activity_id = $1",
+		[mail],
+	);
+	assert.equal(drafts.rowCount, 0);
+
 	assert.equal(
 		(await db.query("select idempotency_key from save_receipt")).rowCount,
 		0,

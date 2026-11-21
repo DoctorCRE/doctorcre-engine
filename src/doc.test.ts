@@ -8,7 +8,10 @@ import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
 import { docMcp } from "./doc-mcp.ts";
 import { findDocRecords } from "./doc-reads.ts";
+import { homeInbox } from "./home-inbox.ts";
 import { nextTransaction } from "./next-connection.ts";
+import { jobStamp, type NextSaveEnv } from "./next-door.ts";
+import { replyJobs } from "./reply-drafts.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -40,9 +43,10 @@ before(async () => {
 		commit;`);
 });
 afterEach(() =>
-	db.query(
-		"delete from doc_turn; delete from doc_conversation; truncate doc_link",
-	),
+	db.query(`begin; set local engine.job = 'old_system';
+		delete from reply_draft where confirmed_doc_turn_id is not null;
+		delete from doc_turn; delete from doc_conversation; truncate doc_link;
+		commit;`),
 );
 after(cleanup);
 
@@ -78,6 +82,7 @@ function client(user = "joe", writer = connectionString) {
 		await next();
 	});
 	app.route("/", api);
+	app.route("/", homeInbox);
 	return async <Path extends string>(
 		path: Path,
 		status: number | number[],
@@ -86,7 +91,11 @@ function client(user = "joe", writer = connectionString) {
 		const response = await app.request(
 			path,
 			body && { method: "POST", body: JSON.stringify(body) },
-			{ DATABASE_WRITER: { connectionString: writer } },
+			{
+				DATABASE_WRITER: { connectionString: writer },
+				DATABASE: { connectionString },
+				HOME_INBOX_READ_SCHEMA: "next",
+			},
 		);
 		const result = await response.json<Body<Path>>();
 		if (typeof status === "number")
@@ -806,7 +815,7 @@ async function answeredProposal(proposal: object, partner = owner) {
 		from conversation`,
 		[conversation_id, partner, id, answer],
 	);
-	return { conversation_id, path: `/turns/${id}/confirmation` as const };
+	return { id, conversation_id, path: `/turns/${id}/confirmation` as const };
 }
 
 const nextStepProposal = {
@@ -968,15 +977,16 @@ test("Doc refuses a foreign turn and a proposal for a record that is gone", asyn
 async function waitForBlockedTransaction(
 	observer: pg.Client,
 	blocker?: number,
+	lockType = "transactionid",
 ) {
 	const deadline = AbortSignal.timeout(5_000);
 	while (!deadline.aborted) {
 		const {
 			rows: [waiter],
 		} = await observer.query<{ pid: number }>(
-			`select pid from pg_locks where locktype = 'transactionid' and not granted
+			`select pid from pg_locks where locktype = $2 and not granted
 			and coalesce($1, pg_backend_pid()) = any(pg_blocking_pids(pid))`,
-			[blocker],
+			[blocker, lockType],
 		);
 		if (waiter) return waiter.pid;
 	}
@@ -1360,3 +1370,185 @@ test("Doc confirms an exact pending revision with the existing edit and receipt 
 		"draft_changed",
 	);
 });
+
+const proposedReply = { subject: "Re: Plan", body: "Wednesday works." };
+const newReplyEdits = () => ({ idempotency_key: randomUUID(), edits: {} });
+const newReply = (activity_id: string) =>
+	answeredProposal({
+		kind: "reply_draft",
+		target: { ref: { kind: "email", id: activity_id } },
+		...proposedReply,
+	});
+
+async function replyEmail(conversation: string | null = null, partner = owner) {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true)),
+		a as (insert into activity (id, kind, happened_at) select $1::uuid, 'email', now() from stamp returning id),
+		mail as (insert into email (activity_id, message_id, sender, subject, body, conversation_id)
+			select id, id || '@example.test', 'sender@example.test', 'Plan', 'When can you meet?', $2
+			from a returning activity_id),
+		mailbox as (insert into email_mailbox select activity_id, $3::uuid from mail)
+		insert into activity_about (activity_id, party_id) select activity_id, $3 from mail`,
+		[id, conversation, partner],
+	);
+	return id;
+}
+
+const jobDrafts = new Hono<NextSaveEnv>()
+	.use("*", jobStamp)
+	.route("/", replyJobs);
+async function storeJobDraft(activity_id: string) {
+	const response = await jobDrafts.request(
+		"/reply-drafts",
+		{
+			method: "POST",
+			headers: { "Engine-Job": "mail_capture", "Engine-For-User": "joe" },
+			body: JSON.stringify({
+				idempotency_key: randomUUID(),
+				activity_id,
+				subject: "Re: Automatic plan",
+				body: "The job's reply.",
+				evidence: "When can you meet?",
+			}),
+		},
+		{ DATABASE_WRITER: { connectionString } },
+	);
+	const body = await response.json<{ draft_id: string }>();
+	assert.ok(response.ok, JSON.stringify(body));
+	return body.draft_id;
+}
+
+const replyReceipt = (id: string, existing: boolean) => ({
+	kind: "reply_draft",
+	id,
+	href: `/inbox/card/reply_draft%3A${id}`,
+	existing,
+});
+
+test("Doc saves one pending reply, opens its review, and preserves it on repeat", async () => {
+	const mail = await replyEmail();
+	const { id, path } = await newReply(mail);
+	const args = { ...newReplyEdits(), edits: { body: "Thursday works." } };
+	const send = client();
+	const { result } = await send(path, 200, args);
+	const drafts = () =>
+		db.query<{ id: string }>(
+			`select id, status, revision, owner_user_id, changed_by_user_id, proposed_by_job,
+		confirmed_doc_turn_id, subject, body from reply_draft where email_activity_id = $1`,
+			[mail],
+		);
+	const {
+		rows: [draft],
+	} = await drafts();
+	assert.ok(draft);
+	assert.deepEqual(draft, {
+		id: draft.id,
+		status: "pending",
+		revision: 1,
+		owner_user_id: owner,
+		changed_by_user_id: owner,
+		proposed_by_job: null,
+		confirmed_doc_turn_id: id,
+		subject: proposedReply.subject,
+		body: args.edits.body,
+	});
+	const expected = replyReceipt(draft.id, false);
+	assert.deepEqual(result, expected);
+	const href = expected.href;
+	assert.partialDeepStrictEqual(
+		await send(href.replace("/inbox/card/", "/home/cards/"), 200),
+		{
+			item_id: `reply_draft:${draft.id}`,
+		},
+	);
+	assert.deepEqual(await send(path, 200, args), { result, replayed: true });
+	assert.equal(
+		(await send(path, 409, { ...args, edits: {} })).error,
+		"key_reuse",
+	);
+	const repeat = await newReply(mail);
+	assert.deepEqual(await send(repeat.path, 200, newReplyEdits()), {
+		result: replyReceipt(draft.id, true),
+	});
+	assert.deepEqual((await drafts()).rows, [draft]);
+});
+
+test("Doc refuses a reply when the source email is gone or outside the partner's mailbox", async () => {
+	const foreign = await replyEmail(null, other);
+	const gone = await replyEmail();
+	const proposal = await newReply(gone);
+	await db.query(`begin; set local engine.job = 'old_system';
+		delete from email_mailbox where activity_id = '${gone}';
+		delete from email where activity_id = '${gone}';
+		commit;`);
+	for (const { path } of [await newReply(foreign), proposal]) {
+		assert.equal(
+			(await client()(path, 404, newReplyEdits())).error,
+			"not_found",
+		);
+	}
+	const drafts = await db.query(
+		"select from reply_draft where email_activity_id = any($1::uuid[])",
+		[[foreign, gone]],
+	);
+	assert.equal(drafts.rowCount, 0);
+});
+
+for (const first of ["job", "doc"] as const) {
+	test(`Doc and mail capture share the conversation lock with ${first} first`, async () => {
+		const conversation = randomUUID();
+		const jobMail = await replyEmail(conversation);
+		const docMail = await replyEmail(conversation);
+		const { path, id } = await newReply(docMail);
+		const start = {
+			job: () => storeJobDraft(jobMail),
+			doc: () => client()(path, 200, newReplyEdits()),
+		};
+		const pending: Promise<unknown>[] = [];
+		const beginSave = (source: keyof typeof start) => {
+			const result = start[source]();
+			void result.catch(() => {});
+			pending.push(result);
+		};
+		await db.query("begin");
+		try {
+			await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+				`reply draft ${owner} ${conversation}`,
+			]);
+			beginSave(first);
+			const waiting = await waitForBlockedTransaction(
+				db,
+				undefined,
+				"advisory",
+			);
+			beginSave(first === "job" ? "doc" : "job");
+			await waitForBlockedTransaction(db, waiting, "advisory");
+		} finally {
+			await db.query("rollback");
+			await Promise.allSettled(pending);
+		}
+		const [job, doc] =
+			first === "job"
+				? [await pending[0], await pending[1]]
+				: [await pending[1], await pending[0]];
+		assert.equal(typeof job, "string");
+		assert.deepEqual(doc, {
+			result: replyReceipt(String(job), first === "job"),
+		});
+		const { rows } = await db.query(
+			`select id, status, confirmed_doc_turn_id, email_activity_id, body
+			from reply_draft where email_activity_id = any($1::uuid[])`,
+			[[jobMail, docMail]],
+		);
+		assert.deepEqual(rows, [
+			{
+				id: job,
+				status: "pending",
+				confirmed_doc_turn_id: first === "doc" ? id : null,
+				email_activity_id: first === "doc" ? docMail : jobMail,
+				body: first === "doc" ? proposedReply.body : "The job's reply.",
+			},
+		]);
+	});
+}

@@ -112,22 +112,86 @@ async function locked(
 	return draft;
 }
 
-async function dismissOlderDrafts(
+type DraftEmail = { activity_id: string; owner_user_id: string };
+
+async function lockDraftConversation(
 	tx: Transaction<DB>,
-	{
-		activity_id,
-		owner_user_id,
-	}: { activity_id: string; owner_user_id: string },
+	{ activity_id, owner_user_id }: DraftEmail,
 ) {
-	// Run the update after taking the lock so it sees the previous save's commit.
 	const {
 		rows: [source],
-	} = await sql<{ conversation_id: string }>`
+	} = await sql<{ conversation_id: string | null }>`
 		select conversation_id, pg_advisory_xact_lock(
-			hashtextextended('reply draft ' || ${owner_user_id}::text || ' ' || conversation_id, 0))
-		from email where activity_id = ${activity_id} and conversation_id is not null
+			hashtextextended(case when conversation_id is null
+				then 'reply draft email ' || ${owner_user_id}::text || ' ' || activity_id::text
+				else 'reply draft ' || ${owner_user_id}::text || ' ' || conversation_id end, 0))
+		from email where activity_id = ${activity_id}
 	`.execute(tx);
-	if (!source) return;
+	return source?.conversation_id ?? null;
+}
+
+export async function storeReplyDraft(
+	tx: Transaction<DB>,
+	source: DraftEmail,
+	reply: { subject: string; body: string } & (
+		| { proposed_by_job: "mail_capture"; evidence: string }
+		| { confirmed_doc_turn_id: string }
+	),
+) {
+	const { activity_id, owner_user_id } = source;
+	const conversation = await lockDraftConversation(tx, source);
+	let evidence: string;
+	if ("evidence" in reply) evidence = reply.evidence;
+	else {
+		const {
+			rows: [email],
+		} = await sql<{ evidence: string }>`
+			select case when left(e.body, 2000) ~ '\\S'
+				then left(e.body, 2000) else e.sender::text end as evidence
+			from email e join email_mailbox m on m.activity_id = e.activity_id
+			where e.activity_id = ${activity_id} and m.user_id = ${owner_user_id}
+			for key share of e
+		`.execute(tx);
+		if (!email) return fail(new Refusal(404, "not_found"));
+		evidence = email.evidence;
+	}
+	// Read in a new statement so it sees the previous lock holder's commit.
+	const {
+		rows: [existing],
+	} = await sql<{ id: string; revision: number }>`
+		select d.id, d.revision from reply_draft d
+		join email e on e.activity_id = d.email_activity_id
+		join activity a on a.id = e.activity_id
+		where d.owner_user_id = ${owner_user_id}
+		and (d.email_activity_id = ${activity_id} or (
+			e.conversation_id = ${conversation} and d.status = 'pending'
+			and (${"confirmed_doc_turn_id" in reply} or d.confirmed_doc_turn_id is not null)
+		))
+		order by (d.email_activity_id = ${activity_id}) desc, a.happened_at desc, a.id desc
+		limit 1
+	`.execute(tx);
+	if (existing) return { ...existing, existing: true };
+	const draft = await tx
+		.insertInto("reply_draft")
+		.values({
+			email_activity_id: activity_id,
+			owner_user_id,
+			...reply,
+			evidence,
+			changed_at: sql<string>`now()`,
+		})
+		.returning(["id", "revision"])
+		.executeTakeFirstOrThrow();
+	if ("proposed_by_job" in reply && conversation)
+		await dismissOlderDrafts(tx, owner_user_id, conversation);
+	return { ...draft, existing: false };
+}
+
+async function dismissOlderDrafts(
+	tx: Transaction<DB>,
+	owner_user_id: string,
+	conversation: string,
+) {
 	await tx
 		.updateTable("reply_draft")
 		.set({
@@ -141,7 +205,7 @@ async function dismissOlderDrafts(
 				.innerJoin("email", "email.activity_id", "pending.email_activity_id")
 				.innerJoin("activity", "activity.id", "email.activity_id")
 				.select("pending.id")
-				.where("email.conversation_id", "=", source.conversation_id)
+				.where("email.conversation_id", "=", conversation)
 				.where("pending.owner_user_id", "=", owner_user_id)
 				.where("pending.status", "=", "pending")
 				.orderBy("activity.happened_at", "desc")
@@ -345,33 +409,16 @@ export const replyJobs = new Hono<NextSaveEnv>()
 				]),
 			async (tx, request) => {
 				const user = await owner(tx, c);
-				const inserted = await sql<{
-					id: string;
-					revision: number;
-				}>`insert into reply_draft
-   (email_activity_id, owner_user_id, proposed_by_job, evidence, subject, body)
-   values (${request.activity_id}::uuid, ${user.id}::uuid, 'mail_capture', ${request.evidence}, ${request.subject}, ${request.body})
-   on conflict (email_activity_id, owner_user_id) do nothing returning id, revision`.execute(
+				const { activity_id, evidence, subject, body } = request;
+				const { id, revision, existing } = await storeReplyDraft(
 					tx,
+					{ activity_id, owner_user_id: user.id },
+					{ proposed_by_job: "mail_capture", evidence, subject, body },
 				);
-				const [draft] = inserted.rows;
-				if (draft) {
-					await dismissOlderDrafts(tx, {
-						activity_id: request.activity_id,
-						owner_user_id: user.id,
-					});
-					return { draft_id: draft.id, version: draft.revision };
-				}
-				const existing = await tx
-					.selectFrom("reply_draft")
-					.select(["id", "revision"])
-					.where("email_activity_id", "=", request.activity_id)
-					.where("owner_user_id", "=", user.id)
-					.executeTakeFirstOrThrow();
 				return {
-					draft_id: existing.id,
-					version: existing.revision,
-					existing: true,
+					draft_id: id,
+					version: revision,
+					...(existing && { existing }),
 				};
 			},
 		);
