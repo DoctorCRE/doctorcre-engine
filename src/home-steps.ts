@@ -114,7 +114,10 @@ export function stepCopy({ what, item_title, context_label }: StepWording) {
 		savedHomeTitle(instruction) ||
 		homeDisplayText(context_label) ||
 		"Next step";
-	return { title, instruction };
+	return {
+		title,
+		instruction: instruction && instruction !== title ? instruction : null,
+	};
 }
 
 export function homeStepCopy(step: HomeStep, evidence: StepEvidence) {
@@ -125,12 +128,13 @@ export function homeStepCopy(step: HomeStep, evidence: StepEvidence) {
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
 	const withoutEnd = (text: string) => text.replace(/[.!?]+$/, "");
-	const extraEvidence = (text: string) =>
-		[title, instruction].some(
-			(wording) => withoutEnd(wording) === withoutEnd(text),
-		)
+	const extraEvidence = (text: string) => {
+		const wording = withoutEnd(text);
+		return wording === withoutEnd(title) ||
+			(instruction && wording === withoutEnd(instruction))
 			? null
 			: text;
+	};
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
 		? `Follow-up set from the ${evidence.source_kind}`
