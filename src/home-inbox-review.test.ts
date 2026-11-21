@@ -854,6 +854,80 @@ for (const match of [
 	});
 }
 
+test("Home shows a filing suggested on every message of a conversation once and settles it for the thread", async () => {
+	const user = { user: "example" };
+	const job = { job: "mail_capture", for_user: user.user };
+	const thread = async (conversation: string, kind: string) => {
+		const ids: string[] = [];
+		for (const day of [11, 12, 13]) {
+			const [stored, email] = await save(job, "activities", {
+				idempotency_key: randomUUID(),
+				kind: "email",
+				happened_at: `2026-01-${day}T12:00:00Z`,
+				email: {
+					message_id: `<${conversation}-${day}@example.test>`,
+					conversation_id: conversation,
+					sender: "pat@example.test",
+					recipients: [],
+					subject: "Suite question",
+					body: `Message ${day} about the suite.`,
+				},
+			});
+			assert.equal(stored, 201);
+			const [suggested, proposal] = await save(job, "proposals", {
+				idempotency_key: randomUUID(),
+				kind,
+				activity_id: email.activity_id,
+				evidence: "This thread is about the suite.",
+				...(kind === "file_to_deal" && { deal_id: deal }),
+			});
+			assert.equal(suggested, 201);
+			ids.push(String(proposal.proposal_id));
+		}
+		return ids;
+	};
+	const filings = await thread("Outlook-repeat-filing", "file_to_deal");
+	const choices = await thread("Outlook-repeat-choice", "possible_new_deal");
+	const decisions = async (ids: string[]) =>
+		(await inbox()).flatMap(({ suggestions }) => {
+			const shown = Array.isArray(suggestions)
+				? suggestions.filter(isArguments).map(({ id }) => String(id))
+				: [];
+			return shown.some((id) => ids.includes(id)) ? [shown] : [];
+		});
+	for (const ids of [filings, choices])
+		assert.deepEqual(await decisions(ids), [[ids[2]]]);
+	for (const [ids, decision] of [
+		[filings, { decision: "accept", reason: "The thread is about this deal." }],
+		[choices, { decision: "dismiss", reason: "Not a deal." }],
+	] as const) {
+		const [status] = await save(user, `proposals/${ids[2]}/decision`, {
+			idempotency_key: randomUUID(),
+			...decision,
+		});
+		assert.equal(status, 200);
+		assert.deepEqual(await decisions(ids), []);
+	}
+	const settled = await db.query(
+		`select p.kind, p.status, about.deal_id from proposal p
+		left join activity_about about on about.activity_id = p.activity_id and about.deal_id is not null
+		where p.id = any($1::uuid[]) order by p.kind, p.created_at`,
+		[[...filings, ...choices]],
+	);
+	assert.deepEqual(settled.rows, [
+		...filings.map(() => ({
+			kind: "file_to_deal",
+			status: "accepted",
+			deal_id: deal,
+		})),
+		...choices.map(() => ({
+			kind: "possible_new_deal",
+			status: "dismissed",
+			deal_id: null,
+		})),
+	]);
+});
+
 test("A copied email lead suggestion keeps its mailbox and intake reading on Home", async () => {
 	const candidateId = id(40);
 	const proposalId = id(41);
