@@ -17,7 +17,6 @@ import {
 	activityShape,
 	clientListShape,
 	clientShape,
-	marketsShape,
 	networkShape,
 	vendorListShape,
 	vendorShape,
@@ -56,7 +55,6 @@ export type Ask =
 	| { read: "client"; client: string }
 	| { read: "vendor list" }
 	| { read: "vendor"; vendor: string }
-	| { read: "vendor markets"; market?: string }
 	| { read: "relationships" }
 	// `record` identifies the deal, client or vendor whose name is asked.
 	| { read: "recent activity"; name: string; record: string; limit?: 20 }
@@ -116,7 +114,6 @@ export const READS: Record<Ask["read"], Read> = {
 	client: { shape: clientShape, prefix: "client", label: "client detail" },
 	"vendor list": { shape: vendorListShape, prefix: "vendors" },
 	vendor: { shape: vendorShape, prefix: "vendor", label: "vendor detail" },
-	"vendor markets": { shape: marketsShape, prefix: "markets" },
 	relationships: { shape: networkShape, prefix: "network" },
 	"recent activity": { shape: activityShape, prefix: "activity" },
 	"today's reminders": { shape: todayShape, prefix: "today" },
@@ -215,8 +212,6 @@ export async function compareDeals(
 		{ read: "invoices" },
 		{ read: "client list" },
 		{ read: "vendor list" },
-		// The app's first asks: every market, and the whole map.
-		{ read: "vendor markets" },
 		{ read: "relationships" },
 		{ read: "today's reminders" },
 		{ read: "today's reminders", owners: "partners" },
@@ -285,10 +280,6 @@ export async function compareDeals(
 				const value = firstText(old, "submarkets", field);
 				if (value !== undefined) enqueue({ read: "territory", [field]: value });
 			}
-		if (ask.read === "vendor markets" && ask.market === undefined) {
-			const market = firstText(old, "markets", "slug");
-			if (market !== undefined) enqueue({ read: "vendor markets", market });
-		}
 
 		if (ask.read === "board")
 			for (const { id, client_name } of dealsOn(old)) {

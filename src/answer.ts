@@ -330,7 +330,6 @@ type Verb =
 	| "read-reply-draft"
 	| "read-updates"
 	| "read-vendor-meetings"
-	| "read-vendor-markets-v1"
 	| "search-parties-v1"
 	| "territory-state-board"
 	| "today-triage";
