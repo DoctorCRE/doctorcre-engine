@@ -9,6 +9,7 @@ type RecordedIds = {
 	national_account_owner: string;
 	next_step: string;
 	party_role: { party_id: string; role: "lead" };
+	user_preference: { user_id: string };
 };
 type Recorded = keyof RecordedIds;
 
