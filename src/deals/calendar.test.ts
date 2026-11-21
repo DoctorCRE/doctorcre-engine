@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { nextTransaction } from "../next-connection.ts";
 import { isArguments } from "../save-door.ts";
 import { copyTest, readSchema } from "../test-copy.ts";
 import worker from "../worker.ts";
+import { readNextCalendarDates } from "./calendar.ts";
 
 const { db, connectionString, setup, cleanup } = copyTest();
 const id = (n: number) =>
@@ -67,20 +69,16 @@ before(async () => {
 		insert into deal_phase_change (deal_id, happened_at, phase)
 			values ('${open}', '2026-01-01', 'research'), ('${other}', '2026-01-01', 'research'),
 			('${closed}', '2026-01-01', 'research'), ('${closed}', '2026-01-02', 'closed');
-		with clock as (select (now() at time zone 'America/Chicago')::date as today)
 		insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on, hold_until, resolution)
-		select v.id, v.deal_id, v.party_id, v.owner_id, v.what, today + v.due_offset,
-			today + v.hold_offset, v.resolution
-		from clock cross join (values
-			('${id(31)}'::uuid, '${open}'::uuid, null::uuid, '${alex}'::uuid, '**Send revised offer**', -3, null::int, null::text),
-			('${id(32)}', null, '${clinic}', '${casey}', 'Ask about the expansion', 5, null, null),
-			('${id(33)}', '${other}', null, '${alex}', 'Held step', -1, 5, null),
-			('${id(34)}', '${closed}', null, '${casey}', 'Snoozed step', -1, null, null),
+		values
+			('${id(31)}', '${open}', null, '${alex}', '**Send revised offer**', '2001-01-12', null, null),
+			('${id(32)}', null, '${clinic}', '${casey}', 'Ask about the expansion', '2001-01-20', null, null),
+			('${id(33)}', '${other}', null, '${alex}', 'Held step', '2001-01-14', 'infinity', null),
+			('${id(34)}', '${closed}', null, '${casey}', 'Snoozed step', '2001-01-14', null, null),
 			('${id(35)}', '${other}', null, '${casey}', 'Undated step', null, null, null),
-			('${id(36)}', '${open}', null, '${alex}', 'Finished step', -1, null, 'done')
-		) v(id, deal_id, party_id, owner_id, what, due_offset, hold_offset, resolution);
+			('${id(36)}', '${open}', null, '${alex}', 'Finished step', '2001-01-14', null, 'done');
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until)
-			values ('${casey}', '${id(34)}', 'snoozed', now() + interval '2 days');
+			values ('${casey}', '${id(34)}', 'snoozed', 'infinity');
 		commit;
 	`);
 	await db.query("begin");
@@ -91,12 +89,17 @@ before(async () => {
 });
 after(cleanup);
 
-const get = (schema?: string, partner?: string) =>
+const get = (
+	schema?: string,
+	partner?: string,
+	path = "calendar/critical-dates",
+) =>
 	worker.request(
-		"https://app.example.test/api/engine/calendar/critical-dates",
+		`https://app.example.test/api/engine/${path}`,
 		{ headers: partner ? { Cookie: "__Host-dealroom_session=example" } : {} },
 		{
 			DEALS_READ_SCHEMA: schema,
+			HOME_INBOX_READ_SCHEMA: schema,
 			DATABASE: { connectionString },
 			CARR: {
 				fetch: async () =>
@@ -168,27 +171,24 @@ for (const schema of [undefined, "next"]) {
 	});
 }
 
-test("both partners see today's overdue step and upcoming steps on their dates", async () => {
-	const {
-		rows: [clock],
-	} = await db.query(`select
-		((now() at time zone 'America/Chicago')::date - 3)::text as past,
-		(now() at time zone 'America/Chicago')::date::text as today,
-		((now() at time zone 'America/Chicago')::date + 5)::text as future`);
-	for (const partner of ["joe", "dell"]) {
-		const response = await get("next", partner);
-		assert.equal(response.status, 200);
-		const body = await response.json();
-		assert.ok(isArguments(body));
+test("both partners see overdue steps on the request day and upcoming steps on their dates", async () => {
+	for (const [partner, today, daysLate] of [
+		[alex, "2001-01-15", 3],
+		[casey, "2001-01-16", 4],
+	] as const) {
+		const body = await nextTransaction(connectionString, "read", (tx) =>
+			readNextCalendarDates(tx, partner, today),
+		);
+		assert.ok("next_steps" in body);
 		assert.deepEqual(body.next_steps, [
 			{
 				id: id(31),
 				what: "Send revised offer",
 				owner: "joe",
 				record_label: "Example lease",
-				due_on: clock.past,
-				display_on: clock.today,
-				days_late: 3,
+				due_on: "2001-01-12",
+				display_on: today,
+				days_late: daysLate,
 				open_url: `/deals?deal=${open}&focus=next-step&step=${id(31)}`,
 			},
 			{
@@ -196,11 +196,60 @@ test("both partners see today's overdue step and upcoming steps on their dates",
 				what: "Ask about the expansion",
 				owner: "dell",
 				record_label: "Example Clinic",
-				due_on: clock.future,
-				display_on: clock.future,
+				due_on: "2001-01-20",
+				display_on: "2001-01-20",
 				days_late: 0,
 				open_url: `/relationships?node=party:${clinic}&step=${id(32)}`,
 			},
 		]);
+	}
+});
+
+test("Calendar and Today still show dated steps when open steps have infinite due dates", async (t) => {
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on) values
+			('${id(37)}', '${closed}', null, '${alex}', 'No finite due date', 'infinity'),
+			('${id(38)}', null, '${clinic}', '${alex}', 'No finite due date', '-infinity');
+		commit;
+	`);
+	try {
+		await t.test(
+			"Calendar returns the critical dates and finite steps",
+			async () => {
+				const response = await get("next", "joe");
+				assert.equal(response.status, 200);
+				const calendar = await response.json();
+				assert.ok(isArguments(calendar));
+				assert.ok(Array.isArray(calendar.critical_dates));
+				assert.deepEqual(
+					calendar.critical_dates.map((row) => row.id),
+					[date, otherDate],
+				);
+				assert.ok(Array.isArray(calendar.next_steps));
+				assert.deepEqual(
+					calendar.next_steps.map((step) => step.id),
+					[id(31), id(32)],
+				);
+			},
+		);
+		await t.test("Today returns the finite reminders", async () => {
+			const response = await get("next", "joe", "home/today");
+			assert.equal(response.status, 200);
+			const body = await response.json();
+			assert.ok(isArguments(body) && isArguments(body.reminders));
+			assert.equal(body.reminders.state, "ready");
+			assert.ok(Array.isArray(body.reminders.late));
+			assert.deepEqual(
+				body.reminders.late.map((step) => step.id),
+				[id(31), id(32)],
+			);
+		});
+	} finally {
+		await db.query(`begin;
+			select set_config('engine.job', 'old_system', true);
+			delete from next_step where id in ('${id(37)}', '${id(38)}');
+			commit;
+		`);
 	}
 });
