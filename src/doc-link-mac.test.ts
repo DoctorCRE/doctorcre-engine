@@ -10,10 +10,13 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { test } from "node:test";
+import { afterEach, beforeEach, mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { readDocLinkConfig, runDocLink } from "../scripts/doc-link.ts";
+
+beforeEach(() => mock.timers.enable({ apis: ["setInterval"] }));
+afterEach(() => mock.timers.reset());
 
 const credential = "x".repeat(43);
 const engine = "https://engine.example.test";

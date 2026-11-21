@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runDocLink } from "../scripts/doc-link.ts";
 import { withPartnerAuth } from "./partner-auth.ts";
@@ -13,6 +13,21 @@ const engineOrigin = "https://engine.example.test";
 const linkPath = "/api/engine/doc/link";
 const proof = { Origin: appOrigin, "Sec-Fetch-Site": "same-origin" };
 
+async function runSubtest(
+	parent: TestContext,
+	name: string,
+	run: (context: TestContext) => Promise<void>,
+) {
+	let body: Promise<void> | undefined;
+	await parent.test(name, (context) => {
+		body = run(context);
+		return body;
+	});
+	// Node can finish reporting a cancelled subtest before its body stops using the database.
+	await Promise.allSettled([body]);
+	parent.signal.throwIfAborted();
+}
+
 test("Doc link migration, private credentials and Mac polling", {
 	timeout: 30_000,
 }, async (t) => {
@@ -20,7 +35,6 @@ test("Doc link migration, private credentials and Mac polling", {
 	const reader = `doc_read_${randomUUID().replaceAll("-", "")}`;
 	const writer = `doc_write_${randomUUID().replaceAll("-", "")}`;
 	await setup();
-	t.after(cleanup);
 	const secret = randomBytes(32).toString("hex");
 	const appUserId = randomUUID();
 	const otherUserId = randomUUID();
@@ -328,7 +342,8 @@ test("Doc link migration, private credentials and Mac polling", {
 		const otherCredential = await issue(second, `?owner_user_id=${appUserId}`);
 		assert.equal((await poll(otherCredential)).status, 204);
 		assert.equal((await presence(second)).connected, true);
-		await t.test(
+		await runSubtest(
+			t,
 			"mail judgment uses the same owner slot and lease as turns",
 			async (t) => {
 				await db.query("select set_config('engine.user_id', $1, false)", [
@@ -360,20 +375,27 @@ test("Doc link migration, private credentials and Mac polling", {
 					(owner_user_id, activity_id, idempotency_key, created_at, kind)
 					values ($1, $2, gen_random_uuid(), now() - interval '2 minutes', 'email_filing')
 					returning id`;
-				await t.test("a filing job needs a valid destination", async () => {
-					await assert.rejects(db.query(enqueueFiling, [appUserId, activity]), {
-						code: "23503",
-					});
-					await assert.rejects(
-						db.query(
-							`with job as (${enqueueFiling})
+				await runSubtest(
+					t,
+					"a filing job needs a valid destination",
+					async () => {
+						await assert.rejects(
+							db.query(enqueueFiling, [appUserId, activity]),
+							{
+								code: "23503",
+							},
+						);
+						await assert.rejects(
+							db.query(
+								`with job as (${enqueueFiling})
 							insert into next.doc_judgment_destination (job_id, position, deal_id)
 							select id, 1, $3 from job`,
-							[appUserId, activity, deal.id],
-						),
-						{ constraint: "doc_judgment_destination_deal_id_fkey" },
-					);
-				});
+								[appUserId, activity, deal.id],
+							),
+							{ constraint: "doc_judgment_destination_deal_id_fkey" },
+						);
+					},
+				);
 				await db.query(
 					"insert into next.deal (id, name, owner_user_id) values ($1, 'Example deal', $2)",
 					[deal.id, appUserId],
@@ -529,14 +551,37 @@ test("Doc link migration, private credentials and Mac polling", {
 				]);
 				const turn = await fetchClaim(capable);
 				assert.equal(turn.work.kind, "turn");
-				await t.test(
+				await db.query(
+					"update next.doc_turn set claim_until = 'infinity' where claim_id = $1",
+					[turn.claim_id],
+				);
+				await runSubtest(
+					t,
 					"an active turn holds the slot until its lease expires",
 					async () => {
 						assert.equal((await poll(credential, capable)).status, 204);
+					},
+				);
+				await runSubtest(
+					t,
+					"work selection uses one lease cutoff",
+					async () => {
+						// A read can finish under this lock, but a separate mail claim must wait.
 						await db.query(
-							"update next.doc_turn set claim_until = '-infinity' where claim_id = $1",
-							[turn.claim_id],
+							"begin; lock next.doc_judgment_job in exclusive mode",
 						);
+						const request = poll(credential, capable);
+						try {
+							await waitForBlockedRequest(request);
+							await db.query(
+								"update next.doc_turn set claim_until = '-infinity' where claim_id = $1",
+								[turn.claim_id],
+							);
+						} finally {
+							await db.query("commit");
+							await Promise.allSettled([request]);
+						}
+						assert.equal((await request).status, 204);
 					},
 				);
 				const reclaimed = await fetchClaim(capable);
@@ -587,9 +632,11 @@ test("Doc link migration, private credentials and Mac polling", {
 					{ kind: "email_filing", result: answer.result },
 				]);
 
-				await t.test(
+				await runSubtest(
+					t,
 					"the Mac completes a queued turn before both mail judgments",
-					async () => {
+					async (mac) => {
+						mac.mock.timers.enable({ apis: ["setInterval"] });
 						const mail = randomUUID();
 						const quote = "The landlord confirmed a Friday tour.";
 						const instruction =
@@ -712,7 +759,6 @@ test("Doc link migration, private credentials and Mac polling", {
 
 		async function waitForBlockedRequest(
 			request: Promise<unknown>,
-			label: string,
 			blocker?: number,
 		) {
 			let finished = false;
@@ -720,8 +766,7 @@ test("Doc link migration, private credentials and Mac polling", {
 				finished = true;
 			};
 			void request.then(finish, finish);
-			const deadline = AbortSignal.timeout(5_000);
-			while (!finished && !deadline.aborted) {
+			while (!finished && !t.signal.aborted) {
 				const { rows } = await db.query<{ pid: number }>(
 					`select pid from pg_locks
 					where not granted
@@ -730,7 +775,7 @@ test("Doc link migration, private credentials and Mac polling", {
 				);
 				if (rows[0]) return rows[0].pid;
 			}
-			assert.fail(`${label} did not wait for the lock`);
+			assert.ok(finished, "Test timed out waiting for a database lock");
 		}
 
 		async function queueLinkRequests<First, Second>(
@@ -745,12 +790,13 @@ test("Doc link migration, private credentials and Mac polling", {
 			const firstRequest = startFirst();
 			let secondRequest: Promise<Second> | undefined;
 			try {
-				const firstPid = await waitForBlockedRequest(
-					firstRequest,
-					"First request",
-				);
+				const firstPid = await waitForBlockedRequest(firstRequest);
+				assert.ok(firstPid, "First request did not wait for the lock");
 				secondRequest = startSecond();
-				await waitForBlockedRequest(secondRequest, "Second request", firstPid);
+				assert.ok(
+					await waitForBlockedRequest(secondRequest, firstPid),
+					"Second request did not wait for the lock",
+				);
 			} finally {
 				await db.query("rollback");
 				await Promise.allSettled([firstRequest, secondRequest]);
@@ -781,9 +827,16 @@ test("Doc link migration, private credentials and Mac polling", {
 			status: "not_set_up",
 		});
 
-		await t.test(
+		await runSubtest(
+			t,
 			"polls refresh presence at most every 15 seconds and keep their order with revoke",
 			async () => {
+				// Keep the fixture ahead of PostgreSQL's real statement clock.
+				const now = "2100-01-01 00:00:00+00";
+				await db.query(`create or replace function pg_catalog.clock_timestamp()
+					returns timestamptz language sql volatile
+					as $$ select timestamptz '${now}' $$`);
+
 				async function lastSeen() {
 					const { rows } = await db.query<{ last_seen_at: string | null }>(
 						"select last_seen_at::text from next.doc_link where owner_user_id = $1",
@@ -794,21 +847,23 @@ test("Doc link migration, private credentials and Mac polling", {
 
 				const credential = await issue(first);
 				assert.equal((await poll(credential)).status, 204);
-				const firstSeen = await lastSeen();
-				assert.ok(firstSeen);
+				assert.equal(await lastSeen(), now);
+				await db.query(
+					`update next.doc_link set last_seen_at = clock_timestamp() - interval '14 seconds'
+					where owner_user_id = $1`,
+					[appUserId],
+				);
+				const recent = await lastSeen();
 				assert.equal((await poll(credential)).status, 204);
-				const secondSeen = await lastSeen();
+				assert.equal(await lastSeen(), recent);
 
 				await db.query(
 					`update next.doc_link set last_seen_at = clock_timestamp() - interval '16 seconds'
 				where owner_user_id = $1`,
 					[appUserId],
 				);
-				const agedSeen = await lastSeen();
 				assert.equal((await poll(credential)).status, 204);
-				const refreshedSeen = await lastSeen();
-				assert.ok(refreshedSeen);
-				assert.notEqual(refreshedSeen, agedSeen);
+				assert.equal(await lastSeen(), now);
 				assert.equal((await presence(first)).connected, true);
 
 				const [pollBeforeRevoke, revoked] = await queueLinkRequests(
@@ -818,14 +873,14 @@ test("Doc link migration, private credentials and Mac polling", {
 				assert.equal(pollBeforeRevoke.status, 204);
 				assert.equal(revoked.status, 204);
 				assert.equal((await poll(credential)).status, 401);
-				assert.equal(
-					secondSeen,
-					firstSeen,
-					"a poll inside 15 seconds does not rewrite presence",
-				);
 			},
 		);
 	} finally {
-		await db.query(`drop role if exists ${reader}, ${writer}`);
+		// A timed-out test can still be finishing a request.
+		try {
+			await db.query(`drop role if exists ${reader}, ${writer}`);
+		} finally {
+			await cleanup();
+		}
 	}
 });
