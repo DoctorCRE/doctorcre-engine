@@ -234,6 +234,8 @@ export function stepTargetFields(db: Transaction<DB>) {
 			having count(*) = 1
 		) end as building_deal_id,
 		coalesce(d.name, p.name, property.name, property.address) as context_label,
+		exists (select from party_role r where r.party_id = s.party_id and r.role = 'lead') as lead_target,
+		exists (select from party_role r where r.party_id = s.party_id and r.role = 'vendor') as vendor_target,
 		exists (select from party_role r where r.party_id = s.party_id
 			and r.role = 'lead' and r.stage = 'opportunity'
 			and not exists (select from deal_party dp where dp.party_id = r.party_id)) as prospect
@@ -254,6 +256,37 @@ export const datedPartnerSteps = sql`
 		and m.disposition is distinct from 'dropped'
 		and (m.snoozed_until is null or m.snoozed_until <= now())
 `;
+export const homeDay = sql<string>`(now() at time zone 'America/Chicago')::date`;
+
+export type HomeStepTarget = {
+	deal_id: string | null;
+	building_deal_id: string | null;
+	property_id: string | null;
+	lead_target: boolean;
+	vendor_target: boolean;
+};
+
+export function homeStepTarget(step: HomeStepTarget) {
+	if (step.deal_id || step.building_deal_id) return "deal";
+	if (step.lead_target) return "lead";
+	if (step.vendor_target) return "vendor";
+	if (step.property_id) return "building";
+	return "other";
+}
+
+export function homeStepEligible(
+	step: HomeStepTarget & { due_on: string | null },
+	today: string,
+) {
+	const target = homeStepTarget(step);
+	return (
+		(target === "deal" || target === "vendor" || target === "building") &&
+		(!step.due_on || step.due_on <= today)
+	);
+}
+
+export const lateLabel = (days: number) =>
+	`${days} ${days === 1 ? "day" : "days"} late`;
 
 export const stepItemId = (step: { id: string; call_id: string | null }) =>
 	`${step.call_id ? "capture_post_call_action" : "next_action"}:${step.id}`;

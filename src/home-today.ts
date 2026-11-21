@@ -8,7 +8,9 @@ import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import { readCompletionReviews } from "./home-inbox-reviews-updates.ts";
 import {
 	datedPartnerSteps,
+	homeDay,
 	homeStepCopy,
+	lateLabel,
 	type StepTitle,
 	stepItemId,
 	stepOpenUrl,
@@ -194,9 +196,7 @@ async function readTodayReminders(
 		context_label: r.context_label,
 		due_on: r.due_on,
 		days_late: r.days_late,
-		late_label: r.days_late
-			? `${r.days_late} ${r.days_late === 1 ? "day" : "days"} late`
-			: null,
+		late_label: r.days_late ? lateLabel(r.days_late) : null,
 		owner: r.owner,
 		deal_id: r.deal_id,
 		...(r.deal_ended && { deal_ended: true as const }),
@@ -218,9 +218,9 @@ async function readHomeToday(
 ) {
 	const [clock] = (
 		await sql<Clock>`
-			select (now() at time zone 'America/Chicago')::date::text as today,
-				((now() at time zone 'America/Chicago')::date::timestamp at time zone 'America/Chicago') as today_start,
-				(((now() at time zone 'America/Chicago')::date + 1)::timestamp at time zone 'America/Chicago') as tomorrow_start,
+			select ${homeDay}::text as today,
+				(${homeDay}::timestamp at time zone 'America/Chicago') as today_start,
+				((${homeDay} + 1)::timestamp at time zone 'America/Chicago') as tomorrow_start,
 				now() as now_at, u.slug as viewer, u.is_account_partner as is_partner,
 				coalesce((select jsonb_agg(jsonb_build_object('slug', au.slug, 'name', p.name) order by au.slug)
 					from app_user au join party p on p.id = au.id where au.is_account_partner), '[]') as partners
