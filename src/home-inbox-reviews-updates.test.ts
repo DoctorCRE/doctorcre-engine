@@ -78,8 +78,8 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.deepEqual(duplicates, []);
 	assert.partialDeepStrictEqual(card, {
 		item_id,
-		title: `A call mentions a step for ${dealName} — check if done: Send the survey`,
-		why: "I received the survey.",
+		title: `Check whether the step for ${dealName} is done`,
+		why: "I received the survey. Send the survey.",
 		primary_action: "Review completion",
 		context_label: dealName,
 		due_on: "2001-02-01",
@@ -158,7 +158,7 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.equal(dismissed?.completion_review, undefined);
 	if (callFollowUp) {
 		assert.partialDeepStrictEqual(dismissed, {
-			title: `Call for ${dealName} on Feb 4, 2001 left a follow-up — Send the survey`,
+			title: "Send the survey",
 			why: "Call on Feb 4, 2001. Send the survey. Due Feb 1, 2001.",
 			open_url: `/calls?session=${call}`,
 		});
@@ -185,7 +185,7 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 	assert.partialDeepStrictEqual(card, {
 		item_id: `notification:${update}`,
 		kind_label: "Update",
-		title: "Checklist item due for Example Survey — Review the survey",
+		title: "Review the checklist item for Example Survey",
 		why: "Review the survey. Due Feb 1, 2001.",
 		primary_action: "Open checklist item",
 		context_label: "Example Survey",
@@ -224,7 +224,8 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 		commit;`);
 	const [revised] = await cards(alex, deal);
 	assert.partialDeepStrictEqual(revised, {
-		title: "Checklist item due for Example Survey — Review the revised survey",
+		title: "Review the checklist item for Example Survey",
+		why: "Review the revised survey. Due Feb 1, 2001.",
 		section: "inbox",
 	});
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
@@ -236,6 +237,28 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 		new RegExp(`^${revised?.source_version}:[1-9][0-9]*:inbox$`),
 	);
 	assert.notEqual(cleared?.base_version, revised?.base_version);
+});
+
+test("a checklist reminder uses the decision title when its item is a status label", async () => {
+	const deal = randomUUID();
+	const dealName = "Example Survey Checklist";
+	const step = randomUUID();
+	const update = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id) values ('${deal}', '${dealName}', '${owner}');
+		insert into next_step (id, deal_id, what, item_title, source_ref)
+			values ('${step}', '${deal}', 'Review the survey', 'Follow-up set for Morgan', 'example-survey');
+		insert into home_update (id, user_id, deal_id, what, checklist_item_ref, due_on)
+			values ('${update}', '${owner}', '${deal}', 'Review the survey', 'deal-item:${step}', '2001-02-01');
+		commit;`);
+	const card = (await cards(alex, deal)).find(
+		(item) => item.source_id === update,
+	);
+	assert.partialDeepStrictEqual(card, {
+		title: `Review the checklist item for ${dealName}`,
+		why: "Follow-up set for Morgan. Due Feb 1, 2001.",
+	});
 });
 
 test("checklist reminders follow the item through completion, drop and reopen", async () => {
@@ -307,18 +330,15 @@ test("tour comment and shortlist changes retain their saved property context", a
 	const examples = await cards(alex, deal);
 	assert.partialDeepStrictEqual(examples, [
 		{
-			title:
-				"Example Dental removed Cedar Suite from the shortlist — review the change",
+			title: "Review tour feedback on Cedar Suite for Example Dental Tour",
 			why: "Example Dental removed Cedar Suite from the shortlist. Recorded Nov 19, 2026.",
 		},
 		{
-			title:
-				"Example Dental added Cedar Suite to the shortlist — review the change",
+			title: "Review tour feedback on Cedar Suite for Example Dental Tour",
 			why: "Example Dental added Cedar Suite to the shortlist. Recorded Nov 18, 2026.",
 		},
 		{
-			title:
-				"Tour feedback on Cedar Suite for Example Dental Tour — review feedback",
+			title: "Review tour feedback on Cedar Suite for Example Dental Tour",
 			why: "Needs a larger waiting area. Good parking. Recorded Nov 17, 2026.",
 		},
 	]);
