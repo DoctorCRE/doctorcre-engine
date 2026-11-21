@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { filingReviewNeeded } from "./activity/filing-evidence.ts";
+import { filingReviewNeeded, filingScope } from "./activity/filing-evidence.ts";
 import { lockEmail } from "./activity/next-record.ts";
 import { answerNextRead, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
@@ -96,6 +96,7 @@ const decision = {
 		v === "accept" || v === "dismiss",
 	edits: optional(fitting(edits)),
 	deal_id: optional(isUuid),
+	vendor_id: optional(isUuid),
 	reason: optional(isText),
 };
 const fail = (
@@ -331,7 +332,7 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 
 const filingKinds = ["file_to_deal", "possible_new_deal"];
 
-// Each message carries its own filing suggestion, so one decision locks every member in id order.
+// Filing decisions and mail jobs take the same email locks before changing proposals.
 async function lockFiling(
 	tx: Transaction<DB>,
 	p: {
@@ -339,13 +340,15 @@ async function lockFiling(
 		kind: string;
 		activity_id: string | null;
 		deal_id: string | null;
+		filing_scope: string | null;
 	},
 ) {
 	const { rows } = await sql<{ id: string; message_id: string | null }>`
-		select sibling.id, e.message_id
+		select sibling.id, coalesce(e.message_id, e.activity_id::text) as message_id
 		from proposal sibling
 		left join email e on e.activity_id = sibling.activity_id
-		where sibling.id = ${p.id}::uuid or (sibling.kind = ${p.kind}
+		where sibling.id = ${p.id}::uuid or (${p.filing_scope}::text is null
+			and ${filingScope("sibling")} is null and sibling.kind = ${p.kind}
 			and sibling.deal_id is not distinct from ${p.deal_id}::uuid
 			and sibling.status = 'pending'
 			and sibling.activity_id in (
@@ -354,16 +357,21 @@ async function lockFiling(
 					or thread.conversation_id = source.conversation_id
 				where source.activity_id = ${p.activity_id}::uuid
 			)
-			and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)}
-			and (sibling.kind <> 'file_to_deal'
-				or ${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))}))
-		order by sibling.id
-		for update of sibling`.execute(tx);
+			and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)})
+	`.execute(tx);
 	for (const messageId of [
 		...new Set(rows.map((row) => row.message_id)),
 	].sort())
 		if (messageId) await lockEmail(tx, messageId);
-	return rows.map((row) => row.id);
+	const { rows: members } = await sql<{ id: string }>`
+		select sibling.id from proposal sibling
+		where sibling.id = any(${rows.map((row) => row.id)}::uuid[])
+			and (sibling.id = ${p.id}::uuid or (sibling.status = 'pending' and
+				(sibling.kind <> 'file_to_deal' or
+					${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))})))
+		order by sibling.id for update
+	`.execute(tx);
+	return members.map((row) => row.id);
 }
 
 export const proposalDecisions = new Hono<NextSaveEnv>().post(
@@ -381,7 +389,13 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 			async (tx, r) => {
 				const clicked = await tx
 					.selectFrom("proposal")
-					.select(["id", "kind", "activity_id", "deal_id"])
+					.select([
+						"id",
+						"kind",
+						"activity_id",
+						"deal_id",
+						filingScope("proposal").as("filing_scope"),
+					])
 					.where("id", "=", r.proposal_id)
 					.executeTakeFirst();
 				const members =
@@ -395,6 +409,8 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					// A direct decision clears the mailbox stamp and records the owner as decider.
 					.where(sql<boolean>`(kind <> 'email_lead' or coalesce(decided_by_user_id, changed_for_user_id)
 						= nullif(current_setting('engine.user_id', true), '')::uuid)`)
+					.where(sql<boolean>`(${filingScope("proposal")} is null or
+						${sourceInMailbox(sql.ref("proposal.activity_id"), sql<string>`current_setting('engine.user_id')`)})`)
 					.forUpdate()
 					.executeTakeFirst();
 				if (!p) return fail(404, "not_found");
@@ -408,6 +424,12 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 				if (
 					(r.edits && p.kind !== "next_step") ||
 					(r.deal_id && !filing) ||
+					(r.vendor_id &&
+						(!accepts ||
+							!p.filing_scope ||
+							p.filing_scope === "deal" ||
+							r.deal_id)) ||
+					(accepts && p.filing_scope === "vendor" && !r.vendor_id) ||
 					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
@@ -453,6 +475,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						filed_deal_id: string | null;
 					}>`update proposal
    set status = ${accepts ? "accepted" : "dismissed"}, filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
+	${r.vendor_id ? sql`filed_vendor_id = ${r.vendor_id}::uuid,` : sql``}
     filing_reason = ${accepts ? (r.reason ?? null) : null},
     dismiss_reason = ${accepts ? null : (r.reason?.trim() ?? null)} where id = any(${members}::uuid[])
    returning id, status, decided_at::text, filed_deal_id`.execute(tx);
