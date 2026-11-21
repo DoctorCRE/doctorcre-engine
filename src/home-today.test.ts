@@ -22,7 +22,7 @@ const id = (n: number) =>
 const reader: Record<string, string> = { HOME_INBOX_READ_SCHEMA: "next" };
 const joe = { user: "joe" };
 const get = { method: "GET" } as const;
-const review = "Review counter with Pat | Example Leasing, Tue Oct 27 4:30 PM";
+const review = "Project review with Pat | Example Leasing, Tue Oct 27 4:30 PM";
 
 before(async () => {
 	await setup();
@@ -140,10 +140,10 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	const row = (i: Row) =>
 		`${i.id}|${i.title}|${i.late_label}|${i.owner}|${i.home_item_id}|${i.open_url}`;
 	assert.deepEqual(body.reminders?.late.map(row), [
-		`${id(33)}|Call the office. If no one answers, leave a message and retry tomorrow.|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
+		`${id(33)}|Call the office|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
 		`${id(32)}|Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
 		`${id(21)}|send status unknown — re-touch or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
-		`${id(28)}|Review counter with Pat|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
+		`${id(28)}|Review the project with Pat|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
 		`${id(23)}|Follow up with Dr. Example|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	// Client and lead steps live on their records, not on Today.
@@ -159,6 +159,10 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 			[id(28), undefined],
 			[id(23), undefined],
 		],
+	);
+	assert.equal(
+		body.reminders?.late.find((i) => i.id === id(33))?.why,
+		"If no one answers, leave a message and retry tomorrow.",
 	);
 	const inboxRes = await request(joe, "home/inbox", get, reader);
 	const inbox = (await inboxRes.json()) as { items: Row[] };
@@ -204,9 +208,9 @@ for (const [example, caller, step, title] of [
 		"call instructions without a phone number",
 		{ user: "dell" },
 		id(33),
-		"Call the office. If no one answers, leave a message and retry tomorrow.",
+		"Call the office",
 	],
-	["a meeting suffix", { user: "dell" }, id(28), "Review counter with Pat"],
+	["a meeting suffix", { user: "dell" }, id(28), "Review the project with Pat"],
 ] as const) {
 	test(`Today and the Home card share a title for ${example}`, async () => {
 		const result = await reminderAndCardTitles(caller, step);
@@ -217,7 +221,7 @@ for (const [example, caller, step, title] of [
 test("Home and Calendar show meeting details in the why without repeating the step title", async () => {
 	const step = id(28);
 	const caller = { user: "dell" };
-	const title = "Review counter with Pat";
+	const title = "Review the project with Pat";
 	const details = "Example Leasing, Tue Oct 27 4:30 PM.";
 	const [home, calendar] = await Promise.all([
 		reminderAndCardTitles(caller, step),

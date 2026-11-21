@@ -16,6 +16,8 @@ const phoneNumber =
 	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
 const meetingSuffix =
 	/\s*\|\s*([^|]+, (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\p{L}*,? \p{L}{3,9} \d{1,2}(?:,? \d{4},?)? \d{1,2}:\d{2}\s*[AP]M\.?)$/iu;
+const instructionSuffix =
+	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/;
 const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
 
 export function homeDisplayText(text: string | null) {
@@ -80,15 +82,22 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
 	const meeting = meetingSuffix.exec(savedText);
-	const savedAction = meeting ? savedText.slice(0, meeting.index) : savedText;
+	const savedAction = meeting
+		? savedText
+				.slice(0, meeting.index)
+				.replace(/^project review(?= with\b|$)/i, "Review the project")
+		: savedText;
 	const wording = savedAction
 		.replace(phoneNumber, " ")
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "");
 	const cadence = vendorCadence.exec(savedText)?.[1];
+	const instructionAt = wording.search(instructionSuffix);
+	const actionWording =
+		instructionAt === -1 ? wording : wording.slice(0, instructionAt);
 	const title = cadence
 		? homeTitle("vendor_check_in", target)
-		: savedHomeTitle(wording) ||
+		: (savedHomeTitle(wording) && actionWording) ||
 			(contact
 				? homeTitle("call_follow_up", contact)
 				: homeTitle("follow_up", target));
