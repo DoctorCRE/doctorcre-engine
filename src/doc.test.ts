@@ -32,7 +32,11 @@ before(async () => {
 			('${owner}', 'joe'), ('${other}', 'dell'), ('${nonPartner}', 'former_partner');
 		commit;`);
 });
-afterEach(() => db.query("truncate doc_turn, doc_conversation, doc_link"));
+afterEach(() =>
+	db.query(
+		"delete from doc_turn; delete from doc_conversation; truncate doc_link",
+	),
+);
 after(cleanup);
 
 type Chat = { id: string; title: string };
@@ -674,7 +678,8 @@ test("the claim-state migration preserves old turns and enforces one queued or w
 	const old = copyTest();
 	await old.setup();
 	t.after(old.cleanup);
-	await old.db.query("drop table doc_turn, doc_conversation");
+	await old.db.query(`alter table reply_draft drop constraint reply_draft_confirmed_doc_turn_owner_fkey;
+		drop table doc_turn, doc_conversation`);
 	await old.db.query(await readSchema("add-doc-conversations.sql"));
 	const partner = randomUUID();
 	const chat = randomUUID();

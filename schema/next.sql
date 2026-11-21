@@ -1910,7 +1910,7 @@ create view deal_next_date with (security_invoker = true) as
 			and newer.item_title is null and newer.created_at > p.decided_at)))
 	order by s.deal_id, s.created_at desc, s.id desc;
 
--- A job's reply to one email, which its owner's mailbox sends. An outreach draft is apart: a user sends it by hand.
+-- A reply to one email, which its owner's mailbox sends. An outreach draft is sent by hand.
 create table reply_draft (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -4148,6 +4148,42 @@ create policy doc_link_credential on doc_link for select to engine using (
 revoke all on doc_link from public, engine_reader;
 grant select, insert, delete on doc_link to engine;
 grant update (credential_hash, issued_at, last_seen_at, readiness) on doc_link to engine;
+
+alter table reply_draft
+	add column confirmed_doc_turn_id uuid,
+	alter column proposed_by_job drop not null,
+	add constraint reply_draft_confirmed_doc_turn_key unique (confirmed_doc_turn_id),
+	add constraint reply_draft_confirmed_doc_turn_owner_fkey
+		foreign key (confirmed_doc_turn_id, owner_user_id) references doc_turn (id, owner_user_id),
+	add constraint reply_draft_one_origin check (num_nonnulls(proposed_by_job, confirmed_doc_turn_id) = 1);
+
+create function reply_draft_doc_origin() returns trigger
+language plpgsql as $$
+begin
+	if new.owner_user_id is distinct from nullif(current_setting('engine.user_id', true), '')::uuid
+		or not exists (
+			select from doc_turn t
+			where t.id = new.confirmed_doc_turn_id and t.owner_user_id = new.owner_user_id
+				and t.confirmation_key is not null
+				and t.answer #>> '{proposal,kind}' = 'reply_draft'
+				and t.answer #>> '{proposal,target,ref,kind}' = 'email'
+				and t.answer #>> '{proposal,target,ref,id}' = new.email_activity_id::text
+			for share
+		) then
+		raise exception 'a Doc draft requires its owner to confirm a reply to that email'
+			using errcode = 'check_violation', constraint = 'reply_draft_doc_origin';
+	end if;
+	return new;
+end $$;
+
+do $$ begin
+	execute format('alter function reply_draft_doc_origin set search_path = pg_catalog, %I, pg_temp', current_schema());
+end $$;
+revoke execute on function reply_draft_doc_origin from public;
+
+create trigger reply_draft_doc_origin before insert on reply_draft
+	for each row when (new.confirmed_doc_turn_id is not null and new.proposed_by_job is null)
+	execute function reply_draft_doc_origin();
 
 create table doc_judgment_job (
 	id uuid primary key default gen_random_uuid(),
