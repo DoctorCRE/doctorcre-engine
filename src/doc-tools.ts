@@ -2,14 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { sql, type Transaction } from "kysely";
 import { z } from "zod";
 import { isCalendarDate } from "./calendar-date.ts";
-import type { JsonObject } from "./database.d.ts";
 import { findDocRecords, readDocRecord, type Source } from "./doc-reads.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { isArguments } from "./save-door.ts";
 import { isUuid } from "./uuid.ts";
 
-const kind = z.enum(["deal", "lead", "client"]);
 const text = z
 	.string()
 	.trim()
@@ -17,22 +15,22 @@ const text = z
 	.max(4000)
 	.refine((value) => value.isWellFormed() && !value.includes("\0"));
 const source = z.string().max(48);
-const findInput = z.strictObject({
-	query: text,
-	kind: z.enum(["all", ...kind.options]),
-});
-const proposalFields = {
+const proposal = z.strictObject({
 	kind: z.enum(["note", "next_step"]),
+	source: source.optional(),
+	target: z.unknown().optional(),
 	text: text.optional(),
 	what: text.optional(),
 	due_on: z
 		.string()
-		.refine((date) => isCalendarDate(date) && !date.startsWith("0000"))
 		.nullable()
+		.refine(
+			(date) =>
+				date === null || (isCalendarDate(date) && !date.startsWith("0000")),
+		)
 		.optional(),
-};
-const proposalInput = z.strictObject({ ...proposalFields, source });
-const replyInput = z.strictObject({
+});
+const answer = z.strictObject({
 	kind: z.enum(["answer", "clarification", "refusal"]),
 	text,
 	sources: z.array(z.unknown()).max(40),
@@ -45,30 +43,34 @@ export type DocClaimState = {
 	choices?: Source[];
 	failed?: true;
 };
-const keyFor = (ref: Source["ref"]) => `${ref.kind}:${ref.id}`;
+type ClaimRead = {
+	connection: string;
+	partner: string;
+	state: DocClaimState;
+	timeout: number;
+};
 
-function getSource(state: DocClaimState, value: unknown) {
+function sourceFor(state: DocClaimState, value: unknown) {
 	const ref = isArguments(value) && value.ref;
 	const key =
-		isArguments(ref) && kind.safeParse(ref.kind).success && isUuid(ref.id)
+		isArguments(ref) && typeof ref.kind === "string" && isUuid(ref.id)
 			? `${ref.kind}:${ref.id}`
 			: value;
-	return typeof key === "string" && Object.hasOwn(state.sources, key)
-		? state.sources[key]
-		: undefined;
+	if (typeof key === "string" && Object.hasOwn(state.sources, key))
+		return state.sources[key];
 }
 
-function saveProposal(payload: unknown, state: DocClaimState): JsonObject {
-	const parsed = z
-		.strictObject({
-			...proposalFields,
-			source: source.optional(),
-			target: z.unknown().optional(),
-		})
-		.safeParse(payload);
-	if (!parsed.success) throw new Error("Invalid save proposal");
-	const { kind, source: key, target: ref, text, what, due_on } = parsed.data;
-	const target = getSource(state, key ?? ref);
+function propose(payload: unknown, state: DocClaimState) {
+	if (state.failed) throw new Error("A Doc read failed");
+	const {
+		kind,
+		text,
+		what,
+		due_on,
+		source,
+		target: ref,
+	} = proposal.parse(payload);
+	const target = sourceFor(state, source ?? ref);
 	if (!target || state.choices)
 		throw new Error("Choose an authorized source first");
 	if (kind === "note" && text && what === undefined && due_on === undefined)
@@ -92,82 +94,72 @@ export function validateDocAnswer(payload: unknown, state: DocClaimState) {
 			sources: state.choices,
 			proposal: null,
 		};
-	const parsed = replyInput.safeParse(payload);
-	if (!parsed.success) throw new Error("Invalid Doc answer");
-	const { kind, text, sources, proposal } = parsed.data;
-	const cited = new Set<Source>();
-	if (kind !== "refusal") {
-		for (const value of sources) {
-			const record = getSource(state, value);
-			if (!record) throw new Error("Doc cited an unread record");
-			cited.add(record);
-		}
-	}
-	if (kind === "answer" && !cited.size)
+	const { kind, text, sources, proposal } = answer.parse(payload);
+	const cited =
+		kind === "refusal"
+			? []
+			: sources.map((value) => {
+					const record = sourceFor(state, value);
+					if (!record) throw new Error("Doc cited an unread record");
+					return record;
+				});
+	if (kind === "answer" && !cited.length)
 		throw new Error("Doc answer has no sources");
 	return {
 		kind,
 		text,
-		sources: [...cited],
+		sources: [...new Set(cited)],
 		proposal:
-			kind === "answer" && proposal != null
-				? saveProposal(proposal, state)
-				: null,
+			kind === "answer" && proposal != null ? propose(proposal, state) : null,
 	};
 }
 
-const content = (value: unknown) => ({
+const toolResult = (value: unknown) => ({
 	content: [{ type: "text" as const, text: JSON.stringify(value) }],
 });
 
 export function registerDocTools(
 	server: McpServer,
-	{
-		connection,
-		partner,
-		state,
-		timeout,
-	}: {
-		connection: string;
-		partner: string;
-		state: DocClaimState;
-		timeout: number;
-	},
+	{ connection, partner, state, timeout }: ClaimRead,
 ) {
+	const deadline = Date.now() + timeout;
+
 	function read(run: (db: Transaction<DB>) => Promise<unknown>) {
 		if (state.failed) throw new Error("A Doc read failed");
 		if (state.choices) throw new Error("Choose a record to continue");
 		if (state.reads >= 4) throw new Error("Doc read limit exceeded");
 		state.reads++;
 		return nextTransaction(connection, "read", async (db) => {
-			await sql`select set_config('statement_timeout', ${String(timeout)}, true)`.execute(
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) throw new Error("Doc read deadline passed");
+			await sql`select set_config('transaction_timeout', ${String(remaining)}, true)`.execute(
 				db,
 			);
-			return content(await run(db));
+			return toolResult(await run(db));
 		}).catch(() => {
 			state.failed = true;
 			throw new Error("A Doc read failed");
 		});
 	}
 
+	const find = z.strictObject({
+		query: text,
+		kind: z.enum(["all", "deal", "lead", "client"]),
+	});
 	server.registerTool(
 		"find",
-		{
-			description:
-				"Find deals, leads, and clients by name or ID. Use the returned source keys.",
-			inputSchema: findInput,
-		},
+		{ description: "Find records by name or ID.", inputSchema: find },
 		({ query, kind }) =>
 			read(async (db) => {
 				const matches = await findDocRecords(db, query, kind);
-				const labelKey = (label: string) => label.trim().toLowerCase();
+				const name = (label: string) => label.trim().toLowerCase();
 				const exact = matches.filter(
-					({ label }) => labelKey(label) === labelKey(query),
+					({ label }) => name(label) === name(query),
 				);
 				const choices = exact.length ? exact : matches;
 				if (
 					choices.length > 1 &&
-					new Set(choices.map(({ label }) => labelKey(label))).size === 1
+					new Set(choices.map(({ label }) => name(label))).size === 1
 				) {
 					state.choices = choices.map(({ city, ...record }) => ({
 						...record,
@@ -176,7 +168,7 @@ export function registerDocTools(
 					return validateDocAnswer(null, state);
 				}
 				return matches.map(({ city, ...record }) => {
-					const source = keyFor(record.ref);
+					const source = `${record.ref.kind}:${record.ref.id}`;
 					state.sources[source] = record;
 					return { ...record, city, source };
 				});
@@ -185,33 +177,31 @@ export function registerDocTools(
 	server.registerTool(
 		"read",
 		{
-			description: "Read facts for a source returned by find in this turn.",
+			description: "Read a source returned by find.",
 			inputSchema: z.strictObject({ source }),
 		},
 		({ source }) =>
 			read(async (db) => {
-				const record = getSource(state, source);
-				const result = record ? await readDocRecord(db, record, partner) : null;
-				if (!result) delete state.sources[source];
-				return result;
+				const record = sourceFor(state, source);
+				const facts = record ? await readDocRecord(db, record, partner) : null;
+				if (!facts) delete state.sources[source];
+				return facts;
 			}),
 	);
 	server.registerTool(
 		"propose_save",
 		{
-			description:
-				"Propose a note or next step on a source from this turn for partner confirmation.",
-			inputSchema: proposalInput,
+			description: "Propose a note or next step for partner confirmation.",
+			inputSchema: proposal.omit({ target: true }).required({ source: true }),
 		},
-		(args) => content(saveProposal(args, state)),
+		(args) => toolResult(propose(args, state)),
 	);
 	server.registerTool(
 		"validate_answer",
 		{
-			description:
-				"Validate an answer or clarification against sources returned in this turn.",
-			inputSchema: replyInput,
+			description: "Check an answer against this turn's sources.",
+			inputSchema: answer,
 		},
-		(args) => content(validateDocAnswer(args, state)),
+		(args) => toolResult(validateDocAnswer(args, state)),
 	);
 }

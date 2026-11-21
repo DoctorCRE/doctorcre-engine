@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
-import { validateDocAnswer } from "./doc-tools.ts";
+import { type DocClaimState, validateDocAnswer } from "./doc-tools.ts";
 import { copyTest } from "./test-copy.ts";
 import worker from "./worker.ts";
 
@@ -177,7 +177,8 @@ test("the engine speaks MCP only to the link credential and its current private 
 
 test("Doc reads shared records, validates citations and proposes a save without business writes", async () => {
 	const { credential } = await issue(owner);
-	const request = send(credential, await claim(owner));
+	const id = await claim(owner);
+	const request = send(credential, id);
 	const source = `deal:${deal}`;
 	await tool(
 		request,
@@ -206,6 +207,14 @@ test("Doc reads shared records, validates citations and proposes a save without 
 	assert.equal(facts.next_steps[0].what, "Review the floor plan");
 	assert.equal(facts.activity[0].summary, "The west entrance needs a ramp.");
 	assert.equal(facts.activity.length, 1);
+	const [sharedClient] = await tool(request, "find", {
+		query: client,
+		kind: "client",
+	});
+	assert.equal(
+		(await tool(request, "read", { source: sharedClient.source })).owner,
+		"Example Two",
+	);
 	const proposal = await tool(request, "propose_save", {
 		kind: "note",
 		source,
@@ -255,13 +264,14 @@ test("Doc reads shared records, validates citations and proposes a save without 
 		sources: [{ ...proposal.target, href: "https://example.test" }, source],
 		proposal: { ...proposal, target: { ...proposal.target, label: "Made up" } },
 	});
-	assert.deepEqual(
-		validateDocAnswer(answer, {
-			reads: 1,
-			sources: { [source]: proposal.target },
-		}),
-		answer,
+	const {
+		rows: [current],
+	} = await db.query<{ claim_state: DocClaimState }>(
+		"select claim_state from doc_turn where claim_id = $1",
+		[id],
 	);
+	assert.ok(current);
+	assert.deepEqual(validateDocAnswer(answer, current.claim_state), answer);
 	assert.deepEqual(answer, {
 		kind: "answer",
 		text: "Ready.",

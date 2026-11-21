@@ -1,5 +1,3 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
 import { sql } from "kysely";
 import { withDocLink } from "./doc-link.ts";
@@ -21,12 +19,17 @@ export async function docMcp(c: Context<WriterEnv>) {
 	if (!writer) return c.body(null, 503);
 
 	try {
-		const body = c.req.method === "POST" ? await c.req.arrayBuffer() : null;
-		const request = new Request(c.req.url, {
-			method: c.req.method,
-			headers: c.req.raw.headers,
-			body,
-		});
+		const request =
+			c.req.method === "POST"
+				? new Request(c.req.raw, { body: await c.req.arrayBuffer() })
+				: c.req.raw;
+		// Load the SDK after Wrangler's bundled Zod constructors have initialized.
+		const { McpServer } = await import(
+			"@modelcontextprotocol/sdk/server/mcp.js"
+		);
+		const { WebStandardStreamableHTTPServerTransport } = await import(
+			"@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
+		);
 		const connection = writer.connectionString;
 		const response = await withDocLink(
 			connection,
@@ -55,7 +58,7 @@ export async function docMcp(c: Context<WriterEnv>) {
 				if (request.method !== "POST")
 					return c.body(null, 405, { Allow: "POST" });
 
-				const { reads, failed } = turn.state;
+				const { reads } = turn.state;
 				const server = new McpServer({
 					name: "doctorcre-doc",
 					version: "1.0.0",
@@ -68,7 +71,7 @@ export async function docMcp(c: Context<WriterEnv>) {
 				try {
 					const reply = await transport.handleRequest(request);
 					reply.headers.set("Cache-Control", "no-store");
-					if (turn.state.reads !== reads || turn.state.failed !== failed) {
+					if (turn.state.reads !== reads) {
 						const saved = await tx
 							.updateTable("doc_turn")
 							.set({ claim_state: turn.state })
@@ -84,7 +87,7 @@ export async function docMcp(c: Context<WriterEnv>) {
 				}
 			},
 		);
-		return response ?? unauthorized();
+		return response instanceof Response ? response : unauthorized();
 	} catch {
 		return c.body(null, 503);
 	}

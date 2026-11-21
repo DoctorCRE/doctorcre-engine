@@ -19,20 +19,18 @@ const recordLink = {
 	client: "/clients?record=",
 };
 
-function match(
+const match = (
 	kind: RecordKind,
 	id: string,
-	name: string,
+	label: string,
 	key = id,
 	city: string | null = null,
-) {
-	return {
-		ref: { kind, id },
-		label: name,
-		href: recordLink[kind] + encodeURIComponent(key),
-		city,
-	};
-}
+) => ({
+	ref: { kind, id },
+	label,
+	href: recordLink[kind] + encodeURIComponent(key),
+	city,
+});
 
 export async function findDocRecords(
 	db: Transaction<DB>,
@@ -104,10 +102,7 @@ export async function readDocRecord(
 ) {
 	const facts = await recordFacts(db, source, partner);
 	if (!facts) return null;
-	const {
-		ref: { kind, id },
-		label: name,
-	} = source;
+	const { kind, id } = source.ref;
 	const target = kind === "deal" ? "deal_id" : "party_id";
 	const targetColumn = sql.ref(target);
 	const {
@@ -127,5 +122,5 @@ export async function readDocRecord(
 				order by a.happened_at desc, a.id desc limit 5
 			) entry) as activity
 	`.execute(db);
-	return { name, ...facts, ...related };
+	return { name: source.label, ...facts, ...related };
 }

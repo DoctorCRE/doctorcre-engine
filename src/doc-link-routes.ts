@@ -4,7 +4,6 @@ import {
 	docLinkOwnerTransaction,
 	docLinkPresence,
 	issueDocLink,
-	recordDocLinkPoll,
 	revokeDocLink,
 	withDocLink,
 } from "./doc-link.ts";
@@ -58,11 +57,7 @@ export async function claimDocLink(c: Context<WriterEnv>) {
 	const writer = c.env.DATABASE_WRITER;
 	if (!writer) return unavailable();
 	try {
-		const result = await withDocLink(
-			writer.connectionString,
-			credential,
-			recordDocLinkPoll,
-		);
+		const result = await withDocLink(writer.connectionString, credential);
 		if (result === null) return unauthorized();
 		return new Response(null, { status: 204, headers: noStore });
 	} catch {
