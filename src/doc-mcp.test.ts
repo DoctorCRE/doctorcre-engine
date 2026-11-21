@@ -15,7 +15,8 @@ const duplicate = randomUUID();
 const copiedLead = randomUUID();
 const client = randomUUID();
 const route = "/api/engine/doc/mcp";
-const env = { DATABASE_WRITER: { connectionString } };
+const binding = { connectionString };
+const env = { DATABASE: binding, DATABASE_WRITER: binding };
 
 before(async () => {
 	await setup();
@@ -293,6 +294,24 @@ test("Doc reads shared records, validates citations and proposes a save without 
 		(await db.query("select idempotency_key from save_receipt")).rowCount,
 		0,
 	);
+});
+
+test("Doc finds a lead by the copied ID from its link in a new claim", async () => {
+	const { credential } = await issue(owner);
+	const first = await tool(send(credential, await claim(owner)), "find", {
+		query: lead,
+		kind: "lead",
+	});
+	const [match] = first;
+	const linkId = new URL(match.href, "https://example.test").searchParams.get(
+		"lead",
+	);
+	assert.equal(linkId, copiedLead);
+	const next = await tool(send(credential, await claim(owner)), "find", {
+		query: linkId,
+		kind: "lead",
+	});
+	assert.deepEqual(next, first);
 });
 
 test("Doc limits concurrent reads as a group and asks which lead when names collide", async () => {

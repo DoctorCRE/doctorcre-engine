@@ -15,8 +15,8 @@ export async function docMcp(c: Context<WriterEnv>) {
 		c.body(null, 401, { "WWW-Authenticate": "Bearer" });
 	const credential = docLinkCredential(c);
 	if (!credential) return unauthorized();
-	const writer = c.env.DATABASE_WRITER;
-	if (!writer) return c.body(null, 503);
+	const { DATABASE: reader, DATABASE_WRITER: writer } = c.env;
+	if (!reader || !writer) return c.body(null, 503);
 
 	try {
 		const request =
@@ -30,9 +30,8 @@ export async function docMcp(c: Context<WriterEnv>) {
 		const { WebStandardStreamableHTTPServerTransport } = await import(
 			"@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 		);
-		const connection = writer.connectionString;
 		const response = await withDocLink(
-			connection,
+			writer.connectionString,
 			credential,
 			async (tx, owner) => {
 				const claim = c.req.header("Doc-Claim-Id");
@@ -66,7 +65,10 @@ export async function docMcp(c: Context<WriterEnv>) {
 				const transport = new WebStandardStreamableHTTPServerTransport({
 					enableJsonResponse: true,
 				});
-				registerDocTools(server, { ...turn, connection });
+				registerDocTools(server, {
+					...turn,
+					readConnection: reader.connectionString,
+				});
 				await server.connect(transport);
 				try {
 					const reply = await transport.handleRequest(request);

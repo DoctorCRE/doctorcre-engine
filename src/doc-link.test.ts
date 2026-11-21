@@ -16,8 +16,15 @@ test("Doc link migration, private credentials and Mac polling", {
 	timeout: 30_000,
 }, async (t) => {
 	const { db, setup, cleanup, connectionString } = copyTest();
+	const reader = `doc_read_${randomUUID().replaceAll("-", "")}`;
+	const writer = `doc_write_${randomUUID().replaceAll("-", "")}`;
 	await setup();
-	t.after(cleanup);
+	t.after(async () => {
+		await db.query(`drop role if exists ${reader}, ${writer}`);
+		await cleanup();
+	});
+	await db.query(`create role ${reader} login in role engine_reader;
+		create role ${writer} login in role engine;`);
 	await db.query("drop table next.doc_link");
 	await db.query(await readSchema("partner-auth.sql"));
 	const secret = randomBytes(32).toString("hex");
@@ -88,6 +95,10 @@ test("Doc link migration, private credentials and Mac polling", {
 	);
 	const localDatabase = new URL(connectionString);
 	localDatabase.password = "fixture";
+	const readDatabase = new URL(localDatabase);
+	readDatabase.username = reader;
+	const writeDatabase = new URL(localDatabase);
+	writeDatabase.username = writer;
 	const server = createTestHarness({
 		workers: [
 			{
@@ -115,9 +126,14 @@ test("Doc link migration, private credentials and Mac polling", {
 					compatibility_flags: ["nodejs_compat"],
 					hyperdrive: [
 						{
+							binding: "DATABASE",
+							id: "test-reader",
+							localConnectionString: readDatabase.href,
+						},
+						{
 							binding: "DATABASE_WRITER",
 							id: "test-writer",
-							localConnectionString: localDatabase.href,
+							localConnectionString: writeDatabase.href,
 						},
 						{
 							binding: "PARTNER_AUTH_DATABASE",

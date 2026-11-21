@@ -44,7 +44,7 @@ export type DocClaimState = {
 	failed?: true;
 };
 type ClaimRead = {
-	connection: string;
+	readConnection: string;
 	partner: string;
 	state: DocClaimState;
 	timeout: number;
@@ -120,7 +120,7 @@ const toolResult = (value: unknown) => ({
 
 export function registerDocTools(
 	server: McpServer,
-	{ connection, partner, state, timeout }: ClaimRead,
+	{ readConnection, partner, state, timeout }: ClaimRead,
 ) {
 	const deadline = Date.now() + timeout;
 
@@ -129,7 +129,7 @@ export function registerDocTools(
 		if (state.choices) throw new Error("Choose a record to continue");
 		if (state.reads >= 4) throw new Error("Doc read limit exceeded");
 		state.reads++;
-		return nextTransaction(connection, "read", async (db) => {
+		return nextTransaction(readConnection, "read", async (db) => {
 			const remaining = deadline - Date.now();
 			if (remaining <= 0) throw new Error("Doc read deadline passed");
 			await sql`select set_config('transaction_timeout', ${String(remaining)}, true)`.execute(
