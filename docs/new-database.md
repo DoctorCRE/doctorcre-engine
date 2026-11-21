@@ -1565,7 +1565,7 @@ Track record counts come from `vendor_track_record`. A deal counts even when its
 
 ## Doc conversations and turns
 
-The [Doc screen](screens/doc.md) calls `/api/engine/doc/*` on the app's origin through the current [partner session door](sign-in.md#serve-pages-and-partner-calls-through-the-app). Every call resolves the signed-in partner, and every POST requires the partner write proofs. Doc responses use `Cache-Control: no-store`. Only the app route serves Doc. The engine owns the tables in `next`, and Doc starts with empty history.
+The [Doc screen](screens/doc.md) calls `/api/engine/doc/*` on the app's origin through the current [partner session door](sign-in.md#serve-pages-and-partner-calls-through-the-app). Every call resolves the signed-in partner, and every POST requires the partner write proofs. Doc responses use `Cache-Control: no-store`. Only the app route serves Doc. The engine owns the tables in `next`, and Doc starts with empty history. Apply [the Doc storage migration](../schema/add-doc-conversations.sql) to an existing `next` before enabling these routes.
 
 ### Private storage
 

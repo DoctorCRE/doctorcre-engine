@@ -70,6 +70,9 @@ const HINTS = {
 	invalid_idempotency_key:
 		"Supply a UUID as idempotency_key and reuse it only for the same action.",
 	key_reuse: "Use a fresh idempotency_key for changed arguments.",
+	doc_unavailable: "Retry the question with the same key.",
+	turn_in_progress: "Wait for Doc to finish the current question.",
+	turn_superseded: "Reopen the chat and retry only its latest question.",
 	email_summary_result_conflict:
 		"The source and generator version already have a different summary result.",
 	version_conflict: "Re-read the record and ask the human before retrying.",
