@@ -25,6 +25,7 @@ type WorkspaceLead = {
 	party_id?: string;
 	stage_label?: string | null;
 	owner_label?: string | null;
+	new_from_email?: boolean;
 	contact_state: string;
 	est_lease_event: string | null;
 	event_confidence: string | null;
@@ -215,6 +216,8 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 				r.lane, r.segment, r.estimated_lease_on as est_lease_event,
 				r.lease_estimate_confidence as event_confidence,
 				u.slug as owner, owner.name as owner_label,
+				exists (select from lead_email_attention a where a.party_id = p.id
+					and a.acknowledged_at is null) as new_from_email,
 				(select max(c.id) from change c where c.table_name = 'party_role'
 					and c.record = jsonb_build_object('party_id', p.id, 'role', 'lead')) as base_version,
 				dnc.party_id is not null as do_not_contact,

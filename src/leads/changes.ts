@@ -20,8 +20,13 @@ import { SaveRefusal } from "../save.ts";
 import { latestChange } from "../seen-change.ts";
 import { STAGE_ORDER } from "./board.ts";
 
-const isAction = (value: unknown): value is "claim" | "stage" | "link" =>
-	value === "claim" || value === "stage" || value === "link";
+const isAction = (
+	value: unknown,
+): value is "acknowledge_email" | "claim" | "stage" | "link" =>
+	value === "acknowledge_email" ||
+	value === "claim" ||
+	value === "stage" ||
+	value === "link";
 const SHAPE = {
 	idempotency_key: isUuid,
 	base_version: isChangeId,
@@ -51,6 +56,7 @@ function parseLeadChange(
 		return new Refusal(409, "account_changed");
 	const base = { ...common, lead_id };
 	if (action === "claim") return { ...base, action };
+	if (action === "acknowledge_email") return { ...base, action };
 	if (action === "link") {
 		if (!client_id || !confirmed)
 			return new Refusal(400, "missing_required", {
@@ -68,6 +74,18 @@ function parseLeadChange(
 
 type LeadChange = Exclude<ReturnType<typeof parseLeadChange>, Refusal>;
 
+async function acknowledgeLeadEmail(tx: Transaction<DB>, partyId: string) {
+	await tx
+		.updateTable("lead_email_attention")
+		.set({
+			acknowledged_by_user_id: ACTING_USER,
+			acknowledged_at: sql<string>`now()`,
+		})
+		.where("party_id", "=", partyId)
+		.where("acknowledged_at", "is", null)
+		.execute();
+}
+
 async function saveLeadChange(tx: Transaction<DB>, change: LeadChange) {
 	const { lead_id, base_version } = change;
 	const imported = await tx
@@ -84,6 +102,11 @@ async function saveLeadChange(tx: Transaction<DB>, change: LeadChange) {
 	);
 	if (!lead || lead.stage === null)
 		throw new SaveRefusal(new Refusal(404, "not_found"));
+	const answer = { ok: true, lead_id };
+	if (change.action === "acknowledge_email") {
+		await acknowledgeLeadEmail(tx, party_id);
+		return answer;
+	}
 	const current_version = await latestChange(tx, "party_role", {
 		party_id,
 		role: "lead",
@@ -97,7 +120,6 @@ async function saveLeadChange(tx: Transaction<DB>, change: LeadChange) {
 		.updateTable("party_role")
 		.where("party_id", "=", party_id)
 		.where("role", "=", "lead");
-	const answer = { ok: true, lead_id };
 	if (change.action === "stage") {
 		if (change.stage === lead.stage) return answer;
 		if (change.stage === "archived") {
@@ -130,6 +152,13 @@ async function saveLeadChange(tx: Transaction<DB>, change: LeadChange) {
 		if (unavailable || lead.stage === "archived" || lead.owner_user_id !== null)
 			throw new SaveRefusal(new Refusal(409, "lead_not_claimable"));
 		await role.set({ owner_user_id: ACTING_USER }).execute();
+		const pending = await tx
+			.selectFrom("lead_email_attention")
+			.select("party_id")
+			.where("party_id", "=", party_id)
+			.where("acknowledged_at", "is", null)
+			.executeTakeFirst();
+		if (pending) await acknowledgeLeadEmail(tx, party_id);
 	} else {
 		if (unavailable)
 			throw new SaveRefusal(new Refusal(409, "lead_not_linkable"));
