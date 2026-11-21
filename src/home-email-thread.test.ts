@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cleanEmailBody } from "./home-email-thread.ts";
+import { cleanEmailBody, cleanEmailThread } from "./home-email-thread.ts";
 
 test("cleans a large body with an incomplete header promptly", () => {
 	const body = `Current message.\nFrom: Pat\n${" ".repeat(100_000)}\n${"x".repeat(100_000)}`;
@@ -103,6 +103,7 @@ test("keeps sentences that follow a sign-off or the sender's name", () => {
 
 test("never empties a message that is only a sign-off or a signature", () => {
 	for (const body of [
+		"-----",
 		"Thanks",
 		"Cheers",
 		"Thanks!",
@@ -138,6 +139,209 @@ const mayaSignature =
 	"Best, Maya Example Office Manager | Example Dental Group Direct: (555) 010-2000 | Main: (555) 010-3000 |";
 const outlookHeader =
 	"From: Sam Partner <sam@example.test> Sent: Monday, October 26, 2026 12:19 PM To: Maya Example <maya@example.test> Cc: Office <office@example.test> Subject: RE: Suite 200";
+
+const signature =
+	"Maya Example | regional leasing manager | Direct: 555-010-2000 | Main: 555-010-3000 | Telephone: 555-010-4000 | Fax: 555-010-5000 | Cell: 555-010-6000 | maya@example.test | License 12345";
+
+function message(
+	body: string,
+	sender = "maya@example.test",
+	sender_name = maya,
+) {
+	return { body, sender, sender_name };
+}
+
+test("keeps a repeated opening inside a reply and cuts a complete bare repeat", () => {
+	const first =
+		"Thanks for taking the time to walk through the building with us today. I will send the survey.";
+	const reply =
+		"Quick update. Thanks for taking the time to walk through the building with us today. I can meet on Monday.";
+	const inline = `You wrote: ${first} I can meet on Monday.`;
+	assert.deepEqual(
+		cleanEmailThread([
+			message(first),
+			message(reply, "sam@example.test", "Sam Partner"),
+			message(inline, "sam@example.test", "Sam Partner"),
+			message(`I have the survey. ${first}`, "sam@example.test", "Sam Partner"),
+		]),
+		[first, reply, inline, "I have the survey."],
+	);
+});
+
+test("keeps a shared closing instruction from the same sender", () => {
+	for (const closing of [
+		"Please copy the surveyor on every update.",
+		"Thanks for copying the surveyor on every update.",
+	]) {
+		const bodies = [
+			`The plan is ready. ${closing}`,
+			`I sent the plan. ${closing}`,
+		];
+		assert.deepEqual(
+			cleanEmailThread(bodies.map((body) => message(body))),
+			bodies,
+		);
+	}
+});
+
+test("keeps a shared closing instruction before a shared contact footer", () => {
+	const closing = "Please copy the surveyor on every update.";
+	for (const { separator, footer } of [
+		{ separator: "\n\n", footer: "Direct: 555-010-2000\nmaya@example.test" },
+		{
+			separator: " ",
+			footer: "Best, Maya Example | Direct: 555-010-2000 | maya@example.test",
+		},
+	]) {
+		const bodies = ["The plan is ready.", "I sent the plan."].map(
+			(update) => `${update} ${closing}`,
+		);
+		assert.deepEqual(
+			cleanEmailThread(
+				bodies.map((body) => message(`${body}${separator}${footer}`)),
+			),
+			bodies,
+			footer,
+		);
+	}
+});
+
+test("cuts quoted Outlook headers and wrapped reply openers", () => {
+	const earlier = "Could you send the suite 200 plan?";
+	const reply = "Here is the plan.";
+	for (const boundary of [
+		"> From: Maya Example\n> Date: Mon, Jan 5, 2026\n> To: Sam Partner\n> Subject: Suite 200",
+		"> > On Mon, Jan 5, 2026 at 9:30 AM\n\t>> Maya Example <maya@example.test> wrote:",
+	]) {
+		assert.deepEqual(
+			cleanEmailThread([
+				message(earlier),
+				message(
+					`${reply}\n\n${boundary}\n> ${earlier}\n> Older thread text.`,
+					"sam@example.test",
+				),
+			]),
+			[earlier, reply],
+			boundary,
+		);
+	}
+});
+
+test("keeps an authored CC sentence before an Outlook header", () => {
+	const earlier =
+		"Could you send the survey and the plan for suite 200 by Friday?";
+	const reply = "Here is the plan.\nCC: Please also copy the surveyor.";
+	const headers =
+		"From: Maya Example\nDate: Mon, Jan 5, 2026\nTo: Sam Partner\nSubject: Suite 200";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(earlier),
+			message(`${reply}\n${headers}\n${earlier}`, "sam@example.test"),
+		]),
+		[earlier, reply],
+	);
+});
+
+test("cuts a wrapped quote opener before the earlier text", () => {
+	const earlier =
+		"Could you send the survey and the plan for suite 200 by Friday?";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(earlier),
+			message(
+				`Here is the plan.\r\n\r\nOn Mon, Jan 5, 2026 at 9:30 AM Maya Example <\r\nmaya@example.test> wrote:\r\n> ${earlier}`,
+				"sam@example.test",
+			),
+		]),
+		[earlier, "Here is the plan."],
+	);
+});
+
+test("cuts a short earlier message after a divider even with older text after it", () => {
+	const earlier = "Could you send the suite 200 plan?";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(earlier),
+			message(`Here is the plan.\n\n________\n> ${earlier}\nOlder email text.`),
+		]),
+		[earlier, "Here is the plan."],
+	);
+});
+
+test("cuts a reordered Date header and a rewrapped quote of a nonadjacent email", () => {
+	const first =
+		"Could you send the survey and the plan for suite 200 by Friday?";
+	const second = "I only have the survey in my inbox at the moment.";
+	const third = "I can send the plan.\nPlease use the west door";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(first),
+			message(second, "sam@example.test", "Sam Example"),
+			message(
+				`${third} Subject: RE: Suite 200. To: Pat Example Date: Tue, Jan 6, 2026 From: Maya Example <maya@example.test>\n> COULD YOU SEND THE SURVEY\n> and the plan for suite 200 by Friday?`,
+				"pat@example.test",
+				"Pat Example",
+			),
+		]),
+		[first, second, third],
+	);
+});
+
+test("drops the shared signature by sender address after cutting quotes", () => {
+	const first = "Please leave the marked survey on the desk in suite 200.";
+	const second = "I've sent it to the surveyor instead.";
+	const third = "Let me know if you need the plan too";
+	const otherSender = `The back door is open. ${signature}`;
+	assert.deepEqual(
+		cleanEmailThread([
+			message(`${first} ${signature}`),
+			message(
+				`${second} ${signature.toUpperCase()} ${first}`,
+				"MAYA@example.test",
+				"M. Example",
+			),
+			message(`${third}\n${signature.replaceAll(" | ", "\n| ")}`),
+			message(otherSender, "other@example.test"),
+		]),
+		[first, second, third, otherSender],
+	);
+});
+
+test("drops recurring calendar boilerplate and keeps a message made entirely of it", () => {
+	const invite = "Teams Meeting Dial in by phone 555-010-2000 View map Guests";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(`Please meet at the west door. ${invite}`),
+			message(`The meeting has moved to Thursday. ${invite}`),
+			message(invite),
+		]),
+		[
+			"Please meet at the west door.",
+			"The meeting has moved to Thursday.",
+			invite,
+		],
+	);
+});
+
+test("cleans an eleven-message carried chain of ten thousand characters per message in under 50 ms", () => {
+	const bodies: string[] = [];
+	const expected: string[] = [];
+	for (let index = 0; index < 11; index++) {
+		const own = `Update ${index + 1}: the surveyor will leave the plans by the west door.`;
+		const previous = bodies.at(-1);
+		const body = previous
+			? `${own} ${signature} From: Maya Example Date: Jan 6, 2026 To: Sam Example Subject: Plans ${previous}`
+			: `${own} ${"Plan ".repeat(2000).slice(0, 9999 - own.length - signature.length - 1)} ${signature}`;
+		expected.push(previous ? own : body.slice(0, -signature.length).trimEnd());
+		bodies.push(body.slice(0, 10_000));
+	}
+	const messages = bodies.map((body) => message(body));
+	const start = performance.now();
+	const cleaned = cleanEmailThread(messages);
+	const elapsed = performance.now() - start;
+	assert.deepEqual(cleaned, expected);
+	assert.ok(elapsed < 50, `cleanup took ${elapsed} ms`);
+});
 
 test("keeps only the sender's new words when the body was stored as one line", () => {
 	const cases = [
