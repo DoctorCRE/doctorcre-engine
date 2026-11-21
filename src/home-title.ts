@@ -3,7 +3,7 @@ const statusPrefix =
 	/^(?:(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)|review(?: follow-up| call note)?\s*:\s*)/i;
 const titleCharacters = new Intl.Segmenter("en", { granularity: "grapheme" });
 const titleWords = new Intl.Segmenter("en", { granularity: "word" });
-const titleUrl = /https?:\/\/\S+/gi;
+export const homeUrl = /https?:\/\/\S+/gi;
 
 const chooseDeal = (sender: string) =>
 	sender
@@ -81,7 +81,7 @@ export function splitHomeTitle(text: string) {
 	const word = titleWords.segment(text).containing(limit);
 	let end = word?.index || limit;
 	let url = "";
-	for (const match of text.matchAll(titleUrl)) {
+	for (const match of text.matchAll(homeUrl)) {
 		if (match.index > limit && text.slice(end, match.index).trim()) break;
 		if (match.index + match[0].length <= limit) continue;
 		end = match.index;

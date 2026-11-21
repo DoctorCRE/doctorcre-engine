@@ -2,6 +2,7 @@ import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	homeTitle,
+	homeUrl,
 	splitHomeTitle,
 	stripHomeTitlePrefixes,
 } from "./home-title.ts";
@@ -18,11 +19,12 @@ const stepSeparator = / [|—–] /;
 const instructionSuffix =
 	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/i;
 const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
+const markdownLink = /\[([^\]]+)\]\([^\s)]+\)/g;
 
 export function homeDisplayText(text: string | null) {
 	return (text ?? "")
 		.replace(/(^|\n)[ \t]*(?:#{1,6}|[-+*]|\d+[.)]|>)[ \t]+/g, "$1")
-		.replace(/\[([^\]]+)\]\([^\s)]+\)/g, "$1")
+		.replace(markdownLink, "$1")
 		.replace(/(\*{1,3}|`{1,3}|~~)(?=\S)(.+?)(?<=\S)\1/g, "$2")
 		.replace(/(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)/g, "$2")
 		.replace(/\([^()]*\)|\[[^[\]]*\]/g, (aside) => {
@@ -71,8 +73,41 @@ type StepEvidence = {
 	source_evidence: string | null;
 };
 
+function stepPart(text: string) {
+	const suffix = instructionSuffix.exec(text);
+	const wording = text.slice(0, suffix?.index);
+	const supporting = suffix ? text.slice(suffix.index + suffix[0].length) : "";
+	return {
+		action: wording
+			.replace(phoneNumber, " ")
+			.replace(/\s+/g, " ")
+			.replace(edgePunctuation, ""),
+		phones:
+			wording
+				.match(phoneNumber)
+				?.map((number) => number.replace(/^at\s+/i, ""))
+				.join(", ") ?? null,
+		supporting: supporting.charAt(0).toUpperCase() + supporting.slice(1),
+	};
+}
+
 export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
-	const savedText = homeStepText(step.title.replace(/\(\s*T-\d+\s*\)/gi, " "));
+	const urls: string[] = [];
+	let urlMarker = "\uE000";
+	while (step.title.includes(urlMarker)) urlMarker += "\uE000";
+	const savedText = homeStepText(
+		step.title
+			.replace(markdownLink, "$1")
+			.replace(homeUrl, (url) => {
+				const index = urls.length;
+				urls.push(url);
+				return `${urlMarker}${index}${urlMarker}`;
+			})
+			.replace(/\(\s*T-\d+\s*\)/gi, " "),
+	);
+	const urlToken = new RegExp(`${urlMarker}(\\d+)${urlMarker}`, "g");
+	const restoreUrls = (text: string) =>
+		text.replace(urlToken, (_, index: string) => urls[Number(index)] ?? "");
 	const target = homeDisplayText(step.context_label);
 	const contact = homeDisplayText(step.call_contact);
 	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
@@ -80,35 +115,35 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
-	const suffix = instructionSuffix.exec(savedText);
-	const savedAction = savedText.slice(0, suffix?.index);
-	const action = savedAction
-		.replace(phoneNumber, " ")
-		.replace(/\s+/g, " ")
-		.replace(edgePunctuation, "");
-	const cleaned = action + (suffix ? savedText.slice(suffix.index) : "");
 	const cadence = vendorCadence.exec(savedText)?.[1];
-	const separator = cadence ? null : stepSeparator.exec(cleaned);
-	const wording = cleaned.slice(0, separator?.index);
-	const explicitDetails = separator
-		? cleaned.slice(separator.index + separator[0].length)
+	const separator = cadence ? null : stepSeparator.exec(savedText);
+	const left = stepPart(savedText.slice(0, separator?.index));
+	const right = separator
+		? stepPart(savedText.slice(separator.index + separator[0].length))
 		: null;
-	const supporting = wording.slice(action.length + (suffix?.[0].length ?? 0));
+	const leadingPhone = right && left.phones && !left.action && !left.supporting;
+	const explicitDetails = leadingPhone ? "" : (right?.action ?? "");
 	const shortened = cadence
 		? { title: homeTitle("vendor_check_in", target), url: "", overflow: "" }
-		: splitHomeTitle(wording.slice(0, action.length));
+		: splitHomeTitle(restoreUrls(leadingPhone ? right.action : left.action));
 	const title = shortened.title || homeTitle("follow_up", target);
-	const details =
-		cadence ??
-		homeWhy(
-			savedAction
-				.match(phoneNumber)
-				?.map((number) => number.replace(/^at\s+/i, ""))
-				.join(", ") ?? null,
-			supporting.charAt(0).toUpperCase() + supporting.slice(1),
-		);
+	const details = cadence
+		? [cadence]
+		: [
+				left.phones,
+				right?.phones ?? null,
+				left.supporting,
+				right?.supporting ?? null,
+			];
 	const stepWhy = (...facts: (string | null)[]) =>
-		[shortened.url, homeWhy(explicitDetails, shortened.overflow, ...facts)]
+		[
+			shortened.url,
+			...[explicitDetails, shortened.overflow, ...facts].map((fact) =>
+				fact?.endsWith(urlMarker)
+					? restoreUrls(fact)
+					: restoreUrls(homeWhy(fact)),
+			),
+		]
 			.filter(Boolean)
 			.join(" ");
 	const titleText = title.replace(/[.!?]+$/, "");
@@ -124,13 +159,13 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 						homeDisplayText(evidence?.call_summary ?? null) ||
 						"Call details unavailable",
 				),
-				details,
+				...details,
 				hold,
 				due,
 			),
 		};
 	}
-	if (!evidence) return { title, why: stepWhy(details) };
+	if (!evidence) return { title, why: stepWhy(...details) };
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
 		? `Follow-up set from the ${evidence.source_kind}`
@@ -143,7 +178,7 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			hold || set,
 			extraEvidence(homeDisplayText(evidence.source_evidence)),
 			due,
-			details,
+			...details,
 		),
 	};
 }

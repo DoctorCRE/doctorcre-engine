@@ -36,6 +36,18 @@ for (const [scenario, what, title, why, contact = null] of [
 		"(202) 555-0142. If no one answers, leave a message with the office and retry later.",
 	],
 	[
+		"a URL containing phone-like digits after a separator",
+		"Review case | https://example.test/files/2025550142/confirm",
+		"Review case",
+		"https://example.test/files/2025550142/confirm",
+	],
+	[
+		"a phone number immediately after a separator",
+		"Review case | (202) 555-0142",
+		"Review case",
+		"(202) 555-0142.",
+	],
+	[
 		"a date-only suffix",
 		"Lease review | Tue Oct 27",
 		"Lease review",
