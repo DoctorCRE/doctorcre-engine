@@ -17,7 +17,7 @@ import type { DB } from "../database.d.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText, inJsonbOrder } from "../reader.ts";
 import { UUID } from "../uuid.ts";
-import { people } from "./people.ts";
+import { nextVendorContacts, people } from "./people.ts";
 import {
 	nextTrackRecordFacts,
 	rateNextTrackRecord,
@@ -304,7 +304,7 @@ const NEXT_DISPOSITIONS = [
 	{ slug: "avoid", label: "Avoid", workable: false },
 ];
 const activeTerritory = sql`pt.ended_on is null or pt.ended_on >= (now() at time zone 'America/Chicago')::date`;
-const nextTerritory = sql<
+export const nextTerritory = sql<
 	string | null
 >`(select nullif(string_agg(distinct t.name, ', ' order by t.name), '')
 	from party_territory pt join territory t on t.id = pt.territory_id
@@ -313,7 +313,7 @@ const nextVertical = sql<
 	string | null
 >`(select nullif(string_agg(vv.vertical, ', ' order by vv.vertical), '')
 	from vendor_vertical vv where vv.party_id = p.id)`;
-const nextRef = sql<string>`coalesce(
+export const nextRef = sql<string>`coalesce(
 	(select o.value from outside_id o
 		where o.party_id = p.id and o.source = 'old_system_ref'
 		order by (o.value like 'V-%') desc, o.value asc limit 1),
@@ -337,25 +337,21 @@ const nextPhone = (party: ReturnType<typeof sql.ref>, mobile: boolean) =>
 		from party_phone pp where pp.party_id = ${party}
 			and pp.label ${mobile ? sql.raw("=") : sql.raw("<>")} 'mobile'
 		order by pp.is_primary desc, pp.created_at, pp.id limit 1)`;
+export const nextVendorContact = sql`jsonb_build_object(
+	'id', c.id, 'name', c.name, 'email', ${nextEmail(sql.ref("c.id"))},
+	'phone', ${nextPhone(sql.ref("c.id"), false)}, 'cell', ${nextPhone(sql.ref("c.id"), true)})`;
 const nextPeople = sql<object[]>`(select coalesce(jsonb_agg(jsonb_build_object(
 	'company', c.company,
-	'contact', jsonb_build_object('id', c.id, 'name', c.name,
-		'email', ${nextEmail(sql.ref("c.id"))},
-		'phone', ${nextPhone(sql.ref("c.id"), false)},
-		'cell', ${nextPhone(sql.ref("c.id"), true)}),
+	'contact', ${nextVendorContact},
 	'office', null,
 	'research', jsonb_build_object('status', 'not_researched', 'finding_id', null,
 		'observed_at', null, 'expires_on', null)
-) order by c.id), '[]')
-from (select p.id, p.name, (select jsonb_build_object('id', co.id, 'name', co.name)
-		from party_company pc join party co on co.id = pc.company_id
-		where pc.person_id = p.id and pc.ended_on is null
-		order by pc.started_on desc nulls last, pc.created_at desc, pc.id desc limit 1) as company
-	where p.kind = 'person' and btrim(p.name) <> ''
-	union all
-	select distinct cp.id, cp.name, jsonb_build_object('id', p.id, 'name', p.name)
-	from party_company pc join party cp on cp.id = pc.person_id
-	where p.kind = 'company' and pc.company_id = p.id and pc.ended_on is null and btrim(cp.name) <> '') c)`;
+) order by c.id), '[]') from ${nextVendorContacts} c where btrim(c.name) <> '')`;
+
+export const nextVendorCategory = sql<{ slug: string; label: string }>`(
+	select r.slug, r.label from party_role cr
+	join role r on r.slug = cr.role where cr.party_id = p.id and r.category_of = 'vendor'
+	order by r.slug limit 1)`;
 
 const NEXT_ORDER = {
 	name: sql`lower(p.name) asc, p.id asc`,
@@ -387,15 +383,7 @@ const liveNextVendors = (db: Transaction<NextDB>) =>
 		)
 		.leftJoin("relationship_level as rl", "rl.level", "pr.relationship_level")
 		.leftJoin("vendor_track_record as vtr", "vtr.party_id", "p.id")
-		.leftJoinLateral(
-			sql<{
-				slug: string;
-				label: string;
-			}>`(select r.slug, r.label from party_role cr
-				join role r on r.slug = cr.role where cr.party_id = p.id and r.category_of = 'vendor'
-				order by r.slug limit 1)`.as("cat"),
-			(join) => join.onTrue(),
-		)
+		.leftJoinLateral(nextVendorCategory.as("cat"), (join) => join.onTrue())
 		.where("pr.role", "=", "vendor");
 
 function nextVendorRows(

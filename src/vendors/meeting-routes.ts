@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { answer, checkFields, Refusal, refuse } from "../answer.ts";
+import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { isOneOf, PARTNERS } from "../clients/read.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import {
@@ -16,7 +16,7 @@ function queryOf(params: URLSearchParams): MeetingsQuery | null {
 	const [q = "", ...otherQ] = params.getAll("q");
 	const [cursor, ...otherCursors] = params.getAll("cursor");
 	const view =
-		VIEWS.find((given) => given === params.get("view")) ?? "suggested";
+		VIEWS.find((given) => given === params.get("view")) ?? "research";
 	const limit = Number(params.get("limit") ?? 25);
 	const valid =
 		!otherQ.length &&
@@ -36,14 +36,14 @@ vendorMeetings.get("/vendor-meetings", async (c) => {
 		numbers: ["limit"],
 	});
 	if (refused) return refuse(c, refused);
-	const partner = c.get("partner").slug;
-	return answer(c, "read-vendor-meetings", async (db) => {
-		if (!isOneOf(PARTNERS, partner))
-			return new Refusal(403, "AUTHORIZATION_REFUSED");
-		const query = queryOf(params);
-		if (!query) return new Refusal(400, "vendor_meetings_query_invalid");
+	if (!isOneOf(PARTNERS, c.get("partner").slug))
+		return refuse(c, new Refusal(403, "AUTHORIZATION_REFUSED"));
+	const query = queryOf(params);
+	if (!query)
+		return refuse(c, new Refusal(400, "vendor_meetings_query_invalid"));
+	return answerNextRead(c, "read-vendor-meetings", async (db, userId) => {
 		return (
-			(await readVendorMeetings(db, partner, query)) ??
+			(await readVendorMeetings(db, userId, query)) ??
 			new Refusal(500, "vendor_meetings_unavailable")
 		);
 	});
