@@ -118,20 +118,25 @@ async function queueChecklistReminders(
 			join (${checklistDeals(db)}) deal using (deal_id) where deal.eligible
 		), local_times as (
 			select owner_user_id, coalesce(p.time_zone, 'America/Chicago') as zone,
-				now() at time zone coalesce(p.time_zone, 'America/Chicago') as local_now,
+				${new Date().toISOString()}::timestamptz as queued_at,
 				coalesce(p.quiet_until, time '07:00') as opens_at
 			from (select distinct owner_user_id from due) owners
 			left join user_preference p on p.user_id = owner_user_id
-		), windows as (
-			select owner_user_id, zone, local_now, local_now::date + opens_at as opens_today
+		), calendar as (
+			select owner_user_id, zone, queued_at,
+				(queued_at at time zone zone)::date + opens_at as opens_today
 			from local_times
+		), windows as (
+			select owner_user_id, zone, queued_at,
+				case when queued_at < opens_today at time zone zone
+					then opens_today - interval '1 day' else opens_today end as last_open
+			from calendar
 		), queued as (
 			insert into home_update (user_id, deal_id, checklist_item_ref, due_on, what, held_until)
 			select owner_user_id, deal_id, item_ref, due_on,
 				'A deal checklist item is due. Open the deal checklist for details.',
-				case when local_now < opens_today then opens_today at time zone zone
-					when local_now >= opens_today + interval '4 hours'
-						then (opens_today + interval '1 day') at time zone zone
+				case when queued_at >= (last_open + interval '4 hours') at time zone zone
+					then (last_open + interval '1 day') at time zone zone
 				end
 			from due join windows using (owner_user_id)
 			order by owner_user_id, deal_id, item_ref, due_on

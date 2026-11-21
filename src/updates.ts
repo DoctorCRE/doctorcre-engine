@@ -21,7 +21,7 @@ const unreadCount = async (db: Transaction<DB>, user: RawBuilder<string>) => {
 	} = await sql<{ unread_count: number }>`
 		select count(*)::int as unread_count from home_update u
 		where u.user_id = ${user} and u.read_at is null
-			and ${homeUpdateAvailable}
+			and ${homeUpdateAvailable(db)}
 			and not exists (select from home_mark m
 				where (m.user_id, m.item_kind, m.item_id) = (u.user_id, 'home_update', u.id)
 					and m.disposition = 'dropped')
@@ -61,7 +61,7 @@ async function markRead(
 		with mine as (
 			select id from home_update u
 			where id = any(${update_ids}::uuid[]) and user_id = ${ACTING_USER}
-				and ${homeUpdateAvailable}
+				and ${homeUpdateAvailable(tx)}
 			for no key update
 		), marked as (
 			update home_update u set read_at = now()
