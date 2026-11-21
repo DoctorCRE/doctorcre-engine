@@ -2600,6 +2600,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
 	do_not_contact: ["until_date"],
 	doc_conversation: ["owner_user_id"],
+	doc_link: ["credential_hash", "issued_at"],
 	doc_turn: ["answer", "claim_id", "claim_until", "state"],
 	stage: ["label"],
 	how_found: ["label"],
@@ -2757,6 +2758,7 @@ const DEFAULTED: Record<string, string[]> = {
 	],
 };
 const REMOVABLE = [
+	"doc_link",
 	"deal_client_website_attempt",
 	"deal_client_website_grant",
 	...STORED_AT.filter(
