@@ -227,6 +227,54 @@ test("Doc link migration, private credentials and Mac polling", {
 			"database stores only the credential hash for the session owner",
 		);
 
+		const claim = randomUUID();
+		await db.query(
+			`with chat as (insert into next.doc_conversation (owner_user_id) values ($1) returning id)
+			insert into next.doc_turn (conversation_id, owner_user_id, position, idempotency_key,
+				request_hash, question, state, claim_id, claim_until, claim_state)
+			select id, $1, 1, gen_random_uuid(), 'example', 'Find a deal', 'working', $2,
+				clock_timestamp() + interval '60 seconds', '{"reads":0,"sources":{}}' from chat`,
+			[appUserId, claim],
+		);
+		const mcp = await server.fetch(`${engineOrigin}/api/engine/doc/mcp`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${credential}`,
+				"Doc-Claim-Id": claim,
+				"Content-Type": "application/json",
+				Accept: "application/json, text/event-stream",
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: {
+					name: "find",
+					arguments: { query: "Example Missing Deal", kind: "deal" },
+				},
+			}),
+		});
+		assert.equal(mcp.status, 200);
+		assert.equal(mcp.headers.get("cache-control"), "no-store");
+		assert.equal(
+			(
+				await server.fetch(`${appOrigin}/api/engine/doc/mcp`, {
+					method: "POST",
+					headers: {
+						...first,
+						...proof,
+						Authorization: `Bearer ${credential}`,
+					},
+				})
+			).status,
+			404,
+		);
+		assert.deepEqual(await mcp.json(), {
+			jsonrpc: "2.0",
+			id: 1,
+			result: { content: [{ type: "text", text: "[]" }] },
+		});
+
 		assert.equal((await poll(wrongCredential)).status, 401);
 		assert.equal(
 			(await poll(credential, { Cookie: first.Cookie })).status,

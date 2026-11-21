@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 
 import { dealNoteDoor } from "./activity/deal-note.ts";
 import { emailSummary } from "./activity/email-summary.ts";
@@ -34,6 +35,7 @@ import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
 import { docRoutes } from "./doc.ts";
 import { claimDocLink, docLinkRoutes } from "./doc-link-routes.ts";
+import { docMcp } from "./doc-mcp.ts";
 import { heldStepReviews } from "./held-steps.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { homeMarks } from "./home-marks.ts";
@@ -166,6 +168,14 @@ partnerApi.route("/api/engine", dealDocuments);
 partnerApi.route("/api/engine", replyDrafts);
 
 app.post("/api/engine/doc/link/claim", claimDocLink);
+app.all(
+	"/api/engine/doc/mcp",
+	bodyLimit({
+		maxSize: 64 * 1024,
+		onError: (c) => c.body(null, 413, { "Cache-Control": "no-store" }),
+	}),
+	docMcp,
+);
 app.use("/api/engine/*", requireSession);
 app.route("/", partnerApi);
 partnerApp.route("/", partnerGoogle);

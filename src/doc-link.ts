@@ -58,7 +58,11 @@ export async function revokeDocLink(tx: Transaction<DB>, owner: string) {
 	await tx.deleteFrom("doc_link").where("owner_user_id", "=", owner).execute();
 }
 
-export function authenticateDocLink(connection: string, credential: string) {
+export function withDocLink<T>(
+	connection: string,
+	credential: string,
+	run: (tx: Transaction<DB>, owner: string) => Promise<T>,
+) {
 	const hash = credentialHash(credential);
 	return nextTransaction(connection, "save", async (tx) => {
 		await sql`select set_config('engine.doc_link_hash', ${hash}, true)`.execute(
@@ -69,7 +73,7 @@ export function authenticateDocLink(connection: string, credential: string) {
 			.select("owner_user_id")
 			.where("credential_hash", "=", hash)
 			.executeTakeFirst();
-		if (!link) return false;
+		if (!link) return null;
 
 		const owner = link.owner_user_id;
 		await stampOwner(tx, owner);
@@ -87,23 +91,26 @@ export function authenticateDocLink(connection: string, credential: string) {
 				Buffer.from(hash, "hex"),
 			)
 		)
-			return false;
+			return null;
 
-		await tx
-			.updateTable("doc_link")
-			.set({ last_seen_at: sql`clock_timestamp()` })
-			.where("owner_user_id", "=", owner)
-			.where((eb) =>
-				eb.or([
-					eb("last_seen_at", "is", null),
-					eb(
-						"last_seen_at",
-						"<=",
-						sql<string>`clock_timestamp() - interval '15 seconds'`,
-					),
-				]),
-			)
-			.execute();
-		return true;
+		return run(tx, owner);
 	});
+}
+
+export async function recordDocLinkPoll(tx: Transaction<DB>, owner: string) {
+	await tx
+		.updateTable("doc_link")
+		.set({ last_seen_at: sql`clock_timestamp()` })
+		.where("owner_user_id", "=", owner)
+		.where((eb) =>
+			eb.or([
+				eb("last_seen_at", "is", null),
+				eb(
+					"last_seen_at",
+					"<=",
+					sql<string>`clock_timestamp() - interval '15 seconds'`,
+				),
+			]),
+		)
+		.execute();
 }

@@ -1,11 +1,12 @@
 import { type Context, Hono } from "hono";
 import type { Transaction } from "kysely";
 import {
-	authenticateDocLink,
 	docLinkOwnerTransaction,
 	docLinkPresence,
 	issueDocLink,
+	recordDocLinkPoll,
 	revokeDocLink,
+	withDocLink,
 } from "./doc-link.ts";
 import type { DB } from "./next-database.d.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
@@ -43,18 +44,26 @@ export const docLinkRoutes = new Hono<DocLinkEnv>()
 		return c.body(null, 204);
 	});
 
-export async function claimDocLink(c: Context<WriterEnv>) {
-	const credential = c.req
+export function docLinkCredential(c: Context<WriterEnv>) {
+	if (c.req.header("Cookie") !== undefined) return undefined;
+	return c.req
 		.header("Authorization")
 		?.match(/^Bearer ([A-Za-z0-9_-]{43})$/i)?.[1];
-	if (!credential || c.req.header("Cookie") !== undefined)
-		return unauthorized();
+}
+
+export async function claimDocLink(c: Context<WriterEnv>) {
+	const credential = docLinkCredential(c);
+	if (!credential) return unauthorized();
 
 	const writer = c.env.DATABASE_WRITER;
 	if (!writer) return unavailable();
 	try {
-		if (!(await authenticateDocLink(writer.connectionString, credential)))
-			return unauthorized();
+		const result = await withDocLink(
+			writer.connectionString,
+			credential,
+			recordDocLinkPoll,
+		);
+		if (result === null) return unauthorized();
 		return new Response(null, { status: 204, headers: noStore });
 	} catch {
 		return unavailable();

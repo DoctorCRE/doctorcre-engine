@@ -22,6 +22,9 @@ type WorkspaceLead = {
 	id: string;
 	base_version: number;
 	stage: string;
+	party_id?: string;
+	stage_label?: string | null;
+	owner_label?: string | null;
 	contact_state: string;
 	est_lease_event: string | null;
 	event_confidence: string | null;
