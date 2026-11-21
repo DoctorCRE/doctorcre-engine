@@ -3,7 +3,7 @@ begin;
 set local lock_timeout = '1s';
 set local search_path = next, pg_temp;
 
-create function queue_email_summary(email_id uuid) returns void
+create or replace function queue_email_summary(email_id uuid) returns void
 language sql security definer as $$
 	insert into doc_judgment_job (owner_user_id, activity_id, idempotency_key, kind)
 	select m.user_id, e.activity_id, e.activity_id, 'email_summary'
