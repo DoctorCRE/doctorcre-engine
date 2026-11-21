@@ -32,6 +32,7 @@ import {
 } from "./deals/next-change.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
+import { docRoutes } from "./doc.ts";
 import { heldStepReviews } from "./held-steps.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { homeMarks } from "./home-marks.ts";
@@ -168,6 +169,7 @@ partnerApp.route("/", partnerGoogle);
 partnerApp.get("/auth/session", requirePartnerSession, partnerSessionStatus);
 partnerApp.use("/api/engine/*", requirePartnerSession);
 partnerApp.route("/", partnerApi);
+partnerApp.route("/api/engine/doc", docRoutes());
 
 // The app forwards only /api/engine/*, so this door is reached directly.
 app.use(

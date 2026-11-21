@@ -536,6 +536,48 @@ test("partner sessions in PostgreSQL", async (t) => {
 			}
 
 			await routes.test(
+				"Doc is app-only and requires session write proofs",
+				async () => {
+					const { headers, csrfToken } = await browserSession();
+					const path = "/api/engine/doc/conversations";
+					check(await read(path, {}), 401);
+					assert.equal(
+						(
+							await publicRead(path, {
+								Cookie: "__Host-dealroom_session=example",
+							})
+						).status,
+						404,
+					);
+					const ask = (headers: Headers) =>
+						binding.fetch(
+							new Request(`${appOrigin}/api/engine/doc/turns`, {
+								method: "POST",
+								headers,
+								body: JSON.stringify({
+									idempotency_key: randomUUID(),
+									question: "What should I review?",
+								}),
+							}),
+						);
+					for (const proof of ["Origin", "Sec-Fetch-Site", "x-carr-csrf"]) {
+						const incomplete = proofs(headers, csrfToken);
+						incomplete.delete(proof);
+						check(await ask(incomplete), 403);
+					}
+					const response = await ask(proofs(headers, csrfToken));
+					check(response, 503);
+					const result = await response.json();
+					assert.ok(isArguments(result));
+					assert.equal(result.error, "doc_unavailable");
+					const chat = `${path}/${result.conversation_id}`;
+					check(await read(chat, headers), 200);
+					const other = await browserSession(second);
+					check(await read(chat, other.headers), 404);
+				},
+			);
+
+			await routes.test(
 				"requires each same-origin write proof from this session",
 				async () => {
 					const { headers, csrfToken } = await browserSession();

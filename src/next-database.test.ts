@@ -2599,6 +2599,8 @@ const CHANGEABLE: Record<string, string[]> = {
 	commission_tier: ["closing_share"],
 	role: ["label"],
 	do_not_contact: ["until_date"],
+	doc_conversation: ["owner_user_id"],
+	doc_turn: ["answer", "claim_id", "claim_until", "state"],
 	stage: ["label"],
 	how_found: ["label"],
 	claim_type: ["label"],
