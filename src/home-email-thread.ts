@@ -24,58 +24,85 @@ export function sourceInMailbox(
 		from email_mailbox where activity_id = ${source}), true)`;
 }
 
+const historyMarker =
+	/^(?:-+ *(?:original|forwarded) message *-+|begin forwarded message:)$/i;
+const droppedLine =
+	/^[ \t]*(?:>|\*?(?:from|to|cc|bcc|sent|subject|phone|fax|tel|mobile|cell):|sent from my )/i;
+const ruleLine = /^[ \t]*[-_=*]{3,}[ \t]*$/;
 const signOff =
-	/^(?:best(?: regards)?|kind regards|regards|thanks|thank you|sincerely)[,.!]$/i;
-const contactLine =
-	/^(?:\+?(?:[(). -]*\d){10,15}|\S+@\S+\.\S+|https?:\/\/\S+)$/i;
+	/^(?:best|regards|(?:best|kind|warm) regards|thanks(?: so much| again)?|thank you|many thanks|sincerely|cheers)[,.!]?$/i;
+const contact = /\S@\S+\.\S|https?:\/\/|www\.|\d[\d(). -]{8,}\d/i;
 
 export function cleanEmailBody(body: string, sender: string | null) {
-	const source = body.split(/\r?\n/);
-	let candidate = -1;
-	let cutoff = source.length;
-	for (const [index, line] of source.entries()) {
-		if (
-			/^(?:[- ]*original message[- ]*|on .+ wrote:[ \t]*)$/i.test(
-				line.trimStart(),
-			)
-		) {
-			cutoff = index;
-			break;
-		}
-		if (/^[ \t]*from:/i.test(line)) {
-			candidate = index;
-		} else if (candidate >= 0 && /^[ \t]*(?:sent|date):/i.test(line)) {
-			cutoff = candidate;
-			break;
-		} else if (
-			candidate >= 0 &&
-			!/^(?:[ \t]+|[A-Za-z][A-Za-z0-9-]*:)/.test(line)
-		) {
-			candidate = -1;
-		}
-	}
-	const lines = source
-		.slice(0, cutoff)
-		.filter(
-			(line) =>
-				!/^[ \t]*(?:>|from:|to:|cc:|bcc:|sent:|subject:|phone:|fax:|tel:|mobile:)/i.test(
-					line,
-				),
-		);
-	const end = lines.findLastIndex((line) => signOff.test(line.trim()));
-	if (end < 0) return lines.join("\n").trim();
+	const source = body.replace(/\u00a0/g, " ").split(/\r\n?|\n/);
+	const kept = source
+		.slice(0, historyStart(source))
+		.filter((line) => !droppedLine.test(line));
+	const lines = kept.slice(0, signatureStart(kept, sender));
+	const end = lines.findLastIndex(
+		(line) => line.trim() && !ruleLine.test(line),
+	);
+	return lines
+		.slice(0, end + 1)
+		.join("\n")
+		.trim();
+}
 
-	const name = sender?.toLowerCase();
-	const firstName = name?.split(/\s+/, 1)[0];
-	const [signature, ...details] = lines
-		.slice(end + 1)
-		.map((line) => line.trim().toLowerCase())
-		.filter(Boolean);
-	const footer =
-		!signature ||
-		((signature === name || signature === firstName) &&
-			details.every((line) => contactLine.test(line)));
-	return (footer ? lines.slice(0, end) : lines).join("\n").trim();
+function historyStart(lines: string[]) {
+	let from = -1;
+	for (const [index, line] of lines.entries()) {
+		const text = line.trim();
+		if (historyMarker.test(text) || quoteIntro(lines, index)) return index;
+		if (/^\*?from:/i.test(text)) from = index;
+		else if (from < 0 || !text) continue;
+		else if (/^\*?(?:sent|date):/i.test(text)) return from;
+		else if (!/^[ \t]|^\*?[a-z][a-z0-9-]*:/i.test(line)) from = -1;
+	}
+	return lines.length;
+}
+
+// Mail clients wrap a long "On <date>, <name> <address> wrote:" over lines.
+function quoteIntro(lines: string[], index: number) {
+	if (!/^on\s/i.test(lines[index]?.trim() ?? "")) return false;
+	let text = "";
+	for (const line of lines.slice(index, index + 3)) {
+		text = `${text} ${line.trim()}`.trim();
+		if (text.length > 400) return false;
+		if (/\bwrote:$/i.test(text)) return true;
+	}
+	return false;
+}
+
+function signatureStart(lines: string[], sender: string | null) {
+	const name = sender?.trim().toLowerCase();
+	const first = name?.split(/\s+/, 1)[0];
+	const isName = (line: string) =>
+		!!name &&
+		(line === name ||
+			line === first ||
+			line.startsWith(`${name} `) ||
+			line.startsWith(`${name},`));
+	const details = (rest: string[]) =>
+		rest.length <= 8 &&
+		rest.every((line) => line.length <= 80) &&
+		(!rest.length || rest.some((line) => contact.test(line)));
+	const window = lines.length - 15;
+	// A sign-off or the sender's name followed only by short contact lines is a signature.
+	const start = lines.findIndex((raw, index) => {
+		if (index < window) return false;
+		const line = raw.trim().toLowerCase();
+		const tail = lines
+			.slice(index + 1)
+			.map((rest) => rest.trim().toLowerCase())
+			.filter(Boolean);
+		const [next = "", ...rest] = tail;
+		return (
+			line === "--" ||
+			(signOff.test(line) && (!next || (isName(next) && details(rest)))) ||
+			(isName(line) && !!next && details(tail))
+		);
+	});
+	return start < 0 ? lines.length : start;
 }
 
 type ThreadMessage = {
