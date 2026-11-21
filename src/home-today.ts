@@ -8,7 +8,7 @@ import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import { readCompletionReviews } from "./home-inbox-reviews-updates.ts";
 import {
 	datedPartnerSteps,
-	homeDay,
+	homeDayAt,
 	homeStepCopy,
 	lateLabel,
 	type StepTitle,
@@ -93,7 +93,7 @@ async function readTodayMeetings(
 		return noMeetings("Outlook calendar data could not be read.");
 	const addresses = [...new Set(section.items.flatMap(emailsOf))];
 	const openDeals = db
-		.selectFrom(selectNextDeals(db).as("board"))
+		.selectFrom(selectNextDeals(db, clock.today).as("board"))
 		.select(["id", "name", "client_name"])
 		.where(isOpenBoardDeal);
 	const matches = addresses.length
@@ -156,11 +156,11 @@ async function readTodayMeetings(
 async function readTodayReminders(
 	db: Transaction<DB>,
 	userId: string,
-	today: string,
+	{ today, now_at }: Clock,
 	owner: string,
 ) {
 	const openDeals = db
-		.selectFrom(selectNextDeals(db).as("board"))
+		.selectFrom(selectNextDeals(db, today).as("board"))
 		.select("id")
 		.where(isOpenBoardDeal);
 	const { rows } = await sql<StepRow>`
@@ -171,7 +171,7 @@ async function readTodayReminders(
 			s.deal_id is not null and not exists (
 				select from (${openDeals}) as open_deal where open_deal.id = s.deal_id
 			) as deal_ended
-		${datedPartnerSteps} and s.due_on <= ${today}::date
+		${datedPartnerSteps(sql`${now_at}::timestamptz`)} and s.due_on <= ${today}::date
 			${owner === "all" ? sql`` : sql`and u.slug = ${owner}`}
 		order by s.due_on, (s.call_activity_id is null), s.id
 	`.execute(db);
@@ -207,16 +207,20 @@ async function readHomeToday(
 	db: Transaction<DB>,
 	userId: string,
 	owner: string,
+	now: string,
 ) {
 	const [clock] = (
 		await sql<Clock>`
-			select ${homeDay}::text as today,
-				(${homeDay}::timestamp at time zone 'America/Chicago') as today_start,
-				((${homeDay} + 1)::timestamp at time zone 'America/Chicago') as tomorrow_start,
-				now() as now_at, u.slug as viewer, u.is_account_partner as is_partner,
+			select central.day::text as today,
+				(central.day::timestamp at time zone 'America/Chicago') as today_start,
+				((central.day + 1)::timestamp at time zone 'America/Chicago') as tomorrow_start,
+				request_time.now_at, u.slug as viewer, u.is_account_partner as is_partner,
 				coalesce((select jsonb_agg(jsonb_build_object('slug', au.slug, 'name', p.name) order by au.slug)
 					from app_user au join party p on p.id = au.id where au.is_account_partner), '[]') as partners
-			from app_user u where u.id = ${userId}::uuid
+			from app_user u
+			cross join (select ${now}::timestamptz as now_at) request_time
+			cross join lateral (select ${homeDayAt(sql`request_time.now_at`)} as day) central
+			where u.id = ${userId}::uuid
 		`.execute(db)
 	).rows;
 	if (!clock?.is_partner) return new Refusal(403, "AUTHORIZATION_REFUSED");
@@ -227,7 +231,7 @@ async function readHomeToday(
 	);
 	const reminders = await isolate(
 		db,
-		() => readTodayReminders(db, userId, clock.today, owner),
+		() => readTodayReminders(db, userId, clock, owner),
 		{
 			state: "unavailable" as const,
 			reason: "Today's reminders could not be loaded.",
@@ -263,7 +267,8 @@ export const homeToday = new Hono<
 		);
 	if (owner !== "all" && !PARTNERS.some((p) => p === owner))
 		return refuse(c, new Refusal(400, "unknown_owner"));
+	const now = new Date().toISOString();
 	return answerNextRead(c, "read-home-today-v1", (db, userId) =>
-		readHomeToday(db, userId, owner),
+		readHomeToday(db, userId, owner, now),
 	);
 });

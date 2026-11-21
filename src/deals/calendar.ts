@@ -113,7 +113,7 @@ async function readCalendarSteps(db: Transaction<DB>, today: string) {
 			${stepTargetFields(db)}, s.due_on::text as due_on,
 			greatest(s.due_on, ${today}::date)::text as display_on,
 			greatest(${today}::date - s.due_on, 0) as days_late
-		${datedPartnerSteps}
+		${datedPartnerSteps()}
 		order by s.due_on, s.id
 	`.execute(db);
 	return rows.map((step) => ({

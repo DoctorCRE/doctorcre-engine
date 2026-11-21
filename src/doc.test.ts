@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { after, before, test } from "node:test";
+import { after, afterEach, before, test } from "node:test";
 import { Hono } from "hono";
 import { docRoutes, recentDocTurns } from "./doc.ts";
-import { docLinkOwnerTransaction } from "./doc-link.ts";
+import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
+import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -31,6 +32,7 @@ before(async () => {
 			('${owner}', 'joe'), ('${other}', 'dell'), ('${nonPartner}', 'former_partner');
 		commit;`);
 });
+afterEach(() => db.query("truncate doc_turn, doc_conversation, doc_link"));
 after(cleanup);
 
 type Chat = { id: string; title: string };
@@ -41,6 +43,7 @@ type Turn = {
 	position: number;
 	answer: unknown;
 	context: unknown;
+	waiting_reason: string | null;
 };
 type Body<Path> = { error?: string } & (Path extends "/turns"
 	? { conversation_id: string; turn: Turn }
@@ -48,8 +51,8 @@ type Body<Path> = { error?: string } & (Path extends "/turns"
 		? { conversation: Chat; turns: Turn[] }
 		: { conversations: Chat[]; next_before: string | null });
 
-function client(model: Parameters<typeof docRoutes>[0], user = "joe") {
-	const api = docRoutes(model);
+function client(user = "joe") {
+	const api = docRoutes();
 	const app = new Hono<typeof api extends Hono<infer Env> ? Env : never>();
 	app.use("*", async (c, next) => {
 		c.set("partner", { slug: user, display: "Example Partner" });
@@ -74,180 +77,379 @@ function client(model: Parameters<typeof docRoutes>[0], user = "joe") {
 	};
 }
 
-const answer = async () => refusal;
 const expire = (id: string) =>
 	db.query("update doc_turn set claim_until = '-infinity' where id = $1", [id]);
 
-test("a worker cannot finish an expired claim before anyone retries", async () => {
-	const send = client(async ({ turn }) => {
-		await expire(turn.id);
-		return refusal;
-	});
+const mac = new Hono<{
+	Bindings: { DATABASE_WRITER: { connectionString: string } };
+}>()
+	.post("/claim", claimDocLink)
+	.post("/result", completeDocLink);
+
+const issue = async (user: string) =>
+	(
+		await docLinkOwnerTransaction(connectionString, user, (tx) =>
+			issueDocLink(tx, user),
+		)
+	).credential;
+const poll = async (credential: string, readiness: string | null = "ready") =>
+	mac.request(
+		"/claim",
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${credential}`,
+				...(readiness === null ? {} : { "Doc-Link-Readiness": readiness }),
+			},
+		},
+		{ DATABASE_WRITER: { connectionString } },
+	);
+
+type Claim = {
+	kind: "turn";
+	claim_id: string;
+	conversation_id: string;
+	turn: { id: string; question: string };
+	history: { question: string; answer: typeof refusal }[];
+};
+
+async function claim(credential: string) {
+	const response = await poll(credential);
+	assert.equal(response.status, 200);
+	return response.json<Claim>();
+}
+
+test("keeps a question and its key while a Mac has never connected", async () => {
+	const send = client();
 	const ask = { ...question, idempotency_key: randomUUID() };
+	const created = await send("/turns", 202, ask);
+	assert.equal(created.turn.state, "queued");
+	assert.equal(
+		created.turn.waiting_reason,
+		"Doc isn't set up on your Mac yet.",
+	);
+	assert.deepEqual(await send("/turns", 202, ask), created);
+	const chat = `/conversations/${created.conversation_id}` as const;
+	assert.deepEqual((await send(chat, 200)).turns, [created.turn]);
+	assert.equal(
+		(
+			await send("/turns", 409, {
+				...ask,
+				conversation_id: created.conversation_id,
+			})
+		).error,
+		"key_reuse",
+	);
+	assert.equal(
+		(
+			await send("/turns", 409, {
+				...ask,
+				idempotency_key: randomUUID(),
+				conversation_id: created.conversation_id,
+			})
+		).error,
+		"turn_in_progress",
+	);
+	assert.equal((await client("dell")(chat, 404)).error, "not_found");
+});
+
+test("simultaneous first asks with the same key share a queued turn", async () => {
+	const send = client();
+	const ask = { ...question, idempotency_key: randomUUID() };
+	const [first, second] = await Promise.all([
+		send("/turns", 202, ask),
+		send("/turns", 202, ask),
+	]);
+	assert.deepEqual(first, second);
+	assert.equal(first.turn.state, "queued");
+});
+
+test("ready polling claims the oldest turn and an expired claim is queued again", async () => {
+	const send = client();
+	const credential = await issue(owner);
+	const ask = { ...question, idempotency_key: randomUUID() };
+	const { conversation_id, turn } = await send("/turns", 202, ask);
+	const chat = `/conversations/${conversation_id}` as const;
+	const next = await send("/turns", 202, {
+		...ask,
+		idempotency_key: randomUUID(),
+	});
+	const polls = await Promise.all([poll(credential), poll(credential)]);
+	assert.deepEqual(polls.map(({ status }) => status).sort(), [200, 204]);
+	const picked = polls.find(({ status }) => status === 200);
+	assert.ok(picked);
+	const first = await picked.json<Claim>();
+	assert.equal(first.kind, "turn");
+	assert.equal(first.turn.id, turn.id);
+	assert.equal(first.turn.question, ask.question);
+	assert.equal(first.conversation_id, conversation_id);
+	assert.deepEqual(first.history, []);
+	assert.equal((await poll(credential)).status, 204);
+	assert.equal(
+		(await send(`/conversations/${next.conversation_id}`, 200)).turns[0]
+			?.waiting_reason,
+		"Doc is waiting for a free slot on your Mac.",
+	);
+	assert.equal((await send(chat, 200)).turns[0]?.state, "working");
+	await expire(turn.id);
+	assert.equal((await send(chat, 200)).turns[0]?.state, "queued");
+	assert.equal((await send("/turns", 202, ask)).turn.state, "queued");
+	const second = await claim(credential);
+	assert.equal(second.turn.id, turn.id);
+	assert.notEqual(second.claim_id, first.claim_id);
+});
+
+test("reclaims the oldest turn when its claim expires during a poll", async () => {
+	const send = client();
+	const credential = await issue(owner);
+	const oldest = await send("/turns", 202, {
+		...question,
+		idempotency_key: randomUUID(),
+	});
+	const original = await claim(credential);
+	await send("/turns", 202, { ...question, idempotency_key: randomUUID() });
+	await db.query(
+		"update doc_turn set created_at = '2000-01-01', claim_until = 'infinity' where id = $1",
+		[oldest.turn.id],
+	);
+
+	await db.query(`
+		create function next.hold_doc_turn_update() returns trigger language plpgsql as $$
+		begin
+			perform pg_advisory_xact_lock(992);
+			return null;
+		end;
+		$$;
+		grant execute on function next.hold_doc_turn_update() to engine;
+		create trigger hold_doc_turn_update before update on doc_turn
+		for each statement execute function next.hold_doc_turn_update();
+	`);
+	await db.query("begin; select pg_advisory_xact_lock(992)");
+	let finished = false;
+	const pending = poll(credential).finally(() => {
+		finished = true;
+	});
+	try {
+		const deadline = AbortSignal.timeout(5_000);
+		while (!finished && !deadline.aborted) {
+			const blocked = await db.query(`select 1 from pg_locks
+				where locktype = 'advisory' and not granted
+				and pg_backend_pid() = any(pg_blocking_pids(pid))`);
+			if (blocked.rowCount) break;
+		}
+		assert.ok(
+			!deadline.aborted,
+			"Mac poll neither reached the lock nor returned",
+		);
+		// Pause expiry cleanup after it takes its snapshot, if the poll runs it.
+		await db.query(
+			"update doc_turn set claim_until = clock_timestamp() where id = $1",
+			[oldest.turn.id],
+		);
+	} catch (error) {
+		await db.query("rollback");
+		await pending;
+		throw error;
+	}
+	await db.query("commit");
+	const response = await pending;
+	await db.query(`drop trigger hold_doc_turn_update on doc_turn;
+		drop function next.hold_doc_turn_update()`);
+	assert.ok([200, 204].includes(response.status));
+	const retried =
+		response.status === 204
+			? await claim(credential)
+			: await response.json<Claim>();
+	assert.equal(
+		retried.turn.id,
+		oldest.turn.id,
+		"the oldest turn keeps its place",
+	);
+	assert.notEqual(retried.claim_id, original.claim_id);
+});
+
+test("presence-only polls keep the last readiness report visible", async () => {
+	const send = client();
+	const credential = await issue(owner);
+	const { conversation_id } = await send("/turns", 202, {
+		...question,
+		idempotency_key: randomUUID(),
+	});
+	const chat = `/conversations/${conversation_id}` as const;
+	const waitingReason = async () =>
+		(await send(chat, 200)).turns[0]?.waiting_reason;
+	for (const [readiness, reason] of [
+		["signed_out", "Sign in to Claude Code on your Mac."],
+		["plan_limited", "Doc is paused until your Claude plan resets."],
+	]) {
+		assert.equal((await poll(credential, readiness)).status, 204);
+		await db.query(
+			"update doc_link set last_seen_at = '-infinity' where owner_user_id = $1",
+			[owner],
+		);
+		assert.equal(await waitingReason(), "Doc answers when your Mac is on.");
+		assert.equal((await poll(credential, null)).status, 204);
+		assert.equal(await waitingReason(), reason);
+	}
+});
+
+test("reports why a question waits and claims it when ready", async () => {
+	const send = client("dell");
+	const credential = await issue(other);
+	const { conversation_id, turn } = await send("/turns", 202, {
+		...question,
+		idempotency_key: randomUUID(),
+	});
+	const chat = `/conversations/${conversation_id}` as const;
+	const current = async () => (await send(chat, 200)).turns[0];
+	assert.equal(
+		(await current())?.waiting_reason,
+		"Doc answers when your Mac is on.",
+	);
+	assert.equal((await poll(credential, "signed_out")).status, 204);
+	assert.equal(
+		(await current())?.waiting_reason,
+		"Sign in to Claude Code on your Mac.",
+	);
+	assert.equal((await poll(credential, "plan_limited")).status, 204);
+	assert.equal(
+		(await current())?.waiting_reason,
+		"Doc is paused until your Claude plan resets.",
+	);
+	await db.query(
+		"update doc_link set last_seen_at = '-infinity' where owner_user_id = $1",
+		[other],
+	);
+	assert.equal(
+		(await current())?.waiting_reason,
+		"Doc answers when your Mac is on.",
+	);
+	const picked = await claim(credential);
+	assert.equal(picked.turn.id, turn.id);
+	assert.equal((await current())?.waiting_reason, null);
+});
+
+const complete = (credential: string, body: object) =>
+	mac.request(
+		"/result",
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${credential}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
+		},
+		{ DATABASE_WRITER: { connectionString } },
+	);
+
+test("a foreign, expired or replaced claim cannot finish a turn", async () => {
+	const send = client();
+	const credential = await issue(owner);
+	const foreign = await issue(other);
+	const { turn, conversation_id } = await send("/turns", 202, {
+		...question,
+		idempotency_key: randomUUID(),
+	});
+	assert.equal((await poll(foreign)).status, 204);
+	const first = await claim(credential);
+	const response = {
+		kind: "answered",
+		claim_id: first.claim_id,
+		answer: refusal,
+	};
+	assert.equal((await complete(foreign, response)).status, 404);
+	await expire(turn.id);
+	assert.equal((await complete(credential, response)).status, 404);
+	const second = await claim(credential);
+	assert.equal((await complete(credential, response)).status, 404);
+	const completion = { ...response, claim_id: second.claim_id };
+	assert.equal(
+		(
+			await complete(credential, {
+				...completion,
+				answer: {
+					kind: "answer",
+					text: "Unverified",
+					sources: ["deal:missing"],
+				},
+			})
+		).status,
+		422,
+	);
+	assert.equal((await complete(credential, completion)).status, 204);
+	assert.equal((await complete(credential, completion)).status, 404);
+	const chat = `/conversations/${conversation_id}` as const;
+	const { turns } = await send(chat, 200);
+	assert.equal(turns[0]?.state, "answered");
+	assert.deepEqual(turns[0]?.answer, refusal);
+	assert.equal(turns[0]?.waiting_reason, null);
+	const next = await send("/turns", 202, {
+		...question,
+		idempotency_key: randomUUID(),
+		conversation_id,
+	});
+	assert.equal(next.turn.position, 2);
+	const followUp = await claim(credential);
+	assert.equal(followUp.turn.id, next.turn.id);
+	assert.deepEqual(followUp.history, [
+		{ question: question.question, answer: refusal },
+	]);
+});
+
+test("a blocker releases the active claim and an explicit failure stays retryable", async () => {
+	const send = client();
+	const credential = await issue(owner);
+	const ask = { ...question, idempotency_key: randomUUID() };
+	const { turn, conversation_id } = await send("/turns", 202, ask);
+	const chat = `/conversations/${conversation_id}` as const;
+	const current = async () => (await send(chat, 200)).turns[0];
+	const first = await claim(credential);
+	assert.equal(
+		(
+			await complete(credential, {
+				kind: "plan_limited",
+				claim_id: first.claim_id,
+			})
+		).status,
+		204,
+	);
+	assert.equal(
+		(await current())?.waiting_reason,
+		"Doc is paused until your Claude plan resets.",
+	);
+	assert.equal((await poll(credential, "plan_limited")).status, 204);
+
+	const second = await claim(credential);
+	assert.equal(
+		(await complete(credential, { kind: "failed", claim_id: second.claim_id }))
+			.status,
+		204,
+	);
+	assert.equal((await current())?.state, "failed");
+	const retry = await send("/turns", 202, ask);
+	assert.equal(retry.turn.id, turn.id);
+	assert.equal(
+		retry.turn.waiting_reason,
+		"Doc is waiting for a free slot on your Mac.",
+	);
+
+	const third = await claim(credential);
+	assert.equal(
+		(await complete(credential, { kind: "failed", claim_id: third.claim_id }))
+			.status,
+		204,
+	);
+	await send("/turns", 202, {
+		...ask,
+		idempotency_key: randomUUID(),
+		conversation_id,
+	});
 	assert.equal((await send("/turns", 409, ask)).error, "turn_superseded");
 });
 
-test("simultaneous first asks with the same key share a reservation", async () => {
-	const finish = Promise.withResolvers<typeof refusal>();
-	let modelCalls = 0;
-	const send = client(async () => {
-		modelCalls++;
-		return finish.promise;
-	});
-	const ask = { ...question, idempotency_key: randomUUID() };
-	// Hold the first insert so both requests reach the database before either reserves.
-	await db.query("begin; lock table doc_conversation in share mode");
-	const requests = [
-		send("/turns", [200, 202], ask),
-		send("/turns", [200, 202], ask),
-	] as const;
-	const settled = Promise.allSettled(requests);
-	try {
-		try {
-			const deadline = AbortSignal.timeout(10_000);
-			for (;;) {
-				deadline.throwIfAborted();
-				const { rows } = await db.query<{
-					waiting: number;
-				}>(`select count(distinct pid)::int as waiting
-					from pg_locks where not granted and locktype in ('advisory', 'relation')
-					and database = (select oid from pg_database where datname = current_database())`);
-				if (rows[0]?.waiting === 2) break;
-			}
-		} finally {
-			await db.query("rollback");
-		}
-		assert.equal((await Promise.race(requests)).turn.state, "working");
-	} finally {
-		finish.resolve(refusal);
-		await settled;
-	}
-	const [first, second] = await Promise.all(requests);
-	assert.equal(modelCalls, 1);
-	assert.equal(first.conversation_id, second.conversation_id);
-	assert.equal(first.turn.id, second.turn.id);
-	assert.deepEqual([first.turn.state, second.turn.state].sort(), [
-		"answered",
-		"working",
-	]);
-});
-
-test("keeps one turn across an expired claim, retry, and reload", async () => {
-	const started = Promise.withResolvers<void>();
-	const finish = Promise.withResolvers<Awaited<ReturnType<typeof answer>>>();
-	const send = client(async () => {
-		started.resolve();
-		return finish.promise;
-	});
-	const pending = send("/turns", 409, question);
-	const retry = client(answer);
-	await Promise.race([started.promise, pending]);
-	try {
-		const { conversation_id, turn } = await retry("/turns", 202, question);
-		const chat: `/conversations/${string}` = `/conversations/${conversation_id}`;
-		assert.equal(turn.state, "working");
-		assert.equal(
-			(await retry("/turns", 409, { ...question, conversation_id })).error,
-			"key_reuse",
-		);
-		const next = {
-			idempotency_key: randomUUID(),
-			question: "Show the details",
-			conversation_id,
-		};
-		assert.equal((await retry("/turns", 409, next)).error, "turn_in_progress");
-		const otherPartner = client(answer, "dell");
-		assert.equal((await otherPartner(chat, 404)).error, "not_found");
-		assert.equal((await otherPartner("/turns", 404, next)).error, "not_found");
-		assert.deepEqual(await otherPartner("/conversations", 200), {
-			conversations: [],
-			next_before: null,
-		});
-		await expire(turn.id);
-		assert.equal((await retry(chat, 200)).turns[0]?.state, "failed");
-		const saved = await retry("/turns", 200, {
-			...question,
-			question: `  ${question.question}  `,
-		});
-		assert.equal(saved.turn.id, turn.id);
-		assert.deepEqual(saved.turn.answer, refusal);
-		assert.deepEqual(await retry("/turns", 200, question), saved);
-		const followUp = await retry("/turns", 200, next);
-		assert.equal(followUp.turn.position, 2);
-		assert.deepEqual((await retry(chat, 200)).turns, [
-			saved.turn,
-			followUp.turn,
-		]);
-	} finally {
-		finish.resolve({ ...refusal, sources: [], text: "Stale answer" });
-	}
-	assert.equal((await pending).error, "turn_superseded");
-});
-
-test("the model deadline saves a failure and only the latest turn can be reclaimed", async (t) => {
-	t.mock.timers.enable({ apis: ["setTimeout"] });
-	const startedModel = Promise.withResolvers<AbortSignal>();
-	const send = client(async (_input, signal) => {
-		startedModel.resolve(signal);
-		return new Promise(() => {});
-	});
-	const request = { ...question, idempotency_key: randomUUID() };
-	const asking = send("/turns", 503, request);
-	const signal = await Promise.race([
-		startedModel.promise,
-		asking.then(() => null),
-	]);
-	assert.ok(signal);
-	t.mock.timers.tick(44_999);
-	assert.equal(signal.aborted, false);
-	t.mock.timers.tick(1);
-	assert.equal(signal.aborted, true);
-	t.mock.timers.reset();
-	const first = await asking;
-	assert.equal(first.error, "doc_unavailable");
-	assert.equal(first.turn.state, "failed");
-	const retry = client(answer);
-	const saved = await retry("/turns", 200, request);
-	assert.equal(saved.turn.id, first.turn.id);
-
-	const started = Promise.withResolvers<void>();
-	const finish = Promise.withResolvers<null>();
-	const stalled = client(async () => {
-		started.resolve();
-		return finish.promise;
-	});
-	const next = {
-		...request,
-		idempotency_key: randomUUID(),
-		conversation_id: first.conversation_id,
-	};
-	const pending = stalled("/turns", 409, next);
-	await Promise.race([started.promise, pending]);
-	try {
-		const working = await retry("/turns", 202, next);
-		await expire(working.turn.id);
-		const latest = await retry("/turns", 200, {
-			...next,
-			idempotency_key: randomUUID(),
-		});
-		assert.equal(latest.turn.position, 3);
-		assert.equal((await retry("/turns", 409, next)).error, "turn_superseded");
-		const { turns } = await retry(
-			`/conversations/${first.conversation_id}`,
-			200,
-		);
-		assert.deepEqual(
-			turns.map((turn: { state: string }) => turn.state),
-			["answered", "failed", "answered"],
-		);
-	} finally {
-		finish.resolve(null);
-	}
-	assert.equal((await pending).error, "turn_superseded");
-});
-
 test("bounds questions and pages stable ties by conversation ID", async () => {
-	const send = client(answer);
+	const send = client();
 	const prefix = "📋".repeat(4000);
 	const ask = {
 		...question,
@@ -262,7 +464,7 @@ test("bounds questions and pages stable ties by conversation ID", async () => {
 		(await send("/turns", 400, { ...ask, question: "   " })).error,
 		"invalid_field_value",
 	);
-	const saved = await send("/turns", 200, { ...ask, question: prefix });
+	const saved = await send("/turns", 202, { ...ask, question: prefix });
 	assert.deepEqual(saved.turn.context, ask.context);
 	const { rows } = await db.query<{ id: string }>(
 		`with chats as (

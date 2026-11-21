@@ -701,10 +701,15 @@ test("partner sessions in PostgreSQL", async (t) => {
 						check(await ask(incomplete), 403);
 					}
 					const response = await ask(proofs(headers, csrfToken));
-					check(response, 503);
+					check(response, 202);
 					const result = await response.json();
 					assert.ok(isArguments(result));
-					assert.equal(result.error, "doc_unavailable");
+					assert.ok(isArguments(result.turn));
+					assert.equal(result.turn.state, "queued");
+					assert.equal(
+						result.turn.waiting_reason,
+						"Doc isn't set up on your Mac yet.",
+					);
 					const chat = `${path}/${result.conversation_id}`;
 					check(await read(chat, headers), 200);
 					const other = await browserSession(second);

@@ -210,6 +210,7 @@ test("Doc link migration, private credentials and Mac polling", {
 			200,
 		);
 		await db.query(await readSchema("add-doc-link.sql"));
+		await db.query(await readSchema("add-doc-link-readiness.sql"));
 
 		assert.equal((await send({})).status, 401);
 		assert.equal((await send(first, "POST")).status, 403);
@@ -290,6 +291,42 @@ test("Doc link migration, private credentials and Mac polling", {
 			id: 1,
 			result: { content: [{ type: "text", text: "[]" }] },
 		});
+
+		const completion = {
+			claim_id: claim,
+			kind: "answered",
+			answer: {
+				kind: "refusal",
+				text: "I could not find that deal.",
+				sources: [],
+			},
+		};
+		const result = (headers: Record<string, string>, origin = engineOrigin) =>
+			server.fetch(`${origin}${linkPath}/result`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json", ...headers },
+				body: JSON.stringify(completion),
+			});
+		const bearer = { Authorization: `Bearer ${credential}` };
+		assert.equal(
+			(await result({ ...bearer, Cookie: first.Cookie })).status,
+			401,
+		);
+		assert.equal((await result({ ...first, ...proof }, appOrigin)).status, 404);
+		const done = await result(bearer);
+		assert.equal(done.status, 204);
+		assert.equal(done.headers.get("Cache-Control"), "no-store");
+		assert.equal((await result(bearer)).status, 404);
+		const { rows: turns } = await db.query(
+			"select state, answer from next.doc_turn where owner_user_id = $1",
+			[appUserId],
+		);
+		assert.deepEqual(turns, [
+			{
+				state: "answered",
+				answer: { ...completion.answer, proposal: null },
+			},
+		]);
 
 		assert.equal((await poll(wrongCredential)).status, 401);
 		assert.equal(

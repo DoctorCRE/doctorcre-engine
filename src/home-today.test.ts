@@ -221,28 +221,13 @@ for (const [example, caller, step, title] of [
 }
 
 test("today keeps each Outlook occurrence independently of its review", async (t) => {
-	const [clockFunction] = (
-		await db.query<{ definition: string }>(
-			"select pg_get_functiondef('pg_catalog.now()'::regprocedure) as definition",
-		)
-	).rows;
-	assert.ok(clockFunction);
-	t.after(async () => {
-		await db.query(clockFunction.definition);
-	});
-	// Separate route transactions share the same clock in this test database.
-	await db.query(`create or replace function pg_catalog.now() returns timestamptz
-		language sql stable strict parallel safe as $$ select timestamptz '2026-01-15 00:05:00 America/Chicago' $$`);
-
-	const q = `select now() as n, ((now() at time zone 'America/Chicago')::date::timestamp at time zone 'America/Chicago') as s,
-		(((now() at time zone 'America/Chicago')::date + 1)::timestamp at time zone 'America/Chicago') as e`;
-	const clock = (await db.query<{ n: string; s: string; e: string }>(q))
-		.rows[0];
-	assert.ok(clock);
-	const now = Date.parse(clock.n);
-	const start = Date.parse(clock.s);
-	const end = Date.parse(clock.e);
 	const hr = 3_600_000;
+	const start = Date.parse("2026-01-15T00:00:00-06:00");
+	const end = start + 24 * hr;
+	const now = start + 5 * 60_000;
+	const meetingTime = start + 12 * hr;
+	t.mock.timers.enable({ apis: ["Date"], now });
+
 	const iso = (ms: number) => new Date(ms).toISOString();
 	const mtg = (a: number, b: number, title: string) => ({
 		start: iso(a),
@@ -260,7 +245,7 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 		prompt: "Confirm whether this meeting happened.",
 	});
 	const lease = {
-		...mtg(now - 300_000, now + 300_000, "Lease review"),
+		...mtg(meetingTime - 300_000, meetingTime + 300_000, "Lease review"),
 		key: "fedcba0123456789",
 		organizer: p("Example Partner One", "joe@example.test"),
 		attendees: [p("Dr. Example", "dr.example@example.test")],
@@ -271,12 +256,17 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 		key: "1111111111111111",
 		attendees: [p("Solo Clinic", "solo@example.test")],
 	};
+	const endedInvite = {
+		...mtg(start, now - 60_000, "Ended earlier today"),
+		key: "4444444444444444",
+	};
 	const agenda = {
 		schema: "carr-calendar-agenda.v1",
 		observed_at: iso(now),
 		warnings: [],
 		items: [
 			mtg(start - hr, start, "Yesterday midnight"),
+			endedInvite,
 			lease,
 			secondInvite,
 			{
@@ -352,6 +342,7 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 					confirmedKey,
 					lease.key,
 					secondInvite.key,
+					endedInvite.key,
 				].sort(),
 			);
 		},
@@ -380,6 +371,34 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 			assert.ok(
 				!joeBody.meetings?.items.some((item) => item.key === dellInvite.key),
 			);
+		},
+	);
+
+	await t.test(
+		"a refused activity insert leaves the database clock intact",
+		async () => {
+			await db.query("begin");
+			try {
+				await db.query("select set_config('engine.user_id', $1, true)", [
+					id(1),
+				]);
+				await assert.rejects(
+					db.query(
+						`insert into activity (kind, happened_at, calendar_review_user_id, calendar_review_key)
+					values ('meeting', now(), $1, 'invalid-key')`,
+						[id(1)],
+					),
+					{ code: "23514" },
+				);
+			} finally {
+				await db.query("rollback");
+			}
+			const { rows } = await db.query(
+				"select now() = transaction_timestamp() as uses_transaction_clock",
+			);
+			assert.equal(rows[0]?.uses_transaction_clock, true);
+			const [, fresh] = await today();
+			assert.deepEqual(fresh.meetings?.items, m.items);
 		},
 	);
 
