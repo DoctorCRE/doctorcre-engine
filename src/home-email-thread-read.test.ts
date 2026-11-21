@@ -3,7 +3,8 @@ import { after, before, test } from "node:test";
 import { isArguments } from "./save-door.ts";
 import { doorTest } from "./test-door.ts";
 
-const { db, setup, cleanup, request } = doorTest();
+const { db, setup, cleanup, request, save } = doorTest();
+const caller = { user: "thread-reviewer" };
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const viewer = id(1);
@@ -12,6 +13,8 @@ const deal = id(3);
 const followUp = id(4);
 const filing = id(5);
 const draft = id(6);
+const duplicateProposal = id(7);
+const duplicateDraft = id(8);
 const start = "2026-01-05T15:00:00.000001Z";
 const nextMicrosecond = "2026-01-05T15:00:00.000002Z";
 const footer = "Please copy the surveyor.\nThanks again.";
@@ -28,6 +31,7 @@ const messages: {
 	body: string;
 	messageId?: string;
 	subject?: string;
+	conversation?: string;
 	split?: [authored: string, history: string];
 	mailboxes?: string[];
 }[] = [
@@ -104,6 +108,23 @@ const messages: {
 		at: "2026-01-08T15:00:00Z",
 		body: `Will do.\n> ${privateQuote}\n${footer}`,
 	},
+	{
+		id: 40,
+		at: start,
+		body: captured,
+		messageId: "<layout@example.test>",
+		subject: "Old layout subject",
+		conversation: "Layout thread",
+	},
+	{
+		id: 41,
+		at: start,
+		body: captured,
+		messageId: "<layout@example.test>",
+		conversation: "Layout thread",
+		split: [authored, history],
+		mailboxes: [viewer, other],
+	},
 ];
 
 before(async () => {
@@ -125,10 +146,11 @@ before(async () => {
 		);
 		await db.query(
 			`insert into email (activity_id, message_id, conversation_id, sender, subject, body, authored, history, imported)
-			values ($1, $2::text, 'Plan thread', 'maya@example.test', $3, $4, $5, $6, $2 is null)`,
+			values ($1, $2::text, $3, 'maya@example.test', $4, $5, $6, $7, $2 is null)`,
 			[
 				activityId,
 				message.messageId ?? null,
+				message.conversation ?? "Plan thread",
 				message.subject ?? "Suite plan",
 				message.body,
 				...(message.split ?? [null, null]),
@@ -146,9 +168,11 @@ before(async () => {
 	await db.query(`
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
 		values ('${followUp}', 'next_step', '${id(10)}', 'email', 'I sent the plan.', 'old_system', '${deal}', 'Review the plan', '${viewer}'),
-			('${filing}', 'file_to_deal', '${id(10)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null);
+			('${filing}', 'file_to_deal', '${id(10)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
+			('${duplicateProposal}', 'file_to_deal', '${id(40)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null);
 		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
-		values ('${draft}', '${id(10)}', '${viewer}', 'old_system', 'Re: Suite plan', 'Thanks.', 'I sent the plan.');
+		values ('${draft}', '${id(10)}', '${viewer}', 'old_system', 'Re: Suite plan', 'Thanks.', 'I sent the plan.'),
+			('${duplicateDraft}', '${id(41)}', '${viewer}', 'old_system', 'Re: Suite plan', 'Thanks.', 'I sent the plan.');
 		commit;`);
 });
 
@@ -158,7 +182,7 @@ after(async () => {
 });
 
 async function thread(path = `proposals/${followUp}`) {
-	const response = await request({ user: "thread-reviewer" }, path, {
+	const response = await request(caller, path, {
 		method: "GET",
 	});
 	assert.equal(response.status, 200, path);
@@ -180,7 +204,7 @@ test("shows one exact Message-ID across mailbox copies and joins its single miss
 		)
 		.map(({ activity_id, body, folded }) => ({ activity_id, body, folded }));
 	assert.deepEqual(entries, [
-		entry(10, authored, history),
+		entry(11, authored, history),
 		entry(14, captured, null),
 		entry(13, captured, null),
 	]);
@@ -214,8 +238,40 @@ test("Home follow-up, email filing and draft reviews show the same grouped threa
 	const entries = await thread();
 	assert.deepEqual(
 		entries.map(({ activity_id }) => activity_id),
-		[10, 14, 13, 20, 21, 22, 23, 24, 30, 32].map(id),
+		[11, 14, 13, 20, 21, 22, 23, 24, 30, 32].map(id),
 	);
 	assert.deepEqual(await thread(`proposals/${filing}`), entries);
 	assert.deepEqual(await thread(`reply-drafts/${draft}`), entries);
+});
+
+test("a proposal and draft on different copies identify the same displayed email", async () => {
+	const [proposalStatus, proposal] = await save(
+		caller,
+		`proposals/${duplicateProposal}`,
+		{},
+		"GET",
+	);
+	const [draftStatus, reply] = await save(
+		caller,
+		`reply-drafts/${duplicateDraft}`,
+		{},
+		"GET",
+	);
+	assert.equal(proposalStatus, 200);
+	assert.equal(draftStatus, 200);
+	assert.partialDeepStrictEqual(proposal, {
+		proposal_id: duplicateProposal,
+		source_activity: { id: id(41), subject: "Suite plan" },
+	});
+	assert.partialDeepStrictEqual(reply, {
+		draft_id: duplicateDraft,
+		source_activity: { id: id(41), subject: "Suite plan" },
+	});
+	assert.ok(Array.isArray(proposal.thread));
+	assert.equal(proposal.thread.length, 1);
+	assert.partialDeepStrictEqual(
+		proposal.thread[0],
+		entry(41, authored, history),
+	);
+	assert.deepEqual(reply.thread, proposal.thread);
 });

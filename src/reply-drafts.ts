@@ -304,9 +304,15 @@ replyDrafts
 			if (owner_user_id !== userId)
 				return new Refusal(403, "not_mailbox_owner");
 			if (!source_visible) return new Refusal(404, "not_found");
+			const { thread, sourceActivity } = await readHomeEmailThread(
+				db,
+				userId,
+				email_activity_id,
+			);
 			return {
 				...detail,
-				thread: await readHomeEmailThread(db, userId, email_activity_id),
+				source_activity: sourceActivity ?? detail.source_activity,
+				thread,
 			};
 		});
 	})

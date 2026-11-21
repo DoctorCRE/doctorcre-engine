@@ -237,12 +237,19 @@ export async function readProposal(
 		.executeTakeFirst();
 	if (!proposal) return new Refusal(404, "not_found");
 	const { email_source_id, ...detail } = proposal;
-	return email_source_id
-		? {
-				...detail,
-				thread: await readHomeEmailThread(db, userId, email_source_id),
-			}
-		: detail;
+	if (!email_source_id) return detail;
+	const { thread, sourceActivity, sourceSummary } = await readHomeEmailThread(
+		db,
+		userId,
+		email_source_id,
+	);
+	return {
+		...detail,
+		source_activity: sourceActivity
+			? { ...sourceActivity, summary: sourceSummary }
+			: detail.source_activity,
+		thread,
+	};
 }
 
 function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {

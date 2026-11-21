@@ -47,6 +47,8 @@ type ThreadRow = Sender & {
 	activity_id: string;
 	happened_at: string;
 	exact_happened_at: string;
+	saved_sender_name: string | null;
+	summary: DB["activity"]["summary"];
 } & Pick<
 		DB["email"],
 		"message_id" | "subject" | "body" | "authored" | "history"
@@ -453,11 +455,6 @@ function messageMatchKey(row: ThreadRow) {
 	]);
 }
 
-function displayPriority(row: ThreadRow, sourceId: string) {
-	if (row.activity_id === sourceId) return 0;
-	return row.authored !== null ? 1 : 2;
-}
-
 function groupThreadRows(rows: ThreadRow[], sourceId: string) {
 	const uniqueIdsByMatch = new Map<string, string | null>();
 	const matchedRows = rows.map((row) => {
@@ -472,14 +469,8 @@ function groupThreadRows(rows: ThreadRow[], sourceId: string) {
 		}
 		return { row, match };
 	});
-	const groups = new Map<
-		string,
-		{
-			display: ThreadRow;
-			order: number;
-			lowestSplit: ThreadRow | null;
-		}
-	>();
+	const groups = new Map<string, { display: ThreadRow; order: number }>();
+	let sourceKey: string | undefined;
 	for (const [order, { row, match }] of matchedRows.entries()) {
 		const id = row.message_id ?? (match ? uniqueIdsByMatch.get(match) : null);
 		const key = id
@@ -487,40 +478,39 @@ function groupThreadRows(rows: ThreadRow[], sourceId: string) {
 			: match
 				? `match:${match}`
 				: `activity:${row.activity_id}`;
+		if (row.activity_id === sourceId) sourceKey = key;
 		const group = groups.get(key);
-		const split = row.authored !== null ? row : null;
 		if (!group) {
-			groups.set(key, { display: row, order, lowestSplit: split });
+			groups.set(key, { display: row, order });
 			continue;
 		}
 
-		const priority = displayPriority(row, sourceId);
-		const current = displayPriority(group.display, sourceId);
+		const hasSplit = row.authored !== null;
+		const displayHasSplit = group.display.authored !== null;
 		if (
-			priority < current ||
-			(priority === current && row.activity_id < group.display.activity_id)
+			(hasSplit && !displayHasSplit) ||
+			(hasSplit === displayHasSplit &&
+				row.activity_id < group.display.activity_id)
 		) {
 			group.display = row;
 			group.order = order;
 		}
-		if (
-			split &&
-			(!group.lowestSplit || split.activity_id < group.lowestSplit.activity_id)
-		) {
-			group.lowestSplit = split;
-		}
 	}
-	return [...groups.values()].sort((a, b) => a.order - b.order);
+	return {
+		groups: [...groups.values()].sort((a, b) => a.order - b.order),
+		source:
+			sourceKey === undefined ? undefined : groups.get(sourceKey)?.display,
+	};
 }
 
 export async function readHomeEmailThread(
 	db: Transaction<DB>,
 	userId: string,
-	sourceId: string | null,
+	sourceId: string,
 ) {
-	if (!sourceId) return [];
 	const { rows } = await sql<ThreadRow>`
 		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name,
+			e.sender_name as saved_sender_name, a.summary,
 			${isoMillis(sql.ref("a.happened_at"))} as happened_at,
 			a.happened_at::text as exact_happened_at, e.message_id, e.subject, e.body, e.authored, e.history
 		from email source
@@ -532,18 +522,30 @@ export async function readHomeEmailThread(
 		where source.activity_id = ${sourceId}::uuid
 		order by a.happened_at, a.id
 	`.execute(db);
-	const groups = groupThreadRows(rows, sourceId);
+	const { groups, source } = groupThreadRows(rows, sourceId);
 	const bodies = cleanEmailThread(groups.map(({ display }) => display));
-	return groups.map(({ display, lowestSplit }, index) => {
+	const thread = groups.map(({ display }, index) => {
 		const { activity_id, sender_name, happened_at } = display;
-		const split = display.authored === null ? lowestSplit : display;
 		const cleaned = bodies[index];
 		return {
 			activity_id,
 			sender_name,
 			happened_at,
-			body: split?.authored ?? cleaned?.body ?? display.body,
-			folded: split ? split.history || null : (cleaned?.folded ?? null),
+			body: display.authored ?? cleaned?.body ?? display.body,
+			folded:
+				display.authored === null
+					? (cleaned?.folded ?? null)
+					: display.history || null,
 		};
 	});
+	const sourceActivity = source && {
+		id: source.activity_id,
+		kind: "email",
+		sender: source.sender,
+		sender_name: source.saved_sender_name,
+		subject: source.subject,
+		body: source.body,
+		happened_at: source.happened_at,
+	};
+	return { thread, sourceActivity, sourceSummary: source?.summary ?? null };
 }
