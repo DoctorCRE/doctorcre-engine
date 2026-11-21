@@ -2179,6 +2179,15 @@ These doors use the signed-in partner entrance. They share the save and retry ru
 - Confirm opens a date proposed by automation. Resolve takes `done`, `dropped` or `passed` as `resolution` and returns it as `status`. A proposal can be dropped, and an open date can take any of the three resolutions. `reason` must be nonblank. The database stamps the decisions and keeps the confirmation when resolving.
 - A missing date on confirm or resolve returns `404 not_found`. A fresh key targeting the date's current status returns `409 version_conflict { status }`. Other disallowed transitions return `422 database_refused_the_statement { rule: "critical_date_status_moves" }`.
 
+### Deal tour plans
+
+Both signed-in partners can use these doors for any deal. The paths below start with `/api/engine/deals/{deal_id}/tours`. Deal, tour, and property IDs are UUIDs.
+
+- `GET` on that path returns `{ tours: [{ id, planned_on }] }` in date and ID order. Completed and cancelled plans leave this list. A deal without plans returns an empty list.
+- `GET /{tour_id}` returns `{ id, deal_id, planned_on, notes, revision, completed_activity_id, cancelled_at, stops }`. Each stop has `{ property_id, position, address, name }`, in saved order with current property details.
+- `POST` on the list path creates a plan and returns `201 { id, revision }`. `POST /{tour_id}` replaces a plan's date, notes, and stops and returns `200 { id, revision }`. Both take `{ idempotency_key, planned_on, notes?, stops }`. An edit also requires the last-read `revision`. The date is `YYYY-MM-DD` and omitted or null notes clear the notes. Each item in the nonempty `stops` array is `{ property_id }` for an existing property or `{ address, name? }` to create one. Array order sets the stop order. Reuse the shared retry key on retries.
+- An unknown deal or a tour outside the named deal returns `404 not_found`. An edit to a changed or finalized plan returns `409 version_conflict { current_revision }`.
+
 ### 24. Home marks saved
 
 `POST /api/engine/home/marks` saves one card's mark for the signed-in partner. Every request includes `idempotency_key` and the card's `item_id` and `base_version` from the new Home inbox read. Item IDs are `next_action:<UUID>`, `capture_post_call_action:<UUID>`, `notification:<UUID>`, `suggestion:<UUID>` and `reply_draft:<UUID>` for a step, call follow-up, update, suggestion card and reply draft. A suggestion uses the proposal ID that heads the card. A completion review uses the step's ID and mark version. An unavailable card returns `404 home_item_not_found`. A sent draft has no mark actions.

@@ -35,6 +35,7 @@ import {
 import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
+import { dealTours } from "./deals/tours.ts";
 import { docRoutes } from "./doc.ts";
 import {
 	claimDocLink,
@@ -150,6 +151,7 @@ const engine = new Hono<WorkerEnv>()
 
 const partnerApi = new Hono<WorkerEnv>();
 partnerApi.use("/api/engine/*", userStamp);
+partnerApi.route("/api/engine", dealTours);
 partnerApi.route("/api/engine", engine);
 partnerApi.route("/api/engine", dealCallContext);
 partnerApi.route("/api/engine", leadChanges);
