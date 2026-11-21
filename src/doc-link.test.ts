@@ -12,14 +12,13 @@ const engineOrigin = "https://engine.example.test";
 const linkPath = "/api/engine/doc/link";
 const proof = { Origin: appOrigin, "Sec-Fetch-Site": "same-origin" };
 
-test("two partners manage and connect their own Doc links", {
+test("Doc link migration, private credentials and Mac polling", {
 	timeout: 30_000,
 }, async (t) => {
 	const { db, setup, cleanup, connectionString } = copyTest();
 	await setup();
 	t.after(cleanup);
 	await db.query("drop table next.doc_link");
-	await db.query(await readSchema("add-doc-link.sql"));
 	await db.query(await readSchema("partner-auth.sql"));
 	const secret = randomBytes(32).toString("hex");
 	const appUserId = randomUUID();
@@ -114,10 +113,6 @@ test("two partners manage and connect their own Doc links", {
 					main: new URL("./worker-entry.ts", import.meta.url).pathname,
 					compatibility_date: "2026-11-11",
 					compatibility_flags: ["nodejs_compat"],
-					durable_objects: {
-						bindings: [{ name: "DOC_LINK", class_name: "DocLink" }],
-					},
-					migrations: [{ tag: "doc-link-v1", new_sqlite_classes: ["DocLink"] }],
 					hyperdrive: [
 						{
 							binding: "DATABASE_WRITER",
@@ -146,13 +141,10 @@ test("two partners manage and connect their own Doc links", {
 			method = "GET",
 			suffix = "",
 		) => server.fetch(appOrigin + linkPath + suffix, { method, headers });
-		const connect = (
-			credential: string,
-			headers: Record<string, string> = {},
-		) =>
-			server.fetch(`${engineOrigin}${linkPath}/connect`, {
+		const poll = (credential: string, headers: Record<string, string> = {}) =>
+			server.fetch(`${engineOrigin}${linkPath}/claim`, {
+				method: "POST",
 				headers: {
-					Upgrade: "websocket",
 					Authorization: `Bearer ${credential}`,
 					...headers,
 				},
@@ -180,33 +172,36 @@ test("two partners manage and connect their own Doc links", {
 			assert.ok(typeof result.credential === "string");
 			return result.credential;
 		}
-		async function open(credential: string) {
-			const response = await connect(credential);
-			assert.equal(response.status, 101);
-			assert.ok(response.webSocket);
-			const socket = response.webSocket;
-			const closed = new Promise<number>((resolve) => {
-				const aborted = () => resolve(-1);
-				t.signal.addEventListener("abort", aborted, { once: true });
-				socket.addEventListener(
-					"close",
-					(event) => {
-						t.signal.removeEventListener("abort", aborted);
-						resolve(event.code);
-					},
-					{ once: true },
-				);
-			});
-			socket.accept();
-			return { socket, closed };
-		}
 		const revoke = (partner: typeof first, suffix = "") =>
 			send({ ...partner, ...proof }, "POST", `/revoke${suffix}`);
+
+		const wrongCredential = randomBytes(32).toString("base64url");
+		for (const response of await Promise.all([
+			send(first),
+			send({ ...first, ...proof }, "POST"),
+			revoke(first),
+			poll(wrongCredential),
+		])) {
+			assert.equal(response.status, 503);
+			assert.deepEqual(await response.json(), {
+				error: "doc_link_unavailable",
+			});
+			assert.equal(response.headers.get("cache-control"), "no-store");
+		}
+		assert.equal(
+			(await server.fetch(`${appOrigin}/auth/session`, { headers: first }))
+				.status,
+			200,
+		);
+		await db.query(await readSchema("add-doc-link.sql"));
 
 		assert.equal((await send({})).status, 401);
 		assert.equal((await send(first, "POST")).status, 403);
 		assert.equal((await send(first, "POST", "/revoke")).status, 403);
-		assert.equal((await send(first, "GET", "/connect")).status, 404);
+		assert.equal(
+			(await send({ ...first, ...proof }, "POST", "/claim")).status,
+			404,
+		);
 		assert.equal(
 			(
 				await server.fetch(engineOrigin + linkPath, {
@@ -232,15 +227,17 @@ test("two partners manage and connect their own Doc links", {
 			"database stores only the credential hash for the session owner",
 		);
 
+		assert.equal((await poll(wrongCredential)).status, 401);
 		assert.equal(
-			(await connect(randomBytes(32).toString("base64url"))).status,
+			(await poll(credential, { Cookie: first.Cookie })).status,
 			401,
 		);
-		assert.equal(
-			(await connect(credential, { Cookie: first.Cookie })).status,
-			401,
-		);
-		const original = await open(credential);
+		assert.equal((await poll(credential, { Authorization: "" })).status, 401);
+		assert.equal((await presence(first)).connected, false);
+		const empty = await poll(credential);
+		assert.equal(empty.status, 204);
+		assert.equal(empty.headers.get("cache-control"), "no-store");
+		assert.equal(await empty.text(), "");
 		const status = await presence(first);
 		assert.equal(status.connected, true);
 		assert.ok(
@@ -251,44 +248,91 @@ test("two partners manage and connect their own Doc links", {
 			connected: false,
 			issued_at: null,
 		});
+		await db.query(
+			`update next.doc_link set last_seen_at = clock_timestamp() - interval '31 seconds'
+			where owner_user_id = $1`,
+			[appUserId],
+		);
+		assert.deepEqual(await presence(first), { ...status, connected: false });
+		assert.equal((await poll(credential)).status, 204);
+		assert.deepEqual(await presence(first), status);
 
 		const otherCredential = await issue(second, `?owner_user_id=${appUserId}`);
-		const other = await open(otherCredential);
+		assert.equal((await poll(otherCredential)).status, 204);
 		assert.equal((await presence(second)).connected, true);
 		assert.equal(
 			(await revoke(second, `?owner_user_id=${appUserId}`)).status,
 			204,
 		);
-		assert.equal((await connect(otherCredential)).status, 401);
+		assert.equal((await poll(otherCredential)).status, 401);
 		assert.deepEqual(await presence(first), status);
 
-		const replacementSocket = await open(credential);
-		assert.equal((await presence(first)).connected, true);
-		replacementSocket.socket.close(1000, "Mac disconnected");
-		await replacementSocket.closed;
-		assert.deepEqual(await presence(first), { ...status, connected: false });
+		async function waitForBlockedRequest(
+			request: Promise<unknown>,
+			blocker?: number,
+		) {
+			let finished = false;
+			const finish = () => {
+				finished = true;
+			};
+			void request.then(finish, finish);
+			const deadline = AbortSignal.timeout(5_000);
+			while (!finished && !deadline.aborted) {
+				const { rows } = await db.query<{ pid: number }>(
+					`select pid from pg_locks
+					where not granted
+					and coalesce($1, pg_backend_pid()) = any(pg_blocking_pids(pid))`,
+					[blocker ?? null],
+				);
+				if (rows[0]) return rows[0].pid;
+			}
+			assert.fail(
+				blocker === undefined
+					? "Credential change did not wait for the fixture row lock"
+					: "Poll did not wait for the credential change",
+			);
+		}
 
-		const reconnected = await open(credential);
-		const replacementCredential = await issue(first);
-		assert.equal((await connect(credential)).status, 401);
+		async function changeWhilePolling<T>(
+			change: () => Promise<T>,
+			oldCredential: string,
+		) {
+			await db.query("begin");
+			await db.query(
+				"select 1 from next.doc_link where owner_user_id = $1 for update",
+				[appUserId],
+			);
+			const changing = change();
+			let polling: ReturnType<typeof poll> | undefined;
+			try {
+				const changePid = await waitForBlockedRequest(changing);
+				polling = poll(oldCredential);
+				await waitForBlockedRequest(polling, changePid);
+			} finally {
+				await db.query("rollback");
+				await Promise.allSettled([changing, polling]);
+			}
+			const result = await changing;
+			assert.equal((await polling).status, 401);
+			return result;
+		}
+
+		const replacement = await changeWhilePolling(
+			() => issue(first),
+			credential,
+		);
+		assert.equal((await poll(credential)).status, 401);
 		assert.equal((await presence(first)).connected, false);
-		const rotated = await open(replacementCredential);
+		assert.equal((await poll(replacement)).status, 204);
+		assert.equal((await presence(first)).connected, true);
+		const revoked = await changeWhilePolling(() => revoke(first), replacement);
+		assert.equal(revoked.status, 204);
 		assert.equal((await revoke(first)).status, 204);
-		assert.equal((await revoke(first)).status, 204);
-		assert.equal((await connect(replacementCredential)).status, 401);
+		assert.equal((await poll(replacement)).status, 401);
 		assert.deepEqual(await presence(first), {
 			connected: false,
 			issued_at: null,
 		});
-		assert.deepEqual(
-			await Promise.all([
-				original.closed,
-				other.closed,
-				reconnected.closed,
-				rotated.closed,
-			]),
-			[1008, 1008, 1008, 1008],
-		);
 	} finally {
 		await server.close();
 	}

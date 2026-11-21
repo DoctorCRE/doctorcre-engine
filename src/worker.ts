@@ -33,11 +33,7 @@ import {
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
 import { docRoutes } from "./doc.ts";
-import {
-	connectDocLink,
-	type DocLinkEnv,
-	docLinkRoutes,
-} from "./doc-link-routes.ts";
+import { claimDocLink, docLinkRoutes } from "./doc-link-routes.ts";
 import { heldStepReviews } from "./held-steps.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { homeMarks } from "./home-marks.ts";
@@ -56,6 +52,7 @@ import { nextStep } from "./next-step.ts";
 import { automaticStepUndo, nextSteps } from "./next-steps.ts";
 import { partnerGoogle } from "./partner-google.ts";
 import {
+	type PartnerSessionEnv,
 	partnerSessionStatus,
 	partnerSignOut,
 	requirePartnerSession,
@@ -76,8 +73,8 @@ import { today } from "./today/routes.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 
-export type WorkerEnv = DocLinkEnv &
-	NextSaveEnv &
+export type WorkerEnv = NextSaveEnv &
+	PartnerSessionEnv &
 	CompareEnv &
 	IntakeEnv & {
 		Bindings: { CF_VERSION_METADATA: { id: string; tag?: string } };
@@ -168,7 +165,7 @@ partnerApi.route("/api/engine", attachmentFiles);
 partnerApi.route("/api/engine", dealDocuments);
 partnerApi.route("/api/engine", replyDrafts);
 
-app.get("/api/engine/doc/link/connect", connectDocLink);
+app.post("/api/engine/doc/link/claim", claimDocLink);
 app.use("/api/engine/*", requireSession);
 app.route("/", partnerApi);
 partnerApp.route("/", partnerGoogle);

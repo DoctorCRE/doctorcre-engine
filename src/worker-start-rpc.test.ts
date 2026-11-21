@@ -7,7 +7,7 @@ test("GET /health reports when ClientWebsiteAccess served the first request", as
 		resolve(specifier, context, nextResolve) {
 			if (specifier === "cloudflare:workers") {
 				return {
-					url: "data:text/javascript,export class DurableObject {}; export class WorkerEntrypoint { constructor(_ctx, env) { this.env = env } }",
+					url: "data:text/javascript,export class WorkerEntrypoint { constructor(_ctx, env) { this.env = env } }",
 					shortCircuit: true,
 				};
 			}

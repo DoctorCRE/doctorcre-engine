@@ -4012,6 +4012,7 @@ create table doc_link (
 	is_account_partner boolean not null generated always as (true) stored,
 	credential_hash text not null unique check (credential_hash ~ '^[0-9a-f]{64}$'),
 	issued_at timestamptz not null default now(),
+	last_seen_at timestamptz,
 	foreign key (owner_user_id, is_account_partner) references app_user (id, is_account_partner)
 );
 
@@ -4027,4 +4028,4 @@ create policy doc_link_credential on doc_link for select to engine using (
 );
 revoke all on doc_link from public, engine_reader;
 grant select, insert, delete on doc_link to engine;
-grant update (credential_hash, issued_at) on doc_link to engine;
+grant update (credential_hash, issued_at, last_seen_at) on doc_link to engine;

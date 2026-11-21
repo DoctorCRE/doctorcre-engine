@@ -1583,7 +1583,7 @@ Track record counts come from `vendor_track_record`. A deal counts even when its
 
 ## Doc conversations and turns
 
-The [Doc screen](screens/doc.md) calls `/api/engine/doc/*` on the app's origin through the current [partner session door](sign-in.md#serve-pages-and-partner-calls-through-the-app). Every call resolves the signed-in partner, and every POST requires the partner write proofs. Doc responses use `Cache-Control: no-store`. Only the app route serves partner chat and confirmation calls. The engine owns the tables in `next`, and Doc starts with empty history. Apply [the Doc storage migration](../schema/add-doc-conversations.sql) to an existing `next` before enabling these routes.
+The [Doc screen](screens/doc.md) calls `/api/engine/doc/*` on the app's origin through the current [partner session door](sign-in.md#serve-pages-and-partner-calls-through-the-app). Each call from the app resolves the signed-in partner. The app's POSTs require the partner write proofs. Doc responses use `Cache-Control: no-store`. Only the app route serves partner chat and confirmation calls. The engine owns the tables in `next`, and Doc starts with empty history. Apply [the Doc storage migration](../schema/add-doc-conversations.sql) to an existing `next` before enabling these routes.
 
 ### Private storage
 
@@ -1627,7 +1627,7 @@ Session failures return the existing partner responses, including `401 { error: 
 
 ### Model reads and links
 
-After committing the claim, the engine sends the question and up to 12 prior answered turns to the owner's Doc link over a hibernating Durable Object WebSocket. Each partner has one outbound connection and a revocable Doc link credential issued by the engine at install. The engine uses that credential to identify the partner on the connection and on its MCP Streamable HTTP endpoint. Doc link loads only that server with `--mcp-config` and `--strict-mcp-config`. The endpoint exposes the same reads and save proposals Doc already uses, scoped to the partner and current claim. Confirmation stays on the signed-in app route.
+After committing the claim, the engine returns the question and up to 12 prior answered turns in the response to the owner's Doc link poll. Each partner has a revocable Doc link credential issued by the engine at install. The engine uses that credential to identify the partner on the poll and on its MCP Streamable HTTP endpoint. Doc link loads only that server with `--mcp-config` and `--strict-mcp-config`. The endpoint exposes the same reads and save proposals Doc already uses, scoped to the partner and current claim. Confirmation stays on the signed-in app route.
 
 Engine code handles unattended work that can be decided from saved facts. The same link claims separate jobs for steps that need judgment, including summaries, action titles, and filing relevant email facts. Queue each step for the partner whose mail or record it is. For a shared record use the deal or client owner, or the partner who saved it if there is no such owner. The engine validates job results and applies the existing stamped save rules. Jobs stay queued while the partner's link cannot run. Unresolved work appears on Home for a partner to handle with Doc's help. See decision 195 in [Decisions](decisions.md).
 
@@ -1645,15 +1645,17 @@ Doc uses only `next` readers. A failed read fails the ask rather than passing an
 
 A signed-in partner issues a credential from the app and gives it to their Mac's installer. The named app door gets the owner from the partner session. The POSTs require the usual partner write proofs and take no arguments. Responses use `Cache-Control: no-store`.
 
-| App request                        | Answer                                                                                                         |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `GET /api/engine/doc/link`         | `200 { connected, issued_at }`. The issue time is null when the partner has no current credential.             |
-| `POST /api/engine/doc/link`        | `201 { credential }`. Shows the engine credential once. Replaces the old credential and closes its connection. |
-| `POST /api/engine/doc/link/revoke` | `204`. Revokes the partner's credential and closes its connection. Safe to repeat.                             |
+| App request                        | Answer                                                                                                      |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET /api/engine/doc/link`         | `200 { connected, issued_at }`. The issue time is null when the partner has no current credential.          |
+| `POST /api/engine/doc/link`        | `201 { credential }`. Shows the new credential once, replaces any previous credential, and resets presence. |
+| `POST /api/engine/doc/link/revoke` | `204`. Revokes the partner's credential. Safe to repeat.                                                    |
 
-The Mac opens an outbound WebSocket over TLS on the engine's direct `GET /api/engine/doc/link/connect` with `Authorization: Bearer <credential>` and no cookie. The engine resolves the owner from the credential. Unknown and revoked credentials return `401`. One hibernating Durable Object per partner holds their live connection. A new authenticated connection replaces the previous socket. A disconnected Mac can reconnect with its current credential.
+The Mac polls the engine directly over HTTPS about every two seconds using `POST /api/engine/doc/link/claim` with `Authorization: Bearer <credential>` and no cookies. An authenticated poll returns `204` when there is no work. Turn and job delivery is tracked in #978. The engine derives the owner from the credential. An invalid credential or a request with cookies returns `401`. The next poll with an old credential after rotation or revocation returns `401`.
 
-Apply [the Doc link migration](../schema/add-doc-link.sql) before enabling these calls. `next.doc_link` keeps one row per account partner with an owner ID, a SHA-256 credential hash, and the issue time. Only the partner's stamped writer can manage that row. The engine matches the exact hash during credential authentication. General readers and jobs have no access.
+Presence is true when the current credential last authenticated within 30 seconds. Apply [the Doc link migration](../schema/add-doc-link.sql) to an existing database. Until then, authenticated app requests to the link routes and well-formed Mac polls return `503 { error: "doc_link_unavailable" }`.
+
+`next.doc_link` keeps one row per account partner with an owner ID, a SHA-256 credential hash, the issue time, and the last authenticated poll time. The engine uses the hash to find a candidate owner, then compares fixed-length digests in constant time under the row lock. The partner's stamped writer manages the row. General readers and jobs have no access.
 
 ### Confirmed saves and receipts
 

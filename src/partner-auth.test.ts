@@ -117,7 +117,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 						if (specifier !== "cloudflare:workers")
 							return nextResolve(specifier, context);
 						return {
-							url: "data:text/javascript,export class DurableObject {}; export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env } }",
+							url: "data:text/javascript,export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env } }",
 							shortCircuit: true,
 						};
 					},
@@ -541,7 +541,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 				resolve(specifier, context, nextResolve) {
 					if (specifier === "cloudflare:workers") {
 						return {
-							url: "data:text/javascript,export class DurableObject {}; export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env } }",
+							url: "data:text/javascript,export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env } }",
 							shortCircuit: true,
 						};
 					}

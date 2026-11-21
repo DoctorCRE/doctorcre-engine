@@ -7,7 +7,6 @@ import { failureKind } from "./failure.ts";
 import type { WriterEnv } from "./save.ts";
 import { partnerApp, recordWorkerStart, type WorkerEnv } from "./worker.ts";
 
-export { DocLink } from "./doc-link-object.ts";
 export { default } from "./worker.ts";
 
 export class PartnerApp extends WorkerEntrypoint<WorkerEnv["Bindings"]> {
