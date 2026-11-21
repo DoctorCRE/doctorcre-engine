@@ -132,10 +132,6 @@ async function inbox(caller = user) {
 	for (const item of items) {
 		assert.ok(typeof item.title === "string");
 		assert.ok([...titleCharacters.segment(item.title)].length <= 90);
-		assert.doesNotMatch(
-			item.title,
-			/…|\.\.\.|\bemail (?:received )?from|^follow-up (?:set|due|completed)/i,
-		);
 		assert.equal(Object.hasOwn(item, "auto_settled"), false);
 		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
 	}
@@ -545,8 +541,26 @@ for (const [scenario, what, title, savedText = what] of [
 		`Call Dr. Example and Mr. Reed at St. Example Inc. about the plan. ${longAction}.`,
 		followUpFallback,
 	],
-	["a copied sender label", "Email from Morgan Example", followUpFallback],
-	["a copied receipt label", "Email received from Morgan", followUpFallback],
+	[
+		"a call from the office",
+		"Call from the office at noon",
+		"Call from the office at noon",
+	],
+	[
+		"a forwarded email",
+		"Forward the email from Morgan to the landlord",
+		"Forward the email from Morgan to the landlord",
+	],
+	[
+		"a copied sender label",
+		"Email from Morgan Example",
+		"Email from Morgan Example",
+	],
+	[
+		"a copied receipt label",
+		"Email received from Morgan",
+		"Email received from Morgan",
+	],
 	[
 		"a step starting with Forward",
 		"Forward the revised floor plan to Morgan",
@@ -557,11 +571,11 @@ for (const [scenario, what, title, savedText = what] of [
 		"Call Á. Morgan. Confirm the date.",
 		"Call Á. Morgan. Confirm the date.",
 	],
-	["copied wording with an ellipsis", "Send the plan...", followUpFallback],
+	["copied wording with an ellipsis", "Send the plan...", "Send the plan..."],
 	[
 		"a copied status label",
 		"Follow-up set for Morgan Example",
-		followUpFallback,
+		"Follow-up set for Morgan Example",
 	],
 	[
 		"stacked copied prefixes",

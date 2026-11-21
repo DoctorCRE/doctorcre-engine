@@ -1,9 +1,6 @@
 const decisionPrefix = /^(?:[A-Z][A-Z'.-]* )+DECIDE\s*:\s*/;
 const statusPrefix =
 	/^(?:(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)|review(?: follow-up| call note)?\s*:\s*)/i;
-// Copied source labels belong with the evidence.
-const savedLabel =
-	/^(?:call (?:from|with)|follow[- ]up (?:set|due|completed|scheduled|held|done)|send status unknown)\b/i;
 const titleCharacters = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 const chooseDeal = (sender: string) =>
@@ -65,14 +62,19 @@ export function stripHomeTitlePrefixes(text: string) {
 	}
 }
 
-function fitsTitle(text: string) {
-	if (!text || /…|\.\.\.|\bemail (?:received )?from\b/i.test(text))
-		return false;
+function fitsLength(text: string) {
+	if (!text) return false;
 	let remaining = 90;
 	for (const _ of titleCharacters.segment(text)) {
 		if (--remaining < 0) return false;
 	}
 	return true;
+}
+
+function fitsTitle(text: string) {
+	return (
+		!/…|\.\.\.|\bemail (?:received )?from\b/i.test(text) && fitsLength(text)
+	);
 }
 
 export function homeTitle(
@@ -91,5 +93,5 @@ export function homeTitle(
 }
 
 export function savedHomeTitle(text: string) {
-	return !savedLabel.test(text) && fitsTitle(text) ? text : "";
+	return fitsLength(text) ? text : "";
 }

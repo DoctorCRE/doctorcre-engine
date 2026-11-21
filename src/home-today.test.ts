@@ -139,7 +139,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	assert.deepEqual(body.reminders?.late.map(row), [
 		`${id(33)}|Call the office. If no one answers, leave a message and retry tomorrow.|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
 		`${id(32)}|Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
-		`${id(21)}|Follow up on Example Dental, Springfield|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
+		`${id(21)}|send status unknown — re-touch or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
 		`${id(28)}|Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
 		`${id(23)}|Follow up with Dr. Example|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
@@ -194,7 +194,7 @@ for (const [example, caller, step, title] of [
 		"a copied decision prompt",
 		joe,
 		id(21),
-		"Follow up on Example Dental, Springfield",
+		"send status unknown — re-touch or drop",
 	],
 	["long phone instructions", joe, id(23), "Follow up with Dr. Example"],
 	[
