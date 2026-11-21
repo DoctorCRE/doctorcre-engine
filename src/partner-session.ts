@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
-import { withPartnerAuth } from "./partner-auth.ts";
+import { SESSION_COOKIE, withPartnerAuth } from "./partner-auth.ts";
 import { hasWriteProof, sessionRefusals } from "./session.ts";
 
 const FRESHNESS_MS = 10 * 60 * 1000;
@@ -17,18 +17,21 @@ export type PartnerSessionEnv = {
 	};
 };
 
-async function resolveAppSession(
-	request: { origin: string; headers: Headers },
-	env: PartnerSessionEnv["Bindings"],
-) {
+function sessionConfig(env: PartnerSessionEnv["Bindings"]) {
 	const appOrigin = env.PARTNER_APP_ORIGIN;
 	const connectionString = env.PARTNER_AUTH_DATABASE?.connectionString;
 	const secret = env.PARTNER_AUTH_SECRET;
 	if (!appOrigin || !connectionString || !secret)
 		throw new Error("Partner session configuration unavailable");
-	return withPartnerAuth(
-		{ appOrigin, connectionString, secret },
-		({ resolveSession }) => resolveSession(request),
+	return { appOrigin, connectionString, secret };
+}
+
+async function resolveAppSession(
+	request: { origin: string; headers: Headers },
+	env: PartnerSessionEnv["Bindings"],
+) {
+	return withPartnerAuth(sessionConfig(env), ({ resolveSession }) =>
+		resolveSession(request),
 	);
 }
 
@@ -69,4 +72,19 @@ export function partnerSessionStatus(c: Context<PartnerSessionEnv>) {
 			Date.now() - googleAuthenticatedAt.getTime() >= FRESHNESS_MS,
 		reauth_url: "/auth/reauth?return_to=/",
 	});
+}
+
+export async function partnerSignOut(c: Context<PartnerSessionEnv>) {
+	try {
+		await withPartnerAuth(sessionConfig(c.env), ({ revokeSession }) =>
+			revokeSession(c.get("partnerSession").id),
+		);
+	} catch {
+		return c.json(sessionRefusals[503](), 503);
+	}
+	c.header(
+		"Set-Cookie",
+		`${SESSION_COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`,
+	);
+	return c.redirect("/", 303);
 }
