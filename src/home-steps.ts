@@ -16,8 +16,10 @@ const phoneNumber =
 	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
 const meetingSuffix =
 	/\s*\|\s*([^|]+, (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\p{L}*,? \p{L}{3,9} \d{1,2}(?:,? \d{4},?)? \d{1,2}:\d{2}\s*[AP]M\.?)$/iu;
+const actionStart =
+	/^(?:Please )?(?:ask|call|check|confirm|contact|discuss|draft|email|follow up|forward|meet|prepare|reply|review|schedule|send|verify)\b/i;
 const instructionSuffix =
-	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/;
+	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/i;
 const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
 
 export function homeDisplayText(text: string | null) {
@@ -82,32 +84,39 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
 	const meeting = meetingSuffix.exec(savedText);
-	const savedAction = meeting
-		? savedText
-				.slice(0, meeting.index)
-				.replace(/^project review(?= with\b|$)/i, "Review the project")
-		: savedText;
-	const wording = savedAction
+	const savedWording = meeting ? savedText.slice(0, meeting.index) : savedText;
+	const suffix = instructionSuffix.exec(savedWording);
+	const savedAction = suffix
+		? savedWording.slice(0, suffix.index)
+		: savedWording;
+	const supporting = suffix
+		? savedWording.slice(suffix.index + suffix[0].length)
+		: "";
+	const action = savedAction
 		.replace(phoneNumber, " ")
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "");
 	const cadence = vendorCadence.exec(savedText)?.[1];
-	const instructionAt = wording.search(instructionSuffix);
-	const actionWording =
-		instructionAt === -1 ? wording : wording.slice(0, instructionAt);
+	const isMeetingSubject = meeting !== null && !actionStart.test(action);
+	const actionTitle = isMeetingSubject
+		? homeTitle("follow_up", action)
+		: savedHomeTitle(action);
 	const title = cadence
 		? homeTitle("vendor_check_in", target)
-		: (savedHomeTitle(wording) && actionWording) ||
+		: actionTitle ||
 			(contact
 				? homeTitle("call_follow_up", contact)
 				: homeTitle("follow_up", target));
 	const instruction =
-		title === wording
-			? savedAction
-					.match(phoneNumber)
-					?.map((number) => number.replace(/^at\s+/i, ""))
-					.join(", ")
-			: savedAction;
+		title === action || (isMeetingSubject && title !== homeTitle("follow_up"))
+			? homeWhy(
+					savedAction
+						.match(phoneNumber)
+						?.map((number) => number.replace(/^at\s+/i, ""))
+						.join(", ") ?? null,
+					supporting.charAt(0).toUpperCase() + supporting.slice(1),
+				)
+			: savedWording;
 	const titleWords = title.replace(/[\p{P}\s]+$/gu, "").split(/\s+/);
 	const titlePrefix = new RegExp(
 		`^${titleWords.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+")}(?=$|[\\s\\p{P}])`,
@@ -123,9 +132,9 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 				: null
 			: instruction;
 	const details = homeWhy(cadence ?? detail ?? null, meeting?.[1] ?? null);
-	const action = title.replace(/[.!?]+$/, "");
+	const titleText = title.replace(/[.!?]+$/, "");
 	const extraEvidence = (text: string) =>
-		text.replace(/[.!?]+$/, "") === action ? null : text;
+		text.replace(/[.!?]+$/, "") === titleText ? null : text;
 	if (step.call_at) {
 		return {
 			title,
