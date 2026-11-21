@@ -19,17 +19,14 @@ export function copyTest() {
 		options: "-c search_path=next -c TimeZone=UTC",
 	});
 	const setup = async () => {
-		assert.ok(process.env.TEST_SNAPSHOT, "Run npm run check");
-		const [schema, attribution] = await Promise.all([
-			readSchema("next.sql"),
-			readSchema("copy-attribution.sql"),
-		]);
+		const template = process.env.TEST_COPY_SNAPSHOT;
+		assert.ok(template, "Run npm run check");
 		await asAdmin(
-			`create database "${name}" template "${process.env.TEST_SNAPSHOT}"`,
+			`create database "${name}" template "${template}"`,
+			// Compiling the copy queries costs more than running them on small fixtures.
+			`alter database "${name}" set jit = off`,
 		);
 		await db.connect();
-		await db.query(`alter default privileges revoke execute on functions from public;
-			create schema next; ${schema}; ${attribution}`);
 	};
 	const cleanup = async () => {
 		await db.end();
