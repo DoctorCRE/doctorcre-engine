@@ -6,7 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
-const configSchema = z.strictObject({
+export const docLinkConfigSchema = z.strictObject({
 	engine: z.url().refine((value) => {
 		const url = new URL(value);
 		return (
@@ -17,7 +17,7 @@ const configSchema = z.strictObject({
 	claude: z.string().refine(isAbsolute),
 	credential: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
-type Config = z.infer<typeof configSchema>;
+type Config = z.infer<typeof docLinkConfigSchema>;
 
 const claimSchema = z.object({
 	kind: z.literal("turn"),
@@ -53,12 +53,18 @@ const checkSignInEvery = 30_000;
 const pollEvery = 2_000;
 // https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy
 // https://code.claude.com/docs/en/server-managed-settings
-const managedRoots = {
-	directory: "/Library/Application Support/ClaudeCode",
-	preferences: "/Library/Managed Preferences",
-	domain: "com.anthropic.claudecode.plist",
-	cache: join(homedir(), ".claude", "remote-settings.json"),
-};
+function macManagedSettingsPaths() {
+	const preferences = "/Library/Managed Preferences";
+	const domain = "com.anthropic.claudecode.plist";
+	return {
+		directory: "/Library/Application Support/ClaudeCode",
+		preferences: [
+			join(preferences, userInfo().username, domain),
+			join(preferences, domain),
+		],
+		cache: join(homedir(), ".claude", "remote-settings.json"),
+	};
+}
 
 function readJson(text: string): unknown {
 	try {
@@ -82,15 +88,17 @@ function isMissingFile(error: unknown) {
 	return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-async function hasManagedPolicy({
-	directory,
-	preferences = [],
-	cache,
-}: {
-	directory: string;
-	preferences?: string[];
-	cache?: string;
-}) {
+export async function hasManagedPolicy(
+	{
+		directory,
+		preferences = [],
+		cache,
+	}: {
+		directory: string;
+		preferences?: string[];
+		cache?: string;
+	} = macManagedSettingsPaths(),
+) {
 	try {
 		const entries = await readdir(directory, {
 			recursive: true,
@@ -164,7 +172,7 @@ function runClaude(
 	});
 }
 
-async function signInStatus(claude: string) {
+export async function signInStatus(claude: string) {
 	const { ok, stdout } = await runClaude(claude, 5_000);
 	const auth = authStatus.safeParse(readJson(stdout));
 	if (!auth.success) return undefined;
@@ -248,18 +256,7 @@ export async function runDocLink(
 		fetch: globalThis.fetch,
 		now: Date.now,
 		wait: () => delay(pollEvery),
-		managedSettings: {
-			directory: managedRoots.directory,
-			preferences: [
-				join(
-					managedRoots.preferences,
-					userInfo().username,
-					managedRoots.domain,
-				),
-				join(managedRoots.preferences, managedRoots.domain),
-			],
-			cache: managedRoots.cache,
-		},
+		managedSettings: macManagedSettingsPaths(),
 	},
 ) {
 	function post(path: "claim" | "result", init: RequestInit) {
@@ -363,7 +360,9 @@ export async function readDocLinkConfig(path: string) {
 			`Doc link needs a private configuration file. Run chmod 600 "${path}".`,
 		);
 	}
-	const config = configSchema.safeParse(readJson(await file.readFile("utf8")));
+	const config = docLinkConfigSchema.safeParse(
+		readJson(await file.readFile("utf8")),
+	);
 	if (!config.success)
 		throw new Error("Doc link could not read its configuration file.");
 	return config.data;
