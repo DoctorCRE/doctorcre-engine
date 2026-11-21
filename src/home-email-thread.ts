@@ -29,13 +29,33 @@ const signOff =
 const contactLine =
 	/^(?:\+?(?:[(). -]*\d){10,15}|\S+@\S+\.\S+|https?:\/\/\S+)$/i;
 
-function cleanEmailBody(body: string, sender: string | null) {
-	const [message = ""] = body.split(
-		/^[ \t]*(?:[- ]*original message[- ]*$|on .+ wrote:[ \t]*$|from:[^\n]*\n(?:sent|date|to):)/im,
-		1,
-	);
-	const lines = message
-		.split(/\r?\n/)
+export function cleanEmailBody(body: string, sender: string | null) {
+	const source = body.split(/\r?\n/);
+	let candidate = -1;
+	let cutoff = source.length;
+	for (const [index, line] of source.entries()) {
+		if (
+			/^(?:[- ]*original message[- ]*|on .+ wrote:[ \t]*)$/i.test(
+				line.trimStart(),
+			)
+		) {
+			cutoff = index;
+			break;
+		}
+		if (/^[ \t]*from:/i.test(line)) {
+			candidate = index;
+		} else if (candidate >= 0 && /^[ \t]*(?:sent|date):/i.test(line)) {
+			cutoff = candidate;
+			break;
+		} else if (
+			candidate >= 0 &&
+			!/^(?:[ \t]+|[A-Za-z][A-Za-z0-9-]*:)/.test(line)
+		) {
+			candidate = -1;
+		}
+	}
+	const lines = source
+		.slice(0, cutoff)
 		.filter(
 			(line) =>
 				!/^[ \t]*(?:>|from:|to:|cc:|bcc:|sent:|subject:|phone:|fax:|tel:|mobile:)/i.test(
