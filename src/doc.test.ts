@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
 import { Hono } from "hono";
+import pg from "pg";
 import { docRoutes, recentDocTurns } from "./doc.ts";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
@@ -69,7 +70,7 @@ type Body<Path> = { error?: string } & (Path extends "/turns"
 				}
 			: { conversations: Chat[]; next_before: string | null });
 
-function client(user = "joe") {
+function client(user = "joe", writer = connectionString) {
 	const api = docRoutes();
 	const app = new Hono<typeof api extends Hono<infer Env> ? Env : never>();
 	app.use("*", async (c, next) => {
@@ -85,7 +86,7 @@ function client(user = "joe") {
 		const response = await app.request(
 			path,
 			body && { method: "POST", body: JSON.stringify(body) },
-			{ DATABASE_WRITER: { connectionString } },
+			{ DATABASE_WRITER: { connectionString: writer } },
 		);
 		const result = await response.json<Body<Path>>();
 		if (typeof status === "number")
@@ -964,58 +965,120 @@ test("Doc refuses a foreign turn and a proposal for a record that is gone", asyn
 	assert.equal((await client()(path, 409, args)).error, "target_changed");
 });
 
-async function mergeDuringConfirmation(
-	target: Awaited<ReturnType<typeof exampleLead>>,
-	survivor: string,
-	prelockedParty: string,
+async function waitForBlockedTransaction(
+	observer: pg.Client,
+	blocker?: number,
 ) {
-	const { path, conversation_id } = await answeredProposal({
-		...nextStepProposal,
-		target,
-	});
-	await db.query(`begin; set local engine.job = 'old_system';
-		set local statement_timeout = '5s'; set local deadlock_timeout = '10s'`);
-	await db.query("select id from party where id = $1 for update", [
-		prelockedParty,
-	]);
+	const deadline = AbortSignal.timeout(5_000);
+	while (!deadline.aborted) {
+		const {
+			rows: [waiter],
+		} = await observer.query<{ pid: number }>(
+			`select pid from pg_locks where locktype = 'transactionid' and not granted
+			and coalesce($1, pg_backend_pid()) = any(pg_blocking_pids(pid))`,
+			[blocker],
+		);
+		if (waiter) return waiter.pid;
+	}
+	assert.fail("Expected a transaction to wait on the held lock");
+}
+
+async function mergeDuringConfirmation({
+	target,
+	survivor,
+	victim,
+}: {
+	target: Awaited<ReturnType<typeof exampleLead>>;
+	survivor: string;
+	victim?: "doc" | "merge";
+}) {
+	const { path, conversation_id } = await answeredProposal(
+		{
+			...nextStepProposal,
+			target,
+		},
+		victim === "merge" ? other : owner,
+	);
+	const { id } = target.ref;
+	const writer = new URL(connectionString);
+	writer.searchParams.set(
+		"options",
+		`-c statement_timeout=15s -c deadlock_timeout=${victim === "doc" ? "1ms" : "1min"}`,
+	);
+	const merge = () => db.query("select merge_party($1, $2)", [id, survivor]);
+	const gate =
+		victim === "doc" ? new pg.Client({ connectionString }) : undefined;
 	const idempotency_key = randomUUID();
-	const confirmed = client()(path, [200, 409, 503], {
+	const send = client(victim === "merge" ? "dell" : "joe", writer.href);
+	const args = {
 		idempotency_key,
 		edits: {},
-	});
+	};
+	let settled: Promise<unknown> | undefined;
+	await gate?.connect();
+	await db.query("begin");
 	try {
-		const deadline = AbortSignal.timeout(5_000);
-		while (true) {
-			const blocked = await db.query(`select from pg_locks
-				where locktype = 'transactionid' and not granted
-				and pg_backend_pid() = any(pg_blocking_pids(pid))`);
-			if (blocked.rowCount) break;
-			assert.ok(
-				!deadline.aborted,
-				"Doc confirmation did not wait on the merge",
+		await db.query(`set local engine.job = 'old_system'; set local statement_timeout = '15s';
+			set local deadlock_timeout = '${victim === "merge" ? "1ms" : "1min"}'`);
+		await db.query("select id from party where id = $1 for update", [
+			victim ? survivor : id,
+		]);
+		if (gate) {
+			await gate.query("begin");
+			await gate.query(
+				"select from next.party_role where party_id = $1 and role = 'lead' for update",
+				[id],
 			);
 		}
-		if (prelockedParty === target.ref.id) {
-			// Keep the retry from masking a reversed lock order.
-			await db.query(
-				"select from party_role where party_id = $1 and role = 'lead' for update nowait",
-				[target.ref.id],
-			);
+		const confirmed = send(path, victim === "merge" ? 200 : [409, 503], args);
+		settled = Promise.allSettled([confirmed]);
+		if (gate) {
+			const docPid = await waitForBlockedTransaction(gate);
+			await Promise.all([
+				merge(),
+				waitForBlockedTransaction(gate, docPid).then(() =>
+					gate.query("commit"),
+				),
+			]);
+		} else {
+			await waitForBlockedTransaction(db);
+			if (!victim) {
+				// Keep the retry from masking a reversed lock order.
+				await db.query(
+					"select from party_role where party_id = $1 and role = 'lead' for update nowait",
+					[id],
+				);
+			}
+			if (victim === "merge") await assert.rejects(merge(), { code: "40P01" });
+			else await merge();
 		}
-		await db.query("select merge_party($1, $2)", [target.ref.id, survivor]);
-		await db.query("commit");
+		await db.query(victim === "merge" ? "rollback" : "commit");
+		return { confirmation: await confirmed, conversation_id, path, args };
 	} catch (error) {
+		await gate?.query("rollback");
 		await db.query("rollback");
-		await Promise.allSettled([confirmed]);
+		await settled;
 		throw error;
+	} finally {
+		await gate?.end();
 	}
-	assert.equal((await confirmed).error, "target_changed");
+}
+
+async function assertMergePreemptedConfirmation(
+	{
+		confirmation,
+		conversation_id,
+		args,
+	}: Awaited<ReturnType<typeof mergeDuringConfirmation>>,
+	parties: [string, string],
+) {
+	assert.equal(confirmation.error, "target_changed");
 	const { turns } = await client()(`/conversations/${conversation_id}`, 200);
 	assert.equal(turns[0]?.confirmation, null);
 	assert.equal(
 		(
 			await db.query("select from save_receipt where idempotency_key = $1", [
-				idempotency_key,
+				args.idempotency_key,
 			])
 		).rowCount,
 		0,
@@ -1023,8 +1086,7 @@ async function mergeDuringConfirmation(
 	assert.equal(
 		(
 			await db.query("select from next_step where party_id in ($1, $2)", [
-				target.ref.id,
-				survivor,
+				...parties,
 			])
 		).rowCount,
 		0,
@@ -1034,12 +1096,78 @@ async function mergeDuringConfirmation(
 test("a lead merge can finish while Doc confirmation is waiting on the party", async () => {
 	const target = await exampleLead("Example Duplicate");
 	const survivor = (await exampleLead("Example Survivor")).ref.id;
-	await mergeDuringConfirmation(target, survivor, target.ref.id);
+	const outcome = await mergeDuringConfirmation({ target, survivor });
+	await assertMergePreemptedConfirmation(outcome, [target.ref.id, survivor]);
 });
 
-test("Doc retries when a lead merges into the confirming partner", async () => {
-	const target = await exampleLead("Example Partner Duplicate", "person");
-	await mergeDuringConfirmation(target, owner, owner);
+test("Doc retries when it closes the deadlock cycle and only its detector can fire", async () => {
+	const target = await exampleLead("Example Doc Victim", "person");
+	const outcome = await mergeDuringConfirmation({
+		target,
+		survivor: owner,
+		victim: "doc",
+	});
+	await assertMergePreemptedConfirmation(outcome, [target.ref.id, owner]);
+});
+
+test("the merge must be rerun when it closes the deadlock cycle and only its detector can fire", async () => {
+	const target = await exampleLead("Example Merge Victim", "person");
+	const id = target.ref.id;
+	const { confirmation, path, args } = await mergeDuringConfirmation({
+		target,
+		survivor: other,
+		victim: "merge",
+	});
+	const steps = async () =>
+		(
+			await db.query<{ id: string }>(
+				"select id, party_id, owner_party_id, what, status from next_step where party_id in ($1, $2)",
+				[id, other],
+			)
+		).rows;
+	const before = await steps();
+	const [step] = before;
+	assert.ok(step);
+	assert.deepEqual(before, [
+		{
+			id: step.id,
+			party_id: id,
+			owner_party_id: other,
+			what: nextStepProposal.what,
+			status: "open",
+		},
+	]);
+	assert.deepEqual(confirmation.result, {
+		kind: "next_step",
+		id: step.id,
+		href: target.href,
+	});
+	const send = client("dell");
+	assert.deepEqual(await send(path, 200, args), {
+		...confirmation,
+		replayed: true,
+	});
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		select merge_party($1, $2) from stamp`,
+		[id, other],
+	);
+	assert.deepEqual(await steps(), [{ ...step, party_id: other }]);
+	const survivor = {
+		ref: { kind: "lead", id: other },
+		href: `/leads?lead=${other}`,
+	};
+	const next = await answeredProposal(
+		{ ...nextStepProposal, target: survivor },
+		other,
+	);
+	const conflict = await send(next.path, 409, {
+		...args,
+		idempotency_key: randomUUID(),
+	});
+	assert.equal(conflict.error, "open_step_exists");
+	assert.equal(conflict.next_step_id, step.id);
+	assert.equal(conflict.href, survivor.href);
 });
 
 test("Doc refuses a step when a lead was linked to a client after the proposal", async () => {
