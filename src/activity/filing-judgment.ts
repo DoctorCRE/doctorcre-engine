@@ -9,6 +9,7 @@ import {
 	filingReviewEvidence,
 	filingReviewNeeded,
 	hasFiledFacts,
+	partnerSettledFiling,
 } from "./filing-evidence.ts";
 import { linkActivity, lockEmail, recordActivity } from "./next-record.ts";
 
@@ -38,19 +39,33 @@ export async function saveFilingJudgment(
 	const sourceId = sql.val(source);
 	const {
 		rows: [email],
-	} = await sql<{ happened_at: string; filed: boolean }>`
-		select to_jsonb(happened_at) #>> '{}' as happened_at, ${hasFiledFacts(sourceId)} as filed
+	} = await sql<{ happened_at: string }>`
+		select to_jsonb(happened_at) #>> '{}' as happened_at
 		from activity where id = ${source} and not exists (
 			select from lead_email_source where activity_id = ${source}
 		)
+		and not ${hasFiledFacts(sourceId)} and not ${partnerSettledFiling(sourceId)}
 	`.execute(tx);
-	if (!email || email.filed) return;
+	if (!email) return;
 
 	const records = facts.map(({ destination }) => about(destination));
 	const allowed = await eligibleMailLinks(tx, source, records, true);
 	if (allowed.length !== facts.length) return;
 	const links = await eligibleMailLinks(tx, source, records);
 	const deal = facts.find(({ destination }) => destination.kind === "deal");
+	const vendorIds = [
+		...new Set(
+			facts.flatMap(({ destination }) =>
+				destination.kind === "vendor" ? [destination.id] : [],
+			),
+		),
+	];
+	const verifiedVendors =
+		!vendorIds.length ||
+		(
+			await sql`select id from mail_sender_vendors(${source}) as vendor(id)
+			where id = any(${vendorIds}::uuid[])`.execute(tx)
+		).rows.length === vendorIds.length;
 	const activeDeal =
 		deal &&
 		(await sql`select d.id from deal d where d.id = ${deal.destination.id}
@@ -60,20 +75,26 @@ export async function saveFilingJudgment(
 	if (
 		!facts.length ||
 		links.length !== facts.length ||
+		!verifiedVendors ||
 		activeDeal?.rows.length === 0
 	) {
-		const destinations = await eligibleMailLinks(
-			tx,
-			source,
-			job.destinations.map(about),
-			true,
-		);
+		const destinations = facts.length
+			? allowed
+			: await eligibleMailLinks(tx, source, job.destinations.map(about), true);
 		if (!destinations.length) return;
+		const offersDeal = destinations.some(
+			(destination) => "deal_id" in destination,
+		);
+		const offersVendor = destinations.some(
+			(destination) => "party_id" in destination,
+		);
+		const scope =
+			offersDeal && offersVendor ? "both" : offersVendor ? "vendor" : "deal";
 		await stampMailFiling(tx);
-		await sql`insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job)
-			select 'possible_new_deal', ${source}, 'email', ${filingReviewEvidence}, 'mail_capture'
+		await sql`insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job, filing_scope)
+			select 'possible_new_deal', ${source}, 'email', ${filingReviewEvidence}, 'mail_capture', ${scope}
 			where not exists (select from proposal p where p.activity_id = ${source} and (
-				p.kind = 'possible_new_deal' or (p.kind = 'file_to_deal' and p.status = 'pending'
+				p.kind = 'possible_new_deal' or (not ${offersVendor} and p.kind = 'file_to_deal' and p.status = 'pending'
 					and ${filingReviewNeeded(sourceId, sql.ref("p.deal_id"))})
 			)) on conflict do nothing`.execute(tx);
 		return;

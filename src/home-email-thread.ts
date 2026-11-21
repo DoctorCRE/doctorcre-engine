@@ -1,4 +1,5 @@
 import { type Expression, sql, type Transaction } from "kysely";
+import { filingScope } from "./activity/filing-evidence.ts";
 import { isoMillis } from "./answer.ts";
 import type { DB } from "./next-database.d.ts";
 
@@ -35,7 +36,8 @@ export function decisionPosition(
 ) {
 	const column = (name: string) => sql.ref(`${proposal}.${name}`);
 	return sql<number>`row_number() over (
-		partition by ${source}, case when ${column("kind")} in ('file_to_deal', 'possible_new_deal')
+		partition by ${source}, case when ${column("kind")} = 'possible_new_deal' and ${filingScope(proposal)} is not null
+			then ${column("id")}::text when ${column("kind")} in ('file_to_deal', 'possible_new_deal')
 			then ${column("kind")} || ':' || coalesce(${column("deal_id")}::text, '') else ${column("id")}::text end
 		order by (${column("status")} = 'pending') desc, ${column("created_at")} desc, ${column("id")})`;
 }

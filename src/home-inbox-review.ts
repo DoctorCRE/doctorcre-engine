@@ -1,9 +1,13 @@
 import { type RawBuilder, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import {
+	filingChoices,
 	filingReviewEvidence,
 	filingReviewNeeded,
+	filingReviewTitle,
+	filingScope,
 	hasFiledFacts,
+	partnerSettledFiling,
 } from "./activity/filing-evidence.ts";
 import { isoMillis, Refusal } from "./answer.ts";
 import {
@@ -76,6 +80,7 @@ type Suggestion = ReviewRow &
 		contact_name: string | null;
 		source_summary: string | null;
 		evidence: string;
+		filing_scope: string | null;
 		decision_label: string | null;
 		suggestion_title: string | null;
 		due_on: string | null;
@@ -136,7 +141,9 @@ const visibleSuggestion = (userId: string) => sql<boolean>`
 			and not (${filingReviewNeeded(sql.ref("p.activity_id"), sql.ref("p.deal_id"))}) then false
 		when p.kind = 'possible_new_deal' and p.status = 'pending' and (
 			${hasFiledFacts(sql.ref("p.activity_id"), true)} or
-			(p.evidence = ${filingReviewEvidence} and ${hasFiledFacts(sql.ref("p.activity_id"))})
+			(p.evidence = ${filingReviewEvidence} and (
+				${hasFiledFacts(sql.ref("p.activity_id"))} or ${partnerSettledFiling(sql.ref("p.activity_id"))}
+			))
 		) then false
 		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 		when p.kind = 'email_lead' then p.changed_for_user_id = ${userId}::uuid
@@ -195,6 +202,7 @@ export async function readProposal(
 			"p.reason",
 		])
 		.select((eb) => [
+			filingScope("p").as("filing_scope"),
 			sql<
 				string | null
 			>`case when p.activity_kind = 'email' then p.activity_id end`.as(
@@ -244,10 +252,11 @@ export async function readProposal(
 		.where(visibleProposalDetail(userId))
 		.executeTakeFirst();
 	if (!proposal) return new Refusal(404, "not_found");
-	const { email_source_id, ...detail } = proposal;
+	const { email_source_id, filing_scope, ...detail } = proposal;
 	return email_source_id
 		? {
 				...detail,
+				...(filing_scope && { filing_choices: filingChoices(filing_scope) }),
 				thread: await readHomeEmailThread(db, userId, email_source_id),
 			}
 		: detail;
@@ -263,6 +272,7 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 					select from party_role where party_id = p.party_id and role = 'vendor'
 				) as late_target,
 				contact.name as contact_name, a.summary as source_summary, p.evidence,
+				case when p.kind = 'possible_new_deal' then ${filingScope("p")} end as filing_scope,
 				coalesce(phase.label, lead_stage.label) as decision_label,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
@@ -281,6 +291,8 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 						then 'Add ' || party.name || ' as a lead'
 					when p.kind = 'phase_move' then 'Move to ' || phase.label
 					when p.kind = 'file_to_deal' then 'File email to ' || d.name
+					when p.kind = 'possible_new_deal' and p.evidence = ${filingReviewEvidence}
+						then ${filingReviewTitle}
 					when p.kind = 'possible_new_deal' then 'Review possible new deal'
 					when p.kind = 'lead_stage_move' then 'Review lead stage'
 					when p.kind = 'email_lead' then candidate.name || ' · Possible lead'
@@ -630,7 +642,11 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const { summary, quote, title } = emailRequest(suggestion);
 	const request = summary || quote;
 	const source = sender ? `Email from ${sender}` : "Email";
-	const action = emailActions[suggestion.kind];
+	const choices = filingChoices(suggestion.filing_scope);
+	const action =
+		choices.length > 1
+			? "Review filing"
+			: (choices[0]?.label ?? emailActions[suggestion.kind]);
 	const details = {
 		next_step: proposed && `Proposed follow-up: ${proposed}`,
 		file_to_deal: target && `Suggested deal is ${target}`,
@@ -647,7 +663,7 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 		suggestion.evidence === filingReviewEvidence;
 	return {
 		title: filingReview
-			? "Review where to file this email"
+			? filingReviewTitle
 			: title || suggestionTitle(suggestion, sender),
 		why: homeWhy(
 			request || receivedEmail(source, suggestion.email_at),
@@ -656,6 +672,7 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 			count > 1 ? `${count} decisions to review` : null,
 		),
 		primary_action: suggestion.snoozed_until ? null : action,
+		...(choices.length > 0 && { filing_choices: choices }),
 	};
 }
 

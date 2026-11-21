@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { filingReviewNeeded } from "./activity/filing-evidence.ts";
+import {
+	filingReviewNeeded,
+	filingScope,
+	partnerSettledFiling,
+} from "./activity/filing-evidence.ts";
 import { lockEmail } from "./activity/next-record.ts";
 import { answerNextRead, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
@@ -96,6 +100,7 @@ const decision = {
 		v === "accept" || v === "dismiss",
 	edits: optional(fitting(edits)),
 	deal_id: optional(isUuid),
+	vendor_id: optional(isUuid),
 	reason: optional(isText),
 };
 const fail = (
@@ -339,13 +344,15 @@ async function lockFiling(
 		kind: string;
 		activity_id: string | null;
 		deal_id: string | null;
+		filing_scope: string | null;
 	},
 ) {
 	const { rows } = await sql<{ id: string; message_id: string | null }>`
-		select sibling.id, e.message_id
+		select sibling.id, coalesce(e.message_id, e.activity_id::text) as message_id
 		from proposal sibling
 		left join email e on e.activity_id = sibling.activity_id
-		where sibling.id = ${p.id}::uuid or (sibling.kind = ${p.kind}
+		where sibling.id = ${p.id}::uuid or (${p.filing_scope}::text is null
+			and ${filingScope("sibling")} is null and sibling.kind = ${p.kind}
 			and sibling.deal_id is not distinct from ${p.deal_id}::uuid
 			and sibling.status = 'pending'
 			and sibling.activity_id in (
@@ -381,7 +388,13 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 			async (tx, r) => {
 				const clicked = await tx
 					.selectFrom("proposal")
-					.select(["id", "kind", "activity_id", "deal_id"])
+					.select([
+						"id",
+						"kind",
+						"activity_id",
+						"deal_id",
+						filingScope("proposal").as("filing_scope"),
+					])
 					.where("id", "=", r.proposal_id)
 					.executeTakeFirst();
 				const members =
@@ -395,6 +408,8 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					// A direct decision clears the mailbox stamp and records the owner as decider.
 					.where(sql<boolean>`(kind <> 'email_lead' or coalesce(decided_by_user_id, changed_for_user_id)
 						= nullif(current_setting('engine.user_id', true), '')::uuid)`)
+					.where(sql<boolean>`(${filingScope("proposal")} is null or
+						${sourceInMailbox(sql.ref("proposal.activity_id"), sql<string>`current_setting('engine.user_id')`)})`)
 					.forUpdate()
 					.executeTakeFirst();
 				if (!p) return fail(404, "not_found");
@@ -408,9 +423,23 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 				if (
 					(r.edits && p.kind !== "next_step") ||
 					(r.deal_id && !filing) ||
+					(r.vendor_id &&
+						(!accepts ||
+							!p.filing_scope ||
+							p.filing_scope === "deal" ||
+							r.deal_id)) ||
+					(accepts && p.filing_scope === "vendor" && !r.vendor_id) ||
 					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
+				if (p.filing_scope && p.activity_id) {
+					const {
+						rows: [email],
+					} = await sql<{ decided: boolean }>`
+						select ${partnerSettledFiling(sql.val(p.activity_id))} as decided
+					`.execute(tx);
+					if (email?.decided) return fail(409, "already_decided");
+				}
 				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
 					const d = await dealNow(tx, p.deal_id);
 					if (
@@ -453,6 +482,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						filed_deal_id: string | null;
 					}>`update proposal
    set status = ${accepts ? "accepted" : "dismissed"}, filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
+	${r.vendor_id ? sql`filed_vendor_id = ${r.vendor_id}::uuid,` : sql``}
     filing_reason = ${accepts ? (r.reason ?? null) : null},
     dismiss_reason = ${accepts ? null : (r.reason?.trim() ?? null)} where id = any(${members}::uuid[])
    returning id, status, decided_at::text, filed_deal_id`.execute(tx);

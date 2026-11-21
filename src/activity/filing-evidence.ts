@@ -7,6 +7,22 @@ export type About =
 	| { property_id: string };
 
 export const filingReviewEvidence = "Needs filing review.";
+export const filingReviewTitle = "Review where to file this email";
+
+// Home also reads databases where the filing judgment migration is still pending.
+export const filingScope = (proposal: string) =>
+	sql<string | null>`to_jsonb(${sql.ref(proposal)})->>'filing_scope'`;
+
+export function filingChoices(scope: string | null | undefined) {
+	return [
+		...(scope === "deal" || scope === "both"
+			? [{ kind: "deal", label: "Choose deal" }]
+			: []),
+		...(scope === "vendor" || scope === "both"
+			? [{ kind: "vendor", label: "Choose vendor" }]
+			: []),
+	];
+}
 
 export const filingReceiptKey = (activityId: Expression<string | null>) =>
 	sql<string>`md5('email_filing:' || ${activityId}::uuid)::uuid`;
@@ -18,6 +34,13 @@ export function hasFiledFacts(
 	return sql<boolean>`exists (select from save_receipt r
 		where r.idempotency_key = ${filingReceiptKey(activityId)} and r.verb = 'file-email-facts'
 			and (not ${toDeal} or r.answer->>'deal_id' is not null))`;
+}
+
+export function partnerSettledFiling(activityId: Expression<string | null>) {
+	return sql<boolean>`exists (select from proposal settled
+		where settled.activity_id = ${activityId}
+			and settled.kind in ('file_to_deal', 'possible_new_deal')
+			and settled.status in ('accepted', 'dismissed'))`;
 }
 
 function partnerUnlinked(

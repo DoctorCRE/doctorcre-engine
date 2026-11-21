@@ -13,6 +13,7 @@ const contact = randomUUID();
 const vendorContact = randomUUID();
 const ambiguousContact = randomUUID();
 const movingContact = randomUUID();
+const formerContact = randomUUID();
 const vendor = randomUUID();
 const otherVendor = randomUUID();
 const deal = randomUUID();
@@ -31,17 +32,20 @@ before(async () => {
 			('${vendorContact}', 'person', 'Example Vendor Contact'),
 			('${ambiguousContact}', 'person', 'Second Vendor Contact'),
 			('${movingContact}', 'person', 'Moving Contact'),
+			('${formerContact}', 'person', 'Former Vendor Contact'),
 			('${vendor}', 'company', 'Example Vendor'), ('${otherVendor}', 'company', 'Second Vendor');
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
 		insert into role (slug, label) values ('vendor', 'Vendor');
 		insert into party_role (party_id, role) values ('${vendor}', 'vendor'), ('${otherVendor}', 'vendor');
 		insert into party_company (person_id, company_id) values
 			('${vendorContact}', '${vendor}'), ('${movingContact}', '${vendor}'),
+			('${formerContact}', '${vendor}'),
 			('${ambiguousContact}', '${vendor}'), ('${ambiguousContact}', '${otherVendor}');
 		insert into party_email (party_id, address, label) values
 			('${contact}', 'contact@example.test', 'work'),
 			('${vendorContact}', 'vendor-contact@example.test', 'work'),
 			('${movingContact}', 'moving-contact@example.test', 'work'),
+			('${formerContact}', 'former-contact@example.test', 'work'),
 			('${ambiguousContact}', 'ambiguous-contact@example.test', 'work');
 		insert into deal (id, name, owner_user_id) values
 			('${deal}', 'Example Deal', '${joe}'), ('${otherDeal}', 'Other Deal', '${joe}');
@@ -94,8 +98,12 @@ async function propose(activity_id: string, deal_id = deal) {
 }
 
 async function cards(...ids: string[]) {
+	return mailboxCards(partner, ...ids);
+}
+
+async function mailboxCards(caller: { user: string }, ...ids: string[]) {
 	const response = await request(
-		partner,
+		caller,
 		"home/inbox",
 		{ method: "GET" },
 		{
@@ -484,6 +492,207 @@ const fact = (kind: string, id: string, text: string) => ({
 	destination: { kind, id },
 	text,
 	quote: evidence,
+});
+
+async function filingProposals(activity: string) {
+	const { rows } = await db.query<{ id: string }>(
+		"select id from proposal where activity_id = $1 and status = 'pending'",
+		[activity],
+	);
+	return rows.map(({ id }) => id);
+}
+
+for (const decision of ["dismiss", "accept"]) {
+	test(`a partner's ${decision} settles filing for an already claimed second copy`, async () => {
+		const message = mail(`shared-${decision}`, `Shared filing ${decision}`);
+		message.email.sender = "ambiguous-contact@example.test";
+		if (decision === "accept") {
+			await store(
+				mail(
+					"shared-parent",
+					message.email.conversation_id,
+					[{ deal_id: deal }],
+					true,
+				),
+			);
+		}
+		const activity = await captureForJudgment(message);
+		assert.equal(await captureForJudgment(message, secondMailbox), activity);
+		const first = await claimFiling(joe, activity);
+		const second = await claimFiling(dell, activity);
+		assert.equal(await first.answer([]), 204);
+		const [proposal] = await filingProposals(activity);
+		assert.ok(proposal);
+		assert.equal(
+			(
+				await save(partner, `proposals/${proposal}/decision`, {
+					idempotency_key: randomUUID(),
+					decision,
+					reason: "Reviewed by the mailbox partner.",
+					...(decision === "accept" && { deal_id: deal }),
+				})
+			)[0],
+			200,
+		);
+		const text = `Second copy after ${decision}`;
+		assert.equal(await second.answer([fact("vendor", vendor, text)]), 204);
+		assert.equal(
+			(await db.query("select from activity where summary = $1", [text]))
+				.rowCount,
+			0,
+		);
+		assert.equal(
+			(
+				await db.query(
+					"select from activity_about where activity_id = $1 and party_id = $2",
+					[activity, vendor],
+				)
+			).rowCount,
+			0,
+		);
+		assert.deepEqual(await filingProposals(activity), []);
+		assert.deepEqual(await mailboxCards({ user: "dell" }, proposal), []);
+	});
+}
+
+test("an affiliation ending before the email was sent leaves filing for review", async () => {
+	const message = mail("former-contact", "Former vendor");
+	message.email.sender = "former-contact@example.test";
+	const activity = await captureForJudgment(message);
+	const claim = await claimFiling(joe, activity);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		update party_company set ended_on = '2026-11-02'
+		where person_id = '${formerContact}' and company_id = '${vendor}'; commit`);
+	const text = "Fact for a former affiliation";
+	assert.equal(await claim.answer([fact("vendor", vendor, text)]), 204);
+	assert.equal(
+		(await db.query("select from activity where summary = $1", [text]))
+			.rowCount,
+		0,
+	);
+	assert.partialDeepStrictEqual(
+		await cards(...(await filingProposals(activity))),
+		[
+			{
+				title: "Review where to file this email",
+				primary_action: "Choose vendor",
+			},
+		],
+	);
+});
+
+test("a vendor-only fallback offers and accepts a vendor choice", async () => {
+	const message = mail("vendor-review", "Vendor filing review");
+	message.email.sender = "ambiguous-contact@example.test";
+	const activity = await captureForJudgment(message);
+	assert.equal(await (await claimFiling(joe, activity)).answer([]), 204);
+	const [proposal] = await filingProposals(activity);
+	assert.ok(proposal);
+	assert.partialDeepStrictEqual(await cards(proposal), [
+		{
+			title: "Review where to file this email",
+			primary_action: "Choose vendor",
+		},
+	]);
+	const [status, detail] = await save(
+		partner,
+		`proposals/${proposal}`,
+		{},
+		"GET",
+	);
+	assert.equal(status, 200);
+	assert.deepEqual(detail.filing_choices, [
+		{ kind: "vendor", label: "Choose vendor" },
+	]);
+	const selectedVendor = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${selectedVendor}', 'company', 'Selected Vendor');
+		insert into party_role (party_id, role) values ('${selectedVendor}', 'vendor');
+		commit`);
+	const decide = (target: object) =>
+		save(partner, `proposals/${proposal}/decision`, {
+			idempotency_key: randomUUID(),
+			decision: "accept",
+			...target,
+		});
+	assert.equal(
+		(await decide({ deal_id: deal, reason: "Review the target." }))[0],
+		422,
+	);
+	assert.equal((await decide({ vendor_id: selectedVendor }))[0], 200);
+	assert.equal(
+		(
+			await db.query(
+				"select from activity_about where activity_id = $1 and party_id = $2",
+				[activity, selectedVendor],
+			)
+		).rowCount,
+		1,
+	);
+	assert.deepEqual(await cards(proposal), []);
+	const survivor = randomUUID();
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.user_id', '${joe}', true);
+			insert into party (id, kind, name) values ('${survivor}', 'company', 'Surviving Vendor');
+			select merge_party('${selectedVendor}', '${survivor}');`);
+		const { rows } = await db.query(
+			`select p.filed_vendor_id from proposal p join activity_about a
+				on a.activity_id = p.activity_id and a.party_id = p.filed_vendor_id
+				where p.id = $1 and p.status = 'accepted' and p.decided_by_user_id = $2`,
+			[proposal, joe],
+		);
+		assert.deepEqual(rows, [{ filed_vendor_id: survivor }]);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("Home offers both filing choices when the email has both kinds of destination", async () => {
+	const thread = "Mixed filing review";
+	await store(mail("mixed-parent", thread, [{ deal_id: deal }], true));
+	const message = mail("mixed-review", thread);
+	message.email.sender = "vendor-contact@example.test";
+	const activity = await captureForJudgment(message);
+	assert.equal(await (await claimFiling(joe, activity)).answer([]), 204);
+	assert.partialDeepStrictEqual(
+		await cards(...(await filingProposals(activity))),
+		[
+			{
+				title: "Review where to file this email",
+				primary_action: "Review filing",
+				filing_choices: [
+					{ kind: "deal", label: "Choose deal" },
+					{ kind: "vendor", label: "Choose vendor" },
+				],
+			},
+		],
+	);
+});
+
+test("judgment can file to a vendor the sender worked for on the sent date", async () => {
+	const sender = randomUUID();
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${sender}', 'person', 'Previous Contact');
+		insert into party_email (party_id, address, label) values ('${sender}', 'previous@example.test', 'work');
+		insert into party_company (person_id, company_id, started_on, ended_on)
+			values ('${sender}', '${vendor}', '2026-11-01', '2026-11-03');
+		commit`);
+	const message = mail("historic-vendor", "Historical vendor");
+	message.email.sender = "previous@example.test";
+	const activity = await captureForJudgment(message);
+	const text = "Fact for the vendor on the sent date";
+	assert.equal(
+		await (await claimFiling(joe, activity)).answer([
+			fact("vendor", vendor, text),
+		]),
+		204,
+	);
+	assert.equal(
+		(await db.query("select from activity where summary = $1", [text]))
+			.rowCount,
+		1,
+	);
 });
 
 async function captureForJudgment(
