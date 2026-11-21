@@ -1,7 +1,7 @@
 import { type RawBuilder, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import { isoMillis, Refusal } from "./answer.ts";
-import { homeDate, homeDisplayText, homeWhy } from "./home-steps.ts";
+import { homeDate, homeDisplayText, homeTitle, homeWhy } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {
@@ -489,7 +489,11 @@ function conversationReviewText(
 		homeDisplayText(suggestion.evidence) ||
 		homeDisplayText(suggestion.source_summary);
 	return {
-		title: `${kind}${withContact}${about}${when} — ${review}${remaining}`,
+		title: homeTitle(
+			`${kind}${withContact}${about}${when}`,
+			`${review}${remaining}`,
+			`${kind}${withContact}${about}`,
+		),
 		why: homeWhy(
 			date ? `${kind} on ${date}` : null,
 			evidence || proposed || "Source details unavailable",
@@ -504,10 +508,45 @@ function conversationReviewText(
 	};
 }
 
-function emailRequest(email: EmailContext) {
-	return (
-		homeDisplayText(email.email_summary) || homeDisplayText(email.email_quote)
+const requestStart =
+	/^(?:please (?!note\b|see attached\b)|(?:can|could|would|will) you\b|(?:i|we) (?:need|would like)\b|(?:asked|requested|review|confirm|send|call|check|schedule)\b)/i;
+const calendarDate =
+	/\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?) \d{1,2}\b/i;
+const scheduleDecision =
+	/\b(?:works?|confirmed|scheduled|set for|available)\b/i;
+
+function shortEmailExcerpt(evidence: string | null) {
+	const [body = ""] = (evidence ?? "").split(
+		/^\s*(?:>|--|from:|sent:|to:|subject:|on .+ wrote:|(?:best|regards|thanks|thank you|sincerely)[,.!]?\s*$)/im,
 	);
+	let request = "";
+	let fact = "";
+	for (const sentence of body.split(/(?<=[.!?])\s+|\r?\n/)) {
+		const text = homeDisplayText(sentence);
+		if (
+			!/[.!?]$/.test(text) ||
+			/\b(?:From|Sent|Subject|To):|(?:\d[ ().+-]*){10}/i.test(text)
+		)
+			continue;
+		if (requestStart.test(text)) {
+			if (!request || text.length < request.length) request = text;
+		} else if (
+			((calendarDate.test(text) && scheduleDecision.test(text)) ||
+				/\b(?:arrived|was received)\.$/i.test(text)) &&
+			(!fact || text.length < fact.length)
+		) {
+			fact = text;
+		}
+	}
+	return request || fact;
+}
+
+function emailRequest(email: EmailContext) {
+	const summary = homeDisplayText(email.email_summary);
+	return {
+		summary,
+		quote: summary ? "" : shortEmailExcerpt(email.email_quote),
+	};
 }
 
 function receivedEmail(source: string, receivedAt: string | null) {
@@ -522,6 +561,23 @@ function emailEvent(source: string, sender: string, request: string) {
 	return sender && event.toLowerCase().includes(sender.toLowerCase())
 		? event
 		: `${source} (${event})`;
+}
+
+function emailTitle(
+	source: string,
+	sender: string,
+	decision: string,
+	summary: string,
+	quote: string,
+) {
+	const event = quote
+		? `${source} (“${quote}”)`
+		: emailEvent(source, sender, summary);
+	return homeTitle(
+		event,
+		decision,
+		quote || event.startsWith(`${source} (`) ? source : event,
+	);
 }
 
 const emailActions = {
@@ -540,24 +596,23 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const target = homeDisplayText(suggestion.context_label);
 	const destination = homeDisplayText(suggestion.decision_label);
 	const proposed = homeDisplayText(suggestion.suggestion_title);
-	const evidence = homeDisplayText(suggestion.evidence);
-	const request = emailRequest(suggestion);
+	const evidence = suggestion.email_quote
+		? ""
+		: homeDisplayText(suggestion.evidence);
+	const { summary, quote } = emailRequest(suggestion);
+	const request = summary || quote;
 	const source = sender ? `Email from ${sender}` : "Email";
-	const event = emailEvent(
-		source,
-		sender,
-		request || (suggestion.kind === "next_step" ? "" : evidence),
-	);
 	const action = emailActions[suggestion.kind];
 	const forTarget = target && target !== sender ? ` for ${target}` : "";
-	const followUp = `review follow-up${forTarget}`;
 	const decisionText = {
 		next_step: [
-			proposed ? `${followUp} (${proposed})` : followUp,
+			proposed
+				? `review follow-up: ${proposed}`
+				: `review follow-up${forTarget}`,
 			proposed ? `Proposed follow-up: ${proposed}` : null,
 		],
 		file_to_deal: [
-			target ? `choose the deal (suggested: ${target})` : "choose the deal",
+			"choose the deal",
 			target ? `Suggested deal is ${target}` : null,
 		],
 		possible_new_deal: ["decide where to file it", null],
@@ -585,12 +640,20 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	} satisfies Record<Suggestion["kind"], [string, string | null]>;
 	const [decision, details] = decisionText[suggestion.kind];
 	const count = suggestion.suggestions.length;
+	const context =
+		summary ||
+		(suggestion.kind === "next_step" ||
+		suggestion.email_quote ||
+		evidence.length > 60
+			? ""
+			: shortEmailExcerpt(suggestion.evidence));
 	return {
-		title: `${event} — ${decision}${count > 1 ? ` (${count} decisions to review)` : ""}`,
+		title: emailTitle(source, sender, decision, context, quote),
 		why: homeWhy(
 			request || receivedEmail(source, suggestion.email_at),
 			suggestion.kind !== "next_step" && evidence !== request ? evidence : null,
 			details || (request ? null : action),
+			count > 1 ? `${count} decisions to review` : null,
 		),
 		primary_action: suggestion.snoozed_until ? null : action,
 	};
@@ -643,37 +706,45 @@ function draftReviewText(draft: Draft & ReviewMark) {
 	const target = draft.deal_id && homeDisplayText(draft.context_label);
 	const replyWithTarget = target ? `${reply} about ${target}` : reply;
 	const source = sender ? `Email from ${sender}` : "Email";
-	const request = emailRequest(draft);
+	const { summary, quote } = emailRequest(draft);
+	const request = summary || quote;
 	const why = homeWhy(
 		request || receivedEmail(source, draft.email_at),
 		!request && draft.status === "pending" ? "Review the drafted reply" : null,
 	);
 	switch (draft.status) {
 		case "pending": {
-			const event = request
-				? emailEvent(source, sender, request)
-				: `${reply} is drafted`;
+			const event = request ? source : `${reply} is drafted`;
 			return {
-				title: `${event} — review reply${target ? ` for ${target}` : ""}`,
+				title: emailTitle(
+					event,
+					sender,
+					`review reply${target ? ` for ${target}` : ""}`,
+					summary,
+					quote,
+				),
 				why,
 				primary_action: draft.snoozed_until ? null : "Review reply",
 			};
 		}
 		case "failed":
 			return {
-				title: `${replyWithTarget} ${/^unconfirmed_after_\d+$/.test(draft.failure_reason ?? "") ? "has unconfirmed delivery" : "didn't send"} — review delivery`,
+				title: homeTitle(
+					`${replyWithTarget} ${/^unconfirmed_after_\d+$/.test(draft.failure_reason ?? "") ? "has unconfirmed delivery" : "didn't send"}`,
+					"review delivery",
+				),
 				why: deliveryWhy(draft.failure_reason),
 				primary_action: draft.snoozed_until ? null : "Review delivery",
 			};
 		case "approved":
 			return {
-				title: `${replyWithTarget} is sending`,
+				title: homeTitle(`${replyWithTarget} is sending`),
 				why,
 				primary_action: null,
 			};
 		case "sent":
 			return {
-				title: `${replyWithTarget} was sent`,
+				title: homeTitle(`${replyWithTarget} was sent`),
 				why,
 				primary_action: null,
 			};

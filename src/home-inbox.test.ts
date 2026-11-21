@@ -26,6 +26,8 @@ const completedBuildingStep = randomUUID();
 const sharedBuildingStep = randomUUID();
 const followUp = randomUUID();
 const held = randomUUID();
+const leaseReminder = randomUUID();
+const pastLeaseReminder = randomUUID();
 const completed = randomUUID();
 const completedWithoutTime = randomUUID();
 const completedEightDaysAgo = randomUUID();
@@ -64,7 +66,7 @@ before(async () => {
 				'call-example', '${call}', 'Please send the floor plan.');
 		insert into next_step (id, party_id, owner_party_id, what, due_on, hold_until, resolution, done_at, resolution_reason) values
 			('${ordinary}', '${client}', '${owner}', 'Send the lease', '2026-11-19', null, null, null, null),
-			('${held}', '${contact}', '${owner}', 'Call about the suite', '2026-11-19', '2999-04-01', null, null, null),
+			('${held}', '${contact}', '${owner}', 'HOLD — Call about the suite', null, '2999-04-01', null, null, null),
 			('${completed}', '${client}', '${owner}', 'Check the budget', null, null, 'done', now() - interval '1 hour', null),
 			('${completedWithoutTime}', '${client}', '${owner}', 'Review the floor plan', null, null, 'done', null, null),
 			('${completedEightDaysAgo}', '${client}', '${owner}', 'Confirm the suite number', null, null, 'done', now() - interval '8 days', null),
@@ -73,6 +75,13 @@ before(async () => {
 		insert into next_step (id, deal_id, owner_party_id, what)
 			values ('${formerlyHidden}', '${deal}', '${owner}', 'Check the lease term'),
 				('${otherDealStep}', '${meetingDeal}', '${other}', 'Confirm the renewal terms');
+		insert into next_step (id, deal_id, owner_party_id, what, due_on, item_title, source_ref) values
+			('${leaseReminder}', '${deal}', '${owner}',
+				'Lease event — Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone.',
+				'2026-11-19', 'Lease event', 'lease-example'),
+			('${pastLeaseReminder}', '${deal}', '${owner}',
+				'Lease event — Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans.',
+				'2026-11-19', 'Lease event', 'past-lease-example');
 		insert into next_step (id, deal_id, owner_party_id, what, resolution, done_at) values
 			('${completedDealStep}', '${meetingDeal}', '${other}', 'Check the renewal budget', 'done', now());
 		insert into next_step (id, property_id, owner_party_id, what, resolution, done_at) values
@@ -89,8 +98,8 @@ before(async () => {
 		insert into ops.home_inbox_disposition (actor_id, item_id, disposition, snoozed_until, source_version, material_version, updated_at)
 			values ('${owner}', 'next_action:${formerlyHidden}', 'settled', null, '1', 'm', '2026-10-04');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
-			values ('${proposal}', 'next_step', '${meeting}', 'meeting', 'Please check our dates.',
-				'old_system', '${meetingDeal}', 'Check renewal dates', '${owner}');
+			values ('${proposal}', 'next_step', '${meeting}', 'meeting', 'The meeting started at 2026-11-06T01:00:00Z.',
+				'old_system', '${meetingDeal}', 'Check renewal dates on Thursday 2026-11-05', '${owner}');
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${owner}', true);
 		update proposal set status = 'accepted' where id = '${proposal}';
 		commit;`);
@@ -117,6 +126,7 @@ async function inbox(caller = user) {
 	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);
 	const items = result.items.filter(isArguments);
 	for (const item of items) {
+		assert.ok(typeof item.title === "string" && item.title.length <= 90);
 		assert.equal(Object.hasOwn(item, "auto_settled"), false);
 		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
 	}
@@ -149,7 +159,16 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	);
 	assert.deepEqual(
 		new Set(items.keys()),
-		new Set([ordinary, followUp, held, completed, formerlyHidden, proposal]),
+		new Set([
+			ordinary,
+			followUp,
+			held,
+			completed,
+			formerlyHidden,
+			proposal,
+			leaseReminder,
+			pastLeaseReminder,
+		]),
 	);
 	assert.partialDeepStrictEqual(items.get(ordinary), {
 		item_id: `next_action:${ordinary}`,
@@ -201,6 +220,29 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	assert.equal(otherItems.get(otherStep)?.section, "inbox");
 });
 
+test("A held follow-up explains the saved hold and action in plain words", async () => {
+	assert.partialDeepStrictEqual((await inbox()).get(held), {
+		title: "Follow-up on hold for Dr. Example",
+		why: "Held until Apr 1, 2999. Call about the suite.",
+	});
+});
+
+test("A lease reminder names the deal once and gives the decision and estimated date", async () => {
+	assert.partialDeepStrictEqual((await inbox()).get(leaseReminder), {
+		title:
+			"Example Dental, Springfield lease event est. Dec 1, 2026 — decide on renewal or relocation",
+		why: "Last window before leverage is gone. Due Nov 19, 2026.",
+	});
+});
+
+test("A lease reminder shows the estimated date and saved action when the window has passed", async () => {
+	assert.partialDeepStrictEqual((await inbox()).get(pastLeaseReminder), {
+		title:
+			"Example Dental, Springfield lease event est. Oct 1, 2026 — confirm renewal plans",
+		why: "The estimated renewal window has passed. Due Nov 19, 2026.",
+	});
+});
+
 test("a call follow-up appears once with its call, deal and evidence", async () => {
 	const item = (await inbox()).get(followUp);
 	assert.ok(item);
@@ -230,8 +272,9 @@ test("a call follow-up appears once with its call, deal and evidence", async () 
 
 test("a step created by a suggestion keeps the meeting source", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(proposal), {
-		title: "Follow-up set for Example Renewal — Check renewal dates",
-		why: "Follow-up set from the meeting. Please check our dates.",
+		title:
+			"Follow-up set for Example Renewal — Check renewal dates on Thursday, Nov 5, 2026",
+		why: "Follow-up set from the meeting. The meeting started at Nov 5, 2026, 7:00 PM.",
 		source_activity: { kind: "meeting", id: meeting },
 	});
 });
@@ -268,7 +311,8 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 		],
 		["Schedule the next follow-up", "Schedule the next follow-up"],
 		["L-456 — Timing", "Timing"],
-		["C-026", "Follow-up for Example Vendor"],
+		["NONE — Check in after June", "Check in after June"],
+		["C-026", ""],
 	].map(([what, title]) => ({
 		id: randomUUID(),
 		party: randomUUID(),
@@ -307,8 +351,8 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 			items.filter((item) => item.source_id === example.id),
 			[
 				{
-					title: example.title,
-					why: "No reason was recorded.",
+					title: `Follow-up set for Example Vendor — ${example.title || "open the saved step"}`,
+					why: `Follow-up set on Nov 17, 2026.${example.title ? ` ${example.title.replace(/\.$/, "")}.` : ""}`,
 					primary_action: "Mark done",
 					due_on: null,
 					open_url: `/relationships?node=party:${example.party}&step=${example.id}`,
@@ -370,7 +414,7 @@ test("each partner's Home link names their open step on the same deal", async ()
 	);
 	assert.equal(
 		otherItems.get(completedDealStep)?.open_url,
-		`/deals?deal=${meetingDeal}&focus=next-step`,
+		`/deals?deal=${meetingDeal}&focus=next-step&step=${completedDealStep}`,
 	);
 });
 
