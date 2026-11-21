@@ -3,7 +3,6 @@ import { sql, type Transaction } from "kysely";
 import { lockEmail, parseEmail, recordEmail } from "../activity/next-record.ts";
 import { Refusal, refuse } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
-import { beforeEmailHistory } from "../home-email-thread.ts";
 import { nextTransaction } from "../next-connection.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
@@ -299,6 +298,64 @@ export const leadEmailIntake = new Hono<NextSaveEnv>().post(
 		);
 	},
 );
+
+const historyMarker =
+	/^(?:-+ *(?:original|forwarded) message *-+|begin forwarded message:)$/i;
+const headerField = /^\*?(from|to|cc|bcc|sent|date|subject):\*?(.*)$/i;
+const sentence = /[.!?]$|\b[a-z]+ [a-z]+\b/;
+// Stored mail often has no line breaks, so quoted history must be found mid-line too.
+const inlineHistory = new RegExp(
+	[
+		"(?<!-)-{2,80} ?(?:Original|Forwarded) [Mm]essage ?-{2,80}(?!-)",
+		String.raw`(?<!\S)Begin forwarded message:`,
+		// A repeated From or Sent starts a new candidate, so incomplete headers cannot overlap.
+		String.raw`(?:(?<![-_=*])[-_=*]{3,80}[ \t]{0,80})?\*?From:\*? ` +
+			String.raw`(?:(?! \*?(?:From|Sent):)[^\r\n]){1,300} \*?Sent:\*? ` +
+			String.raw`(?:(?! \*?(?:From|Sent|Subject):)[^\r\n\d]){0,40}\d` +
+			String.raw`(?:(?! \*?(?:From|Sent|Subject):)[^\r\n]){0,2000} \*?Subject:`,
+		String.raw`(?<=^|\s)On (?:(?![.!?]\s)[^\r\n\d]){0,300}\d(?:(?![.!?]\s| wrote:)[^\r\n]){0,300} wrote:`,
+	].join("|"),
+);
+
+function beforeEmailHistory(body: string) {
+	const normalized = body.replace(/\u00a0/g, " ");
+	const cut = normalized.search(inlineHistory);
+	const recent = cut < 0 ? normalized : normalized.slice(0, cut);
+	const lines = recent.split(/(?<=\n)|(?<=\r)(?!\n)/);
+	return body.slice(0, lines.slice(0, historyStart(lines)).join("").length);
+}
+
+function field(line: string) {
+	const [, label = "", value = ""] = headerField.exec(line.trim()) ?? [];
+	return sentence.test(value) ? "" : label.toLowerCase();
+}
+
+function historyStart(lines: string[]) {
+	let from = -1;
+	for (const [index, line] of lines.entries()) {
+		if (historyMarker.test(line.trim()) || quoteOpener(lines, index))
+			return index;
+		const label = field(line);
+		if (label === "from") from = index;
+		else if (from < 0 || !line.trim()) continue;
+		else if (label === "sent" || label === "date") return from;
+		else if (!/^[ \t]|^\*?[a-z][a-z0-9-]*:/i.test(line)) from = -1;
+	}
+	return lines.length;
+}
+
+// Mail clients wrap a long "On <date>, <name> <address> wrote:" over lines.
+function quoteOpener(lines: string[], index: number) {
+	if (!/^on\s/i.test(lines[index]?.trim() ?? "")) return false;
+	let opener = "";
+	for (const line of lines.slice(index, index + 3)) {
+		opener = `${opener} ${line.trim()}`;
+		if (opener.length > 400 || !line.trim()) return false;
+		if (/\bwrote:$/i.test(opener)) return /\d/.test(opener);
+		if (/[.!?]$/.test(opener)) return false;
+	}
+	return false;
+}
 
 const defaultLabels = {
 	name: "Name",
