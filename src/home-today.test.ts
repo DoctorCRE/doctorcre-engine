@@ -51,8 +51,8 @@ before(async () => {
 		select v.id, v.deal_id, v.party_id, v.property_id, v.owner_id, v.what, day.d + v.due_offset,
 			case when v.hold_offset is not null then day.d + v.hold_offset end, v.call_id, v.quote
 		from day cross join (values
-			('${id(21)}'::uuid, '${id(7)}'::uuid, null::uuid, null::uuid, '${id(1)}'::uuid, 'Send revised LOI', -3, null::int, null::uuid, null::text),
-			('${id(22)}', null, '${id(3)}', null, '${id(1)}', 'Confirm suite size', 0, null, null, null),
+			('${id(21)}'::uuid, '${id(7)}'::uuid, null::uuid, null::uuid, '${id(1)}'::uuid, 'L-123: **Send revised LOI** (loop #12)', -3, null::int, null::uuid, null::text),
+			('${id(22)}', null, '${id(3)}', null, '${id(1)}', 'L-123: _Confirm suite size_ (loop #12)', 0, null, null, null),
 			('${id(23)}', '${id(8)}', null, null, '${id(1)}', 'Email floor plan', -1, null, '${id(11)}', 'Send floor plan.'),
 			('${id(24)}', '${id(9)}', null, null, '${id(1)}', 'Dropped follow-up', -2, null, '${id(11)}', 'Old follow-up.'),
 			('${id(25)}', null, '${id(5)}', null, '${id(1)}', 'Check in next month', 30, null, null, null),
@@ -60,7 +60,7 @@ before(async () => {
 			('${id(27)}', null, '${id(6)}', null, '${id(1)}', 'Snoozed reminder', -4, null, null, null),
 			('${id(28)}', '${id(8)}', null, null, '${id(2)}', 'Review counter', -2, null, null, null),
 			('${id(29)}', null, '${id(6)}', null, '${id(2)}', 'Call prospect', 0, null, null, null),
-			('${id(30)}', null, null, '${id(10)}', '${id(1)}', 'Check building', 0, null, null, null),
+			('${id(30)}', null, null, '${id(10)}', '${id(1)}', 'V-ABC-012 (loop #12)', 0, null, null, null),
 			('${id(31)}', '${id(7)}', null, null, '${id(12)}', 'Non-partner reminder', -1, null, null, null),
 			('${id(32)}', '${id(9)}', null, null, '${id(2)}', 'Review the ended deal', -5, null, null, null)
 		) v(id, deal_id, party_id, property_id, owner_id, what, due_offset, hold_offset, call_id, quote);
@@ -104,7 +104,7 @@ test("switch off returns 404, non-partners are refused, and invalid owners fail"
 	]);
 });
 
-test("Today keeps reminders on ended deals and marks them for Deals", async () => {
+test("Today shows plain reminder titles and flags ended deals for Deals", async () => {
 	const [status, body] = await today();
 	assert.equal(status, 200);
 	assert.partialDeepStrictEqual(body, {
@@ -131,7 +131,7 @@ test("Today keeps reminders on ended deals and marks them for Deals", async () =
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
 		`${id(22)}|Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
 		`${id(29)}|Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
-		`${id(30)}|Check building|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
+		`${id(30)}|open the saved step|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
 	assert.deepEqual(
 		body.reminders?.late.map((item) => [item.id, item.deal_ended]),
@@ -144,6 +144,11 @@ test("Today keeps reminders on ended deals and marks them for Deals", async () =
 	);
 	const inboxRes = await request(joe, "home/inbox", get, reader);
 	const inbox = (await inboxRes.json()) as { items: Row[] };
+	const buildingCard = inbox.items.find(
+		(i) => i.item_id === `next_action:${id(30)}`,
+	);
+	assert.ok(typeof buildingCard?.title === "string");
+	assert.match(buildingCard.title, /open the saved step$/);
 	const ids = new Set(inbox.items.map((i) => i.item_id));
 	const { late = [], upcoming = [] } = body.reminders ?? {};
 	for (const i of [...late, ...upcoming])
