@@ -33,6 +33,7 @@ import {
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
 import { docRoutes } from "./doc.ts";
+import { claimDocLink, docLinkRoutes } from "./doc-link-routes.ts";
 import { heldStepReviews } from "./held-steps.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { homeMarks } from "./home-marks.ts";
@@ -164,6 +165,7 @@ partnerApi.route("/api/engine", attachmentFiles);
 partnerApi.route("/api/engine", dealDocuments);
 partnerApi.route("/api/engine", replyDrafts);
 
+app.post("/api/engine/doc/link/claim", claimDocLink);
 app.use("/api/engine/*", requireSession);
 app.route("/", partnerApi);
 partnerApp.route("/", partnerGoogle);
@@ -172,6 +174,7 @@ partnerApp.post("/auth/signout", requirePartnerSession, partnerSignOut);
 partnerApp.use("/api/engine/*", requirePartnerSession);
 partnerApp.route("/", partnerApi);
 partnerApp.route("/api/engine/doc", docRoutes());
+partnerApp.route("/api/engine/doc", docLinkRoutes);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
 app.use(
