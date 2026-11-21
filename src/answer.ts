@@ -310,6 +310,7 @@ type Verb =
 	| "lead-board"
 	| "list-practice-origination"
 	| "quiet-follow-ups"
+	| "read-changes"
 	| "read-client-leases"
 	| "read-home-inbox-v5"
 	| "read-home-mail-priorities-v1"

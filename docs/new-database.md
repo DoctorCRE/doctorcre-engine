@@ -827,7 +827,7 @@ One trigger function, `record_change`, writes history for every table that carri
 
 A merge marks each change it makes with the duplicate it merged, in `merge_of`: each link it moves or removes, the duplicate's removal and its merged-into pointer. `merge_party` sets `engine.merge` for its own run, and the mark counts only when a merge of that record was saved in the same transaction, so setting it by hand cannot pass an edit off as an earlier merge's. Set by hand after a merge in the same transaction, it would mark an unrelated edit as that merge's; the change still names who made it and when.
 
-Today's system keeps one `event` row per field changed, with the actor, a verb and a cause, and `/pipeline/changes` reads a deal's events. A change row holds every field one statement changed, so the old per-field rows are `jsonb_each` over its values. A copy of old rows, such as `schema/copy-parties.sql`, keeps each row's old stamp, and its history records the copy itself: an insert by `old_system`, at the time the copy ran. The old `event` rows come across separately as `imported_change`, described below. Serving the change feed and deal events from this table is a later slice.
+Today's system keeps one `event` row per field changed, with the actor, a verb and a cause, and `/pipeline/changes` reads a deal's events. A change row holds every field one statement changed, so the old per-field rows are `jsonb_each` over its values. A copy of old rows, such as `schema/copy-parties.sql`, keeps each row's old stamp, and its history records the copy itself: an insert by `old_system`, at the time the copy ran. The old `event` rows come across separately as `imported_change`, described below. The deal page's events and the Updates page's Who did what read this table (§ "Updates and notification settings").
 
 Only the schema owner's database role may call `erase_change(removed_change_id, fields)`. It requires a delete change and refuses a record that exists again. It removes the selected non-key text fields from old and new values for that table and record, across inserts, edits and deletions. Unknown fields, keys and non-text fields are refused. Other values stay. Keys, actions, merge pointers, authors and times stay unchanged. An `erase` change records the request with its user or job and time, with the erased field names and without copying their words. Repeating a completed erase changes nothing. The function locks the source table while it checks absence and erases, so a concurrent insert cannot recreate the record during it. The engine cannot call it or change history directly. Linked records and external copies are separate requests.
 
@@ -855,7 +855,7 @@ Keep the final report for correction in the old system. A deal waits whole for a
 
 ## Later slices
 
-"Everything about this person." The rest of leads (#286). Serving the change feed from change history. Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
+"Everything about this person." The rest of leads (#286). Indexes, once real sizes are known. Market figures from outside deals. Moving the rest of today's records across. For marketing: rotation rules, lead attribution and the weekly agent loop.
 
 ## Copying today's vendors
 
@@ -2072,6 +2072,18 @@ The app's Updates page reads and saves these on the new schema directly, with no
 `GET /api/engine/preferences` gives the signed-in partner's `{ time_zone, quiet_from, quiet_until, push_to_device, base_version }`. Quiet hours are `HH:MM` in that zone, or both null. With no saved row, the read gives the defaults: `America/Chicago`, the engine's Central day, no quiet hours, `push_to_device` false, and `base_version` 0. `base_version` is the latest change ID of the partner's `user_preference` row.
 
 `POST /api/engine/preferences` saves all four fields with `idempotency_key` and the `base_version` read. The time zone must be one the database knows; otherwise the save returns `400 invalid_field_value { fields: ["time_zone"] }`. Quiet hours are both set or both null, and they may run past midnight, such as `22:00` to `07:00`. Equal or half-set quiet hours return `400 invalid_field_value { fields: ["quiet_from", "quiet_until"] }`. A change after the read returns `409 version_conflict { current_version }`. The answer is `200 { ok: true, time_zone, quiet_from, quiet_until, push_to_device, base_version }` with the new version. The shared retry rules apply.
+
+#### Who did what
+
+`GET /api/engine/updates/changes` lists recent changes to the records both partners share, newest first, 50 a page, for the Updates page (#1014). The answer is `{ changes, next_before }`. Each change is `{ id, changed_at, who, record, what, open_url }`: who made it, by name, or a job's label such as "Mail filing for Alex Example"; the name of the deal, or of the person or company a step or old change is about; what changed in plain words; and where it opens. `next_before` is null on the last page; otherwise pass it back as `?before=` for the next. Any other `before` returns `400 invalid_field_value`. These are settled rules, coordinator decisions (seat bl, 2026-11-21, #1014):
+
+- From change history: a deal opened, moved to a phase, renamed, given a new deal owner, market or value, flagged or cleared, parked with its reason or revived; a next step on a deal, person or company added, finished, cancelled, reworded or moved to a new due date. One saved statement is one entry, its fields joined in one sentence.
+- From `imported_change`: the old system's field changes this read can name, such as "changed the deal owner" or "added a note", without their old values, whose shape varies.
+- Every page has 50 entries except the last, with no time window. Both partners get the same list.
+- Who is the user's name. A job is its label, plus "for" and the user's name when it works for one, so old automations read "Old system".
+- Left out: rows the copy itself wrote as `old_system`, changes to fields no partner reads about (stamps, parking times, holds), records since removed, and each partner's own settings, Home marks, updates, drafts and Doc conversations.
+
+The app gets one list and one cursor. The two histories are merged by time, because imported history is not always older: a copy rerun before the switch brings in old events dated after engine saves. `next_before` holds where each history stopped, change history by its id, which grows with time, so that read follows its primary key without a new index, and imported history by its time.
 
 ### Deal watches and nightly checklist reminders
 
