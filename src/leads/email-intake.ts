@@ -309,12 +309,59 @@ const defaultLabels = {
 	request: "Request",
 };
 
+const contactText = (value: string) =>
+	value.trim().toLowerCase().replace(/\s+/g, " ");
+
+const phonePrefix = /^\+?[(\d][\d ().-]*\d/;
+const bareEmailSlot =
+	/^\s*[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z](?=\s|$)/i;
+
+function noticePhone(value: string | undefined) {
+	const digits = value?.replace(/[ ().-]/g, "");
+	const phone = digits?.replace(/^1?(\d{10})$/, "+1$1");
+	if (phone && /^\+(?:1[2-9]\d{2}[2-9]\d{6}|[2-9]\d{6,14})$/.test(phone))
+		return phone;
+}
+
+function recognizableStreet(street: string, name: string) {
+	const words = street.match(/^\d+\p{L}?\s+([\p{L}\p{M}\d #'’/-]+)$/u)?.[1];
+	return (
+		street.length <= 80 &&
+		words !== undefined &&
+		/\p{L}/u.test(words) &&
+		!/\s(?:llc|llp|pllc|inc|corp|ltd)$/i.test(words) &&
+		!/^(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)(?:$|\s+(?:to|before|after|until|ago)\b)/i.test(
+			words,
+		) &&
+		contactText(street) !== contactText(name)
+	);
+}
+
 function noticeFacts(
 	storedBody: string,
 	fields: Record<string, string> | null,
 ) {
-	const [own = ""] = beforeEmailHistory(storedBody).split(/^[ \t]*>/m, 1);
-	const body = own.trimEnd();
+	const [own = ""] = beforeEmailHistory(storedBody).split(/(?<!\S)>/u, 1);
+	const start = fields || !/[\r\n]/.test(own) ? "(?<!\\S)" : "^[ \\t]*";
+	const nameLabel = literal((fields?.name ?? defaultLabels.name).trim());
+	const nameStart = own.search(
+		new RegExp(`${start}${nameLabel}[ \\t]*:`, "imu"),
+	);
+	if (nameStart < 0) return;
+	const [contactBlock = ""] = own
+		.slice(nameStart)
+		.split(/(?<!\S)Received[ \t]*:/iu, 1);
+	const [contactLine = ""] = contactBlock.split(/[\r\n]/, 1);
+	const [namePart, firstSlot, secondSlot] = contactLine.split(" · ", 3);
+	const copied = firstSlot !== undefined;
+	const phoneSlot = firstSlot?.trim();
+	const emailSlot =
+		phoneSlot === "—" || noticePhone(phoneSlot)
+			? secondSlot?.match(bareEmailSlot)?.[0]
+			: undefined;
+	const body = copied
+		? [namePart, firstSlot, ...(emailSlot ? [emailSlot] : [])].join(" · ")
+		: own.slice(0, nameStart) + contactBlock;
 	const labels = new Map(
 		Object.entries(fields ?? defaultLabels).map(([key, label]) => [
 			label.trim().toLowerCase(),
@@ -325,11 +372,16 @@ function noticeFacts(
 		.sort((a, b) => b.length - a.length)
 		.map(literal)
 		.join("|");
-	const start = fields || !/[\r\n]/.test(body) ? "(?<!\\S)" : "^[ \\t]*";
 	const matches = [
-		...body.matchAll(new RegExp(`${start}(${alternatives})[ \\t]*:`, "gimu")),
+		...body.matchAll(
+			new RegExp(
+				`${copied ? "(?<!\\S)" : start}(${alternatives})[ \\t]*:`,
+				"gimu",
+			),
+		),
 	];
 	const facts = new Map<string, string>();
+	let combinedAddress: { street_address: string; city: string } | undefined;
 	let end = 0;
 	for (const [i, match] of matches.entries()) {
 		const key = labels.get(match[1]?.toLowerCase() ?? "");
@@ -338,13 +390,13 @@ function noticeFacts(
 		const [line = ""] = body
 			.slice(offset, matches[i + 1]?.index)
 			.split(/[\r\n]/, 1);
-		const [value = "", ...extras] = line.split(" · ");
+		const [value = "", extraPart] = line.split(" · ", 2);
 		facts.set(key, value.trim());
 		end = offset + line.length;
-		for (const segment of key === "name" ? extras : []) {
-			const extra = segment.trimStart();
+		if (key === "name" && extraPart !== undefined) {
+			const extra = extraPart.trimStart();
 			const email = extra.match(/^([^\s@]+@[^\s@]+)(?=\s|$)/)?.[1];
-			const phone = extra.match(/^(\+?[(\d][\d ().-]*\d)/)?.[1];
+			const phone = extra.match(phonePrefix)?.[0];
 			const contact = email ? "email" : phone ? "phone" : undefined;
 			const contactValue = email ?? phone ?? "";
 			if (contact) {
@@ -358,27 +410,37 @@ function noticeFacts(
 						/^\s*(?:—\s*)?Address[ \t]*:\s*(\d[^,\r\n]+),\s*(\p{L}[\p{L}\p{M} .’'-]*),\s*[a-z]{2}\s+\d{5}(?:-\d{4})?(?=\s|$)/iu,
 					) ?? [];
 			if (streetAddress && city) {
-				if (facts.has("street_address") || facts.has("city")) return;
-				facts.set("street_address", streetAddress.trim());
-				facts.set("city", city.trim());
+				combinedAddress = {
+					street_address: streetAddress.trim(),
+					city: city.trim(),
+				};
 			}
 		}
 	}
 	const name = facts.get("name");
 	if (!name || (fields?.request && !facts.get("request"))) return;
-	const email = facts.get("email")?.toLowerCase();
-	const digits = facts.get("phone")?.replace(/[ ().-]/g, "");
-	const phone = digits?.replace(/^1?(\d{10})$/, "+1$1");
-	const street_address = facts.get("street_address");
-	const city = facts.get("city");
+	const email = (facts.get("email") ?? emailSlot?.trim())?.toLowerCase();
+	const phone = noticePhone(facts.get("phone"));
+	const labeledStreet = facts.get("street_address");
+	const labeledCity = facts.get("city");
+	const street_address = combinedAddress?.street_address ?? labeledStreet;
+	const city = combinedAddress?.city ?? labeledCity;
+	const address =
+		street_address &&
+		city &&
+		recognizableStreet(street_address, name) &&
+		(!labeledStreet ||
+			contactText(labeledStreet) === contactText(street_address)) &&
+		(!labeledCity || contactText(labeledCity) === contactText(city))
+			? { street_address, city }
+			: undefined;
 	return {
 		prospect: {
 			kind: "person" as const,
 			name,
 			...(email && { email }),
-			...(phone &&
-				/^\+(?:1[2-9]\d{2}[2-9]\d{6}|[2-9]\d{6,14})$/.test(phone) && { phone }),
-			...(street_address && city && { street_address, city }),
+			...(phone && { phone }),
+			...address,
 		},
 		evidence: body.slice(matches[0]?.index, end).trim(),
 	};
