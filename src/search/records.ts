@@ -16,25 +16,29 @@ type SearchRecords = {
 	deals: (DealLink & { phase: string | null; owner: string })[];
 };
 
-const emailDomain = /^@?([a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z0-9-]+[a-z])$/i;
+// Keep the domain labels in step with the email_address constraint.
+const emailDomain =
+	/^@?((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]*[a-z])$/;
 const emailAddress = /^[^\s@]+@[^\s@]+$/;
 
 export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 	const query = input.trim();
 	const lower = query.toLowerCase();
-	const domain = emailDomain.exec(query)?.[1]?.toLowerCase();
+	const domain = emailDomain.exec(lower)?.[1];
 	const address = emailAddress.test(query) ? lower : null;
 	const addressMatch = domain
 		? sql`split_part(address, '@', 2) = ${domain}`
 		: sql`address = ${address}`;
 	const byEmail = Boolean(domain || address);
+	const bareDomain = Boolean(domain && !query.startsWith("@"));
+	const exactName = sql`lower(p.name) = ${lower}`;
 	const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
 	const partyMatch = byEmail
-		? sql`p.id in (select party_id from party_email where ${addressMatch})`
+		? sql`p.id in (select party_id from party_email where ${addressMatch})
+			or (${bareDomain} and ${exactName})`
 		: sql`p.id::text = ${lower} or p.id in (
 				select party_id from outside_id where source in ('old_system', 'old_system_ref') and lower(value) = ${lower}
 			) or p.name ilike ${pattern} or p.name operator(public.%) ${query}`;
-	const exactName = byEmail ? sql`false` : sql`lower(p.name) = ${lower}`;
 	const similarity = byEmail
 		? sql`0`
 		: sql`public.similarity(p.name, ${query})`;
@@ -53,9 +57,10 @@ export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 		),
 		matched_deals as materialized (
 			select id from deal
-			where ${Boolean(query) && !byEmail} and (name ilike ${pattern} or id::text = ${lower} or id in (
+			where (${bareDomain} and lower(name) = ${lower})
+				or (${Boolean(query) && !byEmail} and (name ilike ${pattern} or id::text = ${lower} or id in (
 				select deal_id from outside_id where source = 'old_system' and value = ${lower}
-			))
+			)))
 			order by lower(name), id limit 5
 		)
 		select coalesce((
@@ -63,7 +68,9 @@ export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 				order by result.exact_name desc, result.score desc, lower(result.name), result.id) from (
 				select p.*, array(
 					select role from party_role where party_id = p.id
-						and role in ('client', 'lead', 'vendor') order by role
+						and (role in ('lead', 'vendor') or
+							(role = 'client' and exists (select from client where party_id = p.id)))
+					order by role
 				) as roles, (
 					select coalesce((
 						select min(value) from outside_id where party_id = p.id and source = 'old_system_lead'
