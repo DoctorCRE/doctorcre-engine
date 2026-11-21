@@ -3,6 +3,7 @@ import { sql, type Transaction } from "kysely";
 import { lockEmail, parseEmail, recordEmail } from "../activity/next-record.ts";
 import { Refusal, refuse } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
+import { beforeEmailHistory } from "../home-email-thread.ts";
 import { nextTransaction } from "../next-connection.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
@@ -308,7 +309,12 @@ const defaultLabels = {
 	request: "Request",
 };
 
-function noticeFacts(body: string, fields: Record<string, string> | null) {
+function noticeFacts(
+	storedBody: string,
+	fields: Record<string, string> | null,
+) {
+	const [own = ""] = beforeEmailHistory(storedBody).split(/^[ \t]*>/m, 1);
+	const body = own.trimEnd();
 	const labels = new Map(
 		Object.entries(fields ?? defaultLabels).map(([key, label]) => [
 			label.trim().toLowerCase(),
@@ -319,7 +325,7 @@ function noticeFacts(body: string, fields: Record<string, string> | null) {
 		.sort((a, b) => b.length - a.length)
 		.map(literal)
 		.join("|");
-	const start = fields ? "(?<!\\S)" : "^[ \\t]*";
+	const start = fields || !/[\r\n]/.test(body) ? "(?<!\\S)" : "^[ \\t]*";
 	const matches = [
 		...body.matchAll(new RegExp(`${start}(${alternatives})[ \\t]*:`, "gimu")),
 	];

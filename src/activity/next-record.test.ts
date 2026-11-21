@@ -286,6 +286,90 @@ test("reconciliation moves exact filings to Leads and keeps other Home work", as
 	);
 });
 
+async function copiedNotice(activity_id: string, sender: string, body: string) {
+	await db.query("begin");
+	try {
+		await db.query("select set_config('engine.job', 'old_system', true)");
+		await db.query(
+			"insert into lead_source_sender (address, name) values ($1, 'Example source')",
+			[sender],
+		);
+		await db.query(
+			"insert into activity (id, kind, happened_at) values ($1, 'email', '2026-11-02T15:00:00Z')",
+			[activity_id],
+		);
+		await db.query(
+			`insert into email (activity_id, message_id, sender, subject, body, imported)
+			values ($1, null, $2, 'Example notice', $3, true)`,
+			[activity_id, sender, body],
+		);
+		await db.query(
+			"insert into email_mailbox (activity_id, user_id) values ($1, $2)",
+			[activity_id, JOE],
+		);
+		await db.query(
+			"insert into activity_about (activity_id, party_id) values ($1, $2)",
+			[activity_id, JOE],
+		);
+		await db.query(
+			`insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job)
+			values ('possible_new_deal', $1, 'email', 'Example notice', 'old_system')`,
+			[activity_id],
+		);
+		await db.query("commit");
+	} catch (error) {
+		await db.query("rollback");
+		throw error;
+	}
+}
+
+test("reconciliation leaves filings pending when the notice is only in quoted history", async () => {
+	const activity_id = id(87);
+	await copiedNotice(
+		activity_id,
+		"withdrawals@example.test",
+		"Please withdraw this inquiry.\r\n-----Original Message-----\r\nName: Robin Example\r\nEmail: robin@example.test",
+	);
+	const none = {
+		status: 200,
+		body: { eligible_emails: 0, filing_decisions: 0 },
+	};
+	assert.deepEqual(await reconcile(activity_id, { dry_run: true }), none);
+	assert.deepEqual(await reconcile(activity_id), none);
+	await assertRows(
+		1,
+		`select from proposal where activity_id = $1 and status = 'pending'
+		and not exists (select from lead_email_source where activity_id = $1)`,
+		activity_id,
+	);
+});
+
+test("reconciliation moves a copied one-line notice with default labels", async () => {
+	const activity_id = id(88);
+	await copiedNotice(
+		activity_id,
+		"forms@example.test",
+		"New request Name: Alex Example Email: alex@example.test",
+	);
+	assert.deepEqual(await reconcile(activity_id, { dry_run: true }), {
+		status: 200,
+		body: { eligible_emails: 1, filing_decisions: 1 },
+	});
+	const { status, body } = await reconcile(activity_id);
+	assert.equal(status, 200);
+	assert.ok(typeof body.party_id === "string");
+	await assertRows(
+		1,
+		`select from lead_email_source s join party p on p.id = s.party_id
+		join party_email e on e.party_id = p.id
+		join proposal f on f.activity_id = s.activity_id
+		where s.activity_id = $1 and p.id = $2 and p.name = 'Alex Example'
+		and e.address = 'alex@example.test' and f.status = 'superseded'`,
+		activity_id,
+		body.party_id,
+	);
+});
+
 test("the router queue identifies emails saved by lead intake", async () => {
 	const happened_at = new Date().toISOString();
 	const source = notice("router-source");

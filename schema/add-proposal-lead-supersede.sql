@@ -2,23 +2,31 @@ begin;
 set local lock_timeout = '1s';
 set local search_path = next, pg_temp;
 
-alter table proposal
-	add column superseded_reason text,
-	drop constraint proposal_status_check,
-	drop constraint proposal_decision_whole,
-	add constraint proposal_status_check check (status in ('pending', 'accepted', 'dismissed', 'superseded')),
-	add constraint proposal_decision_whole check (
-		(status = 'pending' and decided_by_user_id is null and decided_at is null)
-		or (status in ('accepted', 'dismissed') and decided_by_user_id is not null and decided_at is not null)
-		or (status = 'superseded' and decided_by_user_id is null and decided_at is not null)),
-	add constraint proposal_superseded_reason check (
-		superseded_reason is not distinct from case when status = 'superseded' then 'Moved to Leads' end);
+alter table proposal add column if not exists superseded_reason text;
 
-drop trigger decide_proposal on proposal;
-create trigger decide_proposal before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
+do $$
+begin
+	if not exists (
+		select from pg_constraint where conrelid = 'proposal'::regclass
+		and conname = 'proposal_superseded_reason'
+	) then
+		alter table proposal
+			drop constraint proposal_status_check,
+			drop constraint proposal_decision_whole,
+			add constraint proposal_status_check check (status in ('pending', 'accepted', 'dismissed', 'superseded')),
+			add constraint proposal_decision_whole check (
+				(status = 'pending' and decided_by_user_id is null and decided_at is null)
+				or (status in ('accepted', 'dismissed') and decided_by_user_id is not null and decided_at is not null)
+				or (status = 'superseded' and decided_by_user_id is null and decided_at is not null)),
+			add constraint proposal_superseded_reason check (
+				superseded_reason is not distinct from case when status = 'superseded' then 'Moved to Leads' end);
+	end if;
+end $$;
+
+create or replace trigger decide_proposal before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
 	for each row when (new.status <> 'superseded') execute function decide_proposal();
 
-create function supersede_lead_filing() returns trigger
+create or replace function supersede_lead_filing() returns trigger
 language plpgsql as $$
 begin
 	if tg_op <> 'UPDATE' or old.status <> 'pending'
@@ -33,7 +41,7 @@ begin
 	return new;
 end $$;
 
-create trigger supersede_lead_filing before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
+create or replace trigger supersede_lead_filing before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
 	for each row when (new.status = 'superseded') execute function supersede_lead_filing();
 
 create or replace function lead_email_attention_change() returns trigger

@@ -71,13 +71,19 @@ const inlineHistory = new RegExp(
 const senderBanner =
 	/You don['’]t often get email from \S+? Learn why this is important(?:\s*<[^>\s]*>)?\.?\s*/g;
 
+export function beforeEmailHistory(body: string) {
+	const normalized = body.replace(/\u00a0/g, " ");
+	const cut = normalized.search(inlineHistory);
+	const recent = cut < 0 ? normalized : normalized.slice(0, cut);
+	const lines = recent.split(/(?<=\n)|(?<=\r)(?!\n)/);
+	return body.slice(0, lines.slice(0, historyStart(lines)).join("").length);
+}
+
 export function cleanEmailBody(body: string, sender: string | null) {
 	const lines = body.replace(/\u00a0/g, " ").split(/\r\n?|\n/);
 	const current = lines.join("\n").replace(senderBanner, "");
-	const cut = current.search(inlineHistory);
-	const recent = (cut < 0 ? current : current.slice(0, cut)).split("\n");
-	const own = recent
-		.slice(0, historyStart(recent))
+	const own = beforeEmailHistory(current)
+		.split("\n")
 		.filter((line) => !/^\s*>/.test(line) && !strayHeader.has(field(line)));
 	const signed = own.slice(0, footerStart(own));
 	const unsigned = text(signed.slice(0, signatureStart(signed, sender)));
