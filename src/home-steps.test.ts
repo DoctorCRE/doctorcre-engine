@@ -4,7 +4,7 @@ import { stepCopy } from "./home-steps.ts";
 
 const longInstruction =
 	"Confirm the accessibility requirements for the proposed suite with the landlord and ask for the revised drawing in writing.";
-const longUrl = `https://example.test/${"a".repeat(100)}`;
+const longUrl = `https://example.test/plan?Next=${"a".repeat(100)}`;
 
 for (const [scenario, item_title, what, title] of [
 	["a saved title", " Send the plan ", longInstruction, "Send the plan"],
@@ -24,8 +24,8 @@ for (const [scenario, item_title, what, title] of [
 	[
 		"an abbreviation within the first sentence",
 		null,
-		`Call Dr. Example about the plan. ${longInstruction}`,
-		"Call Dr. Example about the plan.",
+		`Call Dr. Example and Gen. Sample about the plan. ${longInstruction}`,
+		"Call Dr. Example and Gen. Sample about the plan.",
 	],
 	[
 		"an initial within a long sentence",
@@ -34,7 +34,18 @@ for (const [scenario, item_title, what, title] of [
 		"Example Vendor",
 	],
 	["a long single sentence", null, longInstruction, "Example Vendor"],
-	["a long URL", null, `Review ${longUrl}`, "Example Vendor"],
+	[
+		"a long URL with a query string",
+		null,
+		`Review ${longUrl}`,
+		"Example Vendor",
+	],
+	[
+		"a short first sentence before a URL",
+		null,
+		`Review the plan. Open ${longUrl}`,
+		"Review the plan.",
+	],
 	["a long word", null, "e\u0301".repeat(91), "Example Vendor"],
 ] as const) {
 	test(`shows the whole instruction below the title for ${scenario}`, () => {

@@ -10,7 +10,7 @@ const storedDate =
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
 const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
 const abbreviation =
-	/(?:^|\s)(?:\p{Lu}|Dr|Mr|Mrs|Ms|Prof|St|Jr|Sr|Inc|Ltd|vs|e\.g|i\.e)\.$/u;
+	/(?:^|\s)(?:\p{Lu}|Dr|Mr|Mrs|Ms|Prof|Gen|St|Jr|Sr|Inc|Ltd|vs|e\.g|i\.e)\.$/u;
 const markdownLink = /\[([^\]]+)\]\(([^\s)]+)\)/g;
 const url = /https?:\/\/\S+/gi;
 const urlOrMarkdownLink = new RegExp(
@@ -93,13 +93,21 @@ function stepInstruction(what: string) {
 }
 
 function firstSentence(text: string) {
+	const links = [...text.matchAll(url)];
 	for (const { segment, index } of sentences.segment(text)) {
 		const end = segment.trimEnd();
 		const ending = end.replace(/["'”’)]+$/u, "");
-		if (abbreviation.test(ending) || /(?:\.{2,}|…)$/u.test(ending)) continue;
-		return /[.!?。！？]$/u.test(ending)
-			? text.slice(0, index + end.length)
-			: "";
+		const boundary = index + end.length;
+		const insideLink = links.some(
+			(link) => link.index < boundary && boundary < link.index + link[0].length,
+		);
+		if (
+			insideLink ||
+			abbreviation.test(ending) ||
+			/(?:\.{2,}|…)$/u.test(ending)
+		)
+			continue;
+		return /[.!?。！？]$/u.test(ending) ? text.slice(0, boundary) : "";
 	}
 	return "";
 }
