@@ -10,6 +10,7 @@ import { failureKind } from "../failure.ts";
 import { type DatabaseEnv, readSnapshot } from "../reader.ts";
 import { isUuid } from "../uuid.ts";
 import { readBoard, WORKSPACES } from "./board.ts";
+import { readCalendarDates, readNextCalendarDates } from "./calendar.ts";
 import { readCaptureQueue } from "./capture-queue.ts";
 import { decodeCursor, readChanges } from "./changes.ts";
 import { readClientFit } from "./client-fit.ts";
@@ -39,6 +40,14 @@ deals.get("/deals", async (c): Promise<Response> => {
 	return c.env.DEALS_READ_SCHEMA === "next"
 		? answerNextRead(c, "deal-room-board", (db) => readNextBoard(db, input))
 		: answer(c, "deal-room-board", (db) => readBoard(db, input));
+});
+
+deals.get("/calendar/critical-dates", async (c): Promise<Response> => {
+	const refused = checkFields(new URL(c.req.url).searchParams, []);
+	if (refused) return refuse(c, refused);
+	return c.env.DEALS_READ_SCHEMA === "next"
+		? answerNextRead(c, "calendar-critical-dates", readNextCalendarDates)
+		: answer(c, "calendar-critical-dates", readCalendarDates);
 });
 
 // The deal page's argument is its path, never a query field.
