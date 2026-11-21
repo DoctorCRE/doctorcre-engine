@@ -9,6 +9,7 @@ import {
 import type { DatabaseEnv } from "../reader.ts";
 import { readFind } from "./find.ts";
 import { readNextFind } from "./next-find.ts";
+import { readSearchRecords } from "./records.ts";
 
 export const search = new Hono<
 	DatabaseEnv & { Bindings: { SEARCH_READ_SCHEMA?: string } }
@@ -26,11 +27,12 @@ search.get("/find", async (c): Promise<Response> => {
 			c,
 			new Refusal(400, "missing_required", { fields: ["query"] }),
 		);
-	if (c.env.SEARCH_READ_SCHEMA === "next")
-		return answerNextRead(
-			c,
-			"find",
-			async (db) => await readNextFind(db, query),
-		);
+	if (c.env.SEARCH_READ_SCHEMA === "next") {
+		const read =
+			c.req.header("x-doctorcre-search") === "search.v1"
+				? readSearchRecords
+				: readNextFind;
+		return answerNextRead(c, "find", async (db) => await read(db, query));
+	}
 	return answer(c, "find", async (db) => await readFind(db, query));
 });

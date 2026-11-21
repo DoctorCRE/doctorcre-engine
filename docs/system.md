@@ -177,6 +177,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Clients screen                                           | [Clients](screens/clients.md)                                                                                                       |
 | Leads screen                                             | `docs/screens/leads.md`                                                                                                             |
 | Invoices screen                                          | [Invoices](screens/invoices.md)                                                                                                     |
+| Global Search screen                                     | [Search](screens/search.md)                                                                                                         |
 | Doc screen and engine contract                           | [Doc](screens/doc.md) and [Doc conversations and turns](new-database.md#doc-conversations-and-turns)                                |
 | Prospects lane and Monday review                         | `docs/screens/deals.md` § "Prospects" and § "Monday review"; § "Prospects and the Monday review"                                    |
 

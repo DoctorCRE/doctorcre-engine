@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { sql } from "kysely";
+import { nextTransaction } from "../next-connection.ts";
 import { doorTest } from "../test-door.ts";
+import { searchRecordsQuery } from "./records.ts";
 
-const { db, setup, cleanup, request } = doorTest();
+const { db, setup, cleanup, request, readerUrl } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const [joe, dell, clinic, lead, vendor, person, deal, copied, oldDeal] = [
@@ -22,6 +25,8 @@ const [copiedClient, copiedLead, dental, dentalGroup] = [
 	id(16),
 	id(17),
 ] as const;
+const domainName = id(19);
+const clientRoleOnly = id(20);
 const search = (query: string) =>
 	get("find", query, { SEARCH_READ_SCHEMA: "next" });
 const recent = (query: string, ref?: string) =>
@@ -40,6 +45,9 @@ before(async () => {
 			('${copiedClient}', 'company', 'Sample Practice'), ('${copiedLead}', 'person', 'Sample Prospect'),
 			('${dental}', 'person', 'Example Pediatric Dental'), ('${dentalGroup}', 'company', 'Z Example Dental');
 		insert into how_found (slug, label) values ('referral', 'Referral');
+		insert into party (id, kind, name, how_found) values
+			('${domainName}', 'company', 'example-company.example', null),
+			('${clientRoleOnly}', 'person', 'Garden Practice', 'referral');
 		update party set how_found = 'referral' where id in
 			('${clinic}', '${lead}', '${copiedClient}', '${copiedLead}', '${dental}', '${dentalGroup}');
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
@@ -50,7 +58,8 @@ before(async () => {
 			('${clinic}', 'client', null), ('${lead}', 'lead', 'new'), ('${vendor}', 'vendor', null),
 			('${copiedClient}', 'client', null), ('${copiedClient}', 'lead', 'new'),
 			('${copiedLead}', 'client', null), ('${copiedLead}', 'lead', 'new'),
-			('${dental}', 'lead', 'new'), ('${dentalGroup}', 'lead', 'new');
+			('${dental}', 'lead', 'new'), ('${dentalGroup}', 'lead', 'new'),
+			('${clientRoleOnly}', 'client', null);
 		insert into client (party_id) values ('${clinic}'), ('${copiedClient}'), ('${copiedLead}');
 		insert into deal (id, name, owner_user_id) values
 			('${deal}', 'Orchard Clinic Lease', '${joe}'), ('${copied}', 'Maple Lease', '${joe}');
@@ -62,12 +71,20 @@ before(async () => {
 			('old_system_ref', 'V-EXAMPLE', '${vendor}'),
 			('old_system_ref', 'C-EXAMPLE', '${copiedClient}'),
 			('old_system_ref', 'P-EXAMPLE', '${copiedClient}'),
-			('old_system_ref', 'L-EXAMPLE', '${copiedLead}');
+			('old_system_ref', 'L-EXAMPLE', '${copiedLead}'),
+			('old_system_lead', '${id(18)}', '${dental}');
 		insert into party_link (party_id, other_party_id, kind, created_at) values
 			('${copiedClient}', '${vendor}', 'knows', '2026-11-02T12:00:00Z'),
 			('${copiedClient}', '${clinic}', 'knows', '2026-11-01T12:00:00Z');
 		insert into specialty (slug, label) values ('oral_surgery', 'Oral Surgery');
 		insert into party_specialty (person_id, specialty) values ('${dental}', 'oral_surgery');
+		insert into party_email (party_id, address, label) values
+			('${copiedClient}', 'office@practice.example', 'work'),
+			('${person}', 'name@practice.example', 'work'),
+			('${person}', 'name@practice.x', 'work'),
+			('${clinic}', 'office@other.practice.example', 'work');
+		insert into party (kind, name)
+			select 'person', 'Synthetic Query Plan ' || n from generate_series(1, 25) n;
 		update deal set owner_user_id = '${dell}' where id = '${copied}';
 		insert into activity (id, kind, happened_at, summary) values
 			('${id(10)}', 'call', '2026-11-01T12:00:00Z', 'Discussed the site'),
@@ -91,19 +108,154 @@ async function get(
 	query: string,
 	bindings: object,
 	ref?: string,
+	headers?: HeadersInit,
 ) {
 	const params = new URLSearchParams({ query });
 	if (ref !== undefined) params.set("ref", ref);
 	const response = await request(
 		{ user: "joe" },
 		`${path}?${params}`,
-		{ method: "GET" },
+		{ method: "GET", ...(headers && { headers }) },
 		bindings,
 	);
 	const body = await response.json();
 	assert.equal(response.status, 200, JSON.stringify(body));
 	return body;
 }
+
+const searchRecords = (query: string) =>
+	get("find", query, { SEARCH_READ_SCHEMA: "next" }, undefined, {
+		"x-doctorcre-search": "search.v1",
+	});
+
+test("Global Search returns a party once with its roles and openable deal matches", async () => {
+	assert.partialDeepStrictEqual(await searchRecords("Sample Practice"), {
+		schema_version: "search.v1",
+		parties: [
+			{ id: copiedClient, name: "Sample Practice", roles: ["client", "lead"] },
+		],
+		deals: [],
+	});
+	assert.partialDeepStrictEqual(await searchRecords("Orchard"), {
+		parties: [
+			{
+				id: lead,
+				roles: ["lead"],
+				lead_id: null,
+				deals: [{ id: deal, name: "Orchard Clinic Lease" }],
+			},
+			{
+				id: clinic,
+				deals: [
+					{ id: copied, name: "Maple Lease" },
+					{ id: deal, name: "Orchard Clinic Lease" },
+				],
+			},
+			{ id: vendor, roles: ["vendor"] },
+			{ id: person, kind: "person", roles: [] },
+		],
+		deals: [{ id: deal, name: "Orchard Clinic Lease", owner: "joe" }],
+	});
+	assert.partialDeepStrictEqual(
+		await searchRecords("Example Pediatric Dental"),
+		{
+			parties: [{ id: dental, lead_id: id(18) }],
+		},
+	);
+});
+
+test("Global Search matches a full email or exact domain from stored addresses", async () => {
+	assert.partialDeepStrictEqual(
+		await searchRecords(" OFFICE@PRACTICE.EXAMPLE "),
+		{
+			parties: [{ id: copiedClient }],
+			deals: [],
+		},
+	);
+	for (const domain of ["practice.example", "@PRACTICE.EXAMPLE"]) {
+		assert.partialDeepStrictEqual(await searchRecords(domain), {
+			parties: [{ id: person }, { id: copiedClient }],
+			deals: [],
+		});
+	}
+	assert.partialDeepStrictEqual(
+		await searchRecords("nobody@practice.example"),
+		{
+			parties: [],
+			deals: [],
+		},
+	);
+});
+
+test("Global Search finds stored domains with single-letter final labels without fuzzy name matches", async () => {
+	for (const query of ["practice.x", "@PRACTICE.X", "name@practice.x"]) {
+		assert.deepStrictEqual(await searchRecords(query), {
+			schema_version: "search.v1",
+			parties: [
+				{
+					id: person,
+					kind: "person",
+					name: "Orchard Contact",
+					city: null,
+					roles: [],
+					lead_id: null,
+					deals: [],
+				},
+			],
+			deals: [],
+		});
+	}
+});
+
+test("Global Search finds an exact dotted name when the query has no at sign", async () => {
+	assert.partialDeepStrictEqual(
+		await searchRecords("EXAMPLE-COMPANY.EXAMPLE"),
+		{
+			parties: [{ id: domainName }],
+			deals: [],
+		},
+	);
+	assert.deepStrictEqual(await searchRecords("@example-company.example"), {
+		schema_version: "search.v1",
+		parties: [],
+		deals: [],
+	});
+});
+
+test("Global Search offers the Clients directory only for parties with a directory record", async () => {
+	assert.deepStrictEqual(await searchRecords(clientRoleOnly), {
+		schema_version: "search.v1",
+		parties: [
+			{
+				id: clientRoleOnly,
+				kind: "person",
+				name: "Garden Practice",
+				city: null,
+				roles: [],
+				lead_id: null,
+				deals: [],
+			},
+		],
+		deals: [],
+	});
+});
+
+test("Global Search limits matches before expanding party roles and deals", async () => {
+	const { rows } = await nextTransaction(readerUrl, "read", (tx) =>
+		sql<{ "QUERY PLAN": string }>`explain (analyze, costs off, timing off)
+			${searchRecordsQuery(tx, "Synthetic Query Plan")}`.execute(tx),
+	);
+	const plan = rows.map((row) => row["QUERY PLAN"]).join("\n");
+	assert.match(
+		plan,
+		/CTE matched_parties\s+-> {2}Limit \(actual rows=15(?:\.00)? loops=1\)/,
+	);
+	assert.match(
+		plan,
+		/CTE Scan on matched_parties p\w* \(actual rows=15(?:\.00)? loops=1\)/,
+	);
+	assert.match(plan, /Limit \(actual rows=0(?:\.00)? loops=15\)/);
+});
 
 test("Search finds new records and shows a copied deal's current owner", async () => {
 	assert.partialDeepStrictEqual(await search("orchard"), {
