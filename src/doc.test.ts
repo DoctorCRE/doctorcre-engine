@@ -44,7 +44,7 @@ before(async () => {
 });
 afterEach(() =>
 	db.query(`begin; set local engine.job = 'old_system';
-		delete from reply_draft where confirmed_doc_turn_id is not null;
+		delete from reply_draft where confirmed_doc_turn_id is not null or proposed_by_job = 'mail_capture';
 		delete from doc_turn; delete from doc_conversation; truncate doc_link;
 		commit;`),
 );
@@ -1472,6 +1472,48 @@ test("Doc saves one pending reply, opens its review, and preserves it on repeat"
 		result: replyReceipt(draft.id, true),
 	});
 	assert.deepEqual((await drafts()).rows, [draft]);
+});
+
+async function openNewReply(mail: string) {
+	const { path } = await newReply(mail);
+	const send = client();
+	const { result } = await send(path, 200, newReplyEdits());
+	assert.ok(
+		result && typeof result === "object" && "href" in result && "id" in result,
+	);
+	assert.ok(typeof result.href === "string" && typeof result.id === "string");
+	assert.partialDeepStrictEqual(
+		await send(result.href.replace("/inbox/card/", "/home/cards/"), 200),
+		{
+			item_id: `reply_draft:${result.id}`,
+			reply_draft_status: "pending",
+			source_activity: { id: mail },
+		},
+	);
+	assert.partialDeepStrictEqual(result, { existing: false });
+}
+
+test("Doc opens a new pending reply when an approved reply leads the conversation", async () => {
+	const conversation = randomUUID();
+	const approved = await storeJobDraft(await replyEmail(conversation));
+	await db.query(`begin; set local engine.user_id = '${owner}';
+		update reply_draft set status = 'approved', to_address = 'sender@example.test',
+			cc_address = 'copy@example.test' where id = '${approved}'; commit;`);
+	const mail = await replyEmail(conversation);
+	const send = client();
+	const dashboard = () => send("/home/inbox?view=dashboard", 200);
+	const before = await dashboard();
+	assert.partialDeepStrictEqual(before, {
+		waiting: { items: [{ reply_draft_id: approved }] },
+	});
+	await openNewReply(mail);
+	assert.deepEqual(await dashboard(), before);
+});
+
+test("Doc opens a new reply when a job draft's source is in the other partner's mailbox", async () => {
+	const conversation = randomUUID();
+	await storeJobDraft(await replyEmail(conversation, other));
+	await openNewReply(await replyEmail(conversation));
 });
 
 test("Doc refuses a reply when the source email is gone or outside the partner's mailbox", async () => {

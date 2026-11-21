@@ -148,8 +148,9 @@ export async function storeReplyDraft(
 		} = await sql<{ evidence: string }>`
 			select case when left(e.body, 2000) ~ '\\S'
 				then left(e.body, 2000) else e.sender::text end as evidence
-			from email e join email_mailbox m on m.activity_id = e.activity_id
-			where e.activity_id = ${activity_id} and m.user_id = ${owner_user_id}
+			from email e
+			where e.activity_id = ${activity_id}
+			and ${sourceInMailbox(sql.ref("e.activity_id"), owner_user_id, { requireMailbox: true })}
 			for key share of e
 		`.execute(tx);
 		if (!email) return fail(new Refusal(404, "not_found"));
@@ -165,6 +166,7 @@ export async function storeReplyDraft(
 		where d.owner_user_id = ${owner_user_id}
 		and (d.email_activity_id = ${activity_id} or (
 			e.conversation_id = ${conversation} and d.status = 'pending'
+			and ${sourceInMailbox(sql.ref("d.email_activity_id"), owner_user_id, { requireMailbox: true })}
 			and (${"confirmed_doc_turn_id" in reply} or d.confirmed_doc_turn_id is not null)
 		))
 		order by (d.email_activity_id = ${activity_id}) desc, a.happened_at desc, a.id desc

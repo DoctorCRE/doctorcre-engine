@@ -21,9 +21,10 @@ export function senderLabel(
 export function sourceInMailbox(
 	source: Expression<string | null>,
 	userId: string | Expression<string>,
+	{ requireMailbox = false } = {},
 ) {
 	return sql<boolean>`coalesce((select bool_or(user_id = ${userId}::uuid)
-		from email_mailbox where activity_id = ${source}), true)`;
+		from email_mailbox where activity_id = ${source}), ${!requireMailbox})`;
 }
 
 export const mailGroup = sql<

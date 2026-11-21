@@ -103,7 +103,11 @@ type Suggestion = ReviewRow &
 const mailSource = sql`coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id)`;
 const sourceKey = sql<string>`coalesce(${mailSource}, a.id::text, p.id::text)`;
 
-function draftRows(userId: string, mailGroups?: RawBuilder<unknown>) {
+function draftRows(
+	userId: string,
+	mailGroups: RawBuilder<unknown> | undefined,
+	draftId: string | undefined,
+) {
 	return sql`
 		with drafts as (
 			select r.id, r.status, r.sent_at, r.failure_reason, r.revision::text as source_version,
@@ -130,6 +134,7 @@ function draftRows(userId: string, mailGroups?: RawBuilder<unknown>) {
 				having count(*) = 1
 			)
 			where r.owner_user_id = ${userId}::uuid
+				${draftId ? sql`and r.id = ${draftId}` : sql``}
 				${mailGroups ? sql`and ${mailGroup} in (${mailGroups})` : sql``}
 				and ${sourceInMailbox(sql.ref("r.email_activity_id"), userId)}
 				and (
@@ -413,15 +418,23 @@ function suggestionRows(
 
 function homeReviewGroups(
 	userId: string,
-	forMail = false,
-	dashboard = false,
-	emailActivityIds?: string[],
+	{
+		forMail = false,
+		dashboard = false,
+		emailActivityIds,
+		draftId,
+	}: {
+		forMail?: boolean;
+		dashboard?: boolean;
+		emailActivityIds?: string[] | undefined;
+		draftId?: string | undefined;
+	} = {},
 ) {
 	const mailGroups =
 		emailActivityIds &&
 		sql`select ${mailGroup} from email e where e.activity_id = any(${emailActivityIds}::uuid[])`;
 	return sql`
-		with draft_groups as (${draftRows(userId, mailGroups)}),
+		with draft_groups as (${draftRows(userId, mailGroups, draftId)}),
 		suggestion_groups as (${suggestionRows(userId, forMail, dashboard, mailGroups)}),
 		draft_cards as (
 			select d.*, greatest(d.draft_change_id, s.suggestion_change_id) as source_change_id,
@@ -470,14 +483,12 @@ const cardSummary = (activityId: string) =>
 	sql`left join lateral ${currentEmailSummary(sql.ref(activityId))} summary on true`;
 
 function draftCards(
-	userId: string,
+	groups: RawBuilder<unknown>,
 	limit: number | null,
 	filter?: RawBuilder<boolean>,
-	dashboard = false,
-	emailActivityIds?: string[],
 ) {
 	return sql<Draft>`
-		${homeReviewGroups(userId, false, dashboard, emailActivityIds)}
+		${groups}
 		select card.*, ${summaryFields} from draft_cards card
 		${cardSummary("card.email_activity_id")}
 		${filter ? sql`where ${filter}` : sql``}
@@ -486,14 +497,12 @@ function draftCards(
 }
 
 function suggestionCards(
-	userId: string,
+	groups: RawBuilder<unknown>,
 	limit: number | null,
 	filter?: RawBuilder<boolean>,
-	dashboard = false,
-	emailActivityIds?: string[],
 ) {
 	return sql<Suggestion>`
-		${homeReviewGroups(userId, false, dashboard, emailActivityIds)}
+		${groups}
 		select card.*, ${summaryFields} from suggestion_cards card
 		${cardSummary("card.activity_id")}
 		${filter ? sql`where ${filter}` : sql``}
@@ -541,12 +550,15 @@ export async function lockHomeReview(
 ) {
 	const query =
 		kind === "reply_draft"
-			? (userId: string) =>
-					draftCards(userId, 1, sql`id = ${id} and status <> 'sent'`, true)
-			: (userId: string) => suggestionCards(userId, 1, sql`id = ${id}`);
+			? draftCards(
+					homeReviewGroups(userId, { dashboard: true }),
+					1,
+					sql`id = ${id} and status <> 'sent'`,
+				)
+			: suggestionCards(homeReviewGroups(userId), 1, sql`id = ${id}`);
 	const {
 		rows: [group],
-	} = await query(userId).execute(tx);
+	} = await query.execute(tx);
 	if (!group) return;
 	const draftId =
 		"fallback_reply_draft" in group ? group.fallback_reply_draft?.id : group.id;
@@ -569,7 +581,7 @@ export async function lockHomeReview(
 	}
 	const {
 		rows: [card],
-	} = await markedReviews<ReviewRow>(query(userId), userId, kind).execute(tx);
+	} = await markedReviews<ReviewRow>(query, userId, kind).execute(tx);
 	return (
 		card && {
 			source_version: card.source_change_id,
@@ -832,36 +844,36 @@ export async function readHomeReviewCards(
 ) {
 	const emailActivityIds =
 		scope?.kind === "email_sources" ? scope.activityIds : undefined;
+	const draftId = scope?.kind === "reply_draft" ? scope.id : undefined;
+	const groups = homeReviewGroups(userId, {
+		dashboard,
+		emailActivityIds,
+		draftId,
+	});
 	const bySuggestion =
 		scope?.kind === "suggestion"
 			? sql<boolean>`${scope.id}::uuid = any(pending_member_ids)`
 			: undefined;
 	const drafts = await markedReviews(
 		draftCards(
-			userId,
+			groups,
 			limit,
-			scope?.kind === "reply_draft"
-				? sql`id = ${scope.id}`
-				: emailActivityIds
-					? sql`card.email_activity_id = any(${emailActivityIds}::uuid[])`
-					: bySuggestion,
-			dashboard,
-			emailActivityIds,
+			emailActivityIds
+				? sql`card.email_activity_id = any(${emailActivityIds}::uuid[])`
+				: bySuggestion,
 		),
 		userId,
 		"reply_draft",
 	).execute(db);
 	const suggestions = await markedReviews(
 		suggestionCards(
-			userId,
+			groups,
 			limit,
-			scope?.kind === "reply_draft"
-				? sql`fallback_reply_draft->>'id' = ${scope.id}`
+			draftId
+				? sql`fallback_reply_draft->>'id' = ${draftId}`
 				: emailActivityIds
 					? sql`card.activity_id = any(${emailActivityIds}::uuid[])`
 					: bySuggestion,
-			dashboard,
-			emailActivityIds,
 		),
 		userId,
 		"proposal",
@@ -1059,7 +1071,7 @@ export async function readHomeMailPriorities(
 		"reply_draft",
 	);
 	const { rows } = await sql<MailPriority>`
-		${homeReviewGroups(userId, true)}, marked_drafts as (${drafts}),
+		${homeReviewGroups(userId, { forMail: true })}, marked_drafts as (${drafts}),
 		cards as (
 			select case when draft.id is not null then 'reply_draft:' || draft.id
 					else 'suggestion:' || card.id end as item_id,
