@@ -1301,12 +1301,14 @@ test("draft and proposal details return only the viewer's distinct messages in t
 			sender_name: "Sam Example",
 			happened_at: "2026-01-02T00:00:00.000Z",
 			body: "Please send the plan.",
+			folded: null,
 		},
 		{
 			activity_id: id(11),
 			sender_name: "Pat Example",
 			happened_at: "2026-01-03T00:00:00.000Z",
 			body: "Please send the plan.",
+			folded: null,
 		},
 	];
 	assert.deepEqual(await get(`proposals/${id(30)}`), thread);
@@ -1318,6 +1320,7 @@ test("draft and proposal details return only the viewer's distinct messages in t
 			sender_name: "Pat Example",
 			happened_at: "2026-01-06T00:00:00.000Z",
 			body: "Please send the plan.",
+			folded: null,
 		},
 	]);
 	assert.deepEqual(await get(`proposals/${id(32)}`), [
@@ -1326,6 +1329,7 @@ test("draft and proposal details return only the viewer's distinct messages in t
 			sender_name: "Known Contact",
 			happened_at: "2026-01-04T00:00:00.000Z",
 			body: quotedRequest,
+			folded: null,
 		},
 	]);
 });
@@ -1351,15 +1355,16 @@ test("dashboard hides proposals and drafts when their source is in another mailb
 	assert.deepEqual(await dashboard(user.user), { reminders: [], waiting: [] });
 });
 
-test("single-message threads keep requests, signatures and history without corroborating mail", async () => {
+test("single-message threads keep unsupported content available", async () => {
 	const emails = [75, 76, 77, 79, 81, 82, 83, 84].map(id);
 	const proposals = emails.map(() => randomUUID());
 	const reviewer = id(80);
 	const user = { user: "thread-cleanup-reviewer" };
+	const footer = "Best regards,\nPat Example\nPhone: 555-010-1234";
 	const bodies = [
 		"Thanks!\nCould you confirm that Tuesday still works?",
 		"Here is the plan.\n----\nPlease check the second page.",
-		"Please send the plan.\n\nBest regards,\nPat Example\nPhone: 555-010-1234",
+		`Please send the plan.\n\n${footer}`,
 		"Thanks!\nhttps://example.test/floor-plan",
 		"Current message.\r\nFrom: Pat <pat@example.test>\r\nSent: yesterday\r\nOld message.",
 		"Current message.\r\nFrom: Pat\r\n <pat@example.test>\r\nSent: yesterday\r\nOld message.",
@@ -1403,15 +1408,23 @@ test("single-message threads keep requests, signatures and history without corro
 		assert.equal(response.status, 200);
 		const detail: unknown = await response.json();
 		assert.ok(isArguments(detail) && Array.isArray(detail.thread));
-		threads.push(detail.thread.filter(isArguments).map(({ body }) => body));
+		threads.push(
+			detail.thread
+				.filter(isArguments)
+				.map(({ body, folded }) => ({ body, folded })),
+		);
 	}
 	assert.deepEqual(
 		threads,
-		bodies.map((body) => [body]),
+		bodies.map((body, index) => [
+			index === 2
+				? { body: "Please send the plan.", folded: footer }
+				: { body, folded: null },
+		]),
 	);
 });
 
-test("every Home email review shows each message once without signatures, headers or quoted history", async () => {
+test("Home email reviews return each message with its visible and folded text", async () => {
 	const reviewer = randomUUID();
 	const user = { user: "clean-thread-reviewer" };
 	const [ask, answer, confirm, later] = [
@@ -1426,6 +1439,7 @@ test("every Home email review shows each message once without signatures, header
 	const requestText = "Could you send the suite 200 plan?";
 	const answerText = "Here is the plan.";
 	const confirmText = "Tuesday at 10 works.";
+	const foldedHistory = "> The previous walkthrough was in March.";
 	const signature =
 		"Maya Example | leasing director | Direct: 555-010-2000 | License 12345";
 	const messages = [
@@ -1435,13 +1449,15 @@ test("every Home email review shows each message once without signatures, header
 			sender: "Maya Example",
 			body: `${requestText}\r\n\r\n${signature}`,
 			kept: requestText,
+			folded: null,
 		},
 		{
 			id: answer,
 			address: "partner@example.test",
 			sender: "Example Thread Partner",
-			body: `${answerText}\r\n\r\n*From:* Maya Example <maya@example.test>\r\n\r\n*Sent:* Monday, January 5, 2026 9:00 AM\r\n*To:* Example Thread Partner\r\n*Subject:* Suite 200\r\n\r\n${requestText}`,
+			body: `${answerText}\r\n\r\n*From:* Maya Example <maya@example.test>\r\n\r\n*Sent:* Monday, January 5, 2026 9:00 AM\r\n*To:* Example Thread Partner\r\n*Subject:* Suite 200\r\n\r\n${requestText}\r\n${foldedHistory}`,
 			kept: answerText,
+			folded: foldedHistory,
 		},
 		{
 			id: confirm,
@@ -1449,6 +1465,7 @@ test("every Home email review shows each message once without signatures, header
 			sender: "Maya Example",
 			body: `${confirmText}\r\n${signature}\r\n> ${answerText}\r\n> ${requestText}`,
 			kept: confirmText,
+			folded: null,
 		},
 		{
 			id: later,
@@ -1456,6 +1473,7 @@ test("every Home email review shows each message once without signatures, header
 			sender: "Maya Example",
 			body: `Bring the keys.\n${signature}`,
 			kept: "Bring the keys.",
+			folded: null,
 		},
 	];
 	await db.query(`begin;
@@ -1503,11 +1521,18 @@ test("every Home email review shows each message once without signatures, header
 		const detail: unknown = await response.json();
 		assert.ok(isArguments(detail) && Array.isArray(detail.thread), path);
 		assert.deepEqual(
-			detail.thread.filter(isArguments).map(({ activity_id, body }) => ({
-				activity_id,
-				body,
+			detail.thread
+				.filter(isArguments)
+				.map(({ activity_id, body, folded }) => ({
+					activity_id,
+					body,
+					folded,
+				})),
+			messages.map(({ id, kept, folded }) => ({
+				activity_id: id,
+				body: kept,
+				folded,
 			})),
-			messages.map(({ id, kept }) => ({ activity_id: id, body: kept })),
 			path,
 		);
 	}

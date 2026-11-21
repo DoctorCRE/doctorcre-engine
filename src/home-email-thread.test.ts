@@ -3,7 +3,9 @@ import { test } from "node:test";
 import { cleanEmailThread } from "./home-email-thread.ts";
 
 function message(body: string, sender = "maya@example.test") {
-	return { body, sender };
+	const sender_name =
+		sender.toLowerCase() === "maya@example.test" ? "Maya Example" : null;
+	return { body, sender, sender_name };
 }
 
 const footer =
@@ -11,10 +13,62 @@ const footer =
 const header =
 	"From: Sam Example <sam@example.test>\nDate: Mon, Jan 5, 2026\nTo: Maya Example\nSubject: Suite 200";
 
+test("folds unmatched reply history and keeps its inline answers available", () => {
+	const history =
+		"On Mon, Jan 5, 2026 at 9:30 AM Sam Example\nwrote:\n> Is the plan ready?\nIt is ready.\n> Where are the keys?\nAt the side door.";
+	assert.deepEqual(
+		cleanEmailThread([message(`Answers below.\n\n${history}`)]),
+		[{ body: "Answers below.", folded: history }],
+	);
+});
+
+test("folds an unconfirmed signature before older mail with a complete header", () => {
+	const history = `${footer}\n\n${header}\n\nThe keys are ready.`;
+	assert.deepEqual(
+		cleanEmailThread([message(`Here is the plan.\n\n${history}`)]),
+		[{ body: "Here is the plan.", folded: history }],
+	);
+});
+
+test("promotes an entirely folded message to its visible body", () => {
+	const body = `${header}\n\nThe keys are ready.`;
+	assert.deepEqual(cleanEmailThread([message(body)]), [{ body, folded: null }]);
+});
+
+test("folds a complete inline reply header in a flattened body", () => {
+	const history = `${header.replaceAll("\n", " ")} The keys are ready.`;
+	assert.deepEqual(
+		cleanEmailThread([message(`Here is the plan. ${history}`)]),
+		[{ body: "Here is the plan.", folded: history }],
+	);
+});
+
+test("folds a trailing signature and legal notice without removing either", () => {
+	const notice =
+		"This email may contain confidential information.\nIf you received it in error, please delete it.";
+	const signature = `${footer}\n\n${notice}`;
+	assert.deepEqual(
+		cleanEmailThread([message(`Here is the plan.\n\n${signature}`)]),
+		[{ body: "Here is the plan.", folded: signature }],
+	);
+});
+
+function availableText(messages: Parameters<typeof cleanEmailThread>[0]) {
+	return cleanEmailThread(messages).map(({ body, folded }) =>
+		folded ? `${body}\n${folded}` : body,
+	);
+}
+
+function oneLine(text: string) {
+	return text.trim().replace(/\s+/g, " ");
+}
+
 test("keeps authored calendar fields and instructions", () => {
 	const note =
 		"Walkthrough details.\nDate: January 5, 2026\nSubject: Building walkthrough\nMeet at the west door.";
-	assert.deepEqual(cleanEmailThread([message(note)]), [note]);
+	assert.deepEqual(cleanEmailThread([message(note)]), [
+		{ body: note, folded: null },
+	]);
 });
 
 test("keeps replies between quoted questions inside a forward", () => {
@@ -23,7 +77,7 @@ test("keeps replies between quoted questions inside a forward", () => {
 		"Begin forwarded message:\nAnswers below.\nOn Mon, Jan 5, 2026 at 9:30 AM Sam Example <sam@example.test> wrote:";
 	const reply = `${intro}\n> Is the plan ready?\nIt is ready.\n> Where are the keys?\nAt the side door.`;
 	assert.deepEqual(
-		cleanEmailThread([message(questions, "sam@example.test"), message(reply)]),
+		availableText([message(questions, "sam@example.test"), message(reply)]),
 		[questions, `${intro}\nIt is ready.\nAt the side door.`],
 	);
 });
@@ -40,8 +94,10 @@ test("keeps standalone links and callbacks after a signature", () => {
 	];
 	const signed = updates.map((update) => message(`${update}\n${footer}`));
 	assert.deepEqual(
-		cleanEmailThread([...signed, ...notes.map((note) => message(note))]),
-		[...updates, ...notes],
+		availableText([...signed, ...notes.map((note) => message(note))]).map(
+			oneLine,
+		),
+		[...updates, ...notes].map(oneLine),
 	);
 });
 
@@ -54,7 +110,7 @@ test("keeps a whole instruction that ends with another message's footer line", (
 		"Leave it upstairs.",
 	];
 	assert.deepEqual(
-		cleanEmailThread([
+		availableText([
 			...updates.map((update) => message(`${update}\n${footer}`)),
 			message(`${instruction}\n${suffix}`),
 		]),
@@ -65,7 +121,9 @@ test("keeps a whole instruction that ends with another message's footer line", (
 test("keeps a floor-plan link on a meeting join label", () => {
 	const note =
 		"Use this link for the plan.\nJoin Zoom Meeting: https://example.test/floor-plan";
-	assert.deepEqual(cleanEmailThread([message(note)]), [note]);
+	assert.deepEqual(cleanEmailThread([message(note)]), [
+		{ body: note, folded: null },
+	]);
 });
 
 test("matches complete earlier lines after whitespace and quote-marker normalization", () => {
@@ -74,7 +132,7 @@ test("matches complete earlier lines after whitespace and quote-marker normaliza
 	const reply =
 		"Here is the plan.\r\n  >> Could you send the\u00a0suite\t200 plan?\r\n\t> Use the west door.\r\n> A line missing from the archive.\r\nPlease text when you arrive.";
 	assert.deepEqual(
-		cleanEmailThread([message(oldest), message(later), message(reply)]),
+		availableText([message(oldest), message(later), message(reply)]),
 		[
 			oldest,
 			later,
@@ -91,7 +149,7 @@ test("removes a complete reply header and its matching lines, including Outlook 
 		"> *From:* Sam Example\n\n> *Sent:* Mon, Jan 5, 2026\n> *To:* Maya Example\n> *Subject:* Suite 200";
 	for (const boundary of [header, outlook]) {
 		assert.deepEqual(
-			cleanEmailThread([
+			availableText([
 				message(earlier),
 				message(`${reply}\n${boundary}\n\n${earlier}\n${postscript}`),
 			]),
@@ -103,7 +161,7 @@ test("removes a complete reply header and its matching lines, including Outlook 
 test("the reply header needs a matching line immediately after it", () => {
 	const earlier = "Could you send the suite 200 plan?";
 	const reply = `Here is the plan.\n${header}\nPlease use the west door.\n> ${earlier}`;
-	assert.deepEqual(cleanEmailThread([message(earlier), message(reply)]), [
+	assert.deepEqual(availableText([message(earlier), message(reply)]), [
 		earlier,
 		`Here is the plan.\n${header}\nPlease use the west door.`,
 	]);
@@ -113,7 +171,7 @@ test("unmarked repeated words and matches on only part of a line stay visible", 
 	const earlier = "Use the west door.";
 	const reply = `Quick update.\n${earlier}\n> Use the west door. I can arrive Monday.\nYou wrote: ${earlier} I can arrive Monday.`;
 	assert.deepEqual(
-		cleanEmailThread([message(earlier), message(reply, "sam@example.test")]),
+		availableText([message(earlier), message(reply, "sam@example.test")]),
 		[earlier, reply],
 	);
 });
@@ -178,10 +236,10 @@ for (const [shape, text] of unstoredHistory) {
 	test(`preserves ${shape} without evidence of carried history`, () => {
 		const earlier = "Can you send the new plan?";
 		const reply = `Here is the plan.\n${text}`;
-		assert.deepEqual(cleanEmailThread([message(earlier), message(reply)]), [
-			earlier,
-			reply,
-		]);
+		assert.deepEqual(
+			availableText([message(earlier), message(reply)]).map(oneLine),
+			[earlier, oneLine(reply)],
+		);
 	});
 }
 
@@ -199,7 +257,9 @@ test("keeps the sign-off, contact and address lines of an unsupported signature"
 		"Tuesday works. Thank you, Maya, (555) 010-2000 maya@example.test",
 	];
 	for (const note of notes) {
-		assert.deepEqual(cleanEmailThread([message(note)]), [note]);
+		assert.deepEqual(availableText([message(note)]).map(oneLine), [
+			oneLine(note),
+		]);
 	}
 });
 
@@ -209,7 +269,7 @@ test("signature lines need two other messages from the same sender", () => {
 	const third = `Use the west door.\n${footer.replace("Office Manager", "Office  Manager")}\n\n`;
 	const other = `The office is open.\n${footer}`;
 	assert.deepEqual(
-		cleanEmailThread([
+		availableText([
 			message(first),
 			message(second),
 			message(other, "sam@example.test"),
@@ -217,7 +277,7 @@ test("signature lines need two other messages from the same sender", () => {
 		[first, second, other],
 	);
 	assert.deepEqual(
-		cleanEmailThread([
+		availableText([
 			message(first),
 			message(second, "MAYA@example.test"),
 			message(third),
@@ -231,7 +291,7 @@ test("does not borrow a number in a sentence when another message puts it in a f
 	const note =
 		"Here is the plan. Call the office at 555-010-2000\nmaya@example.test";
 	const signed = "The plan is attached.\n555-010-2000\nmaya@example.test";
-	assert.deepEqual(cleanEmailThread([message(note), message(signed)]), [
+	assert.deepEqual(availableText([message(note), message(signed)]), [
 		note,
 		signed,
 	]);
@@ -249,7 +309,7 @@ test("a recurring block before a closing paragraph stays visible", () => {
 			"Use the west door.",
 		];
 		assert.deepEqual(
-			cleanEmailThread([
+			availableText([
 				...updates.map((update) => message(`${update}\n${footer}`)),
 				message(current),
 			]),
@@ -263,10 +323,7 @@ test("names and a repeated instruction after a repeated phone line need more tha
 		(update) =>
 			`${update}\nMaya Example\nDirect: 555-010-2000\nPlease text before you arrive.`,
 	);
-	assert.deepEqual(
-		cleanEmailThread(bodies.map((body) => message(body))),
-		bodies,
-	);
+	assert.deepEqual(availableText(bodies.map((body) => message(body))), bodies);
 });
 
 const teams =
@@ -283,8 +340,10 @@ test("removes whole invite template lines and keeps the authored paragraphs arou
 			"Meeting ID: 867 is the label to use on your plan.",
 		]) {
 			assert.deepEqual(
-				cleanEmailThread([message(`${before}\n\n${invite}\n${after}`)]),
-				[`${before}\n\n${after}`],
+				availableText([message(`${before}\n\n${invite}\n${after}`)]).map(
+					oneLine,
+				),
+				[`${before} ${after}`],
 			);
 		}
 	}
@@ -295,14 +354,14 @@ test("keeps a standalone invite and other messages with no surviving lines", () 
 	const quote = `> ${earlier}`;
 	const signature = `\n${footer}\n\n`;
 	for (const body of ["", "  ", "Thanks", teams, zoom]) {
-		assert.deepEqual(cleanEmailThread([message(body)]), [body]);
+		assert.deepEqual(availableText([message(body)]), [body]);
 	}
-	assert.deepEqual(cleanEmailThread([message(earlier), message(quote)]), [
+	assert.deepEqual(availableText([message(earlier), message(quote)]), [
 		earlier,
 		quote,
 	]);
 	assert.deepEqual(
-		cleanEmailThread([message(signature), message(footer), message(footer)]),
+		availableText([message(signature), message(footer), message(footer)]),
 		[signature, footer, footer],
 	);
 });
@@ -312,9 +371,9 @@ test("invite details without a template and unrelated links remain visible", () 
 		"Meeting ID: 12345\nPasscode: example\nJoin on your computer\nJoin with Google Meet\nhttps://meet.google.com/abc-defg-hij";
 	const linkedNote =
 		"Please join remotely.\nJoin Microsoft Teams Meeting\nhttps://example.test/join\nMeeting ID: 1234\n\nhttps://example.test/floor-plan";
-	assert.deepEqual(cleanEmailThread([message(note), message(linkedNote)]), [
+	assert.deepEqual(availableText([message(note), message(linkedNote)]), [
 		note,
-		"Please join remotely.\nhttps://example.test/join\nMeeting ID: 1234\n\nhttps://example.test/floor-plan",
+		"Please join remotely.\nhttps://example.test/join\nMeeting ID: 1234\nhttps://example.test/floor-plan",
 	]);
 });
 
@@ -331,7 +390,7 @@ test("preserves large folded lines and removes individually matched lines in a c
 			),
 		),
 	);
-	assert.deepEqual(cleanEmailThread([message(folded), ...messages]), [
+	assert.deepEqual(availableText([message(folded), ...messages]), [
 		folded,
 		...replies,
 	]);

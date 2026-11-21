@@ -40,10 +40,10 @@ export function decisionPosition(
 		order by (${column("status")} = 'pending') desc, ${column("created_at")} desc, ${column("id")})`;
 }
 
-type ThreadMessage = {
+type Sender = { sender: string; sender_name: string | null };
+
+type ThreadMessage = Sender & {
 	activity_id: string;
-	sender: string;
-	sender_name: string | null;
 	happened_at: string;
 	body: string;
 };
@@ -64,6 +64,30 @@ const zoomJoin =
 	/^Join Zoom Meeting:? <?https:\/\/(?:[\w-]+\.)?zoom\.us\/j\/\d+(?:\?[^ <>]+)?>?$/i;
 const inviteDetail =
 	/^(?:Join the meeting now|Meeting ID: \d+(?: \d+)*|Passcode: [\w-]+)$/i;
+
+const replyOpener =
+	/\bOn[ \t]+(?=[^<>\r\n]{0,48}\d)[^<>]{1,240}?(?:<[^<>]{1,160}>)?\s*\bwrote:/i;
+const forwarded =
+	/\bBegin forwarded message:|(?<!-)-{2,} *(?:original|forwarded) message *-{2,}/i;
+const headerField =
+	/(?<![^\s.…>])\*?(From|Sent|Date|To|Cc|Bcc|Subject):\*?(?=\s|$)/gi;
+const phone = /(?:\+?1[ .-]*)?(?:\(\d{3}\)|\d{3})[ .-]*\d{3}[ .-]*\d{4}/;
+const address = /[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+/;
+const website = /(?:https?:\/\/|www\.)[^\s<>]+/i;
+const contactValue = new RegExp(
+	`(?:mailto:)?${address.source}|${website.source}|${phone.source}`,
+	"gi",
+);
+const contactLabel =
+	/\b(?:direct|main|office|phone|cell|mobile|fax|tel(?:ephone)?|e-?mail|web|[cftmpoe])\b/gi;
+const signatureDetail =
+	/^(?:(?:[A-Z]{2} )?(?:license|lic\.|dre|bre|nmls)[ :#]+[\w-]*\d[\w-]*|(?:(?:general|regional|office|transaction|leasing|commercial|managing|associate|executive|chief|operating|vice|senior) ){0,4}(?:dentist|director|manager|broker|president|partner|associate|coordinator|officer)|(?:[\w-]+\.)+(?:com|org|net|co|io)|\d+ [\w. ]+ (?:st\.?|street|road|rd\.?|avenue|ave\.?|lane|ln\.?|drive|dr\.?|blvd\.?)(?:[., ].*)?|[\w. ]+, [A-Z]{2} \d{5}(?:-\d{4})?)$/i;
+const legalFooter =
+	/^(?:confidentiality (?:notice|statement)\b|if you (?:are not the intended recipient|have received this (?:e-?mail|message) in error)\b|(?:this|the) (?:e-?mail|message|communication|transmission|information)\b.*\b(?:confidential|privileged|intended (?:only |solely )?for)\b)/is;
+const deviceFooter = /^sent from my (?:iphone|ipad|android|mobile device)$/i;
+const imageFooter = /^\[cid:[^\]]+\](?:\s*<https?:\/\/[^>]+>)?$/i;
+const signOff =
+	/^(?:best|(?:(?:best|kind|warm) )?regards|thanks(?: so much| again)?|thank you|many thanks|sincerely|cheers)[,.!]?$/i;
 
 type MailLine = {
 	text: string;
@@ -141,12 +165,162 @@ function signatureLines(group: MailLine[][]) {
 	});
 }
 
-export function cleanEmailThread(
-	messages: Pick<ThreadMessage, "body" | "sender">[],
+function historyStart(body: string) {
+	const start = Math.min(
+		body.length,
+		...[
+			body.search(replyOpener),
+			body.search(forwarded),
+			body.search(/^[ \t]*>/m),
+		].filter((at) => at >= 0),
+	);
+	const fields = [...body.matchAll(headerField)];
+	const header = fields.findIndex((field, index) => {
+		if (field.index >= start) return false;
+		if (/^(?:cc|bcc)$/i.test(field[1] ?? "")) return false;
+		const labels = new Set<string>();
+		for (const [offset, next] of fields.slice(index, index + 7).entries()) {
+			if (next.index - field.index > 3500) break;
+			const label = next[1]?.toLowerCase() ?? "";
+			if (labels.has(label)) break;
+			const value = body
+				.slice(next.index + next[0].length, fields[index + offset + 1]?.index)
+				.trim();
+			if ((label === "from" || label === "subject") && !value) break;
+			labels.add(label);
+			if (
+				labels.has("from") &&
+				labels.has("to") &&
+				labels.has("subject") &&
+				(labels.has("sent") || labels.has("date"))
+			)
+				return true;
+		}
+		return false;
+	});
+	const boundary = fields[header]?.index ?? start;
+	const divider = body.slice(0, boundary).search(/(?<!_)_{8,}\s*$/);
+	return boundary < body.length && divider >= 0 ? divider : boundary;
+}
+
+function signatureStart(
+	body: string,
+	senderName: string | null,
+	sender: string,
 ) {
+	const name = senderName?.trim().toLowerCase();
+	const firstName = name?.split(/\s+/, 1)[0];
+	let start = body.length;
+	let hasContact = false;
+	const paragraph = body.lastIndexOf("\n\n") + 2;
+	if (paragraph > 1 && legalFooter.test(body.slice(paragraph).trimStart())) {
+		start = paragraph - 1;
+		hasContact = true;
+	}
+	for (const raw of body.slice(0, start).split("\n").toReversed()) {
+		const line = raw.trim();
+		if (line) {
+			const lower = line.toLowerCase();
+			const named = name && (lower.startsWith(`${name} |`) || lower === name);
+			const details =
+				named && line.includes("|") ? line.slice(line.indexOf("|") + 1) : line;
+			const contactLine = details.length <= 500 && contactDetails(details);
+			const footer =
+				legalFooter.test(line) ||
+				deviceFooter.test(line) ||
+				imageFooter.test(line);
+			if (contactLine || footer) hasContact = true;
+			else if (
+				!hasContact ||
+				!(
+					named ||
+					lower === firstName ||
+					signatureDetail.test(line) ||
+					signOff.test(line)
+				)
+			)
+				break;
+		}
+		start -= raw.length + 1;
+	}
+	const last = hasContact ? Math.max(0, start + 1) : body.length;
+	const prefix = body.slice(0, last).trimEnd();
+	const lineStart = prefix.lastIndexOf("\n") + 1;
+	const inline = prefix.slice(lineStart);
+	const inlineStart = inlineSignatureStart(inline, name, sender);
+	return inlineStart < inline.length ? lineStart + inlineStart : last;
+}
+
+function contactDetails(line: string) {
+	const residue = line.replace(contactValue, "");
+	return (
+		residue !== line &&
+		residue
+			.split("|")
+			.every(
+				(part) =>
+					/^[\s<>()[\]:+./-]*$/.test(
+						part
+							.replace(contactLabel, "")
+							.replace(/\b(?:ext\.?|x) *\d+\b/gi, ""),
+					) || signatureDetail.test(part.trim()),
+			)
+	);
+}
+
+function inlineSignatureStart(
+	line: string,
+	name: string | undefined,
+	sender: string,
+) {
+	const tail = line.slice(-1600);
+	const mailbox = sender.trim().toLowerCase();
+	if (!phone.test(tail) && !address.test(tail) && !website.test(tail))
+		return line.length;
+	for (const sign of tail.matchAll(/(?<=\S )[A-Z][a-z]+(?: [a-z]+){0,2},? /g)) {
+		if (!signOff.test(sign[0].trim())) continue;
+		const details = tail.slice(sign.index + sign[0].length);
+		if (
+			name &&
+			!details.toLowerCase().startsWith(name.split(" ", 1)[0] ?? name)
+		)
+			continue;
+		if (
+			details.includes("|") ||
+			(mailbox && details.toLowerCase().includes(mailbox)) ||
+			/^\S+[,.]? +(?:\+?1 |\(|\d)/.test(details)
+		)
+			return line.length - tail.length + sign.index;
+	}
+	if (name) {
+		const at = tail.toLowerCase().lastIndexOf(name);
+		const details = tail.slice(at + name.length);
+		if (
+			at > 0 &&
+			/[.!?]\s+$/.test(tail.slice(0, at)) &&
+			(/^[, ]+(?:DMD|DDS)/.test(details) ||
+				details.includes("|") ||
+				(mailbox && details.toLowerCase().includes(mailbox)))
+		)
+			return line.length - tail.length + at;
+	}
+	return line.length;
+}
+
+function foldEmailBody(body: string, { sender_name, sender }: Sender) {
+	const normalized = body.replace(/\r\n?/g, "\n");
+	const history = historyStart(normalized);
+	const visible = normalized.slice(0, history).trimEnd();
+	const split = signatureStart(visible, sender_name, sender);
+	const current = visible.slice(0, split).trimEnd();
+	const folded = normalized.slice(split).trim();
+	return current && folded ? { body: current, folded } : { body, folded: null };
+}
+
+export function cleanEmailThread(messages: (Sender & { body: string })[]) {
 	const earlier = new Set<string>();
 	const senders = new Map<string, MailLine[][]>();
-	const cleaned = messages.map(({ body, sender }) => {
+	const cleaned = messages.map(({ body, sender, sender_name }) => {
 		const lines = mailLines(body);
 		const content = lines.filter(({ text }) => text.trim());
 		const removed = historyLines(content, earlier);
@@ -161,7 +335,7 @@ export function cleanEmailThread(
 			if (group) group.push(own);
 			else senders.set(address, [own]);
 		}
-		return { body, lines, content, removed };
+		return { body, lines, content, removed, sender_name, sender };
 	});
 
 	const signatures = new Set<MailLine>();
@@ -172,7 +346,8 @@ export function cleanEmailThread(
 		}
 	}
 
-	return cleaned.map(({ body, lines, content, removed }) => {
+	return cleaned.map((message) => {
+		const { body, lines, content, removed } = message;
 		let inInvite = false;
 		for (const line of content) {
 			const { key } = line;
@@ -183,16 +358,17 @@ export function cleanEmailThread(
 				(inInvite && inviteDetail.test(key));
 			if (inInvite || signatures.has(line)) removed.add(line);
 		}
-		if (!removed.size) return body;
+		if (!removed.size) return foldEmailBody(body, message);
 		const shown = lines.filter((line) => !removed.has(line));
 		const start = shown.findIndex(({ text }) => text.trim());
-		if (start < 0) return body;
+		if (start < 0) return foldEmailBody(body, message);
 		const end = shown.findLastIndex(({ text }) => text.trim());
-		return shown
+		const retained = shown
 			.slice(start, end + 1)
 			.map(({ text }) => text)
 			.join("\n")
 			.replace(/\n(?:[ \t]*\n){2,}/g, "\n\n");
+		return foldEmailBody(retained, message);
 	});
 }
 
@@ -217,6 +393,6 @@ export async function readHomeEmailThread(
 	const bodies = cleanEmailThread(rows);
 	return rows.map(({ sender: _sender, ...message }, index) => ({
 		...message,
-		body: bodies[index] ?? message.body,
+		...(bodies[index] ?? { body: message.body, folded: null }),
 	}));
 }
