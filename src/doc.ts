@@ -8,7 +8,7 @@ import {
 	draftReference,
 	requirePendingDocDraft,
 } from "./doc-draft.ts";
-import { docLinkConnected } from "./doc-link.ts";
+import { docLinkState } from "./doc-link.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
@@ -128,14 +128,14 @@ const queued = sql`(t.state = 'queued' or t.claim_until <= statement_timestamp()
 
 const turnFields = sql`t.id, to_jsonb(t.created_at) #>> '{}' as created_at, t.position, t.question, t.context, t.answer, t.idempotency_key,
 	case when ${queued} then 'queued' else t.state end as state,
-	case when ${queued} then coalesce(
-		(select case
-			when not ${docLinkConnected} then 'Doc answers when your Mac is on.'
-			when readiness = 'signed_out' then 'Sign in to Claude Code on your Mac.'
-			when readiness = 'plan_limited' then 'Doc is paused until your Claude plan resets.'
-			else 'Doc is waiting for a free slot on your Mac.'
-		end from doc_link where owner_user_id = t.owner_user_id),
-		'Doc isn''t set up on your Mac yet.'
+	case when ${queued} then (
+		select case status
+			when 'not_set_up' then 'Doc isn''t set up on your Mac yet.'
+			when 'mac_off' then 'Doc answers when your Mac is on.'
+			when 'signed_out' then 'Sign in to Claude Code on your Mac.'
+			when 'plan_limited' then 'Doc is paused until your Claude plan resets.'
+			when 'ready' then 'Doc is waiting for a free slot on your Mac.'
+		end from ${docLinkState(sql<string>`t.owner_user_id`)} link
 	) end as waiting_reason,
 	(select answer -> 'result' from save_receipt where idempotency_key = t.confirmation_key) as confirmation`;
 

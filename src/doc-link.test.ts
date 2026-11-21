@@ -166,8 +166,8 @@ test("Doc link migration, private credentials and Mac polling", {
 					...headers,
 				},
 			});
-		async function presence(partner: typeof first) {
-			const response = await send(partner);
+		async function presence(partner: typeof first, suffix = "") {
+			const response = await send(partner, "GET", suffix);
 			assert.equal(response.status, 200);
 			assert.equal(response.headers.get("cache-control"), "no-store");
 			const status: unknown = await response.json();
@@ -175,9 +175,14 @@ test("Doc link migration, private credentials and Mac polling", {
 				status &&
 					typeof status === "object" &&
 					"issued_at" in status &&
-					"connected" in status,
+					"connected" in status &&
+					"status" in status,
 			);
-			assert.deepEqual(Object.keys(status).sort(), ["connected", "issued_at"]);
+			assert.deepEqual(Object.keys(status).sort(), [
+				"connected",
+				"issued_at",
+				"status",
+			]);
 			return status;
 		}
 		async function issue(partner: typeof first, suffix = "") {
@@ -232,8 +237,10 @@ test("Doc link migration, private credentials and Mac polling", {
 		assert.deepEqual(await presence(first), {
 			connected: false,
 			issued_at: null,
+			status: "not_set_up",
 		});
 		const credential = await issue(first);
+		assert.equal((await presence(first)).status, "mac_off");
 		const expectedHash = createHash("sha256").update(credential).digest("hex");
 		const stored = await db.query(
 			"select owner_user_id, credential_hash from next.doc_link",
@@ -346,21 +353,37 @@ test("Doc link migration, private credentials and Mac polling", {
 		assert.equal(await empty.text(), "");
 		const status = await presence(first);
 		assert.equal(status.connected, true);
+		assert.equal(status.status, "ready");
 		assert.ok(
 			typeof status.issued_at === "string" &&
 				Number.isFinite(Date.parse(status.issued_at)),
 		);
-		assert.deepEqual(await presence(second), {
+		assert.deepEqual(await presence(second, `?owner_user_id=${appUserId}`), {
 			connected: false,
 			issued_at: null,
+			status: "not_set_up",
 		});
+		for (const readiness of ["signed_out", "plan_limited"]) {
+			assert.equal(
+				(await poll(credential, { "Doc-Link-Readiness": readiness })).status,
+				204,
+			);
+			assert.deepEqual(await presence(first), { ...status, status: readiness });
+		}
 		await db.query(
 			`update next.doc_link set last_seen_at = clock_timestamp() - interval '31 seconds'
 			where owner_user_id = $1`,
 			[appUserId],
 		);
-		assert.deepEqual(await presence(first), { ...status, connected: false });
-		assert.equal((await poll(credential)).status, 204);
+		assert.deepEqual(await presence(first), {
+			...status,
+			connected: false,
+			status: "mac_off",
+		});
+		assert.equal(
+			(await poll(credential, { "Doc-Link-Readiness": "ready" })).status,
+			204,
+		);
 		assert.deepEqual(await presence(first), status);
 
 		const otherCredential = await issue(second, `?owner_user_id=${appUserId}`);
@@ -708,6 +731,7 @@ test("Doc link migration, private credentials and Mac polling", {
 		assert.deepEqual(await presence(first), {
 			connected: false,
 			issued_at: null,
+			status: "not_set_up",
 		});
 
 		await t.test(
