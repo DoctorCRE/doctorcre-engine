@@ -323,36 +323,51 @@ function noticePhone(value: string | undefined) {
 		return phone;
 }
 
-const streetTypes = [
-	"alley|aly",
-	"avenue|ave",
-	"boulevard|blvd",
-	"circle|cir",
-	"court|ct",
-	"crescent|cres",
-	"drive|dr",
-	"expressway|expy",
-	"freeway|fwy",
-	"highway|hwy",
-	"lane|ln",
-	"loop",
-	"parkway|pkwy",
-	"pike",
-	"place|pl",
-	"plaza|plz",
-	"road|rd",
-	"row",
-	"run",
-	"square|sq",
-	"street|st",
-	"terrace|ter",
-	"trail|trl",
-	"turnpike|tpke",
-	"way",
-].join("|");
+const streetTypes: ReadonlyArray<
+	[names: string, routeNumber?: "optional" | "required"]
+> = [
+	["alley|aly"],
+	["avenue|ave"],
+	["boulevard|blvd"],
+	["circle|cir"],
+	["court|ct"],
+	["crescent|cres"],
+	["drive|dr"],
+	["expressway|expy"],
+	[String.raw`farm\s+to\s+market|fm`, "required"],
+	["freeway|fwy"],
+	["highway|hwy", "optional"],
+	["lane|ln"],
+	["loop", "optional"],
+	["parkway|pkwy"],
+	["pike"],
+	["place|pl"],
+	["plaza|plz"],
+	["road|rd"],
+	[String.raw`(?:u\.?s\.?|state|county)\s+(?:road|rd)`, "required"],
+	["route|rte|sh", "required"],
+	["row"],
+	["run"],
+	["square|sq"],
+	["street|st"],
+	["terrace|ter"],
+	["trail|trl"],
+	["turnpike|tpke"],
+	["way"],
+];
+
+const namedStreetTypes = streetTypes
+	.filter(([, routeNumber]) => routeNumber !== "required")
+	.map(([names]) => names)
+	.join("|");
+const numberedRouteTypes = streetTypes
+	.filter(([, routeNumber]) => routeNumber)
+	.map(([names]) => names)
+	.join("|");
+const streetWord = String.raw`(?:[\p{L}\d][\p{L}\p{M}\d'’/-]*\s+)`;
 
 const streetPattern = new RegExp(
-	String.raw`^\d+\p{L}?\s+(?:[\p{L}\d][\p{L}\p{M}\d'’/-]*\s+)+(?:${streetTypes})\.?` +
+	String.raw`^\d+\p{L}?\s+(?:${streetWord}+(?:${namedStreetTypes})\.?|${streetWord}*(?:${numberedRouteTypes})\.?\s+\d+[a-z]?)` +
 		String.raw`(?:\s+(?:n|ne|e|se|s|sw|w|nw|north(?:east|west)?|south(?:east|west)?|east|west)\.?)?` +
 		String.raw`(?:\s+(?:(?:suite|ste|unit|bldg|apt)\.?\s+(?:#\s*)?|#\s*)(?:[a-z]|[a-z]*\d[a-z\d]*)(?:-[a-z\d]+)?)?$`,
 	"iu",

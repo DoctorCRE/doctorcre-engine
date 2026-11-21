@@ -400,6 +400,20 @@ for (const { number, hint, prefix, phone, street } of [
 		phone: "+12145550142",
 		street: "64 Fixture Ave. Northwest #12-B",
 	},
+	{
+		number: 94,
+		hint: "on a numbered highway with directions",
+		prefix: "—",
+		phone: null,
+		street: "4100 E Highway 80 W",
+	},
+	{
+		number: 95,
+		hint: "on a numbered route with an abbreviated type",
+		prefix: "—",
+		phone: null,
+		street: "825 Rte 9",
+	},
 ]) {
 	test(`reconciliation moves a copied notice with a combined contact address ${hint}`, async () => {
 		const activity_id = id(number);
@@ -472,6 +486,8 @@ test("reconciliation drops invalid streets and retains a valid phone", async () 
 		"7 Oaks Dental",
 		"19 Example Dental LLC",
 		"64 Fixture Row!",
+		"64 Fixture Road 80",
+		"24 hours should be enough",
 	].entries()) {
 		const activity_id = id(120 + offset);
 		await copiedNotice(
@@ -502,7 +518,7 @@ for (const [offset, sentence] of [
 	"10 people can make the call on Monday",
 ].entries()) {
 	test(`reconciliation drops the sentence ${JSON.stringify(sentence)} as a street`, async () => {
-		const activity_id = id(125 + offset);
+		const activity_id = id(127 + offset);
 		const phone = `214-555-015${offset}`;
 		await copiedNotice(
 			activity_id,
