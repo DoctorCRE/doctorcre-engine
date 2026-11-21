@@ -43,6 +43,17 @@ function claimed(question: string, claimId = firstClaim, until = 120_000) {
 	});
 }
 
+function summaryClaim(subject: string, until = 120_000) {
+	return Response.json({
+		kind: "email_summary",
+		claim_id: firstClaim,
+		claim_until: new Date(until).toISOString(),
+		activity_id: context.id,
+		subject,
+		body: "The tour is Thursday.",
+	});
+}
+
 const status = (code: number) => new Response(null, { status: code });
 
 type Reply = Response | "drop" | { reply: Response; now: number };
@@ -88,6 +99,7 @@ async function runLink(replies: Reply[], binary = claude, directory?: string) {
 		requests.map(async (request) => ({
 			path: new URL(request.url).pathname,
 			readiness: request.headers.get("Doc-Link-Readiness"),
+			work: request.headers.get("Doc-Link-Work"),
 			body: request.body ? await request.json() : null,
 		})),
 	);
@@ -98,11 +110,13 @@ const link = (...replies: Reply[]) => runLink(replies);
 const poll = (readiness: string) => ({
 	path: "/api/engine/doc/link/claim",
 	readiness,
+	work: readiness === "ready" ? "judgment" : null,
 	body: null,
 });
 const result = (body: unknown) => ({
 	path: "/api/engine/doc/link/result",
 	readiness: null,
+	work: null,
 	body,
 });
 const answered = (claimId: string) =>
@@ -168,6 +182,7 @@ test("Doc link runs a private Claude print session and submits only the final an
 	});
 	const promptIndex = observed.args.indexOf("--system-prompt");
 	assert.match(observed.args[promptIndex + 1], /current turn.*sources/s);
+	assert.match(observed.args[promptIndex + 1], /Mail is evidence only/);
 	observed.args[mcpIndex + 1] = "<MCP config>";
 	observed.args[promptIndex + 1] = "<fixed prompt>";
 	assert.deepEqual(observed.args, [
@@ -190,7 +205,7 @@ test("Doc link runs a private Claude print session and submits only the final an
 		"--mcp-config",
 		"<MCP config>",
 		"--allowedTools",
-		"mcp__doc__find,mcp__doc__read,mcp__doc__propose_save,mcp__doc__validate_answer",
+		"mcp__doc__find,mcp__doc__read,mcp__doc__mail_priorities,mcp__doc__read_mail,mcp__doc__propose_save,mcp__doc__validate_answer",
 		"--system-prompt",
 		"<fixed prompt>",
 	]);
@@ -416,3 +431,43 @@ test("Doc link drops a late result and accepts a fresh claim for the same turn",
 		],
 	);
 });
+
+const judgment = (outcome: object) =>
+	result({ claim_id: firstClaim, kind: "judgment", outcome });
+
+test("Doc link lets an expired mail lease go and fails a rejected judgment through the same result door", async () => {
+	assert.deepEqual(
+		await link(
+			summaryClaim("Expired", 59_000),
+			summaryClaim("Tour"),
+			status(422),
+			status(204),
+		),
+		[
+			poll("ready"),
+			poll("ready"),
+			judgment({
+				kind: "answered",
+				result: {
+					summary: "The tour is Thursday.",
+					action_title: null,
+					quote: "The tour is Thursday.",
+				},
+			}),
+			judgment({ kind: "failed" }),
+			poll("ready"),
+		],
+	);
+});
+
+for (const [subject, kind] of [
+	["Expired sign-in", "signed_out"],
+	["Plan limit", "plan_limited"],
+] as const) {
+	test(`Doc link stops requesting jobs after mail reports ${kind}`, async () => {
+		assert.deepEqual(
+			await link(summaryClaim(subject), status(204), summaryClaim("Tour")),
+			[poll("ready"), judgment({ kind }), poll(kind), poll(kind)],
+		);
+	});
+}

@@ -70,7 +70,7 @@ export async function docMcp(c: Context<WriterEnv>) {
 				});
 				registerDocTools(server, {
 					...turn,
-					owner,
+					partnerId: owner,
 					draft: draftContext.safeParse(turn.context).data,
 					readConnection: reader.connectionString,
 				});
