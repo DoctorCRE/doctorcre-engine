@@ -368,22 +368,22 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 
 test("A held follow-up explains the saved hold", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(held), {
-		title: "Call about the suite",
-		why: "Held until Apr 1, 2999.",
+		title: "Follow up on Dr. Example",
+		why: "Call about the suite. Held until Apr 1, 2999.",
 	});
 });
 
-test("A long lease reminder keeps the full event wording in the why line", async () => {
+test("A lease reminder puts the details after the separator first in why", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(leaseReminder), {
-		title: "Follow up on Example Dental, Springfield",
-		why: "Follow-up set on Nov 21, 2026. Due Nov 19, 2026. Lease event — Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone.",
+		title: "Lease event",
+		why: "Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone. Follow-up set on Nov 21, 2026. Due Nov 19, 2026.",
 	});
 });
 
 test("A long lease reminder keeps both the event and the saved instruction", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(pastLeaseReminder), {
-		title: "Follow up on Example Dental, Springfield",
-		why: "Follow-up set on Nov 21, 2026. Due Nov 19, 2026. Lease event — Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans.",
+		title: "Lease event",
+		why: "Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans. Follow-up set on Nov 21, 2026. Due Nov 19, 2026.",
 	});
 });
 
@@ -461,7 +461,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 				"Email about the report (V-ABC-012), then call.",
 				"Email about the report, then call.",
 			],
-			["T-3 months — Confirm lease timing", "Confirm lease timing"],
+			["T-3 months — Confirm lease timing", "", "Confirm lease timing. "],
 			[
 				"Check in with Example Vendor (T-137).",
 				"Check in with Example Vendor.",
@@ -489,19 +489,20 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 				"Schedule the next check-in with the office manager",
 			],
 			["Schedule the next follow-up", "Schedule the next follow-up"],
-			["L-456 — Timing", "Timing"],
+			["L-456 — Timing", "", "Timing. "],
 			[
 				"Review follow-up: Refer a broker to Maya Reed",
 				"Refer a broker to Maya Reed",
 			],
-			["NONE — Check in after June", "Check in after June"],
+			["NONE — Check in after June", "", "Check in after June. "],
 			["C-026", ""],
 		] as const
-	).map(([what, title]) => ({
+	).map(([what, title, details = ""]) => ({
 		id: randomUUID(),
 		party: randomUUID(),
 		what,
 		title,
+		details,
 	}));
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);`);
 	for (const { id, party, what } of examples) {
@@ -535,7 +536,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 			[
 				{
 					title: example.title || "Follow up on Example Vendor",
-					why: "Follow-up set on Nov 17, 2026.",
+					why: `${example.details}Follow-up set on Nov 17, 2026.`,
 					primary_action: "Mark done",
 					due_on: null,
 					open_url: `/relationships?node=party:${example.party}&step=${example.id}`,
@@ -558,24 +559,30 @@ const longAction =
 	"Confirm the accessibility requirements for the proposed suite with the landlord and ask for the revised drawing in writing";
 const accentedAction =
 	"Send the revised plan to Rene\u0301e at Example Lost Deal with the extra icons 📐 📍 📎 🗂 🏢 🔑";
-const followUpFallback = "Follow up on Example Lost Deal";
-
-for (const [scenario, what, title, savedText = what] of [
+for (const [scenario, what, title, overflow = ""] of [
 	[
 		"a long step with a short first sentence",
 		`Send the site plan. ${longAction}.`,
-		followUpFallback,
+		"Send the site plan. Confirm the accessibility requirements for the proposed suite with the",
+		"landlord and ask for the revised drawing in writing.",
 	],
-	["a long instruction", longAction, followUpFallback],
+	[
+		"a long instruction",
+		longAction,
+		"Confirm the accessibility requirements for the proposed suite with the landlord and ask",
+		"for the revised drawing in writing.",
+	],
 	[
 		"an initial in a long instruction",
 		"Send the revised floor plan to Á. Morgan and include the accessibility notes from the most recent walkthrough",
-		followUpFallback,
+		"Send the revised floor plan to Á. Morgan and include the accessibility notes from the most",
+		"recent walkthrough.",
 	],
 	[
 		"a long call with common abbreviations",
 		`Call Dr. Example and Mr. Reed at St. Example Inc. about the plan. ${longAction}.`,
-		followUpFallback,
+		"Call Dr. Example and Mr. Reed at St. Example Inc. about the plan. Confirm the",
+		"accessibility requirements for the proposed suite with the landlord and ask for the revised drawing in writing.",
 	],
 	[
 		"a call from the office",
@@ -617,11 +624,10 @@ for (const [scenario, what, title, savedText = what] of [
 		"stacked copied prefixes",
 		"REVIEWER DECIDE: review follow-up: Send the plan",
 		"Send the plan",
-		"Send the plan",
 	],
 	["an action with an accented name and emoji", accentedAction, accentedAction],
 ] as const) {
-	test(`Home titles use the complete action or decision for ${scenario}`, async () => {
+	test(`Home keeps the saved wording across title and why for ${scenario}`, async () => {
 		const step = randomUUID();
 		await db.query("begin");
 		try {
@@ -635,7 +641,8 @@ for (const [scenario, what, title, savedText = what] of [
 			assert.ok(card);
 			assert.equal(card.title, title);
 			assert.ok(typeof card.why === "string");
-			assert.equal(card.why.includes(savedText), savedText !== title);
+			assert.ok(card.why.startsWith(overflow), card.why);
+			assert.ok(!card.why.includes(title), card.why);
 		} finally {
 			await db.query("rollback");
 			await db.query("begin");

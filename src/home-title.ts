@@ -2,6 +2,8 @@ const decisionPrefix = /^(?:[A-Z][A-Z'.-]* )+DECIDE\s*:\s*/;
 const statusPrefix =
 	/^(?:(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)|review(?: follow-up| call note)?\s*:\s*)/i;
 const titleCharacters = new Intl.Segmenter("en", { granularity: "grapheme" });
+const titleWords = new Intl.Segmenter("en", { granularity: "word" });
+export const homeUrl = /https?:\/\/\S+/gi;
 
 const chooseDeal = (sender: string) =>
 	sender
@@ -17,8 +19,6 @@ const replyTarget = (sender: string, deal: string) =>
 const templates = {
 	follow_up: (target) =>
 		target ? `Follow up on ${target}` : "Review the follow-up",
-	call_follow_up: (contact) =>
-		contact ? `Follow up with ${contact}` : "Review the call follow-up",
 	vendor_check_in: (vendor) => `Check in with ${vendor || "the vendor"}`,
 	next_step: (target) => forTarget("Review the proposed follow-up", target),
 	file_to_deal: chooseDeal,
@@ -63,13 +63,36 @@ export function stripHomeTitlePrefixes(text: string) {
 	}
 }
 
-function fitsLength(text: string) {
-	if (!text) return false;
+function titleLimitIndex(text: string) {
 	let remaining = 90;
-	for (const _ of titleCharacters.segment(text)) {
-		if (--remaining < 0) return false;
+	for (const { index } of titleCharacters.segment(text)) {
+		if (--remaining < 0) return index;
 	}
-	return true;
+	return text.length;
+}
+
+function fitsLength(text: string) {
+	return text.length > 0 && titleLimitIndex(text) === text.length;
+}
+
+export function splitHomeTitle(text: string) {
+	const limit = titleLimitIndex(text);
+	if (limit === text.length) return { title: text, url: "", overflow: "" };
+	const word = titleWords.segment(text).containing(limit);
+	let end = word?.index || limit;
+	let url = "";
+	for (const match of text.matchAll(homeUrl)) {
+		if (match.index > limit && text.slice(end, match.index).trim()) break;
+		if (match.index + match[0].length <= limit) continue;
+		end = match.index;
+		url = match[0];
+		break;
+	}
+	return {
+		title: text.slice(0, end).trimEnd(),
+		url,
+		overflow: text.slice(end + url.length).trimStart(),
+	};
 }
 
 function fitsTitle(text: string) {

@@ -104,7 +104,7 @@ before(async () => {
 			('${closed}', '2026-01-01', 'research'), ('${closed}', '2026-01-02', 'closed');
 		insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on, hold_until, resolution)
 		values
-			('${id(31)}', '${open}', null, '${alex}', '**Send revised offer**', '2001-01-12', null, null),
+			('${id(31)}', '${open}', null, '${alex}', '**Send revised offer**. Before sending, check the suite number.', '2001-01-12', null, null),
 			('${id(32)}', null, '${clinic}', '${casey}', 'Ask Example Clinic (T-137) about the expansion', '2001-01-20', null, null),
 			('${id(33)}', '${other}', null, '${alex}', 'Held step', '2001-01-14', 'infinity', null),
 			('${id(34)}', '${closed}', null, '${casey}', 'Snoozed step', '2001-01-14', null, null),
@@ -279,7 +279,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			{
 				id: id(31),
 				what: "Send revised offer",
-				why: null,
+				why: "Before sending, check the suite number.",
 				owner: "joe",
 				record_label: "Example lease",
 				due_on: "2001-01-12",
@@ -311,8 +311,8 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			},
 			{
 				id: id(40),
-				what: "Follow up on Example Supply",
-				why: `${longWording}.`,
+				what: "Ask Example Supply whether the expansion order can ship before the tenant improvements",
+				why: "finish next spring.",
 				owner: "joe",
 				record_label: "Example Supply",
 				due_on: "2001-01-18",
