@@ -166,16 +166,10 @@ function recurringLines(group: MailLine[][]) {
 	});
 }
 
-function historyStart(body: string) {
-	const start = Math.min(
-		body.length,
-		...[body.search(replyOpener), body.search(forwarded)].filter(
-			(at) => at >= 0,
-		),
-	);
+function headerStart(body: string, limit = body.length) {
 	const fields = [...body.matchAll(headerField)];
 	const header = fields.findIndex((field, index) => {
-		if (field.index >= start) return false;
+		if (field.index >= limit) return false;
 		if (/^(?:cc|bcc)$/i.test(field[1] ?? "")) return false;
 		const labels = new Set<string>();
 		for (const [offset, next] of fields.slice(index, index + 7).entries()) {
@@ -197,7 +191,17 @@ function historyStart(body: string) {
 		}
 		return false;
 	});
-	const boundary = fields[header]?.index ?? start;
+	return fields[header]?.index ?? body.length;
+}
+
+function historyStart(body: string) {
+	const start = Math.min(
+		body.length,
+		...[body.search(replyOpener), body.search(forwarded)].filter(
+			(at) => at >= 0,
+		),
+	);
+	const boundary = Math.min(headerStart(body, start), start);
 	const divider = body.slice(0, boundary).search(/(?<!_)_{8,}\s*$/);
 	return boundary < body.length && divider >= 0 ? divider : boundary;
 }
@@ -326,13 +330,10 @@ function followsReply(body: string, quoteStart: number) {
 		.slice(Math.max(0, quoteStart - 3500), quoteStart)
 		.trimEnd();
 	if (replyOpenerEnd.test(before)) return true;
-	const header = before
-		.split("\n")
-		.filter((line) => line.trim())
-		.slice(-replyHeader.length);
+	const lastLine = before.split("\n").at(-1) ?? "";
 	return (
-		header.length === replyHeader.length &&
-		header.every((field, index) => replyHeader[index]?.test(field.trim()))
+		/(?:^|\s)\*?Subject:\*?\s*\S/i.test(lastLine) &&
+		headerStart(before) < before.length
 	);
 }
 

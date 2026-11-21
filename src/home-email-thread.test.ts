@@ -95,6 +95,14 @@ test("folds a complete inline reply header in a flattened body", () => {
 	);
 });
 
+test("folds a single quote after a flattened reply header", () => {
+	const history = `${header.replaceAll("\n", " ")}\n> The keys are ready.`;
+	assert.deepEqual(
+		cleanEmailThread([message(`Here is the plan.\n${history}`)]),
+		[{ body: "Here is the plan.", folded: history }],
+	);
+});
+
 test("folds a trailing signature and legal notice without removing either", () => {
 	const notice =
 		"This email may contain confidential information.\nIf you received it in error, please delete it.";
