@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, before, test } from "node:test";
+import { type TestContext, test } from "node:test";
 import { readSchema } from "../test-copy.ts";
 import { doorTest } from "../test-door.ts";
 
@@ -12,12 +12,10 @@ const PAT = "00000000-0000-4000-8000-000000000102";
 const SAM = "00000000-0000-4000-8000-000000000103";
 const NEW_ORG = "00000000-0000-4000-8000-000000000201";
 const NEW_CONTACT = "00000000-0000-4000-8000-000000000202";
-const OLD_VENDOR = `
-	set session_replication_role = replica;
+const SEED = `set session_replication_role = replica;
 	insert into public.actor (id, slug, kind, display_name) values
 		('${ACTOR}', 'joe', 'human', 'Example'), ('${OTHER}', 'dell', 'human', 'Example');
 	insert into public.vendor_category (slug, label, sort) values ('lender', 'Example Lender', 1);
-	insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Active', true, 1);
 	insert into public.party (id, kind, name, org_id, email, city, created_by, updated_by) values
 		('${ORG}', 'org', 'Example Lending Co', null, null, null, '${ACTOR}', '${ACTOR}'),
 		('${PAT}', 'person', 'Pat Example', '${ORG}', ' Pat@Example.TEST ', 'Austin', '${ACTOR}', '${ACTOR}'),
@@ -30,10 +28,8 @@ const NEW_VENDOR = `
 	insert into party (id, kind, name) values
 		('${NEW_ORG}', 'company', 'Example Builders'),
 		('${NEW_CONTACT}', 'person', 'New Contact');
-	insert into role (slug, label) values ('vendor', 'Vendor') on conflict do nothing;
-	insert into role (slug, label, category_of) values ('contractor', 'Contractor', 'vendor') on conflict do nothing;
-	insert into party_role (party_id, role, offers) values ('${NEW_ORG}', 'vendor', 'Build-outs');
-	insert into party_role (party_id, role) values ('${NEW_ORG}', 'contractor');
+	insert into party_role (party_id, role, offers) values
+		('${NEW_ORG}', 'vendor', 'Build-outs'), ('${NEW_ORG}', 'lender', null);
 	insert into party_company (person_id, company_id) values ('${NEW_CONTACT}', '${NEW_ORG}');
 	insert into party_email (party_id, address, label, is_primary)
 		values ('${NEW_CONTACT}', 'new-contact@example.test', 'work', true);`;
@@ -54,21 +50,20 @@ function agenda(items: object[]) {
 const pat = { email: "pat@example.test" };
 const newContact = { email: "new-contact@example.test" };
 
-const door = doorTest();
-before(async () => {
+async function vendorMeetings(t: TestContext) {
+	const door = doorTest();
 	await door.setup();
-	await door.db.query(OLD_VENDOR);
-	for (const file of ["copy-parties.sql", "copy-vendors.sql"])
-		await door.db.query(`begin; ${await readSchema(file)} commit;`);
-	await door.db.query(`begin;
-		select set_config('engine.user_id', '${ACTOR}', true);
-		${NEW_VENDOR}
-		commit;`);
-});
-after(() => door.cleanup());
+	t.after(door.cleanup);
+	const meetings = (search = "", user = "joe") =>
+		door.request({ user }, `vendor-meetings${search}`, { method: "GET" });
+	return { ...door, meetings };
+}
 
-const meetings = (search = "", user = "joe") =>
-	door.request({ user }, `vendor-meetings${search}`, { method: "GET" });
+async function seedCopiedVendor(db: ReturnType<typeof doorTest>["db"]) {
+	await db.query(SEED);
+	for (const file of ["copy-parties.sql", "copy-vendors.sql"])
+		await db.query(`begin; ${await readSchema(file)} commit;`);
+}
 
 type Answer = {
 	view: string;
@@ -76,9 +71,7 @@ type Answer = {
 	has_more: boolean;
 	next_cursor: string | null;
 	items: {
-		vendor_id: string;
-		ref: string;
-		contact: { id: string; name: string; email: string };
+		contact: { name: string };
 		missing: string[];
 		possible_meetings: { title: string }[];
 	}[];
@@ -99,19 +92,25 @@ const people = (answer: Answer) =>
 		item.possible_meetings.map((m) => m.title),
 	]);
 
-test("copied and newly saved contacts match exact emails in the signed-in partner's agenda", async () => {
+test("vendor meetings match exact attendee and organizer emails in the signed-in partner's Outlook agenda", async (t) => {
+	const { db, meetings, save } = await vendorMeetings(t);
+	await seedCopiedVendor(db);
+	await db.query(`begin;
+		select set_config('engine.user_id', '${ACTOR}', true);
+		${NEW_VENDOR}
+		commit;`);
 	const own = agenda([
 		{ title: "Matched attendee", attendees: [pat] },
 		{ title: "Matched organizer", organizer: { email: "PAT@EXAMPLE.TEST" } },
 		{
 			title: "Different address",
-			attendees: [{ email: "not-pat@example.test" }],
+			attendees: [{ email: "pat+other@example.test" }],
 		},
 		{ title: "New vendor meeting", attendees: [newContact] },
 	]);
 	const other = agenda([{ title: "Other calendar", attendees: [pat] }]);
 	const publish = async (slug: string, snapshot: ReturnType<typeof agenda>) => {
-		const [status] = await door.save(
+		const [status] = await save(
 			{ job: "mail_capture", for_user: slug },
 			"calendar/agenda",
 			snapshot,
@@ -120,13 +119,11 @@ test("copied and newly saved contacts match exact emails in the signed-in partne
 		assert.equal(status, 200);
 	};
 	await publish("dell", other);
-	const unavailable = await ready(await meetings("?q=Pat"));
-	assert.deepEqual(people(unavailable), [
-		["Pat Example", ["verified_office"], []],
-	]);
-	assert.equal(unavailable.calendar.state, "unavailable");
-	assert.equal(unavailable.calendar.reason, "source_unavailable");
-	assert.equal(unavailable.calendar.scheduling.reason, "source_unavailable");
+	const missing = await ready(await meetings("?q=Pat"));
+	assert.deepEqual(people(missing), [["Pat Example", ["verified_office"], []]]);
+	assert.equal(missing.calendar.state, "unavailable");
+	assert.equal(missing.calendar.reason, "source_unavailable");
+	assert.equal(missing.calendar.scheduling.reason, "source_unavailable");
 
 	await publish("joe", own);
 	const page = await ready(await meetings());
@@ -156,7 +153,9 @@ test("copied and newly saved contacts match exact emails in the signed-in partne
 	]);
 });
 
-test("Research search and pages keep vendor contacts in order", async () => {
+test("pages follow their cursor", async (t) => {
+	const { db, meetings } = await vendorMeetings(t);
+	await seedCopiedVendor(db);
 	const first = await ready(await meetings("?view=research&q=AUSTIN&limit=1"));
 	assert.equal(first.total, 2);
 	assert.equal(first.has_more, true);
@@ -169,7 +168,9 @@ test("Research search and pages keep vendor contacts in order", async () => {
 	assert.equal(second.has_more, false);
 	assert.equal(second.next_cursor, null);
 	assert.deepEqual(
-		first.items.concat(second.items).map(({ contact }) => contact.name),
+		people(first)
+			.concat(people(second))
+			.map(([name]) => name),
 		["Pat Example", "Sam Example"],
 	);
 	await refused(
@@ -177,17 +178,16 @@ test("Research search and pages keep vendor contacts in order", async () => {
 		400,
 		"vendor_meetings_query_invalid",
 	);
-});
-
-test("the retired Suggested view returns an empty page to existing clients", async () => {
-	const page = await ready(await meetings("?view=suggested"));
-	assert.partialDeepStrictEqual(page, {
-		view: "suggested",
-		total: 0,
-		items: [],
-		has_more: false,
-		next_cursor: null,
-	});
+	assert.partialDeepStrictEqual(
+		await ready(await meetings("?view=suggested")),
+		{
+			view: "suggested",
+			total: 0,
+			items: [],
+			has_more: false,
+			next_cursor: null,
+		},
+	);
 });
 
 async function refused(response: Response, status: number, error: string) {
@@ -201,7 +201,8 @@ async function refused(response: Response, status: number, error: string) {
 	assert.deepEqual(body, { error });
 }
 
-test("the read refuses a caller who is not a partner, a bad query and a failed read", async () => {
+test("the read refuses a caller who is not a partner, a bad query and a failed read", async (t) => {
+	const { db, meetings } = await vendorMeetings(t);
 	await refused(await meetings("?q=x", "claude"), 403, "AUTHORIZATION_REFUSED");
 	for (const search of [
 		`?q=${"x".repeat(81)}`,
@@ -212,13 +213,15 @@ test("the read refuses a caller who is not a partner, a bad query and a failed r
 		"?cursor=",
 		"?cursor=!!!",
 		`?cursor=${btoa("null")}`,
+		`?view=research&cursor=${btoa(encodeURIComponent(JSON.stringify({ v: 1, view: "research", q: "", after: [ORG, PAT] })))}`,
 	])
 		await refused(await meetings(search), 400, "vendor_meetings_query_invalid");
 
-	await door.db.query("alter table party_role rename to hidden_party_role");
-	try {
-		await refused(await meetings(), 500, "vendor_meetings_unavailable");
-	} finally {
-		await door.db.query("alter table hidden_party_role rename to party_role");
-	}
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${ACTOR}', 'person', 'Example Partner');
+		insert into app_user (id, slug) values ('${ACTOR}', 'joe');
+		alter table party_role rename to hidden_party_role;
+		commit;`);
+	await refused(await meetings(), 500, "vendor_meetings_unavailable");
 });

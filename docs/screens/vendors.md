@@ -4,7 +4,9 @@
 
 Research shows vendor contacts and their possible meetings. For a person with a vendor role, it shows that person. For a company with a vendor role, it shows the people with open company links, or a row with no contact. Each vendor link uses the party ID. Copied vendors keep their recorded vendor ref.
 
-Search covers the vendor ref, contact and company names, category, service territory, and contact city. Pages follow the vendor and contact IDs. Start a new search after records change.
+Search covers the vendor ref, contact and company names, category, service territory, and contact city. Contact state is outside the search because the new database does not store it. Pages follow the vendor and contact IDs. Start a new search after records change.
+
+The planner drops the outside-market warning because no production vendors used the flag and the new database does not carry it over.
 
 A possible meeting comes from the signed-in partner's stored Outlook agenda. Its organizer or an attendee must match the contact's email exactly after normalization. Research still shows contacts when the calendar is unavailable.
 
