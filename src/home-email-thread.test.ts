@@ -151,6 +151,80 @@ function message(
 	return { body, sender, sender_name };
 }
 
+test("keeps a repeated opening inside a reply and cuts a complete bare repeat", () => {
+	const first =
+		"Thanks for taking the time to walk through the building with us today. I will send the survey.";
+	const reply =
+		"Quick update. Thanks for taking the time to walk through the building with us today. I can meet on Monday.";
+	const inline = `You wrote: ${first} I can meet on Monday.`;
+	assert.deepEqual(
+		cleanEmailThread([
+			message(first),
+			message(reply, "sam@example.test", "Sam Partner"),
+			message(inline, "sam@example.test", "Sam Partner"),
+			message(`I have the survey. ${first}`, "sam@example.test", "Sam Partner"),
+		]),
+		[first, reply, inline, "I have the survey."],
+	);
+});
+
+test("keeps a shared closing instruction from the same sender", () => {
+	for (const closing of [
+		"Please copy the surveyor on every update.",
+		"Thanks for copying the surveyor on every update.",
+	]) {
+		const bodies = [
+			`The plan is ready. ${closing}`,
+			`I sent the plan. ${closing}`,
+		];
+		assert.deepEqual(
+			cleanEmailThread(bodies.map((body) => message(body))),
+			bodies,
+		);
+	}
+});
+
+test("keeps an authored CC sentence before an Outlook header", () => {
+	const earlier =
+		"Could you send the survey and the plan for suite 200 by Friday?";
+	const reply = "Here is the plan.\nCC: Please also copy the surveyor.";
+	const headers =
+		"From: Maya Example\nDate: Mon, Jan 5, 2026\nTo: Sam Partner\nSubject: Suite 200";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(earlier),
+			message(`${reply}\n${headers}\n${earlier}`, "sam@example.test"),
+		]),
+		[earlier, reply],
+	);
+});
+
+test("cuts a wrapped quote opener before the earlier text", () => {
+	const earlier =
+		"Could you send the survey and the plan for suite 200 by Friday?";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(earlier),
+			message(
+				`Here is the plan.\r\n\r\nOn Mon, Jan 5, 2026 at 9:30 AM Maya Example <\r\nmaya@example.test> wrote:\r\n> ${earlier}`,
+				"sam@example.test",
+			),
+		]),
+		[earlier, "Here is the plan."],
+	);
+});
+
+test("cuts a short earlier message after a divider even with older text after it", () => {
+	const earlier = "Could you send the suite 200 plan?";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(earlier),
+			message(`Here is the plan.\n\n________\n> ${earlier}\nOlder email text.`),
+		]),
+		[earlier, "Here is the plan."],
+	);
+});
+
 test("cuts a reordered Date header and a rewrapped quote of a nonadjacent email", () => {
 	const first =
 		"Could you send the survey and the plan for suite 200 by Friday?";

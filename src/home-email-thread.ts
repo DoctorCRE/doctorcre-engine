@@ -196,55 +196,205 @@ const quoteWindowLength = 40;
 const minimumSignatureLength = 25;
 const quoteHeaderField =
 	/(?<!\S)\*?(from|sent|date|to|cc|bcc|subject):\*?(?=\s)/gi;
+const replyOpener =
+	/(?<!\S)On\s+(?:(?![.!?]\s)[^\d]){0,300}\d(?:(?![.!?]\s| wrote:)[\s\S]){0,300}\s+wrote:$/i;
+const quoteDivider =
+	/(?<!\S)(?:[-_=*]{3,}|-+ *(?:original|forwarded) message *-+|begin forwarded message:)$/i;
+const addressDomain = /@[\w-]+(?:\.[\w-]+)+/;
+const address = String.raw`[^<>\s,;]+${addressDomain.source}`;
+const mailboxAddress = new RegExp(
+	`^(?:${address}|[^<>]*<\\s*${address}\\s*>)$`,
+);
+const nameWord = /^(?:\p{Lu}[\p{L}'’.-]*[\p{L}]|\p{Lu}\.?)$/u;
+const nameConnector = /^(?:de|del|van|von|da|dos)$/i;
 
 function comparableBody(body: string) {
-	const offsets = new Map<number, number>();
+	const words = /(^[ \t]*(?:>[ \t]*)+)|\S+/gm;
+	const starts: number[] = [];
+	const offsets: number[] = [];
 	let normalized = "";
-	for (const match of body.matchAll(/(^[ \t]*(?:>[ \t]*)+)|\S+/gm)) {
+	for (let match = words.exec(body); match; match = words.exec(body)) {
 		if (match[1]) continue;
 		if (normalized) normalized += " ";
-		offsets.set(normalized.length, match.index);
+		starts.push(normalized.length);
+		offsets[normalized.length] = match.index;
 		normalized += match[0].toLowerCase();
 	}
-	return { body, normalized, offsets };
+	return { body, normalized, starts, offsets };
 }
 
-function beforeQuote(prefix: string) {
+function headerValue(label: string, value: string) {
+	if (!value) return false;
+	if (label === "subject") return !/[\r\n]/.test(value);
+	if (label === "sent" || label === "date")
+		return /\d/.test(value) && Number.isFinite(Date.parse(value));
+	return (
+		mailboxAddress.test(value) ||
+		value.split(/[;,]/).every((mailbox) => {
+			const [first, ...rest] = mailbox.trim().split(/\s+/);
+			return (
+				mailboxAddress.test(mailbox.trim()) ||
+				(first !== undefined &&
+					nameWord.test(first) &&
+					rest.every((word) => nameWord.test(word) || nameConnector.test(word)))
+			);
+		})
+	);
+}
+
+function quoteBoundary(prefix: string) {
+	const end = prefix
+		.trimEnd()
+		.replace(/(?:^|[\r\n])[ \t]*(?:>[ \t]*)+$/, "")
+		.trimEnd().length;
+	const start = Math.max(0, end - 2100);
+	const tail = prefix.slice(start, end);
+	const opener = /wrote:$/i.test(tail) ? tail.search(replyOpener) : -1;
+	if (opener >= 0) return start + opener;
+
 	const labels = new Set<string>();
-	let header = prefix.length;
-	const fields = [...prefix.matchAll(quoteHeaderField)];
-	for (const field of fields.reverse()) {
+	let header = tail.length;
+	for (const field of [...tail.matchAll(quoteHeaderField)].reverse()) {
 		const label = field[1]?.toLowerCase() ?? "";
-		if (header - field.index > 300 || labels.has(label)) break;
+		const value = tail.slice(field.index + field[0].length, header).trim();
+		if (
+			header - field.index > 300 ||
+			labels.has(label) ||
+			!headerValue(label, value)
+		)
+			break;
 		labels.add(label);
 		header = field.index;
 	}
-	const opener = prefix.search(inlineHistory);
-	const cut = Math.min(
-		labels.size >= 2 ? header : prefix.length,
-		opener < 0 ? prefix.length : opener,
-	);
-	return prefix
-		.slice(0, cut)
-		.trimEnd()
-		.replace(/(?:^|\s)(?:[-_=*]{3,}|>+)$/, "")
-		.trim();
+	const beforeHeader = labels.size >= 2 ? header : tail.length;
+	const divider = tail.slice(0, beforeHeader).trimEnd().search(quoteDivider);
+	if (divider >= 0) return start + divider;
+	return labels.size >= 2 ? start + header : null;
 }
 
-function withoutHistory(body: string, earlier: Set<string>) {
+type EarlierText = {
+	text: string;
+	opening: string;
+	signature: string | undefined;
+};
+type EarlierMessages = Map<string, Map<string, EarlierText[]>>;
+
+function quoteKey(text: string, start = 0) {
+	const prefix = text.slice(start, start + 8);
+	const space = prefix.indexOf(" ");
+	return space < 0 ? prefix : prefix.slice(0, space);
+}
+
+function withoutHistory(body: string, earlier: EarlierMessages) {
 	const message = comparableBody(body);
 	if (!earlier.size) return message;
-	for (const [start, offset] of message.offsets) {
+	const { normalized } = message;
+	for (const start of message.starts) {
 		if (!start) continue;
-		const window = message.normalized.slice(start, start + quoteWindowLength);
-		if (!earlier.has(window)) continue;
-		const own = beforeQuote(body.slice(0, offset));
-		return own ? comparableBody(own) : message;
+		const bucket = earlier.get(normalized.charAt(start));
+		const matches = bucket?.get(quoteKey(normalized, start));
+		if (!matches) continue;
+		const repeats = matches.some(({ opening }) => {
+			const end = start + opening.length;
+			return (
+				normalized.startsWith(opening, start) &&
+				(opening.length === quoteWindowLength ||
+					end === normalized.length ||
+					normalized[end] === " ")
+			);
+		});
+		if (!repeats) continue;
+
+		const offset = message.offsets[start];
+		const boundary = quoteBoundary(body.slice(0, offset));
+		if (
+			boundary === null &&
+			!matches.some(
+				({ text, signature }) =>
+					normalized.length - start === text.length &&
+					normalized.endsWith(text) &&
+					(!signature ||
+						normalized.slice(0, start - 1).endsWith(` ${signature}`)),
+			)
+		)
+			continue;
+		const own = body.slice(0, boundary ?? offset).trim();
+		if (own) return comparableBody(own);
 	}
 	return message;
 }
 
-type ComparableBody = ReturnType<typeof comparableBody>;
+type ComparableBody = ReturnType<typeof comparableBody> & {
+	senderName: string | null;
+};
+
+const inlineSignOff = new RegExp(`^${signOffWords}\\s+`, "i");
+const contactAddress = new RegExp(`(?<=[^<>\\s,;])${addressDomain.source}`);
+const phone = /(?:\(\d{3}\)|\b\d{3})[ .-]*\d{3}[ .-]*\d{4}\b/;
+const website = /\b(?:https?:\/\/|www\.)\S+/i;
+const contactLabel = /(?:^|[\r\n|])\s*(?:direct|cell|fax):/i;
+const titleLine =
+	/(?:^|[\r\n|])\s*(?:[\p{L}-]+[ \t]+){0,5}(?:director|manager|broker|president|partner|associate|coordinator|officer)\s*(?=$|[\r\n|])/iu;
+
+function hasContactDetails(text: string) {
+	return (
+		contactAddress.test(text) ||
+		phone.test(text) ||
+		website.test(text) ||
+		contactLabel.test(text) ||
+		titleLine.test(text)
+	);
+}
+
+function startsWithName(text: string, name: string) {
+	return (
+		text === name ||
+		(text.startsWith(name) && /[ ,.|]/.test(text.charAt(name.length)))
+	);
+}
+
+function isSignature(
+	block: string,
+	normalized: string,
+	senderName: string | null,
+) {
+	const firstLine = block.split(/[\r\n]/, 1)[0]?.trim() ?? "";
+	if (signOff.test(firstLine) || hasContactDetails(block)) return true;
+	if (!senderName) return false;
+	return (
+		startsWithName(normalized, senderName) ||
+		startsWithName(normalized.replace(inlineSignOff, ""), senderName)
+	);
+}
+
+function rememberEarlier(message: ComparableBody, earlier: EarlierMessages) {
+	const { body, normalized, offsets, senderName } = message;
+	if (!normalized) return;
+	const initial = normalized.charAt(0);
+	const bucket = earlier.get(initial) ?? new Map<string, EarlierText[]>();
+	earlier.set(initial, bucket);
+	const remember = (text: string, signature?: string) => {
+		const opening = text.slice(0, quoteWindowLength);
+		const quote = { text, opening, signature };
+		const key = quoteKey(opening);
+		const matches = bucket.get(key);
+		if (matches) matches.push(quote);
+		else bucket.set(key, [quote]);
+	};
+	remember(normalized);
+	if (!senderName) return;
+	const start = normalized.lastIndexOf(` ${senderName}`) + 1;
+	if (!start || !startsWithName(normalized.slice(start), senderName)) return;
+	const at = offsets[start];
+	if (
+		at === undefined ||
+		!/(?:[.!?]|[\r\n])\s*$/.test(body.slice(0, at)) ||
+		!hasContactDetails(body.slice(at))
+	)
+		return;
+	// A reply can quote the earlier text without copying the sender's footer.
+	remember(normalized.slice(0, start - 1), normalized.slice(start));
+}
 
 function sharedSignatureLength(messages: ComparableBody[]) {
 	const [first, ...rest] = messages;
@@ -263,7 +413,8 @@ function sharedSignatureLength(messages: ComparableBody[]) {
 	if (length < minimumSignatureLength) return 0;
 	if (
 		messages.some(
-			({ normalized, offsets }) => !offsets.has(normalized.length - length),
+			({ normalized, offsets }) =>
+				offsets[normalized.length - length] === undefined,
 		)
 	) {
 		const space = first.normalized.indexOf(
@@ -285,15 +436,17 @@ export function cleanEmailThread(
 		!messages
 			.slice(1)
 			.some(({ sender }) => sender.toLowerCase() === firstSender);
-	const earlier = new Set<string>();
+	const earlier: EarlierMessages = new Map();
 	const own = messages.map(({ body, sender, sender_name }, index) => {
-		const message =
+		const comparable =
 			index === 0 && useFallback
 				? comparableBody(cleanEmailBody(body, sender_name))
 				: withoutHistory(body, earlier);
-		if (message.normalized.length >= quoteWindowLength) {
-			earlier.add(message.normalized.slice(0, quoteWindowLength));
-		}
+		const message = {
+			...comparable,
+			senderName: sender_name?.trim().toLowerCase() || null,
+		};
+		rememberEarlier(message, earlier);
 		const address = sender.toLowerCase();
 		const group = senders.get(address);
 		if (group) group.push(message);
@@ -303,8 +456,19 @@ export function cleanEmailThread(
 	for (const group of senders.values()) {
 		const length = sharedSignatureLength(group);
 		if (!length) continue;
+		const signature = group.some(
+			({ body, normalized, offsets, senderName }) => {
+				const start = normalized.length - length;
+				const at = offsets[start];
+				return (
+					at !== undefined &&
+					isSignature(body.slice(at), normalized.slice(start), senderName)
+				);
+			},
+		);
+		if (!signature) continue;
 		for (const message of group) {
-			const offset = message.offsets.get(message.normalized.length - length);
+			const offset = message.offsets[message.normalized.length - length];
 			message.body = message.body.slice(0, offset).trimEnd() || message.body;
 		}
 	}

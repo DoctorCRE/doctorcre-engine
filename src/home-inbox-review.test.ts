@@ -953,7 +953,11 @@ test("Two accepts of different suggestions in one filing settle it once", {
 		while (
 			(
 				await db.query(
-					"select count(distinct pid)::int as waiting from pg_locks where not granted",
+					`select count(distinct pid)::int as waiting from pg_locks
+					where not granted and pid in (
+						select pid from pg_locks
+						where database = (select oid from pg_database where datname = current_database())
+					)`,
 				)
 			).rows[0].waiting < count
 		)
@@ -1423,10 +1427,8 @@ test("every Home email review shows each message once without signatures, header
 	const followUp = randomUUID();
 	const chooseDeal = randomUUID();
 	const draft = randomUUID();
-	const requestText =
-		"Could you send the suite 200 plan with the survey before the tour?";
-	const answerText =
-		"Here is the plan with the entrance and the parking lot marked.";
+	const requestText = "Could you send the suite 200 plan?";
+	const answerText = "Here is the plan.";
 	const confirmText = "Tuesday at 10 works.";
 	const signature =
 		"Maya Example | leasing director | Direct: 555-010-2000 | License 12345";
@@ -1442,7 +1444,7 @@ test("every Home email review shows each message once without signatures, header
 			id: answer,
 			address: "partner@example.test",
 			sender: "Example Thread Partner",
-			body: `${answerText} From: Maya Example <maya@example.test> Date: Monday, January 5, 2026 9:00 AM To: Example Thread Partner Subject: Suite 200 ${requestText}`,
+			body: `${answerText}\r\n\r\n________________________________\r\n*From:* Maya Example <maya@example.test>\r\n\r\n*Sent:* Monday, January 5, 2026 9:00 AM\r\n*To:* Example Thread Partner\r\n*Subject:* Suite 200\r\n\r\n${requestText}`,
 			kept: answerText,
 		},
 		{
