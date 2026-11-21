@@ -87,7 +87,10 @@ nextAgenda.put("/calendar/agenda", async (c) => {
 	});
 });
 
-export async function readStoredAgenda(db: Transaction<DB>, userId?: string) {
+export async function readStoredAgenda(
+	db: Pick<Transaction<DB>, "getExecutor">,
+	userId?: string,
+) {
 	const user = userId
 		? sql`${userId}::uuid`
 		: sql`current_setting('engine.user_id')::uuid`;
