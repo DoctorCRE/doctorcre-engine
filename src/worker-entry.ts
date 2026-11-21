@@ -5,9 +5,18 @@ import {
 } from "./deals/client-website-access.ts";
 import { failureKind } from "./failure.ts";
 import type { WriterEnv } from "./save.ts";
-import { recordWorkerStart } from "./worker.ts";
+import { partnerApp, recordWorkerStart } from "./worker.ts";
 
 export { default } from "./worker.ts";
+
+export class PartnerApp extends WorkerEntrypoint<
+	Parameters<typeof partnerApp.fetch>[1]
+> {
+	fetch(request: Request) {
+		recordWorkerStart();
+		return partnerApp.fetch(request, this.env, this.ctx);
+	}
+}
 
 export class ClientWebsiteAccess extends WorkerEntrypoint<
 	WriterEnv["Bindings"]

@@ -48,6 +48,7 @@ import { mondayReviewReads } from "./monday-review/read.ts";
 import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { automaticStepUndo, nextSteps } from "./next-steps.ts";
+import { partnerGoogle } from "./partner-google.ts";
 import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
@@ -75,6 +76,8 @@ let startedAt: string | undefined;
 export function recordWorkerStart() {
 	startedAt ??= new Date().toISOString();
 }
+
+export const partnerApp = partnerGoogle;
 
 // Routes match the raw path as the old door did, but still decode their values.
 const app = new Hono<WorkerEnv>({

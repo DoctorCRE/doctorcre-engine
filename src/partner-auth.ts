@@ -1,17 +1,23 @@
+import { createHash } from "node:crypto";
 import { betterAuth } from "better-auth";
+import { getOAuthState } from "better-auth/api";
 import { PostgresDialect } from "kysely";
 import pg from "pg";
 
 const SESSION_SECONDS = 30 * 24 * 60 * 60;
-const SESSION_COOKIE = "__Host-doctorcre_session";
+export const SESSION_COOKIE = "__Host-doctorcre_session";
 
 type PartnerAuthConfig = {
 	connectionString: string;
 	appOrigin: string;
 	secret: string;
+	google?: { clientId: string; clientSecret: string };
 };
 
-function partnerAuth(pool: pg.Pool, { appOrigin, secret }: PartnerAuthConfig) {
+function partnerAuth(
+	pool: pg.Pool,
+	{ appOrigin, secret, google }: PartnerAuthConfig,
+) {
 	return betterAuth({
 		baseURL: appOrigin,
 		basePath: "/auth",
@@ -22,8 +28,40 @@ function partnerAuth(pool: pg.Pool, { appOrigin, secret }: PartnerAuthConfig) {
 			schemaName: "doctorcre_auth",
 		},
 		logger: { disabled: true },
+		socialProviders: google
+			? {
+					google: {
+						...google,
+						prompt: "select_account",
+						accessType: "online",
+						includeGrantedScopes: false,
+						disableSignUp: true,
+					},
+				}
+			: {},
 		emailAndPassword: { enabled: false, disableSignUp: true },
 		user: {
+			validateUserInfo: async ({ source }) => {
+				const profile = source.oauth?.profile;
+				// The ID token comes from Google's HTTPS code exchange using PKCE.
+				if (
+					!google ||
+					source.action !== "sign-in" ||
+					source.oauth?.providerId !== "google" ||
+					profile?.email_verified !== true ||
+					(profile.iss !== "https://accounts.google.com" &&
+						profile.iss !== "accounts.google.com") ||
+					profile.aud !== google.clientId ||
+					(profile.azp !== undefined && profile.azp !== google.clientId) ||
+					typeof profile.exp !== "number" ||
+					profile.exp * 1000 <= Date.now()
+				) {
+					return { error: "google_identity_required" };
+				}
+				const state = await getOAuthState();
+				if (!state || !(await claimGoogleReturn(pool, state)))
+					return { error: "state_already_used" };
+			},
 			additionalFields: {
 				partnerUserId: {
 					type: "string",
@@ -42,7 +80,10 @@ function partnerAuth(pool: pg.Pool, { appOrigin, secret }: PartnerAuthConfig) {
 			// Better Auth otherwise adds __Secure- in front of our __Host- name.
 			useSecureCookies: false,
 			defaultCookieAttributes: { secure: true },
-			cookies: { session_token: { name: SESSION_COOKIE } },
+			cookies: {
+				session_token: { name: SESSION_COOKIE },
+				state: { name: "__Host-doctorcre_oauth_state" },
+			},
 			database: { joins: true },
 		},
 		session: {
@@ -72,6 +113,23 @@ function partnerAuth(pool: pg.Pool, { appOrigin, secret }: PartnerAuthConfig) {
 			},
 		},
 	});
+}
+
+async function claimGoogleReturn(
+	pool: pg.Pool,
+	{ codeVerifier, expiresAt }: { codeVerifier: string; expiresAt: number },
+) {
+	// Better Auth checks and deletes state separately, so only one return may issue a session.
+	const now = new Date();
+	if (now.getTime() >= expiresAt) return false;
+	const id = `google-used:${createHash("sha256").update(codeVerifier).digest("hex")}`;
+	const { rowCount } = await pool.query(
+		`insert into doctorcre_auth.verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt")
+		 values ($1, $1, '', $2, $3, $3)
+		 on conflict (id) do nothing`,
+		[id, new Date(expiresAt), now],
+	);
+	return rowCount === 1;
 }
 
 type Partner = { app_user_id: string; slug: string; display: string };
