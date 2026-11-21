@@ -1,43 +1,28 @@
-import { type Selectable, sql, type Transaction } from "kysely";
+import { sql, type Transaction } from "kysely";
 import { z } from "zod";
 import { recentDocTurns } from "./doc.ts";
 import { recordDocPoll } from "./doc-link.ts";
 import { type DocClaimState, validateDocAnswer } from "./doc-tools.ts";
 import type { DB } from "./next-database.d.ts";
+import { UUID } from "./uuid.ts";
 
 const clearClaim = { claim_id: null, claim_until: null, claim_state: null };
+const clearJudgmentClaim = {
+	claim_id: null,
+	claim_until: null,
+	claim_source_hash: null,
+};
 const initialClaim = { reads: 0, sources: {} } satisfies DocClaimState;
 const unexpired = sql<boolean>`claim_until > clock_timestamp()`;
 const leaseEnd = sql<string>`clock_timestamp() + interval '60 seconds'`;
+const claimUntilText = sql<string>`to_jsonb(claim_until) #>> '{}'`.as(
+	"claim_until",
+);
 const sourceHash = sql`sha256(convert_to(jsonb_build_array(e.subject, e.body)::text, 'UTF8'))`;
 
-type ClaimableTurn = Pick<
-	Selectable<DB["doc_turn"]>,
-	"id" | "conversation_id" | "position" | "question" | "context"
->;
-
-async function claimDocTurn(tx: Transaction<DB>, owner: string) {
-	const {
-		rows: [turn],
-	} = await sql<ClaimableTurn>`
-		with cutoff as materialized (select clock_timestamp() as checked_at)
-		select t.id, t.conversation_id, t.position, t.question, t.context
-		from doc_turn t cross join cutoff
-		where t.owner_user_id = ${owner}
-		  and (t.state = 'queued' or (t.state = 'working' and t.claim_until <= cutoff.checked_at))
-		  and not exists (
-			select 1 from doc_turn active
-			where active.owner_user_id = ${owner} and active.state = 'working'
-			  and active.claim_until > cutoff.checked_at
-		  )
-		order by t.created_at, t.id
-		limit 1 for update of t
-	`.execute(tx);
-	if (!turn) return null;
-	const { conversation_id, ...question } = turn;
-	const history = await recentDocTurns(tx, conversation_id, turn.position);
+async function claimDocTurn(tx: Transaction<DB>, owner: string, id: string) {
 	const claim_id = crypto.randomUUID();
-	const { claim_until } = await tx
+	const { conversation_id, claim_until, ...turn } = await tx
 		.updateTable("doc_turn")
 		.set({
 			state: "working",
@@ -45,36 +30,45 @@ async function claimDocTurn(tx: Transaction<DB>, owner: string) {
 			claim_until: leaseEnd,
 			claim_state: initialClaim,
 		})
-		.where("id", "=", turn.id)
+		.where("id", "=", id)
 		.where("owner_user_id", "=", owner)
-		.returning(sql<string>`to_jsonb(claim_until) #>> '{}'`.as("claim_until"))
+		.returning([
+			"id",
+			"conversation_id",
+			"position",
+			"question",
+			"context",
+			claimUntilText,
+		])
 		.executeTakeFirstOrThrow();
+	const history = await recentDocTurns(tx, conversation_id, turn.position);
 	return {
 		kind: "turn" as const,
 		claim_id,
 		claim_until,
 		conversation_id,
-		turn: question,
+		turn,
 		history,
 	};
 }
 
 const destination = z.strictObject({
 	kind: z.enum(["deal", "vendor"]),
-	id: z.uuid(),
+	id: z.string().regex(UUID),
 });
-const source = z.object({
-	activity_id: z.uuid(),
-	subject: z.string(),
-	body: z.string(),
-});
-const judgmentWork = z.discriminatedUnion("kind", [
-	source.extend({ kind: z.literal("email_summary") }),
-	source.extend({
-		kind: z.literal("email_filing"),
-		destinations: z.array(destination).min(1),
-	}),
-]);
+type JudgmentInput = {
+	kind: "email_summary" | "email_filing";
+	activity_id: string;
+	subject: string;
+	body: string;
+	destinations: z.infer<typeof destination>[];
+};
+
+const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
+	coalesce((select jsonb_agg(jsonb_build_object(
+		'kind', case when deal_id is null then 'vendor' else 'deal' end,
+		'id', coalesce(deal_id, vendor_id)
+	) order by position) from doc_judgment_destination where job_id = j.id), '[]') as destinations`;
 
 export async function claimDocWork(
 	tx: Transaction<DB>,
@@ -87,44 +81,64 @@ export async function claimDocWork(
 	} = await sql<{ installed: boolean }>`
 		select to_regclass('next.doc_judgment_job') is not null as installed
 	`.execute(tx);
-	const installed = storage?.installed;
-	if (installed) {
-		const active = await tx
-			.selectFrom("doc_judgment_job")
-			.select("id")
-			.where("owner_user_id", "=", owner)
-			.where(unexpired)
-			.executeTakeFirst();
-		if (active) return null;
-	}
-	const turn = await claimDocTurn(tx, owner);
-	if (turn || !acceptsJudgment || !installed) return turn;
+	const mailQueue = storage?.installed
+		? sql`
+		union all
+		select 'mail', id, created_at, claim_until from doc_judgment_job
+		where owner_user_id = ${owner} and state in ('queued', 'working')
+	`
+		: sql``;
+	while (true) {
+		const {
+			rows: [candidate],
+		} = await sql<{ queue: "turn" | "mail"; id: string }>`
+			with pending as (
+				select 'turn' as queue, id, created_at, claim_until from doc_turn
+				where owner_user_id = ${owner} and state in ('queued', 'working')
+				${mailQueue}
+			)
+			select queue, id from pending
+			where (queue = 'turn' or ${acceptsJudgment})
+			  and not exists (select 1 from pending where claim_until > statement_timestamp())
+			order by queue <> 'turn', created_at, id
+			limit 1
+		`.execute(tx);
+		if (!candidate) return null;
+		if (candidate.queue === "turn")
+			return claimDocTurn(tx, owner, candidate.id);
 
-	const claim_id = crypto.randomUUID();
-	const {
-		rows: [job],
-	} = await sql<{ claim_until: string }>`
-		with candidate as (
-			select id, activity_id
-			from doc_judgment_job
-			where owner_user_id = ${owner}
-			  and (state = 'queued' or (state = 'working' and claim_until <= clock_timestamp()))
-			  and not exists (
-				select 1 from doc_turn where owner_user_id = ${owner} and ${unexpired}
-			  )
-			order by created_at, id
-			limit 1 for update
-		)
-		update doc_judgment_job j
-		set state = 'working', claim_id = ${claim_id}, claim_until = ${leaseEnd},
-			claim_source_hash = ${sourceHash}
-		from candidate join email e using (activity_id)
-		where j.id = candidate.id
-		returning j.kind, j.activity_id, j.destinations, e.subject, e.body,
-			to_jsonb(j.claim_until) #>> '{}' as claim_until
-	`.execute(tx);
-	if (!job) return null;
-	return { ...judgmentWork.parse(job), claim_id, claim_until: job.claim_until };
+		const {
+			rows: [job],
+		} = await sql<JudgmentInput & { claim_source_hash: Buffer }>`
+			select ${judgmentInput}, ${sourceHash} as claim_source_hash
+			from doc_judgment_job j join email e using (activity_id)
+			where j.id = ${candidate.id} and j.owner_user_id = ${owner}
+			for update of j
+		`.execute(tx);
+		const update = tx
+			.updateTable("doc_judgment_job")
+			.where("id", "=", candidate.id)
+			.where("owner_user_id", "=", owner);
+		const hasDestinations = Boolean(job?.destinations.length);
+		if (!job || (job.kind === "email_filing") !== hasDestinations) {
+			await update.set({ state: "failed", ...clearJudgmentClaim }).execute();
+			continue;
+		}
+
+		const { destinations, claim_source_hash, ...input } = job;
+		const claim_id = crypto.randomUUID();
+		const { claim_until } = await update
+			.set({
+				state: "working",
+				claim_id,
+				claim_until: leaseEnd,
+				claim_source_hash,
+			})
+			.returning(claimUntilText)
+			.executeTakeFirstOrThrow();
+		const work = { ...input, claim_id, claim_until };
+		return work.kind === "email_filing" ? { ...work, destinations } : work;
+	}
 }
 
 const judgmentOutcome = z.discriminatedUnion("kind", [
@@ -144,10 +158,7 @@ const filingResult = z.strictObject({
 	facts: z.array(z.strictObject({ destination, text, quote: text })),
 });
 
-function validateJudgment(
-	outcome: unknown,
-	work: z.infer<typeof judgmentWork>,
-) {
+function validateJudgment(outcome: unknown, work: JudgmentInput) {
 	if (work.kind === "email_summary")
 		return summaryResult.safeParse(outcome).data;
 	const result = filingResult.safeParse(outcome).data;
@@ -172,17 +183,15 @@ export async function finishDocJudgment(
 	if (!outcome) return 400;
 	const {
 		rows: [job],
-	} = await sql<{ id: string }>`
-		select j.id, j.kind, j.activity_id, j.destinations, e.subject, e.body
+	} = await sql<JudgmentInput & { id: string }>`
+		select j.id, ${judgmentInput}
 		from doc_judgment_job j join email e using (activity_id)
 		where j.owner_user_id = ${owner} and j.claim_id = ${claim_id} and ${unexpired}
 		  and (j.claim_source_hash = ${sourceHash} or ${outcome.kind} <> 'answered')
 	`.execute(tx);
 	if (!job) return 404;
 	const result =
-		outcome.kind === "answered"
-			? validateJudgment(outcome.result, judgmentWork.parse(job))
-			: null;
+		outcome.kind === "answered" ? validateJudgment(outcome.result, job) : null;
 	if (result === undefined) return 422;
 
 	const { kind } = outcome;
@@ -191,9 +200,7 @@ export async function finishDocJudgment(
 		.updateTable("doc_judgment_job")
 		.set({
 			state: blocked ? "queued" : kind,
-			claim_id: null,
-			claim_until: null,
-			claim_source_hash: null,
+			...clearJudgmentClaim,
 			result,
 		})
 		.where("id", "=", job.id)

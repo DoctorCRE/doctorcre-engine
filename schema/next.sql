@@ -4067,19 +4067,17 @@ create table doc_judgment_job (
 	activity_id uuid not null,
 	idempotency_key uuid not null,
 	created_at timestamptz not null default now(),
-	kind text not null,
-	destinations jsonb,
+	kind text not null check (kind in ('email_summary', 'email_filing')),
+	first_destination integer generated always as (case when kind = 'email_filing' then 1 end) stored,
 	state text not null default 'queued',
 	claim_id uuid unique,
 	claim_until timestamptz,
 	claim_source_hash bytea,
 	result jsonb check (jsonb_typeof(result) = 'object'),
+	unique (id, kind),
 	unique (owner_user_id, idempotency_key),
 	foreign key (owner_user_id, is_account_partner) references app_user (id, is_account_partner),
 	foreign key (activity_id, owner_user_id) references email_mailbox on delete cascade,
-	check ((kind = 'email_summary' and destinations is null) or
-		(kind = 'email_filing' and destinations is not null and jsonb_typeof(destinations) = 'array'
-			and destinations <> '[]'::jsonb)),
 	check ((state = 'working' and claim_id is not null and claim_until is not null
 			and claim_source_hash is not null and result is null)
 		or (state in ('queued', 'failed', 'answered') and claim_id is null and claim_until is null
@@ -4095,3 +4093,27 @@ create policy doc_judgment_owner on doc_judgment_job to engine using (
 revoke all on doc_judgment_job from public, engine_reader;
 grant select on doc_judgment_job to engine;
 grant update (state, claim_id, claim_until, claim_source_hash, result) on doc_judgment_job to engine;
+
+create table doc_judgment_destination (
+	job_id uuid not null,
+	job_kind text generated always as ('email_filing') stored,
+	position integer not null check (position > 0),
+	deal_id uuid references deal,
+	vendor_id uuid,
+	vendor_role text generated always as ('vendor') stored,
+	primary key (job_id, position),
+	foreign key (job_id, job_kind) references doc_judgment_job (id, kind) on delete cascade,
+	foreign key (vendor_id, vendor_role) references party_role (party_id, role),
+	check (num_nonnulls(deal_id, vendor_id) = 1)
+);
+
+-- A filing job and its first destination must be written in the same transaction.
+alter table doc_judgment_job add foreign key (id, first_destination)
+	references doc_judgment_destination (job_id, position) deferrable initially deferred;
+
+alter table doc_judgment_destination enable row level security;
+create policy doc_judgment_destination_owner on doc_judgment_destination to engine using (
+	exists (select 1 from doc_judgment_job where id = job_id)
+);
+revoke all on doc_judgment_destination from public, engine_reader;
+grant select on doc_judgment_destination to engine;
