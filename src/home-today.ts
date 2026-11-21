@@ -43,6 +43,7 @@ const noMeetings = (reason: string) => ({
 	state: "unavailable" as const,
 	reason,
 	observed_at: null,
+	meetings_may_be_missing: false,
 	notes: [] as string[],
 	items: [] as never[],
 	follow_up_reviews: [] as never[],
@@ -142,10 +143,16 @@ async function readTodayMeetings(
 			possible_deals,
 		};
 	});
+	const warnings = isArguments(stored) ? stored.warnings : undefined;
 	return {
 		state: section.state,
 		reason: null,
 		observed_at: section.observed_at,
+		meetings_may_be_missing:
+			Array.isArray(warnings) &&
+			warnings.some(
+				(warning) => isArguments(warning) && warning.code === "undecoded",
+			),
 		notes: section.notes,
 		items,
 		follow_up_reviews: section.follow_up_reviews ?? [],

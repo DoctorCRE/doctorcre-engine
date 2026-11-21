@@ -10,6 +10,7 @@ type TodayBody = {
 	error?: string;
 	meetings?: Section<{
 		observed_at: string | null;
+		meetings_may_be_missing: boolean;
 		items: Row[];
 		follow_up_reviews: Row[];
 	}>;
@@ -143,6 +144,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		reminders: { state: "ready", reason: null },
 	});
 	assert.equal(typeof body.meetings?.reason, "string");
+	assert.equal(body.meetings?.meetings_may_be_missing, false);
 	const row = (i: Row) =>
 		`${i.id}|${i.title}|${i.late_label}|${i.owner}|${i.home_item_id}|${i.open_url}`;
 	assert.deepEqual(body.reminders?.late.map(row), [
@@ -312,6 +314,13 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 	const m = body.meetings;
 	assert.equal(status, 200);
 	assert.ok(m);
+
+	await t.test(
+		"an agenda without warnings has no missing-meetings flag set",
+		() => {
+			assert.equal(m.meetings_may_be_missing, false);
+		},
+	);
 
 	await t.test("an ended review-only meeting gets a calendar row", () => {
 		assert.partialDeepStrictEqual(
@@ -486,6 +495,33 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 			}
 		}
 	});
+
+	for (const code of ["group_invites_not_shown", "undecoded"]) {
+		await t.test(
+			`Today exposes the missing-meetings flag with ${code}`,
+			async () => {
+				const [saved] = await save(
+					cap,
+					"calendar/agenda",
+					{
+						...agenda,
+						items: [],
+						follow_up_reviews: [],
+						warnings: [{ code, count: 1 }],
+					},
+					"PUT",
+				);
+				assert.equal(saved, 200);
+				const [status, response] = await today();
+				assert.equal(status, 200);
+				assert.partialDeepStrictEqual(response.meetings, {
+					state: "partial",
+					items: [],
+					meetings_may_be_missing: code === "undecoded",
+				});
+			},
+		);
+	}
 });
 
 test("reminder home_item_id does not depend on the inbox page limit", async () => {
