@@ -544,7 +544,13 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 proposalDecisions.get("/proposals/:id", async (c) => {
 	const id = c.req.param("id");
 	if (!isUuid(id)) return refuse(c, new Refusal(404, "not_found"));
+	const dealId = c.req.query("deal_id");
+	if (dealId !== undefined && !isUuid(dealId))
+		return refuse(
+			c,
+			new Refusal(400, "invalid_field_value", { fields: ["deal_id"] }),
+		);
 	return answerNextRead(c, "read-proposal", (tx, userId) =>
-		readProposal(tx, userId, id),
+		readProposal(tx, userId, id, dealId),
 	);
 });
