@@ -978,6 +978,8 @@ When bringing forward pending `email_lead` candidates, apply the same eligibilit
 
 The board uses the copied lead ID when available and otherwise uses the party ID. It shows the copied lead registry reference for Quiet follow-ups links. The drawer accepts either ID, including multiple copied lead IDs that resolve to one party. The drawer and reachability keep stored phone extensions, and reachability uses a stored mobile number when available. The drawer reads mail, calls and meetings linked to the party. Recent linked activity carries its recorded user or job into reachability. A reached call counts as successful contact, while mail still needs proof of an exact nonautomated inbound match. Stage history pages applied moves and ordinary stage changes by recorded event time, with the audit ID as the tie-breaker and cursor. The drawer reads the latest linked note for Plans.
 
+When a lead role moves to a different party, the board, drawer and saves count that audit entry toward the destination lead's version. Later changes to that role advance the version as usual.
+
 The score and old prospect engagement fields are empty. Timing events and research findings are empty lists. The legacy Undo control is absent.
 
 The drawer's `plans` text omits old research tags. The read keeps the original note in `notes`. A Quiet follow-up anchored to the day a lead was added describes that day as last contact only when the last-touch view has contact evidence for that day.

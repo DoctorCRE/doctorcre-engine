@@ -130,6 +130,36 @@ test("a copied New lead can be claimed once by the signed-in partner", async () 
 	);
 });
 
+test("a lead moved to a company is listed, opens, and can be claimed", async () => {
+	const person = randomUUID();
+	const company = randomUUID();
+	const copiedId = randomUUID();
+	await db.query(`begin;
+		set local engine.job = 'agent';
+		insert into party (id, kind, name) values
+			('${person}', 'person', 'Example Placeholder'), ('${company}', 'company', 'Example Company');
+		insert into party_role (party_id, role, stage) values ('${person}', 'lead', 'new');
+		insert into outside_id (source, value, party_id) values ('old_system_lead', '${copiedId}', '${person}');
+		update party_role set party_id = '${company}' where party_id = '${person}' and role = 'lead';
+		update outside_id set party_id = '${company}' where party_id = '${person}' and source = 'old_system_lead';
+		commit;`);
+
+	const { leads } = await read("leads?workspace=leads");
+	assert.ok(Array.isArray(leads));
+	const lead = leads.map(record).find((row) => row.id === copiedId);
+	const version = lead?.base_version;
+	assert.ok(
+		typeof version === "number" && Number.isSafeInteger(version) && version > 0,
+	);
+	assert.equal((await board(copiedId)).detail.base_version, version);
+	assert.equal((await save(copiedId, command(version, "claim"))).ok, true);
+	assert.equal((await board(copiedId)).detail.owner, "joe");
+	assert.equal(
+		(await save(copiedId, command(version, "claim"))).error,
+		"version_conflict",
+	);
+});
+
 test("unowned active leads can be claimed at any stage, but archived leads cannot", async () => {
 	for (const id of [outreach, nurture]) {
 		const before = (await board(id)).detail;
