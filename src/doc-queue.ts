@@ -19,6 +19,9 @@ const claimUntilText = sql<string>`to_jsonb(claim_until) #>> '{}'`.as(
 	"claim_until",
 );
 const sourceHash = sql`sha256(convert_to(jsonb_build_array(e.subject, e.body)::text, 'UTF8'))`;
+const judgmentStorage = sql<{ installed: boolean }>`
+	select to_regclass('next.doc_judgment_job') is not null as installed
+`;
 
 async function claimDocTurn(tx: Transaction<DB>, owner: string, id: string) {
 	const claim_id = crypto.randomUUID();
@@ -78,9 +81,7 @@ export async function claimDocWork(
 	// Turns still run before the separate judgment storage migration.
 	const {
 		rows: [storage],
-	} = await sql<{ installed: boolean }>`
-		select to_regclass('next.doc_judgment_job') is not null as installed
-	`.execute(tx);
+	} = await judgmentStorage.execute(tx);
 	const mailQueue = storage?.installed
 		? sql`
 		union all
@@ -153,21 +154,25 @@ const text = z
 const summaryResult = z.strictObject({
 	summary: text.refine((value) => [...value].length <= 300),
 	action_title: text.refine((value) => [...value].length <= 90).nullable(),
+	quote: text,
 });
 const filingResult = z.strictObject({
 	facts: z.array(z.strictObject({ destination, text, quote: text })),
 });
 
 function validateJudgment(outcome: unknown, work: JudgmentInput) {
-	if (work.kind === "email_summary")
-		return summaryResult.safeParse(outcome).data;
+	const quotesEmail = (quote: string) =>
+		work.body.includes(quote) || work.subject.includes(quote);
+	if (work.kind === "email_summary") {
+		const result = summaryResult.safeParse(outcome).data;
+		return result && quotesEmail(result.quote) ? result : undefined;
+	}
 	const result = filingResult.safeParse(outcome).data;
 	return result?.facts.every(
 		({ destination, quote }) =>
 			work.destinations.some(
 				({ kind, id }) => kind === destination.kind && id === destination.id,
-			) &&
-			(work.body.includes(quote) || work.subject.includes(quote)),
+			) && quotesEmail(quote),
 	)
 		? result
 		: undefined;
@@ -182,9 +187,14 @@ export async function finishDocJudgment(
 	const { data: outcome } = judgmentOutcome.safeParse(payload);
 	if (!outcome) return 400;
 	const {
+		rows: [storage],
+	} = await judgmentStorage.execute(tx);
+	if (!storage?.installed) return 404;
+	const {
 		rows: [job],
-	} = await sql<JudgmentInput & { id: string }>`
-		select j.id, ${judgmentInput}
+	} = await sql<JudgmentInput & { id: string; source_hash: string }>`
+		select j.id, 'sha256:' || encode(j.claim_source_hash, 'hex') as source_hash,
+			${judgmentInput}
 		from doc_judgment_job j join email e using (activity_id)
 		where j.owner_user_id = ${owner} and j.claim_id = ${claim_id} and ${unexpired}
 		  and (j.claim_source_hash = ${sourceHash} or ${outcome.kind} <> 'answered')
@@ -193,6 +203,12 @@ export async function finishDocJudgment(
 	const result =
 		outcome.kind === "answered" ? validateJudgment(outcome.result, job) : null;
 	if (result === undefined) return 422;
+
+	const summary = result && "summary" in result ? result : null;
+	if (summary)
+		await sql`select pg_advisory_xact_lock(hashtextextended(${`email summary ${job.activity_id}`}, 0))`.execute(
+			tx,
+		);
 
 	const { kind } = outcome;
 	const blocked = kind === "signed_out" || kind === "plan_limited";
@@ -212,6 +228,19 @@ export async function finishDocJudgment(
 		)`)
 		.executeTakeFirst();
 	if (!saved.numUpdatedRows) return 404;
+	if (summary) {
+		await sql`select set_config('engine.job', 'mail_capture', true)`.execute(
+			tx,
+		);
+		await sql`
+			select record_email_summary(${job.activity_id}, ${job.source_hash}, 'doc-link.email-summary.v1',
+				'available', ${summary.summary}, jsonb_build_object(
+					'action_title', ${summary.action_title}::text, 'quote', ${summary.quote}::text,
+					'job_id', ${job.id}::uuid, 'job', 'mail_capture'
+				), clock_timestamp())
+			where not exists (select from email_current_summary where activity_id = ${job.activity_id})
+		`.execute(tx);
+	}
 	if (blocked) await recordDocPoll(tx, owner, kind);
 	return 204;
 }

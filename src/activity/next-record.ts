@@ -318,9 +318,19 @@ export async function recordEmail(
 	const activity_id =
 		stored?.activity_id ??
 		(await insertActivity(tx, { ...activity, from_party_id }, email));
-	await sql`insert into email_mailbox (activity_id, user_id)
+	const mailbox = await sql`insert into email_mailbox (activity_id, user_id)
   select ${activity_id}, ${ACTING_USER} where ${ACTING_USER} is not null
   on conflict do nothing`.execute(tx);
+	if (autoFile && mailbox.numAffectedRows) {
+		const {
+			rows: [storage],
+		} = await sql<{ installed: boolean }>`
+			select to_regclass('next.doc_judgment_job') is not null
+				and to_regprocedure('next.queue_email_summary(uuid)') is not null as installed
+		`.execute(tx);
+		if (storage?.installed)
+			await sql`select queue_email_summary(${activity_id})`.execute(tx);
+	}
 	return {
 		activity_id,
 		existing: stored !== undefined,

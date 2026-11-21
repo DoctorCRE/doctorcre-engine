@@ -455,8 +455,11 @@ test("Doc link migration, private credentials and Mac polling", {
 					);
 					assert.equal(response.status, status);
 				};
-				const fetchClaim = async (headers: Record<string, string>) => {
-					const response = await poll(credential, headers);
+				const fetchClaim = async (
+					headers: Record<string, string>,
+					token = credential,
+				) => {
+					const response = await poll(token, headers);
 					assert.equal(response.status, 200);
 					const body: unknown = await response.json();
 					assert.ok(isArguments(body));
@@ -468,6 +471,7 @@ test("Doc link migration, private credentials and Mac polling", {
 				const summary = {
 					summary: "The tour is Thursday.",
 					action_title: null,
+					quote: "Tour is Thursday.",
 				};
 				const summaryAnswer = { kind: "answered", result: summary };
 				const expire = (id: string) =>
@@ -477,6 +481,16 @@ test("Doc link migration, private credentials and Mac polling", {
 					);
 				assert.equal((await poll(credential, ready)).status, 204);
 				assert.equal((await poll(otherCredential, capable)).status, 204);
+				await db.query(
+					`insert into next.email_mailbox (activity_id, user_id) values ($1, $2)`,
+					[activity, otherUserId],
+				);
+				await db.query(
+					`insert into next.doc_judgment_job (owner_user_id, activity_id, idempotency_key, kind)
+					values ($1, $2, $2, 'email_summary')`,
+					[otherUserId, activity],
+				);
+				const otherJob = await fetchClaim(capable, otherCredential);
 				const firstJob = await fetchClaim(capable);
 				assert.deepEqual(
 					(
@@ -510,8 +524,40 @@ test("Doc link migration, private credentials and Mac polling", {
 					[appUserId],
 				);
 				assert.equal((await poll(credential, ready)).status, 204);
+				await complete(
+					current.claim_id,
+					{
+						...summaryAnswer,
+						result: { ...summary, quote: "Made up." },
+					},
+					422,
+				);
+				const storedSummary = () =>
+					db.query(
+						`select source_activity_id, text, provenance->>'quote' as quote, provenance->>'job' as job
+						from next.email_summary where activity_id = $1`,
+						[activity],
+					);
+				assert.equal((await storedSummary()).rowCount, 0);
 				await complete(current.claim_id, summaryAnswer, 204);
 				await complete(current.claim_id, summaryAnswer, 404);
+				await complete(
+					otherJob.claim_id,
+					{
+						...summaryAnswer,
+						result: { ...summary, summary: "The tour is set." },
+					},
+					204,
+					otherCredential,
+				);
+				assert.deepEqual((await storedSummary()).rows, [
+					{
+						source_activity_id: activity,
+						text: summary.summary,
+						quote: summary.quote,
+						job: "mail_capture",
+					},
+				]);
 				const turn = await fetchClaim(capable);
 				assert.equal(turn.work.kind, "turn");
 				const expireTurn = () =>
@@ -570,7 +616,8 @@ test("Doc link migration, private credentials and Mac polling", {
 				const answer = filingAnswer({ ...fact, quote: "Tour is Friday." });
 				await complete(updated.claim_id, answer, 204);
 				const { rows } = await db.query(
-					"select kind, result from next.doc_judgment_job where state = 'answered' order by created_at",
+					"select kind, result from next.doc_judgment_job where state = 'answered' and owner_user_id = $1 order by created_at",
+					[appUserId],
 				);
 				assert.deepEqual(rows, [
 					{ kind: "email_summary", result: summary },
