@@ -25,11 +25,11 @@ const SEED = `set session_replication_role = replica;
 	set session_replication_role = origin;`;
 
 const NEW_VENDOR = `
-	insert into party (id, kind, name) values
-		('${NEW_ORG}', 'company', 'Example Builders'),
-		('${NEW_CONTACT}', 'person', 'New Contact');
+	insert into party (id, kind, name, city) values
+		('${NEW_ORG}', 'company', 'Example Builders', null),
+		('${NEW_CONTACT}', 'person', 'New Contact', 'Austin');
 	insert into party_role (party_id, role, offers) values
-		('${NEW_ORG}', 'vendor', 'Build-outs'), ('${NEW_ORG}', 'lender', null);
+		('${NEW_ORG}', 'vendor', 'Build-outs'), ('${NEW_ORG}', 'contractor', null);
 	insert into party_company (person_id, company_id) values ('${NEW_CONTACT}', '${NEW_ORG}');
 	insert into party_email (party_id, address, label, is_primary)
 		values ('${NEW_CONTACT}', 'new-contact@example.test', 'work', true);`;
@@ -59,10 +59,14 @@ async function vendorMeetings(t: TestContext) {
 	return { ...door, meetings };
 }
 
-async function seedCopiedVendor(db: ReturnType<typeof doorTest>["db"]) {
+async function seedVendors(db: ReturnType<typeof doorTest>["db"]) {
 	await db.query(SEED);
 	for (const file of ["copy-parties.sql", "copy-vendors.sql"])
 		await db.query(`begin; ${await readSchema(file)} commit;`);
+	await db.query(`begin;
+		select set_config('engine.user_id', '${ACTOR}', true);
+		${NEW_VENDOR}
+		commit;`);
 }
 
 type Answer = {
@@ -71,7 +75,8 @@ type Answer = {
 	has_more: boolean;
 	next_cursor: string | null;
 	items: {
-		contact: { name: string };
+		vendor_id: string;
+		contact: { id: string; name: string };
 		missing: string[];
 		possible_meetings: { title: string }[];
 	}[];
@@ -94,13 +99,9 @@ const people = (answer: Answer) =>
 
 test("vendor meetings match exact attendee and organizer emails in the signed-in partner's Outlook agenda", async (t) => {
 	const { db, meetings, save } = await vendorMeetings(t);
-	await seedCopiedVendor(db);
-	await db.query(`begin;
-		select set_config('engine.user_id', '${ACTOR}', true);
-		${NEW_VENDOR}
-		commit;`);
+	await seedVendors(db);
 	const own = agenda([
-		{ title: "Matched attendee", attendees: [pat] },
+		{ title: "Matched attendee", attendees: [{ email: "pAt@Example.TEST" }] },
 		{ title: "Matched organizer", organizer: { email: "PAT@EXAMPLE.TEST" } },
 		{
 			title: "Different address",
@@ -144,6 +145,7 @@ test("vendor meetings match exact attendee and organizer emails in the signed-in
 	});
 	assert.partialDeepStrictEqual(page.items[2], {
 		vendor_id: NEW_ORG,
+		category: "contractor",
 		contact: { id: NEW_CONTACT, email: newContact.email },
 	});
 	assert.equal(page.calendar.state, "ready");
@@ -153,25 +155,30 @@ test("vendor meetings match exact attendee and organizer emails in the signed-in
 	]);
 });
 
-test("pages follow their cursor", async (t) => {
+test("Research pages follow their cursor within and across vendors", async (t) => {
 	const { db, meetings } = await vendorMeetings(t);
-	await seedCopiedVendor(db);
-	const first = await ready(await meetings("?view=research&q=AUSTIN&limit=1"));
-	assert.equal(first.total, 2);
+	await seedVendors(db);
+	const search = "?view=research&q=AUSTIN&limit=1";
+	const first = await ready(await meetings(search));
 	assert.equal(first.has_more, true);
 	assert.ok(first.next_cursor);
 	const cursor = encodeURIComponent(first.next_cursor);
-	const second = await ready(
-		await meetings(`?view=research&q=AUSTIN&limit=1&cursor=${cursor}`),
+	const second = await ready(await meetings(`${search}&cursor=${cursor}`));
+	assert.equal(second.has_more, true);
+	assert.ok(second.next_cursor);
+	const third = await ready(
+		await meetings(
+			`${search}&cursor=${encodeURIComponent(second.next_cursor)}`,
+		),
 	);
-	assert.equal(second.total, 2);
-	assert.equal(second.has_more, false);
-	assert.equal(second.next_cursor, null);
+	assert.equal(third.has_more, false);
+	assert.equal(third.next_cursor, null);
+	assert.deepEqual([first.total, second.total, third.total], [3, 3, 3]);
 	assert.deepEqual(
-		people(first)
-			.concat(people(second))
-			.map(([name]) => name),
-		["Pat Example", "Sam Example"],
+		[first, second, third].map(({ items }) =>
+			items.map(({ vendor_id, contact }) => [vendor_id, contact.id]),
+		),
+		[[[ORG, PAT]], [[ORG, SAM]], [[NEW_ORG, NEW_CONTACT]]],
 	);
 	await refused(
 		await meetings(`?view=research&q=Pat&limit=1&cursor=${cursor}`),
