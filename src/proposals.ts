@@ -329,8 +329,10 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 		refuse(c, new Refusal(403, "user_decides")),
 	);
 
-// Each message in a conversation carries its own filing suggestion; Home shows them as one decision.
-async function sameFiling(
+const filingKinds = ["file_to_deal", "possible_new_deal"];
+
+// Each message carries its own filing suggestion, so one decision locks every member in id order.
+async function lockFiling(
 	tx: Transaction<DB>,
 	p: {
 		id: string;
@@ -341,15 +343,20 @@ async function sameFiling(
 ) {
 	const { rows } = await sql<{ id: string; message_id: string | null }>`
 		select sibling.id, e.message_id
-		from email source
-		join email e on e.activity_id = source.activity_id or e.conversation_id = source.conversation_id
-		join proposal sibling on sibling.activity_id = e.activity_id
-		where source.activity_id = ${p.activity_id}::uuid and sibling.kind = ${p.kind}
+		from proposal sibling
+		left join email e on e.activity_id = sibling.activity_id
+		where sibling.id = ${p.id}::uuid or (sibling.kind = ${p.kind}
 			and sibling.deal_id is not distinct from ${p.deal_id}::uuid
-			and (sibling.id = ${p.id}::uuid or (sibling.status = 'pending'
-				and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)}
-				and (sibling.kind <> 'file_to_deal'
-					or ${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))})))
+			and sibling.status = 'pending'
+			and sibling.activity_id in (
+				select thread.activity_id from email source
+				join email thread on thread.activity_id = source.activity_id
+					or thread.conversation_id = source.conversation_id
+				where source.activity_id = ${p.activity_id}::uuid
+			)
+			and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)}
+			and (sibling.kind <> 'file_to_deal'
+				or ${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))}))
 		order by sibling.id
 		for update of sibling`.execute(tx);
 	for (const messageId of [
@@ -372,6 +379,15 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 				return parsed instanceof Refusal ? parsed : { ...parsed, proposal_id };
 			},
 			async (tx, r) => {
+				const clicked = await tx
+					.selectFrom("proposal")
+					.select(["id", "kind", "activity_id", "deal_id"])
+					.where("id", "=", r.proposal_id)
+					.executeTakeFirst();
+				const members =
+					clicked && filingKinds.includes(clicked.kind)
+						? await lockFiling(tx, clicked)
+						: [r.proposal_id];
 				const p = await tx
 					.selectFrom("proposal")
 					.selectAll()
@@ -388,7 +404,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						decided_by: p.decided_by_user_id,
 					});
 				const accepts = r.decision === "accept";
-				const filing = ["file_to_deal", "possible_new_deal"].includes(p.kind);
+				const filing = filingKinds.includes(p.kind);
 				if (
 					(r.edits && p.kind !== "next_step") ||
 					(r.deal_id && !filing) ||
@@ -422,7 +438,6 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						});
 				}
 				const filingDeal = r.deal_id ?? p.deal_id;
-				const members = filing ? await sameFiling(tx, p) : [p.id];
 				if (r.decision === "accept" && filing && filingDeal) {
 					await dealNow(tx, filingDeal);
 				}

@@ -5,6 +5,7 @@ import {
 	jsonObjectFrom,
 } from "kysely/helpers/postgres";
 import { filingReviewNeeded } from "../activity/filing-evidence.ts";
+import { decisionPosition, mailGroup } from "../home-email-thread.ts";
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
@@ -288,7 +289,22 @@ const documentsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 
 const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db
-		.selectFrom("proposal as p")
+		.selectFrom((eb) =>
+			eb
+				.selectFrom("proposal as p")
+				.innerJoin("email as e", "e.activity_id", "p.activity_id")
+				.select(["p.id", decisionPosition("p", mailGroup).as("position")])
+				.where("p.deal_id", "=", deal)
+				.where("p.status", "=", "pending")
+				.where((eb) =>
+					eb.or([
+						eb("p.kind", "<>", "file_to_deal"),
+						filingReviewNeeded(eb.ref("p.activity_id"), eb.ref("p.deal_id")),
+					]),
+				)
+				.as("shown"),
+		)
+		.innerJoin("proposal as p", "p.id", "shown.id")
 		.innerJoin("email as e", "e.activity_id", "p.activity_id")
 		.innerJoin("activity as a", "a.id", "e.activity_id")
 		.leftJoin("app_user as o", "o.id", "p.owner_party_id")
@@ -311,14 +327,7 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 				summary: eb.ref("a.summary"),
 			}).as("email"),
 		])
-		.where("p.deal_id", "=", deal)
-		.where("p.status", "=", "pending")
-		.where((eb) =>
-			eb.or([
-				eb("p.kind", "<>", "file_to_deal"),
-				filingReviewNeeded(eb.ref("p.activity_id"), eb.ref("p.deal_id")),
-			]),
-		)
+		.where("shown.position", "=", 1)
 		.orderBy("p.created_at", "desc")
 		.orderBy("p.id");
 
