@@ -1459,11 +1459,26 @@ test("email split: a retry with a new key keeps the first stored pair", async ()
 	});
 });
 
-test("email split: a complete second mailbox capture fills the missing pair", async () => {
+test("email split: only a new mailbox capture fills a preview's missing pair", async () => {
 	const messageId = "split-second-mailbox@example.test";
 	const preview = "Thanks for the update.";
 	const first = await viaJob(mail(messageId, { body: preview }));
 	assert.equal(first.status, 201);
+	const retry = await viaJob(
+		mail(messageId, {
+			body: "Same mailbox text",
+			authored: "Same mailbox text",
+			history: "",
+		}),
+	);
+	assert.equal(retry.status, 201);
+	assert.equal(retry.body.existing, true);
+	assert.equal(retry.body.activity_id, first.body.activity_id);
+	assert.deepEqual(await savedEmailText(first.body.activity_id), {
+		body: preview,
+		authored: null,
+		history: null,
+	});
 	const second = await viaJob(
 		mail(messageId, {
 			body: `${splitText.authored}\n\n${splitText.history}`,

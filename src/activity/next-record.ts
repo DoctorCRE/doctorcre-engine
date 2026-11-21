@@ -329,16 +329,16 @@ export async function recordEmail(
 	const activity_id =
 		stored?.activity_id ??
 		(await insertActivity(tx, { ...activity, from_party_id }, email));
-	if (email.split)
+	const mailbox = await sql`insert into email_mailbox (activity_id, user_id)
+  select ${activity_id}, ${ACTING_USER} where ${ACTING_USER} is not null
+  on conflict do nothing`.execute(tx);
+	if (email.split && (!stored || mailbox.numAffectedRows))
 		await tx
 			.updateTable("email")
 			.set(email.split)
 			.where("activity_id", "=", activity_id)
 			.where("authored", "is", null)
 			.execute();
-	const mailbox = await sql`insert into email_mailbox (activity_id, user_id)
-  select ${activity_id}, ${ACTING_USER} where ${ACTING_USER} is not null
-  on conflict do nothing`.execute(tx);
 	if (autoFile && mailbox.numAffectedRows) {
 		const {
 			rows: [storage],
