@@ -41,10 +41,10 @@ export function decisionPosition(
 }
 
 const historyMarker =
-	/^(?:-+ *(?:original|forwarded) message *-+|begin forwarded message:)$/i;
-const headerField = /^\*?(from|to|cc|bcc|sent|date|subject):\*?(.*)$/i;
-// People write "Date:" in their own words, so only a header block owns it.
-const strayHeader = new Set(["from", "to", "cc", "bcc", "sent", "subject"]);
+	/(?<!-)-{2,} *(?:original|forwarded) message *-{2,}|\bbegin forwarded message:(?=[ \t]*(?:\n|\*?from:|$))/i;
+const underscoreDivider = /(?<!_)_{8,120}(?!_)|^[ \t]*_{8,}[ \t]*$/m;
+const strayFrom =
+	/^[ \t]*\*?[Ff][Rr][Oo][Mm]:\*?[ \t]*\p{Lu}[\p{L}’'-]*[ \t]*$/u;
 const ruleLine = /^[-_=*]{3,}$/;
 const signOffWords = `(?:best|regards|(?:best|kind|warm) regards|thanks(?: so much| again)?|thank you|many thanks|sincerely|cheers)[,.!]?`;
 const signOff = new RegExp(`^${signOffWords}$`, "i");
@@ -53,39 +53,24 @@ const trailingSignOff = new RegExp(
 	"i",
 );
 const deviceFooter = /^sent from my [\w-]+(?: [\w-]+){0,3}$/i;
-const sentence = /[.!?]$|\b[a-z]+ [a-z]+\b/;
 // Names, titles, companies, phones, emails and links start each word with a capital, digit or symbol.
 const contactWord = /^(?:[^a-z]|[a-z]:$|(?:of|and|at|for|in|the)$)|@|:\/\//;
-// Stored mail often has no line breaks, so quoted history must be found mid-line too.
-const inlineHistory = new RegExp(
-	[
-		"(?<!-)-{2,80} ?(?:Original|Forwarded) [Mm]essage ?-{2,80}(?!-)",
-		// A repeated From or Sent starts a new candidate, so incomplete headers cannot overlap.
-		String.raw`(?:(?<![-_=*])[-_=*]{3,80}[ \t]{0,80})?\*?From:\*? ` +
-			String.raw`(?:(?! \*?(?:From|Sent):)[^\r\n]){1,300} \*?Sent:\*? ` +
-			String.raw`(?:(?! \*?(?:From|Sent|Subject):)[^\r\n\d]){0,40}\d` +
-			String.raw`(?:(?! \*?(?:From|Sent|Subject):)[^\r\n]){0,2000} \*?Subject:`,
-		String.raw`(?<=^|\s)On (?:(?![.!?]\s)[^\r\n\d]){0,300}\d(?:(?![.!?]\s| wrote:)[^\r\n]){0,300} wrote:`,
-	].join("|"),
-);
 const senderBanner =
 	/You don['’]t often get email from \S+? Learn why this is important(?:\s*<[^>\s]*>)?\.?\s*/g;
 
-export function cleanEmailBody(body: string, sender: string | null) {
-	const lines = body.replace(/\u00a0/g, " ").split(/\r\n?|\n/);
-	const current = lines.join("\n").replace(senderBanner, "");
-	const cut = current.search(inlineHistory);
-	const recent = (cut < 0 ? current : current.slice(0, cut)).split("\n");
-	const own = recent
-		.slice(0, historyStart(recent))
-		.filter((line) => !/^\s*>/.test(line) && !strayHeader.has(field(line)));
+function withoutSignature(
+	body: string,
+	senderName: string | null,
+	senderAddress: string,
+) {
+	const own = body.split("\n");
 	const signed = own.slice(0, footerStart(own));
-	const unsigned = text(signed.slice(0, signatureStart(signed, sender)));
-	// A message that is only a sign-off, a signature or quoted mail keeps its text.
+	const unsigned = text(signed.slice(0, signatureStart(signed, senderName)));
 	return (
-		unsigned.slice(0, inlineSignatureStart(unsigned, sender)).trim() ||
+		unsigned
+			.slice(0, inlineSignatureStart(unsigned, senderName, senderAddress))
+			.trim() ||
 		text(signed) ||
-		text(lines) ||
 		body
 	);
 }
@@ -100,46 +85,22 @@ function text(lines: string[]) {
 		.trim();
 }
 
-function field(line: string) {
-	const [, label = "", value = ""] = headerField.exec(line.trim()) ?? [];
-	return sentence.test(value) ? "" : label.toLowerCase();
-}
-
-function historyStart(lines: string[]) {
-	let from = -1;
-	for (const [index, line] of lines.entries()) {
-		if (historyMarker.test(line.trim()) || quoteOpener(lines, index))
-			return index;
-		const label = field(line);
-		if (label === "from") from = index;
-		else if (from < 0 || !line.trim()) continue;
-		else if (label === "sent" || label === "date") return from;
-		else if (!/^[ \t]|^\*?[a-z][a-z0-9-]*:/i.test(line)) from = -1;
-	}
-	return lines.length;
-}
-
-// Mail clients wrap a long "On <date>, <name> <address> wrote:" over lines.
-function quoteOpener(lines: string[], index: number) {
-	if (!/^on\s/i.test(lines[index]?.trim() ?? "")) return false;
-	let opener = "";
-	for (const line of lines.slice(index, index + 3)) {
-		opener = `${opener} ${line.trim()}`;
-		if (opener.length > 400 || !line.trim()) return false;
-		if (/\bwrote:$/i.test(opener)) return /\d/.test(opener);
-		if (/[.!?]$/.test(opener)) return false;
-	}
-	return false;
-}
-
 function footerStart(lines: string[]) {
 	const last = lines.findLastIndex((line) => line.trim());
 	return deviceFooter.test(lines[last]?.trim() ?? "") ? last : lines.length;
 }
 
 const contactLine = (line: string) =>
-	line.length <= 80 &&
-	line.split(/\s+/).every((word) => contactWord.test(word));
+	line
+		.split(/\s*\|\s*/)
+		.every(
+			(part) =>
+				part.length <= 250 &&
+				(part.split(/\s+/).every((word) => !word || contactWord.test(word)) ||
+					titleLine.test(part) ||
+					phoneLine.test(part) ||
+					licenseLine.test(part)),
+		);
 
 // A signature is a trailing sign-off, then the sender's name, then only contact lines.
 function signatureStart(lines: string[], sender: string | null) {
@@ -171,15 +132,43 @@ function signatureStart(lines: string[], sender: string | null) {
 }
 
 // A one-line body ends "... works. Best, Maya Example Office Manager | Direct: 555-010-2000".
-function inlineSignatureStart(text: string, sender: string | null) {
-	const first = sender?.trim().split(/\s+/, 1)[0]?.toLowerCase();
-	const words = [...text.matchAll(/\S+/g)];
-	const contact = words.findLastIndex(([word]) => !contactWord.test(word)) + 1;
-	for (const { 0: word, index } of words.slice(contact)) {
-		if (word.replace(/[.,|]$/, "").toLowerCase() !== first) continue;
-		const at = text.slice(0, index).search(trailingSignOff);
+function inlineSignatureStart(
+	text: string,
+	senderName: string | null,
+	senderAddress: string,
+) {
+	const first = senderName?.split(/\s+/, 1)[0];
+	if (!first) return text.length;
+	const start = Math.max(0, text.length - 1600);
+	const tail = text.slice(start);
+	const words = [...tail.matchAll(/\S+/g)];
+	for (const { 0: word, index } of words) {
+		if (word.split(/[.,|]/, 1)[0]?.toLowerCase() !== first) continue;
+		const at = tail.slice(0, index).search(trailingSignOff);
 		// A capital separates "Thanks, Maya" from "I want to say thanks, Maya".
-		if (at >= 0 && /[A-Z]/.test(text[at] ?? "")) return at;
+		if (
+			at > 0 &&
+			/[A-Z]/.test(tail[at] ?? "") &&
+			tail.slice(index).split("\n").every(contactLine)
+		)
+			return start + at;
+		if (!senderName || !tail.slice(index).toLowerCase().startsWith(senderName))
+			continue;
+		const details = tail.slice(index + senderName.length);
+		const credential = /^[, ]+(?:DMD|DDS)(?=\b|[A-Z])/.test(details);
+		const ownAddress =
+			senderAddress &&
+			details
+				.toLowerCase()
+				.split(/[\s,;<>|]+/)
+				.includes(senderAddress);
+		if (
+			(credential || ownAddress) &&
+			/^[,|\s]/.test(details) &&
+			/(?:[.!?]|\n)\s*$/.test(tail.slice(0, index)) &&
+			details.trim().split("\n").every(contactLine)
+		)
+			return start + index;
 	}
 	return text.length;
 }
@@ -192,14 +181,21 @@ type ThreadMessage = {
 	body: string;
 };
 
-const quoteWindowLength = 40;
 const minimumSignatureLength = 25;
 const quoteHeaderField =
 	/(?<!\S)\*?(from|sent|date|to|cc|bcc|subject):\*?(?=\s)/gi;
-const replyOpener =
-	/(?<!\S)On\s+(?:(?![.!?]\s)[^\d]){0,300}\d(?:(?![.!?]\s| wrote:)[\s\S]){0,300}\s+wrote:$/i;
-const quoteDivider =
-	/(?<!\S)(?:[-_=*]{3,}|-+ *(?:original|forwarded) message *-+|begin forwarded message:)$/i;
+const month = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\.?";
+const weekday = "(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\\.?,?\\s+)?";
+const day = String.raw`(?:\d{1,4}[./-]\d{1,2}(?:[./-]\d{1,4})?|(?:\d{1,2}\s+${month}|${month}\s+\d{1,2})(?:,?\s+\d{4})?)`;
+const datePrefix = new RegExp(`^${weekday}${day}(?=\\W|$)`, "i");
+const quoteDate = new RegExp(
+	String.raw`(?<!\S)On\s+${weekday}${day}(?=\W)`,
+	"gi",
+);
+const quoteTime =
+	/^[, \t\n]+(?:at\s+)?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?(?:\s+(?:GMT|UTC)(?:[+-]\d{1,4})?)?/i;
+const wrote = /\bwrote:/i;
+const quoteDivider = /(?<![-_=*])[-_=*]{3,}$/;
 const addressDomain = /@[\w-]+(?:\.[\w-]+)+/;
 const address = String.raw`[^<>\s,;]+${addressDomain.source}`;
 const mailboxAddress = new RegExp(
@@ -212,27 +208,25 @@ const trailingQuoteIndent = /(?:^|[\r\n])[ \t]*(?:>[ \t]*)+$/;
 
 function comparableBody(body: string) {
 	const words = /(^[ \t]*(?:>[ \t]*)+)|\S+/gm;
-	const starts: number[] = [];
 	const offsets: number[] = [];
 	let normalized = "";
 	for (let match = words.exec(body); match; match = words.exec(body)) {
 		if (match[1]) continue;
 		if (normalized) normalized += " ";
-		starts.push(normalized.length);
 		offsets[normalized.length] = match.index;
 		normalized += match[0].toLowerCase();
 	}
-	return { body, normalized, starts, offsets };
+	return { body, normalized, offsets };
 }
 
 function headerValue(label: string, value: string) {
 	if (!value) return false;
 	if (label === "subject") return !/[\r\n]/.test(value);
 	if (label === "sent" || label === "date")
-		return /\d/.test(value) && Number.isFinite(Date.parse(value));
+		return /^(?:yesterday|today)$/i.test(value) || datePrefix.test(value);
 	return (
 		mailboxAddress.test(value) ||
-		value.split(/[;,]/).every((mailbox) => {
+		value.split(/\s+on behalf of\s+|[;,](?![^<>]*>)/i).every((mailbox) => {
 			const [first, ...rest] = mailbox.trim().split(/\s+/);
 			return (
 				mailboxAddress.test(mailbox.trim()) ||
@@ -244,174 +238,129 @@ function headerValue(label: string, value: string) {
 	);
 }
 
-function quoteBoundary(prefix: string) {
-	const end = prefix
-		.trimEnd()
-		.replace(trailingQuoteIndent, "")
-		.trimEnd().length;
-	const start = Math.max(0, end - 2100);
-	const raw = prefix.slice(start, end);
-	// Keep the match offsets valid in the original body.
-	const tail = raw.replace(quoteIndent, (indent) => " ".repeat(indent.length));
-	const boundaryAt = (offset: number) =>
-		start + raw.slice(0, offset).replace(trailingQuoteIndent, "").length;
-	const opener = /wrote:$/i.test(tail) ? tail.search(replyOpener) : -1;
-	if (opener >= 0) return boundaryAt(opener);
+function openerStart(body: string) {
+	if (!wrote.test(body)) return -1;
+	for (const date of body.matchAll(quoteDate)) {
+		const from = date.index + date[0].length;
+		const tail = body.slice(from, from + 380);
+		const marker = tail.search(wrote);
+		if (marker < 0) continue;
+		const mailbox = tail
+			.slice(0, marker)
+			.replace(quoteTime, "")
+			.trim()
+			.replace(/^,\s*/, "");
+		if (
+			!mailbox.match(quoteDate) &&
+			!/(?:\p{L}{4}\.|[!?])\s+[\p{Lu}][\p{Ll}]/u.test(mailbox) &&
+			headerValue("from", mailbox)
+		)
+			return date.index;
+	}
+	return -1;
+}
 
+function historyStart(body: string) {
+	// Quote indents count as whitespace without changing the source offsets.
+	const unquoted = body.replace(quoteIndent, (indent) =>
+		" ".repeat(indent.length),
+	);
+	const rule = unquoted.search(underscoreDivider);
+	const join = unquoted.search(joinBlock);
+	const marker = unquoted.search(historyMarker);
+	const opener = openerStart(unquoted);
+	const limit = Math.min(
+		marker < 0 ? body.length : marker,
+		opener < 0 ? body.length : opener,
+		rule < 0 || join >= 0 ? body.length : rule,
+	);
+	const fields = [...unquoted.slice(0, limit).matchAll(quoteHeaderField)];
 	const labels = new Set<string>();
-	let header = tail.length;
-	for (const field of [...tail.matchAll(quoteHeaderField)].reverse()) {
+	let start = 0;
+	let end = 0;
+	for (const [index, field] of fields.entries()) {
 		const label = field[1]?.toLowerCase() ?? "";
-		const value = tail.slice(field.index + field[0].length, header).trim();
+		const valueStart = field.index + field[0].length;
+		const next = fields[index + 1]?.index ?? limit;
+		const nearby = unquoted.slice(valueStart, Math.min(valueStart + 600, next));
+		const value = nearby.match(/^[^\n]*(?:\n[ \t]*<[^<>\n]+>)?/)?.[0] ?? "";
+		const valid =
+			(label === "subject" ||
+				label === "date" ||
+				label === "sent" ||
+				nearby.length === next - valueStart ||
+				value.length < nearby.length) &&
+			headerValue(label, value.trim());
 		if (
-			header - field.index > 300 ||
+			!valid ||
 			labels.has(label) ||
-			!headerValue(label, value)
+			(labels.size && unquoted.slice(end, field.index).trim())
 		)
-			break;
+			labels.clear();
+		if (!valid) continue;
+		if (!labels.size) start = field.index;
 		labels.add(label);
-		header = field.index;
+		end = valueStart + value.length;
+		if (labels.size >= 2) {
+			const divider = unquoted.slice(0, start).trimEnd().search(quoteDivider);
+			return divider < 0 ? start : divider;
+		}
 	}
-	const beforeHeader = labels.size >= 2 ? header : tail.length;
-	const divider = tail.slice(0, beforeHeader).trimEnd().search(quoteDivider);
-	if (divider >= 0) return boundaryAt(divider);
-	return labels.size >= 2 ? boundaryAt(header) : null;
+	return limit;
 }
 
-type EarlierText = {
-	text: string;
-	opening: string;
-	signature: string | undefined;
-};
-type EarlierMessages = Map<string, Map<string, EarlierText[]>>;
-
-function quoteKey(text: string, start = 0) {
-	const prefix = text.slice(start, start + 8);
-	const space = prefix.indexOf(" ");
-	return space < 0 ? prefix : prefix.slice(0, space);
-}
-
-function withoutHistory(body: string, earlier: EarlierMessages) {
-	const message = comparableBody(body);
-	if (!earlier.size) return message;
-	const { normalized } = message;
-	for (const start of message.starts) {
-		if (!start) continue;
-		const bucket = earlier.get(normalized.charAt(start));
-		const matches = bucket?.get(quoteKey(normalized, start));
-		if (!matches) continue;
-		const repeats = matches.some(({ opening }) => {
-			const end = start + opening.length;
-			return (
-				normalized.startsWith(opening, start) &&
-				(opening.length === quoteWindowLength ||
-					end === normalized.length ||
-					normalized[end] === " ")
-			);
-		});
-		if (!repeats) continue;
-
-		const offset = message.offsets[start];
-		const boundary = quoteBoundary(body.slice(0, offset));
-		if (
-			boundary === null &&
-			!matches.some(
-				({ text, signature }) =>
-					normalized.length - start === text.length &&
-					normalized.endsWith(text) &&
-					(!signature ||
-						normalized.slice(0, start - 1).endsWith(` ${signature}`)),
-			)
-		)
-			continue;
-		const own = body.slice(0, boundary ?? offset).trim();
-		if (own) return comparableBody(own);
-	}
-	return message;
+function withoutHistory(body: string) {
+	const normalized = body
+		.replace(/\u00a0/g, " ")
+		.replace(/\r\n?/g, "\n")
+		.replace(senderBanner, "");
+	const current = normalized
+		.slice(0, historyStart(normalized))
+		.replace(trailingQuoteIndent, "");
+	const lines = current.split("\n").filter((line) => !strayFrom.test(line));
+	return text(lines) || body;
 }
 
 type ComparableBody = ReturnType<typeof comparableBody> & {
 	senderName: string | null;
+	senderAddress: string;
 };
 
-const contactAddress = new RegExp(`(?<=[^<>\\s,;])${addressDomain.source}`);
 const phone = /(?:\(\d{3}\)|\b\d{3})[ .-]*\d{3}[ .-]*\d{4}\b/;
+const phoneLine =
+	/^(?:(?:direct|main|office|phone|cell|mobile|fax|tel(?:ephone)?|[cftmpo])\s*:\s*)?(?:\+?1[ .-]*)?(?:\(\d{3}\)|\d{3})[ .-]*\d{3}[ .-]*\d{4}(?:\s*(?:ext\.?|x)\s*\d+)?$/i;
+const licenseLine =
+	/^(?:[A-Z]{2} )?(?:(?:RE |DRE |BRE |NMLS )?(?:license|lic\.)|DRE|BRE|NMLS)[ :#]+[A-Z\d-]*\d[A-Z\d-]*$/i;
 const website = /\b(?:https?:\/\/|www\.)\S+/i;
 const contactLabel = /(?:direct|cell|fax):/i;
-const contactLineLabel = new RegExp(
-	String.raw`(?:^|[\r\n|])\s*${contactLabel.source}`,
-	"i",
-);
 const inlineContact = new RegExp(
-	String.raw`(?<![^\s|])(?:(?:teams meeting\s+)?dial in by phone\s+${phone.source}|${contactLabel.source}|${phone.source}|${website.source}|<?[^<>\s,;|]{1,64}${addressDomain.source})`,
+	String.raw`(?:^|(?<=[\r\n|]))[ \t]*(?=(?:(?:${contactLabel.source}[ \t]*)?${phone.source}|${website.source}|<?[^<>\s,;|]{1,64}${addressDomain.source}>?)[ \t]*(?:$|[\r\n|]))`,
 	"i",
 );
 const titleLine =
-	/(?:^|(?<=[\r\n|]))[ \t]*(?:[\p{L}-]+[ \t]+){0,5}(?:director|manager|broker|president|partner|associate|coordinator|officer)[ \t]*(?=$|[\r\n|])/iu;
-
-function hasContactDetails(text: string) {
-	return (
-		contactAddress.test(text) ||
-		phone.test(text) ||
-		website.test(text) ||
-		contactLineLabel.test(text) ||
-		titleLine.test(text)
-	);
-}
-
-function startsWithName(text: string, name: string) {
-	return (
-		text === name ||
-		(text.startsWith(name) && /[ ,.|]/.test(text.charAt(name.length)))
-	);
-}
+	/(?:^|(?<=[\r\n|]))[ \t]*(?:(?:senior|junior|general|regional|office|transaction|leasing|commercial|managing|associate|executive|chief|operating|vice)[ \t]+){0,5}(?:dentist|director|manager|broker|president|partner|associate|coordinator|officer)[ \t]*(?=$|[\r\n|])/i;
 
 function sharedFooterStart(block: string, senderName: string | null) {
-	const contact = block.search(inlineContact);
+	const contact = inlineContact.exec(block);
 	const title = titleLine.exec(block);
 	const titleStart = title
 		? title.index + title[0].length - title[0].trimStart().length
 		: block.length;
-	const footer = Math.min(titleStart, contact < 0 ? block.length : contact);
+	const contactStart = contact
+		? contact.index + contact[0].length
+		: block.length;
+	const footer = Math.min(titleStart, contactStart);
 	const name = senderName?.split(/\s+/).map(RegExp.escape).join("[ \\t]+");
 	const signOffLine = String.raw`${signOffWords}(?=[ \t]*(?:[\r\n]|$))`;
 	const sender = name
-		? String.raw`|(?:${signOffWords}[ \t]+)?${name}(?=[\s,.|]|$)`
+		? String.raw`|${name}(?=[ \t]*(?:[,|\r\n]|$))|${signOffWords}[ \t]+${name}(?=[\s,.|]|$)`
 		: "";
 	const opening = new RegExp(
 		String.raw`(?:^|[\r\n]|[.!?][ \t]+)[ \t]*(?=${signOffLine}${sender})`,
 		"i",
 	).exec(block.slice(0, footer));
-	return opening ? opening.index + opening[0].length : footer;
-}
-
-function rememberEarlier(message: ComparableBody, earlier: EarlierMessages) {
-	const { body, normalized, offsets, senderName } = message;
-	if (!normalized) return;
-	const initial = normalized.charAt(0);
-	const bucket = earlier.get(initial) ?? new Map<string, EarlierText[]>();
-	earlier.set(initial, bucket);
-	const remember = (text: string, signature?: string) => {
-		const opening = text.slice(0, quoteWindowLength);
-		const quote = { text, opening, signature };
-		const key = quoteKey(opening);
-		const matches = bucket.get(key);
-		if (matches) matches.push(quote);
-		else bucket.set(key, [quote]);
-	};
-	remember(normalized);
-	if (!senderName) return;
-	const start = normalized.lastIndexOf(` ${senderName}`) + 1;
-	if (!start || !startsWithName(normalized.slice(start), senderName)) return;
-	const at = offsets[start];
-	if (
-		at === undefined ||
-		!/(?:[.!?]|[\r\n])\s*$/.test(body.slice(0, at)) ||
-		!hasContactDetails(body.slice(at))
-	)
-		return;
-	// A reply can quote the earlier text without copying the sender's footer.
-	remember(normalized.slice(0, start - 1), normalized.slice(start));
+	const start = opening ? opening.index + opening[0].length : footer;
+	return block.slice(start).split("\n").every(contactLine) ? start : footer;
 }
 
 function sharedSignatureLength(messages: ComparableBody[]) {
@@ -448,7 +397,15 @@ function sharedSignatureLength(messages: ComparableBody[]) {
 		const start = normalized.length - length;
 		const at = offsets[start];
 		if (at === undefined) continue;
-		const footer = at + sharedFooterStart(body.slice(at), senderName);
+		const block = body.slice(at);
+		const boundary = sharedFooterStart(block, senderName);
+		if (
+			!boundary &&
+			inlineContact.exec(block)?.index === 0 &&
+			!/(?:\n|[.!?|])\s*$/.test(body.slice(0, at))
+		)
+			continue;
+		const footer = at + boundary;
 		if (footer === body.length) continue;
 		const position = offsets.indexOf(footer, start);
 		if (position >= 0)
@@ -457,28 +414,41 @@ function sharedSignatureLength(messages: ComparableBody[]) {
 	return signature;
 }
 
+const joinBlock =
+	/(?<!\S)(?:Microsoft Teams meeting\b(?=\s+(?:Join|Meeting ID:|Dial in))|Teams Meeting\s+Dial in by phone\b|Join (?:the meeting now|(?:with )?Google Meet|Zoom Meeting|Microsoft Teams Meeting|on your computer)\b:?(?=\s*(?:https?:\/\/|<|Meeting ID:|Dial in))|Google (?:Calendar invitation|Meet joining info)\b)/i;
+
+function withoutJoinBlock(body: string) {
+	const join = joinBlock.exec(body);
+	if (!join) return body;
+	const before = body
+		.slice(0, join.index)
+		.trimEnd()
+		.replace(quoteDivider, "")
+		.trimEnd();
+	if (!before) return body;
+	const tail = body.slice(join.index + join[0].length);
+	const end = /\n[ \t]*_{8,}[ \t]*(?=\n)|(?=\n[ \t]*P\.?S\.[ \t])/i.exec(tail);
+	const after = end ? tail.slice(end.index + end[0].length).trim() : "";
+	return after ? `${before}\n\n${after}` : before;
+}
+
+export function cleanEmailBody(body: string, sender: string | null) {
+	return (
+		cleanEmailThread([{ body, sender: "", sender_name: sender }])[0] ?? body
+	);
+}
+
 export function cleanEmailThread(
 	messages: Pick<ThreadMessage, "body" | "sender" | "sender_name">[],
 ) {
 	const senders = new Map<string, ComparableBody[]>();
-	const firstSender = messages[0]?.sender.toLowerCase();
-	const useFallback =
-		firstSender !== undefined &&
-		!messages
-			.slice(1)
-			.some(({ sender }) => sender.toLowerCase() === firstSender);
-	const earlier: EarlierMessages = new Map();
-	const own = messages.map(({ body, sender, sender_name }, index) => {
-		const comparable =
-			index === 0 && useFallback
-				? comparableBody(cleanEmailBody(body, sender_name))
-				: withoutHistory(body, earlier);
-		const message = {
-			...comparable,
-			senderName: sender_name?.trim().toLowerCase() || null,
-		};
-		rememberEarlier(message, earlier);
+	const own = messages.map(({ body, sender, sender_name }) => {
 		const address = sender.toLowerCase();
+		const message = {
+			...comparableBody(withoutHistory(body)),
+			senderName: sender_name?.trim().toLowerCase() || null,
+			senderAddress: address,
+		};
 		const group = senders.get(address);
 		if (group) group.push(message);
 		else senders.set(address, [message]);
@@ -492,7 +462,9 @@ export function cleanEmailThread(
 			message.body = message.body.slice(0, offset).trimEnd() || message.body;
 		}
 	}
-	return own.map(({ body }) => body);
+	return own.map(({ body, senderName, senderAddress }) =>
+		withoutJoinBlock(withoutSignature(body, senderName, senderAddress)),
+	);
 }
 
 export async function readHomeEmailThread(

@@ -151,7 +151,7 @@ function message(
 	return { body, sender, sender_name };
 }
 
-test("keeps a repeated opening inside a reply and cuts a complete bare repeat", () => {
+test("keeps repeated words without a quoted history marker", () => {
 	const first =
 		"Thanks for taking the time to walk through the building with us today. I will send the survey.";
 	const reply =
@@ -164,7 +164,7 @@ test("keeps a repeated opening inside a reply and cuts a complete bare repeat", 
 			message(inline, "sam@example.test", "Sam Partner"),
 			message(`I have the survey. ${first}`, "sam@example.test", "Sam Partner"),
 		]),
-		[first, reply, inline, "I have the survey."],
+		[first, reply, inline, `I have the survey. ${first}`],
 	);
 });
 
@@ -182,6 +182,17 @@ test("keeps a shared closing instruction from the same sender", () => {
 			bodies,
 		);
 	}
+});
+
+test("keeps contact details that the sender uses in a shared instruction", () => {
+	const bodies = [
+		"The plan is ready. Call 555-010-2000 when you arrive.",
+		"I sent the plan. Call 555-010-2000 when you arrive.",
+	];
+	assert.deepEqual(
+		cleanEmailThread(bodies.map((body) => message(body))),
+		bodies,
+	);
 });
 
 test("keeps a shared closing instruction before a shared contact footer", () => {
@@ -296,7 +307,7 @@ test("drops the shared signature by sender address after cutting quotes", () => 
 		cleanEmailThread([
 			message(`${first} ${signature}`),
 			message(
-				`${second} ${signature.toUpperCase()} ${first}`,
+				`${second} ${signature.toUpperCase()} -----Original Message----- ${first}`,
 				"MAYA@example.test",
 				"M. Example",
 			),
@@ -306,6 +317,113 @@ test("drops the shared signature by sender address after cutting quotes", () => 
 		[first, second, third, otherSender],
 	);
 });
+
+const missingHistory = [
+	[
+		"quoted header fields in a different order",
+		"Here is the plan.\n> Subject: An older plan\n> To: Sam Partner\n> Date: Tue, Jan 6, 2026\n> From: Lee Example\n> This message is missing from the archive.",
+	],
+	[
+		"inline header fields in a different order",
+		"Here is the plan. To: Sam Partner Date: Tue, Jan 6, 2026 From: Lee Example <lee@example.test> Subject: An older plan This message is missing from the archive.",
+	],
+	[
+		"wrapped, quoted reply opener",
+		"Here is the plan.\n> On Tue, Jan 6, 2026 at 9:30 AM\n> Lee Example <lee@example.test> wrote:\n> This message is missing from the archive.",
+	],
+	[
+		"inline original-message divider",
+		"Here is the plan. -----Original Message----- This message is missing from the archive.",
+	],
+	[
+		"underscore divider",
+		"Here is the plan.\n________________\nThis message is missing from the archive.",
+	],
+	[
+		"trailing header fragment",
+		"Here is the plan. From: Lee Example <lee@example.test> Date: Tue, Jan 6, 2026 at 9:30 AM",
+	],
+	[
+		"inline header with a long quoted body after the subject",
+		`Here is the plan. From: Lee Example <lee@example.test> Subject: Prior plan ${"Old text. ".repeat(100)}`,
+	],
+	[
+		"single signature with phone, email, address, title and license",
+		"Here is the plan.\nThanks,\nSam Partner\nGeneral Dentist\n123 Example St.\nExample City, TX 75001\nFax: (555) 010-2000\nsam@example.test\nLicense #12345",
+	],
+	[
+		"glued credentials and title",
+		"Here is the plan. Regards, Sam Partner, DMDGeneral Dentist | (555) 010-2000",
+	],
+	[
+		"glued credentials and title with no sign-off",
+		"Here is the plan. Sam Partner,DMDGeneral Dentist Example City, TX",
+	],
+	[
+		"flattened signature with the sender's address",
+		"Here is the plan. Sam Partner Office Manager | +1 (555) 010-2000 | sam@example.test",
+	],
+] as const;
+
+for (const [shape, body] of missingHistory) {
+	test(`cleans a later message with ${shape}`, () => {
+		const first = "Can you send the new plan?";
+		assert.deepEqual(
+			cleanEmailThread([
+				message(first),
+				message(body, "sam@example.test", "Sam Partner"),
+			]),
+			[first, "Here is the plan."],
+		);
+	});
+}
+
+test("keeps a dated sentence before a dated reply opener", () => {
+	const own = "On Jan 5, 2026 we sent the plan. The keys are at the desk.";
+	const quote =
+		"On Tue, Jan 6, 2026 at 9:30 AM Lee Example <lee@example.test> wrote:\nIs the suite open?";
+	assert.equal(cleanEmailBody(`${own}\n\n${quote}`, maya), own);
+	assert.equal(cleanEmailBody(quote, maya), quote);
+});
+
+test("keeps a postscript after meeting instructions and an authored mention of Meet", () => {
+	const before = "Join with Google Meet if the office is closed.";
+	const invite =
+		"Join Microsoft Teams Meeting\nhttps://example.test/join\nMeeting ID: 1234\nPasscode: abc";
+	const after = "P.S. Bring the signed plan.";
+	assert.equal(
+		cleanEmailBody(
+			`${before}\n\n________________\n${invite}\n________________\n${after}`,
+			maya,
+		),
+		`${before}\n\n${after}`,
+	);
+});
+
+test("keeps prose that uses the same words as a mail or meeting marker", () => {
+	const body =
+		"The button says Begin forwarded message: in the preview.\nWe should join the meeting now";
+	assert.equal(cleanEmailBody(body, maya), body);
+});
+
+for (const invite of [
+	"Microsoft Teams meeting\nJoin the meeting now\nMeeting ID: 123 456 789\nPasscode: abc",
+	"Join with Google Meet\nhttps://meet.google.com/abc-defg-hij\nJoin by phone\n(555) 010-2000",
+	"Join Zoom Meeting: https://example.zoom.us/j/123456789 Meeting ID: 123 456 789",
+]) {
+	test(`drops the join instructions after an authored note (${invite.split(/\n| https/)[0]})`, () => {
+		const first = "Are we meeting today?";
+		const reply = "Let's meet at ten.";
+		assert.deepEqual(
+			cleanEmailThread([
+				message(first),
+				message(`${reply}\n\n${invite}`, "sam@example.test", "Sam Partner"),
+			]),
+			[first, reply],
+		);
+		assert.equal(cleanEmailBody(invite, null), invite);
+	});
+}
 
 test("drops recurring calendar boilerplate and keeps a message made entirely of it", () => {
 	const invite = "Teams Meeting Dial in by phone 555-010-2000 View map Guests";
