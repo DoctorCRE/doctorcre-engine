@@ -2230,6 +2230,8 @@ CARR still owns watch settings and delivery. A new subscription sets a baseline 
 
 Each change has `change_id`, `table_name`, `record` (the row's key), `action`, `field`, `old_value`, `new_value`, `actor`, `for_user`, and `changed_at`. The actor is the user or job that saved it. A job's sponsoring user is named where recorded. Changes are in timestamp, change ID, and field order. The read returns the saved fields behind a deal's phase, outcome, close date, owner, parking, open critical dates, and next step owners and dates. A deleted next step keeps its stamped history with the old field value and a null `new_value`. The watch shows a step-completion review only while the subscriber can open its proposal detail. It includes lease versions and option notice dates. A lease watch reads the watched lease's own dates and options, plus the linked deal's changes.
 
+For a phase move, `old_value` is the preceding recorded phase of the same deal, and `new_value` is the phase it moved to. The preceding phase can come from copied history or from a move saved before `since`. If the deal has no earlier recorded phase, `old_value` is null.
+
 Reply IDs come from inbound emails still filed to that deal and present in the subscriber's mailbox. The later of the filing time and that mailbox's capture time sets the boundary.
 
 Once switched, CARR reads this history with an overlapping time window and groups source fields into material changes using its baseline. It keeps policy, lease thresholds, and delivery. The pair `change_id` and `field`, or the reply activity ID, identifies a change for deduplication within a subscription.
