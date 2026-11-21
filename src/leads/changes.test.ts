@@ -160,6 +160,29 @@ test("a lead moved to a company is listed, opens, and can be claimed", async () 
 	);
 });
 
+test("moving a lead as a vendor leaves the destination lead claimable", async () => {
+	const source = randomUUID();
+	const destination = randomUUID();
+	await db.query(`begin;
+		set local engine.job = 'agent';
+		insert into role (slug, label) values ('vendor', 'Vendor');
+		insert into party (id, kind, name, how_found) values
+			('${source}', 'person', 'Example Source', 'referral'),
+			('${destination}', 'company', 'Example Destination', 'referral');
+		insert into party_role (party_id, role, stage) values
+			('${source}', 'lead', 'new'), ('${destination}', 'lead', 'new');
+		commit;`);
+	const { detail } = await board(destination);
+	await db.query(`begin;
+		set local engine.job = 'agent';
+		update party_role set party_id = '${destination}', role = 'vendor', stage = null
+			where party_id = '${source}' and role = 'lead';
+		commit;`);
+	const result = await save(destination, command(detail.base_version, "claim"));
+	assert.equal(result.status, 200, String(result.error));
+	assert.equal((await board(destination)).detail.owner, "joe");
+});
+
 test("unowned active leads can be claimed at any stage, but archived leads cannot", async () => {
 	for (const id of [outreach, nurture]) {
 		const before = (await board(id)).detail;
