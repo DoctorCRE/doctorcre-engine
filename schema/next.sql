@@ -4059,3 +4059,39 @@ create policy doc_link_credential on doc_link for select to engine using (
 revoke all on doc_link from public, engine_reader;
 grant select, insert, delete on doc_link to engine;
 grant update (credential_hash, issued_at, last_seen_at, readiness) on doc_link to engine;
+
+create table doc_judgment_job (
+	id uuid primary key default gen_random_uuid(),
+	owner_user_id uuid not null,
+	is_account_partner boolean not null generated always as (true) stored,
+	activity_id uuid not null,
+	idempotency_key uuid not null,
+	created_at timestamptz not null default now(),
+	kind text not null,
+	destinations jsonb,
+	state text not null default 'queued',
+	claim_id uuid unique,
+	claim_until timestamptz,
+	claim_source_hash bytea,
+	result jsonb check (jsonb_typeof(result) = 'object'),
+	unique (owner_user_id, idempotency_key),
+	foreign key (owner_user_id, is_account_partner) references app_user (id, is_account_partner),
+	foreign key (activity_id, owner_user_id) references email_mailbox on delete cascade,
+	check ((kind = 'email_summary' and destinations is null) or
+		(kind = 'email_filing' and destinations is not null and jsonb_typeof(destinations) = 'array'
+			and destinations <> '[]'::jsonb)),
+	check ((state = 'working' and claim_id is not null and claim_until is not null
+			and claim_source_hash is not null and result is null)
+		or (state in ('queued', 'failed', 'answered') and claim_id is null and claim_until is null
+			and claim_source_hash is null and ((state = 'answered') = (result is not null)))
+	)
+);
+
+alter table doc_judgment_job enable row level security;
+create policy doc_judgment_owner on doc_judgment_job to engine using (
+	owner_user_id = nullif(current_setting('engine.user_id', true), '')::uuid
+	and nullif(current_setting('engine.job', true), '') is null
+);
+revoke all on doc_judgment_job from public, engine_reader;
+grant select on doc_judgment_job to engine;
+grant update (state, claim_id, claim_until, claim_source_hash, result) on doc_judgment_job to engine;

@@ -27,4 +27,4 @@
 - [ ] **Save draft and open review** opens the existing reply review for that draft. A draft already on the email, or a pending draft in its Outlook conversation, opens with its saved text. The partner reviews and submits mail in that review.
 - [ ] If a save fails, the edit stays visible and the message says what happened. A lost response offers **Retry** for the same save. A target or step that changed asks the partner to open the record or ask Doc again. Reloading after success shows the saved result once.
 
-The engine owns the [conversation and turn contract](../new-database.md#doc-conversations-and-turns). Verify these lines on a signed-in app against the practice copy as both partners, including a mailbox the other partner cannot open.
+The engine owns the [conversation and turn contract](../new-database.md#doc-conversations-and-turns). Mail jobs that need judgment use the partner's link after any waiting chat turns and stay out of Recent chats. Verify these lines on a signed-in app against the practice copy as both partners, including a mailbox the other partner cannot open.

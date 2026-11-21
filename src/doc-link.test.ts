@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createTestHarness } from "wrangler";
 import { withPartnerAuth } from "./partner-auth.ts";
+import { isArguments } from "./save-door.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const appOrigin = "https://app.example.test";
@@ -301,11 +302,15 @@ test("Doc link migration, private credentials and Mac polling", {
 				sources: [],
 			},
 		};
-		const result = (headers: Record<string, string>, origin = engineOrigin) =>
+		const result = (
+			headers: Record<string, string>,
+			origin = engineOrigin,
+			payload: object = completion,
+		) =>
 			server.fetch(`${origin}${linkPath}/result`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...headers },
-				body: JSON.stringify(completion),
+				body: JSON.stringify(payload),
 			});
 		const bearer = { Authorization: `Bearer ${credential}` };
 		assert.equal(
@@ -361,6 +366,160 @@ test("Doc link migration, private credentials and Mac polling", {
 		const otherCredential = await issue(second, `?owner_user_id=${appUserId}`);
 		assert.equal((await poll(otherCredential)).status, 204);
 		assert.equal((await presence(second)).connected, true);
+		await t.test(
+			"mail judgment uses the same owner slot and lease as turns",
+			async (t) => {
+				await db.query("select set_config('engine.user_id', $1, false)", [
+					appUserId,
+				]);
+				t.after(() => db.query("reset engine.user_id"));
+				const activity = randomUUID();
+				const deal = { kind: "deal", id: randomUUID() };
+				await db.query(
+					`with source as (
+					insert into next.activity (id, kind, happened_at)
+					values ($1, 'email', now()) returning id
+				), about as (
+					insert into next.activity_about (activity_id, party_id)
+					select id, $2 from source
+				), message as (
+					insert into next.email (activity_id, sender, message_id, subject, body)
+					select id, 'sam@example.test', 'example-message', 'Visit', 'Tour is Thursday.' from source
+					returning activity_id
+				)
+				insert into next.email_mailbox (activity_id, user_id)
+				select activity_id, $2 from message`,
+					[activity, appUserId],
+				);
+				await db.query(
+					`insert into next.doc_judgment_job (owner_user_id, activity_id, idempotency_key, created_at, kind, destinations)
+				values ($1, $2, gen_random_uuid(), now() - interval '1 minute', 'email_summary', null),
+					($1, $2, gen_random_uuid(), now(), 'email_filing', $3)`,
+					[appUserId, activity, JSON.stringify([deal])],
+				);
+				const ready = { "Doc-Link-Readiness": "ready" };
+				const capable = { ...ready, "Doc-Link-Work": "judgment" };
+				const complete = async (
+					claim_id: string,
+					outcome: object,
+					token = credential,
+				) =>
+					(
+						await result({ Authorization: `Bearer ${token}` }, engineOrigin, {
+							claim_id,
+							kind: "judgment",
+							outcome,
+						})
+					).status;
+				const fetchClaim = async (headers: Record<string, string>) => {
+					const response = await poll(credential, headers);
+					assert.equal(response.status, 200);
+					const body: unknown = await response.json();
+					assert.ok(isArguments(body));
+					const { claim_id, claim_until, ...work } = body;
+					assert.equal(typeof claim_until, "string");
+					assert.ok(typeof claim_id === "string");
+					return { claim_id, work };
+				};
+				const summary = {
+					summary: "The tour is Thursday.",
+					action_title: null,
+				};
+				const summaryAnswer = { kind: "answered", result: summary };
+				const expire = (id: string) =>
+					db.query(
+						"update next.doc_judgment_job set claim_until = now() - interval '1 second' where claim_id = $1",
+						[id],
+					);
+				assert.equal((await poll(credential, ready)).status, 204);
+				assert.equal((await poll(otherCredential, capable)).status, 204);
+				const firstJob = await fetchClaim(capable);
+				assert.deepEqual(firstJob.work, {
+					kind: "email_summary",
+					activity_id: activity,
+					subject: "Visit",
+					body: "Tour is Thursday.",
+				});
+				assert.equal(
+					await complete(firstJob.claim_id, summaryAnswer, otherCredential),
+					404,
+				);
+				assert.equal(
+					await complete(firstJob.claim_id, { kind: "plan_limited" }),
+					204,
+				);
+				const retry = await fetchClaim(capable);
+				assert.notEqual(retry.claim_id, firstJob.claim_id);
+				await expire(retry.claim_id);
+				assert.equal(await complete(retry.claim_id, summaryAnswer), 404);
+
+				const current = await fetchClaim(capable);
+				assert.notEqual(current.claim_id, retry.claim_id);
+				await db.query(
+					`insert into next.doc_turn (conversation_id, owner_user_id, position, idempotency_key,
+					request_hash, question, state)
+				select id, $1, 2, gen_random_uuid(), 'example', 'Find a client', 'queued'
+				from next.doc_conversation where owner_user_id = $1`,
+					[appUserId],
+				);
+				assert.equal((await poll(credential, ready)).status, 204);
+				assert.equal(await complete(current.claim_id, summaryAnswer), 204);
+				assert.equal(await complete(current.claim_id, summaryAnswer), 404);
+				const turn = await fetchClaim(capable);
+				assert.equal(turn.work.kind, "turn");
+				assert.equal((await poll(credential, capable)).status, 204);
+				await db.query(
+					"update next.doc_turn set state = 'failed', claim_id = null, claim_until = null, claim_state = null where claim_id = $1",
+					[turn.claim_id],
+				);
+
+				const filing = await fetchClaim(capable);
+				assert.deepEqual(filing.work.destinations, [deal]);
+				const fact = {
+					destination: deal,
+					text: "A tour is planned.",
+					quote: "Tour is Thursday.",
+				};
+				const filingAnswer = (f: typeof fact) => ({
+					kind: "answered",
+					result: { facts: [f] },
+				});
+				assert.equal(
+					await complete(
+						filing.claim_id,
+						filingAnswer({ ...fact, quote: "Made up." }),
+					),
+					422,
+				);
+				assert.equal(
+					await complete(
+						filing.claim_id,
+						filingAnswer({
+							...fact,
+							destination: { ...deal, id: randomUUID() },
+						}),
+					),
+					422,
+				);
+				await db.query(
+					"update next.email set body = 'Tour is Friday.' where activity_id = $1",
+					[activity],
+				);
+				assert.equal(await complete(filing.claim_id, filingAnswer(fact)), 404);
+				await expire(filing.claim_id);
+				const updated = await fetchClaim(capable);
+				assert.equal(updated.work.body, "Tour is Friday.");
+				const answer = filingAnswer({ ...fact, quote: "Tour is Friday." });
+				assert.equal(await complete(updated.claim_id, answer), 204);
+				const { rows } = await db.query(
+					"select kind, result from next.doc_judgment_job order by created_at",
+				);
+				assert.deepEqual(rows, [
+					{ kind: "email_summary", result: summary },
+					{ kind: "email_filing", result: answer.result },
+				]);
+			},
+		);
 		assert.equal(
 			(await revoke(second, `?owner_user_id=${appUserId}`)).status,
 			204,
