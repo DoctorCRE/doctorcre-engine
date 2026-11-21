@@ -1651,11 +1651,11 @@ A signed-in partner issues a credential from the app and gives it to their Mac's
 | `POST /api/engine/doc/link`        | `201 { credential }`. Shows the new credential once, replaces any previous credential, and resets presence. |
 | `POST /api/engine/doc/link/revoke` | `204`. Revokes the partner's credential. Safe to repeat.                                                    |
 
-The Mac polls the engine directly over HTTPS about every two seconds using `POST /api/engine/doc/link/claim` with `Authorization: Bearer <credential>` and no cookies. An authenticated poll returns `204` when there is no work. Turn and job delivery is tracked in #978. The engine derives the owner from the credential. An invalid credential or a request with cookies returns `401`. The next poll with an old credential after rotation or revocation returns `401`.
+The Mac polls the engine directly over HTTPS about every two seconds using `POST /api/engine/doc/link/claim` with `Authorization: Bearer <credential>` and no cookies. An authenticated poll returns `204` when there is no work. Turn and job delivery is tracked in #978. The engine derives the owner from the credential. An invalid credential or a request with cookies returns `401`. A poll that locks the credential first may return `204` even if a rotation or revocation is waiting. A poll that starts after the change commits returns `401` with the old credential.
 
-Presence is true when the current credential last authenticated within 30 seconds. Apply [the Doc link migration](../schema/add-doc-link.sql) to an existing database. Until then, authenticated app requests to the link routes and well-formed Mac polls return `503 { error: "doc_link_unavailable" }`.
+Presence is true for 30 seconds after the last recorded successful poll. The first successful poll records presence. Later successful polls refresh it when the stored time is at least 15 seconds old. Apply [the Doc link migration](../schema/add-doc-link.sql) to an existing database. Until then, authenticated app requests to the link routes and well-formed Mac polls return `503 { error: "doc_link_unavailable" }`.
 
-`next.doc_link` keeps one row per account partner with an owner ID, a SHA-256 credential hash, the issue time, and the last authenticated poll time. The engine uses the hash to find a candidate owner, then compares fixed-length digests in constant time under the row lock. The partner's stamped writer manages the row. General readers and jobs have no access.
+`next.doc_link` keeps one row per account partner with an owner ID, a SHA-256 credential hash, the issue time, and the last recorded poll time. The engine uses the hash to find a candidate owner, then compares fixed-length digests in constant time under the row lock. The partner's stamped writer manages the row. General readers and jobs have no access.
 
 ### Confirmed saves and receipts
 

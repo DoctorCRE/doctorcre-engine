@@ -93,6 +93,16 @@ export function authenticateDocLink(connection: string, credential: string) {
 			.updateTable("doc_link")
 			.set({ last_seen_at: sql`clock_timestamp()` })
 			.where("owner_user_id", "=", owner)
+			.where((eb) =>
+				eb.or([
+					eb("last_seen_at", "is", null),
+					eb(
+						"last_seen_at",
+						"<=",
+						sql<string>`clock_timestamp() - interval '15 seconds'`,
+					),
+				]),
+			)
 			.execute();
 		return true;
 	});

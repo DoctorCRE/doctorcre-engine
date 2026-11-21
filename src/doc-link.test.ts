@@ -269,6 +269,7 @@ test("Doc link migration, private credentials and Mac polling", {
 
 		async function waitForBlockedRequest(
 			request: Promise<unknown>,
+			label: string,
 			blocker?: number,
 		) {
 			let finished = false;
@@ -286,53 +287,100 @@ test("Doc link migration, private credentials and Mac polling", {
 				);
 				if (rows[0]) return rows[0].pid;
 			}
-			assert.fail(
-				blocker === undefined
-					? "Credential change did not wait for the fixture row lock"
-					: "Poll did not wait for the credential change",
-			);
+			assert.fail(`${label} did not wait for the row lock`);
 		}
 
-		async function changeWhilePolling<T>(
-			change: () => Promise<T>,
-			oldCredential: string,
+		async function queueLinkRequests<First, Second>(
+			startFirst: () => Promise<First>,
+			startSecond: () => Promise<Second>,
 		) {
 			await db.query("begin");
 			await db.query(
 				"select 1 from next.doc_link where owner_user_id = $1 for update",
 				[appUserId],
 			);
-			const changing = change();
-			let polling: ReturnType<typeof poll> | undefined;
+			const firstRequest = startFirst();
+			let secondRequest: Promise<Second> | undefined;
 			try {
-				const changePid = await waitForBlockedRequest(changing);
-				polling = poll(oldCredential);
-				await waitForBlockedRequest(polling, changePid);
+				const firstPid = await waitForBlockedRequest(
+					firstRequest,
+					"First request",
+				);
+				secondRequest = startSecond();
+				await waitForBlockedRequest(secondRequest, "Second request", firstPid);
 			} finally {
 				await db.query("rollback");
-				await Promise.allSettled([changing, polling]);
+				await Promise.allSettled([firstRequest, secondRequest]);
 			}
-			const result = await changing;
-			assert.equal((await polling).status, 401);
-			return result;
+			return Promise.all([firstRequest, secondRequest]);
 		}
 
-		const replacement = await changeWhilePolling(
+		const [replacement, pollDuringRotation] = await queueLinkRequests(
 			() => issue(first),
-			credential,
+			() => poll(credential),
 		);
+		assert.equal(pollDuringRotation.status, 401);
 		assert.equal((await poll(credential)).status, 401);
 		assert.equal((await presence(first)).connected, false);
 		assert.equal((await poll(replacement)).status, 204);
 		assert.equal((await presence(first)).connected, true);
-		const revoked = await changeWhilePolling(() => revoke(first), replacement);
+		const [revoked, pollDuringRevoke] = await queueLinkRequests(
+			() => revoke(first),
+			() => poll(replacement),
+		);
 		assert.equal(revoked.status, 204);
+		assert.equal(pollDuringRevoke.status, 401);
 		assert.equal((await revoke(first)).status, 204);
 		assert.equal((await poll(replacement)).status, 401);
 		assert.deepEqual(await presence(first), {
 			connected: false,
 			issued_at: null,
 		});
+
+		await t.test(
+			"polls refresh presence at most every 15 seconds and keep their order with revoke",
+			async () => {
+				async function lastSeen() {
+					const { rows } = await db.query<{ last_seen_at: string | null }>(
+						"select last_seen_at::text from next.doc_link where owner_user_id = $1",
+						[appUserId],
+					);
+					return rows[0]?.last_seen_at;
+				}
+
+				const credential = await issue(first);
+				assert.equal((await poll(credential)).status, 204);
+				const firstSeen = await lastSeen();
+				assert.ok(firstSeen);
+				assert.equal((await poll(credential)).status, 204);
+				const secondSeen = await lastSeen();
+
+				await db.query(
+					`update next.doc_link set last_seen_at = clock_timestamp() - interval '16 seconds'
+				where owner_user_id = $1`,
+					[appUserId],
+				);
+				const agedSeen = await lastSeen();
+				assert.equal((await poll(credential)).status, 204);
+				const refreshedSeen = await lastSeen();
+				assert.ok(refreshedSeen);
+				assert.notEqual(refreshedSeen, agedSeen);
+				assert.equal((await presence(first)).connected, true);
+
+				const [pollBeforeRevoke, revoked] = await queueLinkRequests(
+					() => poll(credential),
+					() => revoke(first),
+				);
+				assert.equal(pollBeforeRevoke.status, 204);
+				assert.equal(revoked.status, 204);
+				assert.equal((await poll(credential)).status, 401);
+				assert.equal(
+					secondSeen,
+					firstSeen,
+					"a poll inside 15 seconds does not rewrite presence",
+				);
+			},
+		);
 	} finally {
 		await server.close();
 	}
