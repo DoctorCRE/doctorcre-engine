@@ -9,11 +9,6 @@ const storedDate =
 	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
 const markdownLink = /\[([^\]]+)\]\(((?:[^\s()]|\([^\s()]*\))+)\)/g;
-const url = /https?:\/\/\S+/gi;
-const urlOrMarkdownLink = new RegExp(
-	`${url.source}|${markdownLink.source}`,
-	"gi",
-);
 
 export function homeDisplayText(text: string | null) {
 	return (text ?? "")
@@ -76,13 +71,36 @@ function stepInstruction(what: string) {
 	let marker = "\uE000";
 	while (what.includes(marker)) marker += "\uE000";
 	const mask = (link: string) => `${marker}${urls.push(link) - 1}${marker}`;
-	const masked = what.replace(
-		urlOrMarkdownLink,
-		(match, label?: string, destination?: string) =>
-			label === undefined || destination === undefined
-				? mask(match)
-				: `${label.replace(url, mask)} (${mask(destination)})`,
-	);
+	const linkStart = /https?:\/\/\S+|\[((?:\\.|[^[\]\\])*)\]\(/gi;
+	let masked = "";
+	let sectionStart = 0;
+	for (let match = linkStart.exec(what); match; match = linkStart.exec(what)) {
+		masked += what.slice(sectionStart, match.index);
+		const [link, label] = match;
+		if (label === undefined) {
+			masked += mask(link);
+		} else {
+			const before = what[match.index - 1];
+			if (!label || /[\\\r\n]/.test(label) || before === "\\" || before === "!")
+				return what;
+			const start = linkStart.lastIndex;
+			let end = start;
+			let depth = 1;
+			while (depth > 0 && end < what.length) {
+				const character = what.charAt(end);
+				if (/[\s\\<>]/.test(character)) return what;
+				if (character === "(") depth++;
+				if (character === ")") depth--;
+				end++;
+			}
+			if (depth !== 0 || end === start + 1) return what;
+			masked += mask(`${label} (${what.slice(start, end - 1)})`);
+			linkStart.lastIndex = end;
+		}
+		sectionStart = linkStart.lastIndex;
+	}
+	masked += what.slice(sectionStart);
+	if (masked.includes("](")) return what;
 	return homeStepText(masked.replace(/\(\s*T-\d+\s*\)/gi, " ")).replace(
 		new RegExp(`${marker}(\\d+)${marker}`, "g"),
 		(_, index: string) => urls[Number(index)] ?? "",

@@ -54,6 +54,7 @@ for (const opening of [
 for (const url of [
 	"https://example.test/C-026/2026-11-27?rev=2",
 	"https://example.test/plan(revised)/C-026/2026-11-27?rev=2",
+	"/p(a(b))/C-026",
 ]) {
 	test(`a Markdown link keeps its full destination ${url}`, () => {
 		assert.deepEqual(
@@ -66,6 +67,23 @@ for (const url of [
 				title: "Review the plan",
 				instruction: `Read the plan (${url}) before replying`,
 			},
+		);
+	});
+}
+
+for (const what of [
+	'Read [the plan](/p(a(b))/C-026 "Reference title") before replying',
+	"Read [the plan](/p(a(b))/C-026",
+	"Read [the [sample] plan](/p(a(b))/C-026) before replying",
+]) {
+	test(`preserves the original instruction when the link is unclear: ${what}`, () => {
+		assert.deepEqual(
+			stepCopy({
+				what,
+				item_title: "Review the plan",
+				context_label: "Example Deal",
+			}),
+			{ title: "Review the plan", instruction: what },
 		);
 	});
 }
