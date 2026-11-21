@@ -137,7 +137,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] The new database keeps each deal's client website registration so the deal page can still show its Client website link after the switch (owner, 2026-11-18, #728).
 - [ ] A deal with no website says "No client website linked."
 - [ ] Set up client website stays below the deal's facts and asks for the website name and a password (owner, 2026-11-18).
-- [ ] Next steps shows each person's open step with its owner and due date in words. A late step also shows "N days late". A Home card for one of the steps opens here with that step in view.
+- [ ] Next steps shows each person's open step with its owner and due date in words. Each open step says who set it and when. If the setter was not recorded, it shows when alone. A late step also shows "N days late". A Home card for one of the steps opens here with that step in view.
 - [ ] Closing or losing a deal leaves its steps unchanged. On the deal page, steps still open appear under "Open before this deal ended" with their due dates. Ended deals never count a step as late anywhere on Deals.
 - [ ] Either partner can choose Done on any open next step on a deal they can open, including a step owned by the other partner or still open on an ended deal. Each row puts the step text and its details next to a keyboard-accessible Done button with a touch target at least 44 pixels tall and wide. Rows use the app's colors in both themes without individual card outlines.
 - [ ] Done uses the same engine save as Home's Mark done (door 18, end by step ID). It sends the version shown on the deal page. After saving, the step leaves the open list and Timeline shows its completion and who marked it done.
