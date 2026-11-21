@@ -225,8 +225,9 @@ test("meetings cover all of today in Central time including ended ones and hide 
 		(((now() at time zone 'America/Chicago')::date + 1)::timestamp at time zone 'America/Chicago') as e`;
 	const t = (await db.query<{ n: string; s: string; e: string }>(q)).rows[0];
 	assert.ok(t);
-	const now = Date.parse(t.n);
 	const start = Date.parse(t.s);
+	const now = Date.parse(t.n);
+	const meetingTime = start + 12 * 3_600_000;
 	const end = Date.parse(t.e);
 	const hr = 3_600_000;
 	const iso = (ms: number) => new Date(ms).toISOString();
@@ -244,12 +245,12 @@ test("meetings cover all of today in Central time including ended ones and hide 
 		warnings: [],
 		items: [
 			mtg(start - hr, start, "Yesterday midnight"),
-			mtg(start, Math.max(start + 1_000, now - 60_000), "Ended earlier today"),
-			mtg(now - 300_000, now + 300_000, "Lease review", {
+			mtg(start, meetingTime - 60_000, "Ended earlier today"),
+			mtg(meetingTime - 300_000, meetingTime + 300_000, "Lease review", {
 				organizer: p("Example Partner One", "joe@example.test"),
 				attendees: [p("Dr. Example", "dr.example@example.test"), p("Bad", "x")],
 			}),
-			mtg(now - 200_000, now + 400_000, "Solo intro", {
+			mtg(meetingTime - 200_000, meetingTime + 400_000, "Solo intro", {
 				attendees: [p("Solo Clinic", "solo@example.test")],
 			}),
 			mtg(end, end + hr, "Tomorrow midnight"),
