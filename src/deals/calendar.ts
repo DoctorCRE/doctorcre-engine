@@ -124,7 +124,7 @@ async function readCalendarSteps(db: Transaction<DB>, now: string) {
 		return {
 			id: step.id,
 			what: title,
-			why: instruction || null,
+			why: instruction,
 			owner: step.owner,
 			record_label: step.context_label,
 			due_on: step.due_on,

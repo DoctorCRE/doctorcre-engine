@@ -6,14 +6,22 @@ const longInstruction =
 	"Confirm the accessibility requirements for the proposed suite with the landlord and ask for the revised drawing in writing.";
 const longUrl = `https://example.test/plan?Next=${"a".repeat(100)}`;
 
-for (const [scenario, item_title, what, title] of [
+for (const [scenario, item_title, what, title, instruction = what] of [
 	["a saved title", " Send the plan ", longInstruction, "Send the plan"],
-	["blank saved title", "  ", "Check the suite.", "Check the suite."],
+	["blank saved title", "  ", "Check the suite.", "Check the suite.", null],
 	[
 		"a short instruction",
 		null,
 		"Call the office | Ask for Pat",
 		"Call the office | Ask for Pat",
+		null,
+	],
+	[
+		"a saved title that matches its instruction",
+		"Send the plan",
+		"Send the plan",
+		"Send the plan",
+		null,
 	],
 	["a long single sentence", null, longInstruction, "Example Vendor"],
 	[
@@ -22,14 +30,22 @@ for (const [scenario, item_title, what, title] of [
 		`Review ${longUrl}`,
 		"Example Vendor",
 	],
+	["an empty display instruction", null, "C-026", "Example Vendor", null],
+	[
+		"a short URL",
+		null,
+		"Read https://example.test/plan?a=b",
+		"Read https://example.test/plan?a=b",
+		null,
+	],
 	["a long word", null, "e\u0301".repeat(91), "Example Vendor"],
 ] as const) {
-	test(`shows the whole instruction below the title for ${scenario}`, () => {
+	test(`shows distinct heading and body text for ${scenario}`, () => {
 		assert.deepEqual(
 			stepCopy({ what, item_title, context_label: "Example Vendor" }),
 			{
 				title,
-				instruction: what,
+				instruction,
 			},
 		);
 	});

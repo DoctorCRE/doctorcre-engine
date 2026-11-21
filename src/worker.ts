@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-
+import { activityDealAttribution } from "./activity/deal-attribution.ts";
 import { dealNoteDoor } from "./activity/deal-note.ts";
 import { emailSummary } from "./activity/email-summary.ts";
 import { filedEmails } from "./activity/filed-emails.ts";
@@ -196,6 +196,7 @@ partnerApp.route("/", partnerGoogle);
 partnerApp.get("/auth/session", requirePartnerSession, partnerSessionStatus);
 partnerApp.post("/auth/signout", requirePartnerSession, partnerSignOut);
 partnerApp.use("/api/engine/*", requirePartnerSession);
+partnerApp.route("/api/engine", activityDealAttribution);
 partnerApp.route("/", partnerApi);
 partnerApp.route("/api/engine/doc", docRoutes());
 partnerApp.route("/api/engine/doc", docLinkRoutes);

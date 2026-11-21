@@ -584,9 +584,45 @@ The November 18 rehearsal had zero critical dates with kind `other` and note "Ph
 
 ## Tours as meetings
 
-A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal; the property links support a later property read. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
+A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal, and the property links support a later property read. The existing kind check and checked, unique links apply.
 
 Moving today's rows across, each logged `activity` of kind `tour` becomes a meeting, retaining its actual time and summary. Preserve its `party_id` and map every linked client, lead and vendor to that record's party in `activity_about`. Keep its deal link when present; a lead or client tour needs no invented deal. Old activity rows have no property column. Add visited properties from a user's confirmation of actual stops or a record of a completed visit naming those properties. If a tour record and its logged activity describe the same completed visit, they become one meeting. A planned route or appointment alone does not prove a visit happened. A meeting with known party links still moves when its deal or properties are unknown; only a tour with no resolvable record waits for a partner to fix it. Route order, appointments, client packets, share links, shortlists, comments and landlord registrations do not move in this slice. The owner accepted meetings only on #196, D5; a later planner can use the same parties, deals and properties.
+
+### Planned tours on a deal
+
+The proposed `next` schema change for [#1107](https://github.com/DoctorCRE/doctorcre-engine/issues/1107) supports the [deal page](screens/deals.md#tours). The production migration needs the owner's approval. The planner starts empty. The old system has zero deal-linked plans and one unlinked plan, which stays there. The completed-tour copy above still applies.
+
+- `tour_plan` has its own ID, a required `deal_id` referencing `deal`, a required `planned_on` calendar date, and optional internal `notes`. Each plan belongs to one deal for its lifetime. Access follows the deal for both partners. Saves use the signed-in partner's usual change stamp.
+- `tour_stop` references a plan and a `property`. Partners pick an existing property or create one with an address and optional name when no existing property matches. A stop's required positive `position` is unique within its plan. The database requires at least one stop per saved plan. Save the date, notes, and full ordered stop list together. Refuse a stale edit without changing the plan or its stops.
+- A nullable, unique `completed_activity_id` on `tour_plan` references a meeting. A nullable `cancelled_at` records when a partner cancelled, and change history records who cancelled. A plan can have at most one of these values. The deal's planned list reads plans with neither value. Only a plan in that list can be edited, completed, or cancelled. Cancelling a plan creates no activity.
+- Completion saves the meeting, its links, and the plan's completion link together. The meeting uses the confirmed local visit date and time. Add one `activity_about` row for the deal and each distinct confirmed visited property, including off-plan visits, plus known parties the visit concerns. The original plan and its stop order stay on record. A retry or a second partner's completion returns the same meeting.
+- The client stop list preview and copied text read the saved date and stops in order, using the current names and addresses on `property`. Internal notes stay on the plan. The partner sends the copied list from Outlook. The engine stores no separate document or tour share record.
+
+### Old planner capabilities outside this design
+
+The old planner at `carr-system` commit `7a8ca32` has the following capabilities outside the deal-page planner.
+
+- A separate Tours library for browsing and creating tours.
+- Standalone plans for a client or a work record without a deal.
+- Custom tour names and stop labels.
+- A property search map with filters and drawing tools.
+- A saved property selection cart before a property joins the tour.
+- Property source evidence and rights reviews.
+- Coordinate review for a property's access point.
+- Separate route start and end points.
+- Routing-provider optimization.
+- Route versions with approval and explicit links between replaced stops.
+- Held and excluded stop states.
+- Per-stop appointment windows and public appointment notes.
+- Turn-by-turn navigation with return to the current stop.
+- Internal cheat-sheet autosave, revision history, and restore.
+- A client map with published property points.
+- A client packet with property facts, media, and publication approval.
+- PDF rendering, review, and download.
+- Shared links with scopes, expiry, rotation, and revocation.
+- Client shortlist editing.
+- Client comment submission and the planner's feedback view. Partners review existing feedback on Home.
+- Landlord registrations.
 
 ## Marketing
 
@@ -1474,6 +1510,14 @@ The new detail read returns `correspondence`, an array of email messages and mee
 
 Both partners' open board cards and deal pages return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The reader database role can read the fields used to form the link.
 
+### Activity deal attribution
+
+`GET /api/engine/activities/{activity_id}/deal-attribution` takes the exact activity UUID from the deal's history and requires a PartnerApp session. Either partner can read attribution for activity filed to a shared deal.
+
+- With one deal in `activity_about`, the read returns `{ kind: "credited", deal: { id, name } }`.
+- With several deals, the read returns `{ kind: "ambiguous", candidates: [{ id, name }, ...] }`, ordered by deal name and ID. None receives credit.
+- With no deal link or no matching activity, the read returns `404 not_found`. A signed-out request returns `401`.
+
 ### Call recorder context
 
 `GET /api/engine/call-context` reads the new database for a signed-in partner. Pass 1 to 50 distinct deal UUIDs as repeated `deal_id` query fields. A missing list, invalid UUID, duplicate UUID (ignoring case), or oversized batch returns `400 invalid_field_value`.
@@ -1566,9 +1610,9 @@ The [Home dashboard](screens/home-inbox.md) requests `?view=dashboard` for **Rem
 
 Reminders includes open steps due today or earlier and undated follow-ups on the same eligible records as the [Today panel](#today-panel). Past-due deal and vendor cards get calendar days late in Central time. Pending reply drafts and other partner decisions each appear once. Held, snoozed, and processing work belongs in In motion and waiting. A future dated step stays off Home until its due day. Lead-only steps and their completion reviews stay with the lead, including held or snoozed steps. Completed steps, sent drafts, and other finished cards stay in their record history. Calendar outcome reviews join today's meeting tile when the meeting is in it. An outstanding outcome for an earlier day belongs in Reminders.
 
-The response uses the app's `home-inbox.v5` card fields and carries `home_mark_drop: true` and `home_proposal_drop: true`. Steps, call follow-ups, completion reviews, suggestion groups, reply drafts, checklist reminders and tour feedback use a plain-word `title`, a one-line `why` from recorded facts and a `primary_action` label. Step cards follow the [Home step title rule](screens/home-inbox.md#every-card) and include the full display instruction in `why`. Pending decisions use the title for their kind with the recorded name and put the saved instruction, summary, or feedback in `why`. The app uses existing IDs and links to run the action. Display text omits copied client, lead and vendor codes, loop numbers, lease offsets and Markdown. The saved step and source evidence keep their original text. Dropped call follow-ups and Home updates stay off Home for that user. It includes the step's date, destination and linked source when known. A call source includes its date, contact when known, summary and quote. An accepted suggestion links a step to its email or meeting. The step's change ID gives `action_version`, and `base_version` includes the mark's revision and current disposition. An available Undo uses the exact `action_version` of the signed-in owner’s direct completion. A step completed by accepting a proposal has no Undo.
+The response uses the app's `home-inbox.v5` card fields and carries `home_mark_drop: true` and `home_proposal_drop: true`. Steps, call follow-ups, completion reviews, suggestion groups, reply drafts, checklist reminders and tour feedback use a plain-word `title`, a one-line `why` from recorded facts and a `primary_action` label. Step cards follow the [Home step title rule](screens/home-inbox.md#every-card) and include the full display instruction in `why` when it differs from the heading. Pending decisions use the title for their kind with the recorded name and put the saved instruction, summary, or feedback in `why`. The app uses existing IDs and links to run the action. Display text omits copied client, lead and vendor codes, loop numbers, lease offsets and Markdown. The saved step and source evidence keep their original text. Dropped call follow-ups and Home updates stay off Home for that user. It includes the step's date, destination and linked source when known. A call source includes its date, contact when known, summary and quote. An accepted suggestion links a step to its email or meeting. The step's change ID gives `action_version`, and `base_version` includes the mark's revision and current disposition. An available Undo uses the exact `action_version` of the signed-in owner’s direct completion. A step completed by accepting a proposal has no Undo.
 
-A deal-step card has `open_url` set to `/deals?deal={deal_id}&focus=next-step&step={next_step_id}`. The `step` value is the `next_step.id` of the card's step, also carried as `action_id`. Match it to the step row's `id` in the deal detail's `next_actions`. New-schema deal detail adds `display_title` and `display_instruction` using the same rule, alongside the stored `title` and `description`. Those rows return the recorded creation time as `set_at`, the creator's name as `set_by` when known, and `set_from` for a linked call, email, meeting or automatic follow-up schedule. Copies without creation history have no attributed creator. Call follow-ups open the call. A building-only step uses `/deals?deal={deal_id}` when exactly one open deal is linked through `deal_property`. Its `open_url` is null when zero or several linked deals are open.
+A deal-step card has `open_url` set to `/deals?deal={deal_id}&focus=next-step&step={next_step_id}`. The `step` value is the `next_step.id` of the card's step, also carried as `action_id`. Match it to the step row's `id` in the deal detail's `next_actions`. New-schema deal detail adds `display_title` and `display_instruction` using the same rule, alongside the stored `title` and `description`. `display_instruction` is null when the instruction is empty or matches `display_title`. Those rows return the recorded creation time as `set_at`, the creator's name as `set_by` when known, and `set_from` for a linked call, email, meeting or automatic follow-up schedule. Copies without creation history have no attributed creator. Call follow-ups open the call. A building-only step uses `/deals?deal={deal_id}` when exactly one open deal is linked through `deal_property`. Its `open_url` is null when zero or several linked deals are open.
 
 The prospect detail link `/deals?prospect={party_id}&focus=follow-up&step={next_step_id}` remains available from the prospect. The prospect detail accepts `?step={next_step_id}` and returns the requested completed follow-up as `completed_follow_up`, or `null` if that step is unavailable on the prospect. Open steps match by `follow_ups[].next_step_id`. Both carry the same attribution fields as deal steps. The lane and its ordering use open follow-ups.
 
@@ -1618,13 +1662,13 @@ The response is `{ ok: true, schema_version: "home-today.v1", today, viewer, own
 
 `reminders` splits the two partners' open dated `next_step` rows due on or before today (excluding future holds, active snoozes, and dropped call follow-ups; deal critical dates are not reminders) into `late` and `upcoming`. Like the Home dashboard, it lists steps on deals, buildings, parties with a vendor role, and people at one or more current vendor companies. A vendor qualifies even when the party or one of the person's companies also has a lead role. A company link is current if its start is unknown or on or before the request's Central date and its end is absent or after that date. Steps tied only to leads or other records are excluded. Holds and snoozes end by the request time. A healthy section has `reason: null`. Each `late` item carries calendar `days_late` and `late_label` (`"1 day late"`, `"N days late"`). Each step owned by the signed-in partner carries its canonical Home card `home_item_id` for the inbox without a query parameter, even when the inbox list cuts it off. Other steps have `home_item_id: null`. The reminder retains its record's `open_url`. A step on an ended deal also carries `deal_ended: true` so the Deals Today panel can omit it.
 
-Each reminder's `title` uses the Home step card's title rules. The `why` field carries the full display instruction and is null when no display text remains. When the linked card shows a completion review, the reminder uses that review’s title and why. The panel keeps a meeting read's failure status visible without directing partners to Outlook.
+Each reminder's `title` uses the Home step card's title rules. The `why` field carries the full display instruction and is null when the instruction is empty or matches the heading. When the linked card shows a completion review, the reminder uses that review’s title and why. The panel keeps a meeting read's failure status visible without directing partners to Outlook.
 
 ### Calendar read
 
 `GET /api/engine/calendar/critical-dates` returns `calendar-critical-dates.v1`. With `DEALS_READ_SCHEMA=next`, either signed-in partner can read both partners' dates and steps in one call. Each `critical_dates` row carries `id`, `deal_id`, `deal_name`, the deal owner's slug as `owner`, a display label as `kind`, `due_on` and `done: false`. The read includes only confirmed open dates on open deals, from any month, so a past date shows when the partner pages back to it. The legacy read retains its existing date scope and omits `next_steps`.
 
-The new-schema `next_steps` list uses the same rules as Today reminders for open status, partner ownership, eligible records, a finite due date, holds, snoozes, and dropped follow-ups. Calendar also includes future due dates. Each row carries `id`, `what`, `why`, `owner`, `record_label`, `due_on`, `display_on`, `days_late` and `open_url`. `what` is the Home card title. `why` carries the full display instruction and is null when no display text remains. `display_on` is the later of the due day and today's Central day. Dates use `YYYY-MM-DD`, and `days_late` is zero unless the step is overdue. A deal step links to its deal, including a call follow-up. A vendor or vendor contact step links to the Relationships record. A building step links to its sole open deal when there is one and otherwise has `open_url: null`.
+The new-schema `next_steps` list uses the same rules as Today reminders for open status, partner ownership, eligible records, a finite due date, holds, snoozes, and dropped follow-ups. Calendar also includes future due dates. Each row carries `id`, `what`, `why`, `owner`, `record_label`, `due_on`, `display_on`, `days_late` and `open_url`. `what` is the Home card title. `why` carries the full display instruction and is null when the instruction is empty or matches the heading. `display_on` is the later of the due day and today's Central day. Dates use `YYYY-MM-DD`, and `days_late` is zero unless the step is overdue. A deal step links to its deal, including a call follow-up. A vendor or vendor contact step links to the Relationships record. A building step links to its sole open deal when there is one and otherwise has `open_url: null`.
 
 ## Invoice tracker reads for the app
 
