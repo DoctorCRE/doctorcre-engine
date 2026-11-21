@@ -12,7 +12,7 @@ export type SessionEnv = {
 
 // The old system's bodies: its browser sign-in refusal, and its Worker's
 // answer when its session store threw.
-const REFUSALS = {
+export const sessionRefusals = {
 	401: () => ({ error: "unauthorized", state: "sign_in_required" }),
 	403: () => ({ error: "forbidden" }),
 	503: () => ({ error: "internal_error", correlation_id: crypto.randomUUID() }),
@@ -54,6 +54,20 @@ async function equalTokens(
 	return timingSafeEqual(new Uint8Array(left), new Uint8Array(right));
 }
 
+export async function hasWriteProof(
+	request: Request,
+	origin: string,
+	csrfToken: string,
+): Promise<boolean> {
+	if (request.method === "GET" || request.method === "HEAD") return true;
+	const token = request.headers.get("x-carr-csrf");
+	return (
+		request.headers.get("Origin") === origin &&
+		request.headers.get("Sec-Fetch-Site") === "same-origin" &&
+		Boolean(token && (await equalTokens(csrfToken, token)))
+	);
+}
+
 export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 	// Set before anything can throw, so an error answer is not cached either.
 	c.header("Cache-Control", "no-store");
@@ -63,9 +77,9 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 		for (const value of renewed)
 			c.header("Set-Cookie", value, { append: true });
 	};
-	const refuse = (status: keyof typeof REFUSALS) => {
+	const refuse = (status: keyof typeof sessionRefusals) => {
 		protect();
-		return c.json(REFUSALS[status](), status);
+		return c.json(sessionRefusals[status](), status);
 	};
 	const unavailable = (kind: string) => {
 		console.warn("sign-in check unavailable:", kind);
@@ -112,16 +126,8 @@ export const requireSession = createMiddleware<SessionEnv>(async (c, next) => {
 		);
 	}
 
-	if (c.req.method !== "GET" && c.req.method !== "HEAD") {
-		const token = c.req.header("x-carr-csrf");
-		if (
-			origin !== browserOrigin ||
-			c.req.header("Sec-Fetch-Site") !== "same-origin" ||
-			!token ||
-			!(await equalTokens(session.csrf_token, token))
-		)
-			return refuse(403);
-	}
+	if (!(await hasWriteProof(c.req.raw, browserOrigin, session.csrf_token)))
+		return refuse(403);
 	c.set("partner", session.actor);
 	await next();
 	protect();

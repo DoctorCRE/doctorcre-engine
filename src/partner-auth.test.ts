@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { UnsecuredJWT } from "jose";
 import pg from "pg";
 import { withPartnerAuth } from "./partner-auth.ts";
+import { isArguments } from "./save-door.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const appOrigin = "https://app.example.test";
@@ -400,6 +401,222 @@ test("partner sessions in PostgreSQL", async (t) => {
 			});
 			assert.equal(await resolve(headers), null);
 			assert.ok(await resolve(sessionHeaders(surviving.token)));
+		});
+
+		await t.test("partner routes through the app binding", async (routes) => {
+			// The inherited hook supplies a fresh clock to each route test.
+			routes.mock.timers.reset();
+			const hooks = registerHooks({
+				resolve(specifier, context, nextResolve) {
+					if (specifier === "cloudflare:workers") {
+						return {
+							url: "data:text/javascript,export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env } }",
+							shortCircuit: true,
+						};
+					}
+					return nextResolve(specifier, context);
+				},
+			});
+			routes.after(() => hooks.deregister());
+			const { default: worker, PartnerApp } = await import("./worker-entry.ts");
+			const writer = `${role}_writer`;
+			routes.after(async () => {
+				await db.query(`rollback; drop role if exists ${writer}`);
+			});
+			await db.query(`begin; set local engine.job = 'old_system';
+				create role ${writer} login in role engine;
+				insert into role (slug, label) values ('lead', 'Lead');
+				insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity');
+				insert into how_found (slug, label) values ('referral', 'Referral');
+				commit;`);
+			const writerUrl = new URL(connectionString);
+			writerUrl.username = writer;
+			const env = {
+				PARTNER_APP_ORIGIN: appOrigin,
+				PARTNER_AUTH_DATABASE: { connectionString: config.connectionString },
+				PARTNER_AUTH_SECRET: secret,
+				DATABASE_WRITER: { connectionString: writerUrl.href },
+				CARR: {
+					fetch: async () =>
+						Response.json({
+							actor: { slug: first.slug, display: first.display },
+							csrf_token: "legacy-token",
+						}),
+				},
+			};
+			const bind = (bindings = env) => {
+				const binding: unknown = Reflect.construct(PartnerApp, [
+					undefined,
+					bindings,
+				]);
+				assert.ok(binding instanceof PartnerApp);
+				return binding;
+			};
+			const binding = bind();
+			const statusPath = "/auth/session";
+			const whoamiPath = "/api/engine/whoami";
+			const paths = [statusPath, whoamiPath];
+			const forged = {
+				"Engine-For-User": second.slug,
+				"Engine-Job": "agent",
+				"X-Forwarded-User": second.slug,
+			};
+			const browserSession = async (partner = first) => {
+				const session = await issue(partner.id);
+				const headers = sessionHeaders(session.token);
+				for (const [name, value] of Object.entries(forged))
+					headers.set(name, value);
+				const stored = await resolve(headers);
+				assert.ok(stored);
+				return { headers, csrfToken: stored.csrfToken };
+			};
+			const request = (
+				path: string,
+				headers: HeadersInit,
+				origin = appOrigin,
+			) => new Request(origin + path, { headers });
+			const read = (path: string, headers: HeadersInit, origin = appOrigin) =>
+				binding.fetch(request(path, headers, origin));
+			const publicRead = (path: string, headers: HeadersInit) =>
+				worker.fetch(
+					request(path, headers, "https://engine.example.test"),
+					env,
+				);
+			const check = (response: Response, status: number) => {
+				assert.equal(response.status, status);
+				assert.equal(response.headers.get("Cache-Control"), "no-store");
+			};
+			const proofs = (headers: Headers, token: string) => {
+				const proved = new Headers(headers);
+				proved.set("Origin", appOrigin);
+				proved.set("Sec-Fetch-Site", "same-origin");
+				proved.set("x-carr-csrf", token);
+				return proved;
+			};
+			const save = (headers: Headers) =>
+				binding.fetch(
+					new Request(`${appOrigin}/api/engine/prospects`, {
+						method: "POST",
+						headers,
+						body: JSON.stringify({
+							idempotency_key: randomUUID(),
+							name: "Example Prospect",
+							kind: "company",
+							how_found: "referral",
+							note: "Example note",
+						}),
+					}),
+				);
+
+			for (const partner of [first, second]) {
+				await routes.test(`reads and saves as ${partner.display}`, async () => {
+					const { headers, csrfToken } = await browserSession(partner);
+					const actor = { slug: partner.slug, display: partner.display };
+					const status = await read(statusPath, headers);
+					check(status, 200);
+					assert.deepEqual(await status.json(), {
+						actor,
+						csrf_token: csrfToken,
+						reauth_required: false,
+						reauth_url: "/auth/reauth?return_to=/",
+					});
+					const whoami = await read(whoamiPath, headers);
+					check(whoami, 200);
+					assert.deepEqual(await whoami.json(), actor);
+					const saved = await save(proofs(headers, csrfToken));
+					check(saved, 201);
+					const answer = await saved.json();
+					assert.ok(isArguments(answer));
+					const { rows } = await db.query(
+						"select changed_by_user_id from activity where id = $1",
+						[answer.activity_id],
+					);
+					assert.deepEqual(rows, [{ changed_by_user_id: partner.appUserId }]);
+				});
+			}
+
+			await routes.test(
+				"requires each same-origin write proof from this session",
+				async () => {
+					const { headers, csrfToken } = await browserSession();
+					const other = await browserSession(second);
+					for (const [header, wrong] of Object.entries({
+						Origin: "https://other.example.test",
+						"Sec-Fetch-Site": "same-site",
+						"x-carr-csrf": other.csrfToken,
+					})) {
+						const proved = proofs(headers, csrfToken);
+						proved.delete(header);
+						check(await save(proved), 403);
+						proved.set(header, wrong);
+						check(await save(proved), 403);
+					}
+				},
+			);
+
+			await routes.test(
+				"refuses absent, expired, and wrong-origin sessions",
+				async (sub) => {
+					const { headers } = await browserSession();
+					for (const path of paths) {
+						check(await read(path, forged), 401);
+						check(await read(path, headers, "https://other.example.test"), 401);
+					}
+					sub.mock.timers.setTime(expiresAt.getTime());
+					for (const path of paths) check(await read(path, headers), 401);
+				},
+			);
+
+			await routes.test(
+				"session status reports freshness at ten minutes",
+				async (sub) => {
+					const { headers } = await browserSession();
+					sub.mock.timers.tick(599_999);
+					const fresh = await read(statusPath, headers);
+					assert.partialDeepStrictEqual(await fresh.json(), {
+						reauth_required: false,
+					});
+					sub.mock.timers.tick(1);
+					const stale = await read(statusPath, headers);
+					assert.partialDeepStrictEqual(await stale.json(), {
+						reauth_required: true,
+					});
+				},
+			);
+
+			await routes.test(
+				"auth store failure is unavailable even with a legacy cookie",
+				async () => {
+					const broken = bind({
+						...env,
+						PARTNER_AUTH_DATABASE: { connectionString: writerUrl.href },
+					});
+					const { headers } = await browserSession();
+					headers.set(
+						"Cookie",
+						`${headers.get("Cookie")}; __Host-dealroom_session=legacy`,
+					);
+					for (const path of paths)
+						check(await broken.fetch(request(path, headers)), 503);
+				},
+			);
+
+			await routes.test(
+				"public dispatch accepts only CARR sign-in",
+				async () => {
+					const { headers } = await browserSession(second);
+					assert.equal((await publicRead(statusPath, headers)).status, 404);
+					check(await publicRead(whoamiPath, headers), 401);
+					headers.set("Cookie", "__Host-dealroom_session=legacy");
+					const legacy = await publicRead(whoamiPath, headers);
+					check(legacy, 200);
+					assert.deepEqual(await legacy.json(), {
+						slug: first.slug,
+						display: first.display,
+					});
+					assert.equal((await read("/jobs/deals", headers)).status, 404);
+				},
+			);
 		});
 
 		await t.test("auth login stays within the auth store", async () => {

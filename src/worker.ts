@@ -49,6 +49,11 @@ import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { automaticStepUndo, nextSteps } from "./next-steps.ts";
 import { partnerGoogle } from "./partner-google.ts";
+import {
+	type PartnerSessionEnv,
+	partnerSessionStatus,
+	requirePartnerSession,
+} from "./partner-session.ts";
 import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { presence } from "./presence.ts";
@@ -65,7 +70,8 @@ import { today } from "./today/routes.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 
-type WorkerEnv = NextSaveEnv &
+export type WorkerEnv = NextSaveEnv &
+	PartnerSessionEnv &
 	CompareEnv &
 	IntakeEnv & {
 		Bindings: { CF_VERSION_METADATA: { id: string; tag?: string } };
@@ -77,17 +83,21 @@ export function recordWorkerStart() {
 	startedAt ??= new Date().toISOString();
 }
 
-export const partnerApp = partnerGoogle;
-
 // Routes match the raw path as the old door did, but still decode their values.
-const app = new Hono<WorkerEnv>({
-	getPath: (request) => new URL(request.url).pathname,
-});
-app.use("*", (_c, next) => {
-	recordWorkerStart();
-	return next();
-});
-app.notFound((c) => c.json({ error: "not_found" }, 404));
+function workerRouter() {
+	const router = new Hono<WorkerEnv>({
+		getPath: (request) => new URL(request.url).pathname,
+	});
+	router.use("*", (_c, next) => {
+		recordWorkerStart();
+		return next();
+	});
+	router.notFound((c) => c.json({ error: "not_found" }, 404));
+	return router;
+}
+
+const app = workerRouter();
+export const partnerApp = workerRouter();
 
 app.get("/health", (c) => {
 	const { id, tag } = c.env.CF_VERSION_METADATA;
@@ -120,36 +130,44 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", vendorMarkets)
 	.route("/", vendorMeetings);
 
-app.use("/api/engine/*", requireSession, userStamp);
-app.route("/api/engine", engine);
-app.route("/api/engine", leadChanges);
-app.route("/api/engine", partySearch);
-app.route("/api/engine", clientLeases);
-app.route("/api/engine", prospectReads);
-app.route("/api/engine", prospectChanges);
-app.route("/api/engine", nextDeals);
-app.route("/api/engine", automaticPhaseUndo);
-app.route("/api/engine", nationalAccounts);
-app.route("/api/engine", dealParticipants);
-app.route("/api/engine", dealClientWebsite);
-app.route("/api/engine", openClientWebsite);
-app.route("/api/engine", criticalDates);
-app.route("/api/engine", nextSteps);
-app.route("/api/engine", heldStepReviews);
-app.route("/api/engine", homeMarks);
-app.route("/api/engine", mondayReviewReads);
-app.route("/api/engine", mondayReviewMarks);
-app.route("/api/engine", automaticStepUndo);
-app.route("/api/engine", invoiceUndo);
-app.route("/api/engine", invoicePayment);
-app.route("/api/engine", proposalDecisions);
-app.route("/api/engine", nextAgenda);
-app.route("/api/engine", calendarDismissal);
-app.route("/api/engine", activityDoor);
-app.route("/api/engine", prospectAdd);
-app.route("/api/engine", attachmentFiles);
-app.route("/api/engine", dealDocuments);
-app.route("/api/engine", replyDrafts);
+const partnerApi = new Hono<WorkerEnv>();
+partnerApi.use("/api/engine/*", userStamp);
+partnerApi.route("/api/engine", engine);
+partnerApi.route("/api/engine", leadChanges);
+partnerApi.route("/api/engine", partySearch);
+partnerApi.route("/api/engine", clientLeases);
+partnerApi.route("/api/engine", prospectReads);
+partnerApi.route("/api/engine", prospectChanges);
+partnerApi.route("/api/engine", nextDeals);
+partnerApi.route("/api/engine", automaticPhaseUndo);
+partnerApi.route("/api/engine", nationalAccounts);
+partnerApi.route("/api/engine", dealParticipants);
+partnerApi.route("/api/engine", dealClientWebsite);
+partnerApi.route("/api/engine", openClientWebsite);
+partnerApi.route("/api/engine", criticalDates);
+partnerApi.route("/api/engine", nextSteps);
+partnerApi.route("/api/engine", heldStepReviews);
+partnerApi.route("/api/engine", homeMarks);
+partnerApi.route("/api/engine", mondayReviewReads);
+partnerApi.route("/api/engine", mondayReviewMarks);
+partnerApi.route("/api/engine", automaticStepUndo);
+partnerApi.route("/api/engine", invoiceUndo);
+partnerApi.route("/api/engine", invoicePayment);
+partnerApi.route("/api/engine", proposalDecisions);
+partnerApi.route("/api/engine", nextAgenda);
+partnerApi.route("/api/engine", calendarDismissal);
+partnerApi.route("/api/engine", activityDoor);
+partnerApi.route("/api/engine", prospectAdd);
+partnerApi.route("/api/engine", attachmentFiles);
+partnerApi.route("/api/engine", dealDocuments);
+partnerApi.route("/api/engine", replyDrafts);
+
+app.use("/api/engine/*", requireSession);
+app.route("/", partnerApi);
+partnerApp.route("/", partnerGoogle);
+partnerApp.get("/auth/session", requirePartnerSession, partnerSessionStatus);
+partnerApp.use("/api/engine/*", requirePartnerSession);
+partnerApp.route("/", partnerApi);
 
 // The app forwards only /api/engine/*, so this door is reached directly.
 app.use(
