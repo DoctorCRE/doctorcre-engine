@@ -228,7 +228,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a deal's kind, reason, lease it renews, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
-- an activity's time, sender and summary;
+- an activity's time, sender and summary, and a stored email's authored and earlier text;
 - a next step's text, owner, due date and done time;
 - a user's time zone, quiet hours and device notifications, a Home mark's disposition, snooze time, drop reason and whom it waits on and why, and a Home update's `read_at` (`read_at` is the only updatable column on `home_update`);
 - a round's status, and a critical date's status and resolution reason;
@@ -473,6 +473,8 @@ Stored email bodies and their display fields are plain text. The table grows wit
 - Convert each part to plain text with paragraph breaks and line breaks. Keep the original order within each part. Preserve unclassified text in `authored`. For complete plain text, use the existing [line rules in decision 200](decisions.md) with the evidence available at capture. Put identified lines in `history`, including lines the legacy read would omit. Preview-only and undecodable bodies leave the split unset.
 - Keep `email.body` as the unsplit captured text. Door 19 adds `email.authored` and `email.history`, both nullable text columns in `next.email`. Both `NULL` means the split is unavailable. Both strings means it succeeded, including `''` when one part is empty. The database checks that the pair is present or absent together. Keep HTML and MIME bytes in Outlook.
 - Accept old door 19 requests without the pair. New captures send both strings with the full decoded body. A later complete capture for the same verified Message-ID can fill a missing pair in the same save that adds mailbox membership. Repeat saves keep the first stored pair and preserve the captured `body` used by evidence, summaries, and routing.
+
+Apply [the email text migration](../schema/add-email-authored.sql) before sending the pair to an existing database. Requests that omit both fields work before and after the migration.
 
 ### One entry for each message
 

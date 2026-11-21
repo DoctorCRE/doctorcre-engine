@@ -2695,6 +2695,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	document_kind: ["label"],
 	offer: ["status"],
 	critical_date: ["resolution_reason", "status"],
+	email: ["authored", "history"],
 	social_account: ["handle", "platform_account_id"],
 	idea: ["angle", "hook", "pillar"],
 	design_template: ["name"],
@@ -2704,10 +2705,12 @@ const CHANGEABLE: Record<string, string[]> = {
 const DEFAULTED: Record<string, string[]> = {
 	email: [
 		"activity_kind",
+		"authored",
 		"changed_at",
 		"changed_by_job",
 		"changed_by_user_id",
 		"changed_for_user_id",
+		"history",
 		"imported",
 	],
 	next_step: [
