@@ -1665,6 +1665,18 @@ create unique index proposal_source_payload_once on proposal
 	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found, phase_stated, phase_on, next_step_id)
 	nulls not distinct where activity_id is not null;
 
+create function deal_filing_reason(email_id uuid, selected_deal_id uuid) returns text
+language sql as $$
+	select case
+		when exists (select from activity_about where activity_id = email_id and deal_id <> selected_deal_id)
+			then 'another_deal'
+		when not exists (
+			select from deal_party d join activity_about a on a.party_id = d.party_id
+			where d.deal_id = selected_deal_id and d.role = 'client' and a.activity_id = email_id
+		) then 'different_client'
+	end;
+$$;
+
 create function decide_proposal() returns trigger
 language plpgsql as $$
 declare
@@ -1805,9 +1817,7 @@ begin
 		if new.filed_deal_id is null or current_phase in ('closed', 'dead') then
 			raise exception 'filing needs an open deal' using errcode = 'check_violation', constraint = 'proposal_filing_open_deal';
 		end if;
-		if new.filing_reason is null and (exists (select from activity_about where activity_id = new.activity_id
-			and deal_id <> new.filed_deal_id) or not exists (select from deal_party d join activity_about a on a.party_id = d.party_id
-			where d.deal_id = new.filed_deal_id and d.role = 'client' and a.activity_id = new.activity_id)) then
+		if new.filing_reason is null and deal_filing_reason(new.activity_id, new.filed_deal_id) is not null then
 			raise exception 'a corrected filing needs a reason' using errcode = 'check_violation', constraint = 'proposal_filing_reason';
 		end if;
 		delete from activity_about where activity_id = new.activity_id and deal_id <> new.filed_deal_id;
@@ -3956,6 +3966,8 @@ grant execute on function carry_weekly_review to engine;
 grant execute on function lock_weekly_review(date, uuid, uuid) to engine;
 grant execute on function npi_check_digit_holds(text), is_time_zone(text) to engine;
 grant execute on function invoice_email_target(invoice_email), invoice_name(text) to engine, engine_reader;
+revoke execute on function deal_filing_reason(uuid, uuid) from public;
+grant execute on function deal_filing_reason(uuid, uuid) to engine, engine_reader;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;
