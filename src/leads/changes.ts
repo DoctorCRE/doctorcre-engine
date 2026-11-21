@@ -152,7 +152,13 @@ async function saveLeadChange(tx: Transaction<DB>, change: LeadChange) {
 		if (unavailable || lead.stage === "archived" || lead.owner_user_id !== null)
 			throw new SaveRefusal(new Refusal(409, "lead_not_claimable"));
 		await role.set({ owner_user_id: ACTING_USER }).execute();
-		await acknowledgeLeadEmail(tx, party_id);
+		const pending = await tx
+			.selectFrom("lead_email_attention")
+			.select("party_id")
+			.where("party_id", "=", party_id)
+			.where("acknowledged_at", "is", null)
+			.executeTakeFirst();
+		if (pending) await acknowledgeLeadEmail(tx, party_id);
 	} else {
 		if (unavailable)
 			throw new SaveRefusal(new Refusal(409, "lead_not_linkable"));

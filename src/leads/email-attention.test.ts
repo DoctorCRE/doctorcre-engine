@@ -187,12 +187,28 @@ test("email acknowledgement and claim require partner sign-in", async () => {
 
 test("until the grant lands, reads work and failed saves leave attention and owner unchanged", async () => {
 	const id = await emailLead();
+	const ordinaryId = await emailLead();
+	await db.query("delete from lead_email_attention where party_id = $1", [
+		ordinaryId,
+	]);
+	const ordinary = await open(ordinaryId, "joe", "board");
 	const { base_version } = await open(id, "joe", "board");
 	const claim = command("claim", "joe", base_version);
 	await db.query(
 		"revoke update (acknowledged_by_user_id, acknowledged_at) on lead_email_attention from engine",
 	);
 	try {
+		assert.equal(
+			(
+				await change(
+					ordinaryId,
+					"joe",
+					command("claim", "joe", ordinary.base_version),
+				)
+			).status,
+			200,
+		);
+		assert.equal((await open(ordinaryId, "joe", "board")).owner, "joe");
 		for (const body of [
 			command("acknowledge_email", "joe", base_version),
 			claim,
