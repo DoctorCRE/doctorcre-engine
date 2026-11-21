@@ -4,6 +4,7 @@ import { sql, type Transaction } from "kysely";
 import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import { answerNextRead, isoMillis, Refusal, refuse } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
+import { readHomeEmailThread, sourceInMailbox } from "./home-email-thread.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
@@ -251,6 +252,7 @@ replyDrafts
 				.select([
 					"r.id as draft_id",
 					"r.owner_user_id",
+					"r.email_activity_id",
 					"r.status",
 					"r.failure_reason",
 					"r.revision as version",
@@ -268,6 +270,7 @@ replyDrafts
 					) else r.cc_address end`.as("cc"),
 				])
 				.select((eb) => [
+					sourceInMailbox(eb.ref("e.activity_id"), userId).as("source_visible"),
 					jsonObjectFrom(
 						eb
 							.selectFrom("activity as a")
@@ -296,10 +299,15 @@ replyDrafts
 				.where("r.id", "=", id)
 				.executeTakeFirst();
 			if (!draft) return new Refusal(404, "not_found");
-			const { owner_user_id, ...detail } = draft;
-			return owner_user_id === userId
-				? detail
-				: new Refusal(403, "not_mailbox_owner");
+			const { owner_user_id, email_activity_id, source_visible, ...detail } =
+				draft;
+			if (owner_user_id !== userId)
+				return new Refusal(403, "not_mailbox_owner");
+			if (!source_visible) return new Refusal(404, "not_found");
+			return {
+				...detail,
+				thread: await readHomeEmailThread(db, userId, email_activity_id),
+			};
 		});
 	})
 	.post("/reply-drafts/:id/edit", (c) => savePendingDraft(c, "edit"))

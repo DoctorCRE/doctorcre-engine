@@ -1,6 +1,11 @@
 import { type RawBuilder, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import { isoMillis, Refusal } from "./answer.ts";
+import {
+	readHomeEmailThread,
+	senderLabel,
+	sourceInMailbox,
+} from "./home-email-thread.ts";
 import { homeDate, homeDisplayText, homeTitle, homeWhy } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 
@@ -11,6 +16,7 @@ type ReviewRow = {
 	activity_at: string;
 	context_label: string | null;
 	open_url: string | null;
+	mail_card_id: string | null;
 };
 
 type DraftStatus = "pending" | "approved" | "failed" | "sent";
@@ -58,6 +64,7 @@ type Suggestion = ReviewRow &
 		decision_label: string | null;
 		suggestion_title: string | null;
 		due_on: string | null;
+		late_target: boolean;
 		fallback_reply_draft: {
 			id: string;
 			version: string;
@@ -70,22 +77,13 @@ type Suggestion = ReviewRow &
 
 const mailGroup = sql`coalesce('conversation:' || e.conversation_id, 'email:' || e.activity_id)`;
 
-function senderLabel(email: "e" | "title_email") {
-	return sql<string>`coalesce(nullif(btrim(${sql.ref(`${email}.sender_name`)}), ''),
-		(select min(party.name) from party_email
-			join party on party.id = party_email.party_id
-			where party_email.address = ${sql.ref(`${email}.sender`)}
-			having count(*) = 1),
-		${sql.ref(`${email}.sender`)}::text)`;
-}
-
 function draftRows(userId: string) {
 	return sql`
 		with drafts as (
 			select r.id, r.status, r.sent_at, r.failure_reason, r.revision::text as source_version,
 				(select coalesce(max(id), 0) from change where table_name = 'reply_draft'
 					and record = jsonb_build_object('id', r.id)) as draft_change_id,
-				${mailGroup} as mail_group,
+				${mailGroup} as mail_group, 'email:' || md5(${mailGroup}) as mail_card_id,
 				coalesce(r.sent_at, r.changed_at) as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
 				a.happened_at as email_at, ${senderLabel("e")} as email_sender,
 				case when strpos(e.body, r.evidence) > 0 then r.evidence end as email_quote,
@@ -165,6 +163,11 @@ export async function readProposal(
 			"p.reason",
 		])
 		.select((eb) => [
+			sql<
+				string | null
+			>`case when p.activity_kind = 'email' then p.activity_id end`.as(
+				"email_source_id",
+			),
 			eb.fn.coalesce("p.what", "step.what").as("what"),
 			eb.fn.coalesce("p.due_on", "step.due_on").as("due_on"),
 			eb.fn
@@ -207,19 +210,30 @@ export async function readProposal(
 		])
 		.where("p.id", "=", id)
 		.where("p.status", "=", "pending")
+		.where(sourceInMailbox(sql.ref("p.activity_id"), userId))
 		.where(sql<boolean>`case when p.kind = 'next_step_done'
 			then step.owner_party_id = ${userId}::uuid and step.status = 'open'
 			else ${visibleSuggestion(userId)} end`)
 		.executeTakeFirst();
-	return proposal ?? new Refusal(404, "not_found");
+	if (!proposal) return new Refusal(404, "not_found");
+	const { email_source_id, ...detail } = proposal;
+	return email_source_id
+		? {
+				...detail,
+				thread: await readHomeEmailThread(db, userId, email_source_id),
+			}
+		: detail;
 }
 
-function suggestionRows(userId: string, forMail: boolean) {
+function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 	return sql`
 		with visible as (
 			select p.id, p.kind, p.status, a.id as activity_id,
 				case when lead_email.activity_id is not null then 'email' else a.kind end as activity_kind,
 				p.created_at as activity_at, p.due_on,
+				p.deal_id is not null or exists (
+					select from party_role where party_id = p.party_id and role = 'vendor'
+				) as late_target,
 				contact.name as contact_name, a.summary as source_summary, p.evidence,
 				coalesce(phase.label, lead_stage.label) as decision_label,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
@@ -249,6 +263,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 				a.happened_at as source_at,
 				coalesce(a.happened_at::text, candidate.source_row->>'first_seen_at') as email_at,
 				coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id) as mail_group,
+				'email:' || md5(${mailGroup}) as mail_card_id,
 				coalesce(lead_email.activity_id, a.id) as group_activity_id,
 				coalesce(lead_email.happened_at, a.happened_at) as group_source_at,
 				jsonb_build_object(
@@ -295,7 +310,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 				array_agg(id) over all_members as member_ids,
 				md5(string_agg(id::text, ':') filter (where status = 'pending') over all_members) as source_version,
 				jsonb_agg(${forMail ? sql`reference || jsonb_build_object('suggestion_title', suggestion_title, 'due_on', due_on)` : sql`reference`})
-					filter (where status = 'pending') over all_members as suggestions
+					filter (where status = 'pending' ${dashboard ? sql`and kind <> 'email_lead'` : sql``}) over all_members as suggestions
 			from visible
 			window source_group as (
 				partition by activity_kind, coalesce(mail_group, activity_id::text, id::text)
@@ -307,16 +322,17 @@ function suggestionRows(userId: string, forMail: boolean) {
 	`;
 }
 
-function homeReviewGroups(userId: string, forMail = false) {
+function homeReviewGroups(userId: string, forMail = false, dashboard = false) {
 	return sql`
 		with draft_groups as (${draftRows(userId)}),
-		suggestion_groups as (${suggestionRows(userId, forMail)}),
+		suggestion_groups as (${suggestionRows(userId, forMail, dashboard)}),
 		draft_cards as (
 			select d.*, greatest(d.draft_change_id, s.suggestion_change_id) as source_change_id,
 				s.suggestions, s.member_ids, s.due_on
 			from draft_groups d
 			left join suggestion_groups s on s.mail_group = d.mail_group and d.status <> 'sent'
 			where d.status in ('pending', 'sent') or s.id is null
+				${dashboard ? sql`or s.kind = 'email_lead'` : sql``}
 		), suggestion_cards as (
 			select s.*, greatest(s.suggestion_change_id, d.draft_change_id) as source_change_id,
 				case when d.id is not null then jsonb_build_object('id', d.id, 'version', d.source_version,
@@ -328,9 +344,14 @@ function homeReviewGroups(userId: string, forMail = false) {
 	`;
 }
 
-function draftCards(userId: string, limit: number, itemId?: string) {
+function draftCards(
+	userId: string,
+	limit: number | null,
+	itemId?: string,
+	dashboard = false,
+) {
 	return sql<Draft>`
-		${homeReviewGroups(userId)}
+		${homeReviewGroups(userId, false, dashboard)}
 		select card.*, summary.text as email_summary from draft_cards card
 		left join email_current_summary summary on summary.activity_id = card.email_activity_id
 		${itemId ? sql`where id = ${itemId} and status <> 'sent'` : sql``}
@@ -338,9 +359,14 @@ function draftCards(userId: string, limit: number, itemId?: string) {
 	`;
 }
 
-function suggestionCards(userId: string, limit: number, itemId?: string) {
+function suggestionCards(
+	userId: string,
+	limit: number | null,
+	itemId?: string,
+	dashboard = false,
+) {
 	return sql<Suggestion>`
-		${homeReviewGroups(userId)}
+		${homeReviewGroups(userId, false, dashboard)}
 		select card.*, summary.text as email_summary from suggestion_cards card
 		left join email_current_summary summary on summary.activity_id = card.activity_id
 		${itemId ? sql`where id = ${itemId}` : sql``}
@@ -355,6 +381,7 @@ type ReviewMark = {
 	mark_item_id: string;
 	mark_version: string | null;
 	snoozed_until: string | null;
+	waiting_reason: string | null;
 };
 
 function markedReviews<Row extends ReviewRow>(
@@ -364,7 +391,8 @@ function markedReviews<Row extends ReviewRow>(
 ) {
 	return sql<Row & ReviewMark>`
 		select card.*, history.mark_version, coalesce(history.item_id, card.id) as mark_item_id,
-			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
+			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
+			m.waiting_reason
 		from (${rows}) card
 		left join lateral (
 			select member.item_id, max(h.id) as mark_version
@@ -384,10 +412,13 @@ export async function lockHomeReview(
 	id: string,
 	userId: string,
 ) {
-	const query = kind === "reply_draft" ? draftCards : suggestionCards;
+	const query =
+		kind === "reply_draft"
+			? (userId: string) => draftCards(userId, 1, id, true)
+			: (userId: string) => suggestionCards(userId, 1, id);
 	const {
 		rows: [group],
-	} = await query(userId, 1, id).execute(tx);
+	} = await query(userId).execute(tx);
 	if (!group) return;
 	const draftId =
 		"fallback_reply_draft" in group ? group.fallback_reply_draft?.id : group.id;
@@ -410,11 +441,7 @@ export async function lockHomeReview(
 	}
 	const {
 		rows: [card],
-	} = await markedReviews<ReviewRow>(
-		query(userId, 1, id),
-		userId,
-		kind,
-	).execute(tx);
+	} = await markedReviews<ReviewRow>(query(userId), userId, kind).execute(tx);
 	return (
 		card && {
 			source_version: card.source_change_id,
@@ -659,6 +686,9 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	};
 }
 
+const unconfirmedDelivery = (reason: string | null) =>
+	/^unconfirmed_after_\d+$/.test(reason ?? "");
+
 function deliveryWhy(reason: string | null) {
 	switch (reason) {
 		case "aborted_before_dispatch":
@@ -686,7 +716,7 @@ function deliveryWhy(reason: string | null) {
 		case "failed:abort_cleanup_failed":
 			return "Outlook could not clean up the interrupted send.";
 		default:
-			if (/^unconfirmed_after_\d+$/.test(reason ?? ""))
+			if (unconfirmedDelivery(reason))
 				return "Outlook could not confirm that the reply was sent.";
 			if (
 				/^(?:failed:|refused:|draft:|[a-z]+(?:_[a-z]+)+:|[a-z\d]+(?:_[a-z\d]+)+$)/.test(
@@ -700,7 +730,7 @@ function deliveryWhy(reason: string | null) {
 	}
 }
 
-function draftReviewText(draft: Draft & ReviewMark) {
+function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 	const sender = homeDisplayText(draft.email_sender);
 	const reply = sender ? `Reply to ${sender}` : "Reply";
 	const target = draft.deal_id && homeDisplayText(draft.context_label);
@@ -708,9 +738,11 @@ function draftReviewText(draft: Draft & ReviewMark) {
 	const source = sender ? `Email from ${sender}` : "Email";
 	const { summary, quote } = emailRequest(draft);
 	const request = summary || quote;
+	const decisions = dashboard ? (draft.suggestions?.length ?? 0) : 0;
 	const why = homeWhy(
 		request || receivedEmail(source, draft.email_at),
 		!request && draft.status === "pending" ? "Review the drafted reply" : null,
+		decisions > 1 ? `${decisions} decisions to review` : null,
 	);
 	switch (draft.status) {
 		case "pending": {
@@ -730,7 +762,7 @@ function draftReviewText(draft: Draft & ReviewMark) {
 		case "failed":
 			return {
 				title: homeTitle(
-					`${replyWithTarget} ${/^unconfirmed_after_\d+$/.test(draft.failure_reason ?? "") ? "has unconfirmed delivery" : "didn't send"}`,
+					`${replyWithTarget} ${unconfirmedDelivery(draft.failure_reason) ? "has unconfirmed delivery" : "didn't send"}`,
 					"review delivery",
 				),
 				why: deliveryWhy(draft.failure_reason),
@@ -754,37 +786,49 @@ function draftReviewText(draft: Draft & ReviewMark) {
 export async function readHomeReviewCards(
 	db: Transaction<DB>,
 	userId: string,
-	limit: number,
+	limit: number | null,
+	dashboard: boolean,
 ) {
 	const drafts = await markedReviews(
-		draftCards(userId, limit),
+		draftCards(userId, limit, undefined, dashboard),
 		userId,
 		"reply_draft",
 	).execute(db);
 	const suggestions = await markedReviews(
-		suggestionCards(userId, limit),
+		suggestionCards(userId, limit, undefined, dashboard),
 		userId,
 		"proposal",
 	).execute(db);
+	const draftRows = dashboard
+		? drafts.rows.filter(({ status }) => status !== "sent")
+		: drafts.rows;
+	const suggestionRows = dashboard
+		? suggestions.rows.filter(({ kind }) => kind !== "email_lead")
+		: suggestions.rows;
 	return [
-		...drafts.rows.map((draft) => ({
+		...draftRows.map((draft) => ({
 			...reviewCard(
 				draft,
 				"reply_draft",
 				"email_proposal",
 				draft.status === "sent"
 					? "done"
-					: draft.status === "approved"
+					: draft.status === "approved" ||
+							(dashboard && unconfirmedDelivery(draft.failure_reason))
 						? "working"
 						: draft.status === "failed"
 							? "failed"
 							: "needs_attention",
 				draft.sent_at,
 			),
-			...draftReviewText(draft),
+			...draftReviewText(draft, dashboard),
+			...(dashboard && {
+				card_id: draft.mail_card_id ?? `reply_draft:${draft.id}`,
+				waiting_reason: homeDisplayText(draft.waiting_reason) || null,
+			}),
 			kind_label: "Reply draft",
 			deal_id: null,
-			due_on: draft.due_on,
+			due_on: dashboard && !draft.suggestions ? null : draft.due_on,
 			merged_source_ids: [
 				draft.id,
 				...(draft.suggestions?.map(({ id }) => id) ?? []),
@@ -800,7 +844,7 @@ export async function readHomeReviewCards(
 				deal_id: draft.deal_id,
 			},
 		})),
-		...suggestions.rows.map((suggestion) => {
+		...suggestionRows.map((suggestion) => {
 			const call = suggestion.activity_kind === "call";
 			const meeting = suggestion.activity_kind === "meeting";
 			const sourceType = call
@@ -810,6 +854,13 @@ export async function readHomeReviewCards(
 					: "email_proposal";
 			return {
 				...reviewCard(suggestion, "proposal", sourceType, "needs_attention"),
+				...(dashboard && {
+					card_id:
+						suggestion.mail_card_id ??
+						`${suggestion.activity_kind}:${suggestion.activity_id ?? suggestion.id}`,
+					late_target: suggestion.late_target,
+					waiting_reason: homeDisplayText(suggestion.waiting_reason) || null,
+				}),
 				...(call || meeting
 					? conversationReviewText(suggestion, call ? "Call" : "Meeting")
 					: emailSuggestionText(suggestion)),

@@ -428,6 +428,7 @@ test("the owner can read, edit and decline a pending reply at its current revisi
 		failure_reason: null,
 		...mail,
 		attachments: [],
+		thread: [],
 		source_activity: {
 			id: id(36),
 			kind: "email",

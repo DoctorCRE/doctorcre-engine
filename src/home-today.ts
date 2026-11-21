@@ -8,7 +8,11 @@ import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import { readCompletionReviews } from "./home-inbox-reviews-updates.ts";
 import {
 	datedPartnerSteps,
+	type HomeStepTarget,
+	homeDay,
 	homeStepCopy,
+	homeStepEligible,
+	lateLabel,
 	type StepTitle,
 	stepItemId,
 	stepOpenUrl,
@@ -24,7 +28,8 @@ type Clock = Record<
 > & { is_partner: boolean | null; partners: { slug: string; name: string }[] };
 type Match = Record<"email" | "party_name", string> &
 	Record<"deal_id" | "deal_name" | "client_name", string | null>;
-type StepRow = Omit<StepTitle, "status" | "hold_until" | "due_on"> &
+type StepRow = HomeStepTarget &
+	Omit<StepTitle, "status" | "hold_until" | "due_on"> &
 	Record<"id" | "due_on" | "owner", string> &
 	Record<
 		"deal_id" | "party_id" | "call_id" | "building_deal_id",
@@ -170,7 +175,7 @@ async function readTodayReminders(
 		.select("id")
 		.where(isOpenBoardDeal);
 	const { rows } = await sql<StepRow>`
-		select s.id, s.what as title, ${stepTargetFields(db)}, s.due_on::text as due_on,
+		select s.id, s.what as title, ${stepTargetFields(db)}, s.due_on::text as due_on, s.property_id,
 			case when s.due_on < ${today}::date then (${today}::date - s.due_on)::int end as days_late,
 			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id,
 			s.call_activity_id as call_id, c.happened_at as call_at, contact.name as call_contact,
@@ -194,13 +199,12 @@ async function readTodayReminders(
 		context_label: r.context_label,
 		due_on: r.due_on,
 		days_late: r.days_late,
-		late_label: r.days_late
-			? `${r.days_late} ${r.days_late === 1 ? "day" : "days"} late`
-			: null,
+		late_label: r.days_late ? lateLabel(r.days_late) : null,
 		owner: r.owner,
 		deal_id: r.deal_id,
 		...(r.deal_ended && { deal_ended: true as const }),
-		home_item_id: r.is_viewer ? stepItemId(r) : null,
+		home_item_id:
+			r.is_viewer && homeStepEligible(r, today) ? stepItemId(r) : null,
 		open_url: stepOpenUrl(r),
 	}));
 	return {
@@ -218,9 +222,9 @@ async function readHomeToday(
 ) {
 	const [clock] = (
 		await sql<Clock>`
-			select (now() at time zone 'America/Chicago')::date::text as today,
-				((now() at time zone 'America/Chicago')::date::timestamp at time zone 'America/Chicago') as today_start,
-				(((now() at time zone 'America/Chicago')::date + 1)::timestamp at time zone 'America/Chicago') as tomorrow_start,
+			select ${homeDay}::text as today,
+				(${homeDay}::timestamp at time zone 'America/Chicago') as today_start,
+				((${homeDay} + 1)::timestamp at time zone 'America/Chicago') as tomorrow_start,
 				now() as now_at, u.slug as viewer, u.is_account_partner as is_partner,
 				coalesce((select jsonb_agg(jsonb_build_object('slug', au.slug, 'name', p.name) order by au.slug)
 					from app_user au join party p on p.id = au.id where au.is_account_partner), '[]') as partners

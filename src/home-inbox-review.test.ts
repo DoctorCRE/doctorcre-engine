@@ -61,7 +61,8 @@ before(async () => {
 			from (values ('${id(10)}'::uuid, 'Sam Example requested the **floor plan** (C-123) before the tour.'),
 				('${id(11)}'::uuid, 'Pat Example asked for tour times at Cedar Suite.')) summaries(id, summary);
 		insert into email_mailbox (activity_id, user_id) values
-			('${id(10)}', '${partner}'), ('${id(11)}', '${partner}'), ('${id(11)}', '${other}'), ('${id(12)}', '${partner}');
+			('${id(10)}', '${partner}'), ('${id(11)}', '${partner}'), ('${id(11)}', '${other}'),
+			('${id(12)}', '${partner}'), ('${id(14)}', '${other}');
 		insert into activity_about (activity_id, deal_id) values ('${id(11)}', '${deal}');
 		insert into activity_about (activity_id, party_id)
 			select id, '${partner}' from activity where id <> '${id(11)}';
@@ -134,6 +135,48 @@ async function inbox(user = "example") {
 	}
 	return items;
 }
+
+async function dashboard(user = "example") {
+	const response = await request(
+		{ user },
+		"home/inbox?view=dashboard",
+		{ method: "GET" },
+		{ HOME_INBOX_READ_SCHEMA: "next" },
+	);
+	assert.equal(response.status, 200);
+	const result: unknown = await response.json();
+	assert.ok(
+		isArguments(result) &&
+			isArguments(result.reminders) &&
+			isArguments(result.waiting),
+	);
+	const items = (group: Record<string, unknown>) => {
+		assert.ok(Array.isArray(group.items));
+		assert.equal(group.count, group.items.length);
+		return group.items.filter(isArguments);
+	};
+	return { reminders: items(result.reminders), waiting: items(result.waiting) };
+}
+
+test("dashboard sends approved drafts to waiting, failed deliveries to reminders, and sent drafts to history", async () => {
+	const { reminders, waiting } = await dashboard();
+	assert.partialDeepStrictEqual(
+		waiting.find((card) => card.reply_draft_id === id(25)),
+		{
+			waiting_reason: "Waiting for Outlook to confirm delivery",
+			primary_action: null,
+		},
+	);
+	assert.equal(
+		reminders.find((card) => card.reply_draft_id === id(26))?.primary_action,
+		"Review delivery",
+	);
+	assert.ok(
+		[...reminders, ...waiting].every(
+			(card) => card.reply_draft_id !== id(24) && !("thread" in card),
+		),
+	);
+});
 
 test("Home shows only its partner's active drafts and one per known conversation", async () => {
 	const drafts = (await inbox()).filter(
@@ -240,6 +283,16 @@ for (const item_id of [`suggestion:${id(32)}`, `reply_draft:${id(21)}`]) {
 			snoozed_until: until,
 			base_version: answer.base_version,
 		});
+		const { waiting } = await dashboard();
+		assert.partialDeepStrictEqual(
+			waiting.find((entry) => entry.item_id === item_id),
+			{
+				waiting_reason: "Snoozed",
+				returns_at: until,
+				base_version: answer.base_version,
+				primary_action: null,
+			},
+		);
 		const [stale] = await save(user, "home/marks", {
 			...snooze,
 			idempotency_key: randomUUID(),
@@ -655,6 +708,14 @@ for (const match of [
 			{ suggestions: [{ id: filing.proposal_id, kind: "file_to_deal" }] },
 		]);
 		const cards = await relevantCards();
+		const dashboardCards = await dashboard();
+		assert.ok(
+			[...dashboardCards.reminders, ...dashboardCards.waiting].every(
+				(card) =>
+					Array.isArray(card.merged_source_ids) &&
+					card.merged_source_ids.every((member) => member !== lead.proposal_id),
+			),
+		);
 		if (match === "other_mailbox" || match === "mismatch") {
 			const standalone = cards.find(
 				(card) => card.proposal_id === lead.proposal_id,
@@ -1013,6 +1074,66 @@ test("Home opens each visible suggestion with its original evidence and proposed
 	assert.equal((await read(41)).status, 404);
 });
 
+test("draft and proposal details return only the viewer's distinct messages in the exact Outlook thread", async () => {
+	const get = async (path: string, user = "example") => {
+		const response = await request({ user }, path, { method: "GET" });
+		assert.equal(response.status, 200);
+		const detail: unknown = await response.json();
+		assert.ok(isArguments(detail));
+		return detail.thread;
+	};
+	const thread = [
+		{
+			activity_id: id(10),
+			sender_name: "Sam Example",
+			happened_at: "2026-01-02T00:00:00.000Z",
+			body: "Please send the plan.",
+		},
+		{
+			activity_id: id(11),
+			sender_name: "Pat Example",
+			happened_at: "2026-01-03T00:00:00.000Z",
+			body: "Please send the plan.",
+		},
+	];
+	assert.deepEqual(await get(`proposals/${id(30)}`), thread);
+	assert.deepEqual(await get(`reply-drafts/${id(21)}`), thread);
+	assert.deepEqual(await get(`proposals/${id(38)}`, "other"), [
+		thread[1],
+		{
+			activity_id: id(14),
+			sender_name: "Pat Example",
+			happened_at: "2026-01-06T00:00:00.000Z",
+			body: "Please send the plan.",
+		},
+	]);
+	assert.deepEqual(await get(`proposals/${id(32)}`), [
+		{
+			activity_id: id(12),
+			sender_name: "Known Contact",
+			happened_at: "2026-01-04T00:00:00.000Z",
+			body: "Hello,\nCould you please also let me know whether the west suite is still available for a tour later this month?\nPlease send the plan.\nNovember 8 works for the tour.",
+		},
+	]);
+	const denied = await request({ user: "other" }, `reply-drafts/${id(22)}`, {
+		method: "GET",
+	});
+	assert.equal(denied.status, 404);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into email_mailbox (activity_id, user_id) values ('${id(13)}', '${partner}'); commit;`);
+	try {
+		const deniedProposal = await request(
+			{ user: "evidence-reviewer" },
+			`proposals/${filingWithPhone}`,
+			{ method: "GET" },
+		);
+		assert.equal(deniedProposal.status, 404);
+	} finally {
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+			delete from email_mailbox where activity_id = '${id(13)}' and user_id = '${partner}'; commit;`);
+	}
+});
+
 test("Mail priorities ranks inbound work once per Outlook conversation and opens the same Home card", async () => {
 	const user = { user: "example" };
 	const url = "home/mail-priorities";
@@ -1106,6 +1227,11 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	};
 	const thread = () => activeCard([10, 11, 14].map(id));
 	const unkeyed = () => activeCard([id(13)]);
+	const dashboardBefore = await dashboard(user.user);
+	const beforeCard = dashboardBefore.reminders.find(
+		(card) => card.item_id === `reply_draft:${draft}`,
+	);
+	assert.ok(typeof beforeCard?.card_id === "string");
 	assert.partialDeepStrictEqual(await unkeyed(), {
 		item_id: `reply_draft:${declinedDraft}`,
 		why: "Email from Pat Example received on Jan 4, 2026. Review the drafted reply.",
@@ -1144,6 +1270,11 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	const approve =
 		"status = 'approved', failure_reason = null, to_address = 'pat@example.test', cc_address = 'copy@example.test'";
 	await setDraft("", approve);
+	const dashboardAfter = await dashboard(user.user);
+	const afterCard = dashboardAfter.reminders.find(
+		(card) => card.item_id === `suggestion:${id(60)}`,
+	);
+	assert.equal(afterCard?.card_id, beforeCard.card_id);
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `suggestion:${id(60)}`,
 		title:
