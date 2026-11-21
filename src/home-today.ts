@@ -5,7 +5,12 @@ import { type Meeting, meetingsFromSnapshot } from "./calendar/meetings.ts";
 import { readStoredAgenda } from "./calendar/next-agenda.ts";
 import { PARTNERS } from "./clients/read.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
-import { stepItemId, stepOpenUrl, stepTargetFields } from "./home-steps.ts";
+import {
+	homeDisplayText,
+	stepItemId,
+	stepOpenUrl,
+	stepTargetFields,
+} from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
 import { isArguments } from "./save-door.ts";
@@ -183,7 +188,7 @@ async function readTodayReminders(
 	const list = rows.map((r) => ({
 		id: r.id,
 		kind: r.call_id ? ("call_follow_up" as const) : ("step" as const),
-		title: r.title,
+		title: homeDisplayText(r.title) || "Open the saved step",
 		context_label: r.context_label,
 		due_on: r.due_on,
 		days_late: r.days_late,
