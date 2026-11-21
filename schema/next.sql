@@ -1180,6 +1180,10 @@ begin
 	insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, text, provenance, recorded_at)
 	values (email_id, email_id, captured_hash, writer_version, result_status, summary_text, result_provenance, result_time)
 	on conflict (source_activity_id, source_hash, generator_version) do nothing;
+	if found and result_time > clock_timestamp() + interval '5 minutes' then
+		raise check_violation using message = 'recorded time is more than five minutes ahead of the database clock',
+			constraint = 'email_summary_recorded_at_in_future';
+	end if;
 
 	select * into strict saved from email_summary
 	where source_activity_id = email_id and source_hash = captured_hash and generator_version = writer_version;

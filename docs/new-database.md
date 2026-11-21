@@ -1704,9 +1704,9 @@ The suggestion kinds:
 | `provenance`        | JSON object with the recorded details, including the model when recorded   |
 | `recorded_at`       | Time the result was recorded, with a zone                                  |
 
-A save returns `200` with the stored fields and `source_activity_id`, equal to `activity_id` for a new result. The response expresses `recorded_at` in UTC. The activity ID, hash, and generator version form this door's retry key. Replay returns the first stored answer, including its time. Different status, text, or provenance for that key returns `409 email_summary_result_conflict`.
+A save returns `200` with the stored fields and `source_activity_id`, equal to `activity_id` for a new result. The response expresses `recorded_at` in UTC. PostgreSQL stores and returns provenance numbers at `jsonb` precision. The activity ID, hash, and generator version form this door's retry key. Replay returns the first stored answer, including its time. Different status, text, or provenance for that key returns `409 email_summary_result_conflict`.
 
-An unknown email or an email outside the named mailbox returns `404 not_found`. An invalid hash returns `400 invalid_field_value`. Text over 300 characters returns `422 database_refused_the_statement`. Home reads the latest available result by recorded time.
+An unknown email or an email outside the named mailbox returns `404 not_found`. An invalid hash returns `400 invalid_field_value`. A new result more than five minutes ahead of the database clock returns `400 invalid_field_value` for `recorded_at`. The database keeps the supplied time for accepted results. Text over 300 characters returns `422 database_refused_the_statement`. Home reads the latest available result by recorded time.
 
 #### Open a suggestion from Home
 

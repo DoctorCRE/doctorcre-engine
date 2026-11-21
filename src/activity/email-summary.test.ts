@@ -3,13 +3,15 @@ import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { doorTest } from "../test-door.ts";
 
-const { db, setup, cleanup, save } = doorTest();
+const { db, setup, cleanup, save, request } = doorTest();
 const partner = randomUUID();
 const other = randomUUID();
 const fresh = randomUUID();
 const copied = randomUUID();
 const unavailable = randomUUID();
 const refused = randomUUID();
+const future = randomUUID();
+const precise = randomUUID();
 const oldSource = randomUUID();
 const oldHash = `sha256:${"a".repeat(64)}`;
 const copiedResult = {
@@ -31,7 +33,7 @@ before(async () => {
 			('${partner}', 'person', 'Example Partner'), ('${other}', 'person', 'Other Partner');
 		insert into app_user (id, slug) values ('${partner}', 'joe'), ('${other}', 'dell');
 		insert into activity (id, kind, happened_at) values
-			${[fresh, copied, unavailable, refused].map((id) => `('${id}', 'email', '2026-01-01')`).join(",")};
+			${[fresh, copied, unavailable, refused, future, precise].map((id) => `('${id}', 'email', '2026-01-01')`).join(",")};
 		insert into email (activity_id, message_id, sender, subject, body)
 			select id, id || '@example.test', 'sender@example.test', 'Floor plan', 'Can you send the floor plan today?'
 			from activity;
@@ -87,6 +89,53 @@ test("mail capture saves one current result and concurrent retries return the or
 	assert.deepEqual(await results("email_summary", fresh), [expected]);
 	const { status: _status, ...current } = expected;
 	assert.deepEqual(await results("email_current_summary", fresh), [current]);
+});
+
+test("a future recording time is refused for a new result but ignored on replay", async () => {
+	const ahead = { ...summary(future), recorded_at: "9999-01-01T00:00:00Z" };
+	const [status, body] = await record(ahead);
+	assert.equal(status, 400);
+	assert.equal(body.error, "invalid_field_value");
+	assert.deepEqual(body.fields, ["recorded_at"]);
+	assert.deepEqual(await results("email_summary", future), []);
+	const {
+		rows: [time],
+	} = await db.query<{ recorded_at: string }>(
+		"select to_jsonb(clock_timestamp() + interval '4 minutes') #>> '{}' as recorded_at",
+	);
+	assert.ok(time);
+	const input = { ...summary(future), recorded_at: time.recorded_at };
+	const expected = [200, { ...input, source_activity_id: future }];
+	assert.deepEqual(await record(input), expected);
+	assert.deepEqual(await record(ahead), expected);
+});
+
+test("summary provenance preserves large integers when saving and comparing replays", async () => {
+	const send = (runId: string) =>
+		request(caller, path, {
+			method: "POST",
+			body: JSON.stringify({
+				...summary(precise),
+				provenance: { run_id: runId },
+			}).replace(JSON.stringify(runId), runId),
+		});
+	const saved = await send("9007199254740993");
+	assert.equal(saved.status, 200);
+	const answer = await saved.text();
+	assert.match(answer, /"run_id"\s*:\s*9007199254740993\b/u);
+	const replay = await send("9007199254740993.0");
+	assert.equal(replay.status, 200);
+	assert.equal(await replay.text(), answer);
+	const changed = await send("9007199254740992");
+	assert.equal(changed.status, 409);
+	assert.partialDeepStrictEqual(await changed.json(), {
+		error: "email_summary_result_conflict",
+	});
+	const { rows } = await db.query(
+		"select provenance ->> 'run_id' as run_id from email_summary where activity_id = $1",
+		[precise],
+	);
+	assert.deepEqual(rows, [{ run_id: "9007199254740993" }]);
 });
 
 test("an unavailable result keeps no text and leaves the copied text current until a newer available result", async () => {

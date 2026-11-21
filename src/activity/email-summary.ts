@@ -1,10 +1,9 @@
 import { Hono } from "hono";
-import { type Selectable, sql } from "kysely";
+import { sql } from "kysely";
 import pg from "pg";
 import { Refusal, refuse } from "../answer.ts";
 import { failureKind } from "../failure.ts";
 import { nextTransaction } from "../next-connection.ts";
-import type { DB } from "../next-database.d.ts";
 import type { NextSaveEnv } from "../next-door.ts";
 import { stampNextSave } from "../next-save.ts";
 import {
@@ -37,7 +36,13 @@ export const emailSummary = new Hono<NextSaveEnv>().post(
 		const stamp = c.get("stamp");
 		if (stamp.job !== "mail_capture" || !stamp.for_user)
 			return refused(new Refusal(403, "unknown_job"));
-		const body: unknown = await c.req.json().catch(() => undefined);
+		const bodyText = await c.req.text().catch(() => "");
+		let body: unknown;
+		try {
+			body = JSON.parse(bodyText);
+		} catch {
+			return refused(new Refusal(400, "invalid_json"));
+		}
 		if (!isArguments(body)) return refused(new Refusal(400, "invalid_json"));
 		const result = fit(body, shape, [
 			"activity_id",
@@ -63,24 +68,32 @@ export const emailSummary = new Hono<NextSaveEnv>().post(
 					await stampNextSave(tx, stamp);
 					const {
 						rows: [row],
-					} = await sql<{ summary: Selectable<DB["email_summary"]> }>`
-					select to_jsonb(s) as summary
+					} = await sql<{ summary: string }>`
+					select to_jsonb(s)::text as summary
 					from record_email_summary(
 						${result.activity_id}, ${result.source_hash}, ${result.generator_version},
-						${result.status}, ${result.text}, ${JSON.stringify(result.provenance)}, ${result.recorded_at}
+						${result.status}, ${result.text}, (${bodyText}::json -> 'provenance')::jsonb, ${result.recorded_at}
 					) s
 					where s.activity_id is not null
 				`.execute(tx);
 					return row?.summary;
 				},
 			);
-			return saved ? c.json(saved) : refused(new Refusal(404, "not_found"));
+			return saved
+				? c.body(saved, 200, { "Content-Type": "application/json" })
+				: refused(new Refusal(404, "not_found"));
 		} catch (error) {
 			if (error instanceof SaveRefusal) return refused(error.refusal);
 			if (error instanceof pg.DatabaseError) {
 				if (error.constraint === "email_summary_result_conflict")
 					return refused(new Refusal(409, "email_summary_result_conflict"));
-				if (error.code === "22P05")
+				if (error.constraint === "email_summary_recorded_at_in_future")
+					return refused(
+						new Refusal(400, "invalid_field_value", {
+							fields: ["recorded_at"],
+						}),
+					);
+				if (error.code === "22P05" || error.code === "22003")
 					return refused(
 						new Refusal(400, "invalid_field_value", { fields: ["provenance"] }),
 					);
