@@ -2601,6 +2601,13 @@ const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
 	do_not_contact: ["until_date"],
 	doc_conversation: ["owner_user_id"],
+	doc_judgment_job: [
+		"claim_id",
+		"claim_source_hash",
+		"claim_until",
+		"result",
+		"state",
+	],
 	doc_link: ["credential_hash", "issued_at", "last_seen_at", "readiness"],
 	doc_turn: ["answer", "claim_id", "claim_state", "claim_until", "state"],
 	stage: ["label"],
@@ -4365,6 +4372,8 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
 				"deal_open_name",
+				"doc_judgment_destination",
+				"doc_judgment_job",
 				"email_summary",
 				"invoice_mailbox",
 				"imported_automatic_phase_move",

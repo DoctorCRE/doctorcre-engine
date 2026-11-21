@@ -9,7 +9,7 @@ import {
 	revokeDocLink,
 	withDocLink,
 } from "./doc-link.ts";
-import { claimDocTurn, finishDocTurn } from "./doc-queue.ts";
+import { claimDocWork, finishDocJudgment, finishDocTurn } from "./doc-queue.ts";
 import type { DB } from "./next-database.d.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
 import type { WriterEnv } from "./save.ts";
@@ -84,7 +84,14 @@ export function claimDocLink(c: Context<WriterEnv>) {
 			);
 
 		await recordDocPoll(tx, owner, readiness);
-		const work = readiness === "ready" ? await claimDocTurn(tx, owner) : null;
+		const work =
+			readiness === "ready"
+				? await claimDocWork(
+						tx,
+						owner,
+						c.req.header("Doc-Link-Work") === "judgment",
+					)
+				: null;
 		return work
 			? Response.json(work, { headers: noStore })
 			: new Response(null, { status: 204, headers: noStore });
@@ -99,6 +106,10 @@ export async function completeDocLink(c: Context<WriterEnv>) {
 
 		const { claim_id, kind } = body;
 		const fields = Object.keys(body).length;
+		if (kind === "judgment" && fields === 3 && Object.hasOwn(body, "outcome")) {
+			const status = await finishDocJudgment(tx, owner, claim_id, body.outcome);
+			return new Response(null, { status, headers: noStore });
+		}
 		const result: Parameters<typeof finishDocTurn>[2] | null =
 			kind === "answered" && fields === 3 && Object.hasOwn(body, "answer")
 				? { claim_id, kind, answer: body.answer }

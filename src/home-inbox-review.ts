@@ -146,6 +146,14 @@ const visibleSuggestion = (userId: string) => sql<boolean>`
 	end
 `;
 
+export const visibleProposalDetail = (userId: string) => sql<boolean>`
+	p.status = 'pending'
+	and ${sourceInMailbox(sql.ref("p.activity_id"), userId)}
+	and case when p.kind = 'next_step_done'
+		then step.owner_party_id = ${userId}::uuid and step.status = 'open'
+		else ${visibleSuggestion(userId)} end
+`;
+
 export async function readProposal(
 	db: Transaction<DB>,
 	userId: string,
@@ -224,11 +232,7 @@ export async function readProposal(
 				)} end`.as("source_activity"),
 		])
 		.where("p.id", "=", id)
-		.where("p.status", "=", "pending")
-		.where(sourceInMailbox(sql.ref("p.activity_id"), userId))
-		.where(sql<boolean>`case when p.kind = 'next_step_done'
-			then step.owner_party_id = ${userId}::uuid and step.status = 'open'
-			else ${visibleSuggestion(userId)} end`)
+		.where(visibleProposalDetail(userId))
 		.executeTakeFirst();
 	if (!proposal) return new Refusal(404, "not_found");
 	const { email_source_id, ...detail } = proposal;

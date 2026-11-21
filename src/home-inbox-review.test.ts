@@ -1325,7 +1325,7 @@ test("draft and proposal details return only the viewer's distinct messages in t
 			activity_id: id(12),
 			sender_name: "Known Contact",
 			happened_at: "2026-01-04T00:00:00.000Z",
-			body: "Hello,\nCould you please also let me know whether the west suite is still available for a tour later this month?\nPlease send the plan.\nNovember 8 works for the tour.",
+			body: quotedRequest,
 		},
 	]);
 });
@@ -1351,7 +1351,7 @@ test("dashboard hides proposals and drafts when their source is in another mailb
 	assert.deepEqual(await dashboard(user.user), { reminders: [], waiting: [] });
 });
 
-test("single-message threads keep requests around sign-offs and dividers and remove the footer", async () => {
+test("single-message threads keep requests, signatures and history without corroborating mail", async () => {
 	const emails = [75, 76, 77, 79, 81, 82, 83, 84].map(id);
 	const proposals = emails.map(() => randomUUID());
 	const reviewer = id(80);
@@ -1407,23 +1407,19 @@ test("single-message threads keep requests around sign-offs and dividers and rem
 	}
 	assert.deepEqual(
 		threads,
-		[
-			bodies[0],
-			bodies[1],
-			"Please send the plan.",
-			bodies[3],
-			"Current message.",
-			"Current message.",
-			"Current message.",
-			"Current message.\n  Please keep this line.",
-		].map((body) => [body]),
+		bodies.map((body) => [body]),
 	);
 });
 
 test("every Home email review shows each message once without signatures, headers or quoted history", async () => {
 	const reviewer = randomUUID();
 	const user = { user: "clean-thread-reviewer" };
-	const [ask, answer, confirm] = [randomUUID(), randomUUID(), randomUUID()];
+	const [ask, answer, confirm, later] = [
+		randomUUID(),
+		randomUUID(),
+		randomUUID(),
+		randomUUID(),
+	];
 	const followUp = randomUUID();
 	const chooseDeal = randomUUID();
 	const draft = randomUUID();
@@ -1444,15 +1440,22 @@ test("every Home email review shows each message once without signatures, header
 			id: answer,
 			address: "partner@example.test",
 			sender: "Example Thread Partner",
-			body: `${answerText}\r\n\r\n________________________________\r\n*From:* Maya Example <maya@example.test>\r\n\r\n*Sent:* Monday, January 5, 2026 9:00 AM\r\n*To:* Example Thread Partner\r\n*Subject:* Suite 200\r\n\r\n${requestText}`,
+			body: `${answerText}\r\n\r\n*From:* Maya Example <maya@example.test>\r\n\r\n*Sent:* Monday, January 5, 2026 9:00 AM\r\n*To:* Example Thread Partner\r\n*Subject:* Suite 200\r\n\r\n${requestText}`,
 			kept: answerText,
 		},
 		{
 			id: confirm,
 			address: "maya@example.test",
 			sender: "Maya Example",
-			body: `${confirmText}\r\n${signature} On Mon, Jan 5, 2026 at 9:30 AM Example Thread Partner <partner@example.test> wrote: ${answerText} ${requestText}`,
+			body: `${confirmText}\r\n${signature}\r\n> ${answerText}\r\n> ${requestText}`,
 			kept: confirmText,
+		},
+		{
+			id: later,
+			address: "maya@example.test",
+			sender: "Maya Example",
+			body: `Bring the keys.\n${signature}`,
+			kept: "Bring the keys.",
 		},
 	];
 	await db.query(`begin;

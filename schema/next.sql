@@ -1319,10 +1319,10 @@ begin
 			or new.acknowledged_by_user_id is not null or new.acknowledged_at is not null
 			or not exists (
 				select from party_role r join party p on p.id = r.party_id
-				join lead_email_source s on s.party_id = r.party_id join email e using (activity_id)
+				join lead_email_source s on s.party_id = r.party_id
 				where r.party_id = new.party_id and r.role = 'lead' and r.created_at = now()
 					and r.stage = 'new' and r.owner_user_id is null and p.how_found = 'inbound'
-					and s.activity_id = new.activity_id and e.message_id is not null
+					and s.activity_id = new.activity_id
 					and s.mailbox_user_id = nullif(current_setting('engine.user_id', true), '')::uuid
 			) then
 			raise exception 'only a new unclaimed inbound lead starts with email attention'
@@ -1578,9 +1578,10 @@ create table proposal (
 	candidate_id uuid unique references candidate,
 	evidence text not null check (evidence ~ '\S'),
 	proposed_by_job text not null references job,
-	status text not null default 'pending' check (status in ('pending', 'accepted', 'dismissed')),
+	status text not null default 'pending' check (status in ('pending', 'accepted', 'dismissed', 'superseded')),
 	decided_by_user_id uuid references app_user,
 	decided_at timestamptz,
+	superseded_reason text,
 	deal_id uuid references deal,
 	next_step_id uuid,
 	held_deal_id uuid generated always as (case when kind = 'next_step_done' then deal_id end) stored,
@@ -1620,7 +1621,10 @@ create table proposal (
 	constraint proposal_dismiss_reason check (dismiss_reason is null or status = 'dismissed'),
 	constraint proposal_decision_whole check (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
-		or (status <> 'pending' and decided_by_user_id is not null and decided_at is not null)),
+		or (status in ('accepted', 'dismissed') and decided_by_user_id is not null and decided_at is not null)
+		or (status = 'superseded' and decided_by_user_id is null and decided_at is not null)),
+	constraint proposal_superseded_reason check (
+		superseded_reason is not distinct from case when status = 'superseded' then 'Moved to Leads' end),
 	constraint proposal_stated_phase check (case when phase_stated then
 		kind = 'phase_move' and activity_kind in ('call', 'meeting') else phase_on is null end),
 	constraint proposal_held_step check (case when kind = 'next_step_done' then
@@ -1811,7 +1815,25 @@ begin
 end $$;
 
 create trigger decide_proposal before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
-	for each row execute function decide_proposal();
+	for each row when (new.status <> 'superseded') execute function decide_proposal();
+
+create function supersede_lead_filing() returns trigger
+language plpgsql as $$
+begin
+	if tg_op <> 'UPDATE' or old.status <> 'pending'
+		or new.kind not in ('file_to_deal', 'possible_new_deal')
+		or current_setting('engine.job', true) is distinct from 'mail_capture'
+		or not exists (select from lead_email_source where activity_id = new.activity_id) then
+		raise exception 'mail capture supersedes only a pending filing for an email moved to Leads'
+			using errcode = 'check_violation', constraint = 'proposal_lead_supersede';
+	end if;
+	new.decided_at := clock_timestamp();
+	new.superseded_reason := 'Moved to Leads';
+	return new;
+end $$;
+
+create trigger supersede_lead_filing before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
+	for each row when (new.status = 'superseded') execute function supersede_lead_filing();
 
 -- A call's resolution can keep the current date until a new ordinary step takes its place.
 create view deal_next_date with (security_invoker = true) as
@@ -4059,3 +4081,61 @@ create policy doc_link_credential on doc_link for select to engine using (
 revoke all on doc_link from public, engine_reader;
 grant select, insert, delete on doc_link to engine;
 grant update (credential_hash, issued_at, last_seen_at, readiness) on doc_link to engine;
+
+create table doc_judgment_job (
+	id uuid primary key default gen_random_uuid(),
+	owner_user_id uuid not null,
+	is_account_partner boolean not null generated always as (true) stored,
+	activity_id uuid not null,
+	idempotency_key uuid not null,
+	created_at timestamptz not null default now(),
+	kind text not null check (kind in ('email_summary', 'email_filing')),
+	first_destination integer generated always as (case when kind = 'email_filing' then 1 end) stored,
+	state text not null default 'queued',
+	claim_id uuid unique,
+	claim_until timestamptz,
+	claim_source_hash bytea,
+	result jsonb check (jsonb_typeof(result) = 'object'),
+	unique (id, kind),
+	unique (owner_user_id, idempotency_key),
+	foreign key (owner_user_id, is_account_partner) references app_user (id, is_account_partner),
+	foreign key (activity_id, owner_user_id) references email_mailbox on delete cascade,
+	check ((state = 'working' and claim_id is not null and claim_until is not null
+			and claim_source_hash is not null and result is null)
+		or (state in ('queued', 'failed', 'answered') and claim_id is null and claim_until is null
+			and claim_source_hash is null and ((state = 'answered') = (result is not null)))
+	)
+);
+
+alter table doc_judgment_job enable row level security;
+create policy doc_judgment_owner on doc_judgment_job to engine using (
+	owner_user_id = nullif(current_setting('engine.user_id', true), '')::uuid
+	and nullif(current_setting('engine.job', true), '') is null
+);
+revoke all on doc_judgment_job from public, engine_reader;
+grant select on doc_judgment_job to engine;
+grant update (state, claim_id, claim_until, claim_source_hash, result) on doc_judgment_job to engine;
+
+create table doc_judgment_destination (
+	job_id uuid not null,
+	job_kind text generated always as ('email_filing') stored,
+	position integer not null check (position > 0),
+	deal_id uuid references deal,
+	vendor_id uuid,
+	vendor_role text generated always as ('vendor') stored,
+	primary key (job_id, position),
+	foreign key (job_id, job_kind) references doc_judgment_job (id, kind) on delete cascade,
+	foreign key (vendor_id, vendor_role) references party_role (party_id, role),
+	check (num_nonnulls(deal_id, vendor_id) = 1)
+);
+
+-- A filing job and its first destination must be written in the same transaction.
+alter table doc_judgment_job add foreign key (id, first_destination)
+	references doc_judgment_destination (job_id, position) deferrable initially deferred;
+
+alter table doc_judgment_destination enable row level security;
+create policy doc_judgment_destination_owner on doc_judgment_destination to engine using (
+	exists (select 1 from doc_judgment_job where id = job_id)
+);
+revoke all on doc_judgment_destination from public, engine_reader;
+grant select on doc_judgment_destination to engine;

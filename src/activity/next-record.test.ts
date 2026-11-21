@@ -54,6 +54,7 @@ async function ask(path: string, body: object | undefined, headers: object) {
 			JOBS_ACCESS_AUD: "made-up-jobs",
 			DATABASE_WRITER: { connectionString: url.href },
 			DATABASE: { connectionString: url.href },
+			HOME_INBOX_READ_SCHEMA: "next",
 			CARR: { fetch: async () => Response.json(session) },
 		},
 	);
@@ -155,6 +156,229 @@ async function assertRows(
 ) {
 	assert.equal((await db.query(statement, values)).rowCount, count);
 }
+
+const [storedNotice, ordinary] = [id(80), id(81)];
+const [unrelated, filing, suggestedDeal, otherFiling, reply] = [
+	id(82),
+	id(83),
+	id(84),
+	id(85),
+	id(86),
+];
+const reconcile = (activity_id: string, options = {}) =>
+	jobRequest(
+		"leads/email-reconcile",
+		{
+			activity_id,
+			idempotency_key: randomUUID(),
+			...options,
+		},
+		MAIL_CAPTURE,
+	);
+
+test("reconciliation moves exact filings to Leads and keeps other Home work", async () => {
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into lead_source_sender (domain, name) values ('source.example.test', 'Example domain');
+		insert into lead_source_sender (address, name, fields) values
+			('intake@source.example.test', 'Example sender', '{"name":"Contact","street_address":"Address"}');
+		insert into activity (id, kind, happened_at)
+			select id, 'email', '2026-11-02T15:00:00Z'
+			from unnest(array['${storedNotice}', '${ordinary}']::uuid[]) as e(id);
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body, imported)
+			select id, null, 'same-thread', sender, 'Example notice',
+				'New request Contact: Maya Example · maya@example.test Address: 12 Fixture Row', true
+			from (values ('${storedNotice}'::uuid, 'intake@source.example.test'), ('${ordinary}', 'other@example.test')) as e(id, sender);
+		insert into email_mailbox (activity_id, user_id) select id, '${JOE}' from activity where id in ('${storedNotice}', '${ordinary}');
+		insert into activity_about (activity_id, party_id) select id, '${JOE}' from activity where id in ('${storedNotice}', '${ordinary}');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job)
+			values ('${filing}', 'possible_new_deal', '${storedNotice}', 'email', 'Example notice', 'old_system'),
+				('${otherFiling}', 'possible_new_deal', '${ordinary}', 'email', 'Other email', 'old_system');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what)
+			values ('${suggestedDeal}', 'file_to_deal', '${storedNotice}', 'email', 'Example notice', 'old_system', '${DEAL}', null),
+				('${unrelated}', 'next_step', '${storedNotice}', 'email', 'Please call', 'old_system', '${DEAL}', 'Call the prospect');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+			values ('${reply}', '${storedNotice}', '${JOE}', 'old_system', 'Re: Example notice', 'Thanks for writing.', 'New request');
+		commit;`);
+	const key = randomUUID();
+	assert.deepEqual(
+		await reconcile(storedNotice, { dry_run: true, idempotency_key: key }),
+		{ status: 200, body: { eligible_emails: 1, filing_decisions: 2 } },
+	);
+	await assertRows(
+		1,
+		`select where not exists (select from lead_email_source where activity_id = $1)
+		and not exists (select from save_receipt where idempotency_key = $2)`,
+		storedNotice,
+		key,
+	);
+
+	const {
+		status,
+		body: { party_id, filing_decisions },
+	} = await reconcile(storedNotice, { idempotency_key: key });
+	assert.equal(status, 200);
+	assert.equal(filing_decisions, 2);
+	assert.ok(typeof party_id === "string");
+	await assertRows(
+		2,
+		`select from proposal where id in ($1, $2) and status = 'superseded'
+		and changed_by_job = 'mail_capture' and superseded_reason = 'Moved to Leads'`,
+		filing,
+		suggestedDeal,
+	);
+	const home = await ask("/api/engine/home/inbox?view=dashboard", undefined, {
+		Cookie: "__Host-dealroom_session=made-up",
+	});
+	assert.equal(home.status, 200);
+	const cards = JSON.stringify(home.body);
+	for (const kept of [reply, unrelated, otherFiling])
+		assert.ok(cards.includes(kept), kept);
+	for (const settled of [filing, suggestedDeal])
+		assert.ok(!cards.includes(settled), settled);
+
+	await assertRows(
+		1,
+		`select from lead_email_source s join party p on p.id = s.party_id
+		join party_role r on r.party_id = p.id and r.role = 'lead'
+		join lead_email_attention a on a.party_id = p.id
+		where s.activity_id = $1 and p.id = $2 and p.name = 'Maya Example'
+		and r.owner_user_id is null and a.acknowledged_at is null`,
+		storedNotice,
+		party_id,
+	);
+	await db.query(`begin; select set_config('engine.user_id', '${JOE}', true);
+		update party_role set owner_user_id = '${JOE}' where party_id = '${party_id}' and role = 'lead';
+		update lead_email_attention set acknowledged_by_user_id = '${JOE}', acknowledged_at = now()
+		where party_id = '${party_id}'; commit;`);
+	const history = async () =>
+		(
+			await db.query(
+				`select id from change
+		where record->>'id' in ($1, $2) or record->>'party_id' = $3 order by id`,
+				[filing, suggestedDeal, party_id],
+			)
+		).rows;
+	const before = await history();
+	assert.deepEqual(await reconcile(storedNotice), {
+		status: 200,
+		body: { party_id, eligible_emails: 1, filing_decisions: 0 },
+	});
+	assert.deepEqual(await history(), before);
+	await assertRows(
+		1,
+		`select from party_role r join lead_email_attention a using (party_id)
+		where r.party_id = $1 and r.role = 'lead' and r.owner_user_id = $2 and a.acknowledged_by_user_id = $2`,
+		party_id,
+		JOE,
+	);
+
+	assert.deepEqual(await reconcile(ordinary), {
+		status: 200,
+		body: { eligible_emails: 0, filing_decisions: 0 },
+	});
+	await assertRows(
+		1,
+		`select from proposal where id = $1 and status = 'pending'
+		and not exists (select from lead_email_source where activity_id = $2)`,
+		otherFiling,
+		ordinary,
+	);
+});
+
+async function copiedNotice(activity_id: string, sender: string, body: string) {
+	await db.query("begin");
+	try {
+		await db.query("select set_config('engine.job', 'old_system', true)");
+		await db.query(
+			"insert into lead_source_sender (address, name) values ($1, 'Example source')",
+			[sender],
+		);
+		await db.query(
+			"insert into activity (id, kind, happened_at) values ($1, 'email', '2026-11-02T15:00:00Z')",
+			[activity_id],
+		);
+		await db.query(
+			`insert into email (activity_id, message_id, sender, subject, body, imported)
+			values ($1, null, $2, 'Example notice', $3, true)`,
+			[activity_id, sender, body],
+		);
+		await db.query(
+			"insert into email_mailbox (activity_id, user_id) values ($1, $2)",
+			[activity_id, JOE],
+		);
+		await db.query(
+			"insert into activity_about (activity_id, party_id) values ($1, $2)",
+			[activity_id, JOE],
+		);
+		await db.query(
+			`insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job)
+			values ('possible_new_deal', $1, 'email', 'Example notice', 'old_system')`,
+			[activity_id],
+		);
+		await db.query("commit");
+	} catch (error) {
+		await db.query("rollback");
+		throw error;
+	}
+}
+
+for (const { number, separator, marker } of [
+	{ number: 87, separator: "\r\n", marker: "-----Original Message-----" },
+	{ number: 89, separator: " ", marker: "Begin forwarded message:" },
+]) {
+	test(`reconciliation leaves filings pending when the notice follows ${marker}`, async () => {
+		const activity_id = id(number);
+		await copiedNotice(
+			activity_id,
+			`withdrawals-${number}@example.test`,
+			[
+				"Please withdraw this inquiry.",
+				marker,
+				"Name: Robin Example",
+				"Email: robin@example.test",
+			].join(separator),
+		);
+		const none = {
+			status: 200,
+			body: { eligible_emails: 0, filing_decisions: 0 },
+		};
+		assert.deepEqual(await reconcile(activity_id, { dry_run: true }), none);
+		assert.deepEqual(await reconcile(activity_id), none);
+		await assertRows(
+			1,
+			`select from proposal where activity_id = $1 and status = 'pending'
+			and not exists (select from lead_email_source where activity_id = $1)`,
+			activity_id,
+		);
+	});
+}
+
+test("reconciliation moves a copied one-line notice with default labels", async () => {
+	const activity_id = id(88);
+	await copiedNotice(
+		activity_id,
+		"forms@example.test",
+		"New request Name: Alex Example Email: alex@example.test",
+	);
+	assert.deepEqual(await reconcile(activity_id, { dry_run: true }), {
+		status: 200,
+		body: { eligible_emails: 1, filing_decisions: 1 },
+	});
+	const { status, body } = await reconcile(activity_id);
+	assert.equal(status, 200);
+	assert.ok(typeof body.party_id === "string");
+	await assertRows(
+		1,
+		`select from lead_email_source s join party p on p.id = s.party_id
+		join party_email e on e.party_id = p.id
+		join proposal f on f.activity_id = s.activity_id
+		where s.activity_id = $1 and p.id = $2 and p.name = 'Alex Example'
+		and e.address = 'alex@example.test' and f.status = 'superseded'`,
+		activity_id,
+		body.party_id,
+	);
+});
 
 test("the router queue identifies emails saved by lead intake", async () => {
 	const happened_at = new Date().toISOString();
@@ -318,6 +542,7 @@ test("a street and city qualify a notice and reuse email already stored by Messa
 });
 
 test("ineligible email leaves evidence only", async (t) => {
+	const { rowCount: proposals } = await db.query("select from proposal");
 	const internal = notice("internal");
 	internal.email.sender = "joe@example.com";
 	const cases = [
@@ -364,7 +589,7 @@ test("ineligible email leaves evidence only", async (t) => {
 			);
 		});
 	}
-	await assertRows(0, "select from proposal");
+	assert.equal((await db.query("select from proposal")).rowCount, proposals);
 });
 
 test("the database requires a prospect name and valid contact facts on a lead source", async () => {
