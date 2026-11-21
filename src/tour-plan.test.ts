@@ -87,6 +87,29 @@ for (const migrated of [false, true]) {
 			await db.query(`update tour_plan set notes = 'Bring a floor plan';
 			delete from tour_stop; ${addStop(plan, 1)}; ${addStop(plan, 2)};`);
 
+			const {
+				rows: [before],
+			} = await db.query<{ revision: number }>(
+				"select revision from tour_plan",
+			);
+			assert.ok(before);
+			await db.query(`set engine.user_id = '${owner}';
+				delete from tour_stop; ${addStop(plan, 2)}; ${addStop(plan, 3)};`);
+			await db.query(`set engine.user_id = '${partner}'`);
+			const stale = await db.query(
+				"update tour_plan set notes = 'Stale edit' where id = $1 and revision = $2",
+				[plan, before.revision],
+			);
+			assert.equal(stale.rowCount, 0);
+			const {
+				rows: [after],
+			} = await db.query<{ revision: number; changed_by_user_id: string }>(
+				"select revision, changed_by_user_id from tour_plan",
+			);
+			assert.ok(after);
+			assert.ok(after.revision > before.revision);
+			assert.equal(after.changed_by_user_id, owner);
+
 			const other = new pg.Client({
 				connectionString,
 				options: "-c search_path=next",
@@ -95,7 +118,7 @@ for (const migrated of [false, true]) {
 			try {
 				await other.query(`set role engine; set engine.user_id = '${owner}';
 				begin isolation level repeatable read; select from tour_stop;`);
-				await db.query("delete from tour_stop where position = 1");
+				await db.query("delete from tour_stop where position = 3");
 				await assert.rejects(
 					other.query("delete from tour_stop where position = 2; commit"),
 					{ code: "40001" },

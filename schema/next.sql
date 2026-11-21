@@ -1078,6 +1078,7 @@ create table tour_plan (
 	completed_activity_id uuid unique,
 	completed_activity_kind text generated always as ('meeting') stored,
 	cancelled_at timestamptz,
+	revision integer not null default 1 check (revision >= 1),
 	constraint tour_plan_one_outcome check (num_nonnulls(completed_activity_id, cancelled_at) <= 1),
 	foreign key (completed_activity_id, completed_activity_kind) references activity (id, kind)
 );
@@ -1092,9 +1093,13 @@ create table tour_stop (
 	primary key (tour_plan_id, position)
 );
 
-create function tour_plan_open_for_update() returns trigger
+create function revise_tour_plan() returns trigger
 language plpgsql as $$
 begin
+	if tg_op = 'INSERT' then
+		new.revision := 1;
+		return new;
+	end if;
 	if new.deal_id is distinct from old.deal_id then
 		raise exception 'a tour plan stays with its deal'
 			using errcode = 'check_violation', constraint = 'tour_plan_same_deal';
@@ -1103,13 +1108,14 @@ begin
 		raise exception 'only a planned tour can change'
 			using errcode = 'check_violation', constraint = 'tour_plan_open';
 	end if;
+	new.revision := old.revision + 1;
 	return new;
 end $$;
 
 create function tour_stop_on_open_plan() returns trigger
 language plpgsql as $$
 begin
-	-- Write the parent version so concurrent stop removals and finalization cannot both use an old snapshot.
+	-- Restamp the plan on stop edits and serialize them with finalization.
 	update tour_plan set planned_on = planned_on where id in (old.tour_plan_id, new.tour_plan_id);
 	return case when tg_op = 'DELETE' then old else new end;
 end $$;
@@ -1137,10 +1143,10 @@ do $$ begin
 	execute format('alter function tour_plan_requires_stop set search_path = pg_catalog, %I, pg_temp', current_schema());
 end $$;
 
-revoke execute on function tour_plan_open_for_update(), tour_stop_on_open_plan(), tour_plan_requires_stop() from public;
+revoke execute on function revise_tour_plan(), tour_stop_on_open_plan(), tour_plan_requires_stop() from public;
 
-create trigger tour_plan_open_for_update before update on tour_plan
-	for each row execute function tour_plan_open_for_update();
+create trigger revise_tour_plan before insert or update on tour_plan
+	for each row execute function revise_tour_plan();
 create trigger tour_stop_on_open_plan before insert or update or delete on tour_stop
 	for each row execute function tour_stop_on_open_plan();
 
