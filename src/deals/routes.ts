@@ -71,8 +71,10 @@ deals.get("/deals/:deal{.+}", async (c): Promise<Response> => {
 	const refused = checkFields(dealArguments(c.req.url, deal), ["deal"]);
 	if (refused) return refuse(c, refused);
 	if (c.env.DEALS_READ_SCHEMA === "next") {
-		return answerNextRead(c, "get-deal-room", async (db) => {
-			const detail = isUuid(deal) ? await readNextDealDetail(db, deal) : null;
+		return answerNextRead(c, "get-deal-room", async (db, userId) => {
+			const detail = isUuid(deal)
+				? await readNextDealDetail(db, deal, userId)
+				: null;
 			return !detail || "error" in detail
 				? new Refusal(404, "not_found")
 				: detail;
