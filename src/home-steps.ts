@@ -106,6 +106,19 @@ export function stepTargetFields(db: Transaction<DB>) {
 	`;
 }
 
+export const datedPartnerSteps = sql`
+	from home_next_step s
+	join app_user u on u.id = s.owner_party_id and u.is_account_partner
+	left join deal d on d.id = s.deal_id
+	left join party p on p.id = s.party_id
+	left join property on property.id = s.property_id
+	left join home_mark m on m.user_id = s.owner_party_id and m.item_id = s.id
+		and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
+	where s.due_on is not null
+		and m.disposition is distinct from 'dropped'
+		and (m.snoozed_until is null or m.snoozed_until <= now())
+`;
+
 export const stepItemId = (step: { id: string; call_id: string | null }) =>
 	`${step.call_id ? "capture_post_call_action" : "next_action"}:${step.id}`;
 
@@ -113,21 +126,24 @@ export function dealStepUrl(dealId: string, stepId: string) {
 	return `/deals?deal=${dealId}&focus=next-step&step=${stepId}`;
 }
 
-export function stepOpenUrl(step: {
+type StepTarget = {
 	id: string;
-	call_id: string | null;
 	deal_id: string | null;
 	party_id: string | null;
 	prospect: boolean;
 	building_deal_id: string | null;
-}) {
-	return step.call_id
-		? `/calls?session=${step.call_id}`
-		: step.deal_id
-			? dealStepUrl(step.deal_id, step.id)
-			: step.party_id
-				? step.prospect
-					? `/deals?prospect=${step.party_id}&focus=follow-up&step=${step.id}`
-					: `/relationships?node=party:${step.party_id}&step=${step.id}`
-				: step.building_deal_id && `/deals?deal=${step.building_deal_id}`;
+};
+
+export function stepRecordUrl(step: StepTarget) {
+	if (step.deal_id) return dealStepUrl(step.deal_id, step.id);
+	if (step.party_id) {
+		return step.prospect
+			? `/deals?prospect=${step.party_id}&focus=follow-up&step=${step.id}`
+			: `/relationships?node=party:${step.party_id}&step=${step.id}`;
+	}
+	return step.building_deal_id && `/deals?deal=${step.building_deal_id}`;
+}
+
+export function stepOpenUrl(step: StepTarget & { call_id: string | null }) {
+	return step.call_id ? `/calls?session=${step.call_id}` : stepRecordUrl(step);
 }
