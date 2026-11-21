@@ -3,11 +3,13 @@ import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { z } from "zod";
 import { Refusal, refuse } from "../answer.ts";
+import { isCalendarDate } from "../calendar-date.ts";
 import { failureKind } from "../failure.ts";
 import { visibleProposalDetail } from "../home-inbox-review.ts";
 import { nextTransaction } from "../next-connection.ts";
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
-import type { NextSaveEnv } from "../next-door.ts";
+import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
+import { fit } from "../request-shape.ts";
 import { isUuid } from "../uuid.ts";
 import { criticalDateLabel } from "./checklist.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./next-board.ts";
@@ -40,22 +42,36 @@ async function answer(c: Context<NextSaveEnv>, read: Read): Promise<Response> {
 	}
 }
 
-async function checklistReminders(db: Transaction<DB>, dealId: string) {
+function checklistDeals(db: Transaction<DB>) {
 	const board = selectNextDeals(db).select([
 		"owner.id as owner_user_id",
 		"owner.is_account_partner",
 	]);
-	const deal = await db
+	return db
 		.selectFrom(board.as("board"))
 		.select(["id as deal_id", "owner_user_id", "owner"])
 		.select(
-			sql<string>`(now() at time zone 'America/Chicago')::date::text`.as(
-				"observed_on",
-			),
-		)
-		.select(
 			sql<boolean>`(${isOpenBoardDeal}) and operating_state = 'active' and is_account_partner`.as(
 				"eligible",
+			),
+		);
+}
+
+const openChecklistItems = (day: string) => sql`
+	select deal_id, 'critical-date:' || id as item_ref, kind as title,
+		due_on, true as standard, null::timestamptz as created_at
+	from critical_date where status = 'open' and due_on between date '0001-01-01' and ${day}::date
+	union all
+	select deal_id, 'deal-item:' || id, item_title, due_on, false, created_at
+	from next_step where status = 'open' and item_title is not null
+		and source_ref ~ '[^[:space:]]' and due_on between date '0001-01-01' and ${day}::date
+`;
+
+async function checklistReminders(db: Transaction<DB>, dealId: string) {
+	const deal = await checklistDeals(db)
+		.select(
+			sql<string>`(now() at time zone 'America/Chicago')::date::text`.as(
+				"observed_on",
 			),
 		)
 		.where("id", "=", dealId)
@@ -69,16 +85,9 @@ async function checklistReminders(db: Transaction<DB>, dealId: string) {
 		due_on: string;
 		standard: boolean;
 	}>`
-		with due as (
-			select 'critical-date:' || id as item_ref, kind as title, due_on, true as standard, null::timestamptz as created_at
-			from critical_date where deal_id = ${dealId} and status = 'open'
-			union all
-			select 'deal-item:' || id, item_title, due_on, false, created_at
-			from next_step where deal_id = ${dealId} and status = 'open' and item_title is not null
-			and source_ref ~ '[^[:space:]]'
-		)
-		select item_ref, title, due_on::text, standard from due
-		where due_on between date '0001-01-01' and ${deal.observed_on}::date
+		select item_ref, title, due_on::text, standard
+		from (${openChecklistItems(deal.observed_on)}) due
+		where deal_id = ${dealId}
 		and not exists (
 			select from home_update u where u.user_id = ${deal.owner_user_id} and u.deal_id = ${dealId}
 			and u.checklist_item_ref = due.item_ref and u.due_on = due.due_on
@@ -93,6 +102,49 @@ async function checklistReminders(db: Transaction<DB>, dealId: string) {
 			title: standard ? criticalDateLabel(title) : title,
 		})),
 	};
+}
+
+const isRunDate = (value: unknown): value is string =>
+	isCalendarDate(value) && value >= "0001-01-01";
+
+async function queueChecklistReminders(
+	db: Transaction<DB>,
+	{ run_date }: { run_date: string },
+) {
+	const { rows } = await sql<{ queued: number; already_queued: number }>`
+		with due as (
+			select deal_id, owner_user_id, item_ref, due_on
+			from (${openChecklistItems(run_date)}) item
+			join (${checklistDeals(db)}) deal using (deal_id) where deal.eligible
+		), local_times as (
+			select owner_user_id, coalesce(p.time_zone, 'America/Chicago') as zone,
+				now() at time zone coalesce(p.time_zone, 'America/Chicago') as local_now,
+				coalesce(p.quiet_until, time '07:00') as opens_at
+			from (select distinct owner_user_id from due) owners
+			left join user_preference p on p.user_id = owner_user_id
+		), windows as (
+			select owner_user_id, zone, local_now, local_now::date + opens_at as opens_today
+			from local_times
+		), queued as (
+			insert into home_update (user_id, deal_id, checklist_item_ref, due_on, what, held_until)
+			select owner_user_id, deal_id, item_ref, due_on,
+				'A deal checklist item is due. Open the deal checklist for details.',
+				case when local_now < opens_today then opens_today at time zone zone
+					when local_now >= opens_today + interval '4 hours'
+						then (opens_today + interval '1 day') at time zone zone
+				end
+			from due join windows using (owner_user_id)
+			order by owner_user_id, deal_id, item_ref, due_on
+			on conflict (user_id, deal_id, checklist_item_ref, due_on) do nothing
+			returning id
+		)
+		select count(*)::int as queued,
+			((select count(*) from due) - count(*))::int as already_queued
+		from queued
+	`.execute(db);
+	const [answer] = rows;
+	if (!answer) throw new Error("Checklist reminders were not counted");
+	return answer;
 }
 
 type Watch = {
@@ -206,6 +258,20 @@ const watchQuery = z.strictObject({
 });
 
 export const notificationReads = new Hono<NextSaveEnv>()
+	.post("/deals/checklist-reminders", async (c) => {
+		if (c.get("stamp").job !== "nightly_checklist")
+			return refuse(c, new Refusal(403, "unknown_job"));
+		return answerNextSave(
+			c,
+			"queue-checklist-reminders",
+			(body) =>
+				fit(body, { idempotency_key: isUuid, run_date: isRunDate }, [
+					"idempotency_key",
+					"run_date",
+				]),
+			queueChecklistReminders,
+		);
+	})
 	.get("/deals/:deal_id/checklist-reminders", async (c) => {
 		const id = c.req.param("deal_id");
 		if (!isUuid(id)) return refuse(c, new Refusal(404, "not_found"));

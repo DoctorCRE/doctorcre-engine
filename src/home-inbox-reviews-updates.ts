@@ -175,6 +175,8 @@ const viewFilters = {
 	updates: sql``,
 };
 
+export const homeUpdateAvailable = sql`(u.held_until is null or u.held_until <= now())`;
+
 function updateText(update: HomeUpdate) {
 	const text = homeDisplayText(update.title);
 	const deal = homeDisplayText(update.deal_name);
@@ -233,6 +235,7 @@ export async function readHomeUpdates(
 				and record = jsonb_build_object('user_id', u.user_id, 'item_kind', 'home_update', 'item_id', u.id)
 		) mark_change
 		where u.user_id = ${userId}::uuid
+			and ${homeUpdateAvailable}
 			and m.disposition is distinct from 'dropped'
 			${viewFilters[view]}
 		order by u.created_at desc, u.id

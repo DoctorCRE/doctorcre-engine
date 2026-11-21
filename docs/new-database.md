@@ -9,7 +9,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`app_user`**: each person who uses the system, today the two partners, one row each with their person's id and the `slug` they sign in under. `user` is a reserved word in PostgreSQL. A user still shows on timelines and deals as their person. Each user's facts will be columns here, or a child table keyed by the user, as they come.
 - **`user_preference`**: a user's own settings and notification choices: their time zone, quiet hours and whether notifications reach their devices.
 - **`home_mark`**: a user's own mark on an item on their Home: snoozed until a time, dropped with a reason, and whom it waits on and why.
-- **`home_update`**: an update about a deal for one user (`update` or `tour_feedback`), with the words shown on Home, the checklist reference or property when applicable, and when it was read.
+- **`home_update`**: an update about a deal for one user (`update` or `tour_feedback`), with the words shown on Home, the checklist reference or property when applicable, an optional morning hold, and when it was read.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.
 - **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason and an optional until-date.
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
@@ -2118,7 +2118,13 @@ The old nightly script took distinct deal IDs from the Home agenda in ID order (
 
 `GET /jobs/deals/:deal_id/checklist-reminders` answers with `deal_id`, `owner_user_id`, `owner` (slug), `observed_on` (Central date), and `items`. Each item has `item_ref`, `title`, and `due_on`. Parked, closed, lost, or invoiced deals and those without a partner owner return no items. The read lists open confirmed standard deadlines due by today in date order, then open sourced stored checklist items due by today in creation order.
 
-Once switched, the nightly caller supplies active deal IDs in ID order and queues the returned items for the deal owner's morning window. The read excludes a reminder if `home_update` already has the recipient, deal, item reference, and due date. A later save must use that same unique key to handle concurrent runs. Both routes require the jobs Access token and a registered job. The caller switches and delivery are separate work.
+The read excludes a reminder if `home_update` already has the recipient, deal, item reference, and due date. It requires the jobs Access token and a registered job.
+
+`POST /jobs/deals/checklist-reminders` requires the jobs Access token and `Engine-Job: nightly_checklist`. Send a Central calendar date as `run_date` (`YYYY-MM-DD`) and an `idempotency_key` UUID. The engine checks all eligible deals for deadlines due through `run_date` and queues the reminders in the same transaction. The answer is `{ queued, already_queued }`. The database's unique key uses the owner, deal, item reference, and deadline's due date. A new run counts matching reminders as `already_queued`, including any queued by a concurrent run. A same-key retry returns the first counts with `replayed: true`.
+
+The job saves “A deal checklist item is due. Open the deal checklist for details.” A reminder queued during the owner's four-hour morning window is visible immediately. At other times it stays off Home, Updates, and the unread count until the next window opens. The window opens at the end of quiet hours, or at 07:00 if quiet hours are unset, in the owner's time zone. The default zone is Central.
+
+Existing databases need [the checklist reminder schema update](../schema/add-checklist-reminder-door.sql) before deploying the engine change. The Studio caller enables its separate switch after the route is ready (carr-system #3271).
 
 ### What can start when this merges
 

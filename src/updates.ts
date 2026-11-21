@@ -2,7 +2,10 @@ import { Hono } from "hono";
 import { type RawBuilder, sql, type Transaction } from "kysely";
 import { answerNextRead, Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
-import { readHomeUpdates } from "./home-inbox-reviews-updates.ts";
+import {
+	homeUpdateAvailable,
+	readHomeUpdates,
+} from "./home-inbox-reviews-updates.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { ACTING_USER } from "./next-save.ts";
@@ -18,6 +21,7 @@ const unreadCount = async (db: Transaction<DB>, user: RawBuilder<string>) => {
 	} = await sql<{ unread_count: number }>`
 		select count(*)::int as unread_count from home_update u
 		where u.user_id = ${user} and u.read_at is null
+			and ${homeUpdateAvailable}
 			and not exists (select from home_mark m
 				where (m.user_id, m.item_kind, m.item_id) = (u.user_id, 'home_update', u.id)
 					and m.disposition = 'dropped')
@@ -55,8 +59,9 @@ async function markRead(
 ) {
 	const { rows } = await sql<{ id: string; read_at: string }>`
 		with mine as (
-			select id from home_update
+			select id from home_update u
 			where id = any(${update_ids}::uuid[]) and user_id = ${ACTING_USER}
+				and ${homeUpdateAvailable}
 			for no key update
 		), marked as (
 			update home_update u set read_at = now()
