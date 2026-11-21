@@ -27,7 +27,7 @@ const run = async (sql = copy, fixtureSql = "", keepOpen = false) => {
 		throw error;
 	}
 };
-const users = [1, 3, 4];
+const users = [1, 3, 4, 5];
 const actions = [100, 101, 102, 103, 104, 105, 106, 107, 108];
 const marks = () =>
 	rows(
@@ -41,7 +41,7 @@ let report: unknown[][];
 before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
- insert into public.actor (id,slug,kind,display_name) values ${[1, 2, 3, 4].map((n) => `('${id(n)}','example_${n}','human','Example User ${n}')`).join(",")};
+ insert into public.actor (id,slug,kind,display_name) values ${[1, 2, 3, 4, 5].map((n) => `('${id(n)}','example_${n}','human','Example User ${n}')`).join(",")};
  ${users
 		.map(
 			(
@@ -63,10 +63,11 @@ before(async () => {
  insert into public.next_action (id,subject_type,subject_id,owner_id,description,status,created_by) values
  ${actions.map((n) => `('${id(n)}','lead','${id(30)}','${id(1)}','${n === 105 ? " " : `Example step ${n}`}','${n === 100 ? "open" : n === 105 ? "dropped" : "done"}','${id(1)}')`).join(",")};
  insert into ops.notification_preference (actor,device_opt_in,quiet_hours_start,quiet_hours_end,timezone,version) values
- ('${id(1)}',true,'22:00','06:00','America/Chicago',3),
+ ('${id(1)}',true,'22:00','06:00',default,3),
  ('${id(2)}',false,null,null,'UTC',1),
  ('${id(3)}',false,null,null,'Example/Nowhere',1),
- ('${id(4)}',true,'08:00','08:00','UTC',2);
+ ('${id(4)}',true,'08:00','08:00','UTC',2),
+ ('${id(5)}',false,null,null,'America/New_York',1);
  insert into ops.home_inbox_disposition (actor_id,item_id,disposition,snoozed_until,source_version,material_version,updated_at) values
  ('${id(1)}','${item(100)}','snoozed','2026-12-01','1','m','2026-10-01'),
  ('${id(1)}','${item(101)}','settled',null,'1','m','2026-10-02'),
@@ -90,9 +91,10 @@ before(async () => {
 });
 after(cleanup);
 
-test("each user's settings become their preferences, and unknown zones and equal quiet hours wait for that user", async () => {
+test("preferences copy the old default as Central, keep other zones and report invalid settings", async () => {
 	assert.deepEqual(await preferences(), [
 		[id(1), "America/Chicago", "22:00:00", "06:00:00", true, id(1), null, true],
+		[id(5), "America/New_York", null, null, false, id(5), null, true],
 	]);
 	assert.deepEqual(
 		report.filter(([, , , reason]) =>

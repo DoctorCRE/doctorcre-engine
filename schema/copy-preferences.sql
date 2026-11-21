@@ -19,7 +19,8 @@ select p.actor, f.field, f.value, f.reason from old_preference p cross join late
 insert into not_copied select * from preference_refusal;
 -- Today's row keeps no time; only its user sets it.
 insert into user_preference (user_id, time_zone, quiet_from, quiet_until, push_to_device, changed_by_user_id, changed_at)
-select user_id, timezone, quiet_hours_start, quiet_hours_end, device_opt_in, user_id, now() from old_preference p
+select user_id, case timezone when 'UTC' then 'America/Chicago' else timezone end,
+ quiet_hours_start, quiet_hours_end, device_opt_in, user_id, now() from old_preference p
 where not exists (select from preference_refusal r where r.actor = p.actor);
 
 -- Both action copies keep their ids; inherited v2 dispositions use the old Home's exact-id precedence.

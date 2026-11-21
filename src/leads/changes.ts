@@ -17,8 +17,8 @@ import {
 	optional,
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
-import { latestChange } from "../seen-change.ts";
 import { STAGE_ORDER } from "./board.ts";
+import { leadVersions } from "./versions.ts";
 
 const isAction = (
 	value: unknown,
@@ -107,10 +107,13 @@ async function saveLeadChange(tx: Transaction<DB>, change: LeadChange) {
 		await acknowledgeLeadEmail(tx, party_id);
 		return answer;
 	}
-	const current_version = await latestChange(tx, "party_role", {
-		party_id,
-		role: "lead",
-	});
+	const {
+		rows: [version],
+	} = await sql<{ base_version: string }>`
+		select base_version from (${leadVersions}) versions where party_id = ${party_id}`.execute(
+		tx,
+	);
+	const current_version = version ? Number(version.base_version) : null;
 	if (base_version !== current_version)
 		throw new SaveRefusal(
 			new Refusal(409, "version_conflict", { current_version }),
