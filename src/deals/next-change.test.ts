@@ -752,6 +752,61 @@ test("a new client, the deal and its prospect contact save together", async () =
 	);
 });
 
+test("Client Fit counts a prospect deal closed won with a new client", async () => {
+	const prospect = await addProspect("Example Client Fit Prospect");
+	const name = "Example Converted Win";
+	const [created, deal] = await saveAt(partner, "deals", {
+		idempotency_key: randomUUID(),
+		name,
+		owner: "blair",
+		phase: "touring",
+		kind: "lease",
+		market_id: MARKET,
+		prospect_id: prospect.party_id,
+		client: {
+			name: "Example New Client Fit Practice",
+			kind: "company",
+			how_found: "referral",
+		},
+	});
+	assert.equal(created, 201);
+	assert.ok(typeof deal.deal_id === "string");
+	const {
+		rows: [day],
+	} = await db.query<{ today: string }>(
+		"select (now() at time zone 'America/Chicago')::date::text as today",
+	);
+	assert.ok(day);
+	const closed_on = day.today;
+	const [closed, receipt] = await change(partner, deal.deal_id, {
+		phase: { from: "touring", to: "closed", on: closed_on },
+	});
+	assert.equal(closed, 200, JSON.stringify(receipt));
+
+	const board = await request(
+		partner,
+		"deals",
+		{},
+		{ DEALS_READ_SCHEMA: "next" },
+	);
+	assert.equal(board.status, 200);
+	assert.partialDeepStrictEqual(await board.json(), {
+		closed_deals: [{ id: deal.deal_id, outcome: "won", closed_on }],
+	});
+
+	const fit = await request(partner, "client-fit?city=Example%20Market", {});
+	assert.equal(fit.status, 200);
+	assert.partialDeepStrictEqual(await fit.json(), {
+		profiles: [
+			{
+				clients: 1,
+				won_deals: 1,
+				evidence: [{ deal_id: deal.deal_id, deal_name: name, closed_on }],
+			},
+		],
+	});
+});
+
 test("a conversion refuses a party outside the lane and only one concurrent save can convert a prospect", async () => {
 	const [status, refusal] = await saveAt(partner, "deals", {
 		...conversion("Example Refused Conversion"),

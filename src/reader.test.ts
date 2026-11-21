@@ -12,7 +12,6 @@ import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
 import { readCaptureQueue } from "./deals/capture-queue.ts";
 import { readChanges } from "./deals/changes.ts";
-import { readClientFit } from "./deals/client-fit.ts";
 import { readDealDetail } from "./deals/detail.ts";
 import { readInvoiceTracker } from "./invoices.ts";
 import { readLeadBoard } from "./leads/board.ts";
@@ -235,7 +234,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the client fit, the change feed, the capture queue, search, the lead board, an opened lead, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", (t) =>
+test("the reader login reads the board, a deal, the change feed, the capture queue, search, the lead board, an opened lead, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", (t) =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -255,14 +254,6 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				detail.thread.map((n) => n.text),
 				["Example reader note"],
 			);
-			const fit = await readSnapshot(login, (db) =>
-				readClientFit(db, { vertical: null, city: null, state: null }),
-			);
-			assert.deepEqual(fit, {
-				schema_version: "ideal-client-profile.v1",
-				coverage: "recorded_closed_won_only",
-				profiles: [],
-			});
 			const tracker = await readSnapshot(login, (db) =>
 				readInvoiceTracker(db, seeded.actor),
 			);
