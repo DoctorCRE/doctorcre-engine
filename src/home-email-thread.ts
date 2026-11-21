@@ -60,6 +60,7 @@ const contactWord = /^(?:[^a-z]|[a-z]:$|(?:of|and|at|for|in|the)$)|@|:\/\//;
 const inlineHistory = new RegExp(
 	[
 		"(?<!-)-{2,80} ?(?:Original|Forwarded) [Mm]essage ?-{2,80}(?!-)",
+		String.raw`(?<!\S)Begin forwarded message:`,
 		// A repeated From or Sent starts a new candidate, so incomplete headers cannot overlap.
 		String.raw`(?:(?<![-_=*])[-_=*]{3,80}[ \t]{0,80})?\*?From:\*? ` +
 			String.raw`(?:(?! \*?(?:From|Sent):)[^\r\n]){1,300} \*?Sent:\*? ` +

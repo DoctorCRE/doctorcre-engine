@@ -323,26 +323,36 @@ async function copiedNotice(activity_id: string, sender: string, body: string) {
 	}
 }
 
-test("reconciliation leaves filings pending when the notice is only in quoted history", async () => {
-	const activity_id = id(87);
-	await copiedNotice(
-		activity_id,
-		"withdrawals@example.test",
-		"Please withdraw this inquiry.\r\n-----Original Message-----\r\nName: Robin Example\r\nEmail: robin@example.test",
-	);
-	const none = {
-		status: 200,
-		body: { eligible_emails: 0, filing_decisions: 0 },
-	};
-	assert.deepEqual(await reconcile(activity_id, { dry_run: true }), none);
-	assert.deepEqual(await reconcile(activity_id), none);
-	await assertRows(
-		1,
-		`select from proposal where activity_id = $1 and status = 'pending'
-		and not exists (select from lead_email_source where activity_id = $1)`,
-		activity_id,
-	);
-});
+for (const { number, separator, marker } of [
+	{ number: 87, separator: "\r\n", marker: "-----Original Message-----" },
+	{ number: 89, separator: " ", marker: "Begin forwarded message:" },
+]) {
+	test(`reconciliation leaves filings pending when the notice follows ${marker}`, async () => {
+		const activity_id = id(number);
+		await copiedNotice(
+			activity_id,
+			`withdrawals-${number}@example.test`,
+			[
+				"Please withdraw this inquiry.",
+				marker,
+				"Name: Robin Example",
+				"Email: robin@example.test",
+			].join(separator),
+		);
+		const none = {
+			status: 200,
+			body: { eligible_emails: 0, filing_decisions: 0 },
+		};
+		assert.deepEqual(await reconcile(activity_id, { dry_run: true }), none);
+		assert.deepEqual(await reconcile(activity_id), none);
+		await assertRows(
+			1,
+			`select from proposal where activity_id = $1 and status = 'pending'
+			and not exists (select from lead_email_source where activity_id = $1)`,
+			activity_id,
+		);
+	});
+}
 
 test("reconciliation moves a copied one-line notice with default labels", async () => {
 	const activity_id = id(88);

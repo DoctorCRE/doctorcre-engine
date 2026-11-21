@@ -376,6 +376,23 @@ test("keeps only the sender's new words when the body was stored as one line", (
 	}
 });
 
+test("hides forwarded history after an inline marker", () => {
+	for (const marker of [
+		"Begin forwarded message:",
+		"---------- Forwarded message ---------",
+		"-----Original Message-----",
+	]) {
+		assert.equal(
+			cleanEmailBody(
+				`Please withdraw this inquiry. ${marker} Name: Robin Example Email: robin@example.test`,
+				maya,
+			),
+			"Please withdraw this inquiry.",
+			marker,
+		);
+	}
+});
+
 test("keeps one-line sentences that only resemble a sign-off, header or quote", () => {
 	for (const body of [
 		"I wanted to say thanks, Maya Example (555) 010-2000.",
