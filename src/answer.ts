@@ -314,6 +314,7 @@ type Verb =
 	| "quiet-follow-ups"
 	| "read-changes"
 	| "read-client-leases"
+	| "read-home-card"
 	| "read-home-inbox-v5"
 	| "read-home-mail-priorities-v1"
 	| "read-home-today-v1"

@@ -19,6 +19,8 @@ import {
 import { SaveRefusal } from "./save.ts";
 
 const text = { subject: isText, body: isText };
+export const replacedDraftReason =
+	"Replaced by a newer reply draft in this conversation";
 const draftVersion = { idempotency_key: isUuid, version: isChangeId };
 const create = {
 	idempotency_key: isUuid,
@@ -130,7 +132,7 @@ async function dismissOlderDrafts(
 		.updateTable("reply_draft")
 		.set({
 			status: "dismissed",
-			dismiss_reason: "Replaced by a newer reply draft in this conversation",
+			dismiss_reason: replacedDraftReason,
 		})
 		.where("status", "=", "pending")
 		.where("id", "in", (eb) =>
