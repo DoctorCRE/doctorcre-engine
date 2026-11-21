@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { answer, checkFields, Refusal, refuse } from "../answer.ts";
+import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { PARTNERS } from "../clients/read.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isMarketName, readVendorMarkets } from "./markets.ts";
@@ -19,7 +19,7 @@ vendorMarkets.get("/vendor-markets", async (c) => {
 	const [market = null, ...more] = params.getAll("market");
 	if (more.length > 0 || (market !== null && !isMarketName(market)))
 		return refuse(c, new Refusal(400, "unhandled_verb_failure"));
-	return answer(c, "read-vendor-markets-v1", async (db) => {
+	return answerNextRead(c, "read-vendor-markets-v1", async (db) => {
 		if (!isPartner(c.get("partner").slug))
 			return new Refusal(422, "unhandled_verb_failure");
 		const markets = await readVendorMarkets(db, market);

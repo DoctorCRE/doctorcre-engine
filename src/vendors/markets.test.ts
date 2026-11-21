@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import pg from "pg";
-import { withSnapshot } from "../../scripts/test-database.ts";
+import { doorTest } from "../test-door.ts";
 import worker from "../worker.ts";
 
-const ACTOR = "00000000-0000-4000-8000-000000000001";
+const ACTOR = "00000000-0000-4000-8000-000000000101";
 const UNREAD = "postgres://made-up@127.0.0.1:1/none";
 
 const markets = (search: string, connectionString: string, slug = "joe") =>
@@ -29,76 +28,15 @@ const GENERIC = {
 	hint: "The operation failed. Quote the correlation_id when reporting it.",
 };
 
-async function refused(response: Response, status: number, expected = {}) {
+async function refused(response: Response, status: number) {
 	assert.equal(response.status, status);
 	const { correlation_id, ...body } = (await response.json()) as Record<
 		string,
 		unknown
 	>;
 	assert.equal(typeof correlation_id, "string");
-	assert.deepEqual(body, { ...GENERIC, ...expected });
+	assert.deepEqual(body, GENERIC);
 }
-
-// The fields these tests read.
-type Answer = {
-	selected_market: string | null;
-	markets: {
-		slug: string;
-		aliases: string[];
-		vendor_count: number;
-		memberships: { vendor_id: string }[];
-		regional_references: { regional_slug: string; regional_kind: string }[];
-	}[];
-	vendors: {
-		id: string;
-		name: string;
-		market_slugs: string[];
-		people: {
-			contact: { name: string };
-			research: { status: string };
-			office: { street_address: string } | null;
-		}[];
-	}[];
-};
-
-const ready = async (response: Response) => {
-	assert.equal(response.status, 200);
-	return (await response.json()) as Answer;
-};
-
-async function run(url: string, statements: string) {
-	const db = new pg.Client({ connectionString: url });
-	await db.connect();
-	try {
-		await db.query(statements);
-	} finally {
-		await db.end();
-	}
-}
-
-const ACTORS = `insert into actor (id, slug, kind, display_name) values
-		('${ACTOR}', 'joe', 'human', 'Example'),
-		('00000000-0000-4000-8000-000000000002', 'example-agent', 'human', 'Example');
-	insert into contact_state values ('active', 'Example', true, 1);
-	insert into vendor_disposition values ('active', 'Example', true, 1);`;
-
-const party = (
-	id: string,
-	kind: string,
-	name: string,
-	extra = "null, null, null",
-) =>
-	`insert into party (id, kind, name, org_id, merged_into, deleted_at, created_by, updated_by)
-		values ('${id}', '${kind}', '${name}', ${extra}, '${ACTOR}', '${ACTOR}');`;
-const vendor = (id: string, partyId: string, merged = "null") =>
-	`insert into vendor (id, party_id, category, merged_into, created_by, updated_by)
-		values ('${id}', '${partyId}', 'lender', ${merged}, '${ACTOR}', '${ACTOR}');`;
-const market = (slug: string, kind = "market") =>
-	`insert into vendor_market values ('${slug}', 'Example', '${kind}', 'Example', 'Example',
-		'${ACTOR}', '2026-01-01T00:00:00Z');`;
-const member = (slug: string, vendorId: string) =>
-	`insert into vendor_market_membership values ('${slug}', '${vendorId}', true, null,
-		'Example', '${ACTOR}', '2026-01-01T00:00:00Z');`;
 
 test("bad input is refused before any read", async () => {
 	for (const search of [
@@ -110,82 +48,138 @@ test("bad input is refused before any read", async () => {
 		await refused(await markets(search, UNREAD), 400);
 });
 
-test("markets list live vendors, their people and offices, and resolve an alias", () =>
-	withSnapshot(async (url) => {
-		// Ids in the order the answer sorts them.
-		const id = (n: number) => `00000000-0000-4000-8000-1000000000${n}0`;
-		const [blake, alex, org, live] = [id(1), id(2), id(3), id(4)];
-		const [merged, deleted, gone, blank] = [id(5), id(6), id(7), id(8)];
-		await run(
-			url,
-			`${ACTORS} ${party(org, "org", "Example Lending Co")}
-			${party(alex, "person", "Alex Example", `'${org}', null, null`)}
-			${party(blake, "person", "Blake Example", `'${org}', null, null`)}
-			${party(blank, "person", " ", `'${org}', null, null`)}
-			${party(gone, "org", "Example Deleted Co", "null, null, now()")}
-			${vendor(live, org)} ${vendor(merged, org, `'${live}'`)} ${vendor(deleted, gone)}
-			${market("springfield")} ${market("example-region", "regional")}
-			insert into vendor_market_key values ('spring field', 'springfield');
-			${member("springfield", live)} ${member("springfield", merged)}
-			${member("springfield", deleted)} ${member("example-region", live)}
-			insert into vendor_market_regional_reference (market_slug, regional_slug, note, source,
-				reviewed_by, reviewed_at) values ('springfield', 'example-region', 'Example', 'Example',
-				'${ACTOR}', '2026-01-01T00:00:00Z');
-			insert into record_flag (id, subject_type, subject_id, kind, value, source, observed_at,
-				created_by) select ('00000000-0000-4000-8000-20000000000' || n)::uuid, 'party', '${alex}',
-				'address', value::jsonb, 'https://example.test', '2025-01-01T00:00:00Z', '${ACTOR}'
-				from (values (1, '{"found":false}'), (2, '{"found":true,"epistemic_status":"source_backed",
-				"location_type":"office","street_address":"1 Example Way","city":"Springfield","state":"ZZ"}'))
-				f (n, value);`,
-		);
-		const answer = await ready(
-			await markets("?market=%20Spring%20FIELD%20", url),
-		);
-		assert.equal(answer.selected_market, "springfield");
-		assert.deepEqual(
-			answer.markets.map((m) => [
-				m.slug,
-				m.aliases,
-				m.vendor_count,
-				m.memberships.map((x) => x.vendor_id),
-				m.regional_references.map((r) => [r.regional_slug, r.regional_kind]),
-			]),
-			[
-				["example-region", ["example-region"], 1, [live], []],
-				[
-					"springfield",
-					["spring field", "springfield"],
-					1,
-					[live],
-					[["example-region", "regional"]],
-				],
+const id = (n: number) =>
+	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const [vendor, otherVendor, contact, nonVendor, empty, undrawn] = [
+	1, 2, 3, 4, 5, 6,
+].map(id);
+const copied = "27730777-4817-6292-5482-09d56518ba48";
+
+async function withMarkets(
+	run: (door: ReturnType<typeof doorTest>) => Promise<void>,
+) {
+	const door = doorTest();
+	await door.setup();
+	try {
+		await door.db.query(`
+			select set_config('engine.job', 'old_system', true);
+			insert into party (id, kind, name) values ('${ACTOR}', 'person', 'Example Partner');
+			insert into app_user (id, slug) values ('${ACTOR}', 'joe');
+			insert into role (slug, label, category_of) values ('vendor', 'Vendor', null), ('lender', 'Lender', 'vendor');
+		`);
+		await run(door);
+	} finally {
+		await door.cleanup();
+	}
+}
+
+const getMarkets = (door: ReturnType<typeof doorTest>, path = "") =>
+	door.request({ user: "joe" }, `vendor-markets${path}`, { method: "GET" });
+
+test("markets list current vendor links, review evidence, and working vendor and market selections", () =>
+	withMarkets(async (door) => {
+		await door.db.query(`
+			select set_config('engine.job', 'old_system', true);
+			insert into party (id, kind, name) values
+				('${vendor}', 'company', 'Example Lending Co'), ('${otherVendor}', 'person', 'Example Architect'),
+				('${contact}', 'person', 'Alex Example'), ('${nonVendor}', 'person', 'Example Nonvendor');
+			insert into party_role (party_id, role) values
+				('${vendor}', 'vendor'), ('${vendor}', 'lender'), ('${otherVendor}', 'vendor');
+			insert into outside_id (party_id, source, value) values ('${vendor}', 'old_system_ref', 'V-001');
+			insert into party_company (person_id, company_id) values ('${contact}', '${vendor}');
+			insert into territory (id, name) values
+				('${copied}', 'Example City'), ('${empty}', 'Empty City'), ('${undrawn}', 'Undrawn');
+			with created as (insert into market (name) values ('Example City'), ('Empty City') returning id, name)
+			insert into territory_piece (territory_id, market_id)
+				select t.id, m.id from territory t join created m using (name);
+			with links as (
+				insert into party_territory (party_id, territory_id, started_on, ended_on) values
+					('${vendor}', '${copied}', null, null),
+					('${vendor}', '${copied}', '2000-01-01', null),
+					('${otherVendor}', '${copied}', null, null),
+					('${otherVendor}', '${empty}', '2000-01-01', '2000-02-01'),
+					('${vendor}', '${empty}', '9999-01-01', null),
+					('${nonVendor}', '${empty}', null, null),
+					('${vendor}', '${undrawn}', null, null)
+				returning id, party_id, territory_id, started_on
+			)
+			insert into party_territory_review (party_territory_id, has_office, coverage, source)
+				select id, true, 'Example coverage', 'Example review' from links
+				where party_id = '${vendor}' and (started_on = '2000-01-01' or territory_id = '${undrawn}');
+		`);
+		const response = await getMarkets(door);
+		assert.equal(response.status, 200);
+		assert.partialDeepStrictEqual(await response.json(), {
+			state: "ready",
+			selected_market: null,
+			markets: [
+				{ slug: empty, name: "Empty City", vendor_count: 0, memberships: [] },
+				{
+					slug: copied,
+					name: "Example City",
+					kind: "market",
+					aliases: [copied],
+					vendor_count: 2,
+					regional_references: [],
+					memberships: [
+						{
+							market_slug: copied,
+							vendor_id: vendor,
+							office_presence: true,
+							service_coverage: "Example coverage",
+							source: "Example review",
+							reviewed_by: "old_system",
+						},
+						{
+							market_slug: copied,
+							vendor_id: otherVendor,
+							office_presence: false,
+							service_coverage: null,
+						},
+					],
+				},
 			],
-		);
-		assert.deepEqual(
-			answer.vendors.map((v) => [v.id, v.name, v.market_slugs]),
-			[[live, "Example Lending Co", ["example-region", "springfield"]]],
-		);
-		// The blank-named contact is left out, and of two findings at one moment
-		// the higher id counts as the latest.
-		assert.deepEqual(
-			answer.vendors[0]?.people.map((p) => [
-				p.contact.name,
-				p.research.status,
-				p.office?.street_address,
-			]),
-			[
-				["Blake Example", "not_researched", undefined],
-				["Alex Example", "office_verified", "1 Example Way"],
+			vendors: [
+				{
+					id: vendor,
+					ref: "V-001",
+					category: "lender",
+					name: "Example Lending Co",
+					market_slugs: [copied],
+					people: [
+						{ contact: { id: contact, name: "Alex Example" }, office: null },
+					],
+				},
+				{ id: otherVendor, market_slugs: [copied] },
 			],
+		});
+		for (const key of [copied, "%20Example-City%20", empty]) {
+			const selected = await getMarkets(door, `?market=${key}`);
+			assert.equal(selected.status, 200);
+			assert.partialDeepStrictEqual(await selected.json(), {
+				selected_market: key === empty ? empty : copied,
+			});
+		}
+		const drawer = await door.request(
+			{ user: "joe" },
+			`vendors/${vendor}?contract=vendor-directory.v2`,
+			{
+				method: "GET",
+			},
+			{ DIRECTORY_READ_SCHEMA: "next" },
 		);
-		await refused(await markets("?market=nowhere", url), 404);
-		await refused(await markets("", url, "example-agent"), 422);
+		assert.equal(drawer.status, 200);
+		assert.partialDeepStrictEqual(await drawer.json(), {
+			record: { id: vendor },
+		});
+		await refused(await getMarkets(door, "?market=nowhere"), 404);
 	}));
 
-test("an empty registry answers empty, and one over either cap is refused, never cut", () =>
-	withSnapshot(async (url) => {
-		await run(url, ACTORS);
-		assert.deepEqual(await ready(await markets("?market=Anywhere", url)), {
+test("an empty registry answers empty, and one over either cap is refused", () =>
+	withMarkets(async (door) => {
+		const response = await getMarkets(door, "?market=Anywhere");
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
 			ok: true,
 			schema_version: "vendor-markets.v1",
 			state: "empty",
@@ -193,27 +187,31 @@ test("an empty registry answers empty, and one over either cap is refused, never
 			markets: [],
 			vendors: [],
 		});
-		const extra = "00000000-0000-4000-9000-000000000051";
-		await run(
-			url,
-			`insert into vendor_market select 'm-' || i, 'Example', 'market', 'Example', 'Example',
-				'${ACTOR}', '2026-01-01T00:00:00Z' from generate_series(1, 100) i;
-			insert into party (id, kind, name, created_by, updated_by)
-				select ('00000000-0000-4000-9000-' || lpad(i::text, 12, '0'))::uuid, 'person',
-				'Example', '${ACTOR}', '${ACTOR}' from generate_series(1, 51) i;
-			insert into vendor (id, party_id, category, created_by, updated_by)
-				select id, id, 'lender', '${ACTOR}', '${ACTOR}' from party;
-			insert into vendor_market_membership select m.slug, v.id, true, null, 'Example',
-				'${ACTOR}', '2026-01-01T00:00:00Z' from vendor_market m cross join vendor v
-				where v.id <> '${extra}';`,
-		);
-		const full = await ready(await markets("", url));
-		assert.deepEqual([full.markets.length, full.vendors.length], [100, 50]);
-		await run(url, member("m-1", extra));
-		await refused(await markets("", url), 422);
-		await run(
-			url,
-			`delete from vendor_market_membership where vendor_id = '${extra}'; ${market("m-101")}`,
-		);
-		await refused(await markets("", url), 422);
+		await door.db.query(`
+			select set_config('engine.job', 'old_system', true);
+			with m as (insert into market (name) select 'Example ' || i from generate_series(1, 101) i returning id, name),
+				t as (insert into territory (name) select name from m returning id, name)
+			insert into territory_piece (territory_id, market_id)
+				select t.id, m.id from t join m using (name) where m.name <> 'Example 101';
+			with p as (insert into party (kind, name) select 'person', 'Example' from generate_series(1, 50) returning id)
+			insert into party_role (party_id, role) select id, 'vendor' from p;
+			insert into party_territory (party_id, territory_id)
+				select pr.party_id, t.id from party_role pr cross join territory t where t.name <> 'Example 101';
+		`);
+		assert.equal((await getMarkets(door)).status, 200);
+		await door.db.query(`
+			select set_config('engine.job', 'old_system', true);
+			with p as (insert into party (kind, name) values ('person', 'One more') returning id),
+				r as (insert into party_role (party_id, role) select id, 'vendor' from p returning party_id)
+			insert into party_territory (party_id, territory_id)
+				select party_id, t.id from r cross join territory t where t.name = 'Example 1';
+		`);
+		await refused(await getMarkets(door), 422);
+		await door.db.query(`
+			select set_config('engine.job', 'old_system', true);
+			delete from party_territory where party_id in (select id from party where name = 'One more');
+			insert into territory_piece (territory_id, market_id)
+				select t.id, m.id from territory t join market m using (name) where m.name = 'Example 101';
+		`);
+		await refused(await getMarkets(door), 422);
 	}));

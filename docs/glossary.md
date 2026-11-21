@@ -185,7 +185,7 @@ _New database_: a named market (`market`), by the counties it covers, and `deal.
 **Territory**:
 The area someone serves: a user's, a vendor's or a lead's. A vendor's market is its territory. It is made of whole states, named markets and distances from a base.
 _Avoid_: market, for someone's whole area
-_Database_: `vendor.territory` (text) and `vendor_market_membership` today; `territory`, `territory_piece` and `party_territory` in the new database.
+_Database_: `territory`, `territory_piece` and `party_territory`. `party_territory_review` holds a vendor's reviewed office and coverage evidence.
 
 **Critical date**:
 A date in the deal or its lease that must not be missed, such as a due-diligence deadline or a lease expiration. In the new database it is proposed until a user confirms it; only a user resolves it.

@@ -1645,6 +1645,10 @@ The list and drawer show live vendors and their current relationship partner. Co
 
 Track record counts come from `vendor_track_record`. A deal counts even when its work date is unknown. The first and last work dates use participation saved through the new system. A dated introduction that led to a deal can also set the Last deal date. The old coverage verification timestamp, manual override and rating edit version return null.
 
+Vendors by market (`GET /api/engine/vendor-markets`) always reads `next` as `engine_reader`. The selector lists territories with a named market piece, including those with zero vendors. A vendor counts once per market while its membership is current on the Chicago date. If dates overlap, the latest start takes precedence over earlier or undated links. Office presence, coverage, source and reviewer come from the selected membership's review. An unreviewed link has no declared office, coverage or review details.
+
+The `vendor-markets.v1` response uses territory UUIDs as market keys and vendor party UUIDs as drawer links. A copied canonical slug still selects its territory through the copy's UUID derivation. An empty selector returns `state: "empty"`. Alternate aliases, Regional references and registry-level boundary and source text have no destination in the copy and are absent from the view.
+
 **Later.** The copy leaves vendor work dates unknown. Preserving them needs a design decision about a nullable participation date or a field for its source.
 
 ## Doc conversations and turns

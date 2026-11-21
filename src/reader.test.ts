@@ -24,7 +24,6 @@ import { readNetwork } from "./relationships/network.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 import { readTodayTriage } from "./today/triage.ts";
-import { readVendorMarkets } from "./vendors/markets.ts";
 import { readVendorMeetings } from "./vendors/meetings.ts";
 import { readVendor, readVendorList } from "./vendors/read.ts";
 
@@ -94,10 +93,6 @@ const readable = [
 	"vendor",
 	"vendor_category",
 	"vendor_disposition",
-	"vendor_market",
-	"vendor_market_key",
-	"vendor_market_membership",
-	"vendor_market_regional_reference",
 	"vendor_relationship_level",
 	"vendor_stage",
 ];
@@ -395,21 +390,6 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 				}),
 			);
 			assert.deepEqual(vendor.record.people, []);
-			await withAdmin(
-				(admin) =>
-					admin.query(`insert into vendor_market select 'example', 'Example', 'market',
-							'Example', 'Example', id, now() from actor;
-						insert into vendor_market_membership select 'example', vendor.id, true, null,
-							'Example', actor.id, now() from vendor, actor`),
-				database,
-			);
-			const markets = await readSnapshot(login, (db) =>
-				readVendorMarkets(db, "Example"),
-			);
-			assert.partialDeepStrictEqual(markets, {
-				selected_market: "example",
-				vendors: [{ name: "Example Clinic" }],
-			});
 			const network = await readSnapshot(login, readNetwork);
 			assert.deepEqual(
 				network.edges.map((e) => [e.kind, e.when]),

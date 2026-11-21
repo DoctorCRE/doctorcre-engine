@@ -303,7 +303,7 @@ const NEXT_DISPOSITIONS = [
 	{ slug: "parked", label: "Parked", workable: false },
 	{ slug: "avoid", label: "Avoid", workable: false },
 ];
-const activeTerritory = sql`pt.ended_on is null or pt.ended_on >= (now() at time zone 'America/Chicago')::date`;
+export const activeTerritory = sql`pt.ended_on is null or pt.ended_on >= (now() at time zone 'America/Chicago')::date`;
 const nextTerritory = sql<
 	string | null
 >`(select nullif(string_agg(distinct t.name, ', ' order by t.name), '')
@@ -313,7 +313,7 @@ const nextVertical = sql<
 	string | null
 >`(select nullif(string_agg(vv.vertical, ', ' order by vv.vertical), '')
 	from vendor_vertical vv where vv.party_id = p.id)`;
-const nextRef = sql<string>`coalesce(
+export const nextRef = sql<string>`coalesce(
 	(select o.value from outside_id o
 		where o.party_id = p.id and o.source = 'old_system_ref'
 		order by (o.value like 'V-%') desc, o.value asc limit 1),
@@ -337,7 +337,9 @@ const nextPhone = (party: ReturnType<typeof sql.ref>, mobile: boolean) =>
 		from party_phone pp where pp.party_id = ${party}
 			and pp.label ${mobile ? sql.raw("=") : sql.raw("<>")} 'mobile'
 		order by pp.is_primary desc, pp.created_at, pp.id limit 1)`;
-const nextPeople = sql<object[]>`(select coalesce(jsonb_agg(jsonb_build_object(
+export const nextPeople = sql<
+	object[]
+>`(select coalesce(jsonb_agg(jsonb_build_object(
 	'company', c.company,
 	'contact', jsonb_build_object('id', c.id, 'name', c.name,
 		'email', ${nextEmail(sql.ref("c.id"))},
@@ -367,6 +369,11 @@ const NEXT_ORDER = {
 	territory: sql`lower(${nextTerritory}) asc nulls last, lower(p.name), p.id`,
 };
 
+export const nextVendorCategory = sql<{ slug: string; label: string }>`(
+	select r.slug, r.label from party_role cr
+	join role r on r.slug = cr.role where cr.party_id = p.id and r.category_of = 'vendor'
+	order by r.slug limit 1)`;
+
 async function nextViewerId(db: Transaction<NextDB>, viewer: string) {
 	const user = await db
 		.selectFrom("app_user")
@@ -387,15 +394,7 @@ const liveNextVendors = (db: Transaction<NextDB>) =>
 		)
 		.leftJoin("relationship_level as rl", "rl.level", "pr.relationship_level")
 		.leftJoin("vendor_track_record as vtr", "vtr.party_id", "p.id")
-		.leftJoinLateral(
-			sql<{
-				slug: string;
-				label: string;
-			}>`(select r.slug, r.label from party_role cr
-				join role r on r.slug = cr.role where cr.party_id = p.id and r.category_of = 'vendor'
-				order by r.slug limit 1)`.as("cat"),
-			(join) => join.onTrue(),
-		)
+		.leftJoinLateral(nextVendorCategory.as("cat"), (join) => join.onTrue())
 		.where("pr.role", "=", "vendor");
 
 function nextVendorRows(
