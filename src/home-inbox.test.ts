@@ -421,6 +421,38 @@ test("a step created by a suggestion keeps the meeting source", async () => {
 	});
 });
 
+test("Home keeps separate vendor follow-ups from the same meeting", async () => {
+	const steps = ["Amber", "Birch", "Cedar", "Dawn"].map((name, index) => ({
+		id: randomUUID(),
+		party: randomUUID(),
+		name,
+		what: `Planning meeting: Call ${name}${index === 0 ? " (T-041)" : ""}`,
+	}));
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);`);
+	for (const step of steps) {
+		await db.query(
+			"insert into party (id, kind, name) values ($1, 'company', $2)",
+			[step.party, step.name],
+		);
+		await db.query(
+			"insert into party_role (party_id, role) values ($1, 'vendor')",
+			[step.party],
+		);
+		await db.query(
+			"insert into next_step (id, party_id, owner_party_id, what, due_on) values ($1, $2, $3, $4, '2026-11-19')",
+			[step.id, step.party, other, step.what],
+		);
+	}
+	await db.query("commit");
+	const items = await inbox({ user: "other-partner" });
+	for (const step of steps) {
+		assert.partialDeepStrictEqual(items.get(step.id), {
+			title: `Planning meeting: Call ${step.name}`,
+			open_url: `/relationships?node=party:${step.party}&step=${step.id}`,
+		});
+	}
+});
+
 test("Home keeps undated steps and cleans their titles without rewriting saved wording", async () => {
 	const examples = (
 		[
