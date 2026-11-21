@@ -221,6 +221,19 @@ for (const [example, caller, step, title] of [
 }
 
 test("today keeps each Outlook occurrence independently of its review", async (t) => {
+	const [clockFunction] = (
+		await db.query<{ definition: string }>(
+			"select pg_get_functiondef('pg_catalog.now()'::regprocedure) as definition",
+		)
+	).rows;
+	assert.ok(clockFunction);
+	t.after(async () => {
+		await db.query(clockFunction.definition);
+	});
+	// Separate route transactions share the same clock in this test database.
+	await db.query(`create or replace function pg_catalog.now() returns timestamptz
+		language sql stable strict parallel safe as $$ select timestamptz '2026-01-15 00:05:00 America/Chicago' $$`);
+
 	const q = `select now() as n, ((now() at time zone 'America/Chicago')::date::timestamp at time zone 'America/Chicago') as s,
 		(((now() at time zone 'America/Chicago')::date + 1)::timestamp at time zone 'America/Chicago') as e`;
 	const clock = (await db.query<{ n: string; s: string; e: string }>(q))

@@ -238,7 +238,7 @@ export function meetingsFromSnapshot(
 	let malformed = 0;
 	let unread = 0;
 	const meetings: Meeting[] = [];
-	const itemKeys = new Set<string>();
+	const keyedMeetings = new Map<string, Meeting | null>();
 	for (const row of rows) {
 		const start = instant(field(row, "start"));
 		const end = instant(field(row, "end"));
@@ -248,11 +248,19 @@ export function meetingsFromSnapshot(
 			continue;
 		}
 		const key = fromMs === undefined ? null : occurrenceKey(row);
-		if (key) itemKeys.add(key);
-		if (inWindow(start, end)) {
-			const times = alternateTimes(field(row, "times"));
-			meetings.push(meetingFrom(row, { start, end, title, key }, times.shown));
-			unread += times.unread;
+		if (!inWindow(start, end)) {
+			if (key && !keyedMeetings.has(key)) keyedMeetings.set(key, null);
+			continue;
+		}
+		const times = alternateTimes(field(row, "times"));
+		const meeting = meetingFrom(row, { start, end, title, key }, times.shown);
+		unread += times.unread;
+		if (key) {
+			const prior = keyedMeetings.get(key);
+			if (!prior || meeting.start < prior.start)
+				keyedMeetings.set(key, meeting);
+		} else {
+			meetings.push(meeting);
 		}
 	}
 
@@ -262,11 +270,13 @@ export function meetingsFromSnapshot(
 	if (fromMs !== undefined) {
 		// Older publishers sometimes send an ended occurrence only as a review.
 		for (const review of valid) {
-			if (itemKeys.has(review.key) || !inWindow(review.start, review.end))
+			if (keyedMeetings.has(review.key) || !inWindow(review.start, review.end))
 				continue;
-			itemKeys.add(review.key);
-			meetings.push(meetingFrom(review, review, []));
+			keyedMeetings.set(review.key, meetingFrom(review, review, []));
 		}
+	}
+	for (const meeting of keyedMeetings.values()) {
+		if (meeting) meetings.push(meeting);
 	}
 	meetings.sort(
 		(a, b) => a.start.localeCompare(b.start) || a.title.localeCompare(b.title),
