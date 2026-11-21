@@ -252,7 +252,8 @@ test("partner sessions in PostgreSQL", async (t) => {
 					);
 				}
 				const count = async () =>
-					(await db.query("select id from doctorcre_auth.session")).rowCount;
+					(await db.query("select id from doctorcre_auth.session")).rows.length;
+				const initialSessions = await count();
 				const assertRefused = (response: Response) => {
 					assert.equal(response.status, 401);
 					assert.equal(response.headers.get("cache-control"), "no-store");
@@ -278,7 +279,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 				assertRefused(await complete({ ...flow, state: "wrong-state" }));
 				assertRefused(await complete({ ...flow, cookie: "" }));
 				assert.equal(exchanges, 0);
-				assert.equal(await count(), 0);
+				assert.equal(await count(), initialSessions);
 				const signedIn = await complete(flow);
 				assert.equal(signedIn.status, 302);
 				assert.equal(signedIn.headers.get("cache-control"), "no-store");
@@ -306,7 +307,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 				]) {
 					assertRefused(await complete(await start("/"), code));
 				}
-				assert.equal(await count(), 1);
+				assert.equal(await count(), initialSessions + 1);
 				for (const path of [
 					"https://outside.example.test",
 					"//outside.example.test",
@@ -325,7 +326,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 					results.map((response) => response.status).sort(),
 					[302, 401],
 				);
-				assert.equal(await count(), 5);
+				assert.equal(await count(), initialSessions + 5);
 			},
 		);
 		await t.test("resolves both actors and checks origin", async () => {
