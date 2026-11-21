@@ -14,6 +14,7 @@ import {
 	readHomeUpdates,
 } from "./home-inbox-reviews-updates.ts";
 import {
+	type HomeStep,
 	type HomeStepTarget,
 	homeDay,
 	homeDisplayText,
@@ -21,7 +22,6 @@ import {
 	homeStepEligible,
 	homeStepTarget,
 	lateLabel,
-	type StepTitle,
 	stepItemId,
 	stepOpenUrl,
 	stepTargetFields,
@@ -32,7 +32,7 @@ import { isUuid } from "./request-shape.ts";
 
 const LIMIT = 1000;
 
-interface Step extends StepTitle, HomeStepTarget {
+interface Step extends HomeStep, HomeStepTarget {
 	id: string;
 	party_id: string | null;
 	prospect: boolean;
@@ -55,7 +55,7 @@ interface Step extends StepTitle, HomeStepTarget {
 
 function stepRows(db: Transaction<DB>, userId: string, dashboard: boolean) {
 	return sql<Step>`
-		select s.id, s.what as title, s.status, s.deal_id, s.party_id, s.property_id,
+		select s.id, s.what, s.item_title, s.status, s.deal_id, s.party_id, s.property_id,
 			${stepTargetFields(db)},
 			s.due_on, s.created_at, setter.name as set_by,
 			coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
