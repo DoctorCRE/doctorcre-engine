@@ -2,7 +2,7 @@ import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	homeTitle,
-	shortenHomeTitle,
+	splitHomeTitle,
 	stripHomeTitlePrefixes,
 } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
@@ -14,8 +14,7 @@ const storedDate =
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
 const phoneNumber =
 	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
-const meetingSuffix =
-	/(?:\s*\|\s*| [·–—-] |, )((?:[^,|]+, )?(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\p{L}*,? \p{L}{3,9} \d{1,2}(?:,? \d{4},?)? \d{1,2}:\d{2}\s*[AP]M\.?)$/iu;
+const stepSeparator = / [|—–] /;
 const instructionSuffix =
 	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/i;
 const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
@@ -81,49 +80,44 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
-	const pipe = savedText.lastIndexOf(" | ");
-	const meeting = pipe < 0 ? meetingSuffix.exec(savedText) : null;
-	const savedWording = savedText.slice(0, pipe < 0 ? meeting?.index : pipe);
-	const meetingDetails =
-		pipe < 0 ? (meeting?.[1] ?? null) : savedText.slice(pipe + 3);
-	const suffix = instructionSuffix.exec(savedWording);
-	const savedAction = suffix
-		? savedWording.slice(0, suffix.index)
-		: savedWording;
-	const supporting = suffix
-		? savedWording.slice(suffix.index + suffix[0].length)
-		: "";
+	const suffix = instructionSuffix.exec(savedText);
+	const savedAction = savedText.slice(0, suffix?.index);
 	const action = savedAction
 		.replace(phoneNumber, " ")
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "");
+	const cleaned = action + (suffix ? savedText.slice(suffix.index) : "");
 	const cadence = vendorCadence.exec(savedText)?.[1];
-	const actionTitle = shortenHomeTitle(action);
-	const title = cadence
-		? homeTitle("vendor_check_in", target)
-		: actionTitle ||
-			(contact
-				? homeTitle("call_follow_up", contact)
-				: homeTitle("follow_up", target));
-	const overflow = cadence ? "" : action.slice(actionTitle.length).trimStart();
-	const instruction = actionTitle
-		? homeWhy(
-				savedAction
-					.match(phoneNumber)
-					?.map((number) => number.replace(/^at\s+/i, ""))
-					.join(", ") ?? null,
-				supporting.charAt(0).toUpperCase() + supporting.slice(1),
-			)
-		: savedWording;
-	const details = homeWhy(cadence ?? instruction, meetingDetails);
+	const separator = cadence ? null : stepSeparator.exec(cleaned);
+	const wording = cleaned.slice(0, separator?.index);
+	const explicitDetails = separator
+		? cleaned.slice(separator.index + separator[0].length)
+		: null;
+	const supporting = wording.slice(action.length + (suffix?.[0].length ?? 0));
+	const shortened = cadence
+		? { title: homeTitle("vendor_check_in", target), url: "", overflow: "" }
+		: splitHomeTitle(wording.slice(0, action.length));
+	const title = shortened.title || homeTitle("follow_up", target);
+	const details =
+		cadence ??
+		homeWhy(
+			savedAction
+				.match(phoneNumber)
+				?.map((number) => number.replace(/^at\s+/i, ""))
+				.join(", ") ?? null,
+			supporting.charAt(0).toUpperCase() + supporting.slice(1),
+		);
+	const stepWhy = (...facts: (string | null)[]) =>
+		[shortened.url, homeWhy(explicitDetails, shortened.overflow, ...facts)]
+			.filter(Boolean)
+			.join(" ");
 	const titleText = title.replace(/[.!?]+$/, "");
 	const extraEvidence = (text: string) =>
 		text.replace(/[.!?]+$/, "") === titleText ? null : text;
 	if (step.call_at) {
 		return {
 			title,
-			why: homeWhy(
-				overflow,
+			why: stepWhy(
 				`Call${contact ? ` with ${contact}` : ""} on ${homeDate(step.call_at)}`,
 				extraEvidence(
 					homeDisplayText(evidence?.call_quote ?? null) ||
@@ -136,7 +130,7 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			),
 		};
 	}
-	if (!evidence) return { title, why: homeWhy(overflow, details) };
+	if (!evidence) return { title, why: stepWhy(details) };
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
 		? `Follow-up set from the ${evidence.source_kind}`
@@ -145,8 +139,7 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			: `Follow-up set on ${homeDate(evidence.created_at)}`;
 	return {
 		title,
-		why: homeWhy(
-			overflow,
+		why: stepWhy(
 			hold || set,
 			extraEvidence(homeDisplayText(evidence.source_evidence)),
 			due,

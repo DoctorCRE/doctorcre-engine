@@ -373,19 +373,17 @@ test("A held follow-up explains the saved hold", async () => {
 	});
 });
 
-test("A long lease reminder puts the rest of the event wording first in why", async () => {
+test("A lease reminder puts the details after the separator first in why", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(leaseReminder), {
-		title:
-			"Lease event — Example Dental, Springfield, est. December 1, 2026. Last window before",
-		why: "leverage is gone. Follow-up set on Nov 21, 2026. Due Nov 19, 2026.",
+		title: "Lease event",
+		why: "Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone. Follow-up set on Nov 21, 2026. Due Nov 19, 2026.",
 	});
 });
 
 test("A long lease reminder keeps both the event and the saved instruction", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(pastLeaseReminder), {
-		title:
-			"Lease event — Example Dental, Springfield, est. October 1, 2026. The estimated renewal",
-		why: "window has passed. Confirm renewal plans. Follow-up set on Nov 21, 2026. Due Nov 19, 2026.",
+		title: "Lease event",
+		why: "Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans. Follow-up set on Nov 21, 2026. Due Nov 19, 2026.",
 	});
 });
 

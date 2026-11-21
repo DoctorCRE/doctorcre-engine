@@ -3,6 +3,7 @@ const statusPrefix =
 	/^(?:(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)|review(?: follow-up| call note)?\s*:\s*)/i;
 const titleCharacters = new Intl.Segmenter("en", { granularity: "grapheme" });
 const titleWords = new Intl.Segmenter("en", { granularity: "word" });
+const titleUrl = /https?:\/\/\S+/gi;
 
 const chooseDeal = (sender: string) =>
 	sender
@@ -18,8 +19,6 @@ const replyTarget = (sender: string, deal: string) =>
 const templates = {
 	follow_up: (target) =>
 		target ? `Follow up on ${target}` : "Review the follow-up",
-	call_follow_up: (contact) =>
-		contact ? `Follow up with ${contact}` : "Review the call follow-up",
 	vendor_check_in: (vendor) => `Check in with ${vendor || "the vendor"}`,
 	next_step: (target) => forTarget("Review the proposed follow-up", target),
 	file_to_deal: chooseDeal,
@@ -76,11 +75,24 @@ function fitsLength(text: string) {
 	return text.length > 0 && titleLimitIndex(text) === text.length;
 }
 
-export function shortenHomeTitle(text: string) {
+export function splitHomeTitle(text: string) {
 	const limit = titleLimitIndex(text);
-	if (limit === text.length) return text;
-	const segment = titleWords.segment(text).containing(limit);
-	return text.slice(0, segment?.index || limit).trimEnd();
+	if (limit === text.length) return { title: text, url: "", overflow: "" };
+	const word = titleWords.segment(text).containing(limit);
+	let end = word?.index || limit;
+	let url = "";
+	for (const match of text.matchAll(titleUrl)) {
+		if (match.index > limit && text.slice(end, match.index).trim()) break;
+		if (match.index + match[0].length <= limit) continue;
+		end = match.index;
+		url = match[0];
+		break;
+	}
+	return {
+		title: text.slice(0, end).trimEnd(),
+		url,
+		overflow: text.slice(end + url.length).trimStart(),
+	};
 }
 
 function fitsTitle(text: string) {
