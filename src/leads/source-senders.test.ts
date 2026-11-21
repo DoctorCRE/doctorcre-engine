@@ -93,7 +93,19 @@ test("the database rejects duplicate lead-source addresses and domains", async (
 	}
 });
 
-test("field labels must have known keys, nonblank string values, a name and a request", async () => {
+test("field labels need only a name, since a lead source's notice is itself the request", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			"insert into lead_source_sender (domain, name, fields) values ($1, $2, $3)",
+			["leads.example.test", "Example Source", { name: "Contact" }],
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("field labels must have known keys, nonblank string values and a name", async () => {
 	for (const fieldLabels of [
 		{ ...fields, unknown: "Unknown label" },
 		{ ...fields, phone: " \t" },
@@ -101,7 +113,6 @@ test("field labels must have known keys, nonblank string values, a name and a re
 		{ ...fields, phone: 123 },
 		{ ...fields, phone: null },
 		{ email: fields.email, request: fields.request },
-		{ name: fields.name, email: fields.email },
 		[fields],
 		null,
 	]) {

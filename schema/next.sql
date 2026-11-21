@@ -1263,7 +1263,7 @@ create table lead_source_sender (
 		case
 			when fields is null then true
 			when jsonb_typeof(fields) = 'object' then
-				fields ?& array['name', 'request']
+				fields ? 'name'
 				and fields - array['name', 'email', 'phone', 'street_address', 'city', 'request'] = '{}'::jsonb
 				and not jsonb_path_exists(fields, 'strict $.* ? (@.type() != "string"
 					|| !(@ like_regex "[^[:space:]]") || @ like_regex ":[[:space:]]*$")')
