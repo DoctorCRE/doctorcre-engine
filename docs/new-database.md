@@ -962,7 +962,7 @@ Moving today's `deal_invoice_email` rows across maps created_by through the exis
 
 Mail intake reads `GET /jobs/leads/sources` with the jobs Access token and job name. It answers `{ senders: [{ address, domain, name, fields }] }` in name order. Each sender has either an exact email address or a lowercase hostname in `domain`. The engine roles can only read this list.
 
-`fields` is null or an object mapping `name` and `request`, and optionally `email`, `phone`, `street_address` and `city`, to the corresponding labels in the notice body. Labels must contain nonwhitespace text and may not end with a colon.
+`fields` is null or an object mapping `name`, and optionally `request`, `email`, `phone`, `street_address` and `city`, to the corresponding labels in the notice body. A request label is optional because a known lead source's notice is itself the request for help. Labels must contain nonwhitespace text and may not end with a colon.
 
 The mail capture job creates an unclaimed lead at New with how found set to inbound. Intake needs a recorded inquiry, a nonblank prospect name and at least one contact fact from the email: an email address, an E.164 phone number, or a street address and city that both appear literally in the evidence quote. A lead-source notice supplies the prospect's details in its body, including the full email address if used. Match parties by exact normalized email or phone. A name or street address alone never matches an existing party. Ambiguous, incomplete, internal and system mail stays in `lead_email_evidence` without creating a lead or a Home suggestion.
 
