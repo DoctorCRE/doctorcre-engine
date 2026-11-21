@@ -8,9 +8,6 @@ const stepMetadata =
 const storedDate =
 	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
-const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
-const abbreviation =
-	/(?:^|\s)(?:\p{Lu}|Dr|Mr|Mrs|Ms|Prof|Gen|St|Jr|Sr|Inc|Ltd|vs|e\.g|i\.e)\.$/u;
 const markdownLink = /\[([^\]]+)\]\(([^\s)]+)\)/g;
 const url = /https?:\/\/\S+/gi;
 const urlOrMarkdownLink = new RegExp(
@@ -84,7 +81,7 @@ function stepInstruction(what: string) {
 		(match, label?: string, destination?: string) =>
 			label === undefined || destination === undefined
 				? mask(match)
-				: `[${label.replace(url, mask)}](${destination.replace(url, mask)})`,
+				: `${label.replace(url, mask)} (${mask(destination)})`,
 	);
 	return homeStepText(masked.replace(/\(\s*T-\d+\s*\)/gi, " ")).replace(
 		new RegExp(`${marker}(\\d+)${marker}`, "g"),
@@ -92,32 +89,11 @@ function stepInstruction(what: string) {
 	);
 }
 
-function firstSentence(text: string) {
-	const links = [...text.matchAll(url)];
-	for (const { segment, index } of sentences.segment(text)) {
-		const end = segment.trimEnd();
-		const ending = end.replace(/["'”’)]+$/u, "");
-		const boundary = index + end.length;
-		const insideLink = links.some(
-			(link) => link.index < boundary && boundary < link.index + link[0].length,
-		);
-		if (
-			insideLink ||
-			abbreviation.test(ending) ||
-			/(?:\.{2,}|…)$/u.test(ending)
-		)
-			continue;
-		return /[.!?。！？]$/u.test(ending) ? text.slice(0, boundary) : "";
-	}
-	return "";
-}
-
 export function stepCopy({ what, item_title, context_label }: StepWording) {
 	const instruction = stepInstruction(what);
 	const title =
 		item_title?.trim() ||
 		savedHomeTitle(instruction) ||
-		savedHomeTitle(firstSentence(instruction)) ||
 		homeDisplayText(context_label) ||
 		"Next step";
 	return { title, instruction };

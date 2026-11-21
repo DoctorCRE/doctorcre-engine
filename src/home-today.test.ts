@@ -150,7 +150,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		`${id(32)}|Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
 		`${id(21)}|send status unknown — re-touch or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
 		`${id(28)}|${reviewTitle}|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
-		`${id(23)}|(202) 555-0142 — Call about the floor plan.|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
+		`${id(23)}|Other Clinic, Austin|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	// Client and lead steps live on their records, not on Today.
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
@@ -213,12 +213,7 @@ for (const [example, caller, step, title] of [
 		id(21),
 		"send status unknown — re-touch or drop",
 	],
-	[
-		"long phone instructions",
-		joe,
-		id(23),
-		"(202) 555-0142 — Call about the floor plan.",
-	],
+	["long phone instructions", joe, id(23), "Other Clinic, Austin"],
 	[
 		"call instructions without a phone number",
 		{ user: "dell" },

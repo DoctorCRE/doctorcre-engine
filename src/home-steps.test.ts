@@ -15,36 +15,12 @@ for (const [scenario, item_title, what, title] of [
 		"Call the office | Ask for Pat",
 		"Call the office | Ask for Pat",
 	],
-	[
-		"a short first sentence",
-		null,
-		`Send the offer. ${longInstruction}`,
-		"Send the offer.",
-	],
-	[
-		"an abbreviation within the first sentence",
-		null,
-		`Call Dr. Example and Gen. Sample about the plan. ${longInstruction}`,
-		"Call Dr. Example and Gen. Sample about the plan.",
-	],
-	[
-		"an initial within a long sentence",
-		null,
-		`Ask Á. Morgan to ${longInstruction}`,
-		"Example Vendor",
-	],
 	["a long single sentence", null, longInstruction, "Example Vendor"],
 	[
 		"a long URL with a query string",
 		null,
 		`Review ${longUrl}`,
 		"Example Vendor",
-	],
-	[
-		"a short first sentence before a URL",
-		null,
-		`Review the plan. Open ${longUrl}`,
-		"Review the plan.",
 	],
 	["a long word", null, "e\u0301".repeat(91), "Example Vendor"],
 ] as const) {
@@ -58,3 +34,34 @@ for (const [scenario, item_title, what, title] of [
 		);
 	});
 }
+
+for (const opening of [
+	"Confirm by Fri. Nov 27 and",
+	"Call at 9 a.m. Central and",
+	"Call at 202. 555. 0142 and",
+	"Use https://example.test/plan? and",
+	"Send the plan. then",
+]) {
+	test(`uses the record name for a long instruction starting with "${opening}"`, () => {
+		const what = `${opening} check the final signed drawing with the site manager before sending the revised plan to the tenant.`;
+		assert.deepEqual(
+			stepCopy({ what, item_title: null, context_label: "Example Deal" }),
+			{ title: "Example Deal", instruction: what },
+		);
+	});
+}
+
+test("a Markdown link keeps its destination in the instruction", () => {
+	const url = "https://example.test/C-026/2026-11-27?rev=2";
+	assert.deepEqual(
+		stepCopy({
+			what: `Read [the plan](${url}) before replying`,
+			item_title: "Review the plan",
+			context_label: "Example Deal",
+		}),
+		{
+			title: "Review the plan",
+			instruction: `Read the plan (${url}) before replying`,
+		},
+	);
+});

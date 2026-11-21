@@ -481,7 +481,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 			],
 			[
 				"Review the [plan](https://example.test/plan) with _the client_.",
-				"Review the plan with the client.",
+				"Review the plan (https://example.test/plan) with the client.",
 			],
 			["Draft the lease amendment", "Draft the lease amendment"],
 			[
@@ -563,9 +563,9 @@ const accentedAction =
 	"Send the revised plan to Rene\u0301e at Example Lost Deal with the extra icons 📐 📍 📎 🗂 🏢 🔑";
 for (const [scenario, what, title] of [
 	[
-		"a long step with a short first sentence",
+		"a long step with two sentences",
 		`Send the site plan. ${longAction}.`,
-		"Send the site plan.",
+		"Example Lost Deal",
 	],
 	["a long instruction", longAction, "Example Lost Deal"],
 	[
@@ -576,7 +576,7 @@ for (const [scenario, what, title] of [
 	[
 		"a long call with common abbreviations",
 		`Call Dr. Example and Mr. Reed at St. Example Inc. about the plan. ${longAction}.`,
-		"Call Dr. Example and Mr. Reed at St. Example Inc. about the plan.",
+		"Example Lost Deal",
 	],
 	[
 		"a call from the office",
