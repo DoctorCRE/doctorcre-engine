@@ -23,6 +23,7 @@ import {
 } from "./home-steps.ts";
 import { homeTitle, savedHomeTitle } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
+import { replacedDraftReason } from "./reply-drafts.ts";
 
 type ReviewRow = {
 	id: string;
@@ -411,14 +412,14 @@ const summaryFields = sql`summary.text as email_summary,
 function draftCards(
 	userId: string,
 	limit: number | null,
-	itemId?: string,
+	filter?: RawBuilder<boolean>,
 	dashboard = false,
 ) {
 	return sql<Draft>`
 		${homeReviewGroups(userId, false, dashboard)}
 		select card.*, ${summaryFields} from draft_cards card
 		left join email_current_summary summary on summary.activity_id = card.email_activity_id
-		${itemId ? sql`where id = ${itemId} and status <> 'sent'` : sql``}
+		${filter ? sql`where ${filter}` : sql``}
 		order by (status = 'sent'), activity_at desc, id limit ${limit}
 	`;
 }
@@ -426,14 +427,14 @@ function draftCards(
 function suggestionCards(
 	userId: string,
 	limit: number | null,
-	itemId?: string,
+	filter?: RawBuilder<boolean>,
 	dashboard = false,
 ) {
 	return sql<Suggestion>`
 		${homeReviewGroups(userId, false, dashboard)}
 		select card.*, ${summaryFields} from suggestion_cards card
 		left join email_current_summary summary on summary.activity_id = card.activity_id
-		${itemId ? sql`where id = ${itemId}` : sql``}
+		${filter ? sql`where ${filter}` : sql``}
 		order by activity_at desc, id limit ${limit}
 	`;
 }
@@ -478,8 +479,9 @@ export async function lockHomeReview(
 ) {
 	const query =
 		kind === "reply_draft"
-			? (userId: string) => draftCards(userId, 1, id, true)
-			: (userId: string) => suggestionCards(userId, 1, id);
+			? (userId: string) =>
+					draftCards(userId, 1, sql`id = ${id} and status <> 'sent'`, true)
+			: (userId: string) => suggestionCards(userId, 1, sql`id = ${id}`);
 	const {
 		rows: [group],
 	} = await query(userId).execute(tx);
@@ -764,19 +766,36 @@ function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 	};
 }
 
+export type HomeReviewLink = { kind: "reply_draft" | "suggestion"; id: string };
+
 export async function readHomeReviewCards(
 	db: Transaction<DB>,
 	userId: string,
 	limit: number | null,
 	dashboard: boolean,
+	link?: HomeReviewLink,
 ) {
+	const member = link && JSON.stringify([{ id: link.id }]);
+	const bySuggestion = link && sql<boolean>`suggestions @> ${member}::jsonb`;
 	const drafts = await markedReviews(
-		draftCards(userId, limit, undefined, dashboard),
+		draftCards(
+			userId,
+			limit,
+			link?.kind === "reply_draft" ? sql`id = ${link.id}` : bySuggestion,
+			dashboard,
+		),
 		userId,
 		"reply_draft",
 	).execute(db);
 	const suggestions = await markedReviews(
-		suggestionCards(userId, limit, undefined, dashboard),
+		suggestionCards(
+			userId,
+			limit,
+			link?.kind === "reply_draft"
+				? sql`fallback_reply_draft->>'id' = ${link.id}`
+				: bySuggestion,
+			dashboard,
+		),
 		userId,
 		"proposal",
 	).execute(db);
@@ -875,6 +894,67 @@ export async function readHomeReviewCards(
 			};
 		}),
 	];
+}
+
+export async function readHomeReviewDisposition(
+	db: Transaction<DB>,
+	userId: string,
+	{ kind, id }: HomeReviewLink,
+) {
+	const item_id = `${kind}:${id}`;
+	if (kind === "reply_draft") {
+		const draft = await db
+			.selectFrom("reply_draft")
+			.select(["status", "dismiss_reason"])
+			.where("id", "=", id)
+			.where("owner_user_id", "=", userId)
+			.where(sourceInMailbox(sql.ref("email_activity_id"), userId))
+			.executeTakeFirst();
+		if (draft?.status === "sent") return { item_id, state: "done" };
+		if (draft?.status === "dismissed")
+			return {
+				item_id,
+				state:
+					draft.dismiss_reason === replacedDraftReason ? "replaced" : "dropped",
+				reason: draft.dismiss_reason,
+			};
+	} else {
+		const proposal = await db
+			.selectFrom("proposal as p")
+			.leftJoin("activity as a", "a.id", "p.activity_id")
+			.select([
+				"p.status",
+				"p.dismiss_reason",
+				"p.superseded_reason",
+				"p.filing_reason",
+			])
+			.where("p.id", "=", id)
+			.where("p.kind", "not in", ["next_step_done", "email_lead"])
+			.where(visibleSuggestion(userId))
+			.where(sourceInMailbox(sql.ref("p.activity_id"), userId))
+			.executeTakeFirst();
+		if (proposal?.status === "accepted")
+			return {
+				item_id,
+				state: "done",
+				...(proposal.filing_reason && { reason: proposal.filing_reason }),
+			};
+		if (proposal?.status === "dismissed")
+			return {
+				item_id,
+				state: "dropped",
+				...(proposal.dismiss_reason && { reason: proposal.dismiss_reason }),
+			};
+		if (proposal?.status === "superseded")
+			return {
+				item_id,
+				state: "replaced",
+				...(proposal.superseded_reason && {
+					reason: proposal.superseded_reason,
+				}),
+			};
+	}
+	return new Refusal(404, "not_found");
 }
 
 type MailPriority = {

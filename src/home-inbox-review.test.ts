@@ -82,6 +82,7 @@ before(async () => {
 			('${call}', 'call', '2026-01-03T02:00Z', '${knownContact}'), ('${meeting}', 'meeting', '2026-01-03T12:00Z', null);
 		insert into activity_about (activity_id, deal_id) values ('${call}', '${deal}');
 		update reply_draft set status = 'dismissed', dismiss_reason = 'I already replied' where id = '${id(23)}';
+	update reply_draft set status = 'dismissed', dismiss_reason = 'Replaced by a newer reply draft in this conversation' where id = '${id(20)}';
 		update reply_draft set status = 'approved', to_address = 'pat@example.test', cc_address = 'copy@example.test'
 			where id in ('${id(24)}', '${id(25)}', '${id(26)}');
 		select set_config('engine.job', 'old_system', true);
@@ -166,6 +167,80 @@ async function dashboard(user = "example") {
 	return { reminders: items(result.reminders), waiting: items(result.waiting) };
 }
 
+function linkedCard(itemId: string, user = "example") {
+	return request(
+		{ user },
+		`home/cards/${encodeURIComponent(itemId)}`,
+		{ method: "GET" },
+		{ HOME_INBOX_READ_SCHEMA: "next" },
+	);
+}
+
+test("a linked draft is the same grouped card as Home", async () => {
+	const { reminders, waiting } = await dashboard();
+	for (const [itemId, cardId] of [
+		[`reply_draft:${id(21)}`, `reply_draft:${id(21)}`],
+		[`suggestion:${id(38)}`, `reply_draft:${id(21)}`],
+		[`suggestion:${id(32)}`, `suggestion:${id(32)}`],
+	] as const) {
+		const card = [...reminders, ...waiting].find(
+			(row) => row.item_id === cardId,
+		);
+		assert.ok(Array.isArray(card?.suggestions) && card.suggestions.length > 0);
+		if (itemId.startsWith("reply_draft"))
+			assert.ok(card.suggestions.length > 1);
+		const response = await linkedCard(itemId);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), card);
+	}
+});
+
+test("linked reviews show only the recorded disposition once finished", async () => {
+	for (const [item_id, state, reason] of [
+		[
+			`reply_draft:${id(20)}`,
+			"replaced",
+			"Replaced by a newer reply draft in this conversation",
+		],
+		[`reply_draft:${id(23)}`, "dropped", "I already replied"],
+		[`reply_draft:${id(24)}`, "done"],
+		[`suggestion:${id(35)}`, "dropped"],
+		[`suggestion:${id(36)}`, "done"],
+	] as const) {
+		const response = await linkedCard(item_id);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
+			item_id,
+			state,
+			...(reason && { reason }),
+		});
+	}
+});
+
+test("another partner's linked reviews look the same as an unknown item", async () => {
+	const unknown = await linkedCard(`reply_draft:${id(999)}`, "other");
+	assert.equal(unknown.status, 404);
+	const body = await unknown.json();
+	assert.ok(isArguments(body));
+	const { correlation_id: _, ...missing } = body;
+	assert.deepEqual(missing, {
+		error: "not_found",
+		hint: "The requested record was not found.",
+	});
+	for (const itemId of [
+		`reply_draft:${id(21)}`,
+		`reply_draft:${id(23)}`,
+		`suggestion:${id(36)}`,
+	]) {
+		const response = await linkedCard(itemId, "other");
+		assert.equal(response.status, 404);
+		const body = await response.json();
+		assert.ok(isArguments(body));
+		const { correlation_id: _, ...refusal } = body;
+		assert.deepEqual(refusal, missing);
+	}
+});
+
 test("dashboard sends approved drafts to waiting, failed deliveries to reminders, and sent drafts to history", async () => {
 	const { reminders, waiting } = await dashboard();
 	assert.partialDeepStrictEqual(
@@ -236,6 +311,9 @@ test("dashboard keeps one conversation card while delivery is unconfirmed", asyn
 		primary_action: null,
 		fallback_reply_draft: { id: draft, failure_reason: "unconfirmed_after_3" },
 	});
+	const linked = await linkedCard(`reply_draft:${draft}`, user);
+	assert.equal(linked.status, 200);
+	assert.deepEqual(await linked.json(), waiting[0]);
 });
 
 test("Home shows only its partner's active drafts and one per known conversation", async () => {
@@ -914,6 +992,14 @@ test("Home shows a filing suggested on every message of a conversation once and 
 		});
 		assert.equal(status, 200);
 		assert.deepEqual(await decisions(ids), []);
+		const item_id = `suggestion:${ids[2]}`;
+		const linked = await linkedCard(item_id);
+		assert.equal(linked.status, 200);
+		assert.deepEqual(await linked.json(), {
+			item_id,
+			state: decision.decision === "accept" ? "done" : "dropped",
+			reason: decision.reason,
+		});
 	}
 	const settled = await db.query(
 		`select p.kind, p.status, about.deal_id from proposal p
