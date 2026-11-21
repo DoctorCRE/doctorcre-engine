@@ -10,12 +10,14 @@ const brand = randomUUID();
 const copied = randomUUID();
 const oldClient = randomUUID();
 const market = randomUUID();
+const filedEmail = randomUUID();
 type ClientRow = {
 	id: string;
 	name: string;
 	ref: string;
 	owner_label: string;
 	owned_by_viewer: boolean;
+	active_deals?: { id: string; name: string }[];
 	recorded_client_type: string | null;
 	recorded_client_type_label: string | null;
 };
@@ -69,8 +71,9 @@ test("Clients opens a location saved through Deals and shows the next owner of a
 
 	const get = (path: string, bindings = { DIRECTORY_READ_SCHEMA: "next" }) =>
 		request(caller, path, { method: "GET" }, bindings);
+	const deal = { id: receipt.deal_id, name: "Example Deal" };
 	const list = await get(
-		"clients?scope=mine&type=franchise&pipeline=active&sort=last_deal_desc",
+		"clients?scope=mine&type=franchise&pipeline=active&sort=last_deal_desc&contract=vendor-directory.v2",
 	);
 	assert.equal(list.status, 200, await list.clone().text());
 	const { rows }: { rows: ClientRow[] } = await list.json();
@@ -80,13 +83,41 @@ test("Clients opens a location saved through Deals and shows the next owner of a
 	assert.equal(location.name, "Example New Location");
 	assert.equal(location.ref, location.id);
 	assert.equal(location.owned_by_viewer, true);
-	const added = await get(`clients/${location.id}`);
+	assert.deepEqual(location.active_deals, [deal]);
+	const added = await get(
+		`clients/${location.id}?contract=vendor-directory.v2`,
+	);
 	assert.equal(added.status, 200);
 	const { record: created }: { record: ClientRecord } = await added.json();
 	assert.equal(created.ref, location.ref);
+	assert.deepEqual(created.active_deals, [deal]);
 	assert.equal(created.acquisition_source, "national_account");
 
-	const copiedList = await get("clients?owner=dell&q=C-001");
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at, summary) values
+			('${filedEmail}', 'email', '2026-01-02', 'Email to demo@example.test: Lease update');
+		insert into email (activity_id, sender, subject, body, imported) values
+			('${filedEmail}', 'demo@example.test', 'Lease update', 'The updated lease is ready.', true);
+		insert into activity_about (activity_id, deal_id, party_id) values
+			('${filedEmail}', '${deal.id}', null), ('${filedEmail}', null, '${location.id}');
+		commit;`);
+	const activity = await request(
+		caller,
+		`recent-activity?query=Example+New+Location&ref=${location.id}`,
+		{ method: "GET" },
+		{ ACTIVITY_READ_SCHEMA: "next" },
+	);
+	assert.equal(activity.status, 200, await activity.clone().text());
+	const recent: { catch_up: { timeline: object[] } } = await activity.json();
+	assert.partialDeepStrictEqual(recent.catch_up.timeline[0], {
+		deal_id: deal.id,
+		email_subject: "Lease update",
+		detail: "The updated lease is ready.",
+	});
+
+	const copiedList = await get(
+		"clients?owner=dell&q=C-001&contract=vendor-directory.v2",
+	);
 	assert.equal(copiedList.status, 200);
 	const { rows: matches }: { rows: ClientRow[] } = await copiedList.json();
 	assert.equal(matches.length, 1);
@@ -94,6 +125,7 @@ test("Clients opens a location saved through Deals and shows the next owner of a
 	assert.ok(copiedRow);
 	assert.equal(copiedRow.owner_label, "Example Corrected Owner");
 	assert.equal(copiedRow.ref, "C-001");
+	assert.deepEqual(copiedRow.active_deals, []);
 	await t.test("drawer echoes the requested old UUID", async () => {
 		const requestedId = oldClient.toUpperCase();
 		const response = await get(`clients/${requestedId}`);

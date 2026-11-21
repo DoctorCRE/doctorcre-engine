@@ -367,6 +367,10 @@ With `clients-vendors-from-engine` on in the app KV, the engine serves `GET /api
 
 The directory uses the computed client status, the client type and vertical, and the last closed date from Deals. The national account role supplies the National account label, facet and type filter. The drawer reads contact details, including stored phone extensions, how the client was found, and copied roster notes from the new schema. Fields without a corresponding next value stay null, including state, county, contact cadence, the old status note and ETL status, the free-text contact, deal, specialty and duplicate labels, and the old record version. The deal type sort uses name order because the old roster deal type label was left behind.
 
+Clients list and drawer requests with `contract=vendor-directory.v2` include `active_deals: [{ id, name }]`, ordered by name and ID. The next read uses the same current phase rule as `client_status`. The public read uses the open deal’s phase, outcome and dates. Earlier requests keep their response shape.
+
+The next recent activity read includes a deal ID when an entry names one deal, and the saved email subject when present. The Clients drawer uses the deal ID for navigation and can open the saved email text inline.
+
 #### National account saves
 
 - `POST /api/engine/national-accounts` requires `idempotency_key` (UUID), `name` (nonblank text), and `owner` (`joe` or `dell`). It accepts either `company_id` (UUID) or `force_new` (boolean). Sending both returns `400 invalid_field_value` with `fields: ["company_id", "force_new"]`.

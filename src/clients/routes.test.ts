@@ -147,8 +147,8 @@ alter table client enable trigger client_touch;
 update client set merged_into = '${id(27)}' where id = '${id(29)}';
 update party set merged_into = '${id(127)}' where id = '${id(130)}';
 update party set deleted_at = now() where id = '${id(131)}';
-insert into deal (client_id, name, deal_type, phase, closed_on, created_by, updated_by)
-	select '${id(27)}', 'Example Deal', 'example-lease', 'example-open', d, '${id(903)}', '${id(903)}'
+insert into deal (id, client_id, name, deal_type, phase, closed_on, created_by, updated_by)
+	select case when d is null then '${id(1001)}'::uuid else gen_random_uuid() end, '${id(27)}', 'Example Deal', 'example-lease', 'example-open', d, '${id(903)}', '${id(903)}'
 	from unnest(array['2025-03-04', '2025-06-07', null]::date[]) d;
 `;
 
@@ -446,6 +446,15 @@ test("a client's details answer the old JSON for every branch the old read takes
 				return answer.json.record;
 			};
 
+			const withDeals = await record(
+				27,
+				"joe",
+				"?contract=vendor-directory.v2",
+			);
+			assert.deepEqual(withDeals.active_deals, [
+				{ id: id(1001), name: "Example Deal" },
+			]);
+
 			const rich = await ask(`/${id(27)}?contract=vendor-directory.v1`);
 			const { observed_at, valid_until } = rich.json.source;
 			assert.equal(Date.parse(valid_until) - Date.parse(observed_at), 60_000);
@@ -522,10 +531,6 @@ test("a client's details answer the old JSON for every branch the old read takes
 			);
 			const { last_deal_at: _, deal_type: __, ...legacy } = full;
 			assert.deepEqual(await record(27, "dell", "?viewer=dell"), legacy);
-			assert.deepEqual(
-				await record(27, "joe", "?contract=vendor-directory.v2"),
-				full,
-			);
 			assert.deepEqual(
 				(await ask(`/${id(27).toUpperCase()}`)).json.record.id,
 				id(27),
