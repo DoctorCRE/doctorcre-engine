@@ -11,8 +11,8 @@ import { isArguments } from "../save-door.ts";
 import { isUuid } from "../uuid.ts";
 import {
 	type About,
+	eligibleMailLinks,
 	knownMailDestination,
-	unsuppressedMailLinks,
 } from "./filing-evidence.ts";
 
 type Email = {
@@ -260,8 +260,6 @@ async function insertActivity(
 	return id;
 }
 
-// Links an email to every party, other than the users, whose address sent or
-// received it. A second copy of a stored email only adds its new links.
 export async function lockEmail(tx: Transaction<DB>, messageId: string) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`email ${messageId}`}, 0))`.execute(
 		tx,
@@ -297,21 +295,20 @@ export async function recordEmail(
 	await lockEmail(tx, message_id);
 	const stored = await tx
 		.selectFrom("email")
-		.innerJoin("activity", "activity.id", "email.activity_id")
-		.select(["activity_id", "conversation_id", "sender", "happened_at"])
+		.select(["activity_id", "conversation_id", "sender"])
 		.where("email.message_id", "=", message_id)
 		.executeTakeFirst();
 	if (autoFile && !records.some((record) => "deal_id" in record)) {
 		const destination = await knownMailDestination(
 			tx,
-			stored ?? { ...email, happened_at: activity.happened_at },
-			stored?.activity_id ?? null,
+			stored ?? email,
+			!stored,
 		);
 		if (destination) about.push(destination);
 	}
 	const links =
 		autoFile && stored
-			? await unsuppressedMailLinks(tx, stored.activity_id, about)
+			? await eligibleMailLinks(tx, stored.activity_id, about)
 			: about;
 	if (!stored && !links.length)
 		throw new SaveRefusal(new Refusal(422, "about_nothing"));
@@ -378,26 +375,10 @@ async function addLinks(
 	if (!stored) throw new SaveRefusal(new Refusal(404, "not_found"));
 	await requireRecords(tx, about);
 	if (stored.message_id) await lockEmail(tx, stored.message_id);
-	let links = about;
-	if (mailCapture && stored.kind === "email") {
-		const filed = await tx
-			.selectFrom("activity_about")
-			.select("deal_id")
-			.where("activity_id", "=", activity_id)
-			.where("deal_id", "is not", null)
-			.execute();
-		links = await unsuppressedMailLinks(
-			tx,
-			activity_id,
-			about.filter(
-				(candidate) =>
-					!("deal_id" in candidate) ||
-					filed.every(
-						({ deal_id }) => deal_id === candidate.deal_id.toLowerCase(),
-					),
-			),
-		);
-	}
+	const links =
+		mailCapture && stored.kind === "email"
+			? await eligibleMailLinks(tx, activity_id, about)
+			: about;
 	return { activity_id, about: await link(tx, activity_id, links) };
 }
 

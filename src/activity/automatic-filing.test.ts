@@ -10,6 +10,7 @@ const dell = randomUUID();
 const contact = randomUUID();
 const vendorContact = randomUUID();
 const ambiguousContact = randomUUID();
+const movingContact = randomUUID();
 const vendor = randomUUID();
 const otherVendor = randomUUID();
 const deal = randomUUID();
@@ -27,16 +28,18 @@ before(async () => {
 			('${contact}', 'person', 'Example Contact'),
 			('${vendorContact}', 'person', 'Example Vendor Contact'),
 			('${ambiguousContact}', 'person', 'Second Vendor Contact'),
+			('${movingContact}', 'person', 'Moving Contact'),
 			('${vendor}', 'company', 'Example Vendor'), ('${otherVendor}', 'company', 'Second Vendor');
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
 		insert into role (slug, label) values ('vendor', 'Vendor');
 		insert into party_role (party_id, role) values ('${vendor}', 'vendor'), ('${otherVendor}', 'vendor');
 		insert into party_company (person_id, company_id) values
-			('${vendorContact}', '${vendor}'),
+			('${vendorContact}', '${vendor}'), ('${movingContact}', '${vendor}'),
 			('${ambiguousContact}', '${vendor}'), ('${ambiguousContact}', '${otherVendor}');
 		insert into party_email (party_id, address, label) values
 			('${contact}', 'contact@example.test', 'work'),
 			('${vendorContact}', 'vendor-contact@example.test', 'work'),
+			('${movingContact}', 'moving-contact@example.test', 'work'),
 			('${ambiguousContact}', 'ambiguous-contact@example.test', 'work');
 		insert into deal (id, name, owner_user_id) values
 			('${deal}', 'Example Deal', '${joe}'), ('${otherDeal}', 'Other Deal', '${joe}');
@@ -195,6 +198,63 @@ test("one current vendor contact files there while two vendor matches leave the 
 	assert.equal((await cards(filing)).length, 1);
 });
 
+test("another mailbox copy keeps the vendor filed before the sender moved", async () => {
+	const message = mail("vendor-move", "Outlook-vendor-move");
+	message.email.sender = "moving-contact@example.test";
+	const first = await store(message);
+	const about = [vendor, movingContact]
+		.sort()
+		.map((party_id) => ({ party_id }));
+	assert.deepEqual(first.about, about);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		update party_company set ended_on = '2026-11-04'
+			where person_id = '${movingContact}' and company_id = '${vendor}';
+		insert into party_company (person_id, company_id) values
+			('${movingContact}', '${otherVendor}');
+		commit;`);
+	const copy = { ...message, idempotency_key: randomUUID() };
+	const second = await store(copy, secondMailbox);
+	assert.equal(second.activity_id, first.activity_id);
+	assert.deepEqual(second.about, about);
+	await store(
+		mail("vendor-move-deal", "Outlook-vendor-move", [{ deal_id: deal }], true),
+	);
+	const filed = await store({ ...message, idempotency_key: randomUUID() });
+	assert.deepEqual(filed.about, [...about, { deal_id: deal }]);
+});
+
+test("a newer stored conflicting deal leaves a backfill unfiled", async () => {
+	const conversation = "Outlook-backfill";
+	await store(mail("oldest", conversation, [{ deal_id: deal }], true));
+	await store({
+		...mail("newest", conversation, [{ deal_id: otherDeal }]),
+		happened_at: "2026-11-04T12:00:00Z",
+	});
+	const backfill = mail("backfill", conversation);
+	backfill.email.sender = "vendor-contact@example.test";
+	assert.deepEqual((await store(backfill)).about, [
+		{ party_id: vendorContact },
+	]);
+});
+
+test("a conflicting explicit deal on another mailbox copy keeps the original filing", async () => {
+	const message = mail("duplicate-conflict", "Outlook-duplicate-conflict", [
+		{ deal_id: deal },
+	]);
+	const first = await store(message);
+	const copy = await store(
+		{
+			...message,
+			idempotency_key: randomUUID(),
+			about: [{ deal_id: otherDeal.toUpperCase() }],
+		},
+		secondMailbox,
+	);
+	assert.equal(copy.activity_id, first.activity_id);
+	assert.deepEqual(copy.about, [{ deal_id: deal }, { party_id: contact }]);
+});
+
 for (const conflict of ["two thread deals", "a different existing deal"]) {
 	test(`${conflict} leaves the filing question open`, async () => {
 		const conversation = `Outlook-${conflict}`;
@@ -260,7 +320,7 @@ test("a partner's unlink prevents filing again and hides the same filing questio
 	assert.deepEqual(again.about, [{ party_id: contact }]);
 	const [status, legacy] = await save(
 		capture,
-		`activities/${saved.activity_id}/about`,
+		`activities/${saved.activity_id.toUpperCase()}/about`,
 		{ about: [{ deal_id: deal.toUpperCase() }], idempotency_key: randomUUID() },
 	);
 	assert.equal(status, 200);
@@ -292,5 +352,12 @@ test("dismissing filing prevents an inherited link on a fresh delivery", async (
 		secondMailbox,
 	);
 	assert.deepEqual(again.about, [{ party_id: contact }]);
+	const [status, routed] = await save(
+		capture,
+		`activities/${saved.activity_id}/about`,
+		{ about: [{ deal_id: deal }], idempotency_key: randomUUID() },
+	);
+	assert.equal(status, 200);
+	assert.deepEqual(routed.about, again.about);
 	assert.deepEqual(await cards(filing), []);
 });

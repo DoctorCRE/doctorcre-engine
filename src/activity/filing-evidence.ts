@@ -14,7 +14,7 @@ function partnerUnlinked(
 		select from change removed
 		where removed.table_name = 'activity_about' and removed.action = 'delete'
 			and removed.changed_by_user_id is not null
-			and removed.old_value->>'activity_id' = ${activityId}::text
+			and removed.old_value->>'activity_id' = ${activityId}::uuid::text
 			and removed.old_value @> ${target}
 	)`;
 }
@@ -32,7 +32,7 @@ export function filingReviewNeeded(
 	)}`;
 }
 
-export async function unsuppressedMailLinks(
+export async function eligibleMailLinks(
 	tx: Transaction<DB>,
 	activityId: string,
 	about: About[],
@@ -44,6 +44,10 @@ export async function unsuppressedMailLinks(
 			candidate(deal_id uuid, party_id uuid, property_id uuid)
 		where not ${partnerUnlinked(sql.val(activityId), sql`jsonb_strip_nulls(to_jsonb(candidate))`)}
 			and not exists (
+				select from activity_about filed
+				where filed.activity_id = ${activityId} and filed.deal_id <> candidate.deal_id
+			)
+			and not exists (
 				select from proposal p
 				where p.activity_id = ${activityId} and p.deal_id = candidate.deal_id
 					and p.kind = 'file_to_deal' and p.status = 'dismissed'
@@ -54,27 +58,24 @@ export async function unsuppressedMailLinks(
 
 export async function knownMailDestination(
 	tx: Transaction<DB>,
-	source: {
-		conversation_id: string | null;
-		happened_at: string | Expression<string>;
-		sender: string;
-	},
-	activityId: string | null,
+	{
+		conversation_id,
+		sender,
+	}: { conversation_id: string | null; sender: string },
+	firstDelivery: boolean,
 ) {
 	const {
 		rows: [destination],
 	} = await sql<{ link: About }>`
 		with thread_deals as (
 			select distinct about.deal_id
-			from email earlier
-			join activity on activity.id = earlier.activity_id
-			join activity_about about on about.activity_id = earlier.activity_id
-			where earlier.conversation_id = ${source.conversation_id}
-				and activity.happened_at < ${source.happened_at}
+			from email
+			join activity_about about using (activity_id)
+			where email.conversation_id = ${conversation_id}
 				and about.deal_id is not null
 			limit 2
 		), senders as (
-			select party_id from party_email where address = ${source.sender} limit 2
+			select party_id from party_email where ${firstDelivery} and address = ${sender} limit 2
 		), sender_vendors as (
 			select role.party_id
 			from senders s
@@ -103,8 +104,6 @@ export async function knownMailDestination(
 				and (select count(*) from sender_vendors) = 1
 		)
 		select link from destinations
-		where not exists (select from activity_about
-			where activity_id = ${activityId} and deal_id is not null)
 	`.execute(tx);
 	return destination?.link;
 }
