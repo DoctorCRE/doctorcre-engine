@@ -452,14 +452,14 @@ test("A new suggestion keeps the conversation snoozed and unsnooze returns it to
 	const [unsnoozed, receipt] = await mark("unsnooze");
 	assert.equal(unsnoozed, 200);
 	assert.equal((await card()).section, "inbox");
-	const [decided] = await save(user, `proposals/${id(51)}/decision`, {
+	const [decided] = await save(user, `proposals/${id(50)}/decision`, {
 		idempotency_key: randomUUID(),
 		decision: "dismiss",
 	});
 	assert.equal(decided, 200);
 	assert.partialDeepStrictEqual(await card(), {
 		section: "inbox",
-		merged_source_ids: [id(52), id(50)],
+		merged_source_ids: [id(52)],
 	});
 	const [stale] = await mark("snooze", receipt, until);
 	assert.equal(stale, 409);
@@ -853,6 +853,137 @@ for (const match of [
 		assert.deepEqual(await relevantCards(), []);
 	});
 }
+
+// A job suggests the same decision on every message of a conversation.
+async function suggestOnEachMessage(conversation: string, kind: string) {
+	const job = { job: "mail_capture", for_user: "example" };
+	const ids: string[] = [];
+	for (const day of [11, 12, 13]) {
+		const [stored, email] = await save(job, "activities", {
+			idempotency_key: randomUUID(),
+			kind: "email",
+			happened_at: `2026-01-${day}T12:00:00Z`,
+			email: {
+				message_id: `<${conversation}-${day}@example.test>`,
+				conversation_id: conversation,
+				sender: "pat@example.test",
+				recipients: [],
+				subject: "Suite question",
+				body: `Message ${day} about the suite.`,
+			},
+		});
+		assert.equal(stored, 201);
+		const [suggested, proposal] = await save(job, "proposals", {
+			idempotency_key: randomUUID(),
+			kind,
+			activity_id: email.activity_id,
+			evidence: "This thread is about the suite.",
+			...(kind === "file_to_deal" && { deal_id: deal }),
+		});
+		assert.equal(suggested, 201);
+		ids.push(String(proposal.proposal_id));
+	}
+	return ids;
+}
+
+test("Home shows a filing suggested on every message of a conversation once and settles it for the thread", async () => {
+	const user = { user: "example" };
+	const filings = await suggestOnEachMessage(
+		"Outlook-repeat-filing",
+		"file_to_deal",
+	);
+	const choices = await suggestOnEachMessage(
+		"Outlook-repeat-choice",
+		"possible_new_deal",
+	);
+	const decisions = async (ids: string[]) =>
+		(await inbox()).flatMap(({ suggestions }) => {
+			const shown = Array.isArray(suggestions)
+				? suggestions.filter(isArguments).map(({ id }) => String(id))
+				: [];
+			return shown.some((id) => ids.includes(id)) ? [shown] : [];
+		});
+	for (const ids of [filings, choices])
+		assert.deepEqual(await decisions(ids), [[ids[2]]]);
+	for (const [ids, decision] of [
+		[filings, { decision: "accept", reason: "The thread is about this deal." }],
+		[choices, { decision: "dismiss", reason: "Not a deal." }],
+	] as const) {
+		const [status] = await save(user, `proposals/${ids[2]}/decision`, {
+			idempotency_key: randomUUID(),
+			...decision,
+		});
+		assert.equal(status, 200);
+		assert.deepEqual(await decisions(ids), []);
+	}
+	const settled = await db.query(
+		`select p.kind, p.status, about.deal_id from proposal p
+		left join activity_about about on about.activity_id = p.activity_id and about.deal_id is not null
+		where p.id = any($1::uuid[]) order by p.kind, p.created_at`,
+		[[...filings, ...choices]],
+	);
+	assert.deepEqual(settled.rows, [
+		...filings.map(() => ({
+			kind: "file_to_deal",
+			status: "accepted",
+			deal_id: deal,
+		})),
+		...choices.map(() => ({
+			kind: "possible_new_deal",
+			status: "dismissed",
+			deal_id: null,
+		})),
+	]);
+});
+
+test("Two accepts of different suggestions in one filing settle it once", {
+	timeout: 10000,
+}, async (t) => {
+	// Locks are taken in id order, so the race clicks the lowest and highest ids.
+	const [lowest, middle, highest] = (
+		await suggestOnEachMessage("Outlook-racing-filing", "file_to_deal")
+	).sort();
+	const accept = (proposal: string | undefined) =>
+		save({ user: "example" }, `proposals/${proposal}/decision`, {
+			idempotency_key: randomUUID(),
+			decision: "accept",
+			reason: "The thread is about this deal.",
+		});
+	const waiting = async (count: number) => {
+		while (
+			(
+				await db.query(
+					"select count(distinct pid)::int as waiting from pg_locks where not granted",
+				)
+			).rows[0].waiting < count
+		)
+			t.signal.throwIfAborted();
+	};
+	// Holding the middle suggestion parks the first accept inside its decision.
+	await db.query("begin");
+	await db.query("select from proposal where id = $1 for update", [middle]);
+	const first = accept(lowest);
+	await waiting(1);
+	const second = accept(highest);
+	await waiting(2);
+	await db.query("commit");
+	const answers = await Promise.all([first, second]);
+	assert.deepEqual(
+		answers.map(([status, body]) => [status, body.error ?? body.status]),
+		[
+			[200, "accepted"],
+			[409, "already_decided"],
+		],
+	);
+	const { rows } = await db.query(
+		"select status from proposal where id = any($1::uuid[])",
+		[[lowest, middle, highest]],
+	);
+	assert.deepEqual(
+		rows.map(({ status }) => status),
+		["accepted", "accepted", "accepted"],
+	);
+});
 
 test("A copied email lead suggestion keeps its mailbox and intake reading on Home", async () => {
 	const candidateId = id(40);

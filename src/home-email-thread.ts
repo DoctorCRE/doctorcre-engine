@@ -18,10 +18,26 @@ export function senderLabel(
 
 export function sourceInMailbox(
 	source: Expression<string | null>,
-	userId: string,
+	userId: string | Expression<string>,
 ) {
 	return sql<boolean>`coalesce((select bool_or(user_id = ${userId}::uuid)
 		from email_mailbox where activity_id = ${source}), true)`;
+}
+
+export const mailGroup = sql<
+	string | null
+>`coalesce('conversation:' || e.conversation_id, 'email:' || e.activity_id)`;
+
+// A job suggests filing on each message of a conversation; every screen shows that decision once, as its newest pending suggestion.
+export function decisionPosition(
+	proposal: string,
+	source: Expression<string | null>,
+) {
+	const column = (name: string) => sql.ref(`${proposal}.${name}`);
+	return sql<number>`row_number() over (
+		partition by ${source}, case when ${column("kind")} in ('file_to_deal', 'possible_new_deal')
+			then ${column("kind")} || ':' || coalesce(${column("deal_id")}::text, '') else ${column("id")}::text end
+		order by (${column("status")} = 'pending') desc, ${column("created_at")} desc, ${column("id")})`;
 }
 
 const historyMarker =

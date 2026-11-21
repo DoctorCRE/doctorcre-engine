@@ -290,3 +290,31 @@ test("both partners see individual correspondence and can decide email suggestio
 		[id(24), id(23), id(21), id(20)],
 	);
 });
+
+test("the deal page lists a filing suggested on every message of a conversation once", async () => {
+	const messages = `array['${id(60)}', '${id(61)}', '${id(62)}']::uuid[]`;
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at)
+			select message, 'email', '2026-01-20'::date + day::int
+			from unnest(${messages}) with ordinality m(message, day);
+		insert into email (activity_id, message_id, sender, subject, body, conversation_id)
+			select message, message || '@example.test', 'pat@example.test', 'Suite question',
+				'About the suite.', 'example-suite-thread'
+			from unnest(${messages}) message;
+		insert into activity_about (activity_id, party_id)
+			select message, '${id(3)}' from unnest(${messages}) message;
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, created_at)
+			select gen_random_uuid(), 'file_to_deal', message, 'email', 'About the suite.', 'old_system',
+				'${otherDealId}', '2026-01-20'::date + day::int
+			from unnest(${messages}) with ordinality m(message, day);
+		commit;`);
+	const page = await detail(alex, otherDealId);
+	assert.ok("email_follow_ups" in page && Array.isArray(page.email_follow_ups));
+	assert.deepEqual(
+		page.email_follow_ups
+			.filter((entry) => entry.kind === "file_to_deal")
+			.map((entry) => entry.email.activity_id),
+		[id(62)],
+	);
+});

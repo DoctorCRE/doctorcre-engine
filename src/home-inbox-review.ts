@@ -3,6 +3,8 @@ import { jsonObjectFrom } from "kysely/helpers/postgres";
 import { filingReviewNeeded } from "./activity/filing-evidence.ts";
 import { isoMillis, Refusal } from "./answer.ts";
 import {
+	decisionPosition,
+	mailGroup,
 	readHomeEmailThread,
 	senderLabel,
 	sourceInMailbox,
@@ -83,7 +85,8 @@ type Suggestion = ReviewRow &
 		member_ids: string[];
 	};
 
-const mailGroup = sql`coalesce('conversation:' || e.conversation_id, 'email:' || e.activity_id)`;
+const mailSource = sql`coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id)`;
+const sourceKey = sql<string>`coalesce(${mailSource}, a.id::text, p.id::text)`;
 
 function draftRows(userId: string) {
 	return sql`
@@ -274,7 +277,9 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 				case when strpos(e.body, p.evidence) > 0 then p.evidence end as email_quote,
 				a.happened_at as source_at,
 				coalesce(a.happened_at::text, candidate.source_row->>'first_seen_at') as email_at,
-				coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id) as mail_group,
+				${mailSource} as mail_group,
+				${sourceKey} as source_key,
+				${decisionPosition("p", sourceKey)} as decision_position,
 				'email:' || md5(${mailGroup}) as mail_card_id,
 				coalesce(lead_email.activity_id, a.id) as group_activity_id,
 				coalesce(lead_email.happened_at, a.happened_at) as group_source_at,
@@ -323,11 +328,9 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 				array_agg(id) over all_members as member_ids,
 				md5(string_agg(id::text, ':') filter (where status = 'pending') over all_members) as source_version,
 				jsonb_agg(${forMail ? sql`reference || jsonb_build_object('suggestion_title', suggestion_title, 'due_on', due_on)` : sql`reference`})
-					filter (where status = 'pending' ${dashboard ? sql`and kind <> 'email_lead'` : sql``}) over all_members as suggestions
+					filter (where status = 'pending' and decision_position = 1 ${dashboard ? sql`and kind <> 'email_lead'` : sql``}) over all_members as suggestions
 			from visible
-			window source_group as (
-				partition by activity_kind, coalesce(mail_group, activity_id::text, id::text)
-			), latest_source as (source_group order by (status = 'pending') desc, group_source_at desc, group_activity_id desc),
+			window source_group as (partition by activity_kind, source_key), latest_source as (source_group order by (status = 'pending') desc, group_source_at desc, group_activity_id desc),
 			same_source as (source_group order by (status = 'pending') desc, (kind = 'email_lead'), activity_at desc, id),
 			all_members as (same_source rows between unbounded preceding and unbounded following)
 		)
