@@ -1,9 +1,7 @@
 import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
-	followUpTitlePrefix,
 	homeTitle,
-	savedHomeTitle,
 	shortenHomeTitle,
 	stripHomeTitlePrefixes,
 } from "./home-title.ts";
@@ -17,9 +15,7 @@ const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
 const phoneNumber =
 	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
 const meetingSuffix =
-	/\s*\|\s*([^|]+, (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\p{L}*,? \p{L}{3,9} \d{1,2}(?:,? \d{4},?)? \d{1,2}:\d{2}\s*[AP]M\.?)$/iu;
-const actionStart =
-	/^(?:Please )?(?:ask|call|check|confirm|contact|discuss|draft|email|follow up|forward|meet|prepare|reply|review|schedule|send|verify|visit)\b/i;
+	/(?:\s*\|\s*| [·–—-] |, )((?:[^,|]+, )?(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\p{L}*,? \p{L}{3,9} \d{1,2}(?:,? \d{4},?)? \d{1,2}:\d{2}\s*[AP]M\.?)$/iu;
 const instructionSuffix =
 	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/i;
 const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
@@ -85,8 +81,11 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
-	const meeting = meetingSuffix.exec(savedText);
-	const savedWording = meeting ? savedText.slice(0, meeting.index) : savedText;
+	const pipe = savedText.lastIndexOf(" | ");
+	const meeting = pipe < 0 ? meetingSuffix.exec(savedText) : null;
+	const savedWording = savedText.slice(0, pipe < 0 ? meeting?.index : pipe);
+	const meetingDetails =
+		pipe < 0 ? (meeting?.[1] ?? null) : savedText.slice(pipe + 3);
 	const suffix = instructionSuffix.exec(savedWording);
 	const savedAction = suffix
 		? savedWording.slice(0, suffix.index)
@@ -99,48 +98,24 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "");
 	const cadence = vendorCadence.exec(savedText)?.[1];
-	const subjectPrefix =
-		meeting && !actionStart.test(action) ? followUpTitlePrefix : "";
-	const actionTitle =
-		meeting && action
-			? shortenHomeTitle(action, subjectPrefix)
-			: savedHomeTitle(action);
+	const actionTitle = shortenHomeTitle(action);
 	const title = cadence
 		? homeTitle("vendor_check_in", target)
 		: actionTitle ||
 			(contact
 				? homeTitle("call_follow_up", contact)
 				: homeTitle("follow_up", target));
-	const overflow =
-		meeting && actionTitle
-			? action.slice(actionTitle.length - subjectPrefix.length).trimStart()
-			: "";
-	const instruction =
-		title === actionTitle && actionTitle
-			? homeWhy(
-					overflow.charAt(0).toUpperCase() + overflow.slice(1),
-					savedAction
-						.match(phoneNumber)
-						?.map((number) => number.replace(/^at\s+/i, ""))
-						.join(", ") ?? null,
-					supporting.charAt(0).toUpperCase() + supporting.slice(1),
-				)
-			: savedWording;
-	const titleWords = title.replace(/[\p{P}\s]+$/gu, "").split(/\s+/);
-	const titlePrefix = new RegExp(
-		`^${titleWords.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+")}(?=$|[\\s\\p{P}])`,
-		"iu",
-	);
-	const remaining = instruction
-		?.replace(titlePrefix, "")
-		.replace(/^[\s\p{P}]+/u, "");
-	const detail =
-		instruction && titlePrefix.test(instruction)
-			? remaining
-				? remaining.charAt(0).toUpperCase() + remaining.slice(1)
-				: null
-			: instruction;
-	const details = homeWhy(cadence ?? detail ?? null, meeting?.[1] ?? null);
+	const overflow = cadence ? "" : action.slice(actionTitle.length).trimStart();
+	const instruction = actionTitle
+		? homeWhy(
+				savedAction
+					.match(phoneNumber)
+					?.map((number) => number.replace(/^at\s+/i, ""))
+					.join(", ") ?? null,
+				supporting.charAt(0).toUpperCase() + supporting.slice(1),
+			)
+		: savedWording;
+	const details = homeWhy(cadence ?? instruction, meetingDetails);
 	const titleText = title.replace(/[.!?]+$/, "");
 	const extraEvidence = (text: string) =>
 		text.replace(/[.!?]+$/, "") === titleText ? null : text;
@@ -148,6 +123,7 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		return {
 			title,
 			why: homeWhy(
+				overflow,
 				`Call${contact ? ` with ${contact}` : ""} on ${homeDate(step.call_at)}`,
 				extraEvidence(
 					homeDisplayText(evidence?.call_quote ?? null) ||
@@ -160,7 +136,7 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			),
 		};
 	}
-	if (!evidence) return { title, why: details };
+	if (!evidence) return { title, why: homeWhy(overflow, details) };
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
 		? `Follow-up set from the ${evidence.source_kind}`
@@ -170,6 +146,7 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 	return {
 		title,
 		why: homeWhy(
+			overflow,
 			hold || set,
 			extraEvidence(homeDisplayText(evidence.source_evidence)),
 			due,

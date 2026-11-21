@@ -311,8 +311,8 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			},
 			{
 				id: id(40),
-				what: "Follow up on Example Supply",
-				why: `${longWording}.`,
+				what: "Ask Example Supply whether the expansion order can ship before the tenant improvements",
+				why: "finish next spring.",
 				owner: "joe",
 				record_label: "Example Supply",
 				due_on: "2001-01-18",
