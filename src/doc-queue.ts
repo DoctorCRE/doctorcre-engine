@@ -1,6 +1,6 @@
-import { sql, type Transaction } from "kysely";
+import { type Selectable, sql, type Transaction } from "kysely";
 import { recentDocTurns } from "./doc.ts";
-import { type DocLinkReadiness, recordDocPoll } from "./doc-link.ts";
+import { recordDocPoll } from "./doc-link.ts";
 import { type DocClaimState, validateDocAnswer } from "./doc-tools.ts";
 import type { DB } from "./next-database.d.ts";
 
@@ -8,44 +8,28 @@ const clearClaim = { claim_id: null, claim_until: null, claim_state: null };
 const initialClaim = { reads: 0, sources: {} } satisfies DocClaimState;
 const unexpired = sql<boolean>`claim_until > clock_timestamp()`;
 
-export async function pollDocWork<T>(
-	tx: Transaction<DB>,
-	owner: string,
-	readiness: DocLinkReadiness | null,
-	claimWork: (tx: Transaction<DB>, owner: string) => Promise<T>,
-) {
-	await recordDocPoll(tx, owner, readiness);
-	await tx
-		.updateTable("doc_turn")
-		.set({ state: "queued", ...clearClaim })
-		.where("owner_user_id", "=", owner)
-		.where("state", "=", "working")
-		.where("claim_until", "<=", sql<string>`statement_timestamp()`)
-		.execute();
-	if (readiness !== "ready") return null;
-
-	const active = await tx
-		.selectFrom("doc_turn")
-		.select("id")
-		.where("owner_user_id", "=", owner)
-		.where("state", "=", "working")
-		.where(unexpired)
-		.limit(1)
-		.executeTakeFirst();
-	return active ? null : claimWork(tx, owner);
-}
+type ClaimableTurn = Pick<
+	Selectable<DB["doc_turn"]>,
+	"id" | "conversation_id" | "position" | "question" | "context"
+>;
 
 export async function claimDocTurn(tx: Transaction<DB>, owner: string) {
-	const turn = await tx
-		.selectFrom("doc_turn")
-		.select(["id", "conversation_id", "position", "question", "context"])
-		.where("owner_user_id", "=", owner)
-		.where("state", "=", "queued")
-		.orderBy("created_at")
-		.orderBy("id")
-		.limit(1)
-		.forUpdate()
-		.executeTakeFirst();
+	const {
+		rows: [turn],
+	} = await sql<ClaimableTurn>`
+		with cutoff as materialized (select clock_timestamp() as checked_at)
+		select t.id, t.conversation_id, t.position, t.question, t.context
+		from doc_turn t cross join cutoff
+		where t.owner_user_id = ${owner}
+		  and (t.state = 'queued' or (t.state = 'working' and t.claim_until <= cutoff.checked_at))
+		  and not exists (
+			select 1 from doc_turn active
+			where active.owner_user_id = ${owner} and active.state = 'working'
+			  and active.claim_until > cutoff.checked_at
+		  )
+		order by t.created_at, t.id
+		limit 1 for update of t
+	`.execute(tx);
 	if (!turn) return null;
 	const { conversation_id, ...question } = turn;
 	const history = await recentDocTurns(tx, conversation_id, turn.position);

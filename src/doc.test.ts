@@ -92,14 +92,14 @@ const issue = async (user: string) =>
 			issueDocLink(tx, user),
 		)
 	).credential;
-const poll = (credential: string, readiness = "ready") =>
+const poll = async (credential: string, readiness: string | null = "ready") =>
 	mac.request(
 		"/claim",
 		{
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${credential}`,
-				"Doc-Link-Readiness": readiness,
+				...(readiness === null ? {} : { "Doc-Link-Readiness": readiness }),
 			},
 		},
 		{ DATABASE_WRITER: { connectionString } },
@@ -197,6 +197,100 @@ test("ready polling claims the oldest turn and an expired claim is queued again"
 	const second = await claim(credential);
 	assert.equal(second.turn.id, turn.id);
 	assert.notEqual(second.claim_id, first.claim_id);
+});
+
+test("reclaims the oldest turn when its claim expires during a poll", async () => {
+	const send = client();
+	const credential = await issue(owner);
+	const oldest = await send("/turns", 202, {
+		...question,
+		idempotency_key: randomUUID(),
+	});
+	const original = await claim(credential);
+	await send("/turns", 202, { ...question, idempotency_key: randomUUID() });
+	await db.query(
+		"update doc_turn set created_at = '2000-01-01', claim_until = 'infinity' where id = $1",
+		[oldest.turn.id],
+	);
+
+	await db.query(`
+		create function next.hold_doc_turn_update() returns trigger language plpgsql as $$
+		begin
+			perform pg_advisory_xact_lock(992);
+			return null;
+		end;
+		$$;
+		grant execute on function next.hold_doc_turn_update() to engine;
+		create trigger hold_doc_turn_update before update on doc_turn
+		for each statement execute function next.hold_doc_turn_update();
+	`);
+	await db.query("begin; select pg_advisory_xact_lock(992)");
+	let finished = false;
+	const pending = poll(credential).finally(() => {
+		finished = true;
+	});
+	try {
+		const deadline = AbortSignal.timeout(5_000);
+		while (!finished && !deadline.aborted) {
+			const blocked = await db.query(`select 1 from pg_locks
+				where locktype = 'advisory' and not granted
+				and pg_backend_pid() = any(pg_blocking_pids(pid))`);
+			if (blocked.rowCount) break;
+		}
+		assert.ok(
+			!deadline.aborted,
+			"Mac poll neither reached the lock nor returned",
+		);
+		// Pause expiry cleanup after it takes its snapshot, if the poll runs it.
+		await db.query(
+			"update doc_turn set claim_until = clock_timestamp() where id = $1",
+			[oldest.turn.id],
+		);
+	} catch (error) {
+		await db.query("rollback");
+		await pending;
+		throw error;
+	}
+	await db.query("commit");
+	const response = await pending;
+	await db.query(`drop trigger hold_doc_turn_update on doc_turn;
+		drop function next.hold_doc_turn_update()`);
+	assert.ok([200, 204].includes(response.status));
+	const retried =
+		response.status === 204
+			? await claim(credential)
+			: await response.json<Claim>();
+	assert.equal(
+		retried.turn.id,
+		oldest.turn.id,
+		"the oldest turn keeps its place",
+	);
+	assert.notEqual(retried.claim_id, original.claim_id);
+});
+
+test("presence-only polls keep the last readiness report visible", async () => {
+	const send = client();
+	const credential = await issue(owner);
+	const { conversation_id } = await send("/turns", 202, {
+		...question,
+		idempotency_key: randomUUID(),
+	});
+	const chat = `/conversations/${conversation_id}` as const;
+	const waitingReason = async () =>
+		(await send(chat, 200)).turns[0]?.waiting_reason;
+	for (const [readiness, reason] of [
+		["signed_out", "Sign in to Claude Code on your Mac."],
+		["plan_limited", "Doc is paused until your Claude plan resets."],
+	]) {
+		assert.equal((await poll(credential, readiness)).status, 204);
+		await db.query(
+			"update doc_link set last_seen_at = '-infinity' where owner_user_id = $1",
+			[owner],
+		);
+		assert.equal(await waitingReason(), "Doc answers when your Mac is on.");
+		assert.equal((await poll(credential, null)).status, 204);
+		assert.equal(await waitingReason(), reason);
+	}
 });
 
 test("reports why a question waits and claims it when ready", async () => {

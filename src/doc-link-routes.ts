@@ -5,10 +5,11 @@ import {
 	docLinkPresence,
 	docLinkReadiness,
 	issueDocLink,
+	recordDocPoll,
 	revokeDocLink,
 	withDocLink,
 } from "./doc-link.ts";
-import { claimDocTurn, finishDocTurn, pollDocWork } from "./doc-queue.ts";
+import { claimDocTurn, finishDocTurn } from "./doc-queue.ts";
 import type { DB } from "./next-database.d.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
 import type { WriterEnv } from "./save.ts";
@@ -82,7 +83,8 @@ export function claimDocLink(c: Context<WriterEnv>) {
 				{ status: 400, headers: noStore },
 			);
 
-		const work = await pollDocWork(tx, owner, readiness ?? null, claimDocTurn);
+		await recordDocPoll(tx, owner, readiness);
+		const work = readiness === "ready" ? await claimDocTurn(tx, owner) : null;
 		return work
 			? Response.json(work, { headers: noStore })
 			: new Response(null, { status: 204, headers: noStore });

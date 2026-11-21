@@ -109,17 +109,18 @@ export function withDocLink<T>(
 export async function recordDocPoll(
 	tx: Transaction<DB>,
 	owner: string,
-	readiness: DocLinkReadiness | null,
+	readiness?: DocLinkReadiness,
 ) {
+	const nextReadiness = sql<DocLinkReadiness | null>`coalesce(${readiness ?? null}, readiness)`;
 	await tx
 		.updateTable("doc_link")
 		.set({
 			last_seen_at: sql`case when ${presenceDue} then clock_timestamp() else last_seen_at end`,
-			readiness,
+			readiness: nextReadiness,
 		})
 		.where("owner_user_id", "=", owner)
 		.where(
-			sql<boolean>`(${presenceDue}) or readiness is distinct from ${readiness}`,
+			sql<boolean>`(${presenceDue}) or readiness is distinct from ${nextReadiness}`,
 		)
 		.execute();
 }
