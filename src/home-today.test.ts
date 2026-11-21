@@ -22,7 +22,12 @@ const id = (n: number) =>
 const reader: Record<string, string> = { HOME_INBOX_READ_SCHEMA: "next" };
 const joe = { user: "joe" };
 const get = { method: "GET" } as const;
+const reviewTitle = "Review the project";
 const review = "Project review with Pat | Example Leasing, Tue Oct 27 4:30 PM";
+const callOffice =
+	"Call the office. If no one answers, leave a message and retry tomorrow.";
+const callPlan =
+	"(202) 555-0142 — Call about the floor plan. If no one answers, leave a message with the office and retry later.";
 
 before(async () => {
 	await setup();
@@ -56,7 +61,7 @@ before(async () => {
 		from day cross join (values
 			('${id(21)}'::uuid, '${id(7)}'::uuid, null::uuid, null::uuid, '${id(1)}'::uuid, 'CASEY DECIDE: send status unknown — re-touch or drop', -3, null::int, null::uuid, null::text),
 			('${id(22)}', null, '${id(3)}', null, '${id(1)}', 'L-123: _Confirm suite size_ (loop #12)', 0, null, null, null),
-			('${id(23)}', '${id(8)}', null, null, '${id(1)}', '(202) 555-0142 — Call about the floor plan. If no one answers, leave a message with the office and retry later.', -1, null, '${id(11)}', 'Send floor plan.'),
+			('${id(23)}', '${id(8)}', null, null, '${id(1)}', '${callPlan}', -1, null, '${id(11)}', 'Send floor plan.'),
 			('${id(24)}', '${id(9)}', null, null, '${id(1)}', 'Dropped follow-up', -2, null, '${id(11)}', 'Old follow-up.'),
 			('${id(25)}', null, '${id(5)}', null, '${id(1)}', 'Check in next month', 30, null, null, null),
 			('${id(26)}', null, '${id(4)}', null, '${id(1)}', 'Wait for contractor', -2, 5, null, null),
@@ -66,8 +71,9 @@ before(async () => {
 			('${id(30)}', null, null, '${id(10)}', '${id(1)}', 'V-ABC-012 (loop #12)', 0, null, null, null),
 			('${id(31)}', '${id(7)}', null, null, '${id(12)}', 'Non-partner reminder', -1, null, null, null),
 			('${id(32)}', '${id(9)}', null, null, '${id(2)}', 'Review the ended deal', -5, null, null, null),
-			('${id(33)}', null, '${id(5)}', null, '${id(2)}', 'Call the office. If no one answers, leave a message and retry tomorrow.', -6, null, null, null)
+			('${id(33)}', null, '${id(5)}', null, '${id(2)}', '${callOffice}', -6, null, null, null)
 		) v(id, deal_id, party_id, property_id, owner_id, what, due_offset, hold_offset, call_id, quote);
+		update next_step set item_title = '${reviewTitle}', source_ref = 'sample-project' where id = '${id(28)}';
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values ('${id(1)}', '${id(27)}', 'snoozed', now() + interval '2 days');
 		insert into home_mark (user_id, call_follow_up_id, disposition, drop_reason) values ('${id(1)}', '${id(24)}', 'dropped', 'Already handled.');
 		with day as (select (now() at time zone 'America/Chicago')::date as d)
@@ -140,15 +146,15 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	const row = (i: Row) =>
 		`${i.id}|${i.title}|${i.late_label}|${i.owner}|${i.home_item_id}|${i.open_url}`;
 	assert.deepEqual(body.reminders?.late.map(row), [
-		`${id(33)}|Call the office|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
+		`${id(33)}|${callOffice}|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
 		`${id(32)}|Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
-		`${id(21)}|send status unknown|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
-		`${id(28)}|Project review with Pat|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
-		`${id(23)}|Call about the floor plan|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
+		`${id(21)}|send status unknown — re-touch or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
+		`${id(28)}|${reviewTitle}|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
+		`${id(23)}|(202) 555-0142 — Call about the floor plan.|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	// Client and lead steps live on their records, not on Today.
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
-		`${id(30)}|Follow up on 100 Example Way|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
+		`${id(30)}|100 Example Way|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
 	assert.deepEqual(
 		body.reminders?.late.map((item) => [item.id, item.deal_ended]),
@@ -162,11 +168,11 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	);
 	assert.equal(
 		body.reminders?.late.find((i) => i.id === id(33))?.why,
-		"If no one answers, leave a message and retry tomorrow.",
+		callOffice,
 	);
 	assert.equal(
 		body.reminders?.late.find((i) => i.id === id(21))?.why,
-		"re-touch or drop.",
+		"send status unknown — re-touch or drop",
 	);
 	const inboxRes = await request(joe, "home/inbox", get, reader);
 	const inbox = (await inboxRes.json()) as { items: Row[] };
@@ -174,7 +180,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		(i) => i.item_id === `next_action:${id(30)}`,
 	);
 	assert.ok(typeof buildingCard?.title === "string");
-	assert.equal(buildingCard.title, "Follow up on 100 Example Way");
+	assert.equal(buildingCard.title, "100 Example Way");
 	const ids = new Set(inbox.items.map((i) => i.item_id));
 	const { late = [], upcoming = [] } = body.reminders ?? {};
 	for (const i of [...late, ...upcoming])
@@ -201,15 +207,25 @@ async function reminderAndCardTitles(caller: { user: string }, step: string) {
 }
 
 for (const [example, caller, step, title] of [
-	["a copied decision prompt", joe, id(21), "send status unknown"],
-	["long phone instructions", joe, id(23), "Call about the floor plan"],
+	[
+		"a copied decision prompt",
+		joe,
+		id(21),
+		"send status unknown — re-touch or drop",
+	],
+	[
+		"long phone instructions",
+		joe,
+		id(23),
+		"(202) 555-0142 — Call about the floor plan.",
+	],
 	[
 		"call instructions without a phone number",
 		{ user: "dell" },
 		id(33),
-		"Call the office",
+		callOffice,
 	],
-	["a meeting suffix", { user: "dell" }, id(28), "Project review with Pat"],
+	["a meeting suffix", { user: "dell" }, id(28), reviewTitle],
 ] as const) {
 	test(`Today and the Home card share a title for ${example}`, async () => {
 		const result = await reminderAndCardTitles(caller, step);
@@ -217,11 +233,9 @@ for (const [example, caller, step, title] of [
 	});
 }
 
-test("Home and Calendar show meeting details in the why without repeating the step title", async () => {
+test("Home and Calendar show the full instruction below a saved title", async () => {
 	const step = id(28);
 	const caller = { user: "dell" };
-	const title = "Project review with Pat";
-	const details = "Example Leasing, Tue Oct 27 4:30 PM.";
 	const [home, calendar] = await Promise.all([
 		reminderAndCardTitles(caller, step),
 		request(caller, "calendar/critical-dates", get, {
@@ -233,11 +247,11 @@ test("Home and Calendar show meeting details in the why without repeating the st
 	assert.ok(isArguments(body) && Array.isArray(body.next_steps));
 	assert.partialDeepStrictEqual(
 		body.next_steps.filter(isArguments).find((item) => item.id === step),
-		{ what: title, why: details },
+		{ what: reviewTitle, why: review },
 	);
-	assert.equal(home.card, title);
-	assert.ok(typeof home.why === "string" && home.why.startsWith(details));
-	assert.ok(!home.why.includes(title), home.why);
+	assert.equal(home.card, reviewTitle);
+	assert.ok(typeof home.why === "string" && home.why.startsWith(review));
+	assert.equal(home.reminder, reviewTitle);
 });
 
 test("today keeps each Outlook occurrence independently of its review", async (t) => {

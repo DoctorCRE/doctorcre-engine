@@ -16,6 +16,7 @@ import {
 	savedEmailAction,
 } from "../home-email-title.ts";
 import { readHomeReviewCards } from "../home-inbox-review.ts";
+import { stepCopy } from "../home-steps.ts";
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
@@ -253,6 +254,18 @@ export async function readNextDealDetail(
 	);
 	return {
 		...detail,
+		next_actions: detail.next_actions.map((step) => {
+			const { title, instruction } = stepCopy({
+				what: step.description,
+				item_title: step.title,
+				context_label: detail.name,
+			});
+			return {
+				...step,
+				display_title: title,
+				display_instruction: instruction,
+			};
+		}),
 		email_follow_ups: email_follow_ups.map(
 			({ email_action_title, email_sender, decision_label, ...followUp }) => ({
 				...followUp,

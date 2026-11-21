@@ -1,11 +1,6 @@
 import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
-import {
-	homeTitle,
-	homeUrl,
-	splitHomeTitle,
-	stripHomeTitlePrefixes,
-} from "./home-title.ts";
+import { savedHomeTitle, stripHomeTitlePrefixes } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
 
 const stepMetadata =
@@ -13,15 +8,13 @@ const stepMetadata =
 const storedDate =
 	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
-const phoneNumber =
-	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
-const stepSeparator = /\s[|—–]\s/;
-const instructionSuffix =
-	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/i;
-const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
+const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
+const abbreviation =
+	/(?:^|\s)(?:\p{Lu}|Dr|Mr|Mrs|Ms|Prof|St|Jr|Sr|Inc|Ltd|vs|e\.g|i\.e)\.$/u;
 const markdownLink = /\[([^\]]+)\]\(([^\s)]+)\)/g;
+const url = /https?:\/\/\S+/gi;
 const urlOrMarkdownLink = new RegExp(
-	`${homeUrl.source}|${markdownLink.source}`,
+	`${url.source}|${markdownLink.source}`,
 	"gi",
 );
 
@@ -58,10 +51,14 @@ export function homeStepText(text: string) {
 	return stripHomeTitlePrefixes(homeDisplayText(text));
 }
 
-export type StepTitle = {
-	title: string;
-	status: string | null;
+type StepWording = {
+	what: string;
+	item_title: string | null;
 	context_label: string | null;
+};
+
+export type HomeStep = StepWording & {
+	status: string | null;
 	due_on: string | null;
 	hold_until: string | null;
 	call_at: string | null;
@@ -77,127 +74,85 @@ type StepEvidence = {
 	source_evidence: string | null;
 };
 
-function maskStepUrls(raw: string) {
+function stepInstruction(what: string) {
 	const urls: string[] = [];
 	let marker = "\uE000";
-	while (raw.includes(marker)) marker += "\uE000";
-	const mask = (url: string) => `${marker}${urls.push(url) - 1}${marker}`;
-	const text = raw.replace(
+	while (what.includes(marker)) marker += "\uE000";
+	const mask = (link: string) => `${marker}${urls.push(link) - 1}${marker}`;
+	const masked = what.replace(
 		urlOrMarkdownLink,
 		(match, label?: string, destination?: string) =>
 			label === undefined || destination === undefined
 				? mask(match)
-				: `[${label.replace(homeUrl, mask)}](${destination.replace(homeUrl, mask)})`,
+				: `[${label.replace(url, mask)}](${destination.replace(url, mask)})`,
 	);
-	const token = new RegExp(`${marker}(\\d+)${marker}`, "g");
-	const unmask = (value: string) =>
-		value.replace(token, (_, index: string) => urls[Number(index)] ?? "");
-	const unmaskWhy = (value: string | null) =>
-		unmask(value?.endsWith(marker) ? value : homeWhy(value));
-	return { text, unmask, unmaskWhy };
+	return homeStepText(masked.replace(/\(\s*T-\d+\s*\)/gi, " ")).replace(
+		new RegExp(`${marker}(\\d+)${marker}`, "g"),
+		(_, index: string) => urls[Number(index)] ?? "",
+	);
 }
 
-function splitStepText(text: string): [string, string] {
-	const separator = stepSeparator.exec(text);
-	return separator
-		? [
-				text.slice(0, separator.index),
-				text.slice(separator.index + separator[0].length),
-			]
-		: [text, ""];
+function firstSentence(text: string) {
+	for (const { segment, index } of sentences.segment(text)) {
+		const end = segment.trimEnd();
+		const ending = end.replace(/["'”’)]+$/u, "");
+		if (abbreviation.test(ending) || /(?:\.{2,}|…)$/u.test(ending)) continue;
+		return /[.!?。！？]$/u.test(ending)
+			? text.slice(0, index + end.length)
+			: "";
+	}
+	return "";
 }
 
-function cleanStepPart(raw: string) {
-	const text = homeStepText(raw.replace(/\(\s*T-\d+\s*\)/gi, " "));
-	const suffix = instructionSuffix.exec(text);
-	const wording = text.slice(0, suffix?.index);
-	const supporting = suffix ? text.slice(suffix.index + suffix[0].length) : "";
-	return {
-		text,
-		action: wording
-			.replace(phoneNumber, " ")
-			.replace(/\s+/g, " ")
-			.replace(edgePunctuation, ""),
-		phones:
-			wording
-				.match(phoneNumber)
-				?.map((number) => number.replace(/^at\s+/i, ""))
-				.join(", ") ?? null,
-		supporting: supporting.charAt(0).toUpperCase() + supporting.slice(1),
-	};
+export function stepCopy({ what, item_title, context_label }: StepWording) {
+	const instruction = stepInstruction(what);
+	const title =
+		item_title?.trim() ||
+		savedHomeTitle(instruction) ||
+		savedHomeTitle(firstSentence(instruction)) ||
+		homeDisplayText(context_label) ||
+		"Next step";
+	return { title, instruction };
 }
 
-export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
-	const masked = maskStepUrls(step.title);
-	const [leftText, rightText] = splitStepText(masked.text);
-	const left = cleanStepPart(leftText);
-	const right = cleanStepPart(rightText);
-	const cadence = vendorCadence.exec(
-		`${left.text} ${right.text}`.trimEnd(),
-	)?.[1];
-	const leadingPhone = left.phones && !left.action && !left.supporting;
-	const action = masked.unmask(leadingPhone ? right.action : left.action);
-	const explicitDetails =
-		cadence || leadingPhone ? "" : masked.unmaskWhy(right.action);
-	const details = cadence
-		? [homeWhy(cadence)]
-		: [left.phones, right.phones, left.supporting, right.supporting].map(
-				masked.unmaskWhy,
-			);
-	const target = homeDisplayText(step.context_label);
-	const shortened = cadence
-		? { title: homeTitle("vendor_check_in", target), url: "", overflow: "" }
-		: splitHomeTitle(action);
-	const title = shortened.title || homeTitle("follow_up", target);
-
-	const contact = homeDisplayText(step.call_contact);
+export function homeStepCopy(step: HomeStep, evidence: StepEvidence) {
+	const { title, instruction } = stepCopy(step);
 	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
 	const hold =
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
-	const stepWhy = (...facts: string[]) =>
-		[shortened.url, explicitDetails, homeWhy(shortened.overflow), ...facts]
-			.filter(Boolean)
-			.join(" ");
-	const titleText = title.replace(/[.!?]+$/, "");
+	const withoutEnd = (text: string) => text.replace(/[.!?]+$/, "");
 	const extraEvidence = (text: string) =>
-		text.replace(/[.!?]+$/, "") === titleText ? null : text;
-	if (step.call_at) {
-		return {
-			title,
-			why: stepWhy(
-				homeWhy(
-					`Call${contact ? ` with ${contact}` : ""} on ${homeDate(step.call_at)}`,
-					extraEvidence(
-						homeDisplayText(evidence?.call_quote ?? null) ||
-							homeDisplayText(evidence?.call_summary ?? null) ||
-							"Call details unavailable",
-					),
-				),
-				...details,
-				homeWhy(hold, due),
-			),
-		};
-	}
-	if (!evidence) return { title, why: stepWhy(...details) };
+		[title, instruction].some(
+			(wording) => withoutEnd(wording) === withoutEnd(text),
+		)
+			? null
+			: text;
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
 		? `Follow-up set from the ${evidence.source_kind}`
 		: setter
 			? `Follow-up set by ${setter}`
 			: `Follow-up set on ${homeDate(evidence.created_at)}`;
-	return {
-		title,
-		why: stepWhy(
-			homeWhy(
+	const contact = homeDisplayText(step.call_contact);
+	const details = step.call_at
+		? homeWhy(
+				`Call${contact ? ` with ${contact}` : ""} on ${homeDate(step.call_at)}`,
+				extraEvidence(
+					homeDisplayText(evidence.call_quote) ||
+						homeDisplayText(evidence.call_summary) ||
+						"Call details unavailable",
+				),
+				hold,
+				due,
+			)
+		: homeWhy(
 				hold || set,
 				extraEvidence(homeDisplayText(evidence.source_evidence)),
 				due,
-			),
-			...details,
-		),
-	};
+			);
+	return { title, why: homeWhy(instruction, details) };
 }
 
 const dateLabel = new Intl.DateTimeFormat("en-US", {
@@ -260,8 +215,6 @@ export const datedPartnerSteps = (now = sql`now()`) => sql`
 	left join deal d on d.id = s.deal_id
 	left join party p on p.id = s.party_id
 	left join property on property.id = s.property_id
-	left join activity c on c.id = s.call_activity_id
-	left join party contact on contact.id = coalesce(s.call_contact_party_id, c.from_party_id)
 	left join home_mark m on m.user_id = s.owner_party_id and m.item_id = s.id
 		and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
 	where s.status = 'open' and isfinite(s.due_on)
