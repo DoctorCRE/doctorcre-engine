@@ -3976,20 +3976,22 @@ create table doc_turn (
 	state text not null,
 	claim_id uuid,
 	claim_until timestamptz,
+	claim_state jsonb,
 	answer jsonb check (jsonb_typeof(answer) = 'object'),
 	confirmation_key uuid unique references save_receipt (idempotency_key) deferrable initially deferred,
 	unique (conversation_id, position),
 	unique (owner_user_id, idempotency_key),
 	unique (id, owner_user_id),
 	foreign key (conversation_id, owner_user_id) references doc_conversation (id, owner_user_id),
-	check (
-		(state = 'working' and claim_id is not null and claim_until is not null and answer is null)
-		or (state = 'failed' and claim_id is null and claim_until is null and answer is null)
-		or (state = 'answered' and claim_id is null and claim_until is null and answer is not null)
+	constraint doc_turn_claim_state check (
+		(state = 'working' and claim_id is not null and claim_until is not null
+			and answer is null and claim_state is not null and jsonb_typeof(claim_state) = 'object')
+		or (state in ('queued', 'failed', 'answered') and claim_id is null and claim_until is null
+			and claim_state is null and ((state = 'answered') = (answer is not null)))
 	),
 	check (confirmation_key is null or coalesce(jsonb_typeof(answer -> 'proposal') = 'object', false))
 );
-create unique index doc_turn_one_working on doc_turn (conversation_id) where state = 'working';
+create unique index doc_turn_one_pending on doc_turn (conversation_id) where state in ('queued', 'working');
 
 alter table doc_conversation enable row level security;
 alter table doc_turn enable row level security;
@@ -4005,7 +4007,7 @@ revoke all on doc_conversation, doc_turn from public, engine_reader;
 grant select, insert on doc_conversation, doc_turn to engine;
 -- FOR UPDATE needs UPDATE on one column. Row security keeps the owner fixed.
 grant update (owner_user_id) on doc_conversation to engine;
-grant update (state, claim_id, claim_until, answer) on doc_turn to engine;
+grant update (state, claim_id, claim_until, claim_state, answer) on doc_turn to engine;
 
 create table doc_link (
 	owner_user_id uuid primary key,
