@@ -195,7 +195,11 @@ async function requireRecords(tx: Transaction<DB>, about: About[]) {
 		);
 }
 
-async function link(tx: Transaction<DB>, activity_id: string, about: About[]) {
+export async function linkActivity(
+	tx: Transaction<DB>,
+	activity_id: string,
+	about: About[],
+) {
 	if (about.length)
 		await tx
 			.insertInto("activity_about")
@@ -283,6 +287,7 @@ export async function recordEmail(
 	records: About[],
 	email: CapturedEmail,
 	autoFile = false,
+	queueFiling = false,
 ) {
 	const { message_id, sender, recipients } = email;
 	if (!message_id || message_id !== message_id.trim())
@@ -339,6 +344,7 @@ export async function recordEmail(
 			.where("activity_id", "=", activity_id)
 			.where("authored", "is", null)
 			.execute();
+	const filedAbout = await linkActivity(tx, activity_id, links);
 	if (autoFile && mailbox.numAffectedRows) {
 		const {
 			rows: [storage],
@@ -348,11 +354,20 @@ export async function recordEmail(
 		`.execute(tx);
 		if (storage?.installed)
 			await sql`select queue_email_summary(${activity_id})`.execute(tx);
+		if (queueFiling) {
+			const {
+				rows: [filing],
+			} = await sql<{ installed: boolean }>`
+				select to_regprocedure('next.queue_email_filing(uuid)') is not null as installed
+			`.execute(tx);
+			if (filing?.installed)
+				await sql`select queue_email_filing(${activity_id})`.execute(tx);
+		}
 	}
 	return {
 		activity_id,
 		existing: stored !== undefined,
-		about: await link(tx, activity_id, links),
+		about: filedAbout,
 		unmatched: addresses.filter(
 			(given) => !owners.some((owner) => owner.address === given),
 		),
@@ -370,13 +385,15 @@ export async function recordActivity(
 		...fields
 	}: NewActivity,
 	autoFile = false,
+	queueFiling = false,
 ) {
 	await requireRecords(tx, about);
 	const activity = {
 		...fields,
 		happened_at: happened_at ?? sql<string>`now()`,
 	};
-	if (email) return recordEmail(tx, activity, about, email, autoFile);
+	if (email)
+		return recordEmail(tx, activity, about, email, autoFile, queueFiling);
 	const { activity_id, existing } =
 		calendar_review_key === undefined
 			? { activity_id: await insertActivity(tx, activity), existing: false }
@@ -384,7 +401,7 @@ export async function recordActivity(
 	return {
 		activity_id,
 		existing,
-		about: await link(tx, activity_id, existing ? [] : about),
+		about: await linkActivity(tx, activity_id, existing ? [] : about),
 		unmatched: [],
 	};
 }
@@ -407,17 +424,24 @@ async function addLinks(
 		mailCapture && stored.kind === "email"
 			? await eligibleMailLinks(tx, activity_id, about)
 			: about;
-	return { activity_id, about: await link(tx, activity_id, links) };
+	return { activity_id, about: await linkActivity(tx, activity_id, links) };
 }
 
-export const activityDoor = new Hono<NextSaveEnv>()
+export const activityDoor = new Hono<
+	NextSaveEnv & { Bindings: { EMAIL_FILING_JUDGMENT?: string } }
+>()
 	.post("/activities", (c) =>
 		answerNextSave(
 			c,
 			"record-activity",
 			parseActivity,
 			(tx, activity) =>
-				recordActivity(tx, activity, c.get("stamp").job === "mail_capture"),
+				recordActivity(
+					tx,
+					activity,
+					c.get("stamp").job === "mail_capture",
+					c.env.EMAIL_FILING_JUDGMENT === "true",
+				),
 			201,
 		),
 	)

@@ -3,7 +3,7 @@ begin;
 set local lock_timeout = '1s';
 set local search_path = next, pg_temp;
 
-create function queue_email_summary(email_id uuid) returns void
+create or replace function queue_email_summary(email_id uuid) returns void
 language sql security definer as $$
 	insert into doc_judgment_job (owner_user_id, activity_id, idempotency_key, kind)
 	select m.user_id, e.activity_id, e.activity_id, 'email_summary'
@@ -28,3 +28,12 @@ revoke execute on function queue_email_summary from public;
 grant execute on function queue_email_summary to engine;
 
 commit;
+
+-- Read back the definition, security and execute grants. Expect one security-definer
+-- function with the fixed search path, engine execute, and no reader or public execute.
+-- select pg_get_functiondef(p.oid), p.prosecdef, p.proconfig,
+--   has_function_privilege('engine', p.oid, 'execute') as engine_execute,
+--   has_function_privilege('engine_reader', p.oid, 'execute') as reader_execute,
+--   exists (select from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+--     where a.grantee = 0 and a.privilege_type = 'EXECUTE') as public_execute
+-- from pg_proc p where p.oid = 'next.queue_email_summary(uuid)'::regprocedure;

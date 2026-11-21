@@ -7,8 +7,8 @@ import type { DB } from "./next-database.d.ts";
 import { readSearchRecords } from "./search/records.ts";
 
 type RecordKind = "deal" | "lead" | "client";
-export type Source = {
-	ref: { kind: RecordKind; id: string };
+export type Source<Kind extends RecordKind | "email" = RecordKind> = {
+	ref: { kind: Kind; id: string };
 	label: string;
 	href: string;
 };

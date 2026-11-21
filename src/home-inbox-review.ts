@@ -1,6 +1,12 @@
 import { type RawBuilder, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
-import { filingReviewNeeded } from "./activity/filing-evidence.ts";
+import {
+	filingChoices,
+	filingReviewNeeded,
+	filingReviewTitle,
+	filingScope,
+	hasFiledFacts,
+} from "./activity/filing-evidence.ts";
 import { isoMillis, Refusal } from "./answer.ts";
 import {
 	decisionPosition,
@@ -72,6 +78,7 @@ type Suggestion = ReviewRow &
 		contact_name: string | null;
 		source_summary: string | null;
 		evidence: string;
+		filing_scope: string | null;
 		decision_label: string | null;
 		suggestion_title: string | null;
 		due_on: string | null;
@@ -130,6 +137,10 @@ const visibleSuggestion = (userId: string) => sql<boolean>`
 	case
 		when p.kind = 'file_to_deal' and p.status = 'pending'
 			and not (${filingReviewNeeded(sql.ref("p.activity_id"), sql.ref("p.deal_id"))}) then false
+		when p.kind = 'possible_new_deal' and p.status = 'pending' and (
+			${hasFiledFacts(sql.ref("p.activity_id"), true)} or
+			(${filingScope("p")} is not null and ${hasFiledFacts(sql.ref("p.activity_id"))})
+		) then false
 		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 		when p.kind = 'email_lead' then p.changed_for_user_id = ${userId}::uuid
 		when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
@@ -187,6 +198,7 @@ export async function readProposal(
 			"p.reason",
 		])
 		.select((eb) => [
+			filingScope("p").as("filing_scope"),
 			sql<
 				string | null
 			>`case when p.activity_kind = 'email' then p.activity_id end`.as(
@@ -236,7 +248,7 @@ export async function readProposal(
 		.where(visibleProposalDetail(userId))
 		.executeTakeFirst();
 	if (!proposal) return new Refusal(404, "not_found");
-	const { email_source_id, ...detail } = proposal;
+	const { email_source_id, filing_scope, ...detail } = proposal;
 	if (!email_source_id) return detail;
 	const { thread, sourceActivity, sourceSummary } = await readHomeEmailThread(
 		db,
@@ -245,6 +257,7 @@ export async function readProposal(
 	);
 	return {
 		...detail,
+		...(filing_scope && { filing_choices: filingChoices(filing_scope) }),
 		source_activity: sourceActivity
 			? { ...sourceActivity, summary: sourceSummary }
 			: detail.source_activity,
@@ -262,6 +275,7 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 					select from party_role where party_id = p.party_id and role = 'vendor'
 				) as late_target,
 				contact.name as contact_name, a.summary as source_summary, p.evidence,
+				case when p.kind = 'possible_new_deal' then ${filingScope("p")} end as filing_scope,
 				coalesce(phase.label, lead_stage.label) as decision_label,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
@@ -280,6 +294,8 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 						then 'Add ' || party.name || ' as a lead'
 					when p.kind = 'phase_move' then 'Move to ' || phase.label
 					when p.kind = 'file_to_deal' then 'File email to ' || d.name
+					when p.kind = 'possible_new_deal' and ${filingScope("p")} is not null
+						then ${filingReviewTitle}
 					when p.kind = 'possible_new_deal' then 'Review possible new deal'
 					when p.kind = 'lead_stage_move' then 'Review lead stage'
 					when p.kind = 'email_lead' then candidate.name || ' · Possible lead'
@@ -370,6 +386,29 @@ function homeReviewGroups(userId: string, forMail = false, dashboard = false) {
 			where d.status is distinct from 'pending'
 		)
 	`;
+}
+
+export async function findHomeEmailReviewItem(
+	db: Transaction<DB>,
+	userId: string,
+	activityId: string,
+) {
+	const member = sql`jsonb_build_array(jsonb_build_object('activity_id', ${activityId}::uuid))`;
+	const {
+		rows: [review],
+	} = await sql<{ item_id: string }>`
+		${homeReviewGroups(userId)}, exact_reviews as (
+			select 'reply_draft:' || id as item_id, email_activity_id = ${activityId}::uuid as exact, 0 as position
+			from draft_cards
+			where email_activity_id = ${activityId}::uuid or suggestions @> ${member}
+			union all
+			select 'suggestion:' || id, activity_id = ${activityId}::uuid, 1
+			from suggestion_cards
+			where activity_kind = 'email' and (activity_id = ${activityId}::uuid or suggestions @> ${member})
+		)
+		select item_id from exact_reviews order by exact desc nulls last, position, item_id limit 1
+	`.execute(db);
+	return review?.item_id;
 }
 
 const summaryFields = sql`summary.text as email_summary,
@@ -629,7 +668,11 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const { summary, quote, title } = emailRequest(suggestion);
 	const request = summary || quote;
 	const source = sender ? `Email from ${sender}` : "Email";
-	const action = emailActions[suggestion.kind];
+	const choices = filingChoices(suggestion.filing_scope);
+	const action =
+		choices.length > 1
+			? "Review filing"
+			: (choices[0]?.label ?? emailActions[suggestion.kind]);
 	const details = {
 		next_step: proposed && `Proposed follow-up: ${proposed}`,
 		file_to_deal: target && `Suggested deal is ${target}`,
@@ -641,8 +684,11 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 		log_call: proposed,
 	}[suggestion.kind];
 	const count = suggestion.suggestions.length;
+	const filingReview = choices.length > 0;
 	return {
-		title: title || suggestionTitle(suggestion, sender),
+		title: filingReview
+			? filingReviewTitle
+			: title || suggestionTitle(suggestion, sender),
 		why: homeWhy(
 			request || receivedEmail(source, suggestion.email_at),
 			suggestion.kind !== "next_step" && evidence !== request ? evidence : null,
@@ -650,6 +696,7 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 			count > 1 ? `${count} decisions to review` : null,
 		),
 		primary_action: suggestion.snoozed_until ? null : action,
+		...(choices.length > 0 && { filing_choices: choices }),
 	};
 }
 
@@ -859,8 +906,8 @@ type MailPriority = {
 export async function readHomeMailPriorities(
 	db: Transaction<DB>,
 	userId: string,
+	{ limit = 25, requireMailbox = false } = {},
 ) {
-	const limit = 25;
 	const suggestions = markedReviews(
 		sql<Suggestion>`select * from suggestion_cards`,
 		userId,
@@ -908,12 +955,25 @@ export async function readHomeMailPriorities(
 				) as position
 			from cards
 			join email e on e.activity_id = cards.activity_id
-			join email title_email on title_email.activity_id = cards.title_activity_id
+			join email title_email on title_email.activity_id = ${
+				requireMailbox
+					? sql`cards.review_activity_id`
+					: sql`cards.title_activity_id`
+			}
 			join activity a on a.id = e.activity_id
 			join activity review on review.id = cards.review_activity_id
 			where not exists (
 				select from party_email pe join app_user u on u.id = pe.party_id where pe.address = e.sender
 			)
+			${
+				requireMailbox
+					? sql`and exists (
+				select from email_mailbox m where m.user_id = ${userId}::uuid and m.activity_id = e.activity_id
+			) and exists (
+				select from email_mailbox m where m.user_id = ${userId}::uuid and m.activity_id = review.id
+			)`
+					: sql``
+			}
 		)
 		select item_id, source_change_id || ':' || coalesce(mark_version, 0) || ':inbox' as base_version,
 			proposal_id, reply_draft_id, kind, suggestion, due_on,
