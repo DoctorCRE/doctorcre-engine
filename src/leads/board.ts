@@ -14,6 +14,7 @@ import {
 	type Finding,
 	reachability,
 } from "./reachability.ts";
+import { leadVersions } from "./versions.ts";
 
 // One `v_lead_workspace` row with its prospect fields and timing, as the old
 // system serialized it. Only the fields the engine reads are named.
@@ -218,8 +219,7 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 				u.slug as owner, owner.name as owner_label,
 				exists (select from lead_email_attention a where a.party_id = p.id
 					and a.acknowledged_at is null) as new_from_email,
-				(select max(c.id) from change c where c.table_name = 'party_role'
-					and c.record = jsonb_build_object('party_id', p.id, 'role', 'lead')) as base_version,
+				versions.base_version,
 				dnc.party_id is not null as do_not_contact,
 				case when dnc.party_id is null then 'active' else 'do_not_contact' end as contact_state,
 				client.party_id is not null as is_client,
@@ -239,6 +239,7 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 				jsonb_build_object('contract', 'lead-opportunity-timing.v1', 'record_added_at', r.created_at,
 					'status', 'unknown', 'events', '[]'::jsonb) as opportunity_timing
 			from party_role r join party p on p.id = r.party_id
+			left join (${leadVersions}) versions on versions.party_id = p.id::text
 			join stage s on s.role = r.role and s.slug = r.stage
 			left join app_user u on u.id = r.owner_user_id
 			left join party owner on owner.id = u.id
