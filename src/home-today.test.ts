@@ -220,103 +220,249 @@ for (const [example, caller, step, title] of [
 	});
 }
 
-test("meetings cover all of today in Central time including ended ones and hide handled reviews", async () => {
-	const q = `select now() as n, ((now() at time zone 'America/Chicago')::date::timestamp at time zone 'America/Chicago') as s,
-		(((now() at time zone 'America/Chicago')::date + 1)::timestamp at time zone 'America/Chicago') as e`;
-	const t = (await db.query<{ n: string; s: string; e: string }>(q)).rows[0];
-	assert.ok(t);
-	const start = Date.parse(t.s);
-	const now = Date.parse(t.n);
-	const meetingTime = start + 12 * 3_600_000;
-	const end = Date.parse(t.e);
+test("today keeps each Outlook occurrence independently of its review", async (t) => {
 	const hr = 3_600_000;
+	const start = Date.parse("2026-01-15T00:00:00-06:00");
+	const end = start + 24 * hr;
+	const now = start + 5 * 60_000;
+	const meetingTime = start + 12 * hr;
+	t.mock.timers.enable({ apis: ["Date"], now });
+
 	const iso = (ms: number) => new Date(ms).toISOString();
-	const mtg = (a: number, b: number, title: string, extra = {}) => ({
+	const mtg = (a: number, b: number, title: string) => ({
 		start: iso(a),
 		end: iso(b),
 		title,
-		...extra,
 	});
 	const p = (name: string, email: string) => ({ name, email });
-	const keys = ["0123456789abcdef", "fedcba9876543210", "abcdef0123456789"];
+	const endedKey = "0123456789abcdef";
+	const dismissedKey = "fedcba9876543210";
+	const confirmedKey = "abcdef0123456789";
+	const review = (key: string, title: string, end: number) => ({
+		...mtg(end - 30 * 60_000, end, title),
+		key,
+		state: "needs_review",
+		prompt: "Confirm whether this meeting happened.",
+	});
+	const lease = {
+		...mtg(meetingTime - 300_000, meetingTime + 300_000, "Lease review"),
+		key: "fedcba0123456789",
+		organizer: p("Example Partner One", "joe@example.test"),
+		attendees: [p("Dr. Example", "dr.example@example.test")],
+		location: "Example conference room",
+	};
+	const secondInvite = {
+		...lease,
+		key: "1111111111111111",
+		attendees: [p("Solo Clinic", "solo@example.test")],
+	};
+	const endedInvite = {
+		...mtg(start, now - 60_000, "Ended earlier today"),
+		key: "4444444444444444",
+	};
 	const agenda = {
 		schema: "carr-calendar-agenda.v1",
-		observed_at: iso(now - 60_000),
+		observed_at: iso(now),
 		warnings: [],
 		items: [
 			mtg(start - hr, start, "Yesterday midnight"),
-			mtg(start, meetingTime - 60_000, "Ended earlier today"),
-			mtg(meetingTime - 300_000, meetingTime + 300_000, "Lease review", {
-				organizer: p("Example Partner One", "joe@example.test"),
-				attendees: [p("Dr. Example", "dr.example@example.test"), p("Bad", "x")],
-			}),
-			mtg(meetingTime - 200_000, meetingTime + 400_000, "Solo intro", {
-				attendees: [p("Solo Clinic", "solo@example.test")],
-			}),
+			endedInvite,
+			lease,
+			secondInvite,
+			{
+				...lease,
+				...review(confirmedKey, "End of tour", now),
+			},
 			mtg(end, end + hr, "Tomorrow midnight"),
 		],
-		follow_up_reviews: keys.map((key, i) => ({
-			key,
-			title: `Review ${i + 1}`,
-			start: iso(now - (i + 2) * hr),
-			end: iso(now - (i + 1) * hr),
-			state: "needs_review",
-			prompt: "Confirm whether this meeting happened.",
-		})),
+		follow_up_reviews: [
+			review(endedKey, "Lease discussion", now),
+			review(dismissedKey, "Tour debrief", now),
+			review(confirmedKey, "End of tour", now),
+			review("2222222222222222", "Yesterday midnight", start),
+		],
 	};
 	const cap = { job: "mail_capture", for_user: "joe" };
 	const [saved] = await save(cap, "calendar/agenda", agenda, "PUT");
-	const dkey = { idempotency_key: randomUUID() };
-	const [dim] = await save(joe, `calendar/reviews/${keys[1]}/dismissal`, dkey);
-	assert.deepEqual([saved, dim], [200, 200]);
-	await db.query(`begin; select set_config('engine.user_id', '${id(1)}', true);
-		insert into activity (kind, happened_at, calendar_review_user_id, calendar_review_key)
-		values ('meeting', now() - interval '3 hours', '${id(1)}', '${keys[2]}'); commit;`);
+	assert.equal(saved, 200);
 	const [status, body] = await today();
 	const m = body.meetings;
-	const [, dellBody] = await today("?owner=dell", { user: "dell" });
-	const lines = m?.items.map(
-		(x) => `${x.title}|${x.context_label}|${x.open_url}`,
-	);
-	const revs = m?.follow_up_reviews.map((r) => r.key);
-	assert.deepEqual(
-		[status, m?.state, m?.observed_at, revs, dellBody.meetings?.state],
-		[200, "partial", iso(now - 60_000), [keys[0]], "unavailable"],
-	);
-	assert.deepEqual(lines, [
-		"Ended earlier today|null|null",
-		`Lease review|Example Dental, Springfield|/deals?deal=${id(7)}`,
-		"Solo intro|Solo Clinic|null",
-	]);
-	const deal = {
-		id: id(7),
-		name: "Example Dental, Springfield",
-		client_name: "Example Dental",
-	};
-	assert.partialDeepStrictEqual(m?.items[1], { possible_deals: [deal] });
-});
+	assert.equal(status, 200);
+	assert.ok(m);
 
-test("meetings and reminders fail independently with plain unavailable reasons", async () => {
-	const cases = [
-		["calendar_agenda", "unavailable", "ready"],
-		["next_step", "partial", "unavailable"],
-	] as const;
-	for (const [table, em, er] of cases) {
-		await db.query(`revoke select on ${table} from engine_reader`);
-		try {
-			const [s, b] = await today();
-			const bad = em === "unavailable" ? b.meetings : b.reminders;
-			const ok = em === "unavailable" ? b.reminders?.late : b.meetings?.items;
-			const states = [s, b.meetings?.state, b.reminders?.state];
-			assert.deepEqual(states, [200, em, er]);
+	await t.test("an ended review-only meeting gets a calendar row", () => {
+		assert.partialDeepStrictEqual(
+			m.items.find((item) => item.key === endedKey),
+			{
+				title: "Lease discussion",
+				attendees: [],
+				location: null,
+				open_url: null,
+			},
+		);
+		assert.ok(m.follow_up_reviews.some((r) => r.key === endedKey));
+	});
+
+	await t.test(
+		"distinct invites with the same title and times keep their keys and details",
+		() => {
 			assert.deepEqual(
-				[typeof bad?.reason, ok?.length],
-				["string", em === "unavailable" ? 5 : 3],
+				m.items
+					.filter((item) => item.title === lease.title)
+					.map((item) => item.key)
+					.sort(),
+				[lease.key, secondInvite.key].sort(),
 			);
-		} finally {
-			await db.query(`grant select on ${table} to engine_reader`);
+			assert.partialDeepStrictEqual(
+				m.items.find((item) => item.key === lease.key),
+				{
+					attendees: lease.attendees,
+					location: lease.location,
+					open_url: `/deals?deal=${id(7)}`,
+					possible_deals: [
+						{
+							id: id(7),
+							name: "Example Dental, Springfield",
+							client_name: "Example Dental",
+						},
+					],
+				},
+			);
+		},
+	);
+
+	await t.test(
+		"Central midnight bounds the calendar rows independently of reviews",
+		() => {
+			assert.deepEqual(
+				m.items.map((item) => item.key).sort(),
+				[
+					endedKey,
+					dismissedKey,
+					confirmedKey,
+					lease.key,
+					secondInvite.key,
+					endedInvite.key,
+				].sort(),
+			);
+		},
+	);
+
+	await t.test(
+		"the owner filter never switches the viewer's calendar",
+		async () => {
+			const dell = { user: "dell" };
+			const dellInvite = { ...lease, key: "3333333333333333" };
+			const [dellSaved] = await save(
+				{ ...cap, for_user: dell.user },
+				"calendar/agenda",
+				{ ...agenda, items: [dellInvite], follow_up_reviews: [] },
+				"PUT",
+			);
+			assert.equal(dellSaved, 200);
+			const [, dellBody] = await today("?owner=joe", dell);
+			assert.deepEqual(
+				dellBody.meetings?.items.map((item) => item.key),
+				[dellInvite.key],
+			);
+			assert.deepEqual(dellBody.meetings?.follow_up_reviews, []);
+			const [, joeBody] = await today("?owner=dell");
+			assert.ok(joeBody.meetings?.items.some((item) => item.key === lease.key));
+			assert.ok(
+				!joeBody.meetings?.items.some((item) => item.key === dellInvite.key),
+			);
+		},
+	);
+
+	await t.test(
+		"a refused activity insert leaves the database clock intact",
+		async () => {
+			await db.query("begin");
+			try {
+				await db.query("select set_config('engine.user_id', $1, true)", [
+					id(1),
+				]);
+				await assert.rejects(
+					db.query(
+						`insert into activity (kind, happened_at, calendar_review_user_id, calendar_review_key)
+					values ('meeting', now(), $1, 'invalid-key')`,
+						[id(1)],
+					),
+					{ code: "23514" },
+				);
+			} finally {
+				await db.query("rollback");
+			}
+			const { rows } = await db.query(
+				"select now() = transaction_timestamp() as uses_transaction_clock",
+			);
+			assert.equal(rows[0]?.uses_transaction_clock, true);
+			const [, fresh] = await today();
+			assert.deepEqual(fresh.meetings?.items, m.items);
+		},
+	);
+
+	await t.test(
+		"dismissed and confirmed meetings stay on a fresh load",
+		async () => {
+			const [dismissed] = await save(
+				joe,
+				`calendar/reviews/${dismissedKey}/dismissal`,
+				{
+					idempotency_key: randomUUID(),
+				},
+			);
+			assert.equal(dismissed, 200);
+			await db.query(`begin; select set_config('engine.user_id', '${id(1)}', true);
+			insert into activity (kind, happened_at, calendar_review_user_id, calendar_review_key)
+			values ('meeting', now(), '${id(1)}', '${confirmedKey}'); commit;`);
+			const [, fresh] = await today();
+			assert.deepEqual(
+				fresh.meetings?.items.map((item) => item.key),
+				m.items.map((item) => item.key),
+			);
+			assert.ok(
+				fresh.meetings?.items.some((item) => item.key === dismissedKey),
+			);
+			assert.partialDeepStrictEqual(
+				fresh.meetings?.items.filter((item) => item.key === confirmedKey),
+				[
+					{
+						location: lease.location,
+						attendees: lease.attendees,
+						open_url: `/deals?deal=${id(7)}`,
+					},
+				],
+			);
+			assert.ok(
+				fresh.meetings?.follow_up_reviews.some((r) => r.key === endedKey),
+			);
+			assert.ok(
+				!fresh.meetings?.follow_up_reviews.some(
+					(r) => r.key === dismissedKey || r.key === confirmedKey,
+				),
+			);
+		},
+	);
+	await t.test("meetings and reminders fail independently", async () => {
+		const cases = [
+			["calendar_agenda", "meetings", "reminders"],
+			["next_step", "reminders", "meetings"],
+		] as const;
+		const [, healthy] = await today();
+		for (const [table, bad, good] of cases) {
+			await db.query(`revoke select on ${table} from engine_reader`);
+			try {
+				const [status, body] = await today();
+				assert.equal(status, 200);
+				assert.equal(body[bad]?.state, "unavailable");
+				assert.equal(typeof body[bad]?.reason, "string");
+				assert.deepEqual(body[good], healthy[good]);
+			} finally {
+				await db.query(`grant select on ${table} to engine_reader`);
+			}
 		}
-	}
+	});
 });
 
 test("reminder home_item_id does not depend on the inbox page limit", async () => {

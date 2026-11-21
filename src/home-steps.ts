@@ -242,7 +242,7 @@ export function stepTargetFields(db: Transaction<DB>) {
 	`;
 }
 
-export const datedPartnerSteps = sql`
+export const datedPartnerSteps = (now = sql`now()`) => sql`
 	from home_next_step s
 	join app_user u on u.id = s.owner_party_id and u.is_account_partner
 	left join deal d on d.id = s.deal_id
@@ -254,9 +254,11 @@ export const datedPartnerSteps = sql`
 		and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
 	where isfinite(s.due_on)
 		and m.disposition is distinct from 'dropped'
-		and (m.snoozed_until is null or m.snoozed_until <= now())
+		and (m.snoozed_until is null or m.snoozed_until <= ${now})
 `;
-export const homeDay = sql<string>`(now() at time zone 'America/Chicago')::date`;
+export const homeDayAt = (now = sql`now()`) =>
+	sql<string>`(${now} at time zone 'America/Chicago')::date`;
+export const homeDay = homeDayAt();
 
 export type HomeStepTarget = {
 	deal_id: string | null;

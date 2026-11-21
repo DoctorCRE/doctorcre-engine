@@ -205,3 +205,61 @@ test("a calendar-day window includes ended meetings today and excludes both midn
 	assert.ok(read && read.state !== "unavailable");
 	assert.deepEqual(titles(read.items), ["Early ended", "Later today"]);
 });
+
+test("today keeps the earliest full row per Outlook key, breaking ties by snapshot position", () => {
+	const first = {
+		...meeting(-4, 1, "Lease review"),
+		key: "0123456789abcdef",
+		location: "First room",
+	};
+	const otherInvite = { ...first, key: "fedcba9876543210" };
+	const review = {
+		...first,
+		title: "Review prompt",
+		state: "needs_review",
+		prompt: "How did it go?",
+	};
+	const later = {
+		...first,
+		...meeting(-2, 1, first.title),
+		location: "Later room",
+	};
+	const tied = { ...first, title: "A lease review", location: "Second room" };
+	for (const rows of [
+		[later, first, otherInvite],
+		[first, tied, otherInvite],
+	]) {
+		const read = meetingsFromSnapshot(
+			snapshot(rows, { follow_up_reviews: [review] }),
+			NOW,
+			{ fromMs: Date.parse(at(-9)), untilMs: Date.parse(at(15)) },
+		);
+		assert.ok(read && read.state !== "unavailable");
+		assert.deepEqual(
+			read.items.map(({ key, location }) => [key, location]),
+			[
+				[first.key, first.location],
+				[otherInvite.key, otherInvite.location],
+			],
+		);
+		assert.deepEqual(
+			read.follow_up_reviews?.map(({ key }) => key),
+			[first.key],
+		);
+	}
+});
+
+test("the calendar-day window shows all occurrences beyond the briefing limit", () => {
+	const items = Array.from({ length: 101 }, (_, i) =>
+		meeting(1, 1, `Meeting ${i}`),
+	);
+	const stored = snapshot(items);
+	const read = meetingsFromSnapshot(stored, NOW, {
+		fromMs: Date.parse(at(-9)),
+		untilMs: Date.parse(at(15)),
+	});
+	assert.ok(read && read.state !== "unavailable");
+	assert.equal(read.items.length, 101);
+	assert.deepEqual(read.notes, []);
+	assert.equal(shown(stored).items.length, 100);
+});

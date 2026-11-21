@@ -34,6 +34,7 @@ type Conflict = Record<
 	string
 >;
 export type Meeting = {
+	key?: string;
 	start: string;
 	end: string;
 	title: string;
@@ -90,6 +91,11 @@ const iso = (ms: number) => new Date(ms).toISOString();
 const text = (value: unknown) =>
 	typeof value === "string" && value.trim() ? value.trim().slice(0, 500) : null;
 
+function occurrenceKey(row: unknown) {
+	const key = field(row, "key");
+	return typeof key === "string" && /^[a-f0-9]{16}$/.test(key) ? key : null;
+}
+
 const person = (value: unknown): Person => ({
 	name: text(field(value, "name")),
 	email: text(field(value, "email"))?.toLowerCase() ?? null,
@@ -105,13 +111,19 @@ function alternateTimes(listed: unknown) {
 
 function meetingFrom(
 	row: unknown,
-	{ start, end, title }: { start: number; end: number; title: string },
+	{
+		start,
+		end,
+		title,
+		key,
+	}: { start: number; end: number; title: string; key: string | null },
 	times: string[],
 ): Meeting {
 	const listed = field(row, "attendees");
 	const attendees = Array.isArray(listed) ? listed.map(person) : [];
 	const count = field(row, "attendee_count");
 	return {
+		...(key && { key }),
 		start: iso(start),
 		end: iso(end),
 		title,
@@ -181,13 +193,12 @@ function warningNote(warning: unknown) {
 function reviewFrom(row: unknown) {
 	const start = instant(field(row, "start"));
 	const end = instant(field(row, "end"));
-	const key = field(row, "key");
+	const key = occurrenceKey(row);
 	const title = text(field(row, "title"));
 	const prompt = text(field(row, "prompt"));
 	const valid =
 		field(row, "state") === "needs_review" &&
-		typeof key === "string" &&
-		/^[a-f0-9]{16}$/.test(key) &&
+		key !== null &&
 		start !== null &&
 		end !== null &&
 		end > start;
@@ -201,7 +212,15 @@ function reviewFrom(row: unknown) {
 export function meetingsFromSnapshot(
 	snapshot: unknown,
 	now: Date,
-	{ fromMs, untilMs }: { fromMs?: number; untilMs?: number } = {},
+	{
+		fromMs,
+		untilMs,
+		handledReviewKeys,
+	}: {
+		fromMs?: number;
+		untilMs?: number;
+		handledReviewKeys?: ReadonlySet<string>;
+	} = {},
 ) {
 	if (snapshot === undefined || snapshot === null) return null;
 	const nowMs = now.getTime();
@@ -211,24 +230,53 @@ export function meetingsFromSnapshot(
 	const schema = field(snapshot, "schema");
 	if (schema !== SCHEMA || observed === null || !Array.isArray(rows))
 		return UNAVAILABLE;
+	const inWindow = (start: number, end: number) =>
+		start < endWindowMs &&
+		(fromMs === undefined
+			? end > nowMs
+			: end > fromMs || (end === start && start >= fromMs));
 	let malformed = 0;
 	let unread = 0;
 	const meetings: Meeting[] = [];
+	const keyedMeetings = new Map<string, Meeting | null>();
 	for (const row of rows) {
 		const start = instant(field(row, "start"));
 		const end = instant(field(row, "end"));
 		const title = text(field(row, "title"));
-		if (start === null || end === null || end < start || !title) malformed++;
-		else if (
-			(fromMs === undefined
-				? end > nowMs
-				: end > fromMs || (end === start && start >= fromMs)) &&
-			start < endWindowMs
-		) {
-			const times = alternateTimes(field(row, "times"));
-			meetings.push(meetingFrom(row, { start, end, title }, times.shown));
-			unread += times.unread;
+		if (start === null || end === null || end < start || !title) {
+			malformed++;
+			continue;
 		}
+		const key = fromMs === undefined ? null : occurrenceKey(row);
+		if (!inWindow(start, end)) {
+			if (key && !keyedMeetings.has(key)) keyedMeetings.set(key, null);
+			continue;
+		}
+		const times = alternateTimes(field(row, "times"));
+		const meeting = meetingFrom(row, { start, end, title, key }, times.shown);
+		unread += times.unread;
+		if (key) {
+			const prior = keyedMeetings.get(key);
+			if (!prior || meeting.start < prior.start)
+				keyedMeetings.set(key, meeting);
+		} else {
+			meetings.push(meeting);
+		}
+	}
+
+	const listed = field(snapshot, "follow_up_reviews");
+	const parsed = Array.isArray(listed) ? listed.map(reviewFrom) : [];
+	const valid = parsed.filter((review) => review !== null);
+	if (fromMs !== undefined) {
+		// Older publishers sometimes send an ended occurrence only as a review.
+		for (const review of valid) {
+			if (keyedMeetings.has(review.key) || !inWindow(review.start, review.end))
+				continue;
+			keyedMeetings.set(review.key, meetingFrom(review, review, []));
+		}
+	}
+	for (const meeting of keyedMeetings.values()) {
+		if (meeting) meetings.push(meeting);
 	}
 	meetings.sort(
 		(a, b) => a.start.localeCompare(b.start) || a.title.localeCompare(b.title),
@@ -237,14 +285,12 @@ export function meetingsFromSnapshot(
 
 	const stale = nowMs - observed > 18 * HOUR_MS;
 	const future = observed > nowMs;
-	const listed = field(snapshot, "follow_up_reviews");
-	const parsed = Array.isArray(listed) ? listed.map(reviewFrom) : [];
-	const valid = parsed.filter((review) => review !== null);
 	const reviews = valid
 		.filter(
 			(review) =>
 				!stale &&
 				!future &&
+				!handledReviewKeys?.has(review.key) &&
 				review.end <= Math.min(observed, nowMs) &&
 				review.end > nowMs - DAY_MS,
 		)
@@ -269,7 +315,7 @@ export function meetingsFromSnapshot(
 		notes.push(
 			`${unread} stored alternate ${plural(unread, "time", "times")} could not be shown. Check Outlook for the current time.`,
 		);
-	if (meetings.length > SHOWN)
+	if (fromMs === undefined && meetings.length > SHOWN)
 		notes.push(`Only the first ${SHOWN} meetings are shown.`);
 	if (reviews.length)
 		notes.push(
@@ -302,7 +348,7 @@ export function meetingsFromSnapshot(
 			},
 		},
 		...(malformed ? { malformed_items: malformed } : {}),
-		items: meetings.slice(0, SHOWN),
+		items: fromMs === undefined ? meetings.slice(0, SHOWN) : meetings,
 		...(listed !== undefined
 			? { follow_up_reviews: reviews.slice(0, SHOWN) }
 			: {}),

@@ -17,8 +17,11 @@ type BoardList = "open" | "closed" | "lost";
 export const isOpenBoardDeal = sql<boolean>`outcome is null and closed_on is null
 	and invoiced_on is null and (phase is null or phase not in (${sql.join(ENDED_PHASES)}))`;
 // Today's board groups by brand and owner as they stand on the partners' calendar day.
-const covers = (from: Expression<string>, to: Expression<string | null>) =>
-	sql<boolean>`daterange(${from}, ${to}) @> (now() at time zone 'America/Chicago')::date`;
+const covers = (
+	from: Expression<string>,
+	to: Expression<string | null>,
+	today: string | Expression<string>,
+) => sql<boolean>`daterange(${from}, ${to}) @> ${today}::date`;
 const dealReason = sql<string | null>`coalesce(d.reason,
 	case when imported.renewal_lease_unrecorded then 'renewal' end)`;
 
@@ -46,7 +49,12 @@ export const clientWebsiteOf = (
 		.where("website.disabled_at", "is", null);
 
 // What the board and the deal page both show of a deal. A deal can have no client yet.
-export const selectNextDeals = (db: Transaction<DB>) =>
+export const selectNextDeals = (
+	db: Transaction<DB>,
+	today:
+		| string
+		| Expression<string> = sql<string>`(now() at time zone 'America/Chicago')::date`,
+) =>
 	db
 		.selectFrom("deal as d")
 		.leftJoin("deal_party as c", (join) =>
@@ -95,7 +103,9 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 					.leftJoin("national_account_owner as o", (join) =>
 						join
 							.onRef("o.account_id", "=", "na.party_id")
-							.on((eb) => covers(eb.ref("o.started_on"), eb.ref("o.ended_on"))),
+							.on((eb) =>
+								covers(eb.ref("o.started_on"), eb.ref("o.ended_on"), today),
+							),
 					)
 					.leftJoin("app_user as ao", "ao.id", "o.owner_id")
 					.select([
@@ -104,7 +114,9 @@ export const selectNextDeals = (db: Transaction<DB>) =>
 						"ao.slug as account_owner",
 					])
 					.whereRef("b.location_id", "=", "c.party_id")
-					.where((eb) => covers(eb.ref("b.started_on"), eb.ref("b.ended_on")))
+					.where((eb) =>
+						covers(eb.ref("b.started_on"), eb.ref("b.ended_on"), today),
+					)
 					.as("a"),
 			(join) => join.onTrue(),
 		)
