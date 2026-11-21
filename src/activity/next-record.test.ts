@@ -385,13 +385,20 @@ test("reconciliation moves a copied one-line notice with default labels", async 
 	);
 });
 
-for (const { number, hint, prefix, phone } of [
-	{ number: 90, hint: "alone", prefix: "—", phone: null },
+for (const { number, hint, prefix, phone, street } of [
+	{
+		number: 90,
+		hint: "alone",
+		prefix: "—",
+		phone: null,
+		street: "64 Fixture Row Suite B",
+	},
 	{
 		number: 93,
 		hint: "after a phone",
 		prefix: "214-555-0142",
 		phone: "+12145550142",
+		street: "64 Fixture Ave. Northwest #12-B",
 	},
 ]) {
 	test(`reconciliation moves a copied notice with a combined contact address ${hint}`, async () => {
@@ -399,7 +406,7 @@ for (const { number, hint, prefix, phone } of [
 		await copiedNotice(
 			activity_id,
 			`address-notices-${number}@example.test`,
-			`New inquiry Contact: Dana Example · ${prefix} Address: 64 Fixture Row Suite B, Example City, TX 75001 Received: 2026-11-02`,
+			`New inquiry Contact: Dana Example · ${prefix} Address: ${street}, Example City, TX 75001 Received: 2026-11-02`,
 			"Contact",
 		);
 		assert.deepEqual(await reconcile(activity_id, { dry_run: true }), {
@@ -414,12 +421,13 @@ for (const { number, hint, prefix, phone } of [
 			`select from lead_email_source s join party p on p.id = s.party_id
 		join proposal f on f.activity_id = s.activity_id
 		where s.activity_id = $1 and p.id = $2 and p.name = 'Dana Example'
-		and p.city = 'Example City' and s.prospect->>'street_address' = '64 Fixture Row Suite B'
+		and p.city = 'Example City' and s.prospect->>'street_address' = $4
 		and s.prospect->>'city' = 'Example City' and f.status = 'superseded'
 		and s.prospect->>'phone' is not distinct from $3::text`,
 			activity_id,
 			body.party_id,
 			phone,
+			street,
 		);
 	});
 }
@@ -487,6 +495,33 @@ test("reconciliation drops invalid streets and retains a valid phone", async () 
 		);
 	}
 });
+
+for (const [offset, sentence] of [
+	"24 hours should be enough",
+	"3 brokers will follow up",
+	"10 people can make the call on Monday",
+].entries()) {
+	test(`reconciliation drops the sentence ${JSON.stringify(sentence)} as a street`, async () => {
+		const activity_id = id(125 + offset);
+		const phone = `214-555-015${offset}`;
+		await copiedNotice(
+			activity_id,
+			`numbered-sentence-${offset}@example.test`,
+			`Contact: Dana Example · ${phone} Address: ${sentence}, Example City, TX 75001`,
+			"Contact",
+		);
+		const { status, body } = await reconcile(activity_id);
+		assert.equal(status, 200);
+		assert.equal(body.eligible_emails, 1);
+		await assertRows(
+			1,
+			`select from lead_email_source where activity_id = $1
+			and prospect->>'phone' = $2 and not (prospect ?| array['street_address', 'city'])`,
+			activity_id,
+			`+1${phone.replaceAll("-", "")}`,
+		);
+	});
+}
 
 test("reconciliation stops reading facts at the end of the contact block", async () => {
 	for (const [offset, rest] of [

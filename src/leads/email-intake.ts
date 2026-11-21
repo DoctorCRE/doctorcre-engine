@@ -323,16 +323,45 @@ function noticePhone(value: string | undefined) {
 		return phone;
 }
 
+const streetTypes = [
+	"alley|aly",
+	"avenue|ave",
+	"boulevard|blvd",
+	"circle|cir",
+	"court|ct",
+	"crescent|cres",
+	"drive|dr",
+	"expressway|expy",
+	"freeway|fwy",
+	"highway|hwy",
+	"lane|ln",
+	"loop",
+	"parkway|pkwy",
+	"pike",
+	"place|pl",
+	"plaza|plz",
+	"road|rd",
+	"row",
+	"run",
+	"square|sq",
+	"street|st",
+	"terrace|ter",
+	"trail|trl",
+	"turnpike|tpke",
+	"way",
+].join("|");
+
+const streetPattern = new RegExp(
+	String.raw`^\d+\p{L}?\s+(?:[\p{L}\d][\p{L}\p{M}\d'’/-]*\s+)+(?:${streetTypes})\.?` +
+		String.raw`(?:\s+(?:n|ne|e|se|s|sw|w|nw|north(?:east|west)?|south(?:east|west)?|east|west)\.?)?` +
+		String.raw`(?:\s+(?:(?:suite|ste|unit|bldg|apt)\.?\s+(?:#\s*)?|#\s*)(?:[a-z]|[a-z]*\d[a-z\d]*)(?:-[a-z\d]+)?)?$`,
+	"iu",
+);
+
 function recognizableStreet(street: string, name: string) {
-	const words = street.match(/^\d+\p{L}?\s+([\p{L}\p{M}\d #'’/-]+)$/u)?.[1];
 	return (
 		street.length <= 80 &&
-		words !== undefined &&
-		/\p{L}/u.test(words) &&
-		!/\s(?:llc|llp|pllc|inc|corp|ltd)$/i.test(words) &&
-		!/^(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)(?:$|\s+(?:to|before|after|until|ago)\b)/i.test(
-			words,
-		) &&
+		streetPattern.test(street) &&
 		contactText(street) !== contactText(name)
 	);
 }
