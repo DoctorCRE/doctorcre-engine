@@ -191,7 +191,10 @@ test("a linked draft is the same grouped card as Home", async () => {
 			assert.ok(card.suggestions.length > 1);
 		const response = await linkedCard(itemId);
 		assert.equal(response.status, 200);
-		assert.deepEqual(await response.json(), card);
+		assert.deepEqual(await response.json(), {
+			...card,
+			...(itemId !== cardId && { requested_item_id: itemId }),
+		});
 	}
 });
 
@@ -932,10 +935,14 @@ for (const match of [
 }
 
 // A job suggests the same decision on every message of a conversation.
-async function suggestOnEachMessage(conversation: string, kind: string) {
+async function suggestOnEachMessage(
+	conversation: string,
+	kind: string,
+	days = [11, 12, 13],
+) {
 	const job = { job: "mail_capture", for_user: "example" };
 	const ids: string[] = [];
-	for (const day of [11, 12, 13]) {
+	for (const day of days) {
 		const [stored, email] = await save(job, "activities", {
 			idempotency_key: randomUUID(),
 			kind: "email",
@@ -965,10 +972,29 @@ async function suggestOnEachMessage(conversation: string, kind: string) {
 
 test("Home shows a filing suggested on every message of a conversation once and settles it for the thread", async () => {
 	const user = { user: "example" };
+	const conversation = "Outlook-repeat-filing";
 	const filings = await suggestOnEachMessage(
-		"Outlook-repeat-filing",
+		conversation,
 		"file_to_deal",
+		[11],
 	);
+	const requested_item_id = `suggestion:${filings[0]}`;
+	assert.equal((await linkedCard(requested_item_id)).status, 200);
+	filings.push(
+		...(await suggestOnEachMessage(conversation, "file_to_deal", [12, 13])),
+	);
+	const currentItemId = `suggestion:${filings[2]}`;
+	const currentCard = (await dashboard()).reminders.find(
+		({ item_id }) => item_id === currentItemId,
+	);
+	assert.ok(currentCard);
+	const earlierLink = await linkedCard(requested_item_id);
+	assert.equal(earlierLink.status, 200);
+	assert.deepEqual(await earlierLink.json(), {
+		...currentCard,
+		requested_item_id,
+	});
+	assert.equal((await linkedCard(requested_item_id, "other")).status, 404);
 	const choices = await suggestOnEachMessage(
 		"Outlook-repeat-choice",
 		"possible_new_deal",

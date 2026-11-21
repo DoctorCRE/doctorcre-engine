@@ -339,9 +339,13 @@ homeInbox.get("/home/cards/:item_id", (c) => {
 	return answerNextRead(c, "read-home-card", async (db, userId) => {
 		const link: HomeReviewLink = { kind, id };
 		const [card] = await readHomeReviewCards(db, userId, null, true, link);
-		return card
-			? dashboardCard(card, await dashboardDay(db))
-			: readHomeReviewDisposition(db, userId, link);
+		if (!card) return readHomeReviewDisposition(db, userId, link);
+		const requested_item_id = `${kind}:${id}`;
+		return {
+			...dashboardCard(card, await dashboardDay(db)),
+			...(kind === "suggestion" &&
+				card.item_id !== requested_item_id && { requested_item_id }),
+		};
 	});
 });
 

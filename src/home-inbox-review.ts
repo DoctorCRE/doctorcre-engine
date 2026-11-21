@@ -348,6 +348,7 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 				row_number() over same_source as position,
 				max(proposal_version) over source_group as suggestion_change_id,
 				array_agg(id) over all_members as member_ids,
+				array_agg(id) filter (where status = 'pending' and kind <> 'email_lead') over all_members as pending_member_ids,
 				md5(string_agg(id::text, ':') filter (where status = 'pending') over all_members) as source_version,
 				jsonb_agg(${forMail ? sql`reference || jsonb_build_object('suggestion_title', suggestion_title, 'due_on', due_on)` : sql`reference`})
 					filter (where status = 'pending' and decision_position = 1 ${dashboard ? sql`and kind <> 'email_lead'` : sql``}) over all_members as suggestions
@@ -366,7 +367,7 @@ function homeReviewGroups(userId: string, forMail = false, dashboard = false) {
 		suggestion_groups as (${suggestionRows(userId, forMail, dashboard)}),
 		draft_cards as (
 			select d.*, greatest(d.draft_change_id, s.suggestion_change_id) as source_change_id,
-				s.suggestions, s.member_ids, s.due_on, coalesce(s.late_target, false) as late_target
+				s.suggestions, s.member_ids, s.pending_member_ids, s.due_on, coalesce(s.late_target, false) as late_target
 			from draft_groups d
 			left join suggestion_groups s on s.mail_group = d.mail_group and d.status <> 'sent'
 			where d.status in ('pending', 'sent') or s.id is null
@@ -775,8 +776,10 @@ export async function readHomeReviewCards(
 	dashboard: boolean,
 	link?: HomeReviewLink,
 ) {
-	const member = link && JSON.stringify([{ id: link.id }]);
-	const bySuggestion = link && sql<boolean>`suggestions @> ${member}::jsonb`;
+	const bySuggestion =
+		link?.kind === "suggestion"
+			? sql<boolean>`${link.id}::uuid = any(pending_member_ids)`
+			: undefined;
 	const drafts = await markedReviews(
 		draftCards(
 			userId,
