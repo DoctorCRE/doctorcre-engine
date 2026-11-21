@@ -137,3 +137,5 @@ The health probe appends `next_section_readable` after its existing fields.
 Each check also loads `schema/next.sql` into `next` in a copy of that restore and
 generates ignored `src/next-database.d.ts` from it with `npm run types:next`, so a
 column change in the schema reaches the code's types on the next check.
+The same template holds the copy attribution functions. Each copy fixture clones
+it into its own database with PostgreSQL JIT disabled for the small test data.

@@ -17,11 +17,15 @@ async function loadNextSection(url: string) {
 	});
 	await db.connect();
 	try {
-		const schema = await readFile(
-			new URL("../schema/next.sql", import.meta.url),
-			"utf8",
-		);
-		await db.query(`create schema next; ${schema}`);
+		const [schema, attribution] = await Promise.all([
+			readFile(new URL("../schema/next.sql", import.meta.url), "utf8"),
+			readFile(
+				new URL("../schema/copy-attribution.sql", import.meta.url),
+				"utf8",
+			),
+		]);
+		await db.query(`alter default privileges revoke execute on functions from public;
+			create schema next; ${schema}; ${attribution}`);
 	} finally {
 		await db.end();
 	}
@@ -37,13 +41,12 @@ await withSnapshot((_, snapshot) =>
 			TEST_SNAPSHOT: snapshot,
 		};
 		npmRun("types:db", env);
-		// Tests add the new section to their own copies, so the snapshot must not hold it.
-		await withSnapshot(async (nextUrl) => {
+		await withSnapshot(async (nextUrl, copySnapshot) => {
 			await loadNextSection(nextUrl);
 			npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
+			npmRun("types", env);
+			npmRun("test", { ...env, TEST_COPY_SNAPSHOT: copySnapshot });
 		}, snapshot);
-		npmRun("types", env);
-		npmRun("test", env);
 	}, snapshot),
 ).catch((error: unknown) => {
 	if (!(error instanceof NoDatabase)) throw error;

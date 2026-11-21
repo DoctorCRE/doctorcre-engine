@@ -48,6 +48,7 @@ test("new-section reads are typed, read-only UTC snapshots without old-table fal
 		const result =
 			await sql`select current_schema() as schema, current_user as role,
 			current_setting('TimeZone') as zone,
+			current_setting('jit') as jit,
 			current_setting('transaction_isolation') as isolation,
 			current_setting('transaction_read_only') as read_only`.execute(tx);
 		assert.deepEqual(result.rows, [
@@ -55,6 +56,7 @@ test("new-section reads are typed, read-only UTC snapshots without old-table fal
 				schema: "next",
 				role: "engine_reader",
 				zone: "UTC",
+				jit: "off",
 				isolation: "repeatable read",
 				read_only: "on",
 			},
