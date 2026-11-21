@@ -9,7 +9,7 @@ const emit = (event: unknown) =>
 if (args.includes("auth")) {
 	const capture = join(import.meta.dirname, "auth-args.json");
 	if (existsSync(capture)) writeFileSync(capture, JSON.stringify(args));
-	emit({ loggedIn: true, authMethod: "claude.ai" });
+	emit({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro" });
 } else {
 	const input = JSON.parse(readFileSync(0, "utf8"));
 	const question = input.turn.question;

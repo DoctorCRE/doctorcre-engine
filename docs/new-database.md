@@ -1682,9 +1682,23 @@ Apply [the Doc link migration](../schema/add-doc-link.sql) and then [the link re
 
 #### Doc link on macOS
 
-The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts) in the engine checkout with its runtime dependencies, the JSON configuration file, and a log file in the partner's directory. The partner must own the configuration file and set its mode to `0600` or stricter. The runner checks the file before reading it. The configuration holds `engine` (the HTTPS engine origin), `claude` (the absolute path to the official Claude Code binary), and `credential` (the Doc link credential issued for this partner). The runner passes the credential to Claude Code through its environment for the Doc MCP server. Reload the LaunchAgent after replacing the file. It stops on `401` so a revoked credential no longer polls.
+**Before the visit.** Put the engine checkout where it will stay on the Mac. Install [Node.js 26](https://nodejs.org/en/download), make it available in Terminal, and run `npm ci` in the checkout. Prepare the command with the HTTPS engine origin for the app that issues the credential. Rehearse with the staging origin and a sourced answer about a test record. The coordinator confirms acceptance of Anthropic's Commercial Terms and sets up the first Mac before the second.
 
-The partner signs in through Claude Code and keeps plan usage credits off. The link uses `claude auth status` to check for a subscription login under that macOS user. It uses the same settings sources and isolation flags as the turn so a key in personal settings cannot mask the subscription. It checks again every 30 seconds and reports an expired sign-in from a failed turn. On a reported plan limit, it keeps the turn queued until the reported reset. If Claude Code gives no reset time, the link checks again after five minutes.
+**Three minutes at the Mac.** Open Terminal under the partner's macOS login. From the prepared checkout, run this command with `DOC_ENGINE_ORIGIN` set to the supplied HTTPS engine origin.
+
+```sh
+bash scripts/install-doc-link.sh "$DOC_ENGINE_ORIGIN"
+```
+
+1. Setup uses [Anthropic's official installer](https://code.claude.com/docs/en/setup) if Claude Code is missing. If setup asks you to sign in, open `claude` (try `~/.local/bin/claude` if needed). Sign in with your own Claude subscription through Anthropic, keep usage credits off in your Claude account, and run the same command again.
+2. In the app, issue a Doc link credential from your account. Paste it at the hidden Terminal prompt and press Return. A prepared command can also read one line from standard input. Keep the credential out of command arguments and shell history. Setup verifies the credential with the engine before saving it and starting the job. If the code is refused, make a new one in the app and run setup again.
+3. When Terminal says **Doc link is ready.**, open Ask Doc and ask about a deal you can see. Open the source link in the answer to confirm it goes to that deal.
+
+Rerun the command with a new credential to replace the configuration and reload the background job. Setup writes the configuration to `~/Library/Application Support/DoctorCRE Doc/link.json` with mode `0600`. The runner checks the owner and permissions before reading it. The configuration holds `engine` (the HTTPS engine origin), `claude` (the absolute path to the official Claude Code binary), and `credential` (the Doc link credential issued for this partner). The runner passes the credential to Claude Code through its environment for the Doc MCP server. It stops on `401` so a revoked credential no longer polls.
+
+The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts), the configuration, and `link.log` in the same folder as the configuration.
+
+The partner signs in through Claude Code and keeps plan usage credits off. Setup and the link use `claude auth status` to confirm a personal Pro, Max, or Ultra subscription. Team, Enterprise, and unrecognized plans stop setup or pause the link. The check uses the same settings sources and isolation flags as the turn so a key in personal settings cannot mask the subscription. The link checks every 30 seconds and before starting a turn. It reports an expired sign-in from a failed turn. On a reported plan limit, it keeps the turn queued until the reported reset. If Claude Code gives no reset time, the link checks again after five minutes.
 
 A Doc Mac has no managed Claude Code configuration of any kind. The runner checks these roots before polling and before launching Claude Code for a turn.
 
