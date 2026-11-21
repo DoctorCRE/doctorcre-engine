@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { filingReviewNeeded } from "./activity/filing-evidence.ts";
 import { lockEmail } from "./activity/next-record.ts";
 import { answerNextRead, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
+import { sourceInMailbox } from "./home-email-thread.ts";
 import { readProposal } from "./home-inbox-review.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
@@ -327,6 +329,36 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 		refuse(c, new Refusal(403, "user_decides")),
 	);
 
+// Each message in a conversation carries its own filing suggestion; Home shows them as one decision.
+async function sameFiling(
+	tx: Transaction<DB>,
+	p: {
+		id: string;
+		kind: string;
+		activity_id: string | null;
+		deal_id: string | null;
+	},
+) {
+	const { rows } = await sql<{ id: string; message_id: string | null }>`
+		select sibling.id, e.message_id
+		from email source
+		join email e on e.activity_id = source.activity_id or e.conversation_id = source.conversation_id
+		join proposal sibling on sibling.activity_id = e.activity_id
+		where source.activity_id = ${p.activity_id}::uuid and sibling.kind = ${p.kind}
+			and sibling.deal_id is not distinct from ${p.deal_id}::uuid
+			and (sibling.id = ${p.id}::uuid or (sibling.status = 'pending'
+				and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)}
+				and (sibling.kind <> 'file_to_deal'
+					or ${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))})))
+		order by sibling.id
+		for update of sibling`.execute(tx);
+	for (const messageId of [
+		...new Set(rows.map((row) => row.message_id)),
+	].sort())
+		if (messageId) await lockEmail(tx, messageId);
+	return rows.map((row) => row.id);
+}
+
 export const proposalDecisions = new Hono<NextSaveEnv>().post(
 	"/proposals/:id/decision",
 	(c) =>
@@ -390,14 +422,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						});
 				}
 				const filingDeal = r.deal_id ?? p.deal_id;
-				if (filing) {
-					const email = await tx
-						.selectFrom("email")
-						.select("message_id")
-						.where("activity_id", "=", p.activity_id)
-						.executeTakeFirst();
-					if (email?.message_id) await lockEmail(tx, email.message_id);
-				}
+				const members = filing ? await sameFiling(tx, p) : [p.id];
 				if (r.decision === "accept" && filing && filingDeal) {
 					await dealNow(tx, filingDeal);
 				}
@@ -407,14 +432,15 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 				const owner = ownerEdit ?? p.owner_party_id;
 				const updateDecision = () =>
 					sql<{
+						id: string;
 						status: string;
 						decided_at: string;
 						filed_deal_id: string | null;
 					}>`update proposal
    set status = ${accepts ? "accepted" : "dismissed"}, filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
     filing_reason = ${accepts ? (r.reason ?? null) : null},
-    dismiss_reason = ${accepts ? null : (r.reason?.trim() ?? null)} where id = ${p.id}::uuid
-   returning status, decided_at::text, filed_deal_id`.execute(tx);
+    dismiss_reason = ${accepts ? null : (r.reason?.trim() ?? null)} where id = any(${members}::uuid[])
+   returning id, status, decided_at::text, filed_deal_id`.execute(tx);
 				const { rows } =
 					accepts && p.kind === "next_step"
 						? await saveOpenStep(
@@ -439,6 +465,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								},
 							)
 						: await updateDecision();
+				const decided = rows.find((row) => row.id === p.id);
 				if (accepts && Object.keys(stepEdits).length)
 					await tx
 						.updateTable("next_step")
@@ -467,8 +494,8 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 										};
 				return {
 					proposal_id: p.id,
-					status: rows[0]?.status ?? null,
-					decided_at: rows[0]?.decided_at ?? null,
+					status: decided?.status ?? null,
+					decided_at: decided?.decided_at ?? null,
 					created,
 					...(p.next_step_id && { next_step_id: p.next_step_id }),
 				};

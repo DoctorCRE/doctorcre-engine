@@ -18,7 +18,7 @@ export function senderLabel(
 
 export function sourceInMailbox(
 	source: Expression<string | null>,
-	userId: string,
+	userId: string | Expression<string>,
 ) {
 	return sql<boolean>`coalesce((select bool_or(user_id = ${userId}::uuid)
 		from email_mailbox where activity_id = ${source}), true)`;

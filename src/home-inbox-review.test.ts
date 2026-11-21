@@ -452,14 +452,14 @@ test("A new suggestion keeps the conversation snoozed and unsnooze returns it to
 	const [unsnoozed, receipt] = await mark("unsnooze");
 	assert.equal(unsnoozed, 200);
 	assert.equal((await card()).section, "inbox");
-	const [decided] = await save(user, `proposals/${id(51)}/decision`, {
+	const [decided] = await save(user, `proposals/${id(50)}/decision`, {
 		idempotency_key: randomUUID(),
 		decision: "dismiss",
 	});
 	assert.equal(decided, 200);
 	assert.partialDeepStrictEqual(await card(), {
 		section: "inbox",
-		merged_source_ids: [id(52), id(50)],
+		merged_source_ids: [id(52)],
 	});
 	const [stale] = await mark("snooze", receipt, until);
 	assert.equal(stale, 409);

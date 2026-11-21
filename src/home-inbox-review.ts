@@ -278,6 +278,8 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 				'email:' || md5(${mailGroup}) as mail_card_id,
 				coalesce(lead_email.activity_id, a.id) as group_activity_id,
 				coalesce(lead_email.happened_at, a.happened_at) as group_source_at,
+				case when p.kind in ('file_to_deal', 'possible_new_deal')
+					then p.kind || ':' || coalesce(p.deal_id::text, '') else p.id::text end as decision_key,
 				jsonb_build_object(
 					'id', p.id, 'kind', p.kind, 'activity_id', p.activity_id,
 					'activity_kind', p.activity_kind, 'deal_id', p.deal_id, 'party_id', p.party_id,
@@ -315,19 +317,25 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 					where pe.address = candidate.source_row->>'address'
 					having count(*) = 1 and bool_or(u.is_account_partner)
 				))
+		), sourced as (
+			select visible.*, coalesce(mail_group, activity_id::text, id::text) as source_key from visible
+		), decisions as (
+			select sourced.*, row_number() over (
+				partition by activity_kind, source_key, decision_key
+				order by (status = 'pending') desc, activity_at desc, id
+			) as decision_position
+			from sourced
 		), grouped as (
-			select visible.*,
+			select decisions.*,
 				first_value(group_activity_id) over latest_source as latest_activity_id,
 				row_number() over same_source as position,
 				max(proposal_version) over source_group as suggestion_change_id,
 				array_agg(id) over all_members as member_ids,
 				md5(string_agg(id::text, ':') filter (where status = 'pending') over all_members) as source_version,
 				jsonb_agg(${forMail ? sql`reference || jsonb_build_object('suggestion_title', suggestion_title, 'due_on', due_on)` : sql`reference`})
-					filter (where status = 'pending' ${dashboard ? sql`and kind <> 'email_lead'` : sql``}) over all_members as suggestions
-			from visible
-			window source_group as (
-				partition by activity_kind, coalesce(mail_group, activity_id::text, id::text)
-			), latest_source as (source_group order by (status = 'pending') desc, group_source_at desc, group_activity_id desc),
+					filter (where status = 'pending' and decision_position = 1 ${dashboard ? sql`and kind <> 'email_lead'` : sql``}) over all_members as suggestions
+			from decisions
+			window source_group as (partition by activity_kind, source_key), latest_source as (source_group order by (status = 'pending') desc, group_source_at desc, group_activity_id desc),
 			same_source as (source_group order by (status = 'pending') desc, (kind = 'email_lead'), activity_at desc, id),
 			all_members as (same_source rows between unbounded preceding and unbounded following)
 		)
