@@ -65,7 +65,10 @@ function withoutSignature(
 ) {
 	const own = body.split("\n");
 	const signed = own.slice(0, footerStart(own));
-	const unsigned = text(signed.slice(0, signatureStart(signed, senderName)));
+	const remaining = withoutBusinessCard(signed, senderName, senderAddress);
+	const unsigned = text(
+		remaining.slice(0, signatureStart(remaining, senderName)),
+	);
 	return (
 		unsigned
 			.slice(0, inlineSignatureStart(unsigned, senderName, senderAddress))
@@ -99,8 +102,17 @@ const contactLine = (line: string) =>
 				(part.split(/\s+/).every((word) => !word || contactWord.test(word)) ||
 					titleLine.test(part) ||
 					phoneLine.test(part) ||
+					bareWebsite.test(part) ||
 					licenseLine.test(part)),
 		);
+
+const hasContact = (line: string) =>
+	phone.test(line) ||
+	addressDomain.test(line) ||
+	website.test(line) ||
+	bareWebsite.test(line) ||
+	titleLine.test(line) ||
+	licenseLine.test(line);
 
 // A signature is a trailing sign-off, then the sender's name, then only contact lines.
 function signatureStart(lines: string[], sender: string | null) {
@@ -125,10 +137,46 @@ function signatureStart(lines: string[], sender: string | null) {
 	const start = tail.findIndex(({ line }, position) => {
 		const after = tail.slice(position + 1).map((rest) => rest.line);
 		return signOff.test(line)
-			? !after.length || signature(after)
-			: after.length > 0 && signature([line, ...after]);
+			? !after.length ||
+					(signature(after) &&
+						(after.some(hasContact) ||
+							(after.length === 1 &&
+								[first, name].includes(after[0]?.toLowerCase() ?? ""))))
+			: [line, ...after].some(hasContact) && signature([line, ...after]);
 	});
 	return tail[start]?.index ?? lines.length;
+}
+
+function withoutBusinessCard(
+	lines: string[],
+	senderName: string | null,
+	senderAddress: string,
+) {
+	if (!senderName || !senderAddress) return lines;
+	const start = lines.findLastIndex(
+		(line, index) =>
+			index > 1 &&
+			!lines[index - 1]?.trim() &&
+			line.trim().toLowerCase() === senderName,
+	);
+	if (start < 0) return lines;
+	const nextText = lines.findIndex(
+		(line, index) => index > start && line.trim() && !contactLine(line.trim()),
+	);
+	const details = lines
+		.slice(start + 1, nextText < 0 ? undefined : nextText)
+		.map((line) => line.trim());
+	if (
+		!details.some((line) => titleLine.test(line) || licenseLine.test(line)) ||
+		!details.some((line) => phoneLine.test(line)) ||
+		!details.some((line) => line.toLowerCase() === senderAddress)
+	)
+		return lines;
+	const end = start + 2 + details.findLastIndex(hasContact);
+	return [
+		...lines.slice(0, start),
+		...lines.slice(lines[end]?.trim() === "" ? end + 1 : end),
+	];
 }
 
 // A one-line body ends "... works. Best, Maya Example Office Manager | Direct: 555-010-2000".
@@ -149,6 +197,7 @@ function inlineSignatureStart(
 		if (
 			at > 0 &&
 			/[A-Z]/.test(tail[at] ?? "") &&
+			hasContact(tail.slice(index)) &&
 			tail.slice(index).split("\n").every(contactLine)
 		)
 			return start + at;
@@ -183,7 +232,7 @@ type ThreadMessage = {
 
 const minimumSignatureLength = 25;
 const quoteHeaderField =
-	/(?<!\S)\*?(from|sent|date|to|cc|bcc|subject):\*?(?=\s)/gi;
+	/(?:(?<!\S)|(?<=\.{3}|…))\*?(from|sent|date|to|cc|bcc|subject):\*?(?=\s)/gi;
 const month = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\.?";
 const weekday = "(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\\.?,?\\s+)?";
 const day = String.raw`(?:\d{1,4}[./-]\d{1,2}(?:[./-]\d{1,4})?|(?:\d{1,2}\s+${month}|${month}\s+\d{1,2})(?:,?\s+\d{4})?)`;
@@ -199,12 +248,20 @@ const quoteDivider = /(?<![-_=*])[-_=*]{3,}$/;
 const addressDomain = /@[\w-]+(?:\.[\w-]+)+/;
 const address = String.raw`[^<>\s,;]+${addressDomain.source}`;
 const mailboxAddress = new RegExp(
-	`^(?:${address}|[^<>]*<\\s*${address}\\s*>)$`,
+	`^(?:${address}|[^<>]*<\\s*${address}\\s*>\\.?)$`,
 );
 const nameWord = /^(?:\p{Lu}[\p{L}'’.-]*[\p{L}]|\p{Lu}\.?)$/u;
 const nameConnector = /^(?:de|del|van|von|da|dos)$/i;
 const quoteIndent = /^[ \t]*(?:>[ \t]*)+/gm;
 const trailingQuoteIndent = /(?:^|[\r\n])[ \t]*(?:>[ \t]*)+$/;
+const displayName = new RegExp(
+	String.raw`^(?:${nameWord.source.slice(1, -1)}[ \t]+){0,7}${nameWord.source.slice(1, -1)}$`,
+	"u",
+);
+const truncatedFrom = new RegExp(
+	String.raw`(?<!\S)\*?From:\*?[ \t]+(?:${nameWord.source.slice(1, -1)}[ \t]+){1,8}<[\p{L}\d@._%+-]*[ \t]*$`,
+	"u",
+);
 
 function comparableBody(body: string) {
 	const words = /(^[ \t]*(?:>[ \t]*)+)|\S+/gm;
@@ -260,6 +317,82 @@ function openerStart(body: string) {
 	return -1;
 }
 
+function headerBlock(body: string, leading = false) {
+	const fields = [...body.matchAll(quoteHeaderField)];
+	if (leading && fields[0]?.index !== 0) return null;
+	const labels = new Set<string>();
+	let start = 0;
+	let end = 0;
+	let subjectValue = -1;
+	const maximum = leading ? 8000 : 600;
+	for (const [index, field] of fields.entries()) {
+		const label = field[1]?.toLowerCase() ?? "";
+		const valueStart = field.index + field[0].length;
+		const nextField = fields[index + 1];
+		const next = nextField?.index ?? body.length;
+		const nearby = body.slice(valueStart, Math.min(valueStart + maximum, next));
+		let value = nearby.match(/^[^\n]*(?:\n[ \t]*<[^<>\n]+>)?/)?.[0] ?? "";
+		let wrappedFrom = false;
+		if (label === "from" && /^(?:sent|date)$/i.test(nextField?.[1] ?? "")) {
+			const name = nearby.trim();
+			if (
+				/[\n/|]/.test(name) &&
+				/^[^\n]*(?:\n[^\n]*)?$/.test(name) &&
+				name
+					.replace(/\n[ \t]*/g, " ")
+					.split(/[|/]/)
+					.every((part) => displayName.test(part.trim()))
+			) {
+				value = nearby.trimEnd();
+				wrappedFrom = true;
+			}
+		}
+		const emptyRecipient =
+			leading && labels.has("from") && label === "to" && !value.trim();
+		const valid =
+			emptyRecipient ||
+			wrappedFrom ||
+			((label === "subject" ||
+				label === "date" ||
+				label === "sent" ||
+				nearby.length === next - valueStart ||
+				value.length < nearby.length) &&
+				headerValue(label, value.trim()));
+		if (
+			!valid ||
+			labels.has(label) ||
+			(labels.size && body.slice(end, field.index).trim())
+		) {
+			if (leading) break;
+			labels.clear();
+		}
+		if (!valid) continue;
+		if (!labels.size) start = field.index;
+		labels.add(label);
+		end = valueStart + value.length;
+		if (!leading && labels.size >= 2) return { start, end };
+		subjectValue =
+			leading &&
+			label === "subject" &&
+			body
+				.slice(body.lastIndexOf("\n", field.index - 1) + 1, field.index)
+				.trim()
+				? valueStart
+				: -1;
+	}
+	if (
+		leading &&
+		labels.has("from") &&
+		(labels.has("date") || labels.has("sent")) &&
+		(labels.has("to") || labels.has("subject"))
+	)
+		return {
+			start,
+			end: subjectValue >= 0 ? subjectValue : end,
+		};
+	return null;
+}
+
 function historyStart(body: string) {
 	// Quote indents count as whitespace without changing the source offsets.
 	const unquoted = body.replace(quoteIndent, (indent) =>
@@ -269,44 +402,39 @@ function historyStart(body: string) {
 	const join = unquoted.search(joinBlock);
 	const marker = unquoted.search(historyMarker);
 	const opener = openerStart(unquoted);
+	const truncated = unquoted.search(truncatedFrom);
 	const limit = Math.min(
 		marker < 0 ? body.length : marker,
 		opener < 0 ? body.length : opener,
 		rule < 0 || join >= 0 ? body.length : rule,
+		truncated < 0 ? body.length : truncated,
 	);
-	const fields = [...unquoted.slice(0, limit).matchAll(quoteHeaderField)];
-	const labels = new Set<string>();
-	let start = 0;
-	let end = 0;
-	for (const [index, field] of fields.entries()) {
-		const label = field[1]?.toLowerCase() ?? "";
-		const valueStart = field.index + field[0].length;
-		const next = fields[index + 1]?.index ?? limit;
-		const nearby = unquoted.slice(valueStart, Math.min(valueStart + 600, next));
-		const value = nearby.match(/^[^\n]*(?:\n[ \t]*<[^<>\n]+>)?/)?.[0] ?? "";
-		const valid =
-			(label === "subject" ||
-				label === "date" ||
-				label === "sent" ||
-				nearby.length === next - valueStart ||
-				value.length < nearby.length) &&
-			headerValue(label, value.trim());
-		if (
-			!valid ||
-			labels.has(label) ||
-			(labels.size && unquoted.slice(end, field.index).trim())
-		)
-			labels.clear();
-		if (!valid) continue;
-		if (!labels.size) start = field.index;
-		labels.add(label);
-		end = valueStart + value.length;
-		if (labels.size >= 2) {
-			const divider = unquoted.slice(0, start).trimEnd().search(quoteDivider);
-			return divider < 0 ? start : divider;
-		}
-	}
-	return limit;
+	const headers = headerBlock(unquoted.slice(0, limit));
+	if (!headers) return limit;
+	const divider = unquoted
+		.slice(0, headers.start)
+		.trimEnd()
+		.search(quoteDivider);
+	return divider < 0 ? headers.start : divider;
+}
+
+function withoutLeadingHeaders(body: string) {
+	const opening = historyMarker.exec(body);
+	const start = opening?.index === 0 ? opening[0].length : 0;
+	const remainder = body
+		.slice(start)
+		.replace(/^[\s>]*_{8,}[ \t]*(?:\n|$)/, "")
+		.replace(/^[\s\u200b]+/, "");
+	if (!/^\*?From:/i.test(remainder))
+		return start && remainder ? remainder : body;
+	const headers = headerBlock(
+		remainder.replace(quoteIndent, (indent) => " ".repeat(indent.length)),
+		true,
+	);
+	return (
+		(headers && remainder.slice(headers.end).trimStart()) ||
+		(start && remainder ? remainder : body)
+	);
 }
 
 function withoutHistory(body: string) {
@@ -314,11 +442,12 @@ function withoutHistory(body: string) {
 		.replace(/\u00a0/g, " ")
 		.replace(/\r\n?/g, "\n")
 		.replace(senderBanner, "");
-	const current = normalized
-		.slice(0, historyStart(normalized))
+	const content = withoutLeadingHeaders(normalized);
+	const current = content
+		.slice(0, historyStart(content))
 		.replace(trailingQuoteIndent, "");
 	const lines = current.split("\n").filter((line) => !strayFrom.test(line));
-	return text(lines) || body;
+	return text(lines) || (content !== normalized ? content : body);
 }
 
 type ComparableBody = ReturnType<typeof comparableBody> & {
@@ -332,6 +461,7 @@ const phoneLine =
 const licenseLine =
 	/^(?:[A-Z]{2} )?(?:(?:RE |DRE |BRE |NMLS )?(?:license|lic\.)|DRE|BRE|NMLS)[ :#]+[A-Z\d-]*\d[A-Z\d-]*$/i;
 const website = /\b(?:https?:\/\/|www\.)\S+/i;
+const bareWebsite = /^(?:[a-z\d-]+\.)+(?:com|org|net|co|io)$/i;
 const contactLabel = /(?:direct|cell|fax):/i;
 const inlineContact = new RegExp(
 	String.raw`(?:^|(?<=[\r\n|]))[ \t]*(?=(?:(?:${contactLabel.source}[ \t]*)?${phone.source}|${website.source}|<?[^<>\s,;|]{1,64}${addressDomain.source}>?)[ \t]*(?:$|[\r\n|]))`,
@@ -360,7 +490,17 @@ function sharedFooterStart(block: string, senderName: string | null) {
 		"i",
 	).exec(block.slice(0, footer));
 	const start = opening ? opening.index + opening[0].length : footer;
-	return block.slice(start).split("\n").every(contactLine) ? start : footer;
+	for (const candidate of [start, footer]) {
+		if (block.slice(candidate).split("\n").every(contactLine)) return candidate;
+	}
+	return block.length;
+}
+
+function contactInsideSentence(body: string, offset: number) {
+	return (
+		inlineContact.exec(body.slice(offset))?.index === 0 &&
+		!/(?:^|\n|[.!?|])[ \t]*$/.test(body.slice(0, offset))
+	);
 }
 
 function sharedSignatureLength(messages: ComparableBody[]) {
@@ -399,14 +539,8 @@ function sharedSignatureLength(messages: ComparableBody[]) {
 		if (at === undefined) continue;
 		const block = body.slice(at);
 		const boundary = sharedFooterStart(block, senderName);
-		if (
-			!boundary &&
-			inlineContact.exec(block)?.index === 0 &&
-			!/(?:\n|[.!?|])\s*$/.test(body.slice(0, at))
-		)
-			continue;
 		const footer = at + boundary;
-		if (footer === body.length) continue;
+		if (footer === body.length || contactInsideSentence(body, footer)) continue;
 		const position = offsets.indexOf(footer, start);
 		if (position >= 0)
 			signature = Math.max(signature, normalized.length - position);
@@ -416,6 +550,13 @@ function sharedSignatureLength(messages: ComparableBody[]) {
 
 const joinBlock =
 	/(?<!\S)(?:Microsoft Teams meeting\b(?=\s+(?:Join|Meeting ID:|Dial in))|Teams Meeting\s+Dial in by phone\b|Join (?:the meeting now|(?:with )?Google Meet|Zoom Meeting|Microsoft Teams Meeting|on your computer)\b:?(?=\s*(?:https?:\/\/|<|Meeting ID:|Dial in))|Google (?:Calendar invitation|Meet joining info)\b)/i;
+const joinDetail =
+	/^(?:[_-]{8,}|[\d ()+.-]{8,}|(?:meeting id|phone conference id):[ \t]*[\d #]+|(?:passcode|meeting code|password):[ \t]*[\w#-]+|(?:join (?:the meeting now|with google meet|by phone|zoom meeting|on your computer)|dial in by phone|find a local number|reset dial-in pin|meeting options)(?:[ \t]*:?[ \t]*<?https?:\/\/\S+)?)[ \t]*$/i;
+const joinUrl = /^<?https?:\/\/[^\s<>]+>?$/i;
+const inlineJoinDetail = new RegExp(
+	String.raw`^:?[ \t]*(?:<?https?://[^\s<>]+>?(?:[ \t]+Meeting ID:[ \t]*[\d ]+)?|${phone.source}(?:[ \t]+View map Guests)?)$`,
+	"i",
+);
 
 function withoutJoinBlock(body: string) {
 	const join = joinBlock.exec(body);
@@ -426,9 +567,20 @@ function withoutJoinBlock(body: string) {
 		.replace(quoteDivider, "")
 		.trimEnd();
 	if (!before) return body;
-	const tail = body.slice(join.index + join[0].length);
-	const end = /\n[ \t]*_{8,}[ \t]*(?=\n)|(?=\n[ \t]*P\.?S\.[ \t])/i.exec(tail);
-	const after = end ? tail.slice(end.index + end[0].length).trim() : "";
+	const [inline = "", ...lines] = body
+		.slice(join.index + join[0].length)
+		.split("\n");
+	if (inline.trim() && !inlineJoinDetail.test(inline.trim())) return body;
+	const firstDetail = lines.findIndex((line) => line.trim());
+	const end = lines.findIndex((raw, index) => {
+		const line = raw.trim();
+		return (
+			line &&
+			!joinDetail.test(line) &&
+			!(!inline.trim() && index === firstDetail && joinUrl.test(line))
+		);
+	});
+	const after = end < 0 ? "" : lines.slice(end).join("\n").trim();
 	return after ? `${before}\n\n${after}` : before;
 }
 
@@ -459,6 +611,8 @@ export function cleanEmailThread(
 		if (!length) continue;
 		for (const message of group) {
 			const offset = message.offsets[message.normalized.length - length];
+			if (offset === undefined || contactInsideSentence(message.body, offset))
+				continue;
 			message.body = message.body.slice(0, offset).trimEnd() || message.body;
 		}
 	}

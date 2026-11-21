@@ -552,3 +552,171 @@ test("a carried chain of eleven one-line messages shows each message's new text 
 		thread.map(({ kept }) => kept),
 	);
 });
+
+test("preserves a repeated instruction after a repeated phone line", () => {
+	const bodies = ["The plan is ready.", "I sent the plan."].map(
+		(update) =>
+			`${update}\nDirect: 555-010-2000\nPlease text before you arrive.`,
+	);
+	assert.deepEqual(
+		cleanEmailThread(bodies.map((body) => message(body))),
+		bodies,
+	);
+});
+
+test("preserves words with title capitalization after a sender name", () => {
+	for (const body of [
+		"Here is the door label.\nMaya Example\nUse The West Door",
+		"Here is the door label. Thanks, Maya Use The West Door",
+	]) {
+		assert.equal(cleanEmailBody(body, maya), body);
+	}
+});
+
+test("preserves an ordinary paragraph after meeting instructions", () => {
+	assert.equal(
+		cleanEmailBody(
+			"Please join remotely.\n\nJoin Microsoft Teams Meeting\nhttps://example.test/join\nMeeting ID: 1234\nPasscode: abc\n\nI'll bring the keys to the office after the call.",
+			maya,
+		),
+		"Please join remotely.\n\nI'll bring the keys to the office after the call.",
+	);
+});
+
+test("cuts history when the From name is wrapped before the other headers", () => {
+	assert.equal(
+		cleanEmailBody(
+			"Here is the plan.\nFrom: Sam\nPartner\nSent: Mon, Jan 5, 2026\nTo: Maya Example\nSubject: Suite 200\nOld text.",
+			maya,
+		),
+		"Here is the plan.",
+	);
+});
+
+test("keeps the readable message after a leading forwarded header block", () => {
+	assert.equal(
+		cleanEmailBody(
+			"Begin forwarded message:\nFrom: Sam Partner <sam@example.test>\nDate: Mon, Jan 5, 2026\nTo: Maya Example\nSubject: Suite 200\n\nThe keys are at the desk.\n\nOn Jan 4, 2026 Pat Example wrote:\nOlder message.",
+			maya,
+		),
+		"The keys are at the desk.",
+	);
+});
+
+test("retains the subject and body of a folded leading header without the transport fields", () => {
+	assert.equal(
+		cleanEmailBody(
+			"From: Sam Partner <sam@example.test> Date: Mon, Jan 5, 2026 To: Maya Example Subject: Suite 200 The keys are at the desk.",
+			maya,
+		),
+		"Suite 200 The keys are at the desk.",
+	);
+});
+
+test("cuts a truncated angle address at the end of a carried header", () => {
+	assert.equal(
+		cleanEmailBody(
+			"Thanks for the plan. From: Sam Partner <sam@example.test",
+			maya,
+		),
+		"Thanks for the plan.",
+	);
+});
+
+test("cuts a wrapped display name with a company separator before Outlook history", () => {
+	assert.equal(
+		cleanEmailBody(
+			"Here is the plan.\nFrom: Sam Partner/\nExample Realty\nSent: Mon, Jan 5, 2026\nTo: Maya Example\nSubject: Suite 200\nOlder text.",
+			maya,
+		),
+		"Here is the plan.",
+	);
+});
+
+test("unwraps a leading mail header with an empty To and a long Cc", () => {
+	const recipients = Array.from(
+		{ length: 24 },
+		(_, index) => `Broker Example <broker${index}@example.test>`,
+	).join("; ");
+	assert.equal(
+		cleanEmailBody(
+			`From: Sam Partner <sam@example.test>\nDate: Mon, Jan 5, 2026\nTo:\nCc: ${recipients}\nSubject: Suite 200\n\nThe keys are at the desk.`,
+			maya,
+		),
+		"The keys are at the desk.",
+	);
+});
+
+test("keeps the note inside a leading forward before an inner header", () => {
+	assert.equal(
+		cleanEmailBody(
+			"Begin forwarded message:\n\u200b\nThe plan is signed.\nFrom: Sam Partner <sam@example.test>\nDate: Mon, Jan 5, 2026\nTo: Maya Example\nSubject: Suite 200\nOlder text.",
+			maya,
+		),
+		"The plan is signed.",
+	);
+});
+
+test("cuts a folded header glued to the author's ellipsis", () => {
+	assert.equal(
+		cleanEmailBody(
+			"One more thing...From: Sam Partner <sam@example.test>. Date: Mon, Jan 5, 2026 at 9:00 AM. To: Maya Example <maya@example.test>...Older message.",
+			maya,
+		),
+		"One more thing...",
+	);
+});
+
+test("keeps a number used in prose when another message puts it in a footer", () => {
+	const withInstruction =
+		"Here is the plan. Call the office at 555-010-2000\nmaya@example.test";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(withInstruction),
+			message("The plan is attached.\n555-010-2000\nmaya@example.test"),
+		]),
+		[withInstruction, "The plan is attached."],
+	);
+});
+
+test("keeps a separate link after a meeting footer", () => {
+	assert.equal(
+		cleanEmailBody(
+			"Please join remotely.\n\nJoin Microsoft Teams Meeting\nhttps://example.test/join\nMeeting ID: 1234\n\nhttps://example.test/floor-plan",
+			maya,
+		),
+		"Please join remotely.\n\nhttps://example.test/floor-plan",
+	);
+});
+
+test("drops only a business signature between the message and a closing paragraph", () => {
+	assert.deepEqual(
+		cleanEmailThread([
+			message(
+				"The keys are at the desk.\n\nMaya Example\nOffice Manager\nDirect: 555-010-2000\nmaya@example.test\n\nPlease text when you pick them up.",
+			),
+		]),
+		["The keys are at the desk.\n\nPlease text when you pick them up."],
+	);
+});
+
+test("recognizes a bare website at the end of an otherwise confirmed signature", () => {
+	assert.equal(
+		cleanEmailBody(
+			"The keys are at the desk.\n\nMaya Example\nOffice Manager\nDirect: 555-010-2000\nexample.com",
+			maya,
+		),
+		"The keys are at the desk.",
+	);
+});
+
+test("keeps a separate title-cased instruction after a business signature", () => {
+	assert.deepEqual(
+		cleanEmailThread([
+			message(
+				"The keys are at the desk.\n\nMaya Example\nOffice Manager\nDirect: 555-010-2000\nmaya@example.test\n\nPlease Text Before You Arrive.",
+			),
+		]),
+		["The keys are at the desk.\n\nPlease Text Before You Arrive."],
+	);
+});
