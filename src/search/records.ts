@@ -37,7 +37,8 @@ export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 		? sql`p.id in (select party_id from party_email where ${addressMatch})
 			or (${bareDomain} and ${exactName})`
 		: sql`p.id::text = ${lower} or p.id in (
-				select party_id from outside_id where source in ('old_system', 'old_system_ref') and lower(value) = ${lower}
+				select party_id from outside_id
+				where source in ('old_system', 'old_system_ref', 'old_system_lead') and lower(value) = ${lower}
 			) or p.name ilike ${pattern} or p.name operator(public.%) ${query}`;
 	const similarity = byEmail
 		? sql`0`

@@ -16,12 +16,14 @@
 		"types:next": "kysely-codegen --dialect postgres --include-pattern \"next.*\" --default-schema next --date-parser string --type-mapping '{\"timestamp\":\"string\",\"timestamptz\":\"string\"}' --out-file src/next-database.d.ts"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/sdk": "1.32.2",
 		"aws4fetch": "1.0.20",
 		"better-auth": "1.7.27",
 		"hono": "4.13.18",
 		"jose": "6.2.17",
 		"kysely": "0.29.8",
-		"pg": "8.23.1"
+		"pg": "8.23.1",
+		"zod": "4.6.7"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.6.6",

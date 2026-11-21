@@ -16,8 +16,15 @@ test("Doc link migration, private credentials and Mac polling", {
 	timeout: 30_000,
 }, async (t) => {
 	const { db, setup, cleanup, connectionString } = copyTest();
+	const reader = `doc_read_${randomUUID().replaceAll("-", "")}`;
+	const writer = `doc_write_${randomUUID().replaceAll("-", "")}`;
 	await setup();
-	t.after(cleanup);
+	t.after(async () => {
+		await db.query(`drop role if exists ${reader}, ${writer}`);
+		await cleanup();
+	});
+	await db.query(`create role ${reader} login in role engine_reader;
+		create role ${writer} login in role engine;`);
 	await db.query("drop table next.doc_link");
 	await db.query(await readSchema("partner-auth.sql"));
 	const secret = randomBytes(32).toString("hex");
@@ -88,6 +95,10 @@ test("Doc link migration, private credentials and Mac polling", {
 	);
 	const localDatabase = new URL(connectionString);
 	localDatabase.password = "fixture";
+	const readDatabase = new URL(localDatabase);
+	readDatabase.username = reader;
+	const writeDatabase = new URL(localDatabase);
+	writeDatabase.username = writer;
 	const server = createTestHarness({
 		workers: [
 			{
@@ -115,9 +126,14 @@ test("Doc link migration, private credentials and Mac polling", {
 					compatibility_flags: ["nodejs_compat"],
 					hyperdrive: [
 						{
+							binding: "DATABASE",
+							id: "test-reader",
+							localConnectionString: readDatabase.href,
+						},
+						{
 							binding: "DATABASE_WRITER",
 							id: "test-writer",
-							localConnectionString: localDatabase.href,
+							localConnectionString: writeDatabase.href,
 						},
 						{
 							binding: "PARTNER_AUTH_DATABASE",
@@ -226,6 +242,54 @@ test("Doc link migration, private credentials and Mac polling", {
 				stored.rows[0]?.credential_hash === expectedHash,
 			"database stores only the credential hash for the session owner",
 		);
+
+		const claim = randomUUID();
+		await db.query(
+			`with chat as (insert into next.doc_conversation (owner_user_id) values ($1) returning id)
+			insert into next.doc_turn (conversation_id, owner_user_id, position, idempotency_key,
+				request_hash, question, state, claim_id, claim_until, claim_state)
+			select id, $1, 1, gen_random_uuid(), 'example', 'Find a deal', 'working', $2,
+				clock_timestamp() + interval '60 seconds', '{"reads":0,"sources":{}}' from chat`,
+			[appUserId, claim],
+		);
+		const mcp = await server.fetch(`${engineOrigin}/api/engine/doc/mcp`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${credential}`,
+				"Doc-Claim-Id": claim,
+				"Content-Type": "application/json",
+				Accept: "application/json, text/event-stream",
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: {
+					name: "find",
+					arguments: { query: "Example Missing Deal", kind: "deal" },
+				},
+			}),
+		});
+		assert.equal(mcp.status, 200);
+		assert.equal(mcp.headers.get("cache-control"), "no-store");
+		assert.equal(
+			(
+				await server.fetch(`${appOrigin}/api/engine/doc/mcp`, {
+					method: "POST",
+					headers: {
+						...first,
+						...proof,
+						Authorization: `Bearer ${credential}`,
+					},
+				})
+			).status,
+			404,
+		);
+		assert.deepEqual(await mcp.json(), {
+			jsonrpc: "2.0",
+			id: 1,
+			result: { content: [{ type: "text", text: "[]" }] },
+		});
 
 		assert.equal((await poll(wrongCredential)).status, 401);
 		assert.equal(

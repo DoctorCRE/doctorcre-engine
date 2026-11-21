@@ -1,0 +1,207 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { sql, type Transaction } from "kysely";
+import { z } from "zod";
+import { isCalendarDate } from "./calendar-date.ts";
+import { findDocRecords, readDocRecord, type Source } from "./doc-reads.ts";
+import { nextTransaction } from "./next-connection.ts";
+import type { DB } from "./next-database.d.ts";
+import { isArguments } from "./save-door.ts";
+import { isUuid } from "./uuid.ts";
+
+const text = z
+	.string()
+	.trim()
+	.min(1)
+	.max(4000)
+	.refine((value) => value.isWellFormed() && !value.includes("\0"));
+const source = z.string().max(48);
+const proposal = z.strictObject({
+	kind: z.enum(["note", "next_step"]),
+	source: source.optional(),
+	target: z.unknown().optional(),
+	text: text.optional(),
+	what: text.optional(),
+	due_on: z
+		.string()
+		.nullable()
+		.refine(
+			(date) =>
+				date === null || (isCalendarDate(date) && !date.startsWith("0000")),
+		)
+		.optional(),
+});
+const answer = z.strictObject({
+	kind: z.enum(["answer", "clarification", "refusal"]),
+	text,
+	sources: z.array(z.unknown()).max(40),
+	proposal: z.unknown().optional(),
+});
+
+export type DocClaimState = {
+	reads: number;
+	sources: Record<string, Source>;
+	choices?: Source[];
+	failed?: true;
+};
+type ClaimRead = {
+	readConnection: string;
+	partner: string;
+	state: DocClaimState;
+	timeout: number;
+};
+
+function sourceFor(state: DocClaimState, value: unknown) {
+	const ref = isArguments(value) && value.ref;
+	const key =
+		isArguments(ref) && typeof ref.kind === "string" && isUuid(ref.id)
+			? `${ref.kind}:${ref.id}`
+			: value;
+	if (typeof key === "string" && Object.hasOwn(state.sources, key))
+		return state.sources[key];
+}
+
+function propose(payload: unknown, state: DocClaimState) {
+	if (state.failed) throw new Error("A Doc read failed");
+	const {
+		kind,
+		text,
+		what,
+		due_on,
+		source,
+		target: ref,
+	} = proposal.parse(payload);
+	const target = sourceFor(state, source ?? ref);
+	if (!target || state.choices)
+		throw new Error("Choose an authorized source first");
+	if (kind === "note" && text && what === undefined && due_on === undefined)
+		return { kind, target, text };
+	if (
+		kind === "next_step" &&
+		what &&
+		due_on !== undefined &&
+		text === undefined
+	)
+		return { kind, target, what, due_on };
+	throw new Error("Invalid save proposal");
+}
+
+export function validateDocAnswer(payload: unknown, state: DocClaimState) {
+	if (state.failed) throw new Error("A Doc read failed");
+	if (state.choices)
+		return {
+			kind: "clarification",
+			text: "Which of these records did you mean?",
+			sources: state.choices,
+			proposal: null,
+		};
+	const { kind, text, sources, proposal } = answer.parse(payload);
+	const cited =
+		kind === "refusal"
+			? []
+			: sources.map((value) => {
+					const record = sourceFor(state, value);
+					if (!record) throw new Error("Doc cited an unread record");
+					return record;
+				});
+	if (kind === "answer" && !cited.length)
+		throw new Error("Doc answer has no sources");
+	return {
+		kind,
+		text,
+		sources: [...new Set(cited)],
+		proposal:
+			kind === "answer" && proposal != null ? propose(proposal, state) : null,
+	};
+}
+
+const toolResult = (value: unknown) => ({
+	content: [{ type: "text" as const, text: JSON.stringify(value) }],
+});
+
+export function registerDocTools(
+	server: McpServer,
+	{ readConnection, partner, state, timeout }: ClaimRead,
+) {
+	const deadline = Date.now() + timeout;
+
+	function read(run: (db: Transaction<DB>) => Promise<unknown>) {
+		if (state.failed) throw new Error("A Doc read failed");
+		if (state.choices) throw new Error("Choose a record to continue");
+		if (state.reads >= 4) throw new Error("Doc read limit exceeded");
+		state.reads++;
+		return nextTransaction(readConnection, "read", async (db) => {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) throw new Error("Doc read deadline passed");
+			await sql`select set_config('transaction_timeout', ${String(remaining)}, true)`.execute(
+				db,
+			);
+			return toolResult(await run(db));
+		}).catch(() => {
+			state.failed = true;
+			throw new Error("A Doc read failed");
+		});
+	}
+
+	const find = z.strictObject({
+		query: text,
+		kind: z.enum(["all", "deal", "lead", "client"]),
+	});
+	server.registerTool(
+		"find",
+		{ description: "Find records by name or ID.", inputSchema: find },
+		({ query, kind }) =>
+			read(async (db) => {
+				const matches = await findDocRecords(db, query, kind);
+				const name = (label: string) => label.trim().toLowerCase();
+				const exact = matches.filter(
+					({ label }) => name(label) === name(query),
+				);
+				const choices = exact.length ? exact : matches;
+				if (
+					choices.length > 1 &&
+					new Set(choices.map(({ label }) => name(label))).size === 1
+				) {
+					state.choices = choices.map(({ city, ...record }) => ({
+						...record,
+						label: city ? `${record.label} (${city})` : record.label,
+					}));
+					return validateDocAnswer(null, state);
+				}
+				return matches.map(({ city, ...record }) => {
+					const source = `${record.ref.kind}:${record.ref.id}`;
+					state.sources[source] = record;
+					return { ...record, city, source };
+				});
+			}),
+	);
+	server.registerTool(
+		"read",
+		{
+			description: "Read a source returned by find.",
+			inputSchema: z.strictObject({ source }),
+		},
+		({ source }) =>
+			read(async (db) => {
+				const record = sourceFor(state, source);
+				const facts = record ? await readDocRecord(db, record, partner) : null;
+				if (!facts) delete state.sources[source];
+				return facts;
+			}),
+	);
+	server.registerTool(
+		"propose_save",
+		{
+			description: "Propose a note or next step for partner confirmation.",
+			inputSchema: proposal.omit({ target: true }).required({ source: true }),
+		},
+		(args) => toolResult(propose(args, state)),
+	);
+	server.registerTool(
+		"validate_answer",
+		{
+			description: "Check an answer against this turn's sources.",
+			inputSchema: answer,
+		},
+		(args) => toolResult(validateDocAnswer(args, state)),
+	);
+}

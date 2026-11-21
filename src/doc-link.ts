@@ -58,7 +58,11 @@ export async function revokeDocLink(tx: Transaction<DB>, owner: string) {
 	await tx.deleteFrom("doc_link").where("owner_user_id", "=", owner).execute();
 }
 
-export function authenticateDocLink(connection: string, credential: string) {
+export function withDocLink<T>(
+	connection: string,
+	credential: string,
+	handleClaim?: (tx: Transaction<DB>, owner: string) => Promise<T>,
+) {
 	const hash = credentialHash(credential);
 	return nextTransaction(connection, "save", async (tx) => {
 		await sql`select set_config('engine.doc_link_hash', ${hash}, true)`.execute(
@@ -69,7 +73,7 @@ export function authenticateDocLink(connection: string, credential: string) {
 			.select("owner_user_id")
 			.where("credential_hash", "=", hash)
 			.executeTakeFirst();
-		if (!link) return false;
+		if (!link) return null;
 
 		const owner = link.owner_user_id;
 		await stampOwner(tx, owner);
@@ -87,7 +91,9 @@ export function authenticateDocLink(connection: string, credential: string) {
 				Buffer.from(hash, "hex"),
 			)
 		)
-			return false;
+			return null;
+
+		if (handleClaim) return handleClaim(tx, owner);
 
 		await tx
 			.updateTable("doc_link")
