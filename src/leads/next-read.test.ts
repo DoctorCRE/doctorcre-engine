@@ -8,7 +8,7 @@ const { db, setup, cleanup, request, readerUrl } = doorTest();
 const [legacyId, aliasId] = [randomUUID(), randomUUID()].sort();
 const registryRef = "L-EXAMPLE";
 const leadNotes =
-	"[Web sweep 7/25 · finder conf LOW · verify: UNVERIFIED (present anyway, flag)] Planning a dental relocation.\n\n[Finder conf LOW] Needs two treatment rooms.";
+	"[Web sweep 7/25 · finder conf LOW · verify: UNVERIFIED (present anyway, flag)] Planning a dental relocation.\n\n[Finder conf LOW] Needs two treatment rooms.\n[Verify: confirm the lease permits dental use]\n[Web sweep checklist](https://example.test/checklist)";
 const note = randomUUID();
 const [partner, copied, fresh, converted, oldOwner, mail, call, meeting, move] =
 	Array.from({ length: 9 }, () => randomUUID());
@@ -194,7 +194,7 @@ test("the drawer returns readable plans and research without generic handling ad
 	assert.equal(opened.notes, leadNotes);
 	assert.equal(
 		opened.plans,
-		"Planning a dental relocation.\n\nNeeds two treatment rooms.",
+		"Planning a dental relocation.\n\nNeeds two treatment rooms.\n[Verify: confirm the lease permits dental use]\n[Web sweep checklist](https://example.test/checklist)",
 	);
 	assert.equal(opened.handling_advice, null);
 	assert.equal(

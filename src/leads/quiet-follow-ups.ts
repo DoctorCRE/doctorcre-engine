@@ -12,6 +12,7 @@ type Proposal = {
 	owner_id: string | null;
 	anchor_on: string;
 	basis: "created_at" | "last_contact";
+	last_contact_on: string | null;
 	next_action_date: string | null;
 	client_id: string | null;
 	interval_days: number;
@@ -56,7 +57,9 @@ const proposals = (db: Reader, cadence: Cadence, ownerSlug: string | null) =>
 		left join v_last_touch t on t.subject_type = 'vendor' and t.subject_id = v.id
 		where v.merged_into is null and v.disposition = 'active' and ${liveContactable}
 	), anchored as (
-		select s.*, coalesce(touched_on, carr_business_date(created_at)) as anchor_on
+		select s.*, coalesce(touched_on, carr_business_date(created_at)) as anchor_on,
+			case when subject_type = 'lead' and touched_on = carr_business_date(created_at)
+				then activity_on else touched_on end as last_contact_on
 		from subjects s
 		where not exists (select 1 from next_action n where n.status = 'open'
 			and ((n.subject_type = s.subject_type and n.subject_id = s.subject_id)
@@ -67,10 +70,8 @@ const proposals = (db: Reader, cadence: Cadence, ownerSlug: string | null) =>
 	)
 	select d.subject_type, d.subject_id, d.party_id, d.ref, d.name, d.owner_id,
 		to_char(d.anchor_on, 'YYYY-MM-DD') as anchor_on,
-		case when d.touched_on is null or (
-			d.subject_type = 'lead' and d.touched_on = carr_business_date(d.created_at)
-			and d.activity_on is distinct from d.touched_on
-		) then 'created_at' else 'last_contact' end as basis,
+		case when d.last_contact_on = d.anchor_on then 'last_contact' else 'created_at' end as basis,
+		to_char(d.last_contact_on, 'YYYY-MM-DD') as last_contact_on,
 		d.next_action_date, d.client_id, d.interval_days,
 		to_char(d.due_on, 'YYYY-MM-DD') as due_on, a.slug as owner,
 		carr_business_date() - d.due_on as days_overdue

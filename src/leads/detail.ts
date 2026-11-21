@@ -283,7 +283,7 @@ export async function readNextLeadDetail(
 			...detail,
 			plans: (detail.notes ?? "")
 				.replace(
-					/^[ \t]*(?:\[(?:web sweep\b|finder conf\b|verify:)[^\]\r\n]*\][ \t]*)+/gim,
+					/^[ \t]*(?:\[(?:web sweep \d{1,2}\/\d{1,2} · finder conf (?:LOW|MEDIUM|HIGH) · verify: UNVERIFIED(?: \([^)\r\n]*\))?|finder conf (?:LOW|MEDIUM|HIGH))\](?=[ \t]|\r?$)[ \t]*)+/gim,
 					"",
 				)
 				.trim(),
