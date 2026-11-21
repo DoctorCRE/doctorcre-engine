@@ -279,13 +279,20 @@ export async function readProposal(
 		.executeTakeFirst();
 	if (!proposal) return new Refusal(404, "not_found");
 	const { email_source_id, filing_scope, ...detail } = proposal;
-	return email_source_id
-		? {
-				...detail,
-				...(filing_scope && { filing_choices: filingChoices(filing_scope) }),
-				thread: await readHomeEmailThread(db, userId, email_source_id),
-			}
-		: detail;
+	if (!email_source_id) return detail;
+	const { thread, sourceActivity, sourceSummary } = await readHomeEmailThread(
+		db,
+		userId,
+		email_source_id,
+	);
+	return {
+		...detail,
+		...(filing_scope && { filing_choices: filingChoices(filing_scope) }),
+		source_activity: sourceActivity
+			? { ...sourceActivity, summary: sourceSummary }
+			: detail.source_activity,
+		thread,
+	};
 }
 
 function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
