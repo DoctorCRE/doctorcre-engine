@@ -7,7 +7,14 @@ import {
 	senderLabel,
 	sourceInMailbox,
 } from "./home-email-thread.ts";
-import { homeDate, homeDisplayText, homeTitle, homeWhy } from "./home-steps.ts";
+import {
+	homeActionTitle,
+	homeDate,
+	homeDisplayText,
+	homeStepText,
+	homeTitle,
+	homeWhy,
+} from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {
@@ -503,40 +510,23 @@ function conversationReviewText(
 	kind: "Call" | "Meeting",
 ) {
 	const contact = homeDisplayText(suggestion.contact_name);
-	const context = homeDisplayText(suggestion.context_label);
-	const note = suggestion.kind === "log_call";
-	const nameTarget = note || suggestion.kind === "next_step";
-	const withContact = contact ? ` with ${contact}` : "";
-	const about =
-		nameTarget && context && context !== contact ? ` about ${context}` : "";
 	const date = suggestion.source_at ? homeDate(suggestion.source_at) : null;
-	const when = !contact && date ? ` on ${date}` : "";
-	const more = suggestion.suggestions.length - 1;
-	const remaining = more
-		? ` (+${more} more ${more === 1 ? "decision" : "decisions"})`
-		: "";
 	const proposed = homeDisplayText(suggestion.suggestion_title);
-	const review = proposed
-		? `${note ? "review call note" : "review"}: ${proposed}`
-		: "review suggestions";
 	const evidence =
 		homeDisplayText(suggestion.evidence) ||
 		homeDisplayText(suggestion.source_summary);
+	const count = suggestion.suggestions.length;
 	return {
-		title: homeTitle(
-			`${kind}${withContact}${about}${when}`,
-			`${review}${remaining}`,
-			`${kind}${withContact}${about}`,
-		),
+		title: suggestionTitle(suggestion, contact),
 		why: homeWhy(
-			date ? `${kind} on ${date}` : null,
+			date ? `${kind}${contact ? ` with ${contact}` : ""} on ${date}` : null,
 			evidence || proposed || "Source details unavailable",
 			proposed &&
 				evidence &&
-				evidence !== proposed &&
-				evidence !== `${proposed}.`
+				evidence.replace(/\.$/, "") !== proposed.replace(/\.$/, "")
 				? `Proposed: ${proposed}`
 				: null,
+			count > 1 ? `${count} decisions to review` : null,
 		),
 		primary_action: "Review suggestions",
 	};
@@ -589,31 +579,6 @@ function receivedEmail(source: string, receivedAt: string | null) {
 		: source;
 }
 
-function emailEvent(source: string, sender: string, request: string) {
-	if (!request) return source;
-	const event = request.replace(/\.$/, "");
-	return sender && event.toLowerCase().includes(sender.toLowerCase())
-		? event
-		: `${source} (${event})`;
-}
-
-function emailTitle(
-	source: string,
-	sender: string,
-	decision: string,
-	summary: string,
-	quote: string,
-) {
-	const event = quote
-		? `${source} (“${quote}”)`
-		: emailEvent(source, sender, summary);
-	return homeTitle(
-		event,
-		decision,
-		quote || event.startsWith(`${source} (`) ? source : event,
-	);
-}
-
 const emailActions = {
 	next_step: "Review follow-up",
 	file_to_deal: "Choose deal",
@@ -625,11 +590,51 @@ const emailActions = {
 	log_call: "Review call note",
 } as const;
 
+function suggestionTitle(suggestion: Suggestion, contact: string) {
+	const target = homeDisplayText(suggestion.context_label) || contact;
+	const destination = homeDisplayText(suggestion.decision_label);
+	const named = target ? ` for ${target}` : "";
+	switch (suggestion.kind) {
+		case "next_step": {
+			const fallback = homeTitle(
+				"Review the proposed follow-up",
+				`Review the proposed follow-up${named}`,
+			);
+			const { action } = homeStepText(suggestion.suggestion_title ?? "");
+			return homeActionTitle(action, target, fallback);
+		}
+		case "file_to_deal":
+		case "possible_new_deal":
+			return homeTitle(
+				"Choose the deal for this email",
+				contact && `Choose the deal for ${contact}'s email`,
+			);
+		case "phase_move":
+			return homeTitle(
+				"Review the proposed phase change",
+				target && destination && `Review moving ${target} to ${destination}`,
+			);
+		case "new_lead":
+		case "email_lead":
+			return homeTitle(
+				"Review the possible lead",
+				target && `Review adding ${target} as a lead`,
+			);
+		case "lead_stage_move":
+			return homeTitle(
+				"Review the proposed lead stage",
+				target && destination && `Review moving ${target} to ${destination}`,
+			);
+		case "log_call":
+			return homeTitle("Review the call note", `Review the call note${named}`);
+	}
+}
+
 function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const sender = homeDisplayText(suggestion.email_sender);
 	const target = homeDisplayText(suggestion.context_label);
 	const destination = homeDisplayText(suggestion.decision_label);
-	const proposed = homeDisplayText(suggestion.suggestion_title);
+	const proposed = homeStepText(suggestion.suggestion_title ?? "").savedText;
 	const evidence = suggestion.email_quote
 		? ""
 		: homeDisplayText(suggestion.evidence);
@@ -637,52 +642,19 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const request = summary || quote;
 	const source = sender ? `Email from ${sender}` : "Email";
 	const action = emailActions[suggestion.kind];
-	const forTarget = target && target !== sender ? ` for ${target}` : "";
-	const decisionText = {
-		next_step: [
-			proposed
-				? `review follow-up: ${proposed}`
-				: `review follow-up${forTarget}`,
-			proposed ? `Proposed follow-up: ${proposed}` : null,
-		],
-		file_to_deal: [
-			"choose the deal",
-			target ? `Suggested deal is ${target}` : null,
-		],
-		possible_new_deal: ["decide where to file it", null],
-		phase_move: [
-			destination && target
-				? `review move of ${target} to ${destination}`
-				: "review phase change",
-			destination ? `Proposed phase is ${destination}` : null,
-		],
-		new_lead: [
-			target ? `review adding ${target} as a lead` : "review adding a lead",
-			target ? `Proposed lead is ${target}` : null,
-		],
-		email_lead: [
-			`review possible lead${forTarget}`,
-			"Review the possible lead",
-		],
-		lead_stage_move: [
-			destination && target
-				? `review moving ${target} to ${destination}`
-				: "review lead stage",
-			destination ? `Proposed lead stage is ${destination}` : null,
-		],
-		log_call: [`review call note${forTarget}`, proposed],
-	} satisfies Record<Suggestion["kind"], [string, string | null]>;
-	const [decision, details] = decisionText[suggestion.kind];
+	const details = {
+		next_step: proposed && `Proposed follow-up: ${proposed}`,
+		file_to_deal: target && `Suggested deal is ${target}`,
+		possible_new_deal: null,
+		phase_move: destination && `Proposed phase is ${destination}`,
+		new_lead: target && `Proposed lead is ${target}`,
+		email_lead: "Review the possible lead",
+		lead_stage_move: destination && `Proposed lead stage is ${destination}`,
+		log_call: proposed,
+	}[suggestion.kind];
 	const count = suggestion.suggestions.length;
-	const context =
-		summary ||
-		(suggestion.kind === "next_step" ||
-		suggestion.email_quote ||
-		evidence.length > 60
-			? ""
-			: shortEmailExcerpt(suggestion.evidence));
 	return {
-		title: emailTitle(source, sender, decision, context, quote),
+		title: suggestionTitle(suggestion, sender),
 		why: homeWhy(
 			request || receivedEmail(source, suggestion.email_at),
 			suggestion.kind !== "next_step" && evidence !== request ? evidence : null,
@@ -739,9 +711,9 @@ function deliveryWhy(reason: string | null) {
 
 function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 	const sender = homeDisplayText(draft.email_sender);
-	const reply = sender ? `Reply to ${sender}` : "Reply";
+	const toSender = sender ? ` to ${sender}` : "";
 	const target = draft.deal_id && homeDisplayText(draft.context_label);
-	const replyWithTarget = target ? `${reply} about ${target}` : reply;
+	const about = target ? ` about ${target}` : "";
 	const source = sender ? `Email from ${sender}` : "Email";
 	const { summary, quote } = emailRequest(draft);
 	const request = summary || quote;
@@ -752,38 +724,42 @@ function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 		decisions > 1 ? `${decisions} decisions to review` : null,
 	);
 	switch (draft.status) {
-		case "pending": {
-			const event = request ? source : `${reply} is drafted`;
+		case "pending":
 			return {
-				title: emailTitle(
-					event,
-					sender,
-					`review reply${target ? ` for ${target}` : ""}`,
-					summary,
-					quote,
+				title: homeTitle(
+					"Review the reply",
+					`Review the reply${toSender}${about}`,
+					sender && `Review the reply to ${sender}`,
 				),
 				why,
 				primary_action: draft.snoozed_until ? null : "Review reply",
 			};
-		}
 		case "failed":
 			return {
 				title: homeTitle(
-					`${replyWithTarget} ${unconfirmedDelivery(draft.failure_reason) ? "has unconfirmed delivery" : "didn't send"}`,
-					"review delivery",
+					"Review reply delivery",
+					sender && `Review reply delivery to ${sender}`,
 				),
 				why: deliveryWhy(draft.failure_reason),
 				primary_action: draft.snoozed_until ? null : "Review delivery",
 			};
 		case "approved":
 			return {
-				title: homeTitle(`${replyWithTarget} is sending`),
+				title: homeTitle(
+					"Reply is sending",
+					`Reply${toSender}${about} is sending`,
+					`Reply${toSender} is sending`,
+				),
 				why,
 				primary_action: null,
 			};
 		case "sent":
 			return {
-				title: homeTitle(`${replyWithTarget} was sent`),
+				title: homeTitle(
+					"Reply was sent",
+					`Reply${toSender}${about} was sent`,
+					`Reply${toSender} was sent`,
+				),
 				why,
 				primary_action: null,
 			};

@@ -1,6 +1,7 @@
 import { sql, type Transaction } from "kysely";
 import {
 	dealStepUrl,
+	homeActionTitle,
 	homeDate,
 	homeDay,
 	homeDisplayText,
@@ -106,9 +107,13 @@ export async function readCompletionReviews(
 function completionReviewText(review: CompletionReview) {
 	const { action, savedText } = homeStepText(review.what);
 	const deal = homeDisplayText(review.deal_name);
+	const step = action.replace(/\.$/, "");
+	const check = step ? `Check whether “${step}” is done` : "";
 	const title = homeTitle(
-		`A ${review.activity_kind} mentions a step for ${deal}`,
-		action ? `check if done: ${action}` : "review completion",
+		"Check whether the step is done",
+		check && deal && `${check} (${deal})`,
+		check,
+		deal && `Check whether the step for ${deal} is done`,
 	);
 	return {
 		title,
@@ -116,7 +121,7 @@ function completionReviewText(review: CompletionReview) {
 			homeDisplayText(review.evidence) ||
 				homeDisplayText(review.summary) ||
 				`The ${review.activity_kind} was recorded on ${homeDate(review.happened_at)}`,
-			savedText !== action || !title.endsWith(action) ? savedText : null,
+			savedText !== action || !title.includes(check) ? savedText : null,
 		),
 	};
 }
@@ -175,23 +180,46 @@ function updateText(update: HomeUpdate) {
 	if (update.kind === "tour_feedback") {
 		const property = homeDisplayText(update.property_label);
 		const target = property ? `${property} for ${deal}` : deal;
-		const shortlistChange = /\b(?:added|removed)\b.*\bshortlist\b/i.test(text);
+		const notice = text.replace(/\.$/, "").toLowerCase();
+		const label = property.toLowerCase();
+		const shortlistChange =
+			property &&
+			(notice.endsWith(` added ${label} to the shortlist`)
+				? `Review the addition of ${property} to the shortlist`
+				: notice.endsWith(` removed ${label} from the shortlist`)
+					? `Review the removal of ${property} from the shortlist`
+					: "");
+		const title = shortlistChange
+			? homeTitle(
+					"Review the shortlist change",
+					shortlistChange,
+					`Review the shortlist change for ${deal}`,
+				)
+			: homeTitle(
+					"Review tour feedback",
+					`Review tour feedback on ${target}`,
+					`Review tour feedback for ${deal}`,
+				);
 		return {
-			title: shortlistChange
-				? homeTitle(text, "review the change")
-				: homeTitle(`Tour feedback on ${target}`, "review feedback"),
+			title,
 			why: homeWhy(text, `Recorded ${homeDate(update.activity_at)}`),
 			primary_action: "Review feedback",
 		};
 	}
-	if (update.due_on) {
-		const item = homeDisplayText(update.checklist_item_title) || text;
+	if (update.checklist_item_ref || update.due_on) {
+		const { action, savedText: item } = homeStepText(
+			update.checklist_item_title ?? update.title,
+		);
+		const fallback = homeTitle(
+			"Review the checklist item",
+			`Review the checklist item for ${deal}`,
+		);
 		return {
-			title: homeTitle(
-				`Checklist item due for ${deal}`,
-				item || "open the checklist item",
+			title: homeActionTitle(action, deal, fallback),
+			why: homeWhy(
+				item,
+				update.due_on ? `Due ${homeDate(update.due_on)}` : null,
 			),
-			why: homeWhy(item, `Due ${homeDate(update.due_on)}`),
 			primary_action: "Open checklist item",
 		};
 	}

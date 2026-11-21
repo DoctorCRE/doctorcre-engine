@@ -137,16 +137,16 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	const row = (i: Row) =>
 		`${i.id}|${i.title}|${i.late_label}|${i.owner}|${i.home_item_id}|${i.open_url}`;
 	assert.deepEqual(body.reminders?.late.map(row), [
-		`${id(33)}|Follow-up due for Solo Clinic — Call the office|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
-		`${id(32)}|Follow-up due for Closed Clinic — Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
-		`${id(21)}|Follow-up due for Example Dental, Springfield — Decide whether to follow up or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
-		`${id(28)}|Follow-up due for Other Clinic, Austin — Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
-		`${id(23)}|Call with Dr. Example left a follow-up — Call about the floor plan|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
+		`${id(33)}|Call the office (Solo Clinic)|6 days late|dell|null|/relationships?node=party:${id(5)}&step=${id(33)}`,
+		`${id(32)}|Review the ended deal (Closed Clinic)|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
+		`${id(21)}|Decide whether to follow up or drop (Example Dental, Springfield)|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
+		`${id(28)}|Review counter (Other Clinic, Austin)|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
+		`${id(23)}|Call about the floor plan (Dr. Example)|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
-		`${id(22)}|Follow-up due for Example Dental — Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
-		`${id(29)}|Follow-up due for Prospect Dental — Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
-		`${id(30)}|Follow-up due for 100 Example Way — open the saved step|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
+		`${id(22)}|Confirm suite size (Example Dental)|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
+		`${id(29)}|Call prospect (Prospect Dental)|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
+		`${id(30)}|Review the follow-up for 100 Example Way|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
 	assert.deepEqual(
 		body.reminders?.late.map((item) => [item.id, item.deal_ended]),
@@ -164,7 +164,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		(i) => i.item_id === `next_action:${id(30)}`,
 	);
 	assert.ok(typeof buildingCard?.title === "string");
-	assert.match(buildingCard.title, /open the saved step$/);
+	assert.equal(buildingCard.title, "Review the follow-up for 100 Example Way");
 	const ids = new Set(inbox.items.map((i) => i.item_id));
 	const { late = [], upcoming = [] } = body.reminders ?? {};
 	for (const i of [...late, ...upcoming])
@@ -194,25 +194,25 @@ for (const [example, caller, step, title] of [
 		"a copied decision prompt",
 		joe,
 		id(21),
-		"Follow-up due for Example Dental, Springfield — Decide whether to follow up or drop",
+		"Decide whether to follow up or drop (Example Dental, Springfield)",
 	],
 	[
 		"long phone instructions",
 		joe,
 		id(23),
-		"Call with Dr. Example left a follow-up — Call about the floor plan",
+		"Call about the floor plan (Dr. Example)",
 	],
 	[
 		"call instructions without a phone number",
 		{ user: "dell" },
 		id(33),
-		"Follow-up due for Solo Clinic — Call the office",
+		"Call the office (Solo Clinic)",
 	],
 	[
 		"plain step wording",
 		{ user: "dell" },
 		id(28),
-		"Follow-up due for Other Clinic, Austin — Review counter",
+		"Review counter (Other Clinic, Austin)",
 	],
 ] as const) {
 	test(`Today and the Home card share a title for ${example}`, async () => {

@@ -130,6 +130,10 @@ async function inbox(caller = user) {
 	const items = result.items.filter(isArguments);
 	for (const item of items) {
 		assert.ok(typeof item.title === "string" && item.title.length <= 90);
+		assert.doesNotMatch(
+			item.title,
+			/…|\.\.\.|^follow-up (?:set|due|completed)/i,
+		);
 		assert.equal(Object.hasOwn(item, "auto_settled"), false);
 		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
 	}
@@ -316,7 +320,7 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	);
 	assert.partialDeepStrictEqual(items.get(ordinary), {
 		item_id: `next_action:${ordinary}`,
-		title: "Follow-up due for Example Dental — Send the lease",
+		title: "Send the lease (Example Dental)",
 		primary_action: "Mark done",
 		context_label: "Example Dental",
 		due_on: "2026-11-19",
@@ -366,24 +370,22 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 
 test("A held follow-up explains the saved hold and action in plain words", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(held), {
-		title: "Follow-up on hold for Dr. Example",
+		title: "Call about the suite (Dr. Example)",
 		why: "Held until Apr 1, 2999. Call about the suite.",
 	});
 });
 
 test("A lease reminder names the deal once and gives the decision and estimated date", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(leaseReminder), {
-		title:
-			"Example Dental, Springfield lease event est. Dec 1, 2026 — decide on renewal or relocation",
-		why: "Last window before leverage is gone. Due Nov 19, 2026.",
+		title: "Review lease timing for Example Dental, Springfield",
+		why: "Estimated lease event for Example Dental, Springfield on December 1, 2026. Last window before leverage is gone. Due Nov 19, 2026.",
 	});
 });
 
 test("A lease reminder shows the estimated date and saved action when the window has passed", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(pastLeaseReminder), {
-		title:
-			"Example Dental, Springfield lease event est. Oct 1, 2026 — confirm renewal plans",
-		why: "The estimated renewal window has passed. Due Nov 19, 2026.",
+		title: "Confirm renewal plans (Example Dental, Springfield)",
+		why: "Estimated lease event for Example Dental, Springfield on October 1, 2026. The estimated renewal window has passed. Due Nov 19, 2026.",
 	});
 });
 
@@ -393,9 +395,8 @@ test("a call follow-up appears once with its call, deal and evidence", async () 
 	assert.equal(Object.hasOwn(item, "source_ref"), false);
 	assert.partialDeepStrictEqual(item, {
 		item_id: `capture_post_call_action:${followUp}`,
-		title:
-			"Call with Dr. Example left a follow-up — Call Dr. Example about the second-floor suite",
-		why: "Call on Nov 17, 2026. Please send the floor plan.",
+		title: "Call Dr. Example about the second-floor suite",
+		why: "Call with Dr. Example on Nov 17, 2026. Please send the floor plan.",
 		primary_action: "Mark done",
 		kind_label: "Call follow-up",
 		section: "inbox",
@@ -416,48 +417,53 @@ test("a call follow-up appears once with its call, deal and evidence", async () 
 
 test("a step created by a suggestion keeps the meeting source", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(proposal), {
-		title:
-			"Follow-up set for Example Renewal — Check renewal dates on Thursday, Nov 5, 2026",
+		title: "Check renewal dates on Thursday, Nov 5, 2026 (Example Renewal)",
 		why: "Follow-up set from the meeting. The meeting started at Nov 5, 2026, 7:00 PM.",
 		source_activity: { kind: "meeting", id: meeting },
 	});
 });
 
 test("Home keeps undated steps and cleans their titles without rewriting saved wording", async () => {
-	const examples = [
-		["L-223: **Call** about the suite", "Call about the suite"],
+	const examples = (
 		[
-			"Email about the report (V-ABC-012), then call.",
-			"Email about the report, then call.",
-		],
-		["T-3 months — Confirm lease timing", "Confirm lease timing"],
-		["Review the floor plan [loop #25]", "Review the floor plan"],
-		[
-			"Call (L-223, due Friday) about the suite",
-			"Call (due Friday) about the suite",
-		],
-		[
-			"Call (due Friday, C-026) about the suite",
-			"Call (due Friday) about the suite",
-		],
-		[
-			"Call (— if available) about the suite",
-			"Call (— if available) about the suite",
-		],
-		[
-			"Review the [plan](https://example.test/plan) with _the client_.",
-			"Review the plan with the client.",
-		],
-		["Draft the lease amendment", "Draft the lease amendment"],
-		[
-			"Schedule the next check-in with the office manager",
-			"Schedule the next check-in with the office manager",
-		],
-		["Schedule the next follow-up", "Schedule the next follow-up"],
-		["L-456 — Timing", "Timing"],
-		["NONE — Check in after June", "Check in after June"],
-		["C-026", ""],
-	].map(([what, title]) => ({
+			["L-223: **Call** about the suite", "Call about the suite"],
+			[
+				"Email about the report (V-ABC-012), then call.",
+				"Email about the report, then call.",
+			],
+			["T-3 months — Confirm lease timing", "Confirm lease timing"],
+			["Review the floor plan [loop #25]", "Review the floor plan"],
+			[
+				"Call (L-223, due Friday) about the suite",
+				"Call (due Friday) about the suite",
+			],
+			[
+				"Call (due Friday, C-026) about the suite",
+				"Call (due Friday) about the suite",
+			],
+			[
+				"Call (— if available) about the suite",
+				"Call (— if available) about the suite",
+			],
+			[
+				"Review the [plan](https://example.test/plan) with _the client_.",
+				"Review the plan with the client.",
+			],
+			["Draft the lease amendment", "Draft the lease amendment"],
+			[
+				"Schedule the next check-in with the office manager",
+				"Schedule the next check-in with the office manager",
+			],
+			["Schedule the next follow-up", "Schedule the next follow-up"],
+			["L-456 — Timing", "Timing"],
+			[
+				"Review follow-up: Refer a broker to Maya Reed",
+				"Refer a broker to Maya Reed",
+			],
+			["NONE — Check in after June", "Check in after June"],
+			["C-026", ""],
+		] as const
+	).map(([what, title]) => ({
 		id: randomUUID(),
 		party: randomUUID(),
 		what,
@@ -494,7 +500,9 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 			items.filter((item) => item.source_id === example.id),
 			[
 				{
-					title: `Follow-up set for Example Vendor — ${example.title || "open the saved step"}`,
+					title: example.title.includes(" ")
+						? `${example.title.replace(/\.$/, "")} (Example Vendor)`
+						: "Review the follow-up for Example Vendor",
 					why: `Follow-up set on Nov 17, 2026.${example.title ? ` ${example.title.replace(/\.$/, "")}.` : ""}`,
 					primary_action: "Mark done",
 					due_on: null,
@@ -512,6 +520,37 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 		);
 	}
 	assert.equal(Object.hasOwn(result, "unexplained_step_count"), false);
+});
+
+test("Home keeps complete titles and the full instructions when the saved action is long", async () => {
+	const concise = "Send the site plan";
+	const long =
+		"Confirm the accessibility requirements for the proposed suite with the landlord and ask for the revised drawing in writing";
+	for (const [what, title] of [
+		[`${concise}. ${long}.`, `${concise} (Example Lost Deal)`],
+		[long, "Review the follow-up for Example Lost Deal"],
+	] as const) {
+		const step = randomUUID();
+		await db.query("begin");
+		try {
+			await db.query("select set_config('engine.job', 'old_system', true)");
+			await db.query(
+				"insert into next_step (id, deal_id, owner_party_id, what) values ($1, $2, $3, $4)",
+				[step, lostDeal, other, what],
+			);
+			await db.query("commit");
+			const card = (await inbox({ user: "other-partner" })).get(step);
+			assert.ok(card);
+			assert.equal(card.title, title);
+			assert.ok(typeof card.why === "string" && card.why.includes(what));
+		} finally {
+			await db.query("rollback");
+			await db.query("begin");
+			await db.query("select set_config('engine.job', 'old_system', true)");
+			await db.query("delete from next_step where id = $1", [step]);
+			await db.query("commit");
+		}
+	}
 });
 
 test("the focused deal step names its creator and source after a later edit", async () => {

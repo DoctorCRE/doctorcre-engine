@@ -8,6 +8,8 @@ const storedDate =
 	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
 const decisionPrefix = /^(?:[A-Z][A-Z'.-]* )+DECIDE\s*:\s*/;
+const reviewPrefix = /^review(?: follow-up| call note)?\s*:\s*/i;
+const firstSentence = /(?<!\b(?:Dr|Mr|Mrs|Ms)\.)(?<=[.!?])\s+/i;
 const unknownSendDecision =
 	/^send status unknown\s*[,—–-]\s*re-touch or drop\.?$/i;
 const phoneNumber =
@@ -43,45 +45,46 @@ export function homeDisplayText(text: string | null) {
 }
 
 export function homeStepText(text: string) {
-	const savedText = homeDisplayText(text).replace(
-		/^(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)/i,
-		"",
-	);
+	const savedText = homeDisplayText(text)
+		.replace(/^(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)/i, "")
+		.replace(reviewPrefix, "");
 	const prompt = savedText.replace(decisionPrefix, "");
 	if (unknownSendDecision.test(prompt))
-		return { savedText, action: "Decide whether to follow up or drop" };
+		return { savedText: prompt, action: "Decide whether to follow up or drop" };
 	const withoutNumber = prompt.replace(phoneNumber, " ");
 	if (withoutNumber === prompt && !/^(?:please )?call\b/i.test(prompt))
-		return { savedText, action: prompt };
-	const [firstSentence = ""] = withoutNumber
+		return { savedText: prompt, action: prompt };
+	const [action = ""] = withoutNumber
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "")
-		.split(/(?<!\b(?:Dr|Mr|Mrs|Ms)\.)(?<=[.!?])\s+/i, 1);
-	return { savedText, action: firstSentence.replace(/\.$/, "") };
+		.split(firstSentence, 1);
+	return { savedText: prompt, action: action.replace(/\.$/, "") };
 }
 
-const titleLength = 90;
-
-function shorten(text: string, width: number) {
-	if (text.length <= width) return text;
-	const start = text.slice(0, width - 1);
-	const word = text[width - 1] === " " ? start : start.replace(/\s+\S*$/, "");
-	return `${(word || start).trimEnd()}…`;
-}
-
-export function homeTitle(event: string, action = "", fallbackEvent = event) {
-	if (!action) return shorten(event, titleLength);
-	const separator = " — ";
-	if (event.length + separator.length + action.length <= titleLength)
-		return event + separator + action;
-	const decision = shorten(
-		action,
-		titleLength - separator.length - Math.min(fallbackEvent.length, 35),
-	);
+export function homeTitle(fallback: string, ...candidates: string[]) {
 	return (
-		shorten(fallbackEvent, titleLength - separator.length - decision.length) +
-		separator +
-		decision
+		candidates.find(
+			(text) => text && text.length <= 90 && !/…|\.\.\./.test(text),
+		) ?? fallback
+	);
+}
+
+export function homeActionTitle(
+	action: string,
+	target: string,
+	fallback: string,
+) {
+	const [first = ""] = action.split(firstSentence, 1);
+	const withTarget = (text: string) =>
+		text && target && !text.toLowerCase().includes(target.toLowerCase())
+			? `${text.replace(/\.$/, "")} (${target})`
+			: text;
+	return homeTitle(
+		fallback,
+		withTarget(action),
+		withTarget(first),
+		action,
+		first,
 	);
 }
 
@@ -112,71 +115,65 @@ const leaseAction =
 export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 	const { action, savedText } = homeStepText(step.title);
 	const target = homeDisplayText(step.context_label);
-	const forTarget = target ? ` for ${target}` : "";
+	const contact = homeDisplayText(step.call_contact);
 	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
-	if (step.status === "open" && step.hold_until) {
-		return {
-			title: homeTitle(`Follow-up on hold${forTarget}`),
-			why: homeWhy(`Held until ${homeDate(step.hold_until)}`, savedText),
-		};
-	}
+	const hold =
+		step.status === "open" && step.hold_until
+			? `Held until ${homeDate(step.hold_until)}`
+			: null;
 	const [, name, date, details = ""] = savedText.match(leaseEvent) ?? [];
 	if (step.status === "open" && name && date) {
 		const label = target || name;
-		const dateLabel = date.replace(/^(\w{3})\w*/, "$1");
-		const event = `${label} lease event est. ${dateLabel}`;
-		const sentences = details.split(/(?<=[.!?])\s+/);
+		const sentences = details.split(firstSentence);
 		const savedAction = sentences.find((sentence) =>
 			leaseAction.test(sentence),
 		);
-		const cleanedAction = homeStepText(savedAction ?? "").action;
-		const decision =
-			cleanedAction
-				.replace(/^./, (first) => first.toLowerCase())
-				.replace(/\.$/, "") || "decide on renewal or relocation";
-		const title = homeTitle(
-			event,
-			decision,
-			`Lease event est. ${dateLabel} for ${label}`,
+		const fallback = homeTitle(
+			"Review lease timing",
+			`Review lease timing for ${label}`,
+		);
+		const title = homeActionTitle(
+			homeStepText(savedAction ?? "").action,
+			label,
+			fallback,
 		);
 		return {
 			title,
 			why: homeWhy(
-				title.startsWith(event) ? null : event,
+				`Estimated lease event for ${label} on ${date}`,
 				...sentences.filter(
 					(sentence) =>
-						sentence !== savedAction ||
-						cleanedAction !== savedAction ||
-						!title.endsWith(decision),
+						sentence && !title.startsWith(sentence.replace(/\.$/, "")),
 				),
+				hold,
 				due,
 			),
 		};
 	}
+	const about = contact || target;
+	const fallback = about
+		? homeTitle("Review the follow-up", `Review the follow-up for ${about}`)
+		: "Review the follow-up";
+	const title = homeActionTitle(
+		action.includes(" ") ? action : "",
+		about,
+		fallback,
+	);
+	const hiddenWording = savedText !== action || !title.startsWith(action);
 	if (step.call_at) {
-		const contact = homeDisplayText(step.call_contact);
-		const date = homeDate(step.call_at);
-		const call = contact
-			? `Call with ${contact}`
-			: `Call${forTarget} on ${date}`;
-		const title = homeTitle(
-			`${call} left a follow-up`,
-			action || "open the saved step",
-		);
 		return {
 			title,
 			why: homeWhy(
-				`Call on ${date}`,
+				`Call${contact ? ` with ${contact}` : ""} on ${homeDate(step.call_at)}`,
 				homeDisplayText(evidence?.call_quote ?? null) ||
 					homeDisplayText(evidence?.call_summary ?? null) ||
 					"Call details unavailable",
-				savedText !== action || title.endsWith("…") ? savedText : null,
+				hiddenWording ? savedText : null,
+				hold,
 				due,
 			),
 		};
 	}
-	const event = `${step.status === "done" ? "Follow-up completed" : due ? "Follow-up due" : "Follow-up set"}${forTarget}`;
-	const title = homeTitle(event, action || "open the saved step");
 	if (!evidence) return { title, why: "" };
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
@@ -187,12 +184,10 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 	return {
 		title,
 		why: homeWhy(
-			set,
+			hold || set,
 			homeDisplayText(evidence.source_evidence),
 			due,
-			savedText !== action ||
-				!title.endsWith(action) ||
-				(!evidence.source_kind && !setter && !due)
+			hiddenWording || hold || (!evidence.source_kind && !setter && !due)
 				? savedText
 				: null,
 		),

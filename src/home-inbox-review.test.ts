@@ -62,6 +62,8 @@ before(async () => {
 			select id, id, 'sha256:' || repeat('a', 64), 'example.v1', 'available', summary, '{}', '2026-01-06'
 			from (values ('${id(10)}'::uuid, 'Sam Example requested the **floor plan** (C-123) before the tour.'),
 				('${id(11)}'::uuid, 'Pat Example asked for tour times at Cedar Suite.')) summaries(id, summary);
+		insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, provenance, recorded_at)
+			values ('${id(12)}', '${id(12)}', 'sha256:' || repeat('a', 64), 'example.v1', 'unavailable', '{}', '2026-01-06');
 		insert into email_mailbox (activity_id, user_id) values
 			('${id(10)}', '${partner}'), ('${id(11)}', '${partner}'), ('${id(11)}', '${other}'),
 			('${id(12)}', '${partner}'), ('${id(12)}', '${other}'), ('${id(14)}', '${other}');
@@ -133,6 +135,10 @@ async function inbox(user = "example") {
 	const items = result.items.filter(isArguments);
 	for (const item of items) {
 		assert.ok(typeof item.title === "string" && item.title.length <= 90);
+		assert.doesNotMatch(
+			item.title,
+			/…|\.\.\.|^email from|\breview(?: follow-up| call note)?:/i,
+		);
 		assert.equal(Object.hasOwn(item, "auto_settled"), false);
 		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
 	}
@@ -247,8 +253,7 @@ test("Home shows only its partner's active drafts and one per known conversation
 		{
 			item_id: `reply_draft:${id(21)}`,
 			source_version: "1",
-			title:
-				"Pat Example asked for tour times at Cedar Suite — review reply for Example Dental",
+			title: "Review the reply to Pat Example about Example Dental",
 			why: "Pat Example asked for tour times at Cedar Suite.",
 			primary_action: "Review reply",
 			open_url: `/deals?deal=${deal}`,
@@ -281,7 +286,7 @@ test("Home explains a failed reply without changing its recorded delivery code",
 		(await inbox()).find((card) => card.reply_draft_id === id(26)),
 		{
 			source_state: "failed",
-			title: "Reply to shared@example.test didn't send — review delivery",
+			title: "Review reply delivery to shared@example.test",
 			why: "An attachment could not be found.",
 			primary_action: "Review delivery",
 			failure_reason: "attachment_missing",
@@ -483,9 +488,8 @@ test("Home groups pending suggestions from each email conversation or call and k
 		{
 			source_type: "capture_session",
 			kind_label: "Call",
-			title:
-				"Call with Known Contact about Example Dental — review: Send a budget (+1 more decision)",
-			why: "Call on Jan 2, 2026. Send a budget.",
+			title: "Send a budget (Example Dental)",
+			why: "Call with Known Contact on Jan 2, 2026. Send a budget. 2 decisions to review.",
 			primary_action: "Review suggestions",
 			merged_source_ids: [id(34), id(33)],
 			open_url: `/calls?session=${call}`,
@@ -509,8 +513,7 @@ test("Home names the deal and proposed phase even when the meeting proposal has 
 	assert.partialDeepStrictEqual(
 		(await inbox("other")).find((card) => card.proposal_id === proposal),
 		{
-			title:
-				"Meeting on Jan 3, 2026 — review: Move Example Dental to Negotiating",
+			title: "Review moving Example Dental to Negotiating",
 			why: "Meeting on Jan 3, 2026. We received the LOI. Proposed: Move Example Dental to Negotiating.",
 			primary_action: "Review suggestions",
 			open_url: `/deals?deal=${deal}`,
@@ -552,8 +555,7 @@ for (const decision of ["accept", "dismiss"]) {
 		assert.partialDeepStrictEqual(await findCards(), [
 			{
 				item_id: `suggestion:${proposalId}`,
-				title:
-					"Email from New Example (Asked about leasing a suite) — review possible lead",
+				title: "Review adding New Example as a lead",
 				source_type: "email_proposal",
 				section: "inbox",
 				source_activity: null,
@@ -777,8 +779,7 @@ for (const match of [
 			);
 			assert.equal(cards.length, match === "other_mailbox" ? 1 : 2);
 			assert.partialDeepStrictEqual(standalone, {
-				title:
-					"Email from New Sender (Asked about leasing a suite) — review possible lead",
+				title: "Review adding New Sender as a lead",
 				source_activity: null,
 				suggestions: [
 					{ id: lead.proposal_id, kind: "email_lead", activity_id: null },
@@ -833,8 +834,7 @@ for (const match of [
 				assert.partialDeepStrictEqual(await relevantCards(), [
 					{
 						proposal_id: lead.proposal_id,
-						title:
-							"Email from New Sender (Asked about leasing a suite) — review possible lead",
+						title: "Review adding New Sender as a lead",
 						why: "Email from New Sender received on Jan 8, 2026. Asked about leasing a suite. Review the possible lead.",
 						source_activity: null,
 					},
@@ -909,8 +909,7 @@ test("Home shows one pending call log with the proposal to decide", async () => 
 	assert.partialDeepStrictEqual(cards, [
 		{
 			item_id: `suggestion:${proposal.proposal_id}`,
-			title:
-				"Call about Example Dental — review call note: Agreed to review the example plan.",
+			title: "Review the call note for Example Dental",
 			why: "Call on Jan 6, 2026. Let's review the example plan. Proposed: Agreed to review the example plan.",
 			primary_action: "Review suggestions",
 			proposal_id: proposal.proposal_id,
@@ -1000,7 +999,7 @@ test("Home uses recorded sender names and matches an unambiguous address", async
 		(card) => card.proposal_id === id(38),
 	);
 	assert.partialDeepStrictEqual(filing, {
-		title: "Pat Example asked for tour times at Cedar Suite — choose the deal",
+		title: "Choose the deal for Pat Example's email",
 		why: "Pat Example asked for tour times at Cedar Suite. Please file this. Suggested deal is Example Orthodontics.",
 		primary_action: "Choose deal",
 	});
@@ -1011,7 +1010,7 @@ test("Home uses the shortest saved request before signatures and quoted headers"
 		(card) => card.reply_draft_id === id(22),
 	);
 	assert.partialDeepStrictEqual(draft, {
-		title: "Email from Known Contact (“Please send the plan.”) — review reply",
+		title: "Review the reply to Known Contact",
 		why: "Please send the plan.",
 		primary_action: "Review reply",
 	});
@@ -1021,7 +1020,7 @@ test("Home omits callback numbers from titles built from saved proposal evidence
 	const card = (await inbox("evidence-reviewer")).find(
 		(card) => card.proposal_id === filingWithPhone,
 	);
-	assert.equal(card?.title, "Email from Pat Example — choose the deal");
+	assert.equal(card?.title, "Choose the deal for Pat Example's email");
 });
 
 test("Home keeps a confirmed tour date from the saved excerpt without a summary", async () => {
@@ -1029,16 +1028,15 @@ test("Home keeps a confirmed tour date from the saved excerpt without a summary"
 		(card) => card.reply_draft_id === tourReply,
 	);
 	assert.partialDeepStrictEqual(card, {
-		title:
-			"Email from Known Contact (“November 8 works for the tour.”) — review reply",
+		title: "Review the reply to Known Contact",
 		why: "November 8 works for the tour.",
 	});
 });
 
-test("Home explains an email follow-up with its sender, Central date and pending decision", async () => {
+test("Home uses the saved follow-up when the email summary is unavailable", async () => {
 	const step = (await inbox()).find((card) => card.proposal_id === id(32));
 	assert.partialDeepStrictEqual(step, {
-		title: "Email from Known Contact — review follow-up: Check the drawing",
+		title: "Check the drawing (Example Dental)",
 		why: "Email from Known Contact received on Jan 3, 2026. Proposed follow-up: Check the drawing.",
 		primary_action: "Review follow-up",
 	});
@@ -1058,8 +1056,7 @@ test("Home names the proposed phase, lead and lead stage for email decisions", a
 		assert.partialDeepStrictEqual(
 			cards.find((card) => card.proposal_id === id(63)),
 			{
-				title:
-					"Email from Pat Example (The LOI arrived) — review move of Example Dental to Negotiating",
+				title: "Review moving Example Dental to Negotiating",
 				why: "Email from Pat Example received on Jan 4, 2026. The LOI arrived. Proposed phase is Negotiating.",
 				primary_action: "Review phase change",
 			},
@@ -1067,16 +1064,14 @@ test("Home names the proposed phase, lead and lead stage for email decisions", a
 		assert.partialDeepStrictEqual(
 			cards.find((card) => card.proposal_id === id(64)),
 			{
-				title:
-					"Email from shared@example.test — review adding Known Contact as a lead",
+				title: "Review adding Known Contact as a lead",
 				primary_action: "Review lead",
 			},
 		);
 		assert.partialDeepStrictEqual(
 			cards.find((card) => card.proposal_id === id(65)),
 			{
-				title:
-					"Email from Pat Example — review moving Example Partner to Qualified",
+				title: "Review moving Example Partner to Qualified",
 				why: "Email from Pat Example received on Jan 6, 2026. Confirmed their plans. Proposed lead stage is Qualified.",
 				primary_action: "Review lead stage",
 			},
@@ -1351,8 +1346,7 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	});
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `reply_draft:${draft}`,
-		title:
-			"Pat Example asked for tour times at Cedar Suite — review reply for Example Dental",
+		title: "Review the reply to Pat Example about Example Dental",
 		why: "Pat Example asked for tour times at Cedar Suite.",
 		primary_action: "Review reply",
 		due_on: "2026-01-09",
@@ -1371,8 +1365,7 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	assert.partialDeepStrictEqual(await unkeyed(), {
 		item_id: `suggestion:${id(62)}`,
 		kind_label: "Suggestion",
-		title:
-			"Email from Pat Example (Review the other suite) — decide where to file it",
+		title: "Choose the deal for Pat Example's email",
 		primary_action: "Choose deal",
 	});
 	const setDraft = (job: string, change: string) =>
@@ -1389,8 +1382,7 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	assert.equal(afterCard?.card_id, beforeCard.card_id);
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `suggestion:${id(60)}`,
-		title:
-			"Sam Example requested the floor plan before the tour — review follow-up: Send the plan",
+		title: "Send the plan (Example Dental)",
 		why: "Sam Example requested the floor plan before the tour. Proposed follow-up: Send the plan. 3 decisions to review.",
 		primary_action: "Review follow-up",
 		due_on: "2026-01-09",
@@ -1434,6 +1426,20 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 			.map((card) => card.item_id),
 		[`reply_draft:${draft}`],
 	);
+
+	const [dismissed] = await save(user, `proposals/${id(60)}/decision`, {
+		idempotency_key: randomUUID(),
+		decision: "dismiss",
+	});
+	assert.equal(dismissed, 200);
+	const filing = (await dashboard(user.user)).reminders.find(
+		(card) => card.card_id === beforeCard.card_id,
+	);
+	assert.partialDeepStrictEqual(filing, {
+		title: "Choose the deal for Pat Example's email",
+		why: "Pat Example asked for tour times at Cedar Suite. Review the suite. 2 decisions to review.",
+		primary_action: "Choose deal",
+	});
 });
 
 test("Mail priorities keeps two emails without conversation IDs in separate groups", async () => {
