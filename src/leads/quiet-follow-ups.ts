@@ -38,7 +38,7 @@ const proposals = (db: Reader, cadence: Cadence, ownerSlug: string | null) =>
 	sql<Proposal>`with subjects as (
 		select 'lead'::text as subject_type, l.id as subject_id, l.party_id,
 			l.registry_ref as ref, p.name, l.owner_id,
-			greatest(l.last_touch, t.last_touch) as touched_on, l.created_at,
+			greatest(l.last_touch, t.last_touch) as touched_on, l.created_at, t.last_touch as activity_on,
 			l.next_action_date, c.id as client_id, ${cadence.lead_days}::int as interval_days
 		from lead l
 		join party p on p.id = l.party_id
@@ -49,7 +49,7 @@ const proposals = (db: Reader, cadence: Cadence, ownerSlug: string | null) =>
 				or (c.merged_into is null and coalesce(c.status, '') not in ('cold', 'paused')))
 		union all
 		select 'vendor', v.id, v.party_id, v.vendor_ref, p.name, v.owner_id,
-			greatest(v.last_touch, t.last_touch), v.created_at,
+			greatest(v.last_touch, t.last_touch), v.created_at, t.last_touch,
 			null, null, ${cadence.vendor_days}::int
 		from vendor v
 		join party p on p.id = v.party_id
@@ -67,7 +67,10 @@ const proposals = (db: Reader, cadence: Cadence, ownerSlug: string | null) =>
 	)
 	select d.subject_type, d.subject_id, d.party_id, d.ref, d.name, d.owner_id,
 		to_char(d.anchor_on, 'YYYY-MM-DD') as anchor_on,
-		case when d.touched_on is null then 'created_at' else 'last_contact' end as basis,
+		case when d.touched_on is null or (
+			d.subject_type = 'lead' and d.touched_on = carr_business_date(d.created_at)
+			and d.activity_on is distinct from d.touched_on
+		) then 'created_at' else 'last_contact' end as basis,
 		d.next_action_date, d.client_id, d.interval_days,
 		to_char(d.due_on, 'YYYY-MM-DD') as due_on, a.slug as owner,
 		carr_business_date() - d.due_on as days_overdue
