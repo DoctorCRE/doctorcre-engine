@@ -19,6 +19,7 @@ const templates = {
 		target ? `Follow up on ${target}` : "Review the follow-up",
 	call_follow_up: (contact) =>
 		contact ? `Follow up with ${contact}` : "Review the call follow-up",
+	vendor_check_in: (vendor) => `Check in with ${vendor || "the vendor"}`,
 	next_step: (target) => forTarget("Review the proposed follow-up", target),
 	file_to_deal: chooseDeal,
 	possible_new_deal: chooseDeal,

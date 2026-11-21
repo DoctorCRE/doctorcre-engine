@@ -14,6 +14,9 @@ const storedDate =
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
 const phoneNumber =
 	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
+const meetingSuffix =
+	/\s*\|\s*[^|]+, (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\p{L}*,? \p{L}{3,9} \d{1,2}(?:,? \d{4},?)? \d{1,2}:\d{2}\s*[AP]M\.?$/iu;
+const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
 
 export function homeDisplayText(text: string | null) {
 	return (text ?? "")
@@ -77,15 +80,19 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
 	const wording = savedText
+		.replace(meetingSuffix, "")
 		.replace(phoneNumber, " ")
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "");
-	const title =
-		savedHomeTitle(wording) ||
-		(contact
-			? homeTitle("call_follow_up", contact)
-			: homeTitle("follow_up", target));
-	const hiddenWording = savedText !== title;
+	const cadence = vendorCadence.exec(savedText)?.[1];
+	const title = cadence
+		? homeTitle("vendor_check_in", target)
+		: savedHomeTitle(wording) ||
+			(contact
+				? homeTitle("call_follow_up", contact)
+				: homeTitle("follow_up", target));
+	const details = cadence ?? savedText;
+	const hiddenWording = details !== title ? details : null;
 	if (step.call_at) {
 		return {
 			title,
@@ -94,14 +101,13 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 				homeDisplayText(evidence?.call_quote ?? null) ||
 					homeDisplayText(evidence?.call_summary ?? null) ||
 					"Call details unavailable",
-				hiddenWording ? savedText : null,
+				hiddenWording,
 				hold,
 				due,
 			),
 		};
 	}
-	if (!evidence)
-		return { title, why: homeWhy(hiddenWording ? savedText : null) };
+	if (!evidence) return { title, why: homeWhy(hiddenWording) };
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
 		? `Follow-up set from the ${evidence.source_kind}`
@@ -114,9 +120,9 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			hold || set,
 			homeDisplayText(evidence.source_evidence),
 			due,
-			hiddenWording || hold || (!evidence.source_kind && !setter && !due)
-				? savedText
-				: null,
+			hold || (!evidence.source_kind && !setter && !due)
+				? details
+				: hiddenWording,
 		),
 	};
 }
@@ -156,8 +162,14 @@ export function stepTargetFields(db: Transaction<DB>) {
 			having count(*) = 1
 		) end as building_deal_id,
 		coalesce(d.name, p.name, property.name, property.address) as context_label,
-		exists (select from party_role r where r.party_id = s.party_id and r.role = 'lead') as lead_target,
-		exists (select from party_role r where r.party_id = s.party_id and r.role = 'vendor') as vendor_target,
+		(select r.role from party_role r
+			where r.role in ('lead', 'vendor') and r.party_id in (
+				select s.party_id
+				union all
+				select pc.company_id from party_company pc
+				where pc.person_id = s.party_id and pc.ended_on is null
+			)
+			order by (r.role = 'lead') desc limit 1) as follow_up_role,
 		exists (select from party_role r where r.party_id = s.party_id
 			and r.role = 'lead' and r.stage = 'opportunity'
 			and not exists (select from deal_party dp where dp.party_id = r.party_id)) as prospect
@@ -188,19 +200,16 @@ export type HomeStepTarget = {
 	deal_id: string | null;
 	building_deal_id: string | null;
 	property_id: string | null;
-	lead_target: boolean;
-	vendor_target: boolean;
+	follow_up_role: "lead" | "vendor" | null;
 };
 
 export function homeStepTarget(step: HomeStepTarget) {
 	if (step.deal_id || step.building_deal_id) return "deal";
-	if (step.lead_target) return "lead";
-	if (step.vendor_target) return "vendor";
+	if (step.follow_up_role) return step.follow_up_role;
 	if (step.property_id) return "building";
 	return "other";
 }
 
-// Lead steps live on Leads, so Home and Calendar show only these.
 export const homeStepShown = (step: HomeStepTarget) =>
 	["deal", "vendor", "building"].includes(homeStepTarget(step));
 
