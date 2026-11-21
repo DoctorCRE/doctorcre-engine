@@ -51,17 +51,21 @@ for (const opening of [
 	});
 }
 
-test("a Markdown link keeps its destination in the instruction", () => {
-	const url = "https://example.test/C-026/2026-11-27?rev=2";
-	assert.deepEqual(
-		stepCopy({
-			what: `Read [the plan](${url}) before replying`,
-			item_title: "Review the plan",
-			context_label: "Example Deal",
-		}),
-		{
-			title: "Review the plan",
-			instruction: `Read the plan (${url}) before replying`,
-		},
-	);
-});
+for (const url of [
+	"https://example.test/C-026/2026-11-27?rev=2",
+	"https://example.test/plan(revised)/C-026/2026-11-27?rev=2",
+]) {
+	test(`a Markdown link keeps its full destination ${url}`, () => {
+		assert.deepEqual(
+			stepCopy({
+				what: `Read [the plan](${url}) before replying`,
+				item_title: "Review the plan",
+				context_label: "Example Deal",
+			}),
+			{
+				title: "Review the plan",
+				instruction: `Read the plan (${url}) before replying`,
+			},
+		);
+	});
+}

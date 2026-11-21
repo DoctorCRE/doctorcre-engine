@@ -8,7 +8,7 @@ const stepMetadata =
 const storedDate =
 	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
-const markdownLink = /\[([^\]]+)\]\(([^\s)]+)\)/g;
+const markdownLink = /\[([^\]]+)\]\(((?:[^\s()]|\([^\s()]*\))+)\)/g;
 const url = /https?:\/\/\S+/gi;
 const urlOrMarkdownLink = new RegExp(
 	`${url.source}|${markdownLink.source}`,
