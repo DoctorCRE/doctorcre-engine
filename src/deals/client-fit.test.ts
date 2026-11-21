@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { isArguments } from "../save-door.ts";
 import { copyTest, readSchema } from "../test-copy.ts";
 import worker from "../worker.ts";
 
@@ -88,12 +89,12 @@ before(async () => {
 });
 after(cleanup);
 
-const get = (query = "") =>
+const get = (query = "", url = connectionString) =>
 	worker.request(
 		`https://app.example.test/api/engine/client-fit${query}`,
 		{ headers: { Cookie: "__Host-dealroom_session=made-up-session" } },
 		{
-			DATABASE: { connectionString },
+			DATABASE: { connectionString: url },
 			CARR: {
 				fetch: async () =>
 					Response.json({
@@ -173,4 +174,50 @@ test("Client Fit keeps its exact filters, counts and source link fields", async 
 	assert.equal(response.headers.get("Cache-Control"), "no-store");
 	assert.deepEqual(await response.json(), fit([newWin]));
 	assert.deepEqual(await (await get(`${path}mo`)).json(), fit([]));
+});
+
+test("Client Fit returns 1,000 groups and refuses 1,001", async (t) => {
+	const limit = copyTest();
+	await limit.setup();
+	t.after(limit.cleanup);
+	await limit.db.query(`
+		begin; set local engine.job = 'old_system';
+		insert into how_found (slug, label) values ('referral', 'Referral');
+		insert into party (id, kind, name, how_found) values
+			('${id(1)}', 'person', 'Example Partner', null), ('${id(2)}', 'company', 'Example Client', 'referral');
+		insert into app_user (id, slug) values ('${id(1)}', 'fit-partner');
+		insert into role (slug, label) values ('client', 'Client');
+		insert into party_role (party_id, role) values ('${id(2)}', 'client');
+		insert into client (party_id) values ('${id(2)}');
+		insert into phase (slug, label) values ('closed', 'Closed');
+		commit;
+	`);
+	const addWins = (first: number, last: number) =>
+		limit.db.query(`
+		begin; set local engine.job = 'old_system';
+		with markets as (
+			insert into market (name)
+			select 'Example Limit Market ' || n from generate_series(${first}, ${last}) n
+			returning id, name
+		)
+		insert into deal (name, market_id, owner_user_id)
+		select name, id, '${id(1)}' from markets;
+		insert into deal_party (deal_id, party_id, role)
+		select id, '${id(2)}', 'client' from deal on conflict do nothing;
+		insert into deal_phase_change (deal_id, happened_at, phase)
+		select id, '2025-11-22 02:00Z', 'closed' from deal on conflict do nothing;
+		commit;
+	`);
+	await addWins(1, 1000);
+	const atLimit = await get("", limit.connectionString);
+	assert.equal(atLimit.status, 200);
+	const body = await atLimit.json();
+	assert.ok(isArguments(body) && Array.isArray(body.profiles));
+	assert.equal(body.profiles.length, 1000);
+	await addWins(1001, 1001);
+	const overLimit = await get("", limit.connectionString);
+	assert.equal(overLimit.status, 422);
+	assert.partialDeepStrictEqual(await overLimit.json(), {
+		error: "unhandled_verb_failure",
+	});
 });

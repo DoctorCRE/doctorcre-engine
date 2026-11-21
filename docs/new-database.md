@@ -1456,7 +1456,7 @@ Aggregate counts from production on 2026-11-17. The file-to-deal, possible-new-d
 
 ## Client Fit
 
-Charts counts wins in the closed phase with a recorded close date through today. It uses the Deals board's phase, close date, client, deal type and market. The vertical comes from `client_vertical.vertical` or the client's recorded specialty labels. The response's state comes from the leased property's `property.county_fips` or from `market_county.county_fips` when the market's recorded counties are all in one state. Client addresses have no state field in the new schema. Missing dimensions are null and Charts displays them as “Unrecorded.”
+Charts counts wins in the closed phase with a recorded close date through today. It uses the Deals board's phase, close date, client, deal type and market. A client linked to the deal counts even if they have no separate client profile, as with a newly converted prospect. The vertical comes from `client_vertical.vertical` or the client's recorded specialty labels. The response's state comes from the leased property's `property.county_fips` or from `market_county.county_fips` when the market's recorded counties are all in one state. Client addresses have no state field in the new schema. Missing dimensions are null and Charts displays them as “Unrecorded.”
 
 ## Deals reads for the app
 

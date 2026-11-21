@@ -44,8 +44,7 @@ const stateCodes = `{
 const wins = (db: Transaction<DB>) =>
 	db
 		.selectFrom(selectNextDeals(db).select("d.market_id").as("d"))
-		.innerJoin("client as cl", "cl.party_id", "d.client_id")
-		.leftJoin("client_vertical as cv", "cv.party_id", "cl.party_id")
+		.leftJoin("client_vertical as cv", "cv.party_id", "d.client_id")
 		.leftJoin("lease", "lease.deal_id", "d.id")
 		.leftJoin("property as premises", "premises.id", "lease.property_id")
 		.select([
@@ -64,8 +63,9 @@ const wins = (db: Transaction<DB>) =>
 				string | null
 			>`coalesce(cv.vertical, (select string_agg(nullif(s.label, ''), ', ' order by s.label)
 				from party_specialty ps join specialty s on s.slug = ps.specialty
-				where ps.person_id = cl.party_id))`.as("vertical"),
+				where ps.person_id = d.client_id))`.as("vertical"),
 		])
+		.where("d.client_id", "is not", null)
 		.where("d.phase", "=", "closed")
 		.where("d.outcome", "=", "won")
 		.where(sql<string>`d.closed_on::date`, "<=", sql<string>`current_date`);
