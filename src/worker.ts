@@ -79,6 +79,7 @@ import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
+import { changes } from "./who-did-what.ts";
 
 export type WorkerEnv = NextSaveEnv &
 	PartnerSessionEnv &
@@ -137,6 +138,7 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", relationships)
 	.route("/", search)
 	.route("/", today)
+	.route("/", changes)
 	.route("/", vendorMarkets)
 	.route("/", vendorMeetings);
 
