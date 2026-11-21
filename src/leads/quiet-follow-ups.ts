@@ -1,5 +1,10 @@
-import { sql } from "kysely";
-import type { Reader } from "../reader.ts";
+import { sql, type Transaction } from "kysely";
+import type { DB } from "../next-database.d.ts";
+import {
+	copiedLeadIdentity,
+	lastRecordedContact,
+	openPartySteps,
+} from "./follow-up-reads.ts";
 
 export type Cadence = { lead_days: number; vendor_days: number };
 
@@ -27,63 +32,72 @@ const OPEN_STAGES = [
 	"qualified",
 	"outreach_active",
 	"engaged",
-	"nurture_drip",
+	"nurture",
 ];
-const CONTACTABLE_STATES = ["active", "nurture"];
 
-const liveContactable = sql`p.merged_into is null and p.deleted_at is null
-	and p.contact_state = any(${CONTACTABLE_STATES}::text[])`;
+const today = sql`(now() at time zone 'America/Chicago')::date`;
 
-// Dates and "today" are America/Chicago calendar days, from carr_business_date.
-const proposals = (db: Reader, cadence: Cadence, ownerSlug: string | null) =>
+const proposals = (
+	db: Transaction<DB>,
+	cadence: Cadence,
+	ownerSlug: string | null,
+) =>
 	sql<Proposal>`with subjects as (
-		select 'lead'::text as subject_type, l.id as subject_id, l.party_id,
-			l.registry_ref as ref, p.name, l.owner_id,
-			greatest(l.last_touch, t.last_touch) as touched_on, l.created_at, t.last_touch as activity_on,
-			l.next_action_date, c.id as client_id, ${cadence.lead_days}::int as interval_days
-		from lead l
-		join party p on p.id = l.party_id
-		left join client c on c.id = l.client_id
-		left join v_last_touch t on t.subject_type = 'lead' and t.subject_id = l.id
-		where not l.suppressed and l.stage = any(${OPEN_STAGES}::text[]) and ${liveContactable}
-			and (l.client_id is null
-				or (c.merged_into is null and coalesce(c.status, '') not in ('cold', 'paused')))
-		union all
-		select 'vendor', v.id, v.party_id, v.vendor_ref, p.name, v.owner_id,
-			greatest(v.last_touch, t.last_touch), v.created_at, t.last_touch,
-			null, null, ${cadence.vendor_days}::int
-		from vendor v
-		join party p on p.id = v.party_id
-		left join v_last_touch t on t.subject_type = 'vendor' and t.subject_id = v.id
-		where v.merged_into is null and v.disposition = 'active' and ${liveContactable}
-	), anchored as (
-		select s.*, coalesce(touched_on, carr_business_date(created_at)) as anchor_on,
-			case when subject_type = 'lead' and touched_on = carr_business_date(created_at)
-				then activity_on else touched_on end as last_contact_on
-		from subjects s
-		where not exists (select 1 from next_action n where n.status = 'open'
-			and ((n.subject_type = s.subject_type and n.subject_id = s.subject_id)
-				or (n.subject_type = 'client' and n.subject_id = s.client_id)))
+		select r.role as subject_type, coalesce(legacy.value, p.id::text) as subject_id, p.id as party_id,
+			coalesce(legacy.registry_ref, vendor.ref, legacy.value, p.id::text) as ref,
+			p.name, r.owner_user_id as owner_id, u.slug as owner, c.party_id as client_id,
+			(r.created_at at time zone 'America/Chicago')::date as created_on,
+			(${lastRecordedContact(sql.ref("p.id"))} at time zone 'America/Chicago')::date as last_contact_on,
+			steps.next_action_date,
+			case r.role when 'lead' then ${cadence.lead_days}::int else ${cadence.vendor_days}::int end as interval_days
+		from party_role r
+		join party p on p.id = r.party_id
+		left join app_user u on u.id = r.owner_user_id
+		left join client c on r.role = 'lead' and c.party_id = coalesce(r.lead_client_id, p.id)
+		left join lateral (${copiedLeadIdentity(sql.ref("p.id"))}) legacy on r.role = 'lead'
+		left join lateral (
+			select min(value) as ref from outside_id
+			where party_id = p.id and source = 'old_system_ref' and value like 'V-%'
+		) vendor on r.role = 'vendor'
+		cross join lateral (
+			select min(n.due_on) filter (where hint.value is not null) as next_action_date,
+				count(*) filter (where hint.value is null) > 0 as has_open_step
+			from (${openPartySteps(sql.ref("p.id"))}) n
+			-- Only an untouched copied date overrides cadence.
+			left join outside_id hint on r.role = 'lead' and hint.party_id = p.id
+				and hint.source = 'old_system_lead'
+				and n.id = md5('old_system:lead:' || hint.value || ':follow_up')::uuid
+				and not exists (
+					select from change ch where ch.table_name = 'next_step' and ch.action = 'update'
+						and ch.record = jsonb_build_object('id', n.id)
+				)
+		) steps
+		where ((r.role = 'lead' and r.stage = any(${OPEN_STAGES}::text[]))
+			or (r.role = 'vendor' and r.disposition is null))
+			and not exists (select from active_do_not_contact dnc where dnc.party_id = p.id)
+			and coalesce(c.status, '') not in ('cold', 'paused')
+			and (${ownerSlug}::text is null or u.slug = ${ownerSlug}::text)
+			and not steps.has_open_step
+			and (c.party_id = p.id or not exists (${openPartySteps(sql.ref("c.party_id"))}))
 	), due as (
-		select a.*, coalesce(next_action_date, anchor_on + interval_days) as due_on
-		from anchored a
+		select s.*, coalesce(last_contact_on, created_on) as anchor_on,
+			coalesce(next_action_date, coalesce(last_contact_on, created_on) + interval_days) as due_on
+		from subjects s
 	)
 	select d.subject_type, d.subject_id, d.party_id, d.ref, d.name, d.owner_id,
 		to_char(d.anchor_on, 'YYYY-MM-DD') as anchor_on,
-		case when d.last_contact_on = d.anchor_on then 'last_contact' else 'created_at' end as basis,
+		case when d.last_contact_on is null then 'created_at' else 'last_contact' end as basis,
 		to_char(d.last_contact_on, 'YYYY-MM-DD') as last_contact_on,
 		d.next_action_date, d.client_id, d.interval_days,
-		to_char(d.due_on, 'YYYY-MM-DD') as due_on, a.slug as owner,
-		carr_business_date() - d.due_on as days_overdue
+		to_char(d.due_on, 'YYYY-MM-DD') as due_on, d.owner,
+		${today} - d.due_on as days_overdue
 	from due d
-	left join actor a on a.id = d.owner_id
-	where d.due_on <= carr_business_date()
-		and (${ownerSlug}::text is null or a.slug = ${ownerSlug}::text)
+	where d.due_on <= ${today}
 	order by d.due_on, d.subject_type, d.subject_id
 	limit ${LIMIT + 1}`.execute(db);
 
 export async function readQuietFollowUps(
-	db: Reader,
+	db: Transaction<DB>,
 	cadence: Cadence,
 	ownerSlug: string | null,
 ) {

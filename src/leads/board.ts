@@ -2,6 +2,11 @@ import { sql, type Transaction } from "kysely";
 import type { DB as NextDB } from "../next-database.d.ts";
 import type { Reader } from "../reader.ts";
 import {
+	copiedLeadIdentity,
+	lastRecordedContact,
+	openPartySteps,
+} from "./follow-up-reads.ts";
+import {
 	isServable,
 	type OpportunityTiming,
 	opportunityTiming,
@@ -225,9 +230,8 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 				client.party_id is not null as is_client,
 				exists (select from deal_party d where d.party_id = p.id
 					and d.role in ('client', 'client_contact')) as is_deal,
-				(select min(due_on) from next_step n where n.party_id = p.id and n.status = 'open') as next_action_date,
-				(select max(a.happened_at) from activity_about link join activity a on a.id = link.activity_id
-					where link.party_id = p.id and a.kind in ('email', 'call', 'meeting')) as last_touch,
+				(select min(due_on) from (${openPartySteps(sql.ref("p.id"))}) steps) as next_action_date,
+				${lastRecordedContact(sql.ref("p.id"))} as last_touch,
 				false as suppressed,
 				case when client.party_id is null and r.lead_client_id is null
 					and dnc.party_id is null then coalesce(matches.items, '[]') else '[]' end as possible_clients,
@@ -251,11 +255,7 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 				from client match join party cp on cp.id = match.party_id
 				where cp.id <> p.id and lower(btrim(cp.name)) = lower(btrim(p.name))
 			) matches on client.party_id is null and r.lead_client_id is null and dnc.party_id is null
-			left join lateral (
-				select min(value) filter (where source = 'old_system_lead') as value,
-					min(value) filter (where source = 'old_system_ref' and value like 'L-%') as registry_ref
-				from outside_id where party_id = p.id and source in ('old_system_lead', 'old_system_ref')
-			) legacy on true
+			left join lateral (${copiedLeadIdentity(sql.ref("p.id"))}) legacy on true
 			where r.role = 'lead'
 		)
 		select to_jsonb(b) as lead, '[]'::jsonb as findings,

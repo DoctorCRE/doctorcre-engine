@@ -1013,7 +1013,9 @@ When a role moves to a different party and arrives as a lead, the board, drawer 
 
 The score and old prospect engagement fields are empty. Timing events and research findings are empty lists. The legacy Undo control is absent.
 
-The drawer's `plans` text omits old research tags. The read keeps the original note in `notes`. A Quiet follow-up anchored to the day a lead was added describes that day as last contact only when the last-touch view has contact evidence for that day.
+The drawer's `plans` text omits old research tags. The read keeps the original note in `notes`.
+
+`GET /api/engine/quiet-follow-ups` reads the new lead and active vendor roles and their current owners. It counts from the most recent linked email, call or meeting, or from the date the role was added when there is no recorded contact. Dates use the Central calendar day. A copied standalone lead follow-up date overrides the cadence until the step has a recorded update. An open step on the record or its linked client keeps the record off Quiet, including an edited copied step or a held or future step. Copied lead IDs and references still resolve to the same drawer. A lead without an owner stays unclaimed.
 
 With `LEADS_READ_SCHEMA=next`, `POST /api/engine/leads/:lead_id/changes` accepts the board's UUID, `expected_actor`, the lead's `base_version`, and an `idempotency_key`. Claim gives an eligible unowned lead outside Archived to the signed-in partner and clears any pending email badge in the same transaction. A concurrent claim using the same lead version receives `409 version_conflict`. Acknowledgement can succeed even if the supplied lead version has since changed. Stage edits use change history. An archive records the partner's reason in `lead_stage_move`.
 
