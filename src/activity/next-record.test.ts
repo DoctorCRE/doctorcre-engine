@@ -1336,6 +1336,162 @@ test("conversation id, sender name and ordered recipients survive a second mailb
 	);
 });
 
+const splitText = {
+	authored: "Thanks for the update.\n\nFriday works for me.",
+	history: "From: Casey Example\nIs Friday open?",
+};
+
+async function savedEmailText(activityId: unknown) {
+	const { rows } = await db.query<{
+		body: string;
+		authored: string | null;
+		history: string | null;
+	}>("select body, authored, history from email where activity_id = $1", [
+		activityId,
+	]);
+	assert.equal(rows.length, 1);
+	return rows[0];
+}
+
+test("email split: a legacy request saves the unsplit body with no pair", async () => {
+	const request = mail("legacy-email@example.test");
+	const answer = await viaJob(request);
+	assert.equal(answer.status, 201);
+	assert.deepEqual(await savedEmailText(answer.body.activity_id), {
+		body: request.email.body,
+		authored: null,
+		history: null,
+	});
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		await assert.rejects(
+			db.query("update email set authored = $2 where activity_id = $1", [
+				answer.body.activity_id,
+				splitText.authored,
+			]),
+			{ code: "23514", constraint: "email_authored_history_pair" },
+		);
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("email split: a complete request stores both parts beside the body", async () => {
+	const body = `${splitText.authored}\n\n${splitText.history}`;
+	const answer = await viaJob(
+		mail("complete-email@example.test", { body, ...splitText }),
+	);
+	assert.equal(answer.status, 201);
+	assert.deepEqual(await savedEmailText(answer.body.activity_id), {
+		body,
+		...splitText,
+	});
+});
+
+test("email split: either part can be an empty string", async () => {
+	const pairs = [
+		{ authored: "", history: splitText.history },
+		{ authored: splitText.authored, history: "" },
+	];
+	for (const [index, pair] of pairs.entries()) {
+		const body = pair.authored || pair.history;
+		const answer = await viaJob(
+			mail(`empty-part-${index}@example.test`, { body, ...pair }),
+		);
+		assert.equal(answer.status, 201);
+		assert.deepEqual(await savedEmailText(answer.body.activity_id), {
+			body,
+			...pair,
+		});
+	}
+});
+
+test("email split: a partial or non-string pair is refused", async () => {
+	const messageId = "partial-split@example.test";
+	const idempotency_key = randomUUID();
+	for (const fields of [
+		{ authored: splitText.authored },
+		{ history: splitText.history },
+		{ authored: null, history: null },
+		{ authored: splitText.authored, history: 42 },
+	]) {
+		await refused(
+			viaJob(mail(messageId, fields, { idempotency_key })),
+			400,
+			"invalid_field_value",
+			{ fields: ["email"] },
+		);
+	}
+	assert.deepEqual(await stored(messageId), []);
+	const corrected = await viaJob(
+		mail(messageId, splitText, { idempotency_key }),
+	);
+	assert.equal(corrected.status, 201);
+});
+
+test("email split: a retry with a new key keeps the first stored pair", async () => {
+	const messageId = "split-retry@example.test";
+	const pair = { authored: "", history: splitText.history };
+	const body = pair.history;
+	const first = await viaJob(mail(messageId, { body, ...pair }));
+	assert.equal(first.status, 201);
+	const retry = await viaJob(
+		mail(messageId, {
+			body: "Replacement",
+			authored: "Replacement",
+			history: "",
+		}),
+	);
+	assert.equal(retry.status, 201);
+	assert.equal(retry.body.existing, true);
+	assert.equal(retry.body.activity_id, first.body.activity_id);
+	assert.deepEqual(await savedEmailText(first.body.activity_id), {
+		body,
+		...pair,
+	});
+});
+
+test("email split: a complete second mailbox capture fills the missing pair", async () => {
+	const messageId = "split-second-mailbox@example.test";
+	const preview = "Thanks for the update.";
+	const first = await viaJob(mail(messageId, { body: preview }));
+	assert.equal(first.status, 201);
+	const second = await viaJob(
+		mail(messageId, {
+			body: `${splitText.authored}\n\n${splitText.history}`,
+			...splitText,
+		}),
+		otherMailbox,
+	);
+	assert.equal(second.status, 201);
+	assert.equal(second.body.existing, true);
+	assert.equal(second.body.activity_id, first.body.activity_id);
+	assert.deepEqual(await savedEmailText(first.body.activity_id), {
+		body: preview,
+		...splitText,
+	});
+	await assertRows(
+		2,
+		"select from email_mailbox where activity_id = $1 and user_id in ($2, $3)",
+		first.body.activity_id,
+		JOE,
+		DELL,
+	);
+});
+
+test("email split: a preview-only capture stores no pair", async () => {
+	const preview = "Thanks for the update…";
+	const answer = await viaJob(
+		mail("preview-only@example.test", { body: preview }),
+	);
+	assert.equal(answer.status, 201);
+	assert.deepEqual(await savedEmailText(answer.body.activity_id), {
+		body: preview,
+		authored: null,
+		history: null,
+	});
+});
+
 test("an email refuses recipient fields it does not store", async () => {
 	const message_id = "recipient-field@example.com";
 	await refused(

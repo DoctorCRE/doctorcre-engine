@@ -474,6 +474,8 @@ Stored email bodies and their display fields are plain text. The table grows wit
 - Keep `email.body` as the unsplit captured text. Door 19 adds `email.authored` and `email.history`, both nullable text columns in `next.email`. Both `NULL` means the split is unavailable. Both strings means it succeeded, including `''` when one part is empty. The database checks that the pair is present or absent together. Keep HTML and MIME bytes in Outlook.
 - Accept old door 19 requests without the pair. New captures send both strings with the full decoded body. A later complete capture for the same verified Message-ID can fill a missing pair in the same save that adds mailbox membership. Repeat saves keep the first stored pair and preserve the captured `body` used by evidence, summaries, and routing.
 
+Apply [the email text migration](../schema/add-email-authored.sql) before sending the pair to an existing database. Requests that omit both fields work before and after the migration.
+
 ### One entry for each message
 
 Home's email review, reply draft detail, and email proposal detail use the same thread read. Select the source and conversation rows authorized by `email_mailbox` before grouping or comparing text. The existing source access rules apply, including a source-only thread when there is no Outlook conversation id.

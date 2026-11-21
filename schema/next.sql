@@ -1106,7 +1106,7 @@ create table activity_about (
 
 create index activity_about_by_party on activity_about (party_id, activity_id) where party_id is not null;
 
--- Only the new text is kept; the date is the activity's, and the mailbox stays the full record.
+-- The date is the activity's, and the mailbox stays the full record.
 create table email (
 	activity_id uuid primary key,
 	activity_kind text not null generated always as ('email') stored,
@@ -1117,11 +1117,14 @@ create table email (
 	sender_name text,
 	subject text not null,
 	body text not null,
+	authored text,
+	history text,
 	-- Set only by the owner's copy of today's mail, the one source that may lack the Message-ID.
 	imported boolean not null default false,
 	constraint email_message_id_not_blank check (message_id ~ '\S'),
 	constraint email_conversation_id_not_blank check (conversation_id ~ '\S'),
 	constraint email_message_id_unless_imported check (message_id is not null or imported),
+	constraint email_authored_history_pair check ((authored is null) = (history is null)),
 	foreign key (activity_id, activity_kind) references activity (id, kind)
 );
 
@@ -3934,6 +3937,7 @@ grant insert (id, deal_id, property_id, round, answers_round, from_party_id, fro
 grant update (status) on offer to engine;
 revoke insert on email from engine;
 grant insert (activity_id, message_id, conversation_id, sender, sender_name, subject, body) on email to engine;
+grant update (authored, history) on email to engine;
 revoke insert on email_summary, email_current_summary from engine;
 grant execute on function record_email_summary to engine;
 grant update (handle, platform_account_id) on social_account to engine;
