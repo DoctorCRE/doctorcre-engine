@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { betterAuth } from "better-auth";
-import { getOAuthState } from "better-auth/api";
+import {
+	addOAuthServerContext,
+	createAuthMiddleware,
+	getOAuthState,
+} from "better-auth/api";
 import { PostgresDialect } from "kysely";
 import pg from "pg";
 
@@ -14,9 +18,15 @@ type PartnerAuthConfig = {
 	google?: { clientId: string; clientSecret: string };
 };
 
+type GoogleFlow = {
+	startingSessionId: string | undefined;
+	reauth?: { sessionId: string; returnURL: string; authUserId?: string };
+};
+
 function partnerAuth(
 	pool: pg.Pool,
 	{ appOrigin, secret, google }: PartnerAuthConfig,
+	flow: GoogleFlow,
 ) {
 	return betterAuth({
 		baseURL: appOrigin,
@@ -28,6 +38,15 @@ function partnerAuth(
 			schemaName: "doctorcre_auth",
 		},
 		logger: { disabled: true },
+		hooks: {
+			before: createAuthMiddleware(async ({ path }) => {
+				if (path === "/sign-in/social" && flow.startingSessionId)
+					await addOAuthServerContext({
+						sessionId: flow.startingSessionId,
+						appOrigin,
+					});
+			}),
+		},
 		socialProviders: google
 			? {
 					google: {
@@ -61,6 +80,18 @@ function partnerAuth(
 				const state = await getOAuthState();
 				if (!state || !(await claimGoogleReturn(pool, state)))
 					return { error: "state_already_used" };
+				const original = state.serverContext;
+				if (original) {
+					if (
+						typeof original.sessionId !== "string" ||
+						original.appOrigin !== appOrigin
+					)
+						return { error: "state_mismatch" };
+					flow.reauth = {
+						sessionId: original.sessionId,
+						returnURL: state.callbackURL,
+					};
+				}
 			},
 			additionalFields: {
 				partnerUserId: {
@@ -101,6 +132,11 @@ function partnerAuth(
 				create: {
 					before: async (session) => {
 						if (!(await findPartner(pool, session.userId))) return false;
+						if (flow.reauth) {
+							// Reauthentication proves identity without issuing another session.
+							flow.reauth.authUserId = session.userId;
+							return false;
+						}
 						return {
 							data: {
 								origin: appOrigin,
@@ -135,6 +171,22 @@ async function claimGoogleReturn(
 type Partner = { app_user_id: string; slug: string; display: string };
 type PartnerAuth = ReturnType<typeof partnerAuth>;
 type SessionRequest = { origin: string; headers: Headers };
+
+async function refreshSession(
+	pool: pg.Pool,
+	appOrigin: string,
+	{ sessionId, authUserId }: { sessionId: string; authUserId: string },
+) {
+	const { rowCount } = await pool.query(
+		`update doctorcre_auth.session
+		 set "googleAuthenticatedAt" = greatest("googleAuthenticatedAt", $4),
+		     "updatedAt" = greatest("updatedAt", $4)
+		 where id = $1 and "userId" = $2 and origin = $3 and "expiresAt" > $4
+		   and exists (select from doctorcre_auth.partner where auth_user_id = $2)`,
+		[sessionId, authUserId, appOrigin, new Date()],
+	);
+	return rowCount === 1;
+}
 
 async function findPartner(pool: pg.Pool, authUserId: string) {
 	const { rows } = await pool.query<Partner>(
@@ -176,6 +228,14 @@ export async function withPartnerAuth<T>(
 		resolveSession: (
 			input: SessionRequest,
 		) => ReturnType<typeof resolveSession>;
+		startGoogle: (
+			callbackURL: string,
+			sessionId?: string,
+		) => Promise<{ headers: Headers; response: { url: string | undefined } }>;
+		completeGoogle: (
+			request: Request,
+		) => Promise<{ response: Response; reauthReturn?: string }>;
+		revokeSession: (id: string) => Promise<void>;
 	}) => Promise<T>,
 ): Promise<T> {
 	const { secret } = config;
@@ -200,7 +260,8 @@ export async function withPartnerAuth<T>(
 		max: 1,
 	});
 	try {
-		const auth = partnerAuth(pool, config);
+		const flow: GoogleFlow = { startingSessionId: undefined };
+		const auth = partnerAuth(pool, config, flow);
 		return await run({
 			auth,
 			resolveSession: async (input) => {
@@ -209,6 +270,39 @@ export async function withPartnerAuth<T>(
 				} catch {
 					throw new Error("Partner session store unavailable");
 				}
+			},
+			startGoogle: (callbackURL, sessionId) => {
+				flow.startingSessionId = sessionId;
+				return auth.api.signInSocial({
+					body: { provider: "google", callbackURL },
+					headers: new Headers({ origin: config.appOrigin }),
+					returnHeaders: true,
+				});
+			},
+			completeGoogle: async (request) => {
+				const response = await auth.handler(request);
+				const reauth = flow.reauth;
+				if (!reauth?.authUserId || response.status >= 500) return { response };
+				const { sessionId, authUserId, returnURL } = reauth;
+				const current = await resolveSession(auth, pool, config.appOrigin, {
+					origin: new URL(request.url).origin,
+					headers: request.headers,
+				});
+				if (
+					current?.id === sessionId &&
+					(await refreshSession(pool, config.appOrigin, {
+						sessionId,
+						authUserId,
+					}))
+				)
+					return { response, reauthReturn: returnURL };
+				return { response };
+			},
+			revokeSession: async (id) => {
+				await pool.query(
+					"delete from doctorcre_auth.session where id = $1 and origin = $2",
+					[id, config.appOrigin],
+				);
 			},
 		});
 	} finally {
