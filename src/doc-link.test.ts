@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { createTestHarness } from "wrangler";
 import { runDocLink } from "../scripts/doc-link.ts";
 import { withPartnerAuth } from "./partner-auth.ts";
 import { isArguments } from "./save-door.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
+import worker, { partnerApp, type WorkerEnv } from "./worker.ts";
 
 const appOrigin = "https://app.example.test";
 const engineOrigin = "https://engine.example.test";
@@ -22,14 +20,7 @@ test("Doc link migration, private credentials and Mac polling", {
 	const reader = `doc_read_${randomUUID().replaceAll("-", "")}`;
 	const writer = `doc_write_${randomUUID().replaceAll("-", "")}`;
 	await setup();
-	t.after(async () => {
-		await db.query(`drop role if exists ${reader}, ${writer}`);
-		await cleanup();
-	});
-	await db.query(`create role ${reader} login in role engine_reader;
-		create role ${writer} login in role engine;`);
-	await db.query("drop table next.doc_link");
-	await db.query(await readSchema("partner-auth.sql"));
+	t.after(cleanup);
 	const secret = randomBytes(32).toString("hex");
 	const appUserId = randomUUID();
 	const otherUserId = randomUUID();
@@ -78,90 +69,37 @@ test("Doc link migration, private credentials and Mac polling", {
 			"x-carr-csrf": session.csrfToken,
 		};
 	}
-	const first = await signIn("joe", appUserId);
-	const second = await signIn("dell", otherUserId);
-
-	const dir = await mkdtemp(join(process.cwd(), ".doc-link-test-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
-	const main = join(dir, "app.js");
-	await writeFile(
-		main,
-		// The local harness delivers HTTPS URLs and Origin headers over HTTP.
-		`export default { fetch(request, env) {
-			const url = new URL(request.url);
-			const headers = new Headers(request.headers);
-			const sameOrigin = headers.get("Origin") === url.origin;
-			url.protocol = "https:";
-			if (sameOrigin) headers.set("Origin", url.origin);
-			return env.PARTNER_APP.fetch(new Request(url, { method: request.method, headers }));
-		} }`,
-	);
-	const localDatabase = new URL(connectionString);
-	localDatabase.password = "fixture";
-	const readDatabase = new URL(localDatabase);
-	readDatabase.username = reader;
-	const writeDatabase = new URL(localDatabase);
-	writeDatabase.username = writer;
-	const server = createTestHarness({
-		workers: [
-			{
-				config: {
-					name: "doc-link-test-app",
-					main,
-					compatibility_date: "2026-11-11",
-					services: [
-						{
-							binding: "PARTNER_APP",
-							service: "doc-link-test-engine",
-							entrypoint: "PartnerApp",
-						},
-					],
-					routes: [
-						{ pattern: "app.example.test/*", zone_name: "example.test" },
-					],
-				},
-			},
-			{
-				config: {
-					name: "doc-link-test-engine",
-					main: new URL("./worker-entry.ts", import.meta.url).pathname,
-					compatibility_date: "2026-11-11",
-					compatibility_flags: ["nodejs_compat"],
-					hyperdrive: [
-						{
-							binding: "DATABASE",
-							id: "test-reader",
-							localConnectionString: readDatabase.href,
-						},
-						{
-							binding: "DATABASE_WRITER",
-							id: "test-writer",
-							localConnectionString: writeDatabase.href,
-						},
-						{
-							binding: "PARTNER_AUTH_DATABASE",
-							id: "test-auth",
-							localConnectionString: localDatabase.href,
-						},
-					],
-					vars: { PARTNER_APP_ORIGIN: appOrigin },
-					routes: [
-						{ pattern: "engine.example.test/*", zone_name: "example.test" },
-					],
-				},
-				secrets: { PARTNER_AUTH_SECRET: secret },
-			},
-		],
-	});
 	try {
-		await server.listen();
+		await db.query(`create role ${reader} login in role engine_reader;
+			create role ${writer} login in role engine;`);
+		await db.query("drop table next.doc_link");
+		await db.query(await readSchema("partner-auth.sql"));
+		const first = await signIn("joe", appUserId);
+		const second = await signIn("dell", otherUserId);
+		const readDatabase = new URL(connectionString);
+		readDatabase.username = reader;
+		const writeDatabase = new URL(connectionString);
+		writeDatabase.username = writer;
+		const env = {
+			DATABASE: { connectionString: readDatabase.href },
+			DATABASE_WRITER: { connectionString: writeDatabase.href },
+			PARTNER_AUTH_DATABASE: { connectionString },
+			PARTNER_APP_ORIGIN: appOrigin,
+			PARTNER_AUTH_SECRET: secret,
+		} satisfies Partial<WorkerEnv["Bindings"]>;
+		const request = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const request = new Request(input, init);
+			const app =
+				new URL(request.url).origin === appOrigin ? partnerApp : worker;
+			return app.request(request, undefined, env);
+		};
 		const send = (
 			headers: Record<string, string>,
 			method = "GET",
 			suffix = "",
-		) => server.fetch(appOrigin + linkPath + suffix, { method, headers });
+		) => request(appOrigin + linkPath + suffix, { method, headers });
 		const poll = (credential: string, headers: Record<string, string> = {}) =>
-			server.fetch(`${engineOrigin}${linkPath}/claim`, {
+			request(`${engineOrigin}${linkPath}/claim`, {
 				method: "POST",
 				headers: {
 					Authorization: `Bearer ${credential}`,
@@ -213,8 +151,7 @@ test("Doc link migration, private credentials and Mac polling", {
 			assert.equal(response.headers.get("cache-control"), "no-store");
 		}
 		assert.equal(
-			(await server.fetch(`${appOrigin}/auth/session`, { headers: first }))
-				.status,
+			(await request(`${appOrigin}/auth/session`, { headers: first })).status,
 			200,
 		);
 		await db.query(await readSchema("add-doc-link.sql"));
@@ -229,7 +166,7 @@ test("Doc link migration, private credentials and Mac polling", {
 		);
 		assert.equal(
 			(
-				await server.fetch(engineOrigin + linkPath, {
+				await request(engineOrigin + linkPath, {
 					method: "POST",
 					headers: { ...first, ...proof },
 				})
@@ -263,7 +200,7 @@ test("Doc link migration, private credentials and Mac polling", {
 				clock_timestamp() + interval '60 seconds', '{"reads":0,"sources":{}}' from chat`,
 			[appUserId, claim],
 		);
-		const mcp = await server.fetch(`${engineOrigin}/api/engine/doc/mcp`, {
+		const mcp = await request(`${engineOrigin}/api/engine/doc/mcp`, {
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${credential}`,
@@ -285,7 +222,7 @@ test("Doc link migration, private credentials and Mac polling", {
 		assert.equal(mcp.headers.get("cache-control"), "no-store");
 		assert.equal(
 			(
-				await server.fetch(`${appOrigin}/api/engine/doc/mcp`, {
+				await request(`${appOrigin}/api/engine/doc/mcp`, {
 					method: "POST",
 					headers: {
 						...first,
@@ -316,7 +253,7 @@ test("Doc link migration, private credentials and Mac polling", {
 			origin = engineOrigin,
 			payload: object = completion,
 		) =>
-			server.fetch(`${origin}${linkPath}/result`, {
+			request(`${origin}${linkPath}/result`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...headers },
 				body: JSON.stringify(payload),
@@ -592,22 +529,16 @@ test("Doc link migration, private credentials and Mac polling", {
 				]);
 				const turn = await fetchClaim(capable);
 				assert.equal(turn.work.kind, "turn");
-				const expireTurn = () =>
-					db.query(
-						"update next.doc_turn set claim_until = now() - interval '1 second' where claim_id = $1",
-						[turn.claim_id],
-					);
-				await t.test("work selection uses one lease cutoff", async () => {
-					await db.query("begin; lock next.doc_judgment_job in share mode");
-					const request = poll(credential, capable);
-					try {
-						await waitForBlockedRequest(request);
-						await expireTurn();
-					} finally {
-						await db.query("commit");
-					}
-					assert.equal((await request).status, 204);
-				});
+				await t.test(
+					"an active turn holds the slot until its lease expires",
+					async () => {
+						assert.equal((await poll(credential, capable)).status, 204);
+						await db.query(
+							"update next.doc_turn set claim_until = '-infinity' where claim_id = $1",
+							[turn.claim_id],
+						);
+					},
+				);
 				const reclaimed = await fetchClaim(capable);
 				assert.equal(reclaimed.work.kind, "turn");
 				assert.notEqual(reclaimed.claim_id, turn.claim_id);
@@ -698,6 +629,8 @@ test("Doc link migration, private credentials and Mac polling", {
 						);
 						const observed: unknown[] = [];
 						let requests = 0;
+						let waits = 0;
+						let now = 0;
 						await runDocLink(
 							{
 								engine: engineOrigin,
@@ -708,23 +641,27 @@ test("Doc link migration, private credentials and Mac polling", {
 								credential,
 							},
 							{
-								now: Date.now,
-								wait: async () => {},
+								now: () => now,
+								wait: async () => {
+									assert.ok(
+										++waits <= 6,
+										"Doc link did not finish the queued work",
+									);
+								},
 								async fetch(url, init) {
-									if (requests++ === 6)
+									if (requests++ >= 6)
 										return new Response(null, { status: 401 });
-									const request = new Request(url, init);
-									const body = await request.text();
-									const response = await server.fetch(request.url, {
-										method: request.method,
-										headers: Object.fromEntries(request.headers),
-										...(body && { body }),
-									});
-									const path = new URL(request.url).pathname;
+									const incoming = new Request(url, init);
+									const response = await request(incoming);
+									const path = new URL(incoming.url).pathname;
 									const reply = await response.text();
 									if (path === `${linkPath}/claim` && response.status === 200) {
 										const work: unknown = JSON.parse(reply);
-										observed.push(isArguments(work) ? work.kind : null);
+										assert.ok(
+											isArguments(work) && typeof work.claim_until === "string",
+										);
+										now = Date.parse(work.claim_until) - 60_000;
+										observed.push(work.kind);
 									} else {
 										observed.push([path, response.status]);
 									}
@@ -775,7 +712,7 @@ test("Doc link migration, private credentials and Mac polling", {
 
 		async function waitForBlockedRequest(
 			request: Promise<unknown>,
-			label?: string,
+			label: string,
 			blocker?: number,
 		) {
 			let finished = false;
@@ -793,8 +730,7 @@ test("Doc link migration, private credentials and Mac polling", {
 				);
 				if (rows[0]) return rows[0].pid;
 			}
-			if (label || !finished)
-				assert.fail(`${label ?? "Request"} did not wait for the lock`);
+			assert.fail(`${label} did not wait for the lock`);
 		}
 
 		async function queueLinkRequests<First, Second>(
@@ -890,6 +826,6 @@ test("Doc link migration, private credentials and Mac polling", {
 			},
 		);
 	} finally {
-		await server.close();
+		await db.query(`drop role if exists ${reader}, ${writer}`);
 	}
 });

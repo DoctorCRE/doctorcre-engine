@@ -68,6 +68,8 @@ function managedSettingsIn(directory: string) {
 
 async function runLink(replies: Reply[], binary = claude, directory?: string) {
 	let now = 60_000;
+	const maxWaits = replies.length;
+	let waits = 0;
 	const requests: Request[] = [];
 	await runDocLink(
 		{ engine, claude: binary, credential },
@@ -75,6 +77,10 @@ async function runLink(replies: Reply[], binary = claude, directory?: string) {
 			...(directory ? { managedSettings: managedSettingsIn(directory) } : {}),
 			now: () => now,
 			wait: async () => {
+				assert.ok(
+					++waits <= maxWaits,
+					"Doc link stopped consuming scripted replies",
+				);
 				now += 2_000;
 			},
 			async fetch(url, init) {
