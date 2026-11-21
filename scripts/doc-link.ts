@@ -1,10 +1,9 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { open, readdir, readFile, stat } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
 import { z } from "zod";
 
 const configSchema = z.strictObject({
@@ -55,7 +54,6 @@ const pollEvery = 2_000;
 const macSettingsDir = "/Library/Application Support/ClaudeCode";
 const preferencesDir = "/Library/Managed Preferences";
 const preferencesName = "com.anthropic.claudecode.plist";
-const exec = promisify(execFile);
 
 function readJson(text: string): unknown {
 	try {
@@ -74,13 +72,12 @@ const rateLimit = z.object({
 	status: z.literal("rejected"),
 	resetsAt: z.number().optional(),
 });
-const hookLists = z.record(z.string(), z.array(z.unknown()));
 
 function isMissingFile(error: unknown) {
 	return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-async function managedPolicyBlocker({
+async function hasManagedPolicy({
 	directory,
 	preferences = [],
 	cache,
@@ -89,53 +86,23 @@ async function managedPolicyBlocker({
 	preferences?: string[];
 	cache?: string;
 }) {
-	const dropIns = join(directory, "managed-settings.d");
-	let names: string[];
-	try {
-		names = await readdir(dropIns);
-	} catch (error) {
-		if (!isMissingFile(error))
-			return `Doc link cannot check Claude Code policy in ${dropIns}.`;
-		names = [];
-	}
 	const paths = [
 		join(directory, "managed-settings.json"),
-		...names
-			.filter((name) => !name.startsWith(".") && name.endsWith(".json"))
-			.map((name) => join(dropIns, name)),
+		join(directory, "managed-settings.d"),
+		join(directory, "managed-mcp.json"),
+		join(directory, "CLAUDE.md"),
 		...preferences,
 		...(cache ? [cache] : []),
 	];
 	for (const path of paths) {
 		try {
-			let contents: string;
-			if (path.endsWith(".plist")) {
-				await stat(path);
-				const { stdout } = await exec(
-					"/usr/bin/plutil",
-					["-convert", "json", "-o", "-", path],
-					{ timeout: 5_000 },
-				);
-				contents = stdout;
-			} else {
-				contents = await readFile(path, "utf8");
-			}
-			const policy = fields.safeParse(readJson(contents));
-			if (!policy.success)
-				return `Doc link cannot read Claude Code policy in ${path}.`;
-			if (policy.data.hooks === undefined) continue;
-			const hooks = hookLists.safeParse(policy.data.hooks);
-			if (
-				!hooks.success ||
-				Object.values(hooks.data).some((entries) => entries.length > 0)
-			)
-				return `Doc link is paused because managed Claude Code hooks are configured in ${path}.`;
+			await lstat(path);
+			return true;
 		} catch (error) {
-			if (!isMissingFile(error))
-				return `Doc link cannot check Claude Code policy in ${path}.`;
+			if (!isMissingFile(error)) return true;
 		}
 	}
-	return undefined;
+	return false;
 }
 
 function runClaude(
@@ -266,7 +233,7 @@ type LinkRuntime = {
 	fetch: typeof globalThis.fetch;
 	now: () => number;
 	wait: () => Promise<void>;
-	managedSettings?: Parameters<typeof managedPolicyBlocker>[0];
+	managedSettings?: Parameters<typeof hasManagedPolicy>[0];
 };
 
 export async function runDocLink(
@@ -297,13 +264,17 @@ export async function runDocLink(
 		}).catch(() => undefined);
 	}
 
-	let policyBlocker: string | undefined;
+	let policyBlocked = false;
 	async function policyAllowsTurns() {
-		const blocker =
-			managedSettings && (await managedPolicyBlocker(managedSettings));
-		if (blocker && blocker !== policyBlocker) console.error(blocker);
-		policyBlocker = blocker;
-		return !blocker;
+		const blocked = managedSettings
+			? await hasManagedPolicy(managedSettings)
+			: false;
+		if (blocked && !policyBlocked)
+			console.error(
+				"Doc link needs a Mac without managed Claude Code settings.",
+			);
+		policyBlocked = blocked;
+		return !blocked;
 	}
 
 	let readiness: Readiness | undefined;
@@ -313,6 +284,7 @@ export async function runDocLink(
 		if (now() >= checkAt) {
 			readiness = await signInStatus(config.claude);
 			checkAt = now() + checkSignInEvery;
+			if (!(await policyAllowsTurns())) continue;
 		}
 		const poll = await post("claim", {
 			headers: readiness ? { "Doc-Link-Readiness": readiness } : {},
@@ -329,8 +301,8 @@ export async function runDocLink(
 		const timeout = Math.min(45_000, expires - 15_000 - now());
 		if (!(timeout > 0)) continue;
 
-		const heartbeat = setInterval(() => {
-			void post("claim", {});
+		const heartbeat = setInterval(async () => {
+			if (await policyAllowsTurns()) void post("claim", {});
 		}, 10_000);
 		const outcome = await answerTurn(config, claim, timeout).finally(() =>
 			clearInterval(heartbeat),

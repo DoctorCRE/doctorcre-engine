@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
 	chmod,
 	copyFile,
+	mkdir,
 	mkdtemp,
 	readFile,
 	rmdir,
@@ -46,12 +47,21 @@ const status = (code: number) => new Response(null, { status: code });
 
 type Reply = Response | "drop" | { reply: Response; now: number };
 
-async function runLink(replies: Reply[], binary = claude) {
+function managedSettingsIn(directory: string) {
+	return {
+		directory,
+		preferences: [join(directory, "com.anthropic.claudecode.plist")],
+		cache: join(directory, "remote-settings.json"),
+	};
+}
+
+async function runLink(replies: Reply[], binary = claude, directory?: string) {
 	let now = 60_000;
 	const requests: Request[] = [];
 	await runDocLink(
 		{ engine, claude: binary, credential },
 		{
+			...(directory ? { managedSettings: managedSettingsIn(directory) } : {}),
 			now: () => now,
 			wait: async () => {
 				now += 2_000;
@@ -127,6 +137,7 @@ test("Doc link runs a private Claude print session and submits only the final an
 	const [claim, completion, next] = await runLink(
 		[claimed("Inspect"), status(204)],
 		binary,
+		directory,
 	);
 	assert.deepEqual(claim, poll("ready"));
 	assert.deepEqual(next, poll("ready"));
@@ -214,12 +225,66 @@ test("Doc link refuses a shared credential file and reads a private one", async 
 	assert.deepEqual(await readDocLinkConfig(path), config);
 });
 
-test("Doc link refuses a policy hook added after a claim and resumes once it is removed", async (t) => {
+const managedSources = [
+	["managed settings file", "managed-settings.json", "{}"],
+	["managed settings drop-in directory", "managed-settings.d", null],
+	[
+		"policy helper",
+		"managed-settings.json",
+		JSON.stringify({ policyHelper: { path: "/example/claude-policy" } }),
+	],
+	[
+		"configuration profile",
+		"com.anthropic.claudecode.plist",
+		'<plist version="1.0"><dict/></plist>',
+	],
+	["server policy cache", "remote-settings.json", "{}"],
+	["managed MCP file", "managed-mcp.json", '{"mcpServers":{}}'],
+	["managed instructions", "CLAUDE.md", "Follow company policy."],
+] satisfies [string, string, string | null][];
+
+for (const [source, name, contents] of managedSources) {
+	test(`Doc link stops before polling when it finds ${source}`, async (t) => {
+		const directory = await mkdtemp(join(process.cwd(), ".scratch."));
+		const path = join(directory, name);
+		if (contents === null) await mkdir(path);
+		else await writeFile(path, contents);
+		t.after(async () => {
+			if (contents === null) await rmdir(path);
+			else await unlink(path);
+			await rmdir(directory);
+		});
+		const errors = t.mock.method(console, "error", () => {});
+		const stopped = new Error("End the test while polling is paused");
+		await assert.rejects(
+			runDocLink(
+				{ engine, claude, credential },
+				{
+					managedSettings: managedSettingsIn(directory),
+					now: () => 0,
+					wait: async () => {
+						throw stopped;
+					},
+					fetch: async () => status(401),
+				},
+			),
+			stopped,
+		);
+		assert.equal(errors.mock.calls.length, 1);
+		assert.match(
+			String(errors.mock.calls[0]?.arguments[0]),
+			/managed Claude Code settings/i,
+		);
+	});
+}
+
+test("Doc link refuses a turn when policy appears after a poll and resumes once it is removed", async (t) => {
 	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
 	const policy = join(directory, "managed-settings.json");
 	const errors = t.mock.method(console, "error", () => {});
+	let policyPresent = false;
 	t.after(async () => {
-		await unlink(policy);
+		if (policyPresent) await unlink(policy);
 		await rmdir(directory);
 	});
 	let waits = 0;
@@ -227,25 +292,20 @@ test("Doc link refuses a policy hook added after a claim and resumes once it is 
 	await runDocLink(
 		{ engine, claude, credential },
 		{
-			managedSettings: { directory },
+			managedSettings: managedSettingsIn(directory),
 			now: () => waits * 2_000,
 			wait: async () => {
 				waits++;
-				if (waits === 2) await writeFile(policy, "{}");
+				if (waits === 2) {
+					await unlink(policy);
+					policyPresent = false;
+				}
 			},
 			async fetch(_url, init) {
 				requests.push(new Headers(init?.headers).get("Doc-Link-Readiness"));
 				if (requests.length !== 1) return status(401);
-				await writeFile(
-					policy,
-					JSON.stringify({
-						hooks: {
-							SessionStart: [
-								{ hooks: [{ type: "command", command: "false" }] },
-							],
-						},
-					}),
-				);
+				await writeFile(policy, "{}");
+				policyPresent = true;
 				return claimed("Question");
 			},
 		},
@@ -255,7 +315,7 @@ test("Doc link refuses a policy hook added after a claim and resumes once it is 
 	assert.equal(errors.mock.calls.length, 1);
 	assert.match(
 		String(errors.mock.calls[0]?.arguments[0]),
-		/managed Claude Code hooks/i,
+		/managed Claude Code settings/i,
 	);
 });
 
