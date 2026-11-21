@@ -29,6 +29,11 @@ insert into party (id, kind, name, changed_by_user_id, changed_at) select id, 'p
 insert into app_user (id, slug) select id, slug from partner;
 insert into outside_id (source, value, party_id) select 'old_system', id::text, id from partner;
 
+create temp table skipped_company on commit drop as
+select id from public.party
+where kind = 'org' and merged_into is null and deleted_at is null
+	and name ~* '^\s*\(TBD(\s*[-–—]\s*enrich)?\)\s*$';
+
 -- Keep every source record for corrections, including ones already mapped.
 create temp table source_party on commit drop as
 with recursive merged (id, survivor_id) as (
@@ -36,21 +41,24 @@ with recursive merged (id, survivor_id) as (
 	union all
 	select p.id, m.survivor_id from public.party p join merged m on p.merged_into = m.id
 )
-select p.*, m.survivor_id, author.*,
+select p.*, m.survivor_id, skipped.id as skipped_company_id, author.*,
 	setter.changed_by_user_id as dnc_by_user_id, setter.changed_by_job as dnc_by_job,
 	setter.changed_for_user_id as dnc_for_user_id
 from public.party p
 left join merged m using (id)
+left join skipped_company skipped on skipped.id = m.survivor_id
 cross join lateral copy_attribution('party', p.id, p.updated_by) author
 cross join lateral copy_attribution('party', p.id,
 	coalesce(p.contact_state_set_by, p.updated_by), 'contact_state') setter;
 
 create temp table old_party on commit drop as
 select * from source_party p
-where not exists (select from outside_id where source = 'old_system' and value = p.id::text);
+where skipped_company_id is null
+	and not exists (select from outside_id where source = 'old_system' and value = p.id::text);
 
 create temp table copied on commit drop as
-select * from old_party where survivor_id = id and deleted_at is null;
+select * from old_party
+where survivor_id = id and deleted_at is null;
 
 -- Reporting follows the current map; only unmapped members of a new survivor's chain supply writes.
 create temp table chain on commit drop as
@@ -60,7 +68,8 @@ select s.*, coalesce(m.party_id, survivor.party_id, s.survivor_id) as record_id,
 from source_party s
 left join outside_id m on m.source = 'old_system' and m.value = s.id::text
 left join outside_id survivor on survivor.source = 'old_system' and survivor.value = s.survivor_id::text
-where s.survivor_id in (select id from copied) or m.party_id is not null or survivor.party_id is not null;
+where s.skipped_company_id is null
+	and (s.survivor_id in (select id from copied) or m.party_id is not null or survivor.party_id is not null);
 
 -- NPPES issues a number once; holders keep it, and copy_values sorts first so only uncopied rows can claim it.
 create temp table npi_claim on commit drop as
@@ -193,12 +202,11 @@ from chain s where s.contact_state in ('do_not_contact', 'paused') and s.contact
 
 -- Revisit mapped records too: their lead roles may have been copied after their people.
 create temp table nurture on commit drop as
-select p.id as old_id, map.party_id, coalesce(p.contact_state_set_at, p.updated_at) as set_at, setter.*
-from public.party p
+select p.id as old_id, map.party_id, coalesce(p.contact_state_set_at, p.updated_at) as set_at,
+	p.dnc_by_user_id as changed_by_user_id, p.dnc_by_job as changed_by_job, p.dnc_for_user_id as changed_for_user_id
+from source_party p
 left join outside_id map on map.source = 'old_system' and map.value = p.id::text
-cross join lateral copy_attribution('party', p.id,
-	coalesce(p.contact_state_set_by, p.updated_by), 'contact_state') setter
-where p.contact_state = 'nurture';
+where p.contact_state = 'nurture' and p.skipped_company_id is null;
 
 update party_role r set stage = 'nurture', changed_by_user_id = n.changed_by_user_id,
 	changed_by_job = n.changed_by_job, changed_for_user_id = n.changed_for_user_id, changed_at = n.set_at
@@ -246,33 +254,32 @@ where p.kind = 'person' and v.slug <> ''
 
 -- A person's company and their title there, the survivor's own first, at the record the company became.
 create temp table typed_company on commit drop as
-select s.id as old_id, s.record_id as person_id, s.copy_values, s.org_id, s.title as typed_title, p.kind, map.party_id as company_id,
+select s.id as old_id, s.record_id as person_id, s.copy_values, s.org_id, s.title as typed_title, p.kind, company.id as company_id,
 	company.kind as company_kind, nullif(regexp_replace(s.title, '^\s+|\s+$', '', 'g'), '') as title, s.rank,
+	org.skipped_company_id,
 	s.kind = 'org' and exists (select from public.client c where c.party_id = s.id and c.merged_into is null) as brand_client
 from chain s
 join party p on p.id = s.record_id
 left join outside_id map on map.source = 'old_system' and map.value = s.org_id::text
+left join source_party org on org.id = s.org_id
 left join party company on company.id = map.party_id;
 
 insert into party_company (person_id, company_id, title, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (v.person_id, v.company_id) v.person_id, v.company_id, v.title, p.created_at, p.changed_by_user_id,
 	p.changed_by_job, p.changed_for_user_id, p.updated_at
 from typed_company v join copied p on p.id = v.person_id
-where v.copy_values and v.kind = 'person' and v.company_kind = 'company'
+where v.copy_values and v.kind = 'person' and v.company_kind = 'company' and v.skipped_company_id is null
 order by v.person_id, v.company_id, v.title is null, v.rank;
 
 insert into not_copied
 select old_id, 'org_id', org_id::text, case
 	when kind <> 'person' then 'company links are only kept as brand memberships'
 	when company_id is null then 'its company is not copied'
+	when company_kind = 'company' then 'its record does not hold this company'
 	else 'not a company' end
-from typed_company where org_id is not null and (kind <> 'person' or company_kind is distinct from 'company')
+from typed_company v where org_id is not null and v.skipped_company_id is null
 	-- The brand copy owns a client company's org_id, including corrections when it cannot copy it.
-	and not (kind <> 'person' and brand_client);
-
-insert into not_copied
-select v.old_id, 'org_id', v.org_id::text, 'its record does not hold this company'
-from typed_company v where v.kind = 'person' and v.company_kind = 'company'
+	and not (kind <> 'person' and brand_client)
 	and not exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id);
 
 insert into not_copied
@@ -283,7 +290,7 @@ select v.old_id, 'title', v.typed_title, case
 	when v.org_id is not null then 'its company is not copied'
 	else 'a title without a company' end
 from typed_company v
-where v.title is not null
+where v.title is not null and v.skipped_company_id is null
 	and not exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id and c.title = v.title);
 
 -- These have no place in the new database yet (#271).
@@ -324,7 +331,8 @@ from (
 	select id, 'ref', 'party', ref, 'old_system_ref', regexp_replace(ref, '^\s+|\s+$', '', 'g'), id, id in (select id from old_party)
 	from source_party where ref ~ '\S'
 ) as v
-left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text;
+left join outside_id map on map.source = 'old_system' and map.value = v.party_id::text
+where not exists (select from source_party p where p.id = v.party_id and p.skipped_company_id is not null);
 
 insert into outside_id (source, value, party_id)
 select distinct on (source, value) source, value, party_id
@@ -347,5 +355,20 @@ alter table party_specialty enable trigger stamp_change;
 alter table party_company enable trigger stamp_change;
 alter table party_role enable trigger stamp_change;
 alter table party_role enable trigger lead_stage_needs_evidence;
+
+-- A redirect can point to a real company, so only rows at the original employer count as present.
+with companies as (
+	select count(*) filter (where p.id is null) as skipped_companies,
+		count(p.id) as existing_placeholder_companies
+	from skipped_company s left join party p on p.id = s.id
+), affiliations as (
+	select count(*) filter (where c.person_id is null) as skipped_affiliations,
+		count(distinct c.id) as existing_placeholder_affiliations
+	from typed_company v
+	left join party_company c on c.person_id = v.person_id and c.company_id = v.skipped_company_id
+	where v.kind = 'person' and v.skipped_company_id is not null
+)
+select skipped_companies, skipped_affiliations, existing_placeholder_companies, existing_placeholder_affiliations
+from companies cross join affiliations;
 
 select * from not_copied order by old_id, field, value;

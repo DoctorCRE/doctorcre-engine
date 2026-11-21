@@ -12,6 +12,7 @@ const SYSTEM = id(3);
 const NPI = "9000000015";
 
 const COPY = await readSchema("copy-parties.sql");
+const COPY_VENDORS = await readSchema("copy-vendors.sql");
 
 // A row shaped like today's party, last changed by the system unless it says otherwise.
 const oldParty = (n: number, row: Record<string, string> = {}) => {
@@ -144,12 +145,10 @@ insert into public.record_source (entity_type, entity_id, source_system, externa
 
 const { db, setup, cleanup } = copyTest();
 
-const copy = async (sql = "") => {
-	const results = await db.query(sql + COPY);
-	return (results as unknown as pg.QueryResult[])
-		.at(-1)
-		?.rows.map((row) => Object.values(row));
-};
+const copyResults = async (sql = "") =>
+	(await db.query(sql + COPY)) as unknown as pg.QueryResult[];
+const copy = async (sql = "") =>
+	(await copyResults(sql)).at(-1)?.rows.map((row) => Object.values(row));
 const rows = async (query: string) => (await db.query(query)).rows;
 const rolledBack = async (check: () => Promise<void>) => {
 	await db.query("begin");
@@ -414,6 +413,165 @@ test("a person keeps their company, through its merges, and a title from the sur
 		{ person_id: id(26), company_id: id(11), title: "Lead", started_on: null, ended_on: null },
 	]);
 });
+
+test("placeholder employers stay out of the copy while vendor contacts and real company links carry over", () =>
+	rolledBack(async () => {
+		const first = await copyResults(
+			oldParty(90, { kind: "org", name: "(TBD — enrich)", ref: "P-0090" }) +
+				oldParty(91, { kind: "org", name: "(TBD)" }) +
+				oldParty(92, { kind: "org", name: "Example TBD Holdings" }) +
+				oldParty(93, { kind: "org", name: "(TBD Holdings)" }) +
+				oldParty(94, { kind: "org", name: "(TBD)", merged_into: id(92) }) +
+				oldParty(95, { org_id: id(90), title: "Example broker" }) +
+				oldParty(96, { org_id: id(91) }) +
+				oldParty(97, { org_id: id(94) }) +
+				`insert into public.vendor (id, party_id, category, created_by, updated_by)
+					values ('${id(98)}', '${id(95)}', 'example', '${SYSTEM}', '${SYSTEM}');`,
+		);
+		await db.query("discard temp");
+		await db.query(COPY_VENDORS);
+
+		assert.deepEqual(
+			await rows(
+				`select id, kind, name from party where id between '${id(90)}' and '${id(97)}' order by id`,
+			),
+			[
+				{ id: id(92), kind: "company", name: "Example TBD Holdings" },
+				{ id: id(93), kind: "company", name: "(TBD Holdings)" },
+				{ id: id(95), kind: "person", name: "Example 95" },
+				{ id: id(96), kind: "person", name: "Example 96" },
+				{ id: id(97), kind: "person", name: "Example 97" },
+			],
+		);
+		assert.deepEqual(
+			await rows(`select value, party_id from outside_id
+				where value in ('${id(90)}', '${id(91)}', '${id(94)}', 'P-0090') order by value`),
+			[{ value: id(94), party_id: id(92) }],
+		);
+		assert.deepEqual(
+			await rows(`select person_id, company_id from party_company
+				where person_id between '${id(95)}' and '${id(97)}' order by person_id`),
+			[{ person_id: id(97), company_id: id(92) }],
+		);
+		assert.deepEqual(
+			await rows(`select role from party_role where party_id = '${id(95)}'`),
+			[{ role: "vendor" }],
+		);
+		assert.deepEqual(first.at(-2)?.rows, [
+			{
+				skipped_companies: "2",
+				skipped_affiliations: "2",
+				existing_placeholder_companies: "0",
+				existing_placeholder_affiliations: "0",
+			},
+		]);
+
+		const changes = await rows("select count(*) from change");
+		await db.query("discard temp");
+		const again = await copyResults();
+		assert.deepEqual(
+			again.slice(-2).map((result) => result.rows),
+			first.slice(-2).map((result) => result.rows),
+		);
+		await db.query("discard temp");
+		await db.query(COPY_VENDORS);
+		assert.deepEqual(await rows("select count(*) from change"), changes);
+	}));
+
+test("a rerun recognizes a saved placeholder affiliation and skips a new one", () =>
+	rolledBack(async () => {
+		const again = await copyResults(
+			oldParty(110, { kind: "org", name: "(TBD)", ref: "P-0110" }) +
+				oldParty(111, { org_id: id(110), title: "Example broker" }) +
+				oldParty(112, { org_id: id(110), title: "Example advisor" }) +
+				`insert into public.record_source (entity_type, entity_id, source_system, external_key)
+					values ('party', '${id(110)}', 'example import', 'EX-110');` +
+				`select set_config('engine.job', 'old_system', true);
+				insert into party (id, kind, name) values
+					('${id(110)}', 'company', '(TBD)'), ('${id(111)}', 'person', 'Example 111');
+				insert into outside_id (source, value, party_id) values
+					('old_system', '${id(110)}', '${id(110)}'), ('old_system', '${id(111)}', '${id(111)}');
+				insert into party_company (person_id, company_id, title)
+					values ('${id(111)}', '${id(110)}', 'Saved example title');
+				set constraints all immediate;`,
+		);
+		assert.deepEqual(
+			again
+				.at(-1)
+				?.rows.filter((row) =>
+					[id(110), id(111), id(112)].includes(row.old_id),
+				),
+			[],
+		);
+		assert.deepEqual(again.at(-2)?.rows, [
+			{
+				skipped_companies: "0",
+				skipped_affiliations: "1",
+				existing_placeholder_companies: "1",
+				existing_placeholder_affiliations: "1",
+			},
+		]);
+		assert.deepEqual(
+			await rows(
+				`select person_id, title from party_company where company_id = '${id(110)}'`,
+			),
+			[{ person_id: id(111), title: "Saved example title" }],
+		);
+		assert.deepEqual(
+			await rows(`select source from outside_id where party_id = '${id(110)}'`),
+			[{ source: "old_system" }],
+		);
+	}));
+
+for (const { name, existingCompanies } of [
+	{ name: "(TBD - enrich)", existingCompanies: "1" },
+	{ name: "Example Dental Holdings", existingCompanies: "0" },
+]) {
+	test(`a saved placeholder merged into ${name} cannot supply a new affiliation`, () =>
+		rolledBack(async () => {
+			const result = await copyResults(
+				oldParty(120, { kind: "org", name }) +
+					oldParty(121, { kind: "org", name: "(TBD)" }) +
+					oldParty(122, { org_id: id(121), title: "Example broker" }) +
+					`insert into public.record_source (entity_type, entity_id, source_system, external_key)
+						values ('party', '${id(121)}', 'example import', 'EX-121');
+					select set_config('engine.job', 'old_system', true);
+					insert into party (id, kind, name) values
+						('${id(120)}', 'company', '${name}'), ('${id(121)}', 'company', '(TBD)');
+					insert into outside_id (source, value, party_id) values
+						('old_system', '${id(120)}', '${id(120)}'), ('old_system', '${id(121)}', '${id(121)}');
+					set constraints all immediate;
+					select set_config('engine.user_id', '${PARTNER}', true);
+					select merge_party('${id(121)}', '${id(120)}');`,
+			);
+			assert.deepEqual(
+				await rows(
+					`select company_id, title from party_company where person_id = '${id(122)}'`,
+				),
+				[],
+			);
+			assert.deepEqual(
+				await rows(
+					`select party_id from outside_id where source = 'old_system' and value = '${id(121)}'`,
+				),
+				[{ party_id: id(120) }],
+			);
+			assert.deepEqual(
+				await rows(
+					`select value from outside_id where source = 'example_import' and value = 'EX-121'`,
+				),
+				[],
+			);
+			assert.deepEqual(result.at(-2)?.rows, [
+				{
+					skipped_companies: "1",
+					skipped_affiliations: "1",
+					existing_placeholder_companies: existingCompanies,
+					existing_placeholder_affiliations: "0",
+				},
+			]);
+		}));
+}
 
 test("today's import history and reference numbers are outside ids of the record each old one became", async () => {
 	// biome-ignore format: one row per id
