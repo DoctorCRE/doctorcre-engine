@@ -1,8 +1,10 @@
 import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
+	followUpTitlePrefix,
 	homeTitle,
 	savedHomeTitle,
+	shortenHomeTitle,
 	stripHomeTitlePrefixes,
 } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
@@ -17,7 +19,7 @@ const phoneNumber =
 const meetingSuffix =
 	/\s*\|\s*([^|]+, (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\p{L}*,? \p{L}{3,9} \d{1,2}(?:,? \d{4},?)? \d{1,2}:\d{2}\s*[AP]M\.?)$/iu;
 const actionStart =
-	/^(?:Please )?(?:ask|call|check|confirm|contact|discuss|draft|email|follow up|forward|meet|prepare|reply|review|schedule|send|verify)\b/i;
+	/^(?:Please )?(?:ask|call|check|confirm|contact|discuss|draft|email|follow up|forward|meet|prepare|reply|review|schedule|send|verify|visit)\b/i;
 const instructionSuffix =
 	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/i;
 const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
@@ -97,19 +99,26 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		.replace(/\s+/g, " ")
 		.replace(edgePunctuation, "");
 	const cadence = vendorCadence.exec(savedText)?.[1];
-	const isMeetingSubject = meeting !== null && !actionStart.test(action);
-	const actionTitle = isMeetingSubject
-		? homeTitle("follow_up", action)
-		: savedHomeTitle(action);
+	const subjectPrefix =
+		meeting && !actionStart.test(action) ? followUpTitlePrefix : "";
+	const actionTitle =
+		meeting && action
+			? shortenHomeTitle(action, subjectPrefix)
+			: savedHomeTitle(action);
 	const title = cadence
 		? homeTitle("vendor_check_in", target)
 		: actionTitle ||
 			(contact
 				? homeTitle("call_follow_up", contact)
 				: homeTitle("follow_up", target));
+	const overflow =
+		meeting && actionTitle
+			? action.slice(actionTitle.length - subjectPrefix.length).trimStart()
+			: "";
 	const instruction =
-		title === action || (isMeetingSubject && title !== homeTitle("follow_up"))
+		title === actionTitle && actionTitle
 			? homeWhy(
+					overflow.charAt(0).toUpperCase() + overflow.slice(1),
 					savedAction
 						.match(phoneNumber)
 						?.map((number) => number.replace(/^at\s+/i, ""))

@@ -2,6 +2,7 @@ const decisionPrefix = /^(?:[A-Z][A-Z'.-]* )+DECIDE\s*:\s*/;
 const statusPrefix =
 	/^(?:(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)|review(?: follow-up| call note)?\s*:\s*)/i;
 const titleCharacters = new Intl.Segmenter("en", { granularity: "grapheme" });
+export const followUpTitlePrefix = "Follow up on ";
 
 const chooseDeal = (sender: string) =>
 	sender
@@ -16,7 +17,7 @@ const replyTarget = (sender: string, deal: string) =>
 
 const templates = {
 	follow_up: (target) =>
-		target ? `Follow up on ${target}` : "Review the follow-up",
+		target ? followUpTitlePrefix + target : "Review the follow-up",
 	call_follow_up: (contact) =>
 		contact ? `Follow up with ${contact}` : "Review the call follow-up",
 	vendor_check_in: (vendor) => `Check in with ${vendor || "the vendor"}`,
@@ -63,13 +64,24 @@ export function stripHomeTitlePrefixes(text: string) {
 	}
 }
 
-function fitsLength(text: string) {
-	if (!text) return false;
+function titleLimitIndex(text: string) {
 	let remaining = 90;
-	for (const _ of titleCharacters.segment(text)) {
-		if (--remaining < 0) return false;
+	for (const { index } of titleCharacters.segment(text)) {
+		if (--remaining < 0) return index;
 	}
-	return true;
+	return text.length;
+}
+
+function fitsLength(text: string) {
+	return text.length > 0 && titleLimitIndex(text) === text.length;
+}
+
+export function shortenHomeTitle(text: string, prefix: string) {
+	const title = prefix + text;
+	const limit = titleLimitIndex(title);
+	if (limit === title.length) return title;
+	const boundary = title.lastIndexOf(" ", limit);
+	return title.slice(0, boundary > prefix.length ? boundary : limit);
 }
 
 function fitsTitle(text: string) {

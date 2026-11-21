@@ -39,6 +39,24 @@ for (const [scenario, what, title, why] of [
 		"Example Leasing, Tue Oct 27 4:30 PM.",
 	],
 	[
+		"a visit instruction with a meeting time",
+		"Visit the suite with Pat | Example Leasing, Tue Oct 27 4:30 PM",
+		"Visit the suite with Pat",
+		"Example Leasing, Tue Oct 27 4:30 PM.",
+	],
+	[
+		"a long copied meeting subject",
+		"Lease renewal discussion for the north building with the property team about accessibility and the revised floor plan | Example Leasing, Tue Oct 27 4:30 PM",
+		"Follow up on Lease renewal discussion for the north building with the property team about",
+		"Accessibility and the revised floor plan. Example Leasing, Tue Oct 27 4:30 PM.",
+	],
+	[
+		"a long action with a meeting time",
+		`${longInstruction} | Example Leasing, Tue Oct 27 4:30 PM`,
+		"Confirm the accessibility requirements for the proposed suite with the landlord and ask",
+		"For the revised drawing in writing. Example Leasing, Tue Oct 27 4:30 PM.",
+	],
+	[
 		"a long single instruction",
 		longInstruction,
 		"Follow up on Example Vendor",
