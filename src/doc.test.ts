@@ -49,13 +49,19 @@ type Turn = {
 	answer: unknown;
 	context: unknown;
 	waiting_reason: string | null;
+	confirmation: unknown;
 };
 type Body<Path> = { error?: string } & (Path extends "/turns"
 	? { conversation_id: string; turn: Turn }
 	: Path extends `/conversations/${string}`
 		? { conversation: Chat; turns: Turn[] }
 		: Path extends `/turns/${string}/confirmation`
-			? { result: unknown; replayed?: true }
+			? {
+					result: unknown;
+					replayed?: true;
+					next_step_id?: string;
+					href?: string;
+				}
 			: { conversations: Chat[]; next_before: string | null });
 
 function client(user = "joe") {
@@ -732,6 +738,201 @@ test("the claim-state migration preserves old turns and enforces one queued or w
 		),
 		{ code: "23514" },
 	);
+});
+
+async function sharedDeal() {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		insert into deal (id, name, owner_user_id) select $1::uuid, $1::uuid::text, $2 from stamp`,
+		[id, other],
+	);
+	return { ref: { kind: "deal", id }, href: `/deals?deal=${id}` };
+}
+
+async function answeredProposal(proposal: object, partner = owner) {
+	const id = randomUUID();
+	const conversation_id = randomUUID();
+	const answer = {
+		kind: "answer",
+		text: "Proposed save",
+		sources: [],
+		proposal,
+	};
+	await db.query(
+		`with conversation as (
+			insert into doc_conversation (id, owner_user_id) values ($1, $2) returning id
+		)
+		insert into doc_turn (id, conversation_id, owner_user_id, position, idempotency_key,
+			request_hash, question, state, answer)
+		select $3, id, $2, 1, gen_random_uuid(), 'example', 'Sample', 'answered', $4
+		from conversation`,
+		[conversation_id, partner, id, answer],
+	);
+	return { conversation_id, path: `/turns/${id}/confirmation` as const };
+}
+
+const nextStepProposal = {
+	kind: "next_step",
+	what: "Call next week",
+	due_on: null,
+};
+
+test("Doc confirms exactly one edited note as the recorded partner", async () => {
+	const target = await sharedDeal();
+	const { path, conversation_id } = await answeredProposal({
+		kind: "note",
+		target,
+		text: "Original note",
+	});
+	const notes = async () =>
+		(
+			await db.query(
+				`select a.id, a.summary, a.changed_by_user_id, a.changed_by_job
+			from activity a join activity_about link on link.activity_id = a.id
+			where a.kind = 'note' and link.deal_id = $1`,
+				[target.ref.id],
+			)
+		).rows;
+	assert.deepEqual(await notes(), []);
+	const send = client();
+	const idempotency_key = randomUUID();
+	const edits = { text: "Confirmed note" };
+	assert.equal(
+		(await send(path, 400, { idempotency_key, edits: { what: "Call" } })).error,
+		"invalid_field_value",
+	);
+	const { result } = await send(path, 200, { idempotency_key, edits });
+	const stored = await notes();
+	assert.deepEqual(stored, [
+		{
+			id: stored[0]?.id,
+			summary: edits.text,
+			changed_by_user_id: owner,
+			changed_by_job: null,
+		},
+	]);
+	assert.deepEqual(result, {
+		kind: "note",
+		id: stored[0]?.id,
+		href: target.href,
+	});
+	const chat = await send(`/conversations/${conversation_id}`, 200);
+	assert.deepEqual(chat.turns[0]?.confirmation, result);
+});
+
+test("Doc confirms a next step on a client with the confirming partner as owner", async () => {
+	const id = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into role (slug, label) values ('client', 'Client');
+		insert into how_found (slug, label) values ('referral', 'Referral');
+		insert into party (id, kind, name, how_found) values ('${id}', 'company', 'Example Client', 'referral');
+		insert into party_role (party_id, role) values ('${id}', 'client');
+		insert into client (party_id, owner_user_id) values ('${id}', '${owner}');
+		commit;`);
+	const href = `/clients?record=${id}`;
+	const { path } = await answeredProposal(
+		{
+			...nextStepProposal,
+			target: { ref: { kind: "client", id }, href },
+		},
+		other,
+	);
+	const due_on = "2027-01-12";
+	const { result } = await client("dell")(path, 200, {
+		idempotency_key: randomUUID(),
+		edits: { due_on },
+	});
+	const { rows } = await db.query(
+		`select id, what, due_on::text, owner_party_id, changed_by_user_id, changed_by_job
+		from next_step where party_id = $1 and status = 'open'`,
+		[id],
+	);
+	assert.deepEqual(rows, [
+		{
+			id: rows[0]?.id,
+			what: nextStepProposal.what,
+			due_on,
+			owner_party_id: other,
+			changed_by_user_id: other,
+			changed_by_job: null,
+		},
+	]);
+	assert.deepEqual(result, { kind: "next_step", id: rows[0]?.id, href });
+});
+
+test("concurrent Doc confirmations return the existing open step for that partner", async () => {
+	const target = await sharedDeal();
+	const proposal = { ...nextStepProposal, target };
+	const first = await answeredProposal(proposal);
+	const second = await answeredProposal(proposal);
+	const third = await answeredProposal(proposal, other);
+	const args = () => ({ idempotency_key: randomUUID(), edits: {} });
+	const send = client();
+	const outcomes = await Promise.all([
+		send(first.path, [200, 409], args()),
+		send(second.path, [200, 409], args()),
+	]);
+	const winner = outcomes.find((outcome) => outcome.result);
+	const conflict = outcomes.find((outcome) => outcome.error);
+	const {
+		rows: [step],
+	} = await db.query(
+		"select id from next_step where deal_id = $1 and owner_party_id = $2 and status = 'open'",
+		[target.ref.id, owner],
+	);
+	assert.ok(step);
+	assert.deepEqual(winner?.result, {
+		kind: "next_step",
+		id: step.id,
+		href: target.href,
+	});
+	assert.equal(conflict?.error, "open_step_exists");
+	assert.equal(conflict.next_step_id, step.id);
+	assert.equal(conflict.href, target.href);
+	await client("dell")(third.path, 200, args());
+	const { rows } = await db.query(
+		"select owner_party_id from next_step where deal_id = $1 and status = 'open'",
+		[target.ref.id],
+	);
+	assert.deepEqual(
+		rows.map((row) => row.owner_party_id).sort(),
+		[owner, other].sort(),
+	);
+});
+
+test("Doc replays a lost confirmation and refuses different edits with the same key", async () => {
+	const target = await sharedDeal();
+	const { path } = await answeredProposal({ ...nextStepProposal, target });
+	const send = client();
+	const args = { idempotency_key: randomUUID(), edits: { what: "First text" } };
+	const saved = await send(path, 200, args);
+	assert.deepEqual(await send(path, 200, args), { ...saved, replayed: true });
+	assert.equal(
+		(await send(path, 409, { ...args, edits: { what: "Other text" } })).error,
+		"key_reuse",
+	);
+	assert.equal(
+		(await send(path, 409, { ...args, idempotency_key: randomUUID() })).error,
+		"already_confirmed",
+	);
+});
+
+test("Doc refuses a foreign turn and a proposal for a record that is gone", async () => {
+	const target = await sharedDeal();
+	const { path } = await answeredProposal({
+		kind: "note",
+		target,
+		text: "Example",
+	});
+	const args = { idempotency_key: randomUUID(), edits: {} };
+	assert.equal((await client("dell")(path, 404, args)).error, "not_found");
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		delete from deal using stamp where deal.id = $1`,
+		[target.ref.id],
+	);
+	assert.equal((await client()(path, 409, args)).error, "target_changed");
 });
 
 test("Doc confirms an exact pending revision with the existing edit and receipt rules", async () => {

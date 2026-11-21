@@ -3,11 +3,11 @@ import { type Selectable, sql, type Transaction } from "kysely";
 import { Refusal, refuse, unregisteredFields } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import {
-	confirmDocRevision,
+	confirmDocSave,
 	draftContext,
 	draftReference,
 	requirePendingDocDraft,
-} from "./doc-draft.ts";
+} from "./doc-confirmation.ts";
 import { docLinkState } from "./doc-link.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
@@ -313,5 +313,5 @@ export function docRoutes() {
 			const result = await transact(c, (tx) => reserve(tx, request));
 			return c.json(result, result.turn.state === "answered" ? 200 : 202);
 		})
-		.post("/turns/:id/confirmation", userStamp, confirmDocRevision);
+		.post("/turns/:id/confirmation", userStamp, confirmDocSave);
 }
