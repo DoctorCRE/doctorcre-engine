@@ -93,7 +93,7 @@ deals.get("/client-fit", async (c) => {
 	const params = new URL(c.req.url).searchParams;
 	const refused = checkFields(params, ["vertical", "city", "state"]);
 	if (refused) return refuse(c, refused);
-	return answer(c, "ideal-client-profile", async (db) => {
+	return answerNextRead(c, "ideal-client-profile", async (db) => {
 		const fit = await readClientFit(db, {
 			vertical: params.get("vertical") || null,
 			city: params.get("city") || null,
