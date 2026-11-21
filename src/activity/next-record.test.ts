@@ -1386,6 +1386,14 @@ test("email split: a complete request stores both parts beside the body", async 
 		body,
 		...splitText,
 	});
+	await assertRows(
+		1,
+		`select from activity a where id = $1
+		and (activity_entry(a)->'email'->>'body') = $2
+		and not ((activity_entry(a)->'email') ?| array['authored', 'history'])`,
+		answer.body.activity_id,
+		body,
+	);
 });
 
 test("email split: either part can be an empty string", async () => {

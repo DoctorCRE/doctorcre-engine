@@ -2454,7 +2454,7 @@ create function activity_entry(a activity) returns jsonb
 language sql stable
 begin atomic
 	select to_jsonb(a) - 'calendar_review_key' - 'calendar_review_user_id' || jsonb_build_object('email', (
-		select to_jsonb(e) - 'activity_id' - 'activity_kind' - 'imported' - 'conversation_id' || jsonb_build_object('documents', (
+		select to_jsonb(e) - array['activity_id', 'activity_kind', 'imported', 'conversation_id', 'authored', 'history'] || jsonb_build_object('documents', (
 			select coalesce(jsonb_agg(to_jsonb(doc) order by doc.name, doc.id), '[]')
 			from email_document ed join document doc on doc.id = ed.document_id
 			where ed.email_activity_id = e.activity_id

@@ -228,7 +228,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a deal's kind, reason, lease it renews, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
-- an activity's time, sender and summary;
+- an activity's time, sender and summary, and a stored email's authored and earlier text;
 - a next step's text, owner, due date and done time;
 - a user's time zone, quiet hours and device notifications, a Home mark's disposition, snooze time, drop reason and whom it waits on and why, and a Home update's `read_at` (`read_at` is the only updatable column on `home_update`);
 - a round's status, and a critical date's status and resolution reason;
