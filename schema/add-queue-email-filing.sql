@@ -112,11 +112,6 @@ create or replace trigger supersede_filing before insert or update of status, fi
 create or replace function settle_filing_proposals() returns trigger
 language plpgsql as $$
 begin
-	if exists (select from proposal p where p.activity_id = new.activity_id and p.id <> new.id
-		and p.kind in ('file_to_deal', 'possible_new_deal') and p.status in ('accepted', 'dismissed')) then
-		raise exception 'the email already has a filing decision'
-			using errcode = 'check_violation', constraint = 'proposal_final';
-	end if;
 	update proposal set status = 'superseded'
 	where activity_id = new.activity_id and status = 'pending' and kind in ('file_to_deal', 'possible_new_deal');
 	return null;

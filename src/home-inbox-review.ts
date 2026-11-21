@@ -2,12 +2,10 @@ import { type RawBuilder, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import {
 	filingChoices,
-	filingReviewEvidence,
 	filingReviewNeeded,
 	filingReviewTitle,
 	filingScope,
 	hasFiledFacts,
-	partnerSettledFiling,
 } from "./activity/filing-evidence.ts";
 import { isoMillis, Refusal } from "./answer.ts";
 import {
@@ -141,8 +139,7 @@ const visibleSuggestion = (userId: string) => sql<boolean>`
 			and not (${filingReviewNeeded(sql.ref("p.activity_id"), sql.ref("p.deal_id"))}) then false
 		when p.kind = 'possible_new_deal' and p.status = 'pending' and (
 			${hasFiledFacts(sql.ref("p.activity_id"), true)} or
-			${partnerSettledFiling(sql.ref("p.activity_id"))} or
-			(p.evidence = ${filingReviewEvidence} and ${hasFiledFacts(sql.ref("p.activity_id"))})
+			(${filingScope("p")} is not null and ${hasFiledFacts(sql.ref("p.activity_id"))})
 		) then false
 		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 		when p.kind = 'email_lead' then p.changed_for_user_id = ${userId}::uuid
@@ -290,7 +287,7 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 						then 'Add ' || party.name || ' as a lead'
 					when p.kind = 'phase_move' then 'Move to ' || phase.label
 					when p.kind = 'file_to_deal' then 'File email to ' || d.name
-					when p.kind = 'possible_new_deal' and p.evidence = ${filingReviewEvidence}
+					when p.kind = 'possible_new_deal' and ${filingScope("p")} is not null
 						then ${filingReviewTitle}
 					when p.kind = 'possible_new_deal' then 'Review possible new deal'
 					when p.kind = 'lead_stage_move' then 'Review lead stage'
@@ -657,9 +654,7 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 		log_call: proposed,
 	}[suggestion.kind];
 	const count = suggestion.suggestions.length;
-	const filingReview =
-		suggestion.kind === "possible_new_deal" &&
-		suggestion.evidence === filingReviewEvidence;
+	const filingReview = choices.length > 0;
 	return {
 		title: filingReview
 			? filingReviewTitle

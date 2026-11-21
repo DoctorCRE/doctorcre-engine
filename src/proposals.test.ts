@@ -493,18 +493,7 @@ test("a phase quote is derived at storage and refuses a stale acceptance", async
 test("filing accepts the suggested deal, requires a correction reason, and never creates a deal", async () => {
 	const [, p] = await propose({ kind: "file_to_deal", deal_id: DEAL });
 	assert.equal((await decide(p.proposal_id, {}))[0], 200);
-	const correction = id(65);
-	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into activity (id, kind, happened_at) values ('${correction}', 'email', now());
-		insert into email (activity_id, message_id, sender, subject, body)
-			values ('${correction}', 'correction@example.test', 'clinic@example.test', 'Filing correction', 'Example');
-		insert into activity_about (activity_id, deal_id) values ('${correction}', '${DEAL}');
-		insert into activity_about (activity_id, party_id) values ('${correction}', '${CLIENT}');
-		commit;`);
-	const [, fresh] = await propose({
-		kind: "possible_new_deal",
-		activity_id: correction,
-	});
+	const [, fresh] = await propose({ kind: "possible_new_deal" });
 	assert.equal(
 		(await decide(fresh.proposal_id, {}))[1].rule,
 		"proposal_filing_open_deal",
@@ -530,7 +519,7 @@ test("filing accepts the suggested deal, requires a correction reason, and never
 		(
 			await db.query(
 				"select deal_id from activity_about where activity_id=$1 and deal_id is not null",
-				[correction],
+				[EMAIL],
 			)
 		).rows.map((r) => r.deal_id),
 		[OTHER],
@@ -539,7 +528,7 @@ test("filing accepts the suggested deal, requires a correction reason, and never
 		(
 			await db.query(
 				"select party_id from activity_about where activity_id=$1 and party_id is not null",
-				[correction],
+				[EMAIL],
 			)
 		).rows[0].party_id,
 		CLIENT,

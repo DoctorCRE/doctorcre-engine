@@ -1,11 +1,7 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import {
-	filingReviewNeeded,
-	filingScope,
-	partnerSettledFiling,
-} from "./activity/filing-evidence.ts";
+import { filingReviewNeeded, filingScope } from "./activity/filing-evidence.ts";
 import { lockEmail } from "./activity/next-record.ts";
 import { answerNextRead, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
@@ -371,9 +367,8 @@ async function lockFiling(
 		select sibling.id from proposal sibling
 		where sibling.id = any(${rows.map((row) => row.id)}::uuid[])
 			and (sibling.id = ${p.id}::uuid or (sibling.status = 'pending' and
-				case when sibling.kind = 'file_to_deal'
-					then ${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))}
-					else not ${partnerSettledFiling(sql.ref("sibling.activity_id"))} end))
+				(sibling.kind <> 'file_to_deal' or
+					${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))})))
 		order by sibling.id for update
 	`.execute(tx);
 	return members.map((row) => row.id);
@@ -438,14 +433,6 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
-				if (filing && p.activity_id) {
-					const {
-						rows: [email],
-					} = await sql<{ decided: boolean }>`
-						select ${partnerSettledFiling(sql.val(p.activity_id))} as decided
-					`.execute(tx);
-					if (email?.decided) return fail(409, "already_decided");
-				}
 				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
 					const d = await dealNow(tx, p.deal_id);
 					if (

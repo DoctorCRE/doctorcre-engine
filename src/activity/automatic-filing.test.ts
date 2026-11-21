@@ -502,6 +502,45 @@ async function filingProposals(activity: string) {
 	return rows.map(({ id }) => id);
 }
 
+test("a new legacy correction can move an email after a partner filed it", async () => {
+	const { activity_id } = await store(mail("correction", "Filing correction"));
+	const filing = await propose(activity_id);
+	const accept = (proposalId: string, destination: string) =>
+		save(partner, `proposals/${proposalId}/decision`, {
+			idempotency_key: randomUUID(),
+			decision: "accept",
+			deal_id: destination,
+			reason: "Partner selected this deal.",
+		});
+	assert.equal((await accept(filing, deal))[0], 200);
+
+	const [created, { proposal_id: correction }] = await save(
+		capture,
+		"proposals",
+		{
+			idempotency_key: randomUUID(),
+			kind: "possible_new_deal",
+			activity_id,
+			evidence,
+		},
+	);
+	assert.equal(created, 201);
+	assert.ok(typeof correction === "string");
+	const review = await cards(correction);
+	const [corrected, outcome] = await accept(correction, otherDeal);
+	assert.equal(corrected, 200, JSON.stringify(outcome));
+	assert.equal(review.length, 1);
+	assert.deepEqual(
+		(
+			await db.query(
+				"select deal_id from activity_about where activity_id = $1 and deal_id is not null",
+				[activity_id],
+			)
+		).rows,
+		[{ deal_id: otherDeal }],
+	);
+});
+
 for (const decision of ["dismiss", "accept"]) {
 	test(`a partner's ${decision} settles filing for an already claimed second copy`, async () => {
 		const message = mail(`shared-${decision}`, `Shared filing ${decision}`);

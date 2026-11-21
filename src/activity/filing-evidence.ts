@@ -36,13 +36,6 @@ export function hasFiledFacts(
 			and (not ${toDeal} or r.answer->>'deal_id' is not null))`;
 }
 
-export function partnerSettledFiling(activityId: Expression<string | null>) {
-	return sql<boolean>`exists (select from proposal settled
-		where settled.activity_id = ${activityId}
-			and settled.kind in ('file_to_deal', 'possible_new_deal')
-			and settled.status in ('accepted', 'dismissed'))`;
-}
-
 function partnerUnlinked(
 	activityId: Expression<string | null>,
 	target: Expression<unknown>,
@@ -66,7 +59,7 @@ export function filingReviewNeeded(
 	) and not ${partnerUnlinked(
 		activityId,
 		sql`jsonb_build_object('deal_id', ${dealId})`,
-	)} and not ${hasFiledFacts(activityId, true)} and not ${partnerSettledFiling(activityId)}`;
+	)} and not ${hasFiledFacts(activityId, true)}`;
 }
 
 export async function eligibleMailLinks(

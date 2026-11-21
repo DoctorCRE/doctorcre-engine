@@ -9,7 +9,6 @@ import {
 	filingReviewEvidence,
 	filingReviewNeeded,
 	hasFiledFacts,
-	partnerSettledFiling,
 } from "./filing-evidence.ts";
 import { linkActivity, lockEmail, recordActivity } from "./next-record.ts";
 
@@ -44,7 +43,11 @@ export async function saveFilingJudgment(
 		from activity where id = ${source} and not exists (
 			select from lead_email_source where activity_id = ${source}
 		)
-		and not ${hasFiledFacts(sourceId)} and not ${partnerSettledFiling(sourceId)}
+		and not ${hasFiledFacts(sourceId)} and not exists (
+			select from proposal settled where settled.activity_id = ${source}
+				and settled.kind in ('file_to_deal', 'possible_new_deal')
+				and settled.status in ('accepted', 'dismissed')
+		)
 	`.execute(tx);
 	if (!email) return;
 
