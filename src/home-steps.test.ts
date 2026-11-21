@@ -42,6 +42,13 @@ for (const [scenario, what, title, why, contact = null] of [
 		"https://example.test/files/2025550142/confirm",
 	],
 	[
+		"a bare URL containing Markdown-like punctuation",
+		"Review https://example.test/report[final](draft)",
+		"Review https://example.test/report[final](draft)",
+		"",
+	],
+	["a record-code-only suffix", "Review case | C-123", "Review case", ""],
+	[
 		"a phone number immediately after a separator",
 		"Review case | (202) 555-0142",
 		"Review case",

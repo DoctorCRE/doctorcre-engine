@@ -15,11 +15,15 @@ const storedDate =
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
 const phoneNumber =
 	/(?<!\w)(?:at\s+)?(?:\+[1-9](?:[ .-]?\d){7,14}|(?:\+?1[ .-]?)?(?:\(\d{3}\)\s*|\d{3}[ .-]?)\d{3}[ .-]?\d{4})(?:\s*(?:ext\.?|x)\s*\d+)?(?!\w)/gi;
-const stepSeparator = / [|—–] /;
+const stepSeparator = /\s[|—–]\s/;
 const instructionSuffix =
 	/\. (?=(?:If|Before|After|Then|Otherwise|Make sure|Go through)\b)/i;
 const vendorCadence = /^Relationship touch\b.*\b(\d+-day vendor cadence)\.?$/i;
-const markdownLink = /\[([^\]]+)\]\([^\s)]+\)/g;
+const markdownLink = /\[([^\]]+)\]\(([^\s)]+)\)/g;
+const urlOrMarkdownLink = new RegExp(
+	`${homeUrl.source}|${markdownLink.source}`,
+	"gi",
+);
 
 export function homeDisplayText(text: string | null) {
 	return (text ?? "")
@@ -73,11 +77,43 @@ type StepEvidence = {
 	source_evidence: string | null;
 };
 
-function stepPart(text: string) {
+function maskStepUrls(raw: string) {
+	const urls: string[] = [];
+	let marker = "\uE000";
+	while (raw.includes(marker)) marker += "\uE000";
+	const mask = (url: string) => `${marker}${urls.push(url) - 1}${marker}`;
+	const text = raw.replace(
+		urlOrMarkdownLink,
+		(match, label?: string, destination?: string) =>
+			label === undefined || destination === undefined
+				? mask(match)
+				: `[${label.replace(homeUrl, mask)}](${destination.replace(homeUrl, mask)})`,
+	);
+	const token = new RegExp(`${marker}(\\d+)${marker}`, "g");
+	const unmask = (value: string) =>
+		value.replace(token, (_, index: string) => urls[Number(index)] ?? "");
+	const unmaskWhy = (value: string | null) =>
+		unmask(value?.endsWith(marker) ? value : homeWhy(value));
+	return { text, unmask, unmaskWhy };
+}
+
+function splitStepText(text: string): [string, string] {
+	const separator = stepSeparator.exec(text);
+	return separator
+		? [
+				text.slice(0, separator.index),
+				text.slice(separator.index + separator[0].length),
+			]
+		: [text, ""];
+}
+
+function cleanStepPart(raw: string) {
+	const text = homeStepText(raw.replace(/\(\s*T-\d+\s*\)/gi, " "));
 	const suffix = instructionSuffix.exec(text);
 	const wording = text.slice(0, suffix?.index);
 	const supporting = suffix ? text.slice(suffix.index + suffix[0].length) : "";
 	return {
+		text,
 		action: wording
 			.replace(phoneNumber, " ")
 			.replace(/\s+/g, " ")
@@ -92,58 +128,36 @@ function stepPart(text: string) {
 }
 
 export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
-	const urls: string[] = [];
-	let urlMarker = "\uE000";
-	while (step.title.includes(urlMarker)) urlMarker += "\uE000";
-	const savedText = homeStepText(
-		step.title
-			.replace(markdownLink, "$1")
-			.replace(homeUrl, (url) => {
-				const index = urls.length;
-				urls.push(url);
-				return `${urlMarker}${index}${urlMarker}`;
-			})
-			.replace(/\(\s*T-\d+\s*\)/gi, " "),
-	);
-	const urlToken = new RegExp(`${urlMarker}(\\d+)${urlMarker}`, "g");
-	const restoreUrls = (text: string) =>
-		text.replace(urlToken, (_, index: string) => urls[Number(index)] ?? "");
+	const masked = maskStepUrls(step.title);
+	const [leftText, rightText] = splitStepText(masked.text);
+	const left = cleanStepPart(leftText);
+	const right = cleanStepPart(rightText);
+	const cadence = vendorCadence.exec(
+		`${left.text} ${right.text}`.trimEnd(),
+	)?.[1];
+	const leadingPhone = left.phones && !left.action && !left.supporting;
+	const action = masked.unmask(leadingPhone ? right.action : left.action);
+	const explicitDetails =
+		cadence || leadingPhone ? "" : masked.unmaskWhy(right.action);
+	const details = cadence
+		? [homeWhy(cadence)]
+		: [left.phones, right.phones, left.supporting, right.supporting].map(
+				masked.unmaskWhy,
+			);
 	const target = homeDisplayText(step.context_label);
+	const shortened = cadence
+		? { title: homeTitle("vendor_check_in", target), url: "", overflow: "" }
+		: splitHomeTitle(action);
+	const title = shortened.title || homeTitle("follow_up", target);
+
 	const contact = homeDisplayText(step.call_contact);
 	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
 	const hold =
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
 			: null;
-	const cadence = vendorCadence.exec(savedText)?.[1];
-	const separator = cadence ? null : stepSeparator.exec(savedText);
-	const left = stepPart(savedText.slice(0, separator?.index));
-	const right = separator
-		? stepPart(savedText.slice(separator.index + separator[0].length))
-		: null;
-	const leadingPhone = right && left.phones && !left.action && !left.supporting;
-	const explicitDetails = leadingPhone ? "" : (right?.action ?? "");
-	const shortened = cadence
-		? { title: homeTitle("vendor_check_in", target), url: "", overflow: "" }
-		: splitHomeTitle(restoreUrls(leadingPhone ? right.action : left.action));
-	const title = shortened.title || homeTitle("follow_up", target);
-	const details = cadence
-		? [cadence]
-		: [
-				left.phones,
-				right?.phones ?? null,
-				left.supporting,
-				right?.supporting ?? null,
-			];
-	const stepWhy = (...facts: (string | null)[]) =>
-		[
-			shortened.url,
-			...[explicitDetails, shortened.overflow, ...facts].map((fact) =>
-				fact?.endsWith(urlMarker)
-					? restoreUrls(fact)
-					: restoreUrls(homeWhy(fact)),
-			),
-		]
+	const stepWhy = (...facts: string[]) =>
+		[shortened.url, explicitDetails, homeWhy(shortened.overflow), ...facts]
 			.filter(Boolean)
 			.join(" ");
 	const titleText = title.replace(/[.!?]+$/, "");
@@ -153,15 +167,16 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		return {
 			title,
 			why: stepWhy(
-				`Call${contact ? ` with ${contact}` : ""} on ${homeDate(step.call_at)}`,
-				extraEvidence(
-					homeDisplayText(evidence?.call_quote ?? null) ||
-						homeDisplayText(evidence?.call_summary ?? null) ||
-						"Call details unavailable",
+				homeWhy(
+					`Call${contact ? ` with ${contact}` : ""} on ${homeDate(step.call_at)}`,
+					extraEvidence(
+						homeDisplayText(evidence?.call_quote ?? null) ||
+							homeDisplayText(evidence?.call_summary ?? null) ||
+							"Call details unavailable",
+					),
 				),
 				...details,
-				hold,
-				due,
+				homeWhy(hold, due),
 			),
 		};
 	}
@@ -175,9 +190,11 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 	return {
 		title,
 		why: stepWhy(
-			hold || set,
-			extraEvidence(homeDisplayText(evidence.source_evidence)),
-			due,
+			homeWhy(
+				hold || set,
+				extraEvidence(homeDisplayText(evidence.source_evidence)),
+				due,
+			),
 			...details,
 		),
 	};

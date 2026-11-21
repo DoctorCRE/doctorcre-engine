@@ -368,8 +368,8 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 
 test("A held follow-up explains the saved hold", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(held), {
-		title: "Call about the suite",
-		why: "Held until Apr 1, 2999.",
+		title: "Follow up on Dr. Example",
+		why: "Call about the suite. Held until Apr 1, 2999.",
 	});
 });
 
@@ -461,7 +461,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 				"Email about the report (V-ABC-012), then call.",
 				"Email about the report, then call.",
 			],
-			["T-3 months — Confirm lease timing", "Confirm lease timing"],
+			["T-3 months — Confirm lease timing", "", "Confirm lease timing. "],
 			[
 				"Check in with Example Vendor (T-137).",
 				"Check in with Example Vendor.",
@@ -489,19 +489,20 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 				"Schedule the next check-in with the office manager",
 			],
 			["Schedule the next follow-up", "Schedule the next follow-up"],
-			["L-456 — Timing", "Timing"],
+			["L-456 — Timing", "", "Timing. "],
 			[
 				"Review follow-up: Refer a broker to Maya Reed",
 				"Refer a broker to Maya Reed",
 			],
-			["NONE — Check in after June", "Check in after June"],
+			["NONE — Check in after June", "", "Check in after June. "],
 			["C-026", ""],
 		] as const
-	).map(([what, title]) => ({
+	).map(([what, title, details = ""]) => ({
 		id: randomUUID(),
 		party: randomUUID(),
 		what,
 		title,
+		details,
 	}));
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);`);
 	for (const { id, party, what } of examples) {
@@ -535,7 +536,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 			[
 				{
 					title: example.title || "Follow up on Example Vendor",
-					why: "Follow-up set on Nov 17, 2026.",
+					why: `${example.details}Follow-up set on Nov 17, 2026.`,
 					primary_action: "Mark done",
 					due_on: null,
 					open_url: `/relationships?node=party:${example.party}&step=${example.id}`,
