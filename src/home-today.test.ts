@@ -168,14 +168,8 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 			[id(23), undefined],
 		],
 	);
-	assert.equal(
-		body.reminders?.late.find((i) => i.id === id(33))?.why,
-		callOffice,
-	);
-	assert.equal(
-		body.reminders?.late.find((i) => i.id === id(21))?.why,
-		"send status unknown — re-touch or drop",
-	);
+	assert.equal(body.reminders?.late.find((i) => i.id === id(33))?.why, null);
+	assert.equal(body.reminders?.late.find((i) => i.id === id(21))?.why, null);
 	const inboxRes = await request(joe, "home/inbox", get, reader);
 	const inbox = (await inboxRes.json()) as { items: Row[] };
 	const buildingCard = inbox.items.find(

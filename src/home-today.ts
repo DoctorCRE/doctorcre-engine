@@ -194,7 +194,7 @@ async function readTodayReminders(
 			id: r.id,
 			kind: r.call_id ? ("call_follow_up" as const) : ("step" as const),
 			title: review?.title ?? title,
-			why: (review?.why ?? instruction) || null,
+			why: review?.why ?? instruction,
 			context_label: r.context_label,
 			due_on: r.due_on,
 			days_late: r.days_late,
