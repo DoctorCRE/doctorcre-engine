@@ -63,10 +63,14 @@ const proposals = (
 			select min(n.due_on) filter (where hint.value is not null) as next_action_date,
 				count(*) filter (where hint.value is null) > 0 as has_open_step
 			from (${openPartySteps(sql.ref("p.id"))}) n
-			-- A copied standalone date is a cadence override.
+			-- Only an untouched copied date overrides cadence.
 			left join outside_id hint on r.role = 'lead' and hint.party_id = p.id
 				and hint.source = 'old_system_lead'
 				and n.id = md5('old_system:lead:' || hint.value || ':follow_up')::uuid
+				and not exists (
+					select from change ch where ch.table_name = 'next_step' and ch.action = 'update'
+						and ch.record = jsonb_build_object('id', n.id)
+				)
 		) steps
 		where ((r.role = 'lead' and r.stage = any(${OPEN_STAGES}::text[]))
 			or (r.role = 'vendor' and r.disposition is null))
