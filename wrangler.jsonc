@@ -33,6 +33,7 @@
 		{ "binding": "DEAL_DOCUMENTS", "bucket_name": "carr-documents" }
 	],
 	"vars": {
+		"EMAIL_FILING_JUDGMENT": "false",
 		"POST_MEDIA_BUCKET": "doctorcre-post-media",
 		"CLIENT_WEBSITE_ORIGIN": "https://share.doctorcre.com",
 		"DEALS_READ_SCHEMA": "next",

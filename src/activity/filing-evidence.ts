@@ -6,6 +6,36 @@ export type About =
 	| { party_id: string }
 	| { property_id: string };
 
+export const filingReviewEvidence = "Needs filing review.";
+export const filingReviewTitle = "Review where to file this email";
+
+// Home also reads databases where the filing judgment migration is still pending.
+export const filingScope = (proposal: string) =>
+	sql<string | null>`to_jsonb(${sql.ref(proposal)})->>'filing_scope'`;
+
+export function filingChoices(scope: string | null | undefined) {
+	return [
+		...(scope === "deal" || scope === "both"
+			? [{ kind: "deal", label: "Choose deal" }]
+			: []),
+		...(scope === "vendor" || scope === "both"
+			? [{ kind: "vendor", label: "Choose vendor" }]
+			: []),
+	];
+}
+
+export const filingReceiptKey = (activityId: Expression<string | null>) =>
+	sql<string>`md5('email_filing:' || ${activityId}::uuid)::uuid`;
+
+export function hasFiledFacts(
+	activityId: Expression<string | null>,
+	toDeal = false,
+) {
+	return sql<boolean>`exists (select from save_receipt r
+		where r.idempotency_key = ${filingReceiptKey(activityId)} and r.verb = 'file-email-facts'
+			and (not ${toDeal} or r.answer->>'deal_id' is not null))`;
+}
+
 function partnerUnlinked(
 	activityId: Expression<string | null>,
 	target: Expression<unknown>,
@@ -29,13 +59,14 @@ export function filingReviewNeeded(
 	) and not ${partnerUnlinked(
 		activityId,
 		sql`jsonb_build_object('deal_id', ${dealId})`,
-	)}`;
+	)} and not ${hasFiledFacts(activityId, true)}`;
 }
 
 export async function eligibleMailLinks(
 	tx: Transaction<DB>,
 	activityId: string,
 	about: About[],
+	allowConflictingDeals = false,
 ) {
 	if (!about.length) return about;
 	const { rows } = await sql<{ link: About }>`
@@ -43,10 +74,10 @@ export async function eligibleMailLinks(
 		from jsonb_to_recordset(${JSON.stringify(about)}::jsonb)
 			candidate(deal_id uuid, party_id uuid, property_id uuid)
 		where not ${partnerUnlinked(sql.val(activityId), sql`jsonb_strip_nulls(to_jsonb(candidate))`)}
-			and not exists (
+			and (${allowConflictingDeals} or not exists (
 				select from activity_about filed
 				where filed.activity_id = ${activityId} and filed.deal_id <> candidate.deal_id
-			)
+			))
 			and not exists (
 				select from proposal p
 				where p.activity_id = ${activityId} and p.deal_id = candidate.deal_id

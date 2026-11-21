@@ -2582,7 +2582,13 @@ const CHANGEABLE: Record<string, string[]> = {
 	client_brand: ["ended_on", "started_on"],
 	national_account_owner: ["ended_on", "started_on"],
 
-	proposal: ["dismiss_reason", "filed_deal_id", "filing_reason", "status"],
+	proposal: [
+		"dismiss_reason",
+		"filed_deal_id",
+		"filed_vendor_id",
+		"filing_reason",
+		"status",
+	],
 	reply_draft: [
 		"body",
 		"cc_address",
