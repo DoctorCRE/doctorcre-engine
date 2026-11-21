@@ -86,7 +86,7 @@ before(async () => {
 		insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on, hold_until, resolution)
 		values
 			('${id(31)}', '${open}', null, '${alex}', '**Send revised offer**', '2001-01-12', null, null),
-			('${id(32)}', null, '${clinic}', '${casey}', 'Ask about the expansion', '2001-01-20', null, null),
+			('${id(32)}', null, '${clinic}', '${casey}', 'Ask Example Clinic (T-137) about the expansion', '2001-01-20', null, null),
 			('${id(33)}', '${other}', null, '${alex}', 'Held step', '2001-01-14', 'infinity', null),
 			('${id(34)}', '${closed}', null, '${casey}', 'Snoozed step', '2001-01-14', null, null),
 			('${id(35)}', '${other}', null, '${casey}', 'Undated step', null, null, null),
@@ -251,7 +251,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			},
 			{
 				id: id(32),
-				what: "Ask about the expansion",
+				what: "Ask Example Clinic about the expansion",
 				why: null,
 				owner: "dell",
 				record_label: "Example Clinic",

@@ -430,6 +430,10 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 				"Email about the report, then call.",
 			],
 			["T-3 months — Confirm lease timing", "Confirm lease timing"],
+			[
+				"Check in with Example Vendor (T-137).",
+				"Check in with Example Vendor.",
+			],
 			["Review the floor plan [loop #25]", "Review the floor plan"],
 			[
 				"Call (L-223, due Friday) about the suite",
