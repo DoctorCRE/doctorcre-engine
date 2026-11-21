@@ -43,9 +43,13 @@ const contactWord = /^(?:[^a-z]|[a-z]:$|(?:of|and|at|for|in|the)$)|@|:\/\//;
 // Stored mail often has no line breaks, so quoted history must be found mid-line too.
 const inlineHistory = new RegExp(
 	[
-		`-{2,} ?(?:Original|Forwarded) [Mm]essage ?-{2,}`,
-		String.raw`(?:[-_=*]{3,}[ \t]*)?\*?From:\*? [^\r\n]{1,300}? \*?Sent:\*? [^\r\n\d]{0,40}\d[^\r\n]{0,2000}? \*?Subject:`,
-		String.raw`(?<=^|\s)On (?:(?![.!?]\s)[^\r\n\d]){0,300}\d(?:(?![.!?]\s)[^\r\n]){0,300}? wrote:`,
+		"(?<!-)-{2,80} ?(?:Original|Forwarded) [Mm]essage ?-{2,80}(?!-)",
+		// A repeated From or Sent starts a new candidate, so incomplete headers cannot overlap.
+		String.raw`(?:(?<![-_=*])[-_=*]{3,80}[ \t]{0,80})?\*?From:\*? ` +
+			String.raw`(?:(?! \*?(?:From|Sent):)[^\r\n]){1,300} \*?Sent:\*? ` +
+			String.raw`(?:(?! \*?(?:From|Sent|Subject):)[^\r\n\d]){0,40}\d` +
+			String.raw`(?:(?! \*?(?:From|Sent|Subject):)[^\r\n]){0,2000} \*?Subject:`,
+		String.raw`(?<=^|\s)On (?:(?![.!?]\s)[^\r\n\d]){0,300}\d(?:(?![.!?]\s| wrote:)[^\r\n]){0,300} wrote:`,
 	].join("|"),
 );
 const senderBanner =
@@ -155,7 +159,7 @@ function inlineSignatureStart(text: string, sender: string | null) {
 	const words = [...text.matchAll(/\S+/g)];
 	const contact = words.findLastIndex(([word]) => !contactWord.test(word)) + 1;
 	for (const { 0: word, index } of words.slice(contact)) {
-		if (word.replace(/[,|]$/, "").toLowerCase() !== first) continue;
+		if (word.replace(/[.,|]$/, "").toLowerCase() !== first) continue;
 		const at = text.slice(0, index).search(trailingSignOff);
 		// A capital separates "Thanks, Maya" from "I want to say thanks, Maya".
 		if (at >= 0 && /[A-Z]/.test(text[at] ?? "")) return at;

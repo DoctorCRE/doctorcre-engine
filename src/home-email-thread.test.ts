@@ -11,6 +11,17 @@ test("cleans a large body with an incomplete header promptly", () => {
 	assert.ok(elapsed < 50, `cleanup took ${elapsed} ms`);
 });
 
+test("cleans a 200,000-character body with dividers and incomplete headers in under 100 ms", () => {
+	const noise = `${"-".repeat(50_000)} ${"_".repeat(50_000)} ${"From: Pat Sent: 1 On Friday ".repeat(4_000)}`;
+	const message = `Current message. ${noise}`;
+	const body = `${message.slice(0, 199_999)}.`;
+	const start = performance.now();
+	const result = cleanEmailBody(body, null);
+	const elapsed = performance.now() - start;
+	assert.equal(result, body);
+	assert.ok(elapsed < 100, `cleanup took ${elapsed} ms`);
+});
+
 test("cuts only confirmed header blocks and preserves indented body", () => {
 	for (const headers of [
 		"From: Pat\nSent: yesterday",
@@ -165,12 +176,25 @@ test("keeps one-line sentences that only resemble a sign-off, header or quote", 
 	for (const body of [
 		"I wanted to say thanks, Maya Example (555) 010-2000.",
 		"Thanks, Maya. Please call (555) 010-2000 if the plan is wrong.",
+		"Tuesday works. Thank you, Maya. Please leave the keys outside.",
 		"Best, Maya Example Please bring the keys on Tuesday.",
 		"From: the side door. Sent: the plan on Tuesday. Subject: parking.",
 		"On Monday we can tour. On 5 May I sent the plan and you replied.",
 		"Thanks, Maya Example (555) 010-2000",
 	]) {
 		assert.equal(cleanEmailBody(body, maya), body);
+	}
+});
+
+test("removes a one-line signature with punctuation after the sender's name", () => {
+	for (const punctuation of [".", ","]) {
+		assert.equal(
+			cleanEmailBody(
+				`Tuesday works. Thank you, Maya${punctuation} (555) 010-2000 maya@example.test`,
+				maya,
+			),
+			"Tuesday works.",
+		);
 	}
 });
 
