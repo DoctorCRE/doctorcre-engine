@@ -2,6 +2,7 @@ import { sql, type Transaction } from "kysely";
 import {
 	dealStepUrl,
 	homeDate,
+	homeDay,
 	homeDisplayText,
 	homeStepText,
 	homeTitle,
@@ -165,6 +166,7 @@ type HomeUpdate = DealNotice & {
 	source_version: string;
 	mark_version: string;
 	snoozed_until: string | null;
+	waiting_reason: string | null;
 };
 
 function updateText(update: HomeUpdate) {
@@ -199,7 +201,8 @@ function updateText(update: HomeUpdate) {
 export async function readHomeUpdates(
 	db: Transaction<DB>,
 	userId: string,
-	limit: number,
+	limit: number | null,
+	dashboard: boolean,
 ) {
 	const { rows } = await sql<HomeUpdate>`
 		select u.id, u.deal_id, d.name as deal_name, u.kind, u.what as title, u.due_on,
@@ -208,7 +211,8 @@ export async function readHomeUpdates(
 			coalesce(property.name, property.address) as property_label,
 			coalesce(update_change.id, 0)::text as source_version,
 			coalesce(mark_change.id, 0)::text as mark_version,
-			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until
+			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
+			m.waiting_reason
 		from home_update u
 		join deal d on d.id = u.deal_id
 		left join next_step item on item.deal_id = u.deal_id
@@ -228,7 +232,13 @@ export async function readHomeUpdates(
 		where u.user_id = ${userId}::uuid
 			and u.read_at is null
 			and m.disposition is distinct from 'dropped'
-			and (item.status is null or item.status not in ('done', 'cancelled'))
+			${
+				dashboard
+					? sql`and (u.kind = 'tour_feedback' or u.checklist_item_ref is not null)
+					and (item.status is null or item.status = 'open')
+					and (item.due_on is null or item.due_on <= ${homeDay})`
+					: sql`and (item.status is null or item.status not in ('done', 'cancelled'))`
+			}
 		order by u.created_at desc, u.id
 		limit ${limit}
 	`.execute(db);
@@ -250,6 +260,10 @@ export async function readHomeUpdates(
 			kind: update.kind,
 			base_version: `${update.source_version}:${update.mark_version}:${card.disposition}`,
 			checklist_item_ref: update.checklist_item_ref,
+			...(dashboard && {
+				waiting_reason: homeDisplayText(update.waiting_reason) || null,
+				late_target: !tourFeedback,
+			}),
 			...(update.property_id && { property_id: update.property_id }),
 		};
 	});

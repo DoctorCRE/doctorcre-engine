@@ -42,6 +42,9 @@ before(async () => {
 	await setup();
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
+		insert into role (slug, label) values ('vendor', 'Vendor'), ('lead', 'Lead'), ('client', 'Client');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New');
+		insert into how_found (slug, label) values ('referral', 'Referral');
 		insert into party (id, kind, name) values
 			('${owner}', 'person', 'Example Partner'), ('${other}', 'person', 'Other Partner'),
 			('${client}', 'company', 'Example Dental'), ('${contact}', 'person', 'Dr. Example');
@@ -132,6 +135,147 @@ async function inbox(caller = user) {
 	}
 	return new Map(items.map((item) => [item.source_id, item]));
 }
+
+test("dashboard counts only eligible cards and separates waiting from deal and vendor reminders", async () => {
+	const viewer = randomUUID();
+	const dashboardDeal = randomUUID();
+	const [vendor, lead, sleepingLead, client] = Array.from(
+		{ length: 4 },
+		randomUUID,
+	);
+	const [
+		open,
+		dueToday,
+		future,
+		held,
+		done,
+		vendorStep,
+		leadStep,
+		sleepingLeadStep,
+		clientStep,
+		buildingTask,
+		checklist,
+		feedback,
+	] = Array.from({ length: 12 }, randomUUID);
+	await db
+		.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values
+			('${viewer}', 'person', 'Dashboard Viewer'), ('${vendor}', 'company', 'Example Surveyors'),
+			('${lead}', 'person', 'Example Lead'), ('${sleepingLead}', 'person', 'Another Example Lead'),
+			('${client}', 'company', 'Example Company');
+		update party set how_found = 'referral' where id in ('${lead}', '${sleepingLead}');
+		insert into app_user (id, slug) values ('${viewer}', 'dashboard-viewer');
+		insert into party_role (party_id, role, stage) values
+			('${vendor}', 'vendor', null), ('${lead}', 'lead', 'new'), ('${sleepingLead}', 'lead', 'new'),
+			('${lead}', 'client', null);
+		insert into deal (id, name, owner_user_id) values ('${dashboardDeal}', 'Example Dashboard Deal', '${viewer}');
+		insert into deal_party (deal_id, party_id, role) values ('${dashboardDeal}', '${lead}', 'client');
+		with day as (select (now() at time zone 'America/Chicago')::date as today)
+		insert into next_step (id, owner_party_id, deal_id, party_id, what, due_on, hold_until, item_title, source_ref, resolution, done_at)
+		select v.id::uuid, '${viewer}', v.deal_id::uuid, v.party_id::uuid,
+			'Check the plan', day.today + days, day.today + hold, v.title, v.src,
+			v.resolution, case when v.resolution = 'done' then now() end
+		from day cross join (values
+			('${open}', '${dashboardDeal}', null, -3, null, 'Check Site Plan', 'present', null),
+			('${dueToday}', '${dashboardDeal}', null, 0, null, 'Check Site Plan', 'today', null),
+			('${future}', '${dashboardDeal}', null, 1, null, 'Confirm Site Visit', 'future', null),
+			('${held}', '${meetingDeal}', null, null, 2, null, null, null),
+			('${done}', '${deal}', null, -2, null, null, null, 'done'),
+			('${vendorStep}', null, '${vendor}', -1, null, null, null, null),
+			('${leadStep}', null, '${lead}', -2, null, null, null, null),
+			('${sleepingLeadStep}', null, '${sleepingLead}', 0, 1, null, null, null),
+			('${clientStep}', null, '${client}', -2, null, null, null, null)
+		) v(id, deal_id, party_id, days, hold, title, src, resolution);
+		insert into next_step (id, property_id, owner_party_id, what, due_on)
+			values ('${buildingTask}', '${sharedBuilding}', '${viewer}', 'Check site access',
+				(now() at time zone 'America/Chicago')::date - 2);
+		insert into home_mark (user_id, next_step_id, disposition, snoozed_until) values
+			('${viewer}', '${sleepingLeadStep}', 'snoozed', '2999-01-01');
+		insert into home_update (user_id, deal_id, what, created_at)
+			select '${viewer}', '${deal}', 'Informational update ' || g, now() + interval '1 hour'
+			from generate_series(1, 1001) g;
+		insert into home_update (id, user_id, deal_id, what, checklist_item_ref, due_on)
+			values ('${checklist}', '${viewer}', '${deal}', 'Check the plans', 'survey/item', '2001-01-01');
+		insert into home_update (user_id, deal_id, what, checklist_item_ref, due_on)
+			select '${viewer}', deal_id, what, 'deal-item:' || id, due_on
+			from next_step where id in ('${open}', '${future}');
+		insert into home_update (id, user_id, deal_id, kind, property_id, what)
+			values ('${feedback}', '${viewer}', '${deal}', 'tour_feedback', '${building}', 'Parking felt tight');
+		commit;`)
+		.catch(async (error: unknown) => {
+			await db.query("rollback");
+			throw error;
+		});
+	const caller = { user: "dashboard-viewer" };
+	const read = async () => {
+		const response = await request(
+			caller,
+			`${path}?view=dashboard`,
+			{ method: "GET" },
+			reader,
+		);
+		assert.equal(response.status, 200);
+		const result: unknown = await response.json();
+		assert.ok(
+			isArguments(result) &&
+				isArguments(result.reminders) &&
+				isArguments(result.waiting),
+		);
+		const group = (value: Record<string, unknown>) => {
+			assert.ok(Array.isArray(value.items));
+			assert.equal(value.count, value.items.length);
+			const items = new Map(
+				value.items.filter(isArguments).map((card) => [card.source_id, card]),
+			);
+			assert.equal(items.size, value.count);
+			return items;
+		};
+		return {
+			reminders: group(result.reminders),
+			waiting: group(result.waiting),
+		};
+	};
+	const { reminders, waiting } = await read();
+	assert.deepEqual(
+		new Set(reminders.keys()),
+		new Set([open, dueToday, vendorStep, buildingTask, checklist, feedback]),
+	);
+	assert.deepEqual([...waiting.keys()], [held]);
+	assert.partialDeepStrictEqual(reminders.get(open), {
+		item_id: `next_action:${open}`,
+		card_id: `next_action:${open}`,
+		open_url: `/deals?deal=${dashboardDeal}&focus=next-step&step=${open}`,
+		days_late: 3,
+		late_label: "3 days late",
+	});
+	assert.partialDeepStrictEqual(reminders.get(vendorStep), {
+		days_late: 1,
+		late_label: "1 day late",
+	});
+	assert.partialDeepStrictEqual(reminders.get(dueToday), {
+		item_id: `next_action:${dueToday}`,
+		days_late: null,
+		late_label: null,
+	});
+	assert.partialDeepStrictEqual(reminders.get(buildingTask), {
+		days_late: null,
+		late_label: null,
+		open_url: null,
+	});
+	assert.partialDeepStrictEqual(reminders.get(feedback), {
+		open_url: `/deals?deal=${deal}&property=${building}`,
+	});
+	assert.partialDeepStrictEqual(waiting.get(held), {
+		waiting_reason: "On hold",
+		primary_action: null,
+		days_late: null,
+	});
+	assert.equal(waiting.get(held)?.returns_at, waiting.get(held)?.hold_until);
+	const next = await read();
+	assert.deepEqual([...next.reminders.values()], [...reminders.values()]);
+	assert.deepEqual([...next.waiting.values()], [...waiting.values()]);
+});
 
 test("switch off leaves the inbox on CARR and the read refuses a caller-supplied actor", async () => {
 	assert.equal((await request(user, path, { method: "GET" })).status, 404);
@@ -319,8 +463,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 		what,
 		title,
 	}));
-	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into role (slug, label) values ('vendor', 'Vendor');`);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);`);
 	for (const { id, party, what } of examples) {
 		await db.query(
 			"insert into party (id, kind, name) values ($1, 'company', 'Example Vendor')",

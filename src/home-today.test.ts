@@ -105,6 +105,19 @@ test("switch off returns 404, non-partners are refused, and invalid owners fail"
 	]);
 });
 
+test("Today links owned client follow-ups to the legacy inbox card", async () => {
+	const [[status, body], inbox] = await Promise.all([
+		today(),
+		request(joe, "home/inbox", get, reader),
+	]);
+	assert.deepEqual([status, inbox.status], [200, 200]);
+	const { items } = (await inbox.json()) as { items: Row[] };
+	const card = items.find((item) => item.source_id === id(22));
+	assert.ok(typeof card?.item_id === "string");
+	const followUp = body.reminders?.upcoming.find((item) => item.id === id(22));
+	assert.equal(followUp?.home_item_id, card.item_id);
+});
+
 test("Today shows plain reminder titles and flags ended deals for Deals", async () => {
 	const [status, body] = await today();
 	assert.equal(status, 200);
@@ -173,10 +186,7 @@ async function reminderAndCardTitles(caller: { user: string }, step: string) {
 	const { items } = (await inbox.json()) as { items: Row[] };
 	const reminder = body.reminders?.late.find((item) => item.id === step);
 	assert.ok(reminder);
-	return [
-		reminder.title,
-		items.find((item) => item.item_id === reminder.home_item_id)?.title,
-	];
+	return [reminder.title, items.find((item) => item.source_id === step)?.title];
 }
 
 for (const [example, caller, step, title] of [

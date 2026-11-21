@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, refuse } from "./answer.ts";
+import { isCalendarDate } from "./calendar-date.ts";
 import {
 	readHomeMailPriorities,
 	readHomeReviewCards,
@@ -11,7 +12,13 @@ import {
 	readHomeUpdates,
 } from "./home-inbox-reviews-updates.ts";
 import {
+	type HomeStepTarget,
+	homeDay,
+	homeDisplayText,
 	homeStepCopy,
+	homeStepEligible,
+	homeStepTarget,
+	lateLabel,
 	type StepTitle,
 	stepItemId,
 	stepOpenUrl,
@@ -22,10 +29,8 @@ import type { DatabaseEnv } from "./reader.ts";
 
 const LIMIT = 1000;
 
-type Step = StepTitle & {
+interface Step extends StepTitle, HomeStepTarget {
 	id: string;
-	deal_id: string | null;
-	building_deal_id: string | null;
 	party_id: string | null;
 	prospect: boolean;
 	created_at: string;
@@ -33,6 +38,7 @@ type Step = StepTitle & {
 	activity_at: string;
 	completed_at: string | null;
 	snoozed_until: string | null;
+	waiting_reason: string | null;
 	step_version: string;
 	undo_completion: boolean;
 	mark_version: string | null;
@@ -42,17 +48,18 @@ type Step = StepTitle & {
 	source_id: string | null;
 	source_kind: "call" | "email" | "meeting" | null;
 	source_evidence: string | null;
-};
+}
 
-function stepRows(db: Transaction<DB>, userId: string) {
+function stepRows(db: Transaction<DB>, userId: string, dashboard: boolean) {
 	return sql<Step>`
-		select s.id, s.what as title, s.status, s.deal_id, s.party_id,
+		select s.id, s.what as title, s.status, s.deal_id, s.party_id, s.property_id,
 			${stepTargetFields(db)},
 			s.due_on, s.created_at, setter.name as set_by,
 			coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
-			case when s.hold_until > (now() at time zone 'America/Chicago')::date
+			case when s.hold_until > ${homeDay}
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
+			m.waiting_reason,
 			coalesce(step_change.id, 0) as step_version, mark_change.id as mark_version,
 			coalesce(s.status = 'done' and step_change.changed_by_user_id = s.owner_party_id
 				and step_change.old_value @> '{"resolution":null}'
@@ -95,9 +102,14 @@ function stepRows(db: Transaction<DB>, userId: string) {
 		) mark_change on true
 		where s.owner_party_id = ${userId}::uuid
 			and m.disposition is distinct from 'dropped'
-			and (s.status = 'open' or (s.status = 'done' and s.done_at >= now() - interval '7 days'))
+			and (s.status = 'open' ${
+				dashboard
+					? sql``
+					: sql`or
+				(s.status = 'done' and s.done_at >= now() - interval '7 days')`
+			})
 		order by (s.status = 'done'), activity_at desc, s.id
-		limit ${LIMIT + 1}
+		${dashboard ? sql`` : sql`limit ${LIMIT + 1}`}
 	`;
 }
 
@@ -163,35 +175,117 @@ function stepCard(step: Step) {
 	};
 }
 
-async function readHomeInbox(db: Transaction<DB>, userId: string) {
-	const { rows } = await stepRows(db, userId).execute(db);
+async function readHomeInbox(
+	db: Transaction<DB>,
+	userId: string,
+	dashboard: boolean,
+) {
+	const today = dashboard
+		? (
+				await db
+					.selectNoFrom(sql<string>`${homeDay}::text`.as("today"))
+					.executeTakeFirstOrThrow()
+			).today
+		: "";
+	const { rows } = await stepRows(db, userId, dashboard).execute(db);
+	const eligibleSteps = dashboard
+		? rows.filter((step) => homeStepEligible(step, today))
+		: rows;
 	const reviews = await readCompletionReviews(
 		db,
-		rows.filter((step) => step.status === "open").map((step) => step.id),
+		eligibleSteps
+			.filter((step) => step.status === "open")
+			.map((step) => step.id),
 	);
-	const steps = rows.map((step) => {
+	const steps = eligibleSteps.map((step) => {
 		const review = reviews.get(step.id);
 		const card = stepCard(step);
-		return review && !step.snoozed_until
-			? completionReviewCard(review, card)
-			: card;
+		const waiting = dashboard && (step.hold_until || step.waiting_reason);
+		const visible =
+			review && !step.snoozed_until && !waiting
+				? completionReviewCard(review, card)
+				: card;
+		return dashboard
+			? {
+					...visible,
+					waiting_reason: homeDisplayText(step.waiting_reason) || null,
+					late_target: ["deal", "vendor"].includes(homeStepTarget(step)),
+				}
+			: visible;
 	});
-	const updates = await readHomeUpdates(db, userId, LIMIT + 1);
+	const limit = dashboard ? null : LIMIT + 1;
+	const checklistSteps = new Set(
+		eligibleSteps.map((step) => `deal-item:${step.id}`),
+	);
+	const updates = (await readHomeUpdates(db, userId, limit, dashboard)).filter(
+		(update) =>
+			!dashboard ||
+			!update.checklist_item_ref ||
+			!checklistSteps.has(update.checklist_item_ref),
+	);
 	const items = [
 		...steps,
 		...updates,
-		...(await readHomeReviewCards(db, userId, LIMIT + 1)),
+		...(await readHomeReviewCards(db, userId, limit, dashboard)),
 	].sort(
 		(a, b) =>
 			Number(a.source_state === "done") - Number(b.source_state === "done") ||
 			b.activity_at.localeCompare(a.activity_at) ||
 			a.item_id.localeCompare(b.item_id),
 	);
-	return {
+	const contract = {
 		ok: true,
 		schema_version: "home-inbox.v5",
 		home_mark_drop: true,
 		home_proposal_drop: true,
+	};
+	if (dashboard) {
+		const cards = items.map((item) => {
+			const { late_target, card_id, waiting_reason, ...card } = {
+				late_target: false,
+				card_id: item.item_id,
+				waiting_reason: null,
+				...item,
+			};
+			const returns_at =
+				[card.snoozed_until, card.hold_until]
+					.filter((at) => at !== null)
+					.sort()
+					.at(-1) ?? null;
+			const reason = card.snoozed_until
+				? "Snoozed"
+				: card.hold_until
+					? "On hold"
+					: card.section === "working"
+						? "Waiting for Outlook to confirm delivery"
+						: waiting_reason;
+			const days_late =
+				!reason &&
+				late_target &&
+				isCalendarDate(card.due_on) &&
+				card.due_on < today
+					? (Date.parse(today) - Date.parse(card.due_on)) / 86_400_000
+					: null;
+			return {
+				...card,
+				...(reason && { primary_action: null }),
+				card_id,
+				waiting_reason: reason,
+				returns_at,
+				days_late,
+				late_label: days_late === null ? null : lateLabel(days_late),
+			};
+		});
+		const reminders = cards.filter((card) => !card.waiting_reason);
+		const waiting = cards.filter((card) => card.waiting_reason);
+		return {
+			...contract,
+			reminders: { count: reminders.length, items: reminders },
+			waiting: { count: waiting.length, items: waiting },
+		};
+	}
+	return {
+		...contract,
 		items: items.slice(0, LIMIT),
 		truncated: rows.length > LIMIT || items.length > LIMIT,
 		limit: LIMIT,
@@ -205,9 +299,14 @@ export const homeInbox = new Hono<
 
 homeInbox.get("/home/inbox", (c) => {
 	if (c.env.HOME_INBOX_READ_SCHEMA !== "next") return c.notFound();
-	const refused = checkFields(new URL(c.req.url).searchParams, []);
+	const params = new URL(c.req.url).searchParams;
+	const refused = checkFields(params, ["view"], {
+		vocabularies: { view: ["dashboard"] },
+	});
 	if (refused) return refuse(c, refused);
-	return answerNextRead(c, "read-home-inbox-v5", readHomeInbox);
+	return answerNextRead(c, "read-home-inbox-v5", (db, userId) =>
+		readHomeInbox(db, userId, params.get("view") === "dashboard"),
+	);
 });
 
 homeInbox.get("/home/mail-priorities", (c) => {

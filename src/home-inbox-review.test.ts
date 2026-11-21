@@ -49,7 +49,7 @@ before(async () => {
 			('${deal}', 'Example Dental', '${partner}'), ('${suggestedDeal}', 'Example Orthodontics', '${partner}');
 		insert into activity (id, kind, happened_at)
 			select id, 'email', '2026-01-01'::date + offset_days::int
-			from unnest(array[${[10, 11, 12, 13, 14, 15, 16].map((n) => `'${id(n)}'`).join(",")}]::uuid[])
+			from unnest(array[${[10, 11, 12, 13, 14, 15, 16, 19].map((n) => `'${id(n)}'`).join(",")}]::uuid[])
 			with ordinality t(id, offset_days);
 		insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
 			select id, '<'||id||'@example.test>', case when id in ('${id(10)}', '${id(11)}', '${id(14)}') then 'Thread' end,
@@ -63,7 +63,8 @@ before(async () => {
 			from (values ('${id(10)}'::uuid, 'Sam Example requested the **floor plan** (C-123) before the tour.'),
 				('${id(11)}'::uuid, 'Pat Example asked for tour times at Cedar Suite.')) summaries(id, summary);
 		insert into email_mailbox (activity_id, user_id) values
-			('${id(10)}', '${partner}'), ('${id(11)}', '${partner}'), ('${id(11)}', '${other}'), ('${id(12)}', '${partner}');
+			('${id(10)}', '${partner}'), ('${id(11)}', '${partner}'), ('${id(11)}', '${other}'),
+			('${id(12)}', '${partner}'), ('${id(12)}', '${other}'), ('${id(14)}', '${other}');
 		insert into activity_about (activity_id, deal_id) values ('${id(11)}', '${deal}');
 		insert into activity_about (activity_id, party_id)
 			select id, '${partner}' from activity where id <> '${id(11)}';
@@ -72,7 +73,7 @@ before(async () => {
 			values ${[10, 11, 12, 13, 14, 15, 16]
 				.map(
 					(n) =>
-						`('${id(n + 10)}', '${id(n)}', '${n === 12 ? other : partner}', 'old_system', 'Re: Email from Pat Example: Re: Floor plan', 'Here it is.', '${n === 12 ? quotedRequest : "Please send the plan."}')`,
+						`('${id(n + 10)}', '${id(n === 14 ? 19 : n)}', '${n === 12 ? other : partner}', 'old_system', 'Re: Email from Pat Example: Re: Floor plan', 'Here it is.', '${n === 12 ? quotedRequest : "Please send the plan."}')`,
 				)
 				.join(",")};
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${partner}', true);
@@ -105,6 +106,7 @@ before(async () => {
 		select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${evidenceReviewer}', 'person', 'Example Reviewer');
 		insert into app_user (id, slug) values ('${evidenceReviewer}', 'evidence-reviewer');
+		insert into email_mailbox (activity_id, user_id) values ('${id(12)}', '${evidenceReviewer}');
 		select set_config('engine.user_id', '${evidenceReviewer}', true);
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id)
 			values ('${filingWithPhone}', 'file_to_deal', '${id(13)}', 'email', 'Please call (202) 555-0142.', 'old_system', '${deal}');
@@ -136,6 +138,100 @@ async function inbox(user = "example") {
 	}
 	return items;
 }
+
+async function dashboard(user = "example") {
+	const response = await request(
+		{ user },
+		"home/inbox?view=dashboard",
+		{ method: "GET" },
+		{ HOME_INBOX_READ_SCHEMA: "next" },
+	);
+	assert.equal(response.status, 200);
+	const result: unknown = await response.json();
+	assert.ok(
+		isArguments(result) &&
+			isArguments(result.reminders) &&
+			isArguments(result.waiting),
+	);
+	const items = (group: Record<string, unknown>) => {
+		assert.ok(Array.isArray(group.items));
+		assert.equal(group.count, group.items.length);
+		return group.items.filter(isArguments);
+	};
+	return { reminders: items(result.reminders), waiting: items(result.waiting) };
+}
+
+test("dashboard sends approved drafts to waiting, failed deliveries to reminders, and sent drafts to history", async () => {
+	const { reminders, waiting } = await dashboard();
+	assert.partialDeepStrictEqual(
+		waiting.find((card) => card.reply_draft_id === id(25)),
+		{
+			waiting_reason: "Waiting for Outlook to confirm delivery",
+			primary_action: null,
+		},
+	);
+	assert.equal(
+		reminders.find((card) => card.reply_draft_id === id(26))?.primary_action,
+		"Review delivery",
+	);
+	assert.ok(
+		[...reminders, ...waiting].every(
+			(card) => card.reply_draft_id !== id(24) && !("thread" in card),
+		),
+	);
+});
+
+test("dashboard keeps an overdue decision's late label when a reply draft leads", async () => {
+	const { reminders } = await dashboard();
+	const card = reminders.find((card) => card.reply_draft_id === id(21));
+	assert.equal(card?.due_on, "2026-01-09");
+	assert.ok(typeof card.days_late === "number" && card.days_late >= 1);
+	assert.equal(
+		card.late_label,
+		`${card.days_late} ${card.days_late === 1 ? "day" : "days"} late`,
+	);
+});
+
+test("dashboard keeps one conversation card while delivery is unconfirmed", async () => {
+	const proposer = id(69);
+	const user = "waiting-reviewer";
+	const draft = id(70);
+	const suggestion = id(71);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${proposer}', 'person', 'Example Waiting Reviewer');
+		insert into app_user (id, slug) values ('${proposer}', '${user}');
+		insert into email_mailbox (activity_id, user_id) values ('${id(11)}', '${proposer}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+			values ('${draft}', '${id(11)}', '${proposer}', 'old_system', 'Floor plan', 'Here it is.', 'Please send the plan.');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
+			values ('${suggestion}', 'next_step', '${id(11)}', 'email', 'Please send the plan.', 'old_system',
+				'${deal}', 'Send the plan', '${proposer}');
+		commit;`);
+	const before = await dashboard(user);
+	const pending = before.reminders.find(
+		(card) => card.reply_draft_id === draft,
+	);
+	assert.ok(typeof pending?.card_id === "string");
+	await db.query(`begin;
+		select set_config('engine.user_id', '${proposer}', true);
+		update reply_draft set status = 'approved', to_address = 'pat@example.test',
+			cc_address = 'copy@example.test' where id = '${draft}';
+		select set_config('engine.job', 'old_system', true);
+		update reply_draft set status = 'failed', failure_reason = 'unconfirmed_after_3' where id = '${draft}';
+		commit;`);
+	const { reminders, waiting } = await dashboard(user);
+	assert.deepEqual(reminders, []);
+	assert.equal(waiting.length, 1);
+	assert.partialDeepStrictEqual(waiting[0], {
+		card_id: pending.card_id,
+		proposal_id: suggestion,
+		suggestions: [{ id: suggestion }],
+		waiting_reason: "Waiting for Outlook to confirm delivery",
+		primary_action: null,
+		fallback_reply_draft: { id: draft, failure_reason: "unconfirmed_after_3" },
+	});
+});
 
 test("Home shows only its partner's active drafts and one per known conversation", async () => {
 	const drafts = (await inbox()).filter(
@@ -242,6 +338,16 @@ for (const item_id of [`suggestion:${id(32)}`, `reply_draft:${id(21)}`]) {
 			snoozed_until: until,
 			base_version: answer.base_version,
 		});
+		const { waiting } = await dashboard();
+		assert.partialDeepStrictEqual(
+			waiting.find((entry) => entry.item_id === item_id),
+			{
+				waiting_reason: "Snoozed",
+				returns_at: until,
+				base_version: answer.base_version,
+				primary_action: null,
+			},
+		);
 		const [stale] = await save(user, "home/marks", {
 			...snooze,
 			idempotency_key: randomUUID(),
@@ -390,7 +496,7 @@ test("Home groups pending suggestions from each email conversation or call and k
 		(await inbox("other"))
 			.filter((card) => Array.isArray(card.suggestions))
 			.map((card) => card.merged_source_ids),
-		[[id(38)]],
+		[[id(22), id(32)], [id(38)]],
 	);
 });
 
@@ -657,6 +763,14 @@ for (const match of [
 			{ suggestions: [{ id: filing.proposal_id, kind: "file_to_deal" }] },
 		]);
 		const cards = await relevantCards();
+		const dashboardCards = await dashboard();
+		assert.ok(
+			[...dashboardCards.reminders, ...dashboardCards.waiting].every(
+				(card) =>
+					Array.isArray(card.merged_source_ids) &&
+					card.merged_source_ids.every((member) => member !== lead.proposal_id),
+			),
+		);
 		if (match === "other_mailbox" || match === "mismatch") {
 			const standalone = cards.find(
 				(card) => card.proposal_id === lead.proposal_id,
@@ -1015,6 +1129,122 @@ test("Home opens each visible suggestion with its original evidence and proposed
 	assert.equal((await read(41)).status, 404);
 });
 
+test("draft and proposal details return only the viewer's distinct messages in the exact Outlook thread", async () => {
+	const get = async (path: string, user = "example") => {
+		const response = await request({ user }, path, { method: "GET" });
+		assert.equal(response.status, 200);
+		const detail: unknown = await response.json();
+		assert.ok(isArguments(detail));
+		return detail.thread;
+	};
+	const thread = [
+		{
+			activity_id: id(10),
+			sender_name: "Sam Example",
+			happened_at: "2026-01-02T00:00:00.000Z",
+			body: "Please send the plan.",
+		},
+		{
+			activity_id: id(11),
+			sender_name: "Pat Example",
+			happened_at: "2026-01-03T00:00:00.000Z",
+			body: "Please send the plan.",
+		},
+	];
+	assert.deepEqual(await get(`proposals/${id(30)}`), thread);
+	assert.deepEqual(await get(`reply-drafts/${id(21)}`), thread);
+	assert.deepEqual(await get(`proposals/${id(38)}`, "other"), [
+		thread[1],
+		{
+			activity_id: id(14),
+			sender_name: "Pat Example",
+			happened_at: "2026-01-06T00:00:00.000Z",
+			body: "Please send the plan.",
+		},
+	]);
+	assert.deepEqual(await get(`proposals/${id(32)}`), [
+		{
+			activity_id: id(12),
+			sender_name: "Known Contact",
+			happened_at: "2026-01-04T00:00:00.000Z",
+			body: "Hello,\nCould you please also let me know whether the west suite is still available for a tour later this month?\nPlease send the plan.\nNovember 8 works for the tour.",
+		},
+	]);
+});
+
+test("dashboard hides proposals and drafts when their source is in another mailbox", async () => {
+	const user = { user: "private-source-reviewer" };
+	const reviewer = id(72);
+	const proposal = id(73);
+	const draft = id(74);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Private Source Reviewer');
+		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
+			values ('${proposal}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system',
+				'${deal}', 'Send the plan', '${reviewer}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+			values ('${draft}', '${id(12)}', '${reviewer}', 'old_system', 'Floor plan', 'Here it is.', 'Please send the plan.');
+		commit;`);
+	for (const path of [`proposals/${proposal}`, `reply-drafts/${draft}`]) {
+		assert.equal((await request(user, path, { method: "GET" })).status, 404);
+	}
+	assert.deepEqual(await dashboard(user.user), { reminders: [], waiting: [] });
+});
+
+test("email thread cleanup keeps requests around sign-offs and dividers and removes the footer", async () => {
+	const emails = [75, 76, 77, 79].map(id);
+	const proposal = id(78);
+	const reviewer = id(80);
+	const user = { user: "thread-cleanup-reviewer" };
+	const bodies = [
+		"Thanks!\nCould you confirm that Tuesday still works?",
+		"Here is the plan.\n----\nPlease check the second page.",
+		"Please send the plan.\n\nBest regards,\nPat Example\nPhone: 555-010-1234",
+		"Thanks!\nhttps://example.test/floor-plan",
+	];
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Thread Reviewer');
+		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');`);
+	for (const [index, email] of emails.entries()) {
+		await db.query(
+			"insert into activity (id, kind, happened_at) values ($1, 'email', '2026-01-01'::date + $2::int)",
+			[email, index],
+		);
+		await db.query(
+			`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
+			values ($1::uuid, $1::uuid::text || '@example.test', 'Cleanup examples', 'pat@example.test', 'Pat Example', 'Example plan', $2)`,
+			[email, bodies[index]],
+		);
+		await db.query(
+			"insert into email_mailbox (activity_id, user_id) values ($1, $2)",
+			[email, reviewer],
+		);
+		await db.query(
+			"insert into activity_about (activity_id, party_id) values ($1, $2)",
+			[email, reviewer],
+		);
+	}
+	await db.query(
+		`insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job)
+		values ($1, 'possible_new_deal', $2, 'email', 'Please check the plan.', 'old_system')`,
+		[proposal, emails[0]],
+	);
+	await db.query("commit");
+	const response = await request(user, `proposals/${proposal}`, {
+		method: "GET",
+	});
+	assert.equal(response.status, 200);
+	const detail: unknown = await response.json();
+	assert.ok(isArguments(detail) && Array.isArray(detail.thread));
+	assert.deepEqual(
+		detail.thread.filter(isArguments).map((message) => message.body),
+		[bodies[0], bodies[1], "Please send the plan.", bodies[3]],
+	);
+});
+
 test("Mail priorities ranks inbound work once per Outlook conversation and opens the same Home card", async () => {
 	const user = { user: "example" };
 	const url = "home/mail-priorities";
@@ -1087,6 +1317,7 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
 			values ('${draft}', '${id(11)}', '${reviewer}', 'old_system', 'Floor plan', 'Here it is.', 'Please send the plan.'),
 				('${declinedDraft}', '${id(13)}', '${reviewer}', 'old_system', 'Floor plan', 'Here it is.', 'Reply suggested.');
+		insert into email_mailbox (activity_id, user_id) values ('${id(10)}', '${reviewer}'), ('${id(11)}', '${reviewer}');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, created_at, deal_id, what, owner_party_id, due_on)
 			values ('${id(60)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '2026-01-07',
 				'${deal}', '**Send the plan** (loop #7)', '${reviewer}', '2026-01-09');
@@ -1108,6 +1339,11 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	};
 	const thread = () => activeCard([10, 11, 14].map(id));
 	const unkeyed = () => activeCard([id(13)]);
+	const dashboardBefore = await dashboard(user.user);
+	const beforeCard = dashboardBefore.reminders.find(
+		(card) => card.item_id === `reply_draft:${draft}`,
+	);
+	assert.ok(typeof beforeCard?.card_id === "string");
 	assert.partialDeepStrictEqual(await unkeyed(), {
 		item_id: `reply_draft:${declinedDraft}`,
 		why: "Email from Pat Example received on Jan 4, 2026. Review the drafted reply.",
@@ -1120,7 +1356,7 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 		why: "Pat Example asked for tour times at Cedar Suite.",
 		primary_action: "Review reply",
 		due_on: "2026-01-09",
-		suggestions: [{ id: id(60) }, { id: id(61) }],
+		suggestions: [{ id: id(60) }, { id: id(61) }, { id: id(38) }],
 	});
 	const [declined] = await save(
 		user,
@@ -1146,11 +1382,16 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	const approve =
 		"status = 'approved', failure_reason = null, to_address = 'pat@example.test', cc_address = 'copy@example.test'";
 	await setDraft("", approve);
+	const dashboardAfter = await dashboard(user.user);
+	const afterCard = dashboardAfter.reminders.find(
+		(card) => card.item_id === `suggestion:${id(60)}`,
+	);
+	assert.equal(afterCard?.card_id, beforeCard.card_id);
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `suggestion:${id(60)}`,
 		title:
 			"Sam Example requested the floor plan before the tour — review follow-up: Send the plan",
-		why: "Sam Example requested the floor plan before the tour. Proposed follow-up: Send the plan. 2 decisions to review.",
+		why: "Sam Example requested the floor plan before the tour. Proposed follow-up: Send the plan. 3 decisions to review.",
 		primary_action: "Review follow-up",
 		due_on: "2026-01-09",
 		source_activity: {
@@ -1164,7 +1405,7 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 			status: "approved",
 			failure_reason: null,
 		},
-		suggestions: [{ id: id(60) }, { id: id(61) }],
+		suggestions: [{ id: id(60) }, { id: id(61) }, { id: id(38) }],
 	});
 	await setDraft(
 		"old_system",
@@ -1202,6 +1443,7 @@ test("Mail priorities keeps two emails without conversation IDs in separate grou
 		select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Reviewer');
 		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');
+		insert into email_mailbox (activity_id, user_id) values ('${id(12)}', '${reviewer}');
 		select set_config('engine.user_id', '${reviewer}', true);
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job)
 			values ('${id(54)}', 'possible_new_deal', '${id(12)}', 'email', 'Review the first suite.', 'old_system'),
