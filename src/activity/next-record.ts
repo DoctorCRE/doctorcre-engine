@@ -9,11 +9,12 @@ import { ACTING_USER } from "../next-save.ts";
 import { SaveRefusal } from "../save.ts";
 import { isArguments } from "../save-door.ts";
 import { isUuid } from "../uuid.ts";
+import {
+	type About,
+	knownMailDestination,
+	unsuppressedMailLinks,
+} from "./filing-evidence.ts";
 
-type About =
-	| { deal_id: string }
-	| { party_id: string }
-	| { property_id: string };
 type Email = {
 	message_id: string;
 	conversation_id: string | null;
@@ -272,6 +273,7 @@ export async function recordEmail(
 	activity: ActivityFields,
 	records: About[],
 	email: Email,
+	autoFile = false,
 ) {
 	const { message_id, sender, recipients } = email;
 	if (!message_id || message_id !== message_id.trim())
@@ -295,10 +297,23 @@ export async function recordEmail(
 	await lockEmail(tx, message_id);
 	const stored = await tx
 		.selectFrom("email")
-		.select("activity_id")
-		.where("message_id", "=", message_id)
+		.innerJoin("activity", "activity.id", "email.activity_id")
+		.select(["activity_id", "conversation_id", "sender", "happened_at"])
+		.where("email.message_id", "=", message_id)
 		.executeTakeFirst();
-	if (!stored && !about.length)
+	if (autoFile && !records.some((record) => "deal_id" in record)) {
+		const destination = await knownMailDestination(
+			tx,
+			stored ?? { ...email, happened_at: activity.happened_at },
+			stored?.activity_id ?? null,
+		);
+		if (destination) about.push(destination);
+	}
+	const links =
+		autoFile && stored
+			? await unsuppressedMailLinks(tx, stored.activity_id, about)
+			: about;
+	if (!stored && !links.length)
 		throw new SaveRefusal(new Refusal(422, "about_nothing"));
 	const [from, another] = owners.filter((owner) => owner.address === sender);
 	const from_party_id =
@@ -312,7 +327,7 @@ export async function recordEmail(
 	return {
 		activity_id,
 		existing: stored !== undefined,
-		about: await link(tx, activity_id, about),
+		about: await link(tx, activity_id, links),
 		unmatched: addresses.filter(
 			(given) => !owners.some((owner) => owner.address === given),
 		),
@@ -329,13 +344,14 @@ export async function recordActivity(
 		happened_at,
 		...fields
 	}: NewActivity,
+	autoFile = false,
 ) {
 	await requireRecords(tx, about);
 	const activity = {
 		...fields,
 		happened_at: happened_at ?? sql<string>`now()`,
 	};
-	if (email) return recordEmail(tx, activity, about, email);
+	if (email) return recordEmail(tx, activity, about, email, autoFile);
 	const { activity_id, existing } =
 		calendar_review_key === undefined
 			? { activity_id: await insertActivity(tx, activity), existing: false }
@@ -351,26 +367,56 @@ export async function recordActivity(
 async function addLinks(
 	tx: Transaction<DB>,
 	{ activity_id, about }: { activity_id: string; about: About[] },
+	mailCapture: boolean,
 ) {
 	const stored = await tx
 		.selectFrom("activity")
-		.select("id")
+		.leftJoin("email", "email.activity_id", "activity.id")
+		.select(["activity.kind", "email.message_id"])
 		.where("id", "=", activity_id)
 		.executeTakeFirst();
 	if (!stored) throw new SaveRefusal(new Refusal(404, "not_found"));
 	await requireRecords(tx, about);
-	return { activity_id, about: await link(tx, activity_id, about) };
+	if (stored.message_id) await lockEmail(tx, stored.message_id);
+	let links = about;
+	if (mailCapture && stored.kind === "email") {
+		const filed = await tx
+			.selectFrom("activity_about")
+			.select("deal_id")
+			.where("activity_id", "=", activity_id)
+			.where("deal_id", "is not", null)
+			.execute();
+		links = await unsuppressedMailLinks(
+			tx,
+			activity_id,
+			about.filter(
+				(candidate) =>
+					!("deal_id" in candidate) ||
+					filed.every(
+						({ deal_id }) => deal_id === candidate.deal_id.toLowerCase(),
+					),
+			),
+		);
+	}
+	return { activity_id, about: await link(tx, activity_id, links) };
 }
 
 export const activityDoor = new Hono<NextSaveEnv>()
 	.post("/activities", (c) =>
-		answerNextSave(c, "record-activity", parseActivity, recordActivity, 201),
+		answerNextSave(
+			c,
+			"record-activity",
+			parseActivity,
+			(tx, activity) =>
+				recordActivity(tx, activity, c.get("stamp").job === "mail_capture"),
+			201,
+		),
 	)
 	.post("/activities/:activity_id/about", (c) =>
 		answerNextSave(
 			c,
 			"add-activity-about",
 			(body) => parseLinks(c.req.param("activity_id"), body),
-			addLinks,
+			(tx, args) => addLinks(tx, args, c.get("stamp").job === "mail_capture"),
 		),
 	);

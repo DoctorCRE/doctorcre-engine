@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { lockEmail } from "./activity/next-record.ts";
 import { answerNextRead, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
@@ -389,6 +390,14 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						});
 				}
 				const filingDeal = r.deal_id ?? p.deal_id;
+				if (filing) {
+					const email = await tx
+						.selectFrom("email")
+						.select("message_id")
+						.where("activity_id", "=", p.activity_id)
+						.executeTakeFirst();
+					if (email?.message_id) await lockEmail(tx, email.message_id);
+				}
 				if (r.decision === "accept" && filing && filingDeal) {
 					await dealNow(tx, filingDeal);
 				}

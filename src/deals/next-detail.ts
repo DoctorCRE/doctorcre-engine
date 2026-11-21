@@ -4,6 +4,7 @@ import {
 	jsonBuildObject,
 	jsonObjectFrom,
 } from "kysely/helpers/postgres";
+import { filingReviewNeeded } from "../activity/filing-evidence.ts";
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
@@ -315,15 +316,7 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.where((eb) =>
 			eb.or([
 				eb("p.kind", "<>", "file_to_deal"),
-				eb.not(
-					eb.exists(
-						eb
-							.selectFrom("activity_about as ab")
-							.select("ab.activity_id")
-							.whereRef("ab.activity_id", "=", "p.activity_id")
-							.whereRef("ab.deal_id", "=", "p.deal_id"),
-					),
-				),
+				filingReviewNeeded(eb.ref("p.activity_id"), eb.ref("p.deal_id")),
 			]),
 		)
 		.orderBy("p.created_at", "desc")

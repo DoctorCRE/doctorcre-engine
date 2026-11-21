@@ -10,6 +10,7 @@ const id = (n: number) =>
 const partner = id(1);
 const other = id(2);
 const deal = id(3);
+const suggestedDeal = id(69);
 const call = id(4);
 const meeting = id(5);
 const unstampedCall = id(6);
@@ -44,7 +45,8 @@ before(async () => {
 		insert into party_email (party_id, address, label) values ('${knownContact}', 'known-cc@example.test', 'work'),
 			('${knownContact}', 'pat@example.test', 'work'),
 			('${knownContact}', 'shared@example.test', 'work'), ('${other}', 'shared@example.test', 'work');
-		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${partner}');
+		insert into deal (id, name, owner_user_id) values
+			('${deal}', 'Example Dental', '${partner}'), ('${suggestedDeal}', 'Example Orthodontics', '${partner}');
 		insert into activity (id, kind, happened_at)
 			select id, 'email', '2026-01-01'::date + offset_days::int
 			from unnest(array[${[10, 11, 12, 13, 14, 15, 16].map((n) => `'${id(n)}'`).join(",")}]::uuid[])
@@ -96,7 +98,7 @@ before(async () => {
 				('${id(36)}', 'next_step', '${meeting}', 'meeting', 'Please check the date.', 'old_system', '${deal}', 'Check the date', '${partner}', '2026-01-04', null),
 				('${id(37)}', 'next_step', '${unstampedCall}', 'call', 'Please check the floor plan.', 'old_system', '${deal}', 'Check the floor plan', null, '2026-01-04', null);
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, created_at)
-			values ('${id(38)}', 'file_to_deal', '${id(11)}', 'email', 'Please file this.', 'old_system', '${deal}', '2026-01-02');
+			values ('${id(38)}', 'file_to_deal', '${id(11)}', 'email', 'Please file this.', 'old_system', '${suggestedDeal}', '2026-01-02');
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${partner}', true);
 		update proposal set status = 'dismissed' where id = '${id(35)}';
 		update proposal set status = 'accepted' where id = '${id(36)}';
@@ -302,7 +304,7 @@ test("A new suggestion keeps the conversation snoozed and unsnooze returns it to
 		insert into activity_about (activity_id, deal_id) values
 			('${id(17)}', '${deal}'), ('${id(18)}', '${deal}');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id)
-			values ('${id(50)}', 'file_to_deal', '${id(17)}', 'email', 'Please file the plan.', 'old_system', '${deal}'),
+			values ('${id(50)}', 'file_to_deal', '${id(17)}', 'email', 'Please file the plan.', 'old_system', '${suggestedDeal}'),
 				('${id(51)}', 'possible_new_deal', '${id(17)}', 'email', 'Another example suite.', 'old_system', null);
 		commit;`);
 	const card = async () => {
@@ -885,7 +887,7 @@ test("Home uses recorded sender names and matches an unambiguous address", async
 	);
 	assert.partialDeepStrictEqual(filing, {
 		title: "Pat Example asked for tour times at Cedar Suite — choose the deal",
-		why: "Pat Example asked for tour times at Cedar Suite. Please file this. Suggested deal is Example Dental.",
+		why: "Pat Example asked for tour times at Cedar Suite. Please file this. Suggested deal is Example Orthodontics.",
 		primary_action: "Choose deal",
 	});
 });
