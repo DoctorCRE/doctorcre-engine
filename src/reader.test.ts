@@ -24,7 +24,6 @@ import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 import { readTodayTriage } from "./today/triage.ts";
 import { readVendorMarkets } from "./vendors/markets.ts";
-import { readVendorMeetings } from "./vendors/meetings.ts";
 import { readVendor, readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
@@ -499,16 +498,6 @@ test("the reader login reads the board, a deal, the change feed, the capture que
 				deal_suggestions: { state: "ready" },
 				meeting_prep: { state: "ready" },
 			});
-			const zero = "00000000-0000-0000-0000-000000000000";
-			const vendorMeetings = await readSnapshot(login, (db) =>
-				readVendorMeetings(db, "partner_one", {
-					view: "research",
-					q: "",
-					limit: 25,
-					after: [zero, zero],
-				}),
-			);
-			assert.equal(vendorMeetings?.calendar.state, "unavailable");
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(

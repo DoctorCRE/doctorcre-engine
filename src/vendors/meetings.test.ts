@@ -1,35 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import pg from "pg";
-import { withSnapshot } from "../../scripts/test-database.ts";
+import { after, before, test } from "node:test";
+import { readSchema } from "../test-copy.ts";
 import { doorTest } from "../test-door.ts";
-import worker from "../worker.ts";
-
-const meetings = (search: string, connectionString: string, slug = "joe") =>
-	worker.request(
-		`https://app.example.test/api/engine/vendor-meetings${search}`,
-		{ headers: { Cookie: "__Host-dealroom_session=made-up-session" } },
-		{
-			CARR: {
-				fetch: async () =>
-					Response.json({
-						actor: { slug, display: "Example Partner" },
-						csrf_token: "made-up-csrf",
-					}),
-			},
-			DATABASE: { connectionString },
-		},
-	);
-
-async function run(url: string, statements: string) {
-	const db = new pg.Client({ connectionString: url });
-	await db.connect();
-	try {
-		await db.query(statements);
-	} finally {
-		await db.end();
-	}
-}
 
 const at = (hours: number) =>
 	new Date(Date.now() + hours * 3_600_000).toISOString();
@@ -38,30 +10,33 @@ const OTHER = "00000000-0000-4000-8000-000000000002";
 const ORG = "00000000-0000-4000-8000-000000000101";
 const PAT = "00000000-0000-4000-8000-000000000102";
 const SAM = "00000000-0000-4000-8000-000000000103";
-const finding = (status: string) =>
-	JSON.stringify({
-		found: true,
-		epistemic_status: status,
-		location_type: "office",
-		street_address: "1 Example St",
-		city: "Austin",
-		state: "TX",
-	});
-const SEED = `set session_replication_role = replica;
-	insert into actor (id, slug, kind, display_name) values
-		('${ACTOR}', 'joe', 'human', 'Example'), ('${OTHER}', 'dell', 'human', 'Example'),
-		(gen_random_uuid(), 'claude', 'human', 'Example');
-	insert into vendor_category (slug, label, sort) values ('lender', 'Example Lender', 1);
-	insert into vendor_disposition (slug, label, workable, sort) values ('active', 'Active', true, 1);
-	insert into party (id, kind, name, org_id, email, created_by, updated_by) values
-		('${ORG}', 'org', 'Example Lending Co', null, null, '${ACTOR}', '${ACTOR}'),
-		('${PAT}', 'person', 'Pat Example', '${ORG}', ' Pat@Example.TEST ', '${ACTOR}', '${ACTOR}'),
-		('${SAM}', 'person', 'Sam Example', '${ORG}', 'sam@example.test', '${ACTOR}', '${ACTOR}');
-	insert into vendor (vendor_ref, party_id, category, category_slug, offers, created_by, updated_by)
+const NEW_ORG = "00000000-0000-4000-8000-000000000201";
+const NEW_CONTACT = "00000000-0000-4000-8000-000000000202";
+const OLD_VENDOR = `
+	set session_replication_role = replica;
+	insert into public.actor (id, slug, kind, display_name) values
+		('${ACTOR}', 'joe', 'human', 'Example'), ('${OTHER}', 'dell', 'human', 'Example');
+	insert into public.vendor_category (slug, label, sort) values ('lender', 'Example Lender', 1);
+	insert into public.vendor_disposition (slug, label, workable, sort) values ('active', 'Active', true, 1);
+	insert into public.party (id, kind, name, org_id, email, city, created_by, updated_by) values
+		('${ORG}', 'org', 'Example Lending Co', null, null, null, '${ACTOR}', '${ACTOR}'),
+		('${PAT}', 'person', 'Pat Example', '${ORG}', ' Pat@Example.TEST ', 'Austin', '${ACTOR}', '${ACTOR}'),
+		('${SAM}', 'person', 'Sam Example', '${ORG}', 'sam@example.test', 'Austin', '${ACTOR}', '${ACTOR}');
+	insert into public.vendor (vendor_ref, party_id, category, category_slug, offers, created_by, updated_by)
 		values ('V-1', '${ORG}', 'lender', 'lender', 'Construction loans', '${ACTOR}', '${ACTOR}');
-	insert into record_flag (subject_type, subject_id, kind, value, source, observed_at, created_by) values
-		('party', '${PAT}', 'address', '${finding("source_backed")}', 'https://example.test/a', now() - interval '1 day', '${ACTOR}'),
-		('party', '${SAM}', 'address', '${finding("inferred")}', 'https://example.test/b', now() - interval '1 day', '${ACTOR}');`;
+	set session_replication_role = origin;`;
+
+const NEW_VENDOR = `
+	insert into party (id, kind, name) values
+		('${NEW_ORG}', 'company', 'Example Builders'),
+		('${NEW_CONTACT}', 'person', 'New Contact');
+	insert into role (slug, label) values ('vendor', 'Vendor') on conflict do nothing;
+	insert into role (slug, label, category_of) values ('contractor', 'Contractor', 'vendor') on conflict do nothing;
+	insert into party_role (party_id, role, offers) values ('${NEW_ORG}', 'vendor', 'Build-outs');
+	insert into party_role (party_id, role) values ('${NEW_ORG}', 'contractor');
+	insert into party_company (person_id, company_id) values ('${NEW_CONTACT}', '${NEW_ORG}');
+	insert into party_email (party_id, address, label, is_primary)
+		values ('${NEW_CONTACT}', 'new-contact@example.test', 'work', true);`;
 function agenda(items: object[]) {
 	return {
 		schema: "carr-calendar-agenda.v1",
@@ -77,13 +52,33 @@ function agenda(items: object[]) {
 }
 
 const pat = { email: "pat@example.test" };
+const newContact = { email: "new-contact@example.test" };
+
+const door = doorTest();
+before(async () => {
+	await door.setup();
+	await door.db.query(OLD_VENDOR);
+	for (const file of ["copy-parties.sql", "copy-vendors.sql"])
+		await door.db.query(`begin; ${await readSchema(file)} commit;`);
+	await door.db.query(`begin;
+		select set_config('engine.user_id', '${ACTOR}', true);
+		${NEW_VENDOR}
+		commit;`);
+});
+after(() => door.cleanup());
+
+const meetings = (search = "", user = "joe") =>
+	door.request({ user }, `vendor-meetings${search}`, { method: "GET" });
 
 type Answer = {
+	view: string;
 	total: number;
 	has_more: boolean;
 	next_cursor: string | null;
 	items: {
-		contact: { name: string };
+		vendor_id: string;
+		ref: string;
+		contact: { id: string; name: string; email: string };
 		missing: string[];
 		possible_meetings: { title: string }[];
 	}[];
@@ -104,38 +99,7 @@ const people = (answer: Answer) =>
 		item.possible_meetings.map((m) => m.title),
 	]);
 
-test("vendor research still lists candidates when the calendar cannot be read", () =>
-	withSnapshot(async (url) => {
-		await run(url, SEED);
-		const unplanned = await ready(
-			await meetings("?view=research&q=AUSTIN", url),
-		);
-		assert.deepEqual(people(unplanned), [
-			["Sam Example", ["verified_office"], []],
-		]);
-		assert.equal(unplanned.calendar.state, "unavailable");
-		assert.equal(unplanned.calendar.reason, "source_unavailable");
-		assert.equal(unplanned.calendar.scheduling.reason, "source_unavailable");
-	}));
-
-test("vendor meetings match exact attendee and organizer emails in the signed-in partner's Outlook agenda", async (t) => {
-	const { db, readerUrl, setup, cleanup, request, save } = doorTest();
-	await setup();
-	t.after(cleanup);
-	const joe = "00000000-0000-4000-8000-000000000011";
-	const dell = "00000000-0000-4000-8000-000000000012";
-	const reader = new URL(readerUrl).username;
-	await db.query(`grant select on public.actor, public.party, public.vendor, public.lead,
-		public.vendor_category, public.vendor_disposition, public.v_vendor_assignment_context,
-		public.v_record_flag_subject to ${reader};
-		begin; select set_config('engine.job', 'old_system', true);
-		insert into party (id, kind, name) values
-			('${joe}', 'person', 'Example Partner One'), ('${dell}', 'person', 'Example Partner Two');
-		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
-		set local search_path = public;
-		${SEED}
-		set session_replication_role = origin;
-		commit;`);
+test("copied and newly saved contacts match exact emails in the signed-in partner's agenda", async () => {
 	const own = agenda([
 		{ title: "Matched attendee", attendees: [pat] },
 		{ title: "Matched organizer", organizer: { email: "PAT@EXAMPLE.TEST" } },
@@ -143,10 +107,11 @@ test("vendor meetings match exact attendee and organizer emails in the signed-in
 			title: "Different address",
 			attendees: [{ email: "not-pat@example.test" }],
 		},
+		{ title: "New vendor meeting", attendees: [newContact] },
 	]);
 	const other = agenda([{ title: "Other calendar", attendees: [pat] }]);
 	const publish = async (slug: string, snapshot: ReturnType<typeof agenda>) => {
-		const [status] = await save(
+		const [status] = await door.save(
 			{ job: "mail_capture", for_user: slug },
 			"calendar/agenda",
 			snapshot,
@@ -154,47 +119,76 @@ test("vendor meetings match exact attendee and organizer emails in the signed-in
 		);
 		assert.equal(status, 200);
 	};
-	const suggested = async (user: string) =>
-		ready(await request({ user }, "vendor-meetings", { method: "GET" }));
 	await publish("dell", other);
-	const missing = await suggested("joe");
-	assert.deepEqual(people(missing), [["Pat Example", [], []]]);
-	assert.equal(missing.calendar.state, "unavailable");
-	assert.equal(missing.calendar.reason, "source_unavailable");
-	assert.equal(missing.calendar.scheduling.reason, "source_unavailable");
+	const unavailable = await ready(await meetings("?q=Pat"));
+	assert.deepEqual(people(unavailable), [
+		["Pat Example", ["verified_office"], []],
+	]);
+	assert.equal(unavailable.calendar.state, "unavailable");
+	assert.equal(unavailable.calendar.reason, "source_unavailable");
+	assert.equal(unavailable.calendar.scheduling.reason, "source_unavailable");
 
 	await publish("joe", own);
-	const page = await suggested("joe");
+	const page = await ready(await meetings());
+	assert.equal(page.view, "research");
 	assert.deepEqual(people(page), [
-		["Pat Example", [], ["Matched attendee", "Matched organizer"]],
+		[
+			"Pat Example",
+			["verified_office"],
+			["Matched attendee", "Matched organizer"],
+		],
+		["Sam Example", ["verified_office"], []],
+		["New Contact", ["verified_office"], ["New vendor meeting"]],
 	]);
+	assert.partialDeepStrictEqual(page.items[0], {
+		vendor_id: ORG,
+		ref: "V-1",
+		contact: { id: PAT, email: pat.email },
+	});
+	assert.partialDeepStrictEqual(page.items[2], {
+		vendor_id: NEW_ORG,
+		contact: { id: NEW_CONTACT, email: newContact.email },
+	});
 	assert.equal(page.calendar.state, "ready");
 	assert.equal(page.calendar.scheduling.state, "ready");
-	assert.deepEqual(people(await suggested("dell")), [
-		["Pat Example", [], ["Other calendar"]],
+	assert.deepEqual(people(await ready(await meetings("?q=Pat", "dell"))), [
+		["Pat Example", ["verified_office"], ["Other calendar"]],
 	]);
 });
 
-test("pages follow their cursor", () =>
-	withSnapshot(async (url) => {
-		await run(
-			url,
-			`${SEED};
-			update record_flag set value = value || '{"epistemic_status": "source_backed"}'`,
-		);
-		const first = await ready(await meetings("?limit=1", url));
-		assert.equal(first.has_more, true);
-		const cursor = encodeURIComponent(first.next_cursor ?? "");
-		const second = await ready(
-			await meetings(`?limit=1&cursor=${cursor}`, url),
-		);
-		assert.deepEqual(
-			people(first)
-				.concat(people(second))
-				.map(([name]) => name),
-			["Pat Example", "Sam Example"],
-		);
-	}));
+test("Research search and pages keep vendor contacts in order", async () => {
+	const first = await ready(await meetings("?view=research&q=AUSTIN&limit=1"));
+	assert.equal(first.total, 2);
+	assert.equal(first.has_more, true);
+	assert.ok(first.next_cursor);
+	const cursor = encodeURIComponent(first.next_cursor);
+	const second = await ready(
+		await meetings(`?view=research&q=AUSTIN&limit=1&cursor=${cursor}`),
+	);
+	assert.equal(second.total, 2);
+	assert.equal(second.has_more, false);
+	assert.equal(second.next_cursor, null);
+	assert.deepEqual(
+		first.items.concat(second.items).map(({ contact }) => contact.name),
+		["Pat Example", "Sam Example"],
+	);
+	await refused(
+		await meetings(`?view=research&q=Pat&limit=1&cursor=${cursor}`),
+		400,
+		"vendor_meetings_query_invalid",
+	);
+});
+
+test("the retired Suggested view returns an empty page to existing clients", async () => {
+	const page = await ready(await meetings("?view=suggested"));
+	assert.partialDeepStrictEqual(page, {
+		view: "suggested",
+		total: 0,
+		items: [],
+		has_more: false,
+		next_cursor: null,
+	});
+});
 
 async function refused(response: Response, status: number, error: string) {
 	assert.equal(response.status, status);
@@ -207,30 +201,24 @@ async function refused(response: Response, status: number, error: string) {
 	assert.deepEqual(body, { error });
 }
 
-test("the read refuses a caller who is not a partner, a bad query and a failed read", () =>
-	withSnapshot(async (url) => {
-		await run(url, SEED);
-		await refused(
-			await meetings("?q=x", url, "claude"),
-			403,
-			"AUTHORIZATION_REFUSED",
-		);
-		for (const search of [
-			`?q=${"x".repeat(81)}`,
-			"?q=a&q=b",
-			"?limit=0",
-			"?limit=51",
-			"?limit=1.5",
-			"?cursor=",
-			"?cursor=!!!",
-			`?cursor=${btoa("null")}`,
-			`?view=research&cursor=${btoa(encodeURIComponent(JSON.stringify({ v: 1, view: "suggested", q: "", after: [ORG, PAT] })))}`,
-		])
-			await refused(
-				await meetings(search, url),
-				400,
-				"vendor_meetings_query_invalid",
-			);
-		await run(url, "alter view v_vendor_assignment_context rename to v_hidden");
-		await refused(await meetings("", url), 500, "vendor_meetings_unavailable");
-	}));
+test("the read refuses a caller who is not a partner, a bad query and a failed read", async () => {
+	await refused(await meetings("?q=x", "claude"), 403, "AUTHORIZATION_REFUSED");
+	for (const search of [
+		`?q=${"x".repeat(81)}`,
+		"?q=a&q=b",
+		"?limit=0",
+		"?limit=51",
+		"?limit=1.5",
+		"?cursor=",
+		"?cursor=!!!",
+		`?cursor=${btoa("null")}`,
+	])
+		await refused(await meetings(search), 400, "vendor_meetings_query_invalid");
+
+	await door.db.query("alter table party_role rename to hidden_party_role");
+	try {
+		await refused(await meetings(), 500, "vendor_meetings_unavailable");
+	} finally {
+		await door.db.query("alter table hidden_party_role rename to party_role");
+	}
+});
