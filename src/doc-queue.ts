@@ -151,13 +151,17 @@ const text = z
 	.trim()
 	.min(1)
 	.refine((value) => value.isWellFormed() && !value.includes("\0"));
+const quote = z
+	.string()
+	.min(1)
+	.refine((value) => value.isWellFormed() && !value.includes("\0"));
 const summaryResult = z.strictObject({
 	summary: text.refine((value) => [...value].length <= 300),
 	action_title: text.refine((value) => [...value].length <= 90).nullable(),
-	quote: text,
+	quote,
 });
 const filingResult = z.strictObject({
-	facts: z.array(z.strictObject({ destination, text, quote: text })),
+	facts: z.array(z.strictObject({ destination, text, quote })),
 });
 
 function validateJudgment(outcome: unknown, work: JudgmentInput) {

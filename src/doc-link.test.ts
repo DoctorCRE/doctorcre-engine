@@ -532,6 +532,13 @@ test("Doc link migration, private credentials and Mac polling", {
 					},
 					422,
 				);
+				for (const quote of ["Tour is Thursday.\u00a0", ""]) {
+					await complete(
+						current.claim_id,
+						{ ...summaryAnswer, result: { ...summary, quote } },
+						422,
+					);
+				}
 				const storedSummary = () =>
 					db.query(
 						`select source_activity_id, text, provenance->>'quote' as quote, provenance->>'job' as job
