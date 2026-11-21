@@ -205,3 +205,18 @@ test("a calendar-day window includes ended meetings today and excludes both midn
 	assert.ok(read && read.state !== "unavailable");
 	assert.deepEqual(titles(read.items), ["Early ended", "Later today"]);
 });
+
+test("the calendar-day window shows all occurrences beyond the briefing limit", () => {
+	const items = Array.from({ length: 101 }, (_, i) =>
+		meeting(1, 1, `Meeting ${i}`),
+	);
+	const stored = snapshot(items);
+	const read = meetingsFromSnapshot(stored, NOW, {
+		fromMs: Date.parse(at(-9)),
+		untilMs: Date.parse(at(15)),
+	});
+	assert.ok(read && read.state !== "unavailable");
+	assert.equal(read.items.length, 101);
+	assert.deepEqual(read.notes, []);
+	assert.equal(shown(stored).items.length, 100);
+});
