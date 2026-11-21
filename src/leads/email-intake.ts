@@ -341,13 +341,27 @@ function noticeFacts(
 		const [value = "", ...extras] = line.split(" · ");
 		facts.set(key, value.trim());
 		end = offset + line.length;
-		for (const extra of key === "name" ? extras : []) {
-			const email = extra.match(/^\s*([^\s@]+@[^\s@]+)(?=\s|$)/)?.[1];
-			const phone = extra.match(/^\s*(\+?[(\d][\d ().-]*\d)/)?.[1];
+		for (const segment of key === "name" ? extras : []) {
+			const extra = segment.trimStart();
+			const email = extra.match(/^([^\s@]+@[^\s@]+)(?=\s|$)/)?.[1];
+			const phone = extra.match(/^(\+?[(\d][\d ().-]*\d)/)?.[1];
 			const contact = email ? "email" : phone ? "phone" : undefined;
-			if (!contact) continue;
-			if (facts.has(contact)) return;
-			facts.set(contact, email ?? phone ?? "");
+			const contactValue = email ?? phone ?? "";
+			if (contact) {
+				if (facts.has(contact)) return;
+				facts.set(contact, contactValue);
+			}
+			const [, streetAddress, city] =
+				extra
+					.slice(contactValue.length)
+					.match(
+						/^\s*(?:—\s*)?Address[ \t]*:\s*(\d[^,\r\n]+),\s*(\p{L}[\p{L}\p{M} .’'-]*),\s*[a-z]{2}\s+\d{5}(?:-\d{4})?(?=\s|$)/iu,
+					) ?? [];
+			if (streetAddress && city) {
+				if (facts.has("street_address") || facts.has("city")) return;
+				facts.set("street_address", streetAddress.trim());
+				facts.set("city", city.trim());
+			}
 		}
 	}
 	const name = facts.get("name");
