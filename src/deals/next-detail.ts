@@ -10,7 +10,12 @@ import {
 	mailGroup,
 	senderLabel,
 } from "../home-email-thread.ts";
-import { emailSuggestionTitle, savedEmailAction } from "../home-email-title.ts";
+import {
+	currentEmailSummary,
+	emailSuggestionTitle,
+	savedEmailAction,
+} from "../home-email-title.ts";
+import { readHomeReviewCards } from "../home-inbox-review.ts";
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
@@ -57,8 +62,8 @@ type Correspondence = {
 	| { kind: "meeting"; title: string | null }
 );
 
-export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
-	const record = await selectNextDealsWithFacts(db)
+export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
+	return selectNextDealsWithFacts(db)
 		.select((eb) => [
 			sql.lit("deal-timeline.v1").as("schema_version"),
 			sql.lit("deal-items.v1").as("item_schema_version"),
@@ -201,8 +206,15 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 				order by recorded_at desc, id desc limit ${HISTORY_CAP}
 			) e)`.as("events"),
 		])
-		.where("d.id", "=", deal)
-		.executeTakeFirst();
+		.where("d.id", "=", deal);
+}
+
+export async function readNextDealDetail(
+	db: Transaction<DB>,
+	deal: string,
+	userId?: string,
+) {
+	const record = await nextDealDetailQuery(db, deal).executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
 	const { today, commissions, critical_dates, email_follow_ups, ...detail } =
 		record;
@@ -222,18 +234,34 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		requests: [],
 		today,
 	});
+	const emailActivityIds = [
+		...new Set(email_follow_ups.map(({ email }) => email.activity_id)),
+	];
+	const cards =
+		userId && emailActivityIds.length
+			? await readHomeReviewCards(db, userId, null, true, emailActivityIds)
+			: [];
+	const homeTitles = new Map(
+		cards.flatMap(({ source_activity, title }) =>
+			source_activity?.kind === "email"
+				? [[source_activity.id, title] as const]
+				: [],
+		),
+	);
 	return {
 		...detail,
 		email_follow_ups: email_follow_ups.map(
 			({ email_action_title, email_sender, decision_label, ...followUp }) => ({
 				...followUp,
-				title: emailSuggestionTitle({
-					kind: followUp.kind,
-					email_action_title,
-					email_sender,
-					context_label: detail.name,
-					decision_label,
-				}),
+				title:
+					homeTitles.get(followUp.email.activity_id) ??
+					emailSuggestionTitle({
+						kind: followUp.kind,
+						email_action_title,
+						email_sender,
+						context_label: detail.name,
+						decision_label,
+					}),
 			}),
 		),
 		critical_dates: critical_dates.map((date) => ({
@@ -334,10 +362,9 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.innerJoin("activity as a", "a.id", "e.activity_id")
 		.leftJoin("app_user as o", "o.id", "p.owner_party_id")
 		.leftJoin("phase", "phase.slug", "p.to_phase")
-		.leftJoin(
-			"email_current_summary as summary",
-			"summary.activity_id",
-			"e.activity_id",
+		.leftJoinLateral(
+			(eb) => currentEmailSummary(eb.ref("e.activity_id")).as("summary"),
+			(join) => join.onTrue(),
 		)
 		.select((eb) => [
 			"p.id as proposal_id",

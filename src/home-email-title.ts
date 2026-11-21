@@ -1,6 +1,13 @@
-import { sql } from "kysely";
+import { type Expression, sql } from "kysely";
 import { homeDisplayText, homeStepText } from "./home-steps.ts";
 import { homeTitle, savedHomeTitle } from "./home-title.ts";
+import type { JsonObject } from "./next-database.d.ts";
+
+// LIMIT keeps the summary lookup tied to the source email in the query plan.
+export const currentEmailSummary = (activityId: Expression<string | null>) =>
+	sql<{ text: string; provenance: JsonObject }>`
+		select text, provenance from email_current_summary where activity_id = ${activityId} limit 1
+	`;
 
 export const savedEmailAction = sql<string | null>`
 	case when jsonb_typeof(summary.provenance->'action_title') = 'string'

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { sql } from "kysely";
+import { nextTransaction } from "../next-connection.ts";
 import { isArguments } from "../save-door.ts";
 import { doorTest } from "../test-door.ts";
+import { nextDealDetailQuery } from "./next-detail.ts";
 
-const { db, setup, cleanup, request, save } = doorTest();
+const { db, readerUrl, setup, cleanup, request, save } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const dealId = id(10);
@@ -180,21 +183,24 @@ test("both partners see who saved a critical date or next step", async () => {
 	}
 });
 
-test("deal follow-up uses the Home action title for the exact reply", async () => {
+async function homeReminders(caller: typeof alex) {
 	const response = await request(
-		alex,
-		"home/inbox",
+		caller,
+		"home/inbox?view=dashboard",
 		{ method: "GET" },
-		{
-			HOME_INBOX_READ_SCHEMA: "next",
-		},
+		{ HOME_INBOX_READ_SCHEMA: "next" },
 	);
 	assert.equal(response.status, 200);
 	const inbox: unknown = await response.json();
-	assert.ok(isArguments(inbox) && Array.isArray(inbox.items));
-	const card = inbox.items
-		.filter(isArguments)
-		.find((item) => item.proposal_id === id(30));
+	assert.ok(isArguments(inbox) && isArguments(inbox.reminders));
+	assert.ok(Array.isArray(inbox.reminders.items));
+	return inbox.reminders.items.filter(isArguments);
+}
+
+test("deal follow-up uses the Home action title for the exact reply", async () => {
+	const card = (await homeReminders(alex)).find(
+		(item) => item.proposal_id === id(30),
+	);
 	assert.equal(card?.title, "Send the floor plan to Pat");
 	const page = await detail(alex);
 	assert.ok("email_follow_ups" in page && Array.isArray(page.email_follow_ups));
@@ -202,6 +208,29 @@ test("deal follow-up uses the Home action title for the exact reply", async () =
 		page.email_follow_ups.filter(isArguments).map(({ title }) => title),
 		["Choose the deal for this email", card.title],
 	);
+});
+
+test("deal follow-ups use the leading Home decision when the source email is unsummarized", async () => {
+	const card = (await homeReminders(casey)).find(
+		(item) =>
+			isArguments(item.source_activity) && item.source_activity.id === id(21),
+	);
+	assert.equal(
+		card?.title,
+		"Review the proposed follow-up for Example second lease",
+	);
+	for (const target of [dealId, otherDealId]) {
+		const page = await detail(casey, target);
+		assert.ok(
+			"email_follow_ups" in page && Array.isArray(page.email_follow_ups),
+		);
+		const followUp = page.email_follow_ups
+			.filter(isArguments)
+			.find(
+				(item) => isArguments(item.email) && item.email.activity_id === id(21),
+			);
+		assert.equal(followUp?.title, card.title);
+	}
 });
 
 test("both partners see individual correspondence and can decide email suggestions", async () => {
@@ -346,5 +375,48 @@ test("the deal page lists a filing suggested on every message of a conversation 
 			.filter((entry) => entry.kind === "file_to_deal")
 			.map((entry) => entry.email.activity_id),
 		[id(62)],
+	);
+});
+
+test("deal detail looks up email summaries by source instead of scanning the mailbox", async () => {
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		with inserted as (
+			insert into activity (id, kind, happened_at)
+			select gen_random_uuid(), 'email', '2026-01-01' from generate_series(1, 15000)
+			returning id
+		)
+		insert into email (activity_id, message_id, sender, subject, body)
+			select id, id || '@summary-plan.example.test', 'sender@example.test', 'Example', 'An unrelated message.'
+			from inserted;
+		insert into activity_about (activity_id, party_id)
+			select activity_id, '${id(3)}' from email where message_id = activity_id || '@summary-plan.example.test';
+		insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, text, provenance, recorded_at)
+			select activity_id, activity_id, 'sha256:' || repeat('c', 64), 'example.v1',
+				'available', 'An unrelated message.', '{}', '2026-01-02'
+			from email where message_id = activity_id || '@summary-plan.example.test';
+		insert into deal (id, name, kind, owner_user_id)
+			values ('${id(800)}', 'Example summary lookup', 'lease', '${id(1)}');
+		insert into deal_phase_change (deal_id, happened_at, phase)
+			values ('${id(800)}', '2026-01-01', 'research');
+		insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what)
+			select 'next_step', activity_id, 'email', 'An unrelated message.', 'old_system', '${id(800)}', 'Check the plan'
+			from email_summary where source_hash = 'sha256:' || repeat('c', 64) order by activity_id limit 2;
+		analyze email_summary;
+		commit;`);
+	const { rows } = await nextTransaction(readerUrl, "read", (tx) =>
+		sql<{
+			"QUERY PLAN": string;
+		}>`explain (analyze, buffers, costs off, timing off)
+			${nextDealDetailQuery(tx, id(800))}`.execute(tx),
+	);
+	const plan = rows
+		.map((row) => row["QUERY PLAN"])
+		.filter((line) => /email_summary|Index Cond:.*activity_id/.test(line))
+		.join("\n");
+	assert.doesNotMatch(plan, /Seq Scan on email_summary/);
+	assert.match(
+		plan,
+		/Index (?:Only )?Scan using email_summary_email on email_summary \(actual rows=1(?:\.00)? loops=2\)/,
 	);
 });
