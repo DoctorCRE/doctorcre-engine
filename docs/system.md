@@ -175,6 +175,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Calendar screen                                          | [Calendar](screens/calendar.md)                                                                                                     |
 | Leads screen                                             | `docs/screens/leads.md`                                                                                                             |
 | Invoices screen                                          | [Invoices](screens/invoices.md)                                                                                                     |
+| Global Search screen                                     | [Search](screens/search.md)                                                                                                         |
 | Prospects lane and Monday review                         | `docs/screens/deals.md` § "Prospects" and § "Monday review"; § "Prospects and the Monday review"                                    |
 
 Every `§` without a file is in `docs/new-database.md`.
