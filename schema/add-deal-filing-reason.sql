@@ -174,3 +174,12 @@ begin
 end $$;
 
 commit;
+
+-- Read back the function and execute grants. Expect engine and reader execute,
+-- and no public execute.
+-- select p.oid::regprocedure,
+--   has_function_privilege('engine', p.oid, 'execute') as engine_execute,
+--   has_function_privilege('engine_reader', p.oid, 'execute') as reader_execute,
+--   exists (select from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+--     where a.grantee = 0 and a.privilege_type = 'EXECUTE') as public_execute
+-- from pg_proc p where p.oid = 'next.deal_filing_reason(uuid,uuid)'::regprocedure;
