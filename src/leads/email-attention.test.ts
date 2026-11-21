@@ -152,6 +152,52 @@ test("either partner can clear shared email attention without claiming the lead"
 	await assertState(id, false, "joe", "dell");
 });
 
+test("the drawer identifies the intake email after acknowledgement and among other correspondence", async () => {
+	const id = await emailLead();
+	const { rows } = await db.query(
+		"select activity_id from lead_email_attention where party_id = $1",
+		[id],
+	);
+	const activityId = rows[0].activity_id;
+	const otherId = randomUUID();
+	await db.query("begin; set local engine.job = 'old_system'");
+	await db.query(
+		"insert into activity (id, kind, happened_at, summary, changed_by_job) values ($1, 'email', now(), 'Another contact', 'old_system')",
+		[otherId],
+	);
+	await db.query(
+		"insert into activity_about (activity_id, party_id) values ($1, $2)",
+		[otherId, id],
+	);
+	await db.query("commit");
+	const first = await open(id, "joe", "drawer");
+	assert.ok(Array.isArray(first.correspondence));
+	assert.equal(first.correspondence.length, 2);
+	assert.ok(first.source_email);
+	assert.deepEqual(
+		first.source_email,
+		first.correspondence.find(
+			(entry: unknown) => isArguments(entry) && entry.id === activityId,
+		),
+	);
+	assert.equal(
+		(
+			await change(
+				id,
+				"joe",
+				command("acknowledge_email", "joe", first.base_version),
+			)
+		).status,
+		200,
+	);
+	assert.deepEqual(
+		(await open(id, "dell", "drawer")).source_email,
+		first.source_email,
+	);
+	await db.query("delete from lead_email_attention where party_id = $1", [id]);
+	assert.equal((await open(id, "joe", "drawer")).source_email, null);
+});
+
 test("concurrent claims give the lead to one partner and clear attention in that save", async () => {
 	const id = await emailLead();
 	const { base_version } = await open(id, "joe", "board");

@@ -86,6 +86,7 @@ test("an opened lead merges the board row and detail in jsonb key order", () =>
 			correspondence_coverage,
 			history_limit,
 			correspondence,
+			source_email,
 			stage_history,
 			correspondence_page,
 			stage_history_page,
@@ -93,6 +94,7 @@ test("an opened lead merges the board row and detail in jsonb key order", () =>
 			...row
 		} = detail;
 		assert.deepEqual(row, lead);
+		assert.equal(source_email, null);
 		assert.deepEqual(
 			[phone, email, notes, correspondence_coverage, history_limit],
 			[

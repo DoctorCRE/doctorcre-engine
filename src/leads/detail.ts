@@ -39,6 +39,7 @@ type DetailFields = {
 	correspondence_coverage: "captured_entries_only";
 	history_limit: 100;
 	correspondence: Correspondence[];
+	source_email: Correspondence | null;
 	stage_history: StageChange[];
 	correspondence_page: Page<CorrespondenceCursor>;
 	stage_history_page: Page<string>;
@@ -119,6 +120,7 @@ const detailFields = (
 		lead: RawBuilder<unknown>;
 		correspondence: RawBuilder<unknown>;
 		stages: RawBuilder<unknown>;
+		sourceEmail: RawBuilder<unknown>;
 	},
 	{ correspondence, stageHistory }: HistoryCursors,
 	stageOrder: "mutation_order" | "occurred_at" = "mutation_order",
@@ -155,6 +157,8 @@ const detailFields = (
 		select * from stage_tail order by ${stageDescending} limit 100
 	) select l.id, jsonb_build_object('phone', l.phone, 'email', l.email, 'notes', l.notes,
 		'correspondence_coverage', 'captured_entries_only', 'history_limit', 100,
+		'source_email', (select to_jsonb(a) - 'lead_id' from correspondence a
+			where a.id = (${sources.sourceEmail})),
 		'correspondence', coalesce((select jsonb_agg(to_jsonb(a) - 'lead_id' order by a.occurred_at desc, a.id desc)
 			from correspondence_page a), '[]'),
 		'stage_history', coalesce((select jsonb_agg(to_jsonb(e) - 'lead_id'
@@ -174,6 +178,7 @@ const detailFields = (
 };
 
 const legacyDetail = (leadId: string) => ({
+	sourceEmail: sql`select null::uuid`,
 	lead: sql`select l.id, p.phone, p.email, l.notes
 		from lead l join party p on p.id = l.party_id where l.id = ${leadId}::uuid`,
 	correspondence: sql`select * from v_lead_workspace_correspondence where lead_id = ${leadId}::uuid`,
@@ -181,6 +186,7 @@ const legacyDetail = (leadId: string) => ({
 });
 
 const nextDetail = (leadId: string) => ({
+	sourceEmail: sql`select activity_id from lead_email_attention where party_id = l.id`,
 	lead: sql`select r.party_id as id,
 		(select concat(number, ' x' || extension) from party_phone
 			where party_id = r.party_id and is_primary) as phone,
