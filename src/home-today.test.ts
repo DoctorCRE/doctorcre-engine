@@ -51,9 +51,9 @@ before(async () => {
 		select v.id, v.deal_id, v.party_id, v.property_id, v.owner_id, v.what, day.d + v.due_offset,
 			case when v.hold_offset is not null then day.d + v.hold_offset end, v.call_id, v.quote
 		from day cross join (values
-			('${id(21)}'::uuid, '${id(7)}'::uuid, null::uuid, null::uuid, '${id(1)}'::uuid, 'L-123: **Send revised LOI** (loop #12)', -3, null::int, null::uuid, null::text),
+			('${id(21)}'::uuid, '${id(7)}'::uuid, null::uuid, null::uuid, '${id(1)}'::uuid, 'CASEY DECIDE: send status unknown — re-touch or drop', -3, null::int, null::uuid, null::text),
 			('${id(22)}', null, '${id(3)}', null, '${id(1)}', 'L-123: _Confirm suite size_ (loop #12)', 0, null, null, null),
-			('${id(23)}', '${id(8)}', null, null, '${id(1)}', 'Email floor plan', -1, null, '${id(11)}', 'Send floor plan.'),
+			('${id(23)}', '${id(8)}', null, null, '${id(1)}', '(202) 555-0142 — Call about the floor plan. If no one answers, leave a message with the office and retry later.', -1, null, '${id(11)}', 'Send floor plan.'),
 			('${id(24)}', '${id(9)}', null, null, '${id(1)}', 'Dropped follow-up', -2, null, '${id(11)}', 'Old follow-up.'),
 			('${id(25)}', null, '${id(5)}', null, '${id(1)}', 'Check in next month', 30, null, null, null),
 			('${id(26)}', null, '${id(4)}', null, '${id(1)}', 'Wait for contractor', -2, 5, null, null),
@@ -123,15 +123,15 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	const row = (i: Row) =>
 		`${i.id}|${i.title}|${i.late_label}|${i.owner}|${i.home_item_id}|${i.open_url}`;
 	assert.deepEqual(body.reminders?.late.map(row), [
-		`${id(32)}|Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
-		`${id(21)}|Send revised LOI|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
-		`${id(28)}|Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
-		`${id(23)}|Email floor plan|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
+		`${id(32)}|Follow-up due for Closed Clinic — Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
+		`${id(21)}|Follow-up due for Example Dental, Springfield — Decide whether to follow up or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
+		`${id(28)}|Follow-up due for Other Clinic, Austin — Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
+		`${id(23)}|Call with Dr. Example left a follow-up — Call about the floor plan|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
-		`${id(22)}|Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
-		`${id(29)}|Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
-		`${id(30)}|Open the saved step|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
+		`${id(22)}|Follow-up due for Example Dental — Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
+		`${id(29)}|Follow-up due for Prospect Dental — Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
+		`${id(30)}|Follow-up due for 100 Example Way — open the saved step|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
 	assert.deepEqual(
 		body.reminders?.late.map((item) => [item.id, item.deal_ended]),
@@ -160,6 +160,46 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		[[id(32), id(28)], [id(29)]],
 	);
 });
+
+async function reminderAndCardTitles(caller: { user: string }, step: string) {
+	const [[todayStatus, body], inbox] = await Promise.all([
+		today("", caller),
+		request(caller, "home/inbox", get, reader),
+	]);
+	assert.deepEqual([todayStatus, inbox.status], [200, 200]);
+	const { items } = (await inbox.json()) as { items: Row[] };
+	const reminder = body.reminders?.late.find((item) => item.id === step);
+	assert.ok(reminder);
+	return [
+		reminder.title,
+		items.find((item) => item.item_id === reminder.home_item_id)?.title,
+	];
+}
+
+for (const [example, caller, step, title] of [
+	[
+		"a copied decision prompt",
+		joe,
+		id(21),
+		"Follow-up due for Example Dental, Springfield — Decide whether to follow up or drop",
+	],
+	[
+		"long phone instructions",
+		joe,
+		id(23),
+		"Call with Dr. Example left a follow-up — Call about the floor plan",
+	],
+	[
+		"plain step wording",
+		{ user: "dell" },
+		id(28),
+		"Follow-up due for Other Clinic, Austin — Review counter",
+	],
+] as const) {
+	test(`Today and the Home card share a title for ${example}`, async () => {
+		assert.deepEqual(await reminderAndCardTitles(caller, step), [title, title]);
+	});
+}
 
 test("meetings cover all of today in Central time including ended ones and hide handled reviews", async () => {
 	const q = `select now() as n, ((now() at time zone 'America/Chicago')::date::timestamp at time zone 'America/Chicago') as s,
