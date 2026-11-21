@@ -37,6 +37,7 @@ const formerlyHidden = randomUUID();
 const path = "home/inbox";
 const reader = { HOME_INBOX_READ_SCHEMA: "next" };
 const user = { user: "example-partner" };
+const titleCharacters = new Intl.Segmenter("en", { granularity: "grapheme" });
 
 before(async () => {
 	await setup();
@@ -129,7 +130,8 @@ async function inbox(caller = user) {
 	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);
 	const items = result.items.filter(isArguments);
 	for (const item of items) {
-		assert.ok(typeof item.title === "string" && item.title.length <= 90);
+		assert.ok(typeof item.title === "string");
+		assert.ok([...titleCharacters.segment(item.title)].length <= 90);
 		assert.doesNotMatch(
 			item.title,
 			/…|\.\.\.|^follow-up (?:set|due|completed)/i,
@@ -522,14 +524,45 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 	assert.equal(Object.hasOwn(result, "unexplained_step_count"), false);
 });
 
-test("Home keeps complete titles and the full instructions when the saved action is long", async () => {
-	const concise = "Send the site plan";
-	const long =
-		"Confirm the accessibility requirements for the proposed suite with the landlord and ask for the revised drawing in writing";
-	for (const [what, title] of [
-		[`${concise}. ${long}.`, `${concise} (Example Lost Deal)`],
-		[long, "Review the follow-up for Example Lost Deal"],
-	] as const) {
+const longAction =
+	"Confirm the accessibility requirements for the proposed suite with the landlord and ask for the revised drawing in writing";
+const accentedAction =
+	"Send the revised plan to Rene\u0301e at Example Lost Deal with the extra icons 📐 📍 📎 🗂 🏢 🔑";
+const followUpFallback = "Review the follow-up for Example Lost Deal";
+
+for (const [scenario, what, title, savedText = what] of [
+	[
+		"a shorter complete instruction",
+		`Send the site plan. ${longAction}.`,
+		"Send the site plan (Example Lost Deal)",
+	],
+	["a long instruction", longAction, followUpFallback],
+	[
+		"an initial in a long instruction",
+		"Send the revised floor plan to A. Morgan and include the accessibility notes from the most recent walkthrough",
+		followUpFallback,
+	],
+	[
+		"a complete instruction with common abbreviations",
+		`Call Dr. Example and Mr. Reed at St. Example Inc. about the plan. ${longAction}.`,
+		"Call Dr. Example and Mr. Reed at St. Example Inc. about the plan (Example Lost Deal)",
+	],
+	["a copied sender name", "Morgan Example", followUpFallback],
+	["a copied sender label", "Email from Morgan Example", followUpFallback],
+	[
+		"a copied status label",
+		"Follow-up set for Morgan Example",
+		followUpFallback,
+	],
+	[
+		"stacked copied prefixes",
+		"REVIEWER DECIDE: review follow-up: Send the plan",
+		"Send the plan (Example Lost Deal)",
+		"Send the plan",
+	],
+	["an action with an accented name and emoji", accentedAction, accentedAction],
+] as const) {
+	test(`Home titles use the complete action or decision for ${scenario}`, async () => {
 		const step = randomUUID();
 		await db.query("begin");
 		try {
@@ -542,7 +575,7 @@ test("Home keeps complete titles and the full instructions when the saved action
 			const card = (await inbox({ user: "other-partner" })).get(step);
 			assert.ok(card);
 			assert.equal(card.title, title);
-			assert.ok(typeof card.why === "string" && card.why.includes(what));
+			assert.ok(typeof card.why === "string" && card.why.includes(savedText));
 		} finally {
 			await db.query("rollback");
 			await db.query("begin");
@@ -550,8 +583,8 @@ test("Home keeps complete titles and the full instructions when the saved action
 			await db.query("delete from next_step where id = $1", [step]);
 			await db.query("commit");
 		}
-	}
-});
+	});
+}
 
 test("the focused deal step names its creator and source after a later edit", async () => {
 	await db.query(`begin;

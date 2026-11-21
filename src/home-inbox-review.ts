@@ -8,13 +8,12 @@ import {
 	sourceInMailbox,
 } from "./home-email-thread.ts";
 import {
-	homeActionTitle,
 	homeDate,
 	homeDisplayText,
 	homeStepText,
-	homeTitle,
 	homeWhy,
 } from "./home-steps.ts";
+import { homeActionTitle, homeTitle } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {

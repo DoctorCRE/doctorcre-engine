@@ -238,6 +238,28 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 	assert.notEqual(cleared?.base_version, revised?.base_version);
 });
 
+test("a checklist reminder uses the decision title when its item is a status label", async () => {
+	const deal = randomUUID();
+	const dealName = "Example Survey Checklist";
+	const step = randomUUID();
+	const update = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id) values ('${deal}', '${dealName}', '${owner}');
+		insert into next_step (id, deal_id, what, item_title, source_ref)
+			values ('${step}', '${deal}', 'Review the survey', 'Follow-up set for Morgan', 'example-survey');
+		insert into home_update (id, user_id, deal_id, what, checklist_item_ref, due_on)
+			values ('${update}', '${owner}', '${deal}', 'Review the survey', 'deal-item:${step}', '2001-02-01');
+		commit;`);
+	const card = (await cards(alex, deal)).find(
+		(item) => item.source_id === update,
+	);
+	assert.partialDeepStrictEqual(card, {
+		title: `Review the checklist item for ${dealName}`,
+		why: "Follow-up set for Morgan. Due Feb 1, 2001.",
+	});
+});
+
 test("checklist reminders follow the item through completion, drop and reopen", async () => {
 	const deal = randomUUID();
 	const step = randomUUID();

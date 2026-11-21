@@ -1042,6 +1042,30 @@ test("Home uses the saved follow-up when the email summary is unavailable", asyn
 	});
 });
 
+test("a proposed follow-up keeps the copied sender label in the evidence", async () => {
+	const proposal = id(32);
+	async function setWording(what: string) {
+		await db.query(
+			`begin; select set_config('engine.job', 'old_system', true);`,
+		);
+		await db.query("update proposal set what = $1 where id = $2", [
+			what,
+			proposal,
+		]);
+		await db.query("commit");
+	}
+	await setWording("Email from Morgan Example");
+	try {
+		const step = (await inbox()).find((card) => card.proposal_id === proposal);
+		assert.partialDeepStrictEqual(step, {
+			title: "Review the proposed follow-up for Example Dental",
+			why: "Email from Known Contact received on Jan 3, 2026. Proposed follow-up: Email from Morgan Example.",
+		});
+	} finally {
+		await setWording("Check the drawing");
+	}
+});
+
 test("Home names the proposed phase, lead and lead stage for email decisions", async () => {
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${other}', true);

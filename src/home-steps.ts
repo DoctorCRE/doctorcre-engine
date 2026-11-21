@@ -1,5 +1,12 @@
 import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
+import {
+	homeActionTitle,
+	homeSentences,
+	homeTitle,
+	isHomeAction,
+	stripHomeTitlePrefixes,
+} from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
 
 const stepMetadata =
@@ -7,9 +14,6 @@ const stepMetadata =
 const storedDate =
 	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
 const edgePunctuation = /^[\s:;,·–—-]+|[\s:;,·–—-]+$/g;
-const decisionPrefix = /^(?:[A-Z][A-Z'.-]* )+DECIDE\s*:\s*/;
-const reviewPrefix = /^review(?: follow-up| call note)?\s*:\s*/i;
-const firstSentence = /(?<!\b(?:Dr|Mr|Mrs|Ms)\.)(?<=[.!?])\s+/i;
 const unknownSendDecision =
 	/^send status unknown\s*[,—–-]\s*re-touch or drop\.?$/i;
 const phoneNumber =
@@ -45,47 +49,17 @@ export function homeDisplayText(text: string | null) {
 }
 
 export function homeStepText(text: string) {
-	const savedText = homeDisplayText(text)
-		.replace(/^(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)/i, "")
-		.replace(reviewPrefix, "");
-	const prompt = savedText.replace(decisionPrefix, "");
+	const prompt = stripHomeTitlePrefixes(homeDisplayText(text));
 	if (unknownSendDecision.test(prompt))
 		return { savedText: prompt, action: "Decide whether to follow up or drop" };
 	const withoutNumber = prompt.replace(phoneNumber, " ");
 	if (withoutNumber === prompt && !/^(?:please )?call\b/i.test(prompt))
 		return { savedText: prompt, action: prompt };
-	const [action = ""] = withoutNumber
-		.replace(/\s+/g, " ")
-		.replace(edgePunctuation, "")
-		.split(firstSentence, 1);
+	const [action = ""] = homeSentences(
+		withoutNumber.replace(/\s+/g, " ").replace(edgePunctuation, ""),
+		1,
+	);
 	return { savedText: prompt, action: action.replace(/\.$/, "") };
-}
-
-export function homeTitle(fallback: string, ...candidates: string[]) {
-	return (
-		candidates.find(
-			(text) => text && text.length <= 90 && !/…|\.\.\./.test(text),
-		) ?? fallback
-	);
-}
-
-export function homeActionTitle(
-	action: string,
-	target: string,
-	fallback: string,
-) {
-	const [first = ""] = action.split(firstSentence, 1);
-	const withTarget = (text: string) =>
-		text && target && !text.toLowerCase().includes(target.toLowerCase())
-			? `${text.replace(/\.$/, "")} (${target})`
-			: text;
-	return homeTitle(
-		fallback,
-		withTarget(action),
-		withTarget(first),
-		action,
-		first,
-	);
 }
 
 export type StepTitle = {
@@ -109,8 +83,6 @@ type StepEvidence = {
 
 const leaseEvent =
 	/^Lease event [—–-] (.+?), est\. (\w+ \d{1,2}, \d{4})(?:\.\s*|$)(.*)$/i;
-const leaseAction =
-	/^(?:please )?(?:ask|call|check|confirm|contact|decide|discuss|follow up|reach out|relocate|renew|review|schedule|send)\b/i;
 
 export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 	const { action, savedText } = homeStepText(step.title);
@@ -124,10 +96,8 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 	const [, name, date, details = ""] = savedText.match(leaseEvent) ?? [];
 	if (step.status === "open" && name && date) {
 		const label = target || name;
-		const sentences = details.split(firstSentence);
-		const savedAction = sentences.find((sentence) =>
-			leaseAction.test(sentence),
-		);
+		const sentences = homeSentences(details);
+		const savedAction = sentences.find(isHomeAction);
 		const fallback = homeTitle(
 			"Review lease timing",
 			`Review lease timing for ${label}`,
@@ -151,14 +121,11 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 		};
 	}
 	const about = contact || target;
-	const fallback = about
-		? homeTitle("Review the follow-up", `Review the follow-up for ${about}`)
-		: "Review the follow-up";
-	const title = homeActionTitle(
-		action.includes(" ") ? action : "",
-		about,
-		fallback,
+	const fallback = homeTitle(
+		"Review the follow-up",
+		about && `Review the follow-up for ${about}`,
 	);
+	const title = homeActionTitle(action, about, fallback);
 	const hiddenWording = savedText !== action || !title.startsWith(action);
 	if (step.call_at) {
 		return {

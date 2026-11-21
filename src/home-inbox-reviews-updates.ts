@@ -1,14 +1,13 @@
 import { sql, type Transaction } from "kysely";
 import {
 	dealStepUrl,
-	homeActionTitle,
 	homeDate,
 	homeDay,
 	homeDisplayText,
 	homeStepText,
-	homeTitle,
 	homeWhy,
 } from "./home-steps.ts";
+import { homeActionTitle, homeTitle } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
 
 type DealNotice = {
