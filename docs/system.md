@@ -86,7 +86,7 @@ Still on the old API with no switch yet:
 - Email and calendar calls outside the Home routing above (slice 30), and Deals saves outside the two save switches above (slice 29).
 - Sign-in.
 
-The Updates page reads and saves on the new schema directly, once the app routes it to the engine (§ "Updates and notification settings").
+When `data-deals-saves-from-engine` is on, Updates and its navigation badge use the engine endpoints `/updates`, `/updates/read`, `/preferences` and `/updates/changes` (§ "Updates and notification settings").
 
 The signed-in Prospects lane, detail, quick add and Monday review use the new schema directly. The app enables them when `deals-saves-from-engine` is on.
 
