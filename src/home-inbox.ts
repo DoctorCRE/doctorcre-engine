@@ -115,8 +115,10 @@ const iso = (timestamp: string) => new Date(timestamp).toISOString();
 const optionalIso = (timestamp: string | null) =>
 	timestamp === null ? null : iso(timestamp);
 
-const leaseDecisionWindow =
-	/^Lease event [—–-] (.+?), est\. (\w+ \d{1,2}, \d{4})\. (Last window before leverage is gone\.)$/i;
+const leaseEvent =
+	/^Lease event [—–-] (.+?), est\. (\w+ \d{1,2}, \d{4})(?:\.\s*|$)(.*)$/i;
+const leaseAction =
+	/^(?:please )?(?:ask|call|check|confirm|contact|decide|discuss|follow up|reach out|relocate|renew|review|schedule|send)\b/i;
 
 function stepText(step: Step) {
 	const action = homeStepText(step.title);
@@ -131,19 +133,34 @@ function stepText(step: Step) {
 			primary_action,
 		};
 	}
-	const [, name, date, reason] = action.match(leaseDecisionWindow) ?? [];
-	if (step.status === "open" && name && date && reason) {
+	const [, name, date, details = ""] = action.match(leaseEvent) ?? [];
+	if (step.status === "open" && name && date) {
 		const label = target || name;
 		const dateLabel = date.replace(/^(\w{3})\w*/, "$1");
 		const event = `${label} lease event est. ${dateLabel}`;
+		const sentences = details.split(/(?<=[.!?])\s+/);
+		const savedAction = sentences.find((sentence) =>
+			leaseAction.test(sentence),
+		);
+		const decision = savedAction
+			? savedAction
+					.replace(/^./, (first) => first.toLowerCase())
+					.replace(/\.$/, "")
+			: "decide on renewal or relocation";
 		const title = homeTitle(
 			event,
-			"decide on renewal or relocation",
+			decision,
 			`Lease event est. ${dateLabel} for ${label}`,
 		);
 		return {
 			title,
-			why: homeWhy(title.startsWith(event) ? null : event, reason, due),
+			why: homeWhy(
+				title.startsWith(event) ? null : event,
+				...sentences.filter(
+					(sentence) => sentence !== savedAction || !title.endsWith(decision),
+				),
+				due,
+			),
 			primary_action,
 		};
 	}

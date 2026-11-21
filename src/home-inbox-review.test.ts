@@ -13,10 +13,14 @@ const deal = id(3);
 const call = id(4);
 const meeting = id(5);
 const unstampedCall = id(6);
+const evidenceReviewer = id(66);
+const filingWithPhone = id(67);
+const tourReply = id(68);
 const knownContact = randomUUID();
 const quotedRequest = `Hello,
 Could you please also let me know whether the west suite is still available for a tour later this month?
 Please send the plan.
+November 8 works for the tour.
 
 Thanks,
 Known Contact
@@ -96,6 +100,14 @@ before(async () => {
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${partner}', true);
 		update proposal set status = 'dismissed' where id = '${id(35)}';
 		update proposal set status = 'accepted' where id = '${id(36)}';
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${evidenceReviewer}', 'person', 'Example Reviewer');
+		insert into app_user (id, slug) values ('${evidenceReviewer}', 'evidence-reviewer');
+		select set_config('engine.user_id', '${evidenceReviewer}', true);
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id)
+			values ('${filingWithPhone}', 'file_to_deal', '${id(13)}', 'email', 'Please call (202) 555-0142.', 'old_system', '${deal}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+			values ('${tourReply}', '${id(12)}', '${evidenceReviewer}', 'old_system', 'Tour', 'See you then.', 'November 8 works for the tour.');
 		commit;`);
 });
 after(async () => {
@@ -886,6 +898,24 @@ test("Home uses the shortest saved request before signatures and quoted headers"
 		title: "Email from Known Contact (“Please send the plan.”) — review reply",
 		why: "Please send the plan.",
 		primary_action: "Review reply",
+	});
+});
+
+test("Home omits callback numbers from titles built from saved proposal evidence", async () => {
+	const card = (await inbox("evidence-reviewer")).find(
+		(card) => card.proposal_id === filingWithPhone,
+	);
+	assert.equal(card?.title, "Email from Pat Example — choose the deal");
+});
+
+test("Home keeps a confirmed tour date from the saved excerpt without a summary", async () => {
+	const card = (await inbox("evidence-reviewer")).find(
+		(card) => card.reply_draft_id === tourReply,
+	);
+	assert.partialDeepStrictEqual(card, {
+		title:
+			"Email from Known Contact (“November 8 works for the tour.”) — review reply",
+		why: "November 8 works for the tour.",
 	});
 });
 

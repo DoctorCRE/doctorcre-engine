@@ -508,29 +508,45 @@ function conversationReviewText(
 	};
 }
 
-function emailRequest(email: EmailContext) {
-	const summary = homeDisplayText(email.email_summary);
-	if (summary) return { summary, quote: "" };
-	const [body = ""] = (email.email_quote ?? "").split(
+const requestStart =
+	/^(?:please (?!note\b|see attached\b)|(?:can|could|would|will) you\b|(?:i|we) (?:need|would like)\b|(?:asked|requested|review|confirm|send|call|check|schedule)\b)/i;
+const calendarDate =
+	/\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?) \d{1,2}\b/i;
+const scheduleDecision =
+	/\b(?:works?|confirmed|scheduled|set for|available)\b/i;
+
+function shortEmailExcerpt(evidence: string | null) {
+	const [body = ""] = (evidence ?? "").split(
 		/^\s*(?:>|--|from:|sent:|to:|subject:|on .+ wrote:|(?:best|regards|thanks|thank you|sincerely)[,.!]?\s*$)/im,
 	);
-	let quote = "";
+	let request = "";
+	let fact = "";
 	for (const sentence of body.split(/(?<=[.!?])\s+|\r?\n/)) {
-		const text = sentence.trim();
-		if (
-			!/^(?:please (?!note\b|see attached\b)|(?:can|could|would|will) you\b|(?:i|we) (?:need|would like)\b)/i.test(
-				text,
-			)
-		)
-			continue;
+		const text = homeDisplayText(sentence);
 		if (
 			!/[.!?]$/.test(text) ||
 			/\b(?:From|Sent|Subject|To):|(?:\d[ ().+-]*){10}/i.test(text)
 		)
 			continue;
-		if (!quote || text.length < quote.length) quote = text;
+		if (requestStart.test(text)) {
+			if (!request || text.length < request.length) request = text;
+		} else if (
+			((calendarDate.test(text) && scheduleDecision.test(text)) ||
+				/\b(?:arrived|was received)\.$/i.test(text)) &&
+			(!fact || text.length < fact.length)
+		) {
+			fact = text;
+		}
 	}
-	return { summary, quote: homeDisplayText(quote) };
+	return request || fact;
+}
+
+function emailRequest(email: EmailContext) {
+	const summary = homeDisplayText(email.email_summary);
+	return {
+		summary,
+		quote: summary ? "" : shortEmailExcerpt(email.email_quote),
+	};
 }
 
 function receivedEmail(source: string, receivedAt: string | null) {
@@ -626,7 +642,11 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const count = suggestion.suggestions.length;
 	const context =
 		summary ||
-		(suggestion.kind === "next_step" || evidence.length > 60 ? "" : evidence);
+		(suggestion.kind === "next_step" ||
+		suggestion.email_quote ||
+		evidence.length > 60
+			? ""
+			: shortEmailExcerpt(suggestion.evidence));
 	return {
 		title: emailTitle(source, sender, decision, context, quote),
 		why: homeWhy(

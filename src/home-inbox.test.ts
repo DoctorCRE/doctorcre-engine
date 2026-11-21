@@ -27,6 +27,7 @@ const sharedBuildingStep = randomUUID();
 const followUp = randomUUID();
 const held = randomUUID();
 const leaseReminder = randomUUID();
+const pastLeaseReminder = randomUUID();
 const completed = randomUUID();
 const completedWithoutTime = randomUUID();
 const completedEightDaysAgo = randomUUID();
@@ -77,7 +78,10 @@ before(async () => {
 		insert into next_step (id, deal_id, owner_party_id, what, due_on, item_title, source_ref) values
 			('${leaseReminder}', '${deal}', '${owner}',
 				'Lease event — Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone.',
-				'2026-11-19', 'Lease event', 'lease-example');
+				'2026-11-19', 'Lease event', 'lease-example'),
+			('${pastLeaseReminder}', '${deal}', '${owner}',
+				'Lease event — Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans.',
+				'2026-11-19', 'Lease event', 'past-lease-example');
 		insert into next_step (id, deal_id, owner_party_id, what, resolution, done_at) values
 			('${completedDealStep}', '${meetingDeal}', '${other}', 'Check the renewal budget', 'done', now());
 		insert into next_step (id, property_id, owner_party_id, what, resolution, done_at) values
@@ -163,6 +167,7 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 			formerlyHidden,
 			proposal,
 			leaseReminder,
+			pastLeaseReminder,
 		]),
 	);
 	assert.partialDeepStrictEqual(items.get(ordinary), {
@@ -227,6 +232,14 @@ test("A lease reminder names the deal once and gives the decision and estimated 
 		title:
 			"Example Dental, Springfield lease event est. Dec 1, 2026 — decide on renewal or relocation",
 		why: "Last window before leverage is gone. Due Nov 19, 2026.",
+	});
+});
+
+test("A lease reminder shows the estimated date and saved action when the window has passed", async () => {
+	assert.partialDeepStrictEqual((await inbox()).get(pastLeaseReminder), {
+		title:
+			"Example Dental, Springfield lease event est. Oct 1, 2026 — confirm renewal plans",
+		why: "The estimated renewal window has passed. Due Nov 19, 2026.",
 	});
 });
 
