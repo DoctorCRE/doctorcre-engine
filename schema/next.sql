@@ -1249,6 +1249,31 @@ create table lead_email_evidence (
 	primary key (message_id, mailbox_user_id)
 );
 
+create table lead_source_sender (
+	id uuid primary key default gen_random_uuid(),
+	address email_address,
+	domain text,
+	name text not null check (name ~ '\S'),
+	fields jsonb,
+	created_at timestamptz not null default now(),
+	check ((address is null) <> (domain is null)),
+	check (length(domain) <= 253 and domain collate "C" ~
+		'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'),
+	constraint lead_source_sender_fields check (
+		case
+			when fields is null then true
+			when jsonb_typeof(fields) = 'object' then
+				fields ?& array['name', 'request']
+				and fields - array['name', 'email', 'phone', 'street_address', 'city', 'request'] = '{}'::jsonb
+				and not jsonb_path_exists(fields, 'strict $.* ? (@.type() != "string"
+					|| !(@ like_regex "[^[:space:]]") || @ like_regex ":[[:space:]]*$")')
+			else false
+		end
+	),
+	unique (domain)
+);
+create unique index lead_source_sender_address_unique on lead_source_sender (lower(address));
+
 create table lead_email_source (
 	activity_id uuid primary key,
 	party_id uuid not null references party,
@@ -3826,6 +3851,7 @@ end $$;
 revoke insert on platform_metric, platform_format, relationship_level from engine;
 -- Only the owner adds a user or a job, because every change is signed with one.
 revoke insert on app_user, job from engine;
+revoke insert on lead_source_sender from engine;
 -- Only a merge leaves a pointer.
 revoke insert on merged_party from engine;
 revoke insert on deal_open_name from engine;

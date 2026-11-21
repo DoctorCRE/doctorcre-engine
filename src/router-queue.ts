@@ -111,6 +111,7 @@ export const routerQueue = new Hono<NextSaveEnv>().get(
     select e.id, e.happened_at, jsonb_build_object('activity_id', e.id, 'message_id', e.message_id,
      'happened_at', e.happened_at, 'outgoing', exists (select from party_email pe join app_user u on u.id = pe.party_id where pe.address = e.sender),
      'mailbox_user', ${userSlug}::text, 'subject', e.subject, 'body', e.body, 'conversation_id', e.conversation_id,
+     'lead_source', exists (select from lead_email_source s where s.activity_id = e.id),
      'sender', p.sender, 'recipients', p.recipients,
      'about', coalesce((select jsonb_agg(jsonb_strip_nulls(jsonb_build_object('deal_id', deal_id, 'party_id', party_id, 'property_id', property_id))) from activity_about where activity_id = e.id), '[]'),
      'suppressed_deal_ids', coalesce((select jsonb_agg(distinct removed.old_value->>'deal_id') from change removed
