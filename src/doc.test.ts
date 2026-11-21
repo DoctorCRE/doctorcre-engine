@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { Hono } from "hono";
-import { docRoutes } from "./doc.ts";
-import { copyTest } from "./test-copy.ts";
+import { docRoutes, recentDocTurns } from "./doc.ts";
+import { docLinkOwnerTransaction } from "./doc-link.ts";
+import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
 const owner = randomUUID();
@@ -325,8 +326,8 @@ test("the database enforces private ownership and valid turn rows", async () => 
 	}) =>
 		db.query(
 			`insert into doc_turn
-			(id, conversation_id, owner_user_id, position, idempotency_key, question, request_hash, state, claim_id, claim_until)
-			values ($1, $2, $3, $4, $5, $6, 'example', $7, $8::uuid, case when $8 is not null then 'infinity'::timestamptz end)`,
+			(id, conversation_id, owner_user_id, position, idempotency_key, question, request_hash, state, claim_id, claim_until, claim_state)
+			values ($1, $2, $3, $4, $5, $6, 'example', $7, $8::uuid, case when $8 is not null then 'infinity'::timestamptz end, case when $8 is not null then '{"reads":0,"sources":{}}'::jsonb end)`,
 			[
 				id,
 				conversation,
@@ -438,4 +439,83 @@ test("an answered proposal needs a matching save receipt at commit", async () =>
 	} finally {
 		await db.query("rollback");
 	}
+});
+
+test("only the latest 12 private answered turns provide follow-up context", async () => {
+	const conversation = randomUUID();
+	await db.query(
+		"insert into doc_conversation (id, owner_user_id) values ($1, $2)",
+		[conversation, owner],
+	);
+	await db.query(
+		`insert into doc_turn (conversation_id, owner_user_id, position, idempotency_key, request_hash,
+			question, state, answer)
+		select $1, $2, position, gen_random_uuid(), 'example', 'Question ' || position,
+			case when position = 15 then 'failed' else 'answered' end,
+			case when position <> 15 then '{"kind":"refusal","text":"Sample","sources":[],"proposal":null}'::jsonb end
+		from generate_series(1, 16) position`,
+		[conversation, owner],
+	);
+	const history = (user: string) =>
+		docLinkOwnerTransaction(connectionString, user, (tx) =>
+			recentDocTurns(tx, conversation, 16),
+		);
+	assert.deepEqual(await history(other), []);
+	const own = await history(owner);
+	assert.deepEqual(
+		own.map(({ question }) => question),
+		Array.from({ length: 12 }, (_, i) => `Question ${i + 3}`),
+	);
+});
+
+test("the claim-state migration preserves old turns and enforces one queued or working turn", async (t) => {
+	const old = copyTest();
+	await old.setup();
+	t.after(old.cleanup);
+	await old.db.query("drop table doc_turn, doc_conversation");
+	await old.db.query(await readSchema("add-doc-conversations.sql"));
+	const partner = randomUUID();
+	const chat = randomUUID();
+	const claim = randomUUID();
+	await old.db.query(`begin; set local engine.job = 'old_system';
+		insert into party (id, kind, name) values ('${partner}', 'person', 'Example Partner');
+		insert into app_user (id, slug) values ('${partner}', 'joe');
+		insert into doc_conversation (id, owner_user_id) values ('${chat}', '${partner}');
+		insert into doc_turn (conversation_id, owner_user_id, position, idempotency_key, request_hash,
+			question, state, claim_id, claim_until)
+		values ('${chat}', '${partner}', 1, gen_random_uuid(), 'example', 'Existing question', 'working', '${claim}', 'infinity');
+		commit;`);
+	await old.db.query(await readSchema("add-doc-turn-claim.sql"));
+	assert.deepEqual(
+		(await old.db.query("select claim_id, claim_state, question from doc_turn"))
+			.rows,
+		[
+			{
+				claim_id: claim,
+				claim_state: { reads: 0, sources: {} },
+				question: "Existing question",
+			},
+		],
+	);
+	const queue = (position: number) =>
+		old.db.query(
+			`insert into doc_turn (conversation_id, owner_user_id, position, idempotency_key, request_hash, question, state)
+			values ($1, $2, $3, gen_random_uuid(), 'example', 'Queued question', 'queued')`,
+			[chat, partner, position],
+		);
+	await assert.rejects(queue(2), { code: "23505" });
+	await assert.rejects(old.db.query("update doc_turn set claim_state = null"), {
+		code: "23514",
+	});
+	await old.db.query(
+		"update doc_turn set state = 'failed', claim_id = null, claim_until = null, claim_state = null",
+	);
+	await queue(2);
+	await assert.rejects(queue(3), { code: "23505" });
+	await assert.rejects(
+		old.db.query(
+			"update doc_turn set claim_state = '{}' where state = 'queued'",
+		),
+		{ code: "23514" },
+	);
 });
