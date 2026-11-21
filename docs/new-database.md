@@ -1678,6 +1678,25 @@ Apply [the Doc link migration](../schema/add-doc-link.sql) and then [the link re
 
 `next.doc_link` keeps one row per account partner with an owner ID, a SHA-256 credential hash, the issue time, the last recorded contact time, and nullable readiness. Issuing a replacement clears contact and readiness. The engine uses the hash to find a candidate owner, then compares fixed-length digests in constant time under the row lock. The partner's stamped writer manages the row. General readers and jobs have no access.
 
+#### Doc link on macOS
+
+The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) starts the link under the partner's macOS login. The installer supplies absolute paths to Node 26, [the runner](../scripts/doc-link.ts) in the engine checkout with its runtime dependencies, the JSON configuration file, and a log file in the partner's directory. The partner must own the configuration file and set its mode to `0600` or stricter. The runner checks the file before reading it. The configuration holds `engine` (the HTTPS engine origin), `claude` (the absolute path to the official Claude Code binary), and `credential` (the Doc link credential issued for this partner). The runner passes the credential to Claude Code through its environment for the Doc MCP server. Reload the LaunchAgent after replacing the file. It stops on `401` so a revoked credential no longer polls.
+
+The partner signs in through Claude Code and keeps plan usage credits off. The link uses `claude auth status` to check for a subscription login under that macOS user. It uses the same settings sources and isolation flags as the turn so a key in personal settings cannot mask the subscription. It checks again every 30 seconds and reports an expired sign-in from a failed turn. On a reported plan limit, it keeps the turn queued until the reported reset. If Claude Code gives no reset time, the link checks again after five minutes.
+
+A Doc Mac has no managed Claude Code configuration of any kind. The runner checks these roots before polling and before launching Claude Code for a turn.
+
+- Any file under `/Library/Application Support/ClaudeCode/`, including managed settings, MCP configuration, instructions, agents and skills. An empty directory is allowed. [Managed settings locations](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
+- The `com.anthropic.claudecode` configuration profile or managed preference domain under `/Library/Managed Preferences/`. [macOS managed preferences](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
+- A `policyHelper` configured in managed settings or the profile. [Settings reference](https://code.claude.com/docs/en/settings-reference#policyhelper)
+- The server policy cache at `~/.claude/remote-settings.json`. [Server-managed settings](https://code.claude.com/docs/en/server-managed-settings)
+
+If any source exists or the runner cannot verify its absence, it logs that Doc link needs a Mac without managed Claude Code settings and pauses polling. The app shows the Mac as offline 30 seconds after the last recorded contact. Queued turns stay available, and any claim left unfinished can be picked up after it expires.
+
+The link sends the claimed question, context and answered history to `claude -p` on stdin. It reads the final result from the JSON event stream and keeps the model run inside the 45-second window. It disables personal settings, hooks, skills, browser integration, Claude.ai connectors and built-in tools, limits MCP to the Doc server and its four tools, and disables local session persistence. Claude Code handles the partner's sign-in. The runner passes only the Doc link credential to the engine. The engine validates the final answer again before saving it.
+
+The link retries a dropped claim or completion request after two seconds. While Claude runs, a separate poll refreshes presence without asking for work. A completion retry reuses the original claim and answer until the claim expires. The link ignores a `404` completion and polls for new work. The engine can then give an expired turn a fresh claim.
+
 ### Confirmed saves and receipts
 
 The confirmation locks the partner's turn and uses the existing `runNextSave` receipt rules. It rechecks access and exact target, then writes the business record, receipt, and turn's `confirmation_key` in one transaction. The same key and edits return the original result, even if business state later changed. Same key and different edits return `409 key_reuse`. The model has no access to this route. The browser never sends job headers or credentials.
