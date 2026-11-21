@@ -1194,7 +1194,7 @@ test("dashboard hides proposals and drafts when their source is in another mailb
 });
 
 test("email thread cleanup keeps requests around sign-offs and dividers and removes the footer", async () => {
-	const emails = [75, 76, 77, 79].map(id);
+	const emails = [75, 76, 77, 79, 81, 82, 83, 84].map(id);
 	const proposal = id(78);
 	const reviewer = id(80);
 	const user = { user: "thread-cleanup-reviewer" };
@@ -1203,6 +1203,10 @@ test("email thread cleanup keeps requests around sign-offs and dividers and remo
 		"Here is the plan.\n----\nPlease check the second page.",
 		"Please send the plan.\n\nBest regards,\nPat Example\nPhone: 555-010-1234",
 		"Thanks!\nhttps://example.test/floor-plan",
+		"Current message.\r\nFrom: Pat <pat@example.test>\r\nSent: yesterday\r\nOld message.",
+		"Current message.\r\nFrom: Pat\r\n <pat@example.test>\r\nSent: yesterday\r\nOld message.",
+		"Current message.\r\nFrom: Pat\r\n  Sent: yesterday\r\nOld message.",
+		"Current message.\r\n  Please keep this line.",
 	];
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
@@ -1241,7 +1245,16 @@ test("email thread cleanup keeps requests around sign-offs and dividers and remo
 	assert.ok(isArguments(detail) && Array.isArray(detail.thread));
 	assert.deepEqual(
 		detail.thread.filter(isArguments).map((message) => message.body),
-		[bodies[0], bodies[1], "Please send the plan.", bodies[3]],
+		[
+			bodies[0],
+			bodies[1],
+			"Please send the plan.",
+			bodies[3],
+			"Current message.",
+			"Current message.",
+			"Current message.",
+			"Current message.\n  Please keep this line.",
+		],
 	);
 });
 

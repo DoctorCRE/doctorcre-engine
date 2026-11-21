@@ -31,7 +31,7 @@ const contactLine =
 
 function cleanEmailBody(body: string, sender: string | null) {
 	const [message = ""] = body.split(
-		/^[ \t]*(?:[- ]*original message[- ]*$|on .+ wrote:[ \t]*$|from:[^\n]*\n(?:sent|date|to):)/im,
+		/^[ \t]*(?:[- ]*original message[- ]*$|on .+ wrote:[ \t]*$|from:[^\r\n]*(?:\r?\n[ \t]+(?!(?:sent|date|to):)[^\r\n]*)*\r?\n[ \t]*(?:sent|date|to):)/im,
 		1,
 	);
 	const lines = message
