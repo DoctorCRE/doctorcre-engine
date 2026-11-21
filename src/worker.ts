@@ -21,6 +21,7 @@ import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
+import { dealCallContext } from "./deals/call-context.ts";
 import { clientLeases } from "./deals/client-leases.ts";
 import { dealClientWebsite } from "./deals/client-website.ts";
 import { openClientWebsite } from "./deals/client-website-access.ts";
@@ -150,6 +151,7 @@ const engine = new Hono<WorkerEnv>()
 const partnerApi = new Hono<WorkerEnv>();
 partnerApi.use("/api/engine/*", userStamp);
 partnerApi.route("/api/engine", engine);
+partnerApi.route("/api/engine", dealCallContext);
 partnerApi.route("/api/engine", leadChanges);
 partnerApi.route("/api/engine", partySearch);
 partnerApi.route("/api/engine", clientLeases);

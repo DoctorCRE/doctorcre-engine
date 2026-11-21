@@ -308,6 +308,7 @@ type Verb =
 	| "deal-room-board"
 	| "find"
 	| "find-and-catch-up"
+	| "get-call-context"
 	| "get-deal-room"
 	| "ideal-client-profile"
 	| "lead-board"

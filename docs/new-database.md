@@ -1469,6 +1469,14 @@ The new detail read returns `correspondence`, an array of email messages and mee
 
 Both partners' open board cards and deal pages return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The reader database role can read the fields used to form the link.
 
+### Call recorder context
+
+`GET /api/engine/call-context` reads the new database for a signed-in partner. Pass 1 to 50 distinct deal UUIDs as repeated `deal_id` query fields. A missing list, invalid UUID, duplicate UUID (ignoring case), or oversized batch returns `400 invalid_field_value`.
+
+The response is `{ deals, unavailable_deal_ids }`. Each list follows request order and preserves the requested UUID spelling. A visible, active open deal returns `{ id, name, owner, operating_state, participants }`, with the owner's user slug and `operating_state: "active"`. Copied deals and deals opened in the new database use the same read. As on the Deals board, either partner can read both partners' shared deals. A missing, inaccessible, parked or ended deal appears only by its requested UUID in `unavailable_deal_ids`. It does not prevent the rest of the batch from loading.
+
+Each `participants` entry is `{ party_id, ref, name, email, role }` from a current deal link, including the linked client. Internal app users stay outside the recipient roster. `ref` uses the party's sole retained `P-` reference when available, otherwise its current party UUID. `email` is the party's saved primary address or null. A party with more than one role has an entry for each role. A deal with nobody on its roster returns `participants: []`.
+
 ### Set up a client website
 
 `POST /api/engine/deals/{deal_id}/client-website` is a signed-in partner save. It takes `idempotency_key`, `slug` (1 to 63 lowercase letters, digits and hyphens, starting with a letter or digit), and `password` (1 to 1,024 characters). It returns `200 { ok, deal_id, client_portal_url, created }`. A repeat with the same name and password and a fresh key returns `created: false`. A transport retry with the same key returns the original answer and `replayed: true`. The receipt fingerprint uses the deal and name, omitting the password as the old save did.
