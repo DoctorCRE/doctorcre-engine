@@ -13,12 +13,64 @@ const footer =
 const header =
 	"From: Sam Example <sam@example.test>\nDate: Mon, Jan 5, 2026\nTo: Maya Example\nSubject: Suite 200";
 
-test("folds unmatched reply history and keeps its inline answers available", () => {
-	const history =
-		"On Mon, Jan 5, 2026 at 9:30 AM Sam Example\nwrote:\n> Is the plan ready?\nIt is ready.\n> Where are the keys?\nAt the side door.";
+test("folds repeated instructions and unstored forwards without discarding them", () => {
+	const tails = [
+		`Please copy the surveyor on every update.\n${footer}`,
+		`Begin forwarded message:\nA note from another sender.`,
+	];
+	const openings = [
+		"The plan is ready.",
+		"I sent the plan.",
+		"Use the west door.",
+	];
+	for (const folded of tails) {
+		assert.deepEqual(
+			cleanEmailThread(openings.map((body) => message(`${body}\n${folded}`))),
+			openings.map((body) => ({ body, folded })),
+		);
+	}
+});
+
+test("keeps a greater-than comparison and the paragraph that follows visible", () => {
+	const body =
+		"Lease criteria:\n> 10,000 square feet\n\nPlease confirm the loading dock is available.";
+	assert.deepEqual(cleanEmailThread([message(body)]), [{ body, folded: null }]);
+});
+
+test("keeps instructions after flattened, multiline, and legal footers visible", () => {
+	const instruction = "Please bring the signed lease.";
+	for (const [separator, folded] of [
+		[" ", "Thanks, Maya Example | Direct: 555-010-2000."],
+		["\n\n", footer],
+		["\n\n", "This email may contain\nconfidential information."],
+		[" ", "This email may contain confidential information."],
+	]) {
+		const body = `Tuesday works.${separator}${instruction}`;
+		assert.deepEqual(
+			cleanEmailThread([
+				message(
+					`Tuesday works.${separator}${folded}${separator}${instruction}`,
+				),
+			]),
+			[{ body, folded }],
+		);
+	}
+	const body =
+		"Tuesday works.\n\nThis email contains confidential pricing. Please approve the offer.";
+	assert.deepEqual(cleanEmailThread([message(body)]), [{ body, folded: null }]);
+});
+
+test("folds quote runs and quotes after an opener while keeping inline answers visible", () => {
+	const opener = "On Mon, Jan 5, 2026 at 9:30 AM Sam Example\nwrote:";
+	const history = `${opener}\n> Is the plan ready?\nIt is ready.\n> Where are the keys?\n> Which door?\nAt the side door.`;
 	assert.deepEqual(
 		cleanEmailThread([message(`Answers below.\n\n${history}`)]),
-		[{ body: "Answers below.", folded: history }],
+		[
+			{
+				body: "Answers below.\n\nIt is ready.\nAt the side door.",
+				folded: `${opener}\n> Is the plan ready?\n> Where are the keys?\n> Which door?`,
+			},
+		],
 	);
 });
 
@@ -77,44 +129,42 @@ test("keeps replies between quoted questions inside a forward", () => {
 		"Begin forwarded message:\nAnswers below.\nOn Mon, Jan 5, 2026 at 9:30 AM Sam Example <sam@example.test> wrote:";
 	const reply = `${intro}\n> Is the plan ready?\nIt is ready.\n> Where are the keys?\nAt the side door.`;
 	assert.deepEqual(
-		availableText([message(questions, "sam@example.test"), message(reply)]),
-		[questions, `${intro}\nIt is ready.\nAt the side door.`],
+		cleanEmailThread([message(questions, "sam@example.test"), message(reply)]),
+		[
+			{ body: questions, folded: null },
+			{ body: "It is ready.\nAt the side door.", folded: intro },
+		],
 	);
 });
 
 test("keeps standalone links and callbacks after a signature", () => {
-	const notes = [
+	for (const postscript of [
 		"https://example.test/floor-plan",
 		"P.S. CALL 555-010-3000",
-	].map((postscript) => `The office is open.\n\n${footer}\n\n${postscript}`);
-	const updates = [
-		"I sent the plan.",
-		"The keys are ready.",
-		"Thanks for the note.",
-	];
-	const signed = updates.map((update) => message(`${update}\n${footer}`));
-	assert.deepEqual(
-		availableText([...signed, ...notes.map((note) => message(note))]).map(
-			oneLine,
-		),
-		[...updates, ...notes].map(oneLine),
-	);
+	]) {
+		assert.deepEqual(
+			cleanEmailThread([
+				message(`The office is open.\n\n${footer}\n\n${postscript}`),
+			]),
+			[{ body: `The office is open.\n\n${postscript}`, folded: footer }],
+		);
+	}
 });
 
 test("keeps a whole instruction that ends with another message's footer line", () => {
-	const instruction = "Please address the envelope to Maya Example";
-	const suffix = "Office Manager\nDirect: 555-010-2000\nmaya@example.test";
+	const body = "Please address the envelope to Maya Example";
+	const folded = "Office Manager\nDirect: 555-010-2000\nmaya@example.test";
 	const updates = [
 		"I sent the plan.",
 		"The keys are ready.",
 		"Leave it upstairs.",
 	];
 	assert.deepEqual(
-		availableText([
+		cleanEmailThread([
 			...updates.map((update) => message(`${update}\n${footer}`)),
-			message(`${instruction}\n${suffix}`),
+			message(`${body}\n${folded}`),
 		]),
-		[...updates, instruction],
+		[...updates.map((body) => ({ body, folded: footer })), { body, folded }],
 	);
 });
 
@@ -132,11 +182,14 @@ test("matches complete earlier lines after whitespace and quote-marker normaliza
 	const reply =
 		"Here is the plan.\r\n  >> Could you send the\u00a0suite\t200 plan?\r\n\t> Use the west door.\r\n> A line missing from the archive.\r\nPlease text when you arrive.";
 	assert.deepEqual(
-		availableText([message(oldest), message(later), message(reply)]),
+		cleanEmailThread([message(oldest), message(later), message(reply)]),
 		[
-			oldest,
-			later,
-			"Here is the plan.\n> A line missing from the archive.\nPlease text when you arrive.",
+			{ body: oldest, folded: null },
+			{ body: later, folded: null },
+			{
+				body: "Here is the plan.\nPlease text when you arrive.",
+				folded: "> A line missing from the archive.",
+			},
 		],
 	);
 });
@@ -263,27 +316,42 @@ test("keeps the sign-off, contact and address lines of an unsupported signature"
 	}
 });
 
-test("signature lines need two other messages from the same sender", () => {
-	const first = `I sent the plan.\n${footer}`;
-	const second = `The keys are ready.\n${footer}`;
-	const third = `Use the west door.\n${footer.replace("Office Manager", "Office  Manager")}\n\n`;
-	const other = `The office is open.\n${footer}`;
-	assert.deepEqual(
-		availableText([
-			message(first),
-			message(second),
-			message(other, "sam@example.test"),
-		]),
-		[first, second, other],
+test("same-sender recurrence needs two other messages", () => {
+	const block = "Please copy the surveyor.\nThanks again.";
+	const openings = [
+		"I sent the plan.",
+		"The keys are ready.",
+		"Use the west door.",
+		"The office is open.",
+	];
+	const messages = openings.map((opening, index) =>
+		message(
+			`${opening}\n${index === 2 ? block.replace("copy the", "copy  the") : block}`,
+			index === 3
+				? "sam@example.test"
+				: index === 1
+					? "MAYA@example.test"
+					: undefined,
+		),
 	);
 	assert.deepEqual(
-		availableText([
-			message(first),
-			message(second, "MAYA@example.test"),
-			message(third),
-			message(other, "sam@example.test"),
-		]),
-		["I sent the plan.", "The keys are ready.", "Use the west door.", other],
+		cleanEmailThread(messages.filter((_, index) => index !== 2)),
+		[0, 1, 3].map((index) => ({
+			body: `${openings[index]}\n${block}`,
+			folded: null,
+		})),
+	);
+	assert.deepEqual(
+		cleanEmailThread(messages),
+		openings.map((body, index) =>
+			index === 3
+				? { body: `${body}\n${block}`, folded: null }
+				: {
+						body,
+						folded:
+							index === 2 ? block.replace("copy the", "copy  the") : block,
+					},
+		),
 	);
 });
 
@@ -297,33 +365,43 @@ test("does not borrow a number in a sentence when another message puts it in a f
 	]);
 });
 
-test("a recurring block before a closing paragraph stays visible", () => {
-	for (const closing of [
-		"Please text when you pick up the keys.",
+test("an instruction stays visible after a footer that recurs at the end of other messages", () => {
+	const signed = [
+		"The plan is ready.",
+		"I sent the plan.",
+		"The keys are upstairs.",
+	];
+	const messages = signed.map((body) => message(`${body}\n${footer}`));
+	for (const postscript of [
+		"Please text before you arrive.",
 		"Please Text Before You Arrive.",
 	]) {
-		const current = `The keys are at the desk.\n\n${footer}\n\n${closing}`;
-		const updates = [
-			"I sent the plan.",
-			"The keys are ready.",
-			"Use the west door.",
-		];
+		const body = `The keys are at the desk.\n\n${postscript}`;
 		assert.deepEqual(
-			availableText([
-				...updates.map((update) => message(`${update}\n${footer}`)),
-				message(current),
+			cleanEmailThread([
+				...messages,
+				message(`The keys are at the desk.\n\n${footer}\n\n${postscript}`),
 			]),
-			[...updates, current],
+			[
+				...signed.map((body) => ({ body, folded: footer })),
+				{ body, folded: footer },
+			],
 		);
 	}
 });
 
-test("names and a repeated instruction after a repeated phone line need more than two messages", () => {
-	const bodies = ["The plan is ready.", "I sent the plan."].map(
-		(update) =>
-			`${update}\nMaya Example\nDirect: 555-010-2000\nPlease text before you arrive.`,
+test("a repeated instruction after a signature stays visible when it occurs twice", () => {
+	const instruction = "Please text before you arrive.";
+	const folded = "Maya Example\nDirect: 555-010-2000";
+	const openings = ["The plan is ready.", "I sent the plan."];
+	assert.deepEqual(
+		cleanEmailThread(
+			openings.map((opening) =>
+				message(`${opening}\n${folded}\n${instruction}`),
+			),
+		),
+		openings.map((opening) => ({ body: `${opening}\n${instruction}`, folded })),
 	);
-	assert.deepEqual(availableText(bodies.map((body) => message(body))), bodies);
 });
 
 const teams =
@@ -373,7 +451,7 @@ test("invite details without a template and unrelated links remain visible", () 
 		"Please join remotely.\nJoin Microsoft Teams Meeting\nhttps://example.test/join\nMeeting ID: 1234\n\nhttps://example.test/floor-plan";
 	assert.deepEqual(availableText([message(note), message(linkedNote)]), [
 		note,
-		"Please join remotely.\nhttps://example.test/join\nMeeting ID: 1234\nhttps://example.test/floor-plan",
+		"Please join remotely.\nhttps://example.test/join\nMeeting ID: 1234\n\nhttps://example.test/floor-plan",
 	]);
 });
 

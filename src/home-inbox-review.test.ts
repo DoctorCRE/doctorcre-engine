@@ -18,14 +18,13 @@ const evidenceReviewer = id(66);
 const filingWithPhone = id(67);
 const tourReply = id(68);
 const knownContact = randomUUID();
+const quotedRequestFooter = "Thanks,\nKnown Contact\n555-010-1234";
 const quotedRequest = `Hello,
 Could you please also let me know whether the west suite is still available for a tour later this month?
 Please send the plan.
 November 8 works for the tour.
 
-Thanks,
-Known Contact
-555-010-1234
+${quotedRequestFooter}
 From: Example Partner
 Sent: 2026-01-02T19:00:00Z
 Could you call?`;
@@ -1328,8 +1327,8 @@ test("draft and proposal details return only the viewer's distinct messages in t
 			activity_id: id(12),
 			sender_name: "Known Contact",
 			happened_at: "2026-01-04T00:00:00.000Z",
-			body: quotedRequest,
-			folded: null,
+			body: quotedRequest.replace(`${quotedRequestFooter}\n`, ""),
+			folded: quotedRequestFooter,
 		},
 	]);
 });
@@ -1449,13 +1448,13 @@ test("Home email reviews return each message with its visible and folded text", 
 			sender: "Maya Example",
 			body: `${requestText}\r\n\r\n${signature}`,
 			kept: requestText,
-			folded: null,
+			folded: signature,
 		},
 		{
 			id: answer,
 			address: "partner@example.test",
 			sender: "Example Thread Partner",
-			body: `${answerText}\r\n\r\n*From:* Maya Example <maya@example.test>\r\n\r\n*Sent:* Monday, January 5, 2026 9:00 AM\r\n*To:* Example Thread Partner\r\n*Subject:* Suite 200\r\n\r\n${requestText}\r\n${foldedHistory}`,
+			body: `${answerText}\r\n\r\n*From:* Maya Example <maya@example.test>\r\n\r\n*Sent:* Monday, January 5, 2026 9:00 AM\r\n*To:* Example Thread Partner\r\n*Subject:* Suite 200\r\n\r\n> ${requestText}\r\n${foldedHistory}`,
 			kept: answerText,
 			folded: foldedHistory,
 		},
@@ -1465,7 +1464,7 @@ test("Home email reviews return each message with its visible and folded text", 
 			sender: "Maya Example",
 			body: `${confirmText}\r\n${signature}\r\n> ${answerText}\r\n> ${requestText}`,
 			kept: confirmText,
-			folded: null,
+			folded: signature,
 		},
 		{
 			id: later,
@@ -1473,7 +1472,7 @@ test("Home email reviews return each message with its visible and folded text", 
 			sender: "Maya Example",
 			body: `Bring the keys.\n${signature}`,
 			kept: "Bring the keys.",
-			folded: null,
+			folded: signature,
 		},
 	];
 	await db.query(`begin;
