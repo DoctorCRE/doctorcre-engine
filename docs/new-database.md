@@ -1678,13 +1678,12 @@ The [LaunchAgent template](../scripts/launchd/com.doctorcre.doc-link.plist) star
 
 The partner signs in through Claude Code and keeps plan usage credits off. The link uses `claude auth status` to check for a subscription login under that macOS user. It uses the same settings sources and isolation flags as the turn so a key in personal settings cannot mask the subscription. It checks again every 30 seconds and reports an expired sign-in from a failed turn. On a reported plan limit, it keeps the turn queued until the reported reset. If Claude Code gives no reset time, the link checks again after five minutes.
 
-Use a personal Claude subscription on a Mac without managed Claude Code configuration. The runner checks for these sources before polling and before launching Claude Code for a turn.
+A Doc Mac has no managed Claude Code configuration of any kind. The runner checks these roots before polling and before launching Claude Code for a turn.
 
-- The system `managed-settings.json` file and `managed-settings.d/` directory under `/Library/Application Support/ClaudeCode/`. The directory alone pauses Doc link, even when empty. [Managed settings locations](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
-- The macOS configuration profile for `com.anthropic.claudecode`, stored as a system or per-user plist under `/Library/Managed Preferences/`. [macOS managed preferences](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
-- A `policyHelper` named in managed settings or the macOS profile. Either source pauses Doc link before Claude Code can start the helper. [Claude Code settings reference](https://code.claude.com/docs/en/settings-reference#policyhelper)
-- The server policy cache at `~/.claude/remote-settings.json`. Anthropic delivers live server policy to eligible organization logins. [Server-managed settings requirements and cache](https://code.claude.com/docs/en/server-managed-settings)
-- The system `managed-mcp.json` and `CLAUDE.md` files under `/Library/Application Support/ClaudeCode/`. [Managed MCP file](https://code.claude.com/docs/en/managed-mcp#deploy-managed-mcpjson) · [Managed Claude instructions](https://code.claude.com/docs/en/memory#choose-where-to-put-claudemd-files)
+- Any file under `/Library/Application Support/ClaudeCode/`, including managed settings, MCP configuration, instructions, agents and skills. An empty directory is allowed. [Managed settings locations](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
+- The `com.anthropic.claudecode` configuration profile or managed preference domain under `/Library/Managed Preferences/`. [macOS managed preferences](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy)
+- A `policyHelper` configured in managed settings or the profile. [Settings reference](https://code.claude.com/docs/en/settings-reference#policyhelper)
+- The server policy cache at `~/.claude/remote-settings.json`. [Server-managed settings](https://code.claude.com/docs/en/server-managed-settings)
 
 If any source exists or the runner cannot verify its absence, it logs that Doc link needs a Mac without managed Claude Code settings and pauses polling. The app shows the Mac as offline 30 seconds after the last recorded contact. Queued turns stay available, and any claim left unfinished can be picked up after it expires.
 

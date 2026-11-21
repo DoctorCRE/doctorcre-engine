@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, readdir } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -51,9 +51,14 @@ const allowedTools = ["find", "read", "propose_save", "validate_answer"]
 	.join(",");
 const checkSignInEvery = 30_000;
 const pollEvery = 2_000;
-const macSettingsDir = "/Library/Application Support/ClaudeCode";
-const preferencesDir = "/Library/Managed Preferences";
-const preferencesName = "com.anthropic.claudecode.plist";
+// https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy
+// https://code.claude.com/docs/en/server-managed-settings
+const managedRoots = {
+	directory: "/Library/Application Support/ClaudeCode",
+	preferences: "/Library/Managed Preferences",
+	domain: "com.anthropic.claudecode.plist",
+	cache: join(homedir(), ".claude", "remote-settings.json"),
+};
 
 function readJson(text: string): unknown {
 	try {
@@ -86,15 +91,16 @@ async function hasManagedPolicy({
 	preferences?: string[];
 	cache?: string;
 }) {
-	const paths = [
-		join(directory, "managed-settings.json"),
-		join(directory, "managed-settings.d"),
-		join(directory, "managed-mcp.json"),
-		join(directory, "CLAUDE.md"),
-		...preferences,
-		...(cache ? [cache] : []),
-	];
-	for (const path of paths) {
+	try {
+		const entries = await readdir(directory, {
+			recursive: true,
+			withFileTypes: true,
+		});
+		if (entries.some((entry) => !entry.isDirectory())) return true;
+	} catch (error) {
+		if (!isMissingFile(error)) return true;
+	}
+	for (const path of [...preferences, ...(cache ? [cache] : [])]) {
 		try {
 			await lstat(path);
 			return true;
@@ -243,12 +249,16 @@ export async function runDocLink(
 		now: Date.now,
 		wait: () => delay(pollEvery),
 		managedSettings: {
-			directory: macSettingsDir,
+			directory: managedRoots.directory,
 			preferences: [
-				join(preferencesDir, userInfo().username, preferencesName),
-				join(preferencesDir, preferencesName),
+				join(
+					managedRoots.preferences,
+					userInfo().username,
+					managedRoots.domain,
+				),
+				join(managedRoots.preferences, managedRoots.domain),
 			],
-			cache: join(homedir(), ".claude", "remote-settings.json"),
+			cache: managedRoots.cache,
 		},
 	},
 ) {

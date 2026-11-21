@@ -137,7 +137,7 @@ test("Doc link runs a private Claude print session and submits only the final an
 	const [claim, completion, next] = await runLink(
 		[claimed("Inspect"), status(204)],
 		binary,
-		directory,
+		join(directory, "managed"),
 	);
 	assert.deepEqual(claim, poll("ready"));
 	assert.deepEqual(next, poll("ready"));
@@ -227,7 +227,8 @@ test("Doc link refuses a shared credential file and reads a private one", async 
 
 const managedSources = [
 	["managed settings file", "managed-settings.json", "{}"],
-	["managed settings drop-in directory", "managed-settings.d", null],
+	["managed agent", ".claude/agents/agent.md", "agent"],
+	["managed skill", ".claude/skills/example/SKILL.md", "skill"],
 	[
 		"policy helper",
 		"managed-settings.json",
@@ -247,11 +248,21 @@ for (const [source, name, contents] of managedSources) {
 	test(`Doc link stops before polling when it finds ${source}`, async (t) => {
 		const directory = await mkdtemp(join(process.cwd(), ".scratch."));
 		const path = join(directory, name);
+		await mkdir(join(path, ".."), { recursive: true });
 		if (contents === null) await mkdir(path);
 		else await writeFile(path, contents);
 		t.after(async () => {
 			if (contents === null) await rmdir(path);
 			else await unlink(path);
+			if (name.startsWith(".claude/skills/")) {
+				await rmdir(join(directory, ".claude/skills/example"));
+				await rmdir(join(directory, ".claude/skills"));
+				await rmdir(join(directory, ".claude"));
+			}
+			if (name.startsWith(".claude/agents/")) {
+				await rmdir(join(directory, ".claude/agents"));
+				await rmdir(join(directory, ".claude"));
+			}
 			await rmdir(directory);
 		});
 		const errors = t.mock.method(console, "error", () => {});
@@ -277,6 +288,20 @@ for (const [source, name, contents] of managedSources) {
 		);
 	});
 }
+
+test("Doc link allows an empty or missing managed directory", async (t) => {
+	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
+	t.after(async () => {
+		await rmdir(directory);
+	});
+	assert.deepEqual(await runLink([status(401)], claude, directory), [
+		poll("ready"),
+	]);
+	assert.deepEqual(
+		await runLink([status(401)], claude, join(directory, "missing")),
+		[poll("ready")],
+	);
+});
 
 test("Doc link refuses a turn when policy appears after a poll and resumes once it is removed", async (t) => {
 	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
