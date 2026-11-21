@@ -126,6 +126,7 @@ test("each gap in the snapshot becomes a note and makes the answer partial", () 
 				warnings: [
 					{ code: "undecoded", count: 2 },
 					{ code: "trimmed", count: 1 },
+					{ code: "ended_trimmed", count: 2 },
 					{ code: "unknown" },
 				],
 			},
@@ -143,6 +144,7 @@ test("each gap in the snapshot becomes a note and makes the answer partial", () 
 			notes: [
 				"2 calendar items in Outlook couldn't be read, so meetings may be missing.",
 				"1 later meeting was left out to keep the brief small.",
+				"2 meetings that had ended were left out to keep the brief small.",
 				"This calendar has a gap the brief cannot describe. Check Outlook.",
 				"2 stored meetings could not be shown.",
 				"1 stored alternate time could not be shown. Check Outlook for the current time.",

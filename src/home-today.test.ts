@@ -25,7 +25,7 @@ const get = { method: "GET" } as const;
 before(async () => {
 	await setup();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
-		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client');
+		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client'), ('vendor', 'Vendor');
 		insert into stage (role, slug, label) values ('lead', 'opportunity', 'Opportunity');
 		insert into how_found (slug, label) values ('referral', 'Referral'); insert into phase (slug, label) values ('dead', 'Dead');
 		insert into party (id, kind, name, how_found) values
@@ -37,7 +37,8 @@ before(async () => {
 		insert into party_email (party_id, address, label) values ('${id(1)}', 'joe@example.test', 'work'),
 			('${id(4)}', 'dr.example@example.test', 'work'), ('${id(5)}', 'solo@example.test', 'work');
 		insert into party_company (person_id, company_id) values ('${id(4)}', '${id(3)}');
-		insert into party_role (party_id, role, stage) values ('${id(3)}', 'client', null), ('${id(6)}', 'lead', 'opportunity');
+		insert into party_role (party_id, role, stage) values ('${id(3)}', 'client', null), ('${id(5)}', 'vendor', null),
+			('${id(6)}', 'lead', 'opportunity');
 		insert into deal (id, name, owner_user_id) values ('${id(7)}', 'Example Dental, Springfield', '${id(1)}'),
 			('${id(8)}', 'Other Clinic, Austin', '${id(2)}'), ('${id(9)}', 'Closed Clinic', '${id(1)}');
 		insert into deal_party (deal_id, party_id, role) values ('${id(7)}', '${id(3)}', 'client'), ('${id(9)}', '${id(3)}', 'client');
@@ -105,16 +106,16 @@ test("switch off returns 404, non-partners are refused, and invalid owners fail"
 	]);
 });
 
-test("Today links owned client follow-ups to the legacy inbox card", async () => {
+test("Today links owned follow-ups to the legacy inbox card", async () => {
 	const [[status, body], inbox] = await Promise.all([
 		today(),
 		request(joe, "home/inbox", get, reader),
 	]);
 	assert.deepEqual([status, inbox.status], [200, 200]);
 	const { items } = (await inbox.json()) as { items: Row[] };
-	const card = items.find((item) => item.source_id === id(22));
+	const card = items.find((item) => item.source_id === id(21));
 	assert.ok(typeof card?.item_id === "string");
-	const followUp = body.reminders?.upcoming.find((item) => item.id === id(22));
+	const followUp = body.reminders?.late.find((item) => item.id === id(21));
 	assert.equal(followUp?.home_item_id, card.item_id);
 });
 
@@ -143,9 +144,8 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		`${id(28)}|Review counter|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
 		`${id(23)}|Follow up with Dr. Example|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
+	// Client and lead steps live on their records, not on Today.
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
-		`${id(22)}|Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
-		`${id(29)}|Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
 		`${id(30)}|Follow up on 100 Example Way|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
 	assert.deepEqual(
@@ -173,7 +173,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 	const dr = dell.reminders;
 	assert.deepEqual(
 		[dr?.late.map((i) => i.id), dr?.upcoming.map((i) => i.id)],
-		[[id(33), id(32), id(28)], [id(29)]],
+		[[id(33), id(32), id(28)], []],
 	);
 });
 

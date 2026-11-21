@@ -100,7 +100,8 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 			),
 		};
 	}
-	if (!evidence) return { title, why: "" };
+	if (!evidence)
+		return { title, why: homeWhy(hiddenWording ? savedText : null) };
 	const setter = homeDisplayText(evidence.set_by);
 	const set = evidence.source_kind
 		? `Follow-up set from the ${evidence.source_kind}`
@@ -163,8 +164,12 @@ export function stepTargetFields(db: Transaction<DB>) {
 	`;
 }
 
+export const homeDayAt = (now = sql`now()`) =>
+	sql<string>`(${now} at time zone 'America/Chicago')::date`;
+export const homeDay = homeDayAt();
+
 export const datedPartnerSteps = (now = sql`now()`) => sql`
-	from home_next_step s
+	from next_step s
 	join app_user u on u.id = s.owner_party_id and u.is_account_partner
 	left join deal d on d.id = s.deal_id
 	left join party p on p.id = s.party_id
@@ -173,13 +178,11 @@ export const datedPartnerSteps = (now = sql`now()`) => sql`
 	left join party contact on contact.id = coalesce(s.call_contact_party_id, c.from_party_id)
 	left join home_mark m on m.user_id = s.owner_party_id and m.item_id = s.id
 		and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
-	where isfinite(s.due_on)
+	where s.status = 'open' and isfinite(s.due_on)
+		and (s.hold_until is null or s.hold_until <= ${homeDayAt(now)})
 		and m.disposition is distinct from 'dropped'
 		and (m.snoozed_until is null or m.snoozed_until <= ${now})
 `;
-export const homeDayAt = (now = sql`now()`) =>
-	sql<string>`(${now} at time zone 'America/Chicago')::date`;
-export const homeDay = homeDayAt();
 
 export type HomeStepTarget = {
 	deal_id: string | null;
@@ -197,15 +200,15 @@ export function homeStepTarget(step: HomeStepTarget) {
 	return "other";
 }
 
+// Lead steps live on Leads, so Home and Calendar show only these.
+export const homeStepShown = (step: HomeStepTarget) =>
+	["deal", "vendor", "building"].includes(homeStepTarget(step));
+
 export function homeStepEligible(
 	step: HomeStepTarget & { due_on: string | null },
 	today: string,
 ) {
-	const target = homeStepTarget(step);
-	return (
-		(target === "deal" || target === "vendor" || target === "building") &&
-		(!step.due_on || step.due_on <= today)
-	);
+	return homeStepShown(step) && (!step.due_on || step.due_on <= today);
 }
 
 export const lateLabel = (days: number) =>

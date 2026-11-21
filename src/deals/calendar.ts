@@ -2,7 +2,10 @@ import { sql, type Transaction } from "kysely";
 import { Refusal } from "../answer.ts";
 import {
 	datedPartnerSteps,
-	homeDisplayText,
+	type HomeStepTarget,
+	homeDayAt,
+	homeStepCopy,
+	homeStepShown,
 	stepRecordUrl,
 	stepTargetFields,
 } from "../home-steps.ts";
@@ -59,16 +62,12 @@ export async function readCalendarDates(db: Reader) {
 export async function readNextCalendarDates(
 	db: Transaction<DB>,
 	viewerId: string,
-	today?: string,
+	now = new Date().toISOString(),
 ) {
 	const viewer = await db
 		.selectFrom("app_user")
 		.select("is_account_partner")
-		.select(
-			sql<string>`coalesce(${today ?? null}::date, (now() at time zone 'America/Chicago')::date)::text`.as(
-				"today",
-			),
-		)
+		.select(homeDayAt(sql`${now}::timestamptz`).as("today"))
 		.where("id", "=", viewerId)
 		.executeTakeFirst();
 	if (!viewer?.is_account_partner)
@@ -94,36 +93,49 @@ export async function readNextCalendarDates(
 		.execute();
 	return {
 		...calendarDates(rows),
-		next_steps: await readCalendarSteps(db, viewer.today),
+		next_steps: await readCalendarSteps(db, now),
 	};
 }
 
-type CalendarStep = Parameters<typeof stepRecordUrl>[0] & {
-	what: string;
-	context_label: string;
-	owner: string;
-	due_on: string;
-	display_on: string;
-	days_late: number;
-};
+type CalendarStep = Parameters<typeof stepRecordUrl>[0] &
+	HomeStepTarget & {
+		what: string;
+		context_label: string;
+		call_contact: string | null;
+		owner: string;
+		due_on: string;
+		display_on: string;
+		days_late: number;
+	};
 
-async function readCalendarSteps(db: Transaction<DB>, today: string) {
+async function readCalendarSteps(db: Transaction<DB>, now: string) {
+	const at = sql`${now}::timestamptz`;
 	const { rows } = await sql<CalendarStep>`
-		select s.id, s.what, u.slug as owner, s.deal_id, s.party_id,
-			${stepTargetFields(db)}, s.due_on::text as due_on,
-			greatest(s.due_on, ${today}::date)::text as display_on,
-			greatest(${today}::date - s.due_on, 0) as days_late
-		${datedPartnerSteps()}
+		select s.id, s.what, u.slug as owner, s.deal_id, s.party_id, s.property_id,
+			${stepTargetFields(db)}, contact.name as call_contact, s.due_on::text as due_on,
+			greatest(s.due_on, ${homeDayAt(at)})::text as display_on,
+			greatest(${homeDayAt(at)} - s.due_on, 0) as days_late
+		${datedPartnerSteps(at)}
 		order by s.due_on, s.id
 	`.execute(db);
-	return rows.map((step) => ({
-		id: step.id,
-		what: homeDisplayText(step.what) || "Open the saved step",
-		owner: step.owner,
-		record_label: step.context_label,
-		due_on: step.due_on,
-		display_on: step.display_on,
-		days_late: step.days_late,
-		open_url: stepRecordUrl(step),
-	}));
+	return rows.filter(homeStepShown).map((step) => {
+		const { title, why } = homeStepCopy({
+			...step,
+			title: step.what,
+			status: "open",
+			hold_until: null,
+			call_at: null,
+		});
+		return {
+			id: step.id,
+			what: title,
+			why: why || null,
+			owner: step.owner,
+			record_label: step.context_label,
+			due_on: step.due_on,
+			display_on: step.display_on,
+			days_late: step.days_late,
+			open_url: stepRecordUrl(step),
+		};
+	});
 }
