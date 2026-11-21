@@ -171,12 +171,44 @@ export async function readProposal(
 	db: Transaction<DB>,
 	userId: string,
 	id: string,
+	filingDealId?: string,
 ) {
-	const proposal = await db
+	const visible = db
 		.selectFrom("proposal as p")
 		.leftJoin("activity as a", "a.id", "p.activity_id")
-		.leftJoin("candidate", "candidate.id", "p.candidate_id")
 		.leftJoin("next_step as step", "step.id", "p.next_step_id")
+		.where("p.id", "=", id)
+		.where(visibleProposalDetail(userId));
+	if (filingDealId) {
+		const preview = await visible
+			.innerJoin("deal as selected", (join) =>
+				join.on("selected.id", "=", filingDealId),
+			)
+			.where(filingScope("p"), "in", ["deal", "both"])
+			.where(sql<boolean>`coalesce((
+				select phase from deal_phase_change where deal_id = selected.id
+				order by happened_at desc limit 1
+			), '') not in ('closed', 'dead')`)
+			.select(
+				sql<"another_deal" | "different_client" | null>`
+				deal_filing_reason(p.activity_id, selected.id)
+			`.as("reason"),
+			)
+			.executeTakeFirst();
+		if (!preview) return new Refusal(404, "not_found");
+		const hints = {
+			another_deal:
+				"This email is already filed to another deal. Explain why you are moving it.",
+			different_client:
+				"This deal's client isn't linked to this email. Explain why it belongs on this deal.",
+		};
+		return {
+			reason_required: preview.reason !== null,
+			hint: preview.reason ? hints[preview.reason] : null,
+		};
+	}
+	const proposal = await visible
+		.leftJoin("candidate", "candidate.id", "p.candidate_id")
 		.leftJoin("deal as d", "d.id", "p.deal_id")
 		.leftJoin("party", "party.id", "p.party_id")
 		.leftJoin("property", "property.id", "p.property_id")
@@ -245,18 +277,23 @@ export async function readProposal(
 						]),
 				)} end`.as("source_activity"),
 		])
-		.where("p.id", "=", id)
-		.where(visibleProposalDetail(userId))
 		.executeTakeFirst();
 	if (!proposal) return new Refusal(404, "not_found");
 	const { email_source_id, filing_scope, ...detail } = proposal;
-	return email_source_id
-		? {
-				...detail,
-				...(filing_scope && { filing_choices: filingChoices(filing_scope) }),
-				thread: await readHomeEmailThread(db, userId, email_source_id),
-			}
-		: detail;
+	if (!email_source_id) return detail;
+	const { thread, sourceActivity, sourceSummary } = await readHomeEmailThread(
+		db,
+		userId,
+		email_source_id,
+	);
+	return {
+		...detail,
+		...(filing_scope && { filing_choices: filingChoices(filing_scope) }),
+		source_activity: sourceActivity
+			? { ...sourceActivity, summary: sourceSummary }
+			: detail.source_activity,
+		thread,
+	};
 }
 
 function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {

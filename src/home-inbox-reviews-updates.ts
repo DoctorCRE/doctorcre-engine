@@ -1,4 +1,5 @@
 import { sql, type Transaction } from "kysely";
+import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	dealStepUrl,
 	homeDate,
@@ -164,16 +165,35 @@ type HomeUpdate = DealNotice & {
 	read_at: string | null;
 };
 
-// Home shows unread updates; Updates lists them all with their read time.
 const viewFilters = {
-	inbox: sql`and u.read_at is null
-		and (item.status is null or item.status not in ('done', 'cancelled'))`,
+	inbox: sql`and u.read_at is null`,
 	dashboard: sql`and u.read_at is null
 		and (u.kind = 'tour_feedback' or u.checklist_item_ref is not null)
-		and (item.status is null or item.status = 'open')
 		and (item.due_on is null or item.due_on <= ${homeDay})`,
 	updates: sql``,
 };
+
+export function homeUpdateAvailable(db: Transaction<DB>) {
+	const activeDeals = db
+		.selectFrom(selectNextDeals(db).as("board"))
+		.select("id")
+		.where(isOpenBoardDeal)
+		.where("operating_state", "=", "active");
+	return sql`(u.held_until is null or u.held_until <= now())
+		and (u.checklist_item_ref is null or (
+			u.deal_id in (${activeDeals})
+			and coalesce(
+				(select status = 'open' from next_step
+					where deal_id = u.deal_id and 'deal-item:' || id = u.checklist_item_ref
+						and item_title is not null),
+				(select status = 'open' from critical_date
+					where deal_id = u.deal_id and 'critical-date:' || id = u.checklist_item_ref),
+				not exists (select from change where table_name = 'home_update'
+					and record = jsonb_build_object('id', u.id) and action = 'insert'
+					and changed_by_job = 'nightly_checklist')
+			)
+		))`;
+}
 
 function updateText(update: HomeUpdate) {
 	const text = homeDisplayText(update.title);
@@ -233,6 +253,7 @@ export async function readHomeUpdates(
 				and record = jsonb_build_object('user_id', u.user_id, 'item_kind', 'home_update', 'item_id', u.id)
 		) mark_change
 		where u.user_id = ${userId}::uuid
+			and ${homeUpdateAvailable(db)}
 			and m.disposition is distinct from 'dropped'
 			${viewFilters[view]}
 		order by u.created_at desc, u.id

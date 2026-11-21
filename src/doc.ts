@@ -2,10 +2,17 @@ import { type Context, Hono } from "hono";
 import { type Selectable, sql, type Transaction } from "kysely";
 import { Refusal, refuse, unregisteredFields } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
+import {
+	confirmDocRevision,
+	draftContext,
+	draftReference,
+	requirePendingDocDraft,
+} from "./doc-draft.ts";
 import { docLinkState } from "./doc-link.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
+import { userStamp } from "./next-door.ts";
 import { ACTING_USER, stampNextSave } from "./next-save.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
 import {
@@ -33,7 +40,7 @@ type Ask = {
 	args: {
 		question: string;
 		conversation_id?: string;
-		context?: { kind: string; id: string };
+		context?: { kind: string; id: string; version?: number };
 	};
 };
 
@@ -69,6 +76,15 @@ async function parseAsk(c: Context<DocEnv>): Promise<Ask> {
 		}),
 	};
 	if (context === undefined) return { key, args };
+	const draft = draftReference.safeParse(context);
+	if (draft.success)
+		return {
+			key,
+			args: {
+				...args,
+				context: { ...draft.data, id: draft.data.id.toLowerCase() },
+			},
+		};
 	if (
 		!isArguments(context) ||
 		Object.keys(context).length !== 2 ||
@@ -205,6 +221,8 @@ async function reserve(tx: DocTransaction, { key, args }: Ask) {
 		if (!turn) return reject(404, "not_found");
 		if (turn.state !== "failed") return { conversation_id, turn };
 		if (latest?.id !== turn.id) reject(409, "turn_superseded");
+		const bound = draftContext.safeParse(turn.context).data;
+		if (bound) await requirePendingDocDraft(tx, bound);
 		const queued = await sql<Turn>`update doc_turn as t set state = 'queued'
 			where id = ${turn.id} and owner_user_id = ${ACTING_USER}
 			returning ${turnFields}`.execute(tx);
@@ -214,12 +232,36 @@ async function reserve(tx: DocTransaction, { key, args }: Ask) {
 
 	if (latest?.state === "working" || latest?.state === "queued")
 		reject(409, "turn_in_progress");
+	const requested = draftReference.safeParse(args.context).data;
+	const previous = draftContext.safeParse(latest?.context).data;
+	const ref = requested ?? previous;
+	let context = args.context ?? null;
+	if (ref) {
+		if (
+			latest &&
+			(!previous || (args.context && requested?.id !== previous.id))
+		)
+			reject(400, "invalid_field_value", ["context"]);
+		const { id, activity_id, mailbox_user_id, revision } =
+			await requirePendingDocDraft(tx, {
+				id: ref.id,
+				version: requested?.version,
+			});
+		const bound = {
+			kind: ref.kind,
+			id,
+			activity_id,
+			mailbox_user_id,
+			version: revision,
+		};
+		context = bound;
+	}
 	const {
 		rows: [turn],
 	} = await sql<Turn>`insert into doc_turn as t
 		(conversation_id, owner_user_id, position, idempotency_key, request_hash, question, context, state)
 		values (${conversation_id}, ${ACTING_USER}, ${(latest?.position ?? 0) + 1}, ${key},
-			${request_hash}, ${args.question}, ${args.context ?? null}, 'queued')
+			${request_hash}, ${args.question}, ${context}, 'queued')
 		returning ${turnFields}`.execute(tx);
 	if (!turn) throw new Error("Doc reservation returned no turn");
 	return { conversation_id, turn };
@@ -270,5 +312,6 @@ export function docRoutes() {
 			const request = await parseAsk(c);
 			const result = await transact(c, (tx) => reserve(tx, request));
 			return c.json(result, result.turn.state === "answered" ? 200 : 202);
-		});
+		})
+		.post("/turns/:id/confirmation", userStamp, confirmDocRevision);
 }
