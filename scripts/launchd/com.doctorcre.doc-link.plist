@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.doctorcre.doc-link</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__NODE_PATH__</string>
+		<string>__DOC_LINK_SCRIPT_PATH__</string>
+		<string>__DOC_LINK_CONFIG_PATH__</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+</dict>
+</plist>
