@@ -168,9 +168,23 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Timeline uses the parking reason labels and note wording from Overview. An entry with no note shows only the reason. Timeline uses "Deal kind" and "Deal reason" as in Add deal, including in imported deal openings. It says "Not recorded" for unknown values in those fields.
 - [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. An attachment action already shown as a document event appears once. Copied notes show their words and dates in readable form. Empty notes and technical lines stay in the old system. Owner changes marked as automatic are credited to the move.
 - [ ] Correspondence & notes shows every email and meeting filed to the deal, newest first, and the deal's notes. An email shows its sender, date and subject and appears here even if it has a pending follow-up. A meeting shows its title and time.
-- [ ] Tours: the deal's tours, each with its date in words.
 - [ ] Documents show every file on the deal and open it on click for either partner. When old uploads contain identical bytes, the earliest filing appears once. Different files with the same name and kind show their version numbers in filed order.
 - [ ] Client view gives both partners the same Client website button as Overview. It opens the client's website unlocked in a new tab. The tab says "No client website linked." when the deal has no website. The owner dropped file sharing from Client view (`docs/new-database.md` § "Deal files and extracted text").
+
+### Tours
+
+- [ ] Both partners can open Tours from the deal page. Tour planning starts here. The sidebar has no Tours entry.
+- [ ] Each planned tour appears once with its date in words. Open it to see its notes and its stops in visiting order. Each stop shows its address and its property name when known. An empty list says "No planned tours."
+- [ ] **Plan tour** asks for a date, at least one property, and optional notes. Search existing properties by name or address. When none matches, add a property with its address and optional name.
+- [ ] Before saving, either partner can add, remove, and reorder stops. The order controls work by keyboard and touch.
+- [ ] Either partner can edit a planned tour. After saving and reopening it, both partners see the saved date, order, and notes. A failed save leaves the edits in view and says what to fix. A save based on an older version offers to reload the tour before editing again.
+- [ ] The client stop list preview shows the date and the numbered stops in saved order. Each stop includes its address and its name when known. **Copy stop list** copies the preview for the partner to paste into Outlook. Tour notes stay on the deal page.
+- [ ] **Mark done** starts with the planned date and stops. The partner confirms the actual local date and time and the properties visited. They can omit a skipped stop and add a property visited off-plan. The saved plan keeps its original order.
+- [ ] After **Mark done** saves, the plan leaves the planned list and one meeting appears in **Correspondence & notes**. Opening the meeting shows the visited properties. Trying **Mark done** again leaves one meeting.
+- [ ] **Cancel tour** asks for confirmation. Once confirmed, the plan leaves the planned list, the cancellation appears in the deal's change history, and no meeting is added.
+- [ ] A client's comment on a toured property or a shortlist change still appears on Home. Opening it shows the property and the saved feedback. **Done** finishes the review there.
+
+See [Planned tours on a deal](../new-database.md#planned-tours-on-a-deal).
 
 ## Questions for the owner
 
