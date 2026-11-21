@@ -279,7 +279,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			{
 				id: id(31),
 				what: "Send revised offer. Before sending, check the suite number.",
-				why: "Send revised offer. Before sending, check the suite number.",
+				why: null,
 				owner: "joe",
 				record_label: "Example lease",
 				due_on: "2001-01-12",
@@ -290,7 +290,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			{
 				id: id(39),
 				what: "call Example Owner at (555) 010-0199 about the renewal",
-				why: "call Example Owner at (555) 010-0199 about the renewal",
+				why: null,
 				owner: "dell",
 				record_label: "Example lease",
 				due_on: "2001-01-13",
@@ -301,7 +301,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			{
 				id: id(49),
 				what: cadence,
-				why: cadence,
+				why: null,
 				owner: "joe",
 				record_label: "Example Contact",
 				due_on: "2001-01-17",
@@ -323,7 +323,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			{
 				id: id(32),
 				what: "Ask Example Clinic about the expansion",
-				why: "Ask Example Clinic about the expansion",
+				why: null,
 				owner: "dell",
 				record_label: "Example Clinic",
 				due_on: "2001-01-20",
