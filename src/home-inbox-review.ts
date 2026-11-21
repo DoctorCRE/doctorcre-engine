@@ -9,29 +9,35 @@ type ReviewRow = {
 	source_version: string;
 	source_change_id: string;
 	activity_at: string;
-	title: string;
 	context_label: string | null;
 	open_url: string | null;
 };
 
 type DraftStatus = "pending" | "approved" | "failed" | "sent";
 
-type Draft = ReviewRow & {
-	status: DraftStatus;
-	mail_group: string;
-	member_ids: string[] | null;
-	suggestions: SuggestionReference[] | null;
-	due_on: string | null;
-	sent_at: string | null;
-	failure_reason: string | null;
-	email_activity_id: string;
-	email_at: string;
-	deal_id: string | null;
+type EmailContext = {
+	email_sender: string | null;
+	email_summary: string | null;
+	email_quote: string | null;
 };
+
+type Draft = ReviewRow &
+	EmailContext & {
+		status: DraftStatus;
+		mail_group: string;
+		member_ids: string[] | null;
+		suggestions: SuggestionReference[] | null;
+		due_on: string | null;
+		sent_at: string | null;
+		failure_reason: string | null;
+		email_activity_id: string;
+		email_at: string;
+		deal_id: string | null;
+	};
 
 type SuggestionReference = {
 	id: string;
-	kind: string;
+	kind: keyof typeof emailActions;
 	activity_id: string | null;
 	activity_kind: "email" | "call" | "meeting" | null;
 	deal_id: string | null;
@@ -41,12 +47,14 @@ type SuggestionReference = {
 };
 
 type Suggestion = ReviewRow &
+	EmailContext &
 	Pick<SuggestionReference, "activity_kind" | "kind"> & {
-		latest_activity_id: string | null;
-		latest_source_at: string | null;
+		activity_id: string | null;
+		source_at: string | null;
 		contact_name: string | null;
 		source_summary: string | null;
 		evidence: string;
+		decision_label: string | null;
 		suggestion_title: string | null;
 		due_on: string | null;
 		fallback_reply_draft: {
@@ -78,8 +86,8 @@ function draftRows(userId: string) {
 					and record = jsonb_build_object('id', r.id)) as draft_change_id,
 				${mailGroup} as mail_group,
 				coalesce(r.sent_at, r.changed_at) as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
-				a.happened_at as email_at,
-				'Reply to ' || ${senderLabel("e")} || ': ' || coalesce(nullif(btrim(e.subject), ''), 'No subject') as title,
+				a.happened_at as email_at, ${senderLabel("e")} as email_sender,
+				case when strpos(e.body, r.evidence) > 0 then r.evidence end as email_quote,
 				coalesce(d.name, ${senderLabel("e")}) as context_label,
 				'/deals?deal=' || d.id as open_url,
 				row_number() over (
@@ -210,6 +218,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 		with visible as (
 			select p.id, p.kind, p.status, a.id as activity_id, a.kind as activity_kind, p.created_at as activity_at, p.due_on,
 				contact.name as contact_name, a.summary as source_summary, p.evidence,
+				coalesce(phase.label, lead_stage.label) as decision_label,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
 				coalesce(d.name, party.name, property.name, property.address, candidate.name,
@@ -232,9 +241,8 @@ function suggestionRows(userId: string, forMail: boolean) {
 					when p.kind = 'email_lead' then candidate.name || ' · Possible lead'
 					else 'Review new lead'
 				end as suggestion_title,
-				case when e.activity_id is not null then
-					concat_ws(' · ', ${senderLabel("e")}, nullif(btrim(e.subject), ''))
-				end as email_title,
+				case when e.activity_id is not null then ${senderLabel("e")} end as email_sender,
+				case when strpos(e.body, p.evidence) > 0 then p.evidence end as email_quote,
 				a.happened_at as source_at,
 				${mailGroup} as mail_group,
 				jsonb_build_object(
@@ -274,9 +282,7 @@ function suggestionRows(userId: string, forMail: boolean) {
 				))
 		), grouped as (
 			select visible.*,
-				coalesce(first_value(email_title) over latest_source, suggestion_title) as title,
 				first_value(activity_id) over latest_source as latest_activity_id,
-				first_value(source_at) over latest_source as latest_source_at,
 				row_number() over same_source as position,
 				max(proposal_version) over source_group as suggestion_change_id,
 				array_agg(id) over all_members as member_ids,
@@ -318,7 +324,8 @@ function homeReviewGroups(userId: string, forMail = false) {
 function draftCards(userId: string, limit: number, itemId?: string) {
 	return sql<Draft>`
 		${homeReviewGroups(userId)}
-		select * from draft_cards
+		select card.*, summary.text as email_summary from draft_cards card
+		left join email_current_summary summary on summary.activity_id = card.email_activity_id
 		${itemId ? sql`where id = ${itemId} and status <> 'sent'` : sql``}
 		order by (status = 'sent'), activity_at desc, id limit ${limit}
 	`;
@@ -327,7 +334,8 @@ function draftCards(userId: string, limit: number, itemId?: string) {
 function suggestionCards(userId: string, limit: number, itemId?: string) {
 	return sql<Suggestion>`
 		${homeReviewGroups(userId)}
-		select * from suggestion_cards
+		select card.*, summary.text as email_summary from suggestion_cards card
+		left join email_current_summary summary on summary.activity_id = card.activity_id
 		${itemId ? sql`where id = ${itemId}` : sql``}
 		order by activity_at desc, id limit ${limit}
 	`;
@@ -433,7 +441,6 @@ function reviewCard(
 		source_version: row.source_version,
 		source_state,
 		base_version: `${row.source_change_id}:${row.mark_version ?? "0"}:${disposition}`,
-		title: row.title,
 		activity_at: new Date(row.activity_at).toISOString(),
 		completed_at: completed_at ? new Date(completed_at).toISOString() : null,
 		hold_until: null,
@@ -461,9 +468,7 @@ function conversationReviewText(
 	const withContact = contact ? ` with ${contact}` : "";
 	const about =
 		nameTarget && context && context !== contact ? ` about ${context}` : "";
-	const date = suggestion.latest_source_at
-		? homeDate(suggestion.latest_source_at)
-		: null;
+	const date = suggestion.source_at ? homeDate(suggestion.source_at) : null;
 	const when = !contact && date ? ` on ${date}` : "";
 	const more = suggestion.suggestions.length - 1;
 	const remaining = more
@@ -490,6 +495,120 @@ function conversationReviewText(
 		),
 		primary_action: "Review suggestions",
 	};
+}
+
+function emailRequest(email: EmailContext) {
+	return (
+		homeDisplayText(email.email_summary) || homeDisplayText(email.email_quote)
+	);
+}
+
+const emailActions = {
+	next_step: "Review follow-up",
+	file_to_deal: "Choose deal",
+	possible_new_deal: "Choose deal",
+	phase_move: "Review phase change",
+	new_lead: "Review lead",
+	email_lead: "Review lead",
+	lead_stage_move: "Review lead stage",
+	log_call: "Review call note",
+} as const;
+
+function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
+	const sender = homeDisplayText(suggestion.email_sender);
+	const target = homeDisplayText(suggestion.context_label);
+	const destination = homeDisplayText(suggestion.decision_label);
+	const proposed = homeDisplayText(suggestion.suggestion_title);
+	const evidence = homeDisplayText(suggestion.evidence);
+	const request = emailRequest(suggestion);
+	const source = sender ? `Email from ${sender}` : target || "Email";
+	const action = emailActions[suggestion.kind];
+	const decisionText = {
+		next_step: [
+			proposed ? `review follow-up (${proposed})` : "review follow-up",
+			proposed ? `Proposed follow-up: ${proposed}` : null,
+		],
+		file_to_deal: [
+			"choose the deal",
+			target ? `Suggested deal is ${target}` : null,
+		],
+		possible_new_deal: ["decide where to file it", null],
+		phase_move: [
+			destination ? `review move to ${destination}` : "review phase change",
+			destination ? `Proposed phase is ${destination}` : null,
+		],
+		new_lead: [
+			target ? `review adding ${target} as a lead` : "review adding a lead",
+			target ? `Proposed lead is ${target}` : null,
+		],
+		email_lead: ["review possible lead", null],
+		lead_stage_move: [
+			destination
+				? `review move to lead stage ${destination}`
+				: "review lead stage",
+			destination ? `Proposed lead stage is ${destination}` : null,
+		],
+		log_call: ["review call note", proposed],
+	} satisfies Record<Suggestion["kind"], [string, string | null]>;
+	const [decision, details] = decisionText[suggestion.kind];
+	const count = suggestion.suggestions.length;
+	return {
+		title: `${source} — ${decision}${count > 1 ? ` (${count} decisions to review)` : ""}`,
+		why: homeWhy(
+			request ||
+				(suggestion.kind === "email_lead"
+					? evidence
+					: "Email summary unavailable"),
+			suggestion.kind !== "next_step" &&
+				suggestion.kind !== "email_lead" &&
+				evidence !== request
+				? evidence
+				: null,
+			details,
+		),
+		primary_action: suggestion.snoozed_until ? null : action,
+	};
+}
+
+function deliveryWhy(reason: string | null) {
+	switch (reason) {
+		case "aborted_before_dispatch":
+			return "The send stopped before the reply went out.";
+		case "submission_recipients_invalid":
+			return "The reply's recipients were invalid.";
+		case "invalid_submission":
+			return "Outlook received an invalid reply submission.";
+		case "failed:abort_cleanup_failed":
+			return "Outlook could not clean up the interrupted send.";
+		default:
+			return /^unconfirmed_after_\d+$/.test(reason ?? "")
+				? "Outlook could not confirm that the reply was sent."
+				: homeWhy(homeDisplayText(reason) || "No delivery reason was recorded");
+	}
+}
+
+function draftReviewText(draft: Draft & ReviewMark) {
+	const sender = homeDisplayText(draft.email_sender);
+	const reply = sender ? `Reply to ${sender}` : "Reply";
+	const why = homeWhy(emailRequest(draft) || "Email summary unavailable");
+	switch (draft.status) {
+		case "pending":
+			return {
+				title: `${reply} is drafted — review reply`,
+				why,
+				primary_action: draft.snoozed_until ? null : "Review reply",
+			};
+		case "failed":
+			return {
+				title: `${reply} ${/^unconfirmed_after_\d+$/.test(draft.failure_reason ?? "") ? "has unconfirmed delivery" : "didn't send"} — review delivery`,
+				why: deliveryWhy(draft.failure_reason),
+				primary_action: draft.snoozed_until ? null : "Review delivery",
+			};
+		case "approved":
+			return { title: `${reply} is sending`, why, primary_action: null };
+		case "sent":
+			return { title: `${reply} was sent`, why, primary_action: null };
+	}
 }
 
 export async function readHomeReviewCards(
@@ -522,6 +641,7 @@ export async function readHomeReviewCards(
 							: "needs_attention",
 				draft.sent_at,
 			),
+			...draftReviewText(draft),
 			kind_label: "Reply draft",
 			deal_id: null,
 			due_on: draft.due_on,
@@ -550,8 +670,9 @@ export async function readHomeReviewCards(
 					: "email_proposal";
 			return {
 				...reviewCard(suggestion, "proposal", sourceType, "needs_attention"),
-				...((call || meeting) &&
-					conversationReviewText(suggestion, call ? "Call" : "Meeting")),
+				...(call || meeting
+					? conversationReviewText(suggestion, call ? "Call" : "Meeting")
+					: emailSuggestionText(suggestion)),
 				kind_label: call ? "Call" : "Suggestion",
 				deal_id: null,
 				due_on: suggestion.due_on,
@@ -561,15 +682,13 @@ export async function readHomeReviewCards(
 				...(suggestion.fallback_reply_draft && {
 					fallback_reply_draft: suggestion.fallback_reply_draft,
 				}),
-				source_activity: suggestion.latest_activity_id
+				source_activity: suggestion.activity_id
 					? {
 							kind: suggestion.activity_kind,
-							id: suggestion.latest_activity_id,
-							...(suggestion.latest_source_at
+							id: suggestion.activity_id,
+							...(suggestion.source_at
 								? {
-										happened_at: new Date(
-											suggestion.latest_source_at,
-										).toISOString(),
+										happened_at: new Date(suggestion.source_at).toISOString(),
 									}
 								: {}),
 						}

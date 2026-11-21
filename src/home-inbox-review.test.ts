@@ -21,7 +21,7 @@ before(async () => {
 		select set_config('engine.job', 'old_system', true);
 		insert into how_found (slug, label) values ('inbound', 'Inbound');
 		insert into role (slug, label) values ('lead', 'Lead');
-		insert into stage (role, slug, label) values ('lead', 'new', 'New');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New'), ('lead', 'qualified', 'Qualified');
 		insert into party (id, kind, name) values
 			('${partner}', 'person', 'Example Partner'), ('${other}', 'person', 'Other Partner');
 		insert into app_user (id, slug) values ('${partner}', 'example'), ('${other}', 'other');
@@ -41,11 +41,16 @@ before(async () => {
 				case when id = '${id(10)}' then 'Earlier floor plan' else 'Floor plan' end,
 				'Please send the plan.'
 			from activity;
+		insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, text, provenance, recorded_at)
+			select id, id, 'sha256:' || repeat('a', 64), 'example.v1', 'available', summary, '{}', '2026-01-06'
+			from (values ('${id(10)}'::uuid, 'Sam Example requested the **floor plan** (C-123) before the tour.'),
+				('${id(11)}'::uuid, 'Pat Example asked for tour times at Cedar Suite.')) summaries(id, summary);
 		insert into email_mailbox (activity_id, user_id) values
 			('${id(10)}', '${partner}'), ('${id(11)}', '${partner}'), ('${id(11)}', '${other}'), ('${id(12)}', '${partner}');
 		insert into activity_about (activity_id, deal_id) values ('${id(11)}', '${deal}');
 		insert into activity_about (activity_id, party_id)
 			select id, '${partner}' from activity where id <> '${id(11)}';
+		insert into activity_about (activity_id, party_id) values ('${id(16)}', '${knownContact}');
 		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
 			values ${[10, 11, 12, 13, 14, 15, 16]
 				.map(
@@ -69,7 +74,7 @@ before(async () => {
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id, created_at, due_on)
 			values ('${id(30)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}', '2026-01-05', '2026-01-09'),
 				('${id(31)}', 'next_step', '${id(11)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the plan', '${partner}', '2026-01-03', null),
-				('${id(32)}', 'next_step', '${id(12)}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Check the drawing', null, '2026-01-04', null),
+				('${id(32)}', 'next_step', '${id(12)}', 'email', 'Review is needed.', 'old_system', '${deal}', 'Check the drawing', null, '2026-01-04', null),
 				('${id(33)}', 'next_step', '${call}', 'call', 'Ask about the lease.', 'old_system', '${deal}', 'Check the lease', null, '2026-01-02', null),
 				('${id(34)}', 'next_step', '${call}', 'call', 'Send a budget.', 'old_system', '${deal}', 'Send a budget', '${partner}', '2026-01-03', null),
 				('${id(35)}', 'next_step', '${id(12)}', 'email', 'Please send details.', 'old_system', '${deal}', 'Send details', '${partner}', '2026-01-04', null),
@@ -120,7 +125,9 @@ test("Home shows only its partner's active drafts and one per known conversation
 		{
 			item_id: `reply_draft:${id(21)}`,
 			source_version: "1",
-			title: "Reply to Pat Example: Floor plan",
+			title: "Reply to Pat Example is drafted — review reply",
+			why: "Pat Example asked for tour times at Cedar Suite.",
+			primary_action: "Review reply",
 			open_url: `/deals?deal=${deal}`,
 			section: "inbox",
 			source_activity: {
@@ -131,13 +138,22 @@ test("Home shows only its partner's active drafts and one per known conversation
 			},
 		},
 	);
-	assert.equal(
-		drafts.find((card) => card.reply_draft_id === id(25))?.section,
-		"working",
+	assert.partialDeepStrictEqual(
+		drafts.find((card) => card.reply_draft_id === id(25)),
+		{
+			section: "working",
+			primary_action: null,
+		},
 	);
-	assert.equal(
-		drafts.find((card) => card.reply_draft_id === id(26))?.source_state,
-		"failed",
+	assert.partialDeepStrictEqual(
+		drafts.find((card) => card.reply_draft_id === id(26)),
+		{
+			source_state: "failed",
+			title: "Reply to shared@example.test didn't send — review delivery",
+			why: "The send stopped before the reply went out.",
+			primary_action: "Review delivery",
+			failure_reason: "aborted_before_dispatch",
+		},
 	);
 	assert.deepEqual(
 		(await inbox("other"))
@@ -160,6 +176,7 @@ test("Home shows a sent draft once in Done at the recorded send time", async () 
 		{
 			item_id: `reply_draft:${id(24)}`,
 			reply_draft_status: "sent",
+			primary_action: null,
 			disposition: "inbox",
 			section: "done",
 			completed_at: draft.sent_at.toISOString(),
@@ -400,7 +417,7 @@ for (const decision of ["accept", "dismiss"]) {
 		assert.partialDeepStrictEqual(await findCards(), [
 			{
 				item_id: `suggestion:${proposalId}`,
-				title: "New Example · Possible lead",
+				title: "New Example — review possible lead",
 				source_type: "email_proposal",
 				section: "inbox",
 				source_activity: null,
@@ -609,7 +626,7 @@ for (const match of [
 			);
 			assert.equal(cards.length, match === "other_mailbox" ? 1 : 2);
 			assert.partialDeepStrictEqual(standalone, {
-				title: "New Sender · Possible lead",
+				title: "New Sender — review possible lead",
 				source_activity: null,
 				suggestions: [
 					{ id: lead.proposal_id, kind: "email_lead", activity_id: null },
@@ -640,7 +657,8 @@ for (const match of [
 		);
 		assert.partialDeepStrictEqual(cards[0], {
 			proposal_id: filing.proposal_id,
-			title: "New Sender · Floor plan",
+			title: "Email from New Sender — choose the deal (2 decisions to review)",
+			primary_action: "Choose deal",
 			source_activity: { id: email.activity_id, kind: "email" },
 			suggestions: [
 				{
@@ -820,15 +838,66 @@ test("Home uses recorded sender names and matches an unambiguous address", async
 	const filing = (await inbox("other")).find(
 		(card) => card.proposal_id === id(38),
 	);
-	assert.equal(filing?.title, "Pat Example · Floor plan");
+	assert.partialDeepStrictEqual(filing, {
+		title: "Email from Pat Example — choose the deal",
+		why: "Pat Example asked for tour times at Cedar Suite. Please file this. Suggested deal is Example Dental.",
+		primary_action: "Choose deal",
+	});
 	const step = (await inbox()).find((card) => card.proposal_id === id(32));
-	assert.equal(step?.title, "Known Contact · Floor plan");
+	assert.partialDeepStrictEqual(step, {
+		title: "Email from Known Contact — review follow-up (Check the drawing)",
+		why: "Email summary unavailable. Proposed follow-up: Check the drawing.",
+		primary_action: "Review follow-up",
+	});
 	const draft = (await inbox("other")).find(
 		(card) => card.reply_draft_id === id(22),
 	);
-	assert.equal(draft?.title, "Reply to Known Contact: Floor plan");
-	const shared = (await inbox()).find((card) => card.reply_draft_id === id(26));
-	assert.equal(shared?.title, "Reply to shared@example.test: Floor plan");
+	assert.partialDeepStrictEqual(draft, {
+		title: "Reply to Known Contact is drafted — review reply",
+		why: "Please send the plan.",
+		primary_action: "Review reply",
+	});
+});
+
+test("Home names the proposed phase, lead and lead stage for email decisions", async () => {
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${other}', true);
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, to_phase)
+			values ('${id(63)}', 'phase_move', '${id(13)}', 'email', 'The LOI arrived.', 'old_system', '${deal}', 'negotiation');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, party_id, to_stage, how_found, from_stage, strength)
+			values ('${id(64)}', 'new_lead', '${id(16)}', 'email', 'Asked about representation.', 'old_system', '${knownContact}', 'new', 'inbound', null, null),
+				('${id(65)}', 'lead_stage_move', '${id(15)}', 'email', 'Confirmed their plans.', 'old_system', '${partner}', 'qualified', null, 'new', 'weak');
+		commit;`);
+	try {
+		const cards = await inbox("other");
+		assert.partialDeepStrictEqual(
+			cards.find((card) => card.proposal_id === id(63)),
+			{
+				title: "Email from Pat Example — review move to Negotiating",
+				why: "Email summary unavailable. The LOI arrived. Proposed phase is Negotiating.",
+				primary_action: "Review phase change",
+			},
+		);
+		assert.partialDeepStrictEqual(
+			cards.find((card) => card.proposal_id === id(64)),
+			{
+				title:
+					"Email from shared@example.test — review adding Known Contact as a lead",
+				primary_action: "Review lead",
+			},
+		);
+		assert.partialDeepStrictEqual(
+			cards.find((card) => card.proposal_id === id(65)),
+			{
+				title: "Email from Pat Example — review move to lead stage Qualified",
+				primary_action: "Review lead stage",
+			},
+		);
+	} finally {
+		await db.query(`begin;
+			select set_config('engine.job', 'old_system', true);
+			delete from proposal where id in ('${id(63)}', '${id(64)}', '${id(65)}'); commit;`);
+	}
 });
 
 test("Home opens each visible suggestion with its original evidence and proposed fields", async () => {
@@ -944,9 +1013,11 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
 			values ('${draft}', '${id(11)}', '${reviewer}', 'old_system', 'Floor plan', 'Here it is.', 'Please send the plan.'),
 				('${declinedDraft}', '${id(13)}', '${reviewer}', 'old_system', 'Floor plan', 'Here it is.', 'Please send the plan.');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, created_at, deal_id, what, owner_party_id, due_on)
+			values ('${id(60)}', 'next_step', '${id(10)}', 'email', 'Please send the plan.', 'old_system', '2026-01-07',
+				'${deal}', '**Send the plan** (loop #7)', '${reviewer}', '2026-01-09');
 		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, created_at)
-			values ('${id(60)}', 'possible_new_deal', '${id(10)}', 'email', 'Check the plan.', 'old_system', '2026-01-07'),
-				('${id(61)}', 'possible_new_deal', '${id(11)}', 'email', 'Review the suite.', 'old_system', '2026-01-06'),
+			values ('${id(61)}', 'possible_new_deal', '${id(11)}', 'email', 'Review the suite.', 'old_system', '2026-01-06'),
 				('${id(62)}', 'possible_new_deal', '${id(13)}', 'email', 'Review the other suite.', 'old_system', '2026-01-06');
 		commit;`);
 	const cards = () => inbox(user.user);
@@ -965,6 +1036,10 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	const unkeyed = () => activeCard([id(13)]);
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `reply_draft:${draft}`,
+		title: "Reply to Pat Example is drafted — review reply",
+		why: "Pat Example asked for tour times at Cedar Suite.",
+		primary_action: "Review reply",
+		due_on: "2026-01-09",
 		suggestions: [{ id: id(60) }, { id: id(61) }],
 	});
 	assert.partialDeepStrictEqual(await unkeyed(), {
@@ -984,6 +1059,8 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	assert.partialDeepStrictEqual(await unkeyed(), {
 		item_id: `suggestion:${id(62)}`,
 		kind_label: "Suggestion",
+		title: "Email from Pat Example — decide where to file it",
+		primary_action: "Choose deal",
 	});
 	const setDraft = (job: string, change: string) =>
 		db.query(`begin;
@@ -994,11 +1071,15 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	await setDraft("", approve);
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `suggestion:${id(60)}`,
-		title: "Pat Example · Floor plan",
+		title:
+			"Email from Sam Example — review follow-up (Send the plan) (2 decisions to review)",
+		why: "Sam Example requested the floor plan before the tour. Proposed follow-up: Send the plan.",
+		primary_action: "Review follow-up",
+		due_on: "2026-01-09",
 		source_activity: {
 			kind: "email",
-			id: id(11),
-			happened_at: "2026-01-03T00:00:00.000Z",
+			id: id(10),
+			happened_at: "2026-01-02T00:00:00.000Z",
 		},
 		fallback_reply_draft: {
 			id: draft,

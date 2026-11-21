@@ -137,7 +137,7 @@ Baseline from the 2026-11-18 walkthrough and app code. The new card titles, why 
 - Steps due in 2027, and one on hold until 2027, sit in Needs your attention.
 - Mail priorities rows are titled only "Next step", "Email filing" or "Possible new deal", with no sender or subject, and almost all link to the same email follow-ups page.
 - Mail shows both in Mail priorities and as inbox cards.
-- The app still reads Home from CARR. The engine read supplies draft and suggestion cards with their source and target IDs, marks and sent draft history. Opening the email and deciding a suggestion from Home still need app routing.
+- The app still reads Home from CARR. The engine read supplies action titles, why lines and primary actions for email suggestions and reply drafts, along with their source and target IDs, marks and sent draft history. Opening the email and deciding a suggestion from Home still need app routing.
 - The reply review shows the draft but not the email it answers. A failed reply asks the partner to send it from Outlook, then press Hide.
 - Home still offers Hide from inbox, the Hidden from inbox list and the selection bar's Settle selected.
 - No card has Drop with a reason on the live CARR-backed screen. The engine now supplies reasoned Drop for every Home card kind (doors 18, 21, 22 and 24) and tour feedback Done/Undo (door 24); app routing still waits.
