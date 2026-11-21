@@ -65,20 +65,15 @@ async function isolate<T, F>(
 	}
 }
 
-function unhandledSnapshot(stored: unknown) {
-	if (!isArguments(stored) || !Array.isArray(stored.follow_up_reviews))
-		return stored;
-	const raw = [stored.dismissed, stored.confirmed].flatMap((v) =>
-		Array.isArray(v) ? v : [],
-	);
-	const done = new Set(raw.filter((k): k is string => typeof k === "string"));
-	if (!done.size) return stored;
-	return {
-		...stored,
-		follow_up_reviews: stored.follow_up_reviews.filter(
-			(r) => !isArguments(r) || typeof r.key !== "string" || !done.has(r.key),
+function handledReviewKeys(stored: unknown) {
+	const keys = isArguments(stored) ? [stored.dismissed, stored.confirmed] : [];
+	return new Set(
+		keys.flatMap((value) =>
+			Array.isArray(value)
+				? value.filter((key): key is string => typeof key === "string")
+				: [],
 		),
-	};
+	);
 }
 
 async function readTodayMeetings(
@@ -89,14 +84,11 @@ async function readTodayMeetings(
 	const stored = await readStoredAgenda(db, userId);
 	if (stored === null)
 		return noMeetings("No calendar snapshot has been synced from Outlook yet.");
-	const section = meetingsFromSnapshot(
-		unhandledSnapshot(stored),
-		new Date(clock.now_at),
-		{
-			fromMs: Date.parse(clock.today_start),
-			untilMs: Date.parse(clock.tomorrow_start),
-		},
-	);
+	const section = meetingsFromSnapshot(stored, new Date(clock.now_at), {
+		fromMs: Date.parse(clock.today_start),
+		untilMs: Date.parse(clock.tomorrow_start),
+		handledReviewKeys: handledReviewKeys(stored),
+	});
 	if (!section || section.state === "unavailable")
 		return noMeetings("Outlook calendar data could not be read.");
 	const addresses = [...new Set(section.items.flatMap(emailsOf))];
