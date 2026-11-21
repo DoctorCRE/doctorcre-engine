@@ -26,21 +26,34 @@ export function sourceInMailbox(
 
 const historyMarker =
 	/^(?:-+ *(?:original|forwarded) message *-+|begin forwarded message:)$/i;
-const droppedLine =
-	/^[ \t]*(?:>|\*?(?:from|to|cc|bcc|sent|subject|phone|fax|tel|mobile|cell):|sent from my )/i;
-const ruleLine = /^[ \t]*[-_=*]{3,}[ \t]*$/;
+const headerField = /^\*?(from|to|cc|bcc|sent|date|subject):\*?(.*)$/i;
+// People write "Date:" in their own words, so only a header block owns it.
+const strayHeader = new Set(["from", "to", "cc", "bcc", "sent", "subject"]);
+const ruleLine = /^[-_=*]{3,}$/;
 const signOff =
 	/^(?:best|regards|(?:best|kind|warm) regards|thanks(?: so much| again)?|thank you|many thanks|sincerely|cheers)[,.!]?$/i;
-const contact = /\S@\S+\.\S|https?:\/\/|www\.|\d[\d(). -]{8,}\d/i;
+const deviceFooter = /^sent from my [\w-]+(?: [\w-]+){0,3}$/i;
+const sentence = /[.!?]$|\b[a-z]+ [a-z]+\b/;
+// Names, titles, companies, phones, emails and links start each word with a capital, digit or symbol.
+const contactWord = /^(?:[^a-z]|[a-z]:$|(?:of|and|at|for|in|the)$)|@|:\/\//;
 
 export function cleanEmailBody(body: string, sender: string | null) {
-	const source = body.replace(/\u00a0/g, " ").split(/\r\n?|\n/);
-	const kept = source
-		.slice(0, historyStart(source))
-		.filter((line) => !droppedLine.test(line));
-	const lines = kept.slice(0, signatureStart(kept, sender));
+	const lines = body.replace(/\u00a0/g, " ").split(/\r\n?|\n/);
+	const own = lines
+		.slice(0, historyStart(lines))
+		.filter((line) => !/^\s*>/.test(line) && !strayHeader.has(field(line)));
+	const signed = own.slice(0, footerStart(own));
+	// A message that is only a sign-off, a signature or quoted mail keeps its text.
+	return (
+		text(signed.slice(0, signatureStart(signed, sender))) ||
+		text(signed) ||
+		text(lines)
+	);
+}
+
+function text(lines: string[]) {
 	const end = lines.findLastIndex(
-		(line) => line.trim() && !ruleLine.test(line),
+		(line) => line.trim() && !ruleLine.test(line.trim()),
 	);
 	return lines
 		.slice(0, end + 1)
@@ -48,61 +61,74 @@ export function cleanEmailBody(body: string, sender: string | null) {
 		.trim();
 }
 
+function field(line: string) {
+	const [, label = "", value = ""] = headerField.exec(line.trim()) ?? [];
+	return sentence.test(value) ? "" : label.toLowerCase();
+}
+
 function historyStart(lines: string[]) {
 	let from = -1;
 	for (const [index, line] of lines.entries()) {
-		const text = line.trim();
-		if (historyMarker.test(text) || quoteIntro(lines, index)) return index;
-		if (/^\*?from:/i.test(text)) from = index;
-		else if (from < 0 || !text) continue;
-		else if (/^\*?(?:sent|date):/i.test(text)) return from;
+		if (historyMarker.test(line.trim()) || quoteOpener(lines, index))
+			return index;
+		const label = field(line);
+		if (label === "from") from = index;
+		else if (from < 0 || !line.trim()) continue;
+		else if (label === "sent" || label === "date") return from;
 		else if (!/^[ \t]|^\*?[a-z][a-z0-9-]*:/i.test(line)) from = -1;
 	}
 	return lines.length;
 }
 
 // Mail clients wrap a long "On <date>, <name> <address> wrote:" over lines.
-function quoteIntro(lines: string[], index: number) {
+function quoteOpener(lines: string[], index: number) {
 	if (!/^on\s/i.test(lines[index]?.trim() ?? "")) return false;
-	let text = "";
+	let opener = "";
 	for (const line of lines.slice(index, index + 3)) {
-		text = `${text} ${line.trim()}`.trim();
-		if (text.length > 400) return false;
-		if (/\bwrote:$/i.test(text)) return true;
+		opener = `${opener} ${line.trim()}`;
+		if (opener.length > 400 || !line.trim()) return false;
+		if (/\bwrote:$/i.test(opener)) return /\d/.test(opener);
+		if (/[.!?]$/.test(opener)) return false;
 	}
 	return false;
 }
 
+function footerStart(lines: string[]) {
+	const last = lines.findLastIndex((line) => line.trim());
+	return deviceFooter.test(lines[last]?.trim() ?? "") ? last : lines.length;
+}
+
+const contactLine = (line: string) =>
+	line.length <= 80 &&
+	line.split(/\s+/).every((word) => contactWord.test(word));
+
+// A signature is a trailing sign-off, then the sender's name, then only contact lines.
 function signatureStart(lines: string[], sender: string | null) {
-	const name = sender?.trim().toLowerCase();
-	const first = name?.split(/\s+/, 1)[0];
-	const isName = (line: string) =>
-		!!name &&
-		(line === name ||
-			line === first ||
-			line.startsWith(`${name} `) ||
-			line.startsWith(`${name},`));
-	const details = (rest: string[]) =>
-		rest.length <= 8 &&
-		rest.every((line) => line.length <= 80) &&
-		(!rest.length || rest.some((line) => contact.test(line)));
-	const window = lines.length - 15;
-	// A sign-off or the sender's name followed only by short contact lines is a signature.
-	const start = lines.findIndex((raw, index) => {
-		if (index < window) return false;
-		const line = raw.trim().toLowerCase();
-		const tail = lines
-			.slice(index + 1)
-			.map((rest) => rest.trim().toLowerCase())
-			.filter(Boolean);
-		const [next = "", ...rest] = tail;
+	const name = sender?.trim().toLowerCase() ?? "";
+	const first = name.split(/\s+/, 1)[0];
+	const isName = (line: string) => {
+		const lower = line.toLowerCase();
+		const suffix = lower.slice(name.length);
 		return (
-			line === "--" ||
-			(signOff.test(line) && (!next || (isName(next) && details(rest)))) ||
-			(isName(line) && !!next && details(tail))
+			!!name &&
+			(lower === first ||
+				(lower.startsWith(name) && /^(?:[ ,|]|$)/.test(suffix)))
 		);
+	};
+	const signature = (block: string[]) =>
+		isName(block[0] ?? "") && block.every(contactLine);
+	const tail = lines
+		.flatMap((line, index) =>
+			line.trim() ? [{ index, line: line.trim() }] : [],
+		)
+		.slice(-10);
+	const start = tail.findIndex(({ line }, position) => {
+		const after = tail.slice(position + 1).map((rest) => rest.line);
+		return signOff.test(line)
+			? !after.length || signature(after)
+			: after.length > 0 && signature([line, ...after]);
 	});
-	return start < 0 ? lines.length : start;
+	return tail[start]?.index ?? lines.length;
 }
 
 type ThreadMessage = {

@@ -78,3 +78,46 @@ test("keeps the sender's words that only look like a footer", () => {
 		assert.equal(cleanEmailBody(body, "Maya Example"), body);
 	}
 });
+
+test("keeps sentences that follow a sign-off or the sender's name", () => {
+	for (const body of [
+		"Thanks,\nMaya\nPlease call (555) 010-2000 if the plan is wrong.",
+		"Thanks,\nMaya\nThe tour is 2026-01-06 at the side door.",
+		"The after-hours line is below.\n\nMaya Example\n(555) 010-2000\n\nPlease text before you arrive.",
+		"I left the plan at the desk.\n\nMaya Example called.\nThe number is (555) 010-2000.",
+	]) {
+		assert.equal(cleanEmailBody(body, "Maya Example"), body);
+	}
+});
+
+test("never empties a message that is only a sign-off or a signature", () => {
+	for (const body of [
+		"Thanks",
+		"Cheers",
+		"Thanks!",
+		"Thanks,\nMaya",
+		"Maya Example\n(555) 010-2000\nmaya@example.test",
+	]) {
+		assert.equal(cleanEmailBody(body, "Maya Example"), body);
+	}
+});
+
+test("keeps sentences that start like a header, contact label or mobile footer", () => {
+	for (const body of [
+		"Please come in.\n\nFrom: the side door, not the lobby.",
+		"From: the side door.\nDate: Tuesday is better than Monday.",
+		"Cell: the one on Main Street is the right suite.",
+		"Sent from my office this morning with the keys.",
+	]) {
+		assert.equal(cleanEmailBody(body, "Maya Example"), body);
+	}
+});
+
+test("cuts quoted history only at a whole On <date> ... wrote: line", () => {
+	for (const body of [
+		"On Monday we can tour.\nI already wrote:\nthe suite is ready.",
+		"On Friday the landlord wrote:\nThe suite opens in March.",
+	]) {
+		assert.equal(cleanEmailBody(body, "Maya Example"), body);
+	}
+});
