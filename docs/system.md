@@ -174,6 +174,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Home screen                                              | `docs/screens/home-inbox.md`                                                                                                        |
 | Deals screen                                             | `docs/screens/deals.md`                                                                                                             |
 | Calendar screen                                          | [Calendar](screens/calendar.md)                                                                                                     |
+| Clients screen                                           | [Clients](screens/clients.md)                                                                                                       |
 | Leads screen                                             | `docs/screens/leads.md`                                                                                                             |
 | Invoices screen                                          | [Invoices](screens/invoices.md)                                                                                                     |
 | Doc screen and engine contract                           | [Doc](screens/doc.md) and [Doc conversations and turns](new-database.md#doc-conversations-and-turns)                                |

@@ -48,6 +48,7 @@ import { mondayReviewReads } from "./monday-review/read.ts";
 import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { automaticStepUndo, nextSteps } from "./next-steps.ts";
+import { partnerGoogle } from "./partner-google.ts";
 import {
 	type PartnerSessionEnv,
 	partnerSessionStatus,
@@ -163,6 +164,7 @@ partnerApi.route("/api/engine", replyDrafts);
 
 app.use("/api/engine/*", requireSession);
 app.route("/", partnerApi);
+partnerApp.route("/", partnerGoogle);
 partnerApp.get("/auth/session", requirePartnerSession, partnerSessionStatus);
 partnerApp.use("/api/engine/*", requirePartnerSession);
 partnerApp.route("/", partnerApi);
