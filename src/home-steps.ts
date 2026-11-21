@@ -68,7 +68,7 @@ type StepEvidence = {
 };
 
 export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
-	const savedText = homeStepText(step.title);
+	const savedText = homeStepText(step.title.replace(/\(\s*T-\d+\s*\)/gi, " "));
 	const target = homeDisplayText(step.context_label);
 	const contact = homeDisplayText(step.call_contact);
 	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
