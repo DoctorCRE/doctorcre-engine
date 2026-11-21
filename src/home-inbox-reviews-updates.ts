@@ -62,7 +62,8 @@ function noticeCard(
 	};
 }
 
-type CompletionReview = DealNotice & {
+type CompletionReview = Omit<DealNotice, "title"> & {
+	what: string;
 	next_step_id: string;
 	can_resolve: boolean;
 	activity_id: string;
@@ -84,7 +85,7 @@ export async function readCompletionReviews(
 			order by p.next_step_id, p.created_at desc, p.id desc
 		)
 		select p.id, p.next_step_id, p.deal_id, d.name as deal_name,
-			s.what as title, s.due_on, p.created_at as activity_at,
+			s.what, s.due_on, p.created_at as activity_at,
 			s.changed_at = p.step_seen_at as can_resolve,
 			a.id as activity_id, a.kind as activity_kind, a.happened_at, a.summary, p.evidence
 		from latest p
@@ -93,11 +94,34 @@ export async function readCompletionReviews(
 		join activity a on a.id = p.activity_id
 		where p.status = 'pending'
 	`.execute(db);
-	return new Map(rows.map((row) => [row.next_step_id, row]));
+	return new Map(
+		rows.map((review) => [
+			review.next_step_id,
+			{ ...review, ...completionReviewText(review) },
+		]),
+	);
+}
+
+function completionReviewText(review: CompletionReview) {
+	const { action, savedText } = homeStepText(review.what);
+	const deal = homeDisplayText(review.deal_name);
+	const title = homeTitle(
+		`A ${review.activity_kind} mentions a step for ${deal}`,
+		action ? `check if done: ${action}` : "review completion",
+	);
+	return {
+		title,
+		why: homeWhy(
+			homeDisplayText(review.evidence) ||
+				homeDisplayText(review.summary) ||
+				`The ${review.activity_kind} was recorded on ${homeDate(review.happened_at)}`,
+			savedText !== action || !title.endsWith(action) ? savedText : null,
+		),
+	};
 }
 
 export function completionReviewCard(
-	review: CompletionReview,
+	review: CompletionReview & { title: string; why: string },
 	step: {
 		item_id: string;
 		base_version: string;
@@ -106,12 +130,6 @@ export function completionReviewCard(
 	},
 ) {
 	const { item_id, base_version, source_version, action_version } = step;
-	const action = homeStepText(review.title);
-	const deal = homeDisplayText(review.deal_name);
-	const title = homeTitle(
-		`A ${review.activity_kind} mentions a step for ${deal}`,
-		action ? `check if done: ${action}` : "review completion",
-	);
 	return {
 		...noticeCard(review, {
 			item_id,
@@ -121,13 +139,7 @@ export function completionReviewCard(
 		}),
 		base_version,
 		action_version,
-		title,
-		why: homeWhy(
-			homeDisplayText(review.evidence) ||
-				homeDisplayText(review.summary) ||
-				`The ${review.activity_kind} was recorded on ${homeDate(review.happened_at)}`,
-			!title.endsWith(action) ? action : null,
-		),
+		why: review.why,
 		primary_action: "Review completion",
 		completion_review: {
 			proposal_id: review.id,

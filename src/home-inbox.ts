@@ -11,11 +11,8 @@ import {
 	readHomeUpdates,
 } from "./home-inbox-reviews-updates.ts";
 import {
-	homeDate,
-	homeDisplayText,
-	homeStepText,
-	homeTitle,
-	homeWhy,
+	homeStepCopy,
+	type StepTitle,
 	stepItemId,
 	stepOpenUrl,
 	stepTargetFields,
@@ -25,28 +22,21 @@ import type { DatabaseEnv } from "./reader.ts";
 
 const LIMIT = 1000;
 
-type Step = {
+type Step = StepTitle & {
 	id: string;
-	title: string;
-	status: string | null;
 	deal_id: string | null;
 	building_deal_id: string | null;
 	party_id: string | null;
 	prospect: boolean;
-	context_label: string | null;
-	due_on: string | null;
 	created_at: string;
 	set_by: string | null;
 	activity_at: string;
 	completed_at: string | null;
-	hold_until: string | null;
 	snoozed_until: string | null;
 	step_version: string;
 	undo_completion: boolean;
 	mark_version: string | null;
 	call_id: string | null;
-	call_at: string | null;
-	call_contact: string | null;
 	call_summary: string | null;
 	call_quote: string | null;
 	source_id: string | null;
@@ -115,100 +105,6 @@ const iso = (timestamp: string) => new Date(timestamp).toISOString();
 const optionalIso = (timestamp: string | null) =>
 	timestamp === null ? null : iso(timestamp);
 
-const leaseEvent =
-	/^Lease event [—–-] (.+?), est\. (\w+ \d{1,2}, \d{4})(?:\.\s*|$)(.*)$/i;
-const leaseAction =
-	/^(?:please )?(?:ask|call|check|confirm|contact|decide|discuss|follow up|reach out|relocate|renew|review|schedule|send)\b/i;
-
-function stepText(step: Step) {
-	const action = homeStepText(step.title);
-	const target = homeDisplayText(step.context_label);
-	const forTarget = target ? ` for ${target}` : "";
-	const primary_action = step.status === "done" ? "Open" : "Mark done";
-	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
-	if (step.status === "open" && step.hold_until) {
-		return {
-			title: homeTitle(`Follow-up on hold${forTarget}`),
-			why: homeWhy(`Held until ${homeDate(step.hold_until)}`, action),
-			primary_action,
-		};
-	}
-	const [, name, date, details = ""] = action.match(leaseEvent) ?? [];
-	if (step.status === "open" && name && date) {
-		const label = target || name;
-		const dateLabel = date.replace(/^(\w{3})\w*/, "$1");
-		const event = `${label} lease event est. ${dateLabel}`;
-		const sentences = details.split(/(?<=[.!?])\s+/);
-		const savedAction = sentences.find((sentence) =>
-			leaseAction.test(sentence),
-		);
-		const decision = savedAction
-			? savedAction
-					.replace(/^./, (first) => first.toLowerCase())
-					.replace(/\.$/, "")
-			: "decide on renewal or relocation";
-		const title = homeTitle(
-			event,
-			decision,
-			`Lease event est. ${dateLabel} for ${label}`,
-		);
-		return {
-			title,
-			why: homeWhy(
-				title.startsWith(event) ? null : event,
-				...sentences.filter(
-					(sentence) => sentence !== savedAction || !title.endsWith(decision),
-				),
-				due,
-			),
-			primary_action,
-		};
-	}
-	if (step.call_at) {
-		const contact = homeDisplayText(step.call_contact);
-		const date = homeDate(step.call_at);
-		const call = contact
-			? `Call with ${contact}`
-			: `Call${forTarget} on ${date}`;
-		const title = homeTitle(
-			`${call} left a follow-up`,
-			action || "open the saved step",
-		);
-		return {
-			title,
-			why: homeWhy(
-				`Call on ${date}`,
-				homeDisplayText(step.call_quote) ||
-					homeDisplayText(step.call_summary) ||
-					"Call details unavailable",
-				title.endsWith("…") ? action : null,
-				due,
-			),
-			primary_action,
-		};
-	}
-	const setter = homeDisplayText(step.set_by);
-	const set = step.source_kind
-		? `Follow-up set from the ${step.source_kind}`
-		: setter
-			? `Follow-up set by ${setter}`
-			: `Follow-up set on ${homeDate(step.created_at)}`;
-	const event = `${step.status === "done" ? "Follow-up completed" : due ? "Follow-up due" : "Follow-up set"}${forTarget}`;
-	const title = homeTitle(event, action || "open the saved step");
-	return {
-		title,
-		why: homeWhy(
-			set,
-			homeDisplayText(step.source_evidence),
-			due,
-			!title.endsWith(action) || (!step.source_kind && !setter && !due)
-				? action
-				: null,
-		),
-		primary_action,
-	};
-}
-
 function stepCard(step: Step) {
 	const completed_at = optionalIso(step.completed_at);
 	const done = step.status === "done";
@@ -231,7 +127,8 @@ function stepCard(step: Step) {
 		source_version,
 		source_state: done ? "done" : "needs_attention",
 		base_version: `${source_version}:${step.mark_version ?? "0"}:${disposition}`,
-		...stepText(step),
+		...homeStepCopy(step, step),
+		primary_action: done ? "Open" : "Mark done",
 		activity_at: iso(step.activity_at),
 		completed_at,
 		hold_until,
