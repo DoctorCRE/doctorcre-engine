@@ -1069,6 +1069,92 @@ create table activity (
 	unique (id, kind)
 );
 
+create table tour_plan (
+	id uuid primary key default gen_random_uuid(),
+	created_at timestamptz not null default now(),
+	deal_id uuid not null references deal,
+	planned_on date not null,
+	notes text,
+	completed_activity_id uuid unique,
+	completed_activity_kind text generated always as ('meeting') stored,
+	cancelled_at timestamptz,
+	revision integer not null default 1 check (revision >= 1),
+	constraint tour_plan_one_outcome check (num_nonnulls(completed_activity_id, cancelled_at) <= 1),
+	foreign key (completed_activity_id, completed_activity_kind) references activity (id, kind)
+);
+
+create index tour_plan_deal on tour_plan (deal_id);
+
+create table tour_stop (
+	tour_plan_id uuid not null references tour_plan,
+	property_id uuid not null references property,
+	position integer not null check (position > 0),
+	created_at timestamptz not null default now(),
+	primary key (tour_plan_id, position)
+);
+
+create function revise_tour_plan() returns trigger
+language plpgsql as $$
+begin
+	if tg_op = 'INSERT' then
+		new.revision := 1;
+		return new;
+	end if;
+	if new.deal_id is distinct from old.deal_id then
+		raise exception 'a tour plan stays with its deal'
+			using errcode = 'check_violation', constraint = 'tour_plan_same_deal';
+	end if;
+	if num_nonnulls(old.completed_activity_id, old.cancelled_at) <> 0 then
+		raise exception 'only a planned tour can change'
+			using errcode = 'check_violation', constraint = 'tour_plan_open';
+	end if;
+	new.revision := old.revision + 1;
+	return new;
+end $$;
+
+create function tour_stop_on_open_plan() returns trigger
+language plpgsql as $$
+begin
+	-- Restamp the plan on stop edits and serialize them with finalization.
+	update tour_plan set planned_on = planned_on where id in (old.tour_plan_id, new.tour_plan_id);
+	return case when tg_op = 'DELETE' then old else new end;
+end $$;
+
+create function tour_plan_requires_stop() returns trigger
+language plpgsql as $$
+declare
+	plan_id uuid;
+begin
+	if tg_table_name = 'tour_plan' then
+		plan_id := new.id;
+	else
+		plan_id := old.tour_plan_id;
+	end if;
+	if exists (select from tour_plan where id = plan_id)
+		and not exists (select from tour_stop where tour_plan_id = plan_id) then
+		raise exception 'a tour plan needs at least one stop'
+			using errcode = 'check_violation', constraint = 'tour_plan_requires_stop';
+	end if;
+	return null;
+end $$;
+
+do $$ begin
+	execute format('alter function tour_stop_on_open_plan set search_path = pg_catalog, %I, pg_temp', current_schema());
+	execute format('alter function tour_plan_requires_stop set search_path = pg_catalog, %I, pg_temp', current_schema());
+end $$;
+
+revoke execute on function revise_tour_plan(), tour_stop_on_open_plan(), tour_plan_requires_stop() from public;
+
+create trigger revise_tour_plan before insert or update on tour_plan
+	for each row execute function revise_tour_plan();
+create trigger tour_stop_on_open_plan before insert or update or delete on tour_stop
+	for each row execute function tour_stop_on_open_plan();
+
+create constraint trigger tour_plan_requires_stop after insert or update of id on tour_plan
+	deferrable initially deferred for each row execute function tour_plan_requires_stop();
+create constraint trigger tour_plan_requires_stop after delete or update of tour_plan_id on tour_stop
+	deferrable initially deferred for each row execute function tour_plan_requires_stop();
+
 create table calendar_agenda (
 	user_id uuid primary key references app_user,
 	observed_at timestamptz not null,
@@ -1244,6 +1330,9 @@ create constraint trigger email_about_a_record after delete on activity_about
 
 alter table activity_about add constraint activity_about_activity_party_key unique (activity_id, party_id);
 alter table activity_about add constraint activity_about_activity_deal_key unique (activity_id, deal_id);
+
+alter table tour_plan add constraint tour_plan_completed_on_deal foreign key (completed_activity_id, deal_id)
+	references activity_about (activity_id, deal_id) deferrable initially deferred;
 
 create table lead_email_evidence (
 	message_id text not null check (message_id = btrim(message_id) and message_id ~ '\S'),
@@ -3438,7 +3527,7 @@ declare
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
-		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity',
+		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity', 'tour_plan', 'tour_stop',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement', 'weekly_review',
 		'party_document', 'email_document', 'client_vertical', 'client_research', 'client_research_fact',
@@ -3998,6 +4087,8 @@ grant update (started_on, ended_on) on party_territory to engine;
 grant update (has_office, coverage, source) on party_territory_review to engine;
 grant update (label, is_primary) on party_email, party_phone to engine;
 grant update (happened_at, from_party_id, summary) on activity to engine;
+grant update (planned_on, notes, completed_activity_id, cancelled_at) on tour_plan to engine;
+grant delete on tour_stop to engine;
 grant update (what, owner_party_id, due_on, hold_until, item_bullets, done_at, resolution, resolved_at, resolution_reason) on next_step to engine;
 grant update (time_zone, quiet_from, quiet_until, push_to_device) on user_preference to engine;
 grant update (disposition, snoozed_until, drop_reason, waiting_on_party_id, waiting_reason) on home_mark to engine;

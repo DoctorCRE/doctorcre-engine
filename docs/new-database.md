@@ -229,6 +229,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary, and a stored email's authored and earlier text;
+- a planned tour's date, notes, completion meeting or cancellation time. The engine replaces its stops by removing and adding rows;
 - a next step's text, owner, due date and done time;
 - a user's time zone, quiet hours and device notifications, a Home mark's disposition, snooze time, drop reason and whom it waits on and why, and a Home update's `read_at` (`read_at` is the only updatable column on `home_update`);
 - a round's status, and a critical date's status and resolution reason;
@@ -590,12 +591,12 @@ Moving today's rows across, each logged `activity` of kind `tour` becomes a meet
 
 ### Planned tours on a deal
 
-The proposed `next` schema change for [#1107](https://github.com/DoctorCRE/doctorcre-engine/issues/1107) supports the [deal page](screens/deals.md#tours). The production migration needs the owner's approval. The planner starts empty. The old system has zero deal-linked plans and one unlinked plan, which stays there. The completed-tour copy above still applies.
+The `next` schema has the tables for the [deal page tour planner](screens/deals.md#tours). Apply `schema/add-tour-plans.sql` to an existing `next` schema after the owner approves that file for production. The planner starts empty. The old system has zero deal-linked plans and one unlinked plan, which stays there. The completed-tour copy above still applies.
 
 - `tour_plan` has its own ID, a required `deal_id` referencing `deal`, a required `planned_on` calendar date, and optional internal `notes`. Each plan belongs to one deal for its lifetime. Access follows the deal for both partners. Saves use the signed-in partner's usual change stamp.
-- `tour_stop` references a plan and a `property`. Partners pick an existing property or create one with an address and optional name when no existing property matches. A stop's required positive `position` is unique within its plan. The database requires at least one stop per saved plan. Save the date, notes, and full ordered stop list together. Refuse a stale edit without changing the plan or its stops.
+- `tour_stop` references a plan and a `property`. Partners pick an existing property or create one with an address and optional name when no existing property matches. A stop's required positive `position` is unique within its plan. The database requires at least one stop per saved plan. Save the date, notes, and full ordered stop list together. Every save restamps the plan and advances its `revision`, including a change to the stops alone. Lock the plan and compare its revision with the version the partner read. If they differ, refuse the edit before changing the plan or its stops.
 - A nullable, unique `completed_activity_id` on `tour_plan` references a meeting. A nullable `cancelled_at` records when a partner cancelled, and change history records who cancelled. A plan can have at most one of these values. The deal's planned list reads plans with neither value. Only a plan in that list can be edited, completed, or cancelled. Cancelling a plan creates no activity.
-- Completion saves the meeting, its links, and the plan's completion link together. The meeting uses the confirmed local visit date and time. Add one `activity_about` row for the deal and each distinct confirmed visited property, including off-plan visits, plus known parties the visit concerns. The original plan and its stop order stay on record. A retry or a second partner's completion returns the same meeting.
+- Completion saves the meeting, its links, and the plan's completion link together. At commit, the database requires the meeting to be filed to the plan's deal. The meeting uses the confirmed local visit date and time. Add one `activity_about` row for the deal and each distinct confirmed visited property, including off-plan visits, plus known parties the visit concerns. The original plan and its stop order stay on record. A retry or a second partner's completion returns the same meeting.
 - The client stop list preview and copied text read the saved date and stops in order, using the current names and addresses on `property`. Internal notes stay on the plan. The partner sends the copied list from Outlook. The engine stores no separate document or tour share record.
 
 ### Old planner capabilities outside this design
