@@ -4123,7 +4123,7 @@ revoke all on doc_conversation, doc_turn from public, engine_reader;
 grant select, insert on doc_conversation, doc_turn to engine;
 -- FOR UPDATE needs UPDATE on one column. Row security keeps the owner fixed.
 grant update (owner_user_id) on doc_conversation to engine;
-grant update (state, claim_id, claim_until, claim_state, answer) on doc_turn to engine;
+grant update (state, claim_id, claim_until, claim_state, answer, confirmation_key) on doc_turn to engine;
 
 create table doc_link (
 	owner_user_id uuid primary key,

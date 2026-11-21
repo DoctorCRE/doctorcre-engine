@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { docRoutes, recentDocTurns } from "./doc.ts";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
+import { docMcp } from "./doc-mcp.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -49,7 +50,9 @@ type Body<Path> = { error?: string } & (Path extends "/turns"
 	? { conversation_id: string; turn: Turn }
 	: Path extends `/conversations/${string}`
 		? { conversation: Chat; turns: Turn[] }
-		: { conversations: Chat[]; next_before: string | null });
+		: Path extends `/turns/${string}/confirmation`
+			? { result: unknown; replayed?: true }
+			: { conversations: Chat[]; next_before: string | null });
 
 function client(user = "joe") {
 	const api = docRoutes();
@@ -81,10 +84,14 @@ const expire = (id: string) =>
 	db.query("update doc_turn set claim_until = '-infinity' where id = $1", [id]);
 
 const mac = new Hono<{
-	Bindings: { DATABASE_WRITER: { connectionString: string } };
+	Bindings: {
+		DATABASE_WRITER: { connectionString: string };
+		DATABASE?: { connectionString: string };
+	};
 }>()
 	.post("/claim", claimDocLink)
-	.post("/result", completeDocLink);
+	.post("/result", completeDocLink)
+	.post("/mcp", docMcp);
 
 const issue = async (user: string) =>
 	(
@@ -109,7 +116,7 @@ type Claim = {
 	kind: "turn";
 	claim_id: string;
 	conversation_id: string;
-	turn: { id: string; question: string };
+	turn: { id: string; question: string; context: unknown };
 	history: { question: string; answer: typeof refusal }[];
 };
 
@@ -719,5 +726,146 @@ test("the claim-state migration preserves old turns and enforces one queued or w
 			"update doc_turn set claim_state = '{}' where state = 'queued'",
 		),
 		{ code: "23514" },
+	);
+});
+
+test("Doc confirms an exact pending revision with the existing edit and receipt rules", async () => {
+	const id = randomUUID();
+	const activity_id = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into activity (id, kind, happened_at) values ('${activity_id}', 'email', now());
+		insert into email (activity_id, message_id, sender, subject, body)
+			values ('${activity_id}', '${activity_id}@example.test', 'sender@example.test', 'Plan', 'When can you meet?');
+		insert into email_mailbox values ('${activity_id}', '${owner}');
+		insert into activity_about (activity_id, party_id) values ('${activity_id}', '${owner}');
+		set local engine.job = 'mail_capture';
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, evidence, subject, body)
+			values ('${id}', '${activity_id}', '${owner}', 'mail_capture', 'Asked for a date', 'Re: Plan', 'Monday');
+		commit;`);
+	const send = client();
+	const foreign = client("dell");
+	const credential = await issue(owner);
+	const context = { kind: "reply_draft", id, version: 1 };
+	const ask = { ...question, context, idempotency_key: randomUUID() };
+	await foreign("/turns", 404, ask);
+
+	async function propose(args: object, version: number) {
+		const { conversation_id } = await send("/turns", 202, args);
+		const work = await claim(credential);
+		assert.deepEqual(work.turn.context, {
+			...context,
+			activity_id,
+			mailbox_user_id: owner,
+			version,
+		});
+		const source = `reply_draft:${id}`;
+		const read = await mac.request(
+			"/mcp",
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${credential}`,
+					"Doc-Claim-Id": work.claim_id,
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "tools/call",
+					params: { name: "read", arguments: { source } },
+				}),
+			},
+			{ DATABASE: { connectionString }, DATABASE_WRITER: { connectionString } },
+		);
+		assert.equal(read.status, 200);
+		const { result } = await read.json<{
+			result: { content: [{ text: string }] };
+		}>();
+		const facts = JSON.parse(result.content[0].text);
+		assert.equal(facts.email.body, "When can you meet?");
+		assert.equal(facts.draft.body, version === 1 ? "Monday" : "Wednesday");
+		const outcome = await complete(credential, {
+			kind: "answered",
+			claim_id: work.claim_id,
+			answer: {
+				kind: "answer",
+				text: "Wednesday works.",
+				sources: [source],
+				proposal: { kind: "reply_revision", source, body: "Wednesday" },
+			},
+		});
+		assert.equal(outcome.status, 204);
+		return {
+			conversation_id,
+			path: `/turns/${work.turn.id}/confirmation` as const,
+		};
+	}
+
+	const first = await propose(ask, 1);
+	const stale = await propose({ ...ask, idempotency_key: randomUUID() }, 1);
+	const edits = {
+		idempotency_key: randomUUID(),
+		edits: { subject: "Re: Updated plan" },
+	};
+	await foreign(first.path, 404, edits);
+	const { result } = await send(first.path, 200, edits);
+	assert.deepEqual(result, {
+		kind: "reply_revision",
+		id,
+		version: 2,
+		href: `/inbox/card/reply_draft%3A${id}`,
+	});
+	assert.deepEqual(await send(first.path, 200, edits), {
+		result,
+		replayed: true,
+	});
+	assert.equal(
+		(await send(stale.path, 409, { ...edits, idempotency_key: randomUUID() }))
+			.error,
+		"version_conflict",
+	);
+
+	const draft = await db.query(
+		`select subject, body, revision, status, evidence, to_address
+		from reply_draft where id = $1`,
+		[id],
+	);
+	assert.deepEqual(draft.rows, [
+		{
+			subject: "Re: Updated plan",
+			body: "Wednesday",
+			revision: 2,
+			status: "pending",
+			evidence: "Asked for a date",
+			to_address: null,
+		},
+	]);
+	assert.equal(
+		(await db.query("select from reply_draft where status = 'approved'"))
+			.rowCount,
+		0,
+	);
+
+	const current = await propose(
+		{
+			...question,
+			conversation_id: first.conversation_id,
+			idempotency_key: randomUUID(),
+		},
+		2,
+	);
+	await db.query(`begin; set local engine.job = 'mail_capture';
+		update reply_draft set status = 'dismissed', dismiss_reason = 'Replaced' where id = '${id}';
+		commit;`);
+	assert.equal(
+		(await send(current.path, 409, { ...edits, idempotency_key: randomUUID() }))
+			.error,
+		"draft_changed",
+	);
+	assert.equal(
+		(await send("/turns", 409, { ...ask, idempotency_key: randomUUID() }))
+			.error,
+		"draft_changed",
 	);
 });
