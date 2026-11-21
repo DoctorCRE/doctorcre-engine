@@ -19,6 +19,9 @@ export const draftContext = draftReference.extend({
 	activity_id: uuid,
 	mailbox_user_id: uuid,
 });
+type DraftTarget =
+	| { id: string; version: number | undefined }
+	| z.infer<typeof draftContext>;
 const draftText = z
 	.string()
 	.refine((value) => isStoredText(value) && value.isWellFormed());
@@ -47,7 +50,7 @@ type Draft = {
 };
 export async function readDocDraft(
 	tx: Transaction<DB>,
-	id: string,
+	target: DraftTarget,
 	owner: string | Expression<string>,
 	lock = false,
 ) {
@@ -58,9 +61,29 @@ export async function readDocDraft(
 			jsonb_build_object('subject', e.subject, 'body', left(e.body, 2000), 'sender_name', e.sender_name) as email
 		from reply_draft d join email_mailbox m on (m.activity_id, m.user_id) = (d.email_activity_id, d.owner_user_id)
 		join email e on e.activity_id = m.activity_id
-		where d.id = ${id} and m.user_id = ${owner}
+		where d.id = ${target.id} and m.user_id = ${owner}
 		${lock ? sql`for update of d` : sql``}
 	`.execute(tx);
+	if (
+		"activity_id" in target &&
+		(draft?.activity_id !== target.activity_id ||
+			draft.mailbox_user_id !== target.mailbox_user_id)
+	)
+		return undefined;
+	return draft;
+}
+
+export async function requirePendingDocDraft(
+	tx: Transaction<DB>,
+	target: DraftTarget,
+) {
+	const draft = await readDocDraft(tx, target, ACTING_USER, true);
+	if (!draft) throw new SaveRefusal(new Refusal(404, "not_found"));
+	const current = { version: draft.revision };
+	if (draft.status !== "pending")
+		throw new SaveRefusal(new Refusal(409, "draft_changed", current));
+	if (target.version !== undefined && target.version !== draft.revision)
+		throw new SaveRefusal(new Refusal(409, "version_conflict", current));
 	return draft;
 }
 
@@ -111,13 +134,9 @@ export function confirmDocRevision(c: Context<NextSaveEnv>) {
 				proposal.target.version !== context.version
 			)
 				return fail(409, "no_proposal");
-			const { id, activity_id, mailbox_user_id, version } = context;
-			const draft = await readDocDraft(tx, id, ACTING_USER, true);
-			if (
-				draft?.activity_id !== activity_id ||
-				draft.mailbox_user_id !== mailbox_user_id
-			)
-				return fail(404, "not_found");
+			const { id, version } = context;
+			const draft = await readDocDraft(tx, context, ACTING_USER, true);
+			if (!draft) return fail(404, "not_found");
 			const saved = await changePendingDraft(tx, draft, {
 				version,
 				subject: edits.subject ?? proposal.subject ?? draft.subject,

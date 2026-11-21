@@ -6,7 +6,7 @@ import {
 	confirmDocRevision,
 	draftContext,
 	draftReference,
-	readDocDraft,
+	requirePendingDocDraft,
 } from "./doc-draft.ts";
 import { docLinkConnected } from "./doc-link.ts";
 import { failureKind } from "./failure.ts";
@@ -221,6 +221,8 @@ async function reserve(tx: DocTransaction, { key, args }: Ask) {
 		if (!turn) return reject(404, "not_found");
 		if (turn.state !== "failed") return { conversation_id, turn };
 		if (latest?.id !== turn.id) reject(409, "turn_superseded");
+		const bound = draftContext.safeParse(turn.context).data;
+		if (bound) await requirePendingDocDraft(tx, bound);
 		const queued = await sql<Turn>`update doc_turn as t set state = 'queued'
 			where id = ${turn.id} and owner_user_id = ${ACTING_USER}
 			returning ${turnFields}`.execute(tx);
@@ -240,20 +242,17 @@ async function reserve(tx: DocTransaction, { key, args }: Ask) {
 			(!previous || (args.context && requested?.id !== previous.id))
 		)
 			reject(400, "invalid_field_value", ["context"]);
-		const draft = await readDocDraft(tx, ref.id, ACTING_USER);
-		if (!draft) return reject(404, "not_found");
-		const current = { version: draft.revision };
-		if (draft.status !== "pending")
-			throw new SaveRefusal(new Refusal(409, "draft_changed", current));
-		if (requested && requested.version !== draft.revision)
-			throw new SaveRefusal(new Refusal(409, "version_conflict", current));
-		const { id, activity_id, mailbox_user_id } = draft;
+		const { id, activity_id, mailbox_user_id, revision } =
+			await requirePendingDocDraft(tx, {
+				id: ref.id,
+				version: requested?.version,
+			});
 		const bound = {
 			kind: ref.kind,
 			id,
 			activity_id,
 			mailbox_user_id,
-			...current,
+			version: revision,
 		};
 		context = bound;
 	}

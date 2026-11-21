@@ -804,6 +804,19 @@ test("Doc confirms an exact pending revision with the existing edit and receipt 
 
 	const first = await propose(ask, 1);
 	const stale = await propose({ ...ask, idempotency_key: randomUUID() }, 1);
+	const failedAsk = {
+		...question,
+		conversation_id: first.conversation_id,
+		idempotency_key: randomUUID(),
+	};
+	const failed = await send("/turns", 202, failedAsk);
+	const work = await claim(credential);
+	assert.equal(work.turn.id, failed.turn.id);
+	assert.equal(
+		(await complete(credential, { kind: "failed", claim_id: work.claim_id }))
+			.status,
+		204,
+	);
 	const edits = {
 		idempotency_key: randomUUID(),
 		edits: { subject: "Re: Updated plan" },
@@ -820,6 +833,12 @@ test("Doc confirms an exact pending revision with the existing edit and receipt 
 		result,
 		replayed: true,
 	});
+	assert.partialDeepStrictEqual(await send("/turns", 409, failedAsk), {
+		error: "version_conflict",
+		version: 2,
+	});
+	assert.equal((await poll(credential)).status, 204);
+	assert.equal((await send("/turns", 200, ask)).turn.state, "answered");
 	assert.equal(
 		(await send(stale.path, 409, { ...edits, idempotency_key: randomUUID() }))
 			.error,

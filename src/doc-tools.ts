@@ -215,13 +215,8 @@ export function registerDocTools(
 		({ source }) =>
 			read(async (db) => {
 				if (draft && source === `reply_draft:${draft.id}`) {
-					const row = await readDocDraft(db, draft.id, owner);
-					if (
-						row?.status !== "pending" ||
-						row.revision !== draft.version ||
-						row.activity_id !== draft.activity_id ||
-						row.mailbox_user_id !== draft.mailbox_user_id
-					) {
+					const row = await readDocDraft(db, draft, owner);
+					if (row?.status !== "pending" || row.revision !== draft.version) {
 						delete state.sources[source];
 						return null;
 					}
