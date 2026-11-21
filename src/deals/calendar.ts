@@ -4,8 +4,8 @@ import {
 	datedPartnerSteps,
 	type HomeStepTarget,
 	homeDayAt,
-	homeStepCopy,
 	homeStepShown,
+	stepCopy,
 	stepRecordUrl,
 	stepTargetFields,
 } from "../home-steps.ts";
@@ -101,7 +101,7 @@ type CalendarStep = Parameters<typeof stepRecordUrl>[0] &
 	HomeStepTarget & {
 		what: string;
 		context_label: string;
-		call_contact: string | null;
+		item_title: string | null;
 		owner: string;
 		due_on: string;
 		display_on: string;
@@ -112,25 +112,19 @@ async function readCalendarSteps(db: Transaction<DB>, now: string) {
 	const at = sql`${now}::timestamptz`;
 	const today = homeDayAt(at);
 	const { rows } = await sql<CalendarStep>`
-		select s.id, s.what, u.slug as owner, s.deal_id, s.party_id, s.property_id,
-			${stepTargetFields(db, today)}, contact.name as call_contact, s.due_on::text as due_on,
+		select s.id, s.what, s.item_title, u.slug as owner, s.deal_id, s.party_id, s.property_id,
+			${stepTargetFields(db, today)}, s.due_on::text as due_on,
 			greatest(s.due_on, ${today})::text as display_on,
 			greatest(${today} - s.due_on, 0) as days_late
 		${datedPartnerSteps(at)}
 		order by s.due_on, s.id
 	`.execute(db);
 	return rows.filter(homeStepShown).map((step) => {
-		const { title, why } = homeStepCopy({
-			...step,
-			title: step.what,
-			status: "open",
-			hold_until: null,
-			call_at: null,
-		});
+		const { title, instruction } = stepCopy(step);
 		return {
 			id: step.id,
 			what: title,
-			why: why || null,
+			why: instruction || null,
 			owner: step.owner,
 			record_label: step.context_label,
 			due_on: step.due_on,

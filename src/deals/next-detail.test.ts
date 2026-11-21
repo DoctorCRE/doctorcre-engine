@@ -614,6 +614,13 @@ test("signed-in detail shows saved items and checklist progress from lease facts
 	assert.equal(response.status, 200);
 	assert.partialDeepStrictEqual(await response.json(), {
 		items: [{ id: id(80), title: "Confirm signage", due_on: "2030-01-16" }],
+		next_actions: [
+			{
+				id: id(80),
+				display_title: "Confirm signage",
+				display_instruction: "Example call about the sign",
+			},
+		],
 		checklist: {
 			schema_version: "deal-checklist.v1",
 			template_state: "current",

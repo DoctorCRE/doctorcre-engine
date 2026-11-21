@@ -278,8 +278,8 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 		assert.deepEqual(body.next_steps, [
 			{
 				id: id(31),
-				what: "Send revised offer",
-				why: "Before sending, check the suite number.",
+				what: "Send revised offer. Before sending, check the suite number.",
+				why: "Send revised offer. Before sending, check the suite number.",
 				owner: "joe",
 				record_label: "Example lease",
 				due_on: "2001-01-12",
@@ -289,8 +289,8 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			},
 			{
 				id: id(39),
-				what: "call Example Owner about the renewal",
-				why: "(555) 010-0199.",
+				what: "call Example Owner at (555) 010-0199 about the renewal",
+				why: "call Example Owner at (555) 010-0199 about the renewal",
 				owner: "dell",
 				record_label: "Example lease",
 				due_on: "2001-01-13",
@@ -300,8 +300,8 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			},
 			{
 				id: id(49),
-				what: "Check in with Example Contact",
-				why: "90-day vendor cadence.",
+				what: cadence,
+				why: cadence,
 				owner: "joe",
 				record_label: "Example Contact",
 				due_on: "2001-01-17",
@@ -311,8 +311,8 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			},
 			{
 				id: id(40),
-				what: "Ask Example Supply whether the expansion order can ship before the tenant improvements",
-				why: "finish next spring.",
+				what: "Example Supply",
+				why: longWording,
 				owner: "joe",
 				record_label: "Example Supply",
 				due_on: "2001-01-18",
@@ -323,7 +323,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			{
 				id: id(32),
 				what: "Ask Example Clinic about the expansion",
-				why: null,
+				why: "Ask Example Clinic about the expansion",
 				owner: "dell",
 				record_label: "Example Clinic",
 				due_on: "2001-01-20",

@@ -4,8 +4,9 @@ import {
 	meetingsFromSnapshot,
 	UNAVAILABLE,
 } from "../calendar/meetings.ts";
+import { readStoredAgenda } from "../calendar/next-agenda.ts";
 import { scheduling } from "../calendar/scheduling.ts";
-import { attempt, storedSnapshot } from "../calendar/snapshot.ts";
+import { attempt } from "../calendar/snapshot.ts";
 import type { Reader } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import { latestAddress, office, research } from "./people.ts";
@@ -110,8 +111,16 @@ export function pageAfter(cursor: string | undefined, view: View, q: string) {
 }
 
 async function calendarFor(db: Reader, partner: string, now: Date) {
-	const snapshot = await storedSnapshot(db, partner);
-	// The old read answered a missing snapshot as it did an unreadable one.
+	const snapshot = await attempt(db, async () => {
+		// Vendor candidates have already been read with the public-schema grants.
+		await sql`set local role engine_reader`.execute(db);
+		await sql`set local search_path = next, pg_temp`.execute(db);
+		const {
+			rows: [user],
+		} = await sql<{ id: string }>`
+			select id from app_user where slug = ${partner}`.execute(db);
+		return user ? readStoredAgenda(db, user.id) : null;
+	});
 	const section = meetingsFromSnapshot(snapshot, now) ?? UNAVAILABLE;
 	const { items, ...calendar } = section;
 	const planning = scheduling(snapshot, section, now);

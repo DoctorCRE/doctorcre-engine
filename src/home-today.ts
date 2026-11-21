@@ -10,10 +10,9 @@ import {
 	datedPartnerSteps,
 	type HomeStepTarget,
 	homeDayAt,
-	homeStepCopy,
 	homeStepShown,
 	lateLabel,
-	type StepTitle,
+	stepCopy,
 	stepItemId,
 	stepOpenUrl,
 	stepTargetFields,
@@ -28,7 +27,7 @@ type Clock = Record<
 > & { is_partner: boolean | null; partners: { slug: string; name: string }[] };
 type Match = Record<"email" | "party_name", string> &
 	Record<"deal_id" | "deal_name" | "client_name", string | null>;
-type StepRow = Omit<StepTitle, "status" | "hold_until" | "due_on" | "call_at"> &
+type StepRow = Parameters<typeof stepCopy>[0] &
 	HomeStepTarget &
 	Record<"id" | "due_on" | "owner", string> &
 	Record<"party_id" | "call_id", string | null> & {
@@ -165,10 +164,10 @@ async function readTodayReminders(
 		.where(isOpenBoardDeal);
 	const requestDay = sql<string>`${today}::date`;
 	const { rows } = await sql<StepRow>`
-		select s.id, s.what as title, s.property_id, ${stepTargetFields(db, requestDay)}, s.due_on::text as due_on,
+		select s.id, s.what, s.item_title, s.property_id, ${stepTargetFields(db, requestDay)}, s.due_on::text as due_on,
 			case when s.due_on < ${requestDay} then (${requestDay} - s.due_on)::int end as days_late,
 			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id,
-			s.call_activity_id as call_id, contact.name as call_contact,
+			s.call_activity_id as call_id,
 			s.deal_id is not null and not exists (
 				select from (${openDeals}) as open_deal where open_deal.id = s.deal_id
 			) as deal_ended
@@ -182,14 +181,13 @@ async function readTodayReminders(
 		? await readCompletionReviews(db, viewerSteps)
 		: null;
 	const list = shown.map((r) => {
-		const { title, why } =
-			reviews?.get(r.id) ??
-			homeStepCopy({ ...r, status: "open", hold_until: null, call_at: null });
+		const review = reviews?.get(r.id);
+		const { title, instruction } = stepCopy(r);
 		return {
 			id: r.id,
 			kind: r.call_id ? ("call_follow_up" as const) : ("step" as const),
-			title,
-			why: why || null,
+			title: review?.title ?? title,
+			why: (review?.why ?? instruction) || null,
 			context_label: r.context_label,
 			due_on: r.due_on,
 			days_late: r.days_late,

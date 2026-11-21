@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import pg from "pg";
 import { withSnapshot } from "../../scripts/test-database.ts";
-import { readSnapshot } from "../reader.ts";
+import { doorTest } from "../test-door.ts";
 import worker from "../worker.ts";
-import { readVendorMeetings } from "./meetings.ts";
 
 const meetings = (search: string, connectionString: string, slug = "joe") =>
 	worker.request(
@@ -35,6 +34,7 @@ async function run(url: string, statements: string) {
 const at = (hours: number) =>
 	new Date(Date.now() + hours * 3_600_000).toISOString();
 const ACTOR = "00000000-0000-4000-8000-000000000001";
+const OTHER = "00000000-0000-4000-8000-000000000002";
 const ORG = "00000000-0000-4000-8000-000000000101";
 const PAT = "00000000-0000-4000-8000-000000000102";
 const SAM = "00000000-0000-4000-8000-000000000103";
@@ -49,7 +49,8 @@ const finding = (status: string) =>
 	});
 const SEED = `set session_replication_role = replica;
 	insert into actor (id, slug, kind, display_name) values
-		('${ACTOR}', 'joe', 'human', 'Example'), (gen_random_uuid(), 'claude', 'human', 'Example');
+		('${ACTOR}', 'joe', 'human', 'Example'), ('${OTHER}', 'dell', 'human', 'Example'),
+		(gen_random_uuid(), 'claude', 'human', 'Example');
 	insert into vendor_category (slug, label, sort) values ('lender', 'Example Lender', 1);
 	insert into vendor_disposition (slug, label, workable, sort) values ('active', 'Active', true, 1);
 	insert into party (id, kind, name, org_id, email, created_by, updated_by) values
@@ -61,19 +62,21 @@ const SEED = `set session_replication_role = replica;
 	insert into record_flag (subject_type, subject_id, kind, value, source, observed_at, created_by) values
 		('party', '${PAT}', 'address', '${finding("source_backed")}', 'https://example.test/a', now() - interval '1 day', '${ACTOR}'),
 		('party', '${SAM}', 'address', '${finding("inferred")}', 'https://example.test/b', now() - interval '1 day', '${ACTOR}');`;
-const SNAPSHOT = JSON.stringify({
-	schema: "carr-calendar-agenda.v1",
-	observed_at: at(-1),
-	items: ["pat@example.test", "nobody@example.test"].map((email, i) => ({
-		start: at(2 + i),
-		end: at(3 + i),
-		title: `Example ${i}`,
-		attendees: [{ email }],
-	})),
-});
-const withMeeting = `insert into board_snapshot (organization_tenant_id, sponsoring_human_slug,
-	board_id, snapshot_json, updated_by_actor_id)
-	values ('carr-internal', 'partner_one', 'calendar-agenda', '${SNAPSHOT}', '${ACTOR}')`;
+function agenda(items: object[]) {
+	return {
+		schema: "carr-calendar-agenda.v1",
+		observed_at: at(-1),
+		items: items.map((item, i) => ({
+			start: at(2 + i),
+			end: at(3 + i),
+			...item,
+		})),
+		follow_up_reviews: [],
+		warnings: [],
+	};
+}
+
+const pat = { email: "pat@example.test" };
 
 type Answer = {
 	total: number;
@@ -84,7 +87,11 @@ type Answer = {
 		missing: string[];
 		possible_meetings: { title: string }[];
 	}[];
-	calendar: { state: string; scheduling: { state: string; reason?: string } };
+	calendar: {
+		state: string;
+		reason?: string;
+		scheduling: { state: string; reason?: string };
+	};
 };
 const ready = async (response: Response) => {
 	assert.equal(response.status, 200);
@@ -97,7 +104,7 @@ const people = (answer: Answer) =>
 		item.possible_meetings.map((m) => m.title),
 	]);
 
-test("suggested people come with the partner's meetings their email attends", () =>
+test("vendor research still lists candidates when the calendar cannot be read", () =>
 	withSnapshot(async (url) => {
 		await run(url, SEED);
 		const unplanned = await ready(
@@ -106,28 +113,67 @@ test("suggested people come with the partner's meetings their email attends", ()
 		assert.deepEqual(people(unplanned), [
 			["Sam Example", ["verified_office"], []],
 		]);
+		assert.equal(unplanned.calendar.state, "unavailable");
+		assert.equal(unplanned.calendar.reason, "source_unavailable");
 		assert.equal(unplanned.calendar.scheduling.reason, "source_unavailable");
-
-		await run(url, withMeeting);
-		const zero = "00000000-0000-0000-0000-000000000000";
-		const suggested = await readSnapshot(url, (db) =>
-			readVendorMeetings(db, "partner_one", {
-				view: "suggested",
-				q: "",
-				limit: 25,
-				after: [zero, zero],
-			}),
-		);
-		assert.deepEqual(
-			suggested?.items.map((item) => [
-				item.contact?.id,
-				item.possible_meetings.map((m) => m.title),
-			]),
-			[[PAT, ["Example 0"]]],
-		);
-		assert.equal(suggested?.calendar.state, "ready");
-		assert.equal(suggested?.calendar.scheduling.state, "ready");
 	}));
+
+test("vendor meetings match exact attendee and organizer emails in the signed-in partner's Outlook agenda", async (t) => {
+	const { db, readerUrl, setup, cleanup, request, save } = doorTest();
+	await setup();
+	t.after(cleanup);
+	const joe = "00000000-0000-4000-8000-000000000011";
+	const dell = "00000000-0000-4000-8000-000000000012";
+	const reader = new URL(readerUrl).username;
+	await db.query(`grant select on public.actor, public.party, public.vendor, public.lead,
+		public.vendor_category, public.vendor_disposition, public.v_vendor_assignment_context,
+		public.v_record_flag_subject to ${reader};
+		begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values
+			('${joe}', 'person', 'Example Partner One'), ('${dell}', 'person', 'Example Partner Two');
+		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
+		set local search_path = public;
+		${SEED}
+		set session_replication_role = origin;
+		commit;`);
+	const own = agenda([
+		{ title: "Matched attendee", attendees: [pat] },
+		{ title: "Matched organizer", organizer: { email: "PAT@EXAMPLE.TEST" } },
+		{
+			title: "Different address",
+			attendees: [{ email: "not-pat@example.test" }],
+		},
+	]);
+	const other = agenda([{ title: "Other calendar", attendees: [pat] }]);
+	const publish = async (slug: string, snapshot: ReturnType<typeof agenda>) => {
+		const [status] = await save(
+			{ job: "mail_capture", for_user: slug },
+			"calendar/agenda",
+			snapshot,
+			"PUT",
+		);
+		assert.equal(status, 200);
+	};
+	const suggested = async (user: string) =>
+		ready(await request({ user }, "vendor-meetings", { method: "GET" }));
+	await publish("dell", other);
+	const missing = await suggested("joe");
+	assert.deepEqual(people(missing), [["Pat Example", [], []]]);
+	assert.equal(missing.calendar.state, "unavailable");
+	assert.equal(missing.calendar.reason, "source_unavailable");
+	assert.equal(missing.calendar.scheduling.reason, "source_unavailable");
+
+	await publish("joe", own);
+	const page = await suggested("joe");
+	assert.deepEqual(people(page), [
+		["Pat Example", [], ["Matched attendee", "Matched organizer"]],
+	]);
+	assert.equal(page.calendar.state, "ready");
+	assert.equal(page.calendar.scheduling.state, "ready");
+	assert.deepEqual(people(await suggested("dell")), [
+		["Pat Example", [], ["Other calendar"]],
+	]);
+});
 
 test("pages follow their cursor", () =>
 	withSnapshot(async (url) => {
