@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { registerHooks } from "node:module";
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import { UnsecuredJWT } from "jose";
 import pg from "pg";
 import { withPartnerAuth } from "./partner-auth.ts";
@@ -188,8 +188,13 @@ test("partner sessions in PostgreSQL", async (t) => {
 									? "unprovisioned"
 									: code === "ineligible"
 										? "subject-other"
-										: "subject-one",
-							email: "one@example.test",
+										: code === "different-account"
+											? "subject-two"
+											: "subject-one",
+							email:
+								code === "different-account"
+									? "two@example.test"
+									: "one@example.test",
 							email_verified: code !== "unverified",
 							name: "Example One",
 						};
@@ -210,10 +215,15 @@ test("partner sessions in PostgreSQL", async (t) => {
 						});
 					},
 				);
-				async function start(returnTo: string) {
-					const request = new URL(login);
+				async function start(returnTo: string, browser?: Headers) {
+					const request = new URL(
+						browser ? "/auth/reauth" : "/auth/login",
+						appOrigin,
+					);
 					request.searchParams.set("return_to", returnTo);
-					const response = await binding.fetch(new Request(request));
+					const response = await binding.fetch(
+						new Request(request, { headers: new Headers(browser) }),
+					);
 					assert.equal(response.status, 302);
 					assert.equal(response.headers.get("cache-control"), "no-store");
 					const authorize = new URL(response.headers.get("location") ?? "");
@@ -239,16 +249,21 @@ test("partner sessions in PostgreSQL", async (t) => {
 				function complete(
 					{ state, cookie }: Awaited<ReturnType<typeof start>>,
 					code = "verified",
+					browser?: Headers,
 				) {
 					const url = new URL(callback);
 					url.search = new URLSearchParams({
 						state,
-						code,
+						...(code === "cancel" ? { error: "access_denied" } : { code }),
 						return_to: "https://outside.example.test",
 					}).toString();
+					const cookies = [browser?.get("cookie"), cookie].filter(Boolean);
 					return binding.fetch(
 						new Request(url, {
-							headers: { cookie, "Sec-Fetch-Site": "cross-site" },
+							headers: {
+								cookie: cookies.join("; "),
+								"Sec-Fetch-Site": "cross-site",
+							},
 						}),
 					);
 				}
@@ -328,6 +343,122 @@ test("partner sessions in PostgreSQL", async (t) => {
 					[302, 401],
 				);
 				assert.equal(await count(), initialSessions + 5);
+
+				sub.mock.timers.reset();
+				async function staleSession(reauth: TestContext) {
+					reauth.mock.timers.setTime(issuedAt.getTime());
+					const session = await issue(first.id);
+					const browser = sessionHeaders(session.token);
+					reauth.mock.timers.tick(600_000);
+					const stored = await resolve(browser);
+					assert.ok(stored);
+					return { browser, csrfToken: stored.csrfToken };
+				}
+				async function assertFreshness(
+					browser: Headers,
+					reauthRequired: boolean,
+				) {
+					const status = await binding.fetch(
+						new Request(`${appOrigin}/auth/session`, { headers: browser }),
+					);
+					assert.equal(status.status, 200);
+					assert.partialDeepStrictEqual(await status.json(), {
+						reauth_required: reauthRequired,
+					});
+				}
+				await sub.test(
+					"reauth without a session redirects to login with the local return path",
+					async () => {
+						const response = await binding.fetch(
+							new Request(`${appOrigin}/auth/reauth?return_to=%2Fcalendar`),
+						);
+						assert.equal(response.status, 302);
+						assert.equal(
+							response.headers.get("location"),
+							`${login}?return_to=%2Fcalendar`,
+						);
+					},
+				);
+				await sub.test(
+					"reauth refreshes the same session for exactly ten minutes and refuses replay",
+					async (reauth) => {
+						const { browser } = await staleSession(reauth);
+						const original = await resolve(browser);
+						const sessions = await count();
+						await assertFreshness(browser, true);
+						const flow = await start(path, browser);
+						const refreshed = await complete(flow, "verified", browser);
+						assert.equal(refreshed.status, 302);
+						assert.equal(
+							refreshed.headers.get("location"),
+							`${appOrigin}${path}`,
+						);
+						assert.match(
+							cookieFrom(refreshed, "__Host-doctorcre_oauth_state"),
+							/; Max-Age=0/i,
+						);
+						assert.equal(refreshed.headers.getSetCookie().length, 1);
+						assert.equal(await count(), sessions);
+						assert.deepEqual(await resolve(browser), {
+							...original,
+							googleAuthenticatedAt: new Date(),
+						});
+						reauth.mock.timers.tick(599_999);
+						await assertFreshness(browser, false);
+						reauth.mock.timers.tick(1);
+						await assertFreshness(browser, true);
+						assertRefused(await complete(flow, "verified", browser));
+						await assertFreshness(browser, true);
+					},
+				);
+				for (const code of ["different-account", "cancel"]) {
+					await sub.test(
+						`reauth leaves freshness alone on ${code}`,
+						async (reauth) => {
+							const { browser } = await staleSession(reauth);
+							const sessions = await count();
+							assertRefused(
+								await complete(await start(path, browser), code, browser),
+							);
+							await assertFreshness(browser, true);
+							assert.equal(await count(), sessions);
+						},
+					);
+				}
+				await sub.test(
+					"reauth requires the original browser session",
+					async (reauth) => {
+						const { browser } = await staleSession(reauth);
+						const { browser: other } = await staleSession(reauth);
+						assertRefused(
+							await complete(await start(path, browser), "verified", other),
+						);
+						await assertFreshness(browser, true);
+						await assertFreshness(other, true);
+					},
+				);
+				await sub.test(
+					"sign-out during reauth leaves no session for a late callback",
+					async (reauth) => {
+						const { browser, csrfToken } = await staleSession(reauth);
+						const flow = await start(path, browser);
+						const sessions = await count();
+						const headers = new Headers(browser);
+						headers.set("Origin", appOrigin);
+						headers.set("Sec-Fetch-Site", "same-origin");
+						headers.set("x-carr-csrf", csrfToken);
+						const signedOut = await binding.fetch(
+							new Request(`${appOrigin}/auth/signout`, {
+								method: "POST",
+								headers,
+							}),
+						);
+						assert.equal(signedOut.status, 303);
+						assertRefused(await complete(flow, "verified", browser));
+						assert.equal(await resolve(browser), null);
+						assert.equal(await count(), sessions - 1);
+					},
+				);
 			},
 		);
 		await t.test("resolves both actors and checks origin", async () => {
@@ -507,6 +638,10 @@ test("partner sessions in PostgreSQL", async (t) => {
 						}),
 					}),
 				);
+			const signOut = (headers: Headers) =>
+				binding.fetch(
+					new Request(`${appOrigin}/auth/signout`, { method: "POST", headers }),
+				);
 
 			for (const partner of [first, second]) {
 				await routes.test(`reads and saves as ${partner.display}`, async () => {
@@ -598,6 +733,51 @@ test("partner sessions in PostgreSQL", async (t) => {
 					);
 					for (const path of paths)
 						check(await broken.fetch(request(path, headers)), 503);
+				},
+			);
+
+			await routes.test(
+				"sign-out revokes only the current session",
+				async () => {
+					const { headers, csrfToken } = await browserSession();
+					const separate = await browserSession();
+					const proved = proofs(headers, csrfToken);
+					for (const name of ["Origin", "Sec-Fetch-Site", "x-carr-csrf"]) {
+						const incomplete = new Headers(proved);
+						incomplete.delete(name);
+						check(await signOut(incomplete), 403);
+						check(await read(statusPath, headers), 200);
+					}
+					const response = await signOut(proved);
+					check(response, 303);
+					assert.equal(response.headers.get("Location"), "/");
+					assert.deepEqual(response.headers.getSetCookie(), [
+						"__Host-doctorcre_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax",
+					]);
+					check(await read(statusPath, headers), 401);
+					check(await read(whoamiPath, headers), 401);
+					check(await read(statusPath, separate.headers), 200);
+				},
+			);
+
+			await routes.test(
+				"sign-out returns 503 if the session cannot be revoked",
+				async () => {
+					const { headers, csrfToken } = await browserSession();
+					await db.query(
+						"revoke delete on doctorcre_auth.session from engine_partner_auth",
+					);
+					try {
+						const response = await signOut(proofs(headers, csrfToken));
+						check(response, 503);
+						assert.deepEqual(response.headers.getSetCookie(), []);
+						assert.equal(response.headers.has("Location"), false);
+						check(await read(statusPath, headers), 200);
+					} finally {
+						await db.query(
+							"grant delete on doctorcre_auth.session to engine_partner_auth",
+						);
+					}
 				},
 			);
 

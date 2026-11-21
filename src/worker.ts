@@ -52,6 +52,7 @@ import { partnerGoogle } from "./partner-google.ts";
 import {
 	type PartnerSessionEnv,
 	partnerSessionStatus,
+	partnerSignOut,
 	requirePartnerSession,
 } from "./partner-session.ts";
 import { partySearch } from "./party-search.ts";
@@ -166,6 +167,7 @@ app.use("/api/engine/*", requireSession);
 app.route("/", partnerApi);
 partnerApp.route("/", partnerGoogle);
 partnerApp.get("/auth/session", requirePartnerSession, partnerSessionStatus);
+partnerApp.post("/auth/signout", requirePartnerSession, partnerSignOut);
 partnerApp.use("/api/engine/*", requirePartnerSession);
 partnerApp.route("/", partnerApi);
 

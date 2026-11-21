@@ -34,7 +34,7 @@ function refusal(status: 401 | 404 | 503, headers: Headers) {
 async function googleSignIn(
 	request: Request,
 	env: Bindings,
-	step: "start" | "callback",
+	step: "login" | "reauth" | "callback",
 ) {
 	const {
 		PARTNER_APP_ORIGIN: appOrigin,
@@ -68,16 +68,27 @@ async function googleSignIn(
 				secret,
 				google: { clientId, clientSecret },
 			},
-			async ({ auth }) => {
-				if (step === "start") {
-					const result = await auth.api.signInSocial({
-						body: {
-							provider: "google",
-							callbackURL: returnURL(url, appOrigin),
-						},
-						headers: new Headers({ origin: appOrigin }),
-						returnHeaders: true,
-					});
+			async ({ resolveSession, startGoogle, completeGoogle }) => {
+				if (step !== "callback") {
+					const target = returnURL(url, appOrigin);
+					let sessionId: string | undefined;
+					if (step === "reauth") {
+						const session = await resolveSession({
+							origin: url.origin,
+							headers: request.headers,
+						});
+						if (!session) {
+							const login = new URL("/auth/login", appOrigin);
+							login.searchParams.set(
+								"return_to",
+								target.slice(appOrigin.length),
+							);
+							headers.set("Location", login.href);
+							return new Response(null, { status: 302, headers });
+						}
+						sessionId = session.id;
+					}
+					const result = await startGoogle(target, sessionId);
 					for (const cookie of result.headers.getSetCookie())
 						headers.append("Set-Cookie", cookie);
 					if (!result.response.url) return refusal(503, headers);
@@ -85,9 +96,13 @@ async function googleSignIn(
 					return new Response(null, { status: 302, headers });
 				}
 
-				const response = await auth.handler(request);
+				const { response, reauthReturn } = await completeGoogle(request);
 				const cookies = response.headers.getSetCookie();
 				for (const cookie of cookies) headers.append("Set-Cookie", cookie);
+				if (reauthReturn) {
+					headers.set("Location", reauthReturn);
+					return new Response(null, { status: 302, headers });
+				}
 				const location = response.headers.get("Location");
 				if (response.status >= 500) return refusal(503, headers);
 				if (
@@ -112,7 +127,8 @@ async function googleSignIn(
 }
 
 export const partnerGoogle = new Hono<{ Bindings: Bindings }>()
-	.get("/auth/login", (c) => googleSignIn(c.req.raw, c.env, "start"))
+	.get("/auth/login", (c) => googleSignIn(c.req.raw, c.env, "login"))
+	.get("/auth/reauth", (c) => googleSignIn(c.req.raw, c.env, "reauth"))
 	.get("/auth/callback/google", (c) =>
 		googleSignIn(c.req.raw, c.env, "callback"),
 	);
