@@ -275,9 +275,26 @@ export async function readNextLeadDetail(
 	const board = await readNextLeadBoard(db);
 	if ("error" in board) return board;
 	const lead = board.leads.find((l) => l.party_id === opened?.id);
+	if (!opened || !lead) return { ...board, detail: null };
+	const detail = openLead({ ...lead, id: leadId }, opened.fields);
 	return {
 		...board,
-		detail:
-			opened && lead ? openLead({ ...lead, id: leadId }, opened.fields) : null,
+		detail: {
+			...detail,
+			plans: (detail.notes ?? "")
+				.replace(
+					/^[ \t]*(?:\[(?:web sweep \d{1,2}\/\d{1,2} · finder conf (?:LOW|MEDIUM|HIGH) · verify: UNVERIFIED(?: \([^)\r\n]*\))?|finder conf (?:LOW|MEDIUM|HIGH))\](?=[ \t]|\r?$)[ \t]*)+/gim,
+					"",
+				)
+				.trim(),
+			handling_advice: null,
+			research: {
+				...detail.research,
+				next_step:
+					detail.research.state === "needs_research"
+						? "Check the practice website, professional registry and public filings. Save what you find."
+						: detail.research.next_step,
+			},
+		},
 	};
 }

@@ -7,7 +7,7 @@
 
 - [ ] The header counts leads matching all current filters, including cards beyond the first five in a stage. The first load says “Loading leads…” until the count is known. An empty filter result offers Reset filters.
 - [ ] Search, Owner, Market, Specialty and Stage narrow the same board. Owner includes Unclaimed. Stage includes Opportunity and Archived. Contact evidence appears when there are both reachable and research leads.
-- [ ] Quiet leads filters the board to leads the follow-up read says are due. It combines with the other filters and uses the same count.
+- [ ] Quiet leads filters the board to leads the follow-up read says are due. It combines with the other filters and shows “Showing N quiet leads” using the same count.
 - [ ] Stage names and counts sit above a thin divider. Spacing separates the columns. On a computer, stages share one row that can scroll sideways. A selected stage uses the board's width. Columns stack on a phone, with controls at least 44 pixels tall and wide.
 - [ ] Each card shows the lead's name and owner, or “Unclaimed.” An overdue quiet follow-up adds one “Follow-up late” badge. A newly created email lead shows “New from email” until it is acknowledged. Change stage by using the drawer or moving the card and confirming the change.
 - [ ] Claim appears on every unclaimed lead outside Archived and gives it to the partner who clicks. Claimed leads and archived leads have no Claim action.
@@ -16,11 +16,12 @@
 
 ## Drawer
 
-- [ ] The lead's name opens its drawer with stage, contact details, plans, timing, research, correspondence and stage history. Older correspondence and stage changes load on request.
-- [ ] A quiet lead's drawer shows its last contact date or when it was added if no contact was recorded. It also shows when follow-up is due.
-- [ ] Claim follows the board's rule. Link appears for suggested clients and uses the selected match. Once linked, the lead leaves the board.
+- [ ] The lead's name opens its drawer with owner, stage, contact details, plans, timing, research, correspondence and stage history. Older correspondence and stage changes load on request.
+- [ ] Plans and research use plain words. Handling advice appears when it applies to this lead. Phones use a readable format, estimated lease dates are labeled, and dates outside this year include the year.
+- [ ] A quiet lead's drawer shows its last contact date or says no contact was recorded and shows when it was added. It also shows when follow-up is due.
+- [ ] Claim follows the board's rule. “Link to client” names the suggested client and uses the selected match. Once linked, the lead leaves the board.
 - [ ] If a Claim or Link save is unconfirmed, Check outcome is available in the drawer and checks the same request.
-- [ ] Stage changes open a review before saving. Archiving requires a reason. An automatic move offers Undo when it can be reversed.
+- [ ] Stage changes open a review before saving. Archiving requires a reason. The drawer says when the lead was archived because it became a deal. An automatic move offers Undo when it can be reversed.
 
 ## Leads from email
 

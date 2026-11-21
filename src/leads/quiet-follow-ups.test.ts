@@ -129,6 +129,30 @@ const daysSince = async (tx: Reader, date: string) =>
 		}>`select carr_business_date() - ${date}::date as n`.execute(tx)
 	).rows[0]?.n;
 
+test("recorded contact is shown independently of a lead's added-day cadence anchor", () =>
+	withRollback(async (tx) => {
+		await seed(tx);
+		await lead(tx, 10, { last_touch: "2020-01-01" });
+		await lead(tx, 11, { last_touch: "2020-01-01" });
+		await lead(tx, 12, { last_touch: "2020-01-01" });
+		await touch(tx, "lead_id", 10, "2019-12-31 19:00:00+00");
+		await touch(tx, "lead_id", 11, "2020-01-01 19:00:00+00");
+		const { proposals } = await read(tx);
+		assert.deepEqual(
+			proposals.map(({ basis, anchor_on, last_contact_on, due_on }) => [
+				basis,
+				anchor_on,
+				last_contact_on,
+				due_on,
+			]),
+			[
+				["created_at", "2020-01-01", "2019-12-31", "2020-02-15"],
+				["last_contact", "2020-01-01", "2020-01-01", "2020-02-15"],
+				["created_at", "2020-01-01", null, "2020-02-15"],
+			],
+		);
+	}));
+
 test("an answer has the old keys, key order, nulls and formats", () =>
 	withRollback(async (tx) => {
 		await seed(tx);
@@ -152,6 +176,7 @@ test("an answer has the old keys, key order, nulls and formats", () =>
 					owner_id: null,
 					anchor_on: "2020-01-01",
 					basis: "created_at",
+					last_contact_on: null,
 					next_action_date: null,
 					client_id: null,
 					interval_days: 90,
@@ -168,6 +193,7 @@ test("an answer has the old keys, key order, nulls and formats", () =>
 					owner_id: uuid(1),
 					anchor_on: "2026-01-02",
 					basis: "last_contact",
+					last_contact_on: "2026-01-02",
 					next_action_date: null,
 					client_id: null,
 					interval_days: 45,

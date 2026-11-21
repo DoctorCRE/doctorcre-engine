@@ -7,6 +7,9 @@ import { doorTest } from "../test-door.ts";
 const { db, setup, cleanup, request, readerUrl } = doorTest();
 const [legacyId, aliasId] = [randomUUID(), randomUUID()].sort();
 const registryRef = "L-EXAMPLE";
+const leadNotes =
+	"[Web sweep 7/25 · finder conf LOW · verify: UNVERIFIED (present anyway, flag)] Planning a dental relocation.\n\n[Finder conf LOW] Needs two treatment rooms.\n[Verify: confirm the lease permits dental use]\n[Web sweep checklist](https://example.test/checklist)";
+const note = randomUUID();
 const [partner, copied, fresh, converted, oldOwner, mail, call, meeting, move] =
 	Array.from({ length: 9 }, () => randomUUID());
 
@@ -61,13 +64,15 @@ before(async () => {
 			('${copied}', '+12025550101', null, 'mobile', false);
 		insert into activity (id, kind, happened_at, summary, reached) values
 			('${call}', 'call', now() - interval '1 day', 'New call', true),
-			('${meeting}', 'meeting', now() - interval '1 hour', 'New meeting', null);
+			('${meeting}', 'meeting', now() - interval '1 hour', 'New meeting', null),
+			('${note}', 'note', now(), '${leadNotes}', null);
 		set local engine.job = 'mail_capture';
 		insert into activity (id, kind, happened_at, reached)
 			values ('${mail}', 'email', now() - interval '2 hours', true);
 		set local engine.job = '';
 		insert into activity_about (activity_id, party_id) values
-			('${mail}', '${copied}'), ('${call}', '${copied}'), ('${meeting}', '${copied}');
+			('${mail}', '${copied}'), ('${call}', '${copied}'), ('${meeting}', '${copied}'),
+			('${note}', '${copied}');
 		insert into email (activity_id, message_id, sender, subject, body)
 			values ('${mail}', '<mail@example.test>', 'lead@example.test', 'New email', 'New message');
 		insert into lead_stage_move (id, party_id, from_stage, to_stage, activity_id, evidence_ref, strength, reason)
@@ -180,6 +185,21 @@ test("the drawer and reachability keep the primary phone extension and mobile ro
 	assert.deepEqual(
 		[opened.phone, inputs.phone, inputs.cell],
 		["+12025550100 x123", "+12025550100 x123", "+12025550101"],
+	);
+});
+
+test("the drawer returns readable plans and research without generic handling advice", async () => {
+	const { detail } = await read(`&lead_id=${legacyId}`, "next");
+	const opened = record(detail);
+	assert.equal(opened.notes, leadNotes);
+	assert.equal(
+		opened.plans,
+		"Planning a dental relocation.\n\nNeeds two treatment rooms.\n[Verify: confirm the lease permits dental use]\n[Web sweep checklist](https://example.test/checklist)",
+	);
+	assert.equal(opened.handling_advice, null);
+	assert.equal(
+		record(opened.research).next_step,
+		"Check the practice website, professional registry and public filings. Save what you find.",
 	);
 });
 
