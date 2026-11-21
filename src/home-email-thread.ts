@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type Expression, sql, type Transaction } from "kysely";
 import { isoMillis } from "./answer.ts";
 import type { DB } from "./next-database.d.ts";
@@ -42,11 +43,14 @@ export function decisionPosition(
 
 type Sender = { sender: string; sender_name: string | null };
 
-type ThreadMessage = Sender & {
+type ThreadRow = Sender & {
 	activity_id: string;
 	happened_at: string;
-	body: string;
-};
+	exact_happened_at: string;
+} & Pick<
+		DB["email"],
+		"message_id" | "subject" | "body" | "authored" | "history"
+	>;
 
 const quotePrefix = /^\s*>[> \t]*/;
 const from = /^\*?From:\*? *[^* ]/i;
@@ -436,15 +440,89 @@ export function cleanEmailThread(messages: (Sender & { body: string })[]) {
 	});
 }
 
+function messageMatchKey(row: ThreadRow) {
+	const normalized = row.body
+		.replace(/\p{White_Space}+/gu, " ")
+		.replace(/^ | $/g, "");
+	if (!normalized) return null;
+	return JSON.stringify([
+		row.sender.toLowerCase(),
+		row.exact_happened_at,
+		row.subject,
+		createHash("sha256").update(normalized).digest("hex"),
+	]);
+}
+
+function displayPriority(row: ThreadRow, sourceId: string) {
+	if (row.activity_id === sourceId) return 0;
+	return row.authored !== null ? 1 : 2;
+}
+
+function groupThreadRows(rows: ThreadRow[], sourceId: string) {
+	const uniqueIdsByMatch = new Map<string, string | null>();
+	const matchedRows = rows.map((row) => {
+		const match = messageMatchKey(row);
+		const { message_id: id } = row;
+		if (match !== null && id !== null) {
+			const known = uniqueIdsByMatch.get(match);
+			uniqueIdsByMatch.set(
+				match,
+				known === undefined || known === id ? id : null,
+			);
+		}
+		return { row, match };
+	});
+	const groups = new Map<
+		string,
+		{
+			display: ThreadRow;
+			order: number;
+			lowestSplit: ThreadRow | null;
+		}
+	>();
+	for (const [order, { row, match }] of matchedRows.entries()) {
+		const id = row.message_id ?? (match ? uniqueIdsByMatch.get(match) : null);
+		const key = id
+			? `id:${id}`
+			: match
+				? `match:${match}`
+				: `activity:${row.activity_id}`;
+		const group = groups.get(key);
+		const split = row.authored !== null ? row : null;
+		if (!group) {
+			groups.set(key, { display: row, order, lowestSplit: split });
+			continue;
+		}
+
+		const priority = displayPriority(row, sourceId);
+		const current = displayPriority(group.display, sourceId);
+		if (
+			priority < current ||
+			(priority === current && row.activity_id < group.display.activity_id)
+		) {
+			group.display = row;
+			group.order = order;
+		}
+		if (
+			split &&
+			(!group.lowestSplit || split.activity_id < group.lowestSplit.activity_id)
+		) {
+			group.lowestSplit = split;
+		}
+	}
+	return [...groups.values()].sort((a, b) => a.order - b.order);
+}
+
 export async function readHomeEmailThread(
 	db: Transaction<DB>,
 	userId: string,
 	sourceId: string | null,
 ) {
 	if (!sourceId) return [];
-	const { rows } = await sql<ThreadMessage>`
+	const { rows } = await sql<ThreadRow>`
 		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name,
-			${isoMillis(sql.ref("a.happened_at"))} as happened_at, e.body
+			${isoMillis(sql.ref("a.happened_at"))} as happened_at,
+			a.happened_at::text as exact_happened_at, e.message_id, e.subject, e.body, e.authored, e.history
 		from email source
 		join email_mailbox source_mailbox on source_mailbox.activity_id = source.activity_id
 			and source_mailbox.user_id = ${userId}::uuid
@@ -454,9 +532,18 @@ export async function readHomeEmailThread(
 		where source.activity_id = ${sourceId}::uuid
 		order by a.happened_at, a.id
 	`.execute(db);
-	const bodies = cleanEmailThread(rows);
-	return rows.map(({ sender: _sender, ...message }, index) => ({
-		...message,
-		...(bodies[index] ?? { body: message.body, folded: null }),
-	}));
+	const groups = groupThreadRows(rows, sourceId);
+	const bodies = cleanEmailThread(groups.map(({ display }) => display));
+	return groups.map(({ display, lowestSplit }, index) => {
+		const { activity_id, sender_name, happened_at } = display;
+		const split = display.authored === null ? lowestSplit : display;
+		const cleaned = bodies[index];
+		return {
+			activity_id,
+			sender_name,
+			happened_at,
+			body: split?.authored ?? cleaned?.body ?? display.body,
+			folded: split ? split.history || null : (cleaned?.folded ?? null),
+		};
+	});
 }
