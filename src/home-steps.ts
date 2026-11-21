@@ -4,6 +4,8 @@ import type { DB } from "./next-database.d.ts";
 
 const stepMetadata =
 	/\b(?:[CL]-\d+|V-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d+|T\s*[-−]\s*\d+\s*(?:days?|weeks?|months?|years?)|loop\s*#\s*\d+)\b/gi;
+const storedDate =
+	/\b(?:(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) )?(\d{4}-\d{2}-\d{2})([T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}))?\b/g;
 
 export function homeDisplayText(text: string | null) {
 	return (text ?? "")
@@ -21,12 +23,55 @@ export function homeDisplayText(text: string | null) {
 		})
 		.replace(stepMetadata, "")
 		.replace(/\s+/g, " ")
+		.replace(storedDate, (original, weekday, date, time) => {
+			const timestamp = time
+				? new Date(date + time)
+				: new Date(`${date}T12:00:00Z`);
+			if (!Number.isFinite(timestamp.getTime())) return original;
+			return time
+				? dateTimeLabel.format(timestamp)
+				: `${weekday ? `${weekday}, ` : ""}${dateLabel.format(timestamp)}`;
+		})
 		.replace(/ +([,.;:!?])/g, "$1")
 		.replace(/^[\s:;,·–—-]+|[\s:;,·–—-]+$/g, "");
 }
 
+export function homeStepText(text: string) {
+	return homeDisplayText(text).replace(/^(?:NONE|HOLD)(?:\s*[—–:-]\s*|$)/i, "");
+}
+
+const titleLength = 90;
+
+function shorten(text: string, width: number) {
+	if (text.length <= width) return text;
+	const start = text.slice(0, width - 1);
+	const word = text[width - 1] === " " ? start : start.replace(/\s+\S*$/, "");
+	return `${(word || start).trimEnd()}…`;
+}
+
+export function homeTitle(event: string, action = "", fallbackEvent = event) {
+	if (!action) return shorten(event, titleLength);
+	const separator = " — ";
+	if (event.length + separator.length + action.length <= titleLength)
+		return event + separator + action;
+	const decision = shorten(
+		action,
+		titleLength - separator.length - Math.min(fallbackEvent.length, 35),
+	);
+	return (
+		shorten(fallbackEvent, titleLength - separator.length - decision.length) +
+		separator +
+		decision
+	);
+}
+
 const dateLabel = new Intl.DateTimeFormat("en-US", {
 	dateStyle: "medium",
+	timeZone: "America/Chicago",
+});
+const dateTimeLabel = new Intl.DateTimeFormat("en-US", {
+	dateStyle: "medium",
+	timeStyle: "short",
 	timeZone: "America/Chicago",
 });
 
@@ -64,25 +109,22 @@ export function stepTargetFields(db: Transaction<DB>) {
 export const stepItemId = (step: { id: string; call_id: string | null }) =>
 	`${step.call_id ? "capture_post_call_action" : "next_action"}:${step.id}`;
 
-export function dealStepUrl(dealId: string, stepId?: string) {
-	return `/deals?deal=${dealId}&focus=next-step${stepId ? `&step=${stepId}` : ""}`;
+export function dealStepUrl(dealId: string, stepId: string) {
+	return `/deals?deal=${dealId}&focus=next-step&step=${stepId}`;
 }
 
-export function stepOpenUrl(
-	step: {
-		id: string;
-		call_id: string | null;
-		deal_id: string | null;
-		party_id: string | null;
-		prospect: boolean;
-		building_deal_id: string | null;
-	},
-	done = false,
-) {
+export function stepOpenUrl(step: {
+	id: string;
+	call_id: string | null;
+	deal_id: string | null;
+	party_id: string | null;
+	prospect: boolean;
+	building_deal_id: string | null;
+}) {
 	return step.call_id
 		? `/calls?session=${step.call_id}`
 		: step.deal_id
-			? dealStepUrl(step.deal_id, done ? undefined : step.id)
+			? dealStepUrl(step.deal_id, step.id)
 			: step.party_id
 				? step.prospect
 					? `/deals?prospect=${step.party_id}&focus=follow-up&step=${step.id}`

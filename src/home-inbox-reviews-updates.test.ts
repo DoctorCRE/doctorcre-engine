@@ -43,13 +43,14 @@ async function cards(caller: typeof alex, dealId: string) {
 
 async function checkCompletionReview(callFollowUp: boolean) {
 	const deal = randomUUID();
+	const dealName = callFollowUp ? "Example Renewal" : "Example Dental";
 	const step = randomUUID();
 	const note = randomUUID();
 	const call = randomUUID();
 	const item_id = `${callFollowUp ? "capture_post_call_action" : "next_action"}:${step}`;
 	await db.query(`begin;
 		select set_config('engine.user_id', '${owner}', true);
-		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental ' || '${deal}', '${owner}');
+		insert into deal (id, name, owner_user_id) values ('${deal}', '${dealName}', '${owner}');
 		insert into activity (id, kind, happened_at, summary) values
 			('${note}', 'note', '2001-02-03T15:00Z', 'The client asked for the survey.'),
 			('${call}', 'call', '2001-02-04T15:00Z', 'The client received the survey.');
@@ -77,10 +78,10 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.deepEqual(duplicates, []);
 	assert.partialDeepStrictEqual(card, {
 		item_id,
-		title: `A call may confirm a step for Example Dental ${deal} — check whether this is done: Send the survey`,
+		title: `A call mentions a step for ${dealName} — check if done: Send the survey`,
 		why: "I received the survey.",
 		primary_action: "Review completion",
-		context_label: `Example Dental ${deal}`,
+		context_label: dealName,
 		due_on: "2001-02-01",
 		open_url: `/deals?deal=${deal}&focus=next-step&step=${step}`,
 		action_id: null,
@@ -140,7 +141,7 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	assert.equal(dismissed?.completion_review, undefined);
 	if (callFollowUp) {
 		assert.partialDeepStrictEqual(dismissed, {
-			title: `Call for Example Dental ${deal} on Feb 4, 2001 left a follow-up — Send the survey`,
+			title: `Call for ${dealName} on Feb 4, 2001 left a follow-up — Send the survey`,
 			why: "Call on Feb 4, 2001. Send the survey. Due Feb 1, 2001.",
 			open_url: `/calls?session=${call}`,
 		});
@@ -157,7 +158,7 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 	const update = randomUUID();
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
-		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental ' || '${deal}', '${other}');
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Survey', '${other}');
 		insert into home_update (id, user_id, deal_id, what, checklist_item_ref, due_on, read_at) values
 			('${update}', '${owner}', '${deal}', 'Review the survey', 'survey/item', '2001-02-01', null),
 			(gen_random_uuid(), '${owner}', '${deal}', 'Read already', null, null, now());
@@ -167,10 +168,10 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 	assert.partialDeepStrictEqual(card, {
 		item_id: `notification:${update}`,
 		kind_label: "Update",
-		title: `Checklist item due for Example Dental ${deal} — Review the survey`,
+		title: "Checklist item due for Example Survey — Review the survey",
 		why: "Review the survey. Due Feb 1, 2001.",
 		primary_action: "Open checklist item",
-		context_label: `Example Dental ${deal}`,
+		context_label: "Example Survey",
 		open_url: `/deals?deal=${deal}`,
 		checklist_item_ref: "survey/item",
 		due_on: "2001-02-01",
@@ -206,7 +207,7 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 		commit;`);
 	const [revised] = await cards(alex, deal);
 	assert.partialDeepStrictEqual(revised, {
-		title: `Checklist item due for Example Dental ${deal} — Review the revised survey`,
+		title: "Checklist item due for Example Survey — Review the revised survey",
 		section: "inbox",
 	});
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);

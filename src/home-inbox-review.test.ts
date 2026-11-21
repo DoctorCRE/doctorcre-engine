@@ -14,6 +14,16 @@ const call = id(4);
 const meeting = id(5);
 const unstampedCall = id(6);
 const knownContact = randomUUID();
+const quotedRequest = `Hello,
+Could you please also let me know whether the west suite is still available for a tour later this month?
+Please send the plan.
+
+Thanks,
+Known Contact
+555-010-1234
+From: Example Partner
+Sent: 2026-01-02T19:00:00Z
+Could you call?`;
 
 before(async () => {
 	await setup();
@@ -40,7 +50,7 @@ before(async () => {
 				case when id = '${id(16)}' then 'shared@example.test' else 'pat@example.test' end,
 				case when id = '${id(10)}' then 'Sam Example' when id not in ('${id(12)}', '${id(16)}') then 'Pat Example' end,
 				case when id = '${id(10)}' then 'Earlier floor plan' else 'Floor plan' end,
-				'Please send the plan.'
+				case when id = '${id(12)}' then '${quotedRequest}' else 'Please send the plan.' end
 			from activity;
 		insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, text, provenance, recorded_at)
 			select id, id, 'sha256:' || repeat('a', 64), 'example.v1', 'available', summary, '{}', '2026-01-06'
@@ -56,7 +66,7 @@ before(async () => {
 			values ${[10, 11, 12, 13, 14, 15, 16]
 				.map(
 					(n) =>
-						`('${id(n + 10)}', '${id(n)}', '${n === 12 ? other : partner}', 'old_system', 'Re: Email from Pat Example: Re: Floor plan', 'Here it is.', 'Please send the plan.')`,
+						`('${id(n + 10)}', '${id(n)}', '${n === 12 ? other : partner}', 'old_system', 'Re: Email from Pat Example: Re: Floor plan', 'Here it is.', '${n === 12 ? quotedRequest : "Please send the plan."}')`,
 				)
 				.join(",")};
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${partner}', true);
@@ -106,6 +116,7 @@ async function inbox(user = "example") {
 	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);
 	const items = result.items.filter(isArguments);
 	for (const item of items) {
+		assert.ok(typeof item.title === "string" && item.title.length <= 90);
 		assert.equal(Object.hasOwn(item, "auto_settled"), false);
 		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
 	}
@@ -771,7 +782,7 @@ test("Home shows one pending call log with the proposal to decide", async () => 
 		{
 			item_id: `suggestion:${proposal.proposal_id}`,
 			title:
-				"Call about Example Dental on Jan 6, 2026 — review call note: Agreed to review the example plan.",
+				"Call about Example Dental — review call note: Agreed to review the example plan.",
 			why: "Call on Jan 6, 2026. Let's review the example plan. Proposed: Agreed to review the example plan.",
 			primary_action: "Review suggestions",
 			proposal_id: proposal.proposal_id,
@@ -861,16 +872,18 @@ test("Home uses recorded sender names and matches an unambiguous address", async
 		(card) => card.proposal_id === id(38),
 	);
 	assert.partialDeepStrictEqual(filing, {
-		title:
-			"Pat Example asked for tour times at Cedar Suite — choose the deal (suggested: Example Dental)",
+		title: "Pat Example asked for tour times at Cedar Suite — choose the deal",
 		why: "Pat Example asked for tour times at Cedar Suite. Please file this. Suggested deal is Example Dental.",
 		primary_action: "Choose deal",
 	});
+});
+
+test("Home uses the shortest saved request before signatures and quoted headers", async () => {
 	const draft = (await inbox("other")).find(
 		(card) => card.reply_draft_id === id(22),
 	);
 	assert.partialDeepStrictEqual(draft, {
-		title: "Email from Known Contact (Please send the plan) — review reply",
+		title: "Email from Known Contact (“Please send the plan.”) — review reply",
 		why: "Please send the plan.",
 		primary_action: "Review reply",
 	});
@@ -879,8 +892,7 @@ test("Home uses recorded sender names and matches an unambiguous address", async
 test("Home explains an email follow-up with its sender, Central date and pending decision", async () => {
 	const step = (await inbox()).find((card) => card.proposal_id === id(32));
 	assert.partialDeepStrictEqual(step, {
-		title:
-			"Email from Known Contact — review follow-up for Example Dental (Check the drawing)",
+		title: "Email from Known Contact — review follow-up: Check the drawing",
 		why: "Email from Known Contact received on Jan 3, 2026. Proposed follow-up: Check the drawing.",
 		primary_action: "Review follow-up",
 	});
@@ -910,7 +922,7 @@ test("Home names the proposed phase, lead and lead stage for email decisions", a
 			cards.find((card) => card.proposal_id === id(64)),
 			{
 				title:
-					"Email from shared@example.test (Asked about representation) — review adding Known Contact as a lead",
+					"Email from shared@example.test — review adding Known Contact as a lead",
 				primary_action: "Review lead",
 			},
 		);
@@ -918,7 +930,8 @@ test("Home names the proposed phase, lead and lead stage for email decisions", a
 			cards.find((card) => card.proposal_id === id(65)),
 			{
 				title:
-					"Email from Pat Example (Confirmed their plans) — review moving Example Partner to Qualified",
+					"Email from Pat Example — review moving Example Partner to Qualified",
+				why: "Email from Pat Example received on Jan 6, 2026. Confirmed their plans. Proposed lead stage is Qualified.",
 				primary_action: "Review lead stage",
 			},
 		);
@@ -1104,8 +1117,8 @@ test("Home falls back to suggestions and keeps delivery feedback on their card",
 	assert.partialDeepStrictEqual(await thread(), {
 		item_id: `suggestion:${id(60)}`,
 		title:
-			"Sam Example requested the floor plan before the tour — review follow-up for Example Dental (Send the plan) (2 decisions to review)",
-		why: "Sam Example requested the floor plan before the tour. Proposed follow-up: Send the plan.",
+			"Sam Example requested the floor plan before the tour — review follow-up: Send the plan",
+		why: "Sam Example requested the floor plan before the tour. Proposed follow-up: Send the plan. 2 decisions to review.",
 		primary_action: "Review follow-up",
 		due_on: "2026-01-09",
 		source_activity: {

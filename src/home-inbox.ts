@@ -13,6 +13,8 @@ import {
 import {
 	homeDate,
 	homeDisplayText,
+	homeStepText,
+	homeTitle,
 	homeWhy,
 	stepItemId,
 	stepOpenUrl,
@@ -113,46 +115,79 @@ const iso = (timestamp: string) => new Date(timestamp).toISOString();
 const optionalIso = (timestamp: string | null) =>
 	timestamp === null ? null : iso(timestamp);
 
+const leaseDecisionWindow =
+	/^Lease event [—–-] (.+?), est\. (\w+ \d{1,2}, \d{4})\. (Last window before leverage is gone\.)$/i;
+
 function stepText(step: Step) {
-	const action = homeDisplayText(step.title);
+	const action = homeStepText(step.title);
 	const target = homeDisplayText(step.context_label);
 	const forTarget = target ? ` for ${target}` : "";
 	const primary_action = step.status === "done" ? "Open" : "Mark done";
 	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
+	if (step.status === "open" && step.hold_until) {
+		return {
+			title: homeTitle(`Follow-up on hold${forTarget}`),
+			why: homeWhy(`Held until ${homeDate(step.hold_until)}`, action),
+			primary_action,
+		};
+	}
+	const [, name, date, reason] = action.match(leaseDecisionWindow) ?? [];
+	if (step.status === "open" && name && date && reason) {
+		const label = target || name;
+		const dateLabel = date.replace(/^(\w{3})\w*/, "$1");
+		const event = `${label} lease event est. ${dateLabel}`;
+		const title = homeTitle(
+			event,
+			"decide on renewal or relocation",
+			`Lease event est. ${dateLabel} for ${label}`,
+		);
+		return {
+			title,
+			why: homeWhy(title.startsWith(event) ? null : event, reason, due),
+			primary_action,
+		};
+	}
 	if (step.call_at) {
 		const contact = homeDisplayText(step.call_contact);
 		const date = homeDate(step.call_at);
 		const call = contact
 			? `Call with ${contact}`
 			: `Call${forTarget} on ${date}`;
+		const title = homeTitle(
+			`${call} left a follow-up`,
+			action || "open the saved step",
+		);
 		return {
-			title: `${call} left a follow-up — ${action || "open the saved step"}`,
+			title,
 			why: homeWhy(
 				`Call on ${date}`,
 				homeDisplayText(step.call_quote) ||
 					homeDisplayText(step.call_summary) ||
 					"Call details unavailable",
+				title.endsWith("…") ? action : null,
 				due,
 			),
 			primary_action,
 		};
 	}
 	const setter = homeDisplayText(step.set_by);
-	if (step.status === "open" && !step.source_kind && !setter && !due) {
-		return {
-			title: action || `Follow-up${forTarget}`,
-			why: "No reason was recorded.",
-			primary_action,
-		};
-	}
 	const set = step.source_kind
 		? `Follow-up set from the ${step.source_kind}`
 		: setter
 			? `Follow-up set by ${setter}`
 			: `Follow-up set on ${homeDate(step.created_at)}`;
+	const event = `${step.status === "done" ? "Follow-up completed" : due ? "Follow-up due" : "Follow-up set"}${forTarget}`;
+	const title = homeTitle(event, action || "open the saved step");
 	return {
-		title: `${step.status === "done" ? "Follow-up completed" : due ? "Follow-up due" : "Follow-up set"}${forTarget} — ${action || "open the saved step"}`,
-		why: homeWhy(set, homeDisplayText(step.source_evidence), due),
+		title,
+		why: homeWhy(
+			set,
+			homeDisplayText(step.source_evidence),
+			due,
+			!title.endsWith(action) || (!step.source_kind && !setter && !due)
+				? action
+				: null,
+		),
 		primary_action,
 	};
 }
@@ -170,7 +205,7 @@ function stepCard(step: Step) {
 			: disposition;
 	const source_type = step.call_id ? "capture_post_call_action" : "next_action";
 	const source_version = step.step_version;
-	const open_url = stepOpenUrl(step, done);
+	const open_url = stepOpenUrl(step);
 
 	return {
 		item_id: stepItemId(step),

@@ -3,6 +3,8 @@ import {
 	dealStepUrl,
 	homeDate,
 	homeDisplayText,
+	homeStepText,
+	homeTitle,
 	homeWhy,
 } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
@@ -104,8 +106,12 @@ export function completionReviewCard(
 	},
 ) {
 	const { item_id, base_version, source_version, action_version } = step;
-	const action = homeDisplayText(review.title);
+	const action = homeStepText(review.title);
 	const deal = homeDisplayText(review.deal_name);
+	const title = homeTitle(
+		`A ${review.activity_kind} mentions a step for ${deal}`,
+		action ? `check if done: ${action}` : "review completion",
+	);
 	return {
 		...noticeCard(review, {
 			item_id,
@@ -115,11 +121,12 @@ export function completionReviewCard(
 		}),
 		base_version,
 		action_version,
-		title: `A ${review.activity_kind} may confirm a step for ${deal} — ${action ? `check whether this is done: ${action}` : "review completion"}`,
+		title,
 		why: homeWhy(
 			homeDisplayText(review.evidence) ||
 				homeDisplayText(review.summary) ||
 				`The ${review.activity_kind} was recorded on ${homeDate(review.happened_at)}`,
+			!title.endsWith(action) ? action : null,
 		),
 		primary_action: "Review completion",
 		completion_review: {
@@ -157,8 +164,8 @@ function updateText(update: HomeUpdate) {
 		const shortlistChange = /\b(?:added|removed)\b.*\bshortlist\b/i.test(text);
 		return {
 			title: shortlistChange
-				? `${text} — review the change`
-				: `Tour feedback on ${target} — review feedback`,
+				? homeTitle(text, "review the change")
+				: homeTitle(`Tour feedback on ${target}`, "review feedback"),
 			why: homeWhy(text, `Recorded ${homeDate(update.activity_at)}`),
 			primary_action: "Review feedback",
 		};
@@ -166,7 +173,10 @@ function updateText(update: HomeUpdate) {
 	if (update.due_on) {
 		const item = homeDisplayText(update.checklist_item_title) || text;
 		return {
-			title: `Checklist item due for ${deal} — ${item || "open the checklist item"}`,
+			title: homeTitle(
+				`Checklist item due for ${deal}`,
+				item || "open the checklist item",
+			),
 			why: homeWhy(item, `Due ${homeDate(update.due_on)}`),
 			primary_action: "Open checklist item",
 		};
