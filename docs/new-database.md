@@ -1708,9 +1708,11 @@ A signed-in partner issues a credential from the app and gives it to their Mac's
 
 | App request                        | Answer                                                                                                      |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `GET /api/engine/doc/link`         | `200 { connected, issued_at }`. The issue time is null when the partner has no current credential.          |
+| `GET /api/engine/doc/link`         | `200 { connected, issued_at, status }`. The issue time is null when the partner has no current credential.  |
 | `POST /api/engine/doc/link`        | `201 { credential }`. Shows the new credential once, replaces any previous credential, and resets presence. |
 | `POST /api/engine/doc/link/revoke` | `204`. Revokes the partner's credential. Safe to repeat.                                                    |
+
+The status is `not_set_up` without a current credential and `mac_off` without a poll in the last 30 seconds. Otherwise `connected` is true and the last report gives `signed_out`, `plan_limited`, or `ready`. A connected Mac with no report shows `ready`. Queued turns use the same status to explain the wait.
 
 The Mac polls the engine directly over HTTPS about every two seconds using `POST /api/engine/doc/link/claim` with `Authorization: Bearer <credential>` and no cookies. It sends `Doc-Link-Readiness: ready | signed_out | plan_limited`. The engine derives the owner from the credential. A poll without a readiness header records presence when due and keeps the last readiness report. An unrecognized value returns `400 invalid_readiness`. An invalid credential or a request with cookies returns `401`. Rotation and revocation take the same owner lock as polls and results. A request that locks the current credential first may finish before a pending rotation or revocation. After the change commits, the old credential returns `401`.
 
