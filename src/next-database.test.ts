@@ -499,6 +499,8 @@ const compared = async (client = db) =>
 
 // Every table whose rows a user or a job adds or changes.
 const STAMPED = [
+	"tour_plan",
+	"tour_stop",
 	"calendar_agenda",
 	"calendar_review_dismissal",
 	"email_mailbox",
@@ -2539,6 +2541,7 @@ const OWNER_RULES: Record<string, Case[]> = {
 };
 // What the engine may change; every other column, and every row of history, stays as stored.
 const CHANGEABLE: Record<string, string[]> = {
+	tour_plan: ["cancelled_at", "completed_activity_id", "notes", "planned_on"],
 	deal_client_website_attempt: ["failed_attempts", "window_started_at"],
 	calendar_agenda: ["observed_at", "snapshot"],
 	invoice_email: ["deal_id", "payment_id", "status"],
@@ -2782,6 +2785,7 @@ const DEFAULTED: Record<string, string[]> = {
 	],
 };
 const REMOVABLE = [
+	"tour_stop",
 	"doc_link",
 	"deal_client_website_attempt",
 	"deal_client_website_grant",

@@ -229,6 +229,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
 - an activity's time, sender and summary, and a stored email's authored and earlier text;
+- a planned tour's date, notes, completion meeting or cancellation time. The engine replaces its stops by removing and adding rows;
 - a next step's text, owner, due date and done time;
 - a user's time zone, quiet hours and device notifications, a Home mark's disposition, snooze time, drop reason and whom it waits on and why, and a Home update's `read_at` (`read_at` is the only updatable column on `home_update`);
 - a round's status, and a critical date's status and resolution reason;
@@ -590,7 +591,7 @@ Moving today's rows across, each logged `activity` of kind `tour` becomes a meet
 
 ### Planned tours on a deal
 
-The proposed `next` schema change for [#1107](https://github.com/DoctorCRE/doctorcre-engine/issues/1107) supports the [deal page](screens/deals.md#tours). The production migration needs the owner's approval. The planner starts empty. The old system has zero deal-linked plans and one unlinked plan, which stays there. The completed-tour copy above still applies.
+The `next` schema has the tables for the [deal page tour planner](screens/deals.md#tours). Apply `schema/add-tour-plans.sql` to an existing `next` schema after the owner approves that file for production. The planner starts empty. The old system has zero deal-linked plans and one unlinked plan, which stays there. The completed-tour copy above still applies.
 
 - `tour_plan` has its own ID, a required `deal_id` referencing `deal`, a required `planned_on` calendar date, and optional internal `notes`. Each plan belongs to one deal for its lifetime. Access follows the deal for both partners. Saves use the signed-in partner's usual change stamp.
 - `tour_stop` references a plan and a `property`. Partners pick an existing property or create one with an address and optional name when no existing property matches. A stop's required positive `position` is unique within its plan. The database requires at least one stop per saved plan. Save the date, notes, and full ordered stop list together. Refuse a stale edit without changing the plan or its stops.
