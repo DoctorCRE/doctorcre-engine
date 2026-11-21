@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cleanEmailBody } from "./home-email-thread.ts";
+import { cleanEmailBody, cleanEmailThread } from "./home-email-thread.ts";
 
 test("cleans a large body with an incomplete header promptly", () => {
 	const body = `Current message.\nFrom: Pat\n${" ".repeat(100_000)}\n${"x".repeat(100_000)}`;
@@ -103,6 +103,7 @@ test("keeps sentences that follow a sign-off or the sender's name", () => {
 
 test("never empties a message that is only a sign-off or a signature", () => {
 	for (const body of [
+		"-----",
 		"Thanks",
 		"Cheers",
 		"Thanks!",
@@ -138,6 +139,92 @@ const mayaSignature =
 	"Best, Maya Example Office Manager | Example Dental Group Direct: (555) 010-2000 | Main: (555) 010-3000 |";
 const outlookHeader =
 	"From: Sam Partner <sam@example.test> Sent: Monday, October 26, 2026 12:19 PM To: Maya Example <maya@example.test> Cc: Office <office@example.test> Subject: RE: Suite 200";
+
+const signature =
+	"Maya Example | regional leasing manager | Direct: 555-010-2000 | Main: 555-010-3000 | Telephone: 555-010-4000 | Fax: 555-010-5000 | Cell: 555-010-6000 | maya@example.test | License 12345";
+
+function message(
+	body: string,
+	sender = "maya@example.test",
+	sender_name = maya,
+) {
+	return { body, sender, sender_name };
+}
+
+test("cuts a reordered Date header and a rewrapped quote of a nonadjacent email", () => {
+	const first =
+		"Could you send the survey and the plan for suite 200 by Friday?";
+	const second = "I only have the survey in my inbox at the moment.";
+	const third = "I can send the plan.\nPlease use the west door";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(first),
+			message(second, "sam@example.test", "Sam Example"),
+			message(
+				`${third} Subject: RE: Suite 200. To: Pat Example Date: Tue, Jan 6, 2026 From: Maya Example <maya@example.test>\n> COULD YOU SEND THE SURVEY\n> and the plan for suite 200 by Friday?`,
+				"pat@example.test",
+				"Pat Example",
+			),
+		]),
+		[first, second, third],
+	);
+});
+
+test("drops the shared signature by sender address after cutting quotes", () => {
+	const first = "Please leave the marked survey on the desk in suite 200.";
+	const second = "I've sent it to the surveyor instead.";
+	const third = "Let me know if you need the plan too";
+	const otherSender = `The back door is open. ${signature}`;
+	assert.deepEqual(
+		cleanEmailThread([
+			message(`${first} ${signature}`),
+			message(
+				`${second} ${signature.toUpperCase()} ${first}`,
+				"MAYA@example.test",
+				"M. Example",
+			),
+			message(`${third}\n${signature.replaceAll(" | ", "\n| ")}`),
+			message(otherSender, "other@example.test"),
+		]),
+		[first, second, third, otherSender],
+	);
+});
+
+test("drops recurring calendar boilerplate and keeps a message made entirely of it", () => {
+	const invite = "Teams Meeting Dial in by phone 555-010-2000 View map Guests";
+	assert.deepEqual(
+		cleanEmailThread([
+			message(`Please meet at the west door. ${invite}`),
+			message(`The meeting has moved to Thursday. ${invite}`),
+			message(invite),
+		]),
+		[
+			"Please meet at the west door.",
+			"The meeting has moved to Thursday.",
+			invite,
+		],
+	);
+});
+
+test("cleans an eleven-message carried chain of ten thousand characters per message in under 50 ms", () => {
+	const bodies: string[] = [];
+	const expected: string[] = [];
+	for (let index = 0; index < 11; index++) {
+		const own = `Update ${index + 1}: the surveyor will leave the plans by the west door.`;
+		const previous = bodies.at(-1);
+		const body = previous
+			? `${own} ${signature} From: Maya Example Date: Jan 6, 2026 To: Sam Example Subject: Plans ${previous}`
+			: `${own} ${"Plan ".repeat(2000).slice(0, 9999 - own.length - signature.length - 1)} ${signature}`;
+		expected.push(previous ? own : body.slice(0, -signature.length).trimEnd());
+		bodies.push(body.slice(0, 10_000));
+	}
+	const messages = bodies.map((body) => message(body));
+	const start = performance.now();
+	const cleaned = cleanEmailThread(messages);
+	const elapsed = performance.now() - start;
+	assert.deepEqual(cleaned, expected);
+	assert.ok(elapsed < 50, `cleanup took ${elapsed} ms`);
+});
 
 test("keeps only the sender's new words when the body was stored as one line", () => {
 	const cases = [

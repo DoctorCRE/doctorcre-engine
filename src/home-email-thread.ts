@@ -85,7 +85,8 @@ export function cleanEmailBody(body: string, sender: string | null) {
 	return (
 		unsigned.slice(0, inlineSignatureStart(unsigned, sender)).trim() ||
 		text(signed) ||
-		text(lines)
+		text(lines) ||
+		body
 	);
 }
 
@@ -185,10 +186,130 @@ function inlineSignatureStart(text: string, sender: string | null) {
 
 type ThreadMessage = {
 	activity_id: string;
+	sender: string;
 	sender_name: string | null;
 	happened_at: string;
 	body: string;
 };
+
+const quoteWindowLength = 40;
+const minimumSignatureLength = 25;
+const quoteHeaderField =
+	/(?<!\S)\*?(from|sent|date|to|cc|bcc|subject):\*?(?=\s)/gi;
+
+function comparableBody(body: string) {
+	const offsets = new Map<number, number>();
+	let normalized = "";
+	for (const match of body.matchAll(/(^[ \t]*(?:>[ \t]*)+)|\S+/gm)) {
+		if (match[1]) continue;
+		if (normalized) normalized += " ";
+		offsets.set(normalized.length, match.index);
+		normalized += match[0].toLowerCase();
+	}
+	return { body, normalized, offsets };
+}
+
+function beforeQuote(prefix: string) {
+	const labels = new Set<string>();
+	let header = prefix.length;
+	const fields = [...prefix.matchAll(quoteHeaderField)];
+	for (const field of fields.reverse()) {
+		const label = field[1]?.toLowerCase() ?? "";
+		if (header - field.index > 300 || labels.has(label)) break;
+		labels.add(label);
+		header = field.index;
+	}
+	const opener = prefix.search(inlineHistory);
+	const cut = Math.min(
+		labels.size >= 2 ? header : prefix.length,
+		opener < 0 ? prefix.length : opener,
+	);
+	return prefix
+		.slice(0, cut)
+		.trimEnd()
+		.replace(/(?:^|\s)(?:[-_=*]{3,}|>+)$/, "")
+		.trim();
+}
+
+function withoutHistory(body: string, earlier: Set<string>) {
+	const message = comparableBody(body);
+	if (!earlier.size) return message;
+	for (const [start, offset] of message.offsets) {
+		if (!start) continue;
+		const window = message.normalized.slice(start, start + quoteWindowLength);
+		if (!earlier.has(window)) continue;
+		const own = beforeQuote(body.slice(0, offset));
+		return own ? comparableBody(own) : message;
+	}
+	return message;
+}
+
+type ComparableBody = ReturnType<typeof comparableBody>;
+
+function sharedSignatureLength(messages: ComparableBody[]) {
+	const [first, ...rest] = messages;
+	if (!first || !rest.length) return 0;
+	let length = first.normalized.length;
+	for (const { normalized } of rest) {
+		let shared = 0;
+		while (
+			shared < length &&
+			shared < normalized.length &&
+			first.normalized.at(-shared - 1) === normalized.at(-shared - 1)
+		)
+			shared++;
+		length = shared;
+	}
+	if (length < minimumSignatureLength) return 0;
+	if (
+		messages.some(
+			({ normalized, offsets }) => !offsets.has(normalized.length - length),
+		)
+	) {
+		const space = first.normalized.indexOf(
+			" ",
+			first.normalized.length - length,
+		);
+		length = space < 0 ? 0 : first.normalized.length - space - 1;
+	}
+	return length >= minimumSignatureLength ? length : 0;
+}
+
+export function cleanEmailThread(
+	messages: Pick<ThreadMessage, "body" | "sender" | "sender_name">[],
+) {
+	const senders = new Map<string, ComparableBody[]>();
+	const firstSender = messages[0]?.sender.toLowerCase();
+	const useFallback =
+		firstSender !== undefined &&
+		!messages
+			.slice(1)
+			.some(({ sender }) => sender.toLowerCase() === firstSender);
+	const earlier = new Set<string>();
+	const own = messages.map(({ body, sender, sender_name }, index) => {
+		const message =
+			index === 0 && useFallback
+				? comparableBody(cleanEmailBody(body, sender_name))
+				: withoutHistory(body, earlier);
+		if (message.normalized.length >= quoteWindowLength) {
+			earlier.add(message.normalized.slice(0, quoteWindowLength));
+		}
+		const address = sender.toLowerCase();
+		const group = senders.get(address);
+		if (group) group.push(message);
+		else senders.set(address, [message]);
+		return message;
+	});
+	for (const group of senders.values()) {
+		const length = sharedSignatureLength(group);
+		if (!length) continue;
+		for (const message of group) {
+			const offset = message.offsets.get(message.normalized.length - length);
+			message.body = message.body.slice(0, offset).trimEnd() || message.body;
+		}
+	}
+	return own.map(({ body }) => body);
+}
 
 export async function readHomeEmailThread(
 	db: Transaction<DB>,
@@ -197,7 +318,7 @@ export async function readHomeEmailThread(
 ) {
 	if (!sourceId) return [];
 	const { rows } = await sql<ThreadMessage>`
-		select e.activity_id, ${senderLabel("e", false)} as sender_name,
+		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name,
 			${isoMillis(sql.ref("a.happened_at"))} as happened_at, e.body
 		from email source
 		join email_mailbox source_mailbox on source_mailbox.activity_id = source.activity_id
@@ -208,8 +329,9 @@ export async function readHomeEmailThread(
 		where source.activity_id = ${sourceId}::uuid
 		order by a.happened_at, a.id
 	`.execute(db);
-	return rows.map((message) => ({
+	const bodies = cleanEmailThread(rows);
+	return rows.map(({ sender: _sender, ...message }, index) => ({
 		...message,
-		body: cleanEmailBody(message.body, message.sender_name),
+		body: bodies[index] ?? message.body,
 	}));
 }
