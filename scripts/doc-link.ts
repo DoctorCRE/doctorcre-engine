@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { constants } from "node:fs";
+import { open, readdir, readFile, stat } from "node:fs/promises";
+import { homedir, userInfo } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { z } from "zod";
 
 const configSchema = z.strictObject({
@@ -49,6 +52,10 @@ const allowedTools = ["find", "read", "propose_save", "validate_answer"]
 	.join(",");
 const checkSignInEvery = 30_000;
 const pollEvery = 2_000;
+const macSettingsDir = "/Library/Application Support/ClaudeCode";
+const preferencesDir = "/Library/Managed Preferences";
+const preferencesName = "com.anthropic.claudecode.plist";
+const exec = promisify(execFile);
 
 function readJson(text: string): unknown {
 	try {
@@ -67,13 +74,105 @@ const rateLimit = z.object({
 	status: z.literal("rejected"),
 	resetsAt: z.number().optional(),
 });
+const hookLists = z.record(z.string(), z.array(z.unknown()));
+
+function isMissingFile(error: unknown) {
+	return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function managedPolicyBlocker({
+	directory,
+	preferences = [],
+	cache,
+}: {
+	directory: string;
+	preferences?: string[];
+	cache?: string;
+}) {
+	const dropIns = join(directory, "managed-settings.d");
+	let names: string[];
+	try {
+		names = await readdir(dropIns);
+	} catch (error) {
+		if (!isMissingFile(error))
+			return `Doc link cannot check Claude Code policy in ${dropIns}.`;
+		names = [];
+	}
+	const paths = [
+		join(directory, "managed-settings.json"),
+		...names
+			.filter((name) => !name.startsWith(".") && name.endsWith(".json"))
+			.map((name) => join(dropIns, name)),
+		...preferences,
+		...(cache ? [cache] : []),
+	];
+	for (const path of paths) {
+		try {
+			let contents: string;
+			if (path.endsWith(".plist")) {
+				await stat(path);
+				const { stdout } = await exec(
+					"/usr/bin/plutil",
+					["-convert", "json", "-o", "-", path],
+					{ timeout: 5_000 },
+				);
+				contents = stdout;
+			} else {
+				contents = await readFile(path, "utf8");
+			}
+			const policy = fields.safeParse(readJson(contents));
+			if (!policy.success)
+				return `Doc link cannot read Claude Code policy in ${path}.`;
+			if (policy.data.hooks === undefined) continue;
+			const hooks = hookLists.safeParse(policy.data.hooks);
+			if (
+				!hooks.success ||
+				Object.values(hooks.data).some((entries) => entries.length > 0)
+			)
+				return `Doc link is paused because managed Claude Code hooks are configured in ${path}.`;
+		} catch (error) {
+			if (!isMissingFile(error))
+				return `Doc link cannot check Claude Code policy in ${path}.`;
+		}
+	}
+	return undefined;
+}
 
 function runClaude(
 	claude: string,
-	args: string[],
 	timeout: number,
-	task?: { input: string; credential: string },
+	task?: { input: string; credential: string; mcpConfig: string },
 ) {
+	const args = [
+		"--setting-sources",
+		"",
+		"--settings",
+		sessionSettings,
+		"--no-session-persistence",
+		"--no-chrome",
+		"--disable-slash-commands",
+		"--strict-mcp-config",
+		"--permission-mode",
+		"dontAsk",
+	];
+	if (task) {
+		args.push(
+			"-p",
+			"--output-format",
+			"stream-json",
+			"--verbose",
+			"--tools",
+			"",
+			"--mcp-config",
+			task.mcpConfig,
+			"--allowedTools",
+			allowedTools,
+			"--system-prompt",
+			prompt,
+		);
+	} else {
+		args.push("auth", "status");
+	}
 	const env = { ...process.env };
 	for (const name of Object.keys(env)) {
 		if (name !== "HOME" && name !== "PATH" && name !== "TMPDIR")
@@ -93,7 +192,7 @@ function runClaude(
 }
 
 async function signInStatus(claude: string) {
-	const { ok, stdout } = await runClaude(claude, ["auth", "status"], 5_000);
+	const { ok, stdout } = await runClaude(claude, 5_000);
 	const auth = authStatus.safeParse(readJson(stdout));
 	if (!auth.success) return undefined;
 	if (!auth.data.loggedIn || auth.data.authMethod !== "claude.ai")
@@ -155,35 +254,11 @@ async function answerTurn(
 			},
 		},
 	};
-	const output = await runClaude(
-		config.claude,
-		[
-			"--setting-sources",
-			"",
-			"-p",
-			"--output-format",
-			"stream-json",
-			"--verbose",
-			"--no-session-persistence",
-			"--no-chrome",
-			"--disable-slash-commands",
-			"--tools",
-			"",
-			"--settings",
-			sessionSettings,
-			"--strict-mcp-config",
-			"--mcp-config",
-			JSON.stringify(mcp),
-			"--permission-mode",
-			"dontAsk",
-			"--allowedTools",
-			allowedTools,
-			"--system-prompt",
-			prompt,
-		],
-		timeout,
-		{ input: JSON.stringify({ turn, history }), credential: config.credential },
-	);
+	const output = await runClaude(config.claude, timeout, {
+		input: JSON.stringify({ turn, history }),
+		credential: config.credential,
+		mcpConfig: JSON.stringify(mcp),
+	});
 	return claudeOutcome(output);
 }
 
@@ -191,14 +266,23 @@ type LinkRuntime = {
 	fetch: typeof globalThis.fetch;
 	now: () => number;
 	wait: () => Promise<void>;
+	managedSettings?: Parameters<typeof managedPolicyBlocker>[0];
 };
 
 export async function runDocLink(
 	config: Config,
-	{ fetch, now, wait }: LinkRuntime = {
+	{ fetch, now, wait, managedSettings }: LinkRuntime = {
 		fetch: globalThis.fetch,
 		now: Date.now,
 		wait: () => delay(pollEvery),
+		managedSettings: {
+			directory: macSettingsDir,
+			preferences: [
+				join(preferencesDir, userInfo().username, preferencesName),
+				join(preferencesDir, preferencesName),
+			],
+			cache: join(homedir(), ".claude", "remote-settings.json"),
+		},
 	},
 ) {
 	function post(path: "claim" | "result", init: RequestInit) {
@@ -213,9 +297,19 @@ export async function runDocLink(
 		}).catch(() => undefined);
 	}
 
+	let policyBlocker: string | undefined;
+	async function policyAllowsTurns() {
+		const blocker =
+			managedSettings && (await managedPolicyBlocker(managedSettings));
+		if (blocker && blocker !== policyBlocker) console.error(blocker);
+		policyBlocker = blocker;
+		return !blocker;
+	}
+
 	let readiness: Readiness | undefined;
 	let checkAt = 0;
 	for (; ; await wait()) {
+		if (!(await policyAllowsTurns())) continue;
 		if (now() >= checkAt) {
 			readiness = await signInStatus(config.claude);
 			checkAt = now() + checkSignInEvery;
@@ -230,6 +324,7 @@ export async function runDocLink(
 			await poll.json().catch(() => undefined),
 		).data;
 		if (!claim) continue;
+		if (!(await policyAllowsTurns())) continue;
 		const expires = Date.parse(claim.claim_until);
 		const timeout = Math.min(45_000, expires - 15_000 - now());
 		if (!(timeout > 0)) continue;
@@ -271,14 +366,34 @@ export async function runDocLink(
 	}
 }
 
+export async function readDocLinkConfig(path: string) {
+	await using file = await open(
+		path,
+		constants.O_RDONLY | constants.O_NONBLOCK,
+	);
+	const info = await file.stat();
+	if (!info.isFile())
+		throw new Error("Doc link needs a regular configuration file.");
+	if (info.uid !== process.geteuid?.())
+		throw new Error(`Create ${path} as the macOS user running Doc link.`);
+	if ((info.mode & 0o077) !== 0) {
+		throw new Error(
+			`Doc link needs a private configuration file. Run chmod 600 "${path}".`,
+		);
+	}
+	const config = configSchema.safeParse(readJson(await file.readFile("utf8")));
+	if (!config.success)
+		throw new Error("Doc link could not read its configuration file.");
+	return config.data;
+}
+
 if (import.meta.main) {
 	const path = process.argv[2];
-	const contents = path ? await readFile(path, "utf8").catch(() => "") : "";
-	const config = configSchema.safeParse(readJson(contents));
-	if (!config.success) {
-		console.error("Doc link could not read its configuration file.");
+	try {
+		if (!path) throw new Error("Doc link needs a configuration file path.");
+		await runDocLink(await readDocLinkConfig(path));
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : "Doc link failed.");
 		process.exitCode = 1;
-	} else {
-		await runDocLink(config.data);
 	}
 }

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-import { deepEqual } from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const args = process.argv.slice(2);
 const emit = (event: unknown) =>
 	process.stdout.write(`${JSON.stringify(event)}\n`);
 
 if (args.includes("auth")) {
-	deepEqual(args, ["auth", "status"]);
+	const capture = join(import.meta.dirname, "auth-args.json");
+	if (existsSync(capture)) writeFileSync(capture, JSON.stringify(args));
 	emit({ loggedIn: true, authMethod: "claude.ai" });
 } else {
 	const input = JSON.parse(readFileSync(0, "utf8"));

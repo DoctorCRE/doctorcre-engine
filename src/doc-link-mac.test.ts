@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
+import {
+	chmod,
+	copyFile,
+	mkdtemp,
+	readFile,
+	rmdir,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { runDocLink } from "../scripts/doc-link.ts";
+import { readDocLinkConfig, runDocLink } from "../scripts/doc-link.ts";
 
 const credential = "x".repeat(43);
 const engine = "https://engine.example.test";
@@ -34,13 +44,13 @@ function claimed(question: string, claimId = firstClaim, until = 120_000) {
 
 const status = (code: number) => new Response(null, { status: code });
 
-async function link(
-	...replies: (Response | "drop" | { reply: Response; now: number })[]
-) {
+type Reply = Response | "drop" | { reply: Response; now: number };
+
+async function runLink(replies: Reply[], binary = claude) {
 	let now = 60_000;
 	const requests: Request[] = [];
 	await runDocLink(
-		{ engine, claude, credential },
+		{ engine, claude: binary, credential },
 		{
 			now: () => now,
 			wait: async () => {
@@ -73,6 +83,8 @@ async function link(
 	);
 }
 
+const link = (...replies: Reply[]) => runLink(replies);
+
 const poll = (readiness: string) => ({
 	path: "/api/engine/doc/link/claim",
 	readiness,
@@ -96,13 +108,26 @@ const answered = (claimId: string) =>
 	});
 
 test("Doc link runs a private Claude print session and submits only the final answer", async (t) => {
+	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
+	const binary = join(directory, "claude.ts");
+	const authArgsPath = join(directory, "auth-args.json");
+	await copyFile(claude, binary);
+	await writeFile(authArgsPath, "");
+	t.after(async () => {
+		await unlink(binary);
+		await unlink(authArgsPath);
+		await rmdir(directory);
+	});
 	const inheritedKey = process.env.ANTHROPIC_API_KEY;
 	process.env.ANTHROPIC_API_KEY = "unused test key";
 	t.after(() => {
 		if (inheritedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
 		else process.env.ANTHROPIC_API_KEY = inheritedKey;
 	});
-	const [claim, completion, next] = await link(claimed("Inspect"), status(204));
+	const [claim, completion, next] = await runLink(
+		[claimed("Inspect"), status(204)],
+		binary,
+	);
 	assert.deepEqual(claim, poll("ready"));
 	assert.deepEqual(next, poll("ready"));
 	assert.ok(completion);
@@ -137,26 +162,32 @@ test("Doc link runs a private Claude print session and submits only the final an
 	assert.deepEqual(observed.args, [
 		"--setting-sources",
 		"",
+		"--settings",
+		'{"disableAllHooks":true,"disableClaudeAiConnectors":true}',
+		"--no-session-persistence",
+		"--no-chrome",
+		"--disable-slash-commands",
+		"--strict-mcp-config",
+		"--permission-mode",
+		"dontAsk",
 		"-p",
 		"--output-format",
 		"stream-json",
 		"--verbose",
-		"--no-session-persistence",
-		"--no-chrome",
-		"--disable-slash-commands",
 		"--tools",
 		"",
-		"--settings",
-		'{"disableAllHooks":true,"disableClaudeAiConnectors":true}',
-		"--strict-mcp-config",
 		"--mcp-config",
 		"<MCP config>",
-		"--permission-mode",
-		"dontAsk",
 		"--allowedTools",
 		"mcp__doc__find,mcp__doc__read,mcp__doc__propose_save,mcp__doc__validate_answer",
 		"--system-prompt",
 		"<fixed prompt>",
+	]);
+	const authArgs = JSON.parse(await readFile(authArgsPath, "utf8"));
+	assert.deepEqual(authArgs, [
+		...observed.args.slice(0, observed.args.indexOf("-p")),
+		"auth",
+		"status",
 	]);
 	assert.deepEqual(observed.input, {
 		turn: { question: "Inspect", context },
@@ -164,6 +195,68 @@ test("Doc link runs a private Claude print session and submits only the final an
 	});
 	assert.equal(observed.credential, credential);
 	assert.equal(observed.inheritedKey, undefined);
+});
+
+test("Doc link refuses a shared credential file and reads a private one", async (t) => {
+	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
+	const path = join(directory, "config.json");
+	const config = { engine, claude, credential };
+	await writeFile(path, JSON.stringify(config), { mode: 0o600 });
+	t.after(async () => {
+		await unlink(path);
+		await rmdir(directory);
+	});
+	await chmod(path, 0o644);
+	await assert.rejects(readDocLinkConfig(path), (error: Error) =>
+		error.message.includes(`chmod 600 "${path}"`),
+	);
+	await chmod(path, 0o600);
+	assert.deepEqual(await readDocLinkConfig(path), config);
+});
+
+test("Doc link refuses a policy hook added after a claim and resumes once it is removed", async (t) => {
+	const directory = await mkdtemp(join(process.cwd(), ".scratch."));
+	const policy = join(directory, "managed-settings.json");
+	const errors = t.mock.method(console, "error", () => {});
+	t.after(async () => {
+		await unlink(policy);
+		await rmdir(directory);
+	});
+	let waits = 0;
+	const requests: (string | null)[] = [];
+	await runDocLink(
+		{ engine, claude, credential },
+		{
+			managedSettings: { directory },
+			now: () => waits * 2_000,
+			wait: async () => {
+				waits++;
+				if (waits === 2) await writeFile(policy, "{}");
+			},
+			async fetch(_url, init) {
+				requests.push(new Headers(init?.headers).get("Doc-Link-Readiness"));
+				if (requests.length !== 1) return status(401);
+				await writeFile(
+					policy,
+					JSON.stringify({
+						hooks: {
+							SessionStart: [
+								{ hooks: [{ type: "command", command: "false" }] },
+							],
+						},
+					}),
+				);
+				return claimed("Question");
+			},
+		},
+	);
+	assert.equal(waits, 2);
+	assert.deepEqual(requests, ["ready", "ready"]);
+	assert.equal(errors.mock.calls.length, 1);
+	assert.match(
+		String(errors.mock.calls[0]?.arguments[0]),
+		/managed Claude Code hooks/i,
+	);
 });
 
 test("Doc link reconnects after dropped polls and retries the same completion after a dropped response", async () => {

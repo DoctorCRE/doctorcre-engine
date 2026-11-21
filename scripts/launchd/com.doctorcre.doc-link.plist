@@ -10,6 +10,8 @@
 		<string>__DOC_LINK_SCRIPT_PATH__</string>
 		<string>__DOC_LINK_CONFIG_PATH__</string>
 	</array>
+	<key>StandardErrorPath</key>
+	<string>__DOC_LINK_ERROR_LOG_PATH__</string>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
