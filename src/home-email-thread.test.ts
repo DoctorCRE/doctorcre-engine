@@ -184,6 +184,49 @@ test("keeps a shared closing instruction from the same sender", () => {
 	}
 });
 
+test("keeps a shared closing instruction before a shared contact footer", () => {
+	const closing = "Please copy the surveyor on every update.";
+	for (const { separator, footer } of [
+		{ separator: "\n\n", footer: "Direct: 555-010-2000\nmaya@example.test" },
+		{
+			separator: " ",
+			footer: "Best, Maya Example | Direct: 555-010-2000 | maya@example.test",
+		},
+	]) {
+		const bodies = ["The plan is ready.", "I sent the plan."].map(
+			(update) => `${update} ${closing}`,
+		);
+		assert.deepEqual(
+			cleanEmailThread(
+				bodies.map((body) => message(`${body}${separator}${footer}`)),
+			),
+			bodies,
+			footer,
+		);
+	}
+});
+
+test("cuts quoted Outlook headers and wrapped reply openers", () => {
+	const earlier = "Could you send the suite 200 plan?";
+	const reply = "Here is the plan.";
+	for (const boundary of [
+		"> From: Maya Example\n> Date: Mon, Jan 5, 2026\n> To: Sam Partner\n> Subject: Suite 200",
+		"> > On Mon, Jan 5, 2026 at 9:30 AM\n\t>> Maya Example <maya@example.test> wrote:",
+	]) {
+		assert.deepEqual(
+			cleanEmailThread([
+				message(earlier),
+				message(
+					`${reply}\n\n${boundary}\n> ${earlier}\n> Older thread text.`,
+					"sam@example.test",
+				),
+			]),
+			[earlier, reply],
+			boundary,
+		);
+	}
+});
+
 test("keeps an authored CC sentence before an Outlook header", () => {
 	const earlier =
 		"Could you send the survey and the plan for suite 200 by Friday?";

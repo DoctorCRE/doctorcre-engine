@@ -207,6 +207,8 @@ const mailboxAddress = new RegExp(
 );
 const nameWord = /^(?:\p{Lu}[\p{L}'’.-]*[\p{L}]|\p{Lu}\.?)$/u;
 const nameConnector = /^(?:de|del|van|von|da|dos)$/i;
+const quoteIndent = /^[ \t]*(?:>[ \t]*)+/gm;
+const trailingQuoteIndent = /(?:^|[\r\n])[ \t]*(?:>[ \t]*)+$/;
 
 function comparableBody(body: string) {
 	const words = /(^[ \t]*(?:>[ \t]*)+)|\S+/gm;
@@ -245,12 +247,16 @@ function headerValue(label: string, value: string) {
 function quoteBoundary(prefix: string) {
 	const end = prefix
 		.trimEnd()
-		.replace(/(?:^|[\r\n])[ \t]*(?:>[ \t]*)+$/, "")
+		.replace(trailingQuoteIndent, "")
 		.trimEnd().length;
 	const start = Math.max(0, end - 2100);
-	const tail = prefix.slice(start, end);
+	const raw = prefix.slice(start, end);
+	// Keep the match offsets valid in the original body.
+	const tail = raw.replace(quoteIndent, (indent) => " ".repeat(indent.length));
+	const boundaryAt = (offset: number) =>
+		start + raw.slice(0, offset).replace(trailingQuoteIndent, "").length;
 	const opener = /wrote:$/i.test(tail) ? tail.search(replyOpener) : -1;
-	if (opener >= 0) return start + opener;
+	if (opener >= 0) return boundaryAt(opener);
 
 	const labels = new Set<string>();
 	let header = tail.length;
@@ -268,8 +274,8 @@ function quoteBoundary(prefix: string) {
 	}
 	const beforeHeader = labels.size >= 2 ? header : tail.length;
 	const divider = tail.slice(0, beforeHeader).trimEnd().search(quoteDivider);
-	if (divider >= 0) return start + divider;
-	return labels.size >= 2 ? start + header : null;
+	if (divider >= 0) return boundaryAt(divider);
+	return labels.size >= 2 ? boundaryAt(header) : null;
 }
 
 type EarlierText = {
@@ -328,20 +334,27 @@ type ComparableBody = ReturnType<typeof comparableBody> & {
 	senderName: string | null;
 };
 
-const inlineSignOff = new RegExp(`^${signOffWords}\\s+`, "i");
 const contactAddress = new RegExp(`(?<=[^<>\\s,;])${addressDomain.source}`);
 const phone = /(?:\(\d{3}\)|\b\d{3})[ .-]*\d{3}[ .-]*\d{4}\b/;
 const website = /\b(?:https?:\/\/|www\.)\S+/i;
-const contactLabel = /(?:^|[\r\n|])\s*(?:direct|cell|fax):/i;
+const contactLabel = /(?:direct|cell|fax):/i;
+const contactLineLabel = new RegExp(
+	String.raw`(?:^|[\r\n|])\s*${contactLabel.source}`,
+	"i",
+);
+const inlineContact = new RegExp(
+	String.raw`(?<![^\s|])(?:(?:teams meeting\s+)?dial in by phone\s+${phone.source}|${contactLabel.source}|${phone.source}|${website.source}|<?[^<>\s,;|]{1,64}${addressDomain.source})`,
+	"i",
+);
 const titleLine =
-	/(?:^|[\r\n|])\s*(?:[\p{L}-]+[ \t]+){0,5}(?:director|manager|broker|president|partner|associate|coordinator|officer)\s*(?=$|[\r\n|])/iu;
+	/(?:^|(?<=[\r\n|]))[ \t]*(?:[\p{L}-]+[ \t]+){0,5}(?:director|manager|broker|president|partner|associate|coordinator|officer)[ \t]*(?=$|[\r\n|])/iu;
 
 function hasContactDetails(text: string) {
 	return (
 		contactAddress.test(text) ||
 		phone.test(text) ||
 		website.test(text) ||
-		contactLabel.test(text) ||
+		contactLineLabel.test(text) ||
 		titleLine.test(text)
 	);
 }
@@ -353,18 +366,23 @@ function startsWithName(text: string, name: string) {
 	);
 }
 
-function isSignature(
-	block: string,
-	normalized: string,
-	senderName: string | null,
-) {
-	const firstLine = block.split(/[\r\n]/, 1)[0]?.trim() ?? "";
-	if (signOff.test(firstLine) || hasContactDetails(block)) return true;
-	if (!senderName) return false;
-	return (
-		startsWithName(normalized, senderName) ||
-		startsWithName(normalized.replace(inlineSignOff, ""), senderName)
-	);
+function sharedFooterStart(block: string, senderName: string | null) {
+	const contact = block.search(inlineContact);
+	const title = titleLine.exec(block);
+	const titleStart = title
+		? title.index + title[0].length - title[0].trimStart().length
+		: block.length;
+	const footer = Math.min(titleStart, contact < 0 ? block.length : contact);
+	const name = senderName?.split(/\s+/).map(RegExp.escape).join("[ \\t]+");
+	const signOffLine = String.raw`${signOffWords}(?=[ \t]*(?:[\r\n]|$))`;
+	const sender = name
+		? String.raw`|(?:${signOffWords}[ \t]+)?${name}(?=[\s,.|]|$)`
+		: "";
+	const opening = new RegExp(
+		String.raw`(?:^|[\r\n]|[.!?][ \t]+)[ \t]*(?=${signOffLine}${sender})`,
+		"i",
+	).exec(block.slice(0, footer));
+	return opening ? opening.index + opening[0].length : footer;
 }
 
 function rememberEarlier(message: ComparableBody, earlier: EarlierMessages) {
@@ -423,7 +441,20 @@ function sharedSignatureLength(messages: ComparableBody[]) {
 		);
 		length = space < 0 ? 0 : first.normalized.length - space - 1;
 	}
-	return length >= minimumSignatureLength ? length : 0;
+	if (length < minimumSignatureLength) return 0;
+
+	let signature = 0;
+	for (const { body, normalized, offsets, senderName } of messages) {
+		const start = normalized.length - length;
+		const at = offsets[start];
+		if (at === undefined) continue;
+		const footer = at + sharedFooterStart(body.slice(at), senderName);
+		if (footer === body.length) continue;
+		const position = offsets.indexOf(footer, start);
+		if (position >= 0)
+			signature = Math.max(signature, normalized.length - position);
+	}
+	return signature;
 }
 
 export function cleanEmailThread(
@@ -456,17 +487,6 @@ export function cleanEmailThread(
 	for (const group of senders.values()) {
 		const length = sharedSignatureLength(group);
 		if (!length) continue;
-		const signature = group.some(
-			({ body, normalized, offsets, senderName }) => {
-				const start = normalized.length - length;
-				const at = offsets[start];
-				return (
-					at !== undefined &&
-					isSignature(body.slice(at), normalized.slice(start), senderName)
-				);
-			},
-		);
-		if (!signature) continue;
 		for (const message of group) {
 			const offset = message.offsets[message.normalized.length - length];
 			message.body = message.body.slice(0, offset).trimEnd() || message.body;
