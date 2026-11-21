@@ -25,6 +25,7 @@
 
 ## Leads from email
 
+- [ ] Intake recognizes a lead-source notice by matching its sender's address or domain against the [lead-source sender list](../new-database.md#leads-from-email).
 - [ ] A clear inbound lead creates one lead at New, with no owner until a partner claims it. Both partners can find the unclaimed lead on Leads.
 - [ ] A recognized lead-source notice or a direct inquiry qualifies when it gives a nonblank prospect name, a clear request for help and an email address, phone number or street address with city. A lead-source notice takes the prospect's details from the body. The street address and city must both appear in the quoted evidence. An exact email or phone match can identify an existing lead, including a contact fact verified by a later notice.
 - [ ] Internal mail, system notices and mail about an existing deal or relationship do not create new leads. An unknown address or a subject alone is insufficient. Keep uncertain intake with its recorded evidence for reclassification. Work that needs a separate partner decision goes through its own Home kind.

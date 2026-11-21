@@ -61,7 +61,7 @@ async function ask(path: string, body: object | undefined, headers: object) {
 	return { status: response.status, body: answer };
 }
 const MAIL_CAPTURE = { "Engine-Job": "mail_capture", "Engine-For-User": "joe" };
-async function jobPost(path: string, body: object, job: object) {
+async function jobRequest(path: string, body: object | undefined, job: object) {
 	return ask(`/jobs/${path}`, body, {
 		"Cf-Access-Jwt-Assertion": await new SignJWT({})
 			.setProtectedHeader({ alg: "RS256", kid: "made-up-kid" })
@@ -73,7 +73,7 @@ async function jobPost(path: string, body: object, job: object) {
 	});
 }
 const viaJob = (body: object, job: object = MAIL_CAPTURE, path = "") =>
-	jobPost(`activities${path}`, body, job);
+	jobRequest(`activities${path}`, body, job);
 const viaApp = (body: object) =>
 	ask("/api/engine/activities", body, {
 		Cookie: "__Host-dealroom_session=made-up",
@@ -126,7 +126,7 @@ const stored = async (message_id: string) =>
 	).rows;
 
 const intake = (body: object, user = "joe") =>
-	jobPost("leads/email-intake", body, {
+	jobRequest("leads/email-intake", body, {
 		...MAIL_CAPTURE,
 		"Engine-For-User": user,
 	});
@@ -155,6 +155,34 @@ async function assertRows(
 ) {
 	assert.equal((await db.query(statement, values)).rowCount, count);
 }
+
+test("the router queue identifies emails saved by lead intake", async () => {
+	const happened_at = new Date().toISOString();
+	const source = notice("router-source");
+	const lead = await intake({ ...source, happened_at });
+	const ordinary = await viaJob(
+		mail(
+			"router-ordinary@example.test",
+			{ sender: source.email.sender },
+			{ happened_at, about: [{ party_id: CASEY }] },
+		),
+	);
+	assert.equal(lead.status, 201);
+	assert.equal(ordinary.status, 201);
+
+	const { status, body } = await jobRequest(
+		"router-queue?limit=200",
+		undefined,
+		MAIL_CAPTURE,
+	);
+	assert.equal(status, 200);
+	assert.ok(Array.isArray(body.emails));
+	const flags = new Map(
+		body.emails.map((email) => [email.activity_id, email.lead_source]),
+	);
+	assert.equal(flags.get(lead.body.activity_id), true);
+	assert.equal(flags.get(ordinary.body.activity_id), false);
+});
 
 test("a notice files the named prospect and the exact source once for both mailboxes", async () => {
 	const request = notice("Intake-A");
@@ -748,17 +776,8 @@ test("an email refuses recipient fields it does not store", async () => {
 	assert.deepEqual(await stored(message_id), []);
 });
 
-async function filedEmails(query: string, job = otherMailbox) {
-	return ask(`/jobs/filed-emails${query}`, undefined, {
-		"Cf-Access-Jwt-Assertion": await new SignJWT({})
-			.setProtectedHeader({ alg: "RS256", kid: "made-up-kid" })
-			.setIssuer(TEAM)
-			.setAudience("made-up-jobs")
-			.setExpirationTime("5 minutes")
-			.sign(access.privateKey),
-		...job,
-	});
-}
+const filedEmails = (query: string, job = otherMailbox) =>
+	jobRequest(`filed-emails${query}`, undefined, job);
 
 test("filed mail pages by id without an age limit and only for its mailbox", async () => {
 	const expected = [];

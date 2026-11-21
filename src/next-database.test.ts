@@ -4376,6 +4376,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 				"imported_deal_invoiced",
 				"app_user",
 				"job",
+				"lead_source_sender",
 				"merged_party",
 				"change",
 				"platform_metric",
