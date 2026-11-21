@@ -163,15 +163,16 @@ async function readTodayReminders(
 		.selectFrom(selectNextDeals(db, today).as("board"))
 		.select("id")
 		.where(isOpenBoardDeal);
+	const requestDay = sql<string>`${today}::date`;
 	const { rows } = await sql<StepRow>`
-		select s.id, s.what as title, s.property_id, ${stepTargetFields(db)}, s.due_on::text as due_on,
-			case when s.due_on < ${today}::date then (${today}::date - s.due_on)::int end as days_late,
+		select s.id, s.what as title, s.property_id, ${stepTargetFields(db, requestDay)}, s.due_on::text as due_on,
+			case when s.due_on < ${requestDay} then (${requestDay} - s.due_on)::int end as days_late,
 			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id,
 			s.call_activity_id as call_id, c.happened_at as call_at, contact.name as call_contact,
 			s.deal_id is not null and not exists (
 				select from (${openDeals}) as open_deal where open_deal.id = s.deal_id
 			) as deal_ended
-		${datedPartnerSteps(sql`${now_at}::timestamptz`)} and s.due_on <= ${today}::date
+		${datedPartnerSteps(sql`${now_at}::timestamptz`)} and s.due_on <= ${requestDay}
 			${owner === "all" ? sql`` : sql`and u.slug = ${owner}`}
 		order by s.due_on, (s.call_activity_id is null), s.id
 	`.execute(db);

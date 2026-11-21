@@ -48,6 +48,8 @@ Partner sign-in follows a separate [after-hours switch](sign-in.md#switch-after-
 
 Outlook stays the source of mail and calendar. Which mail the database keeps, and how older mail without a Message-ID is matched: `docs/new-database.md` § "Activity, emails and next steps" and § "Copying today's emails". The agenda is one snapshot per partner, replaced whole (§ "25. Calendar agenda, review dismissals and meeting confirmations").
 
+Mail capture queues a summary for each new mailbox copy of an unsummarized email, except lead notices. The mailbox partner's Doc link can supply the summary and an action title for Home. Enqueueing starts once the judgment queue and [summary enqueue migration](../schema/add-queue-email-summary.sql) are installed. [Mail judgment jobs](new-database.md#mail-judgment-jobs)
+
 ## Switches
 
 Each switch moves where requests go. None of them builds anything, and none moves records back (see "Going back").
@@ -84,7 +86,7 @@ Still on the old API with no switch yet:
 - Email and calendar calls outside the Home routing above (slice 30), and Deals saves outside the two save switches above (slice 29).
 - Sign-in.
 
-The Updates page reads and saves on the new schema directly, once the app routes it to the engine (§ "Updates and notification settings").
+When `data-deals-saves-from-engine` is on, Updates and its navigation badge use the engine endpoints `/updates`, `/updates/read`, `/preferences` and `/updates/changes` (§ "Updates and notification settings").
 
 The signed-in Prospects lane, detail, quick add and Monday review use the new schema directly. The app enables them when `deals-saves-from-engine` is on.
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, mock, test } from "node:test";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
-import { copyTest } from "../test-copy.ts";
+import { copyTest, readSchema } from "../test-copy.ts";
 import app from "../worker.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -117,6 +117,118 @@ const note = (more = {}) => ({
 	about: [{ party_id: CASEY }],
 	...more,
 });
+
+test("mail capture queues each new message once per mailbox partner", async () => {
+	const conversation_id = "summary-job-thread";
+	const first = mail("summary-job-first", { conversation_id });
+	const second = mail("summary-job-second", { conversation_id });
+	const otherMailbox = { ...MAIL_CAPTURE, "Engine-For-User": "dell" };
+	const one = await viaJob(first);
+	const two = await viaJob(second);
+	assert.equal(one.status, 201);
+	assert.equal(two.status, 201);
+	assert.equal((await viaJob(first)).body.replayed, true);
+	assert.equal(
+		(await viaJob({ ...first, idempotency_key: randomUUID() })).status,
+		201,
+	);
+	const other = await viaJob(
+		{ ...first, idempotency_key: randomUUID() },
+		otherMailbox,
+	);
+	assert.equal(other.status, 201);
+	assert.equal(other.body.activity_id, one.body.activity_id);
+	const { rows } = await db.query(
+		`select activity_id, owner_user_id, idempotency_key, kind from doc_judgment_job
+		where activity_id in ($1, $2) order by activity_id, owner_user_id`,
+		[one.body.activity_id, two.body.activity_id],
+	);
+	assert.deepEqual(
+		rows
+			.map(({ activity_id, owner_user_id, idempotency_key, kind }) => {
+				assert.equal(idempotency_key, activity_id);
+				assert.equal(kind, "email_summary");
+				return `${activity_id}:${owner_user_id}`;
+			})
+			.sort(),
+		[
+			`${one.body.activity_id}:${JOE}`,
+			`${one.body.activity_id}:${DELL}`,
+			`${two.body.activity_id}:${JOE}`,
+		].sort(),
+	);
+});
+
+test("mail capture skips lead notices and available summaries", async () => {
+	const sender = "summary-excluded@example.test";
+	await db.query(
+		"insert into lead_source_sender (address, name) values ($1, 'Example source')",
+		[sender],
+	);
+	const lead = await viaJob(
+		mail("summary-lead-notice", { sender }, { about: [{ party_id: CASEY }] }),
+	);
+	assert.equal(lead.status, 201);
+	await assertRows(
+		0,
+		"select from doc_judgment_job where activity_id = $1",
+		lead.body.activity_id,
+	);
+
+	const otherMailbox = { ...MAIL_CAPTURE, "Engine-For-User": "dell" };
+	for (const available of [true, false]) {
+		const message = mail(`summary-prior-${available}`);
+		const saved = await viaJob(message);
+		assert.equal(saved.status, 201);
+		await db.query(
+			`insert into email_summary
+			(activity_id, source_activity_id, source_hash, generator_version, status, text, provenance, recorded_at)
+			values ($1, $1, 'sha256:' || repeat('a', 64), 'example.v1', $2, $3, '{}', '2026-01-01')`,
+			[
+				saved.body.activity_id,
+				available ? "available" : "unavailable",
+				available ? "An older summary." : null,
+			],
+		);
+		assert.equal(
+			(
+				await viaJob(
+					{ ...message, idempotency_key: randomUUID() },
+					otherMailbox,
+				)
+			).status,
+			201,
+		);
+		await assertRows(
+			available ? 0 : 1,
+			"select from doc_judgment_job where activity_id = $1 and owner_user_id = $2",
+			saved.body.activity_id,
+			DELL,
+		);
+	}
+});
+
+test("mail capture succeeds before the enqueue migration", async () => {
+	await db.query("drop function queue_email_summary(uuid)");
+	try {
+		const response = await viaJob(mail("summary-before-enqueue-migration"));
+		assert.equal(response.status, 201);
+		await assertRows(
+			1,
+			"select from email_mailbox where activity_id = $1 and user_id = $2",
+			response.body.activity_id,
+			JOE,
+		);
+		await assertRows(
+			0,
+			"select from doc_judgment_job where activity_id = $1",
+			response.body.activity_id,
+		);
+	} finally {
+		await db.query(await readSchema("add-queue-email-summary.sql"));
+	}
+});
+
 const stored = async (message_id: string) =>
 	(
 		await db.query(
