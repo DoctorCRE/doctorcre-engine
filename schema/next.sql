@@ -3856,6 +3856,7 @@ grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, pa
 grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
 grant update (lead_client_id) on party_role to engine;
 grant update (relationship_origin, rivalry_note, refers_business, offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id, needs_attention) on party_role to engine;
+grant update (acknowledged_by_user_id, acknowledged_at) on lead_email_attention to engine;
 grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (started_on, ended_on, note) on party_link to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;

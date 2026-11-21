@@ -2565,6 +2565,7 @@ const CHANGEABLE: Record<string, string[]> = {
 		"subject",
 		"time_zone",
 	],
+	lead_email_attention: ["acknowledged_at", "acknowledged_by_user_id"],
 	candidate: [
 		"estimated_lease_on",
 		"lease_estimate_source",
