@@ -5,9 +5,11 @@ import { type Meeting, meetingsFromSnapshot } from "./calendar/meetings.ts";
 import { readStoredAgenda } from "./calendar/next-agenda.ts";
 import { PARTNERS } from "./clients/read.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
+import { readCompletionReviews } from "./home-inbox-reviews-updates.ts";
 import {
 	datedPartnerSteps,
-	homeDisplayText,
+	homeStepCopy,
+	type StepTitle,
 	stepItemId,
 	stepOpenUrl,
 	stepTargetFields,
@@ -22,10 +24,8 @@ type Clock = Record<
 > & { is_partner: boolean | null; partners: { slug: string; name: string }[] };
 type Match = Record<"email" | "party_name", string> &
 	Record<"deal_id" | "deal_name" | "client_name", string | null>;
-type StepRow = Record<
-	"id" | "title" | "context_label" | "due_on" | "owner",
-	string
-> &
+type StepRow = Omit<StepTitle, "status" | "hold_until" | "due_on"> &
+	Record<"id" | "due_on" | "owner", string> &
 	Record<
 		"deal_id" | "party_id" | "call_id" | "building_deal_id",
 		string | null
@@ -172,7 +172,8 @@ async function readTodayReminders(
 	const { rows } = await sql<StepRow>`
 		select s.id, s.what as title, ${stepTargetFields(db)}, s.due_on::text as due_on,
 			case when s.due_on < ${today}::date then (${today}::date - s.due_on)::int end as days_late,
-			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id, s.call_activity_id as call_id,
+			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id,
+			s.call_activity_id as call_id, c.happened_at as call_at, contact.name as call_contact,
 			s.deal_id is not null and not exists (
 				select from (${openDeals}) as open_deal where open_deal.id = s.deal_id
 			) as deal_ended
@@ -180,10 +181,16 @@ async function readTodayReminders(
 			${owner === "all" ? sql`` : sql`and u.slug = ${owner}`}
 		order by s.due_on, (s.call_activity_id is null), s.id
 	`.execute(db);
+	const viewerSteps = rows.filter((r) => r.is_viewer).map((r) => r.id);
+	const reviews = viewerSteps.length
+		? await readCompletionReviews(db, viewerSteps)
+		: null;
 	const list = rows.map((r) => ({
 		id: r.id,
 		kind: r.call_id ? ("call_follow_up" as const) : ("step" as const),
-		title: homeDisplayText(r.title) || "Open the saved step",
+		title:
+			reviews?.get(r.id)?.title ??
+			homeStepCopy({ ...r, status: "open", hold_until: null }).title,
 		context_label: r.context_label,
 		due_on: r.due_on,
 		days_late: r.days_late,

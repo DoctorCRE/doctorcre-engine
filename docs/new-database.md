@@ -1535,7 +1535,7 @@ A row gives `item_id` and `base_version` from its Home card, `kind`, `conversati
 
 The response is `{ ok: true, schema_version: "home-today.v1", today, viewer, owner, partners, meetings, reminders }` with no Deal pulse section. `meetings` and `reminders` fail independently: a read failure in either section returns `state: "unavailable"` with a plain `reason` while the other section still loads. `meetings` reads the signed-in partner's door 25 calendar snapshot for today's full Central calendar day (including meetings that already ended today), matches non-user organizer and attendee emails to open deals and parties (`possible_deals`, `context_label`, `open_url`), and removes dismissed and confirmed keys from `follow_up_reviews`. `reminders` splits the two partners' open dated `next_step` rows due on or before today (excluding future holds, active snoozes, and dropped call follow-ups; deal critical dates are not reminders) into `late` and `upcoming`, with `reason: null` when healthy. Each `late` item carries calendar `days_late` and `late_label` (`"1 day late"`, `"N days late"`). Each step owned by the signed-in partner carries its canonical Home card `home_item_id` (independent of the inbox page limit, because the card exists even when the inbox list cuts it off) and Home's `open_url`; the other partner's steps carry `home_item_id: null`. A step on an ended deal also carries `deal_ended: true` so the Deals Today panel can omit it. Home keeps the reminder.
 
-Each reminder's `title` uses Home's display cleanup. If the cleaned title is empty, it reads "Open the saved step".
+Each reminder's `title` uses the Home step card's title rules. When the linked card shows a completion review, it uses that review's title. Titles are at most 90 characters. The display cleanup leaves the saved step text intact.
 
 ### Calendar read
 
@@ -1571,7 +1571,7 @@ Track record counts come from `vendor_track_record`. A deal counts even when its
 
 ## Doc conversations and turns
 
-The [Doc screen](screens/doc.md) calls `/api/engine/doc/*` on the app's origin through the current [partner session door](sign-in.md#serve-pages-and-partner-calls-through-the-app). Every call resolves the signed-in partner, and every POST requires the partner write proofs. Doc responses use `Cache-Control: no-store`. Only the app route serves Doc. The engine owns the tables in `next`, and Doc starts with empty history.
+The [Doc screen](screens/doc.md) calls `/api/engine/doc/*` on the app's origin through the current [partner session door](sign-in.md#serve-pages-and-partner-calls-through-the-app). Every call resolves the signed-in partner, and every POST requires the partner write proofs. Doc responses use `Cache-Control: no-store`. Only the app route serves Doc. The engine owns the tables in `next`, and Doc starts with empty history. Apply [the Doc storage migration](../schema/add-doc-conversations.sql) to an existing `next` before enabling these routes.
 
 ### Private storage
 
