@@ -25,6 +25,20 @@ const [
 ] = Array.from({ length: 17 }, () => randomUUID());
 const job = { job: "cadence" };
 const read = (path: string) => save(job, path, {}, "GET");
+const watchAs = (subscriber: string, since: string) =>
+	read(
+		`deal-watches/deal/${deal}?subscriber=${subscriber}&since=${encodeURIComponent(since)}`,
+	);
+
+async function watchWatermark() {
+	const {
+		rows: [watermark],
+	} = await db.query<{ since: string }>(
+		"select to_jsonb(clock_timestamp()) #>> '{}' as since",
+	);
+	assert.ok(watermark);
+	return watermark.since;
+}
 
 before(async () => {
 	await setup();
@@ -171,4 +185,98 @@ test("a lease watch reads the lease dates, options and linked deal history", asy
 	const [, since] = await read(`${path}9999-01-01T00:00:00Z`);
 	assert.deepEqual(since.changes, []);
 	assert.deepEqual(since.reply_activity_ids, []);
+});
+
+test("a second mailbox sees a filed reply when its copy arrives after the watermark", async () => {
+	const since = await watchWatermark();
+	const [beforeStatus, before] = await watchAs("dell", since);
+	assert.equal(beforeStatus, 200);
+	assert.deepEqual(before.reply_activity_ids, []);
+	await db.query(`
+		begin;
+		select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${dell}', true);
+		insert into email_mailbox (activity_id, user_id) values ('${reply}', '${dell}');
+		commit;
+	`);
+	const [status, body] = await watchAs("dell", since);
+	assert.equal(status, 200);
+	assert.deepEqual(body.reply_activity_ids, [reply]);
+});
+
+test("a deleted ordinary step keeps its old date and actor in watch history", async () => {
+	const stepId = randomUUID();
+	await db.query(`
+		begin;
+		select set_config('engine.user_id', '${joe}', true);
+		insert into next_step (id, deal_id, what, due_on) values ('${stepId}', '${deal}', 'Example call', '2000-01-01');
+		commit;
+	`);
+	const since = await watchWatermark();
+	await db.query(`
+		begin;
+		set local role engine;
+		select set_config('engine.user_id', '${joe}', true);
+		delete from next_step where id = '${stepId}';
+		commit;
+	`);
+	const [status, body] = await watchAs("joe", since);
+	assert.equal(status, 200);
+	assert.ok(Array.isArray(body.changes));
+	const dates = body.changes.filter(
+		(change) => change.record.id === stepId && change.field === "due_on",
+	);
+	assert.deepEqual(
+		dates.map(({ action, old_value, new_value, actor }) => ({
+			action,
+			old_value,
+			new_value,
+			actor,
+		})),
+		[
+			{
+				action: "delete",
+				old_value: "2000-01-01",
+				new_value: null,
+				actor: "joe",
+			},
+		],
+	);
+});
+
+test("the watch follows proposal detail visibility for step-completion reviews", async () => {
+	const [sourceId, stepId, proposalId] = Array.from({ length: 3 }, () =>
+		randomUUID(),
+	);
+	const since = await watchWatermark();
+	await db.query(`
+		begin;
+		select set_config('engine.user_id', '${dell}', true);
+		insert into next_step (id, deal_id, what, due_on) values ('${stepId}', '${deal}', 'Example call', '2000-01-01');
+		insert into activity (id, kind, happened_at, summary) values ('${sourceId}', 'note', '2001-01-01', 'Example note');
+		insert into activity_about (activity_id, deal_id) values ('${sourceId}', '${deal}');
+		select set_config('engine.job', 'cadence', true);
+		insert into proposal (id, kind, activity_id, activity_kind, deal_id, next_step_id, evidence, proposed_by_job)
+			values ('${proposalId}', 'next_step_done', '${sourceId}', 'note', '${deal}', '${stepId}', 'Example evidence', 'cadence');
+		commit;
+	`);
+	for (const [subscriber, detailStatus] of [
+		["dell", 200],
+		["joe", 404],
+	] as const) {
+		const [proposalStatus] = await save(
+			{ user: subscriber },
+			`proposals/${proposalId}`,
+			{},
+			"GET",
+		);
+		assert.equal(proposalStatus, detailStatus);
+		const [status, body] = await watchAs(subscriber, since);
+		assert.equal(status, 200);
+		assert.ok(Array.isArray(body.changes));
+		assert.equal(
+			body.changes.some((change) => change.record.id === proposalId),
+			detailStatus === 200,
+			subscriber,
+		);
+	}
 });

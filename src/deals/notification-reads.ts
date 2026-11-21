@@ -4,6 +4,7 @@ import { sql, type Transaction } from "kysely";
 import { z } from "zod";
 import { Refusal, refuse } from "../answer.ts";
 import { failureKind } from "../failure.ts";
+import { visibleProposalDetail } from "../home-inbox-review.ts";
 import { nextTransaction } from "../next-connection.ts";
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
 import type { NextSaveEnv } from "../next-door.ts";
@@ -160,16 +161,21 @@ async function dealWatch(db: Transaction<DB>, watch: Watch) {
 			and case c.table_name
 				when 'deal' then c.record = jsonb_build_object('id', ${dealId}::uuid)
 				when 'deal_phase_change' then c.record ->> 'deal_id' = ${dealId}::text
-				when 'next_step' then exists (
-					select from next_step s where s.deal_id = ${dealId} and c.record = jsonb_build_object('id', s.id)
-				)
+				when 'next_step' then case when c.action = 'delete' then c.old_value ->> 'deal_id' = ${dealId}::text
+					else exists (
+						select from next_step s where s.deal_id = ${dealId} and c.record = jsonb_build_object('id', s.id)
+					) end
 				when 'critical_date' then exists (
 					select from critical_date d where c.record = jsonb_build_object('id', d.id)
 					and (d.deal_id = ${dealId} or (d.kind = 'option_notice' and d.lease_version_id in (select id from versions)))
 				)
 				when 'proposal' then exists (
-					select from proposal p where p.deal_id = ${dealId} and p.kind = 'next_step_done'
+					select from proposal p
+					left join activity a on a.id = p.activity_id
+					left join next_step step on step.id = p.next_step_id
+					where p.deal_id = ${dealId} and p.kind = 'next_step_done'
 					and c.record = jsonb_build_object('id', p.id)
+					and ${visibleProposalDetail(subscriber.id)}
 				)
 				when 'lease_version' then (c.record ->> 'id')::uuid in (select id from versions)
 				when 'lease_option' then (c.record ->> 'lease_version_id')::uuid in (select id from versions)
@@ -179,7 +185,7 @@ async function dealWatch(db: Transaction<DB>, watch: Watch) {
 		select e.activity_id from email e join email_mailbox m using (activity_id)
 		where m.user_id = ${subscriber.id}
 		and exists (select from activity_about a where a.activity_id = e.activity_id and a.deal_id = ${dealId}
-			and a.changed_at >= ${watch.since}::timestamptz)
+			and greatest(a.changed_at, m.changed_at) >= ${watch.since}::timestamptz)
 		and not exists (select from party_email pe join app_user u on u.id = pe.party_id where pe.address = e.sender)
 		order by e.activity_id`.execute(db);
 	return {
