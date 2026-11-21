@@ -4015,6 +4015,7 @@ create table doc_link (
 	credential_hash text not null unique check (credential_hash ~ '^[0-9a-f]{64}$'),
 	issued_at timestamptz not null default now(),
 	last_seen_at timestamptz,
+	readiness text constraint doc_link_readiness check (readiness in ('ready', 'signed_out', 'plan_limited')),
 	foreign key (owner_user_id, is_account_partner) references app_user (id, is_account_partner)
 );
 
@@ -4030,4 +4031,4 @@ create policy doc_link_credential on doc_link for select to engine using (
 );
 revoke all on doc_link from public, engine_reader;
 grant select, insert, delete on doc_link to engine;
-grant update (credential_hash, issued_at, last_seen_at) on doc_link to engine;
+grant update (credential_hash, issued_at, last_seen_at, readiness) on doc_link to engine;

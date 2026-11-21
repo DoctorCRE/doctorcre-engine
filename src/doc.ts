@@ -2,6 +2,7 @@ import { type Context, Hono } from "hono";
 import { type Selectable, sql, type Transaction } from "kysely";
 import { Refusal, refuse, unregisteredFields } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
+import { docLinkConnected } from "./doc-link.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
@@ -16,25 +17,8 @@ import {
 import { isArguments } from "./save-door.ts";
 import { isUuid } from "./uuid.ts";
 
-const initialDocClaimState = { reads: 0, sources: {} };
-
 type DocEnv = WriterEnv & PartnerSessionEnv;
 type DocTransaction = Transaction<DB>;
-type DocAnswer = {
-	kind: "answer" | "clarification" | "refusal";
-	text: string;
-	sources: JsonObject[];
-	proposal: JsonObject | null;
-};
-type AnswerQuestion = (
-	input: {
-		partner: string;
-		conversation_id: string;
-		turn: Turn;
-		history: PriorTurn[];
-	},
-	signal: AbortSignal,
-) => Promise<DocAnswer | null>;
 
 function reject(
 	status: Refusal["status"],
@@ -115,6 +99,7 @@ type Turn = Pick<
 > & {
 	state: "queued" | "working" | "failed" | "answered";
 	confirmation: JsonObject | null;
+	waiting_reason: string | null;
 };
 
 const conversations = sql`
@@ -123,8 +108,19 @@ const conversations = sql`
 	  on t.conversation_id = c.id and t.owner_user_id = c.owner_user_id and t.position = 1
 	where c.owner_user_id = ${ACTING_USER}`;
 
+const queued = sql`(t.state = 'queued' or t.claim_until <= statement_timestamp())`;
+
 const turnFields = sql`t.id, to_jsonb(t.created_at) #>> '{}' as created_at, t.position, t.question, t.context, t.answer, t.idempotency_key,
-	case when t.claim_until <= statement_timestamp() then 'failed' else t.state end as state,
+	case when ${queued} then 'queued' else t.state end as state,
+	case when ${queued} then coalesce(
+		(select case
+			when not ${docLinkConnected} then 'Doc answers when your Mac is on.'
+			when readiness = 'signed_out' then 'Sign in to Claude Code on your Mac.'
+			when readiness = 'plan_limited' then 'Doc is paused until your Claude plan resets.'
+			else 'Doc is waiting for a free slot on your Mac.'
+		end from doc_link where owner_user_id = t.owner_user_id),
+		'Doc isn''t set up on your Mac yet.'
+	) end as waiting_reason,
 	(select answer -> 'result' from save_receipt where idempotency_key = t.confirmation_key) as confirmation`;
 
 async function listChats(tx: DocTransaction, before?: string) {
@@ -201,61 +197,32 @@ async function reserve(tx: DocTransaction, { key, args }: Ask) {
 		rows: [latest],
 	} = await sql<Turn>`select ${turnFields} ${turnInChat(conversation_id)}
 		order by t.position desc limit 1`.execute(tx);
-	const claim_id = crypto.randomUUID();
-	const expiry = sql`clock_timestamp() + interval '60 seconds'`;
 	if (prior) {
 		const {
 			rows: [turn],
 		} = await sql<Turn>`select ${turnFields} ${turnInChat(conversation_id)}
 			and t.id = ${prior.id}`.execute(tx);
 		if (!turn) return reject(404, "not_found");
-		if (turn.state !== "failed")
-			return { conversation_id, turn, claim_id: null };
+		if (turn.state !== "failed") return { conversation_id, turn };
 		if (latest?.id !== turn.id) reject(409, "turn_superseded");
-		await sql`update doc_turn set state = 'working', claim_id = ${claim_id}, claim_until = ${expiry}, claim_state = ${initialDocClaimState}
-			where id = ${turn.id} and owner_user_id = ${ACTING_USER}`.execute(tx);
-		const working: Turn = { ...turn, state: "working" };
-		return { conversation_id, turn: working, claim_id };
+		const queued = await sql<Turn>`update doc_turn as t set state = 'queued'
+			where id = ${turn.id} and owner_user_id = ${ACTING_USER}
+			returning ${turnFields}`.execute(tx);
+		if (!queued.rows[0]) throw new Error("Doc retry returned no turn");
+		return { conversation_id, turn: queued.rows[0] };
 	}
 
 	if (latest?.state === "working" || latest?.state === "queued")
 		reject(409, "turn_in_progress");
-	if (latest?.state === "failed")
-		await sql`update doc_turn set state = 'failed', claim_id = null, claim_until = null, claim_state = null
-			where id = ${latest.id} and owner_user_id = ${ACTING_USER} and state = 'working'`.execute(
-			tx,
-		);
 	const {
 		rows: [turn],
 	} = await sql<Turn>`insert into doc_turn as t
-		(conversation_id, owner_user_id, position, idempotency_key, request_hash, question, context,
-			state, claim_id, claim_until, claim_state)
+		(conversation_id, owner_user_id, position, idempotency_key, request_hash, question, context, state)
 		values (${conversation_id}, ${ACTING_USER}, ${(latest?.position ?? 0) + 1}, ${key},
-			${request_hash}, ${args.question}, ${args.context ?? null}, 'working', ${claim_id}, ${expiry}, ${initialDocClaimState})
+			${request_hash}, ${args.question}, ${args.context ?? null}, 'queued')
 		returning ${turnFields}`.execute(tx);
 	if (!turn) throw new Error("Doc reservation returned no turn");
-	return { conversation_id, turn, claim_id };
-}
-
-async function askModel(
-	model: AnswerQuestion,
-	input: Parameters<AnswerQuestion>[0],
-) {
-	const abort = new AbortController();
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		const timeout = new Promise<null>((resolve) => {
-			timer = setTimeout(() => {
-				resolve(null);
-				abort.abort();
-			}, 45_000);
-		});
-		return await Promise.race([timeout, model(input, abort.signal)]);
-	} catch {
-		return null;
-	} finally {
-		clearTimeout(timer);
-	}
+	return { conversation_id, turn };
 }
 
 function transact<T>(
@@ -270,8 +237,7 @@ function transact<T>(
 	});
 }
 
-// Doc link takes over turn delivery in #978.
-export function docRoutes(model: AnswerQuestion = async () => null) {
+export function docRoutes() {
 	return new Hono<DocEnv>()
 		.onError((error, c) => {
 			if (error instanceof SaveRefusal) return refuse(c, error.refusal);
@@ -302,39 +268,7 @@ export function docRoutes(model: AnswerQuestion = async () => null) {
 		})
 		.post("/turns", async (c) => {
 			const request = await parseAsk(c);
-			const { conversation_id, claim_id, turn } = await transact(c, (tx) =>
-				reserve(tx, request),
-			);
-			if (!claim_id)
-				return c.json(
-					{ conversation_id, turn },
-					turn.state === "working" || turn.state === "queued" ? 202 : 200,
-				);
-			const history = await transact(c, (tx) =>
-				recentDocTurns(tx, conversation_id, turn.position),
-			);
-			const answer = await askModel(model, {
-				partner: c.get("partner").slug,
-				conversation_id,
-				turn,
-				history,
-			});
-			const saved = await transact(c, async (tx) => {
-				await lockChat(tx, conversation_id);
-				const {
-					rows: [finished],
-				} = await sql<Turn>`update doc_turn as t
-					set state = ${answer ? "answered" : "failed"}, claim_id = null, claim_until = null, claim_state = null, answer = ${answer}
-					where id = ${turn.id} and owner_user_id = ${ACTING_USER} and claim_id = ${claim_id}
-						and claim_until > clock_timestamp() returning ${turnFields}`.execute(
-					tx,
-				);
-				if (!finished) return reject(409, "turn_superseded");
-				return finished;
-			});
-			const result = { conversation_id, turn: saved };
-			return answer
-				? c.json(result)
-				: refuse(c, new Refusal(503, "doc_unavailable", result));
+			const result = await transact(c, (tx) => reserve(tx, request));
+			return c.json(result, result.turn.state === "answered" ? 200 : 202);
 		});
 }
