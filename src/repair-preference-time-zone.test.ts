@@ -21,9 +21,18 @@ const cases = [
 		name: "refuses UTC set outside the copy",
 		zones: ["America/Chicago"],
 		explicitChoice: true,
-		error: "The UTC preference was not set by the old system copy",
+		error:
+			"The UTC preference cannot be safely attributed to the old system copy",
 	},
 ];
+
+cases.push({
+	name: "refuses a partner saving the copied UTC preference",
+	zones: ["UTC"],
+	explicitChoice: false,
+	error:
+		"The UTC preference cannot be safely attributed to the old system copy",
+});
 
 for (const { name, zones, error, explicitChoice } of cases) {
 	test(`Central time repair ${name}`, async (t) => {
@@ -44,11 +53,15 @@ for (const { name, zones, error, explicitChoice } of cases) {
 			[zones],
 		);
 		await db.query("commit");
+		if (name === "refuses a partner saving the copied UTC preference") {
+			await db.query(`insert into save_receipt (idempotency_key, verb, request_hash, answer)
+				values (gen_random_uuid(), 'save-preferences', 'example', '{"ok": true}')`);
+		}
 		if (explicitChoice) {
 			await db.query(`begin;
 				select set_config('engine.job', '', true), set_config('engine.user_id', id::text, true)
 				from app_user where slug = 'Example 1';
-				update user_preference set time_zone = 'UTC';
+				update user_preference set time_zone = 'UTC' where user_id = (select id from app_user where slug = 'Example 1');
 				commit;`);
 		}
 		const preferences = async () =>

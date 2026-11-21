@@ -23,9 +23,18 @@ begin
 		where c.table_name = 'user_preference' and c.record = jsonb_build_object('user_id', p.user_id)
 			and c.new_value ? 'time_zone'
 		order by c.id desc limit 1
+	) and not exists (
+		select from next.change c
+		where c.table_name = 'user_preference' and c.record = jsonb_build_object('user_id', p.user_id)
+			and c.changed_by_user_id is not null and c.id > (
+				select max(id) from next.change where table_name = 'user_preference'
+					and record = jsonb_build_object('user_id', p.user_id) and action = 'insert'
+			)
+	) and not exists (
+		select from next.save_receipt r where r.verb = 'save-preferences'
 	);
 	if not found then
-		raise exception 'The UTC preference was not set by the old system copy';
+		raise exception 'The UTC preference cannot be safely attributed to the old system copy';
 	end if;
 end $$;
 
