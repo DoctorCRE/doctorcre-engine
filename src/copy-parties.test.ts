@@ -473,6 +473,53 @@ test("placeholder employers stay out of the copy while vendor contacts and real 
 		assert.deepEqual(await rows("select count(*) from change"), changes);
 	}));
 
+test("a rerun recognizes a saved placeholder affiliation and skips a new one", () =>
+	rolledBack(async () => {
+		const again = await copyResults(
+			oldParty(110, { kind: "org", name: "(TBD)" }) +
+				oldParty(111, { org_id: id(110), title: "Example broker" }) +
+				oldParty(112, { org_id: id(110), title: "Example advisor" }) +
+				`select set_config('engine.job', 'old_system', true);
+				insert into party (id, kind, name) values
+					('${id(110)}', 'company', '(TBD)'), ('${id(111)}', 'person', 'Example 111');
+				insert into outside_id (source, value, party_id) values
+					('old_system', '${id(110)}', '${id(110)}'), ('old_system', '${id(111)}', '${id(111)}');
+				insert into party_company (person_id, company_id, title)
+					values ('${id(111)}', '${id(110)}', 'Example broker');
+				set constraints all immediate;`,
+		);
+		assert.deepEqual(
+			again
+				.at(-1)
+				?.rows.filter((row) =>
+					[id(110), id(111), id(112)].includes(row.old_id),
+				),
+			[
+				{
+					old_id: id(112),
+					field: "org_id",
+					value: id(110),
+					reason: "placeholder company",
+				},
+				{
+					old_id: id(112),
+					field: "title",
+					value: "Example advisor",
+					reason: "its company is a placeholder",
+				},
+			],
+		);
+		assert.deepEqual(again.at(-2)?.rows, [
+			{ skipped_companies: "0", skipped_affiliations: "1" },
+		]);
+		assert.deepEqual(
+			await rows(
+				`select person_id, title from party_company where company_id = '${id(110)}'`,
+			),
+			[{ person_id: id(111), title: "Example broker" }],
+		);
+	}));
+
 test("today's import history and reference numbers are outside ids of the record each old one became", async () => {
 	// biome-ignore format: one row per id
 	assert.deepEqual(await rows("select source, value, party_id from outside_id where source <> 'old_system' order by source, value"), [

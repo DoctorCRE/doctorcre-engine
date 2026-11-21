@@ -265,13 +265,13 @@ left join outside_id map on map.source = 'old_system' and map.value = s.org_id::
 left join source_party org on org.id = s.org_id
 left join placeholder_company placeholder on placeholder.id = org.survivor_id
 	and coalesce(map.party_id, placeholder.id) = placeholder.id
-left join party company on company.id = map.party_id and placeholder.id is null;
+left join party company on company.id = map.party_id;
 
 insert into party_company (person_id, company_id, title, created_at, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
 select distinct on (v.person_id, v.company_id) v.person_id, v.company_id, v.title, p.created_at, p.changed_by_user_id,
 	p.changed_by_job, p.changed_for_user_id, p.updated_at
 from typed_company v join copied p on p.id = v.person_id
-where v.copy_values and v.kind = 'person' and v.company_kind = 'company'
+where v.copy_values and v.kind = 'person' and v.company_kind = 'company' and not v.placeholder_employer
 order by v.person_id, v.company_id, v.title is null, v.rank;
 
 insert into not_copied
@@ -279,21 +279,18 @@ select old_id, 'org_id', org_id::text, case
 	when kind <> 'person' then 'company links are only kept as brand memberships'
 	when placeholder_employer then 'placeholder company'
 	when company_id is null then 'its company is not copied'
+	when company_kind = 'company' then 'its record does not hold this company'
 	else 'not a company' end
-from typed_company where org_id is not null and (kind <> 'person' or company_kind is distinct from 'company')
+from typed_company v where org_id is not null
 	-- The brand copy owns a client company's org_id, including corrections when it cannot copy it.
-	and not (kind <> 'person' and brand_client);
-
-insert into not_copied
-select v.old_id, 'org_id', v.org_id::text, 'its record does not hold this company'
-from typed_company v where v.kind = 'person' and v.company_kind = 'company'
+	and not (kind <> 'person' and brand_client)
 	and not exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id);
 
 insert into not_copied
 select v.old_id, 'title', v.typed_title, case
-	when v.placeholder_employer then 'its company is a placeholder'
 	when exists (select from party_company c where c.person_id = v.person_id and c.company_id = v.company_id)
 		then 'its record holds another title there'
+	when v.placeholder_employer then 'its company is a placeholder'
 	when v.company_kind = 'company' then 'its record does not hold this company'
 	when v.org_id is not null then 'its company is not copied'
 	else 'a title without a company' end
