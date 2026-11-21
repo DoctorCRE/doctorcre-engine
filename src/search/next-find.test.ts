@@ -25,6 +25,8 @@ const [copiedClient, copiedLead, dental, dentalGroup] = [
 	id(16),
 	id(17),
 ] as const;
+const domainName = id(19);
+const clientRoleOnly = id(20);
 const search = (query: string) =>
 	get("find", query, { SEARCH_READ_SCHEMA: "next" });
 const recent = (query: string, ref?: string) =>
@@ -43,6 +45,9 @@ before(async () => {
 			('${copiedClient}', 'company', 'Sample Practice'), ('${copiedLead}', 'person', 'Sample Prospect'),
 			('${dental}', 'person', 'Example Pediatric Dental'), ('${dentalGroup}', 'company', 'Z Example Dental');
 		insert into how_found (slug, label) values ('referral', 'Referral');
+		insert into party (id, kind, name, how_found) values
+			('${domainName}', 'company', 'example-company.example', null),
+			('${clientRoleOnly}', 'person', 'Garden Practice', 'referral');
 		update party set how_found = 'referral' where id in
 			('${clinic}', '${lead}', '${copiedClient}', '${copiedLead}', '${dental}', '${dentalGroup}');
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
@@ -53,7 +58,8 @@ before(async () => {
 			('${clinic}', 'client', null), ('${lead}', 'lead', 'new'), ('${vendor}', 'vendor', null),
 			('${copiedClient}', 'client', null), ('${copiedClient}', 'lead', 'new'),
 			('${copiedLead}', 'client', null), ('${copiedLead}', 'lead', 'new'),
-			('${dental}', 'lead', 'new'), ('${dentalGroup}', 'lead', 'new');
+			('${dental}', 'lead', 'new'), ('${dentalGroup}', 'lead', 'new'),
+			('${clientRoleOnly}', 'client', null);
 		insert into client (party_id) values ('${clinic}'), ('${copiedClient}'), ('${copiedLead}');
 		insert into deal (id, name, owner_user_id) values
 			('${deal}', 'Orchard Clinic Lease', '${joe}'), ('${copied}', 'Maple Lease', '${joe}');
@@ -75,6 +81,7 @@ before(async () => {
 		insert into party_email (party_id, address, label) values
 			('${copiedClient}', 'office@practice.example', 'work'),
 			('${person}', 'name@practice.example', 'work'),
+			('${person}', 'name@practice.x', 'work'),
 			('${clinic}', 'office@other.practice.example', 'work');
 		insert into party (kind, name)
 			select 'person', 'Synthetic Query Plan ' || n from generate_series(1, 25) n;
@@ -178,6 +185,59 @@ test("Global Search matches a full email or exact domain from stored addresses",
 			deals: [],
 		},
 	);
+});
+
+test("Global Search finds stored domains with single-letter final labels without fuzzy name matches", async () => {
+	for (const query of ["practice.x", "@PRACTICE.X", "name@practice.x"]) {
+		assert.deepStrictEqual(await searchRecords(query), {
+			schema_version: "search.v1",
+			parties: [
+				{
+					id: person,
+					kind: "person",
+					name: "Orchard Contact",
+					city: null,
+					roles: [],
+					lead_id: null,
+					deals: [],
+				},
+			],
+			deals: [],
+		});
+	}
+});
+
+test("Global Search finds an exact dotted name when the query has no at sign", async () => {
+	assert.partialDeepStrictEqual(
+		await searchRecords("EXAMPLE-COMPANY.EXAMPLE"),
+		{
+			parties: [{ id: domainName }],
+			deals: [],
+		},
+	);
+	assert.deepStrictEqual(await searchRecords("@example-company.example"), {
+		schema_version: "search.v1",
+		parties: [],
+		deals: [],
+	});
+});
+
+test("Global Search offers the Clients directory only for parties with a directory record", async () => {
+	assert.deepStrictEqual(await searchRecords(clientRoleOnly), {
+		schema_version: "search.v1",
+		parties: [
+			{
+				id: clientRoleOnly,
+				kind: "person",
+				name: "Garden Practice",
+				city: null,
+				roles: [],
+				lead_id: null,
+				deals: [],
+			},
+		],
+		deals: [],
+	});
 });
 
 test("Global Search limits matches before expanding party roles and deals", async () => {
