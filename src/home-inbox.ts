@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { answerNextRead, checkFields, refuse } from "./answer.ts";
+import { answerNextRead, checkFields, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import {
+	type HomeReviewLink,
 	readHomeMailPriorities,
 	readHomeReviewCards,
+	readHomeReviewDisposition,
 } from "./home-inbox-review.ts";
 import {
 	completionReviewCard,
@@ -26,6 +28,7 @@ import {
 } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
 import type { DatabaseEnv } from "./reader.ts";
+import { isUuid } from "./request-shape.ts";
 
 const LIMIT = 1000;
 
@@ -175,18 +178,64 @@ function stepCard(step: Step) {
 	};
 }
 
+async function dashboardDay(db: Transaction<DB>) {
+	const { today } = await db
+		.selectNoFrom(sql<string>`${homeDay}::text`.as("today"))
+		.executeTakeFirstOrThrow();
+	return today;
+}
+
+function dashboardCard<
+	Item extends {
+		item_id: string;
+		snoozed_until: string | null;
+		hold_until: string | null;
+		section: string;
+		due_on: string | null;
+		late_target?: boolean;
+		card_id?: string;
+		waiting_reason?: string | null;
+	},
+>(item: Item, today: string) {
+	const { late_target, card_id, waiting_reason, ...card } = {
+		late_target: false,
+		card_id: item.item_id,
+		waiting_reason: null,
+		...item,
+	};
+	const returns_at =
+		[card.snoozed_until, card.hold_until]
+			.filter((at) => at !== null)
+			.sort()
+			.at(-1) ?? null;
+	const reason = card.snoozed_until
+		? "Snoozed"
+		: card.hold_until
+			? "On hold"
+			: card.section === "working"
+				? "Waiting for Outlook to confirm delivery"
+				: waiting_reason;
+	const days_late =
+		!reason && late_target && isCalendarDate(card.due_on) && card.due_on < today
+			? (Date.parse(today) - Date.parse(card.due_on)) / 86_400_000
+			: null;
+	return {
+		...card,
+		...(reason && { primary_action: null }),
+		card_id,
+		waiting_reason: reason,
+		returns_at,
+		days_late,
+		late_label: days_late === null ? null : lateLabel(days_late),
+	};
+}
+
 async function readHomeInbox(
 	db: Transaction<DB>,
 	userId: string,
 	dashboard: boolean,
 ) {
-	const today = dashboard
-		? (
-				await db
-					.selectNoFrom(sql<string>`${homeDay}::text`.as("today"))
-					.executeTakeFirstOrThrow()
-			).today
-		: "";
+	const today = dashboard ? await dashboardDay(db) : "";
 	const { rows } = await stepRows(db, userId, dashboard).execute(db);
 	const eligibleSteps = dashboard
 		? rows.filter((step) => homeStepEligible(step, today))
@@ -242,42 +291,7 @@ async function readHomeInbox(
 		home_proposal_drop: true,
 	};
 	if (dashboard) {
-		const cards = items.map((item) => {
-			const { late_target, card_id, waiting_reason, ...card } = {
-				late_target: false,
-				card_id: item.item_id,
-				waiting_reason: null,
-				...item,
-			};
-			const returns_at =
-				[card.snoozed_until, card.hold_until]
-					.filter((at) => at !== null)
-					.sort()
-					.at(-1) ?? null;
-			const reason = card.snoozed_until
-				? "Snoozed"
-				: card.hold_until
-					? "On hold"
-					: card.section === "working"
-						? "Waiting for Outlook to confirm delivery"
-						: waiting_reason;
-			const days_late =
-				!reason &&
-				late_target &&
-				isCalendarDate(card.due_on) &&
-				card.due_on < today
-					? (Date.parse(today) - Date.parse(card.due_on)) / 86_400_000
-					: null;
-			return {
-				...card,
-				...(reason && { primary_action: null }),
-				card_id,
-				waiting_reason: reason,
-				returns_at,
-				days_late,
-				late_label: days_late === null ? null : lateLabel(days_late),
-			};
-		});
+		const cards = items.map((item) => dashboardCard(item, today));
 		const reminders = cards.filter((card) => !card.waiting_reason);
 		const waiting = cards.filter((card) => card.waiting_reason);
 		return {
@@ -309,6 +323,30 @@ homeInbox.get("/home/inbox", (c) => {
 	return answerNextRead(c, "read-home-inbox-v5", (db, userId) =>
 		readHomeInbox(db, userId, params.get("view") === "dashboard"),
 	);
+});
+
+homeInbox.get("/home/cards/:item_id", (c) => {
+	if (c.env.HOME_INBOX_READ_SCHEMA !== "next") return c.notFound();
+	const [kind, id, extra] = c.req.param("item_id").toLowerCase().split(":");
+	if (
+		(kind !== "reply_draft" && kind !== "suggestion") ||
+		!isUuid(id) ||
+		extra !== undefined
+	)
+		return refuse(c, new Refusal(404, "not_found"));
+	const refused = checkFields(new URL(c.req.url).searchParams, []);
+	if (refused) return refuse(c, refused);
+	return answerNextRead(c, "read-home-card", async (db, userId) => {
+		const link: HomeReviewLink = { kind, id };
+		const [card] = await readHomeReviewCards(db, userId, null, true, link);
+		if (!card) return readHomeReviewDisposition(db, userId, link);
+		const requested_item_id = `${kind}:${id}`;
+		return {
+			...dashboardCard(card, await dashboardDay(db)),
+			...(kind === "suggestion" &&
+				card.item_id !== requested_item_id && { requested_item_id }),
+		};
+	});
 });
 
 homeInbox.get("/home/mail-priorities", (c) => {

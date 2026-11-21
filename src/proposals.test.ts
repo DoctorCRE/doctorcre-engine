@@ -52,8 +52,8 @@ const propose = (args: object) =>
 		evidence: "The tour is confirmed.",
 		...args,
 	});
-const decide = (p: unknown, args: object) =>
-	save({ user: "alex" }, `proposals/${p}/decision`, {
+const decide = (p: unknown, args: object, user = "alex") =>
+	save({ user }, `proposals/${p}/decision`, {
 		idempotency_key: randomUUID(),
 		decision: "accept",
 		...args,
@@ -489,6 +489,84 @@ test("a phase quote is derived at storage and refuses a stale acceptance", async
 		"phase_not_eligible",
 	);
 });
+
+for (const { label, linked, related, dealId, hint } of [
+	{
+		label: "an email filed to another deal",
+		linked: true,
+		related: true,
+		dealId: DEAL,
+		hint: /already filed to another deal/,
+	},
+	{
+		label: "an email without the deal's client",
+		linked: false,
+		related: false,
+		dealId: DEAL,
+		hint: /client isn't linked to this email/,
+	},
+	{
+		label: "an unfiled email about the deal's client",
+		linked: false,
+		related: true,
+		dealId: DEAL,
+		hint: null,
+	},
+]) {
+	test(`the filing preview and save agree for ${label}`, async () => {
+		const email = randomUUID();
+		const proposal = randomUUID();
+		const owner = randomUUID();
+		const ownerSlug = `preview-${owner}`;
+		await db.query(`begin;
+			select set_config('engine.job', 'old_system', true);
+			insert into party (id, kind, name) values ('${owner}', 'person', 'Filing Example');
+			insert into app_user (id, slug) values ('${owner}', '${ownerSlug}');
+			select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', '${owner}', true);
+			insert into activity (id, kind, happened_at) values ('${email}', 'email', now());
+			insert into email (activity_id, message_id, sender, subject, body)
+			values ('${email}', '${email}@example.test', 'clinic@example.test', 'Example tour', 'The tour is confirmed.');
+			insert into email_mailbox (activity_id, user_id) values ('${email}', '${owner}');
+			insert into activity_about (activity_id, party_id) values ('${email}', '${related ? CLIENT : IMPORTED}');
+			${linked ? `insert into activity_about (activity_id, deal_id) values ('${email}', '${OTHER}');` : ""}
+			insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, filing_scope)
+			values ('${proposal}', 'possible_new_deal', '${email}', 'email', 'Review the tour.', 'mail_capture', 'deal');
+			commit;`);
+		const preview = (user: string) =>
+			save({ user }, `proposals/${proposal}?deal_id=${dealId}`, {}, "GET");
+		const [status, result] = await preview(ownerSlug);
+		assert.equal(status, 200);
+		assert.equal(result.reason_required, Boolean(hint));
+		if (hint) assert.match(String(result.hint), hint);
+		else assert.equal(result.hint, null);
+		const [otherStatus, otherResult] = await preview("casey");
+		assert.equal(otherStatus, 404);
+		assert.equal(otherResult.error, "not_found");
+		const [saved, refusal] = await decide(
+			proposal,
+			{ deal_id: dealId },
+			ownerSlug,
+		);
+		assert.equal(saved, hint ? 422 : 200);
+		if (hint) {
+			assert.equal(refusal.rule, "proposal_filing_reason");
+			assert.equal(
+				(
+					await decide(
+						proposal,
+						{
+							deal_id: dealId,
+							reason: "Partner confirmed the deal.",
+						},
+						ownerSlug,
+					)
+				)[0],
+				200,
+			);
+		}
+		assert.equal((await preview(ownerSlug))[0], 404);
+	});
+}
 
 test("filing accepts the suggested deal, requires a correction reason, and never creates a deal", async () => {
 	const [, p] = await propose({ kind: "file_to_deal", deal_id: DEAL });

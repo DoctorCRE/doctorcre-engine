@@ -72,6 +72,8 @@ const HINTS = {
 	key_reuse: "Use a fresh idempotency_key for changed arguments.",
 	turn_in_progress: "Wait for Doc to finish the current question.",
 	turn_superseded: "Reopen the chat and retry only its latest question.",
+	no_proposal: "Choose a Doc reply with a save proposal.",
+	already_confirmed: "Open the saved result from this proposal.",
 	email_summary_result_conflict:
 		"The source and generator version already have a different summary result.",
 	version_conflict: "Re-read the record and ask the human before retrying.",
@@ -312,6 +314,7 @@ type Verb =
 	| "quiet-follow-ups"
 	| "read-changes"
 	| "read-client-leases"
+	| "read-home-card"
 	| "read-home-inbox-v5"
 	| "read-home-mail-priorities-v1"
 	| "read-home-today-v1"

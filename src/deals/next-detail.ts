@@ -239,7 +239,10 @@ export async function readNextDealDetail(
 	];
 	const cards =
 		userId && emailActivityIds.length
-			? await readHomeReviewCards(db, userId, null, true, emailActivityIds)
+			? await readHomeReviewCards(db, userId, null, true, {
+					kind: "email_sources",
+					activityIds: emailActivityIds,
+				})
 			: [];
 	const homeTitles = new Map(
 		cards.flatMap(({ source_activity, title }) =>

@@ -4,7 +4,6 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { copyTest } from "./test-copy.ts";
 import worker from "./worker.ts";
 
-const TEAM = "https://example.cloudflareaccess.com";
 const AUDIENCE = "made-up-jobs-audience";
 
 export type Caller = { user: string } | { job: string; for_user?: string };
@@ -15,6 +14,7 @@ export function doorTest() {
 	const copy = copyTest();
 	const writer = `door_${randomUUID().replaceAll("-", "")}`;
 	const reader = `${writer}_reader`;
+	const team = `https://${randomUUID()}.example.cloudflareaccess.com`;
 	const access = generateKeyPair("RS256", { extractable: true });
 
 	const setup = async () => {
@@ -55,7 +55,7 @@ export function doorTest() {
 			};
 		const token = await new SignJWT({})
 			.setProtectedHeader({ alg: "RS256", kid: "made-up-kid" })
-			.setIssuer(TEAM)
+			.setIssuer(team)
 			.setAudience(AUDIENCE)
 			.setExpirationTime("5 minutes")
 			.sign((await access).privateKey);
@@ -83,7 +83,7 @@ export function doorTest() {
 				...bindings,
 				DATABASE_WRITER: { connectionString: login() },
 				DATABASE: { connectionString: login(reader) },
-				ACCESS_TEAM_DOMAIN: TEAM,
+				ACCESS_TEAM_DOMAIN: team,
 				JOBS_ACCESS_AUD: AUDIENCE,
 				CARR: {
 					fetch: async () =>

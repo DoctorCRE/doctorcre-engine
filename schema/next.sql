@@ -68,6 +68,8 @@ insert into job values
 	('intake', 'Post intake'), ('mail_capture', 'Mail filing'), ('publisher', 'Publisher'), ('readings', 'Post readings'),
 	('review_close', 'Review close'), ('lead_stage', 'Lead stages'), ('candidate_sweep', 'Candidate sweeps'), ('agent', 'Agent'), ('old_system', 'Old system');
 
+insert into job values ('nightly_checklist', 'Nightly checklist reminders');
+
 -- The engine names who acts once per transaction: set_config('engine.user_id', <id>, true) for a user, and
 -- set_config('engine.job', <slug>, true) for a job, with engine.user_id then the user it works for, if any.
 create function stamp_change() returns trigger
@@ -1520,6 +1522,7 @@ create table home_update (
 	due_on date,
 	property_id uuid references property,
 	created_at timestamptz not null default now(),
+	held_until timestamptz,
 	read_at timestamptz check (read_at >= created_at),
 	constraint home_update_checklist_due_date check ((checklist_item_ref is null) = (due_on is null)
 		and (kind = 'update' or checklist_item_ref is null)),
@@ -1665,6 +1668,18 @@ create unique index proposal_source_payload_once on proposal
 	(activity_id, kind, deal_id, party_id, property_id, from_phase, to_phase, from_stage, to_stage, what, owner_party_id, due_on, how_found, phase_stated, phase_on, next_step_id)
 	nulls not distinct where activity_id is not null;
 
+create function deal_filing_reason(email_id uuid, selected_deal_id uuid) returns text
+language sql as $$
+	select case
+		when exists (select from activity_about where activity_id = email_id and deal_id <> selected_deal_id)
+			then 'another_deal'
+		when not exists (
+			select from deal_party d join activity_about a on a.party_id = d.party_id
+			where d.deal_id = selected_deal_id and d.role = 'client' and a.activity_id = email_id
+		) then 'different_client'
+	end;
+$$;
+
 create function decide_proposal() returns trigger
 language plpgsql as $$
 declare
@@ -1805,9 +1820,7 @@ begin
 		if new.filed_deal_id is null or current_phase in ('closed', 'dead') then
 			raise exception 'filing needs an open deal' using errcode = 'check_violation', constraint = 'proposal_filing_open_deal';
 		end if;
-		if new.filing_reason is null and (exists (select from activity_about where activity_id = new.activity_id
-			and deal_id <> new.filed_deal_id) or not exists (select from deal_party d join activity_about a on a.party_id = d.party_id
-			where d.deal_id = new.filed_deal_id and d.role = 'client' and a.activity_id = new.activity_id)) then
+		if new.filing_reason is null and deal_filing_reason(new.activity_id, new.filed_deal_id) is not null then
 			raise exception 'a corrected filing needs a reason' using errcode = 'check_violation', constraint = 'proposal_filing_reason';
 		end if;
 		delete from activity_about where activity_id = new.activity_id and deal_id <> new.filed_deal_id;
@@ -1910,7 +1923,7 @@ create view deal_next_date with (security_invoker = true) as
 			and newer.item_title is null and newer.created_at > p.decided_at)))
 	order by s.deal_id, s.created_at desc, s.id desc;
 
--- A job's reply to one email, which its owner's mailbox sends. An outreach draft is apart: a user sends it by hand.
+-- A reply to one email, which its owner's mailbox sends. An outreach draft is sent by hand.
 create table reply_draft (
 	id uuid primary key default gen_random_uuid(),
 	created_at timestamptz not null default now(),
@@ -3956,6 +3969,8 @@ grant execute on function carry_weekly_review to engine;
 grant execute on function lock_weekly_review(date, uuid, uuid) to engine;
 grant execute on function npi_check_digit_holds(text), is_time_zone(text) to engine;
 grant execute on function invoice_email_target(invoice_email), invoice_name(text) to engine, engine_reader;
+revoke execute on function deal_filing_reason(uuid, uuid) from public;
+grant execute on function deal_filing_reason(uuid, uuid) to engine, engine_reader;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;
@@ -4123,7 +4138,7 @@ revoke all on doc_conversation, doc_turn from public, engine_reader;
 grant select, insert on doc_conversation, doc_turn to engine;
 -- FOR UPDATE needs UPDATE on one column. Row security keeps the owner fixed.
 grant update (owner_user_id) on doc_conversation to engine;
-grant update (state, claim_id, claim_until, claim_state, answer) on doc_turn to engine;
+grant update (state, claim_id, claim_until, claim_state, answer, confirmation_key) on doc_turn to engine;
 
 create table doc_link (
 	owner_user_id uuid primary key,
@@ -4148,6 +4163,42 @@ create policy doc_link_credential on doc_link for select to engine using (
 revoke all on doc_link from public, engine_reader;
 grant select, insert, delete on doc_link to engine;
 grant update (credential_hash, issued_at, last_seen_at, readiness) on doc_link to engine;
+
+alter table reply_draft
+	add column confirmed_doc_turn_id uuid,
+	alter column proposed_by_job drop not null,
+	add constraint reply_draft_confirmed_doc_turn_key unique (confirmed_doc_turn_id),
+	add constraint reply_draft_confirmed_doc_turn_owner_fkey
+		foreign key (confirmed_doc_turn_id, owner_user_id) references doc_turn (id, owner_user_id),
+	add constraint reply_draft_one_origin check (num_nonnulls(proposed_by_job, confirmed_doc_turn_id) = 1);
+
+create function reply_draft_doc_origin() returns trigger
+language plpgsql as $$
+begin
+	if new.owner_user_id is distinct from nullif(current_setting('engine.user_id', true), '')::uuid
+		or not exists (
+			select from doc_turn t
+			where t.id = new.confirmed_doc_turn_id and t.owner_user_id = new.owner_user_id
+				and t.confirmation_key is not null
+				and t.answer #>> '{proposal,kind}' = 'reply_draft'
+				and t.answer #>> '{proposal,target,ref,kind}' = 'email'
+				and t.answer #>> '{proposal,target,ref,id}' = new.email_activity_id::text
+			for share
+		) then
+		raise exception 'a Doc draft requires its owner to confirm a reply to that email'
+			using errcode = 'check_violation', constraint = 'reply_draft_doc_origin';
+	end if;
+	return new;
+end $$;
+
+do $$ begin
+	execute format('alter function reply_draft_doc_origin set search_path = pg_catalog, %I, pg_temp', current_schema());
+end $$;
+revoke execute on function reply_draft_doc_origin from public;
+
+create trigger reply_draft_doc_origin before insert on reply_draft
+	for each row when (new.confirmed_doc_turn_id is not null and new.proposed_by_job is null)
+	execute function reply_draft_doc_origin();
 
 create table doc_judgment_job (
 	id uuid primary key default gen_random_uuid(),

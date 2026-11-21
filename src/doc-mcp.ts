@@ -1,5 +1,7 @@
 import type { Context } from "hono";
 import { sql } from "kysely";
+import type { Json } from "./database.d.ts";
+import { draftContext } from "./doc-draft.ts";
 import { withDocLink } from "./doc-link.ts";
 import { docLinkCredential } from "./doc-link-routes.ts";
 import { type DocClaimState, registerDocTools } from "./doc-tools.ts";
@@ -42,14 +44,15 @@ export async function docMcp(c: Context<WriterEnv>) {
 					state: DocClaimState;
 					partner: string;
 					timeout: number;
+					context: Json;
 				}>`
 				with locked as (
-					select claim_state, claim_until, u.slug
+					select claim_state, claim_until, t.context, u.slug
 					from doc_turn t join app_user u on u.id = t.owner_user_id
 					where t.owner_user_id = ${owner} and t.claim_id = ${claim} and t.state = 'working'
 					for update of t
 				)
-				select claim_state as state, slug as partner,
+				select claim_state as state, slug as partner, context,
 					least(45000, ceil(extract(epoch from claim_until - clock_timestamp()) * 1000) - 15000)::int as timeout
 				from locked where ${available}
 			`.execute(tx);
@@ -68,6 +71,7 @@ export async function docMcp(c: Context<WriterEnv>) {
 				registerDocTools(server, {
 					...turn,
 					partnerId: owner,
+					draft: draftContext.safeParse(turn.context).data,
 					readConnection: reader.connectionString,
 				});
 				await server.connect(transport);
