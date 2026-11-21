@@ -78,7 +78,7 @@ leads.get("/quiet-follow-ups", async (c) => {
 		(ownerSlug !== null && (!ownerSlug.trim() || ownerSlug.length > 100))
 	)
 		return refuse(c, new Refusal(422, "unhandled_verb_failure"));
-	return answer(c, "quiet-follow-ups", async (db) => {
+	return answerNextRead(c, "quiet-follow-ups", async (db) => {
 		const quiet = await readQuietFollowUps(
 			db,
 			{ lead_days, vendor_days },

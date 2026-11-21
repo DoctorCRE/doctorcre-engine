@@ -16,7 +16,6 @@ import { readDealDetail } from "./deals/detail.ts";
 import { readInvoiceTracker } from "./invoices.ts";
 import { readLeadBoard } from "./leads/board.ts";
 import { readLeadDetail } from "./leads/detail.ts";
-import { readQuietFollowUps } from "./leads/quiet-follow-ups.ts";
 import { readReasonsToReachOut } from "./leads/reasons-to-reach-out.ts";
 import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
@@ -235,7 +234,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the change feed, the capture queue, search, the lead board, an opened lead, quiet follow-ups, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", (t) =>
+test("the reader login reads the board, a deal, the change feed, the capture queue, search, the lead board, an opened lead, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, suggested vendor meetings and today's reminders and changes nothing", (t) =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -293,10 +292,6 @@ test("the reader login reads the board, a deal, the change feed, the capture que
 				}),
 			);
 			assert.deepEqual("detail" in opened && opened.detail, null);
-			const quiet = await readSnapshot(login, (db) =>
-				readQuietFollowUps(db, { lead_days: 45, vendor_days: 90 }, null),
-			);
-			assert.deepEqual("proposals" in quiet && quiet.proposals, []);
 			const territory = await readSnapshot(login, (db) =>
 				readTerritory(db, { vertical: null, city: null, state: null }),
 			);

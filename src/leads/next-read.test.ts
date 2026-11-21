@@ -4,7 +4,7 @@ import { after, before, test } from "node:test";
 import { isArguments } from "../save-door.ts";
 import { doorTest } from "../test-door.ts";
 
-const { db, setup, cleanup, request, readerUrl } = doorTest();
+const { db, setup, cleanup, request, readerUrl, save } = doorTest();
 const [legacyId, aliasId] = [randomUUID(), randomUUID()].sort();
 const registryRef = "L-EXAMPLE";
 const leadNotes =
@@ -113,7 +113,9 @@ async function read(query: string, schema?: "next") {
 test("the switch shows corrected and unclaimed owners, and opens copied and new lead IDs", async () => {
 	const switched = await read("", "next");
 	assert.deepEqual(
-		switched.leads.map(({ id, owner, stage }) => [id, owner, stage]),
+		switched.leads
+			.filter(({ id }) => id === legacyId || id === converted || id === fresh)
+			.map(({ id, owner, stage }) => [id, owner, stage]),
 		[
 			[legacyId, "dell", "qualified"],
 			[converted, null, "opportunity"],
@@ -176,6 +178,107 @@ test("a Quiet follow-ups lead reference selects the copied board row and opens i
 	assert.equal(lead.id, legacyId);
 	const { detail } = await read(`&lead_id=${lead.id}`, "next");
 	assert.equal(record(detail).id, legacyId);
+});
+
+async function quietLead() {
+	const id = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.user_id', '${partner}', true);
+		insert into party (id, kind, name, how_found) values ('${id}', 'person', 'Example Quiet Lead', 'referral');
+		insert into party_role (party_id, role, stage, created_at)
+			values ('${id}', 'lead', 'new', now() - interval '60 days');
+		commit;`);
+	return id;
+}
+
+async function quietProposal(id: string) {
+	const response = await request({ user: "dell" }, "quiet-follow-ups", {
+		method: "GET",
+	});
+	assert.equal(response.status, 200);
+	const { proposals } = record(await response.json());
+	assert.ok(Array.isArray(proposals));
+	return proposals.map(record).find((row) => row.subject_id === id);
+}
+
+test("a contact recorded today moves an unclaimed lead off Quiet", async () => {
+	const id = await quietLead();
+	const before = await quietProposal(id);
+	assert.deepEqual(
+		[before?.basis, before?.last_contact_on, before?.owner_id, before?.owner],
+		["created_at", null, null, null],
+	);
+	await db.query(`begin;
+		select set_config('engine.user_id', '${partner}', true);
+		with contact as (
+			insert into activity (kind, happened_at, reached) values ('call', now(), true) returning id
+		) insert into activity_about (activity_id, party_id) select id, '${id}' from contact;
+		commit;`);
+	assert.equal(await quietProposal(id), undefined);
+});
+
+test("a step saved today appears on the lead and moves it off Quiet", async () => {
+	const id = await quietLead();
+	assert.equal((await quietProposal(id))?.subject_id, id);
+	const [status] = await save({ user: "dell" }, "next-steps", {
+		idempotency_key: randomUUID(),
+		party_id: id,
+		what: "Call about the lease",
+		due_on: "2099-01-20",
+		hold_until: "2099-01-19",
+	});
+	assert.equal(status, 201);
+	const { leads } = await read("", "next");
+	assert.equal(
+		leads.find((lead) => lead.id === id)?.next_action_date,
+		"2099-01-20",
+	);
+	assert.equal(await quietProposal(id), undefined);
+});
+
+test("editing an imported follow-up moves the lead off Quiet", async () => {
+	const partyId = await quietLead();
+	const leadId = randomUUID();
+	const {
+		rows: [step],
+	} = await db.query<{ id: string }>(
+		`with actor as (select set_config('engine.job', 'old_system', true)),
+		copied as (
+			insert into outside_id (source, value, party_id)
+			select 'old_system_lead', $1::text, $2::uuid from actor returning value, party_id
+		)
+		insert into next_step (id, party_id, what, due_on, owner_party_id)
+		select md5('old_system:lead:' || value || ':follow_up')::uuid,
+			party_id, 'Imported lead follow-up', '2020-01-05', $3::uuid from copied
+		returning id`,
+		[leadId, partyId, partner],
+	);
+	assert.ok(step);
+	const untouched = await quietProposal(leadId);
+	assert.deepEqual(
+		[untouched?.next_action_date, untouched?.due_on],
+		["2020-01-05", "2020-01-05"],
+	);
+	const {
+		rows: [change],
+	} = await db.query<{ id: string }>(
+		`select id from change where table_name = 'next_step' and action = 'insert'
+		and record = jsonb_build_object('id', $1::uuid)`,
+		[step.id],
+	);
+	assert.ok(change);
+	const [status, body] = await save(
+		{ user: "dell" },
+		`next-steps/${step.id}/changes`,
+		{
+			idempotency_key: randomUUID(),
+			seen_change_id: Number(change.id),
+			what: "Call about the new location",
+			hold_until: "2099-01-19",
+		},
+	);
+	assert.equal(status, 200, JSON.stringify(body));
+	assert.equal(await quietProposal(leadId), undefined);
 });
 
 test("the drawer and reachability keep the primary phone extension and mobile route", async () => {
