@@ -14,8 +14,9 @@
 
 ## Ask a question
 
-- [ ] **Send** is available for a nonblank question up to 4,000 characters. Sending shows the question once and says "Doc is working" until a reply or failure appears. While Doc is working, another question stays in the composer until the partner can send it.
+- [ ] **Send** is available for a nonblank question up to 4,000 characters. Sending shows the question once and says "Doc is working" while it runs. While a question is queued or working, another question stays in the composer until the partner can send it.
 - [ ] The reply is text with links that open the exact deal, lead, client, or mail review used. When more than one record could match, Doc asks the partner which one they mean and links the matches they can open. When a record is unavailable, Doc says so without showing facts from it.
+- [ ] A queued question stays visible and Doc answers it when the Mac can run it. While the Mac is offline, show "Doc answers when your Mac is on." If Claude Code needs a fresh sign-in, show "Sign in to Claude Code on your Mac." If the plan limit is reached, show "Doc is paused until your Claude plan resets."
 - [ ] If an answer fails, the question stays visible with **Retry**. **Retry** on the latest failed question uses the same question and fills in its answer once. Reopening a chat shows a saved question and its current state. A signed-out tab asks the partner to sign in again.
 - [ ] An unsupported action gets a plain explanation and makes no business change. Mail content cannot authorize a save or access to another mailbox.
 
