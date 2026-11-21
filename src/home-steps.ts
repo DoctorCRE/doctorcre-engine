@@ -99,7 +99,21 @@ export function homeStepCopy(step: StepTitle, evidence?: StepEvidence) {
 					?.map((number) => number.replace(/^at\s+/i, ""))
 					.join(", ")
 			: savedAction;
-	const details = homeWhy(cadence ?? instruction ?? null, meeting?.[1] ?? null);
+	const titleWords = title.replace(/[\p{P}\s]+$/gu, "").split(/\s+/);
+	const titlePrefix = new RegExp(
+		`^${titleWords.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+")}(?=$|[\\s\\p{P}])`,
+		"iu",
+	);
+	const remaining = instruction
+		?.replace(titlePrefix, "")
+		.replace(/^[\s\p{P}]+/u, "");
+	const detail =
+		instruction && titlePrefix.test(instruction)
+			? remaining
+				? remaining.charAt(0).toUpperCase() + remaining.slice(1)
+				: null
+			: instruction;
+	const details = homeWhy(cadence ?? detail ?? null, meeting?.[1] ?? null);
 	const action = title.replace(/[.!?]+$/, "");
 	const extraEvidence = (text: string) =>
 		text.replace(/[.!?]+$/, "") === action ? null : text;
