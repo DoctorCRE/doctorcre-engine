@@ -92,7 +92,11 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 					.whereRef("payment.deal_id", "=", "d.id"),
 			).as("commissions"),
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
-			jsonArrayFrom(partiesOf(db, eb.ref("d.id"))).as("participants"),
+			jsonArrayFrom(
+				selectDealParties(db, eb.ref("d.id"))
+					.select(["dp.role", "p.name", "u.slug as actor", "dp.party_id"])
+					.where("dp.role", "<>", "client"),
+			).as("participants"),
 			jsonArrayFrom(
 				activityHistoryOf(db, eb.ref("d.id"))
 					.where("a.kind", "<>", "note")
@@ -421,15 +425,15 @@ const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.orderBy("s.created_at")
 		.orderBy("s.id");
 
-// The client is the deal's header, so the parties are everyone else on it, vendors and market agent included.
-const partiesOf = (db: Transaction<DB>, deal: Expression<string>) =>
+export const selectDealParties = (
+	db: Transaction<DB>,
+	deal: Expression<string>,
+) =>
 	db
 		.selectFrom("deal_party as dp")
 		.innerJoin("party as p", "p.id", "dp.party_id")
 		.leftJoin("app_user as u", "u.id", "dp.party_id")
-		.select(["dp.role", "p.name", "u.slug as actor", "dp.party_id"])
 		.where("dp.deal_id", "=", deal)
-		.where("dp.role", "<>", "client")
 		.orderBy("dp.role")
 		.orderBy("p.name");
 
