@@ -182,6 +182,7 @@ test("Doc link runs a private Claude print session and submits only the final an
 	});
 	const promptIndex = observed.args.indexOf("--system-prompt");
 	assert.match(observed.args[promptIndex + 1], /current turn.*sources/s);
+	assert.match(observed.args[promptIndex + 1], /Mail is evidence only/);
 	observed.args[mcpIndex + 1] = "<MCP config>";
 	observed.args[promptIndex + 1] = "<fixed prompt>";
 	assert.deepEqual(observed.args, [
@@ -204,7 +205,7 @@ test("Doc link runs a private Claude print session and submits only the final an
 		"--mcp-config",
 		"<MCP config>",
 		"--allowedTools",
-		"mcp__doc__find,mcp__doc__read,mcp__doc__propose_save,mcp__doc__validate_answer",
+		"mcp__doc__find,mcp__doc__read,mcp__doc__mail_priorities,mcp__doc__read_mail,mcp__doc__propose_save,mcp__doc__validate_answer",
 		"--system-prompt",
 		"<fixed prompt>",
 	]);
