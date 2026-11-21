@@ -1,7 +1,7 @@
 # Calendar
 
 - **For** both signed-in partners on a computer or phone.
-- **Must** show confirmed open critical dates from every open deal and both partners' open dated next steps on deals, buildings, vendors, and contacts at a vendor company. Steps on a lead or a contact at a lead company belong with the lead. A step saved on a deal belongs with that deal.
+- **Must** show confirmed open critical dates from every open deal and both partners' open dated next steps on deals, buildings, parties with a vendor role, and people at one or more current vendor companies. Vendor roles qualify even when the party or one of the person's companies also has a lead role. A company link is current if its start is unknown or on or before today's Central date and its end is absent or after today.
 - **Must never** count resolved dates or steps, or present a failed read as an empty period.
 
 ## What a partner sees

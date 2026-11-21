@@ -366,10 +366,10 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 	assert.equal(otherItems.get(otherStep)?.section, "inbox");
 });
 
-test("A held follow-up explains the saved hold and action in plain words", async () => {
+test("A held follow-up explains the saved hold", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(held), {
 		title: "Call about the suite",
-		why: "Held until Apr 1, 2999. Call about the suite.",
+		why: "Held until Apr 1, 2999.",
 	});
 });
 
@@ -535,7 +535,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 			[
 				{
 					title: example.title || "Follow up on Example Vendor",
-					why: `Follow-up set on Nov 17, 2026.${example.title ? ` ${example.title.replace(/\.$/, "")}.` : ""}`,
+					why: "Follow-up set on Nov 17, 2026.",
 					primary_action: "Mark done",
 					due_on: null,
 					open_url: `/relationships?node=party:${example.party}&step=${example.id}`,
@@ -634,7 +634,8 @@ for (const [scenario, what, title, savedText = what] of [
 			const card = (await inbox({ user: "other-partner" })).get(step);
 			assert.ok(card);
 			assert.equal(card.title, title);
-			assert.ok(typeof card.why === "string" && card.why.includes(savedText));
+			assert.ok(typeof card.why === "string");
+			assert.equal(card.why.includes(savedText), savedText !== title);
 		} finally {
 			await db.query("rollback");
 			await db.query("begin");

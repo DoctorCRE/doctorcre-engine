@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { isArguments } from "./save-door.ts";
 import { doorTest } from "./test-door.ts";
 
 type Row = Record<string, unknown>;
@@ -210,9 +211,31 @@ for (const [example, caller, step, title] of [
 	test(`Today and the Home card share a title for ${example}`, async () => {
 		const result = await reminderAndCardTitles(caller, step);
 		assert.partialDeepStrictEqual(result, { reminder: title, card: title });
-		if (step === id(28)) assert.ok(String(result.why).includes(review));
 	});
 }
+
+test("Home and Calendar show meeting details in the why without repeating the step title", async () => {
+	const step = id(28);
+	const caller = { user: "dell" };
+	const title = "Review counter with Pat";
+	const details = "Example Leasing, Tue Oct 27 4:30 PM.";
+	const [home, calendar] = await Promise.all([
+		reminderAndCardTitles(caller, step),
+		request(caller, "calendar/critical-dates", get, {
+			DEALS_READ_SCHEMA: "next",
+		}),
+	]);
+	assert.equal(calendar.status, 200);
+	const body: unknown = await calendar.json();
+	assert.ok(isArguments(body) && Array.isArray(body.next_steps));
+	assert.partialDeepStrictEqual(
+		body.next_steps.filter(isArguments).find((item) => item.id === step),
+		{ what: title, why: details },
+	);
+	assert.equal(home.card, title);
+	assert.ok(typeof home.why === "string" && home.why.endsWith(details));
+	assert.ok(!home.why.includes(title), home.why);
+});
 
 test("today keeps each Outlook occurrence independently of its review", async (t) => {
 	const hr = 3_600_000;

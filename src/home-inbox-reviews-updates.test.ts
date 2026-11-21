@@ -159,7 +159,7 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	if (callFollowUp) {
 		assert.partialDeepStrictEqual(dismissed, {
 			title: "Send the survey",
-			why: "Call on Feb 4, 2001. Send the survey. Due Feb 1, 2001.",
+			why: "Call on Feb 4, 2001. Due Feb 1, 2001.",
 			open_url: `/calls?session=${call}`,
 		});
 	}

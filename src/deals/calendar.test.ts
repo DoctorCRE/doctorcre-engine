@@ -29,6 +29,8 @@ const lead = id(45);
 const vendorContact = id(46);
 const leadContact = id(47);
 const formerVendorContact = id(48);
+const futureVendorContact = id(52);
+const futureVendorStep = id(53);
 const cadence = "Relationship touch — Example Contact. 90-day vendor cadence.";
 const longWording =
 	"Ask Example Supply whether the expansion order can ship before the tenant improvements finish next spring";
@@ -72,18 +74,23 @@ before(async () => {
 			('${supplier}', 'company', 'Example Supply'), ('${movers}', 'company', 'Example Movers');
 		insert into how_found (slug, label) values ('referral', 'Referral');
 		insert into party (id, kind, name, how_found) values ('${lead}', 'company', 'Example Place', 'referral');
+		update party set how_found = 'referral' where id = '${clinic}';
 		insert into party (id, kind, name) values ('${vendorContact}', 'person', 'Example Contact'),
-			('${leadContact}', 'person', 'Example Lead Contact'), ('${formerVendorContact}', 'person', 'Example Former Contact');
+			('${leadContact}', 'person', 'Example Lead Contact'), ('${formerVendorContact}', 'person', 'Example Former Contact'),
+			('${futureVendorContact}', 'person', 'Example Future Contact');
 		insert into role (slug, label) values ('vendor', 'Vendor'), ('lead', 'Lead');
-		insert into stage (role, slug, label) values ('lead', 'new', 'New');
+		insert into stage (role, slug, label) values ('lead', 'new', 'New'), ('lead', 'opportunity', 'Opportunity');
 		insert into party_role (party_id, role, stage) values ('${clinic}', 'vendor', null),
 			('${supplier}', 'vendor', null), ('${movers}', 'vendor', null), ('${lead}', 'lead', 'new'),
-			('${leadContact}', 'vendor', null);
+			('${clinic}', 'lead', 'opportunity');
 		insert into party_company (person_id, company_id, started_on, ended_on) values
 			('${vendorContact}', '${lead}', '1999-01-01', '2000-01-01'),
 			('${vendorContact}', '${supplier}', '2000-01-01', null),
+			('${vendorContact}', '${lead}', '2001-01-15', null),
 			('${leadContact}', '${lead}', '2000-01-01', null),
-			('${formerVendorContact}', '${supplier}', '1999-01-01', '2000-01-01');
+			('${formerVendorContact}', '${supplier}', '1999-01-01', '2001-01-15'),
+			('${futureVendorContact}', '${supplier}', '1999-01-01', '2000-01-01'),
+			('${futureVendorContact}', '${supplier}', '2099-01-16', null);
 		insert into outside_id (source, value, party_id)
 			values ('old_system', '${alex}', '${alex}'), ('old_system', '${casey}', '${casey}');
 		insert into deal_kind (slug, label) values ('lease', 'Lease');
@@ -109,7 +116,8 @@ before(async () => {
 			('${id(42)}', null, '${movers}', '${alex}', 'Confirm the move date', '2001-01-12', '2001-01-20', null),
 			('${id(49)}', null, '${vendorContact}', '${alex}', '${cadence}', '2001-01-17', null, null),
 			('${id(50)}', null, '${leadContact}', '${alex}', 'Ask about the introduction', '2001-01-10', null, null),
-			('${id(51)}', null, '${formerVendorContact}', '${alex}', 'Ask about the move', '2001-01-10', null, null);
+			('${id(51)}', null, '${formerVendorContact}', '${alex}', 'Ask about the move', '2001-01-10', null, null),
+			('${futureVendorStep}', null, '${futureVendorContact}', '${alex}', 'Confirm the delivery slot', '2001-01-10', null, null);
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until)
 			values ('${casey}', '${id(34)}', 'snoozed', 'infinity');
 		commit;
@@ -221,6 +229,43 @@ for (const schema of [undefined, "next"]) {
 	});
 }
 
+test("Calendar includes both a dual-role vendor and a contact at separate lead and vendor companies", async () => {
+	const body = await nextTransaction(connectionString, "read", (tx) =>
+		readNextCalendarDates(tx, alex, "2001-01-15T18:00:00Z"),
+	);
+	assert.ok("next_steps" in body);
+	const links = new Map(
+		body.next_steps.map((step) => [step.id, step.open_url]),
+	);
+	assert.equal(
+		links.get(id(32)),
+		`/relationships?node=party:${clinic}&step=${id(32)}`,
+	);
+	assert.equal(
+		links.get(id(49)),
+		`/relationships?node=party:${vendorContact}&step=${id(49)}`,
+	);
+	assert.equal(links.has(id(41)), false);
+	assert.equal(links.has(id(50)), false);
+});
+
+test("Calendar includes company links starting on the request's Central day and excludes ended links", async () => {
+	for (const [now, futureShown, formerShown] of [
+		["2099-01-16T05:59:59Z", false, false],
+		["2099-01-16T06:00:00Z", true, false],
+		["2001-01-15T05:59:59Z", false, true],
+		["2001-01-15T06:00:00Z", false, false],
+	] as const) {
+		const body = await nextTransaction(connectionString, "read", (tx) =>
+			readNextCalendarDates(tx, alex, now),
+		);
+		assert.ok("next_steps" in body);
+		const ids = rowIds(body.next_steps);
+		assert.equal(ids.includes(futureVendorStep), futureShown, now);
+		assert.equal(ids.includes(id(51)), formerShown, now);
+	}
+});
+
 test("both partners see overdue steps on the request day and upcoming steps on their dates", async () => {
 	for (const [partner, now, today, daysLate] of [
 		[alex, "2001-01-15T18:00:00Z", "2001-01-15", 3],
@@ -245,7 +290,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			{
 				id: id(39),
 				what: "call Example Owner about the renewal",
-				why: "call Example Owner at (555) 010-0199 about the renewal.",
+				why: "(555) 010-0199.",
 				owner: "dell",
 				record_label: "Example lease",
 				due_on: "2001-01-13",
