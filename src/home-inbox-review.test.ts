@@ -1140,6 +1140,40 @@ test("Home uses recorded sender names and matches an unambiguous address", async
 	});
 });
 
+test("Home reads the action title and summary from the exact leading message", async () => {
+	const leading = id(11);
+	await db.query(`insert into email_summary
+		(activity_id, source_activity_id, source_hash, generator_version, status, text, provenance, recorded_at)
+		values ('${leading}', '${leading}', 'sha256:' || repeat('c', 64), 'doc-link.email-summary.v1', 'available',
+			'Pat asked for a Friday tour.', '{"action_title":"Confirm the Friday tour with Pat"}', '2026-01-07'),
+		('${id(14)}', '${id(14)}', 'sha256:' || repeat('d', 64), 'doc-link.email-summary.v1', 'available',
+			'The tour moved to Monday.', '{"action_title":"Confirm the Monday tour"}', '2026-01-08')`);
+	try {
+		assert.partialDeepStrictEqual(
+			(await dashboard()).reminders.find(
+				(card) => card.reply_draft_id === id(21),
+			),
+			{
+				title: "Confirm the Friday tour with Pat",
+				why: "Pat asked for a Friday tour. 3 decisions to review.",
+				primary_action: "Review reply",
+			},
+		);
+		assert.partialDeepStrictEqual(
+			(await inbox("other")).find((card) => card.proposal_id === id(38)),
+			{
+				title: "Confirm the Friday tour with Pat",
+				why: "Pat asked for a Friday tour. Please file this. Suggested deal is Example Orthodontics.",
+				primary_action: "Choose deal",
+			},
+		);
+	} finally {
+		await db.query(
+			"delete from email_summary where generator_version = 'doc-link.email-summary.v1'",
+		);
+	}
+});
+
 test("Home uses the shortest saved request before signatures and quoted headers", async () => {
 	const draft = (await inbox("other")).find(
 		(card) => card.reply_draft_id === id(22),

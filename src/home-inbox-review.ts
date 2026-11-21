@@ -15,7 +15,7 @@ import {
 	homeStepText,
 	homeWhy,
 } from "./home-steps.ts";
-import { homeTitle } from "./home-title.ts";
+import { homeTitle, savedHomeTitle } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {
@@ -34,6 +34,7 @@ type EmailContext = {
 	email_sender: string | null;
 	email_at: string | null;
 	email_summary: string | null;
+	email_action_title: string | null;
 	email_quote: string | null;
 };
 
@@ -364,6 +365,10 @@ function homeReviewGroups(userId: string, forMail = false, dashboard = false) {
 	`;
 }
 
+const summaryFields = sql`summary.text as email_summary,
+	case when jsonb_typeof(summary.provenance->'action_title') = 'string'
+		then summary.provenance->>'action_title' end as email_action_title`;
+
 function draftCards(
 	userId: string,
 	limit: number | null,
@@ -372,7 +377,7 @@ function draftCards(
 ) {
 	return sql<Draft>`
 		${homeReviewGroups(userId, false, dashboard)}
-		select card.*, summary.text as email_summary from draft_cards card
+		select card.*, ${summaryFields} from draft_cards card
 		left join email_current_summary summary on summary.activity_id = card.email_activity_id
 		${itemId ? sql`where id = ${itemId} and status <> 'sent'` : sql``}
 		order by (status = 'sent'), activity_at desc, id limit ${limit}
@@ -387,7 +392,7 @@ function suggestionCards(
 ) {
 	return sql<Suggestion>`
 		${homeReviewGroups(userId, false, dashboard)}
-		select card.*, summary.text as email_summary from suggestion_cards card
+		select card.*, ${summaryFields} from suggestion_cards card
 		left join email_current_summary summary on summary.activity_id = card.activity_id
 		${itemId ? sql`where id = ${itemId}` : sql``}
 		order by activity_at desc, id limit ${limit}
@@ -575,6 +580,7 @@ function emailRequest(email: EmailContext) {
 	const summary = homeDisplayText(email.email_summary);
 	return {
 		summary,
+		title: savedHomeTitle(homeStepText(email.email_action_title ?? "")),
 		quote: summary ? "" : shortEmailExcerpt(email.email_quote),
 	};
 }
@@ -613,7 +619,7 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const evidence = suggestion.email_quote
 		? ""
 		: homeDisplayText(suggestion.evidence);
-	const { summary, quote } = emailRequest(suggestion);
+	const { summary, quote, title } = emailRequest(suggestion);
 	const request = summary || quote;
 	const source = sender ? `Email from ${sender}` : "Email";
 	const action = emailActions[suggestion.kind];
@@ -629,7 +635,7 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	}[suggestion.kind];
 	const count = suggestion.suggestions.length;
 	return {
-		title: suggestionTitle(suggestion, sender),
+		title: title || suggestionTitle(suggestion, sender),
 		why: homeWhy(
 			request || receivedEmail(source, suggestion.email_at),
 			suggestion.kind !== "next_step" && evidence !== request ? evidence : null,
@@ -688,7 +694,7 @@ function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 	const sender = homeDisplayText(draft.email_sender);
 	const target = draft.deal_id ? homeDisplayText(draft.context_label) : "";
 	const source = sender ? `Email from ${sender}` : "Email";
-	const { summary, quote } = emailRequest(draft);
+	const { summary, quote, title } = emailRequest(draft);
 	const request = summary || quote;
 	const decisions = dashboard ? (draft.suggestions?.length ?? 0) : 0;
 	const why = homeWhy(
@@ -703,7 +709,9 @@ function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 				? "Review delivery"
 				: null;
 	return {
-		title: homeTitle(`reply_${draft.status}`, sender, target),
+		title:
+			(draft.status === "pending" && title) ||
+			homeTitle(`reply_${draft.status}`, sender, target),
 		why: draft.status === "failed" ? deliveryWhy(draft.failure_reason) : why,
 		primary_action: draft.snoozed_until ? null : action,
 	};
