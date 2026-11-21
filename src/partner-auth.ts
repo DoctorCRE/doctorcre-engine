@@ -58,13 +58,16 @@ function partnerAuth(pool: pg.Pool, { appOrigin, secret }: PartnerAuthConfig) {
 		databaseHooks: {
 			session: {
 				create: {
-					before: async (session) => ({
-						data: {
-							origin: appOrigin,
-							csrfToken: crypto.randomUUID(),
-							googleAuthenticatedAt: session.createdAt,
-						},
-					}),
+					before: async (session) => {
+						if (!(await findPartner(pool, session.userId))) return false;
+						return {
+							data: {
+								origin: appOrigin,
+								csrfToken: crypto.randomUUID(),
+								googleAuthenticatedAt: session.createdAt,
+							},
+						};
+					},
 				},
 			},
 		},
@@ -74,6 +77,14 @@ function partnerAuth(pool: pg.Pool, { appOrigin, secret }: PartnerAuthConfig) {
 type Partner = { app_user_id: string; slug: string; display: string };
 type PartnerAuth = ReturnType<typeof partnerAuth>;
 type SessionRequest = { origin: string; headers: Headers };
+
+async function findPartner(pool: pg.Pool, authUserId: string) {
+	const { rows } = await pool.query<Partner>(
+		"select app_user_id, slug, display from doctorcre_auth.partner where auth_user_id = $1",
+		[authUserId],
+	);
+	return rows[0];
+}
 
 async function resolveSession(
 	auth: PartnerAuth,
@@ -87,11 +98,7 @@ async function resolveSession(
 	if (!session || session.origin !== origin || session.expiresAt <= new Date())
 		return null;
 
-	const { rows } = await pool.query<Partner>(
-		"select app_user_id, slug, display from doctorcre_auth.partner where auth_user_id = $1",
-		[session.userId],
-	);
-	const partner = rows[0];
+	const partner = await findPartner(pool, session.userId);
 	if (!partner) return null;
 
 	return {
@@ -113,6 +120,16 @@ export async function withPartnerAuth<T>(
 		) => ReturnType<typeof resolveSession>;
 	}) => Promise<T>,
 ): Promise<T> {
+	const { secret } = config;
+	if (
+		typeof secret !== "string" ||
+		secret.trim().length < 32 ||
+		secret === "better-auth-secret-12345678901234567890"
+	)
+		throw new Error(
+			"Partner auth requires a signing secret of at least 32 characters",
+		);
+
 	const configured = new URL(config.appOrigin);
 	if (
 		configured.protocol !== "https:" ||

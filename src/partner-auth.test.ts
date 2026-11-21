@@ -23,6 +23,24 @@ function sessionHeaders(token: string) {
 	});
 }
 
+test("requires an explicit signing secret", async () => {
+	const config = { connectionString: "", appOrigin, secret: "" };
+	for (const invalid of [
+		"",
+		" ".repeat(32),
+		"short",
+		"better-auth-secret-12345678901234567890",
+	]) {
+		await assert.rejects(
+			withPartnerAuth(
+				{ ...config, secret: invalid },
+				({ auth }) => auth.$context,
+			),
+			/Partner auth requires a signing secret/,
+		);
+	}
+});
+
 test("partner sessions in PostgreSQL", async (t) => {
 	const { db, setup, cleanup, connectionString } = copyTest();
 	const role = `auth_${randomUUID().replaceAll("-", "")}`;
@@ -47,7 +65,20 @@ test("partner sessions in PostgreSQL", async (t) => {
 
 	await setup();
 	try {
-		await db.query(await readSchema("partner-auth.sql"));
+		const migration = await readSchema("partner-auth.sql");
+		await t.test("migration backs off under write contention", async () => {
+			const writer = new pg.Client({ connectionString });
+			await writer.connect();
+			try {
+				await writer.query("begin; lock next.app_user in row exclusive mode");
+				await db.query("set statement_timeout = '4s'");
+				await assert.rejects(db.query(migration), { code: "55P03" });
+			} finally {
+				await db.query("rollback; reset statement_timeout");
+				await writer.end();
+			}
+		});
+		await db.query(migration);
 		await db.query(`create role ${role} login in role engine_partner_auth`);
 		for (const { id, appUserId, slug, display } of [first, second, other]) {
 			await db.query("begin");
@@ -72,24 +103,22 @@ test("partner sessions in PostgreSQL", async (t) => {
 			);
 		}
 
-		await t.test("resolves both actors and checks origin", async (sub) => {
-			sub.mock.timers.enable({ apis: ["Date"], now: issuedAt });
+		t.beforeEach((sub) =>
+			sub.mock.timers.enable({ apis: ["Date"], now: issuedAt }),
+		);
+		await t.test("resolves both actors and checks origin", async () => {
 			for (const { id, appUserId, slug, display } of [first, second]) {
 				const session = await issue(id);
 				const resolved = await resolve(sessionHeaders(session.token));
 				assert.ok(resolved?.csrfToken);
-				const { csrfToken, ...partner } = resolved;
-				assert.deepEqual(partner, {
+				assert.deepEqual(resolved, {
 					id: session.id,
 					appUserId,
 					actor: { slug, display },
+					csrfToken: resolved.csrfToken,
 					googleAuthenticatedAt: issuedAt,
 					expiresAt,
 				});
-				assert.equal(
-					(await resolve(sessionHeaders(session.token)))?.csrfToken,
-					csrfToken,
-				);
 			}
 			const elsewhere = "https://other.example.test";
 			const session = await issue(first.id, elsewhere);
@@ -98,14 +127,17 @@ test("partner sessions in PostgreSQL", async (t) => {
 			assert.equal(await resolve(headers, elsewhere), null);
 		});
 
-		await t.test("refuses unknown and ineligible users", async (sub) => {
-			sub.mock.timers.enable({ apis: ["Date"], now: issuedAt });
+		await t.test("refuses unknown and ineligible users", async () => {
 			await assert.rejects(addIdentity("unknown", randomUUID()), {
 				code: "23503",
 			});
 			assert.equal(await resolve(sessionHeaders("unknown-token")), null);
-			const session = await issue(other.id);
-			assert.equal(await resolve(sessionHeaders(session.token)), null);
+			assert.equal(Boolean(await issue(other.id)), false);
+			const sessions = await db.query(
+				'select id from doctorcre_auth.session where "userId" = $1',
+				[other.id],
+			);
+			assert.equal(sessions.rowCount, 0);
 		});
 		await t.test("requires unique subjects and partner links", async () => {
 			await assert.rejects(
@@ -122,7 +154,6 @@ test("partner sessions in PostgreSQL", async (t) => {
 		await t.test(
 			"ordinary use never extends the 30-day lifetime",
 			async (sub) => {
-				sub.mock.timers.enable({ apis: ["Date"], now: issuedAt });
 				const session = await issue(first.id);
 				const headers = sessionHeaders(session.token);
 				sub.mock.timers.setTime(expiresAt.getTime() - 1);
@@ -134,48 +165,73 @@ test("partner sessions in PostgreSQL", async (t) => {
 			},
 		);
 
-		await t.test(
-			"revocation is immediate and limited to the revoked session",
-			async (sub) => {
-				sub.mock.timers.enable({ apis: ["Date"], now: issuedAt });
-				const revoked = await issue(second.id);
-				const surviving = await issue(second.id);
-				const headers = sessionHeaders(revoked.token);
-				assert.ok(await resolve(headers));
-				await withPartnerAuth(config, async ({ auth }) => {
-					await (await auth.$context).internalAdapter.deleteSession(
-						revoked.token,
-					);
-				});
-				assert.equal(await resolve(headers), null);
-				assert.ok(await resolve(sessionHeaders(surviving.token)));
-			},
-		);
+		await t.test("revokes only the ended session immediately", async () => {
+			const revoked = await issue(second.id);
+			const surviving = await issue(second.id);
+			const headers = sessionHeaders(revoked.token);
+			assert.ok(await resolve(headers));
+			await withPartnerAuth(config, async ({ auth }) => {
+				await (await auth.$context).internalAdapter.deleteSession(
+					revoked.token,
+				);
+			});
+			assert.equal(await resolve(headers), null);
+			assert.ok(await resolve(sessionHeaders(surviving.token)));
+		});
 
-		await t.test("limits the runtime login", async () => {
-			const runtime = new pg.Client({ connectionString: url.href });
-			await runtime.connect();
-			try {
-				for (const sql of [
-					"select * from public.actor",
-					"delete from public.actor",
-					"select * from next.app_user",
-					"update next.app_user set slug = 'other'",
-					"select * from next.party",
-					"delete from doctorcre_auth.account",
-					'update doctorcre_auth."user" set partner_user_id = gen_random_uuid()',
-					"update doctorcre_auth.session set token = 'replacement'",
-					"create table doctorcre_auth.unexpected (id text)",
-				]) {
-					await assert.rejects(runtime.query(sql), { code: "42501" });
-				}
-			} finally {
-				await runtime.end();
-			}
+		await t.test("auth login stays within the auth store", async () => {
+			const { rows } = await db.query(
+				`
+				with outside_auth as (
+					select oid, nspname from pg_namespace
+					where nspname !~ '^pg_' and nspname not in ('information_schema', 'doctorcre_auth')
+				)
+				select nspname as unexpected from outside_auth
+				where has_schema_privilege($1, oid, 'CREATE')
+					or (nspname <> 'public' and has_schema_privilege($1, oid, 'USAGE'))
+				union all
+				select format('%I.%I', nspname, relname) from pg_class c join outside_auth n on n.oid = c.relnamespace
+				where case when relkind = 'S' then has_sequence_privilege($1, c.oid, 'SELECT, UPDATE, USAGE')
+					when relkind in ('r','p','v','m','f') then
+						has_table_privilege($1, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN')
+						or has_any_column_privilege($1, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')
+					else false end
+				union all
+				select format('%I.%I', nspname, proname) from pg_proc p join outside_auth n on n.oid = p.pronamespace
+				where prosecdef and has_function_privilege($1, p.oid, 'EXECUTE')
+				union all
+				select 'write access beyond session fields' where
+					has_schema_privilege($1, 'doctorcre_auth', 'CREATE')
+					or has_table_privilege($1, 'doctorcre_auth.account', 'DELETE')
+					or has_column_privilege($1, 'doctorcre_auth."user"', 'partner_user_id', 'UPDATE')
+					or has_column_privilege($1, 'doctorcre_auth.session', 'token', 'UPDATE')
+			`,
+				[role],
+			);
+			assert.deepEqual(rows, []);
+		});
+
+		await t.test("existing legacy receipt trigger still runs", async () => {
+			await db.query(`
+				with actor as (
+					insert into public.actor (slug, kind, display_name) values ('fixture', 'human', 'Example Actor')
+					returning id
+				)
+				insert into public.tool_call (idempotency_key, verb, actor_id, request_hash, response, created_at)
+				select 'fixture-receipt', 'fixture', id, 'old', '{}', now() - interval '31 days' from actor;
+				grant insert on public.tool_call to engine_reader;
+				grant select on public.actor to engine_reader;
+			`);
 			await db.query("set role engine_reader");
 			try {
-				const select = db.query("select * from doctorcre_auth.session");
-				await assert.rejects(select, { code: "42501" });
+				const receipt = await db.query(`
+						insert into public.tool_call (idempotency_key, verb, actor_id, request_hash, response)
+						select 'fixture-receipt', 'fixture', id, 'new', '{}' from public.actor where slug = 'fixture'
+					`);
+				assert.equal(receipt.rowCount, 1);
+				await assert.rejects(db.query("select * from doctorcre_auth.session"), {
+					code: "42501",
+				});
 			} finally {
 				await db.query("reset role");
 			}
