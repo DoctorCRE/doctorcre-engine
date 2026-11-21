@@ -121,3 +121,88 @@ test("cuts quoted history only at a whole On <date> ... wrote: line", () => {
 		assert.equal(cleanEmailBody(body, "Maya Example"), body);
 	}
 });
+
+const maya = "Maya Example";
+const mayaSignature =
+	"Best, Maya Example Office Manager | Example Dental Group Direct: (555) 010-2000 | Main: (555) 010-3000 |";
+const outlookHeader =
+	"From: Sam Partner <sam@example.test> Sent: Monday, October 26, 2026 12:19 PM To: Maya Example <maya@example.test> Cc: Office <office@example.test> Subject: RE: Suite 200";
+
+test("keeps only the sender's new words when the body was stored as one line", () => {
+	const cases = [
+		{
+			shape: "signature and Outlook header run",
+			body: `Tuesday works for the tour. ${mayaSignature} ${outlookHeader} Could you send the suite 200 plan?`,
+			kept: "Tuesday works for the tour.",
+		},
+		{
+			shape: "external-sender banner",
+			body: "You don't often get email from maya@example.test. Learn why this is important Could you send the suite 200 plan?",
+			kept: "Could you send the suite 200 plan?",
+		},
+		{
+			shape: "nested On ... wrote: quotes",
+			body: "Sounds good. On Mon, Oct 26, 2026 at 12:19 PM Sam Partner <sam@example.test> wrote: Here is the plan. On Sun, Oct 25, 2026 at 9:00 AM Maya Example <maya@example.test> wrote: Could you send it?",
+			kept: "Sounds good.",
+		},
+		{
+			shape: "Outlook divider and original message marker",
+			body: `Here is the plan. ________________________________ ${outlookHeader} Could you send it? -----Original Message----- Old text.`,
+			kept: "Here is the plan.",
+		},
+		{
+			shape: "sign-off after a sentence with no period",
+			body: "Let me know if Tuesday works Thank you, Maya (555) 010-2000 maya@example.test",
+			kept: "Let me know if Tuesday works",
+		},
+	];
+	for (const { shape, body, kept } of cases) {
+		assert.equal(cleanEmailBody(body, maya), kept, shape);
+	}
+});
+
+test("keeps one-line sentences that only resemble a sign-off, header or quote", () => {
+	for (const body of [
+		"I wanted to say thanks, Maya Example (555) 010-2000.",
+		"Thanks, Maya. Please call (555) 010-2000 if the plan is wrong.",
+		"Best, Maya Example Please bring the keys on Tuesday.",
+		"From: the side door. Sent: the plan on Tuesday. Subject: parking.",
+		"On Monday we can tour. On 5 May I sent the plan and you replied.",
+		"Thanks, Maya Example (555) 010-2000",
+	]) {
+		assert.equal(cleanEmailBody(body, maya), body);
+	}
+});
+
+test("a carried chain of eleven one-line messages shows each message's new text once", () => {
+	const sam = {
+		name: "Sam Partner",
+		signature:
+			"Thanks, Sam Sam Partner | Partner Example Realty Cell: 555-010-4000",
+	};
+	const thread: { sender: string; body: string; kept: string }[] = [];
+	for (let index = 0; index < 11; index++) {
+		const { name, signature } =
+			index % 2 ? sam : { name: maya, signature: mayaSignature };
+		const kept = `Message ${index + 1} about suite 200 is here.`;
+		const earlier = thread.at(-1);
+		const quote = !earlier
+			? ""
+			: index % 3 === 0
+				? ` On Mon, Oct ${index + 10}, 2026 at 9:00 AM ${earlier.sender} <old@example.test> wrote: ${earlier.body}`
+				: ` From: ${earlier.sender} <old@example.test> Sent: Monday, October ${index + 10}, 2026 9:00 AM To: ${name} <new@example.test> Subject: RE: Suite 200 ${earlier.body}`;
+		const banner =
+			index % 2
+				? "You don't often get email from sam@example.test. Learn why this is important "
+				: "";
+		thread.push({
+			sender: name,
+			body: `${banner}${kept} ${signature}${quote}`,
+			kept,
+		});
+	}
+	assert.deepEqual(
+		thread.map(({ body, sender }) => cleanEmailBody(body, sender)),
+		thread.map(({ kept }) => kept),
+	);
+});
