@@ -1,7 +1,8 @@
-import { type Kysely, type QueryCreator, sql } from "kysely";
-import type { DB } from "../database.d.ts";
+import { sql, type Transaction } from "kysely";
+import type { DB } from "../next-database.d.ts";
+import { selectNextDeals } from "./next-board.ts";
 
-export type ClientFitFilters = {
+type ClientFitFilters = {
 	vertical: string | null;
 	city: string | null;
 	state: string | null;
@@ -10,7 +11,10 @@ type Evidence = { deal_id: string; closed_on: string; deal_name: string };
 
 const PROFILE_LIMIT = 1000;
 
-export async function readClientFit(db: Kysely<DB>, filters: ClientFitFilters) {
+export async function readClientFit(
+	db: Transaction<DB>,
+	filters: ClientFitFilters,
+) {
 	const profiles = await profilesOf(db, filters).execute();
 	// The old system refused rather than cut the list short.
 	if (profiles.length > PROFILE_LIMIT)
@@ -25,38 +29,53 @@ export async function readClientFit(db: Kysely<DB>, filters: ClientFitFilters) {
 	};
 }
 
-const wins = (db: QueryCreator<DB>) =>
+// Census ANSI state codes mapped to the USPS abbreviations used by the state filter.
+const stateCodes = `{
+	"01":"AL", "02":"AK", "04":"AZ", "05":"AR", "06":"CA", "08":"CO", "09":"CT",
+	"10":"DE", "11":"DC", "12":"FL", "13":"GA", "15":"HI", "16":"ID", "17":"IL",
+	"18":"IN", "19":"IA", "20":"KS", "21":"KY", "22":"LA", "23":"ME", "24":"MD",
+	"25":"MA", "26":"MI", "27":"MN", "28":"MS", "29":"MO", "30":"MT", "31":"NE",
+	"32":"NV", "33":"NH", "34":"NJ", "35":"NM", "36":"NY", "37":"NC", "38":"ND",
+	"39":"OH", "40":"OK", "41":"OR", "42":"PA", "44":"RI", "45":"SC", "46":"SD",
+	"47":"TN", "48":"TX", "49":"UT", "50":"VT", "51":"VA", "53":"WA", "54":"WV",
+	"55":"WI", "56":"WY", "60":"AS", "66":"GU", "69":"MP", "72":"PR", "78":"VI"
+}`;
+
+const wins = (db: Transaction<DB>) =>
 	db
-		.selectFrom("deal as d")
-		.innerJoin("client as cl", "cl.id", "d.client_id")
-		.innerJoin("party as p", "p.id", "cl.party_id")
+		.selectFrom(selectNextDeals(db).select("d.market_id").as("d"))
+		.innerJoin("client as cl", "cl.party_id", "d.client_id")
+		.leftJoin("client_vertical as cv", "cv.party_id", "cl.party_id")
+		.leftJoin("lease", "lease.deal_id", "d.id")
+		.leftJoin("property as premises", "premises.id", "lease.property_id")
 		.select([
 			"d.id",
 			"d.name",
 			"d.client_id",
-			"d.deal_type",
+			"d.type as deal_type",
 			"d.closed_on",
-			"d.city",
-			"p.state",
+			"d.market as city",
 			sql<
 				string | null
-			>`coalesce(nullif(cl.vertical, ''), nullif(d.segment, ''), nullif(p.specialty, ''))`.as(
-				"vertical",
-			),
+			>`${stateCodes}::jsonb ->> coalesce(left(premises.county_fips, 2),
+				(select min(left(mc.county_fips, 2)) from market_county mc where mc.market_id = d.market_id
+					having count(distinct left(mc.county_fips, 2)) = 1))`.as("state"),
+			sql<
+				string | null
+			>`coalesce(cv.vertical, (select string_agg(nullif(s.label, ''), ', ' order by s.label)
+				from party_specialty ps join specialty s on s.slug = ps.specialty
+				where ps.person_id = cl.party_id))`.as("vertical"),
 		])
 		.where("d.phase", "=", "closed")
 		.where("d.outcome", "=", "won")
-		.where("d.closed_on", "<=", sql<string>`current_date`)
-		.where("cl.merged_into", "is", null)
-		.where("p.merged_into", "is", null)
-		.where("p.deleted_at", "is", null);
+		.where(sql<string>`d.closed_on::date`, "<=", sql<string>`current_date`);
 
 const profilesOf = (
-	db: Kysely<DB>,
+	db: Transaction<DB>,
 	{ vertical, city, state }: ClientFitFilters,
 ) =>
 	db
-		.with("wins", wins)
+		.with("wins", () => wins(db))
 		.selectFrom("wins")
 		.select((eb) => [
 			"vertical",
