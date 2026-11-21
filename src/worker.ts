@@ -31,6 +31,7 @@ import {
 	dealJobs,
 	nextDeals,
 } from "./deals/next-change.ts";
+import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
 import { docRoutes } from "./doc.ts";
@@ -221,6 +222,7 @@ app.use(
 );
 app.route("/jobs", cadence);
 app.route("/jobs", nextDeals);
+app.route("/jobs", notificationReads);
 app.route("/jobs", dealJobs);
 app.route("/jobs", invoiceJobs);
 app.route("/jobs", nextSteps);
