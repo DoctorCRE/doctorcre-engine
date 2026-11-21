@@ -8,8 +8,10 @@ import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import { readCompletionReviews } from "./home-inbox-reviews-updates.ts";
 import {
 	datedPartnerSteps,
+	type HomeStepTarget,
 	homeDayAt,
 	homeStepCopy,
+	homeStepShown,
 	lateLabel,
 	type StepTitle,
 	stepItemId,
@@ -27,11 +29,9 @@ type Clock = Record<
 type Match = Record<"email" | "party_name", string> &
 	Record<"deal_id" | "deal_name" | "client_name", string | null>;
 type StepRow = Omit<StepTitle, "status" | "hold_until" | "due_on"> &
+	HomeStepTarget &
 	Record<"id" | "due_on" | "owner", string> &
-	Record<
-		"deal_id" | "party_id" | "call_id" | "building_deal_id",
-		string | null
-	> & {
+	Record<"party_id" | "call_id", string | null> & {
 		days_late: number | null;
 		is_viewer: boolean;
 		prospect: boolean;
@@ -164,7 +164,7 @@ async function readTodayReminders(
 		.select("id")
 		.where(isOpenBoardDeal);
 	const { rows } = await sql<StepRow>`
-		select s.id, s.what as title, ${stepTargetFields(db)}, s.due_on::text as due_on,
+		select s.id, s.what as title, s.property_id, ${stepTargetFields(db)}, s.due_on::text as due_on,
 			case when s.due_on < ${today}::date then (${today}::date - s.due_on)::int end as days_late,
 			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id,
 			s.call_activity_id as call_id, c.happened_at as call_at, contact.name as call_contact,
@@ -175,11 +175,12 @@ async function readTodayReminders(
 			${owner === "all" ? sql`` : sql`and u.slug = ${owner}`}
 		order by s.due_on, (s.call_activity_id is null), s.id
 	`.execute(db);
-	const viewerSteps = rows.filter((r) => r.is_viewer).map((r) => r.id);
+	const shown = rows.filter(homeStepShown);
+	const viewerSteps = shown.filter((r) => r.is_viewer).map((r) => r.id);
 	const reviews = viewerSteps.length
 		? await readCompletionReviews(db, viewerSteps)
 		: null;
-	const list = rows.map((r) => ({
+	const list = shown.map((r) => ({
 		id: r.id,
 		kind: r.call_id ? ("call_follow_up" as const) : ("step" as const),
 		title:

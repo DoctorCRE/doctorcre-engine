@@ -66,6 +66,7 @@ import {
 } from "./partner-session.ts";
 import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
+import { preferenceSaves, preferences } from "./preferences.ts";
 import { presence } from "./presence.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
 import { prospectAdd } from "./prospects/add.ts";
@@ -77,6 +78,7 @@ import { routerQueue } from "./router-queue.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
+import { updateReads, updates } from "./updates.ts";
 import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 import { changes } from "./who-did-what.ts";
@@ -138,7 +140,9 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", relationships)
 	.route("/", search)
 	.route("/", today)
+	.route("/", updates)
 	.route("/", changes)
+	.route("/", preferences)
 	.route("/", vendorMarkets)
 	.route("/", vendorMeetings);
 
@@ -173,6 +177,8 @@ partnerApi.route("/api/engine", prospectAdd);
 partnerApi.route("/api/engine", attachmentFiles);
 partnerApi.route("/api/engine", dealDocuments);
 partnerApi.route("/api/engine", replyDrafts);
+partnerApi.route("/api/engine", updateReads);
+partnerApi.route("/api/engine", preferenceSaves);
 
 app.post("/api/engine/doc/link/claim", claimDocLink);
 const docLinkBodyLimit = bodyLimit({

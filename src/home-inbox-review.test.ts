@@ -1281,6 +1281,88 @@ test("email thread cleanup keeps requests around sign-offs and dividers and remo
 	);
 });
 
+test("every Home email review shows each message once without signatures, headers or quoted history", async () => {
+	const reviewer = randomUUID();
+	const user = { user: "clean-thread-reviewer" };
+	const [ask, answer, confirm] = [randomUUID(), randomUUID(), randomUUID()];
+	const followUp = randomUUID();
+	const chooseDeal = randomUUID();
+	const draft = randomUUID();
+	const messages = [
+		{
+			id: ask,
+			sender: "Maya Example",
+			body: "Could you send the suite 200 plan?\r\n\r\nThanks,\r\nMaya\r\nMaya Example | Office Manager\r\nC: 555-010-2000\r\nmaya@example.test",
+			kept: "Could you send the suite 200 plan?",
+		},
+		{
+			id: answer,
+			sender: "Example Thread Partner",
+			body: "Here is the plan.\r\n\r\n________________________________\r\n*From:* Maya Example <maya@example.test>\r\n\r\n*Sent:* Monday, January 5, 2026 9:00 AM\r\n*To:* Example Thread Partner\r\n*Subject:* Suite 200\r\n\r\nCould you send the suite 200 plan?",
+			kept: "Here is the plan.",
+		},
+		{
+			id: confirm,
+			sender: "Maya Example",
+			body: "Tuesday at 10 works.\r\n\r\nOn Mon, Jan 5, 2026 at 9:30 AM Example Thread Partner <\r\npartner@example.test> wrote:\r\nHere is the plan.\r\n\r\n---------- Forwarded message ---------\r\nFrom: Maya Example\r\nDate: Mon, Jan 5, 2026\r\nCould you send the suite 200 plan?",
+			kept: "Tuesday at 10 works.",
+		},
+	];
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${reviewer}', 'person', 'Example Thread Partner');
+		insert into app_user (id, slug) values ('${reviewer}', '${user.user}');`);
+	for (const [index, message] of messages.entries()) {
+		await db.query(
+			"insert into activity (id, kind, happened_at) values ($1, 'email', '2026-01-05'::date + $2::int)",
+			[message.id, index],
+		);
+		await db.query(
+			`insert into email (activity_id, message_id, conversation_id, sender, sender_name, subject, body)
+			values ($1::uuid, $1::uuid::text || '@example.test', 'Clean thread', 'maya@example.test', $2, 'Suite 200', $3)`,
+			[message.id, message.sender, message.body],
+		);
+		await db.query(
+			"insert into email_mailbox (activity_id, user_id) values ($1, $2)",
+			[message.id, reviewer],
+		);
+		await db.query(
+			"insert into activity_about (activity_id, party_id) values ($1, $2)",
+			[message.id, reviewer],
+		);
+	}
+	await db.query(
+		`insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
+		values ($1, 'next_step', $3, 'email', 'Tuesday at 10 works.', 'old_system', $4, 'Book the tour', $5),
+			($2, 'file_to_deal', $3, 'email', 'Tuesday at 10 works.', 'old_system', $4, null, null)`,
+		[followUp, chooseDeal, confirm, deal, reviewer],
+	);
+	await db.query(
+		`insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+		values ($1, $2, $3, 'old_system', 'Re: Suite 200', 'See you Tuesday.', 'Tuesday at 10 works.')`,
+		[draft, confirm, reviewer],
+	);
+	await db.query("commit");
+	for (const path of [
+		`proposals/${followUp}`,
+		`proposals/${chooseDeal}`,
+		`reply-drafts/${draft}`,
+	]) {
+		const response = await request(user, path, { method: "GET" });
+		assert.equal(response.status, 200, path);
+		const detail: unknown = await response.json();
+		assert.ok(isArguments(detail) && Array.isArray(detail.thread), path);
+		assert.deepEqual(
+			detail.thread.filter(isArguments).map(({ activity_id, body }) => ({
+				activity_id,
+				body,
+			})),
+			messages.map(({ id, kept }) => ({ activity_id: id, body: kept })),
+			path,
+		);
+	}
+});
+
 test("Mail priorities ranks inbound work once per Outlook conversation and opens the same Home card", async () => {
 	const user = { user: "example" };
 	const url = "home/mail-priorities";
