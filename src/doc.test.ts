@@ -8,6 +8,7 @@ import { copyTest } from "./test-copy.ts";
 const { db, setup, cleanup, connectionString } = copyTest();
 const owner = randomUUID();
 const other = randomUUID();
+const nonPartner = randomUUID();
 const question = {
 	idempotency_key: randomUUID(),
 	question: "What should I review?",
@@ -23,8 +24,10 @@ before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
 		insert into party (id, kind, name) values
-			('${owner}', 'person', 'Example One'), ('${other}', 'person', 'Example Two');
-		insert into app_user (id, slug) values ('${owner}', 'joe'), ('${other}', 'dell');
+			('${owner}', 'person', 'Example One'), ('${other}', 'person', 'Example Two'),
+			('${nonPartner}', 'person', 'Example Three');
+		insert into app_user (id, slug) values
+			('${owner}', 'joe'), ('${other}', 'dell'), ('${nonPartner}', 'former_partner');
 		commit;`);
 });
 after(cleanup);
@@ -54,7 +57,7 @@ function client(model: Parameters<typeof docRoutes>[0], user = "joe") {
 	app.route("/", api);
 	return async <Path extends string>(
 		path: Path,
-		status: number,
+		status: number | number[],
 		body?: object,
 	) => {
 		const response = await app.request(
@@ -63,7 +66,9 @@ function client(model: Parameters<typeof docRoutes>[0], user = "joe") {
 			{ DATABASE_WRITER: { connectionString } },
 		);
 		const result = await response.json<Body<Path>>();
-		assert.equal(response.status, status, JSON.stringify(result));
+		if (typeof status === "number")
+			assert.equal(response.status, status, JSON.stringify(result));
+		else assert.ok(status.includes(response.status), JSON.stringify(result));
 		return result;
 	};
 }
@@ -71,6 +76,60 @@ function client(model: Parameters<typeof docRoutes>[0], user = "joe") {
 const answer = async () => refusal;
 const expire = (id: string) =>
 	db.query("update doc_turn set claim_until = '-infinity' where id = $1", [id]);
+
+test("a worker cannot finish an expired claim before anyone retries", async () => {
+	const send = client(async ({ turn }) => {
+		await expire(turn.id);
+		return refusal;
+	});
+	const ask = { ...question, idempotency_key: randomUUID() };
+	assert.equal((await send("/turns", 409, ask)).error, "turn_superseded");
+});
+
+test("simultaneous first asks with the same key share a reservation", async () => {
+	const finish = Promise.withResolvers<typeof refusal>();
+	let modelCalls = 0;
+	const send = client(async () => {
+		modelCalls++;
+		return finish.promise;
+	});
+	const ask = { ...question, idempotency_key: randomUUID() };
+	// Hold the first insert so both requests reach the database before either reserves.
+	await db.query("begin; lock table doc_conversation in share mode");
+	const requests = [
+		send("/turns", [200, 202], ask),
+		send("/turns", [200, 202], ask),
+	] as const;
+	const settled = Promise.allSettled(requests);
+	try {
+		try {
+			const deadline = AbortSignal.timeout(10_000);
+			for (;;) {
+				deadline.throwIfAborted();
+				const { rows } = await db.query<{
+					waiting: number;
+				}>(`select count(distinct pid)::int as waiting
+					from pg_locks where not granted and locktype in ('advisory', 'relation')
+					and database = (select oid from pg_database where datname = current_database())`);
+				if (rows[0]?.waiting === 2) break;
+			}
+		} finally {
+			await db.query("rollback");
+		}
+		assert.equal((await Promise.race(requests)).turn.state, "working");
+	} finally {
+		finish.resolve(refusal);
+		await settled;
+	}
+	const [first, second] = await Promise.all(requests);
+	assert.equal(modelCalls, 1);
+	assert.equal(first.conversation_id, second.conversation_id);
+	assert.equal(first.turn.id, second.turn.id);
+	assert.deepEqual([first.turn.state, second.turn.state].sort(), [
+		"answered",
+		"working",
+	]);
+});
 
 test("keeps one turn across an expired claim, retry, and reload", async () => {
 	const started = Promise.withResolvers<void>();
@@ -317,5 +376,66 @@ test("the database enforces private ownership and valid turn rows", async () => 
 		} finally {
 			await db.query("rollback");
 		}
+	}
+});
+
+test("the engine role cannot insert another partner's Doc rows", async () => {
+	const { rows } = await db.query<{ id: string }>(
+		"insert into doc_conversation (owner_user_id) values ($1) returning id",
+		[owner],
+	);
+	const conversation = rows[0]?.id;
+	assert.ok(conversation);
+	for (const [statement, values] of [
+		["insert into doc_conversation (owner_user_id) values ($1)", [owner]],
+		[
+			`insert into doc_turn (conversation_id, owner_user_id, position, idempotency_key, request_hash, question, state)
+		values ($1, $2, 1, gen_random_uuid(), 'example', 'Sample', 'failed')`,
+			[conversation, owner],
+		],
+	] satisfies [string, string[]][]) {
+		await db.query("begin; set local role engine");
+		try {
+			await db.query("select set_config('engine.user_id', $1, true)", [other]);
+			await assert.rejects(db.query(statement, values), { code: "42501" });
+		} finally {
+			await db.query("rollback");
+		}
+	}
+});
+
+test("the database refuses a Doc conversation owned by a non-partner", async () => {
+	await assert.rejects(
+		db.query("insert into doc_conversation (owner_user_id) values ($1)", [
+			nonPartner,
+		]),
+		{ code: "23503" },
+	);
+});
+
+test("an answered proposal needs a matching save receipt at commit", async () => {
+	await db.query("begin");
+	try {
+		await db.query(
+			`with conversation as (
+				insert into doc_conversation (owner_user_id) values ($1) returning id
+			)
+			insert into doc_turn (conversation_id, owner_user_id, position, idempotency_key,
+				request_hash, question, state, answer, confirmation_key)
+			select id, $1, 1, gen_random_uuid(), 'example', 'Sample', 'answered', $2, gen_random_uuid()
+			from conversation`,
+			[
+				owner,
+				{
+					kind: "answer",
+					text: "A proposed note",
+					sources: [],
+					proposal: { kind: "note", text: "Sample" },
+				},
+			],
+		);
+		await assert.rejects(db.query("commit"), { code: "23503" });
+	} finally {
+		await db.query("rollback");
 	}
 });

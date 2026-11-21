@@ -1,5 +1,11 @@
 -- Install on an existing next schema before enabling Doc (#953).
+-- Read-only preflight:
+-- SELECT to_regclass('next.doc_conversation') IS NOT NULL AS conversation_exists,
+--        to_regclass('next.doc_turn') IS NOT NULL AS turn_exists;
+-- If both are false, apply this file. If both are true, skip the already-applied migration.
+-- If only one exists, stop and inspect the schema.
 begin;
+set local lock_timeout = '1s';
 set local search_path = next, pg_temp;
 
 create table doc_conversation (
