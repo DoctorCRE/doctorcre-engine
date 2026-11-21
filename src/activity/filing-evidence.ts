@@ -66,7 +66,7 @@ export function filingReviewNeeded(
 	) and not ${partnerUnlinked(
 		activityId,
 		sql`jsonb_build_object('deal_id', ${dealId})`,
-	)} and not ${hasFiledFacts(activityId, true)}`;
+	)} and not ${hasFiledFacts(activityId, true)} and not ${partnerSettledFiling(activityId)}`;
 }
 
 export async function eligibleMailLinks(

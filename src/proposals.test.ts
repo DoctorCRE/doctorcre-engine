@@ -493,7 +493,18 @@ test("a phase quote is derived at storage and refuses a stale acceptance", async
 test("filing accepts the suggested deal, requires a correction reason, and never creates a deal", async () => {
 	const [, p] = await propose({ kind: "file_to_deal", deal_id: DEAL });
 	assert.equal((await decide(p.proposal_id, {}))[0], 200);
-	const [, fresh] = await propose({ kind: "possible_new_deal" });
+	const correction = id(65);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${correction}', 'email', now());
+		insert into email (activity_id, message_id, sender, subject, body)
+			values ('${correction}', 'correction@example.test', 'clinic@example.test', 'Filing correction', 'Example');
+		insert into activity_about (activity_id, deal_id) values ('${correction}', '${DEAL}');
+		insert into activity_about (activity_id, party_id) values ('${correction}', '${CLIENT}');
+		commit;`);
+	const [, fresh] = await propose({
+		kind: "possible_new_deal",
+		activity_id: correction,
+	});
 	assert.equal(
 		(await decide(fresh.proposal_id, {}))[1].rule,
 		"proposal_filing_open_deal",
@@ -519,7 +530,7 @@ test("filing accepts the suggested deal, requires a correction reason, and never
 		(
 			await db.query(
 				"select deal_id from activity_about where activity_id=$1 and deal_id is not null",
-				[EMAIL],
+				[correction],
 			)
 		).rows.map((r) => r.deal_id),
 		[OTHER],
@@ -528,7 +539,7 @@ test("filing accepts the suggested deal, requires a correction reason, and never
 		(
 			await db.query(
 				"select party_id from activity_about where activity_id=$1 and party_id is not null",
-				[EMAIL],
+				[correction],
 			)
 		).rows[0].party_id,
 		CLIENT,
@@ -805,16 +816,25 @@ test("the queue follows Outlook conversations and falls back to subject for mail
 });
 
 test("dismissing any proposal kind persists a nonblank reason and refuses a blank one", async () => {
-	const [call, step, leadParty, freshEmail] = [id(60), id(61), id(62), id(63)];
+	const [call, step, leadParty, freshEmail, newDealEmail] = [
+		id(60),
+		id(61),
+		id(62),
+		id(63),
+		id(64),
+	];
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${leadParty}', 'person', 'Dismiss Example');
 		insert into activity (id, kind, happened_at) values
 			('${call}', 'call', now() - interval '1 hour'),
-			('${freshEmail}', 'email', now() - interval '1 hour');
+			('${freshEmail}', 'email', now() - interval '1 hour'),
+			('${newDealEmail}', 'email', now() - interval '1 hour');
 		insert into email (activity_id, message_id, sender, subject, body)
-			values ('${freshEmail}', 'dismiss-test@example.test', 'clinic@example.test', 'Dismiss test', 'Example');
+			values ('${freshEmail}', 'dismiss-test@example.test', 'clinic@example.test', 'Dismiss test', 'Example'),
+			('${newDealEmail}', 'dismiss-new-deal@example.test', 'clinic@example.test', 'New deal dismiss test', 'Example');
 		insert into activity_about (activity_id, deal_id) values ('${call}', '${DEAL}');
-		insert into activity_about (activity_id, party_id) values ('${call}', '${leadParty}'), ('${freshEmail}', '${CLIENT}');
+		insert into activity_about (activity_id, party_id) values
+			('${call}', '${leadParty}'), ('${freshEmail}', '${CLIENT}'), ('${newDealEmail}', '${CLIENT}');
 		insert into next_step (id, deal_id, owner_party_id, what, due_on)
 			values ('${step}', '${DEAL}', '${USER}', 'Overdue step for dismiss test', '2001-01-01');
 		commit;`);
@@ -854,7 +874,7 @@ test("dismissing any proposal kind persists a nonblank reason and refuses a blan
 			strength: "weak",
 		},
 		{ kind: "file_to_deal", activity_id: freshEmail, deal_id: DEAL },
-		{ kind: "possible_new_deal", activity_id: freshEmail },
+		{ kind: "possible_new_deal", activity_id: newDealEmail },
 		{
 			kind: "log_call",
 			activity_id: call,

@@ -1,4 +1,4 @@
--- Apply after the Doc judgment queue and lead-source sender storage exist.
+-- Apply after the Doc judgment queue, lead-source sender storage and lead filing supersession exist.
 begin;
 set local lock_timeout = '1s';
 set local search_path = next, pg_temp;
@@ -16,6 +16,28 @@ alter table proposal
 		and (filing_scope <> 'vendor' or filed_deal_id is null))),
 	add column if not exists filed_vendor_id uuid references party constraint proposal_filed_vendor check (filed_vendor_id is null or (
 		status = 'accepted' and filed_deal_id is null and (filing_scope in ('vendor', 'both')) is true));
+
+alter table proposal
+	drop constraint proposal_decision_whole,
+	drop constraint proposal_superseded_reason,
+	add constraint proposal_decision_whole check (
+		(status = 'pending' and decided_by_user_id is null and decided_at is null)
+		or (status in ('accepted', 'dismissed') and decided_by_user_id is not null and decided_at is not null)
+		or (status = 'superseded' and decided_at is not null and kind in ('file_to_deal', 'possible_new_deal'))),
+	add constraint proposal_superseded_reason check (
+		superseded_reason is not distinct from case when status = 'superseded' then
+			case when decided_by_user_id is null then 'Moved to Leads' else 'Filing decided' end end);
+
+-- The merge moves roles first, then follows the party reference.
+alter table doc_judgment_destination
+	alter constraint doc_judgment_destination_vendor_id_vendor_role_fkey deferrable initially deferred;
+
+do $$ begin
+	if not exists (select from pg_constraint where conrelid = 'doc_judgment_destination'::regclass
+		and conname = 'doc_judgment_destination_vendor_id_fkey') then
+		alter table doc_judgment_destination add foreign key (vendor_id) references party;
+	end if;
+end $$;
 
 grant update (filed_vendor_id) on proposal to engine;
 
@@ -52,6 +74,58 @@ end $$;
 
 create or replace trigger decide_vendor_filing before insert or update of status, filed_deal_id, filed_vendor_id, filing_reason, dismiss_reason on proposal
 	for each row when (new.filed_vendor_id is not null) execute function decide_vendor_filing();
+
+drop trigger if exists supersede_lead_filing on proposal;
+drop function if exists supersede_lead_filing();
+
+create or replace function supersede_filing() returns trigger
+language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
+begin
+	if tg_op <> 'UPDATE' or old.status <> 'pending'
+		or new.kind not in ('file_to_deal', 'possible_new_deal') then
+		raise exception 'only a pending filing can be superseded'
+			using errcode = 'check_violation', constraint = 'proposal_final';
+	end if;
+	if acting_job is null and acting_user is not null and exists (
+		select from proposal p where p.activity_id = new.activity_id
+			and p.kind in ('file_to_deal', 'possible_new_deal') and p.status in ('accepted', 'dismissed')
+			and p.decided_by_user_id = acting_user
+	) then
+		new.decided_by_user_id := acting_user;
+		new.superseded_reason := 'Filing decided';
+	elsif acting_job = 'mail_capture' and exists (select from lead_email_source where activity_id = new.activity_id) then
+		new.superseded_reason := 'Moved to Leads';
+	else
+		raise exception 'the email needs a filing decision or a lead link'
+			using errcode = 'check_violation', constraint = 'proposal_filing_supersede';
+	end if;
+	new.decided_at := clock_timestamp();
+	return new;
+end $$;
+
+create or replace trigger supersede_filing before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
+	for each row when (new.status = 'superseded') execute function supersede_filing();
+
+create or replace function settle_filing_proposals() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from proposal p where p.activity_id = new.activity_id and p.id <> new.id
+		and p.kind in ('file_to_deal', 'possible_new_deal') and p.status in ('accepted', 'dismissed')) then
+		raise exception 'the email already has a filing decision'
+			using errcode = 'check_violation', constraint = 'proposal_final';
+	end if;
+	update proposal set status = 'superseded'
+	where activity_id = new.activity_id and status = 'pending' and kind in ('file_to_deal', 'possible_new_deal');
+	return null;
+end $$;
+
+create or replace trigger settle_filing_proposals after update of status on proposal
+	for each row when (old.status = 'pending' and new.status in ('accepted', 'dismissed')
+		and new.kind in ('file_to_deal', 'possible_new_deal'))
+	execute function settle_filing_proposals();
 
 create or replace function mail_sender_vendors(email_id uuid) returns setof uuid
 language sql stable as $$

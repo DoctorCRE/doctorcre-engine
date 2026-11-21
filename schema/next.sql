@@ -1627,9 +1627,10 @@ create table proposal (
 	constraint proposal_decision_whole check (
 		(status = 'pending' and decided_by_user_id is null and decided_at is null)
 		or (status in ('accepted', 'dismissed') and decided_by_user_id is not null and decided_at is not null)
-		or (status = 'superseded' and decided_by_user_id is null and decided_at is not null)),
+		or (status = 'superseded' and decided_at is not null and kind in ('file_to_deal', 'possible_new_deal'))),
 	constraint proposal_superseded_reason check (
-		superseded_reason is not distinct from case when status = 'superseded' then 'Moved to Leads' end),
+		superseded_reason is not distinct from case when status = 'superseded' then
+			case when decided_by_user_id is null then 'Moved to Leads' else 'Filing decided' end end),
 	constraint proposal_stated_phase check (case when phase_stated then
 		kind = 'phase_move' and activity_kind in ('call', 'meeting') else phase_on is null end),
 	constraint proposal_held_step check (case when kind = 'next_step_done' then
@@ -1853,23 +1854,54 @@ end $$;
 create trigger decide_vendor_filing before insert or update of status, filed_deal_id, filed_vendor_id, filing_reason, dismiss_reason on proposal
 	for each row when (new.filed_vendor_id is not null) execute function decide_vendor_filing();
 
-create function supersede_lead_filing() returns trigger
+create function supersede_filing() returns trigger
 language plpgsql as $$
+declare
+	acting_job text := nullif(current_setting('engine.job', true), '');
+	acting_user uuid := nullif(current_setting('engine.user_id', true), '');
 begin
 	if tg_op <> 'UPDATE' or old.status <> 'pending'
-		or new.kind not in ('file_to_deal', 'possible_new_deal')
-		or current_setting('engine.job', true) is distinct from 'mail_capture'
-		or not exists (select from lead_email_source where activity_id = new.activity_id) then
-		raise exception 'mail capture supersedes only a pending filing for an email moved to Leads'
-			using errcode = 'check_violation', constraint = 'proposal_lead_supersede';
+		or new.kind not in ('file_to_deal', 'possible_new_deal') then
+		raise exception 'only a pending filing can be superseded'
+			using errcode = 'check_violation', constraint = 'proposal_final';
+	end if;
+	if acting_job is null and acting_user is not null and exists (
+		select from proposal p where p.activity_id = new.activity_id
+			and p.kind in ('file_to_deal', 'possible_new_deal') and p.status in ('accepted', 'dismissed')
+			and p.decided_by_user_id = acting_user
+	) then
+		new.decided_by_user_id := acting_user;
+		new.superseded_reason := 'Filing decided';
+	elsif acting_job = 'mail_capture' and exists (select from lead_email_source where activity_id = new.activity_id) then
+		new.superseded_reason := 'Moved to Leads';
+	else
+		raise exception 'the email needs a filing decision or a lead link'
+			using errcode = 'check_violation', constraint = 'proposal_filing_supersede';
 	end if;
 	new.decided_at := clock_timestamp();
-	new.superseded_reason := 'Moved to Leads';
 	return new;
 end $$;
 
-create trigger supersede_lead_filing before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
-	for each row when (new.status = 'superseded') execute function supersede_lead_filing();
+create trigger supersede_filing before insert or update of status, filed_deal_id, filing_reason, dismiss_reason on proposal
+	for each row when (new.status = 'superseded') execute function supersede_filing();
+
+create function settle_filing_proposals() returns trigger
+language plpgsql as $$
+begin
+	if exists (select from proposal p where p.activity_id = new.activity_id and p.id <> new.id
+		and p.kind in ('file_to_deal', 'possible_new_deal') and p.status in ('accepted', 'dismissed')) then
+		raise exception 'the email already has a filing decision'
+			using errcode = 'check_violation', constraint = 'proposal_final';
+	end if;
+	update proposal set status = 'superseded'
+	where activity_id = new.activity_id and status = 'pending' and kind in ('file_to_deal', 'possible_new_deal');
+	return null;
+end $$;
+
+create trigger settle_filing_proposals after update of status on proposal
+	for each row when (old.status = 'pending' and new.status in ('accepted', 'dismissed')
+		and new.kind in ('file_to_deal', 'possible_new_deal'))
+	execute function settle_filing_proposals();
 
 -- A call's resolution can keep the current date until a new ordinary step takes its place.
 create view deal_next_date with (security_invoker = true) as
@@ -4181,11 +4213,12 @@ create table doc_judgment_destination (
 	job_kind text generated always as ('email_filing') stored,
 	position integer not null check (position > 0),
 	deal_id uuid references deal,
-	vendor_id uuid,
+	vendor_id uuid references party,
 	vendor_role text generated always as ('vendor') stored,
 	primary key (job_id, position),
 	foreign key (job_id, job_kind) references doc_judgment_job (id, kind) on delete cascade,
-	foreign key (vendor_id, vendor_role) references party_role (party_id, role),
+	-- The merge moves roles first, then follows the party reference above.
+	foreign key (vendor_id, vendor_role) references party_role (party_id, role) deferrable initially deferred,
 	check (num_nonnulls(deal_id, vendor_id) = 1)
 );
 

@@ -518,10 +518,13 @@ for (const decision of ["dismiss", "accept"]) {
 		}
 		const activity = await captureForJudgment(message);
 		assert.equal(await captureForJudgment(message, secondMailbox), activity);
+		const pendingDeal = await propose(activity, otherDeal);
 		const first = await claimFiling(joe, activity);
 		const second = await claimFiling(dell, activity);
 		assert.equal(await first.answer([]), 204);
-		const [proposal] = await filingProposals(activity);
+		const proposal = (await filingProposals(activity)).find(
+			(id) => id !== pendingDeal,
+		);
 		assert.ok(proposal);
 		assert.equal(
 			(
@@ -534,8 +537,31 @@ for (const decision of ["dismiss", "accept"]) {
 			)[0],
 			200,
 		);
+		const remaining = await mailboxCards({ user: "dell" }, pendingDeal);
+		const [status, refusal] = await save(
+			{ user: "dell" },
+			`proposals/${pendingDeal}/decision`,
+			{
+				idempotency_key: randomUUID(),
+				decision: "accept",
+				reason: "File on the other deal.",
+			},
+		);
 		const text = `Second copy after ${decision}`;
 		assert.equal(await second.answer([fact("vendor", vendor, text)]), 204);
+		assert.deepEqual(
+			{ cards: remaining.length, status, error: refusal.error },
+			{ cards: 0, status: 409, error: "already_decided" },
+		);
+		assert.deepEqual(
+			(
+				await db.query(
+					"select status, decided_by_user_id from proposal where id = $1",
+					[pendingDeal],
+				)
+			).rows,
+			[{ status: "superseded", decided_by_user_id: joe }],
+		);
 		assert.equal(
 			(await db.query("select from activity where summary = $1", [text]))
 				.rowCount,
@@ -693,6 +719,35 @@ test("judgment can file to a vendor the sender worked for on the sent date", asy
 			.rowCount,
 		1,
 	);
+});
+
+test("a completed judgment's vendor destination follows a vendor merge", async () => {
+	const message = mail("merge-judgment", "Merge filing vendor");
+	message.email.sender = "vendor-contact@example.test";
+	const activity = await captureForJudgment(message);
+	const claim = await claimFiling(joe, activity);
+	assert.deepEqual(claim.destinations, [{ kind: "vendor", id: vendor }]);
+	assert.equal(
+		await claim.answer([
+			fact("vendor", vendor, "Send the merged vendor a plan"),
+		]),
+		204,
+	);
+	await db.query("begin");
+	try {
+		await db.query(`select set_config('engine.user_id', '${joe}', true);
+			select merge_party('${vendor}', '${otherVendor}');
+			set constraints all immediate;`);
+		const { rows } = await db.query(
+			`select j.state, d.vendor_id from doc_judgment_job j
+			join doc_judgment_destination d on d.job_id = j.id
+			where j.activity_id = $1`,
+			[activity],
+		);
+		assert.deepEqual(rows, [{ state: "answered", vendor_id: otherVendor }]);
+	} finally {
+		await db.query("rollback");
+	}
 });
 
 async function captureForJudgment(

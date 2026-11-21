@@ -336,7 +336,7 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 
 const filingKinds = ["file_to_deal", "possible_new_deal"];
 
-// Each message carries its own filing suggestion, so one decision locks every member in id order.
+// Filing decisions and mail jobs take the same email locks before changing proposals.
 async function lockFiling(
 	tx: Transaction<DB>,
 	p: {
@@ -361,16 +361,22 @@ async function lockFiling(
 					or thread.conversation_id = source.conversation_id
 				where source.activity_id = ${p.activity_id}::uuid
 			)
-			and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)}
-			and (sibling.kind <> 'file_to_deal'
-				or ${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))}))
-		order by sibling.id
-		for update of sibling`.execute(tx);
+			and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)})
+	`.execute(tx);
 	for (const messageId of [
 		...new Set(rows.map((row) => row.message_id)),
 	].sort())
 		if (messageId) await lockEmail(tx, messageId);
-	return rows.map((row) => row.id);
+	const { rows: members } = await sql<{ id: string }>`
+		select sibling.id from proposal sibling
+		where sibling.id = any(${rows.map((row) => row.id)}::uuid[])
+			and (sibling.id = ${p.id}::uuid or (sibling.status = 'pending' and
+				case when sibling.kind = 'file_to_deal'
+					then ${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))}
+					else not ${partnerSettledFiling(sql.ref("sibling.activity_id"))} end))
+		order by sibling.id for update
+	`.execute(tx);
+	return members.map((row) => row.id);
 }
 
 export const proposalDecisions = new Hono<NextSaveEnv>().post(
@@ -432,7 +438,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
-				if (p.filing_scope && p.activity_id) {
+				if (filing && p.activity_id) {
 					const {
 						rows: [email],
 					} = await sql<{ decided: boolean }>`

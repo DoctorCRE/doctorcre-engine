@@ -141,9 +141,8 @@ const visibleSuggestion = (userId: string) => sql<boolean>`
 			and not (${filingReviewNeeded(sql.ref("p.activity_id"), sql.ref("p.deal_id"))}) then false
 		when p.kind = 'possible_new_deal' and p.status = 'pending' and (
 			${hasFiledFacts(sql.ref("p.activity_id"), true)} or
-			(p.evidence = ${filingReviewEvidence} and (
-				${hasFiledFacts(sql.ref("p.activity_id"))} or ${partnerSettledFiling(sql.ref("p.activity_id"))}
-			))
+			${partnerSettledFiling(sql.ref("p.activity_id"))} or
+			(p.evidence = ${filingReviewEvidence} and ${hasFiledFacts(sql.ref("p.activity_id"))})
 		) then false
 		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 		when p.kind = 'email_lead' then p.changed_for_user_id = ${userId}::uuid
