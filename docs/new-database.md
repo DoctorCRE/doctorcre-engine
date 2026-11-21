@@ -1474,6 +1474,14 @@ The new detail read returns `correspondence`, an array of email messages and mee
 
 Both partners' open board cards and deal pages return `client_portal_url` for an active registration belonging to the deal's current client. It is the site's address on `share.doctorcre.com`, or null when there is no matching active registration. The reader database role can read the fields used to form the link.
 
+### Activity deal attribution
+
+`GET /api/engine/activities/{activity_id}/deal-attribution` takes the exact activity UUID from the deal's history and requires a PartnerApp session. Either partner can read attribution for activity filed to a shared deal.
+
+- With one deal in `activity_about`, the read returns `{ kind: "credited", deal: { id, name } }`.
+- With several deals, the read returns `{ kind: "ambiguous", candidates: [{ id, name }, ...] }`, ordered by deal name and ID. None receives credit.
+- With no deal link or no matching activity, the read returns `404 not_found`. A signed-out request returns `401`.
+
 ### Call recorder context
 
 `GET /api/engine/call-context` reads the new database for a signed-in partner. Pass 1 to 50 distinct deal UUIDs as repeated `deal_id` query fields. A missing list, invalid UUID, duplicate UUID (ignoring case), or oversized batch returns `400 invalid_field_value`.

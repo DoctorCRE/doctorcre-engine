@@ -157,6 +157,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Terms: Show sourced terms lists each lease term found in the deal's documents, with its document, pages and quoted text. Approve, Correct and Reject each take a reason and save the partner's choice, as on Home's lease fact card.
 - [ ] Email follow-ups show each distinct decision targeting the deal once, with its email. A filing suggested on every message of a conversation shows once, with its newest message. Accept and Dismiss work as on Home's email suggestion. An email already filed to the deal has no "File email to this deal" action. Use the partner's Home card title when the card shows the same email. Otherwise use the saved action for the email or title the pending decision. Keep the email subject in Correspondence & notes.
 - [ ] Update: a note saved to the deal's history with its author and time.
+- [ ] In Updates, Show deal attribution opens a panel with a link to the credited deal. When the activity is filed to several deals, the panel links to each candidate and shows zero credited activities. [Activity deal attribution](../new-database.md#activity-deal-attribution).
 - [ ] Vendors on the deal, each opening its vendor page.
 - [ ] Watch settings and the deal page's call recorder work as they do today. After the switch, watch settings use the old tables and cover copied deals only (#805).
 
