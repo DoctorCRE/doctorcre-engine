@@ -206,7 +206,13 @@ async function dealWatch(db: Transaction<DB>, watch: Watch) {
 			('lease_option', array['kind', 'notice_on'])
 		)
 		select c.id::text as change_id, c.table_name, c.record, c.action, field,
-			c.old_value -> field as old_value, c.new_value -> field as new_value,
+			case when c.table_name = 'deal_phase_change' and c.action = 'insert' and field = 'phase' then (
+				select to_jsonb(prior.phase) from deal_phase_change prior
+				where prior.deal_id = ${dealId}
+				and prior.happened_at < (c.record ->> 'happened_at')::timestamptz
+				order by prior.happened_at desc limit 1
+			) else c.old_value -> field end as old_value,
+			c.new_value -> field as new_value,
 			coalesce(actor.slug, c.changed_by_job) as actor, sponsor.slug as for_user,
 			to_jsonb(c.changed_at) #>> '{}' as changed_at
 		from change c join watched_fields w using (table_name)
