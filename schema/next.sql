@@ -68,6 +68,8 @@ insert into job values
 	('intake', 'Post intake'), ('mail_capture', 'Mail filing'), ('publisher', 'Publisher'), ('readings', 'Post readings'),
 	('review_close', 'Review close'), ('lead_stage', 'Lead stages'), ('candidate_sweep', 'Candidate sweeps'), ('agent', 'Agent'), ('old_system', 'Old system');
 
+insert into job values ('nightly_checklist', 'Nightly checklist reminders');
+
 -- The engine names who acts once per transaction: set_config('engine.user_id', <id>, true) for a user, and
 -- set_config('engine.job', <slug>, true) for a job, with engine.user_id then the user it works for, if any.
 create function stamp_change() returns trigger
@@ -1520,6 +1522,7 @@ create table home_update (
 	due_on date,
 	property_id uuid references property,
 	created_at timestamptz not null default now(),
+	held_until timestamptz,
 	read_at timestamptz check (read_at >= created_at),
 	constraint home_update_checklist_due_date check ((checklist_item_ref is null) = (due_on is null)
 		and (kind = 'update' or checklist_item_ref is null)),
