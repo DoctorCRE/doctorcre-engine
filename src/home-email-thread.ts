@@ -24,21 +24,38 @@ export function sourceInMailbox(
 		from email_mailbox where activity_id = ${source}), true)`;
 }
 
-function cleanEmailBody(body: string) {
+const signOff =
+	/^(?:best(?: regards)?|kind regards|regards|thanks|thank you|sincerely)[,.!]$/i;
+const contactLine =
+	/^(?:\+?(?:[(). -]*\d){10,15}|\S+@\S+\.\S+|https?:\/\/\S+)$/i;
+
+function cleanEmailBody(body: string, sender: string | null) {
 	const [message = ""] = body.split(
-		/^[ \t]*(?:[-_]{2,}\s*$|[- ]*original message[- ]*$|on .+ wrote:\s*$|from:[^\n]*\n(?:sent|date|to):|(?:best|regards|thanks|thank you|sincerely)[,.!][ \t]*$)/im,
+		/^[ \t]*(?:[- ]*original message[- ]*$|on .+ wrote:[ \t]*$|from:[^\n]*\n(?:sent|date|to):)/im,
 		1,
 	);
-	return message
+	const lines = message
 		.split(/\r?\n/)
 		.filter(
 			(line) =>
 				!/^[ \t]*(?:>|from:|to:|cc:|bcc:|sent:|subject:|phone:|fax:|tel:|mobile:)/i.test(
 					line,
 				),
-		)
-		.join("\n")
-		.trim();
+		);
+	const end = lines.findLastIndex((line) => signOff.test(line.trim()));
+	if (end < 0) return lines.join("\n").trim();
+
+	const name = sender?.toLowerCase();
+	const firstName = name?.split(/\s+/, 1)[0];
+	const [signature, ...details] = lines
+		.slice(end + 1)
+		.map((line) => line.trim().toLowerCase())
+		.filter(Boolean);
+	const footer =
+		!signature ||
+		((signature === name || signature === firstName) &&
+			details.every((line) => contactLine.test(line)));
+	return (footer ? lines.slice(0, end) : lines).join("\n").trim();
 }
 
 type ThreadMessage = {
@@ -68,6 +85,6 @@ export async function readHomeEmailThread(
 	`.execute(db);
 	return rows.map((message) => ({
 		...message,
-		body: cleanEmailBody(message.body),
+		body: cleanEmailBody(message.body, message.sender_name),
 	}));
 }

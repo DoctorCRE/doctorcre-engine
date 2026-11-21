@@ -105,6 +105,19 @@ test("switch off returns 404, non-partners are refused, and invalid owners fail"
 	]);
 });
 
+test("Today links owned client follow-ups to the legacy inbox card", async () => {
+	const [[status, body], inbox] = await Promise.all([
+		today(),
+		request(joe, "home/inbox", get, reader),
+	]);
+	assert.deepEqual([status, inbox.status], [200, 200]);
+	const { items } = (await inbox.json()) as { items: Row[] };
+	const card = items.find((item) => item.source_id === id(22));
+	assert.ok(typeof card?.item_id === "string");
+	const followUp = body.reminders?.upcoming.find((item) => item.id === id(22));
+	assert.equal(followUp?.home_item_id, card.item_id);
+});
+
 test("Today shows plain reminder titles and flags ended deals for Deals", async () => {
 	const [status, body] = await today();
 	assert.equal(status, 200);
@@ -131,7 +144,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		`${id(23)}|Call with Dr. Example left a follow-up — Call about the floor plan|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
-		`${id(22)}|Follow-up due for Example Dental — Confirm suite size|null|joe|null|/relationships?node=party:${id(3)}&step=${id(22)}`,
+		`${id(22)}|Follow-up due for Example Dental — Confirm suite size|null|joe|next_action:${id(22)}|/relationships?node=party:${id(3)}&step=${id(22)}`,
 		`${id(29)}|Follow-up due for Prospect Dental — Call prospect|null|dell|null|/deals?prospect=${id(6)}&focus=follow-up&step=${id(29)}`,
 		`${id(30)}|Follow-up due for 100 Example Way — open the saved step|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);

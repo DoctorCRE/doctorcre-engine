@@ -8,10 +8,8 @@ import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import { readCompletionReviews } from "./home-inbox-reviews-updates.ts";
 import {
 	datedPartnerSteps,
-	type HomeStepTarget,
 	homeDay,
 	homeStepCopy,
-	homeStepEligible,
 	lateLabel,
 	type StepTitle,
 	stepItemId,
@@ -28,8 +26,7 @@ type Clock = Record<
 > & { is_partner: boolean | null; partners: { slug: string; name: string }[] };
 type Match = Record<"email" | "party_name", string> &
 	Record<"deal_id" | "deal_name" | "client_name", string | null>;
-type StepRow = HomeStepTarget &
-	Omit<StepTitle, "status" | "hold_until" | "due_on"> &
+type StepRow = Omit<StepTitle, "status" | "hold_until" | "due_on"> &
 	Record<"id" | "due_on" | "owner", string> &
 	Record<
 		"deal_id" | "party_id" | "call_id" | "building_deal_id",
@@ -175,7 +172,7 @@ async function readTodayReminders(
 		.select("id")
 		.where(isOpenBoardDeal);
 	const { rows } = await sql<StepRow>`
-		select s.id, s.what as title, ${stepTargetFields(db)}, s.due_on::text as due_on, s.property_id,
+		select s.id, s.what as title, ${stepTargetFields(db)}, s.due_on::text as due_on,
 			case when s.due_on < ${today}::date then (${today}::date - s.due_on)::int end as days_late,
 			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id,
 			s.call_activity_id as call_id, c.happened_at as call_at, contact.name as call_contact,
@@ -203,8 +200,7 @@ async function readTodayReminders(
 		owner: r.owner,
 		deal_id: r.deal_id,
 		...(r.deal_ended && { deal_ended: true as const }),
-		home_item_id:
-			r.is_viewer && homeStepEligible(r, today) ? stepItemId(r) : null,
+		home_item_id: r.is_viewer ? stepItemId(r) : null,
 		open_url: stepOpenUrl(r),
 	}));
 	return {

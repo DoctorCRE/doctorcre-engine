@@ -35,6 +35,7 @@ type Draft = ReviewRow &
 		member_ids: string[] | null;
 		suggestions: SuggestionReference[] | null;
 		due_on: string | null;
+		late_target: boolean;
 		sent_at: string | null;
 		failure_reason: string | null;
 		email_activity_id: string;
@@ -103,10 +104,12 @@ function draftRows(userId: string) {
 				where about.activity_id = a.id and about.deal_id is not null
 				having count(*) = 1
 			)
-			where r.owner_user_id = ${userId}::uuid and (
-				r.status in ('pending', 'approved', 'failed')
-				or r.sent_at >= now() - interval '7 days'
-			)
+			where r.owner_user_id = ${userId}::uuid
+				and ${sourceInMailbox(sql.ref("r.email_activity_id"), userId)}
+				and (
+					r.status in ('pending', 'approved', 'failed')
+					or r.sent_at >= now() - interval '7 days'
+				)
 		)
 		select * from drafts where position = 1
 	`;
@@ -297,6 +300,7 @@ function suggestionRows(userId: string, forMail: boolean, dashboard: boolean) {
 			left join stage lead_stage on lead_stage.role = 'lead' and lead_stage.slug = p.to_stage
 			where p.kind <> 'next_step_done'
 				and ${visibleSuggestion(userId)}
+				and ${sourceInMailbox(sql.ref("p.activity_id"), userId)}
 				and (p.kind <> 'email_lead' or not exists (
 					select from party_email pe left join app_user u on u.id = pe.party_id
 					where pe.address = candidate.source_row->>'address'
@@ -328,7 +332,7 @@ function homeReviewGroups(userId: string, forMail = false, dashboard = false) {
 		suggestion_groups as (${suggestionRows(userId, forMail, dashboard)}),
 		draft_cards as (
 			select d.*, greatest(d.draft_change_id, s.suggestion_change_id) as source_change_id,
-				s.suggestions, s.member_ids, s.due_on
+				s.suggestions, s.member_ids, s.due_on, coalesce(s.late_target, false) as late_target
 			from draft_groups d
 			left join suggestion_groups s on s.mail_group = d.mail_group and d.status <> 'sent'
 			where d.status in ('pending', 'sent') or s.id is null
@@ -824,6 +828,7 @@ export async function readHomeReviewCards(
 			...draftReviewText(draft, dashboard),
 			...(dashboard && {
 				card_id: draft.mail_card_id ?? `reply_draft:${draft.id}`,
+				late_target: draft.late_target,
 				waiting_reason: homeDisplayText(draft.waiting_reason) || null,
 			}),
 			kind_label: "Reply draft",
@@ -852,8 +857,16 @@ export async function readHomeReviewCards(
 				: meeting
 					? "notification"
 					: "email_proposal";
+			const fallback = suggestion.fallback_reply_draft;
+			const deliveryUnconfirmed =
+				dashboard && fallback && unconfirmedDelivery(fallback.failure_reason);
 			return {
-				...reviewCard(suggestion, "proposal", sourceType, "needs_attention"),
+				...reviewCard(
+					suggestion,
+					"proposal",
+					sourceType,
+					deliveryUnconfirmed ? "working" : "needs_attention",
+				),
 				...(dashboard && {
 					card_id:
 						suggestion.mail_card_id ??
@@ -870,9 +883,7 @@ export async function readHomeReviewCards(
 				proposal_id: suggestion.id,
 				merged_source_ids: suggestion.suggestions.map(({ id }) => id),
 				suggestions: suggestion.suggestions,
-				...(suggestion.fallback_reply_draft && {
-					fallback_reply_draft: suggestion.fallback_reply_draft,
-				}),
+				...(fallback && { fallback_reply_draft: fallback }),
 				source_activity: suggestion.activity_id
 					? {
 							kind: suggestion.activity_kind,
