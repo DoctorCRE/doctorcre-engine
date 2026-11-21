@@ -17,6 +17,8 @@ import { fileURLToPath, URL } from "node:url";
 import {
 	docLinkConfigSchema,
 	hasManagedPolicy,
+	ownClaudePlanMessage,
+	postDocLink,
 	signInStatus,
 } from "./doc-link.ts";
 
@@ -146,6 +148,8 @@ export async function installDocLink(
 			throw new SetupError(
 				"Run claude and sign in with your Claude subscription, then run setup again. Try ~/.local/bin/claude if needed.",
 			);
+		if (status === "personal_plan_required")
+			throw new SetupError(ownClaudePlanMessage);
 		if (status !== "ready")
 			throw new SetupError(
 				"Could not check Claude Code sign-in. Run claude to check your sign-in, then run setup again.",
@@ -168,6 +172,20 @@ export async function installDocLink(
 		if (!config.success)
 			throw new SetupError(
 				"Copy a Doc link credential from the app and run setup again.",
+			);
+		// A poll without a readiness header verifies the credential without claiming a turn.
+		const poll = await postDocLink(config.data, "claim");
+		if (poll?.status === 401 || poll?.status === 403)
+			throw new SetupError(
+				"The Doc link code was refused. Make a new one in the app and run this again.",
+			);
+		if (!poll)
+			throw new SetupError(
+				"Could not reach the engine. Check your internet connection and the HTTPS engine origin, then run setup again.",
+			);
+		if (poll.status !== 204)
+			throw new SetupError(
+				`The engine could not verify the Doc link code (HTTP ${poll.status}). Check the engine origin and try again.`,
 			);
 
 		const library = join(homedir(), "Library");

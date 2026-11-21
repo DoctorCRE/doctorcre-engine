@@ -51,6 +51,7 @@ const allowedTools = ["find", "read", "propose_save", "validate_answer"]
 	.join(",");
 const checkSignInEvery = 30_000;
 const pollEvery = 2_000;
+export const ownClaudePlanMessage = "Doc needs your own Claude plan.";
 // https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy
 // https://code.claude.com/docs/en/server-managed-settings
 function macManagedSettingsPaths() {
@@ -78,7 +79,9 @@ const fields = z.record(z.string(), z.unknown());
 const authStatus = z.object({
 	loggedIn: z.boolean(),
 	authMethod: z.string(),
+	subscriptionType: z.unknown().optional(),
 });
+const personalPlan = z.enum(["pro", "max", "ultra"]);
 const rateLimit = z.object({
 	status: z.literal("rejected"),
 	resetsAt: z.number().optional(),
@@ -178,7 +181,10 @@ export async function signInStatus(claude: string) {
 	if (!auth.success) return undefined;
 	if (!auth.data.loggedIn || auth.data.authMethod !== "claude.ai")
 		return "signed_out";
-	return ok ? "ready" : undefined;
+	if (!ok) return undefined;
+	return personalPlan.safeParse(auth.data.subscriptionType).success
+		? "ready"
+		: "personal_plan_required";
 }
 
 function claudeOutcome({
@@ -250,6 +256,23 @@ type LinkRuntime = {
 	managedSettings?: Parameters<typeof hasManagedPolicy>[0];
 };
 
+export function postDocLink(
+	config: Config,
+	path: "claim" | "result",
+	init: RequestInit = {},
+	fetch = globalThis.fetch,
+) {
+	const headers = new Headers(init.headers);
+	headers.set("Authorization", `Bearer ${config.credential}`);
+	return fetch(new URL(`/api/engine/doc/link/${path}`, config.engine), {
+		...init,
+		method: "POST",
+		headers,
+		redirect: "error",
+		signal: AbortSignal.timeout(10_000),
+	}).catch(() => undefined);
+}
+
 export async function runDocLink(
 	config: Config,
 	{ fetch, now, wait, managedSettings }: LinkRuntime = {
@@ -259,18 +282,6 @@ export async function runDocLink(
 		managedSettings: macManagedSettingsPaths(),
 	},
 ) {
-	function post(path: "claim" | "result", init: RequestInit) {
-		const headers = new Headers(init.headers);
-		headers.set("Authorization", `Bearer ${config.credential}`);
-		return fetch(new URL(`/api/engine/doc/link/${path}`, config.engine), {
-			...init,
-			method: "POST",
-			headers,
-			redirect: "error",
-			signal: AbortSignal.timeout(10_000),
-		}).catch(() => undefined);
-	}
-
 	let policyBlocked = false;
 	async function policyAllowsTurns() {
 		const blocked = managedSettings
@@ -284,18 +295,32 @@ export async function runDocLink(
 		return !blocked;
 	}
 
-	let readiness: Readiness | undefined;
+	let readiness: Readiness | "personal_plan_required" | undefined;
 	let checkAt = 0;
+	async function checkSignIn() {
+		const status = await signInStatus(config.claude);
+		if (status === "personal_plan_required" && readiness !== status)
+			console.error(ownClaudePlanMessage);
+		readiness = status;
+		checkAt = now() + checkSignInEvery;
+		return status;
+	}
+
 	for (; ; await wait()) {
 		if (!(await policyAllowsTurns())) continue;
 		if (now() >= checkAt) {
-			readiness = await signInStatus(config.claude);
-			checkAt = now() + checkSignInEvery;
+			await checkSignIn();
 			if (!(await policyAllowsTurns())) continue;
 		}
-		const poll = await post("claim", {
-			headers: readiness ? { "Doc-Link-Readiness": readiness } : {},
-		});
+		if (readiness === "personal_plan_required") continue;
+		const poll = await postDocLink(
+			config,
+			"claim",
+			{
+				headers: readiness ? { "Doc-Link-Readiness": readiness } : {},
+			},
+			fetch,
+		);
 		if (poll?.status === 401) return;
 		if (poll?.status !== 200 || readiness !== "ready") continue;
 
@@ -304,12 +329,15 @@ export async function runDocLink(
 		).data;
 		if (!claim) continue;
 		if (!(await policyAllowsTurns())) continue;
+		if ((await checkSignIn()) !== "ready" || !(await policyAllowsTurns()))
+			continue;
 		const expires = Date.parse(claim.claim_until);
 		const timeout = Math.min(45_000, expires - 15_000 - now());
 		if (!(timeout > 0)) continue;
 
 		const heartbeat = setInterval(async () => {
-			if (await policyAllowsTurns()) void post("claim", {});
+			if (await policyAllowsTurns())
+				void postDocLink(config, "claim", {}, fetch);
 		}, 10_000);
 		const outcome = await answerTurn(config, claim, timeout).finally(() =>
 			clearInterval(heartbeat),
@@ -330,10 +358,15 @@ export async function runDocLink(
 				? { claim_id, kind, answer: outcome.answer }
 				: { claim_id, kind };
 		while (now() < expires) {
-			const result = await post("result", {
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(completion),
-			});
+			const result = await postDocLink(
+				config,
+				"result",
+				{
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(completion),
+				},
+				fetch,
+			);
 			if (result?.status === 401) return;
 			if (result?.status === 422 && completion.kind === "answered") {
 				completion = { claim_id, kind: "failed" };

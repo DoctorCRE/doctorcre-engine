@@ -14,7 +14,7 @@ if [[ $# != 1 ]]; then
 	exit 1
 fi
 
-script_dir=$(cd -- "$(dirname -- "$0")" && pwd) || exit 1
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
 if [[ ! -f "$script_dir/../node_modules/zod/package.json" ]]; then
 	printf '%s\n' 'Run npm ci in the DoctorCRE Engine checkout, then run setup again.' >&2
 	exit 1

@@ -10,7 +10,7 @@ import {
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { fileURLToPath, URL } from "node:url";
-import { readDocLinkConfig } from "../scripts/doc-link.ts";
+import { readDocLinkConfig, runDocLink } from "../scripts/doc-link.ts";
 
 const engine = "https://engine.example.test";
 const firstCredential = "x".repeat(43);
@@ -21,7 +21,20 @@ const wrapper = fileURLToPath(
 	new URL("../scripts/install-doc-link.sh", import.meta.url),
 );
 
-function fakeMac(t: TestContext, { installed = true, signedIn = true } = {}) {
+function fakeMac(
+	t: TestContext,
+	{
+		installed = true,
+		signedIn = true,
+		subscriptionType = "pro",
+		engineStatus = 204,
+	}: {
+		installed?: boolean;
+		signedIn?: boolean;
+		subscriptionType?: string | null;
+		engineStatus?: number;
+	} = {},
+) {
 	const directory = mkdtempDisposableSync(join(process.cwd(), ".scratch."));
 	t.after(() => directory.remove());
 	const scratch = directory.path;
@@ -50,7 +63,7 @@ function fakeMac(t: TestContext, { installed = true, signedIn = true } = {}) {
 printf 'claude %s\n' "$*" >> "${commands}"
 test -z "\${DOC_LINK_CREDENTIAL+x}" || exit 3
 case "$*" in *" auth status") ;; *) exit 3;; esac
-printf '%s\n' '${JSON.stringify({ loggedIn: signedIn, authMethod: signedIn ? "claude.ai" : "none" })}'
+printf '%s\n' '${JSON.stringify({ loggedIn: signedIn, authMethod: signedIn ? "claude.ai" : "none", ...(subscriptionType === null ? {} : { subscriptionType }) })}'
 exit ${signedIn ? 0 : 1}
 `,
 		{ mode: 0o700 },
@@ -86,24 +99,37 @@ esac`,
 		CLIENT_WEBSITE_ORIGIN: process.env.CLIENT_WEBSITE_ORIGIN,
 	};
 	function run(input = firstCredential) {
-		const invocation = `
+		const invocation = join(scratch, "run-installer.mjs");
+		writeFileSync(
+			invocation,
+			`
+import assert from "node:assert/strict";
+import { appendFileSync } from "node:fs";
 import { installDocLink } from ${JSON.stringify(installer.href)};
-await installDocLink(process.argv[1], {
-	directory: process.argv[2],
-	preferences: [process.argv[2] + ".plist"],
+globalThis.fetch = async (url, init) => {
+	const request = new Request(url, init);
+	assert.equal(request.url, ${JSON.stringify(`${engine}/api/engine/doc/link/claim`)});
+	assert.equal(request.method, "POST");
+	assert.equal(request.headers.get("Authorization"), ${JSON.stringify(`Bearer ${input}`)});
+	assert.equal(request.headers.get("Doc-Link-Readiness"), null);
+	assert.equal(request.headers.get("Cookie"), null);
+	assert.equal(request.redirect, "error");
+	appendFileSync(${JSON.stringify(commands)}, "engine credential checked\\n");
+	return new Response(null, { status: ${engineStatus} });
+};
+await installDocLink(process.argv[2], {
+	directory: process.argv[3],
+	preferences: [process.argv[3] + ".plist"],
 	cache: process.env.HOME + "/.claude/remote-settings.json"
 });
-`;
-		return spawnSync(
-			process.execPath,
-			["--input-type=module", "-e", invocation, engine, managed],
-			{
-				env,
-				input: `${input}\n`,
-				encoding: "utf8",
-				timeout: 5_000,
-			},
+`,
 		);
+		return spawnSync(process.execPath, [invocation, engine, managed], {
+			env,
+			input: `${input}\n`,
+			encoding: "utf8",
+			timeout: 5_000,
+		});
 	}
 	return { run, home, bin, env, claude, agent, config, commands };
 }
@@ -127,7 +153,10 @@ test("first setup installs official Claude Code and loads Doc link from private 
 	assert.ok(plist.includes("link.log"));
 	const commands = readFileSync(mac.commands, "utf8");
 	assert.match(commands, /curl .* https:\/\/claude\.ai\/install\.sh/);
-	assert.match(commands, /launchctl bootstrap gui\/\d+/);
+	assert.match(
+		commands,
+		/engine credential checked\n[\s\S]*launchctl bootstrap gui\/\d+/,
+	);
 	assert.doesNotMatch(commands, /launchctl bootout/);
 });
 
@@ -180,6 +209,32 @@ test("the setup command requires macOS", (t) => {
 	assert.match(result.stderr, /requires macOS/);
 });
 
+test("the setup command finds the installer with CDPATH set", (t) => {
+	const mac = fakeMac(t);
+	writeFileSync(
+		join(mac.bin, "node"),
+		`#!/bin/sh
+if [ "$1" = "--version" ]; then
+	printf '%s\\n' v26.0.0
+	exit 0
+fi
+[ "$#" -eq 2 ] && [ "$1" = ${JSON.stringify(fileURLToPath(installer))} ] &&
+	[ "$2" = ${JSON.stringify(engine)} ] && printf '%s\\n' 'Installer reached.'
+`,
+		{ mode: 0o700 },
+	);
+	const result = spawnSync(
+		"/bin/bash",
+		["scripts/install-doc-link.sh", engine],
+		{
+			env: { ...mac.env, CDPATH: "." },
+			encoding: "utf8",
+		},
+	);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stdout.trim(), "Installer reached.");
+});
+
 test("setup tells a signed-out partner how to sign in and does not load the job", (t) => {
 	const mac = fakeMac(t, { signedIn: false });
 	const result = mac.run();
@@ -200,6 +255,58 @@ test("managed Claude settings block setup before installing or running Claude", 
 	assert.match(result.stderr, /without managed Claude Code settings/);
 	assert.equal(readFileSync(mac.commands, "utf8"), "");
 });
+
+for (const subscriptionType of ["team", "enterprise"]) {
+	test(`setup refuses a ${subscriptionType} login even without a managed settings cache`, (t) => {
+		const mac = fakeMac(t, { subscriptionType });
+		const result = mac.run();
+		assert.equal(result.status, 1, result.stderr);
+		assert.match(result.stderr, /Doc needs your own Claude plan/);
+		assert.doesNotMatch(readFileSync(mac.commands, "utf8"), /launchctl|engine/);
+	});
+}
+
+test("Doc link pauses when Claude does not report its subscription type", async (t) => {
+	const mac = fakeMac(t, { subscriptionType: null });
+	const errors = t.mock.method(console, "error", () => {});
+	const stopped = new Error("End the test while polling is paused");
+	await assert.rejects(
+		runDocLink(
+			{ engine, claude: mac.claude, credential: firstCredential },
+			{
+				fetch: async () => new Response(null, { status: 401 }),
+				now: () => 0,
+				wait: async () => {
+					throw stopped;
+				},
+			},
+		),
+		stopped,
+	);
+	assert.equal(errors.mock.calls.length, 1);
+	assert.match(
+		String(errors.mock.calls[0]?.arguments[0]),
+		/Doc needs your own Claude plan/,
+	);
+});
+
+for (const engineStatus of [401, 403]) {
+	test(`setup reports a refused Doc link code on ${engineStatus} before loading the job`, (t) => {
+		const mac = fakeMac(t, { engineStatus });
+		const result = mac.run();
+		assert.equal(result.status, 1, result.stderr);
+		assert.equal(result.stdout, "");
+		assert.equal(
+			result.stderr.trim(),
+			"The Doc link code was refused. Make a new one in the app and run this again.",
+		);
+		const commands = readFileSync(mac.commands, "utf8");
+		assert.match(commands, /engine credential checked/);
+		assert.doesNotMatch(commands, /launchctl bootstrap/);
+		assert.throws(() => statSync(mac.config), { code: "ENOENT" });
+		assert.ok(!result.stderr.includes(firstCredential));
+	});
+}
 
 test("setup keeps credentials out of child arguments, output and the LaunchAgent", (t) => {
 	const mac = fakeMac(t);
