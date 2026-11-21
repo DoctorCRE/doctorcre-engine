@@ -398,13 +398,18 @@ test("reconciliation moves exact filings to Leads and keeps other Home work", as
 	);
 });
 
-async function copiedNotice(activity_id: string, sender: string, body: string) {
+async function copiedNotice(
+	activity_id: string,
+	sender: string,
+	body: string,
+	nameLabel?: string,
+) {
 	await db.query("begin");
 	try {
 		await db.query("select set_config('engine.job', 'old_system', true)");
 		await db.query(
-			"insert into lead_source_sender (address, name) values ($1, 'Example source')",
-			[sender],
+			"insert into lead_source_sender (address, name, fields) values ($1, 'Example source', $2)",
+			[sender, nameLabel ? { name: nameLabel } : null],
 		);
 		await db.query(
 			"insert into activity (id, kind, happened_at) values ($1, 'email', '2026-11-02T15:00:00Z')",
@@ -490,6 +495,241 @@ test("reconciliation moves a copied one-line notice with default labels", async 
 		activity_id,
 		body.party_id,
 	);
+});
+
+for (const { number, hint, prefix, phone, street } of [
+	{
+		number: 90,
+		hint: "alone",
+		prefix: "—",
+		phone: null,
+		street: "64 Fixture Row Suite B",
+	},
+	{
+		number: 93,
+		hint: "after a phone",
+		prefix: "214-555-0142",
+		phone: "+12145550142",
+		street: "64 Fixture Ave. Northwest #12-B",
+	},
+	{
+		number: 94,
+		hint: "on a numbered highway with directions",
+		prefix: "—",
+		phone: null,
+		street: "4100 E Highway 80 W",
+	},
+	{
+		number: 95,
+		hint: "on a numbered route with an abbreviated type",
+		prefix: "—",
+		phone: null,
+		street: "825 Rte 9",
+	},
+]) {
+	test(`reconciliation moves a copied notice with a combined contact address ${hint}`, async () => {
+		const activity_id = id(number);
+		await copiedNotice(
+			activity_id,
+			`address-notices-${number}@example.test`,
+			`New inquiry Contact: Dana Example · ${prefix} Address: ${street}, Example City, TX 75001 Received: 2026-11-02`,
+			"Contact",
+		);
+		assert.deepEqual(await reconcile(activity_id, { dry_run: true }), {
+			status: 200,
+			body: { eligible_emails: 1, filing_decisions: 1 },
+		});
+		const { status, body } = await reconcile(activity_id);
+		assert.equal(status, 200);
+		assert.ok(typeof body.party_id === "string");
+		await assertRows(
+			1,
+			`select from lead_email_source s join party p on p.id = s.party_id
+		join proposal f on f.activity_id = s.activity_id
+		where s.activity_id = $1 and p.id = $2 and p.name = 'Dana Example'
+		and p.city = 'Example City' and s.prospect->>'street_address' = $4
+		and s.prospect->>'city' = 'Example City' and f.status = 'superseded'
+		and s.prospect->>'phone' is not distinct from $3::text`,
+			activity_id,
+			body.party_id,
+			phone,
+			street,
+		);
+	});
+}
+
+for (const { number, missing, body } of [
+	{
+		number: 91,
+		missing: "a prospect name",
+		body: "New inquiry Contact: · — Address: 64 Fixture Row, Example City, TX 75001",
+	},
+	{
+		number: 92,
+		missing: "a prospect contact detail",
+		body: "Target property: 64 Fixture Row, Example City, TX 75001 Contact: Taylor Example · — No phone listed",
+	},
+]) {
+	test(`reconciliation keeps a copied notice without ${missing} pending`, async () => {
+		const activity_id = id(number);
+		await copiedNotice(
+			activity_id,
+			`missing-${number}@example.test`,
+			body,
+			"Contact",
+		);
+		assert.deepEqual(await reconcile(activity_id), {
+			status: 200,
+			body: { eligible_emails: 0, filing_decisions: 0 },
+		});
+		await assertRows(
+			1,
+			`select from proposal where activity_id = $1 and status = 'pending'
+			and not exists (select from lead_email_source where activity_id = $1)`,
+			activity_id,
+		);
+	});
+}
+
+test("reconciliation drops invalid streets and retains a valid phone", async () => {
+	for (const [offset, street] of [
+		"64",
+		"24 hours to call",
+		"7 Oaks Dental",
+		"19 Example Dental LLC",
+		"64 Fixture Row!",
+		"64 Fixture Road 80",
+		"24 hours should be enough",
+	].entries()) {
+		const activity_id = id(120 + offset);
+		await copiedNotice(
+			activity_id,
+			`bad-street-${offset}@example.test`,
+			`Contact: 7 Oaks Dental · ${offset === 0 ? "214-555-0143" : "—"} Address: ${street}, Example City, TX 75001`,
+			"Contact",
+		);
+		const { status, body } = await reconcile(activity_id);
+		assert.equal(status, 200);
+		assert.equal(body.eligible_emails, offset === 0 ? 1 : 0, street);
+		await assertRows(
+			offset === 0 ? 1 : 0,
+			`select from lead_email_source where activity_id = $1`,
+			activity_id,
+		);
+		await assertRows(
+			0,
+			`select from lead_email_source where activity_id = $1 and prospect ?| array['street_address', 'city']`,
+			activity_id,
+		);
+	}
+});
+
+for (const [offset, sentence] of [
+	"24 hours should be enough",
+	"3 brokers will follow up",
+	"10 people can make the call on Monday",
+].entries()) {
+	test(`reconciliation drops the sentence ${JSON.stringify(sentence)} as a street`, async () => {
+		const activity_id = id(127 + offset);
+		const phone = `214-555-015${offset}`;
+		await copiedNotice(
+			activity_id,
+			`numbered-sentence-${offset}@example.test`,
+			`Contact: Dana Example · ${phone} Address: ${sentence}, Example City, TX 75001`,
+			"Contact",
+		);
+		const { status, body } = await reconcile(activity_id);
+		assert.equal(status, 200);
+		assert.equal(body.eligible_emails, 1);
+		await assertRows(
+			1,
+			`select from lead_email_source where activity_id = $1
+			and prospect->>'phone' = $2 and not (prospect ?| array['street_address', 'city'])`,
+			activity_id,
+			`+1${phone.replaceAll("-", "")}`,
+		);
+	});
+}
+
+test("reconciliation stops reading facts at the end of the contact block", async () => {
+	for (const [offset, rest] of [
+		"— Received: 2026-11-02 · Address: 64 Fixture Row, Example City, TX 75001",
+		"— > Earlier reply · Address: 64 Fixture Row, Example City, TX 75001",
+		"— · Email: earlier@example.test",
+		"Received: 2026-11-02 Email: earlier@example.test",
+		"— · Profile updated · earlier@example.test",
+	].entries()) {
+		const activity_id = id(130 + offset);
+		await copiedNotice(
+			activity_id,
+			`contact-block-${offset}@example.test`,
+			`Name: Dana Example · ${rest}`,
+		);
+		assert.deepEqual(
+			await reconcile(activity_id),
+			{
+				status: 200,
+				body: { eligible_emails: 0, filing_decisions: 0 },
+			},
+			rest,
+		);
+		await assertRows(
+			1,
+			`select from proposal where activity_id = $1 and status = 'pending'`,
+			activity_id,
+		);
+	}
+});
+
+test("reconciliation reads the email slot after an empty phone slot", async () => {
+	const activity_id = id(140);
+	await copiedNotice(
+		activity_id,
+		"email-slot@example.test",
+		"Name: Dana Example · — · dana@example.test Address: 64 Fixture Row, Example City, TX 75001 · Email: earlier@example.test",
+	);
+	const { status, body } = await reconcile(activity_id);
+	assert.equal(status, 200);
+	assert.equal(body.filing_decisions, 1);
+	assert.ok(typeof body.party_id === "string");
+	await assertRows(
+		1,
+		`select from lead_email_source s join proposal f using (activity_id)
+		where s.activity_id = $1 and s.party_id = $2 and f.status = 'superseded'
+		and s.prospect = '{"kind":"person","name":"Dana Example","email":"dana@example.test"}'::jsonb`,
+		activity_id,
+		body.party_id,
+	);
+});
+
+test("reconciliation accepts a repeated city and drops a conflicting address", async () => {
+	for (const [offset, city] of ["example   city", "Different City"].entries()) {
+		const activity_id = id(141 + offset);
+		await copiedNotice(
+			activity_id,
+			`city-label-${offset}@example.test`,
+			`Name: Dana Example · 214-555-0144 Address: 64 Fixture Row, Example City, TX 75001 City: ${city}`,
+		);
+		assert.deepEqual(await reconcile(activity_id, { dry_run: true }), {
+			status: 200,
+			body: { eligible_emails: 1, filing_decisions: 1 },
+		});
+		const { status, body } = await reconcile(activity_id);
+		assert.equal(status, 200);
+		assert.ok(typeof body.party_id === "string");
+		await assertRows(
+			1,
+			`select from lead_email_source s join proposal f using (activity_id)
+			where s.activity_id = $1 and s.party_id = $2 and f.status = 'superseded'
+			and s.prospect->>'phone' = '+12145550144'
+			and s.prospect->>'street_address' is not distinct from $3::text
+			and s.prospect->>'city' is not distinct from $4::text`,
+			activity_id,
+			body.party_id,
+			offset === 0 ? "64 Fixture Row" : null,
+			offset === 0 ? "Example City" : null,
+		);
+	}
 });
 
 test("the router queue identifies emails saved by lead intake", async () => {
