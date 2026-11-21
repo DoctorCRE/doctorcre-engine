@@ -53,6 +53,31 @@ const fail = (refusal: Refusal): never => {
 	throw new SaveRefusal(refusal);
 };
 
+export function changePendingDraft(
+	tx: Transaction<DB>,
+	draft: { id: string; revision: number; status: string },
+	request: { version: number } & (
+		| { subject: string; body: string }
+		| { reason: string }
+	),
+) {
+	const current = { version: draft.revision };
+	if (request.version !== draft.revision)
+		fail(new Refusal(409, "version_conflict", current));
+	if (draft.status !== "pending")
+		fail(new Refusal(409, "draft_changed", current));
+	return tx
+		.updateTable("reply_draft")
+		.set(
+			"reason" in request
+				? { status: "dismissed", dismiss_reason: request.reason.trim() }
+				: { subject: request.subject, body: request.body },
+		)
+		.where("id", "=", draft.id)
+		.returning(["id as draft_id", "revision as version", "status"])
+		.executeTakeFirstOrThrow();
+}
+
 async function owner(tx: Transaction<DB>, c: Context<NextSaveEnv>) {
 	const stamp = c.get("stamp");
 	if ("job" in stamp && stamp.job !== "mail_capture")
@@ -153,24 +178,8 @@ function savePendingDraft(
 						);
 			return parsed instanceof Refusal ? parsed : { ...parsed, draft_id };
 		},
-		async (tx, request) => {
-			const draft = await locked(tx, c, request.draft_id);
-			const current = { version: draft.revision };
-			if (request.version !== draft.revision)
-				fail(new Refusal(409, "version_conflict", current));
-			if (draft.status !== "pending")
-				fail(new Refusal(409, "draft_changed", current));
-			return tx
-				.updateTable("reply_draft")
-				.set(
-					"reason" in request
-						? { status: "dismissed", dismiss_reason: request.reason.trim() }
-						: { subject: request.subject, body: request.body },
-				)
-				.where("id", "=", draft.id)
-				.returning(["id as draft_id", "revision as version", "status"])
-				.executeTakeFirstOrThrow();
-		},
+		async (tx, request) =>
+			changePendingDraft(tx, await locked(tx, c, request.draft_id), request),
 	);
 }
 

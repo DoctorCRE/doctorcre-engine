@@ -3,6 +3,12 @@ import { sql, type Transaction } from "kysely";
 import { z } from "zod";
 import { isCalendarDate } from "./calendar-date.ts";
 import {
+	type draftContext,
+	draftHref,
+	readDocDraft,
+	revisionEdits,
+} from "./doc-draft.ts";
+import {
 	type MailSource,
 	readDocMail,
 	readDocMailPriorities,
@@ -21,7 +27,8 @@ const text = z
 	.refine((value) => value.isWellFormed() && !value.includes("\0"));
 const source = z.string().max(48);
 const proposal = z.strictObject({
-	kind: z.enum(["note", "next_step"]),
+	kind: z.enum(["note", "next_step", "reply_revision"]),
+	...revisionEdits.shape,
 	source: source.optional(),
 	target: z.unknown().optional(),
 	text: text.optional(),
@@ -42,9 +49,13 @@ const answer = z.strictObject({
 	proposal: z.unknown().optional(),
 });
 
+type DraftSource = Omit<Source, "ref"> & {
+	ref: { kind: "reply_draft"; id: string };
+	version: number;
+};
 export type DocClaimState = {
 	reads: number;
-	sources: Record<string, Source | MailSource>;
+	sources: Record<string, Source | DraftSource | MailSource>;
 	choices?: Source[];
 	failed?: true;
 };
@@ -52,11 +63,14 @@ type ClaimRead = {
 	readConnection: string;
 	partner: string;
 	partnerId: string;
+	draft: z.infer<typeof draftContext> | undefined;
 	state: DocClaimState;
 	timeout: number;
 };
 
-function isMailSource(record: Source | MailSource): record is MailSource {
+function isMailSource(
+	record: Source | DraftSource | MailSource,
+): record is MailSource {
 	return record.ref.kind === "email";
 }
 
@@ -77,12 +91,30 @@ function propose(payload: unknown, state: DocClaimState) {
 		text,
 		what,
 		due_on,
+		subject,
+		body,
 		source,
 		target: ref,
 	} = proposal.parse(payload);
 	const target = sourceFor(state, source ?? ref);
 	if (!target || isMailSource(target) || state.choices)
 		throw new Error("Choose an authorized source first");
+	if (
+		kind === "reply_revision" &&
+		"version" in target &&
+		(subject !== undefined || body !== undefined) &&
+		text === undefined &&
+		what === undefined &&
+		due_on === undefined
+	)
+		return {
+			kind,
+			target,
+			...(subject !== undefined && { subject }),
+			...(body !== undefined && { body }),
+		};
+	if ("version" in target || subject !== undefined || body !== undefined)
+		throw new Error("Invalid save proposal");
 	if (kind === "note" && text && what === undefined && due_on === undefined)
 		return { kind, target, text };
 	if (
@@ -130,7 +162,7 @@ const toolResult = (value: unknown) => ({
 
 export function registerDocTools(
 	server: McpServer,
-	{ readConnection, partner, partnerId, state, timeout }: ClaimRead,
+	{ readConnection, partner, partnerId, draft, state, timeout }: ClaimRead,
 ) {
 	const deadline = Date.now() + timeout;
 	function remember(record: Source | MailSource) {
@@ -191,14 +223,38 @@ export function registerDocTools(
 	server.registerTool(
 		"read",
 		{
-			description: "Read a source returned by find.",
+			description:
+				"Read a source returned by find or the bound reply_draft:<id> from turn context.",
 			inputSchema: z.strictObject({ source }),
 		},
 		({ source }) =>
 			read(async (db) => {
+				if (draft && source === `reply_draft:${draft.id}`) {
+					const row = await readDocDraft(db, draft, partnerId);
+					if (row?.status !== "pending" || row.revision !== draft.version) {
+						delete state.sources[source];
+						return null;
+					}
+					const target: DraftSource = {
+						ref: { kind: "reply_draft", id: draft.id },
+						label: "Reply draft",
+						href: draftHref(draft.id),
+						version: draft.version,
+					};
+					state.sources[source] = target;
+					return {
+						source,
+						...target,
+						draft: { subject: row.subject, body: row.body },
+						email: row.email,
+					};
+				}
 				const record = sourceFor(state, source);
 				if (record && isMailSource(record)) return null;
-				const facts = record ? await readDocRecord(db, record, partner) : null;
+				const facts =
+					record && !("version" in record)
+						? await readDocRecord(db, record, partner)
+						: null;
 				if (!facts) delete state.sources[source];
 				return facts;
 			}),
@@ -242,7 +298,8 @@ export function registerDocTools(
 	server.registerTool(
 		"propose_save",
 		{
-			description: "Propose a note or next step for partner confirmation.",
+			description:
+				"Propose a note, next step, or reply_revision for partner confirmation.",
 			inputSchema: proposal.omit({ target: true }).required({ source: true }),
 		},
 		(args) => toolResult(propose(args, state)),
