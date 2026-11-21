@@ -1,6 +1,6 @@
 import { type Kysely, type RawBuilder, sql, type Transaction } from "kysely";
 import type { DB } from "../database.d.ts";
-import { selectNextDeals } from "../deals/next-board.ts";
+import { isOpenBoardDeal, selectNextDeals } from "../deals/next-board.ts";
 import { failureKind } from "../failure.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
@@ -136,6 +136,24 @@ const NOT_IN_THIS_READ = [
 ];
 
 type Column = RawBuilder<unknown>;
+type ActiveDeal = { id: string; name: string };
+
+const oldActiveDeals = sql<ActiveDeal[]>`coalesce((
+	select jsonb_agg(jsonb_build_object('id', d.id, 'name', d.name) order by d.name, d.id)
+	from deal d where d.client_id = c.id and d.outcome is null
+		and d.closed_on is null and d.invoiced_on is null
+		and d.phase not in ('closed', 'invoiced', 'dead')
+), '[]'::jsonb)`;
+
+function nextActiveDeals(db: Transaction<NextDB>): RawBuilder<ActiveDeal[]> {
+	const deals = selectNextDeals(db)
+		.whereRef("c.party_id", "=", sql.ref("client.party_id"))
+		.as("deals");
+	return sql`coalesce((
+		select jsonb_agg(jsonb_build_object('id', id, 'name', name) order by name, id)
+		from ${deals} where ${isOpenBoardDeal}
+	), '[]'::jsonb)`;
+}
 
 const lastDealAt = sql<
 	string | null
@@ -299,6 +317,9 @@ export async function readClientList(
 			ownedByViewer(sql.ref("c.owner_id"), ownerId).as("owned_by_viewer"),
 			asText(eb.ref("c.updated_at")).as("updated_at"),
 		])
+		.$if(query.contract === "vendor-directory.v2", (q) =>
+			q.select(oldActiveDeals.as("active_deals")),
+		)
 		.orderBy(ORDER[query.sort])
 		.limit(PAGE_SIZE)
 		.offset((query.page - 1) * PAGE_SIZE)
@@ -384,6 +405,9 @@ export async function readClient(
 			asText(eb.ref("c.created_at")).as("created_at"),
 			asText(eb.ref("c.updated_at")).as("updated_at"),
 		])
+		.$if(contract === "vendor-directory.v2", (q) =>
+			q.select(oldActiveDeals.as("active_deals")),
+		)
 		.executeTakeFirst();
 	if (!record) throw new BusinessRefusal({ error: "RECORD_NOT_FOUND" });
 	return recordAnswer("clients", viewer, shaped(record, contract), null, stamp);
@@ -522,6 +546,9 @@ export async function readNextClientList(
 		.select(sql<number>`count(*)::int`.as("total"))
 		.executeTakeFirstOrThrow();
 	const rows = await nextClientRows(db, matching, viewerId)
+		.$if(query.contract === "vendor-directory.v2", (q) =>
+			q.select(nextActiveDeals(db).as("active_deals")),
+		)
 		.orderBy(nextOrder[query.sort])
 		.limit(PAGE_SIZE)
 		.offset((query.page - 1) * PAGE_SIZE)
@@ -573,6 +600,9 @@ export async function readNextClient(
 				eb("client.party_id", "=", requestedUuid),
 				eb("client.party_id", "=", alias),
 			]),
+		)
+		.$if(contract === "vendor-directory.v2", (q) =>
+			q.select(nextActiveDeals(db).as("active_deals")),
 		)
 		.orderBy(sql`client.party_id = ${requestedUuid}::uuid`, "desc")
 		.leftJoin("active_do_not_contact as dnc", "dnc.party_id", "client.party_id")
