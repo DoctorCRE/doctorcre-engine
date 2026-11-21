@@ -2,7 +2,12 @@ import type { Context } from "hono";
 import { type Expression, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import { Refusal } from "./answer.ts";
-import type { Json } from "./database.d.ts";
+import type { Json, JsonObject } from "./database.d.ts";
+import {
+	docRecordEdits,
+	readDocEdits,
+	saveDocRecord,
+} from "./doc-record-save.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { ACTING_USER } from "./next-save.ts";
@@ -91,13 +96,14 @@ const fail = (status: 404 | 409, error: Refusal["error"]): never => {
 	throw new SaveRefusal(new Refusal(status, error));
 };
 
+const editsSchema = z.union([revisionEdits, docRecordEdits]);
 const confirmation = {
 	idempotency_key: isUuid,
-	edits: (value: unknown): value is z.infer<typeof revisionEdits> =>
-		revisionEdits.safeParse(value).success,
+	edits: (value: unknown): value is z.infer<typeof editsSchema> =>
+		editsSchema.safeParse(value).success,
 };
 
-export function confirmDocRevision(c: Context<NextSaveEnv>) {
+export function confirmDocSave(c: Context<NextSaveEnv>) {
 	return answerNextSave(
 		c,
 		"doc-confirmation",
@@ -125,11 +131,19 @@ export function confirmDocRevision(c: Context<NextSaveEnv>) {
 			`.execute(tx);
 			if (!turn) return fail(404, "not_found");
 			if (turn.confirmation_key) return fail(409, "already_confirmed");
-			const context = draftContext.safeParse(turn.context).data;
+			const confirm = async (result: JsonObject) => {
+				await sql`update doc_turn set confirmation_key = ${idempotency_key}
+				where id = ${turn_id} and owner_user_id = ${ACTING_USER}`.execute(tx);
+				return { result };
+			};
 			const proposal = revisionAnswer.safeParse(turn.answer).data?.proposal;
+			if (!proposal)
+				return confirm(
+					await saveDocRecord(tx, turn.answer, edits, idempotency_key),
+				);
+			const context = draftContext.safeParse(turn.context).data;
 			if (
 				!context ||
-				!proposal ||
 				proposal.target.ref.id !== context.id ||
 				proposal.target.version !== context.version
 			)
@@ -137,21 +151,18 @@ export function confirmDocRevision(c: Context<NextSaveEnv>) {
 			const { id, version } = context;
 			const draft = await readDocDraft(tx, context, ACTING_USER, true);
 			if (!draft) return fail(404, "not_found");
+			const { subject, body } = readDocEdits(revisionEdits, edits);
 			const saved = await changePendingDraft(tx, draft, {
 				version,
-				subject: edits.subject ?? proposal.subject ?? draft.subject,
-				body: edits.body ?? proposal.body ?? draft.body,
+				subject: subject ?? proposal.subject ?? draft.subject,
+				body: body ?? proposal.body ?? draft.body,
 			});
-			await sql`update doc_turn set confirmation_key = ${idempotency_key}
-			where id = ${turn_id} and owner_user_id = ${ACTING_USER}`.execute(tx);
-			return {
-				result: {
-					kind: "reply_revision",
-					id,
-					version: saved.version,
-					href: draftHref(id),
-				},
-			};
+			return confirm({
+				kind: "reply_revision",
+				id,
+				version: saved.version,
+				href: draftHref(id),
+			});
 		},
 	);
 }

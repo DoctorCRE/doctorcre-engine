@@ -47,9 +47,18 @@ export async function answerNextSave<Request extends JsonObject>(
 	if (!writer) return refused(new Refusal(503, "database_unavailable"));
 	try {
 		const save = { stamp: c.get("stamp"), verb, args: receiptArgs(request) };
-		const result = await runNextSave(writer.connectionString, save, (tx) =>
-			change(tx, request),
-		);
+		const run = () =>
+			runNextSave(writer.connectionString, save, (tx) => change(tx, request));
+		const result = await run().catch((error: unknown) => {
+			const state = sqlState(error);
+			// A merge can contend with the next step's owner lock. Retry with the same receipt key.
+			if (
+				verb === "doc-confirmation" &&
+				(state === "40P01" || state === "40001")
+			)
+				return run();
+			throw error;
+		});
 		return c.json(
 			result,
 			typeof status === "function" ? status(result) : status,

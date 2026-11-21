@@ -73,6 +73,7 @@ const HINTS = {
 	turn_in_progress: "Wait for Doc to finish the current question.",
 	turn_superseded: "Reopen the chat and retry only its latest question.",
 	no_proposal: "Choose a Doc reply with a save proposal.",
+	target_changed: "Open the record again or ask Doc for a fresh proposal.",
 	already_confirmed: "Open the saved result from this proposal.",
 	email_summary_result_conflict:
 		"The source and generator version already have a different summary result.",

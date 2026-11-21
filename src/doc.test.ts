@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
 import { Hono } from "hono";
+import pg from "pg";
 import { docRoutes, recentDocTurns } from "./doc.ts";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
 import { docMcp } from "./doc-mcp.ts";
+import { findDocRecords } from "./doc-reads.ts";
+import { nextTransaction } from "./next-connection.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -31,6 +34,9 @@ before(async () => {
 			('${nonPartner}', 'person', 'Example Three');
 		insert into app_user (id, slug) values
 			('${owner}', 'joe'), ('${other}', 'dell'), ('${nonPartner}', 'former_partner');
+		insert into role (slug, label) values ('lead', 'Lead'), ('client', 'Client');
+		insert into stage (role, slug, label) values ('lead', 'qualified', 'Qualified');
+		insert into how_found (slug, label) values ('referral', 'Referral');
 		commit;`);
 });
 afterEach(() =>
@@ -49,16 +55,22 @@ type Turn = {
 	answer: unknown;
 	context: unknown;
 	waiting_reason: string | null;
+	confirmation: unknown;
 };
 type Body<Path> = { error?: string } & (Path extends "/turns"
 	? { conversation_id: string; turn: Turn }
 	: Path extends `/conversations/${string}`
 		? { conversation: Chat; turns: Turn[] }
 		: Path extends `/turns/${string}/confirmation`
-			? { result: unknown; replayed?: true }
+			? {
+					result: unknown;
+					replayed?: true;
+					next_step_id?: string;
+					href?: string;
+				}
 			: { conversations: Chat[]; next_before: string | null });
 
-function client(user = "joe") {
+function client(user = "joe", writer = connectionString) {
 	const api = docRoutes();
 	const app = new Hono<typeof api extends Hono<infer Env> ? Env : never>();
 	app.use("*", async (c, next) => {
@@ -74,7 +86,7 @@ function client(user = "joe") {
 		const response = await app.request(
 			path,
 			body && { method: "POST", body: JSON.stringify(body) },
-			{ DATABASE_WRITER: { connectionString } },
+			{ DATABASE_WRITER: { connectionString: writer } },
 		);
 		const result = await response.json<Body<Path>>();
 		if (typeof status === "number")
@@ -731,6 +743,461 @@ test("the claim-state migration preserves old turns and enforces one queued or w
 			"update doc_turn set claim_state = '{}' where state = 'queued'",
 		),
 		{ code: "23514" },
+	);
+});
+
+async function sharedDeal() {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		insert into deal (id, name, owner_user_id) select $1::uuid, $1::uuid::text, $2 from stamp`,
+		[id, other],
+	);
+	return { ref: { kind: "deal", id }, href: `/deals?deal=${id}` };
+}
+
+async function exampleLead(
+	name: string,
+	kind: "person" | "company" = "company",
+) {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true)), lead as (
+			insert into party (id, kind, name, how_found)
+			select $1, $2, $3, 'referral' from stamp returning id
+		)
+		insert into party_role (party_id, role, stage) select id, 'lead', 'qualified' from lead`,
+		[id, kind, name],
+	);
+	return { ref: { kind: "lead", id }, href: `/leads?lead=${id}` };
+}
+
+async function exampleClient(name: string) {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true)), company as (
+			insert into party (id, kind, name, how_found)
+			select $1, 'company', $2, 'referral' from stamp returning id
+		), client_role as (
+			insert into party_role (party_id, role) select id, 'client' from company returning party_id
+		)
+		insert into client (party_id, owner_user_id) select party_id, $3 from client_role`,
+		[id, name, owner],
+	);
+	return id;
+}
+
+async function answeredProposal(proposal: object, partner = owner) {
+	const id = randomUUID();
+	const conversation_id = randomUUID();
+	const answer = {
+		kind: "answer",
+		text: "Proposed save",
+		sources: [],
+		proposal,
+	};
+	await db.query(
+		`with conversation as (
+			insert into doc_conversation (id, owner_user_id) values ($1, $2) returning id
+		)
+		insert into doc_turn (id, conversation_id, owner_user_id, position, idempotency_key,
+			request_hash, question, state, answer)
+		select $3, id, $2, 1, gen_random_uuid(), 'example', 'Sample', 'answered', $4
+		from conversation`,
+		[conversation_id, partner, id, answer],
+	);
+	return { conversation_id, path: `/turns/${id}/confirmation` as const };
+}
+
+const nextStepProposal = {
+	kind: "next_step",
+	what: "Call next week",
+	due_on: null,
+};
+
+test("Doc confirms exactly one edited note as the recorded partner", async () => {
+	const target = await sharedDeal();
+	const { path, conversation_id } = await answeredProposal({
+		kind: "note",
+		target,
+		text: "Original note",
+	});
+	const notes = async () =>
+		(
+			await db.query(
+				`select a.id, a.summary, a.changed_by_user_id, a.changed_by_job
+			from activity a join activity_about link on link.activity_id = a.id
+			where a.kind = 'note' and link.deal_id = $1`,
+				[target.ref.id],
+			)
+		).rows;
+	assert.deepEqual(await notes(), []);
+	const send = client();
+	const idempotency_key = randomUUID();
+	const edits = { text: "Confirmed note" };
+	assert.equal(
+		(await send(path, 400, { idempotency_key, edits: { what: "Call" } })).error,
+		"invalid_field_value",
+	);
+	const { result } = await send(path, 200, { idempotency_key, edits });
+	const stored = await notes();
+	assert.deepEqual(stored, [
+		{
+			id: stored[0]?.id,
+			summary: edits.text,
+			changed_by_user_id: owner,
+			changed_by_job: null,
+		},
+	]);
+	assert.deepEqual(result, {
+		kind: "note",
+		id: stored[0]?.id,
+		href: target.href,
+	});
+	const chat = await send(`/conversations/${conversation_id}`, 200);
+	assert.deepEqual(chat.turns[0]?.confirmation, result);
+});
+
+test("Doc confirms a next step on a client with the confirming partner as owner", async () => {
+	const id = await exampleClient("Example Client");
+	const href = `/clients?record=${id}`;
+	const { path } = await answeredProposal(
+		{
+			...nextStepProposal,
+			target: { ref: { kind: "client", id }, href },
+		},
+		other,
+	);
+	const due_on = "2027-01-12";
+	const { result } = await client("dell")(path, 200, {
+		idempotency_key: randomUUID(),
+		edits: { due_on },
+	});
+	const { rows } = await db.query(
+		`select id, what, due_on::text, owner_party_id, changed_by_user_id, changed_by_job
+		from next_step where party_id = $1 and status = 'open'`,
+		[id],
+	);
+	assert.deepEqual(rows, [
+		{
+			id: rows[0]?.id,
+			what: nextStepProposal.what,
+			due_on,
+			owner_party_id: other,
+			changed_by_user_id: other,
+			changed_by_job: null,
+		},
+	]);
+	assert.deepEqual(result, { kind: "next_step", id: rows[0]?.id, href });
+});
+
+test("concurrent Doc confirmations return the existing open step for that partner", async () => {
+	const target = await sharedDeal();
+	const proposal = { ...nextStepProposal, target };
+	const first = await answeredProposal(proposal);
+	const second = await answeredProposal(proposal);
+	const third = await answeredProposal(proposal, other);
+	const args = () => ({ idempotency_key: randomUUID(), edits: {} });
+	const send = client();
+	const outcomes = await Promise.all([
+		send(first.path, [200, 409], args()),
+		send(second.path, [200, 409], args()),
+	]);
+	const winner = outcomes.find((outcome) => outcome.result);
+	const conflict = outcomes.find((outcome) => outcome.error);
+	const {
+		rows: [step],
+	} = await db.query(
+		"select id from next_step where deal_id = $1 and owner_party_id = $2 and status = 'open'",
+		[target.ref.id, owner],
+	);
+	assert.ok(step);
+	assert.deepEqual(winner?.result, {
+		kind: "next_step",
+		id: step.id,
+		href: target.href,
+	});
+	assert.equal(conflict?.error, "open_step_exists");
+	assert.equal(conflict.next_step_id, step.id);
+	assert.equal(conflict.href, target.href);
+	await client("dell")(third.path, 200, args());
+	const { rows } = await db.query(
+		"select owner_party_id from next_step where deal_id = $1 and status = 'open'",
+		[target.ref.id],
+	);
+	assert.deepEqual(
+		rows.map((row) => row.owner_party_id).sort(),
+		[owner, other].sort(),
+	);
+});
+
+test("Doc replays a lost confirmation and refuses different edits with the same key", async () => {
+	const target = await sharedDeal();
+	const { path } = await answeredProposal({ ...nextStepProposal, target });
+	const send = client();
+	const args = { idempotency_key: randomUUID(), edits: { what: "First text" } };
+	const saved = await send(path, 200, args);
+	assert.deepEqual(await send(path, 200, args), { ...saved, replayed: true });
+	assert.equal(
+		(await send(path, 409, { ...args, edits: { what: "Other text" } })).error,
+		"key_reuse",
+	);
+	assert.equal(
+		(await send(path, 409, { ...args, idempotency_key: randomUUID() })).error,
+		"already_confirmed",
+	);
+});
+
+test("Doc refuses a foreign turn and a proposal for a record that is gone", async () => {
+	const target = await sharedDeal();
+	const { path } = await answeredProposal({
+		kind: "note",
+		target,
+		text: "Example",
+	});
+	const args = { idempotency_key: randomUUID(), edits: {} };
+	assert.equal((await client("dell")(path, 404, args)).error, "not_found");
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		delete from deal using stamp where deal.id = $1`,
+		[target.ref.id],
+	);
+	assert.equal((await client()(path, 409, args)).error, "target_changed");
+});
+
+async function waitForBlockedTransaction(
+	observer: pg.Client,
+	blocker?: number,
+) {
+	const deadline = AbortSignal.timeout(5_000);
+	while (!deadline.aborted) {
+		const {
+			rows: [waiter],
+		} = await observer.query<{ pid: number }>(
+			`select pid from pg_locks where locktype = 'transactionid' and not granted
+			and coalesce($1, pg_backend_pid()) = any(pg_blocking_pids(pid))`,
+			[blocker],
+		);
+		if (waiter) return waiter.pid;
+	}
+	assert.fail("Expected a transaction to wait on the held lock");
+}
+
+async function mergeDuringConfirmation({
+	target,
+	survivor,
+	victim,
+}: {
+	target: Awaited<ReturnType<typeof exampleLead>>;
+	survivor: string;
+	victim?: "doc" | "merge";
+}) {
+	const { path, conversation_id } = await answeredProposal(
+		{
+			...nextStepProposal,
+			target,
+		},
+		victim === "merge" ? other : owner,
+	);
+	const { id } = target.ref;
+	const writer = new URL(connectionString);
+	writer.searchParams.set(
+		"options",
+		`-c statement_timeout=15s -c deadlock_timeout=${victim === "doc" ? "1ms" : "1min"}`,
+	);
+	const merge = () => db.query("select merge_party($1, $2)", [id, survivor]);
+	const gate =
+		victim === "doc" ? new pg.Client({ connectionString }) : undefined;
+	const idempotency_key = randomUUID();
+	const send = client(victim === "merge" ? "dell" : "joe", writer.href);
+	const args = {
+		idempotency_key,
+		edits: {},
+	};
+	let settled: Promise<unknown> | undefined;
+	await gate?.connect();
+	await db.query("begin");
+	try {
+		await db.query(`set local engine.job = 'old_system'; set local statement_timeout = '15s';
+			set local deadlock_timeout = '${victim === "merge" ? "1ms" : "1min"}'`);
+		await db.query("select id from party where id = $1 for update", [
+			victim ? survivor : id,
+		]);
+		if (gate) {
+			await gate.query("begin");
+			await gate.query(
+				"select from next.party_role where party_id = $1 and role = 'lead' for update",
+				[id],
+			);
+		}
+		const confirmed = send(path, victim === "merge" ? 200 : [409, 503], args);
+		settled = Promise.allSettled([confirmed]);
+		if (gate) {
+			const docPid = await waitForBlockedTransaction(gate);
+			await Promise.all([
+				merge(),
+				waitForBlockedTransaction(gate, docPid).then(() =>
+					gate.query("commit"),
+				),
+			]);
+		} else {
+			await waitForBlockedTransaction(db);
+			if (!victim) {
+				// Keep the retry from masking a reversed lock order.
+				await db.query(
+					"select from party_role where party_id = $1 and role = 'lead' for update nowait",
+					[id],
+				);
+			}
+			if (victim === "merge") await assert.rejects(merge(), { code: "40P01" });
+			else await merge();
+		}
+		await db.query(victim === "merge" ? "rollback" : "commit");
+		return { confirmation: await confirmed, conversation_id, path, args };
+	} catch (error) {
+		await gate?.query("rollback");
+		await db.query("rollback");
+		await settled;
+		throw error;
+	} finally {
+		await gate?.end();
+	}
+}
+
+async function assertMergePreemptedConfirmation(
+	{
+		confirmation,
+		conversation_id,
+		args,
+	}: Awaited<ReturnType<typeof mergeDuringConfirmation>>,
+	parties: [string, string],
+) {
+	assert.equal(confirmation.error, "target_changed");
+	const { turns } = await client()(`/conversations/${conversation_id}`, 200);
+	assert.equal(turns[0]?.confirmation, null);
+	assert.equal(
+		(
+			await db.query("select from save_receipt where idempotency_key = $1", [
+				args.idempotency_key,
+			])
+		).rowCount,
+		0,
+	);
+	assert.equal(
+		(
+			await db.query("select from next_step where party_id in ($1, $2)", [
+				...parties,
+			])
+		).rowCount,
+		0,
+	);
+}
+
+test("a lead merge can finish while Doc confirmation is waiting on the party", async () => {
+	const target = await exampleLead("Example Duplicate");
+	const survivor = (await exampleLead("Example Survivor")).ref.id;
+	const outcome = await mergeDuringConfirmation({ target, survivor });
+	await assertMergePreemptedConfirmation(outcome, [target.ref.id, survivor]);
+});
+
+test("Doc retries when it closes the deadlock cycle and only its detector can fire", async () => {
+	const target = await exampleLead("Example Doc Victim", "person");
+	const outcome = await mergeDuringConfirmation({
+		target,
+		survivor: owner,
+		victim: "doc",
+	});
+	await assertMergePreemptedConfirmation(outcome, [target.ref.id, owner]);
+});
+
+test("the merge must be rerun when it closes the deadlock cycle and only its detector can fire", async () => {
+	const target = await exampleLead("Example Merge Victim", "person");
+	const id = target.ref.id;
+	const { confirmation, path, args } = await mergeDuringConfirmation({
+		target,
+		survivor: other,
+		victim: "merge",
+	});
+	const steps = async () =>
+		(
+			await db.query<{ id: string }>(
+				"select id, party_id, owner_party_id, what, status from next_step where party_id in ($1, $2)",
+				[id, other],
+			)
+		).rows;
+	const before = await steps();
+	const [step] = before;
+	assert.ok(step);
+	assert.deepEqual(before, [
+		{
+			id: step.id,
+			party_id: id,
+			owner_party_id: other,
+			what: nextStepProposal.what,
+			status: "open",
+		},
+	]);
+	assert.deepEqual(confirmation.result, {
+		kind: "next_step",
+		id: step.id,
+		href: target.href,
+	});
+	const send = client("dell");
+	assert.deepEqual(await send(path, 200, args), {
+		...confirmation,
+		replayed: true,
+	});
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		select merge_party($1, $2) from stamp`,
+		[id, other],
+	);
+	assert.deepEqual(await steps(), [{ ...step, party_id: other }]);
+	const survivor = {
+		ref: { kind: "lead", id: other },
+		href: `/leads?lead=${other}`,
+	};
+	const next = await answeredProposal(
+		{ ...nextStepProposal, target: survivor },
+		other,
+	);
+	const conflict = await send(next.path, 409, {
+		...args,
+		idempotency_key: randomUUID(),
+	});
+	assert.equal(conflict.error, "open_step_exists");
+	assert.equal(conflict.next_step_id, step.id);
+	assert.equal(conflict.href, survivor.href);
+});
+
+test("Doc refuses a step when a lead was linked to a client after the proposal", async () => {
+	const name = "Example Linked Lead";
+	const {
+		ref: { id },
+	} = await exampleLead(name);
+	const clientId = await exampleClient(name);
+	const findLead = () =>
+		nextTransaction(connectionString, "read", (tx) =>
+			findDocRecords(tx, id, "lead"),
+		);
+	const [target] = await findLead();
+	assert.equal(target?.ref.id, id);
+	const { path } = await answeredProposal({ ...nextStepProposal, target });
+	await db.query(
+		`with stamp as (select set_config('engine.user_id', $1, true))
+		update party_role set lead_client_id = $2 from stamp where party_id = $3 and role = 'lead'`,
+		[owner, clientId, id],
+	);
+	assert.deepEqual(await findLead(), []);
+	assert.equal(
+		(await client()(path, 409, { idempotency_key: randomUUID(), edits: {} }))
+			.error,
+		"target_changed",
+	);
+	assert.equal(
+		(await db.query("select from next_step where party_id = $1", [id]))
+			.rowCount,
+		0,
 	);
 });
 

@@ -1,30 +1,24 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { sql, type Transaction } from "kysely";
 import { z } from "zod";
-import { isCalendarDate } from "./calendar-date.ts";
 import {
 	type draftContext,
 	draftHref,
 	readDocDraft,
 	revisionEdits,
-} from "./doc-draft.ts";
+} from "./doc-confirmation.ts";
 import {
 	type MailSource,
 	readDocMail,
 	readDocMailPriorities,
 } from "./doc-mail.ts";
 import { findDocRecords, readDocRecord, type Source } from "./doc-reads.ts";
+import { docDueOn, docText as text } from "./doc-record-save.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { isArguments } from "./save-door.ts";
 import { isUuid, UUID } from "./uuid.ts";
 
-const text = z
-	.string()
-	.trim()
-	.min(1)
-	.max(4000)
-	.refine((value) => value.isWellFormed() && !value.includes("\0"));
 const source = z.string().max(48);
 const proposal = z.strictObject({
 	kind: z.enum(["note", "next_step", "reply_revision"]),
@@ -33,14 +27,7 @@ const proposal = z.strictObject({
 	target: z.unknown().optional(),
 	text: text.optional(),
 	what: text.optional(),
-	due_on: z
-		.string()
-		.nullable()
-		.refine(
-			(date) =>
-				date === null || (isCalendarDate(date) && !date.startsWith("0000")),
-		)
-		.optional(),
+	due_on: docDueOn.optional(),
 });
 const answer = z.strictObject({
 	kind: z.enum(["answer", "clarification", "refusal"]),

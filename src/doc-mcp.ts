@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { sql } from "kysely";
 import type { Json } from "./database.d.ts";
-import { draftContext } from "./doc-draft.ts";
+import { draftContext } from "./doc-confirmation.ts";
 import { withDocLink } from "./doc-link.ts";
 import { docLinkCredential } from "./doc-link-routes.ts";
 import { type DocClaimState, registerDocTools } from "./doc-tools.ts";
