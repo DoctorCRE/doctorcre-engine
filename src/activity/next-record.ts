@@ -24,6 +24,7 @@ type Email = {
 	subject: string;
 	body: string;
 };
+type CapturedEmail = Email & { split?: { authored: string; history: string } };
 type ActivityFields = {
 	kind: string;
 	happened_at: string | RawBuilder<string>;
@@ -35,7 +36,7 @@ type NewActivity = Omit<ActivityFields, "happened_at"> & {
 	idempotency_key: JsonValue;
 	happened_at?: string;
 	about: About[];
-	email: Email | null;
+	email: CapturedEmail | null;
 	calendar_review_key?: string;
 };
 
@@ -131,6 +132,16 @@ export function parseEmail(value: unknown): Email | undefined {
 		: undefined;
 }
 
+function parseCapturedEmail(value: unknown): CapturedEmail | undefined {
+	if (!isArguments(value)) return undefined;
+	const { authored, history, ...fields } = value;
+	const email = parseEmail(fields);
+	if (!email || (authored === undefined && history === undefined)) return email;
+	if (isText(authored) && isText(history)) {
+		return { ...email, split: { authored, history } };
+	}
+}
+
 function parseActivity(args: JsonObject): NewActivity | Refusal {
 	const { idempotency_key, kind, happened_at, about = [], email = null } = args;
 	const { summary = null, from_party_id = null, reached = null } = args;
@@ -148,7 +159,7 @@ function parseActivity(args: JsonObject): NewActivity | Refusal {
 			summary: optional(summary, isText),
 			from_party_id: optional(from_party_id, isUuid),
 			reached: kind === "call" ? optional(reached, isBoolean) : unused(reached),
-			email: kind === "email" ? parseEmail(email) : unused(email),
+			email: kind === "email" ? parseCapturedEmail(email) : unused(email),
 			// Leave preexisting requests unchanged for receipt hashing.
 			...("calendar_review_key" in args && {
 				calendar_review_key:
@@ -274,7 +285,7 @@ export async function recordEmail(
 	tx: Transaction<DB>,
 	activity: ActivityFields,
 	records: About[],
-	email: Email,
+	email: CapturedEmail,
 	autoFile = false,
 	queueFiling = false,
 ) {
@@ -326,6 +337,13 @@ export async function recordEmail(
 	const mailbox = await sql`insert into email_mailbox (activity_id, user_id)
   select ${activity_id}, ${ACTING_USER} where ${ACTING_USER} is not null
   on conflict do nothing`.execute(tx);
+	if (email.split && (!stored || mailbox.numAffectedRows))
+		await tx
+			.updateTable("email")
+			.set(email.split)
+			.where("activity_id", "=", activity_id)
+			.where("authored", "is", null)
+			.execute();
 	const filedAbout = await linkActivity(tx, activity_id, links);
 	if (autoFile && mailbox.numAffectedRows) {
 		const {
