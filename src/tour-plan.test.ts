@@ -14,6 +14,7 @@ const meeting = id(6);
 const call = id(7);
 const plan = id(8);
 const otherPlan = id(9);
+const otherDealMeeting = id(10);
 const missing = id(99);
 
 const addPlan = (planId: string, dealId = deal) =>
@@ -39,7 +40,9 @@ for (const migrated of [false, true]) {
 				('${deal}', 'Example Deal', '${owner}'), ('${otherDeal}', 'Example Two', '${partner}');
 			insert into property (id, address) values ('${property}', 'Example Property');
 			insert into activity (id, kind, happened_at) values
-				('${meeting}', 'meeting', now()), ('${call}', 'call', now());
+				('${otherDealMeeting}', 'meeting', now()), ('${call}', 'call', now());
+			insert into activity_about (activity_id, deal_id) values
+				('${otherDealMeeting}', '${otherDeal}'), ('${call}', '${deal}');
 			commit;`);
 			const migration = await readSchema("add-tour-plans.sql");
 			if (migrated) await db.query(migration);
@@ -139,12 +142,22 @@ for (const migrated of [false, true]) {
 			);
 			await assert.rejects(
 				db.query(
-					`update tour_plan set completed_activity_id = '${meeting}', cancelled_at = now()`,
+					`update tour_plan set completed_activity_id = '${otherDealMeeting}'`,
+				),
+				{ code: "23503" },
+			);
+			await assert.rejects(
+				db.query(
+					`update tour_plan set completed_activity_id = '${otherDealMeeting}', cancelled_at = now()`,
 				),
 				{ code: "23514", constraint: "tour_plan_one_outcome" },
 			);
-			await db.query(`update tour_plan set completed_activity_id = '${meeting}';
-			${addPlan(otherPlan)}; ${addStop(otherPlan, 2)};`);
+			await db.query(`begin;
+			insert into activity (id, kind, happened_at) values ('${meeting}', 'meeting', now());
+			update tour_plan set completed_activity_id = '${meeting}';
+			insert into activity_about (activity_id, deal_id) values ('${meeting}', '${deal}');
+			commit;`);
+			await db.query(`${addPlan(otherPlan)}; ${addStop(otherPlan, 2)};`);
 			await assert.rejects(
 				db.query(
 					`update tour_plan set completed_activity_id = '${meeting}' where id = '${otherPlan}'`,

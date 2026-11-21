@@ -14,7 +14,9 @@ create table if not exists tour_plan (
 	cancelled_at timestamptz,
 	revision integer not null default 1 check (revision >= 1),
 	constraint tour_plan_one_outcome check (num_nonnulls(completed_activity_id, cancelled_at) <= 1),
-	foreign key (completed_activity_id, completed_activity_kind) references activity (id, kind)
+	foreign key (completed_activity_id, completed_activity_kind) references activity (id, kind),
+	constraint tour_plan_completed_on_deal foreign key (completed_activity_id, deal_id)
+		references activity_about (activity_id, deal_id) deferrable initially deferred
 );
 
 create index if not exists tour_plan_deal on tour_plan (deal_id);

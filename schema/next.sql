@@ -1331,6 +1331,9 @@ create constraint trigger email_about_a_record after delete on activity_about
 alter table activity_about add constraint activity_about_activity_party_key unique (activity_id, party_id);
 alter table activity_about add constraint activity_about_activity_deal_key unique (activity_id, deal_id);
 
+alter table tour_plan add constraint tour_plan_completed_on_deal foreign key (completed_activity_id, deal_id)
+	references activity_about (activity_id, deal_id) deferrable initially deferred;
+
 create table lead_email_evidence (
 	message_id text not null check (message_id = btrim(message_id) and message_id ~ '\S'),
 	mailbox_user_id uuid not null references app_user,
