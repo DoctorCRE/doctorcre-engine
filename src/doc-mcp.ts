@@ -67,6 +67,7 @@ export async function docMcp(c: Context<WriterEnv>) {
 				});
 				registerDocTools(server, {
 					...turn,
+					partnerId: owner,
 					readConnection: reader.connectionString,
 				});
 				await server.connect(transport);

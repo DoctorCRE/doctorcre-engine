@@ -411,6 +411,29 @@ function homeReviewGroups(userId: string, forMail = false, dashboard = false) {
 	`;
 }
 
+export async function findHomeEmailReviewItem(
+	db: Transaction<DB>,
+	userId: string,
+	activityId: string,
+) {
+	const member = sql`jsonb_build_array(jsonb_build_object('activity_id', ${activityId}::uuid))`;
+	const {
+		rows: [review],
+	} = await sql<{ item_id: string }>`
+		${homeReviewGroups(userId)}, exact_reviews as (
+			select 'reply_draft:' || id as item_id, email_activity_id = ${activityId}::uuid as exact, 0 as position
+			from draft_cards
+			where email_activity_id = ${activityId}::uuid or suggestions @> ${member}
+			union all
+			select 'suggestion:' || id, activity_id = ${activityId}::uuid, 1
+			from suggestion_cards
+			where activity_kind = 'email' and (activity_id = ${activityId}::uuid or suggestions @> ${member})
+		)
+		select item_id from exact_reviews order by exact desc nulls last, position, item_id limit 1
+	`.execute(db);
+	return review?.item_id;
+}
+
 const summaryFields = sql`summary.text as email_summary,
 	case when jsonb_typeof(summary.provenance->'action_title') = 'string'
 		then summary.provenance->>'action_title' end as email_action_title`;
@@ -906,8 +929,8 @@ type MailPriority = {
 export async function readHomeMailPriorities(
 	db: Transaction<DB>,
 	userId: string,
+	{ limit = 25, requireMailbox = false } = {},
 ) {
-	const limit = 25;
 	const suggestions = markedReviews(
 		sql<Suggestion>`select * from suggestion_cards`,
 		userId,
@@ -955,12 +978,25 @@ export async function readHomeMailPriorities(
 				) as position
 			from cards
 			join email e on e.activity_id = cards.activity_id
-			join email title_email on title_email.activity_id = cards.title_activity_id
+			join email title_email on title_email.activity_id = ${
+				requireMailbox
+					? sql`cards.review_activity_id`
+					: sql`cards.title_activity_id`
+			}
 			join activity a on a.id = e.activity_id
 			join activity review on review.id = cards.review_activity_id
 			where not exists (
 				select from party_email pe join app_user u on u.id = pe.party_id where pe.address = e.sender
 			)
+			${
+				requireMailbox
+					? sql`and exists (
+				select from email_mailbox m where m.user_id = ${userId}::uuid and m.activity_id = e.activity_id
+			) and exists (
+				select from email_mailbox m where m.user_id = ${userId}::uuid and m.activity_id = review.id
+			)`
+					: sql``
+			}
 		)
 		select item_id, source_change_id || ':' || coalesce(mark_version, 0) || ':inbox' as base_version,
 			proposal_id, reply_draft_id, kind, suggestion, due_on,

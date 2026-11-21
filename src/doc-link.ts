@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { sql, type Transaction } from "kysely";
+import { type RawBuilder, sql, type Transaction } from "kysely";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { asText } from "./reader.ts";
@@ -11,7 +11,21 @@ export const docLinkReadiness = [
 ] as const;
 export type DocLinkReadiness = (typeof docLinkReadiness)[number];
 
-export const docLinkConnected = sql<boolean>`coalesce(last_seen_at >= statement_timestamp() - interval '30 seconds', false)`;
+type DocLinkStatus = DocLinkReadiness | "not_set_up" | "mac_off";
+
+type DocLinkState = { issued_at: string | null; status: DocLinkStatus };
+
+export function docLinkState(owner: string | RawBuilder<string>) {
+	return sql<DocLinkState>`(select ${asText(sql.ref("issued_at"))} as issued_at,
+		case
+			when owner_user_id is null then 'not_set_up'
+			when last_seen_at is null or last_seen_at < statement_timestamp() - interval '30 seconds' then 'mac_off'
+			else coalesce(readiness, 'ready')
+		end as status
+		from (select ${owner}::uuid as id) partner
+		left join doc_link on owner_user_id = partner.id)`;
+}
+
 const presenceDue = sql<boolean>`last_seen_at is null or last_seen_at <= clock_timestamp() - interval '15 seconds'`;
 
 function credentialHash(credential: string) {
@@ -53,14 +67,13 @@ export async function issueDocLink(tx: Transaction<DB>, owner: string) {
 
 export async function docLinkPresence(tx: Transaction<DB>, owner: string) {
 	const link = await tx
-		.selectFrom("doc_link")
-		.select([
-			asText(sql.ref("issued_at")).as("issued_at"),
-			docLinkConnected.as("connected"),
-		])
-		.where("owner_user_id", "=", owner)
-		.executeTakeFirst();
-	return link ?? { connected: false, issued_at: null };
+		.selectFrom(docLinkState(owner).as("link"))
+		.selectAll()
+		.executeTakeFirstOrThrow();
+	return {
+		...link,
+		connected: link.status !== "not_set_up" && link.status !== "mac_off",
+	};
 }
 
 export async function revokeDocLink(tx: Transaction<DB>, owner: string) {
