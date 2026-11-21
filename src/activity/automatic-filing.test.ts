@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { docLinkOwnerTransaction } from "../doc-link.ts";
+import { claimDocWork, finishDocJudgment } from "../doc-queue.ts";
 import { isArguments } from "../save-door.ts";
 import { doorTest } from "../test-door.ts";
 
-const { db, setup, cleanup, request, save } = doorTest();
+const { db, setup, cleanup, request, save, writerUrl } = doorTest();
 const joe = randomUUID();
 const dell = randomUUID();
 const contact = randomUUID();
@@ -361,3 +363,165 @@ test("dismissing filing prevents an inherited link on a fresh delivery", async (
 	assert.deepEqual(routed.about, again.about);
 	assert.deepEqual(await cards(filing), []);
 });
+
+test("judgment files verified facts once across mailboxes and leaves the reply", async () => {
+	const thread = "Judged";
+	await store(mail("judged-first", thread, [{ deal_id: deal }]));
+	await store(mail("judged-second", thread, [{ deal_id: otherDeal }]));
+	const message = mail("judged", thread);
+	message.email.sender = "vendor-contact@example.test";
+	const activity = await captureForJudgment(message);
+	assert.equal(await captureForJudgment(message, secondMailbox), activity);
+	const filing = await propose(activity);
+	const [, draft] = await save(capture, "reply-drafts", {
+		idempotency_key: randomUUID(),
+		activity_id: activity,
+		evidence,
+		body: "I’ll send it shortly.",
+		subject: "Re: Floor plan",
+	});
+	assert.ok(typeof draft.draft_id === "string");
+	const first = await claimFiling(joe, activity);
+	const second = await claimFiling(dell, activity);
+	assert.deepEqual(second.destinations, first.destinations);
+	const facts = [
+		fact("deal", deal, "Floor plan requested"),
+		fact("vendor", vendor, "Vendor needs the floor plan"),
+	];
+	assert.equal(await first.answer(facts), 204);
+	assert.equal(await first.answer(facts), 404);
+	assert.equal(await second.answer(facts), 204);
+	const { rows } = await db.query(
+		`select summary, a.changed_by_job, a.changed_for_user_id, b.deal_id, b.party_id
+		from activity a join activity_about b on b.activity_id = a.id
+		where summary in ($1, $2) order by summary`,
+		facts.map(({ text }) => text),
+	);
+	assert.deepEqual(rows, [
+		{
+			summary: "Floor plan requested",
+			changed_by_job: "mail_capture",
+			changed_for_user_id: joe,
+			deal_id: deal,
+			party_id: null,
+		},
+		{
+			summary: "Vendor needs the floor plan",
+			changed_by_job: "mail_capture",
+			changed_for_user_id: joe,
+			deal_id: null,
+			party_id: vendor,
+		},
+	]);
+	assert.equal(
+		(
+			await db.query(
+				`select from save_receipt where verb = 'file-email-facts'
+		and answer->>'source_activity_id' = $1 and jsonb_array_length(answer->'facts') = 2`,
+				[activity],
+			)
+		).rowCount,
+		1,
+	);
+	const [reply, extra] = await cards(filing, draft.draft_id);
+	assert.equal(extra, undefined);
+	assert.equal(reply?.reply_draft_id, draft.draft_id);
+	assert.equal(reply?.suggestions, undefined);
+});
+
+for (const reason of ["unlink", "dismissal", "conflict", "unverified"]) {
+	test(`judgment saves no facts after ${reason}`, async () => {
+		const conflict = reason === "conflict";
+		const unresolved = conflict || reason === "unverified";
+		const thread = `Judgment ${reason}`;
+		if (conflict) {
+			await store(mail("judge-first", thread, [{ deal_id: deal }]));
+			await store(mail("judge-conflicting", thread, [{ deal_id: otherDeal }]));
+		}
+		const activity = await captureForJudgment(
+			mail(`judge-${reason}`, thread, conflict ? [] : [{ deal_id: deal }]),
+		);
+		const claim = await claimFiling(joe, activity);
+		if (reason === "unlink")
+			await db.query(`begin; select set_config('engine.user_id', '${joe}', true);
+				delete from activity_about where activity_id = '${activity}' and deal_id = '${deal}'; commit`);
+		if (reason === "dismissal") {
+			const proposal = await propose(activity);
+			const [status] = await save(partner, `proposals/${proposal}/decision`, {
+				idempotency_key: randomUUID(),
+				decision: "dismiss",
+				reason: "It belongs elsewhere.",
+			});
+			assert.equal(status, 200);
+		}
+		const text = `Fact for ${reason}`;
+		const facts = [
+			fact("deal", reason === "unverified" ? otherDeal : deal, text),
+		];
+		if (conflict) facts.push(fact("deal", otherDeal, text));
+		assert.equal(await claim.answer(facts), unresolved ? 422 : 204);
+		assert.equal(
+			await claim.finish({ kind: "failed" }),
+			unresolved ? 204 : 404,
+		);
+		assert.equal(
+			(await db.query("select from activity where summary = $1", [text]))
+				.rowCount,
+			0,
+		);
+		const { rows } = await db.query<{ id: string }>(
+			"select id from proposal where activity_id = $1 and status = 'pending'",
+			[activity],
+		);
+		const reviews = await cards(...rows.map(({ id }) => id));
+		assert.equal(reviews.length, unresolved ? 1 : 0);
+		if (unresolved)
+			assert.equal(reviews[0]?.title, "Review where to file this email");
+	});
+}
+
+const fact = (kind: string, id: string, text: string) => ({
+	destination: { kind, id },
+	text,
+	quote: evidence,
+});
+
+async function captureForJudgment(
+	message: ReturnType<typeof mail>,
+	caller = capture,
+) {
+	const response = await request(
+		caller,
+		"activities",
+		{
+			method: "POST",
+			body: JSON.stringify({ ...message, idempotency_key: randomUUID() }),
+		},
+		{ EMAIL_FILING_JUDGMENT: "true" },
+	);
+	assert.equal(response.status, 201);
+	const body: unknown = await response.json();
+	assert.ok(isArguments(body) && typeof body.activity_id === "string");
+	return body.activity_id;
+}
+
+async function claimFiling(owner: string, activity: string) {
+	await db.query(
+		"update doc_judgment_job set state = 'failed' where kind = 'email_summary' and state = 'queued'",
+	);
+	const work = await docLinkOwnerTransaction(writerUrl, owner, (tx) =>
+		claimDocWork(tx, owner, true),
+	);
+	assert.ok(work?.kind === "email_filing", "expected a queued filing claim");
+	assert.equal(work.activity_id, activity);
+	const finish = (outcome: object) =>
+		docLinkOwnerTransaction(writerUrl, owner, (tx) =>
+			finishDocJudgment(tx, owner, work.claim_id, outcome),
+		);
+	return {
+		destinations: work.destinations,
+		finish,
+		answer: (facts: object[]) =>
+			finish({ kind: "answered", result: { facts } }),
+	};
+}

@@ -1,10 +1,13 @@
 import { sql, type Transaction } from "kysely";
 import { z } from "zod";
+import {
+	filingDestination,
+	saveFilingJudgment,
+} from "./activity/filing-judgment.ts";
 import { recentDocTurns } from "./doc.ts";
 import { recordDocPoll } from "./doc-link.ts";
 import { type DocClaimState, validateDocAnswer } from "./doc-tools.ts";
 import type { DB } from "./next-database.d.ts";
-import { UUID } from "./uuid.ts";
 
 const clearClaim = { claim_id: null, claim_until: null, claim_state: null };
 const clearJudgmentClaim = {
@@ -55,16 +58,12 @@ async function claimDocTurn(tx: Transaction<DB>, owner: string, id: string) {
 	};
 }
 
-const destination = z.strictObject({
-	kind: z.enum(["deal", "vendor"]),
-	id: z.string().regex(UUID),
-});
 type JudgmentInput = {
 	kind: "email_summary" | "email_filing";
 	activity_id: string;
 	subject: string;
 	body: string;
-	destinations: z.infer<typeof destination>[];
+	destinations: z.infer<typeof filingDestination>[];
 };
 
 const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
@@ -126,7 +125,7 @@ export async function claimDocWork(
 			continue;
 		}
 
-		const { destinations, claim_source_hash, ...input } = job;
+		const { kind, destinations, claim_source_hash, ...input } = job;
 		const claim_id = crypto.randomUUID();
 		const { claim_until } = await update
 			.set({
@@ -138,7 +137,9 @@ export async function claimDocWork(
 			.returning(claimUntilText)
 			.executeTakeFirstOrThrow();
 		const work = { ...input, claim_id, claim_until };
-		return work.kind === "email_filing" ? { ...work, destinations } : work;
+		return kind === "email_filing"
+			? { ...work, kind, destinations }
+			: { ...work, kind };
 	}
 }
 
@@ -161,7 +162,9 @@ const summaryResult = z.strictObject({
 	quote,
 });
 const filingResult = z.strictObject({
-	facts: z.array(z.strictObject({ destination, text, quote })),
+	facts: z.array(
+		z.strictObject({ destination: filingDestination, text, quote }),
+	),
 });
 
 function validateJudgment(outcome: unknown, work: JudgmentInput) {
@@ -172,6 +175,14 @@ function validateJudgment(outcome: unknown, work: JudgmentInput) {
 		return result && quotesEmail(result.quote) ? result : undefined;
 	}
 	const result = filingResult.safeParse(outcome).data;
+	if (
+		new Set(
+			result?.facts
+				.filter(({ destination }) => destination.kind === "deal")
+				.map(({ destination }) => destination.id),
+		).size > 1
+	)
+		return undefined;
 	return result?.facts.every(
 		({ destination, quote }) =>
 			work.destinations.some(
@@ -196,8 +207,14 @@ export async function finishDocJudgment(
 	if (!storage?.installed) return 404;
 	const {
 		rows: [job],
-	} = await sql<JudgmentInput & { id: string; source_hash: string }>`
-		select j.id, 'sha256:' || encode(j.claim_source_hash, 'hex') as source_hash,
+	} = await sql<
+		JudgmentInput & {
+			id: string;
+			source_hash: string;
+			message_id: string | null;
+		}
+	>`
+		select j.id, e.message_id, 'sha256:' || encode(j.claim_source_hash, 'hex') as source_hash,
 			${judgmentInput}
 		from doc_judgment_job j join email e using (activity_id)
 		where j.owner_user_id = ${owner} and j.claim_id = ${claim_id} and ${unexpired}
@@ -206,7 +223,10 @@ export async function finishDocJudgment(
 	if (!job) return 404;
 	const result =
 		outcome.kind === "answered" ? validateJudgment(outcome.result, job) : null;
-	if (result === undefined) return 422;
+	if (result === undefined) {
+		if (job.kind === "email_filing") await saveFilingJudgment(tx, job, []);
+		return 422;
+	}
 
 	const summary = result && "summary" in result ? result : null;
 	if (summary)
@@ -232,6 +252,12 @@ export async function finishDocJudgment(
 		)`)
 		.executeTakeFirst();
 	if (!saved.numUpdatedRows) return 404;
+	if (job.kind === "email_filing" && !blocked)
+		await saveFilingJudgment(
+			tx,
+			job,
+			result && "facts" in result ? result.facts : [],
+		);
 	if (summary) {
 		await sql`select set_config('engine.job', 'mail_capture', true)`.execute(
 			tx,

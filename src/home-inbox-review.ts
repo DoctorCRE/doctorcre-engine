@@ -1,6 +1,10 @@
 import { type RawBuilder, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
-import { filingReviewNeeded } from "./activity/filing-evidence.ts";
+import {
+	filingReviewEvidence,
+	filingReviewNeeded,
+	hasFiledFacts,
+} from "./activity/filing-evidence.ts";
 import { isoMillis, Refusal } from "./answer.ts";
 import {
 	decisionPosition,
@@ -130,6 +134,10 @@ const visibleSuggestion = (userId: string) => sql<boolean>`
 	case
 		when p.kind = 'file_to_deal' and p.status = 'pending'
 			and not (${filingReviewNeeded(sql.ref("p.activity_id"), sql.ref("p.deal_id"))}) then false
+		when p.kind = 'possible_new_deal' and p.status = 'pending' and (
+			${hasFiledFacts(sql.ref("p.activity_id"), true)} or
+			(p.evidence = ${filingReviewEvidence} and ${hasFiledFacts(sql.ref("p.activity_id"))})
+		) then false
 		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 		when p.kind = 'email_lead' then p.changed_for_user_id = ${userId}::uuid
 		when p.kind = 'log_call' then ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
@@ -634,8 +642,13 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 		log_call: proposed,
 	}[suggestion.kind];
 	const count = suggestion.suggestions.length;
+	const filingReview =
+		suggestion.kind === "possible_new_deal" &&
+		suggestion.evidence === filingReviewEvidence;
 	return {
-		title: title || suggestionTitle(suggestion, sender),
+		title: filingReview
+			? "Review where to file this email"
+			: title || suggestionTitle(suggestion, sender),
 		why: homeWhy(
 			request || receivedEmail(source, suggestion.email_at),
 			suggestion.kind !== "next_step" && evidence !== request ? evidence : null,
