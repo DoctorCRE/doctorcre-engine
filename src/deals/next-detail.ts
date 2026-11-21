@@ -5,7 +5,12 @@ import {
 	jsonObjectFrom,
 } from "kysely/helpers/postgres";
 import { filingReviewNeeded } from "../activity/filing-evidence.ts";
-import { decisionPosition, mailGroup } from "../home-email-thread.ts";
+import {
+	decisionPosition,
+	mailGroup,
+	senderLabel,
+} from "../home-email-thread.ts";
+import { emailSuggestionTitle, savedEmailAction } from "../home-email-title.ts";
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
@@ -199,7 +204,8 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 		.where("d.id", "=", deal)
 		.executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
-	const { today, commissions, critical_dates, ...detail } = record;
+	const { today, commissions, critical_dates, email_follow_ups, ...detail } =
+		record;
 	const checklistType =
 		detail.reason === "renewal" ? detail.reason : detail.type;
 	const checklist = checklistOf({
@@ -218,6 +224,18 @@ export async function readNextDealDetail(db: Transaction<DB>, deal: string) {
 	});
 	return {
 		...detail,
+		email_follow_ups: email_follow_ups.map(
+			({ email_action_title, email_sender, decision_label, ...followUp }) => ({
+				...followUp,
+				title: emailSuggestionTitle({
+					kind: followUp.kind,
+					email_action_title,
+					email_sender,
+					context_label: detail.name,
+					decision_label,
+				}),
+			}),
+		),
 		critical_dates: critical_dates.map((date) => ({
 			...date,
 			label: criticalDateLabel(date.kind),
@@ -287,6 +305,12 @@ const documentsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.orderBy("doc.created_at", "desc")
 		.orderBy("doc.id");
 
+const dealEmailFollowUpKinds = [
+	"next_step",
+	"file_to_deal",
+	"phase_move",
+] as const;
+
 const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db
 		.selectFrom((eb) =>
@@ -296,6 +320,7 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 				.select(["p.id", decisionPosition("p", mailGroup).as("position")])
 				.where("p.deal_id", "=", deal)
 				.where("p.status", "=", "pending")
+				.where("p.kind", "in", dealEmailFollowUpKinds)
 				.where((eb) =>
 					eb.or([
 						eb("p.kind", "<>", "file_to_deal"),
@@ -308,9 +333,18 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 		.innerJoin("email as e", "e.activity_id", "p.activity_id")
 		.innerJoin("activity as a", "a.id", "e.activity_id")
 		.leftJoin("app_user as o", "o.id", "p.owner_party_id")
+		.leftJoin("phase", "phase.slug", "p.to_phase")
+		.leftJoin(
+			"email_current_summary as summary",
+			"summary.activity_id",
+			"e.activity_id",
+		)
 		.select((eb) => [
 			"p.id as proposal_id",
 			"p.kind",
+			"phase.label as decision_label",
+			savedEmailAction.as("email_action_title"),
+			senderLabel("e").as("email_sender"),
 			"p.deal_id",
 			"p.evidence",
 			"p.what",
@@ -327,6 +361,7 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 				summary: eb.ref("a.summary"),
 			}).as("email"),
 		])
+		.$narrowType<{ kind: (typeof dealEmailFollowUpKinds)[number] }>()
 		.where("shown.position", "=", 1)
 		.orderBy("p.created_at", "desc")
 		.orderBy("p.id");

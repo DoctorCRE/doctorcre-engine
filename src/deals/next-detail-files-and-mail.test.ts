@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { isArguments } from "../save-door.ts";
 import { doorTest } from "../test-door.ts";
 
 const { db, setup, cleanup, request, save } = doorTest();
@@ -52,11 +53,16 @@ before(async () => {
 			('${id(25)}', 'meeting', '2026-01-15T16:00:00Z', null);
 		insert into email (activity_id, message_id, sender, sender_name, subject, body, conversation_id) values
 			('${id(20)}', 'plan@example.test', 'pat@example.test', 'Pat Example',
-				'Example plan request', 'Could you send the plan?', 'example-plan-thread'),
+				'Re: Example plan request', 'Could you send the plan?', 'example-plan-thread'),
 			('${id(21)}', 'attached@example.test', 'sam@example.test', null,
 				'Example attached plan', 'I attached the plan.', 'example-plan-thread'),
 			('${id(24)}', 'layout@example.test', 'sam@example.test', null,
 				'Example layout reply', 'The layout works.', 'example-plan-thread');
+		insert into email_summary (activity_id, source_activity_id, source_hash, generator_version, status, text, provenance, recorded_at)
+			values ('${id(20)}', '${id(20)}', 'sha256:' || repeat('a', 64), 'example.v1', 'available',
+				'Pat asked for the floor plan.', '{"action_title":"HOLD: Send the floor plan to Pat"}', '2026-01-11'),
+			('${id(24)}', '${id(24)}', 'sha256:' || repeat('b', 64), 'example.v1', 'available',
+				'Pat confirmed the layout.', '{"action_title":"Record the layout approval"}', '2026-01-15');
 		insert into email_mailbox (activity_id, user_id) values ('${id(20)}', '${id(1)}'), ('${id(21)}', '${id(2)}');
 		insert into activity_about (activity_id, deal_id) values
 			('${id(20)}', '${dealId}'), ('${id(22)}', '${dealId}'), ('${id(23)}', '${dealId}'),
@@ -174,6 +180,30 @@ test("both partners see who saved a critical date or next step", async () => {
 	}
 });
 
+test("deal follow-up uses the Home action title for the exact reply", async () => {
+	const response = await request(
+		alex,
+		"home/inbox",
+		{ method: "GET" },
+		{
+			HOME_INBOX_READ_SCHEMA: "next",
+		},
+	);
+	assert.equal(response.status, 200);
+	const inbox: unknown = await response.json();
+	assert.ok(isArguments(inbox) && Array.isArray(inbox.items));
+	const card = inbox.items
+		.filter(isArguments)
+		.find((item) => item.proposal_id === id(30));
+	assert.equal(card?.title, "Send the floor plan to Pat");
+	const page = await detail(alex);
+	assert.ok("email_follow_ups" in page && Array.isArray(page.email_follow_ups));
+	assert.deepEqual(
+		page.email_follow_ups.filter(isArguments).map(({ title }) => title),
+		["Choose the deal for this email", card.title],
+	);
+});
+
 test("both partners see individual correspondence and can decide email suggestions", async () => {
 	const expected = [
 		{
@@ -196,7 +226,7 @@ test("both partners see individual correspondence and can decide email suggestio
 			happened_at: "2026-01-10T16:00:00+00:00",
 			sender: "pat@example.test",
 			sender_name: "Pat Example",
-			subject: "Example plan request",
+			subject: "Re: Example plan request",
 		},
 	];
 	for (const caller of [alex, casey]) {
@@ -233,7 +263,7 @@ test("both partners see individual correspondence and can decide email suggestio
 						activity_id: id(20),
 						sender: "pat@example.test",
 						sender_name: "Pat Example",
-						subject: "Example plan request",
+						subject: "Re: Example plan request",
 						happened_at: "2026-01-10T16:00:00+00:00",
 					},
 				},

@@ -16,12 +16,17 @@ import {
 	sourceInMailbox,
 } from "./home-email-thread.ts";
 import {
+	emailSuggestionTitle,
+	savedEmailAction,
+	savedEmailTitle,
+} from "./home-email-title.ts";
+import {
 	homeDate,
 	homeDisplayText,
 	homeStepText,
 	homeWhy,
 } from "./home-steps.ts";
-import { homeTitle, savedHomeTitle } from "./home-title.ts";
+import { homeTitle } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
 
 type ReviewRow = {
@@ -404,9 +409,7 @@ export async function findHomeEmailReviewItem(
 	return review?.item_id;
 }
 
-const summaryFields = sql`summary.text as email_summary,
-	case when jsonb_typeof(summary.provenance->'action_title') = 'string'
-		then summary.provenance->>'action_title' end as email_action_title`;
+const summaryFields = sql`summary.text as email_summary, ${savedEmailAction} as email_action_title`;
 
 function draftCards(
 	userId: string,
@@ -567,7 +570,11 @@ function conversationReviewText(
 		homeDisplayText(suggestion.source_summary);
 	const count = suggestion.suggestions.length;
 	return {
-		title: suggestionTitle(suggestion, contact),
+		title: homeTitle(
+			suggestion.kind,
+			homeDisplayText(suggestion.context_label) || contact,
+			homeDisplayText(suggestion.decision_label),
+		),
 		why: homeWhy(
 			date ? `${kind}${contact ? ` with ${contact}` : ""} on ${date}` : null,
 			evidence || proposed || "Source details unavailable",
@@ -619,7 +626,6 @@ function emailRequest(email: EmailContext) {
 	const summary = homeDisplayText(email.email_summary);
 	return {
 		summary,
-		title: savedHomeTitle(homeStepText(email.email_action_title ?? "")),
 		quote: summary ? "" : shortEmailExcerpt(email.email_quote),
 	};
 }
@@ -641,15 +647,6 @@ const emailActions = {
 	log_call: "Review call note",
 } as const;
 
-function suggestionTitle(suggestion: Suggestion, contact: string) {
-	const { kind } = suggestion;
-	const target =
-		kind === "file_to_deal" || kind === "possible_new_deal"
-			? contact
-			: homeDisplayText(suggestion.context_label) || contact;
-	return homeTitle(kind, target, homeDisplayText(suggestion.decision_label));
-}
-
 function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const sender = homeDisplayText(suggestion.email_sender);
 	const target = homeDisplayText(suggestion.context_label);
@@ -658,7 +655,7 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const evidence = suggestion.email_quote
 		? ""
 		: homeDisplayText(suggestion.evidence);
-	const { summary, quote, title } = emailRequest(suggestion);
+	const { summary, quote } = emailRequest(suggestion);
 	const request = summary || quote;
 	const source = sender ? `Email from ${sender}` : "Email";
 	const choices = filingChoices(suggestion.filing_scope);
@@ -679,9 +676,7 @@ function emailSuggestionText(suggestion: Suggestion & ReviewMark) {
 	const count = suggestion.suggestions.length;
 	const filingReview = choices.length > 0;
 	return {
-		title: filingReview
-			? filingReviewTitle
-			: title || suggestionTitle(suggestion, sender),
+		title: filingReview ? filingReviewTitle : emailSuggestionTitle(suggestion),
 		why: homeWhy(
 			request || receivedEmail(source, suggestion.email_at),
 			suggestion.kind !== "next_step" && evidence !== request ? evidence : null,
@@ -741,7 +736,7 @@ function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 	const sender = homeDisplayText(draft.email_sender);
 	const target = draft.deal_id ? homeDisplayText(draft.context_label) : "";
 	const source = sender ? `Email from ${sender}` : "Email";
-	const { summary, quote, title } = emailRequest(draft);
+	const { summary, quote } = emailRequest(draft);
 	const request = summary || quote;
 	const decisions = dashboard ? (draft.suggestions?.length ?? 0) : 0;
 	const why = homeWhy(
@@ -757,7 +752,8 @@ function draftReviewText(draft: Draft & ReviewMark, dashboard: boolean) {
 				: null;
 	return {
 		title:
-			(draft.status === "pending" && title) ||
+			(draft.status === "pending" &&
+				savedEmailTitle(draft.email_action_title)) ||
 			homeTitle(`reply_${draft.status}`, sender, target),
 		why: draft.status === "failed" ? deliveryWhy(draft.failure_reason) : why,
 		primary_action: draft.snoozed_until ? null : action,
