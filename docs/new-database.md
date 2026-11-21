@@ -584,9 +584,45 @@ The November 18 rehearsal had zero critical dates with kind `other` and note "Ph
 
 ## Tours as meetings
 
-A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal; the property links support a later property read. The existing kind check and checked, unique links apply; there is no separate tour kind or planner in this schema.
+A completed tour is one `activity` of kind `meeting`, with its actual time, sender when known and summary. `activity_about` preserves the parties it concerns and links the deal and each visited property when known. `everything_about_deal` shows it once on a linked deal, and the property links support a later property read. The existing kind check and checked, unique links apply.
 
 Moving today's rows across, each logged `activity` of kind `tour` becomes a meeting, retaining its actual time and summary. Preserve its `party_id` and map every linked client, lead and vendor to that record's party in `activity_about`. Keep its deal link when present; a lead or client tour needs no invented deal. Old activity rows have no property column. Add visited properties from a user's confirmation of actual stops or a record of a completed visit naming those properties. If a tour record and its logged activity describe the same completed visit, they become one meeting. A planned route or appointment alone does not prove a visit happened. A meeting with known party links still moves when its deal or properties are unknown; only a tour with no resolvable record waits for a partner to fix it. Route order, appointments, client packets, share links, shortlists, comments and landlord registrations do not move in this slice. The owner accepted meetings only on #196, D5; a later planner can use the same parties, deals and properties.
+
+### Planned tours on a deal
+
+The proposed `next` schema change for [#1107](https://github.com/DoctorCRE/doctorcre-engine/issues/1107) supports the [deal page](screens/deals.md#tours). The production migration needs the owner's approval. The planner starts empty. The old system has zero deal-linked plans and one unlinked plan, which stays there. The completed-tour copy above still applies.
+
+- `tour_plan` has its own ID, a required `deal_id` referencing `deal`, a required `planned_on` calendar date, and optional internal `notes`. Each plan belongs to one deal for its lifetime. Access follows the deal for both partners. Saves use the signed-in partner's usual change stamp.
+- `tour_stop` references a plan and a `property`. Partners pick an existing property or create one with an address and optional name when no existing property matches. A stop's required positive `position` is unique within its plan. The database requires at least one stop per saved plan. Save the date, notes, and full ordered stop list together. Refuse a stale edit without changing the plan or its stops.
+- A nullable, unique `completed_activity_id` on `tour_plan` references a meeting. A nullable `cancelled_at` records when a partner cancelled, and change history records who cancelled. A plan can have at most one of these values. The deal's planned list reads plans with neither value. Only a plan in that list can be edited, completed, or cancelled. Cancelling a plan creates no activity.
+- Completion saves the meeting, its links, and the plan's completion link together. The meeting uses the confirmed local visit date and time. Add one `activity_about` row for the deal and each distinct confirmed visited property, including off-plan visits, plus known parties the visit concerns. The original plan and its stop order stay on record. A retry or a second partner's completion returns the same meeting.
+- The client stop list preview and copied text read the saved date and stops in order, using the current names and addresses on `property`. Internal notes stay on the plan. The partner sends the copied list from Outlook. The engine stores no separate document or tour share record.
+
+### Old planner capabilities outside this design
+
+The old planner at `carr-system` commit `7a8ca32` has the following capabilities outside the deal-page planner.
+
+- A separate Tours library for browsing and creating tours.
+- Standalone plans for a client or a work record without a deal.
+- Custom tour names and stop labels.
+- A property search map with filters and drawing tools.
+- A saved property selection cart before a property joins the tour.
+- Property source evidence and rights reviews.
+- Coordinate review for a property's access point.
+- Separate route start and end points.
+- Routing-provider optimization.
+- Route versions with approval and explicit links between replaced stops.
+- Held and excluded stop states.
+- Per-stop appointment windows and public appointment notes.
+- Turn-by-turn navigation with return to the current stop.
+- Internal cheat-sheet autosave, revision history, and restore.
+- A client map with published property points.
+- A client packet with property facts, media, and publication approval.
+- PDF rendering, review, and download.
+- Shared links with scopes, expiry, rotation, and revocation.
+- Client shortlist editing.
+- Client comment submission and the planner's feedback view. Partners review existing feedback on Home.
+- Landlord registrations.
 
 ## Marketing
 
