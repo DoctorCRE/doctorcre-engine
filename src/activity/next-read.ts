@@ -76,17 +76,20 @@ export async function readNextRecentActivity(
 		return { error: "calendar_history_too_large" } as const;
 	const timeline = await sql`
 		select entry_kind, ${isoMillis(sql.ref("at"))} as occurred_at,
-			actor, verb, summary, detail, null as owed
+			actor, verb, summary, detail, deal_id, email_subject, null as owed
 		from (
 			select 'activity' as entry_kind, a.id, a.happened_at as at,
 				coalesce(u.slug, a.changed_by_job) as actor, a.kind as verb,
-				coalesce(nullif(btrim(a.summary), ''), e.subject) as summary, e.body as detail
+				coalesce(nullif(btrim(a.summary), ''), e.subject) as summary, e.body as detail,
+				(select min(about.deal_id::text) from activity_about about
+					where about.activity_id = a.id and about.deal_id is not null
+					having count(*) = 1) as deal_id, e.subject as email_subject
 			${filed} left join app_user u on u.id = a.changed_by_user_id
 			left join email e on e.activity_id = a.id
 			where link.${subject} = ${id}
 			union all
 			select 'event', s.id, coalesce(s.done_at, s.resolved_at, s.created_at),
-				coalesce(u.slug, s.changed_by_job), 'next_step', s.what, null
+				coalesce(u.slug, s.changed_by_job), 'next_step', s.what, null, s.deal_id::text, null
 			from next_step s left join app_user u on u.id = s.changed_by_user_id
 			where s.${subject} = ${id}
 		) entries order by at desc, entry_kind, id limit ${limit}`.execute(db);
