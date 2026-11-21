@@ -3,13 +3,17 @@ import type { Transaction } from "kysely";
 import {
 	docLinkOwnerTransaction,
 	docLinkPresence,
+	docLinkReadiness,
 	issueDocLink,
 	revokeDocLink,
 	withDocLink,
 } from "./doc-link.ts";
+import { claimDocTurn, finishDocTurn, pollDocWork } from "./doc-queue.ts";
 import type { DB } from "./next-database.d.ts";
 import type { PartnerSessionEnv } from "./partner-session.ts";
 import type { WriterEnv } from "./save.ts";
+import { isArguments } from "./save-door.ts";
+import { isUuid } from "./uuid.ts";
 
 type DocLinkEnv = PartnerSessionEnv & WriterEnv;
 
@@ -50,17 +54,59 @@ export function docLinkCredential(c: Context<WriterEnv>) {
 		?.match(/^Bearer ([A-Za-z0-9_-]{43})$/i)?.[1];
 }
 
-export async function claimDocLink(c: Context<WriterEnv>) {
+async function withMac(
+	c: Context<WriterEnv>,
+	run: (tx: Transaction<DB>, owner: string) => Promise<Response>,
+) {
 	const credential = docLinkCredential(c);
 	if (!credential) return unauthorized();
-
 	const writer = c.env.DATABASE_WRITER;
 	if (!writer) return unavailable();
 	try {
-		const result = await withDocLink(writer.connectionString, credential);
-		if (result === null) return unauthorized();
-		return new Response(null, { status: 204, headers: noStore });
+		return (
+			(await withDocLink(writer.connectionString, credential, run)) ??
+			unauthorized()
+		);
 	} catch {
 		return unavailable();
 	}
+}
+
+export function claimDocLink(c: Context<WriterEnv>) {
+	return withMac(c, async (tx, owner) => {
+		const header = c.req.header("Doc-Link-Readiness");
+		const readiness = docLinkReadiness.find((value) => value === header);
+		if (header !== undefined && !readiness)
+			return Response.json(
+				{ error: "invalid_readiness" },
+				{ status: 400, headers: noStore },
+			);
+
+		const work = await pollDocWork(tx, owner, readiness ?? null, claimDocTurn);
+		return work
+			? Response.json(work, { headers: noStore })
+			: new Response(null, { status: 204, headers: noStore });
+	});
+}
+
+export async function completeDocLink(c: Context<WriterEnv>) {
+	const body: unknown = await c.req.json().catch(() => null);
+	return withMac(c, async (tx, owner) => {
+		if (!isArguments(body) || !isUuid(body.claim_id))
+			return new Response(null, { status: 400, headers: noStore });
+
+		const { claim_id, kind } = body;
+		const fields = Object.keys(body).length;
+		const result: Parameters<typeof finishDocTurn>[2] | null =
+			kind === "answered" && fields === 3 && Object.hasOwn(body, "answer")
+				? { claim_id, kind, answer: body.answer }
+				: (kind === "failed" ||
+							kind === "signed_out" ||
+							kind === "plan_limited") &&
+						fields === 2
+					? { claim_id, kind }
+					: null;
+		const status = result ? await finishDocTurn(tx, owner, result) : 400;
+		return new Response(null, { status, headers: noStore });
+	});
 }

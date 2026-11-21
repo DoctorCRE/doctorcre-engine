@@ -4,6 +4,16 @@ import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { asText } from "./reader.ts";
 
+export const docLinkReadiness = [
+	"ready",
+	"signed_out",
+	"plan_limited",
+] as const;
+export type DocLinkReadiness = (typeof docLinkReadiness)[number];
+
+export const docLinkConnected = sql<boolean>`coalesce(last_seen_at >= statement_timestamp() - interval '30 seconds', false)`;
+const presenceDue = sql<boolean>`last_seen_at is null or last_seen_at <= clock_timestamp() - interval '15 seconds'`;
+
 function credentialHash(credential: string) {
 	return createHash("sha256").update(credential).digest("hex");
 }
@@ -34,6 +44,7 @@ export async function issueDocLink(tx: Transaction<DB>, owner: string) {
 				credential_hash: hash,
 				issued_at: sql`now()`,
 				last_seen_at: null,
+				readiness: null,
 			}),
 		)
 		.execute();
@@ -45,9 +56,7 @@ export async function docLinkPresence(tx: Transaction<DB>, owner: string) {
 		.selectFrom("doc_link")
 		.select([
 			asText(sql.ref("issued_at")).as("issued_at"),
-			sql<boolean>`coalesce(last_seen_at >= clock_timestamp() - interval '30 seconds', false)`.as(
-				"connected",
-			),
+			docLinkConnected.as("connected"),
 		])
 		.where("owner_user_id", "=", owner)
 		.executeTakeFirst();
@@ -61,7 +70,7 @@ export async function revokeDocLink(tx: Transaction<DB>, owner: string) {
 export function withDocLink<T>(
 	connection: string,
 	credential: string,
-	handleClaim?: (tx: Transaction<DB>, owner: string) => Promise<T>,
+	run: (tx: Transaction<DB>, owner: string) => Promise<T>,
 ) {
 	const hash = credentialHash(credential);
 	return nextTransaction(connection, "save", async (tx) => {
@@ -93,23 +102,24 @@ export function withDocLink<T>(
 		)
 			return null;
 
-		if (handleClaim) return handleClaim(tx, owner);
-
-		await tx
-			.updateTable("doc_link")
-			.set({ last_seen_at: sql`clock_timestamp()` })
-			.where("owner_user_id", "=", owner)
-			.where((eb) =>
-				eb.or([
-					eb("last_seen_at", "is", null),
-					eb(
-						"last_seen_at",
-						"<=",
-						sql<string>`clock_timestamp() - interval '15 seconds'`,
-					),
-				]),
-			)
-			.execute();
-		return true;
+		return run(tx, owner);
 	});
+}
+
+export async function recordDocPoll(
+	tx: Transaction<DB>,
+	owner: string,
+	readiness: DocLinkReadiness | null,
+) {
+	await tx
+		.updateTable("doc_link")
+		.set({
+			last_seen_at: sql`case when ${presenceDue} then clock_timestamp() else last_seen_at end`,
+			readiness,
+		})
+		.where("owner_user_id", "=", owner)
+		.where(
+			sql<boolean>`(${presenceDue}) or readiness is distinct from ${readiness}`,
+		)
+		.execute();
 }

@@ -2600,7 +2600,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	role: ["label"],
 	do_not_contact: ["until_date"],
 	doc_conversation: ["owner_user_id"],
-	doc_link: ["credential_hash", "issued_at", "last_seen_at"],
+	doc_link: ["credential_hash", "issued_at", "last_seen_at", "readiness"],
 	doc_turn: ["answer", "claim_id", "claim_state", "claim_until", "state"],
 	stage: ["label"],
 	how_found: ["label"],
