@@ -517,7 +517,7 @@ test("the reader login reads the board, a deal, the client fit, the change feed,
 					after: [zero, zero],
 				}),
 			);
-			assert.equal(vendorMeetings?.calendar.state, "ready");
+			assert.equal(vendorMeetings?.calendar.state, "unavailable");
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(
