@@ -216,6 +216,9 @@ test("complete a tour once with the actual time, distinct visited stops, and par
 			{ property_id: property },
 			{ property_id: property.toUpperCase() },
 			{ address: "50 Sample Lane" },
+			{ address: " 50 Sample Lane ", name: null },
+			{ address: "60 Sample Lane", name: "Sample Center" },
+			{ address: "60 Sample Lane", name: "Sample Center" },
 		],
 	};
 	for (const [url, args, expected] of [
@@ -252,6 +255,14 @@ test("complete a tour once with the actual time, distinct visited stops, and par
 		200,
 		{ ...result, replayed: true },
 	]);
+	const newProperties = await db.query(
+		"select address, name from property where address in ($1, $2) order by address",
+		["50 Sample Lane", "60 Sample Lane"],
+	);
+	assert.deepEqual(newProperties.rows, [
+		{ address: "50 Sample Lane", name: null },
+		{ address: "60 Sample Lane", name: "Sample Center" },
+	]);
 	const [, plan] = await save(partner, tour, {}, "GET");
 	assert.equal(plan.completed_activity_id, result.activity_id);
 	assert.ok(Array.isArray(plan.stops));
@@ -276,7 +287,7 @@ test("complete a tour once with the actual time, distinct visited stops, and par
 	});
 	assert.deepEqual(
 		correspondence[0].properties.map((p: { address: string }) => p.address),
-		["10 Example Way", "50 Sample Lane"],
+		["10 Example Way", "50 Sample Lane", "60 Sample Lane"],
 	);
 });
 

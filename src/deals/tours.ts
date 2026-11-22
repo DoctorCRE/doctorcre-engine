@@ -184,15 +184,16 @@ async function savePlan(db: Db, request: PlanSave) {
 		.executeTakeFirstOrThrow();
 }
 
+const newPropertyDetails = ({ address, name }: Fitted<typeof newProperty>) => ({
+	address: address.trim(),
+	name: name?.trim() ?? null,
+});
+
 async function propertyForStop(db: Db, stop: Stop) {
 	if ("property_id" in stop) return stop.property_id.toLowerCase();
 	const { id } = await db
 		.insertInto("property")
-		.values({
-			address: stop.address.trim(),
-			name: stop.name?.trim() ?? null,
-			changed_at,
-		})
+		.values({ ...newPropertyDetails(stop), changed_at })
 		.returning("id")
 		.executeTakeFirstOrThrow();
 	return id;
@@ -220,8 +221,15 @@ async function completePlan(
 	requireOpenRevision(plan, request.revision);
 
 	const visited = new Set<string>();
-	for (const stop of visited_stops)
+	const newProperties = new Set<string>();
+	for (const stop of visited_stops) {
+		if (!("property_id" in stop)) {
+			const details = JSON.stringify(newPropertyDetails(stop));
+			if (newProperties.has(details)) continue;
+			newProperties.add(details);
+		}
 		visited.add(await propertyForStop(db, stop));
+	}
 	const client = await db
 		.selectFrom("deal_party")
 		.select("party_id")
