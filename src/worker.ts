@@ -83,7 +83,6 @@ import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
 import { updateReads, updates } from "./updates.ts";
-import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 import { changes } from "./who-did-what.ts";
 
@@ -147,7 +146,6 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", updates)
 	.route("/", changes)
 	.route("/", preferences)
-	.route("/", vendorMarkets)
 	.route("/", vendorMeetings);
 
 const partnerApi = new Hono<WorkerEnv>();
