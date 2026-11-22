@@ -1,0 +1,37 @@
+{
+	"issue": 1167,
+	"status": "insufficient_evidence",
+	"implementation": "The checkout already contains due_source, proposal_due_source, the upgrade migration, call-suggestion mappings, documentation, and behavioral regression tests. No unresolved findings were supplied. No production code or tests were changed in this attempt.",
+	"checks": [
+		{
+			"command": "npm run check",
+			"exit_code": 1,
+			"result": "Lint and dead-code checks passed. Database setup failed with connect EPERM on the supplied local PostgreSQL server. Type generation, TypeScript, tests, and build were not reached."
+		},
+		{
+			"command": "DATABASE_URL=\"$TEST_DATABASE_URL\" npm run types:next",
+			"exit_code": 1,
+			"result": "PostgreSQL connection denied with EPERM. Types were not regenerated."
+		},
+		{
+			"command": "git diff --check && git diff main --check",
+			"exit_code": 0,
+			"result": "Passed."
+		}
+	],
+	"isolated_database": "PostgreSQL 18 initdb also failed because the sandbox denied shared-memory creation. No database writes or rejection tests ran.",
+	"regression": {
+		"test_file": "src/copy-call-suggestions.test.ts",
+		"ran": false,
+		"failing_before": null,
+		"passing_after": null,
+		"reason": "Database setup could not run. Existing tests exercise named-constraint rejection, accepted provenance, false/true/null mappings, capture_candidate null provenance, and unchanged proposals and history on reruns."
+	},
+	"formal_proof": {
+		"ran": false,
+		"constraints": null,
+		"typecheck": "insufficient_evidence"
+	},
+	"required_constraint": "proposal_due_source",
+	"browser_proof": null
+}
