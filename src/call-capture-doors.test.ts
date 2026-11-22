@@ -29,6 +29,9 @@ const job = { job: "call_capture", for_user: "alex" };
 
 before(async () => {
 	await setup();
+	await db.query(await readSchema("add-call-review-step-merge.sql"));
+	await db.query(await readSchema("add-private-call-log.sql"));
+	await db.query(await readSchema("add-private-call-log.sql"));
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into job values ('call_capture', 'Example call capture');
 		insert into party (id, kind, name) values ('${ALEX}', 'person', 'Alex Example'), ('${BLAIR}', 'person', 'Blair Example');
@@ -126,6 +129,66 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 					original_time: true,
 					summary: what,
 					changed_by_user_id: ALEX,
+				},
+			],
+		);
+	}
+});
+
+test("private call logs save on the call once, including when its summary is blank", async () => {
+	for (const [index, summary] of [null, "", "Original summary."].entries()) {
+		const callId = id(100 + index);
+		const recorder = ["", "call_capture", "old_system"][index];
+		await db.query("begin");
+		await db.query(
+			"select set_config('engine.job', $1, true), set_config('engine.user_id', $2, true)",
+			[recorder, ALEX],
+		);
+		await db.query(
+			`insert into activity (id, kind, happened_at, summary)
+			values ($1, 'call', '2026-01-07T15:00:00Z', $2)`,
+			[callId, summary],
+		);
+		await db.query(
+			`insert into activity_about (activity_id, deal_id, party_id)
+			values ($1, $2, null), ($1, null, $3)`,
+			[callId, REVIEW, CLIENT],
+		);
+		await db.query("commit");
+		const [stored, proposal] = await propose({
+			kind: "log_call",
+			activity_id: callId,
+			what: "Agreed on timing.",
+			...(index === 1 ? { party_id: CLIENT } : { deal_id: REVIEW }),
+		});
+		assert.equal(stored, 201);
+		const decision = { idempotency_key: randomUUID(), decision: "accept" };
+		const accept = () =>
+			save(
+				{ user: "alex" },
+				`proposals/${proposal.proposal_id}/decision`,
+				decision,
+			);
+		const [status, answer] = await accept();
+		assert.equal(status, 200);
+		assert.deepEqual(answer.created, { activity_id: callId });
+		assert.deepEqual(await accept(), [200, { ...answer, replayed: true }]);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select id, kind, summary from activity a where id = $1 or
+						(kind = 'note' and exists (select from activity_about b
+							where b.activity_id = a.id and (b.deal_id = $2 or b.party_id = $3)))`,
+					[callId, REVIEW, CLIENT],
+				)
+			).rows,
+			[
+				{
+					id: callId,
+					kind: "call",
+					summary: summary
+						? "Original summary.\n\nAgreed on timing."
+						: "Agreed on timing.",
 				},
 			],
 		);

@@ -449,7 +449,6 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
-				if (accepts && p.private_call_log) return fail(409, "private_call");
 				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
 					const d = await dealNow(tx, p.deal_id);
 					if (
@@ -572,7 +571,10 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								: promoted
 									? { party_id: promoted.promoted_party_id }
 									: {
-											activity_id: p.kind === "log_call" ? p.id : p.activity_id,
+											activity_id:
+												p.kind === "log_call" && !p.private_call_log
+													? p.id
+													: p.activity_id,
 										};
 				return {
 					proposal_id: p.id,

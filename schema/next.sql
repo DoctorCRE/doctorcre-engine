@@ -1874,10 +1874,16 @@ begin
 	if new.status = 'dismissed' then return new; end if;
 	case new.kind
 	when 'log_call' then
-		insert into activity (id, kind, happened_at, summary)
-		select new.id, 'note', happened_at, new.what from activity where id = new.activity_id;
-		insert into activity_about (activity_id, deal_id, party_id)
-		values (new.id, new.deal_id, new.party_id);
+		if exists (select from activity where id = new.activity_id and changed_by_job = 'old_system'
+			and changed_by_user_id is null and changed_for_user_id is null) then
+			insert into activity (id, kind, happened_at, summary)
+			select new.id, 'note', happened_at, new.what from activity where id = new.activity_id;
+			insert into activity_about (activity_id, deal_id, party_id)
+			values (new.id, new.deal_id, new.party_id);
+		else
+			update activity set summary = coalesce(nullif(summary, '') || E'\n\n', '') || new.what
+			where id = new.activity_id;
+		end if;
 	when 'next_step' then
 		new.merged_step_id := nullif(current_setting('engine.proposal_merged_step', true), '')::uuid;
 		if new.merged_step_id is not null then return new; end if;

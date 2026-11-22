@@ -312,11 +312,15 @@ test("a decision on a hidden suggestion from a visible call returns not found", 
 	}
 });
 
-test("accepting a private log stays pending and writes no shared note", async () => {
+test("accepting a private log appends to its call and writes no shared note", async () => {
+	assert.partialDeepStrictEqual(await (await read(deal)).json(), {
+		calls: [{ proposals: [{ proposal_id: pending, accept_blocked: null }] }],
+	});
 	const response = await decide(pending, "accept");
-	assert.equal(response.status, 409);
+	assert.equal(response.status, 200);
 	assert.partialDeepStrictEqual(await response.json(), {
-		error: "private_call",
+		status: "accepted",
+		created: { activity_id: call },
 	});
 	assert.partialDeepStrictEqual(await (await read(deal)).json(), {
 		calls: [
@@ -324,8 +328,8 @@ test("accepting a private log stays pending and writes no shared note", async ()
 				proposals: [
 					{
 						proposal_id: pending,
-						status: "pending",
-						accept_blocked: "private_call",
+						status: "accepted",
+						accept_blocked: null,
 					},
 				],
 			},
@@ -334,6 +338,16 @@ test("accepting a private log stays pending and writes no shared note", async ()
 	assert.equal(
 		(await db.query("select from activity where id = $1", [pending])).rowCount,
 		0,
+	);
+	assert.equal(
+		(await db.query("select summary from activity where id = $1", [call]))
+			.rows[0].summary,
+		"The tour is booked.\n\nReview the example plan.",
+	);
+	assert.ok(
+		!callIds
+			.parse(await (await read(deal, "dell")).json())
+			.calls.some((row) => row.activity_id === call),
 	);
 });
 
