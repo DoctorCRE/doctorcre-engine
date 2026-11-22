@@ -336,7 +336,6 @@ type Verb =
 	| "read-vendor-meetings"
 	| "search-parties-v1"
 	| "search-properties"
-	| "territory-state-board"
 	| "today-triage";
 
 export function answer(

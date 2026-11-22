@@ -120,11 +120,6 @@ test("every read refuses tool-call markup and repeated fields as the old gate di
 				markup(["before_id"]),
 			],
 			["/reasons-to-reach-out?before_id=9&before_id=9", generic(400)],
-			["/territory-state-board?city=%3C%2Fcity%3E", markup(["city"])],
-			[
-				"/territory-state-board?city=%3C%2Fcity%3E&city=Springfield",
-				read("territory-state-board"),
-			],
 		] as const)
 			assert.deepEqual(await answered(path), expected, path);
 	} finally {

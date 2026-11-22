@@ -27,7 +27,6 @@ import {
 	leadShape,
 	quietShape,
 	reasonsShape,
-	territoryShape,
 } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
 import {
@@ -48,7 +47,6 @@ export type Ask =
 	| { read: "lead board" }
 	| { read: "lead"; lead: string }
 	| { read: "quiet follow-ups" }
-	| { read: "territory"; vertical?: string; city?: string; state?: string }
 	| { read: "reasons to reach out" }
 	| { read: "invoices" }
 	| { read: "client list" }
@@ -107,7 +105,6 @@ export const READS: Record<Ask["read"], Read> = {
 	"lead board": { shape: leadBoardShape, prefix: "leads" },
 	lead: { shape: leadShape, prefix: "lead", label: "lead detail" },
 	"quiet follow-ups": { shape: quietShape, prefix: "quiet" },
-	territory: { shape: territoryShape, prefix: "territory" },
 	"reasons to reach out": { shape: reasonsShape, prefix: "reasons" },
 	invoices: { shape: invoicesShape, prefix: "invoices" },
 	"client list": { shape: clientListShape, prefix: "clients" },
@@ -207,7 +204,6 @@ export async function compareDeals(
 		{ read: "lead board" },
 		// The app's inputs: no filters, and the first page of reasons.
 		{ read: "quiet follow-ups" },
-		{ read: "territory" },
 		{ read: "reasons to reach out" },
 		{ read: "invoices" },
 		{ read: "client list" },
@@ -265,21 +261,6 @@ export async function compareDeals(
 					enqueue({ read: "client fit", [field]: value });
 			}
 		}
-		if (ask.read === "lead board") {
-			// The territory answer has no vertical, so sample it from the Leads board.
-			const vertical = firstText(old, "leads", "specialty");
-			if (vertical !== undefined) enqueue({ read: "territory", vertical });
-		}
-		if (
-			ask.read === "territory" &&
-			ask.vertical === undefined &&
-			ask.city === undefined &&
-			ask.state === undefined
-		)
-			for (const field of ["city", "state"] as const) {
-				const value = firstText(old, "submarkets", field);
-				if (value !== undefined) enqueue({ read: "territory", [field]: value });
-			}
 
 		if (ask.read === "board")
 			for (const { id, client_name } of dealsOn(old)) {

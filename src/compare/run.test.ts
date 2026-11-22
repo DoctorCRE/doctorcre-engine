@@ -41,7 +41,6 @@ const fixed = {
 	"client fit": { schema_version: "ideal-client-profile.v1", profiles: [] },
 	"capture queue": { candidates: [] },
 	"quiet follow-ups": { schema_version: "quiet-follow-ups.v1", proposals: [] },
-	territory: { schema_version: "territory-state-board.v1", submarkets: [] },
 	"reasons to reach out": {
 		pages: [{ ok: true, cards: [], next_cursor: null }],
 	},
@@ -185,7 +184,6 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"find  ",
 		"lead board",
 		"quiet follow-ups",
-		"territory",
 		"reasons to reach out",
 		"invoices",
 		"client list",
@@ -210,8 +208,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 28);
-	assert.deepEqual([run.oldReads, run.engineReads], [29, 58]);
+	assert.equal(pauses, 27);
+	assert.deepEqual([run.oldReads, run.engineReads], [28, 56]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -287,7 +285,6 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"find   matched",
 			"lead board matched",
 			"quiet follow-ups matched",
-			"territory matched",
 			"reasons to reach out matched",
 			"invoices matched",
 			"client list matched",
@@ -371,7 +368,7 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(
 		report("production", run),
 		`Old and new answers compared on production
-old reads made: 29, engine reads made: 58
+old reads made: 28, engine reads made: 56
 
 read                                         asked   matched tie order    at cap different unsettled    failed
 board team                                       1         1         0         0         0         0         0
@@ -383,7 +380,6 @@ change feed                                      2         2         0         0
 search find                                      3         3         0         0         0         0         0
 lead board                                       1         1         0         0         0         0         0
 quiet follow-ups                                 1         1         0         0         0         0         0
-territory                                        1         1         0         0         0         0         0
 reasons to reach out                             1         1         0         0         0         0         0
 invoices                                         1         1         0         0         0         0         0
 client list                                      1         1         0         0         0         0         0
@@ -594,15 +590,6 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 			"quiet follow-ups": {
 				proposals: [{ subject_id: uuid(46), name: m(s), ref: m(s) }],
 			},
-			territory: {
-				submarkets: [
-					{
-						city: m(s),
-						state: m(s),
-						evidence: [{ flag_id: uuid(47), source: m(s) }],
-					},
-				],
-			},
 			"reasons to reach out": {
 				pages: [
 					{
@@ -718,7 +705,6 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 									: ask.read === "lead board" ||
 											ask.read === "lead" ||
 											ask.read === "quiet follow-ups" ||
-											ask.read === "territory" ||
 											ask.read === "reasons to reach out"
 										? leads[ask.read]
 										: ask.read === "today's reminders" ||
@@ -900,17 +886,13 @@ test("Leads reads the engine fails are recorded as failed and the run goes on", 
 	const { run } = await runWith((ask) => {
 		if (ask.read !== "lead board" && readsWorkspace(ask))
 			throw new Error("engine read failed");
-		if (
-			["quiet follow-ups", "territory", "reasons to reach out"].includes(
-				ask.read,
-			)
-		)
+		if (["quiet follow-ups", "reasons to reach out"].includes(ask.read))
 			throw new Error("engine read failed");
 		return answer(ask);
 	});
 	assert.deepEqual(
 		run.outcomes.flatMap((o) => (o.result === "failed" ? [label(o.ask)] : [])),
-		["quiet follow-ups", "territory", "reasons to reach out", l1, l2],
+		["quiet follow-ups", "reasons to reach out", l1, l2],
 	);
 	assert.equal(run.stopped, false);
 	assert.equal(exitCode(run), 2);
@@ -1398,9 +1380,6 @@ test("samples each app filter once from old first answers, and compares the filt
 	const expected: Ask[] = [
 		{ read: "client fit", vertical: "Made-up Fit" },
 		{ read: "client fit", city: "Made-up Fit City" },
-		{ read: "territory", vertical: "Made-up Specialty" },
-		{ read: "territory", city: "Made-up Territory City" },
-		{ read: "territory", state: "ZX" },
 	];
 	const added = (ask: Ask) =>
 		expected.some((e) => JSON.stringify(e) === JSON.stringify(ask));
@@ -1411,15 +1390,6 @@ test("samples each app filter once from old first answers, and compares the filt
 					profiles: [
 						{ vertical: null, city: " " },
 						{ vertical: "Made-up Fit", city: "Made-up Fit City", state: "ZZ" },
-					],
-				};
-			case "lead board":
-				return workspace([leadRow(l1, { specialty: "Made-up Specialty" })]);
-			case "territory":
-				return {
-					submarkets: [
-						{ city: null, state: "" },
-						{ city: "Made-up Territory City", state: "ZX" },
 					],
 				};
 			default:
@@ -1440,7 +1410,7 @@ test("samples each app filter once from old first answers, and compares the filt
 			.every((o) => o.result === "different"),
 	);
 	const text = report("made-up", run);
-	assert.doesNotMatch(text, /Made-up|ZX/);
+	assert.doesNotMatch(text, /Made-up/);
 });
 
 test("missing or malformed old samples add no filter asks, even when the engine has samples", async () => {
@@ -1448,24 +1418,14 @@ test("missing or malformed old samples add no filter asks, even when the engine 
 		switch (ask.read) {
 			case "client fit":
 				return { profiles: [{ vertical: "Made-up", city: "Made-up" }] };
-			case "lead board":
-				return workspace([leadRow(l1, { specialty: "Made-up" })]);
-			case "territory":
-				return { submarkets: [{ city: "Made-up", state: "ZX" }] };
 			default:
 				return answer(ask);
 		}
 	};
 	const { run } = await runWith(engine);
-	assert.equal(run.outcomes.length, 29);
+	assert.equal(run.outcomes.length, 28);
 	const malformed = (ask: Ask) =>
-		["client fit", "lead board", "territory"].includes(ask.read)
-			? {
-					profiles: null,
-					leads: [{ specialty: 7 }],
-					submarkets: [{ city: " ", state: false }],
-				}
-			: answer(ask);
+		ask.read === "client fit" ? { profiles: null } : answer(ask);
 	const invalid = await runWith(engine, malformed);
-	assert.equal(invalid.run.outcomes.length, 27);
+	assert.equal(invalid.run.outcomes.length, 28);
 });

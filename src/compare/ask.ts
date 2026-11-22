@@ -144,12 +144,6 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 			return leadPage();
 		case "quiet follow-ups":
 			return mirrored("/quiet-follow-ups", "quiet-follow-ups");
-		case "territory":
-			return mirrored("/territory-state-board", "territory-state-board", {
-				...(ask.vertical !== undefined && { vertical: ask.vertical }),
-				...(ask.city !== undefined && { city: ask.city }),
-				...(ask.state !== undefined && { state: ask.state }),
-			});
 		case "reasons to reach out":
 			return reasonsPage();
 		case "invoices":
