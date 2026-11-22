@@ -3,12 +3,14 @@ import { randomUUID } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
 import { setTimeout } from "node:timers/promises";
 import { Hono } from "hono";
+import { sql } from "kysely";
 import pg from "pg";
 import { docRoutes, recentDocTurns } from "./doc.ts";
 import { dispatchDocBackup } from "./doc-backup.ts";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
 import { docMcp } from "./doc-mcp.ts";
+import { finishDocJudgment, finishDocTurn } from "./doc-queue.ts";
 import { findDocRecords } from "./doc-reads.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { nextTransaction } from "./next-connection.ts";
@@ -374,6 +376,120 @@ test("backup gives a ready Mac first chance and skips its active judgment claim"
 	);
 	await tick();
 	assert.equal(fetch.mock.callCount(), 1);
+});
+
+test("backup skips a filing job that the Mac is committing as failed", async (t) => {
+	const deal = await sharedDeal();
+	const job = await queueMailJudgment(owner, deal.ref.id);
+	const credential = await issue(owner);
+	const claimed = await poll(credential, "ready", "judgment");
+	assert.equal(claimed.status, 200);
+	const { claim_id } = await claimed.json<{ claim_id: string }>();
+	await db.query(
+		`update doc_judgment_job set created_at = now() - interval '3 minutes',
+			claim_until = '-infinity' where id = $1`,
+		[job.id],
+	);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply({ facts: [] }),
+	);
+
+	await db.query("begin");
+	const pending: Promise<unknown>[] = [];
+	try {
+		await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+			`email ${job.activity}@example.test`,
+		]);
+		const completion = docLinkOwnerTransaction(
+			connectionString,
+			owner,
+			async (tx) => {
+				// Keep the lease valid only inside the Mac's transaction to model expiry without a timer.
+				await tx
+					.updateTable("doc_judgment_job")
+					.set({ claim_until: "infinity" })
+					.where("id", "=", job.id)
+					.execute();
+				assert.equal(
+					await finishDocJudgment(tx, owner, claim_id, { kind: "failed" }),
+					204,
+				);
+			},
+		);
+		pending.push(completion);
+		void completion.catch(() => {});
+		const macPid = await waitForBlockedTransaction(db, undefined, "advisory");
+		const dispatch = tick();
+		pending.push(dispatch);
+		void dispatch.catch(() => {});
+		await waitForBlockedTransaction(db, macPid);
+	} finally {
+		await db.query("rollback");
+		await Promise.all(pending);
+	}
+	const { rows } = await db.query<{ state: string }>(
+		"select state from doc_judgment_job where id = $1",
+		[job.id],
+	);
+	assert.deepEqual(
+		{ state: rows[0]?.state, calls: fetch.mock.callCount() },
+		{ state: "failed", calls: 0 },
+	);
+});
+
+test("backup skips a chat turn that the Mac is committing as failed", async (t) => {
+	const { conversation_id, turn } = await askDoc();
+	const credential = await issue(owner);
+	const { claim_id } = await claim(credential);
+	await db.query(
+		`update doc_turn set created_at = now() - interval '3 minutes',
+			claim_until = '-infinity' where id = $1`,
+		[turn.id],
+	);
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+	const failed = Promise.withResolvers<number>();
+	const commit = Promise.withResolvers<void>();
+	const completion = docLinkOwnerTransaction(
+		connectionString,
+		owner,
+		async (tx) => {
+			await tx
+				.updateTable("doc_turn")
+				.set({ claim_until: "infinity" })
+				.where("id", "=", turn.id)
+				.execute();
+			assert.equal(
+				await finishDocTurn(tx, owner, { claim_id, kind: "failed" }),
+				204,
+			);
+			const {
+				rows: [backend],
+			} = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(
+				tx,
+			);
+			assert.ok(backend);
+			failed.resolve(backend.pid);
+			await commit.promise;
+		},
+	);
+	void completion.catch(failed.reject);
+	let dispatch: Promise<void> | undefined;
+	try {
+		const macPid = await failed.promise;
+		dispatch = tick();
+		void dispatch.catch(() => {});
+		await waitForBlockedTransaction(db, macPid);
+	} finally {
+		commit.resolve();
+		await Promise.all([completion, dispatch]);
+	}
+	assert.deepEqual(
+		{
+			state: (await chatTurn(conversation_id))?.state,
+			calls: fetch.mock.callCount(),
+		},
+		{ state: "failed", calls: 0 },
+	);
 });
 
 test("backup answers an unready partner's turn using Doc's read tools", async (t) => {
