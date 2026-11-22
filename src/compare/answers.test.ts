@@ -9,7 +9,7 @@ import {
 } from "./directory-shapes.ts";
 import { leadBoardShape, leadShape, reasonsShape } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
-import { vendorMeetingsShape } from "./today-shapes.ts";
+import { vendorMeetingsShape } from "./vendor-meetings-shape.ts";
 
 const shape = {
 	rows: {

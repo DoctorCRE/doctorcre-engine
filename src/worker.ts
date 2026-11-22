@@ -10,7 +10,6 @@ import { activity } from "./activity/routes.ts";
 import { attachmentFiles, attachments, dealDocuments } from "./attachments.ts";
 import { cadence } from "./cadence.ts";
 import { calendarDismissal, nextAgenda } from "./calendar/next-agenda.ts";
-import { calendar } from "./calendar/routes.ts";
 import { directory } from "./clients/routes.ts";
 import {
 	accessDoor,
@@ -83,7 +82,6 @@ import { replyDrafts, replyJobs } from "./reply-drafts.ts";
 import { routerQueue } from "./router-queue.ts";
 import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
-import { today } from "./today/routes.ts";
 import { updateReads, updates } from "./updates.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 import { changes } from "./who-did-what.ts";
@@ -129,7 +127,6 @@ app.get("/health", (c) => {
 const engine = new Hono<WorkerEnv>()
 	.get("/whoami", (c) => c.json(c.get("partner")))
 	.route("/", activity)
-	.route("/", calendar)
 	.route("/", directory)
 	.route("/", connection)
 	.route("/", deals)
@@ -143,7 +140,6 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", nextStep)
 	.route("/", relationships)
 	.route("/", search)
-	.route("/", today)
 	.route("/", updates)
 	.route("/", changes)
 	.route("/", preferences)

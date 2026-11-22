@@ -6,7 +6,6 @@ import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 import { withSnapshot } from "../scripts/test-database.ts";
 import { readRecentActivity } from "./activity/read.ts";
-import { readMeetingPrep } from "./calendar/meeting-prep.ts";
 import { readClient, readClientList } from "./clients/read.ts";
 import type { DB } from "./database.d.ts";
 import { readBoard } from "./deals/board.ts";
@@ -21,7 +20,6 @@ import { type Reader, readSnapshot } from "./reader.ts";
 import { readNetwork } from "./relationships/network.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
-import { readTodayTriage } from "./today/triage.ts";
 import { readVendor, readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
@@ -30,7 +28,6 @@ import { readVendor, readVendorList } from "./vendors/read.ts";
 const readable = [
 	"activity",
 	"actor",
-	"board_snapshot",
 	"client",
 	"client_status",
 	"client_type",
@@ -69,8 +66,6 @@ const readable = [
 	"v_deal_room_presence",
 	"v_deal_room_session",
 	"v_deal_room_vendor",
-	"v_export_clients",
-	"v_export_deals",
 	"v_invoice_tracker",
 	"v_last_touch",
 	"v_lead_client_best",
@@ -85,7 +80,6 @@ const readable = [
 	"v_ref_index",
 	"v_requirement_request",
 	"v_subject_timeline",
-	"v_today_triage",
 	"v_vendor_assignment_context",
 	"vendor",
 	"vendor_category",
@@ -227,7 +221,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the change feed, the capture queue, search, the lead board, an opened lead, reasons to reach out, the client list, a client's details, the vendor list, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, vendor meetings and today's reminders and changes nothing", (t) =>
+test("the reader login reads the board, a deal, the change feed, the capture queue, search, the lead board, an opened lead, reasons to reach out, the client list, a client's details, the vendor list, the relationships network, recent activity, a vendor's details and the invoices, and changes nothing", () =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -423,52 +417,6 @@ test("the reader login reads the board, a deal, the change feed, the capture que
 				],
 				[["2026-01-02T03:04:05.678Z"], ["calcap-reader"]],
 			);
-			await withAdmin(
-				(admin) =>
-					admin.query(
-						`insert into critical_date (deal_id, kind, due_on, source, created_by)
-						select $1, 'notice', current_date, 'manual', id from actor where slug = 'reader-agent'`,
-						[seeded.deal],
-					),
-				database,
-			);
-			const reminders = await readSnapshot(login, (db) =>
-				readTodayTriage(db, { owners: "all", limit: 50, after: null }),
-			);
-			assert.deepEqual(
-				reminders.items.map((r) => [r.item_kind, r.subject_name]),
-				[["critical_date", "Example Reader Deal"]],
-			);
-			const calendarNow = new Date("2026-03-08T07:30:00.000Z");
-			// The snapshot and reader share one clock, independent of Docker clock skew.
-			t.mock.timers.enable({ apis: ["Date"], now: calendarNow });
-			await withAdmin(async (admin) => {
-				await admin.query(`set session_replication_role = replica;
-					insert into actor (slug, kind, display_name) values ('partner_one', 'human', 'Example');
-					update party set email = 'client@example.test';
-					update client set roster_ref = 'C-0001';
-					update deal set owner = 'partner_one';
-					insert into deal_participant (deal_id, actor_id, role, set_by)
-						select deal.id, actor.id, 'lead', actor.id from deal, actor where actor.slug = 'partner_one'`);
-				await admin.query(
-					`insert into board_snapshot (organization_tenant_id, sponsoring_human_slug, board_id,
-						snapshot_json, updated_by_actor_id)
-					select 'carr-internal', 'partner_one', 'calendar-agenda', jsonb_build_object(
-						'schema', 'carr-calendar-agenda.v1', 'observed_at', $1::timestamptz, 'items', jsonb_build_array(
-							jsonb_build_object('start', $1::timestamptz + interval '1 hour', 'end', $1::timestamptz + interval '2 hours',
-								'title', 'Example', 'attendees', '[{"email": "client@example.test"}]'::jsonb))),
-						id from actor where slug = 'partner_one'`,
-					[calendarNow.toISOString()],
-				);
-			}, database);
-			const meetingPrep = () =>
-				readSnapshot(login, (db) => readMeetingPrep(db, "partner_one"));
-			const prepared = await meetingPrep();
-			assert.deepEqual("sources" in prepared && prepared.sources, {
-				outlook_calendar: { state: "ready" },
-				deal_suggestions: { state: "ready" },
-				meeting_prep: { state: "ready" },
-			});
 			const visible = await withAdmin(
 				(admin) =>
 					admin.query<{ relname: string }>(
@@ -483,17 +431,6 @@ test("the reader login reads the board, a deal, the change feed, the capture que
 				visible.rows.map((r) => r.relname),
 				readable,
 			);
-			// A refused read still answers.
-			await withAdmin(
-				(admin) =>
-					admin.query(`REVOKE SELECT ON public.board_snapshot FROM ${name}`),
-				database,
-			);
-			assert.deepEqual(await meetingPrep(), {
-				state: "unavailable",
-				reason: "source_unavailable",
-				items: [],
-			});
 			for (const outside of [
 				"capture_candidate",
 				"deal_note",
