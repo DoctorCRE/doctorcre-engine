@@ -104,6 +104,17 @@ for (const { caller, what, expected } of [
 		expected: "Follow up on the Jan 1 meeting: Example review",
 	},
 	{
+		caller: { job: "agent", for_user: "alex" },
+		what: "Example review, Tue Oct 07 4:30 PM",
+		expected: "Follow up on the Oct 07 meeting: Example review",
+	},
+	{
+		caller: { job: "agent", for_user: "alex" },
+		what: "Review $1, $2 and $3 | Example Co, Tue Oct 27 4:30 PM",
+		expected:
+			"Follow up on the Oct 27 meeting: Review $1, $2 and $3 | Example Co",
+	},
+	{
 		caller: { user: "alex" },
 		what: "Site visit with A. Example | Example Co, Tue Oct 27 4:30 PM",
 		expected: undefined,

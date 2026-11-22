@@ -243,6 +243,15 @@ export async function cancelCurrentStep(
 	await cancel.execute();
 }
 
+const JOB_CALENDAR_SUBJECT =
+	/^([\s\S]+), (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (0?[1-9]|[12][0-9]|3[01]) (?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM)/;
+
+function jobStepWording(what: string): string {
+	const match = JOB_CALENDAR_SUBJECT.exec(what);
+	if (!match || match[0] !== what) return what;
+	return `Follow up on the ${match[2]} ${match[3]} meeting: ${match[1]}`;
+}
+
 // Written out, because the generated row type asks for the stamp the database sets.
 export async function createStep(
 	tx: Transaction<DB>,
@@ -590,10 +599,7 @@ export const nextSteps = new Hono<NextSaveEnv>()
 			},
 			async (tx, request) => {
 				const what = c.get("stamp").job
-					? request.what.replace(
-							/^([\s\S]+), (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (0?[1-9]|[12][0-9]|3[01]) (?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM)(?![\s\S])/,
-							"Follow up on the $2 $3 meeting: $1",
-						)
+					? jobStepWording(request.what)
 					: request.what;
 				return { ...(await createStep(tx, { ...request, what })), what };
 			},
