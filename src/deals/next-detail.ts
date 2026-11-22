@@ -96,6 +96,15 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 					])
 					.whereRef("payment.deal_id", "=", "d.id"),
 			).as("commissions"),
+			jsonArrayFrom(
+				eb
+					.selectFrom("deal_property as dp")
+					.innerJoin("property as p", "p.id", "dp.property_id")
+					.select(["p.id", "p.name", "p.address"])
+					.whereRef("dp.deal_id", "=", "d.id")
+					.orderBy("p.address")
+					.orderBy("p.id"),
+			).as("properties"),
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
 			jsonArrayFrom(
 				selectDealParties(db, eb.ref("d.id"))
