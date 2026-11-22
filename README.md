@@ -54,12 +54,14 @@ For a single check on an existing local throwaway server, `TEST_DATABASE_URL`
 defaults to `postgres://postgres@127.0.0.1:5432/postgres`.
 The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a server with
-business data. A check opens roughly one connection per CPU core, plus sessions
-for tests that exercise concurrent writes. More simultaneous checks need more
-connections.
+business data. On small machines, the check runs up to six test files at once,
+with at most two per CPU. It keeps Node's default when that permits more files.
+A check opens roughly one connection per concurrent test file, plus sessions
+for tests that exercise concurrent writes.
 
 Each check restores `schema/business.sql` once, generates ignored `src/database.d.ts`
-with `kysely-codegen`, and runs TypeScript and tests against that database.
+with `kysely-codegen`, and runs TypeScript and tests in parallel once the database
+types are ready.
 A test that needs its own database copies that restore, because one restore
 holds about 2,100 locks and many at once exhaust the server's lock table (#237).
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
