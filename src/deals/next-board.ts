@@ -1,6 +1,9 @@
 import { type Expression, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
-import { visibleCallStep } from "../activity/call-visibility.ts";
+import {
+	visibleCallStep,
+	visiblePhaseReason,
+} from "../activity/call-visibility.ts";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
@@ -72,7 +75,7 @@ export const selectNextDeals = (
 					.select([
 						"pc.phase",
 						"pc.happened_at",
-						"pc.reason",
+						visiblePhaseReason("pc").as("reason"),
 						"pc.changed_at",
 						"pc.changed_by_job",
 					])

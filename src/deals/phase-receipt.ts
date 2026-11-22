@@ -5,6 +5,7 @@ import {
 	type Transaction,
 } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
+import { visiblePhaseReason } from "../activity/call-visibility.ts";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 
@@ -60,7 +61,7 @@ export const automaticPhaseReceipt = (
 			eb.fn
 				.coalesce(
 					sql<string | null>`nullif(${eb.ref("copied.reason")}, '')`,
-					"move.reason",
+					visiblePhaseReason("move"),
 				)
 				.as("reason"),
 			...phaseReceiptFields(
