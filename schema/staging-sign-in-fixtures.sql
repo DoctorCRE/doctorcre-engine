@@ -19,6 +19,11 @@ do $$ begin
 		for each row execute function next.guard_sign_in_fixture_receipt(%L)', current_user);
 end $$;
 
+-- Receipts written inside savepoints still reserve the top-level transaction.
+create unique index if not exists sign_in_fixture_prepared_xact
+	on next.save_receipt ((answer ->> 'prepared_xact'))
+	where verb = 'sign-in-rehearsal' and answer ? 'prepared_xact';
+
 create or replace function next.sign_in_fixture(run_id uuid, operation text, fixture jsonb) returns jsonb
 language plpgsql security definer set search_path = pg_catalog, next, pg_temp as $$
 declare
@@ -70,8 +75,6 @@ begin
 	note_ids := array(select id::uuid from jsonb_array_elements_text(fixture -> 'note_ids') as notes(id));
 
 	if operation = 'record' then
-		if exists (select from save_receipt where verb = 'sign-in-rehearsal'
-			and xmin = pg_current_xact_id()::xid) then return '{"conflict":true}'; end if;
 		-- The audit rows must come from the same transaction as this receipt.
 		with wanted(table_name, record) as (
 			values ('party', jsonb_build_object('id', client_id)),
@@ -98,7 +101,8 @@ begin
 		end if;
 		insert into save_receipt (idempotency_key, verb, request_hash, answer)
 		values (run_id, 'sign-in-rehearsal', actor,
-			jsonb_build_object('state', 'prepared', 'fixture', fixture, 'inserts', inserts))
+			jsonb_build_object('state', 'prepared', 'prepared_xact', pg_current_xact_id()::text,
+				'fixture', fixture, 'inserts', inserts))
 		on conflict do nothing;
 		if not found then return '{"conflict":true}'; end if;
 		return null;
@@ -137,7 +141,8 @@ begin
 	delete from client where party_id = client_id;
 	delete from party_role where party_id = client_id and role = 'client';
 	delete from party where id = client_id;
-	update save_receipt set answer = '{"state":"cleaned"}' where idempotency_key = run_id;
+	update save_receipt set answer = (answer - 'fixture' - 'inserts') || '{"state":"cleaned"}'
+	where idempotency_key = run_id;
 	return null;
 end $$;
 

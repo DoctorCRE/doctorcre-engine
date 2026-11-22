@@ -25,7 +25,11 @@ const changed_at = sql<string>`now()`;
 const parseRun = (body: JsonObject) =>
 	fit(body, { run_id: isUuid }, ["run_id"]);
 
-async function prepare(tx: Transaction<DB>, run_id: string, owner: string) {
+export async function insertSignInFixture(
+	tx: Transaction<DB>,
+	run_id: string,
+	owner: string,
+) {
 	const name = `Sign-in rehearsal ${run_id}`;
 	const { id: client_id } = await tx
 		.insertInto("party")
@@ -148,7 +152,7 @@ export const signInFixtures = new Hono<SignInFixtureEnv>().post(
 					if (action === "cleanup") return { run_id, remaining: 0 };
 					if (prior) return prior;
 					if (!owner) throw new Error("sign-in rehearsal owner required");
-					const answer = await prepare(tx, run_id, owner);
+					const answer = await insertSignInFixture(tx, run_id, owner);
 					const recorded = await fixtureState(tx, run_id, "record", answer);
 					if (recorded?.conflict)
 						throw new SaveRefusal(new Refusal(409, "key_reuse"));

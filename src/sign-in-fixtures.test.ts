@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { sql } from "kysely";
+import { nextTransaction } from "./next-connection.ts";
+import { stampNextSave } from "./next-save.ts";
 import { isArguments } from "./save-door.ts";
+import { insertSignInFixture } from "./sign-in-fixtures.ts";
 import { readSchema } from "./test-copy.ts";
 import { doorTest } from "./test-door.ts";
 
-const { db, setup, cleanup, request } = doorTest();
+const { db, setup, cleanup, request, writerUrl } = doorTest();
 const owner = randomUUID();
 const unrelatedDeal = randomUUID();
 const staging = { ENGINE_ENVIRONMENT: "staging" };
@@ -197,6 +201,26 @@ test("a writer cannot copy another run's receipt and claim its records", async (
 	}
 	assert.equal((await fixture("cleanup", forgedRun)).status, 200);
 	assert.deepEqual(await prepareFixture(run), { ...prepared, replayed: true });
+});
+
+test("a released savepoint cannot hide a receipt from its transaction", async () => {
+	const run = randomUUID();
+	const secondRun = randomUUID();
+	await nextTransaction(writerUrl, "save", async (tx) => {
+		await stampNextSave(tx, caller);
+		const fixture = await insertSignInFixture(tx, run, caller.for_user);
+		await sql`savepoint first_receipt`.execute(tx);
+		const first = await sql`
+			select sign_in_fixture(${run}::uuid, 'record', ${JSON.stringify(fixture)}::jsonb) as result
+		`.execute(tx);
+		assert.deepEqual(first.rows, [{ result: null }]);
+		await sql`release savepoint first_receipt`.execute(tx);
+		const second = await sql`
+			select sign_in_fixture(${secondRun}::uuid, 'record',
+				${JSON.stringify({ ...fixture, run_id: secondRun })}::jsonb) as result
+		`.execute(tx);
+		assert.deepEqual(second.rows, [{ result: { conflict: true } }]);
+	});
 });
 
 test("cleanup removes the run's rows and preserves other records", async () => {
