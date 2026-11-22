@@ -17,6 +17,8 @@ Read this page first. It names the parts, how they connect today and after the s
 
 The engine reads through its `DATABASE` binding and saves through `DATABASE_WRITER`. Production and staging each bind their own writer Hyperdrive in `wrangler.jsonc`. The production writer connects as `engine_business_writer`, separate from the reader login.
 
+The staging reader and writer Hyperdrives point to the Neon rehearsal branch used for [practice sign-in](sign-in.md#serve-pages-and-partner-calls-through-the-app). Their bindings are in `env.staging` in `wrangler.jsonc`.
+
 Which old program reads and writes what, with file and line: `docs/new-database.md` § "Who reads and writes the three features' records".
 
 ## How they connect

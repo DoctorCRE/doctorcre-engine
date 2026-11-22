@@ -47,6 +47,7 @@ before(async () => {
 		begin;
 		select set_config('engine.job', 'old_system', true);
 		insert into job (slug, label) values ('cadence', 'Example nightly job');
+		insert into phase (slug, label) values ('research', 'Research'), ('touring', 'Touring'), ('negotiation', 'Negotiation');
 		insert into party (id, kind, name) values ('${joe}', 'person', 'Example Partner'), ('${dell}', 'person', 'Other Partner');
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
 		insert into party_email (party_id, address, label) values ('${joe}', 'partner@example.test', 'work');
@@ -153,6 +154,64 @@ test("a deal watch sees both owner edits and only newly filed inbound mail for i
 		false,
 	);
 });
+
+for (const startingPhase of [null, "research"]) {
+	test(`a deal watch reports each phase move from ${startingPhase ?? "no phase"}`, async () => {
+		const watchedDeal = randomUUID();
+		await db.query(`
+			begin;
+			select set_config('engine.job', 'old_system', true);
+			insert into deal (id, name, owner_user_id) values ('${watchedDeal}', 'Example ${startingPhase ?? "New"} Deal', '${joe}');
+			${
+				startingPhase
+					? `insert into deal_phase_change (deal_id, happened_at, phase)
+				values ('${watchedDeal}', '2000-01-01T06:00:00.000001Z', '${startingPhase}');`
+					: ""
+			}
+			commit;
+		`);
+		const move = async (from: string | null, to: string) => {
+			const [status, body] = await save(
+				{ user: "joe" },
+				`deals/${watchedDeal}/changes`,
+				{
+					idempotency_key: randomUUID(),
+					seen_change_id: 0,
+					phase: { from, to, on: "2000-01-01" },
+				},
+			);
+			assert.equal(status, 200, JSON.stringify(body));
+		};
+		const phaseMoves = async (since: string) => {
+			const [status, body] = await read(
+				`deal-watches/deal/${watchedDeal}?subscriber=joe&since=${encodeURIComponent(since)}`,
+			);
+			assert.equal(status, 200);
+			assert.ok(Array.isArray(body.changes));
+			return body.changes
+				.filter(
+					({ table_name, field }) =>
+						table_name === "deal_phase_change" && field === "phase",
+				)
+				.map(({ old_value, new_value }) => [old_value, new_value]);
+		};
+
+		const beforeFirst = await watchWatermark();
+		await move(startingPhase, "touring");
+		const afterFirst = await watchWatermark();
+		await move("touring", "negotiation");
+		await move("negotiation", "touring");
+		const laterMoves = [
+			["touring", "negotiation"],
+			["negotiation", "touring"],
+		];
+		assert.deepEqual(await phaseMoves(beforeFirst), [
+			[startingPhase, "touring"],
+			...laterMoves,
+		]);
+		assert.deepEqual(await phaseMoves(afterFirst), laterMoves);
+	});
+}
 
 test("a lease watch reads the lease dates, options and linked deal history", async () => {
 	const path = `deal-watches/lease/${lease}?subscriber=joe&since=`;
