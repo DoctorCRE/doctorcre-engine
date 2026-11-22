@@ -106,7 +106,7 @@ before(async () => {
 			values ('${existingStep}', '${decisionDeal}', 'Send the plan', '${joe}', '2025-02-08');
 		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence, owner_party_id, due_on)
 			values ('${assigned}', 'next_step', '${decisionCall}', 'call', 'old_system', '${decisionDeal}',
-				' SEND  THE plan ', 'Send the plan.', '${joe}', '2025-02-09');
+				' SEND  THE plan. ', 'Send the plan.', '${joe}', '2025-02-09');
 		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
 			values ('${copied}', 'log_call', '${copiedCall}', 'call', 'old_system', '${deal}', 'Copied note.', 'Copied evidence.');
 		select set_config('engine.job', '', true);
@@ -173,10 +173,16 @@ function request(path: string, user: string | null, body?: object) {
 const read = (dealId: string, user: string | null = "joe") =>
 	request(`deals/${dealId}/call-outcomes`, user);
 
-const decide = (proposal: string, decision: string, key = randomUUID()) =>
+const decide = (
+	proposal: string,
+	decision: string,
+	key = randomUUID(),
+	edits?: object,
+) =>
 	request(`proposals/${proposal}/decision`, "joe", {
 		decision,
 		idempotency_key: key,
+		edits,
 	});
 
 test("a deal’s recorded calls include the proposal evidence and current decisions", async () => {
@@ -336,6 +342,7 @@ test("accepting an assigned action leaves an existing step and its date intact",
 	assert.equal(response.status, 409);
 	assert.partialDeepStrictEqual(await response.json(), {
 		error: "open_step_exists",
+		next_step_id: existingStep,
 	});
 	assert.deepEqual(
 		(
@@ -362,7 +369,127 @@ test("accepting an assigned action leaves an existing step and its date intact",
 	assert.equal((await decide(assigned, "dismiss")).status, 200);
 });
 
-test("an open checklist item does not block accepting an assigned action", async () => {
+for (const [index, scenario] of [
+	{ source: null, expectedDue: "2025-02-08" },
+	{
+		source: "defaulted",
+		expectedDue: "2025-02-08",
+		edits: { due_on: "2025-02-10" },
+	},
+	{ source: "stated", expectedDue: "2025-02-09" },
+	{
+		source: "stated",
+		expectedDue: "2025-02-10",
+		edits: {
+			what: "Send the plan.",
+			owner_party_id: dell,
+			due_on: "2025-02-10",
+		},
+	},
+	{ source: null, expectedDue: "2025-02-08", meeting: true },
+	{
+		source: null,
+		expectedDue: "2025-02-08",
+		what: "  SEND\u00a0ΟΣ. ",
+		suggested: "send ος.",
+	},
+	{
+		source: null,
+		expectedDue: "2025-02-08",
+		native: true,
+		what: "  SEND\u00a0ΟΣ. ",
+		suggested: "send ος.",
+	},
+].entries()) {
+	const kind = scenario.meeting ? "meeting" : "call";
+	const job =
+		scenario.meeting || scenario.native ? "call_capture" : "old_system";
+	const details = scenario.suggested
+		? `final sigma in ${scenario.native ? "native" : "copied"} action text`
+		: `${scenario.source ?? "unknown"} date provenance${scenario.edits?.what ? " and edited owner and text" : ""}`;
+	test(`${kind} acceptance joins the held step with ${details}`, async () => {
+		const target = id(101 + index * 4);
+		const activity = id(102 + index * 4);
+		const step = id(103 + index * 4);
+		const action = id(104 + index * 4);
+		const what = scenario.what ?? "  SEND\u00a0the\u2003\tplan.\u3000";
+		const suggested =
+			scenario.suggested ??
+			(scenario.edits?.what ? "Send the old plan." : "send the plan.");
+		await db.query(`
+			begin;
+			select set_config('engine.job', '${job}', true), set_config('engine.user_id', '${joe}', true);
+			insert into deal (id, name, owner_user_id) values ('${target}', 'Example action deal ${index}', '${joe}');
+			insert into activity (id, kind, happened_at) values ('${activity}', '${kind}', '2025-01-06T18:00Z');
+			insert into activity_about (activity_id, deal_id) values ('${activity}', '${target}');
+			insert into next_step (id, deal_id, what, owner_party_id, due_on, hold_until)
+				values ('${step}', '${target}', '${what}', '${scenario.edits?.owner_party_id ?? joe}', '2025-02-08', '2025-02-15');
+			insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence, owner_party_id, due_on, due_source)
+				values ('${action}', 'next_step', '${activity}', '${kind}', '${job}', '${target}',
+					'${suggested}', 'Example quote.',
+					${scenario.meeting ? "null" : `'${joe}'`},
+					'2025-02-09', ${scenario.source ? `'${scenario.source}'` : "null"});
+			commit;
+		`);
+		if (kind === "call") {
+			assert.partialDeepStrictEqual(await (await read(target)).json(), {
+				calls: [{ proposals: [{ proposal_id: action, accept_blocked: null }] }],
+			});
+		}
+		const key = randomUUID();
+		const response = await decide(action, "accept", key, scenario.edits);
+		assert.equal(response.status, 200);
+		const body = await response.json();
+		assert.ok(body && typeof body === "object");
+		assert.partialDeepStrictEqual(body, {
+			status: "accepted",
+			created: { next_step_id: step },
+		});
+		assert.deepEqual(
+			await (await decide(action, "accept", key, scenario.edits)).json(),
+			{ ...body, replayed: true },
+		);
+		const { rows } = await db.query(
+			`select s.id, s.what, s.status, s.due_on::text, s.hold_until::text, p.merged_step_id
+			from proposal p join next_step s on s.deal_id = p.deal_id where p.id = $1`,
+			[action],
+		);
+		assert.deepEqual(rows, [
+			{
+				id: step,
+				what: scenario.edits?.what ?? what,
+				status: "open",
+				due_on: scenario.expectedDue,
+				hold_until: "2025-02-15",
+				merged_step_id: step,
+			},
+		]);
+	});
+}
+
+for (const [kind, proposal] of [
+	["pending next-step", privateProposal],
+	["accepted call log", accepted],
+]) {
+	test(`a ${kind} proposal cannot record a merged step`, async () => {
+		await db.query(
+			`begin; select set_config('engine.user_id', '${joe}', true)`,
+		);
+		try {
+			await assert.rejects(
+				db.query("update proposal set merged_step_id = $1 where id = $2", [
+					existingStep,
+					proposal,
+				]),
+				{ code: "23514", constraint: "proposal_merged_step_decided" },
+			);
+		} finally {
+			await db.query("rollback");
+		}
+	});
+}
+
+test("matching checklist and property steps do not get merged", async () => {
 	const checklistDeal = id(15);
 	const checklistCall = id(27);
 	const checklistItem = id(42);
@@ -373,11 +500,13 @@ test("an open checklist item does not block accepting an assigned action", async
 		insert into deal (id, name, owner_user_id) values ('${checklistDeal}', 'Example checklist deal', '${joe}');
 		insert into activity (id, kind, happened_at) values ('${checklistCall}', 'call', '2025-01-06T18:00Z');
 		insert into activity_about (activity_id, deal_id) values ('${checklistCall}', '${checklistDeal}');
+		insert into property (id, address) values ('${id(16)}', '123 Example Way');
+		insert into next_step (property_id, what, owner_party_id) values ('${id(16)}', 'Review lease terms', '${joe}');
 		insert into next_step (id, deal_id, what, owner_party_id, item_title, item_bullets, source_ref)
 			values ('${checklistItem}', '${checklistDeal}', 'Review lease terms', '${joe}', 'Review lease terms', '[]', 'example:copy');
 		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence, owner_party_id)
 			values ('${action}', 'next_step', '${checklistCall}', 'call', 'old_system', '${checklistDeal}',
-				'Send the plan', 'Send the plan.', '${joe}');
+				'Review lease terms', 'Review lease terms.', '${joe}');
 		commit;
 	`);
 	const response = await decide(action, "accept");
@@ -390,13 +519,14 @@ test("an open checklist item does not block accepting an assigned action", async
 	assert.deepEqual(
 		(
 			await db.query(
-				"select id, status from next_step where deal_id = $1 order by id",
+				`select s.id, s.status, p.merged_step_id from next_step s
+				left join proposal p on p.id = s.id where s.deal_id = $1 order by s.id`,
 				[checklistDeal],
 			)
 		).rows,
 		[
-			{ id: checklistItem, status: "open" },
-			{ id: action, status: "open" },
+			{ id: checklistItem, status: "open", merged_step_id: null },
+			{ id: action, status: "open", merged_step_id: null },
 		],
 	);
 });
