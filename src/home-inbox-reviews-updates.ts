@@ -1,4 +1,5 @@
 import { sql, type Transaction } from "kysely";
+import { visibleCall } from "./activity/call-visibility.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	dealStepUrl,
@@ -68,15 +69,16 @@ type CompletionReview = Omit<DealNotice, "title"> & {
 	what: string;
 	next_step_id: string;
 	can_resolve: boolean;
-	activity_id: string;
-	activity_kind: "note" | "call" | "meeting";
-	happened_at: string;
+	activity_id: string | null;
+	activity_kind: "note" | "call" | "meeting" | null;
+	happened_at: string | null;
 	summary: string | null;
-	evidence: string;
+	evidence: string | null;
 };
 
 export async function readCompletionReviews(
 	db: Transaction<DB>,
+	userId: string,
 	stepIds: string[],
 ) {
 	const { rows } = await sql<CompletionReview>`
@@ -89,11 +91,13 @@ export async function readCompletionReviews(
 		select p.id, p.next_step_id, p.deal_id, d.name as deal_name,
 			s.what, s.due_on, p.created_at as activity_at,
 			s.changed_at = p.step_seen_at as can_resolve,
-			a.id as activity_id, a.kind as activity_kind, a.happened_at, a.summary, p.evidence
+			a.id as activity_id, a.kind as activity_kind, a.happened_at, a.summary,
+			case when a.id is not null then p.evidence end as evidence
 		from latest p
 		join next_step s on s.id = p.next_step_id
 		join deal d on d.id = p.deal_id
-		join activity a on a.id = p.activity_id
+		left join activity a on a.id = p.activity_id
+			and (a.kind <> 'call' or ${visibleCall(userId)})
 		where p.status = 'pending'
 	`.execute(db);
 	return new Map(
@@ -110,7 +114,9 @@ function completionReviewText(review: CompletionReview) {
 		why: homeWhy(
 			homeDisplayText(review.evidence) ||
 				homeDisplayText(review.summary) ||
-				`The ${review.activity_kind} was recorded on ${homeDate(review.happened_at)}`,
+				(review.happened_at
+					? `The ${review.activity_kind} was recorded on ${homeDate(review.happened_at)}`
+					: null),
 			homeStepText(review.what),
 		),
 	};
@@ -142,13 +148,16 @@ export function completionReviewCard(
 			next_step_id: review.next_step_id,
 			can_resolve: review.can_resolve,
 		},
-		source_activity: {
-			kind: review.activity_kind,
-			id: review.activity_id,
-			happened_at: new Date(review.happened_at).toISOString(),
-			summary: review.summary,
-			quote: review.evidence,
-		},
+		source_activity:
+			review.activity_id && review.happened_at
+				? {
+						kind: review.activity_kind,
+						id: review.activity_id,
+						happened_at: new Date(review.happened_at).toISOString(),
+						summary: review.summary,
+						quote: review.evidence,
+					}
+				: null,
 	};
 }
 
