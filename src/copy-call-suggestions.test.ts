@@ -11,7 +11,9 @@ const { db, setup, cleanup } = copyTest();
 const line = (row: pg.QueryResultRow) =>
 	Object.values(row)
 		.map((v) =>
-			v === null ? "-" : String(v).replace(/^0{8}-0{4}-4000-8000-0{10}/, "#"),
+			v === null
+				? "-"
+				: String(v).replace(/^00000000-0000-4000-8000-0*(\d{2,})$/, "#$1"),
 		)
 		.join(" ");
 const rows = async (sql: string) => (await db.query(sql)).rows.map(line);
@@ -111,7 +113,61 @@ before(async () => {
 });
 after(cleanup);
 
-test("copies each call suggestion with its decision, keeps the next step an accepted one made, and on a rerun adds what arrived and lists what changed", async () => {
+test("proposal_due_source rejects invalid provenance and accepts dated next steps", async () => {
+	for (const [kind, date, source] of [
+		["next_step", "2024-02-01", "unknown"],
+		["next_step", null, "stated"],
+		["next_step", null, "defaulted"],
+		["log_call", null, "stated"],
+		["log_call", null, "defaulted"],
+		["log_call", "2024-02-01", "stated"],
+		["log_call", "2024-02-01", "defaulted"],
+	]) {
+		await db.query(
+			"begin; select set_config('engine.job', 'old_system', true)",
+		);
+		try {
+			await assert.rejects(
+				db.query(
+					`insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, due_on, due_source)
+				 values ($1, $2, 'call', 'Example quote', 'old_system', $3, 'Example provenance', $4, $5)`,
+					[kind, id(60), id(30), date, source],
+				),
+				{ code: "23514", constraint: "proposal_due_source" },
+			);
+		} finally {
+			await db.query("rollback");
+		}
+	}
+	await db.query("begin; select set_config('engine.job', 'old_system', true)");
+	try {
+		for (const [kind, date, source] of [
+			["next_step", "2024-02-01", "stated"],
+			["next_step", "2024-02-01", "defaulted"],
+			["next_step", "2024-02-01", null],
+			["next_step", null, null],
+			["log_call", null, null],
+		]) {
+			const result = await db.query(
+				`insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, due_on, due_source)
+			 values ($1, $2, 'call', 'Example quote', 'old_system', $3, $4, $5, $6) returning due_source`,
+				[
+					kind,
+					id(60),
+					id(30),
+					`Example provenance ${kind} ${date} ${source}`,
+					date,
+					source,
+				],
+			);
+			assert.equal(result.rows[0].due_source, source);
+		}
+	} finally {
+		await db.query("rollback");
+	}
+});
+
+test("copies each call suggestion with its decision, keeps the next step an accepted one made, and on a rerun adds what arrived and lists what changed", async (t) => {
 	const report = await run();
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select id, kind, activity_id, activity_kind, evidence, proposed_by_job, status, decided_by_user_id, decided_at::text,
@@ -183,10 +239,10 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 	);
 
 	const all =
-		"select (select jsonb_agg(p order by id) from proposal p), (select jsonb_agg(c order by id) from change c)";
-	const before = await rows(all);
+		"select (select jsonb_agg(p order by id) from proposal p) as proposals, (select jsonb_agg(c order by id) from change c) as history";
+	const before = (await db.query(all)).rows;
 	assert.deepEqual(await run(), report);
-	assert.deepEqual(await rows(all), before);
+	assert.deepEqual((await db.query(all)).rows, before);
 
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.next_action (id, subject_type, subject_id, owner_id, description, created_by, item_title, source_ref)
@@ -218,4 +274,55 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		["2024-01-01 15:01:00+00"],
 	);
 	assert.deepEqual(await rows("select count(*) from next_step"), ["2"]);
+
+	{
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+ insert into public.capture_post_call_candidate (id, session_id, idempotency_key, batch_hash, item_index, kind, deal_id, assignee_slug,
+  action_description, due_on, evidence_quote, confidence, status, resolved_by, resulting_ref, resolved_at, created_at) values
+  ${[postCall(101), postCall(102), postCall(103), postCall(104), postCall(106)].join(",\n  ")};
+ update public.capture_post_call_candidate set due_defaulted = false where id in ('${id(101)}', '${id(103)}');
+ update public.capture_post_call_candidate set due_defaulted = true where id = '${id(102)}';
+ update public.capture_post_call_candidate set due_on = null, due_defaulted = false where id = '${id(106)}';
+ insert into public.capture_candidate (id, session_id, idempotency_key, batch_hash, item_index, kind, payload, evidence_quote, confidence,
+  status, resolved_by, resulting_ref, resolved_at, created_at) values
+  ${capture(105, "next_step", { deal: id(30), text: "Example dated step", next_date: "2024-02-01" })};
+ insert into proposal (id, created_at, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id, due_on)
+  values ('${id(103)}', '2024-01-01 15:01', 'next_step', '${id(60)}', 'call', 'Example quote', 'old_system',
+   '${id(30)}', 'Example action 103', '${id(1)}', '2024-02-01');
+ commit;`);
+		const legacy = `select to_jsonb(p), (select jsonb_agg(c order by id) from change c
+		where table_name = 'proposal' and record->>'id' = '${id(103)}') from proposal p where id = '${id(103)}'`;
+		const earlier = (await db.query(legacy)).rows;
+		assert.deepEqual(await run(), later);
+		assert.deepEqual((await db.query(legacy)).rows, earlier);
+		assert.deepEqual(
+			await rows(
+				`select id, due_on::text, due_source from proposal where id >= '${id(101)}' order by id`,
+			),
+			[
+				"#101 2024-02-01 stated",
+				"#102 2024-02-01 defaulted",
+				"#103 2024-02-01 -",
+				"#104 2024-02-01 -",
+				"#105 2024-02-01 -",
+				"#106 - -",
+			],
+		);
+		const before = (await db.query(all)).rows;
+		assert.deepEqual(await run(), later);
+		assert.deepEqual((await db.query(all)).rows, before);
+		await t.test(
+			"reports changed due-date provenance and preserves copied proposals",
+			async () => {
+				await db.query(`update public.capture_post_call_candidate set due_defaulted = not due_defaulted
+				where id in ('${id(101)}', '${id(102)}')`);
+				assert.deepEqual(await run(), [
+					...later,
+					"#101 proposal #101 existing_proposal_conflicts",
+					"#102 proposal #102 existing_proposal_conflicts",
+				]);
+				assert.deepEqual((await db.query(all)).rows, before);
+			},
+		);
+	}
 });

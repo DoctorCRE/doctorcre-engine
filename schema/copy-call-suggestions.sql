@@ -16,14 +16,15 @@ from (
   c.payload ->> (case when log_call then 'ref' else 'deal' end) as target_ref,
   case when log_call then c.payload ->> 'summary' else btrim(c.payload ->> 'text') end as what,
   case when log_call then c.payload ->> 'occurred_at' end as occurred_at,
-  c.payload ->> 'next_date' as due_text, null as assignee, case when c.payload ->> 'field' = 'phase' then c.payload ->> 'value' end as to_phase,
+  c.payload ->> 'next_date' as due_text, null::text as due_source, null as assignee, case when c.payload ->> 'field' = 'phase' then c.payload ->> 'value' end as to_phase,
   c.payload ->> 'base_event_id' as base_event, c.payload ->> 'started_on' as started_on, null::uuid as contact_party_id,
   c.evidence_quote, c.status, c.resolved_by, c.resolved_at, c.resulting_ref, c.resolution_note, c.created_at, c.undone_at
  from public.capture_candidate c
  cross join lateral (select c.kind = 'activity' and c.status = 'pending' and c.payload ->> 'kind' = 'note' as log_call) f
  where c.kind <> 'meeting_record'
  union all
- select c.id, c.session_id, c.kind, c.deal_id::text, btrim(c.action_description), null, c.due_on::text, c.assignee_slug, null, null, null,
+ select c.id, c.session_id, c.kind, c.deal_id::text, btrim(c.action_description), null, c.due_on::text,
+  case c.due_defaulted when false then 'stated' when true then 'defaulted' end, c.assignee_slug, null, null, null,
   c.contact_party_id, c.evidence_quote, c.status, c.resolved_by, c.resolved_at, c.resulting_ref, c.resolution_note, c.created_at, null
  from public.capture_post_call_candidate c
 ) s
@@ -92,6 +93,7 @@ select s.proposal_id as id, s.created_at, s.kind, s.activity_id, s.activity_kind
  case when s.status <> 'pending' then s.decider end as decided_by_user_id, s.resolved_at as decided_at, s.deal_id,
  case when s.status = 'pending' then s.reviewer end as changed_for_user_id,
  case when s.kind in ('next_step', 'log_call') then s.what end as what, s.owner as owner_party_id, case when s.kind = 'next_step' then s.due_on end as due_on,
+ case when s.kind = 'next_step' and s.due_on is not null then s.due_source end as due_source,
  case when s.kind = 'phase_move' then s.from_phase end as from_phase, case when s.kind = 'phase_move' then s.to_phase end as to_phase, s.id as old_id
 from suggestion s where not exists (select from not_copied n where n.old_id = s.id);
 
@@ -99,8 +101,9 @@ from suggestion s where not exists (select from not_copied n where n.old_id = s.
 insert into not_copied select r.old_id, 'proposal', r.id::text, 'existing_proposal_conflicts' from ready r
 where exists (select from proposal p where (p.id = r.id) <> ((p.activity_id, p.kind, p.deal_id, p.what, p.owner_party_id, p.due_on, p.from_phase, p.to_phase)
  is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase))
- or p.id = r.id and (p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at, p.changed_for_user_id)
-  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at, r.changed_for_user_id))
+ or p.id = r.id and ((p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at, p.changed_for_user_id)
+  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at, r.changed_for_user_id)
+  or (p.due_source is not null and p.due_source is distinct from r.due_source)))
  or exists (select from ready other where other.old_id <> r.old_id and (other.id = r.id
   or (other.activity_id, other.kind, other.deal_id, other.what, other.owner_party_id, other.due_on, other.from_phase, other.to_phase)
   is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase)));
@@ -116,9 +119,9 @@ insert into not_copied select s.id, f.field, f.value, f.reason from suggestion s
 create temp table copied on commit drop as
 with inserted as (
  insert into proposal (id, created_at, kind, activity_id, activity_kind, evidence, proposed_by_job, status, decided_by_user_id, decided_at,
-  deal_id, what, owner_party_id, due_on, from_phase, to_phase, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
+  deal_id, what, owner_party_id, due_on, due_source, from_phase, to_phase, changed_by_user_id, changed_by_job, changed_for_user_id, changed_at)
  select id, created_at, kind, activity_id, activity_kind, evidence, 'old_system', status, decided_by_user_id,
-  case when status <> 'pending' then decided_at end, deal_id, what, owner_party_id, due_on, from_phase, to_phase,
+  case when status <> 'pending' then decided_at end, deal_id, what, owner_party_id, due_on, due_source, from_phase, to_phase,
   decided_by_user_id, case when status = 'pending' then 'old_system' end, changed_for_user_id, case when status = 'pending' then created_at else decided_at end
  from ready r where not exists (select from not_copied n where n.old_id = r.old_id and n.reason = 'existing_proposal_conflicts')
  on conflict do nothing returning *
