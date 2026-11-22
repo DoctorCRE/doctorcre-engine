@@ -118,6 +118,8 @@ test("proposal_due_source rejects invalid provenance and accepts dated next step
 		["next_step", null, "defaulted"],
 		["log_call", null, "stated"],
 		["log_call", null, "defaulted"],
+		["log_call", "2024-02-01", "stated"],
+		["log_call", "2024-02-01", "defaulted"],
 	]) {
 		await db.query(
 			"begin; select set_config('engine.job', 'old_system', true)",
