@@ -167,14 +167,30 @@ test("a queued checklist reminder loses its private title when the step is reass
 	const updates = async () => {
 		const [status, body] = await save(partner, "updates", {}, "GET");
 		assert.equal(status, 200);
-		return JSON.stringify(body);
+		return body;
 	};
-	assert.ok((await updates()).includes(title));
+	assert.ok(JSON.stringify(await updates()).includes(title));
 	await db.query(`
 		set local engine.user_id = '${caller}';
 		update next_step set owner_party_id = '${caller}' where id = '${step}';
 	`);
-	assert.ok(!(await updates()).includes(title));
+	const reassigned = await updates();
+	assert.ok(!JSON.stringify(reassigned).includes(title));
+	assert.equal(reassigned.unread_count, 0);
+	const visible = randomUUID();
+	await db.query(`
+		set local engine.user_id = '${user}';
+		insert into home_update (id, user_id, deal_id, what)
+		values ('${visible}', '${user}', '${deal}', 'Example visible update')
+	`);
+	const [markStatus, marked] = await save(partner, "updates/read", {
+		idempotency_key: randomUUID(),
+		update_ids: [visible],
+	});
+	assert.equal(markStatus, 200, JSON.stringify(marked));
+	assert.equal(marked.unread_count, (await updates()).unread_count);
+	assert.equal(marked.unread_count, 0);
+
 	const home = await request(
 		partner,
 		"home/inbox?view=dashboard",

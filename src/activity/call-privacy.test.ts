@@ -432,3 +432,99 @@ test("the partner login has no direct read permission on call-bearing text", asy
 	);
 	assert.deepEqual(rows, []);
 });
+
+for (const kind of ["deal", "person", "company", "property"] as const) {
+	test(`an accepted private-call step keeps its source on a ${kind}`, async () => {
+		const target = randomUUID();
+		const column =
+			kind === "deal"
+				? "deal_id"
+				: kind === "property"
+					? "property_id"
+					: "party_id";
+		const insert =
+			kind === "deal"
+				? `insert into deal (id, name, owner_user_id) values ('${target}', 'Example step deal', '${joe}')`
+				: kind === "property"
+					? `insert into property (id, address) values ('${target}', 'Example building')`
+					: `insert into party (id, kind, name) values ('${target}', '${kind}', 'Example step party')`;
+		await door.db.query(`
+			set local engine.user_id = '${joe}';
+			${insert};
+			insert into activity_about (activity_id, ${column}) values ('${privateCall}', '${target}');
+		`);
+		const [status, proposal] = await door.save(
+			{ job: "agent", for_user: "joe" },
+			"proposals",
+			{
+				idempotency_key: randomUUID(),
+				kind: "next_step",
+				activity_id: privateCall,
+				[column]: target,
+				owner: "joe",
+				what: "Example private instruction",
+				evidence: privateText,
+			},
+		);
+		assert.equal(status, 201, JSON.stringify(proposal));
+		assert.equal(typeof proposal.proposal_id, "string");
+		const id = String(proposal.proposal_id);
+		const [accepted, decision] = await door.save(
+			{ user: "joe" },
+			`proposals/${id}/decision`,
+			{
+				idempotency_key: randomUUID(),
+				decision: "accept",
+			},
+		);
+		assert.equal(accepted, 200, JSON.stringify(decision));
+		for (const user of partners) {
+			await nextPartnerRead(door.readerUrl, user, async (tx) => {
+				const step = await tx
+					.selectFrom("next_step")
+					.select("what")
+					.where("id", "=", id)
+					.executeTakeFirst();
+				assert.deepEqual(
+					step,
+					user === "joe" ? { what: "Example private instruction" } : undefined,
+				);
+				const entries = await tx
+					.selectFrom("change")
+					.select("new_value")
+					.where("table_name", "=", "next_step")
+					.where(sql<boolean>`record = jsonb_build_object('id', ${id}::uuid)`)
+					.execute();
+				assert.equal(
+					JSON.stringify(entries).includes("Example private instruction"),
+					user === "joe",
+				);
+			});
+		}
+		const { rows } = await door.db.query(
+			"select call_activity_id as source from step_call_provenance where step_id = $1",
+			[id],
+		);
+		assert.deepEqual(rows, [{ source: privateCall }]);
+	});
+}
+
+test("a registered job reads the latest private step’s ID and due date without a viewer", async () => {
+	const [target, latest] = Array.from({ length: 2 }, () => randomUUID());
+	await door.db.query(`
+		set local engine.user_id = '${joe}';
+		insert into deal (id, name, owner_user_id) values ('${target}', 'Example jobs deal', '${joe}');
+		insert into activity_about (activity_id, deal_id) values ('${privateCall}', '${target}');
+		insert into next_step (id, deal_id, owner_party_id, what, due_on, created_at, call_activity_id, call_evidence_quote) values
+			(gen_random_uuid(), '${target}', '${dell}', 'Older wording', '2025-01-01', '2025-01-01', null, null),
+			('${latest}', '${target}', '${joe}', 'Private wording', '2025-01-03', '2025-01-03', '${privateCall}', '${privateText}');
+	`);
+	const [status, result] = await door.save(
+		{ job: "agent" },
+		`deals/${target}`,
+		{},
+		"GET",
+	);
+	assert.equal(status, 200);
+	assert.deepEqual(result.next_step, { id: latest, due_on: "2025-01-03" });
+});

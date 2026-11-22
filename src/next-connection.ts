@@ -2,6 +2,9 @@ import { sql, type Transaction } from "kysely";
 import type { DB } from "./next-database.d.ts";
 import { connect } from "./reader.ts";
 
+const writerRole = sql`set local role engine`;
+const writerPath = sql`set local search_path = next, pg_temp`;
+
 const modes = {
 	read: {
 		isolation: "repeatable read",
@@ -12,14 +15,20 @@ const modes = {
 	save: {
 		isolation: "read committed",
 		access: "read write",
-		role: sql`set local role engine`,
-		path: sql`set local search_path = next, pg_temp`,
+		role: writerRole,
+		path: writerPath,
+	},
+	job: {
+		isolation: "repeatable read",
+		access: "read only",
+		role: writerRole,
+		path: writerPath,
 	},
 } as const;
 
 export async function nextTransaction<T>(
 	connectionString: string,
-	mode: "read" | "save",
+	mode: keyof typeof modes,
 	run: (db: Transaction<DB>) => Promise<T>,
 ): Promise<T> {
 	const db = connect<DB>(connectionString);
@@ -32,6 +41,16 @@ export async function nextTransaction<T>(
 			.execute(async (tx) => {
 				await settings.role.execute(tx);
 				await settings.path.execute(tx);
+				if (mode === "read") {
+					const {
+						rows: [schema],
+					} = await sql<{ protected: boolean }>`
+						select current_schema() = 'next_partner'
+							and to_regclass('next_partner.activity') is not null as protected
+					`.execute(tx);
+					if (!schema?.protected)
+						throw new Error("Protected reader schema is unavailable");
+				}
 				await sql`select set_config('TimeZone', 'UTC', true)`.execute(tx);
 				return run(tx);
 			});

@@ -4399,6 +4399,7 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
 				"call_audit_evidence",
+				"step_call_provenance",
 				"deal_open_name",
 				"doc_judgment_destination",
 				"doc_judgment_job",
@@ -9512,14 +9513,16 @@ test("imported resends must reference one original application with the same tar
 			],
 		),
 	]));
-test("whole-record SQL snapshots cannot run as the partner reader", () =>
-	rolledBack(async () => {
-		await db.query("set local role engine_reader");
-		await assert.rejects(
-			db.query("select next.everything_about_deal($1)", [DEAL]),
-			{
+for (const [snapshot, id] of [
+	["everything_about_deal", DEAL],
+	["everything_about_party", CLIENT],
+] as const) {
+	test(`${snapshot} cannot run as the partner reader`, () =>
+		rolledBack(async () => {
+			await db.query("set local role engine_reader");
+			await assert.rejects(db.query(`select next.${snapshot}($1)`, [id]), {
 				code: "42501",
-				message: "permission denied for function everything_about_deal",
-			},
-		);
-	}));
+				message: `permission denied for function ${snapshot}`,
+			});
+		}));
+}

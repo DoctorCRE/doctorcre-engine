@@ -1882,6 +1882,7 @@ begin
 		new.merged_step_id := nullif(current_setting('engine.proposal_merged_step', true), '')::uuid;
 		if new.merged_step_id is not null then return new; end if;
 		-- The decision can override the step owner without changing the suggestion.
+		-- The call-read migration stamps proposal provenance for every target on insert.
 		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id,
 			call_activity_id, call_evidence_quote)
 		values (new.id, new.what, coalesce(nullif(current_setting('engine.proposal_step_owner', true), '')::uuid, new.owner_party_id),
