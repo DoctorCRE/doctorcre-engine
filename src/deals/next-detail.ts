@@ -235,6 +235,29 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 		.where("d.id", "=", deal);
 }
 
+export async function readNextDealDocumentText(
+	db: Transaction<DB>,
+	{ deal, document }: { deal: string; document: string },
+) {
+	const file = await nextDealDetailQuery(db, deal)
+		.clearSelect()
+		.innerJoin("document as doc", "doc.deal_id", "d.id")
+		.where("doc.id", "=", document)
+		.select((eb) =>
+			eb
+				.selectFrom("document_extraction as extraction")
+				.select("extraction.pages")
+				.whereRef("extraction.document_id", "=", "doc.id")
+				.where("extraction.status", "=", "produced")
+				.orderBy("extraction.extracted_at", "desc")
+				.orderBy("extraction.id", "desc")
+				.limit(1)
+				.as("pages"),
+		)
+		.executeTakeFirst();
+	return file ? { pages: file.pages ?? [] } : null;
+}
+
 export async function readNextDealDetail(
 	db: Transaction<DB>,
 	deal: string,
