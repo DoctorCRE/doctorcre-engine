@@ -63,7 +63,7 @@ create or replace trigger zz_keep_call_audience before insert or update on activ
 	for each row execute function keep_call_audience();
 
 create or replace function call_source_visible(source uuid, viewer uuid default nullif(current_setting('engine.user_id', true), '')::uuid)
-returns boolean language sql stable set search_path = next, pg_temp as $$
+returns boolean language sql stable security definer set search_path = next, pg_temp as $$
 	select exists (select from activity a where a.id = source and call_visible_to(a, viewer));
 $$;
 
@@ -76,15 +76,6 @@ revoke execute on function call_visible_to(activity, uuid), keep_call_audience()
 	call_source_visible(uuid, uuid), call_step_visible_to(uuid, uuid, uuid) from public;
 grant execute on function call_visible_to(activity, uuid), call_source_visible(uuid, uuid),
 	call_step_visible_to(uuid, uuid, uuid) to engine, engine_reader;
-
-create or replace function visible_phase_reason(wanted uuid, happened timestamptz) returns text
-language sql stable security definer set search_path = next, pg_temp as $$
-	select reason from deal_phase_change
-	where deal_id = wanted and happened_at = happened
-		and (call_activity_id is null or call_source_visible(call_activity_id));
-$$;
-revoke execute on function visible_phase_reason(uuid, timestamptz) from public;
-grant execute on function visible_phase_reason(uuid, timestamptz) to engine, engine_reader;
 
 create table if not exists call_audit_evidence (
 	change_id bigint primary key references change,
@@ -121,52 +112,147 @@ create or replace trigger separate_call_audit_evidence after insert or update on
 	for each row execute function separate_call_audit_evidence();
 revoke execute on function separate_call_audit_evidence() from public;
 
-alter table activity enable row level security;
-drop policy if exists activity_engine on activity;
-create policy activity_engine on activity to engine using (true);
-drop policy if exists activity_reader on activity;
-create policy activity_reader on activity for select to engine_reader using (
-	kind <> 'call' or call_visible_to(activity)
-);
+create schema if not exists next_partner;
+grant usage on schema next_partner to engine_reader;
 
-alter table change enable row level security;
-drop policy if exists change_engine on change;
-create policy change_engine on change to engine using (true);
-drop policy if exists change_reader on change;
-create policy change_reader on change for select to engine_reader using (
-	case when table_name = 'activity' and (old_value ? 'summary' or new_value ? 'summary') then
-		exists (select from activity a where a.id = (change.record ->> 'id')::uuid and (
-			a.kind <> 'call'
-			-- The change stamp identifies the new text's author, not the previous text's owner.
-			or (old_value ->> 'summary' is null and call_visible_to(
-				change.changed_by_user_id, change.changed_by_job, change.changed_for_user_id))
-		))
-	when table_name = 'next_step' and (old_value ?| array['what', 'item_title', 'item_bullets']
-		or new_value ?| array['what', 'item_title', 'item_bullets']) then
+create or replace view next_partner.activity with (security_barrier = true) as
+	select a.* from activity a where a.kind <> 'call' or call_visible_to(a);
+
+create or replace view next_partner.next_step with (security_barrier = true) as
+	select s.call_activity_id, s.call_contact_party_id, s.call_kind, s.changed_at, s.changed_by_job,
+		s.changed_by_user_id, s.changed_for_user_id, s.created_at, s.deal_id, s.done_at, s.due_on, s.hold_until,
+		s.home_call_follow_up_id, s.home_step_id, s.id, s.item_bullets, s.item_title, s.owner_party_id, s.party_id,
+		s.property_id, s.resolution, s.resolution_event_id, s.resolved_at, s.source_ref,
+		s.status, s.what,
+		case when call_source_visible(s.call_activity_id) then s.call_evidence_quote end as call_evidence_quote,
+		case when s.call_activity_id is null or call_source_visible(s.call_activity_id) then s.resolution_reason end as resolution_reason
+	from next_step s
+	where call_step_visible_to(s.call_activity_id, s.owner_party_id);
+
+create or replace view next_partner.deal_phase_change with (security_barrier = true) as
+	select visible.* from deal_phase_change m cross join lateral jsonb_populate_record(m, jsonb_build_object('reason',
+		case when (m.call_activity_id is null or call_source_visible(m.call_activity_id))
+			and (call_visible_to(m.changed_by_user_id, m.changed_by_job, m.changed_for_user_id) or not exists (
+				select from imported_automatic_phase_move c where (c.deal_id, c.happened_at) = (m.deal_id, m.happened_at)))
+			and not exists (
+			select from proposal p where p.kind = 'phase_move' and p.status = 'accepted' and p.deal_id = m.deal_id
+				and p.activity_kind = 'call' and p.to_phase = m.phase and p.reason = m.reason
+				and not call_source_visible(p.activity_id)
+		) then m.reason end)) visible;
+
+create or replace view next_partner.imported_automatic_phase_move as
+	select c.source_event_id, c.deal_id, c.happened_at, c.prior_phase,
+		case when call_visible_to(p.changed_by_user_id, p.changed_by_job, p.changed_for_user_id)
+			then c.reason end as reason
+	from imported_automatic_phase_move c join deal_phase_change p using (deal_id, happened_at);
+
+create or replace view next_partner.proposal with (security_barrier = true) as
+	select p.activity_id, p.activity_kind, p.call_deal_id, p.candidate_id, p.changed_at, p.changed_by_job,
+		p.changed_by_user_id, p.changed_for_user_id, p.created_at, p.deal_id, p.decided_at, p.decided_by_user_id,
+		p.due_on, p.due_source, p.filed_deal_id, p.filed_vendor_id, p.filing_reason,
+		p.filing_scope, p.from_phase, p.from_stage, p.held_deal_id, p.how_found, p.id, p.keeps_deal_date, p.kind,
+		p.lead_role, p.merged_step_id, p.next_step_id, p.owner_party_id, p.party_id, p.phase_on, p.phase_stated,
+		p.property_id, p.proposed_by_job, p.status, p.step_seen_at, p.strength, p.superseded_reason, p.to_phase,
+		p.to_stage,
+		case when access.evidence then p.evidence else '' end as evidence,
+		case when access.evidence then p.reason end as reason,
+		case when access.evidence then p.dismiss_reason end as dismiss_reason,
+		case when access.evidence or (p.kind = 'next_step'
+			and call_step_visible_to(p.activity_id, p.owner_party_id)) then p.what end as what
+	from proposal p
+	cross join lateral (select p.activity_kind is distinct from 'call' or call_source_visible(p.activity_id) as evidence) access;
+
+create or replace view next_partner.lead_stage_move with (security_barrier = true) as
+	select visible.* from lead_stage_move m left join activity a on a.id = m.activity_id
+	cross join lateral jsonb_populate_record(m, jsonb_build_object(
+		'evidence_ref', case when a.kind is distinct from 'call' or call_visible_to(a) then m.evidence_ref end,
+		'reason', case when a.kind is distinct from 'call' or call_visible_to(a) then m.reason end)) visible;
+
+create or replace view next_partner.home_update with (security_barrier = true) as
+	select visible.* from home_update u left join next_step s on s.deal_id = u.deal_id
+		and 'deal-item:' || s.id = u.checklist_item_ref
+	cross join lateral jsonb_populate_record(u, jsonb_build_object('what',
+		case when u.checklist_item_ref like 'deal-item:%' and s.id is null
+			then 'A deal checklist item is due. Open the deal checklist for details.'
+			else u.what end)) visible
+	where u.user_id = nullif(current_setting('engine.user_id', true), '')::uuid
+		and (s.id is null or call_step_visible_to(s.call_activity_id, s.owner_party_id));
+
+create or replace view next_partner.change with (security_barrier = true) as
+	select visible.* from change c
+	cross join lateral (select case
+		when c.table_name = 'home_update' then 'what'
+		when c.table_name = 'next_step' then 'resolution_reason'
+		when c.table_name = 'deal_phase_change' and coalesce(c.old_value ->> 'reason', c.new_value ->> 'reason') is not null
+			and not exists (select from next_partner.deal_phase_change m
+				where m.deal_id = (c.record ->> 'deal_id')::uuid
+					and m.happened_at = (c.record ->> 'happened_at')::timestamptz and m.reason is not null) then 'reason'
+	end as field) redact
+	cross join lateral jsonb_populate_record(c, case when redact.field is null then '{}'::jsonb else
+		jsonb_build_object('old_value', c.old_value - redact.field, 'new_value', c.new_value - redact.field) end) visible
+	where case
+	when c.table_name = 'activity' and (c.old_value ? 'summary' or c.new_value ? 'summary') then
+		exists (select from next_partner.activity a where a.id = (c.record ->> 'id')::uuid and (
+			a.kind <> 'call' or (c.old_value ->> 'summary' is null and call_visible_to(
+				c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id))))
+	when c.table_name = 'next_step' then
 		coalesce((select call_step_visible_to(s.call_activity_id, s.owner_party_id)
-			from next_step s where s.id = (change.record ->> 'id')::uuid),
-			case when action in ('insert', 'delete') then call_step_visible_to(
-				(coalesce(new_value, old_value) ->> 'call_activity_id')::uuid,
-				(coalesce(new_value, old_value) ->> 'owner_party_id')::uuid) else false end)
-	else true end
-);
+			from next_step s where s.id = (c.record ->> 'id')::uuid),
+			case when c.action in ('insert', 'delete') then call_step_visible_to(
+				(coalesce(c.new_value, c.old_value) ->> 'call_activity_id')::uuid,
+				(coalesce(c.new_value, c.old_value) ->> 'owner_party_id')::uuid) else false end)
+	when c.table_name = 'proposal' then exists (
+		select from proposal p where p.id = (c.record ->> 'id')::uuid
+			and (p.activity_kind is distinct from 'call' or call_source_visible(p.activity_id)))
+	when c.table_name = 'lead_stage_move' then exists (
+		select from lead_stage_move m left join next_partner.activity a on a.id = m.activity_id
+		where m.id = (c.record ->> 'id')::uuid and (m.activity_id is null or a.id is not null))
+	when c.table_name = 'home_update' then exists (
+		select from next_partner.home_update u where u.id = (c.record ->> 'id')::uuid)
+	else true end;
 
-alter table imported_change enable row level security;
-drop policy if exists imported_change_engine on imported_change;
-create policy imported_change_engine on imported_change to engine using (true);
-drop policy if exists imported_change_reader on imported_change;
-create policy imported_change_reader on imported_change for select to engine_reader using (
-	case when table_name = 'activity' then
-		exists (select from activity a where a.id = (imported_change.record ->> 'id')::uuid)
-	else true end
-);
+create or replace view next_partner.imported_change with (security_barrier = true) as
+	select visible.* from imported_change c
+	cross join lateral jsonb_populate_record(c, jsonb_build_object('source_event',
+		c.source_event - array['human_quote', 'agent_rationale'])) visible
+	where case c.table_name
+		when 'activity' then exists (select from next_partner.activity a where a.id = (c.record ->> 'id')::uuid)
+		when 'proposal' then exists (select from proposal p where p.id = (c.record ->> 'id')::uuid
+			and (p.activity_kind is distinct from 'call' or call_source_visible(p.activity_id)))
+		else true end;
 
-revoke all on call_audit_evidence from public, engine, engine_reader;
+alter view deal_imported_history set (security_invoker = false);
+create or replace view next_partner.deal_imported_history with (security_barrier = true) as
+	select h.deal_id, (select jsonb_agg(e.value order by e.position)
+		from jsonb_array_elements(h.events) with ordinality e(value, position)
+		where case when e.value ->> 'verb' = 'resolve-post-call-candidate'
+			or e.value #>> '{new_value,kind}' = 'call'
+			then exists (select from next_partner.activity a where a.id::text = coalesce(
+				e.value #>> '{new_value,activity_id}', e.value #>> '{new_value,activity}'))
+			else true end) as events
+	from deal_imported_history h;
 
-revoke select on deal_phase_change from engine_reader;
-grant select (deal_id, happened_at, phase, call_activity_id, call_kind, call_move_id,
-	changed_at, changed_by_user_id, changed_by_job, changed_for_user_id) on deal_phase_change to engine_reader;
+create or replace view next_partner.deal_next_date as
+	select distinct on (s.deal_id) s.deal_id, s.due_on from next_partner.next_step s
+	where s.deal_id is not null and s.item_title is null and (s.status = 'open' or exists (
+		select from next_partner.proposal p where p.next_step_id = s.id and p.keeps_deal_date and p.decided_at = s.done_at
+		and not exists (select from next_partner.next_step newer where newer.deal_id = s.deal_id
+			and newer.item_title is null and newer.created_at > p.decided_at)))
+	order by s.deal_id, s.created_at desc, s.id desc;
 
+revoke all on activity, next_step, proposal, deal_phase_change, lead_stage_move, change, imported_change,
+	imported_automatic_phase_move, imported_deal_history, deal_imported_history, home_update,
+	call_audit_evidence, doc_turn from public, engine_reader;
+revoke all on call_audit_evidence from engine;
+revoke select (deal_id, happened_at, phase, call_activity_id, call_kind, call_move_id,
+	changed_at, changed_by_user_id, changed_by_job, changed_for_user_id) on deal_phase_change from engine_reader;
+revoke execute on function everything_about_deal(uuid), everything_about_party(uuid), activity_entry(activity)
+	from public, engine_reader;
+grant execute on function everything_about_deal(uuid), everything_about_party(uuid), activity_entry(activity) to engine;
+grant select on next_partner.activity, next_partner.next_step, next_partner.deal_phase_change,
+	next_partner.imported_automatic_phase_move, next_partner.proposal, next_partner.lead_stage_move,
+	next_partner.home_update, next_partner.change, next_partner.imported_change,
+	next_partner.deal_imported_history, next_partner.deal_next_date to engine_reader;
 
 create or replace function activity_entry(a activity) returns jsonb
 language sql stable

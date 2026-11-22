@@ -2877,6 +2877,12 @@ before(async () => {
 	await asAdmin(`create database "${name}" template template0`);
 	db = await connect("none");
 	await db.query(`create schema next; ${SCHEMA}`);
+	await db.query(
+		await readFile(
+			new URL("../schema/add-call-read-policies.sql", import.meta.url),
+			"utf8",
+		),
+	);
 	await db.query(USERS);
 	await db.query(
 		"insert into invoice_mailbox (address) values ('invoices@example.com')",

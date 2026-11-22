@@ -1,5 +1,4 @@
 import { sql, type Transaction } from "kysely";
-import { visibleCallStep } from "./activity/call-visibility.ts";
 import { BusinessRefusal, readNextClient } from "./clients/read.ts";
 import type { JsonObject } from "./database.d.ts";
 import { readNextDealDetail } from "./deals/next-detail.ts";
@@ -113,7 +112,7 @@ export async function readDocRecord(
 			(select coalesce(jsonb_agg(to_jsonb(step)), '[]') from (
 				select s.what, s.due_on, owner.name as owner
 				from next_step s left join party owner on owner.id = s.owner_party_id
-				where s.${targetColumn} = ${id} and s.status = 'open' and ${visibleCallStep}
+				where s.${targetColumn} = ${id} and s.status = 'open'
 				order by s.due_on, s.id
 			) step) as next_steps,
 			(select coalesce(jsonb_agg(to_jsonb(entry)), '[]') from (

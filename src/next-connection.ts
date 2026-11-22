@@ -7,11 +7,13 @@ const modes = {
 		isolation: "repeatable read",
 		access: "read only",
 		role: sql`set local role engine_reader`,
+		path: sql`set local search_path = next_partner, next, pg_temp`,
 	},
 	save: {
 		isolation: "read committed",
 		access: "read write",
 		role: sql`set local role engine`,
+		path: sql`set local search_path = next, pg_temp`,
 	},
 } as const;
 
@@ -29,7 +31,7 @@ export async function nextTransaction<T>(
 			.setAccessMode(settings.access)
 			.execute(async (tx) => {
 				await settings.role.execute(tx);
-				await sql`set local search_path = next, pg_temp`.execute(tx);
+				await settings.path.execute(tx);
 				await sql`select set_config('TimeZone', 'UTC', true)`.execute(tx);
 				return run(tx);
 			});

@@ -17,8 +17,12 @@ async function loadNextSection(url: string) {
 	});
 	await db.connect();
 	try {
-		const [schema, attribution] = await Promise.all([
+		const [schema, privacy, attribution] = await Promise.all([
 			readFile(new URL("../schema/next.sql", import.meta.url), "utf8"),
+			readFile(
+				new URL("../schema/add-call-read-policies.sql", import.meta.url),
+				"utf8",
+			),
 			readFile(
 				new URL("../schema/copy-attribution.sql", import.meta.url),
 				"utf8",
@@ -26,6 +30,7 @@ async function loadNextSection(url: string) {
 		]);
 		await db.query(`alter default privileges revoke execute on functions from public;
 			create schema next; ${schema}; ${attribution}`);
+		await db.query(privacy);
 	} finally {
 		await db.end();
 	}

@@ -122,8 +122,8 @@ for a match, 1 for differences or unsettled requests and 2 for failure.
 
 For the new section, `nextTransaction(connectionString, "read" | "save", run)`
 passes a `Transaction<DB>` from `src/next-database.d.ts` to `run`. It pins
-`search_path` to `next, pg_temp` and the time zone to UTC. Reads use a repeatable-read,
-read-only snapshot under `engine_reader`. Saves use a read-committed transaction
+`search_path` and the time zone to UTC. Reads use `next_partner, next, pg_temp` and a repeatable-read,
+read-only snapshot under `engine_reader`. Saves use `next, pg_temp` and a read-committed transaction
 under `engine`, with the existing column grants. The supplied SQL-created login
 must belong to the selected role. The reader's has no other grants; the writer's,
 `engine_business_writer`, keeps its old-table grants until the switch revokes them
@@ -133,7 +133,7 @@ save's answer, and `changeDeal` refuses a crossed deal edit and answers `rebased
 over an unseen change to another field.
 The health probe appends `next_section_readable` after its existing fields.
 
-Each check also loads `schema/next.sql` into `next` in a copy of that restore and
+Each check loads `schema/next.sql` and `schema/add-call-read-policies.sql` in a copy of that restore and
 generates ignored `src/next-database.d.ts` from it with `npm run types:next`, so a
 column change in the schema reaches the code's types on the next check.
 The same template holds the copy attribution functions. Each copy fixture clones

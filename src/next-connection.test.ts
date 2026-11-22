@@ -53,7 +53,7 @@ test("new-section reads are typed, read-only UTC snapshots without old-table fal
 			current_setting('transaction_read_only') as read_only`.execute(tx);
 		assert.deepEqual(result.rows, [
 			{
-				schema: "next",
+				schema: "next_partner",
 				role: "engine_reader",
 				zone: "UTC",
 				jit: "off",

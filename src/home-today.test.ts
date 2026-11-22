@@ -479,7 +479,7 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 	await t.test("meetings and reminders fail independently", async () => {
 		const cases = [
 			["calendar_agenda", "meetings", "reminders"],
-			["next_step", "reminders", "meetings"],
+			["next_partner.next_step", "reminders", "meetings"],
 		] as const;
 		const [, healthy] = await today();
 		for (const [table, bad, good] of cases) {

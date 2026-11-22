@@ -329,11 +329,9 @@ test("private phase reasons stay private while the moved or lost phase remains v
 	});
 	await assert.rejects(
 		nextPartnerRead(door.readerUrl, "dell", (tx) =>
-			tx
-				.selectFrom("deal_phase_change")
-				.select("reason")
-				.where("deal_id", "=", moved)
-				.execute(),
+			sql`select reason from next.deal_phase_change where deal_id = ${moved}`.execute(
+				tx,
+			),
 		),
 		{ code: "42501" },
 	);
@@ -413,4 +411,24 @@ test("call privacy migration can safely be applied twice", async () => {
 		await door.db.query("rollback");
 		throw error;
 	}
+});
+
+test("the partner login has no direct read permission on call-bearing text", async () => {
+	const { rows } = await door.db.query(
+		`select census.tab, census.col from (values
+			('activity', 'summary'), ('next_step', 'what'), ('next_step', 'item_title'),
+			('next_step', 'item_bullets'), ('next_step', 'call_evidence_quote'), ('next_step', 'resolution_reason'),
+			('deal_phase_change', 'reason'), ('imported_automatic_phase_move', 'reason'),
+			('proposal', 'evidence'), ('proposal', 'reason'), ('proposal', 'what'), ('proposal', 'dismiss_reason'),
+			('lead_stage_move', 'evidence_ref'), ('lead_stage_move', 'reason'),
+			('change', 'old_value'), ('change', 'new_value'), ('imported_change', 'source_event'),
+			('imported_deal_history', 'old_value'), ('imported_deal_history', 'new_value'),
+			('imported_deal_history', 'human_quote'), ('imported_deal_history', 'agent_rationale'),
+			('home_update', 'what'), ('doc_turn', 'answer'), ('doc_turn', 'claim_state'),
+			('call_audit_evidence', 'old_value'), ('call_audit_evidence', 'new_value')
+		) census(tab, col)
+		where has_column_privilege($1, 'next.' || census.tab, census.col, 'SELECT')`,
+		[new URL(door.readerUrl).username],
+	);
+	assert.deepEqual(rows, []);
 });

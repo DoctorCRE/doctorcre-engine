@@ -4,7 +4,6 @@ import {
 	jsonBuildObject,
 	jsonObjectFrom,
 } from "kysely/helpers/postgres";
-import { visibleCallStep } from "../activity/call-visibility.ts";
 import { filingReviewNeeded } from "../activity/filing-evidence.ts";
 import {
 	decisionPosition,
@@ -487,7 +486,6 @@ const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			asText(eb.ref("s.changed_at")).as("updated_at"),
 		])
 		.where("s.deal_id", "=", deal)
-		.where(visibleCallStep)
 		.orderBy("s.created_at")
 		.orderBy("s.id");
 
