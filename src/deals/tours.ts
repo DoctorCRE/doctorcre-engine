@@ -146,7 +146,7 @@ async function readPlan(db: Db, deal: string, tour: string) {
 	return { ...plan, stops };
 }
 
-async function savePlan(db: Db, request: PlanSave) {
+export async function savePlan(db: Db, request: PlanSave) {
 	const { deal_id, planned_on, notes, stops } = request;
 	const fields = { planned_on, notes: notes ?? null };
 	let id: string;

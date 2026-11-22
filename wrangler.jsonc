@@ -79,6 +79,7 @@
 				}
 			],
 			"vars": {
+				"ENGINE_ENVIRONMENT": "staging",
 				"DOC_BACKUP": "false",
 				"DOC_BACKUP_MODEL": "claude-sonnet-5-5",
 				"POST_MEDIA_BUCKET": "doctorcre-post-media-staging",
