@@ -156,6 +156,7 @@ type HomeUpdate = DealNotice & {
 	kind: "update" | "tour_feedback";
 	checklist_item_ref: string | null;
 	checklist_item_title: string | null;
+	dashboard_eligible: boolean;
 	property_id: string | null;
 	property_label: string | null;
 	source_version: string;
@@ -167,9 +168,7 @@ type HomeUpdate = DealNotice & {
 
 const viewFilters = {
 	inbox: sql`and u.read_at is null`,
-	dashboard: sql`and u.read_at is null
-		and (u.kind = 'tour_feedback' or u.checklist_item_ref is not null)
-		and (item.due_on is null or item.due_on <= ${homeDay})`,
+	dashboard: sql`and u.read_at is null and dashboard.eligible`,
 	updates: sql``,
 };
 
@@ -225,12 +224,13 @@ export async function readHomeUpdates(
 	userId: string,
 	limit: number | null,
 	view: keyof typeof viewFilters,
+	today = homeDay,
 ) {
-	const dashboard = view === "dashboard";
 	const { rows } = await sql<HomeUpdate>`
 		select u.id, u.deal_id, d.name as deal_name, u.kind, u.what as title, u.due_on,
 			u.created_at as activity_at, u.checklist_item_ref, u.property_id,
 			item.item_title as checklist_item_title,
+			dashboard.eligible as dashboard_eligible,
 			coalesce(property.name, property.address) as property_label,
 			coalesce(update_change.id, 0)::text as source_version,
 			coalesce(mark_change.id, 0)::text as mark_version,
@@ -240,7 +240,19 @@ export async function readHomeUpdates(
 		join deal d on d.id = u.deal_id
 		left join next_step item on item.deal_id = u.deal_id
 			and 'deal-item:' || item.id::text = u.checklist_item_ref
-			and item.item_title is not null
+		cross join lateral (
+			select (u.kind = 'tour_feedback' or u.checklist_item_ref is not null)
+				and case
+					when item.due_on > ${today} then item.item_title is null
+					when item.status = 'open' and item.owner_party_id = u.user_id then exists (
+						select from home_mark step_mark
+						where (step_mark.user_id, step_mark.item_kind, step_mark.item_id) =
+							(u.user_id, 'call_follow_up', item.home_call_follow_up_id)
+							and step_mark.disposition = 'dropped'
+					)
+					else true
+				end as eligible
+		) dashboard
 		left join property on property.id = u.property_id
 		left join home_mark m on (m.user_id, m.item_kind, m.item_id) = (u.user_id, 'home_update', u.id)
 		cross join lateral (
@@ -278,9 +290,12 @@ export async function readHomeUpdates(
 			kind: update.kind,
 			base_version: `${update.source_version}:${update.mark_version}:${disposition}`,
 			checklist_item_ref: update.checklist_item_ref,
-			...(dashboard && {
+			...(view !== "updates" && {
 				waiting_reason: homeDisplayText(update.waiting_reason) || null,
-				late_target: !tourFeedback,
+				late_target:
+					!tourFeedback &&
+					update.checklist_item_ref !== null &&
+					update.dashboard_eligible,
 			}),
 			...(update.property_id && { property_id: update.property_id }),
 			...(view === "updates" && {

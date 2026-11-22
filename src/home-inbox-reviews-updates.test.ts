@@ -20,10 +20,10 @@ before(async () => {
 });
 after(cleanup);
 
-async function cards(caller: typeof alex, dealId: string) {
+async function inboxItems(caller: typeof alex, view = "") {
 	const response = await request(
 		caller,
-		"home/inbox",
+		`home/inbox${view}`,
 		{ method: "GET" },
 		{
 			HOME_INBOX_READ_SCHEMA: "next",
@@ -31,14 +31,20 @@ async function cards(caller: typeof alex, dealId: string) {
 	);
 	assert.equal(response.status, 200);
 	const result: unknown = await response.json();
-	assert.ok(isArguments(result) && Array.isArray(result.items));
+	assert.ok(isArguments(result));
 	assert.equal(Object.hasOwn(result, "auto_settle_enabled"), false);
-	const items = result.items.filter(isArguments);
+	const group = view ? result.reminders : result;
+	assert.ok(isArguments(group) && Array.isArray(group.items));
+	const items = group.items.filter(isArguments);
 	for (const item of items) {
 		assert.equal(Object.hasOwn(item, "auto_settled"), false);
 		assert.equal(Object.hasOwn(item, "explicit_unsettle"), false);
 	}
-	return items.filter((item) => item.deal_id === dealId);
+	return items;
+}
+
+async function cards(caller: typeof alex, dealId: string) {
+	return (await inboxItems(caller)).filter((item) => item.deal_id === dealId);
 }
 
 async function checkCompletionReview(callFollowUp: boolean) {
@@ -169,6 +175,115 @@ test("a completion review can be snoozed and dismissed", () =>
 	checkCompletionReview(false));
 test("a call follow-up completion review can be snoozed and dismissed", () =>
 	checkCompletionReview(true));
+
+test("the flat Home list and dashboard show the same days late", async (t) => {
+	const deal = randomUUID();
+	const onTimeDeal = randomUUID();
+	const vendor = randomUUID();
+	const note = randomUUID();
+	const reviewed = randomUUID();
+	const onTime = randomUUID();
+	const followUp = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.user_id', '${owner}', true);
+		insert into role (slug, label) values ('vendor', 'Vendor');
+		insert into party (id, kind, name) values ('${vendor}', 'company', 'Example Surveyors');
+		insert into party_role (party_id, role) values ('${vendor}', 'vendor');
+		insert into deal (id, name, owner_user_id) values
+			('${deal}', 'Example Survey Review', '${owner}'),
+			('${onTimeDeal}', 'Example Site Plan', '${owner}');
+		insert into activity (id, kind, happened_at, summary)
+			values ('${note}', 'note', now() - interval '1 day', 'The client received the survey.');
+		insert into activity_about (activity_id, deal_id) values ('${note}', '${deal}');
+		insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on)
+		values
+			('${reviewed}', '${deal}', null, '${owner}', 'Send the survey', '2026-01-12'),
+			('${followUp}', null, '${vendor}', '${owner}', 'Call the surveyor', '2026-01-12'),
+			('${onTime}', '${onTimeDeal}', null, '${owner}', 'Review the site plan', '2026-01-15');
+		commit;`);
+	const [status] = await save(
+		{ job: "agent", for_user: alex.user },
+		"proposals",
+		{
+			idempotency_key: randomUUID(),
+			kind: "next_step_done",
+			next_step_id: reviewed,
+			activity_id: note,
+			deal_id: deal,
+			evidence: "The client received the survey.",
+		},
+	);
+	assert.equal(status, 201);
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2026-01-16T05:55:00Z"),
+	});
+	for (const view of ["?view=dashboard", ""]) {
+		const items = await inboxItems(alex, view);
+		const card = (id: string) =>
+			items.find((item) => item.item_id === `next_action:${id}`);
+		assert.partialDeepStrictEqual(card(followUp), { days_late: 3 });
+		assert.partialDeepStrictEqual(card(reviewed), {
+			days_late: 3,
+			completion_review: { next_step_id: reviewed },
+		});
+		assert.partialDeepStrictEqual(card(onTime), { days_late: null });
+	}
+});
+
+for (const sameOwner of [true, false]) {
+	test(
+		sameOwner
+			? "the flat Home list does not mark a reminder for a visible step late"
+			: "the flat Home list does not mark a reminder late after its step moves ahead",
+		async (t) => {
+			const deal = randomUUID();
+			const step = randomUUID();
+			const update = randomUUID();
+			const dealName = sameOwner ? "Example Checklist" : "Example Reschedule";
+			const due = "2001-02-01";
+			await db.query(`begin;
+				select set_config('engine.user_id', '${owner}', true);
+				insert into deal (id, name, owner_user_id) values ('${deal}', '${dealName}', '${owner}');
+				insert into next_step (id, deal_id, owner_party_id, what, item_title, source_ref, due_on)
+					values ('${step}', '${deal}', '${sameOwner ? owner : other}', 'Review the survey', 'Site survey', 'example-survey', '${due}');
+				insert into home_update (id, user_id, deal_id, what, checklist_item_ref, due_on)
+					values ('${update}', '${owner}', '${deal}', 'Review the survey', 'deal-item:${step}', '${due}');
+				commit;`);
+			t.mock.timers.enable({
+				apis: ["Date"],
+				now: Date.parse("2001-02-04T12:00Z"),
+			});
+			const reminderId = `notification:${update}`;
+			const dashboard = () => inboxItems(alex, "?view=dashboard");
+			if (sameOwner) {
+				assert.ok(
+					(await dashboard()).some(
+						(item) => item.item_id === `next_action:${step}`,
+					),
+				);
+			} else {
+				for (const items of [await dashboard(), await cards(alex, deal)]) {
+					const reminder = items.find((item) => item.item_id === reminderId);
+					assert.ok(
+						typeof reminder?.days_late === "number" && reminder.days_late > 0,
+					);
+				}
+				await db.query(`begin;
+					select set_config('engine.user_id', '${owner}', true);
+					update next_step set due_on = '2999-02-05' where id = '${step}';
+					commit;`);
+			}
+			assert.ok(
+				!(await dashboard()).some((item) => item.item_id === reminderId),
+			);
+			assert.partialDeepStrictEqual(
+				(await cards(alex, deal)).find((item) => item.item_id === reminderId),
+				{ days_late: null },
+			);
+		},
+	);
+}
 
 test("updates respect recipient, read time, snoozes and mark revisions", async () => {
 	const deal = randomUUID();

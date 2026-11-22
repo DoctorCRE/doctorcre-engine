@@ -17,6 +17,7 @@ import {
 	type HomeStep,
 	type HomeStepTarget,
 	homeDay,
+	homeDayAt,
 	homeDisplayText,
 	homeStepCopy,
 	homeStepEligible,
@@ -53,13 +54,18 @@ interface Step extends HomeStep, HomeStepTarget {
 	source_evidence: string | null;
 }
 
-function stepRows(db: Transaction<DB>, userId: string, dashboard: boolean) {
+function stepRows(
+	db: Transaction<DB>,
+	userId: string,
+	dashboard: boolean,
+	today: typeof homeDay,
+) {
 	return sql<Step>`
 		select s.id, s.what, s.item_title, s.status, s.deal_id, s.party_id, s.property_id,
-			${stepTargetFields(db)},
+			${stepTargetFields(db, today)},
 			s.due_on, s.created_at, setter.name as set_by,
 			coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
-			case when s.hold_until > ${homeDay}
+			case when s.hold_until > ${today}
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
 			m.waiting_reason,
@@ -178,36 +184,34 @@ function stepCard(step: Step) {
 	};
 }
 
-async function dashboardDay(db: Transaction<DB>) {
+async function readHomeDay(db: Transaction<DB>, day = homeDay) {
 	const { today } = await db
-		.selectNoFrom(sql<string>`${homeDay}::text`.as("today"))
+		.selectNoFrom(sql<string>`${day}::text`.as("today"))
 		.executeTakeFirstOrThrow();
 	return today;
 }
 
-function dashboardCard<
-	Item extends {
-		item_id: string;
-		snoozed_until: string | null;
-		hold_until: string | null;
-		section: string;
-		due_on: string | null;
-		late_target?: boolean;
-		card_id?: string;
-		waiting_reason?: string | null;
-	},
->(item: Item, today: string) {
-	const { late_target, card_id, waiting_reason, ...card } = {
-		late_target: false,
-		card_id: item.item_id,
-		waiting_reason: null,
-		...item,
-	};
-	const returns_at =
-		[card.snoozed_until, card.hold_until]
-			.filter((at) => at !== null)
-			.sort()
-			.at(-1) ?? null;
+type HomeCardTiming = {
+	item_id: string;
+	snoozed_until: string | null;
+	hold_until: string | null;
+	section: string;
+	due_on: string | null;
+	late_target?: boolean;
+	card_id?: string;
+	waiting_reason?: string | null;
+};
+
+function homeCardTiming<Item extends HomeCardTiming>(
+	item: Item,
+	today: string,
+) {
+	const {
+		late_target = false,
+		card_id = item.item_id,
+		waiting_reason = null,
+		...card
+	} = item;
 	const reason = card.snoozed_until
 		? "Snoozed"
 		: card.hold_until
@@ -215,10 +219,25 @@ function dashboardCard<
 			: card.section === "working"
 				? "Waiting for Outlook to confirm delivery"
 				: waiting_reason;
+	const { due_on } = card;
 	const days_late =
-		!reason && late_target && isCalendarDate(card.due_on) && card.due_on < today
-			? (Date.parse(today) - Date.parse(card.due_on)) / 86_400_000
+		!reason &&
+		card.section !== "done" &&
+		late_target &&
+		isCalendarDate(due_on) &&
+		due_on < today
+			? (Date.parse(today) - Date.parse(due_on)) / 86_400_000
 			: null;
+	return { card, card_id, reason, days_late };
+}
+
+function dashboardCard<Item extends HomeCardTiming>(item: Item, today: string) {
+	const { card, card_id, reason, days_late } = homeCardTiming(item, today);
+	const returns_at =
+		[card.snoozed_until, card.hold_until]
+			.filter((at) => at !== null)
+			.sort()
+			.at(-1) ?? null;
 	return {
 		...card,
 		...(reason && { primary_action: null }),
@@ -234,9 +253,11 @@ async function readHomeInbox(
 	db: Transaction<DB>,
 	userId: string,
 	dashboard: boolean,
+	now: string,
 ) {
-	const today = dashboard ? await dashboardDay(db) : "";
-	const { rows } = await stepRows(db, userId, dashboard).execute(db);
+	const day = homeDayAt(sql`${now}::timestamptz`);
+	const today = await readHomeDay(db, day);
+	const { rows } = await stepRows(db, userId, dashboard, day).execute(db);
 	const eligibleSteps = dashboard
 		? rows.filter((step) => homeStepEligible(step, today))
 		: rows;
@@ -254,25 +275,20 @@ async function readHomeInbox(
 			review && !step.snoozed_until && !waiting
 				? completionReviewCard(review, card)
 				: card;
-		return dashboard
-			? {
-					...visible,
-					waiting_reason: homeDisplayText(step.waiting_reason) || null,
-					late_target: ["deal", "vendor"].includes(homeStepTarget(step)),
-				}
-			: visible;
+		return {
+			...visible,
+			waiting_reason: homeDisplayText(step.waiting_reason) || null,
+			late_target:
+				!step.hold_until && ["deal", "vendor"].includes(homeStepTarget(step)),
+		};
 	});
 	const limit = dashboard ? null : LIMIT + 1;
-	const checklistSteps = new Set(
-		eligibleSteps.map((step) => `deal-item:${step.id}`),
-	);
-	const updates = (
-		await readHomeUpdates(db, userId, limit, dashboard ? "dashboard" : "inbox")
-	).filter(
-		(update) =>
-			!dashboard ||
-			!update.checklist_item_ref ||
-			!checklistSteps.has(update.checklist_item_ref),
+	const updates = await readHomeUpdates(
+		db,
+		userId,
+		limit,
+		dashboard ? "dashboard" : "inbox",
+		day,
 	);
 	const items = [
 		...steps,
@@ -302,7 +318,10 @@ async function readHomeInbox(
 	}
 	return {
 		...contract,
-		items: items.slice(0, LIMIT),
+		items: items.slice(0, LIMIT).map((item) => {
+			const { card, days_late } = homeCardTiming(item, today);
+			return { ...card, days_late };
+		}),
 		truncated: rows.length > LIMIT || items.length > LIMIT,
 		limit: LIMIT,
 		working_collapsed: true,
@@ -320,8 +339,9 @@ homeInbox.get("/home/inbox", (c) => {
 		vocabularies: { view: ["dashboard"] },
 	});
 	if (refused) return refuse(c, refused);
+	const now = new Date().toISOString();
 	return answerNextRead(c, "read-home-inbox-v5", (db, userId) =>
-		readHomeInbox(db, userId, params.get("view") === "dashboard"),
+		readHomeInbox(db, userId, params.get("view") === "dashboard", now),
 	);
 });
 
@@ -342,7 +362,7 @@ homeInbox.get("/home/cards/:item_id", (c) => {
 		if (!card) return readHomeReviewDisposition(db, userId, link);
 		const requested_item_id = `${kind}:${id}`;
 		return {
-			...dashboardCard(card, await dashboardDay(db)),
+			...dashboardCard(card, await readHomeDay(db)),
 			...(kind === "suggestion" &&
 				card.item_id !== requested_item_id && { requested_item_id }),
 		};

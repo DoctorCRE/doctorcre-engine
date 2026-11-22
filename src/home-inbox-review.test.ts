@@ -264,11 +264,19 @@ test("dashboard sends approved drafts to waiting, failed deliveries to reminders
 	);
 });
 
-test("dashboard keeps an overdue decision's late label when a reply draft leads", async () => {
+test("both Home views count days late when a reply draft leads an overdue decision", async (t) => {
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2026-01-16T05:55:00Z"),
+	});
 	const { reminders } = await dashboard();
 	const card = reminders.find((card) => card.reply_draft_id === id(21));
 	assert.equal(card?.due_on, "2026-01-09");
 	assert.ok(typeof card.days_late === "number" && card.days_late >= 1);
+	assert.equal(
+		(await inbox()).find((item) => item.reply_draft_id === id(21))?.days_late,
+		card.days_late,
+	);
 	assert.equal(
 		card.late_label,
 		`${card.days_late} ${card.days_late === 1 ? "day" : "days"} late`,
