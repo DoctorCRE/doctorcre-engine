@@ -1,4 +1,4 @@
--- Used by the vendor copy and the one-time backfill, with the target stamp triggers disabled.
+-- The backfill and the self-contained vendor copy use this same block.
 -- This legacy contact stands for its partner only when interpreting introductions (#1161).
 create temp table link_party on commit drop as
 select o.value, o.party_id, coalesce(u.id, o.party_id) as introduction_party_id

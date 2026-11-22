@@ -5,17 +5,8 @@ import { URL } from "node:url";
 import pg from "pg";
 import { asAdmin } from "../scripts/test-database.ts";
 
-export async function readSchema(file: string): Promise<string> {
-	let sql = await readFile(
-		new URL(`../schema/${file}`, import.meta.url),
-		"utf8",
-	);
-	const prefix = "\\ir ";
-	for (const directive of sql.match(/^\\ir [\w-]+\.sql$/gm) ?? []) {
-		const included = await readSchema(directive.slice(prefix.length));
-		sql = sql.replace(directive, () => included);
-	}
-	return sql;
+export function readSchema(file: string): Promise<string> {
+	return readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
 }
 
 export function copyTest() {

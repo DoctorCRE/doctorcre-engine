@@ -1,4 +1,5 @@
 -- Run as the schema owner with psql after owner approval (#1161).
+-- Expected additions: 5 introductions, 10 links, 15 change-history rows.
 \set ON_ERROR_STOP on
 begin;
 set local search_path = next;
@@ -22,6 +23,8 @@ end $$;
 select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 alter table introduction disable trigger stamp_change;
 alter table party_link disable trigger stamp_change;
+-- The trigger changes lock both target tables while this run writes and counts their history.
+select coalesce(max(id), 0) as change_before from change \gset
 create temp table not_copied (old_id uuid not null, field text not null, value text, reason text not null) on commit drop;
 
 \ir copy-party-links.sql
@@ -33,5 +36,7 @@ alter table party_link enable trigger stamp_change;
 select l.kind, count(*) as source_rows, count(i.id) as introductions, count(n.id) as relationship_links
 from public.party_link l left join introduction i on i.id = l.id left join party_link n on n.id = l.id
 group by l.kind order by l.kind;
+select count(*) as change_history_rows from change
+where id > :change_before and table_name in ('introduction', 'party_link');
 select old_id, field, reason from not_copied order by old_id, field, reason;
 commit;

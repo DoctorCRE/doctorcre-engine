@@ -929,7 +929,7 @@ Keep the final report for correction in the old system. A deal waits whole for a
 
 ## Copying today's vendors
 
-`schema/copy-vendors.sql` copies today's vendors as "Vendors" above says. The owner runs it after the party copy and before the deal copy, which finds the vendor roles, and again after the deal copy, so introductions and worked deals find their deals. Run it with `psql -f` so it loads the shared `schema/copy-party-links.sql` beside it. Each run is its own transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list.
+`schema/copy-vendors.sql` copies today's vendors as "Vendors" above says. The owner runs it after the party copy and before the deal copy, which finds the vendor roles, and again after the deal copy, so introductions and worked deals find their deals. The practice runner sends the whole SQL file to PostgreSQL. Each run is its own transaction with `search_path` set to the new schema. It only reads today's tables, and ends with its `not_copied` list.
 
 - A vendor's party, found through the party copy's old-id map, takes the vendor role with the vendor's stage, level and target flag, and a role for its category. `outside_id` maps the vendor's old id to that record, so a second run copies only vendors it does not map yet. Its `vendor_ref` becomes an outside id under `old_system_ref`, as a party's `ref` does, unless another record holds it.
 - Each `vendor_category` row is a vendor category, with `gc` as contractor, beside the roles of `deal_vendor_assignment`. Each `vendor_stage` row but the nine original stages is a vendor stage. A role or stage already in the new database keeps its label.
@@ -947,7 +947,7 @@ Keep the final report for correction in the old system. A deal waits whole for a
 
 The November 21 practice copy had 54 old links. It maps 5 of 9 `introduced` rows to introductions and lists the 4 remaining `introduced`, all 7 `intro` and all 4 `referral` rows for a partner because they lack a maker or a vendor. It keeps 20 of 24 `knows` links and lists 4 duplicate pairs with the same start date. It copies all 6 `can_introduce` and all 4 `works_with` links.
 
-For a database that already ran the old vendor copy, the owner can run `psql -X -f schema/backfill-party-links.sql` after approval. The backfill checks the six source counts and the absence of deal bindings before copying, skips existing rows, and returns counts and unresolved link IDs.
+For a database that already ran the old vendor copy, the owner can run `psql -X -f schema/backfill-party-links.sql` after approval. Keep `schema/copy-party-links.sql` beside it. The expected additions are 5 introductions, 10 links, 15 change-history rows. The backfill checks the six source counts and the absence of deal bindings before copying. It skips existing rows and reports the destination counts, the number of history rows written in that run, and the unresolved link IDs.
 
 ## Copying today's markets
 
