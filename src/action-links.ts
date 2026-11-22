@@ -13,9 +13,9 @@ const legacyId =
 
 type ActionRef =
 	| { kind: "rd"; id: string; owner: "joe" | "dell" }
-	| { kind: "ld" | "cr"; id: string };
+	| { kind: "ld"; id: string };
 
-type ActionTarget = { kind: "reply_draft" | "lead" | "deal"; path: string };
+type ActionTarget = { kind: "reply_draft" | "lead"; path: string };
 
 function parseRef(ref: string): ActionRef | null {
 	const encoded = /^al1_([A-Za-z0-9_-]{1,120})$/.exec(ref)?.[1];
@@ -25,12 +25,6 @@ function parseRef(ref: string): ActionRef | null {
 	const [kind, id = "", ...fields] = identity.split(":");
 	if (!legacyId.test(id)) return null;
 	if (kind === "ld" && fields.length === 0) return { kind, id };
-	if (
-		kind === "cr" &&
-		fields.length === 1 &&
-		/^[A-Za-z0-9_-]{1,32}$/.test(fields[0] ?? "")
-	)
-		return { kind, id };
 	if (kind === "rd" && fields.length === 2) {
 		const [owner, version = ""] = fields;
 		if (
@@ -98,23 +92,6 @@ async function leadTarget(
 		return { kind: "lead", path: `/leads?lead=${encodeURIComponent(lead.id)}` };
 }
 
-async function callTarget(
-	db: Transaction<DB>,
-	id: string,
-): Promise<ActionTarget | undefined> {
-	const [deal, other] = await db
-		.selectFrom("activity_about as link")
-		.innerJoin("activity as a", "a.id", "link.activity_id")
-		.innerJoin("deal as d", "d.id", "link.deal_id")
-		.select("d.id")
-		.where("a.id", "=", id)
-		.where("a.kind", "=", "call")
-		.limit(2)
-		.execute();
-	if (deal && !other)
-		return { kind: "deal", path: `/deals?deal=${deal.id}&focus=call-review` };
-}
-
 const unavailable = () => new Refusal(404, "action_link_unavailable");
 
 export const actionLinks = new Hono<DatabaseEnv>().get(
@@ -133,8 +110,6 @@ export const actionLinks = new Hono<DatabaseEnv>().get(
 						return (await replyTarget(db, userId, ref)) ?? unavailable();
 					case "ld":
 						return (await leadTarget(db, ref.id)) ?? unavailable();
-					case "cr":
-						return (await callTarget(db, ref.id)) ?? unavailable();
 				}
 			},
 			{ timing: false },

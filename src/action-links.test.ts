@@ -21,7 +21,7 @@ const oldLead = id(5);
 const leadDraft = id(6);
 const linkedDraft = id(7);
 const deal = id(8);
-const call = id(9);
+const nativeCall = id(9);
 const proposal = id(10);
 const reviewedCall = id(11);
 const unfiledCall = id(12);
@@ -105,7 +105,7 @@ before(async () => {
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${dell}');
 		insert into outside_id (source, value, deal_id) values ('old_system', '${deal}', '${deal}');
 		select set_config('engine.job', '', true), set_config('engine.user_id', '${dell}', true);
-		insert into activity (id, kind, happened_at) values ('${call}', 'call', '2026-01-01T12:00Z');
+		insert into activity (id, kind, happened_at) values ('${nativeCall}', 'call', '2026-01-01T12:00Z');
 		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 		insert into activity (id, kind, happened_at) values
 			('${unfiledCall}', 'call', '2026-01-01T12:00Z'),
@@ -115,7 +115,7 @@ before(async () => {
 		insert into activity_about (activity_id, deal_id)
 			select id, '${deal}' from activity where id <> '${unfiledCall}';
 		insert into proposal (id, activity_id, activity_kind, deal_id, kind, owner_party_id, what, evidence, proposed_by_job)
-			values ('${proposal}', '${call}', 'call', '${deal}', 'next_step', '${joe}', 'Confirm timing', 'Timing', 'old_system');
+			values ('${proposal}', '${nativeCall}', 'call', '${deal}', 'next_step', '${joe}', 'Confirm timing', 'Timing', 'old_system');
 		insert into email (activity_id, message_id, sender, subject, body, conversation_id)
 			select id, '<' || id || '@example.test>', 'sender@example.test', 'Example', 'Please reply',
 				case when id in ('${id(21)}', '${id(22)}', '${id(25)}') then 'ExampleThread' end
@@ -205,33 +205,29 @@ test("a lead draft link opens the shared lead using the board's legacy ID", asyn
 	assert.equal(detail.party_id, lead);
 });
 
-const dealTarget = {
-	kind: "deal",
-	path: `/deals?deal=${deal}&focus=call-review`,
-};
-
-test("another partner's call link opens the shared deal for the assignee", async () => {
+test("a native call link is unavailable even when its deal and suggestion are visible", async () => {
 	const home = await request(`home/cards/suggestion:${proposal}`);
 	assert.equal(home.status, 200);
 	const { source_activity } = await json(home);
 	assert.ok(isArguments(source_activity));
-	assert.equal(source_activity.id, call);
+	assert.equal(source_activity.id, nativeCall);
 	assert.equal((await request(`deals/${deal}`)).status, 200);
-	assert.equal((await open(callRef(unfiledCall))).status, 404);
-	const response = await open(callRef(call));
-	assert.equal(response.status, 200);
-	assert.deepEqual(await response.json(), dealTarget);
+	assert.deepEqual(
+		await unavailable(callRef(nativeCall)),
+		await unavailable(reply(99)),
+	);
 });
 
-test("a reviewed legacy call with a pending step links to the deal page", async () => {
+test("a copied call link is unavailable even with a pending step", async () => {
 	const pending = await db.query(
 		"select from proposal where activity_id = $1 and kind = 'next_step' and status = 'pending'",
 		[reviewedCall],
 	);
 	assert.equal(pending.rowCount, 1);
-	const response = await open(callRef(reviewedCall));
-	assert.equal(response.status, 200);
-	assert.deepEqual(await response.json(), dealTarget);
+	assert.deepEqual(
+		await unavailable(callRef(reviewedCall)),
+		await unavailable(reply(99)),
+	);
 });
 
 async function unavailable(reference: string, cookie?: string) {
@@ -247,8 +243,9 @@ test("finished, inaccessible, missing and retired links give the same answer", a
 		reply(23),
 		reply(24),
 		ref(`ld:${linkedDraft}`),
+		callRef(unfiledCall),
 		callRef(unknown),
-		ref(`fe:${call}:1`),
+		ref(`fe:${nativeCall}:1`),
 		ref(`ld:${unknown}`),
 		ref(`xx:${unknown}`),
 		"al1_!",
