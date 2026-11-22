@@ -247,6 +247,15 @@ test("call outcomes are scoped to the session partner and deal", async () => {
 	assert.deepEqual(callIds.parse(await empty.json()).calls, []);
 });
 
+test("call visibility pins its search path in fresh and migrated databases", async () => {
+	for (const migration of [false, true]) {
+		if (migration) await db.query(await readSchema("add-call-visibility.sql"));
+		const result = await db.query(`select proconfig from pg_proc
+			where oid = 'next.call_visible_to(uuid,text,uuid,uuid)'::regprocedure`);
+		assert.deepEqual(result.rows[0].proconfig, ["search_path=next, pg_temp"]);
+	}
+});
+
 test("the database call rule uses the current viewer and shares copied calls", async () => {
 	for (const [viewer, expected] of [
 		[joe, [call, copiedCall, ordinaryCall]],
