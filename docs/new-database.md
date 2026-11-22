@@ -1529,6 +1529,8 @@ The response is `{ deals, unavailable_deal_ids }`. Each list follows request ord
 
 Each `participants` entry is `{ party_id, ref, name, email, role }` from a current deal link, including the linked client. Internal app users stay outside the recipient roster. `ref` uses the party's sole retained `P-` reference when available, otherwise its current party UUID. `email` is the party's saved primary address or null. A party with more than one role has an entry for each role. A deal with nobody on its roster returns `participants: []`.
 
+`GET /jobs/call-context` gives Studio the same response and deal ID validation. Use the existing Jobs Access token, `Engine-Job: call_capture` for the registered job, and `Engine-For-User` with a provisioned partner's slug. Pass the exact deal UUIDs as repeated `deal_id` fields. Omitting the IDs returns `400 invalid_field_value`. Use `party_id` to identify a participant and `ref` for display.
+
 ### Set up a client website
 
 `POST /api/engine/deals/{deal_id}/client-website` is a signed-in partner save. It takes `idempotency_key`, `slug` (1 to 63 lowercase letters, digits and hyphens, starting with a letter or digit), and `password` (1 to 1,024 characters). It returns `200 { ok, deal_id, client_portal_url, created }`. A repeat with the same name and password and a fresh key returns `created: false`. A transport retry with the same key returns the original answer and `replayed: true`. The receipt fingerprint uses the deal and name, omitting the password as the old save did.

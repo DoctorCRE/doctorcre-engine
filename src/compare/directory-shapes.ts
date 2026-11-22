@@ -14,12 +14,8 @@ const trackRecord = (row: string) => ({
 	[`${row}.relationship.introductions[]`]: { id: "id", unordered: true },
 });
 const people = strict("contact.id");
-// A market's ID is its slug; a map ID is a kind and record UUIDs, such as
+// A map ID is a kind and record UUIDs, such as
 // `link:<uuid>` or `evidence:<uuid>:<uuid>:<role>`.
-const bySlug = (id: string) => ({
-	...strict(id),
-	printable: /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
-});
 const byMapId = (id: string) => ({
 	...strict(id),
 	printable: /^[a-z-]+:[0-9a-f-]{36}(?::[0-9a-f-]{36}:[a-z_]+)?$/,
@@ -45,16 +41,6 @@ export const vendorShape: ReadShape = {
 	rows: { ...trackRecord("record"), "record.people[]": people },
 	opaque: ["record.loan_programs"],
 	clocks: source,
-};
-
-export const marketsShape: ReadShape = {
-	rows: {
-		"markets[]": bySlug("slug"),
-		"markets[].memberships[]": strict("vendor_id"),
-		"markets[].regional_references[]": bySlug("regional_slug"),
-		"vendors[]": strict("id"),
-		"vendors[].people[]": people,
-	},
 };
 
 export const networkShape: ReadShape = {

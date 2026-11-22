@@ -14,7 +14,6 @@ const find: Ask = { read: "find", query: "Made-up & 50%" };
 const invoices: Ask = { read: "invoices" };
 const client = "00000000-0000-4000-8000-000000000051";
 const vendor = "00000000-0000-4000-8000-000000000052";
-const markets: Ask = { read: "vendor markets" };
 const activity: Ask = {
 	read: "recent activity",
 	name: "Made-up & Co",
@@ -69,7 +68,7 @@ const called = (url: URL) => ({
 	arguments: JSON.parse(url.searchParams.get("arguments") ?? "null"),
 });
 
-test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue, a find, the invoices, vendor markets and recent activity, at the door with the Access token", async () => {
+test("asks the engine's board by workspace, a deal by its reference, the client fit, the capture queue, a find, the invoices and recent activity, at the door with the Access token", async () => {
 	const { askEngine, sent } = fake(() => json({ made_up: true }));
 	assert.deepEqual(await askEngine(board), { made_up: true });
 	await askEngine(detail);
@@ -77,7 +76,6 @@ test("asks the engine's board by workspace, a deal by its reference, the client 
 	await askEngine(queue);
 	await askEngine(find);
 	await askEngine(invoices);
-	await askEngine(markets);
 	await askEngine(activity);
 	assert.deepEqual(
 		sent.map((s) => s.url.href),
@@ -88,7 +86,6 @@ test("asks the engine's board by workspace, a deal by its reference, the client 
 			"https://engine.example.test/compare/joe/engine/capture-queue",
 			"https://engine.example.test/compare/joe/engine/find?query=Made-up+%26+50%25",
 			"https://engine.example.test/compare/joe/engine/invoices",
-			"https://engine.example.test/compare/joe/engine/vendor-markets",
 			"https://engine.example.test/compare/joe/engine/recent-activity?query=Made-up+%26+Co&limit=10",
 		],
 	);
@@ -106,7 +103,6 @@ test("asks each old tool as a GET at the door's old mcp address with the Access 
 	await askOld(queue);
 	await askOld(find);
 	await askOld(invoices);
-	await askOld(markets);
 	await askOld(activity);
 	assert.equal(
 		sent[1]?.url.href,
@@ -121,7 +117,6 @@ test("asks each old tool as a GET at the door's old mcp address with the Access 
 			{ name: "capture-queue", arguments: {} },
 			{ name: "find", arguments: { query: "Made-up & 50%" } },
 			{ name: "read-invoice-tracker", arguments: {} },
-			{ name: "read-vendor-markets-v1", arguments: {} },
 			{
 				name: "find-and-catch-up",
 				arguments: { query: "Made-up & Co", limit: 10 },
@@ -191,8 +186,8 @@ test("a refused board or invoices read fails instead of comparing as an empty an
 			);
 });
 
-test("an engine find, Leads, vendor markets or recent activity read that fails with a server error fails that read without stopping the run", async () => {
-	for (const ask of [find, ...leadReads, opened, reasons, markets, activity])
+test("an engine find, Leads or recent activity read that fails with a server error fails that read without stopping the run", async () => {
+	for (const ask of [find, ...leadReads, opened, reasons, activity])
 		await assert.rejects(
 			fake(() => json(failedRead("made-up"), 500)).askEngine(ask),
 			(error: Error) => !(error instanceof StopRun),
@@ -770,12 +765,6 @@ test("mirrors each app filter in engine query text and old tool arguments", asyn
 			name: "ideal-client-profile",
 			args: { [field]: "Made-up & 50%" },
 		})),
-		{
-			ask: { read: "vendor markets", market: "made-up-market" },
-			path: "/vendor-markets",
-			name: "read-vendor-markets-v1",
-			args: { market: "made-up-market" },
-		},
 	];
 	for (const { ask, path, name, args } of cases) {
 		const engine = fake(() => json({}));

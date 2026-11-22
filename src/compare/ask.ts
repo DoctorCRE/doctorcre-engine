@@ -161,12 +161,6 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 			return business(
 				`/vendors/${encodeURIComponent(ask.vendor)}?contract=vendor-directory.v2`,
 			);
-		case "vendor markets":
-			return mirrored(
-				"/vendor-markets",
-				"read-vendor-markets-v1",
-				ask.market === undefined ? {} : { market: ask.market },
-			);
 		case "relationships":
 			return business("/relationships?contract=relationship-network.v1");
 		case "recent activity":

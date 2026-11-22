@@ -120,7 +120,6 @@ test("every read refuses tool-call markup and repeated fields as the old gate di
 				markup(["before_id"]),
 			],
 			["/reasons-to-reach-out?before_id=9&before_id=9", generic(400)],
-			["/vendor-markets?market=%60a%0A%3Cinvoke%60", markup(["market"])],
 		] as const)
 			assert.deepEqual(await answered(path), expected, path);
 	} finally {

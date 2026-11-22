@@ -47,7 +47,6 @@ const fixed = {
 	invoices: invoices(),
 	"client list": directory(),
 	"vendor list": directory(),
-	"vendor markets": { markets: [], vendors: [] },
 	relationships: network,
 	"today's reminders": {
 		pages: [{ items: [], total: 0, has_more: false, next_cursor: null }],
@@ -189,7 +188,6 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"invoices",
 		"client list",
 		"vendor list",
-		"vendor markets",
 		"relationships",
 		"today's reminders",
 		"today's reminders",
@@ -210,8 +208,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 28);
-	assert.deepEqual([run.oldReads, run.engineReads], [29, 58]);
+	assert.equal(pauses, 27);
+	assert.deepEqual([run.oldReads, run.engineReads], [28, 56]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -291,7 +289,6 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"invoices matched",
 			"client list matched",
 			"vendor list matched",
-			"vendor markets matched",
 			"relationships matched",
 			"today's reminders matched",
 			"today's reminders matched",
@@ -371,7 +368,7 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(
 		report("production", run),
 		`Old and new answers compared on production
-old reads made: 29, engine reads made: 58
+old reads made: 28, engine reads made: 56
 
 read                                         asked   matched tie order    at cap different unsettled    failed
 board team                                       1         1         0         0         0         0         0
@@ -387,7 +384,6 @@ reasons to reach out                             1         1         0         0
 invoices                                         1         1         0         0         0         0         0
 client list                                      1         1         0         0         0         0         0
 vendor list                                      1         1         0         0         0         0         0
-vendor markets                                   1         1         0         0         0         0         0
 relationships                                    1         1         0         0         0         0         0
 today's reminders                                2         2         0         0         0         0         0
 meeting prep                                     1         1         0         0         0         0         0
@@ -624,10 +620,6 @@ test("no value, free-form key or non-ID text from either answer reaches the repo
 					people: [{ contact: { id: m(s), email: m(s) } }],
 				},
 				source,
-			},
-			"vendor markets": {
-				markets: [{ slug: upper(s), boundary: m(s) }],
-				vendors: [{ id: v1, name: m(s) }],
 			},
 			relationships: {
 				...network,
@@ -1071,16 +1063,6 @@ test("directory reads match when only their clocks and correlation ids differ, a
 					},
 					source: stamp,
 				};
-			case "vendor markets":
-				return {
-					markets: [
-						{
-							slug: "north-1",
-							boundary: value,
-							memberships: [{ vendor_id: member, service_coverage: value }],
-						},
-					],
-				};
 			case "relationships":
 				return {
 					observed_at: at(call),
@@ -1122,12 +1104,10 @@ test("directory reads match when only their clocks and correlation ids differ, a
 		[
 			"client list different",
 			"vendor list different",
-			"vendor markets different",
 			"relationships different",
 			`${c1} different`,
 			`${c2} different`,
 			`${v1} different`,
-			"vendor markets different",
 			`activity ${c1} different`,
 			`activity ${c2} different`,
 			`activity ${v1} different`,
@@ -1141,8 +1121,6 @@ test("directory reads match when only their clocks and correlation ids differ, a
 				"differences: field path, kind, records, first record IDs",
 				`clients\\.rows\\[\\]\\.city  value differs  1  ${c1}`,
 				`vendors\\.rows\\[\\]\\.relationship\\.recent_entries\\[\\]\\.summary  value differs  1  ${entry}`,
-				"markets\\.markets\\[\\]\\.boundary  value differs  2  north-1",
-				`markets\\.markets\\[\\]\\.memberships\\[\\]\\.service_coverage  value differs  2  ${member}`,
 				`network\\.nodes\\[\\]\\.name  value differs  1  ${node}`,
 				`network\\.edges\\[\\]\\.summary  value differs  1  link:${node}`,
 				`network\\.referrals\\[\\]\\.win_rate  value differs  1  party:${node}`,
@@ -1158,12 +1136,7 @@ test("directory reads match when only their clocks and correlation ids differ, a
 });
 
 test("directory reads that fail are recorded as failed, a failed record read asks no recent activity, and the run goes on", async () => {
-	const failing = new Set([
-		"client",
-		"vendor markets",
-		"relationships",
-		"recent activity",
-	]);
+	const failing = new Set(["client", "relationships", "recent activity"]);
 	const [client, vendor] = [
 		{ id: c1, ref: "C-1", name: "Made-up" },
 		{ id: v1, ref: "V-1", name: "Made-up" },
@@ -1191,7 +1164,6 @@ test("directory reads that fail are recorded as failed, a failed record read ask
 		report("production", run),
 		new RegExp(
 			`\\nnot compared: result, read, record ID\\n${[
-				"failed  vendor markets  -",
 				"failed  relationships  -",
 				`failed  client detail  ${c1}`,
 				`failed  recent activity  ${v1}`,
@@ -1408,7 +1380,6 @@ test("samples each app filter once from old first answers, and compares the filt
 	const expected: Ask[] = [
 		{ read: "client fit", vertical: "Made-up Fit" },
 		{ read: "client fit", city: "Made-up Fit City" },
-		{ read: "vendor markets", market: "made-up-market" },
 	];
 	const added = (ask: Ask) =>
 		expected.some((e) => JSON.stringify(e) === JSON.stringify(ask));
@@ -1419,14 +1390,6 @@ test("samples each app filter once from old first answers, and compares the filt
 					profiles: [
 						{ vertical: null, city: " " },
 						{ vertical: "Made-up Fit", city: "Made-up Fit City", state: "ZZ" },
-					],
-				};
-			case "vendor markets":
-				return {
-					markets: [
-						{ slug: "" },
-						{ slug: "made-up-market" },
-						{ slug: "another-market" },
 					],
 				};
 			default:
@@ -1447,7 +1410,7 @@ test("samples each app filter once from old first answers, and compares the filt
 			.every((o) => o.result === "different"),
 	);
 	const text = report("made-up", run);
-	assert.doesNotMatch(text, /Made-up|made-up-market|another-market/);
+	assert.doesNotMatch(text, /Made-up/);
 });
 
 test("missing or malformed old samples add no filter asks, even when the engine has samples", async () => {
@@ -1455,21 +1418,14 @@ test("missing or malformed old samples add no filter asks, even when the engine 
 		switch (ask.read) {
 			case "client fit":
 				return { profiles: [{ vertical: "Made-up", city: "Made-up" }] };
-			case "vendor markets":
-				return { markets: [{ slug: "made-up" }] };
 			default:
 				return answer(ask);
 		}
 	};
 	const { run } = await runWith(engine);
-	assert.equal(run.outcomes.length, 29);
+	assert.equal(run.outcomes.length, 28);
 	const malformed = (ask: Ask) =>
-		["client fit", "vendor markets"].includes(ask.read)
-			? {
-					profiles: null,
-					markets: [null, { slug: 7 }],
-				}
-			: answer(ask);
+		ask.read === "client fit" ? { profiles: null } : answer(ask);
 	const invalid = await runWith(engine, malformed);
-	assert.equal(invalid.run.outcomes.length, 29);
+	assert.equal(invalid.run.outcomes.length, 28);
 });
