@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { visibleCall } from "./activity/call-visibility.ts";
 import { filingReviewNeeded, filingScope } from "./activity/filing-evidence.ts";
 import { lockEmail } from "./activity/next-record.ts";
 import { answerNextRead, Refusal, refuse } from "./answer.ts";
@@ -425,7 +426,13 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.where(sql<boolean>`(${filingScope("p")} is null or
 						${sourceInMailbox(sql.ref("p.activity_id"), ACTING_USER)})`)
 					.where(
-						sql<boolean>`(p.activity_kind is distinct from 'call' or ${visibleCallProposal(ACTING_USER)})`,
+						sql<boolean>`(p.activity_kind is distinct from 'call'
+							or ${visibleCallProposal(ACTING_USER)}
+							or (not ${visibleCall(ACTING_USER)} and (
+								(p.kind = 'next_step' and p.owner_party_id = ${ACTING_USER})
+								or (p.kind = 'next_step_done' and step.owner_party_id = ${ACTING_USER}
+									and (p.status <> 'pending' or step.status = 'open'))
+							)))`,
 					)
 					.forUpdate("p")
 					.executeTakeFirst();

@@ -1,13 +1,8 @@
 import { type Expression, sql, type Transaction } from "kysely";
+import { sharedCopiedCall, visibleCall } from "../activity/call-visibility.ts";
 import { visibleSuggestion } from "../home-inbox-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { ACTING_USER } from "../next-save.ts";
-
-export const visibleCall = (userId: string | Expression<string> | null) =>
-	sql<boolean>`call_visible_to(a.changed_by_user_id, a.changed_by_job,
-		a.changed_for_user_id, ${userId}::uuid)`;
-
-const sharedCopiedCall = visibleCall(null);
 
 export const visibleCallProposal = (userId: string | Expression<string>) =>
 	sql<boolean>`(${visibleCall(userId)}
