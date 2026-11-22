@@ -24,6 +24,11 @@ test("partner sign-in resolves a separate app origin and auth database per relea
 		);
 		assert.ok(auth, `${release.name} needs a partner auth database`);
 		assert.match(auth.id, /^[0-9a-f]{32}$/);
+		assert.notEqual(
+			auth.id,
+			"0".repeat(32),
+			`${release.name} needs a provisioned partner auth Hyperdrive ID`,
+		);
 		assert.equal(databases.filter(({ id }) => id === auth.id).length, 1);
 	}
 });

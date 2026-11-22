@@ -53,6 +53,13 @@ The Studio and assistant keep their [jobs door](new-database.md#what-every-door-
 
 Keep `PARTNER_SIGN_IN=carr` in the app. After the owner's approval, verify that the migration and auth connections use the direct endpoint for the production Neon branch. Run the database and Wrangler commands in a private terminal with credentials from the private store.
 
+Before the first secret write or engine deployment, record the active production engine version serving 100% as `PREVIOUS_ENGINE_VERSION_ID`. Confirm that the engine's `/health` reports `ok: true` and that version ID. Keep the recorded ID through provisioning and release verification.
+
+```sh
+./node_modules/.bin/wrangler deployments status --name doctorcre-engine --json
+curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
+```
+
 1. If `doctorcre_auth` is absent, apply the approved `schema/partner-auth.sql` as the migration owner.
 
    ```sh
@@ -69,23 +76,63 @@ Keep `PARTNER_SIGN_IN=carr` in the app. After the owner's approval, verify that 
    commit;
    ```
 
-   Connect with `psql -X "$PRODUCTION_PARTNER_AUTH_DATABASE_URL"` as that login. Verify the following read-only check returns the login name, `t`, and `f` in order.
+   Run the [effective permission audit](../schema/partner-auth-permissions.sql) as the dedicated login. It checks login attributes, memberships, required auth grants, and access to business schemas, tables, columns, sequences, and security-definer functions. Proceed to Hyperdrive only if the audit returns zero rows.
 
-   ```sql
-   select current_user,
-          pg_has_role(current_user, 'engine_partner_auth', 'USAGE') as auth_access,
-          pg_has_role(current_user, 'engine', 'MEMBER') as business_access;
+   ```sh
+   psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_PARTNER_AUTH_DATABASE_URL" \
+       -c 'begin read only' -f schema/partner-auth-permissions.sql -c 'rollback'
    ```
 
-3. As the migration owner, provision one auth user and Google account for each of the two approved mappings. Match each verified Google subject and verified email to the privately confirmed `next.app_user.id`. For read-back, join `doctorcre_auth."user"` to `doctorcre_auth.account` by `account."userId" = "user".id` and to `doctorcre_auth.partner` by `partner.auth_user_id = "user".id`. Compare the subject, verified email, and partner ID to the approved mappings in private. Report only the three counts below. Each must be `2`.
+3. Write the two verified mappings in a private CSV with the header `partner_user_id,email,google_subject`. Keep it outside the repo. Open `psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL"` as the migration owner and replace the example CSV path below. Run the block through the final `select`, then compare the two joined rows to the approved mappings in the same private session. Enter `commit;` only if both match. On any error or mismatch, enter `rollback;`. Report only the number of confirmed mappings.
 
    ```sql
-   begin read only;
-   select (select count(*) from doctorcre_auth."user") as users,
-          (select count(*) from doctorcre_auth.account) as accounts,
-          (select count(*) from doctorcre_auth.partner) as eligible_partners;
-   rollback;
+   begin;
+   set local lock_timeout = '1s';
+   create temp table approved_partner (
+       partner_user_id uuid primary key,
+       email text not null unique,
+       google_subject text not null unique
+   ) on commit drop;
+   \copy approved_partner from '/private/path/approved-partners.csv' with (format csv, header true)
+   lock table doctorcre_auth."user", doctorcre_auth.account in share row exclusive mode;
+
+   insert into doctorcre_auth."user"
+       (id, partner_user_id, name, email, "emailVerified", "createdAt", "updatedAt")
+   select gen_random_uuid()::text, u.id, p.name, a.email, true, now(), now()
+   from approved_partner a
+   join next.app_user u on u.id = a.partner_user_id and u.is_account_partner
+   join next.party p on p.id = u.id
+   on conflict do nothing;
+
+   insert into doctorcre_auth.account
+       (id, "userId", "providerId", "accountId", "createdAt", "updatedAt")
+   select gen_random_uuid()::text, u.id, 'google', a.google_subject, now(), now()
+   from approved_partner a
+   join doctorcre_auth."user" u on u.partner_user_id = a.partner_user_id and u.email = a.email
+   on conflict do nothing;
+
+   do $$ begin
+       if (select count(*) from approved_partner) <> 2
+           or (select count(*) from doctorcre_auth."user") <> 2
+           or (select count(*) from doctorcre_auth.account) <> 2
+           or (select count(*) from approved_partner a
+               join doctorcre_auth.partner p on p.app_user_id = a.partner_user_id
+               join doctorcre_auth."user" u on u.id = p.auth_user_id
+                   and u.email = a.email and u."emailVerified"
+               join doctorcre_auth.account g on g."userId" = u.id
+                   and g."providerId" = 'google' and g."accountId" = a.google_subject) <> 2 then
+           raise exception 'Expected exactly two approved, eligible Google mappings';
+       end if;
+   end $$;
+
+   select p.app_user_id, u.email, g."accountId" as google_subject
+   from doctorcre_auth.partner p
+   join doctorcre_auth."user" u on u.id = p.auth_user_id
+   join doctorcre_auth.account g on g."userId" = u.id
+   order by p.app_user_id;
    ```
+
+   An exact existing pair is accepted. A matching user with a missing account is completed. A conflicting pair aborts the transaction for both mappings.
 
 4. Check `./node_modules/.bin/wrangler hyperdrive list` for `doctorcre-engine-partner-auth`. If it is absent, create it using the direct connection URL for `engine_partner_auth_login`.
 
@@ -116,6 +163,19 @@ Keep `PARTNER_SIGN_IN=carr` in the app. After the owner's approval, verify that 
    ```
 
    Verify `PARTNER_APP_ORIGIN=https://app.doctorcre.com`, the approved `PARTNER_AUTH_DATABASE` ID, and the three secret names on the engine. Verify `PARTNER_SIGN_IN=carr` on the app. [Workers commands](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
+
+### Restore the previous engine version
+
+If provisioning or release verification fails, stop the rollout and keep `PARTNER_SIGN_IN=carr`. If an engine release is still running, let it finish before restoring so it cannot overwrite the rollback. Check the active engine version. If a secret write or release changed it, restore the version recorded before provisioning.
+
+```sh
+./node_modules/.bin/wrangler rollback "$PREVIOUS_ENGINE_VERSION_ID" \
+    --name doctorcre-engine --yes --message "Restore engine after sign-in preparation"
+./node_modules/.bin/wrangler deployments status --name doctorcre-engine --json
+curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
+```
+
+Verify the recorded version serves 100% and `/health` returns `ok: true` with that version. Confirm the app still uses CARR by opening a protected page through the usual sign-in. Hold subsequent engine releases until the config is corrected. Worker rollback restores the release. Keep the database and Hyperdrive in place for the next attempt. [Cloudflare Worker rollbacks](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/)
 
 ## Switch after hours with advance notice
 
