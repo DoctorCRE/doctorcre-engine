@@ -536,12 +536,12 @@ export const dealJobs = new Hono<NextSaveEnv>().get(
 	"/deals/:deal",
 	async (c) => {
 		const deal_id = c.req.param("deal");
-		const database = c.env.DATABASE;
+		const database = c.env.DATABASE_WRITER;
 		if (!database) return refuse(c, new Refusal(503, "database_unavailable"));
 		try {
 			const result = await nextTransaction(
 				database.connectionString,
-				"read",
+				"job",
 				async (tx) => {
 					await stampNextSave(tx, c.get("stamp"));
 					if (!isUuid(deal_id)) return null;

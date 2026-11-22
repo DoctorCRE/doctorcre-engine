@@ -72,6 +72,33 @@ returns boolean language sql stable set search_path = next, pg_temp as $$
 	select source is null or coalesce(owner = viewer, false) or call_source_visible(source, viewer);
 $$;
 
+create table if not exists step_call_provenance (
+	step_id uuid primary key references next_step on delete cascade,
+	call_activity_id uuid not null references activity
+);
+revoke all on step_call_provenance from public, engine, engine_reader;
+
+create or replace function stamp_step_proposal_call() returns trigger
+language plpgsql security definer set search_path = next, pg_temp as $$
+begin
+	insert into step_call_provenance (step_id, call_activity_id)
+	select new.id, p.activity_id from proposal p
+	where p.id = new.id and p.kind = 'next_step' and p.activity_kind = 'call' and p.status = 'pending'
+		and (p.deal_id, p.party_id, p.property_id) is not distinct from (new.deal_id, new.party_id, new.property_id);
+	return null;
+end $$;
+create or replace trigger stamp_step_proposal_call after insert on next_step
+	for each row execute function stamp_step_proposal_call();
+
+create or replace function accepted_step_call(wanted uuid) returns uuid
+language sql stable security definer set search_path = next, pg_temp as $$
+	select coalesce((select s.call_activity_id from step_call_provenance s where s.step_id = wanted),
+		(select p.activity_id from proposal p
+		 where p.id = wanted and p.kind = 'next_step' and p.activity_kind = 'call' and p.status = 'accepted'));
+$$;
+revoke execute on function stamp_step_proposal_call(), accepted_step_call(uuid) from public;
+grant execute on function accepted_step_call(uuid) to engine, engine_reader;
+
 revoke execute on function call_visible_to(activity, uuid), keep_call_audience(),
 	call_source_visible(uuid, uuid), call_step_visible_to(uuid, uuid, uuid) from public;
 grant execute on function call_visible_to(activity, uuid), call_source_visible(uuid, uuid),
@@ -113,7 +140,7 @@ create or replace trigger separate_call_audit_evidence after insert or update on
 revoke execute on function separate_call_audit_evidence() from public;
 
 create schema if not exists next_partner;
-grant usage on schema next_partner to engine_reader;
+grant usage on schema next_partner to engine, engine_reader;
 
 create or replace view next_partner.activity with (security_barrier = true) as
 	select a.* from activity a where a.kind <> 'call' or call_visible_to(a);
@@ -124,10 +151,11 @@ create or replace view next_partner.next_step with (security_barrier = true) as
 		s.home_call_follow_up_id, s.home_step_id, s.id, s.item_bullets, s.item_title, s.owner_party_id, s.party_id,
 		s.property_id, s.resolution, s.resolution_event_id, s.resolved_at, s.source_ref,
 		s.status, s.what,
-		case when call_source_visible(s.call_activity_id) then s.call_evidence_quote end as call_evidence_quote,
-		case when s.call_activity_id is null or call_source_visible(s.call_activity_id) then s.resolution_reason end as resolution_reason
+		case when call_source_visible(source.id) then s.call_evidence_quote end as call_evidence_quote,
+		case when source.id is null or call_source_visible(source.id) then s.resolution_reason end as resolution_reason
 	from next_step s
-	where call_step_visible_to(s.call_activity_id, s.owner_party_id);
+	cross join lateral (select coalesce(s.call_activity_id, accepted_step_call(s.id)) as id) source
+	where call_step_visible_to(source.id, s.owner_party_id);
 
 create or replace view next_partner.deal_phase_change with (security_barrier = true) as
 	select visible.* from deal_phase_change m cross join lateral jsonb_populate_record(m, jsonb_build_object('reason',
@@ -196,10 +224,12 @@ create or replace view next_partner.change with (security_barrier = true) as
 			a.kind <> 'call' or (c.old_value ->> 'summary' is null and call_visible_to(
 				c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id))))
 	when c.table_name = 'next_step' then
-		coalesce((select call_step_visible_to(s.call_activity_id, s.owner_party_id)
+		coalesce((select call_step_visible_to(
+			coalesce(s.call_activity_id, accepted_step_call(s.id)), s.owner_party_id)
 			from next_step s where s.id = (c.record ->> 'id')::uuid),
 			case when c.action in ('insert', 'delete') then call_step_visible_to(
-				(coalesce(c.new_value, c.old_value) ->> 'call_activity_id')::uuid,
+				coalesce((coalesce(c.new_value, c.old_value) ->> 'call_activity_id')::uuid,
+					accepted_step_call((c.record ->> 'id')::uuid)),
 				(coalesce(c.new_value, c.old_value) ->> 'owner_party_id')::uuid) else false end)
 	when c.table_name = 'proposal' then exists (
 		select from proposal p where p.id = (c.record ->> 'id')::uuid
@@ -253,6 +283,7 @@ grant select on next_partner.activity, next_partner.next_step, next_partner.deal
 	next_partner.imported_automatic_phase_move, next_partner.proposal, next_partner.lead_stage_move,
 	next_partner.home_update, next_partner.change, next_partner.imported_change,
 	next_partner.deal_imported_history, next_partner.deal_next_date to engine_reader;
+grant select on next_partner.home_update to engine;
 
 create or replace function activity_entry(a activity) returns jsonb
 language sql stable
@@ -271,5 +302,10 @@ update change set old_value = old_value
 where (table_name = 'next_step' and coalesce(old_value ->> 'call_evidence_quote', new_value ->> 'call_evidence_quote') is not null)
 	or (table_name = 'deal_phase_change' and coalesce(old_value ->> 'call_activity_id', new_value ->> 'call_activity_id') is not null
 		and coalesce(old_value ->> 'reason', new_value ->> 'reason') is not null);
+
+insert into step_call_provenance (step_id, call_activity_id)
+select s.id, p.activity_id from next_step s join proposal p on p.id = s.id
+where p.kind = 'next_step' and p.activity_kind = 'call' and p.status = 'accepted'
+on conflict (step_id) do nothing;
 
 commit;
