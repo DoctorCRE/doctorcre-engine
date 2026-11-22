@@ -27,6 +27,7 @@ import { dealCallOutcomes } from "./deals/call-outcomes.ts";
 import { clientLeases } from "./deals/client-leases.ts";
 import { dealClientWebsite } from "./deals/client-website.ts";
 import { openClientWebsite } from "./deals/client-website-access.ts";
+import { closingAnniversaries } from "./deals/closing-anniversaries.ts";
 import { criticalDates } from "./deals/critical-dates.ts";
 import { nationalAccounts } from "./deals/national-accounts.ts";
 import {
@@ -160,6 +161,7 @@ partnerApi.route("/api/engine", leadChanges);
 partnerApi.route("/api/engine", partySearch);
 partnerApi.route("/api/engine", propertySearch);
 partnerApi.route("/api/engine", clientLeases);
+partnerApi.route("/api/engine", closingAnniversaries);
 partnerApi.route("/api/engine", prospectReads);
 partnerApi.route("/api/engine", prospectChanges);
 partnerApi.route("/api/engine", nextDeals);
