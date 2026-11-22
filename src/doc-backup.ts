@@ -1,9 +1,9 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { askDocBackup } from "./doc-backup-client.ts";
 import { docLinkOwnerTransaction } from "./doc-link.ts";
-import { withDocTools } from "./doc-mcp.ts";
 import { docPrompt } from "./doc-prompt.ts";
 import { claimDocWork, finishDocTurn } from "./doc-queue.ts";
+import { withDocTools } from "./doc-tool-session.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { WriterEnv } from "./save.ts";
 

@@ -148,8 +148,9 @@ before(async () => {
 		values ('${id(80)}', '${id(30)}', 'Example call about the sign', 'Confirm signage', 'example-call', '2030-01-16');
 		insert into critical_date (id, deal_id, kind, due_on, source)
 		values ('${id(81)}', '${id(30)}', 'phase_effective_date', '2030-02-01', 'Example phase record');
-		insert into property (id, address) values ('${id(83)}', '100 Example Road');
-		insert into deal_property (deal_id, property_id) values ('${id(30)}', '${id(83)}');
+		insert into property (id, name, address) values
+		 ('${id(83)}', null, '100 Example Road'), ('${id(82)}', 'Example Plaza', '200 Example Road');
+		insert into deal_property (deal_id, property_id) values ('${id(30)}', '${id(82)}'), ('${id(30)}', '${id(83)}');
 		insert into document (id, name, r2_key, r2_bucket, content_type) values
 			('${id(84)}', 'Example lease.pdf', 'example-lease', 'deal_documents', 'application/pdf');
 		insert into lease (id, deal_id, party_id, property_id)
@@ -492,6 +493,14 @@ for (const schema of [undefined, "next"]) {
 			...(schema
 				? {
 						renews_lease_id: null,
+						properties: [
+							{ id: id(83), name: null, address: "100 Example Road" },
+							{
+								id: id(82),
+								name: "Example Plaza",
+								address: "200 Example Road",
+							},
+						],
 						correspondence: [{ kind: "email", subject: "Example tour times" }],
 						critical_dates: [
 							{
@@ -518,6 +527,12 @@ for (const schema of [undefined, "next"]) {
 		assert.equal((await get(`/deals/${id(99)}`, schema)).status, 404);
 	});
 }
+
+test("a deal without linked properties returns an empty list", async () => {
+	const response = await get(`/deals/${id(32)}`, "next");
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), { properties: [] });
+});
 
 test("both partners see a deal's active client website", async () => {
 	for (const partner of ["partner_one", "partner_two"]) {
