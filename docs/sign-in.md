@@ -79,9 +79,9 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
    psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL" -f schema/partner-auth.sql
    ```
 
-2. Apply the separately approved migration that restricts public execution of security-definer routines before auditing the login. [Permissions migration (#1201)](https://github.com/DoctorCRE/doctorcre-engine/issues/1201)
+2. As the migration owner, apply the separately approved `schema/restrict-shared-definer-execute.sql` to restrict public execution of security-definer routines. [Permissions migration (#1201)](https://github.com/DoctorCRE/doctorcre-engine/issues/1201)
 
-   If the dedicated login is absent, create it as the migration owner. Verify the direct Neon endpoint for the production branch. On that connection, confirm `show log_statement` returns `none` and `show log_min_error_statement` returns `panic`. Stop if either setting differs.
+3. If the dedicated login is absent, create it as the migration owner. Verify the direct Neon endpoint for the production branch. On that connection, confirm `show log_statement` returns `none` and `show log_min_error_statement` returns `panic`. Stop if either setting differs.
 
    Generate a random password in memory. Use a private runner with shell tracing and SQL echo disabled. Set `PARTNER_AUTH_PASSWORD` only in the child `psql` environment and feed the following block to `psql -X -w -v ON_ERROR_STOP=1 -f -` on stdin. Neon rejects the password verifier sent by `\password`.
 
@@ -102,9 +102,9 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
        -c 'begin read only' -f schema/partner-auth-permissions.sql -c 'rollback'
    ```
 
-   After a zero-row audit, keep the direct login URL in memory and pass it to the uncached Hyperdrive in step 4. Keep the password and URL out of files, command output, and logs.
+   After a zero-row audit, keep the direct login URL in memory and pass it to the uncached Hyperdrive in step 5. Keep the password and URL out of files, command output, and logs.
 
-3. Write the two verified mappings in a private CSV with the header `partner_user_id,email,google_subject`. Keep it outside the repo. Open `psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL"` as the migration owner and replace the example CSV path below. Run the block through the final `select`, then compare the two joined rows to the approved mappings in the same private session. Enter `commit;` only if both match. On any error or mismatch, enter `rollback;`. Report only the number of confirmed mappings.
+4. Write the two verified mappings in a private CSV with the header `partner_user_id,email,google_subject`. Keep it outside the repo. Open `psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL"` as the migration owner and replace the example CSV path below. Run the block through the final `select`, then compare the two joined rows to the approved mappings in the same private session. Enter `commit;` only if both match. On any error or mismatch, enter `rollback;`. Report only the number of confirmed mappings.
 
    ```sql
    begin;
@@ -155,7 +155,7 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
 
    An exact existing pair is accepted. A matching user with a missing account is completed. A conflicting pair aborts the transaction for both mappings.
 
-4. Check `./node_modules/.bin/wrangler hyperdrive list` for `doctorcre-engine-partner-auth`. If it is absent, create it using the direct connection URL for `engine_partner_auth_login`.
+5. Check `./node_modules/.bin/wrangler hyperdrive list` for `doctorcre-engine-partner-auth`. If it is absent, create it using the direct connection URL for `engine_partner_auth_login`.
 
    ```sh
    ./node_modules/.bin/wrangler hyperdrive create doctorcre-engine-partner-auth \
@@ -164,7 +164,7 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
 
    Check the returned ID with `./node_modules/.bin/wrangler hyperdrive get "$PRODUCTION_PARTNER_AUTH_HYPERDRIVE_ID"`. Verify the production Neon host, database, `engine_partner_auth_login`, and `caching.disabled=true`. In `wrangler.jsonc`, replace the all-zero production `PARTNER_AUTH_DATABASE` ID with this ID. Keep staging's own Hyperdrive on the rehearsal branch. A merge to `main` starts a production upload, so commit and review the real ID before queuing the merge. [Hyperdrive commands](https://developers.cloudflare.com/workers/wrangler/commands/hyperdrive/)
 
-5. For the production Google client, confirm the redirect URI is `https://app.doctorcre.com/auth/callback/google`. If any of the three production secrets are missing, set them with the approved values at the interactive prompts. Each `secret put` deploys a version of the named engine Worker.
+6. For the production Google client, confirm the redirect URI is `https://app.doctorcre.com/auth/callback/google`. If any of the three production secrets are missing, set them with the approved values at the interactive prompts. Each `secret put` deploys a version of the named engine Worker.
 
    ```sh
    ./node_modules/.bin/wrangler secret put PARTNER_AUTH_SECRET --name doctorcre-engine
@@ -172,7 +172,7 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
    ./node_modules/.bin/wrangler secret put PARTNER_GOOGLE_CLIENT_SECRET --name doctorcre-engine
    ```
 
-6. After the engine release, read back the active versions. For each Worker, take the `version_id` serving 100% from `deployments status`.
+7. After the engine release, read back the active versions. For each Worker, take the `version_id` serving 100% from `deployments status`.
 
    ```sh
    ./node_modules/.bin/wrangler deployments status --name doctorcre-engine --json
