@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { z } from "zod";
 import { readSchema } from "./test-copy.ts";
 import { doorTest } from "./test-door.ts";
 
-const { db, setup, cleanup, save } = doorTest();
+const { db, setup, cleanup, save, request } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const ALEX = id(1),
@@ -29,6 +30,9 @@ const job = { job: "call_capture", for_user: "alex" };
 
 before(async () => {
 	await setup();
+	await db.query(await readSchema("add-call-review-step-merge.sql"));
+	await db.query(await readSchema("add-private-call-log.sql"));
+	await db.query(await readSchema("add-private-call-log.sql"));
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into job values ('call_capture', 'Example call capture');
 		insert into party (id, kind, name) values ('${ALEX}', 'person', 'Alex Example'), ('${BLAIR}', 'person', 'Blair Example');
@@ -74,14 +78,24 @@ const decide = (id: unknown) =>
 		idempotency_key: randomUUID(),
 		decision: "accept",
 	});
+const recentActivity = (user: string, query: string) =>
+	request(
+		{ user },
+		`recent-activity?query=${query}`,
+		{ method: "GET" },
+		{
+			ACTIVITY_READ_SCHEMA: "next",
+		},
+	);
 
 test("accepting a copied call log leaves one call and adds one note at the call's time", async () => {
 	const copiedCall = id(19);
 	const copiedDeal = id(20);
+	const summary = "Discussed the example office.";
 	const what = "Agreed to review the example floor plan.";
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into deal (id, name, owner_user_id) values ('${copiedDeal}', 'Example copied call deal', '${ALEX}');
-		insert into activity (id, kind, happened_at) values ('${copiedCall}', 'call', '2026-01-07T15:00:00Z');
+		insert into activity (id, kind, happened_at, summary) values ('${copiedCall}', 'call', '2026-01-07T15:00:00Z', '${summary}');
 		insert into activity_about (activity_id, deal_id) values ('${copiedCall}', '${copiedDeal}');
 		insert into activity_about (activity_id, party_id) values ('${copiedCall}', '${BLAIR}');
 		select set_config('engine.user_id', '${ALEX}', true);
@@ -100,6 +114,13 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 		assert.equal(accepted, 200);
 		assert.deepEqual(answer.created, { activity_id: proposalId });
 		assert.deepEqual(await accept(), [200, { ...answer, replayed: true }]);
+		const target = dealId ?? partyId;
+		assert.ok(target);
+		const recent = await recentActivity("blair", target);
+		assert.equal(recent.status, 200);
+		const timeline = await recent.text();
+		assert.ok(timeline.includes(summary));
+		assert.ok(timeline.includes(what));
 		assert.deepEqual(
 			(
 				await db.query(
@@ -117,7 +138,7 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 					id: copiedCall,
 					kind: "call",
 					original_time: true,
-					summary: null,
+					summary,
 					changed_by_user_id: null,
 				},
 				{
@@ -126,6 +147,98 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 					original_time: true,
 					summary: what,
 					changed_by_user_id: ALEX,
+				},
+			],
+		);
+	}
+});
+
+test("accepted private call logs stay on the call and appear only for its partner", async () => {
+	for (const [index, summary] of [null, "", "Original summary."].entries()) {
+		const callId = id(100 + index);
+		const happenedAt = `2026-01-${17 + index}T15:00:00.000Z`;
+		const recorder = ["", "call_capture", "old_system"][index];
+		await db.query("begin");
+		await db.query(
+			"select set_config('engine.job', $1, true), set_config('engine.user_id', $2, true)",
+			[recorder, ALEX],
+		);
+		await db.query(
+			`insert into activity (id, kind, happened_at, summary)
+			values ($1, 'call', $2, $3)`,
+			[callId, happenedAt, summary],
+		);
+		await db.query(
+			`insert into activity_about (activity_id, deal_id, party_id)
+			values ($1, $2, null), ($1, null, $3)`,
+			[callId, REVIEW, CLIENT],
+		);
+		await db.query("commit");
+		const readEntry = async (user: string, target = CLIENT) => {
+			const response = await recentActivity(user, target);
+			assert.equal(response.status, 200);
+			const activity = z
+				.object({
+					state: z.literal("completed"),
+					catch_up: z.object({
+						timeline: z.array(
+							z.object({
+								actor: z.string(),
+								occurred_at: z.string(),
+								summary: z.string().nullable(),
+							}),
+						),
+					}),
+				})
+				.parse(await response.json());
+			return activity.catch_up.timeline.find(
+				(item) => item.occurred_at === happenedAt,
+			);
+		};
+		assert.equal((await readEntry("alex"))?.actor, recorder || "alex");
+		const beforeAccept = await readEntry("blair");
+		const [stored, proposal] = await propose({
+			kind: "log_call",
+			activity_id: callId,
+			what: "Agreed on timing.",
+			...(index === 1 ? { party_id: CLIENT } : { deal_id: REVIEW }),
+		});
+		assert.equal(stored, 201);
+		const decision = { idempotency_key: randomUUID(), decision: "accept" };
+		const accept = () =>
+			save(
+				{ user: "alex" },
+				`proposals/${proposal.proposal_id}/decision`,
+				decision,
+			);
+		const [status, answer] = await accept();
+		assert.equal(status, 200);
+		assert.deepEqual(answer.created, { activity_id: callId });
+		assert.deepEqual(await accept(), [200, { ...answer, replayed: true }]);
+		const acceptedSummary = summary
+			? "Original summary.\n\nAgreed on timing."
+			: "Agreed on timing.";
+		for (const target of [REVIEW, CLIENT]) {
+			const entry = await readEntry("alex", target);
+			assert.equal(entry?.actor, "alex");
+			assert.equal(entry?.summary, acceptedSummary);
+			assert.equal(await readEntry("blair", target), undefined);
+		}
+		assert.equal(beforeAccept, undefined);
+		assert.deepEqual(
+			(
+				await db.query(
+					`select id, kind, summary from activity a where id = $1 or
+						(kind = 'note' and exists (select from activity_about b
+							where b.activity_id = a.id and (b.deal_id = $2 or b.party_id = $3)))`,
+					[callId, REVIEW, CLIENT],
+				)
+			).rows,
+			[
+				{
+					id: callId,
+					kind: "call",
+					summary: acceptedSummary,
 				},
 			],
 		);

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { visibleCall } from "./activity/call-visibility.ts";
 import { filingReviewNeeded, filingScope } from "./activity/filing-evidence.ts";
 import { lockEmail } from "./activity/next-record.ts";
 import { answerNextRead, Refusal, refuse } from "./answer.ts";
@@ -9,7 +10,6 @@ import type { JsonObject } from "./database.d.ts";
 import {
 	copiedCallStep,
 	lockOpenDealStep,
-	privateCallLog,
 	visibleCallProposal,
 } from "./deals/call-review.ts";
 import { sourceInMailbox } from "./home-email-thread.ts";
@@ -414,10 +414,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.leftJoin("activity as a", "a.id", "p.activity_id")
 					.leftJoin("next_step as step", "step.id", "p.next_step_id")
 					.selectAll("p")
-					.select([
-						privateCallLog.as("private_call_log"),
-						copiedCallStep.as("copied_call_step"),
-					])
+					.select(copiedCallStep.as("copied_call_step"))
 					.where("p.id", "=", r.proposal_id)
 					// A direct decision clears the mailbox stamp and records the owner as decider.
 					.where(sql<boolean>`(p.kind <> 'email_lead' or
@@ -425,7 +422,13 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.where(sql<boolean>`(${filingScope("p")} is null or
 						${sourceInMailbox(sql.ref("p.activity_id"), ACTING_USER)})`)
 					.where(
-						sql<boolean>`(p.activity_kind is distinct from 'call' or ${visibleCallProposal(ACTING_USER)})`,
+						sql<boolean>`(p.activity_kind is distinct from 'call'
+							or ${visibleCallProposal(ACTING_USER)}
+							or (not ${visibleCall(ACTING_USER)} and (
+								(p.kind = 'next_step' and p.owner_party_id = ${ACTING_USER})
+								or (p.kind = 'next_step_done' and step.owner_party_id = ${ACTING_USER}
+									and (p.status <> 'pending' or step.status = 'open'))
+							)))`,
 					)
 					.forUpdate("p")
 					.executeTakeFirst();
@@ -449,7 +452,6 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
-				if (accepts && p.private_call_log) return fail(409, "private_call");
 				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
 					const d = await dealNow(tx, p.deal_id);
 					if (
@@ -562,6 +564,14 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								.where("id", "=", p.candidate_id)
 								.executeTakeFirstOrThrow()
 						: undefined;
+				const callNote =
+					accepts && p.kind === "log_call"
+						? await tx
+								.selectFrom("activity")
+								.select("id")
+								.where("id", "=", p.id)
+								.executeTakeFirst()
+						: undefined;
 				const created =
 					r.decision === "dismiss" || p.kind === "next_step_done"
 						? {}
@@ -571,9 +581,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								? { deal_id: p.deal_id }
 								: promoted
 									? { party_id: promoted.promoted_party_id }
-									: {
-											activity_id: p.kind === "log_call" ? p.id : p.activity_id,
-										};
+									: { activity_id: callNote?.id ?? p.activity_id };
 				return {
 					proposal_id: p.id,
 					status: decided?.status ?? null,

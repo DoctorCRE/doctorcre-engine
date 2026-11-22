@@ -34,6 +34,8 @@ Bind the app to `PartnerApp` and forward each request with its original app URL.
 
 Staging deploys read `PARTNER_APP_ORIGIN` and `PARTNER_AUTH_DATABASE` from `env.staging` in `wrangler.jsonc`. The origin is the staging app's HTTPS address. The auth, reader, and writer Hyperdrives all connect to the same Neon rehearsal branch. Set the three sign-in secrets on the staging Worker.
 
+Staging deal documents use the separate `carr-documents-staging` R2 bucket. If it does not exist, create it before deploying staging with `npx wrangler r2 bucket create carr-documents-staging`.
+
 | App route                                                     | Behavior                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /auth/login?return_to=…` and `GET /auth/callback/google` | Start the Google redirect through Better Auth with the account chooser. Better Auth verifies the OAuth response and binds the callback to the browser with state and PKCE. Store the return path with short-lived, single-use OAuth state. Accept only a local path on the app origin and use `/` for an invalid or missing path. A successful callback issues a session and returns to that path. |
@@ -48,6 +50,17 @@ For reauthentication, use Better Auth's Google callback as proof. The engine sto
 Use the existing `x-carr-csrf` header name during the move. Every partner write, including sign-out, requires the session CSRF token, an exact same-origin `Origin`, and `Sec-Fetch-Site: same-origin`. Keep the existing constant-time token comparison. Auth and protected responses use `Cache-Control: no-store`. Preserve each `Set-Cookie` separately across the binding. Both the service worker and app continue to require a live network check for signed-in data. An auth outage fails closed without routing a request to the old API.
 
 The Studio and assistant keep their [jobs door](new-database.md#what-every-door-shares) with its existing Access service token and audience. The audience and credentials for intake and comparison stay separate as today.
+
+## Rehearsal records on staging
+
+Apply [the rehearsal setup](../schema/staging-sign-in-fixtures.sql) to the staging Neon branch as the migration owner. Apply it again after refreshing the branch. The Worker serves the rehearsal job only when `ENGINE_ENVIRONMENT` is `staging`.
+
+Both requests use the jobs Access credentials and `Engine-Job: sign-in-rehearsal`. Send JSON with one field, `run_id`, a caller-generated UUID. For prepare, add `Engine-For-User` with the staging partner slug that will own the deal and see its overdue Home reminder.
+
+- `POST /jobs/sign-in-rehearsal/prepare` returns 201 with `run_id`, `client_id`, `deal_id`, `deal_name`, `home_item_id`, `next_step_id`, `tour_id`, `property_id`, `phase_changed_at`, and parallel arrays `note_ids` and `notes` in oldest-first order. `home_item_id` is `next_action:<next_step_id>`. Repeating prepare with the same run and partner returns the same IDs and adds `replayed: true`. A cleaned run returns 409 `key_reuse`.
+- `POST /jobs/sign-in-rehearsal/cleanup` returns 200 with `run_id` and `remaining: 0` after the transaction commits. The run closes permanently, including when cleanup arrives before prepare. A repeated cleanup returns the same answer. Run cleanup even if prepare timed out.
+
+Only the rehearsal function writes fixture receipts. The prepared receipt holds the exact insert audit IDs from its transaction. Cleanup checks for replaced records, removes the run's rows, and retains the cleaned receipt. An unexpected dependency causes the cleanup to roll back. The database keeps its ordinary audit history.
 
 ## Prepare production while the app uses CARR
 

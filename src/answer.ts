@@ -98,8 +98,6 @@ const HINTS = {
 	old_role_not_found: "No copied party matches this old role ID and kind.",
 	automatic_resolution_changed: "Refresh Home before undoing this completion.",
 	open_step_exists: "This owner already has an open next step on this record.",
-	private_call:
-		"This call is private. Its note cannot be added to the shared record.",
 	about_nothing:
 		"The email matches no record and names none, so nothing was stored.",
 	message_id_invalid:

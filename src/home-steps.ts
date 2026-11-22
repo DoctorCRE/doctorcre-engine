@@ -256,8 +256,8 @@ export function homeStepEligible(
 export const lateLabel = (days: number) =>
 	`${days} ${days === 1 ? "day" : "days"} late`;
 
-export const stepItemId = (step: { id: string; call_id: string | null }) =>
-	`${step.call_id ? "capture_post_call_action" : "next_action"}:${step.id}`;
+export const stepItemId = (step: { id: string; call_follow_up: boolean }) =>
+	`${step.call_follow_up ? "capture_post_call_action" : "next_action"}:${step.id}`;
 
 export function dealStepUrl(dealId: string, stepId: string) {
 	return `/deals?deal=${dealId}&focus=next-step&step=${stepId}`;

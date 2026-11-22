@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { visibleCall } from "./activity/call-visibility.ts";
 import { Refusal, refuse } from "./answer.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import type { NextSaveEnv } from "./next-door.ts";
-import { stampNextSave } from "./next-save.ts";
+import { ACTING_USER, stampNextSave } from "./next-save.ts";
 import { automaticResolutions } from "./next-steps.ts";
 import { SaveRefusal } from "./save.ts";
 
@@ -14,7 +15,11 @@ const heldSteps = (tx: Transaction<DB>) =>
 		.selectFrom("proposal as p")
 		.innerJoin("next_step as s", "s.id", "p.next_step_id")
 		.innerJoin("deal as d", "d.id", "s.deal_id")
-		.innerJoin("activity as a", "a.id", "p.activity_id")
+		.leftJoin("activity as a", (join) =>
+			join
+				.onRef("a.id", "=", "p.activity_id")
+				.on(sql<boolean>`(a.kind <> 'call' or ${visibleCall(ACTING_USER)})`),
+		)
 		.select([
 			"p.id as proposal_id",
 			"d.id as deal_id",
@@ -22,18 +27,16 @@ const heldSteps = (tx: Transaction<DB>) =>
 			"s.id as next_step_id",
 			"s.what",
 			"s.due_on",
-			"p.evidence",
+			sql<string | null>`case when a.id is not null then p.evidence end`.as(
+				"evidence",
+			),
 			"a.id as activity_id",
 			"a.kind as activity_kind",
 			"a.happened_at",
 			"a.summary",
 			sql<boolean>`s.changed_at = p.step_seen_at`.as("can_resolve"),
 		])
-		.where(
-			"s.owner_party_id",
-			"=",
-			sql<string>`current_setting('engine.user_id')::uuid`,
-		)
+		.where("s.owner_party_id", "=", ACTING_USER)
 		.where("s.status", "=", "open")
 		.where("p.kind", "=", "next_step_done")
 		.where("p.status", "=", "pending")

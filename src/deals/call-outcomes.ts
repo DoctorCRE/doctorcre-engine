@@ -1,15 +1,14 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
+import { visibleCall } from "../activity/call-visibility.ts";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../uuid.ts";
 import {
 	openCopiedCallStepText,
-	privateCallLog,
 	stepTextKey,
-	visibleCall,
 	visibleCallProposal,
 } from "./call-review.ts";
 
@@ -34,12 +33,11 @@ async function readCallOutcomes(
 			...call,
 			proposals: call.proposals.map(({ open_step_text, ...proposal }) => {
 				const acceptBlocked =
-					proposal.accept_blocked ??
-					(open_step_text !== null &&
+					open_step_text !== null &&
 					proposal.what !== null &&
 					stepTextKey(open_step_text) !== stepTextKey(proposal.what)
 						? "open_step_exists"
-						: null);
+						: null;
 				return { ...proposal, accept_blocked: acceptBlocked };
 			}),
 		})),
@@ -101,9 +99,6 @@ export function callOutcomeQuery(
 						"p.phase_on",
 						"p.next_step_id",
 						"owner.slug as owner",
-						sql<"private_call" | null>`
-							case when p.status = 'pending' and (${privateCallLog}) then 'private_call' end
-						`.as("accept_blocked"),
 						openCopiedCallStepText(userId).as("open_step_text"),
 					])
 					.select(({ fn }) => [

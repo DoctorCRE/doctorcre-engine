@@ -20,6 +20,11 @@
 			"binding": "CARR_READS",
 			"service": "carr-mcp",
 			"entrypoint": "ComparisonReads"
+		},
+		{
+			"binding": "CARR_WATCH_SETTINGS",
+			"service": "carr-mcp",
+			"entrypoint": "DealWatchSettings"
 		}
 	],
 	"hyperdrive": [
@@ -65,6 +70,11 @@
 					"binding": "CARR_READS",
 					"service": "carr-mcp-staging",
 					"entrypoint": "ComparisonReads"
+				},
+				{
+					"binding": "CARR_WATCH_SETTINGS",
+					"service": "carr-mcp-staging",
+					"entrypoint": "DealWatchSettings"
 				}
 			],
 			"hyperdrive": [
@@ -82,9 +92,11 @@
 				{
 					"binding": "POST_MEDIA",
 					"bucket_name": "doctorcre-post-media-staging"
-				}
+				},
+				{ "binding": "DEAL_DOCUMENTS", "bucket_name": "carr-documents-staging" }
 			],
 			"vars": {
+				"ENGINE_ENVIRONMENT": "staging",
 				"DOC_BACKUP": "false",
 				"DOC_BACKUP_MODEL": "claude-sonnet-5-5",
 				"POST_MEDIA_BUCKET": "doctorcre-post-media-staging",
