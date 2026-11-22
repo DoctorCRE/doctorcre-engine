@@ -177,7 +177,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 - [ ] Both partners can open Tours from the deal page. Tour planning starts here. The sidebar has no Tours entry.
 - [ ] Each planned tour appears once with its date in words. Open it to see its notes and its stops in visiting order. Each stop shows its address and its property name when known. An empty list says "No planned tours."
-- [ ] **Plan tour** asks for a date, at least one property, and optional notes. Search existing properties by name or address. When none matches, add a property with its address and optional name.
+- [ ] **Plan tour** asks for a date, at least one property, and optional notes. The deal's linked properties appear first, each addable with one tap. Search below by name or address. Both pickers mark selected properties as added and disable their buttons until the partner removes the stop. If nothing matches, say so and open **Add property** with its address and optional name in the scrolling form. **Search properties**, **Save tour**, and **Back to tours** stay in view on desktop and phone.
 - [ ] Before saving, either partner can add, remove, and reorder stops. The order controls work by keyboard and touch.
 - [ ] Either partner can edit a planned tour. After saving and reopening it, both partners see the saved date, order, and notes. A failed save leaves the edits in view and says what to fix. A save based on an older version offers to reload the tour before editing again.
 - [ ] The client stop list preview shows the date and the numbered stops in saved order. Each stop includes its address and its name when known. **Copy stop list** copies the preview for the partner to paste into Outlook. Tour notes stay on the deal page.
