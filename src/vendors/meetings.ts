@@ -17,7 +17,7 @@ import {
 	nextVendorContact,
 } from "./read.ts";
 
-export const VIEWS = ["suggested", "research"] as const;
+export const VIEWS = ["research"] as const;
 type View = (typeof VIEWS)[number];
 export type MeetingsQuery = {
 	view: View;
@@ -138,10 +138,7 @@ export async function readVendorMeetings(
 ) {
 	const { view, q, limit } = query;
 	const now = new Date();
-	const page =
-		view === "suggested"
-			? { total: 0, items: [] }
-			: (await attempt(db, () => candidates(db, query)))?.rows[0];
+	const page = (await attempt(db, () => candidates(db, query)))?.rows[0];
 	if (!page) return null;
 	const { meetings, calendar } = await calendarFor(db, userId, now);
 	const items = page.items.slice(0, limit).map((item) => ({

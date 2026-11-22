@@ -63,7 +63,7 @@ export type Ask =
 	// With no owners, the old default queue of every owner.
 	| { read: "today's reminders"; owners?: "partners" }
 	| { read: "meeting prep" }
-	| { read: "vendor meetings"; view: "suggested" | "research" };
+	| { read: "vendor meetings"; view: "research" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
 export type Outcome =
@@ -222,7 +222,6 @@ export async function compareDeals(
 		{ read: "today's reminders", owners: "partners" },
 		// Both systems read the signed-in partner's own calendar.
 		{ read: "meeting prep" },
-		{ read: "vendor meetings", view: "suggested" },
 		{ read: "vendor meetings", view: "research" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));

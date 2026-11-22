@@ -10,4 +10,4 @@ The planner drops the outside-market warning because no production vendors used 
 
 A possible meeting comes from the signed-in partner's stored Outlook agenda. Its organizer or an attendee must match the contact's email exactly after normalization. Research still shows contacts when the calendar is unavailable.
 
-The new database has no verified office findings for vendor contacts. The planner reads Research by default. Until the app removes the Suggested tab, an explicit Suggested request returns an empty page. Research keeps the existing missing-office label during that transition.
+The new database has no verified office findings for vendor contacts. The planner serves only Research and refuses Suggested like any unknown view. Research keeps the existing missing-office label.

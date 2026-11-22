@@ -1691,6 +1691,8 @@ An unknown payment returns `404 invoice_not_found`. An outdated version returns 
 
 ## Vendors directory reads for the app
 
+The vendor meeting planner (`GET /api/engine/vendor-meetings`) serves only Research, including when no view is supplied. Suggested is refused like any unknown view. The empty Suggested answer kept in PR #1110 is gone. [Meeting planner](screens/vendors.md#meeting-planner).
+
 The Vendors directory (`GET /api/engine/vendors`) and drawer (`GET /api/engine/vendors/:id`) read from the new schema through `DATABASE` as `engine_reader` when the engine Worker's `DIRECTORY_READ_SCHEMA` variable is `next` (and `clients-vendors-from-engine` is `on` in the app). When `DIRECTORY_READ_SCHEMA` is absent or any other value, the old-table read stays active.
 
 The list and drawer show live vendors and their current relationship partner. Copied vendors open by their old UUID, their party UUID or their copied `V-*` ref. The drawer returns the requested UUID for UUID lookups and the party UUID for ref lookups. Intro notes show the copied intro text. Other notes appear in Conversations.

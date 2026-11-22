@@ -105,9 +105,9 @@ the app asks them: the first page of each list, every record on it, and recent
 activity for the first five records of each read with a name and ref. Vendor
 markets and the Relationships map are asked once. Today's reminders are asked
 with no input and for the partners, each following its next page up to five
-pages, and meeting prep once for the signed-in partner. Suggested vendor
-meetings are asked in their suggested and research views, each following its
-next page up to five pages. The old system answers the lists, records and map
+pages, and meeting prep once for the signed-in partner. The engine serves only
+Research for vendor meetings, which the comparison follows up to five pages.
+The old system answers the lists, records and map
 at its `/api/v1/business` paths. Their `observed_at`,
 `valid_until` and `correlation_id` may differ in value, not in format. Keys in
 another order are a `key order` difference at the first moved key. A field
@@ -117,7 +117,7 @@ their order is not checked. A refused deal, client or vendor is compared as its
 refusal; a refused board, invoices read, list, reminders read, meeting prep or
 vendor meetings read counts as failed, and so does an unavailable calendar. A
 network failure or a refused token stops the run. It prints counts, field paths and
-record IDs, never values, bodies or the token. A suggested vendor meeting
+record IDs, never values, bodies or the token. A vendor meeting
 prints its vendor ref and, when it has one, its contact ID. Exit codes are 0
 for a match, 1 for differences or unsettled requests and 2 for failure.
 

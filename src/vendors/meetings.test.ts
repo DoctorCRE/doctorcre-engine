@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { type TestContext, test } from "node:test";
 import { readSchema } from "../test-copy.ts";
 import { doorTest } from "../test-door.ts";
+import { vendorMeetings as route } from "./meeting-routes.ts";
 
 const at = (hours: number) =>
 	new Date(Date.now() + hours * 3_600_000).toISOString();
@@ -70,6 +71,7 @@ async function seedVendors(db: ReturnType<typeof doorTest>["db"]) {
 }
 
 type Answer = {
+	schema: string;
 	view: string;
 	total: number;
 	has_more: boolean;
@@ -160,6 +162,18 @@ test("Research pages follow their cursor within and across vendors", async (t) =
 	await seedVendors(db);
 	const search = "?view=research&q=AUSTIN&limit=1";
 	const first = await ready(await meetings(search));
+	assert.equal(first.schema, "vendor-meetings.v1");
+	assert.equal(first.view, "research");
+	const defaultPage = await ready(await meetings("?q=AUSTIN&limit=1"));
+	for (const field of [
+		"schema",
+		"view",
+		"total",
+		"items",
+		"has_more",
+		"next_cursor",
+	] as const)
+		assert.deepEqual(defaultPage[field], first[field]);
 	assert.equal(first.has_more, true);
 	assert.ok(first.next_cursor);
 	const cursor = encodeURIComponent(first.next_cursor);
@@ -185,16 +199,26 @@ test("Research pages follow their cursor within and across vendors", async (t) =
 		400,
 		"vendor_meetings_query_invalid",
 	);
-	assert.partialDeepStrictEqual(
-		await ready(await meetings("?view=suggested")),
-		{
-			view: "suggested",
-			total: 0,
-			items: [],
-			has_more: false,
-			next_cursor: null,
-		},
-	);
+});
+
+test("Suggested is refused like any unknown vendor meeting view", async () => {
+	const answers = [];
+	for (const view of ["suggested", "bogus"]) {
+		const response = await route.request(`/vendor-meetings?view=${view}`);
+		assert.equal(response.status, 400);
+		const { correlation_id, ...body } = (await response.json()) as Record<
+			string,
+			unknown
+		>;
+		assert.equal(typeof correlation_id, "string");
+		assert.partialDeepStrictEqual(body, {
+			error: "value_not_in_declared_vocabulary",
+			fields: ["view"],
+			allowed_values: ["research"],
+		});
+		answers.push(body);
+	}
+	assert.deepEqual(answers[0], answers[1]);
 });
 
 async function refused(response: Response, status: number, error: string) {
