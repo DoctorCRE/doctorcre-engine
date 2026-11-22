@@ -387,15 +387,35 @@ for (const [index, scenario] of [
 		},
 	},
 	{ source: null, expectedDue: "2025-02-08", meeting: true },
+	{
+		source: null,
+		expectedDue: "2025-02-08",
+		what: "  SEND\u00a0ΟΣ. ",
+		suggested: "send ος.",
+	},
+	{
+		source: null,
+		expectedDue: "2025-02-08",
+		native: true,
+		what: "  SEND\u00a0ΟΣ. ",
+		suggested: "send ος.",
+	},
 ].entries()) {
 	const kind = scenario.meeting ? "meeting" : "call";
-	const job = scenario.meeting ? "call_capture" : "old_system";
-	test(`${kind} acceptance joins the held step with ${scenario.source ?? "unknown"} date provenance${scenario.edits?.what ? " and edited owner and text" : ""}`, async () => {
+	const job =
+		scenario.meeting || scenario.native ? "call_capture" : "old_system";
+	const details = scenario.suggested
+		? `final sigma in ${scenario.native ? "native" : "copied"} action text`
+		: `${scenario.source ?? "unknown"} date provenance${scenario.edits?.what ? " and edited owner and text" : ""}`;
+	test(`${kind} acceptance joins the held step with ${details}`, async () => {
 		const target = id(101 + index * 4);
 		const activity = id(102 + index * 4);
 		const step = id(103 + index * 4);
 		const action = id(104 + index * 4);
-		const what = "  SEND\u00a0the\u2003\tplan.\u3000";
+		const what = scenario.what ?? "  SEND\u00a0the\u2003\tplan.\u3000";
+		const suggested =
+			scenario.suggested ??
+			(scenario.edits?.what ? "Send the old plan." : "send the plan.");
 		await db.query(`
 			begin;
 			select set_config('engine.job', '${job}', true), set_config('engine.user_id', '${joe}', true);
@@ -406,7 +426,7 @@ for (const [index, scenario] of [
 				values ('${step}', '${target}', '${what}', '${scenario.edits?.owner_party_id ?? joe}', '2025-02-08', '2025-02-15');
 			insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence, owner_party_id, due_on, due_source)
 				values ('${action}', 'next_step', '${activity}', '${kind}', '${job}', '${target}',
-					'${scenario.edits?.what ? "Send the old plan." : "send the plan."}', 'Example quote.',
+					'${suggested}', 'Example quote.',
 					${scenario.meeting ? "null" : `'${joe}'`},
 					'2025-02-09', ${scenario.source ? `'${scenario.source}'` : "null"});
 			commit;

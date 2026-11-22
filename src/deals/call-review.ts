@@ -23,8 +23,8 @@ export const copiedCallStep = sql<boolean>`p.kind = 'next_step'
 
 export const privateCallLog = sql<boolean>`p.kind = 'log_call' and not (${sharedCopiedCall})`;
 
-const stepTextKey = (what: string | null | Expression<string | null>) =>
-	sql<string>`lower(btrim(regexp_replace(${what}, ${"[\u0009-\u000d \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+"}, ' ', 'g')))`;
+export const stepTextKey = (what: string) =>
+	what.replace(/\s+/gu, " ").trim().toLowerCase();
 
 const openDealStep = (
 	dealId: string | Expression<string | null>,
@@ -46,20 +46,21 @@ export async function lockOpenDealStep(
 	);
 	const {
 		rows: [existing],
-	} = await sql<{ id: string; matches: boolean }>`
-		select existing.id, ${stepTextKey(sql.ref("existing.what"))} = ${stepTextKey(what)} as matches
+	} = await sql<{ id: string; what: string }>`
+		select existing.id, existing.what
 		${openDealStep(dealId, sql<string>`coalesce(${owner}::uuid, ${ACTING_USER})`)}
 		for no key update`.execute(tx);
-	return existing;
+	return (
+		existing && {
+			id: existing.id,
+			matches:
+				what !== null && stepTextKey(existing.what) === stepTextKey(what),
+		}
+	);
 }
 
-export const callAcceptanceBlock = (userId: string) => sql<
-	"private_call" | "open_step_exists" | null
->`
-	case when p.status = 'pending' then case
-		when ${privateCallLog} then 'private_call'
-		when ${copiedCallStep} and exists (
-			select ${openDealStep(sql.ref("p.deal_id"), sql<string>`coalesce(p.owner_party_id, ${userId}::uuid)`)}
-				and ${stepTextKey(sql.ref("existing.what"))} <> ${stepTextKey(sql.ref("p.what"))}
-		) then 'open_step_exists'
-	end end`;
+export const openCopiedCallStepText = (userId: string) => sql<string | null>`
+	case when p.status = 'pending' and (${copiedCallStep}) then (
+		select existing.what
+		${openDealStep(sql.ref("p.deal_id"), sql<string>`coalesce(p.owner_party_id, ${userId}::uuid)`)}
+	) end`;

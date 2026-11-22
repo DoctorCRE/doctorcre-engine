@@ -6,7 +6,9 @@ import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../uuid.ts";
 import {
-	callAcceptanceBlock,
+	openCopiedCallStepText,
+	privateCallLog,
+	stepTextKey,
 	visibleCall,
 	visibleCallProposal,
 } from "./call-review.ts";
@@ -26,7 +28,22 @@ async function readCallOutcomes(
 	if (!deal) return new Refusal(404, "not_found");
 
 	const calls = await callOutcomeQuery(db, userId, dealId).execute();
-	return { ...deal, calls };
+	return {
+		...deal,
+		calls: calls.map((call) => ({
+			...call,
+			proposals: call.proposals.map(({ open_step_text, ...proposal }) => {
+				const acceptBlocked =
+					proposal.accept_blocked ??
+					(open_step_text !== null &&
+					proposal.what !== null &&
+					stepTextKey(open_step_text) !== stepTextKey(proposal.what)
+						? "open_step_exists"
+						: null);
+				return { ...proposal, accept_blocked: acceptBlocked };
+			}),
+		})),
+	};
 }
 
 export function callOutcomeQuery(
@@ -84,7 +101,10 @@ export function callOutcomeQuery(
 						"p.phase_on",
 						"p.next_step_id",
 						"owner.slug as owner",
-						callAcceptanceBlock(userId).as("accept_blocked"),
+						sql<"private_call" | null>`
+							case when p.status = 'pending' and (${privateCallLog}) then 'private_call' end
+						`.as("accept_blocked"),
+						openCopiedCallStepText(userId).as("open_step_text"),
 					])
 					.select(({ fn }) => [
 						fn.coalesce("p.what", "step.what").as("what"),
