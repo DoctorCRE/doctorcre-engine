@@ -51,6 +51,20 @@ test("the former vendor market route returns not found", async () => {
 	);
 });
 
+test("the former Today and meeting prep routes return not found", async () => {
+	for (const path of [
+		"today-triage?unknown=value",
+		"calendar-meeting-prep?unknown=value",
+	]) {
+		const response = await ask(path);
+		assert.deepEqual(
+			[response.status, await response.json()],
+			[404, { error: "not_found" }],
+			path,
+		);
+	}
+});
+
 // The old door matched the raw path, so an encoded address served nothing.
 test("a percent-encoded address answers the old not-found body", async () => {
 	const uuid = "00000000-0000-4000-8000-000000000001";

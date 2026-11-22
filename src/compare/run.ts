@@ -29,11 +29,7 @@ import {
 	reasonsShape,
 } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
-import {
-	meetingPrepShape,
-	todayShape,
-	vendorMeetingsShape,
-} from "./today-shapes.ts";
+import { vendorMeetingsShape } from "./vendor-meetings-shape.ts";
 
 export class StopRun extends Error {}
 
@@ -56,9 +52,6 @@ export type Ask =
 	| { read: "relationships" }
 	// `record` identifies the deal, client or vendor whose name is asked.
 	| { read: "recent activity"; name: string; record: string; limit?: 20 }
-	// With no owners, the old default queue of every owner.
-	| { read: "today's reminders"; owners?: "partners" }
-	| { read: "meeting prep" }
 	| { read: "vendor meetings"; view: "research" };
 type Fetch = (ask: Ask) => Promise<unknown>;
 type Comparison = ReturnType<typeof compareAnswers>;
@@ -113,8 +106,6 @@ export const READS: Record<Ask["read"], Read> = {
 	vendor: { shape: vendorShape, prefix: "vendor", label: "vendor detail" },
 	relationships: { shape: networkShape, prefix: "network" },
 	"recent activity": { shape: activityShape, prefix: "activity" },
-	"today's reminders": { shape: todayShape, prefix: "today" },
-	"meeting prep": { shape: meetingPrepShape, prefix: "prep" },
 	"vendor meetings": { shape: vendorMeetingsShape, prefix: "meetings" },
 };
 
@@ -209,10 +200,6 @@ export async function compareDeals(
 		{ read: "client list" },
 		{ read: "vendor list" },
 		{ read: "relationships" },
-		{ read: "today's reminders" },
-		{ read: "today's reminders", owners: "partners" },
-		// Both systems read the signed-in partner's own calendar.
-		{ read: "meeting prep" },
 		{ read: "vendor meetings", view: "research" },
 	];
 	const queued = new Set(queue.map((ask) => JSON.stringify(ask)));

@@ -23,8 +23,8 @@ const REFUSALS = new Set([400, 404, 409, 422]);
 export const pause = () =>
 	new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
-// A board for a listed workspace, the invoices, the directory lists, today's
-// reminders, meeting prep and vendor meetings have no refusal to compare.
+// A board for a listed workspace, the invoices, the directory lists, and
+// vendor meetings have no refusal to compare.
 // Comparing one would match two empty answers, and an empty board or list
 // samples no records.
 const UNREFUSED = new Set<Ask["read"]>([
@@ -32,8 +32,6 @@ const UNREFUSED = new Set<Ask["read"]>([
 	"invoices",
 	"client list",
 	"vendor list",
-	"today's reminders",
-	"meeting prep",
 	"vendor meetings",
 ]);
 
@@ -98,28 +96,13 @@ const reasonsPage = (before_id?: string) =>
 		before_id === undefined ? { limit: 25 } : { limit: 25, before_id },
 	);
 
-type Walked = Extract<
-	Ask,
-	{ read: "today's reminders" } | { read: "vendor meetings" }
->;
-const walkedPage = (ask: Walked, cursor?: string) => {
-	const more = cursor !== undefined && { cursor };
-	return ask.read === "vendor meetings"
-		? mirrored("/vendor-meetings", "read-vendor-meetings", {
-				view: ask.view,
-				...more,
-			})
-		: mirrored("/today-triage", "today-triage", {
-				...(ask.owners && { owners: ask.owners }),
-				...more,
-			});
-};
-
 // Two unavailable calendars would match while comparing no meetings.
 const unavailable = (calendar: unknown) =>
 	isRecord(calendar) && calendar.state === "unavailable";
 
-function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
+function requestOf(
+	ask: Exclude<ToolAsk, { read: "lead" } | { read: "vendor meetings" }>,
+): Request {
 	switch (ask.read) {
 		case "board":
 			return mirrored("/deals", "deal-room-board", {
@@ -168,8 +151,6 @@ function requestOf(ask: Exclude<ToolAsk, { read: "lead" } | Walked>): Request {
 				query: ask.name,
 				limit: ask.limit ?? 10,
 			});
-		case "meeting prep":
-			return mirrored("/calendar-meeting-prep", "calendar-meeting-prep");
 	}
 }
 
@@ -231,25 +212,25 @@ async function answerOf(
 			),
 		};
 	}
-	if (ask.read === "today's reminders" || ask.read === "vendor meetings") {
-		const pages = [await read(walkedPage(ask))];
+	if (ask.read === "vendor meetings") {
+		const pageOf = (cursor?: string) =>
+			mirrored("/vendor-meetings", "read-vendor-meetings", {
+				view: ask.view,
+				...(cursor !== undefined && { cursor }),
+			});
+		const pages = [await read(pageOf())];
 		let cursor = nextCursor(pages[0]);
 		while (cursor !== undefined && pages.length < FIRST_PAGES) {
 			await beforePage();
-			const page = await read(walkedPage(ask, cursor));
+			const page = await read(pageOf(cursor));
 			pages.push(page);
 			cursor = nextCursor(page);
 		}
-		if (
-			ask.read === "vendor meetings" &&
-			pages.some((page) => isRecord(page) && unavailable(page.calendar))
-		)
+		if (pages.some((page) => isRecord(page) && unavailable(page.calendar)))
 			throw new Error("calendar unavailable");
 		return { pages };
 	}
 	const first = await read(requestOf(ask));
-	if (ask.read === "meeting prep" && unavailable(first))
-		throw new Error("calendar unavailable");
 	if (ask.read !== "reasons to reach out") return first;
 	return {
 		pages: [

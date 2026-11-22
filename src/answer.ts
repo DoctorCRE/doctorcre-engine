@@ -304,7 +304,6 @@ const isKnownPartner = async (db: Reader, slug: string) =>
 // The old tools whose reads the engine serves. A failed read's body names one.
 type Verb =
 	| "calendar-critical-dates"
-	| "calendar-meeting-prep"
 	| "capture-queue"
 	| "deal-room-board"
 	| "find"
@@ -340,8 +339,7 @@ type Verb =
 	| "read-vendor-meetings"
 	| "resolve-action-link"
 	| "search-parties-v1"
-	| "search-properties"
-	| "today-triage";
+	| "search-properties";
 
 export function answer(
 	c: Context<DatabaseEnv>,
