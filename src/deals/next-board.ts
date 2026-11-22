@@ -307,7 +307,7 @@ export const selectNextDealsWithFacts = (db: Transaction<DB>) =>
 		).as("next_critical_date"),
 	]);
 
-function nextBoardQuery(
+export function nextBoardQuery(
 	db: Transaction<DB>,
 	{ workspace, account }: Scope,
 	list: BoardList = "open",
