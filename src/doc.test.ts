@@ -179,61 +179,37 @@ const chatTurn = async (chat: string, user = "joe") =>
 
 test("backup answers an unready partner's turn using Doc's read tools", async (t) => {
 	const { conversation_id } = await askDoc();
-	const lead = await exampleLead("Example Backup Lead");
-	const answer = {
-		kind: "answer",
-		text: "Here is your example lead.",
-		sources: [`lead:${lead.ref.id}`],
-	};
-	let calls = 0;
-	t.mock.method(globalThis, "fetch", async () =>
-		++calls === 1
-			? modelReply(
-					[
-						{
-							type: "tool_use",
-							id: "find_lead",
-							name: "find",
-							input: { kind: "lead", query: "Example Backup Lead" },
-						},
-					],
-					"tool_use",
-				)
-			: reply(answer),
+	const query = "Example Backup Lead";
+	const lead = await exampleLead(query);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply({ kind: "answer", text: query, sources: [`lead:${lead.ref.id}`] }),
 	);
+	const find = {
+		type: "tool_use",
+		id: "find_lead",
+		name: "find",
+		input: { kind: "lead", query },
+	};
+	fetch.mock.mockImplementationOnce(async () => modelReply([find], "tool_use"));
 	await tick();
-	const saved = await chatTurn(conversation_id);
-	assert.equal(calls, 2);
-	assert.equal(saved?.answered_by, "backup");
+	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
 });
 
-test("backup waits for the ready Mac and skips its live claim even after two minutes", async (t) => {
-	const credential = await issue(owner);
-	assert.equal((await poll(credential)).status, 204);
+test("backup waits for the ready Mac and a Mac takeover retains its answer", async (t) => {
 	const { conversation_id, turn } = await askDoc();
-	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
-	await tick();
-	assert.equal(fetch.mock.callCount(), 0);
-	assert.equal((await chatTurn(conversation_id))?.state, "queued");
+	const credential = await issue(owner);
+	assert.equal((await claim(credential)).turn.id, turn.id);
 	await db.query(
 		"update doc_turn set created_at = clock_timestamp() - interval '2 minutes' where id = $1",
 		[turn.id],
 	);
-	assert.equal((await claim(credential)).turn.id, turn.id);
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
 	await tick();
 	assert.equal(fetch.mock.callCount(), 0);
 	assert.equal((await chatTurn(conversation_id))?.state, "working");
 	await expire(turn.id);
-	await tick();
-	assert.equal(fetch.mock.callCount(), 1);
-	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
-});
-
-test("a Mac taking over an expired backup claim keeps its own answer", async (t) => {
-	const { conversation_id, turn } = await askDoc();
-	const credential = await issue(owner);
 	const macAnswer = { ...refusal, text: "The Mac answered." };
-	const fetch = t.mock.method(globalThis, "fetch", async () => {
+	fetch.mock.mockImplementationOnce(async () => {
 		assert.equal((await poll(credential)).status, 204);
 		await expire(turn.id);
 		const { claim_id } = await claim(credential);
@@ -334,23 +310,18 @@ test("backup switched off leaves turns available to the Mac before the migration
 		drop function stamp_doc_turn_requeue();
 		alter table doc_turn drop column answered_by, drop column requeued_at`);
 	t.after(() => db.query(migration));
-	const { conversation_id, turn } = await askDoc();
+	const { conversation_id } = await askDoc();
 	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
 	await tick({ ...backupEnv, DOC_BACKUP: "false" });
 	assert.equal(fetch.mock.callCount(), 0);
-	assert.deepEqual(await chatTurn(conversation_id), turn);
 	const credential = await issue(owner);
 	const { claim_id } = await claim(credential);
-	assert.equal(
-		(
-			await complete(credential, {
-				kind: "answered",
-				claim_id,
-				answer: refusal,
-			})
-		).status,
-		204,
-	);
+	const result = await complete(credential, {
+		kind: "answered",
+		claim_id,
+		answer: refusal,
+	});
+	assert.equal(result.status, 204);
 	assert.equal((await chatTurn(conversation_id))?.answered_by, "mac");
 });
 

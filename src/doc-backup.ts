@@ -27,6 +27,7 @@ type BackupConfig = {
 	reader: string;
 	writer: string;
 };
+const backupPrompt = docPrompt.replace("The JSON on stdin", "The input JSON");
 
 async function answerTurn(
 	{ apiKey, model, reader, writer }: BackupConfig,
@@ -36,6 +37,9 @@ async function answerTurn(
 	const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
 	const { InMemoryTransport } = await import(
 		"@modelcontextprotocol/sdk/inMemory.js"
+	);
+	const { CallToolResultSchema } = await import(
+		"@modelcontextprotocol/sdk/types.js"
 	);
 	const forOwner = <T>(run: Parameters<typeof docLinkOwnerTransaction<T>>[2]) =>
 		docLinkOwnerTransaction(writer, owner, run);
@@ -61,7 +65,7 @@ async function answerTurn(
 		(await askDocBackup({
 			apiKey,
 			model,
-			system: docPrompt,
+			system: backupPrompt,
 			messages: [{ role: "user", content: JSON.stringify({ turn, history }) }],
 			tools: session.tools,
 			timeoutMs: session.timeout - (performance.now() - start),
@@ -71,36 +75,31 @@ async function answerTurn(
 					client.callTool({ name, arguments: args }, undefined, { signal }),
 				);
 				if (!reply) throw new Error("Doc claim expired");
-				return reply;
+				return CallToolResultSchema.parse(reply);
 			},
 		}));
-	if (result?.kind !== "answer") {
-		const exhausted = result?.kind === "credits_exhausted";
-		await forOwner((tx) =>
-			finishDocTurn(tx, owner, {
+	return forOwner(async (tx) => {
+		if (result?.kind === "answer") {
+			let answer: unknown = null;
+			try {
+				answer = JSON.parse(result.text);
+			} catch {
+				// Let the shared answer validator handle an invalid model response.
+			}
+			const status = await finishDocTurn(tx, owner, {
 				claim_id,
-				kind: exhausted ? "queued" : "failed",
-			}),
-		);
-		return exhausted;
-	}
-	let answer: unknown = null;
-	try {
-		answer = JSON.parse(result.text);
-	} catch {
-		// Let the shared answer validator handle an invalid model response.
-	}
-	await forOwner(async (tx) => {
-		const status = await finishDocTurn(tx, owner, {
+				kind: "answered",
+				answer,
+				answered_by: "backup",
+			});
+			if (status !== 422) return;
+		}
+		await finishDocTurn(tx, owner, {
 			claim_id,
-			kind: "answered",
-			answer,
-			answered_by: "backup",
+			kind: result?.kind === "credits_exhausted" ? "queued" : "failed",
 		});
-		if (status === 422)
-			await finishDocTurn(tx, owner, { claim_id, kind: "failed" });
+		return result?.kind;
 	});
-	return false;
 }
 
 export async function dispatchDocBackup(env: DocBackupBindings) {
@@ -132,7 +131,10 @@ export async function dispatchDocBackup(env: DocBackupBindings) {
 		const claim = await docLinkOwnerTransaction(writer, owner, (tx) =>
 			claimDocWork(tx, owner, "backup"),
 		);
-		if (claim?.kind === "turn" && (await answerTurn(config, owner, claim)))
+		if (
+			claim?.kind === "turn" &&
+			(await answerTurn(config, owner, claim)) === "credits_exhausted"
+		)
 			return;
 	}
 }
