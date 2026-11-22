@@ -3567,6 +3567,15 @@ end $$;
 alter table deal_phase_change add constraint deal_phase_change_call_source check (
 	num_nonnulls(call_activity_id, call_move_id) = case when changed_by_job = 'call_capture' then 2 else 0 end);
 
+create function call_visible_to(
+	changed_by_user_id uuid, changed_by_job text, changed_for_user_id uuid,
+	viewer_id uuid default nullif(current_setting('engine.user_id', true), '')::uuid
+) returns boolean
+language sql immutable set search_path = next, pg_temp as $$
+	select coalesce(viewer_id in (changed_by_user_id, changed_for_user_id)
+		or (changed_by_job = 'old_system' and changed_by_user_id is null and changed_for_user_id is null), false);
+$$;
+
 alter table weekly_review
 	add reviewer_is_partner boolean generated always as (true) stored,
 	add constraint weekly_review_by_a_user check (changed_by_user_id is not null),
@@ -4074,6 +4083,8 @@ grant execute on function npi_check_digit_holds(text), is_time_zone(text) to eng
 grant execute on function invoice_email_target(invoice_email), invoice_name(text) to engine, engine_reader;
 revoke execute on function deal_filing_reason(uuid, uuid) from public;
 grant execute on function deal_filing_reason(uuid, uuid) to engine, engine_reader;
+revoke execute on function call_visible_to(uuid, text, uuid, uuid) from public;
+grant execute on function call_visible_to(uuid, text, uuid, uuid) to engine, engine_reader;
 
 -- Only the owner sets when the engine starts publishing for an account, even on an account the engine adds.
 revoke insert on social_account from engine;

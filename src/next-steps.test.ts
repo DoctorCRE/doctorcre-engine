@@ -91,6 +91,66 @@ const stepNow = async (step: unknown) =>
 const create = (caller: Caller, args: object) =>
 	save(caller, "next-steps", { idempotency_key: randomUUID(), ...args });
 
+for (const { caller, what, expected } of [
+	{
+		caller: { job: "agent", for_user: "alex" },
+		what: "Site visit with A. Example | Example Co, Tue Oct 27 4:30 PM",
+		expected:
+			"Follow up on the Oct 27 meeting: Site visit with A. Example | Example Co",
+	},
+	{
+		caller: { job: "agent" },
+		what: "Example review, Mon Jan 1 12:00 AM",
+		expected: "Follow up on the Jan 1 meeting: Example review",
+	},
+	{
+		caller: { job: "agent", for_user: "alex" },
+		what: "Example review, Tue Oct 07 4:30 PM",
+		expected: "Follow up on the Oct 07 meeting: Example review",
+	},
+	{
+		caller: { job: "agent", for_user: "alex" },
+		what: "Review $1, $2 and $3 | Example Co, Tue Oct 27 4:30 PM",
+		expected:
+			"Follow up on the Oct 27 meeting: Review $1, $2 and $3 | Example Co",
+	},
+	{
+		caller: { user: "alex" },
+		what: "Site visit with A. Example | Example Co, Tue Oct 27 4:30 PM",
+		expected: undefined,
+	},
+	...[
+		"Example review, Oct 27 4:30 PM",
+		"Example review, Tue Oct 27 16:30 PM",
+		"Example review Tue Oct 27 4:30 PM",
+		"Example review, Tue Oct 27 4:30 PM, bring plans",
+		"Example review, Tue Oct 32 4:30 PM",
+		"Example review, Tue Oct 27 0:30 PM",
+		"Example review, Tue Oct 27 4:60 PM",
+		"Example review, Tue Oct 27 4:30 PM\n",
+		"Call the example clinic",
+	].map((what) => ({
+		caller: { job: "agent", for_user: "alex" },
+		what,
+		expected: undefined,
+	})),
+]) {
+	test(`next step wording for ${JSON.stringify(caller)} and ${JSON.stringify(what)}`, async () => {
+		const [status, answer] = await create(caller, {
+			property_id: PROPERTY,
+			what,
+		});
+		const stored = expected ?? what;
+		assert.equal(status, 201);
+		assert.equal((await stepNow(answer.next_step_id)).what, stored);
+		const { rows } = await db.query(
+			"select what from home_next_step where id = $1",
+			[answer.next_step_id],
+		);
+		assert.deepEqual(rows, [{ what: stored }]);
+	});
+}
+
 async function newStep(args: object = {}) {
 	const deal = randomUUID();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
