@@ -73,7 +73,6 @@ import {
 import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { preferenceSaves, preferences } from "./preferences.ts";
-import { presence } from "./presence.ts";
 import { propertySearch } from "./property-search.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
 import { prospectAdd } from "./prospects/add.ts";
@@ -142,7 +141,6 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", invoices)
 	.route("/", leads)
 	.route("/", nextStep)
-	.route("/", presence)
 	.route("/", relationships)
 	.route("/", search)
 	.route("/", today)

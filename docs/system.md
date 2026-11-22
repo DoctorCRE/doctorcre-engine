@@ -21,6 +21,8 @@ The staging reader and writer Hyperdrives point to the Neon rehearsal branch use
 
 Which old program reads and writes what, with file and line: `docs/new-database.md` § "Who reads and writes the three features' records".
 
+On engine sign-in, Closing anniversaries opens from More.
+
 ## How they connect
 
 Today:
@@ -31,7 +33,7 @@ partner ─▶ app ─┬─▶ old API (mcp-server) ─▶ old tables     sign-
                                         └─▶ next schema     Deals and invoice tracker reads, with their engine switches
                                                             Mark paid with invoices-from-engine on
 signed-in partner ─▶ engine /api/engine ─▶ old tables        own calls with CSRF to patch-deal-field, update-deal, add-deal-note,
-                                                            set-next-step, and presence
+                                                            and set-next-step
 engine ─▶ old API /auth/session                             every partner call's sign-in check
 Studio programs ─▶ old API ─▶ old tables                    every program whose switch is off
 Studio programs, assistant ─▶ engine /jobs ─▶ next schema   only where a switch below is on
