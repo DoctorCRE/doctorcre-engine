@@ -3,11 +3,21 @@ import {
 	redeemWebsiteGrant,
 	verifyWebsitePassword,
 } from "./deals/client-website-access.ts";
+import { type DocBackupBindings, dispatchDocBackup } from "./doc-backup.ts";
 import { failureKind } from "./failure.ts";
 import type { WriterEnv } from "./save.ts";
-import { partnerApp, recordWorkerStart, type WorkerEnv } from "./worker.ts";
+import worker, {
+	partnerApp,
+	recordWorkerStart,
+	type WorkerEnv,
+} from "./worker.ts";
 
-export { default } from "./worker.ts";
+export default Object.assign(worker, {
+	scheduled(controller: ScheduledController, env: DocBackupBindings) {
+		controller.noRetry();
+		return dispatchDocBackup(env);
+	},
+});
 
 export class PartnerApp extends WorkerEntrypoint<WorkerEnv["Bindings"]> {
 	fetch(request: Request) {

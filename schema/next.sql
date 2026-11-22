@@ -4200,6 +4200,8 @@ create table doc_turn (
 	claim_until timestamptz,
 	claim_state jsonb,
 	answer jsonb check (jsonb_typeof(answer) = 'object'),
+	answered_by text not null default 'mac' constraint doc_turn_answered_by check (answered_by in ('mac', 'backup')),
+	requeued_at timestamptz,
 	confirmation_key uuid unique references save_receipt (idempotency_key) deferrable initially deferred,
 	unique (conversation_id, position),
 	unique (owner_user_id, idempotency_key),
@@ -4215,6 +4217,17 @@ create table doc_turn (
 );
 create unique index doc_turn_one_pending on doc_turn (conversation_id) where state in ('queued', 'working');
 
+create function stamp_doc_turn_requeue() returns trigger language plpgsql as $$
+begin
+	new.requeued_at := clock_timestamp();
+	return new;
+end;
+$$;
+revoke all on function stamp_doc_turn_requeue() from public;
+create trigger stamp_doc_turn_requeue before update of state on doc_turn
+	for each row when (old.state <> 'queued' and new.state = 'queued')
+	execute function stamp_doc_turn_requeue();
+
 alter table doc_conversation enable row level security;
 alter table doc_turn enable row level security;
 create policy doc_conversation_owner on doc_conversation to engine using (
@@ -4229,7 +4242,7 @@ revoke all on doc_conversation, doc_turn from public, engine_reader;
 grant select, insert on doc_conversation, doc_turn to engine;
 -- FOR UPDATE needs UPDATE on one column. Row security keeps the owner fixed.
 grant update (owner_user_id) on doc_conversation to engine;
-grant update (state, claim_id, claim_until, claim_state, answer, confirmation_key) on doc_turn to engine;
+grant update (state, claim_id, claim_until, claim_state, answer, answered_by, confirmation_key) on doc_turn to engine;
 
 create table doc_link (
 	owner_user_id uuid primary key,

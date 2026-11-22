@@ -813,7 +813,7 @@ async function claimFiling(owner: string, activity: string) {
 		"update doc_judgment_job set state = 'failed' where kind = 'email_summary' and state = 'queued'",
 	);
 	const work = await docLinkOwnerTransaction(writerUrl, owner, (tx) =>
-		claimDocWork(tx, owner, true),
+		claimDocWork(tx, owner, "mac_with_judgment"),
 	);
 	assert.ok(work?.kind === "email_filing", "expected a queued filing claim");
 	assert.equal(work.activity_id, activity);

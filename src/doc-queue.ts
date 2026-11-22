@@ -5,7 +5,7 @@ import {
 	saveFilingJudgment,
 } from "./activity/filing-judgment.ts";
 import { recentDocTurns } from "./doc.ts";
-import { recordDocPoll } from "./doc-link.ts";
+import { docLinkState, recordDocPoll } from "./doc-link.ts";
 import { type DocClaimState, validateDocAnswer } from "./doc-tools.ts";
 import type { DB } from "./next-database.d.ts";
 
@@ -75,8 +75,16 @@ const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
 export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
-	acceptsJudgment: boolean,
+	runner: "mac" | "mac_with_judgment" | "backup",
 ) {
+	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
+		tx,
+	);
+	const eligible =
+		runner === "backup"
+			? sql`coalesce(requeued_at, created_at) <= statement_timestamp() - interval '2 minutes'
+				or (select status from ${docLinkState(owner)} link) <> 'ready'`
+			: sql`true`;
 	// Turns still run before the separate judgment storage migration.
 	const {
 		rows: [storage],
@@ -84,7 +92,7 @@ export async function claimDocWork(
 	const mailQueue = storage?.installed
 		? sql`
 		union all
-		select 'mail', id, created_at, claim_until from doc_judgment_job
+		select 'mail', id, created_at, claim_until, true from doc_judgment_job
 		where owner_user_id = ${owner} and state in ('queued', 'working')
 	`
 		: sql``;
@@ -93,12 +101,12 @@ export async function claimDocWork(
 			rows: [candidate],
 		} = await sql<{ queue: "turn" | "mail"; id: string }>`
 			with pending as (
-				select 'turn' as queue, id, created_at, claim_until from doc_turn
+				select 'turn' as queue, id, created_at, claim_until, (${eligible}) as eligible from doc_turn
 				where owner_user_id = ${owner} and state in ('queued', 'working')
 				${mailQueue}
 			)
 			select queue, id from pending
-			where (queue = 'turn' or ${acceptsJudgment})
+			where eligible and (queue = 'turn' or ${runner === "mac_with_judgment"})
 			  and not exists (select 1 from pending where claim_until > statement_timestamp())
 			order by queue <> 'turn', created_at, id
 			limit 1
@@ -276,8 +284,8 @@ export async function finishDocJudgment(
 }
 
 type DocResult = { claim_id: string } & (
-	| { kind: "answered"; answer: unknown }
-	| { kind: "failed" | "signed_out" | "plan_limited" }
+	| { kind: "answered"; answer: unknown; answered_by?: "backup" }
+	| { kind: "failed" | "signed_out" | "plan_limited" | "queued" }
 );
 
 export async function finishDocTurn(
@@ -309,7 +317,13 @@ export async function finishDocTurn(
 	const blocked = kind === "signed_out" || kind === "plan_limited";
 	const saved = await tx
 		.updateTable("doc_turn")
-		.set({ state: blocked ? "queued" : kind, ...clearClaim, answer })
+		.set({
+			state: blocked ? "queued" : kind,
+			...clearClaim,
+			answer,
+			...(kind === "answered" &&
+				result.answered_by && { answered_by: result.answered_by }),
+		})
 		.where("id", "=", turn.id)
 		.where("owner_user_id", "=", owner)
 		.where(unexpired)

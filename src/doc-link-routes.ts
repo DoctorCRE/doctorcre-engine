@@ -89,7 +89,9 @@ export function claimDocLink(c: Context<WriterEnv>) {
 				? await claimDocWork(
 						tx,
 						owner,
-						c.req.header("Doc-Link-Work") === "judgment",
+						c.req.header("Doc-Link-Work") === "judgment"
+							? "mac_with_judgment"
+							: "mac",
 					)
 				: null;
 		return work

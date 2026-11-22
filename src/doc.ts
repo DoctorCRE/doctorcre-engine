@@ -114,6 +114,7 @@ type Turn = Pick<
 	| "idempotency_key"
 > & {
 	state: "queued" | "working" | "failed" | "answered";
+	answered_by: "mac" | "backup" | null;
 	confirmation: JsonObject | null;
 	waiting_reason: string | null;
 	draft_review: {
@@ -132,6 +133,7 @@ const conversations = sql`
 const queued = sql`(t.state = 'queued' or t.claim_until <= statement_timestamp())`;
 
 const turnFields = sql`t.id, to_jsonb(t.created_at) #>> '{}' as created_at, t.position, t.question, t.context, t.answer, t.idempotency_key,
+	case when t.state = 'answered' then coalesce(to_jsonb(t) ->> 'answered_by', 'mac') end as answered_by,
 	case when ${queued} then 'queued' else t.state end as state,
 	case when ${queued} then (
 		select case status

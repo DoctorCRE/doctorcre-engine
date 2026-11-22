@@ -2620,6 +2620,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	doc_link: ["credential_hash", "issued_at", "last_seen_at", "readiness"],
 	doc_turn: [
 		"answer",
+		"answered_by",
 		"claim_id",
 		"claim_state",
 		"claim_until",
