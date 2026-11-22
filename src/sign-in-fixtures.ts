@@ -3,13 +3,14 @@ import { sql, type Transaction } from "kysely";
 import { recordActivity } from "./activity/next-record.ts";
 import { Refusal, refuse } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
-import { addDeal, changeDeal } from "./deals/next-change.ts";
+import { addDeal } from "./deals/next-change.ts";
 import { savePlan } from "./deals/tours.ts";
 import { failureKind } from "./failure.ts";
+import { stepItemId } from "./home-steps.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
-import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
-import { stampNextSave } from "./next-save.ts";
+import type { NextSaveEnv } from "./next-door.ts";
+import { ACTING_USER, stampNextSave } from "./next-save.ts";
 import { fit, isUuid } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 import { isArguments } from "./save-door.ts";
@@ -19,7 +20,6 @@ export type SignInFixtureEnv = NextSaveEnv & {
 };
 
 const job = "sign-in-rehearsal";
-const path = `/${job}` as const;
 const changed_at = sql<string>`now()`;
 
 const parseRun = (body: JsonObject) =>
@@ -42,14 +42,22 @@ async function prepare(tx: Transaction<DB>, run_id: string, owner: string) {
 		.execute();
 
 	const deal_name = `${name} deal`;
-	const { deal_id, change_id, phase_changed_at } = await addDeal(tx, {
+	const { deal_id, phase_changed_at } = await addDeal(tx, {
 		client_id,
 		owner,
 		name: deal_name,
 		phase: "research",
 		idempotency_key: run_id,
 	});
-	await changeDeal(tx, deal_id, change_id, { needs_attention: true });
+	const {
+		rows: [step],
+	} = await sql<{ id: string }>`
+		insert into next_step (deal_id, created_at, owner_party_id, due_on, what)
+		values (${deal_id}::uuid, now(), ${ACTING_USER},
+			(now() at time zone 'America/Chicago')::date - 1, 'Send the sample floor plan.')
+		returning id
+	`.execute(tx);
+	if (!step) throw new Error("rehearsal next step insert returned no row");
 
 	const now = Date.now();
 	const notes = [
@@ -91,37 +99,36 @@ async function prepare(tx: Transaction<DB>, run_id: string, owner: string) {
 		phase_changed_at,
 		note_ids,
 		notes,
-		home_item_id: `deal:${deal_id}`,
+		next_step_id: step.id,
+		home_item_id: stepItemId({ id: step.id, call_id: null }),
 		tour_id,
 		property_id,
 	};
 }
 
-export const signInFixtures = new Hono<SignInFixtureEnv>()
-	.use(`${path}/*`, async (c, next) => {
+async function fixtureState(
+	tx: Transaction<DB>,
+	run: string,
+	action: "prepare" | "record" | "cleanup",
+	answer: JsonObject | null = null,
+) {
+	const { rows } = await sql<{ state: JsonObject | null }>`
+		select sign_in_fixture(${run}::uuid, ${action}, ${JSON.stringify(answer)}::jsonb) as state
+	`.execute(tx);
+	return rows[0]?.state ?? null;
+}
+
+export const signInFixtures = new Hono<SignInFixtureEnv>().post(
+	`/${job}/:action`,
+	async (c) => {
 		if (c.env.ENGINE_ENVIRONMENT !== "staging") return c.notFound();
-		if (c.get("stamp").job !== job)
-			return refuse(c, new Refusal(403, "unknown_job"));
-		return next();
-	})
-	.post(`${path}/prepare`, async (c) => {
 		const stamp = c.get("stamp");
+		if (stamp.job !== job) return refuse(c, new Refusal(403, "unknown_job"));
+		const action = c.req.param("action");
+		if (action !== "prepare" && action !== "cleanup") return c.notFound();
 		const owner = "for_user" in stamp ? stamp.for_user : undefined;
-		if (!owner) return refuse(c, new Refusal(403, "AUTHORIZATION_REFUSED"));
-		return answerNextSave(
-			c,
-			"prepare-sign-in-rehearsal",
-			(body) => {
-				const run = parseRun(body);
-				return run instanceof Refusal
-					? run
-					: { idempotency_key: run.run_id.toLowerCase() };
-			},
-			(tx, request) => prepare(tx, request.idempotency_key, owner),
-			201,
-		);
-	})
-	.post(`${path}/cleanup`, async (c) => {
+		if (action === "prepare" && !owner)
+			return refuse(c, new Refusal(403, "AUTHORIZATION_REFUSED"));
 		const body: unknown = await c.req.json().catch(() => undefined);
 		if (!isArguments(body)) return refuse(c, new Refusal(400, "invalid_json"));
 		const run = parseRun(body);
@@ -130,19 +137,34 @@ export const signInFixtures = new Hono<SignInFixtureEnv>()
 		if (!writer) return refuse(c, new Refusal(503, "database_unavailable"));
 		const run_id = run.run_id.toLowerCase();
 		try {
-			await nextTransaction(writer.connectionString, "save", async (tx) => {
-				await stampNextSave(tx, { job });
-				await sql`select clear_sign_in_fixture(${run_id}::uuid)`.execute(tx);
-			});
-			return c.json({ run_id, remaining: 0 });
+			const result = await nextTransaction(
+				writer.connectionString,
+				"save",
+				async (tx) => {
+					await stampNextSave(tx, action === "prepare" ? stamp : { job });
+					const prior = await fixtureState(tx, run_id, action);
+					if (prior?.conflict)
+						throw new SaveRefusal(new Refusal(409, "key_reuse"));
+					if (action === "cleanup") return { run_id, remaining: 0 };
+					if (prior) return prior;
+					if (!owner) throw new Error("sign-in rehearsal owner required");
+					const answer = await prepare(tx, run_id, owner);
+					const recorded = await fixtureState(tx, run_id, "record", answer);
+					if (recorded?.conflict)
+						throw new SaveRefusal(new Refusal(409, "key_reuse"));
+					return answer;
+				},
+			);
+			return c.json(result, action === "prepare" ? 201 : 200);
 		} catch (error) {
 			if (error instanceof SaveRefusal) return refuse(c, error.refusal);
 			const correlation = crypto.randomUUID();
 			console.warn(
-				"sign-in rehearsal cleanup failed:",
+				"sign-in rehearsal failed:",
 				correlation,
 				failureKind(error),
 			);
 			return refuse(c, new Refusal(503, "database_unavailable"), correlation);
 		}
-	});
+	},
+);

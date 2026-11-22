@@ -53,12 +53,12 @@ The Studio and assistant keep their [jobs door](new-database.md#what-every-door-
 
 Apply [the rehearsal setup](../schema/staging-sign-in-fixtures.sql) to the staging Neon branch as the migration owner. Apply it again after refreshing the branch. The Worker serves the rehearsal job only when `ENGINE_ENVIRONMENT` is `staging`.
 
-Both requests use the jobs Access credentials and `Engine-Job: sign-in-rehearsal`. Send JSON with one field, `run_id`, a caller-generated UUID. For prepare, add `Engine-For-User` with the staging partner slug that will own the deal and see its Home flag.
+Both requests use the jobs Access credentials and `Engine-Job: sign-in-rehearsal`. Send JSON with one field, `run_id`, a caller-generated UUID. For prepare, add `Engine-For-User` with the staging partner slug that will own the deal and see its overdue Home reminder.
 
-- `POST /jobs/sign-in-rehearsal/prepare` returns 201 with `run_id`, `client_id`, `deal_id`, `deal_name`, `home_item_id`, `tour_id`, `property_id`, `phase_changed_at`, and parallel arrays `note_ids` and `notes` in oldest-first order. `home_item_id` is `deal:<deal_id>`. Repeating prepare with the same run and partner returns the same IDs and adds `replayed: true`.
-- `POST /jobs/sign-in-rehearsal/cleanup` returns 200 with `run_id` and `remaining: 0` after the transaction commits. A repeated cleanup returns the same answer. Run cleanup even if prepare timed out.
+- `POST /jobs/sign-in-rehearsal/prepare` returns 201 with `run_id`, `client_id`, `deal_id`, `deal_name`, `home_item_id`, `next_step_id`, `tour_id`, `property_id`, `phase_changed_at`, and parallel arrays `note_ids` and `notes` in oldest-first order. `home_item_id` is `next_action:<next_step_id>`. Repeating prepare with the same run and partner returns the same IDs and adds `replayed: true`. A cleaned run returns 409 `key_reuse`.
+- `POST /jobs/sign-in-rehearsal/cleanup` returns 200 with `run_id` and `remaining: 0` after the transaction commits. The run closes permanently, including when cleanup arrives before prepare. A repeated cleanup returns the same answer. Run cleanup even if prepare timed out.
 
-The save receipt marks every fixture row by its own ID or the IDs that form its key. Cleanup checks the original insert stamps and removes the rows and their receipt. An unexpected dependency causes the cleanup to roll back. The database keeps its ordinary audit history.
+Only the rehearsal function writes fixture receipts. The prepared receipt holds the exact insert audit IDs from its transaction. Cleanup checks for replaced records, removes the run's rows, and retains the cleaned receipt. An unexpected dependency causes the cleanup to roll back. The database keeps its ordinary audit history.
 
 ## Switch after hours with advance notice
 
