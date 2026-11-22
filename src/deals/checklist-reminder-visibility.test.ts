@@ -144,3 +144,45 @@ test("the morning window follows Central calendar days across midnight and DST",
 		);
 	}
 });
+
+test("a queued checklist reminder loses its private title when the step is reassigned", async (t) => {
+	const { db, request, save, user, deal } = await reminderDeal(t);
+	const [caller, call, step] = Array.from({ length: 3 }, () => randomUUID());
+	const title = "Example private checklist";
+	await db.query(`
+		set local engine.job = 'old_system';
+		insert into party (id, kind, name) values ('${caller}', 'person', 'Example Caller');
+		insert into app_user (id, slug) values ('${caller}', 'dell');
+		set local engine.job = ''; set local engine.user_id = '${caller}';
+		insert into activity (id, kind, happened_at) values ('${call}', 'call', '2025-01-01');
+		insert into activity_about (activity_id, deal_id) values ('${call}', '${deal}');
+		insert into next_step (id, deal_id, owner_party_id, what, item_title, source_ref, due_on,
+			call_activity_id, call_evidence_quote)
+		values ('${step}', '${deal}', '${user}', 'Example wording', '${title}', 'example:plan',
+			'2025-01-01', '${call}', 'Example quote');
+		set local engine.job = 'nightly_checklist'; set local engine.user_id = '';
+		insert into home_update (user_id, deal_id, checklist_item_ref, due_on, what)
+		values ('${user}', '${deal}', 'deal-item:${step}', '2025-01-01', 'Example reminder');
+	`);
+	const updates = async () => {
+		const [status, body] = await save(partner, "updates", {}, "GET");
+		assert.equal(status, 200);
+		return JSON.stringify(body);
+	};
+	assert.ok((await updates()).includes(title));
+	await db.query(`
+		set local engine.user_id = '${caller}';
+		update next_step set owner_party_id = '${caller}' where id = '${step}';
+	`);
+	assert.ok(!(await updates()).includes(title));
+	const home = await request(
+		partner,
+		"home/inbox?view=dashboard",
+		{ method: "GET" },
+		{
+			HOME_INBOX_READ_SCHEMA: "next",
+		},
+	);
+	assert.equal(home.status, 200);
+	assert.ok(!(await home.text()).includes(title));
+});

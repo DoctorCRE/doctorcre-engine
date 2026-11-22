@@ -9512,3 +9512,14 @@ test("imported resends must reference one original application with the same tar
 			],
 		),
 	]));
+test("whole-record SQL snapshots cannot run as the partner reader", () =>
+	rolledBack(async () => {
+		await db.query("set local role engine_reader");
+		await assert.rejects(
+			db.query("select next.everything_about_deal($1)", [DEAL]),
+			{
+				code: "42501",
+				message: "permission denied for function everything_about_deal",
+			},
+		);
+	}));
