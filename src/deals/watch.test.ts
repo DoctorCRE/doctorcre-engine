@@ -217,12 +217,65 @@ test("CARR missing targets and RPC failures have distinct statuses", async () =>
 	const response = await request(async () => missing);
 	assert.equal(response.status, 404);
 	assert.deepEqual(await response.json(), missing);
-	const failed = await request(async () => {
-		throw new Error("Fixture failure");
-	});
-	assert.equal(failed.status, 502);
-	assert.deepEqual(await failed.json(), {
-		ok: false,
-		error: "watch_settings_unavailable",
-	});
+	for (const run of [
+		async () => ({ ok: false, error: "actor_not_provisioned" }),
+		async () => ({ ok: false, error: "unknown_partner" }),
+		async () => {
+			throw new Error("Fixture failure");
+		},
+	]) {
+		const failed = await request(run);
+		assert.equal(failed.status, 502);
+		assert.deepEqual(await failed.json(), unavailable);
+	}
+});
+
+const unavailable = { ok: false, error: "watch_settings_unavailable" };
+
+test("invalid policies and versions are refused before RPC", async () => {
+	const run = mock.fn<Run>(async () => ({ ...v2, rows_changed: 1 }));
+	const start = { command: "watch", idempotency_key: randomUUID() };
+	const replace = { ...edit(), command: "replace-policy" };
+	const lease = { change_kinds: ["lease_threshold_crossed"] };
+	for (const body of [
+		{ ...start, policy: { ...lease, lease_threshold_days: [3651] } },
+		{ ...replace, policy: { ...lease, lease_threshold_months: [121] } },
+		{ ...replace, policy: { ...lease, lease_threshold_days: [1, 1] } },
+		{ ...start, policy: lease },
+		{ ...edit(), base_version: 2_147_483_648 },
+	]) {
+		const response = await request(run, { body });
+		assert.equal(response.status, 400);
+		assert.deepEqual(await response.json(), {
+			ok: false,
+			error: "invalid_request",
+		});
+	}
+	assert.equal(run.mock.callCount(), 0);
+});
+
+test("a malformed save reply returns the generic upstream error", async () => {
+	const body = edit();
+	for (const reply of [
+		{ ...v2, debug: "extra" },
+		{ ...v2, rows_changed: 2 },
+		{ ...v2, rows_changed: 1, watch: null },
+		{ ...v2, rows_changed: 1, replayed: "yes" },
+	]) {
+		const response = await request(async () => reply, { body });
+		assert.equal(response.status, 502);
+		assert.deepEqual(await response.json(), unavailable);
+	}
+});
+
+test("valid replies expose only public fields", async () => {
+	const saved = { ...v2, rows_changed: 0, replayed: true };
+	const reply = {
+		...saved,
+		watch: { ...watch, debug: "extra" },
+		debug: "extra",
+	};
+	const response = await request(async () => reply, { body: edit() });
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), saved);
 });

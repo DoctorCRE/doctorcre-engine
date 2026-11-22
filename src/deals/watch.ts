@@ -5,32 +5,89 @@ import { nextTransaction } from "../next-connection.ts";
 import type { PartnerSessionEnv } from "../partner-session.ts";
 import { isUuid } from "../uuid.ts";
 
-const uuid = z.uuid().refine((value) => value === value.toLowerCase());
-const policy = z.record(z.string(), z.unknown());
+const uuid = z.uuid();
+const lowerUuid = uuid.refine((value) => value === value.toLowerCase());
+const version = z.int32().positive();
+const changeKind = z.enum([
+	"reply_arrived",
+	"lease_threshold_crossed",
+	"listing_status_changed",
+]);
+const distinct = <T>(values: T[]) => new Set(values).size === values.length;
+const thresholds = (max: number) =>
+	z.array(z.int().min(0).max(max)).min(1).max(20).refine(distinct).optional();
+const policy = z
+	.object({
+		change_kinds: z.array(changeKind).min(1).max(3).refine(distinct),
+		include_self_changes: z.boolean().optional(),
+		lease_threshold_days: thresholds(3650),
+		lease_threshold_months: thresholds(120),
+	})
+	.refine(
+		(value) =>
+			!value.change_kinds.includes("lease_threshold_crossed") ||
+			value.lease_threshold_days !== undefined ||
+			value.lease_threshold_months !== undefined,
+	);
+const requestPolicy = policy.strict();
 const edit = {
-	idempotency_key: uuid,
-	subscription_id: uuid,
-	base_version: z.int().positive(),
+	idempotency_key: lowerUuid,
+	subscription_id: lowerUuid,
+	base_version: version,
 };
 const writeCommand = z.discriminatedUnion("command", [
 	z.strictObject({
 		command: z.literal("watch"),
-		idempotency_key: uuid,
-		policy,
+		idempotency_key: lowerUuid,
+		policy: requestPolicy,
 	}),
-	z.strictObject({ command: z.literal("replace-policy"), ...edit, policy }),
+	z.strictObject({
+		command: z.literal("replace-policy"),
+		...edit,
+		policy: requestPolicy,
+	}),
 	z.strictObject({ command: z.enum(["pause", "resume", "unwatch"]), ...edit }),
 ]);
 type WatchCommand = { command: "read" } | z.infer<typeof writeCommand>;
 
-const watchResult = z.discriminatedUnion("ok", [
-	z.looseObject({
-		ok: z.literal(true),
-		schema_version: z.literal("subject-watch.v2"),
-		watch: z.looseObject({}).nullable(),
-		health: z.looseObject({}).nullable(),
+const timestamp = z.iso.datetime({ offset: true });
+const dealSubject = { subject_type: z.literal("deal"), subject_id: uuid };
+const watch = z.object({
+	...dealSubject,
+	id: uuid,
+	actor_id: uuid,
+	state: z.enum(["watching", "paused", "removed"]),
+	policy: policy.safeExtend({ include_self_changes: z.boolean() }),
+	lifecycle_version: version,
+	baseline: z.object({
+		...dealSubject,
+		schema_version: z.literal("subject-watch-baseline.v1"),
+		version: z.int().positive(),
 	}),
-	z.object({ ok: z.literal(false), error: z.string() }),
+	subscribed_at: timestamp,
+});
+const success = z.object({
+	ok: z.literal(true),
+	schema_version: z.literal("subject-watch.v2"),
+	watch: watch.nullable(),
+	health: z
+		.object({
+			status: z.enum(["healthy", "delayed", "needs_repair"]),
+			pending_count: z.int().min(0).max(1001),
+			last_success_at: timestamp.nullable(),
+			oldest_pending_at: timestamp.nullable(),
+		})
+		.nullable(),
+});
+const refusal = z.object({ ok: z.literal(false), error: z.string() });
+const readResult = z.discriminatedUnion("ok", [success, refusal]);
+const writeResult = z.discriminatedUnion("ok", [
+	success.extend({
+		watch,
+		rows_changed: z.literal([0, 1]),
+		replayed: z.literal(true).optional(),
+	}),
+	refusal,
 ]);
 
 export type DealWatchEnv = PartnerSessionEnv & {
@@ -53,16 +110,10 @@ function refusalStatus(error: string) {
 			return 409;
 		case "watch_target_not_found":
 			return 404;
-		case "unknown_partner":
-			return 403;
 		case "invalid_request":
 		case "watch_command_invalid":
 		case "watch_policy_invalid":
 			return 400;
-		case "subject_watch_unavailable":
-			return 502;
-		default:
-			return 422;
 	}
 }
 
@@ -113,12 +164,14 @@ export const dealWatch = new Hono<DealWatchEnv>().on(
 		const service = c.env.CARR_WATCH_SETTINGS;
 		if (!service) return unavailable();
 		try {
-			const result = watchResult.safeParse(
-				await service.run(partner, deal, input),
-			);
+			const schema = input.command === "read" ? readResult : writeResult;
+			const result = schema.safeParse(await service.run(partner, deal, input));
 			if (!result.success) return unavailable();
 			const answer = result.data;
-			if (!answer.ok) return c.json(answer, refusalStatus(answer.error));
+			if (!answer.ok) {
+				const status = refusalStatus(answer.error);
+				return status ? c.json(answer, status) : unavailable();
+			}
 			return input.command === "read"
 				? c.json({ watch: answer.watch, health: answer.health })
 				: c.json(answer);
