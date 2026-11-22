@@ -320,6 +320,7 @@ type Verb =
 	| "read-call-outcomes"
 	| "read-changes"
 	| "read-client-leases"
+	| "read-deal-document-text"
 	| "read-deal-tour"
 	| "read-home-card"
 	| "read-home-inbox-v5"

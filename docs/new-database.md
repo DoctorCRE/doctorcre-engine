@@ -393,6 +393,8 @@ A direct user may classify a filed `other` document as a real kind once. That up
 
 `document_extraction` stores a completed attempt on one deal file version. It keeps the extraction time, method, extractor version, optional model, text format version, status, ordered page strings and optional JSON receipt. Empty page strings preserve page positions. `produced`, `no_text` and `unavailable` distinguish usable text, an empty text layer and an unsuccessful extraction. `receipt_only` retains a fact-extraction receipt without claiming to supply page text. A different extractor, model, method or text format creates another attempt; repeating the same combination is refused, including a null model. The document's immutable hash identifies the bytes extracted. Shared stamps and change history retain who stored each row and when, separately from the extraction time. These rows do not approve extracted business facts.
 
+The signed-in partner read `GET /api/engine/deals/{dealId}/documents/{documentId}/text` takes the deal and document UUIDs from the deal page. It returns `{ "pages": [...] }` in page order, including blank pages. It picks the newest `produced` attempt by `extracted_at`, with the greatest attempt ID breaking ties. A file without a produced attempt returns `{ "pages": [] }`, including files with only `no_text`, `unavailable`, or `receipt_only` attempts. The read uses the deal page's visibility rules. An unknown deal or document, or a document filed to a different deal, returns `404 not_found`.
+
 Moving today's rows across:
 
 - Finalized `ops.deal_deliverable` rows supply filenames, object keys, MIME types, byte counts, hashes and dates. Upload grants, expiry, visibility and unfinished uploads stay behind. Load LOI, counter, lease, amendment, invoice and other before copying. Copy known generated files using the reviewed template-to-kind mapping. Use `other` and list the file for classification when no kind is known.
@@ -402,8 +404,6 @@ Moving today's rows across:
 - Today's generated `document` points at working and PDF attachments. Each surviving attachment becomes a document; the old generated id is an `outside_id` on its deal, qualified by source `old_generated_document`. Each of its files keeps its note as written, and a blank note stays empty. Template definitions, lint results and delivery workflow are not copied by this slice. Client-only generated records are copied by `copy-client-files.sql` without assigning a deal. Generated records with neither a deal nor a client remain listed as `no_deal`.
 
 Keeping documents also prevents deleting an email with attachments or a deal with filed files; the engine must retain those source records. This applies to attachments and post media as well as deal files.
-
-This slice designs storage only. Upload, extraction jobs, reads and the eventual copy run follow separately. It changes no live data.
 
 ## Client files
 
