@@ -1,4 +1,4 @@
-import { sql, type Transaction } from "kysely";
+import { type RawBuilder, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
 	filingDestination,
@@ -26,9 +26,12 @@ const judgmentStorage = sql<{ installed: boolean }>`
 	select to_regclass('next.doc_judgment_job') is not null as installed
 `;
 
-async function claimDocTurn(tx: Transaction<DB>, owner: string, id: string) {
+async function claimDocTurn(
+	tx: Transaction<DB>,
+	eligible: RawBuilder<boolean>,
+) {
 	const claim_id = crypto.randomUUID();
-	const { conversation_id, claim_until, ...turn } = await tx
+	const claimed = await tx
 		.updateTable("doc_turn")
 		.set({
 			state: "working",
@@ -36,8 +39,7 @@ async function claimDocTurn(tx: Transaction<DB>, owner: string, id: string) {
 			claim_until: leaseEnd,
 			claim_state: initialClaim,
 		})
-		.where("id", "=", id)
-		.where("owner_user_id", "=", owner)
+		.where(eligible)
 		.returning([
 			"id",
 			"conversation_id",
@@ -46,7 +48,9 @@ async function claimDocTurn(tx: Transaction<DB>, owner: string, id: string) {
 			"context",
 			claimUntilText,
 		])
-		.executeTakeFirstOrThrow();
+		.executeTakeFirst();
+	if (!claimed) return null;
+	const { conversation_id, claim_until, ...turn } = claimed;
 	const history = await recentDocTurns(tx, conversation_id, turn.position);
 	return {
 		kind: "turn" as const,
@@ -75,16 +79,19 @@ const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
 export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
-	runner: "mac" | "mac_with_judgment" | "backup",
+	runner: "mac" | "mac_with_judgment" | "backup" | "backup_mail",
 ) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
 	);
-	const eligible =
-		runner === "backup"
-			? sql`coalesce(requeued_at, created_at) <= statement_timestamp() - interval '2 minutes'
+	const eligible = (queuedAt: RawBuilder<unknown>) =>
+		runner === "backup" || runner === "backup_mail"
+			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
 				or (select status from ${docLinkState(owner)} link) <> 'ready'`
 			: sql`true`;
+	const claimsMail = runner === "backup_mail" || runner === "mac_with_judgment";
+	const turnQueuedAt = sql`coalesce(requeued_at, created_at)`;
+	const mailQueuedAt = sql`created_at`;
 	// Turns still run before the separate judgment storage migration.
 	const {
 		rows: [storage],
@@ -92,59 +99,96 @@ export async function claimDocWork(
 	const mailQueue = storage?.installed
 		? sql`
 		union all
-		select 'mail', id, created_at, claim_until, true from doc_judgment_job
+		select 'mail', id, created_at, state, claim_id, claim_until,
+			(${eligible(mailQueuedAt)}) as eligible from doc_judgment_job
 		where owner_user_id = ${owner} and state in ('queued', 'working')
 	`
 		: sql``;
 	while (true) {
 		const {
 			rows: [candidate],
-		} = await sql<{ queue: "turn" | "mail"; id: string }>`
+		} = await sql<{
+			queue: "turn" | "mail";
+			id: string;
+			state: "queued" | "working";
+			claim_id: string | null;
+			claim_until: string | null;
+		}>`
 			with pending as (
-				select 'turn' as queue, id, created_at, claim_until, (${eligible}) as eligible from doc_turn
+				select 'turn' as queue, id, created_at, state, claim_id, claim_until,
+					(${eligible(turnQueuedAt)}) as eligible from doc_turn
 				where owner_user_id = ${owner} and state in ('queued', 'working')
 				${mailQueue}
 			)
-			select queue, id from pending
-			where eligible and (queue = 'turn' or ${runner === "mac_with_judgment"})
+			select queue, id, state, claim_id, claim_until::text from pending
+			where eligible and (queue = 'turn' or ${claimsMail})
 			  and not exists (select 1 from pending where claim_until > statement_timestamp())
 			order by queue <> 'turn', created_at, id
 			limit 1
 		`.execute(tx);
 		if (!candidate) return null;
-		if (candidate.queue === "turn")
-			return claimDocTurn(tx, owner, candidate.id);
+		if (candidate.queue === "turn" && runner === "backup_mail") return null;
 
-		const {
-			rows: [job],
-		} = await sql<JudgmentInput & { claim_source_hash: Buffer }>`
-			select ${judgmentInput}, ${sourceHash} as claim_source_hash
-			from doc_judgment_job j join email e using (activity_id)
-			where j.id = ${candidate.id} and j.owner_user_id = ${owner}
-			for update of j
-		`.execute(tx);
-		const update = tx
-			.updateTable("doc_judgment_job")
+		const table = candidate.queue === "turn" ? "doc_turn" : "doc_judgment_job";
+		// The guarded write needs a fresh snapshot after any wait for the row lock.
+		const locked = await tx
+			.selectFrom(table)
+			.select("id")
 			.where("id", "=", candidate.id)
-			.where("owner_user_id", "=", owner);
-		const hasDestinations = Boolean(job?.destinations.length);
-		if (!job || (job.kind === "email_filing") !== hasDestinations) {
-			await update.set({ state: "failed", ...clearJudgmentClaim }).execute();
+			.where("owner_user_id", "=", owner)
+			.forNoKeyUpdate()
+			.executeTakeFirst();
+		if (!locked) continue;
+
+		const stillEligible = (queuedAt: RawBuilder<unknown>) => sql<boolean>`
+			id = ${candidate.id} and owner_user_id = ${owner}
+			and state in ('queued', 'working') and state = ${candidate.state}
+			and claim_id is not distinct from ${candidate.claim_id}::uuid
+			and claim_until is not distinct from ${candidate.claim_until}::timestamptz
+			and (claim_until is null or claim_until <= clock_timestamp())
+			and (${eligible(queuedAt)})
+		`;
+		if (candidate.queue === "turn") {
+			const turn = await claimDocTurn(tx, stillEligible(turnQueuedAt));
+			if (turn) return turn;
 			continue;
 		}
 
-		const { kind, destinations, claim_source_hash, ...input } = job;
+		const {
+			rows: [job],
+		} = await sql<
+			Omit<JudgmentInput, "subject" | "body"> &
+				({ subject: string; body: string } | { subject: null; body: null }) & {
+					claim_source_hash: Buffer;
+				}
+		>`
+			select ${judgmentInput}, ${sourceHash} as claim_source_hash
+			from doc_judgment_job j left join email e using (activity_id)
+			where j.id = ${candidate.id} and j.owner_user_id = ${owner}
+		`.execute(tx);
+		if (!job) continue;
+		const valid =
+			job.subject !== null &&
+			(job.kind === "email_filing") === Boolean(job.destinations.length);
 		const claim_id = crypto.randomUUID();
-		const { claim_until } = await update
-			.set({
-				state: "working",
-				claim_id,
-				claim_until: leaseEnd,
-				claim_source_hash,
-			})
+		const claimed = await tx
+			.updateTable("doc_judgment_job")
+			.where(stillEligible(mailQueuedAt))
+			.set(
+				valid
+					? {
+							state: "working",
+							claim_id,
+							claim_until: leaseEnd,
+							claim_source_hash: job.claim_source_hash,
+						}
+					: { state: "failed", ...clearJudgmentClaim },
+			)
 			.returning(claimUntilText)
-			.executeTakeFirstOrThrow();
-		const work = { ...input, claim_id, claim_until };
+			.executeTakeFirst();
+		if (!valid || !claimed) continue;
+		const { kind, destinations, activity_id, subject, body } = job;
+		const work = { activity_id, subject, body, claim_id, ...claimed };
 		return kind === "email_filing"
 			? { ...work, kind, destinations }
 			: { ...work, kind };
@@ -208,7 +252,15 @@ export async function finishDocJudgment(
 	payload: unknown,
 ) {
 	const { data: outcome } = judgmentOutcome.safeParse(payload);
-	if (!outcome) return 400;
+	return outcome ? saveDocJudgment(tx, owner, claim_id, outcome) : 400;
+}
+
+export async function saveDocJudgment(
+	tx: Transaction<DB>,
+	owner: string,
+	claim_id: string,
+	outcome: z.infer<typeof judgmentOutcome> | { kind: "queued" },
+) {
 	const {
 		rows: [storage],
 	} = await judgmentStorage.execute(tx);
@@ -244,10 +296,11 @@ export async function finishDocJudgment(
 
 	const { kind } = outcome;
 	const blocked = kind === "signed_out" || kind === "plan_limited";
+	const state = blocked ? "queued" : kind;
 	const saved = await tx
 		.updateTable("doc_judgment_job")
 		.set({
-			state: blocked ? "queued" : kind,
+			state,
 			...clearJudgmentClaim,
 			result,
 		})
@@ -260,7 +313,7 @@ export async function finishDocJudgment(
 		)`)
 		.executeTakeFirst();
 	if (!saved.numUpdatedRows) return 404;
-	if (job.kind === "email_filing" && !blocked)
+	if (job.kind === "email_filing" && state !== "queued")
 		await saveFilingJudgment(
 			tx,
 			job,

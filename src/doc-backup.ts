@@ -1,9 +1,10 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { sql } from "kysely";
 import { askDocBackup } from "./doc-backup-client.ts";
+import { judgmentTask } from "./doc-judgment-prompt.ts";
 import { docLinkOwnerTransaction } from "./doc-link.ts";
 import { docPrompt } from "./doc-prompt.ts";
-import { claimDocWork, finishDocTurn } from "./doc-queue.ts";
+import { claimDocWork, finishDocTurn, saveDocJudgment } from "./doc-queue.ts";
 import { withDocTools } from "./doc-tool-session.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
@@ -18,10 +19,8 @@ export type DocBackupBindings = Pick<
 	DOC_BACKUP_MODEL?: string;
 };
 
-type TurnClaim = Extract<
-	Awaited<ReturnType<typeof claimDocWork>>,
-	{ kind: "turn" }
->;
+type Claim = NonNullable<Awaited<ReturnType<typeof claimDocWork>>>;
+type TurnClaim = Extract<Claim, { kind: "turn" }>;
 
 type BackupConfig = {
 	apiKey: string;
@@ -41,6 +40,14 @@ function backupOwnerTransaction<T>(
 		await backupLockTimeout.execute(tx);
 		return run(tx);
 	});
+}
+
+function parseAnswer(text: string): unknown {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return null;
+	}
 }
 
 async function answerTurn(
@@ -93,16 +100,10 @@ async function answerTurn(
 	const creditsExhausted = result?.kind === "credits_exhausted";
 	await backupOwnerTransaction(writer, owner, async (tx) => {
 		if (result?.kind === "answer") {
-			let answer: unknown = null;
-			try {
-				answer = JSON.parse(result.text);
-			} catch {
-				// Let the shared answer validator handle an invalid model response.
-			}
 			const status = await finishDocTurn(tx, owner, {
 				claim_id,
 				kind: "answered",
-				answer,
+				answer: parseAnswer(result.text),
 				answered_by: "backup",
 			});
 			if (status !== 422) return;
@@ -114,6 +115,43 @@ async function answerTurn(
 	}).catch((error: unknown) => {
 		console.warn("Doc backup completion failed:", failureKind(error));
 	});
+	return creditsExhausted;
+}
+
+async function answerMail(
+	{ apiKey, model, writer }: BackupConfig,
+	owner: string,
+	claim: Exclude<Claim, TurnClaim>,
+) {
+	const { input, prompt } = judgmentTask(claim);
+	const result = await askDocBackup({
+		apiKey,
+		model,
+		system: prompt,
+		messages: [{ role: "user", content: input }],
+		tools: [],
+		timeoutMs: Date.parse(claim.claim_until) - Date.now() - 15_000,
+		runTool() {
+			throw new Error("Mail judgment has no tools");
+		},
+	});
+	const creditsExhausted = result.kind === "credits_exhausted";
+	const save = (outcome: Parameters<typeof saveDocJudgment>[3]) =>
+		backupOwnerTransaction(writer, owner, (tx) =>
+			saveDocJudgment(tx, owner, claim.claim_id, outcome),
+		);
+	try {
+		if (result.kind === "answer") {
+			const status = await save({
+				kind: "answered",
+				result: parseAnswer(result.text),
+			});
+			if (status !== 422) return false;
+		}
+		await save({ kind: creditsExhausted ? "queued" : "failed" });
+	} catch (error) {
+		console.warn("Doc backup mail completion failed:", failureKind(error));
+	}
 	return creditsExhausted;
 }
 
@@ -143,15 +181,25 @@ export async function dispatchDocBackup(env: DocBackupBindings) {
 			.orderBy("id")
 			.execute();
 	});
-	for (const { id: owner } of owners) {
-		try {
-			const claim = await backupOwnerTransaction(writer, owner, (tx) =>
-				claimDocWork(tx, owner, "backup"),
-			);
-			if (claim?.kind === "turn" && (await answerTurn(config, owner, claim)))
-				return;
-		} catch (error) {
-			console.warn("Doc backup turn failed:", failureKind(error));
+	const attempted = new Set<string>();
+	for (const runner of ["backup", "backup_mail"] as const) {
+		for (const { id: owner } of owners) {
+			if (attempted.has(owner)) continue;
+			try {
+				const claim = await backupOwnerTransaction(writer, owner, (tx) =>
+					claimDocWork(tx, owner, runner),
+				);
+				if (!claim) continue;
+				attempted.add(owner);
+				const creditsExhausted =
+					claim.kind === "turn"
+						? await answerTurn(config, owner, claim)
+						: await answerMail(config, owner, claim);
+				if (creditsExhausted) return;
+			} catch (error) {
+				attempted.add(owner);
+				console.warn("Doc backup dispatch failed:", failureKind(error));
+			}
 		}
 	}
 }

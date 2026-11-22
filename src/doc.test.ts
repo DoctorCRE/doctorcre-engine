@@ -3,12 +3,14 @@ import { randomUUID } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
 import { setTimeout } from "node:timers/promises";
 import { Hono } from "hono";
+import { sql } from "kysely";
 import pg from "pg";
 import { docRoutes, recentDocTurns } from "./doc.ts";
 import { dispatchDocBackup } from "./doc-backup.ts";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
 import { docMcp } from "./doc-mcp.ts";
+import { finishDocJudgment, finishDocTurn } from "./doc-queue.ts";
 import { findDocRecords } from "./doc-reads.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { nextTransaction } from "./next-connection.ts";
@@ -48,6 +50,7 @@ afterEach(() =>
 	db.query(`begin; set local engine.job = 'old_system';
 		delete from reply_draft where confirmed_doc_turn_id is not null or proposed_by_job = 'mail_capture';
 		delete from doc_turn; delete from doc_conversation; truncate doc_link;
+		delete from doc_judgment_job;
 		commit;`),
 );
 after(cleanup);
@@ -128,7 +131,11 @@ const issue = async (user: string) =>
 			issueDocLink(tx, user),
 		)
 	).credential;
-const poll = async (credential: string, readiness: string | null = "ready") =>
+const poll = async (
+	credential: string,
+	readiness: string | null = "ready",
+	work?: "judgment",
+) =>
 	mac.request(
 		"/claim",
 		{
@@ -136,6 +143,7 @@ const poll = async (credential: string, readiness: string | null = "ready") =>
 			headers: {
 				Authorization: `Bearer ${credential}`,
 				...(readiness === null ? {} : { "Doc-Link-Readiness": readiness }),
+				...(work && { "Doc-Link-Work": work }),
 			},
 		},
 		{ DATABASE_WRITER: { connectionString } },
@@ -187,6 +195,364 @@ const askDoc = (user = "joe") =>
 	client(user)("/turns", 202, { ...question, idempotency_key: randomUUID() });
 const chatTurn = async (chat: string, user = "joe") =>
 	(await client(user)(`/conversations/${chat}`, 200)).turns[0];
+
+const mailQuote = "When can you meet?";
+const summaryAnswer = {
+	summary: "The sender wants to meet.",
+	action_title: "Suggest a meeting time",
+	quote: mailQuote,
+};
+
+async function queueMailJudgment(partner = owner, deal?: string) {
+	const activity = await replyEmail(null, partner);
+	const id = randomUUID();
+	await db.query(
+		`with job as (
+			insert into doc_judgment_job (id, owner_user_id, activity_id, idempotency_key, kind)
+			values ($1, $2, $3, $1, case when $4::uuid is null then 'email_summary' else 'email_filing' end)
+			returning id
+		)
+		insert into doc_judgment_destination (job_id, position, deal_id)
+		select id, 1, $4 from job where $4 is not null`,
+		[id, partner, activity, deal ?? null],
+	);
+	return { id, activity };
+}
+
+test("backup saves the validated summary with its mail capture stamp", async (t) => {
+	const rejected = await queueMailJudgment();
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply(summaryAnswer),
+	);
+	fetch.mock.mockImplementationOnce(async () =>
+		reply({ ...summaryAnswer, quote: "A quote absent from the email." }),
+	);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select j.state, s.text from doc_judgment_job j
+			left join email_summary s on s.activity_id = j.activity_id where j.id = $1`,
+				[rejected.id],
+			)
+		).rows,
+		[{ state: "failed", text: null }],
+	);
+	const { id, activity } = await queueMailJudgment();
+	await tick();
+	assert.deepEqual(
+		(
+			await db.query(
+				`select text, provenance->>'quote' as quote, provenance->>'job' as job,
+			provenance->>'job_id' as job_id from email_summary where activity_id = $1`,
+				[activity],
+			)
+		).rows,
+		[
+			{
+				text: summaryAnswer.summary,
+				quote: mailQuote,
+				job: "mail_capture",
+				job_id: id,
+			},
+		],
+	);
+});
+
+test("backup saves a grounded filing fact on the claimed deal with its receipt", async (t) => {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		insert into deal (id, name, owner_user_id) select $1, 'Example backup deal', $2 from stamp`,
+		[id, owner],
+	);
+	const job = await queueMailJudgment(owner, id);
+	const destination = { kind: "deal", id };
+	const text = "The sender asked to meet.";
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply({ facts: [{ destination, text, quote: mailQuote }] }),
+	);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select n.summary, n.changed_by_job, a.deal_id, fact->>'quote' as quote
+		from save_receipt r cross join lateral jsonb_array_elements(r.answer->'facts') as fact
+		join activity n on n.id = (fact->>'activity_id')::uuid
+		join activity_about a on a.activity_id = n.id
+		where r.verb = 'file-email-facts' and r.answer->>'job_id' = $1
+			and r.answer->>'source_activity_id' = $2`,
+				[job.id, job.activity],
+			)
+		).rows,
+		[
+			{
+				summary: text,
+				changed_by_job: "mail_capture",
+				deal_id: id,
+				quote: mailQuote,
+			},
+		],
+	);
+});
+
+test("backup answers chat before a mail job even when the mail owner sorts first", async (t) => {
+	const [mailOwner, chatUser] =
+		owner < other ? [owner, "dell"] : [other, "joe"];
+	await queueMailJudgment(mailOwner);
+	const { conversation_id } = await askDoc(chatUser);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply(summaryAnswer),
+	);
+	fetch.mock.mockImplementationOnce(async () => reply());
+	await tick();
+	assert.equal(
+		(await chatTurn(conversation_id, chatUser))?.answered_by,
+		"backup",
+	);
+	assert.equal(fetch.mock.callCount(), 2);
+});
+
+test("backup requeues depleted mail work and leaves the next job for another tick", async (t) => {
+	const first = await queueMailJudgment(owner);
+	const second = await queueMailJudgment(other);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply(summaryAnswer),
+	);
+	fetch.mock.mockImplementationOnce(async () => creditsExhausted());
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	const states = async () =>
+		(
+			await db.query<{ state: string }>(
+				"select state from doc_judgment_job where id = any($1::uuid[])",
+				[[first.id, second.id]],
+			)
+		).rows.map(({ state }) => state);
+	assert.deepEqual(await states(), ["queued", "queued"]);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 3);
+	assert.deepEqual(await states(), ["answered", "answered"]);
+});
+
+test("backup gives a ready Mac first chance and skips its active judgment claim", async (t) => {
+	const job = await queueMailJudgment();
+	const credential = await issue(owner);
+	assert.equal((await poll(credential)).status, 204);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply(summaryAnswer),
+	);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 0);
+	await db.query(
+		"update doc_judgment_job set created_at = now() - interval '2 minutes' where id = $1",
+		[job.id],
+	);
+	const claimed = await poll(credential, "ready", "judgment");
+	assert.equal(claimed.status, 200);
+	const { activity_id, claim_id } = await claimed.json<{
+		activity_id: string;
+		claim_id: string;
+	}>();
+	assert.equal(activity_id, job.activity);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 0);
+	assert.equal(
+		(
+			await complete(credential, {
+				claim_id,
+				kind: "judgment",
+				outcome: { kind: "answered", result: summaryAnswer },
+			})
+		).status,
+		204,
+	);
+	const next = await queueMailJudgment();
+	await db.query(
+		"update doc_judgment_job set created_at = now() - interval '2 minutes' where id = $1",
+		[next.id],
+	);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+});
+
+test("backup skips a filing job that the Mac is committing as failed", async (t) => {
+	const deal = await sharedDeal();
+	const job = await queueMailJudgment(owner, deal.ref.id);
+	const credential = await issue(owner);
+	const claimed = await poll(credential, "ready", "judgment");
+	assert.equal(claimed.status, 200);
+	const { claim_id } = await claimed.json<{ claim_id: string }>();
+	await db.query(
+		`update doc_judgment_job set created_at = now() - interval '3 minutes',
+			claim_until = '-infinity' where id = $1`,
+		[job.id],
+	);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply({ facts: [] }),
+	);
+
+	await db.query("begin");
+	const pending: Promise<unknown>[] = [];
+	try {
+		await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+			`email ${job.activity}@example.test`,
+		]);
+		const completion = docLinkOwnerTransaction(
+			connectionString,
+			owner,
+			async (tx) => {
+				// Keep the lease valid only inside the Mac's transaction to model expiry without a timer.
+				await tx
+					.updateTable("doc_judgment_job")
+					.set({ claim_until: "infinity" })
+					.where("id", "=", job.id)
+					.execute();
+				assert.equal(
+					await finishDocJudgment(tx, owner, claim_id, { kind: "failed" }),
+					204,
+				);
+			},
+		);
+		pending.push(completion);
+		void completion.catch(() => {});
+		const macPid = await waitForBlockedTransaction(db, undefined, "advisory");
+		const dispatch = tick();
+		pending.push(dispatch);
+		void dispatch.catch(() => {});
+		await waitForBlockedTransaction(db, macPid);
+	} finally {
+		await db.query("rollback");
+		await Promise.all(pending);
+	}
+	const { rows } = await db.query<{ state: string }>(
+		"select state from doc_judgment_job where id = $1",
+		[job.id],
+	);
+	assert.deepEqual(
+		{ state: rows[0]?.state, calls: fetch.mock.callCount() },
+		{ state: "failed", calls: 0 },
+	);
+});
+
+test("backup skips a chat turn that the Mac is committing as failed", async (t) => {
+	const { conversation_id, turn } = await askDoc();
+	const credential = await issue(owner);
+	const { claim_id } = await claim(credential);
+	await db.query(
+		`update doc_turn set created_at = now() - interval '3 minutes',
+			claim_until = '-infinity' where id = $1`,
+		[turn.id],
+	);
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+	const failed = Promise.withResolvers<number>();
+	const commit = Promise.withResolvers<void>();
+	const completion = docLinkOwnerTransaction(
+		connectionString,
+		owner,
+		async (tx) => {
+			await tx
+				.updateTable("doc_turn")
+				.set({ claim_until: "infinity" })
+				.where("id", "=", turn.id)
+				.execute();
+			assert.equal(
+				await finishDocTurn(tx, owner, { claim_id, kind: "failed" }),
+				204,
+			);
+			const {
+				rows: [backend],
+			} = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(
+				tx,
+			);
+			assert.ok(backend);
+			failed.resolve(backend.pid);
+			await commit.promise;
+		},
+	);
+	void completion.catch(failed.reject);
+	let dispatch: Promise<void> | undefined;
+	try {
+		const macPid = await failed.promise;
+		dispatch = tick();
+		void dispatch.catch(() => {});
+		await waitForBlockedTransaction(db, macPid);
+	} finally {
+		commit.resolve();
+		await Promise.all([completion, dispatch]);
+	}
+	assert.deepEqual(
+		{
+			state: (await chatTurn(conversation_id))?.state,
+			calls: fetch.mock.callCount(),
+		},
+		{ state: "failed", calls: 0 },
+	);
+});
+
+for (const queue of ["chat", "mail"] as const) {
+	test(`backup keeps the expired ${queue} claim when the Mac comes online during the lock wait`, async (t) => {
+		const table = queue === "chat" ? "doc_turn" : "doc_judgment_job";
+		const { id } =
+			queue === "chat" ? (await askDoc()).turn : await queueMailJudgment();
+		const credential = await issue(owner);
+		const response = await poll(
+			credential,
+			"ready",
+			queue === "mail" ? "judgment" : undefined,
+		);
+		assert.equal(response.status, 200);
+		const { claim_id } = await response.json<{ claim_id: string }>();
+		await db.query(
+			`update ${table} set claim_until = '-infinity' where id = $1`,
+			[id],
+		);
+		await db.query(
+			"update doc_link set last_seen_at = now() - interval '1 minute' where owner_user_id = $1",
+			[owner],
+		);
+		const fetch = t.mock.method(globalThis, "fetch", async () =>
+			reply(queue === "chat" ? refusal : summaryAnswer),
+		);
+
+		await db.query("begin");
+		let dispatch: Promise<void> | undefined;
+		try {
+			await db.query(`select id from ${table} where id = $1 for update`, [id]);
+			dispatch = tick();
+			void dispatch.catch(() => {});
+			await waitForBlockedTransaction(db);
+			assert.equal((await poll(credential, null)).status, 204);
+			const { rows } = await db.query<{ readiness: string; online: boolean }>(
+				`select readiness, last_seen_at >= statement_timestamp() - interval '30 seconds' as online
+				from doc_link where owner_user_id = $1`,
+				[owner],
+			);
+			assert.deepEqual(rows, [{ readiness: "ready", online: true }]);
+			await waitForBlockedTransaction(db);
+		} finally {
+			await db.query("rollback");
+			await dispatch;
+		}
+		const { rows } = await db.query<{
+			state: string;
+			claim_id: string | null;
+			claim_until: string | null;
+		}>(
+			`select state, claim_id, claim_until::text from ${table} where id = $1`,
+			[id],
+		);
+		assert.deepEqual(
+			{ rows, calls: fetch.mock.callCount() },
+			{
+				rows: [{ state: "working", claim_id, claim_until: "-infinity" }],
+				calls: 0,
+			},
+		);
+	});
+}
 
 test("backup answers an unready partner's turn using Doc's read tools", async (t) => {
 	const { conversation_id } = await askDoc();
