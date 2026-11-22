@@ -17,6 +17,7 @@ import {
 	type HomeStep,
 	type HomeStepTarget,
 	homeDay,
+	homeDayAt,
 	homeDisplayText,
 	homeStepCopy,
 	homeStepEligible,
@@ -53,13 +54,18 @@ interface Step extends HomeStep, HomeStepTarget {
 	source_evidence: string | null;
 }
 
-function stepRows(db: Transaction<DB>, userId: string, dashboard: boolean) {
+function stepRows(
+	db: Transaction<DB>,
+	userId: string,
+	dashboard: boolean,
+	today: typeof homeDay,
+) {
 	return sql<Step>`
 		select s.id, s.what, s.item_title, s.status, s.deal_id, s.party_id, s.property_id,
-			${stepTargetFields(db)},
+			${stepTargetFields(db, today)},
 			s.due_on, s.created_at, setter.name as set_by,
 			coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
-			case when s.hold_until > ${homeDay}
+			case when s.hold_until > ${today}
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
 			m.waiting_reason,
@@ -178,9 +184,9 @@ function stepCard(step: Step) {
 	};
 }
 
-async function readHomeDay(db: Transaction<DB>) {
+async function readHomeDay(db: Transaction<DB>, day = homeDay) {
 	const { today } = await db
-		.selectNoFrom(sql<string>`${homeDay}::text`.as("today"))
+		.selectNoFrom(sql<string>`${day}::text`.as("today"))
 		.executeTakeFirstOrThrow();
 	return today;
 }
@@ -247,9 +253,11 @@ async function readHomeInbox(
 	db: Transaction<DB>,
 	userId: string,
 	dashboard: boolean,
+	now: string,
 ) {
-	const today = await readHomeDay(db);
-	const { rows } = await stepRows(db, userId, dashboard).execute(db);
+	const day = homeDayAt(sql`${now}::timestamptz`);
+	const today = await readHomeDay(db, day);
+	const { rows } = await stepRows(db, userId, dashboard, day).execute(db);
 	const eligibleSteps = dashboard
 		? rows.filter((step) => homeStepEligible(step, today))
 		: rows;
@@ -275,16 +283,12 @@ async function readHomeInbox(
 		};
 	});
 	const limit = dashboard ? null : LIMIT + 1;
-	const checklistSteps = new Set(
-		eligibleSteps.map((step) => `deal-item:${step.id}`),
-	);
-	const updates = (
-		await readHomeUpdates(db, userId, limit, dashboard ? "dashboard" : "inbox")
-	).filter(
-		(update) =>
-			!dashboard ||
-			!update.checklist_item_ref ||
-			!checklistSteps.has(update.checklist_item_ref),
+	const updates = await readHomeUpdates(
+		db,
+		userId,
+		limit,
+		dashboard ? "dashboard" : "inbox",
+		day,
 	);
 	const items = [
 		...steps,
@@ -335,8 +339,9 @@ homeInbox.get("/home/inbox", (c) => {
 		vocabularies: { view: ["dashboard"] },
 	});
 	if (refused) return refuse(c, refused);
+	const now = new Date().toISOString();
 	return answerNextRead(c, "read-home-inbox-v5", (db, userId) =>
-		readHomeInbox(db, userId, params.get("view") === "dashboard"),
+		readHomeInbox(db, userId, params.get("view") === "dashboard", now),
 	);
 });
 
