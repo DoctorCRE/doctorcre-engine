@@ -23,8 +23,8 @@ const linkedDraft = id(7);
 const deal = id(8);
 const call = id(9);
 const proposal = id(10);
-const finishedCall = id(11);
-const finishedProposal = id(12);
+const reviewedCall = id(11);
+const unfiledCall = id(12);
 const unknown = id(99);
 const reply = (n: number) => ref(`rd:${id(n)}:joe:17`);
 const callRef = (callId: string) => ref(`cr:${callId}:old_version`);
@@ -65,6 +65,7 @@ const request = (path: string, cookie = joeCookie) =>
 			PARTNER_AUTH_SECRET: secret,
 			HOME_INBOX_READ_SCHEMA: "next",
 			LEADS_READ_SCHEMA: "next",
+			DEALS_READ_SCHEMA: "next",
 		},
 	);
 const open = (reference: string, cookie?: string) =>
@@ -102,16 +103,19 @@ before(async () => {
 			values ('${leadDraft}', '${lead}', '${dell}', 'Introduction', 'Hello', now(), 'UTC'),
 				('${linkedDraft}', '${linkedLead}', '${joe}', 'Introduction', 'Hello', now(), 'UTC');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${dell}');
+		insert into outside_id (source, value, deal_id) values ('old_system', '${deal}', '${deal}');
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${dell}', true);
+		insert into activity (id, kind, happened_at) values ('${call}', 'call', '2026-01-01T12:00Z');
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 		insert into activity (id, kind, happened_at) values
-			('${call}', 'call', '2026-01-01T12:00Z'), ('${finishedCall}', 'call', '2026-01-01T12:00Z'),
+			('${unfiledCall}', 'call', '2026-01-01T12:00Z'),
 			('${id(20)}', 'email', '2026-01-01T12:00Z'), ('${id(21)}', 'email', '2026-01-01T12:00Z'),
 			('${id(22)}', 'email', '2026-01-02T12:00Z'), ('${id(23)}', 'email', '2026-01-01T12:00Z'),
 			('${id(24)}', 'email', '2026-01-01T12:00Z'), ('${id(25)}', 'email', '2026-01-03T12:00Z');
 		insert into activity_about (activity_id, deal_id)
-			select id, '${deal}' from activity;
+			select id, '${deal}' from activity where id <> '${unfiledCall}';
 		insert into proposal (id, activity_id, activity_kind, deal_id, kind, owner_party_id, what, evidence, proposed_by_job)
-			values ('${proposal}', '${call}', 'call', '${deal}', 'next_step', '${joe}', 'Confirm timing', 'Timing', 'old_system'),
-				('${finishedProposal}', '${finishedCall}', 'call', '${deal}', 'next_step', '${joe}', 'Confirm date', 'Date', 'old_system');
+			values ('${proposal}', '${call}', 'call', '${deal}', 'next_step', '${joe}', 'Confirm timing', 'Timing', 'old_system');
 		insert into email (activity_id, message_id, sender, subject, body, conversation_id)
 			select id, '<' || id || '@example.test>', 'sender@example.test', 'Example', 'Please reply',
 				case when id in ('${id(21)}', '${id(22)}', '${id(25)}') then 'ExampleThread' end
@@ -128,9 +132,30 @@ before(async () => {
 			dismiss_reason = 'Replaced by a newer reply draft in this conversation' where id = '${id(21)}';
 		update reply_draft set status = 'dismissed', decided_at = now(),
 			dismiss_reason = 'Reply declined' where id = '${id(23)}';
-		update proposal set status = 'dismissed', decided_at = now(), decided_by_user_id = '${joe}'
-			where id = '${finishedProposal}';
+		insert into public.actor (id, slug, kind, display_name) values ('${joe}', 'partner_one', 'human', 'Example Partner One');
+		insert into outside_id (source, value, party_id) values ('old_system', '${joe}', '${joe}');
+		insert into public.contact_state (slug, label, contactable, sort) values ('active', 'Active', true, 1);
+		insert into public.party (id, kind, name, created_by, updated_by)
+			values ('${linkedLead}', 'person', 'Example Client', '${joe}', '${joe}');
+		insert into public.client (id, party_id, created_by, updated_by)
+			values ('${linkedLead}', '${linkedLead}', '${joe}', '${joe}');
+		insert into public.deal_type_ref (slug, label, sort) values ('lease', 'Lease', 1);
+		insert into public.deal_phase (slug, label) values ('loi', 'LOI');
+		insert into public.deal (id, client_id, name, deal_type, phase, owner, created_by, updated_by)
+			values ('${deal}', '${linkedLead}', 'Example Deal', 'lease', 'loi', 'partner_one', '${joe}', '${joe}');
+		insert into public.capture_session
+			(id, nonce, device_id, actor_id, mode, started_at, consent_announced_at, session_token_hash, expires_at, state, state_at,
+			post_call, outcome_reviewed_at, outcome_reviewed_by)
+			values ('${reviewedCall}', 'example-nonce', 'example-device', '${joe}', 'meeting', '2026-01-01T12:00Z',
+				'2026-01-01T12:00Z', 'example-token', '2026-01-02T12:00Z', 'done', '2026-01-01T12:30Z',
+				true, '2026-01-01T13:00Z', '${joe}');
+		insert into public.capture_post_call_candidate
+			(session_id, idempotency_key, batch_hash, item_index, kind, deal_id, assignee_slug, action_description, evidence_quote, confidence)
+			values ('${reviewedCall}', 'example-key', 'example-batch', 0, 'assigned_action', '${deal}', 'partner_one', 'Confirm date', 'Date', 0.9);
 		commit;`);
+	for (const file of ["copy-calls.sql", "copy-call-suggestions.sql"]) {
+		await db.query(`begin; ${await readSchema(file)} commit;`);
+	}
 	joeCookie = await signIn("joe", joe);
 	dellCookie = await signIn("dell", dell);
 });
@@ -154,6 +179,7 @@ test("a reply link opens the current pending revision or its visible pending suc
 		const response = await open(reply(original));
 		assert.equal(response.status, 200);
 		assert.equal(response.headers.get("cache-control"), "no-store");
+		assert.equal(response.headers.get("server-timing"), null);
 		assert.deepEqual(await response.json(), target(current));
 		const home = await request(`home/cards/reply_draft:${id(current)}`);
 		assert.equal(home.status, 200);
@@ -179,46 +205,61 @@ test("a lead draft link opens the shared lead using the board's legacy ID", asyn
 	assert.equal(detail.party_id, lead);
 });
 
-test("a call link opens its pending review on the copied deal", async () => {
-	const response = await open(callRef(call));
-	assert.equal(response.status, 200);
-	assert.deepEqual(await response.json(), {
-		kind: "call_review",
-		path: `/api/engine/home/cards/suggestion:${proposal}`,
-		deal_id: deal,
-		activity_id: call,
-	});
+const dealTarget = {
+	kind: "deal",
+	path: `/deals?deal=${deal}&focus=call-review`,
+};
+
+test("another partner's call link opens the shared deal for the assignee", async () => {
 	const home = await request(`home/cards/suggestion:${proposal}`);
 	assert.equal(home.status, 200);
 	const { source_activity } = await json(home);
 	assert.ok(isArguments(source_activity));
 	assert.equal(source_activity.id, call);
+	assert.equal((await request(`deals/${deal}`)).status, 200);
+	assert.equal((await open(callRef(unfiledCall))).status, 404);
+	const response = await open(callRef(call));
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), dealTarget);
+});
+
+test("a reviewed legacy call with a pending step links to the deal page", async () => {
+	const pending = await db.query(
+		"select from proposal where activity_id = $1 and kind = 'next_step' and status = 'pending'",
+		[reviewedCall],
+	);
+	assert.equal(pending.rowCount, 1);
+	const response = await open(callRef(reviewedCall));
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), dealTarget);
 });
 
 async function unavailable(reference: string, cookie?: string) {
 	const response = await open(reference, cookie);
 	assert.equal(response.status, 404);
-	const { correlation_id, ...body } = await json(response);
-	assert.equal(typeof correlation_id, "string");
-	assert.deepEqual(body, {
-		error: "action_link_unavailable",
-		hint: "This link is no longer available.",
-	});
+	return { body: await response.text(), headers: [...response.headers] };
 }
 
 test("finished, inaccessible, missing and retired links give the same answer", async () => {
-	await unavailable(reply(20), dellCookie);
-	await unavailable(ref(`rd:${id(20)}:dell:17`));
-	await unavailable(reply(23));
-	await unavailable(reply(24));
-	await unavailable(ref(`ld:${linkedDraft}`));
-	await unavailable(callRef(finishedCall));
-	await unavailable(callRef(call), dellCookie);
-	await unavailable(callRef(unknown));
-	await unavailable(ref(`fe:${call}:1`));
-	await unavailable(ref(`ld:${unknown}`));
-	await unavailable(ref(`xx:${unknown}`));
-	await unavailable("al1_!");
+	const unknownReply = await unavailable(reply(99));
+	for (const reference of [
+		ref(`rd:${id(20)}:dell:17`),
+		reply(23),
+		reply(24),
+		ref(`ld:${linkedDraft}`),
+		callRef(unknown),
+		ref(`fe:${call}:1`),
+		ref(`ld:${unknown}`),
+		ref(`xx:${unknown}`),
+		"al1_!",
+	]) {
+		assert.deepEqual(await unavailable(reference), unknownReply);
+	}
+	assert.deepEqual(await unavailable(reply(20), dellCookie), unknownReply);
+	assert.deepEqual(JSON.parse(unknownReply.body), {
+		error: "action_link_unavailable",
+		hint: "This link is no longer available.",
+	});
 });
 
 test("a saved link requires a PartnerApp session", async () => {

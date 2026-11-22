@@ -131,15 +131,13 @@ export class Refusal {
 	}
 }
 
-export const refuse = (
-	c: Context,
-	refusal: Refusal,
-	correlation_id = crypto.randomUUID(),
-) =>
+export const refuse = (c: Context, refusal: Refusal, correlation_id?: string) =>
 	c.json(
 		{
 			error: refusal.error,
-			correlation_id,
+			...(refusal.error === "action_link_unavailable"
+				? {}
+				: { correlation_id: correlation_id ?? crypto.randomUUID() }),
 			hint: HINTS[refusal.error],
 			...refusal.extra,
 		},
@@ -358,16 +356,21 @@ export function answerNextRead<E extends DatabaseEnv>(
 	c: Context<E>,
 	verb: Verb,
 	read: (db: Transaction<NextDB>, userId: string) => Promise<unknown>,
+	options?: { timing?: boolean },
 ) {
-	return answerRead(c, verb, (url, partner) =>
-		nextTransaction(url, "read", async (db) => {
-			const user = await db
-				.selectFrom("app_user")
-				.select("id")
-				.where("slug", "=", partner)
-				.executeTakeFirst();
-			return user ? read(db, user.id) : new Refusal(422, "unauthenticated");
-		}),
+	return answerRead(
+		c,
+		verb,
+		(url, partner) =>
+			nextTransaction(url, "read", async (db) => {
+				const user = await db
+					.selectFrom("app_user")
+					.select("id")
+					.where("slug", "=", partner)
+					.executeTakeFirst();
+				return user ? read(db, user.id) : new Refusal(422, "unauthenticated");
+			}),
+		options,
 	);
 }
 
@@ -375,6 +378,7 @@ async function answerRead<E extends DatabaseEnv>(
 	c: Context<E>,
 	verb: Verb,
 	read: (url: string, partner: string) => Promise<unknown>,
+	{ timing = true } = {},
 ) {
 	const failed = (status: 500 | 503) =>
 		refuse(c, new Refusal(status, "unhandled_verb_failure", { verb }));
@@ -394,7 +398,8 @@ async function answerRead<E extends DatabaseEnv>(
 			return failed(500);
 		}
 	} finally {
-		c.header("Server-Timing", `db;dur=${performance.now() - started}`);
+		if (timing)
+			c.header("Server-Timing", `db;dur=${performance.now() - started}`);
 	}
 	return result instanceof Refusal ? refuse(c, result) : c.json(result);
 }
