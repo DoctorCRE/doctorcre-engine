@@ -4,8 +4,6 @@ import { visibleSuggestion } from "../home-inbox-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { ACTING_USER } from "../next-save.ts";
 
-export { visibleCall };
-
 export const visibleCallProposal = (userId: string | Expression<string>) =>
 	sql<boolean>`(${visibleCall(userId)}
 		and (not (${sharedCopiedCall}) or p.proposed_by_job = 'old_system')
@@ -16,8 +14,6 @@ export const visibleCallProposal = (userId: string | Expression<string>) =>
 export const copiedCallStep = sql<boolean>`p.kind = 'next_step'
 	and p.proposed_by_job = 'old_system' and p.activity_kind in ('call', 'meeting')
 	and p.deal_id is not null`;
-
-export const privateCallLog = sql<boolean>`p.kind = 'log_call' and not (${sharedCopiedCall})`;
 
 export const stepTextKey = (what: string) =>
 	what.replace(/\s+/gu, " ").trim().toLowerCase();

@@ -1,8 +1,8 @@
 import { sql, type Transaction } from "kysely";
 import { hasToolCallMarkup, isoMillis } from "../answer.ts";
-import { visibleCall } from "../deals/call-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { matchingContacts, matchingDealSubjects } from "../search/next-find.ts";
+import { visibleCall } from "./call-visibility.ts";
 
 async function activityCandidates(
 	db: Transaction<DB>,
@@ -37,11 +37,12 @@ export async function readNextRecentActivity(
 	const byRef = ref ? await activityCandidates(db, ref, true) : [];
 	const matching =
 		byRef.length > 0 ? byRef : await activityCandidates(db, query);
-	const byTarget = new Map<string, (typeof matching)[number]>();
+	const bySubject = new Map<string, (typeof matching)[number]>();
 	for (const match of matching) {
-		if (!byTarget.has(match.ref)) byTarget.set(match.ref, match);
+		const subjectKey = `${match.kind === "deal" ? "deal" : "contact"}:${match.id}`;
+		if (!bySubject.has(subjectKey)) bySubject.set(subjectKey, match);
 	}
-	const candidates = [...byTarget.values()].sort((a, b) =>
+	const candidates = [...bySubject.values()].sort((a, b) =>
 		a.ref.localeCompare(b.ref),
 	);
 	const [selected] = candidates;
