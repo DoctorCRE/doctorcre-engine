@@ -9,7 +9,6 @@ import type { JsonObject } from "./database.d.ts";
 import {
 	copiedCallStep,
 	lockOpenDealStep,
-	privateCallLog,
 	visibleCallProposal,
 } from "./deals/call-review.ts";
 import { sourceInMailbox } from "./home-email-thread.ts";
@@ -414,10 +413,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.leftJoin("activity as a", "a.id", "p.activity_id")
 					.leftJoin("next_step as step", "step.id", "p.next_step_id")
 					.selectAll("p")
-					.select([
-						privateCallLog.as("private_call_log"),
-						copiedCallStep.as("copied_call_step"),
-					])
+					.select(copiedCallStep.as("copied_call_step"))
 					.where("p.id", "=", r.proposal_id)
 					// A direct decision clears the mailbox stamp and records the owner as decider.
 					.where(sql<boolean>`(p.kind <> 'email_lead' or
@@ -561,6 +557,14 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								.where("id", "=", p.candidate_id)
 								.executeTakeFirstOrThrow()
 						: undefined;
+				const callNote =
+					accepts && p.kind === "log_call"
+						? await tx
+								.selectFrom("activity")
+								.select("id")
+								.where("id", "=", p.id)
+								.executeTakeFirst()
+						: undefined;
 				const created =
 					r.decision === "dismiss" || p.kind === "next_step_done"
 						? {}
@@ -570,12 +574,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								? { deal_id: p.deal_id }
 								: promoted
 									? { party_id: promoted.promoted_party_id }
-									: {
-											activity_id:
-												p.kind === "log_call" && !p.private_call_log
-													? p.id
-													: p.activity_id,
-										};
+									: { activity_id: callNote?.id ?? p.activity_id };
 				return {
 					proposal_id: p.id,
 					status: decided?.status ?? null,

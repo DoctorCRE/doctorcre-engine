@@ -109,7 +109,8 @@ begin
 			insert into activity_about (activity_id, deal_id, party_id)
 			values (new.id, new.deal_id, new.party_id);
 		else
-			update activity set summary = coalesce(nullif(summary, '') || E'\n\n', '') || new.what
+			update activity set summary = case when summary is null or summary = '' then new.what
+				else summary || E'\n\n' || new.what end
 			where id = new.activity_id;
 		end if;
 	when 'next_step' then

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { z } from "zod";
 import { readSchema } from "./test-copy.ts";
 import { doorTest } from "./test-door.ts";
 
-const { db, setup, cleanup, save } = doorTest();
+const { db, setup, cleanup, save, request } = doorTest();
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const ALEX = id(1),
@@ -155,6 +156,27 @@ test("private call logs save on the call once, including when its summary is bla
 			[callId, REVIEW, CLIENT],
 		);
 		await db.query("commit");
+		const readActor = async () => {
+			const response = await request(
+				{ user: "alex" },
+				`recent-activity?query=${CLIENT}`,
+				{ method: "GET" },
+				{ ACTIVITY_READ_SCHEMA: "next" },
+			);
+			assert.equal(response.status, 200);
+			const activity = z
+				.object({
+					state: z.literal("completed"),
+					catch_up: z.object({
+						timeline: z.array(z.object({ actor: z.string() })),
+					}),
+				})
+				.parse(await response.json());
+			const [entry] = activity.catch_up.timeline;
+			assert.ok(entry);
+			return entry.actor;
+		};
+		assert.equal(await readActor(), recorder || "alex");
 		const [stored, proposal] = await propose({
 			kind: "log_call",
 			activity_id: callId,
@@ -173,6 +195,7 @@ test("private call logs save on the call once, including when its summary is bla
 		assert.equal(status, 200);
 		assert.deepEqual(answer.created, { activity_id: callId });
 		assert.deepEqual(await accept(), [200, { ...answer, replayed: true }]);
+		assert.equal(await readActor(), "alex");
 		assert.deepEqual(
 			(
 				await db.query(
