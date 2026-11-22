@@ -127,16 +127,28 @@ export async function claimDocWork(
 			limit 1
 		`.execute(tx);
 		if (!candidate) return null;
+		if (candidate.queue === "turn" && runner === "backup_mail") return null;
+
+		const table = candidate.queue === "turn" ? "doc_turn" : "doc_judgment_job";
+		// The guarded write needs a fresh snapshot after any wait for the row lock.
+		const locked = await tx
+			.selectFrom(table)
+			.select("id")
+			.where("id", "=", candidate.id)
+			.where("owner_user_id", "=", owner)
+			.forNoKeyUpdate()
+			.executeTakeFirst();
+		if (!locked) continue;
+
 		const stillEligible = (queuedAt: RawBuilder<unknown>) => sql<boolean>`
 			id = ${candidate.id} and owner_user_id = ${owner}
-			and state = ${candidate.state}
+			and state in ('queued', 'working') and state = ${candidate.state}
 			and claim_id is not distinct from ${candidate.claim_id}::uuid
 			and claim_until is not distinct from ${candidate.claim_until}::timestamptz
 			and (claim_until is null or claim_until <= clock_timestamp())
 			and (${eligible(queuedAt)})
 		`;
 		if (candidate.queue === "turn") {
-			if (runner === "backup_mail") return null;
 			const turn = await claimDocTurn(tx, stillEligible(turnQueuedAt));
 			if (turn) return turn;
 			continue;

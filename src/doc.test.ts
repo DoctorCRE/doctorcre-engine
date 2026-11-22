@@ -492,6 +492,68 @@ test("backup skips a chat turn that the Mac is committing as failed", async (t) 
 	);
 });
 
+for (const queue of ["chat", "mail"] as const) {
+	test(`backup keeps the expired ${queue} claim when the Mac comes online during the lock wait`, async (t) => {
+		const table = queue === "chat" ? "doc_turn" : "doc_judgment_job";
+		const { id } =
+			queue === "chat" ? (await askDoc()).turn : await queueMailJudgment();
+		const credential = await issue(owner);
+		const response = await poll(
+			credential,
+			"ready",
+			queue === "mail" ? "judgment" : undefined,
+		);
+		assert.equal(response.status, 200);
+		const { claim_id } = await response.json<{ claim_id: string }>();
+		await db.query(
+			`update ${table} set claim_until = '-infinity' where id = $1`,
+			[id],
+		);
+		await db.query(
+			"update doc_link set last_seen_at = now() - interval '1 minute' where owner_user_id = $1",
+			[owner],
+		);
+		const fetch = t.mock.method(globalThis, "fetch", async () =>
+			reply(queue === "chat" ? refusal : summaryAnswer),
+		);
+
+		await db.query("begin");
+		let dispatch: Promise<void> | undefined;
+		try {
+			await db.query(`select id from ${table} where id = $1 for update`, [id]);
+			dispatch = tick();
+			void dispatch.catch(() => {});
+			await waitForBlockedTransaction(db);
+			assert.equal((await poll(credential, null)).status, 204);
+			const { rows } = await db.query<{ readiness: string; online: boolean }>(
+				`select readiness, last_seen_at >= statement_timestamp() - interval '30 seconds' as online
+				from doc_link where owner_user_id = $1`,
+				[owner],
+			);
+			assert.deepEqual(rows, [{ readiness: "ready", online: true }]);
+			await waitForBlockedTransaction(db);
+		} finally {
+			await db.query("rollback");
+			await dispatch;
+		}
+		const { rows } = await db.query<{
+			state: string;
+			claim_id: string | null;
+			claim_until: string | null;
+		}>(
+			`select state, claim_id, claim_until::text from ${table} where id = $1`,
+			[id],
+		);
+		assert.deepEqual(
+			{ rows, calls: fetch.mock.callCount() },
+			{
+				rows: [{ state: "working", claim_id, claim_until: "-infinity" }],
+				calls: 0,
+			},
+		);
+	});
+}
+
 test("backup answers an unready partner's turn using Doc's read tools", async (t) => {
 	const { conversation_id } = await askDoc();
 	const query = "Example Backup Lead";
