@@ -83,7 +83,15 @@
 				"DOC_BACKUP_MODEL": "claude-sonnet-5-5",
 				"POST_MEDIA_BUCKET": "doctorcre-post-media-staging",
 				"PARTNER_APP_ORIGIN": "https://doctorcre-app-staging.joe-bookout-carr-us.workers.dev",
-				"CLIENT_WEBSITE_ORIGIN": "https://carr-share-staging.joe-bookout-carr-us.workers.dev"
+				"CLIENT_WEBSITE_ORIGIN": "https://carr-share-staging.joe-bookout-carr-us.workers.dev",
+				"DEALS_READ_SCHEMA": "next",
+				"HOME_INBOX_READ_SCHEMA": "next",
+				"LEADS_READ_SCHEMA": "next",
+				"DIRECTORY_READ_SCHEMA": "next",
+				"INVOICES_READ_SCHEMA": "next",
+				"SEARCH_READ_SCHEMA": "next",
+				"ACTIVITY_READ_SCHEMA": "next",
+				"RELATIONSHIPS_READ_SCHEMA": "next"
 			}
 		}
 	}
