@@ -1,13 +1,45 @@
 with outside_auth as (
 	select oid, nspname from pg_namespace
 	where nspname !~ '^pg_' and nspname not in ('information_schema', 'doctorcre_auth')
-), required_table_access (table_name, privilege) as (
-	values ('"user"', 'SELECT'), ('account', 'SELECT'), ('partner', 'SELECT'),
+), auth_tables as (
+	select oid, relname::text as table_name from pg_class
+	where relnamespace = 'doctorcre_auth'::regnamespace and relkind in ('r','p','v','m','f')
+), auth_columns as (
+	select t.oid, table_name, attnum, attname::text as column_name
+	from auth_tables t join pg_attribute a on a.attrelid = t.oid
+	where attnum <> 0 and not attisdropped
+), table_privileges (privilege, applies_to_columns) as (
+	values ('SELECT', true), ('INSERT', true), ('UPDATE', true), ('REFERENCES', true),
+	       ('DELETE', false), ('TRUNCATE', false), ('TRIGGER', false), ('MAINTAIN', false)
+), privilege_modes as (
+	select privilege || suffix as privilege, applies_to_columns
+	from table_privileges cross join (values (''), (' WITH GRANT OPTION')) as options(suffix)
+), allowed_table_access (table_name, privilege) as (
+	values ('user', 'SELECT'), ('account', 'SELECT'), ('partner', 'SELECT'),
 	       ('session', 'SELECT'), ('session', 'INSERT'), ('session', 'DELETE'),
 	       ('verification', 'SELECT'), ('verification', 'INSERT'),
 	       ('verification', 'UPDATE'), ('verification', 'DELETE')
-), session_update_columns (column_name) as (
-	values ('googleAuthenticatedAt'), ('updatedAt')
+), allowed_auth_access (table_name, column_name, privilege) as (
+	select table_name, null::text, privilege from allowed_table_access
+	union all
+	-- PostgreSQL treats table grants as effective column grants.
+	select table_name, column_name, privilege from auth_columns
+	join allowed_table_access using (table_name)
+	join table_privileges using (privilege) where applies_to_columns
+	union all
+	values ('session', 'googleAuthenticatedAt', 'UPDATE'), ('session', 'updatedAt', 'UPDATE')
+), effective_auth_access (table_name, column_name, privilege) as (
+	select table_name, null::text, privilege from auth_tables cross join privilege_modes
+	where has_table_privilege(oid, privilege)
+	union all
+	select table_name, column_name, privilege from auth_columns cross join privilege_modes
+	where case when applies_to_columns then has_column_privilege(oid, attnum, privilege) else false end
+), auth_access_differences as (
+	select 'missing' as difference, access.*
+	from (select * from allowed_auth_access except select * from effective_auth_access) access
+	union all
+	select 'unexpected', access.*
+	from (select * from effective_auth_access except select * from allowed_auth_access) access
 )
 select 'unsafe login attributes' as finding from pg_roles
 where rolname = current_user and (not rolcanlogin or not rolinherit
@@ -24,11 +56,11 @@ where member = current_user::regrole and roleid = 'engine_partner_auth'::regrole
 union all
 select 'missing doctorcre_auth schema usage' where not has_schema_privilege('doctorcre_auth', 'USAGE')
 union all
-select format('missing %s on doctorcre_auth.%s', privilege, table_name) from required_table_access
-where not has_table_privilege('doctorcre_auth.' || table_name, privilege)
+select 'unexpected CREATE on doctorcre_auth' where has_schema_privilege('doctorcre_auth', 'CREATE')
 union all
-select format('missing UPDATE on doctorcre_auth.session.%I', column_name) from session_update_columns
-where not has_column_privilege('doctorcre_auth.session', column_name, 'UPDATE')
+select format('%s %s on doctorcre_auth.%I%s', difference, privilege, table_name,
+	case when column_name is null then '' else format('.%I', column_name) end)
+from auth_access_differences
 union all
 select nspname from outside_auth
 where has_schema_privilege(oid, 'CREATE')
@@ -42,10 +74,4 @@ where case when relkind = 'S' then has_sequence_privilege(c.oid, 'SELECT, UPDATE
 	else false end
 union all
 select format('%I.%I', nspname, proname) from pg_proc p join outside_auth n on n.oid = p.pronamespace
-where prosecdef and has_function_privilege(p.oid, 'EXECUTE')
-union all
-select 'write access beyond session fields' where
-	has_schema_privilege('doctorcre_auth', 'CREATE')
-	or has_table_privilege('doctorcre_auth.account', 'DELETE')
-	or has_column_privilege('doctorcre_auth."user"', 'partner_user_id', 'UPDATE')
-	or has_column_privilege('doctorcre_auth.session', 'token', 'UPDATE');
+where prosecdef and has_function_privilege(p.oid, 'EXECUTE');

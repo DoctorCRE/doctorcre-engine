@@ -76,7 +76,7 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
    commit;
    ```
 
-   Run the [effective permission audit](../schema/partner-auth-permissions.sql) as the dedicated login. It checks login attributes, memberships, required auth grants, and access to business schemas, tables, columns, sequences, and security-definer functions. Proceed to Hyperdrive only if the audit returns zero rows.
+   Run the [effective permission audit](../schema/partner-auth-permissions.sql) as the dedicated login. It checks login attributes, memberships, every effective auth table and column privilege, and access to business schemas, tables, columns, sequences, and security-definer functions. Proceed to Hyperdrive only if the audit returns zero rows.
 
    ```sh
    psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_PARTNER_AUTH_DATABASE_URL" \

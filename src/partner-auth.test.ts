@@ -856,6 +856,11 @@ test("partner sessions in PostgreSQL", async (t) => {
 
 				await db.query(`grant select (slug) on public.actor to ${role}`);
 				await db.query(
+					`grant update ("accountId") on doctorcre_auth.account to ${role};
+					grant truncate on doctorcre_auth.session to ${role};
+					grant update (value) on doctorcre_auth.verification to ${role} with grant option`,
+				);
+				await db.query(
 					"revoke delete on doctorcre_auth.session from engine_partner_auth",
 				);
 				await db.query(`set local role ${role}`);
@@ -863,6 +868,9 @@ test("partner sessions in PostgreSQL", async (t) => {
 				assert.deepEqual(rows.map(({ finding }) => finding).sort(), [
 					"missing DELETE on doctorcre_auth.session",
 					"public.actor",
+					"unexpected TRUNCATE on doctorcre_auth.session",
+					"unexpected UPDATE WITH GRANT OPTION on doctorcre_auth.verification.value",
+					'unexpected UPDATE on doctorcre_auth.account."accountId"',
 				]);
 			} finally {
 				await db.query("rollback");
