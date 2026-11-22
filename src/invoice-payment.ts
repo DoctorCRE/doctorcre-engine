@@ -3,14 +3,14 @@ import { sql } from "kysely";
 import { Refusal } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
-import { fit, isChangeId, isUuid } from "./request-shape.ts";
+import { fit, isChangeId, isUuid, orNull } from "./request-shape.ts";
 import { SaveRefusal } from "./save.ts";
 import { latestChange } from "./seen-change.ts";
 
 const receipt = {
 	idempotency_key: isUuid,
 	commission_id: isUuid,
-	base_version: isChangeId,
+	base_version: orNull(isChangeId),
 	received_on: isCalendarDate,
 };
 
