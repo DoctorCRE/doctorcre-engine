@@ -21,28 +21,21 @@ type TurnClaim = Extract<
 	{ kind: "turn" }
 >;
 
+type BackupConfig = {
+	apiKey: string;
+	model: string;
+	reader: string;
+	writer: string;
+};
+
 async function answerTurn(
-	{
-		apiKey,
-		model,
-		reader,
-		writer,
-		owner,
-	}: {
-		apiKey: string;
-		model: string;
-		reader: string;
-		writer: string;
-		owner: string;
-	},
+	{ apiKey, model, reader, writer }: BackupConfig,
+	owner: string,
 	{ claim_id, turn, history }: TurnClaim,
 ) {
 	const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
 	const { InMemoryTransport } = await import(
 		"@modelcontextprotocol/sdk/inMemory.js"
-	);
-	const { CallToolResultSchema } = await import(
-		"@modelcontextprotocol/sdk/types.js"
 	);
 	const forOwner = <T>(run: Parameters<typeof docLinkOwnerTransaction<T>>[2]) =>
 		docLinkOwnerTransaction(writer, owner, run);
@@ -63,28 +56,33 @@ async function answerTurn(
 		tools: (await client.listTools()).tools,
 		timeout,
 	}));
-	if (!session) return false;
-	const result = await askDocBackup({
-		apiKey,
-		model,
-		system: docPrompt,
-		messages: [{ role: "user", content: JSON.stringify({ turn, history }) }],
-		tools: session.tools,
-		timeoutMs: session.timeout - (performance.now() - start),
-		async runTool({ name, arguments: args }, signal) {
-			signal.throwIfAborted();
-			const reply = await toolSession((client) =>
-				client.callTool({ name, arguments: args }, undefined, { signal }),
-			);
-			if (!reply) throw new Error("Doc claim expired");
-			return CallToolResultSchema.parse(reply);
-		},
-	});
-	if (result.kind !== "answer") {
+	const result =
+		session &&
+		(await askDocBackup({
+			apiKey,
+			model,
+			system: docPrompt,
+			messages: [{ role: "user", content: JSON.stringify({ turn, history }) }],
+			tools: session.tools,
+			timeoutMs: session.timeout - (performance.now() - start),
+			async runTool({ name, arguments: args }, signal) {
+				signal.throwIfAborted();
+				const reply = await toolSession((client) =>
+					client.callTool({ name, arguments: args }, undefined, { signal }),
+				);
+				if (!reply) throw new Error("Doc claim expired");
+				return reply;
+			},
+		}));
+	if (result?.kind !== "answer") {
+		const exhausted = result?.kind === "credits_exhausted";
 		await forOwner((tx) =>
-			finishDocTurn(tx, owner, { claim_id, kind: "queued" }),
+			finishDocTurn(tx, owner, {
+				claim_id,
+				kind: exhausted ? "queued" : "failed",
+			}),
 		);
-		return false;
+		return exhausted;
 	}
 	let answer: unknown = null;
 	try {
@@ -102,7 +100,7 @@ async function answerTurn(
 		if (status === 422)
 			await finishDocTurn(tx, owner, { claim_id, kind: "failed" });
 	});
-	return true;
+	return false;
 }
 
 export async function dispatchDocBackup(env: DocBackupBindings) {
@@ -120,8 +118,8 @@ export async function dispatchDocBackup(env: DocBackupBindings) {
 		!DATABASE_WRITER
 	)
 		return;
-	const { connectionString: writer } = DATABASE_WRITER;
-	const { connectionString: reader } = DATABASE;
+	const writer = DATABASE_WRITER.connectionString;
+	const config = { apiKey, model, writer, reader: DATABASE.connectionString };
 	const owners = await nextTransaction(writer, "save", (tx) =>
 		tx
 			.selectFrom("app_user")
@@ -134,10 +132,7 @@ export async function dispatchDocBackup(env: DocBackupBindings) {
 		const claim = await docLinkOwnerTransaction(writer, owner, (tx) =>
 			claimDocWork(tx, owner, "backup"),
 		);
-		if (
-			claim?.kind === "turn" &&
-			!(await answerTurn({ apiKey, model, reader, writer, owner }, claim))
-		)
+		if (claim?.kind === "turn" && (await answerTurn(config, owner, claim)))
 			return;
 	}
 }

@@ -4201,6 +4201,7 @@ create table doc_turn (
 	claim_state jsonb,
 	answer jsonb check (jsonb_typeof(answer) = 'object'),
 	answered_by text not null default 'mac' constraint doc_turn_answered_by check (answered_by in ('mac', 'backup')),
+	requeued_at timestamptz,
 	confirmation_key uuid unique references save_receipt (idempotency_key) deferrable initially deferred,
 	unique (conversation_id, position),
 	unique (owner_user_id, idempotency_key),
@@ -4215,6 +4216,17 @@ create table doc_turn (
 	check (confirmation_key is null or coalesce(jsonb_typeof(answer -> 'proposal') = 'object', false))
 );
 create unique index doc_turn_one_pending on doc_turn (conversation_id) where state in ('queued', 'working');
+
+create function stamp_doc_turn_requeue() returns trigger language plpgsql as $$
+begin
+	new.requeued_at := clock_timestamp();
+	return new;
+end;
+$$;
+revoke all on function stamp_doc_turn_requeue() from public;
+create trigger stamp_doc_turn_requeue before update of state on doc_turn
+	for each row when (old.state <> 'queued' and new.state = 'queued')
+	execute function stamp_doc_turn_requeue();
 
 alter table doc_conversation enable row level security;
 alter table doc_turn enable row level security;

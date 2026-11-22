@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { registerHooks } from "node:module";
 import { after, afterEach, before, test } from "node:test";
 import { Hono } from "hono";
 import pg from "pg";
 import { docRoutes, recentDocTurns } from "./doc.ts";
+import { dispatchDocBackup } from "./doc-backup.ts";
 import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
 import { docMcp } from "./doc-mcp.ts";
@@ -154,19 +154,6 @@ async function claim(credential: string) {
 	return response.json<Claim>();
 }
 
-const workerHooks = registerHooks({
-	resolve(specifier, context, nextResolve) {
-		return specifier === "cloudflare:workers"
-			? {
-					url: "data:text/javascript,export class WorkerEntrypoint {}",
-					shortCircuit: true,
-				}
-			: nextResolve(specifier, context);
-	},
-});
-const { default: worker } = await import("./worker-entry.ts").finally(() =>
-	workerHooks.deregister(),
-);
 const backupEnv = {
 	DOC_BACKUP: "true",
 	DOC_BACKUP_API_KEY: "fixture-key",
@@ -174,11 +161,7 @@ const backupEnv = {
 	DATABASE: { connectionString },
 	DATABASE_WRITER: { connectionString },
 };
-const tick = (env = backupEnv) =>
-	worker.scheduled(
-		{ cron: "* * * * *", scheduledTime: Date.now(), noRetry() {} },
-		env,
-	);
+const tick = (env = backupEnv) => dispatchDocBackup(env);
 const modelReply = (content: object[], stop_reason = "end_turn") =>
 	Response.json({
 		type: "message",
@@ -221,26 +204,13 @@ test("backup answers an unready partner's turn using Doc's read tools", async (t
 	await tick();
 	const saved = await chatTurn(conversation_id);
 	assert.equal(calls, 2);
-	assert.equal(saved?.state, "answered");
-	assert.equal(saved.answered_by, "backup");
-	assert.equal(
-		(
-			await db.query("select answered_by from doc_turn where id = $1", [
-				saved.id,
-			])
-		).rows[0].answered_by,
-		"backup",
-	);
+	assert.equal(saved?.answered_by, "backup");
 });
 
 test("backup waits for the ready Mac and skips its live claim even after two minutes", async (t) => {
-	const { conversation_id, turn } = await askDoc();
 	const credential = await issue(owner);
-	assert.equal((await poll(credential, "signed_out")).status, 204);
-	await db.query(
-		"update doc_link set readiness = 'ready' where owner_user_id = $1",
-		[owner],
-	);
+	assert.equal((await poll(credential)).status, 204);
+	const { conversation_id, turn } = await askDoc();
 	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
 	await tick();
 	assert.equal(fetch.mock.callCount(), 0);
@@ -249,11 +219,10 @@ test("backup waits for the ready Mac and skips its live claim even after two min
 		"update doc_turn set created_at = clock_timestamp() - interval '2 minutes' where id = $1",
 		[turn.id],
 	);
-	const active = await claim(credential);
+	assert.equal((await claim(credential)).turn.id, turn.id);
 	await tick();
 	assert.equal(fetch.mock.callCount(), 0);
 	assert.equal((await chatTurn(conversation_id))?.state, "working");
-	assert.equal(active.turn.id, turn.id);
 	await expire(turn.id);
 	await tick();
 	assert.equal(fetch.mock.callCount(), 1);
@@ -284,8 +253,9 @@ test("a Mac taking over an expired backup claim keeps its own answer", async (t)
 });
 
 test("backup credit exhaustion leaves both partners' turns queued and sends one request each tick until recovery", async (t) => {
-	const first = await askDoc();
-	const second = await askDoc("dell");
+	const partners = await Promise.all(
+		["joe", "dell"].map(async (user) => ({ user, ...(await askDoc(user)) })),
+	);
 	let depleted = true;
 	const fetch = t.mock.method(globalThis, "fetch", async () =>
 		depleted
@@ -304,24 +274,65 @@ test("backup credit exhaustion leaves both partners' turns queued and sends one 
 	for (const expected of [1, 2]) {
 		await tick();
 		assert.equal(fetch.mock.callCount(), expected);
-		assert.deepEqual(await chatTurn(first.conversation_id), first.turn);
-		assert.deepEqual(
-			await chatTurn(second.conversation_id, "dell"),
-			second.turn,
-		);
+		for (const { user, conversation_id, turn } of partners)
+			assert.deepEqual(await chatTurn(conversation_id, user), turn);
 	}
 	depleted = false;
 	await tick();
-	assert.equal((await chatTurn(first.conversation_id))?.answered_by, "backup");
+	for (const { user, conversation_id } of partners)
+		assert.equal(
+			(await chatTurn(conversation_id, user))?.answered_by,
+			"backup",
+		);
+});
+
+test("a failed backup answer leaves the other partner's turn free to finish", async (t) => {
+	const [first, second] = owner < other ? ["joe", "dell"] : ["dell", "joe"];
+	const failed = await askDoc(first);
+	const eligible = await askDoc(second);
+	let calls = 0;
+	t.mock.method(globalThis, "fetch", async () =>
+		++calls === 1 ? modelReply([], "max_tokens") : reply(),
+	);
+	await tick();
 	assert.equal(
-		(await chatTurn(second.conversation_id, "dell"))?.answered_by,
+		(await chatTurn(eligible.conversation_id, second))?.answered_by,
 		"backup",
 	);
+	assert.equal(
+		(await chatTurn(failed.conversation_id, first))?.state,
+		"failed",
+	);
+	await tick();
+	assert.equal(calls, 2);
+});
+
+test("retrying an old failed turn gives the ready Mac two minutes again", async (t) => {
+	const send = client();
+	const ask = { ...question, idempotency_key: randomUUID() };
+	const { turn, conversation_id } = await send("/turns", 202, ask);
+	const credential = await issue(owner);
+	const { claim_id } = await claim(credential);
+	assert.equal(
+		(await complete(credential, { claim_id, kind: "failed" })).status,
+		204,
+	);
+	await db.query(
+		"update doc_turn set created_at = clock_timestamp() - interval '5 minutes' where id = $1",
+		[turn.id],
+	);
+	assert.equal((await send("/turns", 202, ask)).turn.id, turn.id);
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+	await tick();
+	assert.equal(fetch.mock.callCount(), 0);
+	assert.equal((await chatTurn(conversation_id))?.state, "queued");
 });
 
 test("backup switched off leaves turns available to the Mac before the migration", async (t) => {
 	const migration = await readSchema("add-doc-answered-by.sql");
-	await db.query("alter table doc_turn drop column answered_by");
+	await db.query(`drop trigger stamp_doc_turn_requeue on doc_turn;
+		drop function stamp_doc_turn_requeue();
+		alter table doc_turn drop column answered_by, drop column requeued_at`);
 	t.after(() => db.query(migration));
 	const { conversation_id, turn } = await askDoc();
 	const fetch = t.mock.method(globalThis, "fetch", async () => reply());

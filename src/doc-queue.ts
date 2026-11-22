@@ -82,9 +82,9 @@ export async function claimDocWork(
 	);
 	const eligible =
 		runner === "backup"
-			? sql`and (created_at <= statement_timestamp() - interval '2 minutes'
-			or (select status from ${docLinkState(owner)} link) <> 'ready')`
-			: sql``;
+			? sql`coalesce(requeued_at, created_at) <= statement_timestamp() - interval '2 minutes'
+				or (select status from ${docLinkState(owner)} link) <> 'ready'`
+			: sql`true`;
 	// Turns still run before the separate judgment storage migration.
 	const {
 		rows: [storage],
@@ -92,7 +92,7 @@ export async function claimDocWork(
 	const mailQueue = storage?.installed
 		? sql`
 		union all
-		select 'mail', id, created_at, claim_until from doc_judgment_job
+		select 'mail', id, created_at, claim_until, true from doc_judgment_job
 		where owner_user_id = ${owner} and state in ('queued', 'working')
 	`
 		: sql``;
@@ -101,14 +101,13 @@ export async function claimDocWork(
 			rows: [candidate],
 		} = await sql<{ queue: "turn" | "mail"; id: string }>`
 			with pending as (
-				select 'turn' as queue, id, created_at, claim_until from doc_turn
+				select 'turn' as queue, id, created_at, claim_until, (${eligible}) as eligible from doc_turn
 				where owner_user_id = ${owner} and state in ('queued', 'working')
 				${mailQueue}
 			)
 			select queue, id from pending
-			where (queue = 'turn' or ${runner === "mac_with_judgment"})
+			where eligible and (queue = 'turn' or ${runner === "mac_with_judgment"})
 			  and not exists (select 1 from pending where claim_until > statement_timestamp())
-			  ${eligible}
 			order by queue <> 'turn', created_at, id
 			limit 1
 		`.execute(tx);
