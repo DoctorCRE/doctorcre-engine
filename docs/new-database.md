@@ -1557,7 +1557,7 @@ Each `participants` entry is `{ party_id, ref, name, email, role }` from a curre
 
 The response is `{ deal_id, deal_name, calls }`. It selects up to 50 visible calls linked to the deal, newest first with activity ID breaking ties, then builds their proposal arrays. A call has `activity_id`, `started_at` (an instant), `call_date` (Central time), and `proposals`. Calls recorded for the signed-in partner can have an empty proposal list. An unattributed call from the old system appears only when the deal has a proposal from that call that the signed-in partner can see.
 
-The PostgreSQL function `call_visible_to` allows the partner who recorded the call or the partner for whom a job recorded it. A call copied with the `old_system` job stamp and no partner stamp is shared. Call Outcomes and Home use this rule for call sources. The function uses `engine.user_id` when the query supplies no viewer. Apply [the call visibility migration](../schema/add-call-visibility.sql) before deploying the change to an existing database.
+The PostgreSQL function `call_visible_to` allows the partner who recorded the call or the partner for whom a job recorded it. A call copied with the `old_system` job stamp and no partner stamp is shared. Call Outcomes, its proposal decisions, and Home use this rule for call sources. The function uses `engine.user_id` when the query supplies no viewer. Apply [the call visibility migration](../schema/add-call-visibility.sql) before deploying the change to an existing database.
 
 A proposal has `proposal_id`, `kind`, `status`, `evidence`, and the fields the card can display, `what`, `owner` (the user's slug), `due_on`, `from_phase`, `to_phase`, `phase_on`, and `next_step_id`. Fields that do not apply are null. The response includes visible proposals in their stored state, including accepted and dismissed proposals, ordered by creation time and proposal ID. A proposal for another deal stays off this deal's cards, even when the same call discussed both deals.
 
@@ -2307,7 +2307,7 @@ The app gets one list and one cursor. The two histories are merged by time, beca
 
 ### Deal watches and nightly checklist reminders
 
-CARR still owns watch settings and delivery. A new subscription sets a baseline quietly. The five-minute sweep groups pending changes and lease reminders, queues one in-app update for a subscriber, and records the queued changes so a retry does not repeat the batch. A filed reply can alert the subscriber whose mailbox received it. Until the watch caller switches, it reads old facts for copied records. The old sources are `migrations/1166_subject_watch_changes.sql:7` and `migrations/1167_subject_watch_delivery.sql:90`.
+CARR still owns watch settings and delivery. A new subscription sets a baseline quietly. The five-minute sweep groups pending changes and lease reminders, queues one in-app update for a subscriber, and records the queued changes so a retry does not repeat the batch. A filed reply can alert the subscriber whose mailbox received it. The CARR sweep continues to read old facts for copied records. The old sources are `migrations/1166_subject_watch_changes.sql:7` and `migrations/1167_subject_watch_delivery.sql:90`.
 
 `GET /jobs/deal-watches/:kind/:id?subscriber=<slug>&since=<timestamp>` reads a deal or lease by UUID. The subscriber is a partner's slug. The timestamp includes a time zone and the boundary is inclusive. The answer has `kind`, `id`, `deal_id`, `href`, `changes`, and `reply_activity_ids`. A lease without a linked deal has a null `deal_id`. The link opens the deal or the lease's client.
 
@@ -2317,7 +2317,9 @@ For a phase move, `old_value` is the preceding recorded phase of the same deal, 
 
 Reply IDs come from inbound emails still filed to that deal and present in the subscriber's mailbox. The later of the filing time and that mailbox's capture time sets the boundary.
 
-Once switched, CARR reads this history with an overlapping time window and groups source fields into material changes using its baseline. It keeps policy, lease thresholds, and delivery. The pair `change_id` and `field`, or the reply activity ID, identifies a change for deduplication within a subscription.
+With `ENGINE_DEAL_WATCH_CHANGES=true`, the CARR sweep also reads engine changes for deal watches. The switch stays off until switch day. This path consumes changes only, not the returned reply IDs: engine-filed replies belong to engine Updates. It excludes H2 lease watches. CARR groups material fields by change ID into one receipt per subscription and consumes it once. CARR keeps watch policy and in-app delivery.
+
+The intake floor is the latest of subscription, first activation of the engine sweep, and resume. Changes at or before that floor are excluded. A change committed while a resume is being saved may alert. The sweep overlaps reads by five minutes and assumes engine write transactions commit within five minutes.
 
 The old nightly script took distinct deal IDs from the Home agenda in ID order (`tools/deal-checklist-reminders.py:40`). It queued checklist updates for the deal owner's morning window. That step is off so frozen old checklists cannot prompt for items already finished in the engine.
 
