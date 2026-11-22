@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import pg from "pg";
 import { asAdmin } from "../scripts/test-database.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
@@ -40,8 +41,8 @@ const triggers = [
 	"public.memory_item_plan_anchor_valid()",
 ];
 
-test("shared definer functions keep only the legacy callers' execute access", async () => {
-	const { db, setup, cleanup } = copyTest();
+test("shared definer functions keep only the legacy callers' execute access", async (t) => {
+	const { db, setup, cleanup, connectionString } = copyTest();
 	await setup();
 	let rolesCreated = false;
 	try {
@@ -74,6 +75,23 @@ test("shared definer functions keep only the legacy callers' execute access", as
 		`);
 
 		const migration = await readSchema("restrict-shared-definer-execute.sql");
+		await t.test(
+			"migration backs off under routine grant contention",
+			async () => {
+				const locker = new pg.Client({ connectionString });
+				await locker.connect();
+				try {
+					await locker.query(
+						"begin; revoke execute on function ops.attempt_receipt_binding_valid() from public",
+					);
+					await db.query("set statement_timeout = '4s'");
+					await assert.rejects(db.query(migration), { code: "55P03" });
+				} finally {
+					await db.query("rollback; reset statement_timeout");
+					await locker.end();
+				}
+			},
+		);
 		await db.query(migration);
 		await db.query(migration);
 		for (const [routine, allowed] of [

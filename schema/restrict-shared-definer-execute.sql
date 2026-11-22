@@ -1,4 +1,5 @@
 begin;
+set local lock_timeout = '1s';
 
 revoke execute on function
 	ops.attempt_receipt_binding_valid(),
