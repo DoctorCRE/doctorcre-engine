@@ -6,10 +6,16 @@ import { lockEmail } from "./activity/next-record.ts";
 import { answerNextRead, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
+import {
+	callAcceptanceBlock,
+	copiedAssignedAction,
+	visibleCallProposal,
+} from "./deals/call-review.ts";
 import { sourceInMailbox } from "./home-email-thread.ts";
 import { readProposal } from "./home-inbox-review.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
+import { ACTING_USER } from "./next-save.ts";
 import { cancelCurrentStep, resolveStepOwner } from "./next-steps.ts";
 import { saveOpenStep } from "./open-step.ts";
 import {
@@ -403,15 +409,24 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						? await lockFiling(tx, clicked)
 						: [r.proposal_id];
 				const p = await tx
-					.selectFrom("proposal")
-					.selectAll()
-					.where("id", "=", r.proposal_id)
+					.selectFrom("proposal as p")
+					.leftJoin("activity as a", "a.id", "p.activity_id")
+					.leftJoin("next_step as step", "step.id", "p.next_step_id")
+					.selectAll("p")
+					.select([
+						callAcceptanceBlock.as("accept_blocked"),
+						copiedAssignedAction.as("copied_assigned_action"),
+					])
+					.where("p.id", "=", r.proposal_id)
 					// A direct decision clears the mailbox stamp and records the owner as decider.
-					.where(sql<boolean>`(kind <> 'email_lead' or coalesce(decided_by_user_id, changed_for_user_id)
-						= nullif(current_setting('engine.user_id', true), '')::uuid)`)
-					.where(sql<boolean>`(${filingScope("proposal")} is null or
-						${sourceInMailbox(sql.ref("proposal.activity_id"), sql<string>`current_setting('engine.user_id')`)})`)
-					.forUpdate()
+					.where(sql<boolean>`(p.kind <> 'email_lead' or
+						coalesce(p.decided_by_user_id, p.changed_for_user_id) = ${ACTING_USER})`)
+					.where(sql<boolean>`(${filingScope("p")} is null or
+						${sourceInMailbox(sql.ref("p.activity_id"), ACTING_USER)})`)
+					.where(
+						sql<boolean>`(p.activity_kind is distinct from 'call' or ${visibleCallProposal(ACTING_USER)})`,
+					)
+					.forUpdate("p")
 					.executeTakeFirst();
 				if (!p) return fail(404, "not_found");
 				if (p.status !== "pending")
@@ -433,11 +448,13 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
+				if (accepts && p.accept_blocked) return fail(409, p.accept_blocked);
 				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
 					const d = await dealNow(tx, p.deal_id);
 					if (
 						d.phase !== p.from_phase ||
 						(!p.phase_stated &&
+							p.proposed_by_job !== "old_system" &&
 							phaseMove(d.phase, d.kind, p.evidence) !== p.to_phase)
 					)
 						return fail(409, "version_conflict", { current_phase: d.phase });
@@ -487,6 +504,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								async () => {
 									if (
 										p.deal_id &&
+										!p.copied_assigned_action &&
 										(p.activity_kind === "call" ||
 											p.activity_kind === "meeting")
 									)

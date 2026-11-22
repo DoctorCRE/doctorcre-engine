@@ -111,6 +111,7 @@ export function doorTest() {
 	};
 	return {
 		db: copy.db,
+		connectionString: copy.connectionString,
 		readerUrl: login(reader),
 		writerUrl: login(),
 		setup,
