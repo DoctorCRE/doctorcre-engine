@@ -331,6 +331,7 @@ type Verb =
 	| "read-prospects"
 	| "read-weekly-reviews"
 	| "read-reply-draft"
+	| "read-tour-stop-list"
 	| "read-updates"
 	| "read-vendor-meetings"
 	| "read-vendor-markets-v1"
