@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
+import { setTimeout } from "node:timers/promises";
 import { Hono } from "hono";
 import pg from "pg";
 import { docRoutes, recentDocTurns } from "./doc.ts";
@@ -298,8 +299,6 @@ for (const { name, response, otherState } of [
 		const [first, second] = owner < other ? ["joe", "dell"] : ["dell", "joe"];
 		const blocked = await askDoc(first);
 		const eligible = await askDoc(second);
-		const writer = new URL(connectionString);
-		writer.searchParams.set("options", "-c lock_timeout=50ms");
 		const fetch = t.mock.method(globalThis, "fetch", async () => reply());
 		fetch.mock.mockImplementationOnce(async () => {
 			await db.query("select id from doc_turn where id = $1 for update", [
@@ -307,14 +306,22 @@ for (const { name, response, otherState } of [
 			]);
 			return response();
 		});
+		const deadline = new AbortController();
 		await db.query("begin");
+		const dispatch = tick();
 		try {
-			await tick({
-				...backupEnv,
-				DATABASE_WRITER: { connectionString: writer.href },
-			});
+			await Promise.race([
+				dispatch,
+				setTimeout(5_000, undefined, { signal: deadline.signal }).then(() => {
+					assert.fail(
+						"Backup dispatch did not finish while the turn was locked",
+					);
+				}),
+			]);
 		} finally {
+			deadline.abort();
 			await db.query("rollback");
+			await dispatch;
 		}
 		assert.equal(
 			(await chatTurn(blocked.conversation_id, first))?.state,

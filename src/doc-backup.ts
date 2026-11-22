@@ -1,4 +1,5 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { sql } from "kysely";
 import { askDocBackup } from "./doc-backup-client.ts";
 import { docLinkOwnerTransaction } from "./doc-link.ts";
 import { docPrompt } from "./doc-prompt.ts";
@@ -29,6 +30,18 @@ type BackupConfig = {
 	writer: string;
 };
 const backupPrompt = docPrompt.replace("The JSON on stdin", "The input JSON");
+const backupLockTimeout = sql`set local lock_timeout = '1s'`;
+
+function backupOwnerTransaction<T>(
+	writer: string,
+	owner: string,
+	run: Parameters<typeof docLinkOwnerTransaction<T>>[2],
+) {
+	return docLinkOwnerTransaction(writer, owner, async (tx) => {
+		await backupLockTimeout.execute(tx);
+		return run(tx);
+	});
+}
 
 async function answerTurn(
 	{ apiKey, model, reader, writer }: BackupConfig,
@@ -42,12 +55,10 @@ async function answerTurn(
 	const { CallToolResultSchema } = await import(
 		"@modelcontextprotocol/sdk/types.js"
 	);
-	const forOwner = <T>(run: Parameters<typeof docLinkOwnerTransaction<T>>[2]) =>
-		docLinkOwnerTransaction(writer, owner, run);
 	const toolSession = <T>(
 		run: (client: Client, timeout: number) => Promise<T>,
 	) =>
-		forOwner((tx) =>
+		backupOwnerTransaction(writer, owner, (tx) =>
 			withDocTools(tx, owner, claim_id, reader, async (server, timeout) => {
 				const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
 				const client = new Client({ name: "doc-backup", version: "1.0.0" });
@@ -80,7 +91,7 @@ async function answerTurn(
 			},
 		}));
 	const creditsExhausted = result?.kind === "credits_exhausted";
-	await forOwner(async (tx) => {
+	await backupOwnerTransaction(writer, owner, async (tx) => {
 		if (result?.kind === "answer") {
 			let answer: unknown = null;
 			try {
@@ -123,17 +134,18 @@ export async function dispatchDocBackup(env: DocBackupBindings) {
 		return;
 	const writer = DATABASE_WRITER.connectionString;
 	const config = { apiKey, model, writer, reader: DATABASE.connectionString };
-	const owners = await nextTransaction(writer, "save", (tx) =>
-		tx
+	const owners = await nextTransaction(writer, "save", async (tx) => {
+		await backupLockTimeout.execute(tx);
+		return tx
 			.selectFrom("app_user")
 			.select("id")
 			.where("is_account_partner", "=", true)
 			.orderBy("id")
-			.execute(),
-	);
+			.execute();
+	});
 	for (const { id: owner } of owners) {
 		try {
-			const claim = await docLinkOwnerTransaction(writer, owner, (tx) =>
+			const claim = await backupOwnerTransaction(writer, owner, (tx) =>
 				claimDocWork(tx, owner, "backup"),
 			);
 			if (claim?.kind === "turn" && (await answerTurn(config, owner, claim)))
