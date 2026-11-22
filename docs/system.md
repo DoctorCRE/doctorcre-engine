@@ -21,8 +21,6 @@ The staging reader and writer Hyperdrives point to the Neon rehearsal branch use
 
 Which old program reads and writes what, with file and line: `docs/new-database.md` § "Who reads and writes the three features' records".
 
-On engine sign-in, Closing anniversaries opens from More.
-
 ## How they connect
 
 Today:
