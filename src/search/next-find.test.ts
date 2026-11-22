@@ -27,10 +27,19 @@ const [copiedClient, copiedLead, dental, dentalGroup] = [
 ] as const;
 const domainName = id(19);
 const clientRoleOnly = id(20);
+const sameName = [id(21), id(22)];
+const privateCall = id(23);
 const search = (query: string) =>
 	get("find", query, { SEARCH_READ_SCHEMA: "next" });
-const recent = (query: string, ref?: string) =>
-	get("recent-activity", query, { ACTIVITY_READ_SCHEMA: "next" }, ref);
+const recent = (query: string, ref?: string, user = "joe") =>
+	get(
+		"recent-activity",
+		query,
+		{ ACTIVITY_READ_SCHEMA: "next" },
+		ref,
+		undefined,
+		user,
+	);
 
 before(async () => {
 	await setup();
@@ -42,8 +51,9 @@ before(async () => {
 			('${joe}', 'person', 'Example Partner One'), ('${dell}', 'person', 'Example Partner Two'),
 			('${clinic}', 'company', 'Orchard Clinic'), ('${lead}', 'person', 'Orchard Lead'),
 			('${vendor}', 'company', 'Orchard Vendor'), ('${person}', 'person', 'Orchard Contact'),
-			('${copiedClient}', 'company', 'Sample Practice'), ('${copiedLead}', 'person', 'Sample Prospect'),
-			('${dental}', 'person', 'Example Pediatric Dental'), ('${dentalGroup}', 'company', 'Z Example Dental');
+			('${copiedClient}', 'person', 'Sample Practice'), ('${copiedLead}', 'person', 'Sample Prospect'),
+			('${dental}', 'person', 'Example Pediatric Dental'), ('${dentalGroup}', 'company', 'Z Example Dental'),
+			('${sameName[0]}', 'person', 'Example Namesake'), ('${sameName[1]}', 'person', 'Example Namesake');
 		insert into how_found (slug, label) values ('referral', 'Referral');
 		insert into party (id, kind, name, how_found) values
 			('${domainName}', 'company', 'example-company.example', null),
@@ -70,6 +80,7 @@ before(async () => {
 		insert into outside_id (source, value, party_id) values
 			('old_system_ref', 'V-EXAMPLE', '${vendor}'),
 			('old_system_ref', 'C-EXAMPLE', '${copiedClient}'),
+			('old_system_ref', 'L-PRACTICE', '${copiedClient}'),
 			('old_system_ref', 'P-EXAMPLE', '${copiedClient}'),
 			('old_system_ref', 'L-EXAMPLE', '${copiedLead}'),
 			('old_system_lead', '${id(18)}', '${dental}');
@@ -99,6 +110,10 @@ before(async () => {
 			('${id(10)}', '${clinic}'), ('${id(10)}', '${copiedClient}'), ('${id(10)}', '${copiedLead}');
 		insert into next_step (deal_id, what, created_at)
 			values ('${deal}', 'Send the proposal', '2026-11-05T12:00:00Z');
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${joe}', true);
+		insert into activity (id, kind, happened_at, summary) values
+			('${privateCall}', 'call', '2026-11-06T12:00:00Z', 'Private call about the example practice');
+		insert into activity_about (activity_id, party_id) values ('${privateCall}', '${copiedClient}');
 	`);
 });
 after(cleanup);
@@ -109,11 +124,12 @@ async function get(
 	bindings: object,
 	ref?: string,
 	headers?: HeadersInit,
+	user = "joe",
 ) {
 	const params = new URLSearchParams({ query });
 	if (ref !== undefined) params.set("ref", ref);
 	const response = await request(
-		{ user: "joe" },
+		{ user },
 		`${path}?${params}`,
 		{ method: "GET", ...(headers && { headers }) },
 		bindings,
@@ -346,12 +362,63 @@ test("Recent Activity finds next-only records and uses copied refs", async () =>
 	});
 });
 
-test("Recent Activity accepts a copied client's drawer ref even when the client is also a lead", async () => {
-	assert.partialDeepStrictEqual(await recent("Sample Practice", "C-EXAMPLE"), {
+test("Recent Activity opens one history for a person with lead and client refs", async (t) => {
+	const expectedHistory = {
 		state: "completed",
-		match: { kind: "client", target: "C-EXAMPLE" },
-		catch_up: { timeline: [{ summary: "Discussed the site" }] },
+		catch_up: {
+			subject: { id: copiedClient },
+			timeline: [
+				{ summary: "Private call about the example practice" },
+				{ summary: "Discussed the site" },
+			],
+		},
+	};
+	for (const [kind, target] of [
+		["client", "C-EXAMPLE"],
+		["lead", "L-PRACTICE"],
+	] as const) {
+		await t.test(`by ${kind} ref`, async () => {
+			const expected = { ...expectedHistory, match: { kind, target } };
+			assert.partialDeepStrictEqual(await recent(target), expected);
+			assert.partialDeepStrictEqual(
+				await recent("Orchard Lead", target),
+				expected,
+			);
+		});
+	}
+	await t.test("by name", async () => {
+		assert.partialDeepStrictEqual(
+			await recent("Sample Practice"),
+			expectedHistory,
+		);
 	});
+	await t.test("by ID", async () => {
+		assert.partialDeepStrictEqual(await recent(copiedClient), expectedHistory);
+	});
+});
+
+test("Recent Activity asks which person to open when two people share a name", async () => {
+	const query = "Example Namesake";
+	assert.partialDeepStrictEqual(await recent(query), {
+		state: "needs_disambiguation",
+		candidate_count: 2,
+		candidates: sameName.map((target) => ({ name: query, target })),
+	});
+});
+
+test("Recent Activity hides a private call from the other partner on a person with several roles", async () => {
+	const result = await recent("Sample Practice", undefined, "dell");
+	assert.partialDeepStrictEqual(result, {
+		state: "completed",
+		catch_up: {
+			subject: { id: copiedClient },
+			timeline: [{ summary: "Discussed the site" }],
+		},
+	});
+	assert.doesNotMatch(
+		JSON.stringify(result),
+		/Private call about the example practice/,
+	);
 });
 
 test("Recent Activity prefers a canonical client ID to the copied lead sharing it", async () => {
