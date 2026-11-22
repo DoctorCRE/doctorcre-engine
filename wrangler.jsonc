@@ -20,6 +20,11 @@
 			"binding": "CARR_READS",
 			"service": "carr-mcp",
 			"entrypoint": "ComparisonReads"
+		},
+		{
+			"binding": "CARR_WATCH_SETTINGS",
+			"service": "carr-mcp",
+			"entrypoint": "DealWatchSettings"
 		}
 	],
 	"hyperdrive": [
@@ -59,6 +64,11 @@
 					"binding": "CARR_READS",
 					"service": "carr-mcp-staging",
 					"entrypoint": "ComparisonReads"
+				},
+				{
+					"binding": "CARR_WATCH_SETTINGS",
+					"service": "carr-mcp-staging",
+					"entrypoint": "DealWatchSettings"
 				}
 			],
 			"hyperdrive": [

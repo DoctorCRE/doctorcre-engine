@@ -38,6 +38,7 @@ import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { dealDocumentText, deals } from "./deals/routes.ts";
 import { dealTours } from "./deals/tours.ts";
+import { type DealWatchEnv, dealWatch } from "./deals/watch.ts";
 import { docRoutes } from "./doc.ts";
 import {
 	claimDocLink,
@@ -90,6 +91,7 @@ import { changes } from "./who-did-what.ts";
 export type WorkerEnv = NextSaveEnv &
 	PartnerSessionEnv &
 	CompareEnv &
+	DealWatchEnv &
 	SignInFixtureEnv &
 	IntakeEnv & {
 		Bindings: { CF_VERSION_METADATA: { id: string; tag?: string } };
@@ -202,6 +204,7 @@ partnerApp.use("/api/engine/*", requirePartnerSession);
 partnerApp.route("/api/engine", actionLinks);
 partnerApp.route("/api/engine", activityDealAttribution);
 partnerApp.route("/api/engine", dealCallOutcomes);
+partnerApp.route("/api/engine", dealWatch);
 partnerApp.route("/", partnerApi);
 partnerApp.route("/api/engine/doc", docRoutes());
 partnerApp.route("/api/engine/doc", docLinkRoutes);

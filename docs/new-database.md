@@ -1597,13 +1597,11 @@ All next-schema automatic receipts give `event_id` (UUID), `prior_phase`, `phase
 
 The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. Undo returns the same status and error for a previous phase of Closed, Invoiced, or Dead, with a hint that Undo would return the deal to Closed deals or Lost deals. A copied invoice-dated close returns the same status and error with the hint "Closed because an invoice was recorded; Undo isn't available". A same-key retry returns the original answer.
 
-### Remaining Deals read work
-
-Deal watch settings and their target lookup are deferred. See [Deal watches and nightly checklist reminders](#deal-watches-and-nightly-checklist-reminders).
-
 ### App work for the Deals switch
 
 The app still needs its remaining save and live refresh paths (app #953 onward), including routing invoice undo and copied phase-move Undo to the engine. New-schema change IDs and party IDs have different meanings from legacy save versions and client IDs.
+
+The app routes watch settings to the [signed-in engine watch door](#deal-watches-and-nightly-checklist-reminders) when using engine sign-in.
 
 The deal step editors need to send `seen_current_step` through door 18 before enabling the Deals save switch.
 
@@ -2311,6 +2309,12 @@ The app gets one list and one cursor. The two histories are merged by time, beca
 ### Deal watches and nightly checklist reminders
 
 CARR still owns watch settings and delivery. A new subscription sets a baseline quietly. The five-minute sweep groups pending changes and lease reminders, queues one in-app update for a subscriber, and records the queued changes so a retry does not repeat the batch. A filed reply can alert the subscriber whose mailbox received it. The CARR sweep continues to read old facts for copied records. The old sources are `migrations/1166_subject_watch_changes.sql:7` and `migrations/1167_subject_watch_delivery.sql:90`.
+
+`GET /api/engine/deals/:deal/watch` returns `{ watch, health }` from CARR's v2 watch read. Either field can be null. `POST` to the same path requires the session's CSRF token. Both requests use the signed-in partner from `PartnerApp` and require the deal's UUID in the copy's `old_system` map. The engine calls CARR's private `DealWatchSettings` entrypoint in the matching environment.
+
+Every write takes `command` and a lowercase UUID `idempotency_key`. The `watch` and `replace-policy` commands take the v2 `policy`. The `pause`, `resume`, `replace-policy` and `unwatch` commands take `subscription_id` (the watch's lowercase UUID) and `base_version` (its `lifecycle_version`, a positive 32-bit integer). The policy lists distinct `change_kinds` from `reply_arrived`, `lease_threshold_crossed` and `listing_status_changed`. `include_self_changes` defaults to true. A lease threshold needs `lease_threshold_days`, `lease_threshold_months`, or both, with 1–20 distinct integers in each supplied array. Days range from 0 to 3650 and months from 0 to 120.
+
+A successful write returns `{ ok: true, schema_version: "subject-watch.v2", watch, health, rows_changed }`. Retry the same write with its original key within 30 days to recover the prior answer with `replayed: true`. `watch_stale_version` and `key_reuse` return 409. On a stale version, read the watch again before editing. A deal outside the copy or a target CARR cannot resolve returns 404. A binding failure, malformed reply, or unrecognized CARR refusal returns 502 `watch_settings_unavailable`.
 
 `GET /jobs/deal-watches/:kind/:id?subscriber=<slug>&since=<timestamp>` reads a deal or lease by UUID. The subscriber is a partner's slug. The timestamp includes a time zone and the boundary is inclusive. The answer has `kind`, `id`, `deal_id`, `href`, `changes`, and `reply_activity_ids`. A lease without a linked deal has a null `deal_id`. The link opens the deal or the lease's client.
 
