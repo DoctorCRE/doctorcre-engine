@@ -172,6 +172,16 @@ const modelReply = (content: object[], stop_reason = "end_turn") =>
 	});
 const reply = (answer: object = refusal) =>
 	modelReply([{ type: "text", text: JSON.stringify(answer) }]);
+const creditsExhausted = () =>
+	Response.json(
+		{
+			error: {
+				type: "invalid_request_error",
+				message: "Your credit balance is too low to access the Anthropic API.",
+			},
+		},
+		{ status: 400 },
+	);
 const askDoc = (user = "joe") =>
 	client(user)("/turns", 202, { ...question, idempotency_key: randomUUID() });
 const chatTurn = async (chat: string, user = "joe") =>
@@ -234,18 +244,7 @@ test("backup credit exhaustion leaves both partners' turns queued and sends one 
 	);
 	let depleted = true;
 	const fetch = t.mock.method(globalThis, "fetch", async () =>
-		depleted
-			? Response.json(
-					{
-						error: {
-							type: "invalid_request_error",
-							message:
-								"Your credit balance is too low to access the Anthropic API.",
-						},
-					},
-					{ status: 400 },
-				)
-			: reply(),
+		depleted ? creditsExhausted() : reply(),
 	);
 	for (const expected of [1, 2]) {
 		await tick();
@@ -282,6 +281,57 @@ test("a failed backup answer leaves the other partner's turn free to finish", as
 	await tick();
 	assert.equal(calls, 2);
 });
+
+for (const { name, response, otherState } of [
+	{
+		name: "a backup completion lock timeout lets the other partner's turn finish",
+		response: reply,
+		otherState: "answered",
+	},
+	{
+		name: "exhausted credits stop the tick even if the requeue hits a lock timeout",
+		response: creditsExhausted,
+		otherState: "queued",
+	},
+]) {
+	test(name, async (t) => {
+		const [first, second] = owner < other ? ["joe", "dell"] : ["dell", "joe"];
+		const blocked = await askDoc(first);
+		const eligible = await askDoc(second);
+		const writer = new URL(connectionString);
+		writer.searchParams.set("options", "-c lock_timeout=50ms");
+		const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+		fetch.mock.mockImplementationOnce(async () => {
+			await db.query("select id from doc_turn where id = $1 for update", [
+				blocked.turn.id,
+			]);
+			return response();
+		});
+		await db.query("begin");
+		try {
+			await tick({
+				...backupEnv,
+				DATABASE_WRITER: { connectionString: writer.href },
+			});
+		} finally {
+			await db.query("rollback");
+		}
+		assert.equal(
+			(await chatTurn(blocked.conversation_id, first))?.state,
+			"working",
+		);
+		assert.equal(
+			(await chatTurn(eligible.conversation_id, second))?.state,
+			otherState,
+		);
+
+		await expire(blocked.turn.id);
+		await tick();
+		const recovered = await chatTurn(blocked.conversation_id, first);
+		assert.equal(recovered?.id, blocked.turn.id);
+		assert.equal(recovered.answered_by, "backup");
+	});
+}
 
 test("retrying an old failed turn gives the ready Mac two minutes again", async (t) => {
 	const send = client();

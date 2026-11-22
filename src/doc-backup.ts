@@ -4,6 +4,7 @@ import { docLinkOwnerTransaction } from "./doc-link.ts";
 import { docPrompt } from "./doc-prompt.ts";
 import { claimDocWork, finishDocTurn } from "./doc-queue.ts";
 import { withDocTools } from "./doc-tool-session.ts";
+import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { WriterEnv } from "./save.ts";
 
@@ -78,7 +79,8 @@ async function answerTurn(
 				return CallToolResultSchema.parse(reply);
 			},
 		}));
-	return forOwner(async (tx) => {
+	const creditsExhausted = result?.kind === "credits_exhausted";
+	await forOwner(async (tx) => {
 		if (result?.kind === "answer") {
 			let answer: unknown = null;
 			try {
@@ -96,10 +98,12 @@ async function answerTurn(
 		}
 		await finishDocTurn(tx, owner, {
 			claim_id,
-			kind: result?.kind === "credits_exhausted" ? "queued" : "failed",
+			kind: creditsExhausted ? "queued" : "failed",
 		});
-		return result?.kind;
+	}).catch((error: unknown) => {
+		console.warn("Doc backup completion failed:", failureKind(error));
 	});
+	return creditsExhausted;
 }
 
 export async function dispatchDocBackup(env: DocBackupBindings) {
@@ -128,13 +132,14 @@ export async function dispatchDocBackup(env: DocBackupBindings) {
 			.execute(),
 	);
 	for (const { id: owner } of owners) {
-		const claim = await docLinkOwnerTransaction(writer, owner, (tx) =>
-			claimDocWork(tx, owner, "backup"),
-		);
-		if (
-			claim?.kind === "turn" &&
-			(await answerTurn(config, owner, claim)) === "credits_exhausted"
-		)
-			return;
+		try {
+			const claim = await docLinkOwnerTransaction(writer, owner, (tx) =>
+				claimDocWork(tx, owner, "backup"),
+			);
+			if (claim?.kind === "turn" && (await answerTurn(config, owner, claim)))
+				return;
+		} catch (error) {
+			console.warn("Doc backup turn failed:", failureKind(error));
+		}
 	}
 }
