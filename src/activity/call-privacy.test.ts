@@ -413,6 +413,21 @@ test("call privacy migration can safely be applied twice", async () => {
 	}
 });
 
+test("the partner reader can narrow step history with the change index", async () => {
+	const step = randomUUID();
+	const { rows } = await nextPartnerRead(door.readerUrl, "dell", async (tx) => {
+		await sql`set local enable_seqscan = off`.execute(tx);
+		return sql<{ "QUERY PLAN": string }>`
+			explain (costs off) select id from change
+			where table_name = 'next_step' and record = jsonb_build_object('id', ${step}::uuid)
+		`.execute(tx);
+	});
+	assert.match(
+		rows.map((row) => row["QUERY PLAN"]).join("\n"),
+		/Index Cond: .*table_name = 'next_step'/,
+	);
+});
+
 test("the partner login has no direct read permission on call-bearing text", async () => {
 	const { rows } = await door.db.query(
 		`select census.tab, census.col from (values
