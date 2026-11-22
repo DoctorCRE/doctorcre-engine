@@ -160,6 +160,8 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] In Updates, Show deal attribution opens a panel with a link to the credited deal. When the activity is filed to several deals, the panel links to each candidate and shows zero credited activities. [Activity deal attribution](../new-database.md#activity-deal-attribution).
 - [ ] Vendors on the deal, each opening its vendor page.
 - [ ] Watch settings and the deal page's call recorder work as they do today. After the switch, watch settings use the old tables and cover copied deals only (#805).
+- [ ] The deal page's call review shows recent recorded calls for that deal and the evidence and state of each visible suggestion. The partner confirms or dismisses pending suggestions through the same decision as Home. [Deal call outcomes](../new-database.md#deal-call-outcomes).
+- [ ] When a call note is private or the assignee already has an open ordinary next step, the card explains why Accept is unavailable and still offers Dismiss. Open checklist items leave Accept available.
 
 ### Tabs
 

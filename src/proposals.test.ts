@@ -254,7 +254,7 @@ test("a copied candidate keeps its place when intake proposes the same sender ag
 
 test("accepting a new lead replaces an imported not-recorded how-found value", async () => {
 	const activity = id(8);
-	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${USER}', true);
 		insert into activity (id, kind, happened_at) values ('${activity}', 'call', '2026-11-05T17:00:00Z');
 		insert into activity_about (activity_id, party_id) values ('${activity}', '${IMPORTED}'); commit;`);
 	const [stored, p] = await propose({
@@ -343,7 +343,7 @@ test("storing a call's step suggestion for another deal is refused", async () =>
 
 test("accepting a step from a recorded call keeps the proposal's original evidence", async () => {
 	const call = id(25);
-	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+	await db.query(`begin; select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${USER}', true);
 		insert into activity (id, kind, happened_at) values ('${call}', 'call', '2025-01-01');
 		insert into activity_about (activity_id, deal_id) values ('${call}', '${DEAL}'); commit;`);
 	const evidence = "Please send the example plan.";
@@ -892,8 +892,10 @@ test("dismissing any proposal kind persists a nonblank reason and refuses a blan
 	];
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values ('${leadParty}', 'person', 'Dismiss Example');
+		select set_config('engine.user_id', '${USER}', true);
+		insert into activity (id, kind, happened_at) values ('${call}', 'call', now() - interval '1 hour');
+		select set_config('engine.user_id', '', true);
 		insert into activity (id, kind, happened_at) values
-			('${call}', 'call', now() - interval '1 hour'),
 			('${freshEmail}', 'email', now() - interval '1 hour'),
 			('${newDealEmail}', 'email', now() - interval '1 hour');
 		insert into email (activity_id, message_id, sender, subject, body)
