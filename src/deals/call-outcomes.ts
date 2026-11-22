@@ -6,6 +6,11 @@ import { visibleSuggestion } from "../home-inbox-review.ts";
 import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../uuid.ts";
+import {
+	callAcceptanceBlock,
+	sharedCopiedCall,
+	visibleCall,
+} from "./call-review.ts";
 
 const MAX_CALLS = 50;
 
@@ -21,87 +26,82 @@ async function readCallOutcomes(
 		.executeTakeFirst();
 	if (!deal) return new Refusal(404, "not_found");
 
-	const forPartner = sql<boolean>`${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)`;
-	const calls = await db
-		.selectFrom("activity_about as link")
-		.innerJoin("activity as a", "a.id", "link.activity_id")
-		.innerJoinLateral(
-			(eb) =>
-				db
-					.selectNoFrom(
-						jsonArrayFrom(
-							eb
-								.selectFrom("proposal as p")
-								.leftJoin("next_step as step", "step.id", "p.next_step_id")
-								.leftJoin("app_user as owner", (join) =>
-									join.on(
-										sql<boolean>`owner.id = coalesce(p.owner_party_id, step.owner_party_id)`,
-									),
-								)
-								.select([
-									"p.id as proposal_id",
-									"p.kind",
-									"p.status",
-									"p.evidence",
-									"p.from_phase",
-									"p.to_phase",
-									"p.phase_on",
-									"p.next_step_id",
-									"owner.slug as owner",
-								])
-								.select(({ fn }) => [
-									fn.coalesce("p.what", "step.what").as("what"),
-									fn.coalesce("p.due_on", "step.due_on").as("due_on"),
-								])
-								.whereRef("p.activity_id", "=", "a.id")
-								.where("p.deal_id", "=", deal.deal_id)
-								.where((eb) =>
-									eb.or([
-										forPartner,
-										eb("p.proposed_by_job", "=", "old_system"),
-									]),
-								)
-								.where(sql<boolean>`case when p.kind = 'next_step_done' then
-								step.owner_party_id = ${userId}::uuid and (p.status <> 'pending' or step.status = 'open')
-								else p.decided_by_user_id = ${userId}::uuid or ${visibleSuggestion(userId)} end`)
-								.orderBy("p.created_at")
-								.orderBy("p.id"),
-						).as("proposals"),
-					)
-					.as("outcomes"),
-			(join) => join.onTrue(),
+	const calls = await callOutcomeQuery(db, userId, dealId).execute();
+	return { ...deal, calls };
+}
+
+export function callOutcomeQuery(
+	db: Transaction<DB>,
+	userId: string,
+	dealId: string,
+) {
+	const proposals = db
+		.selectFrom("proposal as p")
+		.leftJoin("next_step as step", "step.id", "p.next_step_id")
+		.where(sql<boolean>`p.activity_id = a.id`)
+		.where("p.deal_id", "=", dealId)
+		.where(
+			sql<boolean>`(not (${sharedCopiedCall}) or p.proposed_by_job = 'old_system')`,
 		)
+		.where(sql<boolean>`case when p.kind = 'next_step_done' then
+			step.owner_party_id = ${userId}::uuid and (p.status <> 'pending' or step.status = 'open')
+			else p.decided_by_user_id = ${userId}::uuid or ${visibleSuggestion(userId)} end`);
+	const recentCalls = db
+		.selectFrom("activity as a")
+		.selectAll("a")
+		.where("a.kind", "=", "call")
+		.where(visibleCall(userId))
+		.where(({ exists, selectFrom }) =>
+			exists(
+				selectFrom("activity_about as link")
+					.select("link.activity_id")
+					.whereRef("link.activity_id", "=", "a.id")
+					.where("link.deal_id", "=", dealId),
+			),
+		)
+		.where(
+			sql<boolean>`(a.changed_by_job = 'call_capture' or exists (${proposals.select("p.id")}))`,
+		)
+		.orderBy("a.happened_at", "desc")
+		.orderBy("a.id")
+		.limit(MAX_CALLS);
+	return db
+		.selectFrom(recentCalls.as("a"))
 		.select([
 			"a.id as activity_id",
 			sql<string>`to_jsonb(a.happened_at) #>> '{}'`.as("started_at"),
 			sql<string>`(a.happened_at at time zone 'America/Chicago')::date::text`.as(
 				"call_date",
 			),
-			"outcomes.proposals",
+			jsonArrayFrom(
+				proposals
+					.leftJoin("app_user as owner", (join) =>
+						join.on(
+							sql<boolean>`owner.id = coalesce(p.owner_party_id, step.owner_party_id)`,
+						),
+					)
+					.select([
+						"p.id as proposal_id",
+						"p.kind",
+						"p.status",
+						"p.evidence",
+						"p.from_phase",
+						"p.to_phase",
+						"p.phase_on",
+						"p.next_step_id",
+						"owner.slug as owner",
+						callAcceptanceBlock.as("accept_blocked"),
+					])
+					.select(({ fn }) => [
+						fn.coalesce("p.what", "step.what").as("what"),
+						fn.coalesce("p.due_on", "step.due_on").as("due_on"),
+					])
+					.orderBy("p.created_at")
+					.orderBy("p.id"),
+			).as("proposals"),
 		])
-		.where("link.deal_id", "=", deal.deal_id)
-		.where("a.kind", "=", "call")
-		.where((eb) =>
-			eb.or([
-				forPartner,
-				eb.and([
-					eb("a.changed_by_job", "=", "old_system"),
-					eb("a.changed_by_user_id", "is", null),
-					eb("a.changed_for_user_id", "is", null),
-				]),
-			]),
-		)
-		.where((eb) =>
-			eb.or([
-				eb("a.changed_by_job", "=", "call_capture"),
-				sql<boolean>`json_array_length(outcomes.proposals) > 0`,
-			]),
-		)
 		.orderBy("a.happened_at", "desc")
-		.orderBy("a.id")
-		.limit(MAX_CALLS)
-		.execute();
-	return { ...deal, calls };
+		.orderBy("a.id");
 }
 
 export const dealCallOutcomes = new Hono<DatabaseEnv>().get(

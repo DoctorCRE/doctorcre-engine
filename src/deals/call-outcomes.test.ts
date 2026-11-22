@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
 import { z } from "zod";
+import { nextTransaction } from "../next-connection.ts";
 import { withPartnerAuth } from "../partner-auth.ts";
 import { readSchema } from "../test-copy.ts";
 import { doorTest } from "../test-door.ts";
 import { partnerApp } from "../worker.ts";
+import { callOutcomeQuery } from "./call-outcomes.ts";
 
 const { db, readerUrl, writerUrl, connectionString, setup, cleanup } =
 	doorTest();
@@ -36,6 +38,8 @@ const dismissed = id(35);
 const phase = id(36);
 const stale = id(37);
 const skip = id(38);
+const assigned = id(40);
+const existingStep = id(41);
 const callIds = z.object({
 	calls: z.array(
 		z.object({
@@ -56,7 +60,7 @@ before(async () => {
 			('${joe}', 'person', 'Example Viewer'), ('${dell}', 'person', 'Example Owner');
 		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
 		insert into job values ('call_capture', 'Example call capture');
-		insert into phase values ('research', 'Research'), ('legal', 'Legal');
+		insert into phase values ('research', 'Research'), ('legal', 'Legal'), ('closing', 'Closing');
 		select set_config('engine.user_id', '${dell}', true);
 		insert into deal (id, name, owner_user_id) values
 			('${deal}', 'Example first deal', '${dell}'),
@@ -94,10 +98,15 @@ before(async () => {
 			('${skip}', 'log_call', '${decisionCall}', 'call', 'call_capture', '${decisionDeal}', 'Skip this note.', 'Skip this note.', '2025-01-05T19:00Z');
 		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence, owner_party_id)
 			values ('${assignedElsewhere}', 'next_step', '${call}', 'call', 'call_capture', '${deal}', 'Other partner task.', 'Other partner task.', '${dell}');
-		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, evidence, from_phase, to_phase, phase_stated, phase_on) values
-			('${phase}', 'phase_move', '${decisionCall}', 'call', 'call_capture', '${decisionDeal}', 'Move to Legal.', 'research', 'legal', true, '2025-01-05'),
-			('${stale}', 'phase_move', '${decisionCall}', 'call', 'call_capture', '${decisionDeal}', 'Move to Legal next day.', 'research', 'legal', true, '2025-01-06');
 		select set_config('engine.job', 'old_system', true);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, evidence, from_phase, to_phase) values
+			('${phase}', 'phase_move', '${decisionCall}', 'call', 'old_system', '${decisionDeal}', 'Move to Legal.', 'research', 'legal'),
+			('${stale}', 'phase_move', '${decisionCall}', 'call', 'old_system', '${decisionDeal}', 'Move elsewhere.', 'research', 'closing');
+		insert into next_step (id, deal_id, what, owner_party_id, due_on)
+			values ('${existingStep}', '${decisionDeal}', 'Send the plan', '${joe}', '2025-02-08');
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence, owner_party_id, due_on)
+			values ('${assigned}', 'next_step', '${decisionCall}', 'call', 'old_system', '${decisionDeal}',
+				' SEND  THE plan ', 'Send the plan.', '${joe}', '2025-02-09');
 		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
 			values ('${copied}', 'log_call', '${copiedCall}', 'call', 'old_system', '${deal}', 'Copied note.', 'Copied evidence.');
 		select set_config('engine.job', '', true);
@@ -163,6 +172,12 @@ function request(path: string, user: string | null, body?: object) {
 
 const read = (dealId: string, user: string | null = "joe") =>
 	request(`deals/${dealId}/call-outcomes`, user);
+
+const decide = (proposal: string, decision: string, key = randomUUID()) =>
+	request(`proposals/${proposal}/decision`, "joe", {
+		decision,
+		idempotency_key: key,
+	});
 
 test("a deal’s recorded calls include the proposal evidence and current decisions", async () => {
 	const response = await read(deal);
@@ -234,11 +249,6 @@ test("call outcomes require a PartnerApp session and an existing deal", async ()
 });
 
 test("the existing decision route replays acceptance, refuses a stale phase and dismisses a call suggestion", async () => {
-	const decide = (proposal: string, decision: string, key = randomUUID()) =>
-		request(`proposals/${proposal}/decision`, "joe", {
-			decision,
-			idempotency_key: key,
-		});
 	const key = randomUUID();
 	const response = await decide(phase, "accept", key);
 	assert.equal(response.status, 200);
@@ -269,4 +279,117 @@ test("the existing decision route replays acceptance, refuses a stale phase and 
 		[decisionDeal],
 	);
 	assert.deepEqual(rows, [{ phase: "legal", changed_by_user_id: joe }]);
+});
+
+test("a decision on another partner’s private call has the same refusal as an unknown proposal", async () => {
+	for (const decision of ["accept", "dismiss"]) {
+		const hidden = await decide(privateProposal, decision);
+		const unknown = await decide(id(99), decision);
+		assert.equal(hidden.status, unknown.status);
+		assert.partialDeepStrictEqual(await hidden.json(), { error: "not_found" });
+	}
+});
+
+test("accepting a private log stays pending and writes no shared note", async () => {
+	const response = await decide(pending, "accept");
+	assert.equal(response.status, 409);
+	assert.partialDeepStrictEqual(await response.json(), {
+		error: "private_call",
+	});
+	assert.partialDeepStrictEqual(await (await read(deal)).json(), {
+		calls: [
+			{
+				proposals: [
+					{
+						proposal_id: pending,
+						status: "pending",
+						accept_blocked: "private_call",
+					},
+				],
+			},
+		],
+	});
+	assert.equal(
+		(await db.query("select from activity where id = $1", [pending])).rowCount,
+		0,
+	);
+});
+
+test("accepting an assigned action leaves an existing step and its date intact", async () => {
+	const response = await decide(assigned, "accept");
+	assert.equal(response.status, 409);
+	assert.partialDeepStrictEqual(await response.json(), {
+		error: "open_step_exists",
+	});
+	assert.deepEqual(
+		(
+			await db.query(
+				"select id, status, due_on::text from next_step where deal_id = $1",
+				[decisionDeal],
+			)
+		).rows,
+		[{ id: existingStep, status: "open", due_on: "2025-02-08" }],
+	);
+	assert.partialDeepStrictEqual(await (await read(decisionDeal)).json(), {
+		calls: [
+			{
+				proposals: [
+					{
+						proposal_id: assigned,
+						status: "pending",
+						accept_blocked: "open_step_exists",
+					},
+				],
+			},
+		],
+	});
+	assert.equal((await decide(assigned, "dismiss")).status, 200);
+});
+
+test("the latest 50 visible calls bound proposal aggregation", async (t) => {
+	const historyDeal = id(14);
+	await db.query(`
+		begin;
+		select set_config('engine.job', 'call_capture', true), set_config('engine.user_id', '${joe}', true);
+		insert into deal (id, name, owner_user_id) values ('${historyDeal}', 'Example long history', '${joe}');
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
+		with history as (
+			insert into activity (kind, happened_at)
+			select 'call', '2000-01-01'::timestamptz + n * interval '1 day'
+			from generate_series(1, 5000) n returning id
+		) insert into activity_about (activity_id, deal_id) select id, '${historyDeal}' from history;
+		select set_config('engine.job', 'call_capture', true), set_config('engine.user_id', '${dell}', true);
+		with hidden as (
+			insert into activity (kind, happened_at)
+			select 'call', '2025-01-01'::timestamptz + n * interval '1 day'
+			from generate_series(1, 60) n returning id
+		) insert into activity_about (activity_id, deal_id) select id, '${historyDeal}' from hidden;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${joe}', true);
+		insert into proposal (kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
+			select 'log_call', activity_id, 'call', 'old_system', deal_id, 'Example note', 'Example evidence'
+			from activity_about where deal_id = '${historyDeal}';
+		commit;
+		analyze activity;
+		analyze activity_about;
+		analyze proposal;
+	`);
+	const response = await read(historyDeal);
+	assert.equal(response.status, 200);
+	const result = callIds.parse(await response.json());
+	assert.equal(result.calls.length, 50);
+	assert.ok(result.calls.every((call) => call.proposals.length === 1));
+	const query = await nextTransaction(readerUrl, "read", async (tx) =>
+		callOutcomeQuery(tx, joe, historyDeal).compile(),
+	);
+	const { rows } = await db.query<{ "QUERY PLAN": string }>(
+		`explain (analyze, costs off, timing off, summary off) ${query.sql}`,
+		[...query.parameters],
+	);
+	const plan = rows.map((row) => row["QUERY PLAN"]).join("\n");
+	if (process.env.CALL_OUTCOMES_EXPLAIN === "1") t.diagnostic(plan);
+	const aggregates = [...plan.matchAll(/Aggregate .*loops=(\d+)\)/g)];
+	assert.equal(
+		aggregates.reduce((total, match) => total + Number(match[1]), 0),
+		50,
+	);
 });
