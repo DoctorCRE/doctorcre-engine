@@ -170,6 +170,71 @@ test("a completion review can be snoozed and dismissed", () =>
 test("a call follow-up completion review can be snoozed and dismissed", () =>
 	checkCompletionReview(true));
 
+test("the flat Home list and dashboard show the same days late", async () => {
+	const deal = randomUUID();
+	const onTimeDeal = randomUUID();
+	const vendor = randomUUID();
+	const note = randomUUID();
+	const reviewed = randomUUID();
+	const onTime = randomUUID();
+	const followUp = randomUUID();
+	await db.query(`begin;
+		select set_config('engine.user_id', '${owner}', true);
+		insert into role (slug, label) values ('vendor', 'Vendor');
+		insert into party (id, kind, name) values ('${vendor}', 'company', 'Example Surveyors');
+		insert into party_role (party_id, role) values ('${vendor}', 'vendor');
+		insert into deal (id, name, owner_user_id) values
+			('${deal}', 'Example Survey Review', '${owner}'),
+			('${onTimeDeal}', 'Example Site Plan', '${owner}');
+		insert into activity (id, kind, happened_at, summary)
+			values ('${note}', 'note', now() - interval '1 day', 'The client received the survey.');
+		insert into activity_about (activity_id, deal_id) values ('${note}', '${deal}');
+		with day as (select (now() at time zone 'America/Chicago')::date as today)
+		insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on)
+		select v.id::uuid, v.deal_id::uuid, v.party_id::uuid, '${owner}', v.what, day.today + v.days
+		from day cross join (values
+			('${reviewed}', '${deal}', null, 'Send the survey', -3),
+			('${followUp}', null, '${vendor}', 'Call the surveyor', -3),
+			('${onTime}', '${onTimeDeal}', null, 'Review the site plan', 0)
+		) v(id, deal_id, party_id, what, days);
+		commit;`);
+	const [status] = await save(
+		{ job: "agent", for_user: alex.user },
+		"proposals",
+		{
+			idempotency_key: randomUUID(),
+			kind: "next_step_done",
+			next_step_id: reviewed,
+			activity_id: note,
+			deal_id: deal,
+			evidence: "The client received the survey.",
+		},
+	);
+	assert.equal(status, 201);
+	for (const view of ["?view=dashboard", ""]) {
+		const response = await request(
+			alex,
+			`home/inbox${view}`,
+			{ method: "GET" },
+			{ HOME_INBOX_READ_SCHEMA: "next" },
+		);
+		assert.equal(response.status, 200);
+		const result: unknown = await response.json();
+		assert.ok(isArguments(result));
+		const group = view ? result.reminders : result;
+		assert.ok(isArguments(group) && Array.isArray(group.items));
+		const items = group.items.filter(isArguments);
+		const card = (id: string) =>
+			items.find((item) => item.item_id === `next_action:${id}`);
+		assert.partialDeepStrictEqual(card(followUp), { days_late: 3 });
+		assert.partialDeepStrictEqual(card(reviewed), {
+			days_late: 3,
+			completion_review: { next_step_id: reviewed },
+		});
+		assert.partialDeepStrictEqual(card(onTime), { days_late: null });
+	}
+});
+
 test("updates respect recipient, read time, snoozes and mark revisions", async () => {
 	const deal = randomUUID();
 	const update = randomUUID();

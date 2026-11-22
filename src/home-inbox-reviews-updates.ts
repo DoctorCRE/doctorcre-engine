@@ -226,7 +226,6 @@ export async function readHomeUpdates(
 	limit: number | null,
 	view: keyof typeof viewFilters,
 ) {
-	const dashboard = view === "dashboard";
 	const { rows } = await sql<HomeUpdate>`
 		select u.id, u.deal_id, d.name as deal_name, u.kind, u.what as title, u.due_on,
 			u.created_at as activity_at, u.checklist_item_ref, u.property_id,
@@ -278,9 +277,9 @@ export async function readHomeUpdates(
 			kind: update.kind,
 			base_version: `${update.source_version}:${update.mark_version}:${disposition}`,
 			checklist_item_ref: update.checklist_item_ref,
-			...(dashboard && {
+			...(view !== "updates" && {
 				waiting_reason: homeDisplayText(update.waiting_reason) || null,
-				late_target: !tourFeedback,
+				late_target: !tourFeedback && update.checklist_item_ref !== null,
 			}),
 			...(update.property_id && { property_id: update.property_id }),
 			...(view === "updates" && {

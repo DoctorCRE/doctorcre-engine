@@ -908,10 +908,13 @@ export async function readHomeReviewCards(
 				draft.sent_at,
 			),
 			...draftReviewText(draft, dashboard),
+			late_target:
+				draft.late_target &&
+				!!draft.suggestions &&
+				!unconfirmedDelivery(draft.failure_reason),
+			waiting_reason: homeDisplayText(draft.waiting_reason) || null,
 			...(dashboard && {
 				card_id: draft.mail_card_id ?? `reply_draft:${draft.id}`,
-				late_target: draft.late_target,
-				waiting_reason: homeDisplayText(draft.waiting_reason) || null,
 			}),
 			kind_label: "Reply draft",
 			deal_id: null,
@@ -941,20 +944,20 @@ export async function readHomeReviewCards(
 					: "email_proposal";
 			const fallback = suggestion.fallback_reply_draft;
 			const deliveryUnconfirmed =
-				dashboard && fallback && unconfirmedDelivery(fallback.failure_reason);
+				fallback && unconfirmedDelivery(fallback.failure_reason);
 			return {
 				...reviewCard(
 					suggestion,
 					"proposal",
 					sourceType,
-					deliveryUnconfirmed ? "working" : "needs_attention",
+					dashboard && deliveryUnconfirmed ? "working" : "needs_attention",
 				),
+				late_target: suggestion.late_target && !deliveryUnconfirmed,
+				waiting_reason: homeDisplayText(suggestion.waiting_reason) || null,
 				...(dashboard && {
 					card_id:
 						suggestion.mail_card_id ??
 						`${suggestion.activity_kind}:${suggestion.activity_id ?? suggestion.id}`,
-					late_target: suggestion.late_target,
-					waiting_reason: homeDisplayText(suggestion.waiting_reason) || null,
 				}),
 				...(call || meeting
 					? conversationReviewText(suggestion, call ? "Call" : "Meeting")

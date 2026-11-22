@@ -178,36 +178,34 @@ function stepCard(step: Step) {
 	};
 }
 
-async function dashboardDay(db: Transaction<DB>) {
+async function readHomeDay(db: Transaction<DB>) {
 	const { today } = await db
 		.selectNoFrom(sql<string>`${homeDay}::text`.as("today"))
 		.executeTakeFirstOrThrow();
 	return today;
 }
 
-function dashboardCard<
-	Item extends {
-		item_id: string;
-		snoozed_until: string | null;
-		hold_until: string | null;
-		section: string;
-		due_on: string | null;
-		late_target?: boolean;
-		card_id?: string;
-		waiting_reason?: string | null;
-	},
->(item: Item, today: string) {
-	const { late_target, card_id, waiting_reason, ...card } = {
-		late_target: false,
-		card_id: item.item_id,
-		waiting_reason: null,
-		...item,
-	};
-	const returns_at =
-		[card.snoozed_until, card.hold_until]
-			.filter((at) => at !== null)
-			.sort()
-			.at(-1) ?? null;
+type HomeCardTiming = {
+	item_id: string;
+	snoozed_until: string | null;
+	hold_until: string | null;
+	section: string;
+	due_on: string | null;
+	late_target?: boolean;
+	card_id?: string;
+	waiting_reason?: string | null;
+};
+
+function homeCardTiming<Item extends HomeCardTiming>(
+	item: Item,
+	today: string,
+) {
+	const {
+		late_target = false,
+		card_id = item.item_id,
+		waiting_reason = null,
+		...card
+	} = item;
 	const reason = card.snoozed_until
 		? "Snoozed"
 		: card.hold_until
@@ -215,10 +213,25 @@ function dashboardCard<
 			: card.section === "working"
 				? "Waiting for Outlook to confirm delivery"
 				: waiting_reason;
+	const { due_on } = card;
 	const days_late =
-		!reason && late_target && isCalendarDate(card.due_on) && card.due_on < today
-			? (Date.parse(today) - Date.parse(card.due_on)) / 86_400_000
+		!reason &&
+		card.section !== "done" &&
+		late_target &&
+		isCalendarDate(due_on) &&
+		due_on < today
+			? (Date.parse(today) - Date.parse(due_on)) / 86_400_000
 			: null;
+	return { card, card_id, reason, days_late };
+}
+
+function dashboardCard<Item extends HomeCardTiming>(item: Item, today: string) {
+	const { card, card_id, reason, days_late } = homeCardTiming(item, today);
+	const returns_at =
+		[card.snoozed_until, card.hold_until]
+			.filter((at) => at !== null)
+			.sort()
+			.at(-1) ?? null;
 	return {
 		...card,
 		...(reason && { primary_action: null }),
@@ -235,7 +248,7 @@ async function readHomeInbox(
 	userId: string,
 	dashboard: boolean,
 ) {
-	const today = dashboard ? await dashboardDay(db) : "";
+	const today = await readHomeDay(db);
 	const { rows } = await stepRows(db, userId, dashboard).execute(db);
 	const eligibleSteps = dashboard
 		? rows.filter((step) => homeStepEligible(step, today))
@@ -254,13 +267,12 @@ async function readHomeInbox(
 			review && !step.snoozed_until && !waiting
 				? completionReviewCard(review, card)
 				: card;
-		return dashboard
-			? {
-					...visible,
-					waiting_reason: homeDisplayText(step.waiting_reason) || null,
-					late_target: ["deal", "vendor"].includes(homeStepTarget(step)),
-				}
-			: visible;
+		return {
+			...visible,
+			waiting_reason: homeDisplayText(step.waiting_reason) || null,
+			late_target:
+				!step.hold_until && ["deal", "vendor"].includes(homeStepTarget(step)),
+		};
 	});
 	const limit = dashboard ? null : LIMIT + 1;
 	const checklistSteps = new Set(
@@ -302,7 +314,10 @@ async function readHomeInbox(
 	}
 	return {
 		...contract,
-		items: items.slice(0, LIMIT),
+		items: items.slice(0, LIMIT).map((item) => {
+			const { card, days_late } = homeCardTiming(item, today);
+			return { ...card, days_late };
+		}),
 		truncated: rows.length > LIMIT || items.length > LIMIT,
 		limit: LIMIT,
 		working_collapsed: true,
@@ -342,7 +357,7 @@ homeInbox.get("/home/cards/:item_id", (c) => {
 		if (!card) return readHomeReviewDisposition(db, userId, link);
 		const requested_item_id = `${kind}:${id}`;
 		return {
-			...dashboardCard(card, await dashboardDay(db)),
+			...dashboardCard(card, await readHomeDay(db)),
 			...(kind === "suggestion" &&
 				card.item_id !== requested_item_id && { requested_item_id }),
 		};

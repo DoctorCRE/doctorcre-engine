@@ -1,5 +1,9 @@
 # Vendors
 
+## Vendors list
+
+Each vendor row shows the last contact date only.
+
 ## Meeting planner
 
 Research shows vendor contacts and their possible meetings. For a person with a vendor role, it shows that person. For a company with a vendor role, it shows the people with open company links, or a row with no contact. Each vendor link uses the party ID. Copied vendors keep their recorded vendor ref.
