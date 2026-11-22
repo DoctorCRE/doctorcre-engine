@@ -139,6 +139,7 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 test("private call logs save on the call once, including when its summary is blank", async () => {
 	for (const [index, summary] of [null, "", "Original summary."].entries()) {
 		const callId = id(100 + index);
+		const happenedAt = `2026-01-0${7 + index}T15:00:00.000Z`;
 		const recorder = ["", "call_capture", "old_system"][index];
 		await db.query("begin");
 		await db.query(
@@ -147,8 +148,8 @@ test("private call logs save on the call once, including when its summary is bla
 		);
 		await db.query(
 			`insert into activity (id, kind, happened_at, summary)
-			values ($1, 'call', '2026-01-07T15:00:00Z', $2)`,
-			[callId, summary],
+			values ($1, 'call', $2, $3)`,
+			[callId, happenedAt, summary],
 		);
 		await db.query(
 			`insert into activity_about (activity_id, deal_id, party_id)
@@ -168,11 +169,15 @@ test("private call logs save on the call once, including when its summary is bla
 				.object({
 					state: z.literal("completed"),
 					catch_up: z.object({
-						timeline: z.array(z.object({ actor: z.string() })),
+						timeline: z.array(
+							z.object({ actor: z.string(), occurred_at: z.string() }),
+						),
 					}),
 				})
 				.parse(await response.json());
-			const [entry] = activity.catch_up.timeline;
+			const entry = activity.catch_up.timeline.find(
+				(item) => item.occurred_at === happenedAt,
+			);
 			assert.ok(entry);
 			return entry.actor;
 		};
