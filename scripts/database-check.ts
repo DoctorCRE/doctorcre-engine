@@ -1,13 +1,19 @@
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import { URL } from "node:url";
 import pg from "pg";
 import { NoDatabase, withSnapshot } from "./test-database.ts";
 
-function npmRun(script: string, env: NodeJS.ProcessEnv) {
-	const result = spawnSync("npm", ["run", script], { env, stdio: "inherit" });
+function run(command: string, args: string[], env: NodeJS.ProcessEnv) {
+	const result = spawnSync(command, args, { env, stdio: "inherit" });
 	if (result.error) throw result.error;
-	if (result.status !== 0) throw new Error(`npm run ${script} failed`);
+	if (result.status !== 0)
+		throw new Error(`${command} ${args.join(" ")} failed`);
+}
+
+function npmRun(script: string, env: NodeJS.ProcessEnv) {
+	run("npm", ["run", script], env);
 }
 
 async function loadNextSection(url: string) {
@@ -50,7 +56,14 @@ await withSnapshot((_, snapshot) =>
 			await loadNextSection(nextUrl);
 			npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
 			npmRun("types", env);
-			npmRun("test", { ...env, TEST_COPY_SNAPSHOT: copySnapshot });
+			// Small runners can run more files while their tests wait for PostgreSQL.
+			const cpus = availableParallelism();
+			const concurrency = Math.max(cpus - 1, Math.min(2 * cpus, 6));
+			run(
+				process.execPath,
+				["--test", `--test-concurrency=${concurrency}`, "src/**/*.test.ts"],
+				{ ...env, TEST_COPY_SNAPSHOT: copySnapshot },
+			);
 		}, snapshot);
 	}, snapshot),
 ).catch((error: unknown) => {
