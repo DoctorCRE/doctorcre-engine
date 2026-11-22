@@ -588,7 +588,15 @@ export const nextSteps = new Hono<NextSaveEnv>()
 					});
 				return request;
 			},
-			createStep,
+			async (tx, request) => {
+				const what = c.get("stamp").job
+					? request.what.replace(
+							/^([\s\S]+), (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (0?[1-9]|[12][0-9]|3[01]) (?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM)(?![\s\S])/,
+							"Follow up on the $2 $3 meeting: $1",
+						)
+					: request.what;
+				return { ...(await createStep(tx, { ...request, what })), what };
+			},
 			201,
 		),
 	)
