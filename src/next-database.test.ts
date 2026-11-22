@@ -2877,6 +2877,12 @@ before(async () => {
 	await asAdmin(`create database "${name}" template template0`);
 	db = await connect("none");
 	await db.query(`create schema next; ${SCHEMA}`);
+	await db.query(
+		await readFile(
+			new URL("../schema/add-call-read-policies.sql", import.meta.url),
+			"utf8",
+		),
+	);
 	await db.query(USERS);
 	await db.query(
 		"insert into invoice_mailbox (address) values ('invoices@example.com')",
@@ -4392,6 +4398,8 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			table,
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
+				"call_audit_evidence",
+				"step_call_provenance",
 				"deal_open_name",
 				"doc_judgment_destination",
 				"doc_judgment_job",

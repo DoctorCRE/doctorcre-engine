@@ -53,7 +53,7 @@ test("new-section reads are typed, read-only UTC snapshots without old-table fal
 			current_setting('transaction_read_only') as read_only`.execute(tx);
 		assert.deepEqual(result.rows, [
 			{
-				schema: "next",
+				schema: "next_partner",
 				role: "engine_reader",
 				zone: "UTC",
 				jit: "off",
@@ -199,3 +199,19 @@ for (const { name, readable, setup, cleanup } of [
 		}
 	});
 }
+
+test("a partner read refuses a pre-migration schema even when raw activity is readable", async () => {
+	await db.query(`alter schema next_partner rename to before_partner_views;
+		grant select on next.activity to engine_reader`);
+	try {
+		await assert.rejects(
+			nextTransaction(login(reader), "read", (tx) =>
+				tx.selectFrom("activity").select("summary").execute(),
+			),
+			/Protected reader schema is unavailable/,
+		);
+	} finally {
+		await db.query(`revoke select on next.activity from engine_reader;
+			alter schema before_partner_views rename to next_partner`);
+	}
+});

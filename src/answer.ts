@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { type Expression, sql, type Transaction } from "kysely";
 import { failureKind, sqlState } from "./failure.ts";
-import { nextTransaction } from "./next-connection.ts";
+import { nextPartnerRead } from "./next-connection.ts";
 import type { DB as NextDB } from "./next-database.d.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 
@@ -363,14 +363,9 @@ export function answerNextRead<E extends DatabaseEnv>(
 		c,
 		verb,
 		(url, partner) =>
-			nextTransaction(url, "read", async (db) => {
-				const user = await db
-					.selectFrom("app_user")
-					.select("id")
-					.where("slug", "=", partner)
-					.executeTakeFirst();
-				return user ? read(db, user.id) : new Refusal(422, "unauthenticated");
-			}),
+			nextPartnerRead(url, partner, async (db, userId) =>
+				userId ? read(db, userId) : new Refusal(422, "unauthenticated"),
+			),
 		options,
 	);
 }

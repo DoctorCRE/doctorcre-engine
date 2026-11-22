@@ -14,7 +14,7 @@ import {
 } from "./doc-mail.ts";
 import { findDocRecords, readDocRecord, type Source } from "./doc-reads.ts";
 import { docDueOn, docText as text } from "./doc-record-save.ts";
-import { nextTransaction } from "./next-connection.ts";
+import { nextTransaction, setNextReadViewer } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { isArguments } from "./save-door.ts";
 import { isUuid, UUID } from "./uuid.ts";
@@ -179,6 +179,7 @@ export function registerDocTools(
 			await sql`select set_config('transaction_timeout', ${String(remaining)}, true)`.execute(
 				db,
 			);
+			await setNextReadViewer(db, partnerId);
 			return toolResult(await run(db));
 		}).catch(() => {
 			state.failed = true;
