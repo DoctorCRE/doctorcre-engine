@@ -49,6 +49,74 @@ Use the existing `x-carr-csrf` header name during the move. Every partner write,
 
 The Studio and assistant keep their [jobs door](new-database.md#what-every-door-shares) with its existing Access service token and audience. The audience and credentials for intake and comparison stay separate as today.
 
+## Prepare production while the app uses CARR
+
+Keep `PARTNER_SIGN_IN=carr` in the app. After the owner's approval, verify that the migration and auth connections use the direct endpoint for the production Neon branch. Run the database and Wrangler commands in a private terminal with credentials from the private store.
+
+1. If `doctorcre_auth` is absent, apply the approved `schema/partner-auth.sql` as the migration owner.
+
+   ```sh
+   psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL" -f schema/partner-auth.sql
+   ```
+
+2. In a `psql -X -v ON_ERROR_STOP=1` session as the migration owner, create the dedicated login if it is absent. Set its password at the `\password` prompt.
+
+   ```sql
+   begin;
+   create role engine_partner_auth_login login nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
+   grant engine_partner_auth to engine_partner_auth_login;
+   \password engine_partner_auth_login
+   commit;
+   ```
+
+   Connect with `psql -X "$PRODUCTION_PARTNER_AUTH_DATABASE_URL"` as that login. Verify the following read-only check returns the login name, `t`, and `f` in order.
+
+   ```sql
+   select current_user,
+          pg_has_role(current_user, 'engine_partner_auth', 'USAGE') as auth_access,
+          pg_has_role(current_user, 'engine', 'MEMBER') as business_access;
+   ```
+
+3. As the migration owner, provision one auth user and Google account for each of the two approved mappings. Match each verified Google subject and verified email to the privately confirmed `next.app_user.id`. For read-back, join `doctorcre_auth."user"` to `doctorcre_auth.account` by `account."userId" = "user".id` and to `doctorcre_auth.partner` by `partner.auth_user_id = "user".id`. Compare the subject, verified email, and partner ID to the approved mappings in private. Report only the three counts below. Each must be `2`.
+
+   ```sql
+   begin read only;
+   select (select count(*) from doctorcre_auth."user") as users,
+          (select count(*) from doctorcre_auth.account) as accounts,
+          (select count(*) from doctorcre_auth.partner) as eligible_partners;
+   rollback;
+   ```
+
+4. Check `./node_modules/.bin/wrangler hyperdrive list` for `doctorcre-engine-partner-auth`. If it is absent, create it using the direct connection URL for `engine_partner_auth_login`.
+
+   ```sh
+   ./node_modules/.bin/wrangler hyperdrive create doctorcre-engine-partner-auth \
+       --connection-string "$PRODUCTION_PARTNER_AUTH_DATABASE_URL" --caching-disabled
+   ```
+
+   Check the returned ID with `./node_modules/.bin/wrangler hyperdrive get "$PRODUCTION_PARTNER_AUTH_HYPERDRIVE_ID"`. Verify the production Neon host, database, `engine_partner_auth_login`, and `caching.disabled=true`. In `wrangler.jsonc`, replace the all-zero production `PARTNER_AUTH_DATABASE` ID with this ID. Keep staging's own Hyperdrive on the rehearsal branch. A merge to `main` starts a production upload, so commit and review the real ID before queuing the merge. [Hyperdrive commands](https://developers.cloudflare.com/workers/wrangler/commands/hyperdrive/)
+
+5. For the production Google client, confirm the redirect URI is `https://app.doctorcre.com/auth/callback/google`. If any of the three production secrets are missing, set them with the approved values at the interactive prompts. Each `secret put` deploys a version of the named engine Worker.
+
+   ```sh
+   ./node_modules/.bin/wrangler secret put PARTNER_AUTH_SECRET --name doctorcre-engine
+   ./node_modules/.bin/wrangler secret put PARTNER_GOOGLE_CLIENT_ID --name doctorcre-engine
+   ./node_modules/.bin/wrangler secret put PARTNER_GOOGLE_CLIENT_SECRET --name doctorcre-engine
+   ```
+
+6. After the engine release, read back the active versions. For each Worker, take the `version_id` serving 100% from `deployments status`.
+
+   ```sh
+   ./node_modules/.bin/wrangler deployments status --name doctorcre-engine --json
+   ./node_modules/.bin/wrangler versions view "$ENGINE_VERSION_ID" --name doctorcre-engine --json |
+       jq '.resources.bindings[] | select(.name | startswith("PARTNER_"))'
+   ./node_modules/.bin/wrangler deployments status --name doctorcre-app --json
+   ./node_modules/.bin/wrangler versions view "$APP_VERSION_ID" --name doctorcre-app --json |
+       jq '.resources.bindings[] | select(.name == "PARTNER_SIGN_IN")'
+   ```
+
+   Verify `PARTNER_APP_ORIGIN=https://app.doctorcre.com`, the approved `PARTNER_AUTH_DATABASE` ID, and the three secret names on the engine. Verify `PARTNER_SIGN_IN=carr` on the app. [Workers commands](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
+
 ## Switch after hours with advance notice
 
 1. Deploy the engine, app and old-session rollback changes ahead of the switch. Keep the app's `PARTNER_SIGN_IN` release setting on `carr`. In staging, run both modes against a production-shaped copy with fixture identities and do a real Google round trip with approved test accounts. Test browser and installed-app contexts, sign in as both partners, reopen each from a saved link, and check that the displayed identity and saved attribution agree. Rehearse rollback and switch again.
