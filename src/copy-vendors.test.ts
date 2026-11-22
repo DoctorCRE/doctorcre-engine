@@ -875,8 +875,9 @@ insert into public.party_link_kind (slug, label, sort) values ('knows', 'Example
 	('works_with', 'Example', 3), ('intro_requested', 'Example', 4), ('example_kind', 'Example', 5);
 ${link(80, 10, 11, "knows")} ${link(81, 11, 10, "knows")} ${link(82, 10, 15, "knows")} ${link(83, 10, 16, "knows")}
 ${link(84, 17, 11, "can_introduce")} ${link(85, 1, 11, "can_introduce", 10)} ${link(86, 11, 17, "can_introduce", 10)}
-${link(87, 1, 12, "can_introduce", 10)} ${link(88, 11, 1, "can_introduce", 16)} ${link(89, 10, 11, "works_with")}
-${link(90, 11, 10, "intro_requested")} ${link(91, 10, 11, "example_kind")} ${link(92, 17, 19, "knows", 11)}`;
+${link(87, 1, 12, "can_introduce", 10)} ${link(88, 11, 1, "can_introduce", 16)} ${link(89, 19, 10, "works_with")}
+${link(90, 11, 10, "intro_requested")} ${link(91, 10, 11, "example_kind")} ${link(92, 17, 19, "knows", 11)}
+${link(94, 11, 19, "works_with")} update public.party_link set note = '   ' where id = '${id(94)}';`;
 const LINK_FIELDS = ["party_link", "via_party"];
 const LINK_ROWS = `select id, kind, party_id, other_party_id, started_on::text, ended_on, note, created_at::text,
 	changed_by_user_id, changed_by_job, changed_at::text from party_link order by id`;
@@ -903,7 +904,12 @@ test("who knows or can introduce whom is copied, and a link with no place is lis
 			copiedLink(80, "knows", 10, 11),
 			copiedLink(84, "can_introduce", 17, 11),
 			copiedLink(85, "can_introduce", 10, 11),
+			{
+				...copiedLink(89, "knows", 19, 10),
+				note: "Works with: Example note 89",
+			},
 			copiedLink(92, "knows", 17, 19),
+			{ ...copiedLink(94, "knows", 11, 19), note: "Works with" },
 		]);
 		// biome-ignore format: one row per value
 		assert.deepEqual(listed, [
@@ -913,7 +919,6 @@ test("who knows or can introduce whom is copied, and a link with no place is lis
 			[id(86), "party_link", "can_introduce", "neither end is a user"],
 			[id(87), "party_link", "can_introduce", "both ends are users"],
 			[id(88), "party_link", "can_introduce", "a party it links is not copied"],
-			[id(89), "party_link", "works_with", "outside the owner's ruling"],
 			[id(90), "party_link", "intro_requested", "outside the owner's ruling"],
 			[id(91), "party_link", "example_kind", "not a kind of link"],
 			[id(92), "via_party", id(11), "a knows link has no broker"],
@@ -927,6 +932,44 @@ test("who knows or can introduce whom is copied, and a link with no place is lis
 		);
 		assert.deepEqual(await rows(LINK_ROWS), links);
 		assert.deepEqual(await rows("select * from change order by id"), history);
+	}));
+
+test("the reviewed partner alias resolves brokers without changing ordinary links", () =>
+	rolledBack(async () => {
+		const contact = "7cb42c06-ba3c-447b-937d-a591860fa04f";
+		const partner = "b6c38b27-d006-4fad-9c38-49edf3130a07";
+		const listed = await copy(`${LINKS}
+			insert into party (id, kind, name) values ('${contact}', 'person', 'Example contact'), ('${partner}', 'person', 'Example partner'),
+				('${id(20)}', 'person', 'Example client');
+			insert into app_user (id, slug) values ('${partner}', 'example-partner');
+			insert into outside_id (source, value, party_id) values ('old_system', '${contact}', '${contact}'), ('old_system', '${id(20)}', '${id(20)}');
+			insert into public.party (id, kind, name, created_by, updated_by) values ('${contact}', 'person', 'Example contact', '${SYSTEM}', '${SYSTEM}'),
+				('${id(20)}', 'person', 'Example client', '${SYSTEM}', '${SYSTEM}');
+			insert into public.party_link_kind (slug, label, sort) values ('introduced', 'Example', 6), ('referral', 'Example', 7);
+			insert into public.party_link (id, from_party, to_party, kind, via_party, created_by, source) values
+				('${id(95)}', '${id(10)}', '${id(20)}', 'introduced', '${contact}', '${PARTNER}', 'example'),
+				('${id(96)}', '${contact}', '${id(11)}', 'introduced', '${id(10)}', '${PARTNER}', 'example'),
+				('${id(97)}', '${contact}', '${id(11)}', 'can_introduce', '${id(10)}', '${PARTNER}', 'example'),
+				('${id(98)}', '${contact}', '${id(11)}', 'knows', null, '${PARTNER}', 'example'),
+				('${id(99)}', '${contact}', '${id(1)}', 'referral', null, '${PARTNER}', 'example');`);
+		// biome-ignore format: one row per copied introduction
+		assert.deepEqual(await rows("select id, vendor_id, made_by, introduced_by_user_id, introduced_party_id from introduction order by id"), [
+			{ id: id(95), vendor_id: id(10), made_by: "team", introduced_by_user_id: partner, introduced_party_id: id(20) },
+			{ id: id(96), vendor_id: id(10), made_by: "vendor", introduced_by_user_id: null, introduced_party_id: id(11) },
+		]);
+		assert.deepEqual(
+			await rows(
+				`select id, party_id, other_party_id from party_link where id in ('${id(97)}', '${id(98)}') order by id`,
+			),
+			[
+				{ id: id(97), party_id: id(10), other_party_id: id(11) },
+				{ id: id(98), party_id: contact, other_party_id: id(11) },
+			],
+		);
+		assert.deepEqual(
+			listed?.filter(([oldId]) => oldId === id(99)),
+			[[id(99), "party_link", "referral", "no copied vendor on either side"]],
+		);
 	}));
 
 for (const [sql, code] of [

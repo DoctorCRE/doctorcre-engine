@@ -5,8 +5,9 @@ import { URL } from "node:url";
 import pg from "pg";
 import { asAdmin } from "../scripts/test-database.ts";
 
-export const readSchema = (file: string) =>
-	readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
+export function readSchema(file: string): Promise<string> {
+	return readFile(new URL(`../schema/${file}`, import.meta.url), "utf8");
+}
 
 export function copyTest() {
 	const name = `copy_${randomUUID().replaceAll("-", "")}`;

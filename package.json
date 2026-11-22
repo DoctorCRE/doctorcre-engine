@@ -2,6 +2,11 @@
 	"name": "doctorcre-engine",
 	"private": true,
 	"type": "module",
+	"knip": {
+		"ignoreBinaries": [
+			"psql"
+		]
+	},
 	"scripts": {
 		"lint": "biome ci",
 		"types": "wrangler types && tsc --noEmit",
