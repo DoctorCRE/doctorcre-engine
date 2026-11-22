@@ -411,12 +411,17 @@ test("deal detail looks up email summaries by source instead of scanning the mai
 			from email_summary where source_hash = 'sha256:' || repeat('c', 64) order by activity_id limit 2;
 		analyze email_summary;
 		commit;`);
-	const { rows } = await nextTransaction(readerUrl, "read", (tx) =>
-		sql<{
+	const { rows } = await nextTransaction(readerUrl, "read", (tx) => {
+		// Audit-history scans dominate the full deal plan for this mailbox fixture.
+		const followUps = tx
+			.selectFrom(nextDealDetailQuery(tx, id(800)).as("detail"))
+			.select("email_follow_ups");
+		return sql<{
 			"QUERY PLAN": string;
-		}>`explain (analyze, buffers, costs off, timing off)
-			${nextDealDetailQuery(tx, id(800))}`.execute(tx),
-	);
+		}>`explain (analyze, buffers, costs off, timing off) ${followUps}`.execute(
+			tx,
+		);
+	});
 	const plan = rows
 		.map((row) => row["QUERY PLAN"])
 		.filter((line) => /email_summary|Index Cond:.*activity_id/.test(line))
