@@ -116,6 +116,11 @@ type Turn = Pick<
 	state: "queued" | "working" | "failed" | "answered";
 	confirmation: JsonObject | null;
 	waiting_reason: string | null;
+	draft_review: {
+		draft_id: string;
+		version: number;
+		current: "pending_same" | "changed" | "gone";
+	} | null;
 };
 
 const conversations = sql`
@@ -137,7 +142,21 @@ const turnFields = sql`t.id, to_jsonb(t.created_at) #>> '{}' as created_at, t.po
 			when 'ready' then 'Doc is waiting for a free slot on your Mac.'
 		end from ${docLinkState(sql<string>`t.owner_user_id`)} link
 	) end as waiting_reason,
-	(select answer -> 'result' from save_receipt where idempotency_key = t.confirmation_key) as confirmation`;
+	(select answer -> 'result' from save_receipt where idempotency_key = t.confirmation_key) as confirmation,
+	case when t.context ->> 'kind' = 'reply_draft'
+		and pg_input_is_valid(t.context ->> 'id', 'uuid')
+		and jsonb_typeof(t.context -> 'version') = 'number'
+	then jsonb_build_object(
+		'draft_id', t.context -> 'id',
+		'version', t.context -> 'version',
+		'current', coalesce((
+			select case when to_jsonb(d.revision) = t.context -> 'version' then 'pending_same' else 'changed' end
+			from reply_draft d join email_mailbox m on (m.activity_id, m.user_id) = (d.email_activity_id, d.owner_user_id)
+			where d.id = (t.context ->> 'id')::uuid and d.status = 'pending'
+				and d.owner_user_id = t.owner_user_id
+				and t.context @> jsonb_build_object('activity_id', m.activity_id, 'mailbox_user_id', m.user_id)
+		), 'gone')
+	) end as draft_review`;
 
 async function listChats(tx: DocTransaction, before?: string) {
 	if (

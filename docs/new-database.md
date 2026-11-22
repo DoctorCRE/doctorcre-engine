@@ -1743,6 +1743,8 @@ Before requeuing a failed draft turn, the engine checks its stored draft, source
 
 Every returned `turn` has `id`, `position`, `created_at`, `idempotency_key`, `question`, nullable `context`, `state`, nullable `answer`, and nullable `confirmation` with the saved result. To retry the first turn after reload, omit `conversation_id` again. The turn also has `waiting_reason`, the plain message from the Doc screen while queued and null otherwise. The app rereads the conversation to show progress and the saved result. The app opens new chat links as `/doc-chats?chat=<id>` so legacy links can show their own message. An older failed turn stays visible and retry applies to the latest question.
 
+Each returned turn also has `draft_review`. It is null for a turn without draft context. For a draft turn it contains `{ draft_id, version, current }`, where `draft_id` and `version` come from the saved turn context. The engine computes `current` when it reads the turn. It is `pending_same` if the draft is still pending at that version, `changed` if it is pending at a newer version, or `gone` if it has left pending or is unavailable to the partner. The app uses `changed` or `gone` to ask the partner to open a fresh review for a failed draft turn.
+
 `answer` is `{ kind, text, sources, proposal }`. `kind` is `answer`, `clarification`, or `refusal`. `text` is plain text. `sources` lists the records used, or accessible choices for a clarification. A refusal has empty sources. `proposal` is null or one of the following on an `answer`.
 
 | `kind`           | Stored proposal                                                                                                                | Allowed `edits`       |
