@@ -8,6 +8,7 @@ import { type DatabaseEnv, type Reader, readSnapshot } from "./reader.ts";
 // The hints are the old system's public ones, so a refusal body is exactly
 // the error payload it returned.
 const HINTS = {
+	action_link_unavailable: "This link is no longer available.",
 	phase_not_eligible:
 		"The quote does not support a move from the current phase.",
 	already_client: "Choose Add deal for this client.",
@@ -334,6 +335,7 @@ type Verb =
 	| "read-tour-stop-list"
 	| "read-updates"
 	| "read-vendor-meetings"
+	| "resolve-action-link"
 	| "search-parties-v1"
 	| "search-properties"
 	| "today-triage";
