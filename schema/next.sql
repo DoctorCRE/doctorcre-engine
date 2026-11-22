@@ -4200,6 +4200,7 @@ create table doc_turn (
 	claim_until timestamptz,
 	claim_state jsonb,
 	answer jsonb check (jsonb_typeof(answer) = 'object'),
+	answered_by text not null default 'mac' constraint doc_turn_answered_by check (answered_by in ('mac', 'backup')),
 	confirmation_key uuid unique references save_receipt (idempotency_key) deferrable initially deferred,
 	unique (conversation_id, position),
 	unique (owner_user_id, idempotency_key),
@@ -4229,7 +4230,7 @@ revoke all on doc_conversation, doc_turn from public, engine_reader;
 grant select, insert on doc_conversation, doc_turn to engine;
 -- FOR UPDATE needs UPDATE on one column. Row security keeps the owner fixed.
 grant update (owner_user_id) on doc_conversation to engine;
-grant update (state, claim_id, claim_until, claim_state, answer, confirmation_key) on doc_turn to engine;
+grant update (state, claim_id, claim_until, claim_state, answer, answered_by, confirmation_key) on doc_turn to engine;
 
 create table doc_link (
 	owner_user_id uuid primary key,

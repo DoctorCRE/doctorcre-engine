@@ -13,6 +13,7 @@
 	"workers_dev": true,
 	"preview_urls": true,
 	"version_metadata": { "binding": "CF_VERSION_METADATA" },
+	"triggers": { "crons": ["* * * * *"] },
 	"services": [
 		{ "binding": "CARR", "service": "carr-mcp" },
 		{
@@ -33,6 +34,8 @@
 		{ "binding": "DEAL_DOCUMENTS", "bucket_name": "carr-documents" }
 	],
 	"vars": {
+		"DOC_BACKUP": "false",
+		"DOC_BACKUP_MODEL": "claude-sonnet-5-5",
 		"EMAIL_FILING_JUDGMENT": "true",
 		"POST_MEDIA_BUCKET": "doctorcre-post-media",
 		"CLIENT_WEBSITE_ORIGIN": "https://share.doctorcre.com",
@@ -48,6 +51,7 @@
 	"env": {
 		"staging": {
 			"name": "doctorcre-engine-staging",
+			"triggers": { "crons": ["* * * * *"] },
 			"version_metadata": { "binding": "CF_VERSION_METADATA" },
 			"services": [
 				{ "binding": "CARR", "service": "carr-mcp-staging" },
@@ -75,6 +79,8 @@
 				}
 			],
 			"vars": {
+				"DOC_BACKUP": "false",
+				"DOC_BACKUP_MODEL": "claude-sonnet-5-5",
 				"POST_MEDIA_BUCKET": "doctorcre-post-media-staging",
 				"PARTNER_APP_ORIGIN": "https://doctorcre-app-staging.joe-bookout-carr-us.workers.dev",
 				"CLIENT_WEBSITE_ORIGIN": "https://carr-share-staging.joe-bookout-carr-us.workers.dev"

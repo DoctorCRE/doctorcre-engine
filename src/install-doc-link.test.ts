@@ -97,6 +97,8 @@ esac`,
 		PATH: `${bin}:/usr/bin:/bin`,
 		POST_MEDIA_BUCKET: process.env.POST_MEDIA_BUCKET,
 		CLIENT_WEBSITE_ORIGIN: process.env.CLIENT_WEBSITE_ORIGIN,
+		DOC_BACKUP: process.env.DOC_BACKUP,
+		DOC_BACKUP_MODEL: process.env.DOC_BACKUP_MODEL,
 	};
 	function run(input = firstCredential) {
 		const invocation = join(scratch, "run-installer.mjs");

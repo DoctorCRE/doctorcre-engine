@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { registerHooks } from "node:module";
 import { after, afterEach, before, test } from "node:test";
 import { Hono } from "hono";
 import pg from "pg";
@@ -57,6 +58,7 @@ type Turn = {
 	state: string;
 	position: number;
 	answer: unknown;
+	answered_by: "mac" | "backup" | null;
 	context: unknown;
 	draft_review: unknown;
 	waiting_reason: string | null;
@@ -151,6 +153,195 @@ async function claim(credential: string) {
 	assert.equal(response.status, 200);
 	return response.json<Claim>();
 }
+
+const workerHooks = registerHooks({
+	resolve(specifier, context, nextResolve) {
+		return specifier === "cloudflare:workers"
+			? {
+					url: "data:text/javascript,export class WorkerEntrypoint {}",
+					shortCircuit: true,
+				}
+			: nextResolve(specifier, context);
+	},
+});
+const { default: worker } = await import("./worker-entry.ts").finally(() =>
+	workerHooks.deregister(),
+);
+const backupEnv = {
+	DOC_BACKUP: "true",
+	DOC_BACKUP_API_KEY: "fixture-key",
+	DOC_BACKUP_MODEL: "claude-sonnet-5-5",
+	DATABASE: { connectionString },
+	DATABASE_WRITER: { connectionString },
+};
+const tick = (env = backupEnv) =>
+	worker.scheduled(
+		{ cron: "* * * * *", scheduledTime: Date.now(), noRetry() {} },
+		env,
+	);
+const modelReply = (content: object[], stop_reason = "end_turn") =>
+	Response.json({
+		type: "message",
+		role: "assistant",
+		stop_reason,
+		content,
+		usage: { output_tokens: 10 },
+	});
+const reply = (answer: object = refusal) =>
+	modelReply([{ type: "text", text: JSON.stringify(answer) }]);
+const askDoc = (user = "joe") =>
+	client(user)("/turns", 202, { ...question, idempotency_key: randomUUID() });
+const chatTurn = async (chat: string, user = "joe") =>
+	(await client(user)(`/conversations/${chat}`, 200)).turns[0];
+
+test("backup answers an unready partner's turn using Doc's read tools", async (t) => {
+	const { conversation_id } = await askDoc();
+	const lead = await exampleLead("Example Backup Lead");
+	const answer = {
+		kind: "answer",
+		text: "Here is your example lead.",
+		sources: [`lead:${lead.ref.id}`],
+	};
+	let calls = 0;
+	t.mock.method(globalThis, "fetch", async () =>
+		++calls === 1
+			? modelReply(
+					[
+						{
+							type: "tool_use",
+							id: "find_lead",
+							name: "find",
+							input: { kind: "lead", query: "Example Backup Lead" },
+						},
+					],
+					"tool_use",
+				)
+			: reply(answer),
+	);
+	await tick();
+	const saved = await chatTurn(conversation_id);
+	assert.equal(calls, 2);
+	assert.equal(saved?.state, "answered");
+	assert.equal(saved.answered_by, "backup");
+	assert.equal(
+		(
+			await db.query("select answered_by from doc_turn where id = $1", [
+				saved.id,
+			])
+		).rows[0].answered_by,
+		"backup",
+	);
+});
+
+test("backup waits for the ready Mac and skips its live claim even after two minutes", async (t) => {
+	const { conversation_id, turn } = await askDoc();
+	const credential = await issue(owner);
+	assert.equal((await poll(credential, "signed_out")).status, 204);
+	await db.query(
+		"update doc_link set readiness = 'ready' where owner_user_id = $1",
+		[owner],
+	);
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+	await tick();
+	assert.equal(fetch.mock.callCount(), 0);
+	assert.equal((await chatTurn(conversation_id))?.state, "queued");
+	await db.query(
+		"update doc_turn set created_at = clock_timestamp() - interval '2 minutes' where id = $1",
+		[turn.id],
+	);
+	const active = await claim(credential);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 0);
+	assert.equal((await chatTurn(conversation_id))?.state, "working");
+	assert.equal(active.turn.id, turn.id);
+	await expire(turn.id);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.equal((await chatTurn(conversation_id))?.answered_by, "backup");
+});
+
+test("a Mac taking over an expired backup claim keeps its own answer", async (t) => {
+	const { conversation_id, turn } = await askDoc();
+	const credential = await issue(owner);
+	const macAnswer = { ...refusal, text: "The Mac answered." };
+	const fetch = t.mock.method(globalThis, "fetch", async () => {
+		assert.equal((await poll(credential)).status, 204);
+		await expire(turn.id);
+		const { claim_id } = await claim(credential);
+		const response = await complete(credential, {
+			kind: "answered",
+			claim_id,
+			answer: macAnswer,
+		});
+		assert.equal(response.status, 204);
+		return reply();
+	});
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	const saved = await chatTurn(conversation_id);
+	assert.deepEqual(saved?.answer, macAnswer);
+	assert.equal(saved.answered_by, "mac");
+});
+
+test("backup credit exhaustion leaves both partners' turns queued and sends one request each tick until recovery", async (t) => {
+	const first = await askDoc();
+	const second = await askDoc("dell");
+	let depleted = true;
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		depleted
+			? Response.json(
+					{
+						error: {
+							type: "invalid_request_error",
+							message:
+								"Your credit balance is too low to access the Anthropic API.",
+						},
+					},
+					{ status: 400 },
+				)
+			: reply(),
+	);
+	for (const expected of [1, 2]) {
+		await tick();
+		assert.equal(fetch.mock.callCount(), expected);
+		assert.deepEqual(await chatTurn(first.conversation_id), first.turn);
+		assert.deepEqual(
+			await chatTurn(second.conversation_id, "dell"),
+			second.turn,
+		);
+	}
+	depleted = false;
+	await tick();
+	assert.equal((await chatTurn(first.conversation_id))?.answered_by, "backup");
+	assert.equal(
+		(await chatTurn(second.conversation_id, "dell"))?.answered_by,
+		"backup",
+	);
+});
+
+test("backup switched off leaves turns available to the Mac before the migration", async (t) => {
+	const migration = await readSchema("add-doc-answered-by.sql");
+	await db.query("alter table doc_turn drop column answered_by");
+	t.after(() => db.query(migration));
+	const { conversation_id, turn } = await askDoc();
+	const fetch = t.mock.method(globalThis, "fetch", async () => reply());
+	await tick({ ...backupEnv, DOC_BACKUP: "false" });
+	assert.equal(fetch.mock.callCount(), 0);
+	assert.deepEqual(await chatTurn(conversation_id), turn);
+	const credential = await issue(owner);
+	const { claim_id } = await claim(credential);
+	assert.equal(
+		(
+			await complete(credential, {
+				kind: "answered",
+				claim_id,
+				answer: refusal,
+			})
+		).status,
+		204,
+	);
+	assert.equal((await chatTurn(conversation_id))?.answered_by, "mac");
+});
 
 test("keeps a question and its key while a Mac has never connected", async () => {
 	const send = client();
