@@ -8,7 +8,7 @@ import { z } from "zod";
 
 const maxToolRounds = 4;
 const maxOutputTokens = 4096;
-const timeoutMs = 30_000;
+const maxTimeoutMs = 45_000;
 
 type ToolCall = Required<Pick<CallToolRequestParams, "name" | "arguments">> & {
 	id: string;
@@ -25,6 +25,7 @@ type BackupRequest = {
 	system: string;
 	messages: readonly Anthropic.MessageParam[];
 	tools: readonly Tool[];
+	timeoutMs: number;
 	runTool: ToolRunner;
 	fetch?: typeof globalThis.fetch;
 };
@@ -35,6 +36,11 @@ type BackupResult =
 	| { kind: "failed"; reason: string };
 
 const textBlock = z.object({ type: z.literal("text"), text: z.string() });
+const thinkingBlock = z.looseObject({
+	type: z.literal("thinking"),
+	thinking: z.string(),
+	signature: z.string(),
+});
 const toolBlock = z.object({
 	type: z.literal("tool_use"),
 	id: z.string().min(1),
@@ -45,7 +51,9 @@ const responseSchema = z.object({
 	type: z.literal("message"),
 	role: z.literal("assistant"),
 	stop_reason: z.string(),
-	content: z.array(z.discriminatedUnion("type", [textBlock, toolBlock])),
+	content: z.array(
+		z.discriminatedUnion("type", [textBlock, thinkingBlock, toolBlock]),
+	),
 	usage: z.object({ output_tokens: z.int().nonnegative() }),
 });
 const depletedCreditMessage =
@@ -72,7 +80,7 @@ async function exchange(
 		authToken: null,
 		baseURL: "https://api.anthropic.com",
 		fetch: request.fetch,
-		fetchOptions: { redirect: "error" },
+		fetchOptions: { redirect: "manual" },
 		defaultHeaders: {
 			Authorization: `Bearer ${request.apiKey}`,
 			"x-api-key": null,
@@ -185,6 +193,9 @@ export async function askDocBackup(
 	if (!request.apiKey.trim() || !request.model.trim()) {
 		return failed("Claude key or model is missing");
 	}
+	const timeoutMs = Math.min(request.timeoutMs, maxTimeoutMs);
+	if (!(timeoutMs > 0)) return failed("Claude request timed out");
+
 	const controller = new AbortController();
 	const deadline = Promise.withResolvers<never>();
 	const timeout = setTimeout(() => {

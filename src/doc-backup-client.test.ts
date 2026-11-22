@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { fileURLToPath, URL } from "node:url";
+import { createTestHarness } from "wrangler";
 import { askDocBackup } from "./doc-backup-client.ts";
 
 const inputSchema = { type: "object" as const };
@@ -9,12 +11,18 @@ const request = {
 	system: "You are Doc.",
 	messages: [{ role: "user", content: "Find the record." }] as const,
 	tools: [{ name: "find", inputSchema }],
+	timeoutMs: 30_000,
 	runTool: () => {
 		throw new Error("Unexpected tool call");
 	},
 };
 const answer = { type: "text", text: "I found it." };
 const answered = { kind: "answer", text: answer.text, toolCalls: [] };
+const thinking = {
+	type: "thinking",
+	thinking: "I should check the records.",
+	signature: "synthetic-opaque-signature",
+};
 const use = {
 	type: "tool_use",
 	id: "toolu_find",
@@ -98,6 +106,33 @@ test("continues with the assistant tool call and its MCP result", async () => {
 	});
 });
 
+test("returns only answer text after signed thinking", async () => {
+	const { ask } = endpoint(message([thinking, answer]));
+	assert.deepEqual(await ask(), answered);
+});
+
+test("replays signed thinking unchanged before the tool call", async () => {
+	const { requests, ask } = endpoint(
+		message([thinking, use], "tool_use"),
+		message([answer]),
+	);
+	const call = { id: use.id, name: use.name, arguments: use.input };
+	assert.deepEqual(await ask(() => ({ content: [] })), {
+		...answered,
+		toolCalls: [call],
+	});
+	const payload = requests[1];
+	assert.ok(payload && typeof payload === "object" && "messages" in payload);
+	assert.deepEqual(payload.messages, [
+		...request.messages,
+		{ role: "assistant", content: [thinking, use] },
+		{
+			role: "user",
+			content: [{ type: "tool_result", tool_use_id: use.id, content: [] }],
+		},
+	]);
+});
+
 test("stops at the round cap before running another tool", async () => {
 	const { requests, ask } = endpoint(
 		...Array.from({ length: 5 }, (_, round) =>
@@ -145,6 +180,60 @@ test("aborts a stalled response body at the deadline", async (t) => {
 	assert.equal(signal.aborted, true);
 });
 
+test("accepts a 35-second answer within the caller's model window", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const started = Promise.withResolvers<void>();
+	const result = askDocBackup({
+		...request,
+		timeoutMs: 40_000,
+		fetch: () =>
+			new Promise((resolve) => {
+				setTimeout(() => resolve(message([answer])), 35_000);
+				started.resolve();
+			}),
+	});
+	await started.promise;
+	t.mock.timers.tick(35_000);
+	assert.deepEqual(await result, answered);
+});
+
+test("caps the caller's model window at 45 seconds", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const started = Promise.withResolvers<AbortSignal>();
+	const result = askDocBackup({
+		...request,
+		timeoutMs: 60_000,
+		fetch: async (_input, init) => {
+			const signal = init?.signal;
+			assert.ok(signal);
+			started.resolve(signal);
+			return new Promise((_, reject) => {
+				signal.addEventListener("abort", () => reject(signal.reason));
+			});
+		},
+	});
+	const signal = await started.promise;
+	t.mock.timers.tick(44_999);
+	assert.equal(signal.aborted, false);
+	t.mock.timers.tick(1);
+	assert.equal(signal.aborted, true);
+	assert.deepEqual(await result, failure("Claude request timed out"));
+});
+
+test("sends no request when the caller has no model time left", async () => {
+	let requests = 0;
+	const result = await askDocBackup({
+		...request,
+		timeoutMs: 0,
+		fetch: async () => {
+			requests++;
+			return message([answer]);
+		},
+	});
+	assert.deepEqual(result, failure("Claude request timed out"));
+	assert.equal(requests, 0);
+});
+
 test("distinguishes depleted credits and never retries HTTP errors", async () => {
 	const creditMessage =
 		"Your credit balance is too low to access the Anthropic API.";
@@ -171,4 +260,32 @@ test("rejects malformed success bodies", async () => {
 		const { ask } = endpoint(response);
 		assert.deepEqual(await ask(), failure("Malformed Claude response"));
 	}
+});
+
+test("workerd sends the Messages request and refuses redirects", async (t) => {
+	const worker = createTestHarness({
+		workers: [
+			{
+				config: {
+					name: "doc-backup-smoke",
+					main: fileURLToPath(
+						new URL("./fixtures/doc-backup-worker.ts", import.meta.url),
+					),
+					compatibility_date: "2026-11-11",
+					compatibility_flags: ["nodejs_compat"],
+					send_metrics: false,
+				},
+			},
+		],
+	});
+	t.after(() => worker.close());
+	await worker.listen();
+	assert.deepEqual(await (await worker.fetch("/")).json(), {
+		result: { kind: "answer", text: "Backup answered.", toolCalls: [] },
+		requests: 1,
+	});
+	assert.deepEqual(await (await worker.fetch("/redirect")).json(), {
+		result: failure("Claude returned HTTP 302"),
+		requests: 1,
+	});
 });
