@@ -192,7 +192,6 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"today's reminders",
 		"today's reminders",
 		"meeting prep",
-		"vendor meetings suggested",
 		"vendor meetings research",
 		d1,
 		d2,
@@ -208,8 +207,8 @@ test("asks the engine, the old system and the engine again for every board, the 
 		"pause",
 		"engine national_account",
 	]);
-	assert.equal(pauses, 27);
-	assert.deepEqual([run.oldReads, run.engineReads], [28, 56]);
+	assert.equal(pauses, 26);
+	assert.deepEqual([run.oldReads, run.engineReads], [27, 54]);
 	assert.ok(run.outcomes.every((o) => o.result === "matched"));
 	assert.equal(exitCode(run), 0);
 });
@@ -293,7 +292,6 @@ test("an engine feed that fails its read is a failed item and the deals are stil
 			"today's reminders matched",
 			"today's reminders matched",
 			"meeting prep matched",
-			"vendor meetings suggested matched",
 			"vendor meetings research matched",
 			`${d1} matched`,
 			`${d2} matched`,
@@ -368,7 +366,7 @@ test("the report counts each read and lists differing paths with record IDs and 
 	assert.equal(
 		report("production", run),
 		`Old and new answers compared on production
-old reads made: 28, engine reads made: 56
+old reads made: 27, engine reads made: 54
 
 read                                         asked   matched tie order    at cap different unsettled    failed
 board team                                       1         1         0         0         0         0         0
@@ -387,7 +385,7 @@ vendor list                                      1         1         0         0
 relationships                                    1         1         0         0         0         0         0
 today's reminders                                2         2         0         0         0         0         0
 meeting prep                                     1         1         0         0         0         0         0
-vendor meetings                                  2         2         0         0         0         0         0
+vendor meetings                                  1         1         0         0         0         0         0
 deal detail                                      3         0         0         0         3         0         0
 lead detail                                      2         2         0         0         0         0         0
 
@@ -1280,7 +1278,7 @@ const listedVendor = (id: string, contact: string | null, reason: string) => ({
 const vendorMeetings = (reason: string, next_cursor: string | null = null) => ({
 	pages: [
 		{
-			view: "suggested",
+			view: "research",
 			total: 3,
 			items: [
 				listedVendor(vendorA, null, reason),
@@ -1309,18 +1307,18 @@ test("vendor meetings pair a vendor's rows by vendor and contact and report a ch
 		withVendorMeetings("Made-up"),
 		withVendorMeetings("Made-up"),
 	);
-	assert.deepEqual(meetingReads(alike.run), ["matched", "matched"]);
+	assert.deepEqual(meetingReads(alike.run), ["matched"]);
 	assert.equal(exitCode(alike.run), 0);
 	const { run } = await runWith(
 		withVendorMeetings("Changed"),
 		withVendorMeetings("Made-up"),
 	);
-	assert.deepEqual(meetingReads(run), ["different", "different"]);
+	assert.deepEqual(meetingReads(run), ["different"]);
 	const text = report("production", run);
 	for (const line of [
-		"vendor meetings                                  2         0         0         0         2         0         0",
-		`meetings.pages[].items[].reason  value differs  4  V-1, V-1/${person}`,
-		`meetings.pages[].items[].possible_meetings[].reason  value differs  4  V-1, V-1/${person}`,
+		"vendor meetings                                  1         0         0         0         1         0         0",
+		`meetings.pages[].items[].reason  value differs  2  V-1, V-1/${person}`,
+		`meetings.pages[].items[].possible_meetings[].reason  value differs  2  V-1, V-1/${person}`,
 	])
 		assert.ok(text.includes(`\n${line}\n`), line);
 	assert.ok(!text.includes("Changed") && !text.includes("example.test"));
@@ -1331,7 +1329,7 @@ test("vendor meetings the engine cannot read fail, and the run goes on", async (
 		if (ask.read === "vendor meetings") throw new Error("read failed");
 		return answer(ask);
 	});
-	assert.deepEqual(meetingReads(run), ["failed", "failed"]);
+	assert.deepEqual(meetingReads(run), ["failed"]);
 	assert.equal(calls.at(-1), `engine ${l2}`);
 	assert.equal(exitCode(run), 2);
 });
@@ -1339,11 +1337,11 @@ test("vendor meetings the engine cannot read fail, and the run goes on", async (
 test("vendor meetings that still have pages after the last page read are at cap, not matched", async () => {
 	const cutOff = withVendorMeetings("Made-up", "more");
 	const { run } = await runWith(cutOff, cutOff);
-	assert.deepEqual(meetingReads(run), ["at cap", "at cap"]);
+	assert.deepEqual(meetingReads(run), ["at cap"]);
 	assert.equal(exitCode(run), 0);
 	assert.match(
 		report("production", run),
-		/\nvendor meetings +2 +0 +0 +2 +0 +0 +0\n/,
+		/\nvendor meetings +1 +0 +0 +1 +0 +0 +0\n/,
 	);
 });
 
@@ -1423,9 +1421,9 @@ test("missing or malformed old samples add no filter asks, even when the engine 
 		}
 	};
 	const { run } = await runWith(engine);
-	assert.equal(run.outcomes.length, 28);
+	assert.equal(run.outcomes.length, 27);
 	const malformed = (ask: Ask) =>
 		ask.read === "client fit" ? { profiles: null } : answer(ask);
 	const invalid = await runWith(engine, malformed);
-	assert.equal(invalid.run.outcomes.length, 28);
+	assert.equal(invalid.run.outcomes.length, 27);
 });

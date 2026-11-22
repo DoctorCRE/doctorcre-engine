@@ -636,17 +636,14 @@ test("an unavailable calendar, a refusal or a server error fails today's reminde
 		);
 });
 
-const meetingViews: Ask[] = [
-	{ read: "vendor meetings", view: "suggested" },
-	{ read: "vendor meetings", view: "research" },
-];
+const meetingViews: Ask[] = [{ read: "vendor meetings", view: "research" }];
 const meetingsPage = (cursor: string | null) => ({
 	items: [{ vendor_id: cursor ?? "first" }],
 	calendar: { state: "ready" },
 	next_cursor: cursor === null ? "a" : null,
 });
 
-test("vendor meetings ask each view with the default limit and follow each side's next_cursor", async () => {
+test("vendor meetings ask Research with the default limit and follow each side's next_cursor", async () => {
 	const engine = fake(({ url }) =>
 		json(meetingsPage(url.searchParams.get("cursor"))),
 	);
@@ -657,8 +654,6 @@ test("vendor meetings ask each view with the default limit and follow each side'
 	assert.deepEqual(
 		engine.sent.map((s) => s.url.pathname + s.url.search),
 		[
-			"/compare/joe/engine/vendor-meetings?view=suggested",
-			"/compare/joe/engine/vendor-meetings?view=suggested&cursor=a",
 			"/compare/joe/engine/vendor-meetings?view=research",
 			"/compare/joe/engine/vendor-meetings?view=research&cursor=a",
 		],
@@ -669,18 +664,16 @@ test("vendor meetings ask each view with the default limit and follow each side'
 	for (const read of meetingViews) await old.askOld(read);
 	assert.deepEqual(
 		old.sent.map((s) => called(s.url)),
-		[
-			{ view: "suggested" },
-			{ view: "suggested", cursor: "a" },
-			{ view: "research" },
-			{ view: "research", cursor: "a" },
-		].map((args) => ({ name: "read-vendor-meetings", arguments: args })),
+		[{ view: "research" }, { view: "research", cursor: "a" }].map((args) => ({
+			name: "read-vendor-meetings",
+			arguments: args,
+		})),
 	);
-	assert.deepEqual(old.waits, [1, 3]);
+	assert.deepEqual(old.waits, [1]);
 
 	const long = fake(() => json({ ...meetingsPage(null), next_cursor: "1" }));
 	for (const read of meetingViews) await long.askEngine(read);
-	assert.equal(long.sent.length, 10);
+	assert.equal(long.sent.length, 5);
 });
 
 test("an unavailable calendar on any page, a refusal or a server error fails vendor meetings instead of comparing, on either side", async () => {
