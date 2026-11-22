@@ -1690,6 +1690,9 @@ create table proposal (
 	due_on date,
 	due_source text constraint proposal_due_source check (due_source is null or
 		(kind = 'next_step' and due_on is not null and due_source in ('stated', 'defaulted'))),
+	merged_step_id uuid constraint proposal_merged_step references next_step,
+	constraint proposal_merged_step_decided check (merged_step_id is null or
+		(kind = 'next_step' and status = 'accepted')),
 	from_phase text references phase,
 	to_phase text references phase,
 	phase_stated boolean not null default false,
@@ -1876,6 +1879,8 @@ begin
 		insert into activity_about (activity_id, deal_id, party_id)
 		values (new.id, new.deal_id, new.party_id);
 	when 'next_step' then
+		new.merged_step_id := nullif(current_setting('engine.proposal_merged_step', true), '')::uuid;
+		if new.merged_step_id is not null then return new; end if;
 		-- The decision can override the step owner without changing the suggestion.
 		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id,
 			call_activity_id, call_evidence_quote)

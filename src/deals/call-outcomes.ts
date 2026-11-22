@@ -84,7 +84,7 @@ export function callOutcomeQuery(
 						"p.phase_on",
 						"p.next_step_id",
 						"owner.slug as owner",
-						callAcceptanceBlock.as("accept_blocked"),
+						callAcceptanceBlock(userId).as("accept_blocked"),
 					])
 					.select(({ fn }) => [
 						fn.coalesce("p.what", "step.what").as("what"),

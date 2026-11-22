@@ -7,8 +7,9 @@ import { answerNextRead, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import {
-	callAcceptanceBlock,
-	copiedAssignedAction,
+	copiedCallStep,
+	lockOpenDealStep,
+	privateCallLog,
 	visibleCallProposal,
 } from "./deals/call-review.ts";
 import { sourceInMailbox } from "./home-email-thread.ts";
@@ -414,8 +415,8 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.leftJoin("next_step as step", "step.id", "p.next_step_id")
 					.selectAll("p")
 					.select([
-						callAcceptanceBlock.as("accept_blocked"),
-						copiedAssignedAction.as("copied_assigned_action"),
+						privateCallLog.as("private_call_log"),
+						copiedCallStep.as("copied_call_step"),
 					])
 					.where("p.id", "=", r.proposal_id)
 					// A direct decision clears the mailbox stamp and records the owner as decider.
@@ -448,7 +449,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					(r.reason && accepts && !filing)
 				)
 					return fail(422, "invalid_field_value");
-				if (accepts && p.accept_blocked) return fail(409, p.accept_blocked);
+				if (accepts && p.private_call_log) return fail(409, "private_call");
 				if (r.decision === "accept" && p.kind === "phase_move" && p.deal_id) {
 					const d = await dealNow(tx, p.deal_id);
 					if (
@@ -481,7 +482,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					await dealNow(tx, filingDeal);
 				}
 
-				const { owner_party_id: editedOwner, ...stepEdits } = r.edits ?? {};
+				const { owner_party_id: editedOwner, what, due_on } = r.edits ?? {};
 				const ownerEdit = isUuid(editedOwner) ? editedOwner : undefined;
 				const owner = ownerEdit ?? p.owner_party_id;
 				const updateDecision = () =>
@@ -490,12 +491,15 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						status: string;
 						decided_at: string;
 						filed_deal_id: string | null;
+						merged_step_id: string | null;
 					}>`update proposal
    set status = ${accepts ? "accepted" : "dismissed"}, filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
 	${r.vendor_id ? sql`filed_vendor_id = ${r.vendor_id}::uuid,` : sql``}
     filing_reason = ${accepts ? (r.reason ?? null) : null},
     dismiss_reason = ${accepts ? null : (r.reason?.trim() ?? null)} where id = any(${members}::uuid[])
-   returning id, status, decided_at::text, filed_deal_id`.execute(tx);
+   returning id, status, decided_at::text, filed_deal_id, merged_step_id`.execute(
+						tx,
+					);
 				const { rows } =
 					accepts && p.kind === "next_step"
 						? await saveOpenStep(
@@ -504,15 +508,31 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 								async () => {
 									if (
 										p.deal_id &&
-										!p.copied_assigned_action &&
 										(p.activity_kind === "call" ||
 											p.activity_kind === "meeting")
-									)
-										await cancelCurrentStep(
-											tx,
-											{ kind: "deal", id: p.deal_id },
+									) {
+										const existing = await lockOpenDealStep(tx, {
+											dealId: p.deal_id,
 											owner,
-										);
+											what: what ?? p.what,
+										});
+										if (existing?.matches) {
+											await sql`select set_config('engine.proposal_merged_step', ${existing.id}, true)`.execute(
+												tx,
+											);
+											return updateDecision();
+										}
+										if (existing && p.copied_call_step)
+											return fail(409, "open_step_exists", {
+												next_step_id: existing.id,
+											});
+										if (existing)
+											await cancelCurrentStep(
+												tx,
+												{ kind: "deal", id: p.deal_id },
+												owner,
+											);
+									}
 									if (ownerEdit)
 										await sql`select set_config('engine.proposal_step_owner', ${ownerEdit}, true)`.execute(
 											tx,
@@ -522,11 +542,17 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 							)
 						: await updateDecision();
 				const decided = rows.find((row) => row.id === p.id);
-				if (accepts && Object.keys(stepEdits).length)
+				const stepId = decided?.merged_step_id ?? p.id;
+				let stepDue = due_on;
+				if (decided?.merged_step_id) {
+					if (p.due_source !== "stated") stepDue = undefined;
+					else if (stepDue === undefined) stepDue = p.due_on;
+				}
+				if (accepts && (what !== undefined || stepDue !== undefined))
 					await tx
 						.updateTable("next_step")
-						.set(stepEdits)
-						.where("id", "=", p.id)
+						.set({ what, due_on: stepDue })
+						.where("id", "=", stepId)
 						.execute();
 				const promoted =
 					r.decision === "accept" && p.candidate_id
@@ -540,7 +566,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					r.decision === "dismiss" || p.kind === "next_step_done"
 						? {}
 						: p.kind === "next_step"
-							? { next_step_id: p.id }
+							? { next_step_id: stepId }
 							: p.kind === "phase_move"
 								? { deal_id: p.deal_id }
 								: promoted
