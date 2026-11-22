@@ -26,7 +26,7 @@ before(async () => {
 			from (values
 				('${id(20)}'::uuid, '${deal}'::uuid), ('${id(21)}', '${deal}'), ('${id(22)}', '${deal}'),
 				('${id(23)}', '${deal}'), ('${id(24)}', '${deal}'), ('${id(25)}', '${deal}'),
-				('${id(26)}', '${otherDeal}')
+				('${id(26)}', '${otherDeal}'), ('${id(27)}', '${deal}')
 			) doc(id, deal_id);
 		insert into document_extraction
 			(document_id, deal_id, extracted_at, created_at, method, extractor_version, text_format_version, status, pages, receipt)
@@ -47,6 +47,11 @@ before(async () => {
 				'unavailable', '{}', null),
 			('${id(26)}', '${otherDeal}', '2026-01-02', '2026-01-04', 'text_layer', 'v1', 'page-text.v1',
 				'produced', array['Text on a different deal'], null);
+		insert into document_extraction
+			(id, document_id, deal_id, extracted_at, method, extractor_version, text_format_version, status, pages)
+		values
+			('${id(31)}', '${id(27)}', '${deal}', '2026-01-02', 'text_layer', 'v1', 'page-text.v1', 'produced', array['Higher id']),
+			('${id(30)}', '${id(27)}', '${deal}', '2026-01-02', 'text_layer', 'v2', 'page-text.v1', 'produced', array['Lower id']);
 		commit;`);
 });
 
@@ -84,6 +89,12 @@ test("the newest produced extraction wins by extraction time", async () => {
 	const response = await read(deal, id(25));
 	assert.equal(response.status, 200);
 	assert.deepEqual(await response.json(), { pages: ["Newest usable text"] });
+});
+
+test("the highest extraction id wins when extraction times match", async () => {
+	const response = await read(deal, id(27));
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), { pages: ["Higher id"] });
 });
 
 test("a document can only be read on the deal it belongs to", async () => {
