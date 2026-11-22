@@ -4,6 +4,7 @@ import {
 	lockEmail,
 	parseCapturedEmail,
 	recordEmail,
+	recordEmailCapture,
 } from "../activity/next-record.ts";
 import { Refusal, refuse } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
@@ -198,10 +199,10 @@ async function saveIntake(tx: Transaction<DB>, request: Intake | StoredIntake) {
 		return reject("The prospect's email or phone is invalid.");
 	if (stored?.party_id) {
 		if (capture)
-			await sql`insert into email_mailbox (activity_id, user_id)
-			values (${stored.activity_id}, ${sponsor.id}) on conflict do nothing`.execute(
-				tx,
-			);
+			await recordEmailCapture(tx, {
+				activity_id: stored.activity_id,
+				split: request.email.split,
+			});
 		return {
 			party_id: stored.party_id,
 			activity_id: stored.activity_id,

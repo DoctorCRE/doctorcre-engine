@@ -136,7 +136,12 @@ export function parseCapturedEmail(value: unknown): CapturedEmail | undefined {
 	const { authored, history, ...fields } = value;
 	const email = parseEmail(fields);
 	if (!email || (authored === undefined && history === undefined)) return email;
-	if (isText(authored) && isText(history)) {
+	if (
+		isText(authored) &&
+		isText(history) &&
+		!authored.includes("\0") &&
+		!history.includes("\0")
+	) {
 		return { ...email, split: { authored, history } };
 	}
 }
@@ -280,6 +285,28 @@ export async function lockEmail(tx: Transaction<DB>, messageId: string) {
 	);
 }
 
+export async function recordEmailCapture(
+	tx: Transaction<DB>,
+	{
+		activity_id,
+		split,
+		created = false,
+	}: { activity_id: string; split: CapturedEmail["split"]; created?: boolean },
+) {
+	const mailbox = await sql`insert into email_mailbox (activity_id, user_id)
+  select ${activity_id}, ${ACTING_USER} where ${ACTING_USER} is not null
+  on conflict do nothing`.execute(tx);
+	const mailboxAdded = mailbox.numAffectedRows === 1n;
+	if (split && (created || mailboxAdded))
+		await tx
+			.updateTable("email")
+			.set(split)
+			.where("activity_id", "=", activity_id)
+			.where("authored", "is", null)
+			.execute();
+	return mailboxAdded;
+}
+
 export async function recordEmail(
 	tx: Transaction<DB>,
 	activity: ActivityFields,
@@ -333,18 +360,13 @@ export async function recordEmail(
 	const activity_id =
 		stored?.activity_id ??
 		(await insertActivity(tx, { ...activity, from_party_id }, email));
-	const mailbox = await sql`insert into email_mailbox (activity_id, user_id)
-  select ${activity_id}, ${ACTING_USER} where ${ACTING_USER} is not null
-  on conflict do nothing`.execute(tx);
-	if (email.split && (!stored || mailbox.numAffectedRows))
-		await tx
-			.updateTable("email")
-			.set(email.split)
-			.where("activity_id", "=", activity_id)
-			.where("authored", "is", null)
-			.execute();
+	const mailboxAdded = await recordEmailCapture(tx, {
+		activity_id,
+		split: email.split,
+		created: !stored,
+	});
 	const filedAbout = await linkActivity(tx, activity_id, links);
-	if (autoFile && mailbox.numAffectedRows) {
+	if (autoFile && mailboxAdded) {
 		const {
 			rows: [storage],
 		} = await sql<{ installed: boolean }>`

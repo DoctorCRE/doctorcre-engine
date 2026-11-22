@@ -760,7 +760,7 @@ test("the router queue identifies emails saved by lead intake", async () => {
 	assert.equal(flags.get(ordinary.body.activity_id), false);
 });
 
-test("a notice files the named prospect and the exact source once for both mailboxes", async () => {
+test("a second lead mailbox can fill the first complete split on the same source", async () => {
 	const request = notice("Intake-A");
 	const first = await intake(request);
 	assert.equal(first.status, 201);
@@ -770,12 +770,34 @@ test("a notice files the named prospect and the exact source once for both mailb
 		authored: null,
 		history: null,
 	});
+	const split = { authored: request.email.body, history: splitText.history };
+	const email = {
+		...request.email,
+		body: `${split.authored}\n\n${split.history}`,
+		...split,
+	};
 	const second = await intake(
-		{ ...request, idempotency_key: randomUUID() },
+		{ ...request, email, idempotency_key: randomUUID() },
 		"dell",
 	);
 	assert.equal(second.status, 200);
 	assert.equal(second.body.party_id, first.body.party_id);
+	assert.equal(second.body.activity_id, first.body.activity_id);
+	const stored = { body: request.email.body, ...split };
+	assert.deepEqual(await savedEmailText(first.body.activity_id), stored);
+	for (const duplicate of [
+		request.email,
+		{ ...email, authored: "Different sender text.", history: "" },
+	]) {
+		const retry = await intake(
+			{ ...request, email: duplicate, idempotency_key: randomUUID() },
+			"joe",
+		);
+		assert.equal(retry.status, 200);
+		assert.equal(retry.body.activity_id, first.body.activity_id);
+		assert.equal(retry.body.party_id, first.body.party_id);
+		assert.deepEqual(await savedEmailText(first.body.activity_id), stored);
+	}
 	await assertRows(
 		1,
 		`select from lead_email_attention n join lead_email_source s using (activity_id, party_id)
@@ -1399,6 +1421,22 @@ for (const [form, history] of [
 			where r.role = 'lead' and e.address = $1`,
 			request.prospect.email,
 		);
+	});
+}
+
+for (const field of ["authored", "history"] as const) {
+	test(`lead intake refuses NUL in email.${field}`, async () => {
+		const request = notice(`lead-nul-${field}`);
+		await refused(
+			intake({
+				...request,
+				email: { ...request.email, ...splitText, [field]: "Text\0with NUL" },
+			}),
+			400,
+			"invalid_field_value",
+			{ fields: ["email"] },
+		);
+		assert.deepEqual(await stored(request.email.message_id), []);
 	});
 }
 
