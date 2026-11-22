@@ -1688,6 +1688,8 @@ create table proposal (
 	what text check (what ~ '\S'),
 	owner_party_id uuid references party,
 	due_on date,
+	due_source text constraint proposal_due_source check (due_source is null or
+		(kind = 'next_step' and due_on is not null and due_source in ('stated', 'defaulted'))),
 	from_phase text references phase,
 	to_phase text references phase,
 	phase_stated boolean not null default false,
