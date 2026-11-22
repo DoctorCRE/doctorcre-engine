@@ -142,7 +142,6 @@ for (const { caller, what, expected } of [
 		});
 		const stored = expected ?? what;
 		assert.equal(status, 201);
-		assert.equal(answer.what, stored);
 		assert.equal((await stepNow(answer.next_step_id)).what, stored);
 		const { rows } = await db.query(
 			"select what from home_next_step where id = $1",
@@ -529,7 +528,6 @@ test("a partner's checklist item lands once on its deal, stamped with the partne
 			{
 				next_step_id: answer.next_step_id,
 				change_id: await seen(answer.next_step_id),
-				what: args.what,
 			},
 		],
 	);

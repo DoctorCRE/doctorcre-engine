@@ -601,7 +601,7 @@ export const nextSteps = new Hono<NextSaveEnv>()
 				const what = c.get("stamp").job
 					? jobStepWording(request.what)
 					: request.what;
-				return { ...(await createStep(tx, { ...request, what })), what };
+				return createStep(tx, { ...request, what });
 			},
 			201,
 		),
