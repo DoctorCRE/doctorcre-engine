@@ -3,12 +3,11 @@ import { visibleSuggestion } from "../home-inbox-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { ACTING_USER } from "../next-save.ts";
 
-const sharedCopiedCall = sql<boolean>`a.changed_by_job = 'old_system'
-	and a.changed_by_user_id is null and a.changed_for_user_id is null`;
+export const visibleCall = (userId: string | Expression<string> | null) =>
+	sql<boolean>`call_visible_to(a.changed_by_user_id, a.changed_by_job,
+		a.changed_for_user_id, ${userId}::uuid)`;
 
-export const visibleCall = (userId: string | Expression<string>) =>
-	sql<boolean>`(${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id)
-		or (${sharedCopiedCall}))`;
+const sharedCopiedCall = visibleCall(null);
 
 export const visibleCallProposal = (userId: string | Expression<string>) =>
 	sql<boolean>`(${visibleCall(userId)}
