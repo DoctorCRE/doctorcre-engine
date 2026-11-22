@@ -48,6 +48,7 @@ afterEach(() =>
 	db.query(`begin; set local engine.job = 'old_system';
 		delete from reply_draft where confirmed_doc_turn_id is not null or proposed_by_job = 'mail_capture';
 		delete from doc_turn; delete from doc_conversation; truncate doc_link;
+		delete from doc_judgment_job;
 		commit;`),
 );
 after(cleanup);
@@ -128,7 +129,11 @@ const issue = async (user: string) =>
 			issueDocLink(tx, user),
 		)
 	).credential;
-const poll = async (credential: string, readiness: string | null = "ready") =>
+const poll = async (
+	credential: string,
+	readiness: string | null = "ready",
+	work?: "judgment",
+) =>
 	mac.request(
 		"/claim",
 		{
@@ -136,6 +141,7 @@ const poll = async (credential: string, readiness: string | null = "ready") =>
 			headers: {
 				Authorization: `Bearer ${credential}`,
 				...(readiness === null ? {} : { "Doc-Link-Readiness": readiness }),
+				...(work && { "Doc-Link-Work": work }),
 			},
 		},
 		{ DATABASE_WRITER: { connectionString } },
@@ -187,6 +193,188 @@ const askDoc = (user = "joe") =>
 	client(user)("/turns", 202, { ...question, idempotency_key: randomUUID() });
 const chatTurn = async (chat: string, user = "joe") =>
 	(await client(user)(`/conversations/${chat}`, 200)).turns[0];
+
+const mailQuote = "When can you meet?";
+const summaryAnswer = {
+	summary: "The sender wants to meet.",
+	action_title: "Suggest a meeting time",
+	quote: mailQuote,
+};
+
+async function queueMailJudgment(partner = owner, deal?: string) {
+	const activity = await replyEmail(null, partner);
+	const id = randomUUID();
+	await db.query(
+		`with job as (
+			insert into doc_judgment_job (id, owner_user_id, activity_id, idempotency_key, kind)
+			values ($1, $2, $3, $1, case when $4::uuid is null then 'email_summary' else 'email_filing' end)
+			returning id
+		)
+		insert into doc_judgment_destination (job_id, position, deal_id)
+		select id, 1, $4 from job where $4 is not null`,
+		[id, partner, activity, deal ?? null],
+	);
+	return { id, activity };
+}
+
+test("backup saves the validated summary with its mail capture stamp", async (t) => {
+	const rejected = await queueMailJudgment();
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply(summaryAnswer),
+	);
+	fetch.mock.mockImplementationOnce(async () =>
+		reply({ ...summaryAnswer, quote: "A quote absent from the email." }),
+	);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select j.state, s.text from doc_judgment_job j
+			left join email_summary s on s.activity_id = j.activity_id where j.id = $1`,
+				[rejected.id],
+			)
+		).rows,
+		[{ state: "failed", text: null }],
+	);
+	const { id, activity } = await queueMailJudgment();
+	await tick();
+	assert.deepEqual(
+		(
+			await db.query(
+				`select text, provenance->>'quote' as quote, provenance->>'job' as job,
+			provenance->>'job_id' as job_id from email_summary where activity_id = $1`,
+				[activity],
+			)
+		).rows,
+		[
+			{
+				text: summaryAnswer.summary,
+				quote: mailQuote,
+				job: "mail_capture",
+				job_id: id,
+			},
+		],
+	);
+});
+
+test("backup saves a grounded filing fact on the claimed deal with its receipt", async (t) => {
+	const id = randomUUID();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		insert into deal (id, name, owner_user_id) select $1, 'Example backup deal', $2 from stamp`,
+		[id, owner],
+	);
+	const job = await queueMailJudgment(owner, id);
+	const destination = { kind: "deal", id };
+	const text = "The sender asked to meet.";
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply({ facts: [{ destination, text, quote: mailQuote }] }),
+	);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	assert.deepEqual(
+		(
+			await db.query(
+				`select n.summary, n.changed_by_job, a.deal_id, fact->>'quote' as quote
+		from save_receipt r cross join lateral jsonb_array_elements(r.answer->'facts') as fact
+		join activity n on n.id = (fact->>'activity_id')::uuid
+		join activity_about a on a.activity_id = n.id
+		where r.verb = 'file-email-facts' and r.answer->>'job_id' = $1
+			and r.answer->>'source_activity_id' = $2`,
+				[job.id, job.activity],
+			)
+		).rows,
+		[
+			{
+				summary: text,
+				changed_by_job: "mail_capture",
+				deal_id: id,
+				quote: mailQuote,
+			},
+		],
+	);
+});
+
+test("backup answers chat before a mail job even when the mail owner sorts first", async (t) => {
+	const [mailOwner, chatUser] =
+		owner < other ? [owner, "dell"] : [other, "joe"];
+	await queueMailJudgment(mailOwner);
+	const { conversation_id } = await askDoc(chatUser);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply(summaryAnswer),
+	);
+	fetch.mock.mockImplementationOnce(async () => reply());
+	await tick();
+	assert.equal(
+		(await chatTurn(conversation_id, chatUser))?.answered_by,
+		"backup",
+	);
+	assert.equal(fetch.mock.callCount(), 2);
+});
+
+test("backup requeues depleted mail work and leaves the next job for another tick", async (t) => {
+	const first = await queueMailJudgment(owner);
+	const second = await queueMailJudgment(other);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply(summaryAnswer),
+	);
+	fetch.mock.mockImplementationOnce(async () => creditsExhausted());
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+	const states = async () =>
+		(
+			await db.query<{ state: string }>(
+				"select state from doc_judgment_job where id = any($1::uuid[])",
+				[[first.id, second.id]],
+			)
+		).rows.map(({ state }) => state);
+	assert.deepEqual(await states(), ["queued", "queued"]);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 3);
+	assert.deepEqual(await states(), ["answered", "answered"]);
+});
+
+test("backup gives a ready Mac first chance and skips its active judgment claim", async (t) => {
+	const job = await queueMailJudgment();
+	const credential = await issue(owner);
+	assert.equal((await poll(credential)).status, 204);
+	const fetch = t.mock.method(globalThis, "fetch", async () =>
+		reply(summaryAnswer),
+	);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 0);
+	await db.query(
+		"update doc_judgment_job set created_at = now() - interval '2 minutes' where id = $1",
+		[job.id],
+	);
+	const claimed = await poll(credential, "ready", "judgment");
+	assert.equal(claimed.status, 200);
+	const { activity_id, claim_id } = await claimed.json<{
+		activity_id: string;
+		claim_id: string;
+	}>();
+	assert.equal(activity_id, job.activity);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 0);
+	assert.equal(
+		(
+			await complete(credential, {
+				claim_id,
+				kind: "judgment",
+				outcome: { kind: "answered", result: summaryAnswer },
+			})
+		).status,
+		204,
+	);
+	const next = await queueMailJudgment();
+	await db.query(
+		"update doc_judgment_job set created_at = now() - interval '2 minutes' where id = $1",
+		[next.id],
+	);
+	await tick();
+	assert.equal(fetch.mock.callCount(), 1);
+});
 
 test("backup answers an unready partner's turn using Doc's read tools", async (t) => {
 	const { conversation_id } = await askDoc();

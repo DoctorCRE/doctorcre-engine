@@ -1,4 +1,4 @@
-import { sql, type Transaction } from "kysely";
+import { type RawBuilder, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
 	filingDestination,
@@ -75,16 +75,17 @@ const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
 export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
-	runner: "mac" | "mac_with_judgment" | "backup",
+	runner: "mac" | "mac_with_judgment" | "backup" | "backup_mail",
 ) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
 	);
-	const eligible =
-		runner === "backup"
-			? sql`coalesce(requeued_at, created_at) <= statement_timestamp() - interval '2 minutes'
+	const eligible = (queuedAt: RawBuilder<unknown>) =>
+		runner === "backup" || runner === "backup_mail"
+			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
 				or (select status from ${docLinkState(owner)} link) <> 'ready'`
 			: sql`true`;
+	const claimsMail = runner === "backup_mail" || runner === "mac_with_judgment";
 	// Turns still run before the separate judgment storage migration.
 	const {
 		rows: [storage],
@@ -92,7 +93,7 @@ export async function claimDocWork(
 	const mailQueue = storage?.installed
 		? sql`
 		union all
-		select 'mail', id, created_at, claim_until, true from doc_judgment_job
+		select 'mail', id, created_at, claim_until, (${eligible(sql`created_at`)}) from doc_judgment_job
 		where owner_user_id = ${owner} and state in ('queued', 'working')
 	`
 		: sql``;
@@ -101,19 +102,22 @@ export async function claimDocWork(
 			rows: [candidate],
 		} = await sql<{ queue: "turn" | "mail"; id: string }>`
 			with pending as (
-				select 'turn' as queue, id, created_at, claim_until, (${eligible}) as eligible from doc_turn
+				select 'turn' as queue, id, created_at, claim_until,
+					(${eligible(sql`coalesce(requeued_at, created_at)`)}) as eligible from doc_turn
 				where owner_user_id = ${owner} and state in ('queued', 'working')
 				${mailQueue}
 			)
 			select queue, id from pending
-			where eligible and (queue = 'turn' or ${runner === "mac_with_judgment"})
+			where eligible and (queue = 'turn' or ${claimsMail})
 			  and not exists (select 1 from pending where claim_until > statement_timestamp())
 			order by queue <> 'turn', created_at, id
 			limit 1
 		`.execute(tx);
 		if (!candidate) return null;
 		if (candidate.queue === "turn")
-			return claimDocTurn(tx, owner, candidate.id);
+			return runner === "backup_mail"
+				? null
+				: claimDocTurn(tx, owner, candidate.id);
 
 		const {
 			rows: [job],
@@ -208,7 +212,15 @@ export async function finishDocJudgment(
 	payload: unknown,
 ) {
 	const { data: outcome } = judgmentOutcome.safeParse(payload);
-	if (!outcome) return 400;
+	return outcome ? saveDocJudgment(tx, owner, claim_id, outcome) : 400;
+}
+
+export async function saveDocJudgment(
+	tx: Transaction<DB>,
+	owner: string,
+	claim_id: string,
+	outcome: z.infer<typeof judgmentOutcome> | { kind: "queued" },
+) {
 	const {
 		rows: [storage],
 	} = await judgmentStorage.execute(tx);
@@ -244,10 +256,11 @@ export async function finishDocJudgment(
 
 	const { kind } = outcome;
 	const blocked = kind === "signed_out" || kind === "plan_limited";
+	const state = blocked ? "queued" : kind;
 	const saved = await tx
 		.updateTable("doc_judgment_job")
 		.set({
-			state: blocked ? "queued" : kind,
+			state,
 			...clearJudgmentClaim,
 			result,
 		})
@@ -260,7 +273,7 @@ export async function finishDocJudgment(
 		)`)
 		.executeTakeFirst();
 	if (!saved.numUpdatedRows) return 404;
-	if (job.kind === "email_filing" && !blocked)
+	if (job.kind === "email_filing" && state !== "queued")
 		await saveFilingJudgment(
 			tx,
 			job,

@@ -5,13 +5,11 @@ import { homedir, userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import { docPrompt } from "../src/doc-prompt.ts";
 import {
 	judgmentClaimSchema,
-	judgmentCompletion,
 	judgmentTask,
-	type LinkOutcome,
-} from "./doc-link-judgment.ts";
+} from "../src/doc-judgment-prompt.ts";
+import { docPrompt } from "../src/doc-prompt.ts";
 
 export const docLinkConfigSchema = z.strictObject({
 	engine: z.url().refine((value) => {
@@ -42,6 +40,10 @@ const claimSchema = z.discriminatedUnion("kind", [
 type TurnClaim = z.infer<typeof turnClaimSchema>;
 
 type Readiness = "ready" | "signed_out" | "plan_limited";
+type LinkOutcome =
+	| { kind: "answered"; answer: Record<string, unknown> }
+	| { kind: "failed" | "signed_out" }
+	| { kind: "plan_limited"; resetsAt: number | undefined };
 
 const sessionSettings = JSON.stringify({
 	disableAllHooks: true,
@@ -370,7 +372,14 @@ export async function runDocLink(
 			const { kind } = outcome;
 			const completion =
 				claim.kind !== "turn"
-					? judgmentCompletion(claim_id, outcome)
+					? {
+							claim_id,
+							kind: "judgment",
+							outcome:
+								kind === "answered"
+									? { kind, result: outcome.answer }
+									: { kind },
+						}
 					: kind === "answered"
 						? { claim_id, kind, answer: outcome.answer }
 						: { claim_id, kind };
