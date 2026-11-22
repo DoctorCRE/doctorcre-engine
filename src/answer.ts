@@ -316,6 +316,7 @@ type Verb =
 	| "list-practice-origination"
 	| "quiet-follow-ups"
 	| "read-activity-deal-attribution"
+	| "read-call-outcomes"
 	| "read-changes"
 	| "read-client-leases"
 	| "read-deal-tour"

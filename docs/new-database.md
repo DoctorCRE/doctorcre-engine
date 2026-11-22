@@ -1531,6 +1531,16 @@ Each `participants` entry is `{ party_id, ref, name, email, role }` from a curre
 
 `GET /jobs/call-context` gives Studio the same response and deal ID validation. Use the existing Jobs Access token, `Engine-Job: call_capture` for the registered job, and `Engine-For-User` with a provisioned partner's slug. Pass the exact deal UUIDs as repeated `deal_id` fields. Omitting the IDs returns `400 invalid_field_value`. Use `party_id` to identify a participant and `ref` for display.
 
+### Deal call outcomes
+
+`GET /api/engine/deals/{deal_id}/call-outcomes` requires a PartnerApp session. It takes the deal UUID in the path. An unknown or malformed deal ID returns `404 not_found`.
+
+The response is `{ deal_id, deal_name, calls }`. It lists up to 50 visible calls linked to the deal, newest first with activity ID breaking ties. A call has `activity_id`, `started_at` (an instant), `call_date` (Central time), and `proposals`. Calls recorded for the signed-in partner can have an empty proposal list. An unattributed call from the old system appears only when the deal has a proposal from that call that the signed-in partner can see.
+
+A proposal has `proposal_id`, `kind`, `status`, `evidence`, and the fields the card can display, `what`, `owner` (the user's slug), `due_on`, `from_phase`, `to_phase`, `phase_on`, and `next_step_id`. Fields that do not apply are null. The response includes visible proposals in their stored state, including accepted and dismissed proposals, ordered by creation time and proposal ID. A proposal for another deal stays off this deal's cards, even when the same call discussed both deals.
+
+The app confirms or dismisses a pending suggestion through [the same proposal decision as Home](#21-suggestions-stored-and-decided). It uses the returned `proposal_id` and sends `decision: "accept"` or `decision: "dismiss"` with a UUID `idempotency_key`. A transport retry with the same key replays the receipt. A phase acceptance after the deal has moved from the proposed starting phase returns `409 version_conflict`. Refresh the call outcomes after a decision.
+
 ### Set up a client website
 
 `POST /api/engine/deals/{deal_id}/client-website` is a signed-in partner save. It takes `idempotency_key`, `slug` (1 to 63 lowercase letters, digits and hyphens, starting with a letter or digit), and `password` (1 to 1,024 characters). It returns `200 { ok, deal_id, client_portal_url, created }`. A repeat with the same name and password and a fresh key returns `created: false`. A transport retry with the same key returns the original answer and `replayed: true`. The receipt fingerprint uses the deal and name, omitting the password as the old save did.

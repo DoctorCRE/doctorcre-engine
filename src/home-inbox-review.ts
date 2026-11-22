@@ -146,7 +146,7 @@ function draftRows(
 	`;
 }
 
-const visibleSuggestion = (userId: string) => sql<boolean>`
+export const visibleSuggestion = (userId: string) => sql<boolean>`
 	case
 		when p.kind = 'file_to_deal' and p.status = 'pending'
 			and not (${filingReviewNeeded(sql.ref("p.activity_id"), sql.ref("p.deal_id"))}) then false
