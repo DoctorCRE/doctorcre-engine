@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { visibleCall } from "./activity/call-visibility.ts";
 import { answerNextRead, checkFields, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import {
@@ -46,6 +47,7 @@ interface Step extends HomeStep, HomeStepTarget {
 	step_version: string;
 	undo_completion: boolean;
 	mark_version: string | null;
+	call_follow_up: boolean;
 	call_id: string | null;
 	call_summary: string | null;
 	call_quote: string | null;
@@ -77,18 +79,21 @@ function stepRows(
 					select from proposal p where p.next_step_id = s.id and p.kind = 'next_step_done'
 						and p.status = 'accepted' and p.decided_at = s.done_at
 				), false) as undo_completion,
-			c.id as call_id, c.happened_at as call_at, contact.name as call_contact,
-			c.summary as call_summary, s.call_evidence_quote as call_quote,
+			s.call_activity_id is not null as call_follow_up, c.id as call_id, c.happened_at as call_at, contact.name as call_contact,
+			c.summary as call_summary, case when c.id is not null then s.call_evidence_quote end as call_quote,
 			accepted.activity_id as source_id, accepted.activity_kind as source_kind,
 			accepted.evidence as source_evidence
 		from next_step s
 		left join deal d on d.id = s.deal_id
 		left join party p on p.id = s.party_id
 		left join property on property.id = s.property_id
-		left join activity c on c.id = s.call_activity_id
-		left join party contact on contact.id = coalesce(s.call_contact_party_id, c.from_party_id)
+		left join activity c on c.id = s.call_activity_id and ${visibleCall(userId, "c")}
+		left join party contact on c.id is not null and contact.id = coalesce(s.call_contact_party_id, c.from_party_id)
 		left join proposal accepted on accepted.id = s.id and accepted.kind = 'next_step'
 			and accepted.status = 'accepted'
+			and (accepted.activity_kind <> 'call' or exists (
+				select from activity a where a.id = accepted.activity_id and ${visibleCall(userId)}
+			))
 		left join lateral (
 			select changed_by_user_id from change
 			where table_name = 'next_step' and record = jsonb_build_object('id', s.id) and action = 'insert'
@@ -97,7 +102,7 @@ function stepRows(
 		left join party setter on setter.id = origin.changed_by_user_id
 		left join home_mark m on m.user_id = ${userId}::uuid
 			and m.item_id = s.id
-			and m.item_kind = case when c.id is null then 'next_step' else 'call_follow_up' end
+			and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
 		left join lateral (
 			select id, changed_by_user_id, old_value, new_value from change
 			where table_name = 'next_step' and record = jsonb_build_object('id', s.id)
@@ -107,7 +112,7 @@ function stepRows(
 			select max(id) as id
 			from change where table_name = 'home_mark'
 				and record = jsonb_build_object('user_id', s.owner_party_id, 'item_id', s.id,
-					'item_kind', case when c.id is null then 'next_step' else 'call_follow_up' end)
+					'item_kind', case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end)
 		) mark_change on true
 		where s.owner_party_id = ${userId}::uuid
 			and m.disposition is distinct from 'dropped'
@@ -137,7 +142,9 @@ function stepCard(step: Step) {
 		: disposition === "inbox" && hold_until
 			? "held"
 			: disposition;
-	const source_type = step.call_id ? "capture_post_call_action" : "next_action";
+	const source_type = step.call_follow_up
+		? "capture_post_call_action"
+		: "next_action";
 	const source_version = step.step_version;
 	const open_url = stepOpenUrl(step);
 
@@ -160,7 +167,7 @@ function stepCard(step: Step) {
 		unseen: false,
 		context_label: step.context_label,
 		open_url,
-		kind_label: step.call_id ? "Call follow-up" : "Task",
+		kind_label: step.call_follow_up ? "Call follow-up" : "Task",
 		action_id: step.id,
 		action_version: Number(step.step_version),
 		undo_completion: step.undo_completion,
@@ -263,6 +270,7 @@ async function readHomeInbox(
 		: rows;
 	const reviews = await readCompletionReviews(
 		db,
+		userId,
 		eligibleSteps
 			.filter((step) => step.status === "open")
 			.map((step) => step.id),

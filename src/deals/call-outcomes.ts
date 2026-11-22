@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
+import { visibleCall } from "../activity/call-visibility.ts";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
@@ -8,7 +9,6 @@ import { isUuid } from "../uuid.ts";
 import {
 	openCopiedCallStepText,
 	stepTextKey,
-	visibleCall,
 	visibleCallProposal,
 } from "./call-review.ts";
 

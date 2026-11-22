@@ -104,7 +104,7 @@ export async function insertSignInFixture(
 		note_ids,
 		notes,
 		next_step_id: step.id,
-		home_item_id: stepItemId({ id: step.id, call_id: null }),
+		home_item_id: stepItemId({ id: step.id, call_follow_up: false }),
 		tour_id,
 		property_id,
 	};

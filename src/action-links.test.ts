@@ -208,9 +208,10 @@ test("a lead draft link opens the shared lead using the board's legacy ID", asyn
 test("a native call link is unavailable even when its deal and suggestion are visible", async () => {
 	const home = await request(`home/cards/suggestion:${proposal}`);
 	assert.equal(home.status, 200);
-	const { source_activity } = await json(home);
-	assert.ok(isArguments(source_activity));
-	assert.equal(source_activity.id, nativeCall);
+	assert.partialDeepStrictEqual(await json(home), {
+		proposal_id: proposal,
+		source_activity: null,
+	});
 	assert.equal((await request(`deals/${deal}`)).status, 200);
 	assert.deepEqual(
 		await unavailable(callRef(nativeCall)),

@@ -1,8 +1,8 @@
 import { sql, type Transaction } from "kysely";
 import { hasToolCallMarkup, isoMillis } from "../answer.ts";
-import { visibleCall } from "../deals/call-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { matchingContacts, matchingDealSubjects } from "../search/next-find.ts";
+import { visibleCall } from "./call-visibility.ts";
 
 async function activityCandidates(
 	db: Transaction<DB>,
