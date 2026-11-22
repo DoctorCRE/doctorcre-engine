@@ -37,7 +37,7 @@ after(async () => {
 	await cleanup();
 });
 
-async function payments() {
+async function payments({ unstamped = false } = {}) {
 	const [deal, dated, undated] = [randomUUID(), randomUUID(), randomUUID()];
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
@@ -45,16 +45,16 @@ async function payments() {
 		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${client}', 'client');
 		insert into deal_phase_change (deal_id, phase, happened_at) values ('${deal}', 'closed', '2020-03-31');
 		insert into commission (deal_id, gross) values ('${deal}', 150);
+		${unstamped ? "alter table commission_payment disable trigger record_change;" : ""}
 		insert into commission_payment (id, deal_id, amount, invoiced_on, due_on) values
 			('${dated}', '${deal}', 100, '${invoicedOn}', '2020-05-01'),
 			('${undated}', '${deal}', 50, null, null);
+		${unstamped ? "set constraints all immediate; alter table commission_payment enable trigger record_change;" : ""}
 		commit;`);
 	return { deal, dated, undated };
 }
 
-async function trackerRow(
-	id: string,
-): Promise<JsonObject & { base_version: number }> {
+async function readTrackerRow(id: string) {
 	const response = await request(
 		user,
 		"invoices",
@@ -68,7 +68,14 @@ async function trackerRow(
 		.filter(isArguments)
 		.find((entry) => entry.commission_id === id);
 	assert.ok(row);
-	const { as_of: _today, base_version, ...entry } = row;
+	const { as_of: _today, ...entry } = row;
+	return entry;
+}
+
+async function trackerRow(
+	id: string,
+): Promise<JsonObject & { base_version: number }> {
+	const { base_version, ...entry } = await readTrackerRow(id);
 	assert.ok(isChangeId(base_version) && base_version > 0);
 	return { ...entry, base_version };
 }
@@ -229,53 +236,131 @@ test("Mark paid refuses stale, ineligible and bad-dated payments", async () => {
 	assert.deepEqual(await trackerRow(undated), other);
 });
 
-test("only one Mark paid save can use a payment version", {
-	timeout: 10000,
-}, async (t) => {
-	const { dated } = await payments();
-	const { base_version } = await trackerRow(dated);
-	await db.query("begin");
-	await db.query("select id from commission_payment where id = $1 for update", [
-		dated,
-	]);
-	const markPaid = (received_on: string) =>
-		save(user, path, {
-			commission_id: dated,
-			base_version,
-			received_on,
-			idempotency_key: randomUUID(),
-		});
-	const pending = Promise.all([markPaid(receivedOn), markPaid("2020-04-03")]);
-	try {
-		// Hold both saves at the payment until each has reached the database lock.
-		let waiting = 0;
-		while (waiting < 2) {
-			t.signal.throwIfAborted();
-			await db.query("select pg_stat_clear_snapshot()");
-			const { rows } = await db.query<{
-				waiting: number;
-			}>(`select count(*)::int as waiting
-				from pg_stat_activity where datname = current_database()
-				and wait_event_type = 'Lock' and usename like 'door_%'`);
-			waiting = rows[0]?.waiting ?? 0;
-		}
-	} finally {
-		await db.query("rollback");
-		await pending;
-	}
-	const answers = await pending;
-	answers.sort(([first], [second]) => first - second);
-	assert.deepEqual(
-		answers.map(([status]) => status),
-		[200, 409],
-	);
-	const [[, saved], [, refusal]] = answers;
-	assert.partialDeepStrictEqual(refusal, {
-		error: "version_conflict",
-		current_version: saved.base_version,
+test("Mark paid saves an invoice whose tracker row has no change ID", async () => {
+	const { dated } = await payments({ unstamped: true });
+	const { base_version } = await readTrackerRow(dated);
+	assert.equal(base_version, null);
+	const args = {
+		commission_id: dated,
+		base_version,
+		received_on: receivedOn,
+		idempotency_key: randomUUID(),
+	};
+	const [status, saved] = await save(user, path, args);
+	assert.equal(status, 200, JSON.stringify(saved));
+	assert.partialDeepStrictEqual(saved, {
+		ok: true,
+		id: dated,
+		received_on: receivedOn,
 	});
 	assert.partialDeepStrictEqual(await trackerRow(dated), {
+		status: "received",
+		received_on: receivedOn,
 		base_version: saved.base_version,
-		received_on: saved.received_on,
+	});
+	const [retryStatus, retry] = await save(user, path, args);
+	assert.equal(retryStatus, 200);
+	assert.deepEqual(retry, { ...saved, replayed: true });
+});
+
+test("Mark paid refuses a null version when the unpaid invoice has a recorded change", async () => {
+	const { dated } = await payments();
+	const before = await trackerRow(dated);
+	const [status, refusal] = await save(user, path, {
+		commission_id: dated,
+		base_version: null,
+		received_on: receivedOn,
+		idempotency_key: randomUUID(),
+	});
+	assert.equal(status, 409, JSON.stringify(refusal));
+	assert.partialDeepStrictEqual(refusal, {
+		error: "version_conflict",
+		current_version: before.base_version,
+	});
+	assert.deepEqual(await trackerRow(dated), before);
+});
+
+test("Mark paid requires a valid base version even when no change is recorded", async () => {
+	const { dated } = await payments({ unstamped: true });
+	const args = { commission_id: dated, received_on: receivedOn };
+	for (const [version, error] of [
+		[{ base_version: 1.5 }, "invalid_field_value"],
+		[{ base_version: -1 }, "invalid_field_value"],
+		[{}, "missing_required"],
+	] as const) {
+		const [status, refusal] = await save(user, path, {
+			...args,
+			...version,
+			idempotency_key: randomUUID(),
+		});
+		assert.equal(status, 400);
+		assert.partialDeepStrictEqual(refusal, { error, fields: ["base_version"] });
+	}
+	assert.partialDeepStrictEqual(await readTrackerRow(dated), {
+		status: "invoiced",
+		base_version: null,
 	});
 });
+
+for (const unstamped of [false, true]) {
+	test(`only one Mark paid save can use ${unstamped ? "a null" : "the same"} payment version`, {
+		timeout: 10000,
+	}, async (t) => {
+		const { dated } = await payments({ unstamped });
+		const { base_version } = unstamped
+			? await readTrackerRow(dated)
+			: await trackerRow(dated);
+		if (unstamped) assert.equal(base_version, null);
+		await db.query("begin");
+		await db.query(
+			"select id from commission_payment where id = $1 for update",
+			[dated],
+		);
+		const markPaid = (received_on: string) =>
+			save(user, path, {
+				commission_id: dated,
+				base_version,
+				received_on,
+				idempotency_key: randomUUID(),
+			});
+		let finished = false;
+		const pending = Promise.all([
+			markPaid(receivedOn),
+			markPaid("2020-04-03"),
+		]).finally(() => {
+			finished = true;
+		});
+		try {
+			// Hold both saves at the payment until each has reached the database lock.
+			let waiting = 0;
+			while (waiting < 2 && !finished) {
+				t.signal.throwIfAborted();
+				await db.query("select pg_stat_clear_snapshot()");
+				const { rows } = await db.query<{
+					waiting: number;
+				}>(`select count(*)::int as waiting
+				from pg_stat_activity where datname = current_database()
+				and wait_event_type = 'Lock' and usename like 'door_%'`);
+				waiting = rows[0]?.waiting ?? 0;
+			}
+		} finally {
+			await db.query("rollback");
+			await pending;
+		}
+		const answers = await pending;
+		answers.sort(([first], [second]) => first - second);
+		assert.deepEqual(
+			answers.map(([status]) => status),
+			[200, 409],
+		);
+		const [[, saved], [, refusal]] = answers;
+		assert.partialDeepStrictEqual(refusal, {
+			error: "version_conflict",
+			current_version: saved.base_version,
+		});
+		assert.partialDeepStrictEqual(await trackerRow(dated), {
+			base_version: saved.base_version,
+			received_on: saved.received_on,
+		});
+	});
+}
