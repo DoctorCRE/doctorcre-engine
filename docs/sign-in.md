@@ -49,6 +49,17 @@ Use the existing `x-carr-csrf` header name during the move. Every partner write,
 
 The Studio and assistant keep their [jobs door](new-database.md#what-every-door-shares) with its existing Access service token and audience. The audience and credentials for intake and comparison stay separate as today.
 
+## Rehearsal records on staging
+
+Apply [the rehearsal setup](../schema/staging-sign-in-fixtures.sql) to the staging Neon branch as the migration owner. Apply it again after refreshing the branch. The Worker serves the rehearsal job only when `ENGINE_ENVIRONMENT` is `staging`.
+
+Both requests use the jobs Access credentials and `Engine-Job: sign-in-rehearsal`. Send JSON with one field, `run_id`, a caller-generated UUID. For prepare, add `Engine-For-User` with the staging partner slug that will own the deal and see its overdue Home reminder.
+
+- `POST /jobs/sign-in-rehearsal/prepare` returns 201 with `run_id`, `client_id`, `deal_id`, `deal_name`, `home_item_id`, `next_step_id`, `tour_id`, `property_id`, `phase_changed_at`, and parallel arrays `note_ids` and `notes` in oldest-first order. `home_item_id` is `next_action:<next_step_id>`. Repeating prepare with the same run and partner returns the same IDs and adds `replayed: true`. A cleaned run returns 409 `key_reuse`.
+- `POST /jobs/sign-in-rehearsal/cleanup` returns 200 with `run_id` and `remaining: 0` after the transaction commits. The run closes permanently, including when cleanup arrives before prepare. A repeated cleanup returns the same answer. Run cleanup even if prepare timed out.
+
+Only the rehearsal function writes fixture receipts. The prepared receipt holds the exact insert audit IDs from its transaction. Cleanup checks for replaced records, removes the run's rows, and retains the cleaned receipt. An unexpected dependency causes the cleanup to roll back. The database keeps its ordinary audit history.
+
 ## Switch after hours with advance notice
 
 1. Deploy the engine, app and old-session rollback changes ahead of the switch. Keep the app's `PARTNER_SIGN_IN` release setting on `carr`. In staging, run both modes against a production-shaped copy with fixture identities and do a real Google round trip with approved test accounts. Test browser and installed-app contexts, sign in as both partners, reopen each from a saved link, and check that the displayed identity and saved attribution agree. Rehearse rollback and switch again.

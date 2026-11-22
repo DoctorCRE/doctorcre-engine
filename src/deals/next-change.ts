@@ -286,7 +286,7 @@ async function carryReview(
 	);
 }
 
-async function addDeal(
+export async function addDeal(
 	tx: Transaction<DB>,
 	{
 		client_id,
