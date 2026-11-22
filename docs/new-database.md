@@ -599,6 +599,8 @@ The `next` schema has the tables for the [deal page tour planner](screens/deals.
 - Completion saves the meeting, its links, and the plan's completion link together. At commit, the database requires the meeting to be filed to the plan's deal. The meeting uses the confirmed local visit date and time. Add one `activity_about` row for the deal and each distinct confirmed visited property, including off-plan visits, plus known parties the visit concerns. The original plan and its stop order stay on record. A retry or a second partner's completion returns the same meeting.
 - The client stop list preview and copied text read the saved date and stops in order, using the current names and addresses on `property`. Internal notes stay on the plan. The partner sends the copied list from Outlook. The engine stores no separate document or tour share record.
 
+`GET /api/engine/properties/search?query=` returns `{ properties: [{ id, name, address }] }` for a single nonblank query of at most 100 characters. It finds up to 25 literal, case-insensitive matches inside property names or addresses, sorted by name or address, then ID.
+
 ### Old planner capabilities outside this design
 
 The old planner at `carr-system` commit `7a8ca32` has the following capabilities outside the deal-page planner.
