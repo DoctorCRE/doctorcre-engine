@@ -765,6 +765,11 @@ test("a notice files the named prospect and the exact source once for both mailb
 	const first = await intake(request);
 	assert.equal(first.status, 201);
 	assert.equal((await intake(request)).body.replayed, true);
+	assert.deepEqual(await savedEmailText(first.body.activity_id), {
+		body: request.email.body,
+		authored: null,
+		history: null,
+	});
 	const second = await intake(
 		{ ...request, idempotency_key: randomUUID() },
 		"dell",
@@ -1351,6 +1356,50 @@ async function savedEmailText(activityId: unknown) {
 	]);
 	assert.equal(rows.length, 1);
 	return rows[0];
+}
+
+for (const [form, history] of [
+	["with quoted history", splitText.history],
+	["without quoted history", ""],
+] as const) {
+	test(`lead intake stores the sender's words ${form} beside the original body`, async () => {
+		const source = notice(
+			history ? "lead-with-history" : "lead-without-history",
+		);
+		const authored = `${source.email.body}\n\nFriday works for me.`;
+		const body = history ? `${authored}\n\n${history}` : authored;
+		const request = {
+			...source,
+			email: { ...source.email, body, authored, history },
+		};
+		const first = await intake(request);
+		assert.equal(first.status, 201);
+		const replay = await intake(request);
+		assert.equal(replay.body.replayed, true);
+		assert.equal(replay.body.activity_id, first.body.activity_id);
+		assert.equal(replay.body.party_id, first.body.party_id);
+		const retry = await intake({ ...request, idempotency_key: randomUUID() });
+		assert.equal(retry.status, 200);
+		assert.equal(retry.body.activity_id, first.body.activity_id);
+		assert.equal(retry.body.party_id, first.body.party_id);
+		assert.deepEqual(await savedEmailText(first.body.activity_id), {
+			body,
+			authored,
+			history,
+		});
+		await assertRows(
+			1,
+			`select from lead_email_source s join email e using (activity_id)
+			where e.message_id = $1`,
+			request.email.message_id,
+		);
+		await assertRows(
+			1,
+			`select from party_role r join party_email e using (party_id)
+			where r.role = 'lead' and e.address = $1`,
+			request.prospect.email,
+		);
+	});
 }
 
 test("email split: a legacy request saves the unsplit body with no pair", async () => {

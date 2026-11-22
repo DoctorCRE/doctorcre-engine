@@ -96,8 +96,7 @@ function recipient(value: JsonValue): Email["recipients"][number] | undefined {
 		: undefined;
 }
 
-export function parseEmail(value: unknown): Email | undefined {
-	if (!isArguments(value)) return undefined;
+function parseEmail(value: JsonObject): Email | undefined {
 	const {
 		message_id,
 		conversation_id = null,
@@ -132,7 +131,7 @@ export function parseEmail(value: unknown): Email | undefined {
 		: undefined;
 }
 
-function parseCapturedEmail(value: unknown): CapturedEmail | undefined {
+export function parseCapturedEmail(value: unknown): CapturedEmail | undefined {
 	if (!isArguments(value)) return undefined;
 	const { authored, history, ...fields } = value;
 	const email = parseEmail(fields);

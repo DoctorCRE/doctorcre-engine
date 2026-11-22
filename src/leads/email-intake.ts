@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { lockEmail, parseEmail, recordEmail } from "../activity/next-record.ts";
+import {
+	lockEmail,
+	parseCapturedEmail,
+	recordEmail,
+} from "../activity/next-record.ts";
 import { Refusal, refuse } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
 import { nextTransaction } from "../next-connection.ts";
@@ -56,7 +60,7 @@ function parseIntake(body: JsonObject) {
 		"kind",
 	]);
 	if (request instanceof Refusal) return request;
-	const email = parseEmail(request.email);
+	const email = parseCapturedEmail(request.email);
 	return email &&
 		isStoredText(email.message_id) &&
 		email.message_id === email.message_id.trim() &&
