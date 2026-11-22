@@ -386,8 +386,12 @@ test("an unsummarized filing uses the sender address in the Home and deal titles
 });
 
 test("deal detail looks up email summaries by source instead of scanning the mailbox", async () => {
+	// The extra messages only provide cardinality for the summary lookup.
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
+		alter table activity disable trigger record_change;
+		alter table email disable trigger record_change;
+		alter table activity_about disable trigger record_change;
 		with inserted as (
 			insert into activity (id, kind, happened_at)
 			select gen_random_uuid(), 'email', '2026-01-01' from generate_series(1, 15000)
@@ -409,6 +413,10 @@ test("deal detail looks up email summaries by source instead of scanning the mai
 		insert into proposal (kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what)
 			select 'next_step', activity_id, 'email', 'An unrelated message.', 'old_system', '${id(800)}', 'Check the plan'
 			from email_summary where source_hash = 'sha256:' || repeat('c', 64) order by activity_id limit 2;
+		set constraints all immediate;
+		alter table activity enable trigger record_change;
+		alter table email enable trigger record_change;
+		alter table activity_about enable trigger record_change;
 		analyze email_summary;
 		commit;`);
 	const { rows } = await nextTransaction(readerUrl, "read", (tx) => {
