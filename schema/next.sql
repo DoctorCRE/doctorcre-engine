@@ -647,6 +647,7 @@ begin
 	update weekly_review set deal_id = new_deal_id, party_id = null
 	where week_of = monday and party_id = prospect_id;
 end $$;
+revoke execute on function carry_weekly_review(uuid, uuid) from public;
 
 do $$ begin
 	execute format('alter function carry_weekly_review set search_path = %I, pg_temp', current_schema());
@@ -3475,6 +3476,7 @@ begin
 	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
+revoke execute on function merge_party(uuid, uuid) from public;
 
 -- Pinned, with pg_temp last, so a caller's own tables cannot stand in for these.
 do $$ begin
@@ -3532,6 +3534,8 @@ begin
 	));
 	return null;
 end $$;
+-- Only the owner can attach this trigger to a table.
+revoke execute on function record_change() from public;
 
 -- Each of these rows says which user or job last changed it and when, set by the database, never by the statement.
 -- The check holds the owner's load of old rows too, which turns the trigger off.
@@ -4072,11 +4076,7 @@ revoke insert on deal_open_name from engine;
 revoke insert on change, imported_change, imported_deal_history from engine;
 -- Only the owner's copy adds the old system's earlier people, owners and board facts.
 revoke insert on imported_automatic_phase_move, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board from engine;
--- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
-revoke execute on function record_change from public;
-revoke execute on function merge_party from public;
 grant execute on function merge_party to engine;
-revoke execute on function carry_weekly_review from public;
 grant execute on function carry_weekly_review to engine;
 grant execute on function lock_weekly_review(date, uuid, uuid) to engine;
 grant execute on function npi_check_digit_holds(text), is_time_zone(text) to engine;
