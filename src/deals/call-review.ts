@@ -4,6 +4,8 @@ import { visibleSuggestion } from "../home-inbox-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { ACTING_USER } from "../next-save.ts";
 
+export { visibleCall };
+
 export const visibleCallProposal = (userId: string | Expression<string>) =>
 	sql<boolean>`(${visibleCall(userId)}
 		and (not (${sharedCopiedCall}) or p.proposed_by_job = 'old_system')

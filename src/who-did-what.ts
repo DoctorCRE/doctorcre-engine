@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { visibleCallStep } from "./activity/call-visibility.ts";
 import { answerNextRead, Refusal } from "./answer.ts";
 import { dealStepUrl } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
@@ -178,6 +179,7 @@ async function readNative(db: Transaction<DB>, before: number) {
 			-- A copy's own history records copying, not anyone's work.
 			and c.changed_by_job is distinct from 'old_system'
 			and coalesce(d.id, sd.id, sp.id) is not null
+			and (c.table_name <> 'next_step' or ${visibleCallStep})
 			and (c.table_name = 'deal_phase_change' and c.action = 'insert'
 				or c.table_name = 'deal' and (c.action = 'insert' or c.new_value ?| ${readable(dealEdits)}::text[])
 				or c.table_name = 'next_step' and (c.action = 'insert' or c.new_value ?| ${readable(stepEdits)}::text[]))

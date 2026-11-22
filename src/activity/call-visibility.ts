@@ -9,3 +9,8 @@ export const visibleCall = (
 		${userId}::uuid)`;
 
 export const sharedCopiedCall = visibleCall(null);
+
+const viewer = sql<string>`nullif(current_setting('engine.user_id', true), '')::uuid`;
+
+export const visibleCallStep = sql<boolean>`(s.call_activity_id is null or s.owner_party_id = ${viewer}
+	or exists (select from activity a where a.id = s.call_activity_id and ${visibleCall(viewer)}))`;

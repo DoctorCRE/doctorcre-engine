@@ -37,3 +37,23 @@ export async function nextTransaction<T>(
 		await db.destroy();
 	}
 }
+
+export function setNextReadViewer(tx: Transaction<DB>, id: string) {
+	return sql`select set_config('engine.user_id', ${id}, true)`.execute(tx);
+}
+
+export function nextPartnerRead<T>(
+	connectionString: string,
+	slug: string,
+	run: (db: Transaction<DB>, userId: string | undefined) => Promise<T>,
+): Promise<T> {
+	return nextTransaction(connectionString, "read", async (tx) => {
+		const user = await tx
+			.selectFrom("app_user")
+			.select("id")
+			.where("slug", "=", slug)
+			.executeTakeFirst();
+		await setNextReadViewer(tx, user?.id ?? "");
+		return run(tx, user?.id);
+	});
+}

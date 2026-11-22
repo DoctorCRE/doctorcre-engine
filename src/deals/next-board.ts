@@ -1,5 +1,6 @@
 import { type Expression, sql, type Transaction } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
+import { visibleCallStep } from "../activity/call-visibility.ts";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
@@ -252,15 +253,14 @@ export const selectNextDeals = (
 				where ab.deal_id = d.id and (a.kind in ('email', 'meeting') or a.kind = 'call' and a.reached))`.as(
 				"last_touch",
 			),
-			sql<string | null>`(select what from next_step
-				where deal_id = d.id and status = 'open' and item_title is null
+			sql<string | null>`(select s.what from next_step s
+				where s.deal_id = d.id and s.status = 'open' and s.item_title is null and ${visibleCallStep}
 				order by created_at desc, id desc limit 1)`.as("next_step"),
 			sql`(select coalesce(jsonb_agg(jsonb_build_object('id', s.id, 'title', s.item_title,
 				'status', s.status, 'due_on', s.due_on, 'bullets', s.item_bullets, 'source_ref', s.source_ref)
 				order by s.created_at, s.id), '[]') from next_step s
-				where s.deal_id = d.id and s.item_title is not null and s.status not in ('cancelled', 'expired'))`.as(
-				"items",
-			),
+				where s.deal_id = d.id and s.item_title is not null and s.status not in ('cancelled', 'expired')
+				and ${visibleCallStep})`.as("items"),
 			sql`(select coalesce(jsonb_object_agg(phase, started_on), '{}') from (
 				select phase, min((happened_at at time zone 'America/Chicago')::date) as started_on
 				from deal_phase_change where deal_id = d.id group by phase
@@ -370,7 +370,7 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			sql`(select coalesce(json_agg(action order by due_on nulls last, id), '[]') from (
 				select s.id, u.slug as owner, s.due_on, 'next_action:' || s.id as item_id, s.what as description
 				from next_step s left join app_user u on u.id = s.owner_party_id
-				where s.deal_id = board.id and s.status = 'open' and s.item_title is null
+				where s.deal_id = board.id and s.status = 'open' and s.item_title is null and ${visibleCallStep}
 				order by s.due_on nulls last, s.id limit 3
 			) action)`.as("open_actions"),
 			// Deal notes have their own section and did not feed the old card summary.
@@ -380,7 +380,8 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 				where ab.deal_id = board.id and a.kind <> 'note'
 				union all
 				select id, 'completed_action', what, done_at
-				from next_step where deal_id = board.id and status = 'done' and done_at is not null
+				from next_step s where s.deal_id = board.id and s.status = 'done' and s.done_at is not null
+				and ${visibleCallStep}
 				order by occurred_at desc, id desc limit 1
 			) latest)`.as("last_step"),
 		])

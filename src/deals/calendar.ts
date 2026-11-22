@@ -1,4 +1,5 @@
 import { sql, type Transaction } from "kysely";
+import { visibleCallStep } from "../activity/call-visibility.ts";
 import { Refusal } from "../answer.ts";
 import {
 	datedPartnerSteps,
@@ -117,6 +118,7 @@ async function readCalendarSteps(db: Transaction<DB>, now: string) {
 			greatest(s.due_on, ${today})::text as display_on,
 			greatest(${today} - s.due_on, 0) as days_late
 		${datedPartnerSteps(at)}
+			and ${visibleCallStep}
 		order by s.due_on, s.id
 	`.execute(db);
 	return rows.filter(homeStepShown).map((step) => {

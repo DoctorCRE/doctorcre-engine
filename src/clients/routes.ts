@@ -1,5 +1,5 @@
 import { type Context, Hono } from "hono";
-import { nextTransaction } from "../next-connection.ts";
+import { nextPartnerRead } from "../next-connection.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import {
@@ -190,7 +190,7 @@ async function answer(
 		return c.json(
 			typeof read === "function"
 				? await readSnapshot(database.connectionString, (db) => read(db, stamp))
-				: await nextTransaction(database.connectionString, "read", (db) =>
+				: await nextPartnerRead(database.connectionString, viewer, (db) =>
 						read.next(db, stamp),
 					),
 		);

@@ -1,7 +1,9 @@
 import { sql, type Transaction } from "kysely";
 import { hasToolCallMarkup, isoMillis } from "../answer.ts";
+import { visibleCall } from "../deals/call-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { matchingContacts, matchingDealSubjects } from "../search/next-find.ts";
+import { visibleCallStep } from "./call-visibility.ts";
 
 async function activityCandidates(
 	db: Transaction<DB>,
@@ -86,12 +88,12 @@ export async function readNextRecentActivity(
 					having count(*) = 1) as deal_id, e.subject as email_subject
 			${filed} left join app_user u on u.id = a.changed_by_user_id
 			left join email e on e.activity_id = a.id
-			where link.${subject} = ${id}
+			where link.${subject} = ${id} and (a.kind <> 'call' or ${visibleCall(userId)})
 			union all
 			select 'event', s.id, coalesce(s.done_at, s.resolved_at, s.created_at),
 				coalesce(u.slug, s.changed_by_job), 'next_step', s.what, null, s.deal_id::text, null
 			from next_step s left join app_user u on u.id = s.changed_by_user_id
-			where s.${subject} = ${id}
+			where s.${subject} = ${id} and ${visibleCallStep}
 		) entries order by at desc, entry_kind, id limit ${limit}`.execute(db);
 	return {
 		state: "completed",
