@@ -364,6 +364,13 @@ test("call capture can assign a suggested next step by user slug", async () => {
 		[proposal.proposal_id],
 	);
 	assert.deepEqual(rows, [{ owner_party_id: BLAIR }]);
+	await db.query(`begin; select set_config('engine.user_id', '${ALEX}', true);
+		update proposal set status = 'accepted' where id = '${proposal.proposal_id}'; commit;`);
+	const step = await db.query(
+		"select owner_party_id from next_step where id = $1",
+		[proposal.proposal_id],
+	);
+	assert.deepEqual(step.rows, [{ owner_party_id: BLAIR }]);
 });
 
 for (const { kind, activity, deal, edits, owner, otherOwner } of [
