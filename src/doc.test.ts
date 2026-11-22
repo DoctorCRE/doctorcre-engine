@@ -58,6 +58,7 @@ type Turn = {
 	position: number;
 	answer: unknown;
 	context: unknown;
+	draft_review: unknown;
 	waiting_reason: string | null;
 	confirmation: unknown;
 };
@@ -162,6 +163,7 @@ test("keeps a question and its key while a Mac has never connected", async () =>
 	);
 	assert.deepEqual(await send("/turns", 202, ask), created);
 	const chat = `/conversations/${created.conversation_id}` as const;
+	assert.equal(created.turn.draft_review, null);
 	assert.deepEqual((await send(chat, 200)).turns, [created.turn]);
 	assert.equal(
 		(
@@ -1418,6 +1420,68 @@ async function storeJobDraft(activity_id: string) {
 	assert.ok(response.ok, JSON.stringify(body));
 	return body.draft_id;
 }
+
+test("Doc reports the saved draft version as its review changes", async () => {
+	const id = await storeJobDraft(await replyEmail());
+	const send = client();
+	const { conversation_id, turn } = await send("/turns", 202, {
+		...question,
+		context: { kind: "reply_draft", id, version: 1 },
+	});
+	const chat = `/conversations/${conversation_id}` as const;
+	const readReview = async () => (await send(chat, 200)).turns[0]?.draft_review;
+	const pending = await readReview();
+	await db.query(
+		`with stamp as (select set_config('engine.user_id', $1, true))
+		update reply_draft set body = 'A revised reply' from stamp where id = $2`,
+		[owner, id],
+	);
+	const changed = await readReview();
+	await db.query(
+		`with stamp as (select set_config('engine.user_id', $1, true))
+		update reply_draft set status = 'dismissed', dismiss_reason = 'Replaced'
+		from stamp where id = $2`,
+		[owner, id],
+	);
+	const dismissed = await readReview();
+	assert.deepEqual(
+		[turn.draft_review, pending, changed, dismissed],
+		[
+			{ draft_id: id, version: 1, current: "pending_same" },
+			{ draft_id: id, version: 1, current: "pending_same" },
+			{ draft_id: id, version: 1, current: "changed" },
+			{ draft_id: id, version: 1, current: "gone" },
+		],
+	);
+});
+
+test("Doc treats a foreign draft in saved context as gone", async () => {
+	const activity_id = await replyEmail();
+	const id = await storeJobDraft(activity_id);
+	const send = client("dell");
+	const { conversation_id, turn } = await send("/turns", 202, question);
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		insert into email_mailbox (activity_id, user_id) select $1, $2 from stamp`,
+		[activity_id, other],
+	);
+	await db.query("update doc_turn set context = $1 where id = $2", [
+		{
+			kind: "reply_draft",
+			id,
+			version: 1,
+			activity_id,
+			mailbox_user_id: other,
+		},
+		turn.id,
+	]);
+	const { turns } = await send(`/conversations/${conversation_id}`, 200);
+	assert.deepEqual(turns[0]?.draft_review, {
+		draft_id: id,
+		version: 1,
+		current: "gone",
+	});
+});
 
 const replyReceipt = (id: string, existing: boolean) => ({
 	kind: "reply_draft",
