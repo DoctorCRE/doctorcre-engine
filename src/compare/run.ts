@@ -17,7 +17,6 @@ import {
 	activityShape,
 	clientListShape,
 	clientShape,
-	marketsShape,
 	networkShape,
 	vendorListShape,
 	vendorShape,
@@ -28,7 +27,6 @@ import {
 	leadShape,
 	quietShape,
 	reasonsShape,
-	territoryShape,
 } from "./leads-shapes.ts";
 import { findShape } from "./search-shape.ts";
 import {
@@ -49,14 +47,12 @@ export type Ask =
 	| { read: "lead board" }
 	| { read: "lead"; lead: string }
 	| { read: "quiet follow-ups" }
-	| { read: "territory"; vertical?: string; city?: string; state?: string }
 	| { read: "reasons to reach out" }
 	| { read: "invoices" }
 	| { read: "client list" }
 	| { read: "client"; client: string }
 	| { read: "vendor list" }
 	| { read: "vendor"; vendor: string }
-	| { read: "vendor markets"; market?: string }
 	| { read: "relationships" }
 	// `record` identifies the deal, client or vendor whose name is asked.
 	| { read: "recent activity"; name: string; record: string; limit?: 20 }
@@ -109,14 +105,12 @@ export const READS: Record<Ask["read"], Read> = {
 	"lead board": { shape: leadBoardShape, prefix: "leads" },
 	lead: { shape: leadShape, prefix: "lead", label: "lead detail" },
 	"quiet follow-ups": { shape: quietShape, prefix: "quiet" },
-	territory: { shape: territoryShape, prefix: "territory" },
 	"reasons to reach out": { shape: reasonsShape, prefix: "reasons" },
 	invoices: { shape: invoicesShape, prefix: "invoices" },
 	"client list": { shape: clientListShape, prefix: "clients" },
 	client: { shape: clientShape, prefix: "client", label: "client detail" },
 	"vendor list": { shape: vendorListShape, prefix: "vendors" },
 	vendor: { shape: vendorShape, prefix: "vendor", label: "vendor detail" },
-	"vendor markets": { shape: marketsShape, prefix: "markets" },
 	relationships: { shape: networkShape, prefix: "network" },
 	"recent activity": { shape: activityShape, prefix: "activity" },
 	"today's reminders": { shape: todayShape, prefix: "today" },
@@ -210,13 +204,10 @@ export async function compareDeals(
 		{ read: "lead board" },
 		// The app's inputs: no filters, and the first page of reasons.
 		{ read: "quiet follow-ups" },
-		{ read: "territory" },
 		{ read: "reasons to reach out" },
 		{ read: "invoices" },
 		{ read: "client list" },
 		{ read: "vendor list" },
-		// The app's first asks: every market, and the whole map.
-		{ read: "vendor markets" },
 		{ read: "relationships" },
 		{ read: "today's reminders" },
 		{ read: "today's reminders", owners: "partners" },
@@ -268,25 +259,6 @@ export async function compareDeals(
 				if (value !== undefined)
 					enqueue({ read: "client fit", [field]: value });
 			}
-		}
-		if (ask.read === "lead board") {
-			// The territory answer has no vertical, so sample it from the Leads board.
-			const vertical = firstText(old, "leads", "specialty");
-			if (vertical !== undefined) enqueue({ read: "territory", vertical });
-		}
-		if (
-			ask.read === "territory" &&
-			ask.vertical === undefined &&
-			ask.city === undefined &&
-			ask.state === undefined
-		)
-			for (const field of ["city", "state"] as const) {
-				const value = firstText(old, "submarkets", field);
-				if (value !== undefined) enqueue({ read: "territory", [field]: value });
-			}
-		if (ask.read === "vendor markets" && ask.market === undefined) {
-			const market = firstText(old, "markets", "slug");
-			if (market !== undefined) enqueue({ read: "vendor markets", market });
 		}
 
 		if (ask.read === "board")

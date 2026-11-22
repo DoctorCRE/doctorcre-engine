@@ -21,7 +21,7 @@ import { connection } from "./connection.ts";
 import { dealClosing } from "./deal-closing.ts";
 import { dealField } from "./deal-field.ts";
 import { dealUpdate } from "./deal-update.ts";
-import { dealCallContext } from "./deals/call-context.ts";
+import { callContextJobs, dealCallContext } from "./deals/call-context.ts";
 import { clientLeases } from "./deals/client-leases.ts";
 import { dealClientWebsite } from "./deals/client-website.ts";
 import { openClientWebsite } from "./deals/client-website-access.ts";
@@ -35,6 +35,7 @@ import {
 import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
+import { dealTours } from "./deals/tours.ts";
 import { docRoutes } from "./doc.ts";
 import {
 	claimDocLink,
@@ -70,6 +71,7 @@ import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { preferenceSaves, preferences } from "./preferences.ts";
 import { presence } from "./presence.ts";
+import { propertySearch } from "./property-search.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
 import { prospectAdd } from "./prospects/add.ts";
 import { prospectChanges } from "./prospects/changes.ts";
@@ -81,7 +83,6 @@ import { search } from "./search/routes.ts";
 import { requireSession } from "./session.ts";
 import { today } from "./today/routes.ts";
 import { updateReads, updates } from "./updates.ts";
-import { vendorMarkets } from "./vendors/market-routes.ts";
 import { vendorMeetings } from "./vendors/meeting-routes.ts";
 import { changes } from "./who-did-what.ts";
 
@@ -145,15 +146,16 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", updates)
 	.route("/", changes)
 	.route("/", preferences)
-	.route("/", vendorMarkets)
 	.route("/", vendorMeetings);
 
 const partnerApi = new Hono<WorkerEnv>();
 partnerApi.use("/api/engine/*", userStamp);
+partnerApi.route("/api/engine", dealTours);
 partnerApi.route("/api/engine", engine);
 partnerApi.route("/api/engine", dealCallContext);
 partnerApi.route("/api/engine", leadChanges);
 partnerApi.route("/api/engine", partySearch);
+partnerApi.route("/api/engine", propertySearch);
 partnerApi.route("/api/engine", clientLeases);
 partnerApi.route("/api/engine", prospectReads);
 partnerApi.route("/api/engine", prospectChanges);
@@ -227,6 +229,7 @@ app.route("/jobs", cadence);
 app.route("/jobs", nextDeals);
 app.route("/jobs", notificationReads);
 app.route("/jobs", dealJobs);
+app.route("/jobs", callContextJobs);
 app.route("/jobs", invoiceJobs);
 app.route("/jobs", nextSteps);
 app.route("/jobs", proposalJobs);

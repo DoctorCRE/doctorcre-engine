@@ -35,6 +35,14 @@ const ask = (path: string, method = "GET", env: object = signedIn) =>
 		env,
 	);
 
+test("the former vendor market route returns not found", async () => {
+	const response = await ask("vendor-markets?market=%3C%2Fmarket%3E");
+	assert.deepEqual(
+		[response.status, await response.json()],
+		[404, { error: "not_found" }],
+	);
+});
+
 // The old door matched the raw path, so an encoded address served nothing.
 test("a percent-encoded address answers the old not-found body", async () => {
 	const uuid = "00000000-0000-4000-8000-000000000001";

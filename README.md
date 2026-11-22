@@ -102,8 +102,8 @@ between requests. It asks the engine before and after the old system and sets a
 request aside as unsettled when the engine's two answers differ. Boards are asked
 by workspace only, not by national account. Clients and vendors are asked as
 the app asks them: the first page of each list, every record on it, and recent
-activity for the first five records of each read with a name and ref. Vendor
-markets and the Relationships map are asked once. Today's reminders are asked
+activity for the first five records of each read with a name and ref. The
+Relationships map is asked once. Today's reminders are asked
 with no input and for the partners, each following its next page up to five
 pages, and meeting prep once for the signed-in partner. The engine serves only
 Research for vendor meetings, which the comparison follows up to five pages.

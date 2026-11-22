@@ -17,13 +17,11 @@ import { readInvoiceTracker } from "./invoices.ts";
 import { readLeadBoard } from "./leads/board.ts";
 import { readLeadDetail } from "./leads/detail.ts";
 import { readReasonsToReachOut } from "./leads/reasons-to-reach-out.ts";
-import { readTerritory } from "./leads/territory.ts";
 import { type Reader, readSnapshot } from "./reader.ts";
 import { readNetwork } from "./relationships/network.ts";
 import { readFind } from "./search/find.ts";
 import { url } from "./test-rollback.ts";
 import { readTodayTriage } from "./today/triage.ts";
-import { readVendorMarkets } from "./vendors/markets.ts";
 import { readVendor, readVendorList } from "./vendors/read.ts";
 
 // The engine login's whole read grant: every relation the engine's reads
@@ -92,10 +90,6 @@ const readable = [
 	"vendor",
 	"vendor_category",
 	"vendor_disposition",
-	"vendor_market",
-	"vendor_market_key",
-	"vendor_market_membership",
-	"vendor_market_regional_reference",
 	"vendor_relationship_level",
 	"vendor_stage",
 ];
@@ -233,7 +227,7 @@ async function seedDeal(database: string) {
 	}
 }
 
-test("the reader login reads the board, a deal, the change feed, the capture queue, search, the lead board, an opened lead, territory, reasons to reach out, the client list, a client's details, the vendor list, vendor markets, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, vendor meetings and today's reminders and changes nothing", (t) =>
+test("the reader login reads the board, a deal, the change feed, the capture queue, search, the lead board, an opened lead, reasons to reach out, the client list, a client's details, the vendor list, the relationships network, recent activity, a vendor's details, the invoices, today's meetings, vendor meetings and today's reminders and changes nothing", (t) =>
 	withSnapshot(async (database) => {
 		const seeded = await seedDeal(database);
 		await withReaderLogin(database, async (login, name) => {
@@ -291,14 +285,6 @@ test("the reader login reads the board, a deal, the change feed, the capture que
 				}),
 			);
 			assert.deepEqual("detail" in opened && opened.detail, null);
-			const territory = await readSnapshot(login, (db) =>
-				readTerritory(db, { vertical: null, city: null, state: null }),
-			);
-			assert.deepEqual(territory, {
-				schema_version: "territory-state-board.v1",
-				coverage: "recorded_geographies_only",
-				submarkets: [],
-			});
 			const clients = await readSnapshot(login, (db) =>
 				readClientList(
 					db,
@@ -385,21 +371,6 @@ test("the reader login reads the board, a deal, the change feed, the capture que
 				}),
 			);
 			assert.deepEqual(vendor.record.people, []);
-			await withAdmin(
-				(admin) =>
-					admin.query(`insert into vendor_market select 'example', 'Example', 'market',
-							'Example', 'Example', id, now() from actor;
-						insert into vendor_market_membership select 'example', vendor.id, true, null,
-							'Example', actor.id, now() from vendor, actor`),
-				database,
-			);
-			const markets = await readSnapshot(login, (db) =>
-				readVendorMarkets(db, "Example"),
-			);
-			assert.partialDeepStrictEqual(markets, {
-				selected_market: "example",
-				vendors: [{ name: "Example Clinic" }],
-			});
 			const network = await readSnapshot(login, readNetwork);
 			assert.deepEqual(
 				network.edges.map((e) => [e.kind, e.when]),
