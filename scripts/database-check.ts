@@ -1,19 +1,19 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { URL } from "node:url";
 import pg from "pg";
 import { NoDatabase, withSnapshot } from "./test-database.ts";
 
-function run(command: string, args: string[], env: NodeJS.ProcessEnv) {
-	const result = spawnSync(command, args, { env, stdio: "inherit" });
-	if (result.error) throw result.error;
-	if (result.status !== 0)
-		throw new Error(`${command} ${args.join(" ")} failed`);
+async function run(command: string, args: string[], env: NodeJS.ProcessEnv) {
+	const child = spawn(command, args, { env, stdio: "inherit" });
+	const [status] = await once(child, "close");
+	if (status !== 0) throw new Error(`${command} ${args.join(" ")} failed`);
 }
 
 function npmRun(script: string, env: NodeJS.ProcessEnv) {
-	run("npm", ["run", script], env);
+	return run("npm", ["run", script], env);
 }
 
 async function loadNextSection(url: string) {
@@ -51,19 +51,25 @@ await withSnapshot((_, snapshot) =>
 			TEST_DATABASE_URL: url,
 			TEST_SNAPSHOT: snapshot,
 		};
-		npmRun("types:db", env);
+		await npmRun("types:db", env);
 		await withSnapshot(async (nextUrl, copySnapshot) => {
 			await loadNextSection(nextUrl);
-			npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
-			npmRun("types", env);
+			await npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
 			// Small runners can run more files while their tests wait for PostgreSQL.
 			const cpus = availableParallelism();
 			const concurrency = Math.max(cpus - 1, Math.min(2 * cpus, 6));
-			run(
-				process.execPath,
-				["--test", `--test-concurrency=${concurrency}`, "src/**/*.test.ts"],
-				{ ...env, TEST_COPY_SNAPSHOT: copySnapshot },
-			);
+			// Both commands must finish before the snapshots are dropped.
+			const results = await Promise.allSettled([
+				npmRun("types", env),
+				run(
+					process.execPath,
+					["--test", `--test-concurrency=${concurrency}`, "src/**/*.test.ts"],
+					{ ...env, TEST_COPY_SNAPSHOT: copySnapshot },
+				),
+			]);
+			for (const result of results) {
+				if (result.status === "rejected") throw result.reason;
+			}
 		}, snapshot);
 	}, snapshot),
 ).catch((error: unknown) => {

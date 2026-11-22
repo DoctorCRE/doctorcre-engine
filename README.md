@@ -60,7 +60,8 @@ A check opens roughly one connection per concurrent test file, plus sessions
 for tests that exercise concurrent writes.
 
 Each check restores `schema/business.sql` once, generates ignored `src/database.d.ts`
-with `kysely-codegen`, and runs TypeScript and tests against that database.
+with `kysely-codegen`, and runs TypeScript and tests in parallel once the database
+types are ready.
 A test that needs its own database copies that restore, because one restore
 holds about 2,100 locks and many at once exhaust the server's lock table (#237).
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
