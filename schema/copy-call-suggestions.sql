@@ -93,7 +93,7 @@ select s.proposal_id as id, s.created_at, s.kind, s.activity_id, s.activity_kind
  case when s.status <> 'pending' then s.decider end as decided_by_user_id, s.resolved_at as decided_at, s.deal_id,
  case when s.status = 'pending' then s.reviewer end as changed_for_user_id,
  case when s.kind in ('next_step', 'log_call') then s.what end as what, s.owner as owner_party_id, case when s.kind = 'next_step' then s.due_on end as due_on,
- case when s.kind = 'next_step' then s.due_source end as due_source,
+ case when s.kind = 'next_step' and s.due_on is not null then s.due_source end as due_source,
  case when s.kind = 'phase_move' then s.from_phase end as from_phase, case when s.kind = 'phase_move' then s.to_phase end as to_phase, s.id as old_id
 from suggestion s where not exists (select from not_copied n where n.old_id = s.id);
 

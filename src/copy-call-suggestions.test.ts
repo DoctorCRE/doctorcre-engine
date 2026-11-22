@@ -11,7 +11,9 @@ const { db, setup, cleanup } = copyTest();
 const line = (row: pg.QueryResultRow) =>
 	Object.values(row)
 		.map((v) =>
-			v === null ? "-" : String(v).replace(/^0{8}-0{4}-4000-8000-0{10}/, "#"),
+			v === null
+				? "-"
+				: String(v).replace(/^00000000-0000-4000-8000-0*(\d{2,})$/, "#$1"),
 		)
 		.join(" ");
 const rows = async (sql: string) => (await db.query(sql)).rows.map(line);
@@ -277,9 +279,10 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		await db.query(`begin; select set_config('engine.job', 'old_system', true);
  insert into public.capture_post_call_candidate (id, session_id, idempotency_key, batch_hash, item_index, kind, deal_id, assignee_slug,
   action_description, due_on, evidence_quote, confidence, status, resolved_by, resulting_ref, resolved_at, created_at) values
-  ${[postCall(101), postCall(102), postCall(103), postCall(104)].join(",\n  ")};
+  ${[postCall(101), postCall(102), postCall(103), postCall(104), postCall(106)].join(",\n  ")};
  update public.capture_post_call_candidate set due_defaulted = false where id in ('${id(101)}', '${id(103)}');
  update public.capture_post_call_candidate set due_defaulted = true where id = '${id(102)}';
+ update public.capture_post_call_candidate set due_on = null, due_defaulted = false where id = '${id(106)}';
  insert into public.capture_candidate (id, session_id, idempotency_key, batch_hash, item_index, kind, payload, evidence_quote, confidence,
   status, resolved_by, resulting_ref, resolved_at, created_at) values
   ${capture(105, "next_step", { deal: id(30), text: "Example dated step", next_date: "2024-02-01" })};
@@ -290,8 +293,7 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		const legacy = `select to_jsonb(p), (select jsonb_agg(c order by id) from change c
 		where table_name = 'proposal' and record->>'id' = '${id(103)}') from proposal p where id = '${id(103)}'`;
 		const earlier = (await db.query(legacy)).rows;
-		const report = await run();
-		assert.ok(!report.some((r) => /^#10[1-5] /.test(r)));
+		assert.deepEqual(await run(), later);
 		assert.deepEqual((await db.query(legacy)).rows, earlier);
 		assert.deepEqual(
 			await rows(
@@ -303,10 +305,11 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 				"#103 2024-02-01 -",
 				"#104 2024-02-01 -",
 				"#105 2024-02-01 -",
+				"#106 - -",
 			],
 		);
 		const before = (await db.query(all)).rows;
-		assert.deepEqual(await run(), report);
+		assert.deepEqual(await run(), later);
 		assert.deepEqual((await db.query(all)).rows, before);
 	}
 });
