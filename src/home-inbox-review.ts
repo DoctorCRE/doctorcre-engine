@@ -1,4 +1,9 @@
-import { type RawBuilder, sql, type Transaction } from "kysely";
+import {
+	type Expression,
+	type RawBuilder,
+	sql,
+	type Transaction,
+} from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import {
 	filingChoices,
@@ -146,7 +151,9 @@ function draftRows(
 	`;
 }
 
-export const visibleSuggestion = (userId: string) => sql<boolean>`
+export const visibleSuggestion = (
+	userId: string | Expression<string>,
+) => sql<boolean>`
 	case
 		when p.kind = 'file_to_deal' and p.status = 'pending'
 			and not (${filingReviewNeeded(sql.ref("p.activity_id"), sql.ref("p.deal_id"))}) then false

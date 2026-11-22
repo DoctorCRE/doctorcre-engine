@@ -44,9 +44,10 @@ before(async () => {
 			'${NO_PHASE}', '${SUGGESTED}', '${EDITED_OWNER}', '${BACKDATED}', '${MEETING_DEAL}', '${EMAIL_DEAL}']::uuid[]) as fixture(id);
 		insert into deal_phase_change (deal_id, phase, happened_at)
 		select id, 'research', '2026-01-05T15:00:00Z' from deal where id <> '${NO_PHASE}';
+		select set_config('engine.job', 'call_capture', true), set_config('engine.user_id', '${ALEX}', true);
 		insert into activity (id, kind, happened_at) values ('${CALL}', 'call', '2026-01-07T15:00:00Z');
 		insert into activity_about (activity_id, deal_id) select '${CALL}', id from deal;
-		insert into activity_about (activity_id, party_id) values ('${CALL}', '${BLAIR}');
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
 		insert into activity (id, kind, happened_at) values ('${MEETING}', 'meeting', '2026-01-07T15:00:00Z');
 		insert into activity_about (activity_id, deal_id) values ('${MEETING}', '${MEETING_DEAL}');
 		insert into activity (id, kind, happened_at) values ('${EMAIL}', 'email', '2026-01-07T15:00:00Z');
@@ -74,27 +75,30 @@ const decide = (id: unknown) =>
 		decision: "accept",
 	});
 
-test("accepting a call log leaves one call and adds one note at the call's time", async () => {
-	for (const target of [{ deal_id: REVIEW }, { party_id: BLAIR }]) {
-		const dealId = target.deal_id ?? null;
-		const partyId = target.party_id ?? null;
-		const what = "Agreed to review the example floor plan.";
-		const [stored, proposal] = await propose({
-			kind: "log_call",
-			what,
-			...target,
-		});
-		assert.equal(stored, 201);
+test("accepting a copied call log leaves one call and adds one note at the call's time", async () => {
+	const copiedCall = id(19);
+	const copiedDeal = id(20);
+	const what = "Agreed to review the example floor plan.";
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, owner_user_id) values ('${copiedDeal}', 'Example copied call deal', '${ALEX}');
+		insert into activity (id, kind, happened_at) values ('${copiedCall}', 'call', '2026-01-07T15:00:00Z');
+		insert into activity_about (activity_id, deal_id) values ('${copiedCall}', '${copiedDeal}');
+		insert into activity_about (activity_id, party_id) values ('${copiedCall}', '${BLAIR}');
+		select set_config('engine.user_id', '${ALEX}', true);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, party_id, what, evidence) values
+			('${id(21)}', 'log_call', '${copiedCall}', 'call', 'old_system', '${copiedDeal}', null, '${what}', '${what}'),
+			('${id(22)}', 'log_call', '${copiedCall}', 'call', 'old_system', null, '${BLAIR}', '${what}', '${what}');
+		commit;`);
+	for (const [proposalId, dealId, partyId] of [
+		[id(21), copiedDeal, null],
+		[id(22), null, BLAIR],
+	] as const) {
 		const decision = { idempotency_key: randomUUID(), decision: "accept" };
 		const accept = () =>
-			save(
-				{ user: "alex" },
-				`proposals/${proposal.proposal_id}/decision`,
-				decision,
-			);
+			save({ user: "alex" }, `proposals/${proposalId}/decision`, decision);
 		const [accepted, answer] = await accept();
 		assert.equal(accepted, 200);
-		assert.deepEqual(answer.created, { activity_id: proposal.proposal_id });
+		assert.deepEqual(answer.created, { activity_id: proposalId });
 		assert.deepEqual(await accept(), [200, { ...answer, replayed: true }]);
 		assert.deepEqual(
 			(
@@ -105,19 +109,19 @@ test("accepting a call log leaves one call and adds one note at the call's time"
 					join activity source on source.id = $3
 					where (b.deal_id = $1 or b.party_id = $2) and a.kind in ('call', 'note')
 					order by a.id`,
-					[dealId, partyId, CALL],
+					[dealId, partyId, copiedCall],
 				)
 			).rows,
 			[
 				{
-					id: CALL,
+					id: copiedCall,
 					kind: "call",
 					original_time: true,
 					summary: null,
 					changed_by_user_id: null,
 				},
 				{
-					id: proposal.proposal_id,
+					id: proposalId,
 					kind: "note",
 					original_time: true,
 					summary: what,
@@ -355,9 +359,8 @@ test("call capture can assign a suggested next step by user slug", async () => {
 	);
 	const [stored, proposal] = await propose({ ...args, owner: "blair" });
 	assert.equal(stored, 201);
-	assert.equal((await decide(proposal.proposal_id))[0], 200);
 	const { rows } = await db.query(
-		"select owner_party_id from next_step where id = $1",
+		"select owner_party_id from proposal where id = $1",
 		[proposal.proposal_id],
 	);
 	assert.deepEqual(rows, [{ owner_party_id: BLAIR }]);

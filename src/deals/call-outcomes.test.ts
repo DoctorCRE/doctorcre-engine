@@ -290,6 +290,22 @@ test("a decision on another partner’s private call has the same refusal as an 
 	}
 });
 
+test("a decision on a hidden suggestion from a visible call returns not found", async () => {
+	const response = await read(deal);
+	assert.equal(response.status, 200);
+	const source = callIds
+		.parse(await response.json())
+		.calls.find((row) => row.activity_id === call);
+	assert.ok(source);
+	assert.ok(!source.proposals.some((p) => p.proposal_id === assignedElsewhere));
+
+	for (const decision of ["accept", "dismiss"]) {
+		const hidden = await decide(assignedElsewhere, decision);
+		assert.equal(hidden.status, 404);
+		assert.partialDeepStrictEqual(await hidden.json(), { error: "not_found" });
+	}
+});
+
 test("accepting a private log stays pending and writes no shared note", async () => {
 	const response = await decide(pending, "accept");
 	assert.equal(response.status, 409);
@@ -344,6 +360,45 @@ test("accepting an assigned action leaves an existing step and its date intact",
 		],
 	});
 	assert.equal((await decide(assigned, "dismiss")).status, 200);
+});
+
+test("an open checklist item does not block accepting an assigned action", async () => {
+	const checklistDeal = id(15);
+	const checklistCall = id(27);
+	const checklistItem = id(42);
+	const action = id(43);
+	await db.query(`
+		begin;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${joe}', true);
+		insert into deal (id, name, owner_user_id) values ('${checklistDeal}', 'Example checklist deal', '${joe}');
+		insert into activity (id, kind, happened_at) values ('${checklistCall}', 'call', '2025-01-06T18:00Z');
+		insert into activity_about (activity_id, deal_id) values ('${checklistCall}', '${checklistDeal}');
+		insert into next_step (id, deal_id, what, owner_party_id, item_title, item_bullets, source_ref)
+			values ('${checklistItem}', '${checklistDeal}', 'Review lease terms', '${joe}', 'Review lease terms', '[]', 'example:copy');
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence, owner_party_id)
+			values ('${action}', 'next_step', '${checklistCall}', 'call', 'old_system', '${checklistDeal}',
+				'Send the plan', 'Send the plan.', '${joe}');
+		commit;
+	`);
+	const response = await decide(action, "accept");
+	assert.equal(response.status, 200);
+	assert.partialDeepStrictEqual(await response.json(), {
+		proposal_id: action,
+		status: "accepted",
+		created: { next_step_id: action },
+	});
+	assert.deepEqual(
+		(
+			await db.query(
+				"select id, status from next_step where deal_id = $1 order by id",
+				[checklistDeal],
+			)
+		).rows,
+		[
+			{ id: checklistItem, status: "open" },
+			{ id: action, status: "open" },
+		],
+	);
 });
 
 test("the latest 50 visible calls bound proposal aggregation", async (t) => {

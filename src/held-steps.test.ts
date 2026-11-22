@@ -28,8 +28,10 @@ async function fixture(kind: "note" | "call", current = true) {
 	const next_step_id = randomUUID();
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into deal (id, name, owner_user_id) values ('${deal_id}', 'Example Deal ' || '${deal_id}', '${ownerId}');
+		select set_config('engine.user_id', '${kind === "call" ? ownerId : ""}', true);
 		insert into activity (id, kind, happened_at, summary) values
 			('${activity_id}', '${kind}', '2001-02-03T15:00:00Z', 'The client received the survey.');
+		select set_config('engine.user_id', '', true);
 		insert into activity_about (activity_id, deal_id) values ('${activity_id}', '${deal_id}');
 		insert into next_step (id, deal_id, owner_party_id, what, due_on, created_at) values
 			('${next_step_id}', '${deal_id}', '${ownerId}', 'Send the survey', '2001-02-01', '${current ? "2001-01-03" : "2001-01-01"}'),

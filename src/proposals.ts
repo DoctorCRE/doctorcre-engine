@@ -9,7 +9,7 @@ import type { JsonObject } from "./database.d.ts";
 import {
 	callAcceptanceBlock,
 	copiedAssignedAction,
-	visibleCall,
+	visibleCallProposal,
 } from "./deals/call-review.ts";
 import { sourceInMailbox } from "./home-email-thread.ts";
 import { readProposal } from "./home-inbox-review.ts";
@@ -411,6 +411,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 				const p = await tx
 					.selectFrom("proposal as p")
 					.leftJoin("activity as a", "a.id", "p.activity_id")
+					.leftJoin("next_step as step", "step.id", "p.next_step_id")
 					.selectAll("p")
 					.select([
 						callAcceptanceBlock.as("accept_blocked"),
@@ -423,7 +424,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.where(sql<boolean>`(${filingScope("p")} is null or
 						${sourceInMailbox(sql.ref("p.activity_id"), ACTING_USER)})`)
 					.where(
-						sql<boolean>`(p.activity_kind is distinct from 'call' or ${visibleCall(ACTING_USER)})`,
+						sql<boolean>`(p.activity_kind is distinct from 'call' or ${visibleCallProposal(ACTING_USER)})`,
 					)
 					.forUpdate("p")
 					.executeTakeFirst();

@@ -2,14 +2,13 @@ import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
-import { visibleSuggestion } from "../home-inbox-review.ts";
 import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../uuid.ts";
 import {
 	callAcceptanceBlock,
-	sharedCopiedCall,
 	visibleCall,
+	visibleCallProposal,
 } from "./call-review.ts";
 
 const MAX_CALLS = 50;
@@ -40,12 +39,7 @@ export function callOutcomeQuery(
 		.leftJoin("next_step as step", "step.id", "p.next_step_id")
 		.where(sql<boolean>`p.activity_id = a.id`)
 		.where("p.deal_id", "=", dealId)
-		.where(
-			sql<boolean>`(not (${sharedCopiedCall}) or p.proposed_by_job = 'old_system')`,
-		)
-		.where(sql<boolean>`case when p.kind = 'next_step_done' then
-			step.owner_party_id = ${userId}::uuid and (p.status <> 'pending' or step.status = 'open')
-			else p.decided_by_user_id = ${userId}::uuid or ${visibleSuggestion(userId)} end`);
+		.where(visibleCallProposal(userId));
 	const recentCalls = db
 		.selectFrom("activity as a")
 		.selectAll("a")
