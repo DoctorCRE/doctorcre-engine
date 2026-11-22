@@ -167,7 +167,7 @@ test("proposal_due_source rejects invalid provenance and accepts dated next step
 	}
 });
 
-test("copies each call suggestion with its decision, keeps the next step an accepted one made, and on a rerun adds what arrived and lists what changed", async () => {
+test("copies each call suggestion with its decision, keeps the next step an accepted one made, and on a rerun adds what arrived and lists what changed", async (t) => {
 	const report = await run();
 	// biome-ignore format: one row per line
 	assert.deepEqual(await rows(`select id, kind, activity_id, activity_kind, evidence, proposed_by_job, status, decided_by_user_id, decided_at::text,
@@ -311,5 +311,18 @@ test("copies each call suggestion with its decision, keeps the next step an acce
 		const before = (await db.query(all)).rows;
 		assert.deepEqual(await run(), later);
 		assert.deepEqual((await db.query(all)).rows, before);
+		await t.test(
+			"reports changed due-date provenance and preserves copied proposals",
+			async () => {
+				await db.query(`update public.capture_post_call_candidate set due_defaulted = not due_defaulted
+				where id in ('${id(101)}', '${id(102)}')`);
+				assert.deepEqual(await run(), [
+					...later,
+					"#101 proposal #101 existing_proposal_conflicts",
+					"#102 proposal #102 existing_proposal_conflicts",
+				]);
+				assert.deepEqual((await db.query(all)).rows, before);
+			},
+		);
 	}
 });

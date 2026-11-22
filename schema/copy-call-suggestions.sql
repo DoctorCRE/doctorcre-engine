@@ -101,8 +101,9 @@ from suggestion s where not exists (select from not_copied n where n.old_id = s.
 insert into not_copied select r.old_id, 'proposal', r.id::text, 'existing_proposal_conflicts' from ready r
 where exists (select from proposal p where (p.id = r.id) <> ((p.activity_id, p.kind, p.deal_id, p.what, p.owner_party_id, p.due_on, p.from_phase, p.to_phase)
  is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase))
- or p.id = r.id and (p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at, p.changed_for_user_id)
-  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at, r.changed_for_user_id))
+ or p.id = r.id and ((p.created_at, p.proposed_by_job, p.evidence, p.status, p.decided_by_user_id, p.decided_at, p.changed_for_user_id)
+  is distinct from (r.created_at, 'old_system', r.evidence, r.status, r.decided_by_user_id, r.decided_at, r.changed_for_user_id)
+  or (p.due_source is not null and p.due_source is distinct from r.due_source)))
  or exists (select from ready other where other.old_id <> r.old_id and (other.id = r.id
   or (other.activity_id, other.kind, other.deal_id, other.what, other.owner_party_id, other.due_on, other.from_phase, other.to_phase)
   is not distinct from (r.activity_id, r.kind, r.deal_id, r.what, r.owner_party_id, r.due_on, r.from_phase, r.to_phase)));
