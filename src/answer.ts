@@ -312,10 +312,13 @@ type Verb =
 	| "get-deal-room"
 	| "ideal-client-profile"
 	| "lead-board"
+	| "list-deal-tours"
 	| "list-practice-origination"
 	| "quiet-follow-ups"
+	| "read-activity-deal-attribution"
 	| "read-changes"
 	| "read-client-leases"
+	| "read-deal-tour"
 	| "read-home-card"
 	| "read-home-inbox-v5"
 	| "read-home-mail-priorities-v1"
@@ -328,10 +331,12 @@ type Verb =
 	| "read-prospects"
 	| "read-weekly-reviews"
 	| "read-reply-draft"
+	| "read-tour-stop-list"
 	| "read-updates"
 	| "read-vendor-meetings"
 	| "read-vendor-markets-v1"
 	| "search-parties-v1"
+	| "search-properties"
 	| "today-triage";
 
 export function answer(

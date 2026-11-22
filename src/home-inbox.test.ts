@@ -369,7 +369,7 @@ test("Home reads a partner's steps, holds, completion and marks", async () => {
 test("A held follow-up explains the saved hold", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(held), {
 		title: "Call about the suite",
-		why: "Call about the suite. Held until Apr 1, 2999.",
+		why: "Held until Apr 1, 2999.",
 	});
 });
 
@@ -416,7 +416,7 @@ test("a call follow-up appears once with its call, deal and evidence", async () 
 test("a step created by a suggestion keeps the meeting source", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(proposal), {
 		title: "Check renewal dates on Thursday, Nov 5, 2026",
-		why: "Check renewal dates on Thursday, Nov 5, 2026. Follow-up set from the meeting. The meeting started at Nov 5, 2026, 7:00 PM.",
+		why: "Follow-up set from the meeting. The meeting started at Nov 5, 2026, 7:00 PM.",
 		source_activity: { kind: "meeting", id: meeting },
 	});
 });
@@ -530,15 +530,12 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 	assert.ok(isArguments(result) && Array.isArray(result.items));
 	const items = result.items.filter(isArguments);
 	for (const example of examples) {
-		const instruction = example.title
-			? `${example.title.replace(/(?<![.!?])$/, ".")} `
-			: "";
 		assert.partialDeepStrictEqual(
 			items.filter((item) => item.source_id === example.id),
 			[
 				{
 					title: example.title || "Example Vendor",
-					why: `${instruction}Follow-up set on Nov 17, 2026.`,
+					why: "Follow-up set on Nov 17, 2026.",
 					primary_action: "Mark done",
 					due_on: null,
 					open_url: `/relationships?node=party:${example.party}&step=${example.id}`,
@@ -635,10 +632,8 @@ for (const [scenario, what, title] of [
 			assert.ok(card);
 			assert.equal(card.title, title);
 			assert.ok(typeof card.why === "string");
-			assert.ok(
-				card.why.startsWith(what.startsWith("REVIEWER DECIDE:") ? title : what),
-				card.why,
-			);
+			const firstWords = title === "Example Lost Deal" ? what : "Follow-up set";
+			assert.ok(card.why.startsWith(firstWords), card.why);
 		} finally {
 			await db.query("rollback");
 			await db.query("begin");

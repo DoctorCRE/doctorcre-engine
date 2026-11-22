@@ -1,4 +1,4 @@
-import { sql } from "kysely";
+import { sql, type Transaction } from "kysely";
 import {
 	type Meeting,
 	meetingsFromSnapshot,
@@ -7,9 +7,15 @@ import {
 import { readStoredAgenda } from "../calendar/next-agenda.ts";
 import { scheduling } from "../calendar/scheduling.ts";
 import { attempt } from "../calendar/snapshot.ts";
-import type { Reader } from "../reader.ts";
+import type { DB } from "../next-database.d.ts";
 import { UUID } from "../uuid.ts";
-import { latestAddress, office, research } from "./people.ts";
+import { nextVendorContacts } from "./people.ts";
+import {
+	nextRef,
+	nextTerritory,
+	nextVendorCategory,
+	nextVendorContact,
+} from "./read.ts";
 
 export const VIEWS = ["suggested", "research"] as const;
 type View = (typeof VIEWS)[number];
@@ -17,70 +23,61 @@ export type MeetingsQuery = {
 	view: View;
 	q: string;
 	limit: number;
-	after: string[];
+	after: [string, string];
 };
 type Candidate = {
 	vendor_id: string;
 	contact: { id: string; email: string | null } | null;
 };
 
+const CURSOR_VERSION = 2;
 const ZERO = "00000000-0000-0000-0000-000000000000";
 
-// A held party is out of contact, an avoided vendor or a suppressed lead.
-const restricted = sql`exists(select 1 from party held
-	where held.id in (a.party_id, p.id, (a.company ->> 'id')::uuid)
-	and ((held.contact_state <> 'active'
-			and (held.contact_state_until is null or held.contact_state_until >= current_date))
-		or exists(select 1 from vendor avoided where avoided.party_id = held.id
-			and avoided.merged_into is null and avoided.disposition = 'avoid')
-		or exists(select 1 from lead suppressed where suppressed.party_id = held.id
-			and (coalesce(suppressed.suppressed, false) or suppressed.stage = 'do_not_contact'))))`;
+const company = sql`coalesce(c.company, case when p.kind = 'company'
+	then jsonb_build_object('id', p.id, 'name', p.name) end)`;
 
-// What a vendor's person lacks before a partner can be told to meet them.
+const restricted = sql`exists(select from active_do_not_contact
+	where party_id in (p.id, c.id, (${company} ->> 'id')::uuid))
+	or exists(select from party_role avoided
+	where avoided.party_id in (p.id, c.id, (${company} ->> 'id')::uuid)
+	and avoided.role = 'vendor' and avoided.disposition = 'avoid')`;
+
 const missing = sql`array_remove(array[
-	case when nullif(btrim(p.name), '') is null then 'named_contact' end,
-	case when nullif(btrim(a.company ->> 'name'), '') is null then 'company' end,
-	case when vc.slug is null then 'category' end,
-	case when not coalesce(vd.workable, false) then 'workable_vendor' end,
-	case when v.out_of_market then 'in_market' end,
-	case when nullif(btrim(v.offers), '') is null then 'meeting_reason' end,
-	case when not coalesce(f.verified, false) then 'verified_office' end,
+	case when nullif(btrim(c.name), '') is null then 'named_contact' end,
+	case when nullif(btrim(${company} ->> 'name'), '') is null then 'company' end,
+	case when cat.slug is null then 'category' end,
+	case when pr.disposition is not null then 'workable_vendor' end,
+	case when pr.offers is null then 'meeting_reason' end,
+	'verified_office',
 	case when ${restricted} then 'contact_permission' end], null)`;
 
-function candidates(db: Reader, { view, q, limit, after }: MeetingsQuery) {
-	const shown =
-		view === "suggested"
-			? sql`cardinality(missing) = 0`
-			: sql`cardinality(missing) > 0`;
+function candidates(db: Transaction<DB>, { q, limit, after }: MeetingsQuery) {
 	const searched = q
-		? sql`and strpos(lower(searched), lower(${q})) > 0`
+		? sql`where strpos(lower(searched), lower(${q})) > 0`
 		: sql``;
 	return sql<{ total: number; items: Candidate[] }>`with candidate as (
-		select a.id as vendor_id, coalesce(p.id, ${ZERO}::uuid) as contact_key,
-			jsonb_build_object('vendor_id', a.id, 'ref', a.ref, 'party_id', a.party_id,
-				'company', a.company,
-				'contact', case when p.id is not null then jsonb_build_object('id', p.id,
-					'name', p.name, 'email', p.email, 'phone', p.phone, 'cell', p.cell) end,
-				'office', ${office}, 'research', ${research},
-				'category', vc.slug, 'category_label', vc.label,
-				'service_coverage', v.territory, 'reason', v.offers) as item,
-			${missing} as missing,
-			concat_ws(' ', a.ref, p.name, a.company ->> 'name', vc.slug, vc.label,
-				v.territory, p.city, p.state, f.value ->> 'street_address',
-				f.value ->> 'city', f.value ->> 'state') as searched
-		from v_vendor_assignment_context a
-		join vendor v on v.id = a.id
-		left join vendor_category vc on vc.slug = coalesce(v.category_slug, v.category)
-		left join vendor_disposition vd on vd.slug = v.disposition
-		left join lateral (select p.* from jsonb_array_elements(a.contacts) listed
-			join party p on p.id = (listed ->> 'id')::uuid) p on true
-		${latestAddress(sql.ref("p.id"))}
+		select p.id as vendor_id, coalesce(c.id, ${ZERO}::uuid) as contact_key,
+			jsonb_build_object('vendor_id', p.id, 'ref', vendor.ref, 'party_id', p.id,
+				'company', ${company},
+				'contact', case when c.id is not null then ${nextVendorContact} end,
+				'office', null, 'research', jsonb_build_object('status', 'not_researched',
+					'finding_id', null, 'observed_at', null, 'expires_on', null),
+				'category', cat.slug, 'category_label', cat.label,
+				'service_coverage', vendor.territory, 'reason', pr.offers,
+				'missing', ${missing}) as item,
+			concat_ws(' ', vendor.ref, c.name, ${company} ->> 'name', cat.slug, cat.label,
+				vendor.territory, c.city) as searched
+		from party_role pr
+		join party p on p.id = pr.party_id
+		cross join lateral (select ${nextRef} as ref, ${nextTerritory} as territory) vendor
+		left join lateral ${nextVendorCategory} cat on true
+		left join lateral ${nextVendorContacts} c on true
+		where pr.role = 'vendor'
 	), matching as (
-		select * from candidate where ${shown} ${searched}
+		select * from candidate ${searched}
 	)
 	select (select count(*)::int from matching) as total,
-		coalesce(jsonb_agg(item || jsonb_build_object('missing', missing)
-			order by vendor_id, contact_key), '[]') as items
+		coalesce(jsonb_agg(item order by vendor_id, contact_key), '[]') as items
 	from (select * from matching
 		where (vendor_id, contact_key) > (${after[0]}::uuid, ${after[1]}::uuid)
 		order by vendor_id, contact_key limit ${limit + 1}) page`.execute(db);
@@ -91,36 +88,33 @@ const isId = (id: unknown): id is string =>
 
 // Where a page starts: the first, or after the row a cursor for the same
 // view and search names.
-export function pageAfter(cursor: string | undefined, view: View, q: string) {
+export function pageAfter(
+	cursor: string | undefined,
+	view: View,
+	q: string,
+): MeetingsQuery["after"] | null {
 	if (cursor === undefined) return [ZERO, ZERO];
 	if (!cursor || cursor.length > 2000) return null;
 	try {
 		const token: Partial<Record<"v" | "view" | "q" | "after", unknown>> | null =
 			JSON.parse(decodeURIComponent(atob(cursor)));
 		const after = token?.after;
-		const valid = token?.v === 1 && token.view === view && token.q === q;
+		const valid =
+			token?.v === CURSOR_VERSION && token.view === view && token.q === q;
 		return valid &&
 			Array.isArray(after) &&
 			after.length === 2 &&
-			after.every(isId)
-			? after
+			isId(after[0]) &&
+			isId(after[1])
+			? [after[0], after[1]]
 			: null;
 	} catch {
 		return null;
 	}
 }
 
-async function calendarFor(db: Reader, partner: string, now: Date) {
-	const snapshot = await attempt(db, async () => {
-		// Vendor candidates have already been read with the public-schema grants.
-		await sql`set local role engine_reader`.execute(db);
-		await sql`set local search_path = next, pg_temp`.execute(db);
-		const {
-			rows: [user],
-		} = await sql<{ id: string }>`
-			select id from app_user where slug = ${partner}`.execute(db);
-		return user ? readStoredAgenda(db, user.id) : null;
-	});
+async function calendarFor(db: Transaction<DB>, userId: string, now: Date) {
+	const snapshot = await attempt(db, () => readStoredAgenda(db, userId));
 	const section = meetingsFromSnapshot(snapshot, now) ?? UNAVAILABLE;
 	const { items, ...calendar } = section;
 	const planning = scheduling(snapshot, section, now);
@@ -138,16 +132,18 @@ const attending = (meetings: readonly Meeting[], email: string | undefined) =>
 		: [];
 
 export async function readVendorMeetings(
-	db: Reader,
-	partner: string,
+	db: Transaction<DB>,
+	userId: string,
 	query: MeetingsQuery,
 ) {
 	const { view, q, limit } = query;
 	const now = new Date();
-	const found = await attempt(db, () => candidates(db, query));
-	const page = found?.rows[0];
+	const page =
+		view === "suggested"
+			? { total: 0, items: [] }
+			: (await attempt(db, () => candidates(db, query)))?.rows[0];
 	if (!page) return null;
-	const { meetings, calendar } = await calendarFor(db, partner, now);
+	const { meetings, calendar } = await calendarFor(db, userId, now);
 	const items = page.items.slice(0, limit).map((item) => ({
 		...item,
 		possible_meetings: attending(
@@ -168,7 +164,9 @@ export async function readVendorMeetings(
 		next_cursor:
 			has_more && next
 				? btoa(
-						encodeURIComponent(JSON.stringify({ v: 1, view, q, after: next })),
+						encodeURIComponent(
+							JSON.stringify({ v: CURSOR_VERSION, view, q, after: next }),
+						),
 					)
 				: null,
 		consistency: "live_keyset; restart after record changes",

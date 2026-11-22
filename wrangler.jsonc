@@ -58,10 +58,14 @@
 				}
 			],
 			"hyperdrive": [
-				{ "binding": "DATABASE", "id": "2894a20af7164fb9ac49d8101bdc1d7f" },
+				{ "binding": "DATABASE", "id": "2631ca644cbd49ac8ba262b5fbcfc796" },
 				{
 					"binding": "DATABASE_WRITER",
-					"id": "a3ea8df2724b46198309bf464bcc89ed"
+					"id": "ad1198b4659d4e6ea41303fc73a0ab73"
+				},
+				{
+					"binding": "PARTNER_AUTH_DATABASE",
+					"id": "4edab12684f3448b87ca5290e03dbc9d"
 				}
 			],
 			"r2_buckets": [
@@ -72,6 +76,7 @@
 			],
 			"vars": {
 				"POST_MEDIA_BUCKET": "doctorcre-post-media-staging",
+				"PARTNER_APP_ORIGIN": "https://doctorcre-app-staging.joe-bookout-carr-us.workers.dev",
 				"CLIENT_WEBSITE_ORIGIN": "https://carr-share-staging.joe-bookout-carr-us.workers.dev"
 			}
 		}

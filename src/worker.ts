@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-
+import { activityDealAttribution } from "./activity/deal-attribution.ts";
 import { dealNoteDoor } from "./activity/deal-note.ts";
 import { emailSummary } from "./activity/email-summary.ts";
 import { filedEmails } from "./activity/filed-emails.ts";
@@ -35,6 +35,7 @@ import {
 import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { deals } from "./deals/routes.ts";
+import { dealTours } from "./deals/tours.ts";
 import { docRoutes } from "./doc.ts";
 import {
 	claimDocLink,
@@ -70,6 +71,7 @@ import { partySearch } from "./party-search.ts";
 import { type IntakeEnv, intake } from "./post-intake.ts";
 import { preferenceSaves, preferences } from "./preferences.ts";
 import { presence } from "./presence.ts";
+import { propertySearch } from "./property-search.ts";
 import { proposalDecisions, proposalJobs } from "./proposals.ts";
 import { prospectAdd } from "./prospects/add.ts";
 import { prospectChanges } from "./prospects/changes.ts";
@@ -150,10 +152,12 @@ const engine = new Hono<WorkerEnv>()
 
 const partnerApi = new Hono<WorkerEnv>();
 partnerApi.use("/api/engine/*", userStamp);
+partnerApi.route("/api/engine", dealTours);
 partnerApi.route("/api/engine", engine);
 partnerApi.route("/api/engine", dealCallContext);
 partnerApi.route("/api/engine", leadChanges);
 partnerApi.route("/api/engine", partySearch);
+partnerApi.route("/api/engine", propertySearch);
 partnerApi.route("/api/engine", clientLeases);
 partnerApi.route("/api/engine", prospectReads);
 partnerApi.route("/api/engine", prospectChanges);
@@ -196,6 +200,7 @@ partnerApp.route("/", partnerGoogle);
 partnerApp.get("/auth/session", requirePartnerSession, partnerSessionStatus);
 partnerApp.post("/auth/signout", requirePartnerSession, partnerSignOut);
 partnerApp.use("/api/engine/*", requirePartnerSession);
+partnerApp.route("/api/engine", activityDealAttribution);
 partnerApp.route("/", partnerApi);
 partnerApp.route("/api/engine/doc", docRoutes());
 partnerApp.route("/api/engine/doc", docLinkRoutes);

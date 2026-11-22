@@ -60,7 +60,11 @@ type Correspondence = {
 			sender_name: string | null;
 			subject: string;
 	  }
-	| { kind: "meeting"; title: string | null }
+	| {
+			kind: "meeting";
+			title: string | null;
+			properties?: { id: string; name: string | null; address: string }[];
+	  }
 );
 
 export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
@@ -208,6 +212,14 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 					select 'operating_state' where c.new_value ?| array['parking_reason', 'parking_note']
 				) edit
 				where c.table_name = 'deal' and c.record = jsonb_build_object('id', d.id) and c.action = 'update'
+				union all
+				select c.id::text, c.changed_at, coalesce(u.slug, c.changed_by_job), 'cancel-tour',
+					'cancelled_at', c.old_value -> 'cancelled_at', c.new_value -> 'cancelled_at', null::text
+				from change created join change c on c.table_name = 'tour_plan' and c.record = created.record
+				left join app_user u on u.id = c.changed_by_user_id
+				where created.table_name = 'tour_plan' and created.action = 'insert'
+					and created.new_value ->> 'deal_id' = d.id::text
+					and c.action = 'update' and c.new_value ->> 'cancelled_at' is not null
 				order by recorded_at desc, id desc limit ${HISTORY_CAP}
 			) e)`.as("events"),
 		])
@@ -297,6 +309,13 @@ const correspondenceOf = (deal: Expression<string>) => sql<Correspondence[]>`(
 		jsonb_build_object('activity_id', a.id, 'kind', a.kind, 'happened_at', a.happened_at)
 		|| case when a.kind = 'meeting' then jsonb_build_object('title',
 			nullif(btrim(split_part(replace(a.summary, chr(13), ''), E'\\n\\n', 1), E' \\t\\n'), ''))
+			|| coalesce((
+				select jsonb_build_object('properties', jsonb_agg(
+					jsonb_build_object('id', p.id, 'name', p.name, 'address', p.address)
+					order by p.address, p.id))
+				from activity_about visited join property p on p.id = visited.property_id
+				where visited.activity_id = a.id having count(*) > 0
+			), '{}')
 		else jsonb_build_object('sender', e.sender, 'sender_name', e.sender_name, 'subject', e.subject)
 		end
 		order by a.happened_at desc, a.id desc
