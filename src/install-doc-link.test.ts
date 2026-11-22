@@ -99,7 +99,15 @@ esac`,
 		CLIENT_WEBSITE_ORIGIN: process.env.CLIENT_WEBSITE_ORIGIN,
 		DOC_BACKUP: process.env.DOC_BACKUP,
 		DOC_BACKUP_MODEL: process.env.DOC_BACKUP_MODEL,
-	};
+		DEALS_READ_SCHEMA: "next",
+		HOME_INBOX_READ_SCHEMA: "next",
+		LEADS_READ_SCHEMA: "next",
+		DIRECTORY_READ_SCHEMA: "next",
+		INVOICES_READ_SCHEMA: "next",
+		SEARCH_READ_SCHEMA: "next",
+		ACTIVITY_READ_SCHEMA: "next",
+		RELATIONSHIPS_READ_SCHEMA: "next",
+	} as const;
 	function run(input = firstCredential) {
 		const invocation = join(scratch, "run-installer.mjs");
 		writeFileSync(
