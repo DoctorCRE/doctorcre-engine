@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { copyTest, readSchema } from "../test-copy.ts";
+import { readSchema } from "../test-copy.ts";
+import { type Caller, doorTest } from "../test-door.ts";
 import worker from "../worker.ts";
 
 const id = (n: number) =>
 	`00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
-const { db, setup, cleanup, connectionString } = copyTest();
+const { db, setup, cleanup, request } = doorTest();
+const callCapture = { job: "call_capture", for_user: "joe" };
 
 before(async () => {
 	await setup();
@@ -41,6 +43,7 @@ before(async () => {
 		await db.query(`begin; ${await readSchema(file)} commit;`);
 	await db.query(`begin;
 		select set_config('engine.user_id', '${id(2)}', true);
+		insert into job values ('call_capture', 'Example call capture');
 		insert into party (id, kind, name) values ('${id(8)}', 'person', 'Example New Broker');
 		insert into party_email (party_id, address, label, is_primary)
 			values ('${id(8)}', 'new-broker@example.test', 'work', true),
@@ -60,23 +63,14 @@ before(async () => {
 });
 after(cleanup);
 
-function get(ids: string[], partner: string | null = "joe") {
+function get(
+	ids: string[],
+	caller: Caller = { user: "joe" },
+	headers: Record<string, string> = {},
+) {
 	const params = new URLSearchParams();
 	for (const dealId of ids) params.append("deal_id", dealId);
-	return worker.request(
-		`https://app.example.test/api/engine/call-context?${params}`,
-		{ headers: partner ? { Cookie: "__Host-dealroom_session=example" } : {} },
-		{
-			DATABASE: { connectionString },
-			CARR: {
-				fetch: async () =>
-					Response.json({
-						actor: { slug: partner, display: "Example User" },
-						csrf_token: "example",
-					}),
-			},
-		},
-	);
+	return request(caller, `call-context?${params}`, { headers });
 }
 
 test("either partner can read exact context and current participants for copied and new deals", async () => {
@@ -88,7 +82,7 @@ test("either partner can read exact context and current participants for copied 
 		email: "new-broker@example.test",
 	};
 	for (const partner of ["joe", "dell"]) {
-		const response = await get([newId, id(10)], partner);
+		const response = await get([newId, id(10)], { user: partner });
 		assert.equal(response.status, 200);
 		assert.deepEqual(await response.json(), {
 			deals: [
@@ -147,30 +141,72 @@ test("missing, parked and closed deals leave the rest of the batch available", a
 	});
 });
 
-test("call context accepts 50 distinct deal IDs and refuses invalid batches", async () => {
-	const max = Array.from({ length: 50 }, (_, index) => id(index + 100));
-	const response = await get(max);
-	assert.equal(response.status, 200);
-	assert.deepEqual(await response.json(), {
-		deals: [],
-		unavailable_deal_ids: max,
-	});
-	for (const ids of [
-		[],
-		["not-a-uuid"],
-		[id(11), id(11).toUpperCase()],
-		[...max, id(300)],
-	]) {
-		const refused = await get(ids);
-		assert.equal(refused.status, 400);
-		assert.partialDeepStrictEqual(await refused.json(), {
-			error: "invalid_field_value",
-			fields: ["deal_id"],
+for (const caller of [{ user: "joe" }, callCapture]) {
+	test(`${"job" in caller ? "Jobs" : "Signed-in"} call context accepts 50 distinct deal IDs and refuses invalid batches`, async () => {
+		const max = Array.from({ length: 50 }, (_, index) => id(index + 100));
+		const response = await get(max, caller);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
+			deals: [],
+			unavailable_deal_ids: max,
 		});
-	}
-});
+		for (const ids of [
+			[],
+			["not-a-uuid"],
+			[id(11), id(11).toUpperCase()],
+			[...max, id(300)],
+		]) {
+			const refused = await get(ids, caller);
+			assert.equal(refused.status, 400);
+			assert.partialDeepStrictEqual(await refused.json(), {
+				error: "invalid_field_value",
+				fields: ["deal_id"],
+			});
+		}
+	});
+}
 
 test("call context requires a signed-in partner", async () => {
-	assert.equal((await get([id(10)], null)).status, 401);
-	assert.equal((await get([id(10)], "example-observer")).status, 403);
+	const anonymous = await worker.request(
+		`https://app.example.test/api/engine/call-context?deal_id=${id(10)}`,
+	);
+	assert.equal(anonymous.status, 401);
+	assert.equal((await get([id(10)], { user: "example-observer" })).status, 403);
+});
+
+test("Studio receives the same call context bytes as a signed-in partner", async () => {
+	const ids = [id(11).toUpperCase(), id(99), id(10), id(12), id(13)];
+	const signedIn = await get(ids);
+	const studio = await get(ids, callCapture);
+	assert.equal(signedIn.status, 200);
+	assert.equal(studio.status, 200);
+	assert.equal(await studio.text(), await signedIn.text());
+});
+
+test("Studio call context refuses a missing Jobs token", async () => {
+	const response = await get([id(10)], callCapture, {
+		"Cf-Access-Jwt-Assertion": "",
+	});
+	assert.equal(response.status, 401);
+});
+
+test("Studio call context requires the call capture job and a provisioned partner", async () => {
+	for (const [caller, status, error] of [
+		[{ ...callCapture, job: "old_system" }, 403, "AUTHORIZATION_REFUSED"],
+		[{ job: "call_capture" }, 403, "AUTHORIZATION_REFUSED"],
+		[
+			{ ...callCapture, for_user: "example-observer" },
+			403,
+			"AUTHORIZATION_REFUSED",
+		],
+		[
+			{ ...callCapture, for_user: "example-unknown" },
+			422,
+			"actor_not_provisioned",
+		],
+	] as const) {
+		const response = await get([id(10)], caller);
+		assert.equal(response.status, status);
+		assert.partialDeepStrictEqual(await response.json(), { error });
+	}
 });
