@@ -16,6 +16,7 @@
 		"types:next": "kysely-codegen --dialect postgres --include-pattern \"next.*\" --default-schema next --date-parser string --type-mapping '{\"timestamp\":\"string\",\"timestamptz\":\"string\"}' --out-file src/next-database.d.ts"
 	},
 	"dependencies": {
+		"@anthropic-ai/sdk": "1.12.0",
 		"@modelcontextprotocol/sdk": "1.32.2",
 		"aws4fetch": "1.0.20",
 		"better-auth": "1.7.27",
