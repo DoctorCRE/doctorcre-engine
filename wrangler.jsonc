@@ -76,7 +76,8 @@
 				{
 					"binding": "POST_MEDIA",
 					"bucket_name": "doctorcre-post-media-staging"
-				}
+				},
+				{ "binding": "DEAL_DOCUMENTS", "bucket_name": "carr-documents-staging" }
 			],
 			"vars": {
 				"ENGINE_ENVIRONMENT": "staging",
