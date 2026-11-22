@@ -31,7 +31,7 @@ partner ─▶ app ─┬─▶ old API (mcp-server) ─▶ old tables     sign-
                                         └─▶ next schema     Deals and invoice tracker reads, with their engine switches
                                                             Mark paid with invoices-from-engine on
 signed-in partner ─▶ engine /api/engine ─▶ old tables        own calls with CSRF to patch-deal-field, update-deal, add-deal-note,
-                                                            set-next-step, and presence
+                                                            and set-next-step
 engine ─▶ old API /auth/session                             every partner call's sign-in check
 Studio programs ─▶ old API ─▶ old tables                    every program whose switch is off
 Studio programs, assistant ─▶ engine /jobs ─▶ next schema   only where a switch below is on

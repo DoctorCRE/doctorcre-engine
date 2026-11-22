@@ -35,6 +35,14 @@ const ask = (path: string, method = "GET", env: object = signedIn) =>
 		env,
 	);
 
+test("the former presence route returns not found", async () => {
+	const response = await ask("presence", "POST");
+	assert.deepEqual(
+		[response.status, await response.json()],
+		[404, { error: "not_found" }],
+	);
+});
+
 test("the former vendor market route returns not found", async () => {
 	const response = await ask("vendor-markets?market=%3C%2Fmarket%3E");
 	assert.deepEqual(
