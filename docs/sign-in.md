@@ -66,22 +66,30 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
    psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL" -f schema/partner-auth.sql
    ```
 
-2. In a `psql -X -v ON_ERROR_STOP=1` session as the migration owner, create the dedicated login if it is absent. Set its password at the `\password` prompt.
+2. Apply the separately approved migration that restricts public execution of security-definer routines before auditing the login. [Permissions migration (#1201)](https://github.com/DoctorCRE/doctorcre-engine/issues/1201)
+
+   If the dedicated login is absent, create it as the migration owner. Verify the direct Neon endpoint for the production branch. On that connection, confirm `show log_statement` returns `none` and `show log_min_error_statement` returns `panic`. Stop if either setting differs.
+
+   Generate a random password in memory. Use a private runner with shell tracing and SQL echo disabled. Set `PARTNER_AUTH_PASSWORD` only in the child `psql` environment and feed the following block to `psql -X -w -v ON_ERROR_STOP=1 -f -` on stdin. Neon rejects the password verifier sent by `\password`.
 
    ```sql
+   \getenv auth_password PARTNER_AUTH_PASSWORD
    begin;
-   create role engine_partner_auth_login login nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
+   create role engine_partner_auth_login
+       login nosuperuser nocreatedb nocreaterole noreplication nobypassrls
+       password :'auth_password';
    grant engine_partner_auth to engine_partner_auth_login;
-   \password engine_partner_auth_login
    commit;
    ```
 
-   Run the [effective permission audit](../schema/partner-auth-permissions.sql) as the dedicated login. It checks login attributes, memberships, every effective auth table and column privilege, and access to business schemas, tables, columns, sequences, and security-definer functions. Proceed to Hyperdrive only if the audit returns zero rows.
+   For the audit, set `PGHOST` and `PGDATABASE` to the verified direct endpoint and database. Set `PGUSER=engine_partner_auth_login` and pass the same in-memory password as `PGPASSWORD`. Use `PGSSLMODE=verify-full` with a trusted root certificate. Run the [effective permission audit](../schema/partner-auth-permissions.sql) and stop if it fails or returns any rows.
 
    ```sh
-   psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_PARTNER_AUTH_DATABASE_URL" \
+   psql -X -w -Atq -v ON_ERROR_STOP=1 \
        -c 'begin read only' -f schema/partner-auth-permissions.sql -c 'rollback'
    ```
+
+   After a zero-row audit, keep the direct login URL in memory and pass it to the uncached Hyperdrive in step 4. Keep the password and URL out of files, command output, and logs.
 
 3. Write the two verified mappings in a private CSV with the header `partner_user_id,email,google_subject`. Keep it outside the repo. Open `psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL"` as the migration owner and replace the example CSV path below. Run the block through the final `select`, then compare the two joined rows to the approved mappings in the same private session. Enter `commit;` only if both match. On any error or mismatch, enter `rollback;`. Report only the number of confirmed mappings.
 
