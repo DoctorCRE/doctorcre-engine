@@ -16,6 +16,8 @@ const evidence = "I have the survey in hand.";
 const followUp = "Send the drawing";
 const proposed = "Send the revised drawing";
 const held = "Send the survey";
+const recorderStep = randomUUID();
+const recorderWording = "Confirm the revised survey price";
 
 function callFixture() {
 	return {
@@ -32,6 +34,7 @@ function callFixture() {
 const privateCall = callFixture();
 const copiedCall = callFixture();
 const decisions = callFixture();
+const endedReview = callFixture();
 
 before(async () => {
 	await setup();
@@ -43,7 +46,7 @@ before(async () => {
 			('${contact}', 'person', '${contactName}');
 		insert into app_user (id, slug) values ('${recorderId}', '${recorder.user}'), ('${assigneeId}', '${assignee.user}');
 		commit;`);
-	for (const fixture of [privateCall, copiedCall, decisions]) {
+	for (const fixture of [privateCall, copiedCall, decisions, endedReview]) {
 		const { call, followUpDeal, heldDeal, step, proposal, heldStep, review } =
 			fixture;
 		const callJob = fixture === copiedCall ? "old_system" : "call_capture";
@@ -70,12 +73,17 @@ before(async () => {
 				values ('${review}', 'next_step_done', '${call}', 'call', 'old_system', '${heldDeal}', '${heldStep}', '${evidence}');
 			commit;`);
 	}
+	await db.query(`begin;
+		select set_config('engine.user_id', '${recorderId}', true);
+		insert into next_step (id, deal_id, owner_party_id, what, due_on, call_activity_id, call_evidence_quote)
+			values ('${recorderStep}', '${privateCall.followUpDeal}', '${recorderId}', '${recorderWording}', '2001-02-01', '${privateCall.call}', '${evidence}');
+		commit;`);
 });
 after(cleanup);
 
-async function readHome(path: string) {
+async function readHome(path: string, caller = assignee) {
 	const response = await request(
-		assignee,
+		caller,
 		path,
 		{ method: "GET" },
 		{ HOME_INBOX_READ_SCHEMA: "next" },
@@ -217,4 +225,45 @@ test("the assignee can accept the step proposal and decide the completion review
 	const step = findRow(items, "action_id", decisions.proposal);
 	assert.equal(step.title, proposed);
 	assertPrivateSourceHidden(step, decisions.call);
+});
+
+test("Today hides a private call follow-up owned by the other partner", async () => {
+	const { reminders } = await readHome("home/today");
+	const payload = JSON.stringify(reminders);
+	assert.ok(!payload.includes(recorderStep));
+	assert.ok(!payload.includes(recorderWording));
+
+	const own = await readHome("home/today", recorder);
+	assert.ok(isArguments(own.reminders));
+	assert.equal(
+		findRow(own.reminders.late, "id", recorderStep).title,
+		recorderWording,
+	);
+	assert.equal(
+		findRow(own.reminders.late, "id", copiedCall.step).open_url,
+		`/calls?session=${copiedCall.call}`,
+	);
+});
+
+test("a pending private-call completion review is unavailable after its step ends", async () => {
+	const path = `proposals/${endedReview.review}`;
+	assert.equal((await save(assignee, path, {}, "GET"))[0], 200);
+	const { items } = await readHome("home/inbox");
+	const review = findRow(items, "source_id", endedReview.review);
+	const [ended, result] = await save(
+		assignee,
+		`next-steps/${endedReview.heldStep}/end`,
+		{
+			idempotency_key: randomUUID(),
+			resolution: "done",
+			base_version: review.action_version,
+		},
+	);
+	assert.equal(ended, 200, JSON.stringify(result));
+	assert.equal((await save(assignee, path, {}, "GET"))[0], 404);
+	const [status] = await save(assignee, `${path}/decision`, {
+		idempotency_key: randomUUID(),
+		decision: "dismiss",
+	});
+	assert.equal(status, 404);
 });
