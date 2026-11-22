@@ -1629,7 +1629,7 @@ With the next read enabled, `X-DoctorCRE-Search: search.v1` requests the Search 
 
 Recent Activity requires `query` and accepts an optional `ref` on both paths. The next read resolves `ref` first, preferring a canonical reference over a shared ID or a copied alias. If `ref` is missing or has no match, the read uses `query`. A query prefers an exact reference or ID, then an exact name. Multiple matching targets return a list to disambiguate. The public read uses `query` as before.
 
-The next timeline shows calls, emails, meetings, notes, and next steps linked to the selected deal or contact. Email `detail` carries the stored body. Other rows have null `detail`, and `owed` is null for all rows. Calendar history contains the signed-in partner's confirmed meetings for that record.
+The next timeline shows calls, emails, meetings, notes, and next steps linked to the selected deal or contact. A private call and its summary, including any accepted notes, appear only for the partner who recorded the call or for whom it was recorded. Both partners see shared copied calls. Email `detail` carries the stored body. Other rows have null `detail`, and `owed` is null for all rows. Calendar history contains the signed-in partner's confirmed meetings for that record.
 
 ## Relationships read for the app
 

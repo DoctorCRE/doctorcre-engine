@@ -78,14 +78,24 @@ const decide = (id: unknown) =>
 		idempotency_key: randomUUID(),
 		decision: "accept",
 	});
+const recentActivity = (user: string, query: string) =>
+	request(
+		{ user },
+		`recent-activity?query=${query}`,
+		{ method: "GET" },
+		{
+			ACTIVITY_READ_SCHEMA: "next",
+		},
+	);
 
 test("accepting a copied call log leaves one call and adds one note at the call's time", async () => {
 	const copiedCall = id(19);
 	const copiedDeal = id(20);
+	const summary = "Discussed the example office.";
 	const what = "Agreed to review the example floor plan.";
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into deal (id, name, owner_user_id) values ('${copiedDeal}', 'Example copied call deal', '${ALEX}');
-		insert into activity (id, kind, happened_at) values ('${copiedCall}', 'call', '2026-01-07T15:00:00Z');
+		insert into activity (id, kind, happened_at, summary) values ('${copiedCall}', 'call', '2026-01-07T15:00:00Z', '${summary}');
 		insert into activity_about (activity_id, deal_id) values ('${copiedCall}', '${copiedDeal}');
 		insert into activity_about (activity_id, party_id) values ('${copiedCall}', '${BLAIR}');
 		select set_config('engine.user_id', '${ALEX}', true);
@@ -104,6 +114,13 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 		assert.equal(accepted, 200);
 		assert.deepEqual(answer.created, { activity_id: proposalId });
 		assert.deepEqual(await accept(), [200, { ...answer, replayed: true }]);
+		const target = dealId ?? partyId;
+		assert.ok(target);
+		const recent = await recentActivity("blair", target);
+		assert.equal(recent.status, 200);
+		const timeline = await recent.text();
+		assert.ok(timeline.includes(summary));
+		assert.ok(timeline.includes(what));
 		assert.deepEqual(
 			(
 				await db.query(
@@ -121,7 +138,7 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 					id: copiedCall,
 					kind: "call",
 					original_time: true,
-					summary: null,
+					summary,
 					changed_by_user_id: null,
 				},
 				{
@@ -136,10 +153,10 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 	}
 });
 
-test("private call logs save on the call once, including when its summary is blank", async () => {
+test("accepted private call logs stay on the call and appear only for its partner", async () => {
 	for (const [index, summary] of [null, "", "Original summary."].entries()) {
 		const callId = id(100 + index);
-		const happenedAt = `2026-01-0${7 + index}T15:00:00.000Z`;
+		const happenedAt = `2026-01-${17 + index}T15:00:00.000Z`;
 		const recorder = ["", "call_capture", "old_system"][index];
 		await db.query("begin");
 		await db.query(
@@ -157,31 +174,29 @@ test("private call logs save on the call once, including when its summary is bla
 			[callId, REVIEW, CLIENT],
 		);
 		await db.query("commit");
-		const readActor = async () => {
-			const response = await request(
-				{ user: "alex" },
-				`recent-activity?query=${CLIENT}`,
-				{ method: "GET" },
-				{ ACTIVITY_READ_SCHEMA: "next" },
-			);
+		const readEntry = async (user: string, target = CLIENT) => {
+			const response = await recentActivity(user, target);
 			assert.equal(response.status, 200);
 			const activity = z
 				.object({
 					state: z.literal("completed"),
 					catch_up: z.object({
 						timeline: z.array(
-							z.object({ actor: z.string(), occurred_at: z.string() }),
+							z.object({
+								actor: z.string(),
+								occurred_at: z.string(),
+								summary: z.string().nullable(),
+							}),
 						),
 					}),
 				})
 				.parse(await response.json());
-			const entry = activity.catch_up.timeline.find(
+			return activity.catch_up.timeline.find(
 				(item) => item.occurred_at === happenedAt,
 			);
-			assert.ok(entry);
-			return entry.actor;
 		};
-		assert.equal(await readActor(), recorder || "alex");
+		assert.equal((await readEntry("alex"))?.actor, recorder || "alex");
+		const beforeAccept = await readEntry("blair");
 		const [stored, proposal] = await propose({
 			kind: "log_call",
 			activity_id: callId,
@@ -200,7 +215,16 @@ test("private call logs save on the call once, including when its summary is bla
 		assert.equal(status, 200);
 		assert.deepEqual(answer.created, { activity_id: callId });
 		assert.deepEqual(await accept(), [200, { ...answer, replayed: true }]);
-		assert.equal(await readActor(), "alex");
+		const acceptedSummary = summary
+			? "Original summary.\n\nAgreed on timing."
+			: "Agreed on timing.";
+		for (const target of [REVIEW, CLIENT]) {
+			const entry = await readEntry("alex", target);
+			assert.equal(entry?.actor, "alex");
+			assert.equal(entry?.summary, acceptedSummary);
+			assert.equal(await readEntry("blair", target), undefined);
+		}
+		assert.equal(beforeAccept, undefined);
 		assert.deepEqual(
 			(
 				await db.query(
@@ -214,9 +238,7 @@ test("private call logs save on the call once, including when its summary is bla
 				{
 					id: callId,
 					kind: "call",
-					summary: summary
-						? "Original summary.\n\nAgreed on timing."
-						: "Agreed on timing.",
+					summary: acceptedSummary,
 				},
 			],
 		);
