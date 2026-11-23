@@ -189,6 +189,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 							"first-link": "subject-two",
 							"unverified-link": "subject-two",
 							"another-subject": "subject-new",
+							"outside-domain": "subject-two",
 						};
 						const subject = subjects[code ?? ""] ?? "subject-one";
 						const profile = {
@@ -198,6 +199,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 									? "one@example.test"
 									: "two@example.test",
 							email_verified: !code?.startsWith("unverified"),
+							...(code === "outside-domain" ? {} : { hd: "example.test" }),
 							name: "Example One",
 						};
 						const id_token = new UnsecuredJWT(profile)
@@ -360,6 +362,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 							[second.id],
 						);
 						assertRefused(await complete(await start("/"), "unverified-link"));
+						assertRefused(await complete(await start("/"), "outside-domain"));
 						assert.equal((await accounts()).rows.length, 0);
 						const linked = await complete(await start("/"), "first-link");
 						assert.equal(linked.status, 302);
