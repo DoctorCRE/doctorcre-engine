@@ -28,6 +28,10 @@ with outside_auth as (
 	join table_privileges using (privilege) where applies_to_columns
 	union all
 	values ('session', 'googleAuthenticatedAt', 'UPDATE'), ('session', 'updatedAt', 'UPDATE')
+	union all
+	-- Linking a partner's first Google account inserts every column but the password.
+	select table_name, column_name, 'INSERT' from auth_columns
+	where table_name = 'account' and attnum > 0 and column_name <> 'password'
 ), effective_auth_access (table_name, column_name, privilege) as (
 	select table_name, null::text, privilege from auth_tables cross join privilege_modes
 	where has_table_privilege(oid, privilege)

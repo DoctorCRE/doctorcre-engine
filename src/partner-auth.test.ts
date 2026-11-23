@@ -182,20 +182,24 @@ test("partner sessions in PostgreSQL", async (t) => {
 						);
 						exchanges++;
 						const code = body.get("code");
+						const subjects: Record<string, string> = {
+							unknown: "unprovisioned",
+							ineligible: "subject-other",
+							"different-account": "subject-two",
+							"first-link": "subject-two",
+							"unverified-link": "subject-two",
+							"another-subject": "subject-new",
+							"outside-domain": "subject-two",
+						};
+						const subject = subjects[code ?? ""] ?? "subject-one";
 						const profile = {
-							sub:
-								code === "unknown"
-									? "unprovisioned"
-									: code === "ineligible"
-										? "subject-other"
-										: code === "different-account"
-											? "subject-two"
-											: "subject-one",
+							sub: subject,
 							email:
-								code === "different-account"
-									? "two@example.test"
-									: "one@example.test",
-							email_verified: code !== "unverified",
+								subject === "subject-one"
+									? "one@example.test"
+									: "two@example.test",
+							email_verified: !code?.startsWith("unverified"),
+							...(code === "outside-domain" ? {} : { hd: "example.test" }),
 							name: "Example One",
 						};
 						const id_token = new UnsecuredJWT(profile)
@@ -345,6 +349,46 @@ test("partner sessions in PostgreSQL", async (t) => {
 				assert.equal(await count(), initialSessions + 5);
 
 				sub.mock.timers.reset();
+				await sub.test(
+					"a provisioned partner links a first Google account once",
+					async () => {
+						const accounts = () =>
+							db.query<{ accountId: string }>(
+								`select "accountId" from doctorcre_auth.account where "userId" = $1`,
+								[second.id],
+							);
+						await db.query(
+							`delete from doctorcre_auth.account where "userId" = $1`,
+							[second.id],
+						);
+						assertRefused(await complete(await start("/"), "unverified-link"));
+						assertRefused(await complete(await start("/"), "outside-domain"));
+						assert.equal((await accounts()).rows.length, 0);
+						const linked = await complete(await start("/"), "first-link");
+						assert.equal(linked.status, 302);
+						const session = await resolve(
+							new Headers({
+								cookie: cookiePair(cookieFrom(linked, sessionCookie)),
+							}),
+						);
+						assert.equal(session?.appUserId, second.appUserId);
+						assert.deepEqual(
+							(
+								await db.query(
+									`select "accessToken", "refreshToken", "idToken" from doctorcre_auth.account where "userId" = $1`,
+									[second.id],
+								)
+							).rows,
+							[{ accessToken: null, refreshToken: null, idToken: null }],
+						);
+						assertRefused(await complete(await start("/"), "another-subject"));
+						assert.deepEqual(
+							(await accounts()).rows.map(({ accountId }) => accountId),
+							["subject-two"],
+						);
+					},
+				);
+
 				async function staleSession(reauth: TestContext) {
 					reauth.mock.timers.setTime(issuedAt.getTime());
 					const session = await issue(first.id);
@@ -497,7 +541,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 		await t.test("requires unique subjects and partner links", async () => {
 			await assert.rejects(
 				db.query(
-					`update doctorcre_auth.account set "accountId" = 'subject-one' where id = 'two'`,
+					`update doctorcre_auth.account set "accountId" = 'subject-one' where "userId" = 'two'`,
 				),
 				{ code: "23505" },
 			);
@@ -856,7 +900,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 
 				await db.query(`grant select (slug) on public.actor to ${role}`);
 				await db.query(
-					`grant update ("accountId") on doctorcre_auth.account to ${role};
+					`grant update ("accountId"), insert (password) on doctorcre_auth.account to ${role};
 					grant truncate on doctorcre_auth.session to ${role};
 					grant update (value) on doctorcre_auth.verification to ${role} with grant option`,
 				);
@@ -868,6 +912,7 @@ test("partner sessions in PostgreSQL", async (t) => {
 				assert.deepEqual(rows.map(({ finding }) => finding).sort(), [
 					"missing DELETE on doctorcre_auth.session",
 					"public.actor",
+					"unexpected INSERT on doctorcre_auth.account.password",
 					"unexpected TRUNCATE on doctorcre_auth.session",
 					"unexpected UPDATE WITH GRANT OPTION on doctorcre_auth.verification.value",
 					'unexpected UPDATE on doctorcre_auth.account."accountId"',

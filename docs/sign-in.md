@@ -18,7 +18,7 @@ Source snapshots are CARR `5ec6edcf95f2f848481456f390120bde0eb454b8` (`mcp-serve
 
 ## Keep one session per browser context
 
-Provision one Better Auth user and Google account per partner. Each account binds the Google subject to one `next.app_user.id`. Keep the provider account ID and partner link unique in PostgreSQL and require a provisioned account and `is_account_partner` at session issuance and resolution. Disable public signup, passwords, implicit account linking, and other providers. Each OAuth return requires a verified Google email and the provisioned subject. Use the existing partner slug and display name in the app response. Identity review and configuration happen privately. Configure a random signing secret of at least 32 characters and keep provider and signing secrets separate for staging and production. No browser flow needs Google mail or calendar permission or stored Google tokens.
+Provision one Better Auth user per partner, with a Google account when the partner's Google subject is known. Each account binds the Google subject to one `next.app_user.id`. Keep the provider account ID and partner link unique in PostgreSQL and require a provisioned account and `is_account_partner` at session issuance and resolution. Disable public signup, passwords, and other providers. Each OAuth return requires a verified Google email and, for a partner with a Google account, that account's subject. A provisioned partner without a Google account links one on the first Google sign-in whose verified email matches the provisioned email, only when Google hosts that address: a Gmail address, or a Workspace domain named by the token's `hd` claim. The database allows one Google account per partner, so a later subject is refused. Use the existing partner slug and display name in the app response. Identity review and configuration happen privately. Configure a random signing secret of at least 32 characters and keep provider and signing secrets separate for staging and production. No browser flow needs Google mail or calendar permission or stored Google tokens.
 
 Better Auth stores the session in a private auth schema in Neon. Use its documented PostgreSQL adapter with a request-scoped connection through uncached Hyperdrive and a login limited to the auth tables and partner lookup. Keep migrations and provisioning on a separate login. The session binds the auth user, an opaque token, the issuing app origin, creation and expiration times, a CSRF token, and the most recent Google authentication time. Keep the session token out of responses, logs, and diagnostics except in its cookie.
 
@@ -83,7 +83,7 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
 
 2. As the migration owner, apply the separately approved `schema/restrict-shared-definer-execute.sql` to restrict public execution of security-definer routines. [Permissions migration (#1201)](https://github.com/DoctorCRE/doctorcre-engine/issues/1201)
 
-3. If the dedicated login is absent, create it as the migration owner. Verify the direct Neon endpoint for the production branch. On that connection, confirm `show log_statement` returns `none` and `show log_min_error_statement` returns `panic`. Stop if either setting differs.
+3. If the dedicated login is absent, create it as the migration owner. Run the audit below whether or not you created it. Verify the direct Neon endpoint for the production branch. On that connection, confirm `show log_statement` returns `none` and `show log_min_error_statement` returns `panic`. Stop if either setting differs.
 
    Generate a random password in memory. Use a private runner with shell tracing and SQL echo disabled. Set `PARTNER_AUTH_PASSWORD` only in the child `psql` environment and feed the following block to `psql -X -w -v ON_ERROR_STOP=1 -f -` on stdin. Neon rejects the password verifier sent by `\password`.
 
@@ -106,7 +106,7 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
 
    After a zero-row audit, keep the direct login URL in memory and pass it to the uncached Hyperdrive in step 5. Keep the password and URL out of files, command output, and logs.
 
-4. Write the two verified mappings in a private CSV with the header `partner_user_id,email,google_subject`. Keep it outside the repo. Open `psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL"` as the migration owner and replace the example CSV path below. Run the block through the final `select`, then compare the two joined rows to the approved mappings in the same private session. Enter `commit;` only if both match. On any error or mismatch, enter `rollback;`. Report only the number of confirmed mappings.
+4. Write each partner's verified mapping whose Google subject is known in a private CSV with the header `partner_user_id,email,google_subject`. Keep it outside the repo. Open `psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL"` as the migration owner and replace the example CSV path below. Run the block through the final `select`, then compare the joined rows to the approved mappings in the same private session. Enter `commit;` only if all match. On any error or mismatch, enter `rollback;`. Report only the number of confirmed mappings.
 
    ```sql
    begin;
@@ -155,7 +155,9 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
    order by p.app_user_id;
    ```
 
-   An exact existing pair is accepted. A matching user with a missing account is completed. A conflicting pair aborts the transaction for both mappings.
+   An exact existing pair is accepted. A matching user with a missing account is completed. A conflicting pair aborts the transaction for both mappings. Change the expected count in the check to the number of rows in the CSV.
+
+   For a partner whose Google subject is not known, insert only the `doctorcre_auth."user"` row, with the partner's verified Google email in lower case and `"emailVerified"` true. That partner's first verified Google sign-in with that email links the account. Apply [the link grant](../schema/allow-first-google-link.sql) as the migration owner on a database set up before it. Once every partner has a Google account, revoke that insert grant from `engine_partner_auth` and drop the matching rows from the permission audit's expected access.
 
 5. Check `./node_modules/.bin/wrangler hyperdrive list` for `doctorcre-engine-partner-auth`. If it is absent, create it using the direct connection URL for `engine_partner_auth_login`.
 
@@ -164,7 +166,7 @@ curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
        --connection-string "$PRODUCTION_PARTNER_AUTH_DATABASE_URL" --caching-disabled
    ```
 
-   Check the returned ID with `./node_modules/.bin/wrangler hyperdrive get "$PRODUCTION_PARTNER_AUTH_HYPERDRIVE_ID"`. Verify the production Neon host, database, `engine_partner_auth_login`, and `caching.disabled=true`. In `wrangler.jsonc`, replace the all-zero production `PARTNER_AUTH_DATABASE` ID with this ID. Keep staging's own Hyperdrive on the rehearsal branch. A merge to `main` starts a production upload, so commit and review the real ID before queuing the merge. [Hyperdrive commands](https://developers.cloudflare.com/workers/wrangler/commands/hyperdrive/)
+   Check the returned ID with `./node_modules/.bin/wrangler hyperdrive get "$PRODUCTION_PARTNER_AUTH_HYPERDRIVE_ID"`. Verify the production Neon host, database, `engine_partner_auth_login`, and `caching.disabled=true`. In `wrangler.jsonc`, set the production `PARTNER_AUTH_DATABASE` ID to this ID. Keep staging's own Hyperdrive on the rehearsal branch. A merge to `main` starts a production upload, so commit and review the real ID before queuing the merge. [Hyperdrive commands](https://developers.cloudflare.com/workers/wrangler/commands/hyperdrive/)
 
 6. For the production Google client, confirm the redirect URI is `https://app.doctorcre.com/auth/callback/google`. If any of the three production secrets are missing, set them with the approved values at the interactive prompts. Each `secret put` deploys a version of the named engine Worker.
 

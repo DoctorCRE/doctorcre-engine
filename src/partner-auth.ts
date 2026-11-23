@@ -65,7 +65,7 @@ function partnerAuth(
 				// The ID token comes from Google's HTTPS code exchange using PKCE.
 				if (
 					!google ||
-					source.action !== "sign-in" ||
+					(source.action !== "sign-in" && source.action !== "link-account") ||
 					source.oauth?.providerId !== "google" ||
 					profile?.email_verified !== true ||
 					(profile.iss !== "https://accounts.google.com" &&
@@ -77,6 +77,8 @@ function partnerAuth(
 				) {
 					return { error: "google_identity_required" };
 				}
+				if (source.action === "link-account" && !googleOwnsEmail(profile))
+					return { error: "google_identity_required" };
 				const state = await getOAuthState();
 				if (!state || !(await claimGoogleReturn(pool, state)))
 					return { error: "state_already_used" };
@@ -103,7 +105,8 @@ function partnerAuth(
 			},
 		},
 		account: {
-			accountLinking: { enabled: false, disableImplicitLinking: true },
+			// A provisioned partner without a Google account links one on a verified sign-in; the database allows one.
+			accountLinking: { enabled: true },
 			storeAccountCookie: false,
 			updateAccountOnSignIn: false,
 		},
@@ -128,6 +131,13 @@ function partnerAuth(
 			},
 		},
 		databaseHooks: {
+			account: {
+				create: {
+					before: async () => ({
+						data: { accessToken: null, refreshToken: null, idToken: null },
+					}),
+				},
+			},
 			session: {
 				create: {
 					before: async (session) => {
@@ -149,6 +159,16 @@ function partnerAuth(
 			},
 		},
 	});
+}
+
+// Google vouches for who owns an address only for Gmail and the domains it hosts.
+function googleOwnsEmail({ email, hd }: { email?: unknown; hd?: unknown }) {
+	if (typeof email !== "string") return false;
+	const domain = email.slice(email.lastIndexOf("@") + 1).toLowerCase();
+	return (
+		domain === "gmail.com" ||
+		(typeof hd === "string" && hd.toLowerCase() === domain)
+	);
 }
 
 async function claimGoogleReturn(

@@ -83,6 +83,9 @@ revoke execute on function public.tool_call_expire() from public;
 revoke all on all tables in schema doctorcre_auth from public;
 grant usage on schema doctorcre_auth to engine_partner_auth;
 grant select on doctorcre_auth."user", doctorcre_auth.account, doctorcre_auth.partner to engine_partner_auth;
+grant insert (id, "userId", "providerId", "accountId", "accessToken", "refreshToken", "idToken",
+	"accessTokenExpiresAt", "refreshTokenExpiresAt", scope, "createdAt", "updatedAt")
+	on doctorcre_auth.account to engine_partner_auth;
 grant select, insert, delete on doctorcre_auth.session to engine_partner_auth;
 grant update ("googleAuthenticatedAt", "updatedAt") on doctorcre_auth.session to engine_partner_auth;
 grant select, insert, update, delete on doctorcre_auth.verification to engine_partner_auth;
