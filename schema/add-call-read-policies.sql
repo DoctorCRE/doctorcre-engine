@@ -207,7 +207,12 @@ create or replace view next_partner.home_update with (security_barrier = true) a
 		and (s.id is null or call_step_visible_to(s.call_activity_id, s.owner_party_id));
 
 create or replace view next_partner.change with (security_barrier = true) as
-	select visible.* from change c
+	-- Preserve audit keys so the planner can use the table-name index condition.
+	select c.id, c.table_name, c.record, c.action,
+		case when redact.field is null then c.old_value else c.old_value - redact.field end as old_value,
+		case when redact.field is null then c.new_value else c.new_value - redact.field end as new_value,
+		c.merge_of, c.changed_by_user_id, c.changed_by_job, c.changed_for_user_id, c.changed_at
+	from change c
 	cross join lateral (select case
 		when c.table_name = 'home_update' then 'what'
 		when c.table_name = 'next_step' then 'resolution_reason'
@@ -216,8 +221,6 @@ create or replace view next_partner.change with (security_barrier = true) as
 				where m.deal_id = (c.record ->> 'deal_id')::uuid
 					and m.happened_at = (c.record ->> 'happened_at')::timestamptz and m.reason is not null) then 'reason'
 	end as field) redact
-	cross join lateral jsonb_populate_record(c, case when redact.field is null then '{}'::jsonb else
-		jsonb_build_object('old_value', c.old_value - redact.field, 'new_value', c.new_value - redact.field) end) visible
 	where case
 	when c.table_name = 'activity' and (c.old_value ? 'summary' or c.new_value ? 'summary') then
 		exists (select from next_partner.activity a where a.id = (c.record ->> 'id')::uuid and (
