@@ -515,7 +515,7 @@ end $$;
 create trigger deal_parked_or_flagged_by_a_user before insert or update of parking_reason, parking_note, needs_attention
 	on deal for each row execute function deal_parked_or_flagged_by_a_user();
 
--- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.
+-- Import history only: another system's id for a record, such as Salesforce's or a roster's.
 create table outside_id (
 	source text not null check (source ~ '^[a-z][a-z0-9_]*$'),
 	value text not null check (value ~ '^\S(.*\S)?$'),
@@ -526,7 +526,7 @@ create table outside_id (
 	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id, email_activity_id) = 1),
 	primary key (source, value)
 );
--- Leads, quiet follow-ups and action links find a party's copied old-system ids.
+-- Reads find a party's old ids by party.
 create index outside_id_by_party on outside_id (party_id);
 
 create table phase (
