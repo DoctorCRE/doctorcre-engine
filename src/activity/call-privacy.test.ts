@@ -428,6 +428,20 @@ test("the partner reader can narrow step history with the change index", async (
 	);
 });
 
+test("the partner reader can narrow phase history to one deal by its key", async () => {
+	const deal = randomUUID();
+	const { rows } = await nextPartnerRead(door.readerUrl, "dell", async (tx) => {
+		await sql`set local enable_seqscan = off`.execute(tx);
+		return sql<{ "QUERY PLAN": string }>`
+			explain (costs off) select phase from deal_phase_change where deal_id = ${deal}::uuid
+		`.execute(tx);
+	});
+	assert.match(
+		rows.map((row) => row["QUERY PLAN"]).join("\n"),
+		/Index Cond: \(deal_id = /,
+	);
+});
+
 test("the partner login has no direct read permission on call-bearing text", async () => {
 	const { rows } = await door.db.query(
 		`select census.tab, census.col from (values
