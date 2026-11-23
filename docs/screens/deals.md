@@ -18,7 +18,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 - [ ] Two tabs: Local Deals and National Accounts.
 - [ ] All, Joe and Dell choose whose deals show. Board, List, Closed deals and Lost deals choose the view. Parked shows or hides the Parked lane on Board and List.
-- [ ] Board: seven columns in order, Prospective Client, Research, Site Selection, Negotiating, Legal, Due Diligence, Closing. The phase name and count fit on one line, even when collapsed and on a phone. Spacing and a subtle divider separate the columns without outlining them. A closed deal leaves the board for Closed deals or Lost deals.
+- [ ] Board: seven columns in order, Prospective Client, Research, Site Selection, Negotiating, Legal, Due Diligence, Closing. The phase name and count fit on one line, even when collapsed and on a phone; a name too long for a narrow column ends in an ellipsis. Each column is a faint, borderless panel as tall as its cards and ends with **+ Add deal**, which opens Add deal set to that phase. On a desktop the seven columns share the width and fit beside Today without scrolling sideways; when the sidebar and Today crowd them, columns keep a minimum width and the board scrolls sideways. A closed deal leaves the board for Closed deals or Lost deals (owner, 2026-11-23).
 - [ ] The headline counts every open deal, including those in collapsed columns, and every parked deal, whether the Parked lane is open or not: "38 open deals · 27 parked".
 - [ ] Each open deal shows once, in its phase column. A parked deal shows only in the Parked lane.
 - [ ] With `deals-from-engine` on, the board stays current without the old live feed: it reloads from the engine when the tab is shown or focused, after each save, and about every minute while in use, and says when it last updated. National Accounts' pending confirmations load on their own (coordinator, 2026-11-20).
@@ -28,7 +28,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 ### Card
 
-- [ ] A card shows the deal's short name and owner. A click, tap or keyboard activation of the name opens the deal page.
+- [ ] A card shows the deal's short name, then one row with the owner's next-step due date ("Due Jan 17", "Due today"), the “Needs attention” badge when there is one, and the owner's initial. A click, tap or keyboard activation of the name opens the deal page.
 - [ ] One small “Needs attention” badge appears when a partner flagged the deal or the deal owner's next step is late. Its accessible name gives the reason, such as “Needs attention: Step 3 days late.” A deal without a next step gets a badge only if flagged.
 - [ ] Dragging a card to another column, or the same move by keyboard, asks for the phase move's details and moves it only on Move to [phase].
 
