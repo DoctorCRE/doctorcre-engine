@@ -108,7 +108,8 @@ function stepRows(
 			and m.item_id = s.id
 			and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
 		left join (
-			select distinct on (step_id) * from step_history order by step_id, id desc
+			select distinct on (step_id) step_id, id, changed_by_user_id, old_value, new_value
+			from step_history order by step_id, id desc
 		) step_change on step_change.step_id = s.id::text
 		left join lateral (
 			select max(id) as id
