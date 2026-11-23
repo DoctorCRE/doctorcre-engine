@@ -37,8 +37,7 @@
 		},
 		{
 			"binding": "PARTNER_AUTH_DATABASE",
-			// Replace with the uncached production Hyperdrive ID before merging.
-			"id": "00000000000000000000000000000000"
+			"id": "9890d06fa69545e1a4a102e2ffa26dea"
 		}
 	],
 	"r2_buckets": [
