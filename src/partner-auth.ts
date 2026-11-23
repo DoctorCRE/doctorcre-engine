@@ -65,7 +65,7 @@ function partnerAuth(
 				// The ID token comes from Google's HTTPS code exchange using PKCE.
 				if (
 					!google ||
-					source.action !== "sign-in" ||
+					(source.action !== "sign-in" && source.action !== "link-account") ||
 					source.oauth?.providerId !== "google" ||
 					profile?.email_verified !== true ||
 					(profile.iss !== "https://accounts.google.com" &&
@@ -103,7 +103,8 @@ function partnerAuth(
 			},
 		},
 		account: {
-			accountLinking: { enabled: false, disableImplicitLinking: true },
+			// A provisioned partner without a Google account links one on a verified sign-in; the database allows one.
+			accountLinking: { enabled: true, trustedProviders: ["google"] },
 			storeAccountCookie: false,
 			updateAccountOnSignIn: false,
 		},
@@ -128,6 +129,13 @@ function partnerAuth(
 			},
 		},
 		databaseHooks: {
+			account: {
+				create: {
+					before: async () => ({
+						data: { accessToken: null, refreshToken: null, idToken: null },
+					}),
+				},
+			},
 			session: {
 				create: {
 					before: async (session) => {
