@@ -86,20 +86,6 @@ test("quiet follow-ups answer with the old cadence, date text and refusals", () 
 			options: "-c search_path=next",
 		});
 		await db.connect();
-		const leads = (from: number, to: number) =>
-			db.query(
-				`with g as (select ('00000000-0000-4000-9000-' || lpad(n::text, 12, '0'))::uuid as id
-					from generate_series($1::int, $2::int) n),
-				p as (insert into party (id, kind, name, how_found)
-					select id, 'person', 'Example', 'referral' from g),
-				r as (insert into party_role (party_id, role, stage, owner_user_id)
-					select g.id, 'lead', 'new', u.id from g, app_user u),
-				o as (insert into outside_id (source, value, party_id)
-					select 'old_system_lead', id::text, id from g)
-				insert into next_step (id, party_id, what, due_on)
-					select md5('old_system:lead:' || id || ':follow_up')::uuid, id, 'Imported lead follow-up', '2020-01-05' from g`,
-				[from, to],
-			);
 		try {
 			await db.query(`select set_config('engine.job', 'old_system', false);
 				with p as (insert into party (kind, name) values ('person', 'Example Partner') returning id)
@@ -107,7 +93,14 @@ test("quiet follow-ups answer with the old cadence, date text and refusals", () 
 				insert into how_found (slug, label) values ('referral', 'Referral');
 				insert into role (slug, label) values ('lead', 'Lead');
 				insert into stage (role, slug, label) values ('lead', 'new', 'New')`);
-			await leads(1, 1);
+			await db.query(`with p as (
+					insert into party (kind, name, how_found) values ('person', 'Example', 'referral') returning id),
+				r as (insert into party_role (party_id, role, stage, owner_user_id)
+					select p.id, 'lead', 'new', u.id from p, app_user u),
+				o as (insert into outside_id (source, value, party_id)
+					select 'old_system_lead', id::text, id from p)
+				insert into next_step (id, party_id, what, due_on)
+					select md5('old_system:lead:' || id || ':follow_up')::uuid, id, 'Imported lead follow-up', '2020-01-05' from p`);
 			const answered = async (search: string) => {
 				const response = await quiet(search, url);
 				assert.equal(response.status, 200);
@@ -144,7 +137,12 @@ test("quiet follow-ups answer with the old cadence, date text and refusals", () 
 				await refusal(await quiet("?lead_days=99999999999", url)),
 				[500, { ...generic, verb: "quiet-follow-ups" }],
 			);
-			await leads(2, 1001);
+			await db.query(`with p as (
+					insert into party (kind, name, how_found)
+						select 'person', 'Example', 'referral' from generate_series(1, 1000)
+						returning id)
+				insert into party_role (party_id, role, stage, owner_user_id, created_at)
+					select p.id, 'lead', 'new', u.id, '2020-01-01' from p, app_user u`);
 			assert.deepEqual(await refusal(await quiet("", url)), [422, generic]);
 		} finally {
 			await db.end();

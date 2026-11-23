@@ -2877,6 +2877,12 @@ before(async () => {
 	await asAdmin(`create database "${name}" template template0`);
 	db = await connect("none");
 	await db.query(`create schema next; ${SCHEMA}`);
+	await db.query(
+		await readFile(
+			new URL("../schema/add-call-read-policies.sql", import.meta.url),
+			"utf8",
+		),
+	);
 	await db.query(USERS);
 	await db.query(
 		"insert into invoice_mailbox (address) values ('invoices@example.com')",
@@ -4392,6 +4398,8 @@ test("the engine adds, changes and removes only what its grants name, and emptie
 			table,
 			changeable: CHANGEABLE[table] ?? null,
 			addable: ![
+				"call_audit_evidence",
+				"step_call_provenance",
 				"deal_open_name",
 				"doc_judgment_destination",
 				"doc_judgment_job",
@@ -9505,3 +9513,16 @@ test("imported resends must reference one original application with the same tar
 			],
 		),
 	]));
+for (const [snapshot, id] of [
+	["everything_about_deal", DEAL],
+	["everything_about_party", CLIENT],
+] as const) {
+	test(`${snapshot} cannot run as the partner reader`, () =>
+		rolledBack(async () => {
+			await db.query("set local role engine_reader");
+			await assert.rejects(db.query(`select next.${snapshot}($1)`, [id]), {
+				code: "42501",
+				message: `permission denied for function ${snapshot}`,
+			});
+		}));
+}

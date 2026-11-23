@@ -180,7 +180,7 @@ for (const migrated of [false, true]) {
 				);
 			}
 			await db.query(
-				"reset role; set role engine_reader; reset engine.user_id",
+				"reset role; set role engine_reader; reset engine.user_id; set search_path = next_partner, next, pg_temp",
 			);
 			assert.deepEqual(
 				(

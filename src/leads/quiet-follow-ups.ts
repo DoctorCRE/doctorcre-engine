@@ -2,7 +2,7 @@ import { sql, type Transaction } from "kysely";
 import type { DB } from "../next-database.d.ts";
 import {
 	copiedLeadIdentity,
-	lastRecordedContact,
+	lastRecordedContacts,
 	openPartySteps,
 } from "./follow-up-reads.ts";
 
@@ -47,12 +47,13 @@ const proposals = (
 			coalesce(legacy.registry_ref, vendor.ref, legacy.value, p.id::text) as ref,
 			p.name, r.owner_user_id as owner_id, u.slug as owner, c.party_id as client_id,
 			(r.created_at at time zone 'America/Chicago')::date as created_on,
-			(${lastRecordedContact(sql.ref("p.id"))} at time zone 'America/Chicago')::date as last_contact_on,
+			(recorded.happened_at at time zone 'America/Chicago')::date as last_contact_on,
 			steps.next_action_date,
 			case r.role when 'lead' then ${cadence.lead_days}::int else ${cadence.vendor_days}::int end as interval_days
 		from party_role r
 		join party p on p.id = r.party_id
 		left join app_user u on u.id = r.owner_user_id
+		left join (${lastRecordedContacts}) recorded on recorded.party_id = p.id
 		left join client c on r.role = 'lead' and c.party_id = coalesce(r.lead_client_id, p.id)
 		left join lateral (${copiedLeadIdentity(sql.ref("p.id"))}) legacy on r.role = 'lead'
 		left join lateral (

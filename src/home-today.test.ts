@@ -479,7 +479,7 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 	await t.test("meetings and reminders fail independently", async () => {
 		const cases = [
 			["calendar_agenda", "meetings", "reminders"],
-			["next_step", "reminders", "meetings"],
+			["next_partner.next_step", "reminders", "meetings"],
 		] as const;
 		const [, healthy] = await today();
 		for (const [table, bad, good] of cases) {
@@ -525,10 +525,14 @@ test("today keeps each Outlook occurrence independently of its review", async (t
 });
 
 test("reminder home_item_id does not depend on the inbox page limit", async () => {
+	// The filler only needs to occupy the inbox page.
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		alter table home_update disable trigger record_change;
 		insert into home_update (user_id, deal_id, what, created_at)
 		select '${id(1)}', '${id(7)}', 'Update ' || g, now() + interval '1 hour'
-		from generate_series(1, 1001) g; commit;`);
+		from generate_series(1, 1001) g;
+		alter table home_update enable trigger record_change;
+		commit;`);
 	try {
 		const inboxRes = await request(joe, "home/inbox", get, reader);
 		const inbox = (await inboxRes.json()) as {

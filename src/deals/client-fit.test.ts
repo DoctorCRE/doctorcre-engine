@@ -204,8 +204,8 @@ test("Client Fit returns 1,000 groups and refuses 1,001", async (t) => {
 		select name, id, '${id(1)}' from markets;
 		insert into deal_party (deal_id, party_id, role)
 		select id, '${id(2)}', 'client' from deal on conflict do nothing;
-		insert into deal_phase_change (deal_id, happened_at, phase)
-		select id, '2025-11-22 02:00Z', 'closed' from deal on conflict do nothing;
+		insert into imported_deal_board (deal_id, city, phase, outcome, closed_on)
+		select id, name, 'closed', 'won', '2025-11-21' from deal on conflict do nothing;
 		commit;
 	`);
 	await addWins(1, 1000);

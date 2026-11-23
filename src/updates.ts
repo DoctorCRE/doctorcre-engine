@@ -19,7 +19,7 @@ const unreadCount = async (db: Transaction<DB>, user: RawBuilder<string>) => {
 	const {
 		rows: [count],
 	} = await sql<{ unread_count: number }>`
-		select count(*)::int as unread_count from home_update u
+		select count(*)::int as unread_count from next_partner.home_update u
 		where u.user_id = ${user} and u.read_at is null
 			and ${homeUpdateAvailable(db)}
 			and not exists (select from home_mark m

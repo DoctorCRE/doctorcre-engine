@@ -1,13 +1,19 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import { URL } from "node:url";
 import pg from "pg";
 import { NoDatabase, withSnapshot } from "./test-database.ts";
 
+async function run(command: string, args: string[], env: NodeJS.ProcessEnv) {
+	const child = spawn(command, args, { env, stdio: "inherit" });
+	const [status] = await once(child, "close");
+	if (status !== 0) throw new Error(`${command} ${args.join(" ")} failed`);
+}
+
 function npmRun(script: string, env: NodeJS.ProcessEnv) {
-	const result = spawnSync("npm", ["run", script], { env, stdio: "inherit" });
-	if (result.error) throw result.error;
-	if (result.status !== 0) throw new Error(`npm run ${script} failed`);
+	return run("npm", ["run", script], env);
 }
 
 async function loadNextSection(url: string) {
@@ -17,8 +23,12 @@ async function loadNextSection(url: string) {
 	});
 	await db.connect();
 	try {
-		const [schema, attribution] = await Promise.all([
+		const [schema, privacy, attribution] = await Promise.all([
 			readFile(new URL("../schema/next.sql", import.meta.url), "utf8"),
+			readFile(
+				new URL("../schema/add-call-read-policies.sql", import.meta.url),
+				"utf8",
+			),
 			readFile(
 				new URL("../schema/copy-attribution.sql", import.meta.url),
 				"utf8",
@@ -26,6 +36,7 @@ async function loadNextSection(url: string) {
 		]);
 		await db.query(`alter default privileges revoke execute on functions from public;
 			create schema next; ${schema}; ${attribution}`);
+		await db.query(privacy);
 	} finally {
 		await db.end();
 	}
@@ -40,12 +51,25 @@ await withSnapshot((_, snapshot) =>
 			TEST_DATABASE_URL: url,
 			TEST_SNAPSHOT: snapshot,
 		};
-		npmRun("types:db", env);
+		await npmRun("types:db", env);
 		await withSnapshot(async (nextUrl, copySnapshot) => {
 			await loadNextSection(nextUrl);
-			npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
-			npmRun("types", env);
-			npmRun("test", { ...env, TEST_COPY_SNAPSHOT: copySnapshot });
+			await npmRun("types:next", { ...env, DATABASE_URL: nextUrl });
+			// Small runners can run more files while their tests wait for PostgreSQL.
+			const cpus = availableParallelism();
+			const concurrency = Math.max(cpus - 1, Math.min(2 * cpus, 6));
+			// Both commands must finish before the snapshots are dropped.
+			const results = await Promise.allSettled([
+				npmRun("types", env),
+				run(
+					process.execPath,
+					["--test", `--test-concurrency=${concurrency}`, "src/**/*.test.ts"],
+					{ ...env, TEST_COPY_SNAPSHOT: copySnapshot },
+				),
+			]);
+			for (const result of results) {
+				if (result.status === "rejected") throw result.reason;
+			}
 		}, snapshot);
 	}, snapshot),
 ).catch((error: unknown) => {

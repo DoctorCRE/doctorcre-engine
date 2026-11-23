@@ -3,7 +3,7 @@ import type { DB as NextDB } from "../next-database.d.ts";
 import type { Reader } from "../reader.ts";
 import {
 	copiedLeadIdentity,
-	lastRecordedContact,
+	lastRecordedContacts,
 	openPartySteps,
 } from "./follow-up-reads.ts";
 import {
@@ -231,7 +231,7 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 				exists (select from deal_party d where d.party_id = p.id
 					and d.role in ('client', 'client_contact')) as is_deal,
 				(select min(due_on) from (${openPartySteps(sql.ref("p.id"))}) steps) as next_action_date,
-				${lastRecordedContact(sql.ref("p.id"))} as last_touch,
+				recorded.happened_at as last_touch,
 				false as suppressed,
 				case when client.party_id is null and r.lead_client_id is null
 					and dnc.party_id is null then coalesce(matches.items, '[]') else '[]' end as possible_clients,
@@ -248,13 +248,15 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 			left join app_user u on u.id = r.owner_user_id
 			left join party owner on owner.id = u.id
 			left join active_do_not_contact dnc on dnc.party_id = p.id
+			left join (${lastRecordedContacts}) recorded on recorded.party_id = p.id
 			left join client on client.party_id = p.id
-			left join lateral (
-				select jsonb_agg(jsonb_build_object('client_id', cp.id, 'name', cp.name)
-					order by cp.id) as items
-				from client match join party cp on cp.id = match.party_id
-				where cp.id <> p.id and lower(btrim(cp.name)) = lower(btrim(p.name))
-			) matches on client.party_id is null and r.lead_client_id is null and dnc.party_id is null
+			-- A lead that is not itself a client never matches its own party.
+			left join (
+				select lower(btrim(cp.name)) as name_key,
+					jsonb_agg(jsonb_build_object('client_id', cp.id, 'name', cp.name) order by cp.id) as items
+				from client match join party cp on cp.id = match.party_id group by 1
+			) matches on matches.name_key = lower(btrim(p.name))
+				and client.party_id is null and r.lead_client_id is null and dnc.party_id is null
 			left join lateral (${copiedLeadIdentity(sql.ref("p.id"))}) legacy on true
 			where r.role = 'lead'
 		)

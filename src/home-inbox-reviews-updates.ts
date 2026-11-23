@@ -245,9 +245,9 @@ export async function readHomeUpdates(
 			coalesce(mark_change.id, 0)::text as mark_version,
 			case when m.snoozed_until > now() then m.snoozed_until end as snoozed_until,
 			m.waiting_reason, u.read_at
-		from home_update u
+		from next_partner.home_update u
 		join deal d on d.id = u.deal_id
-		left join next_step item on item.deal_id = u.deal_id
+		left join next_partner.next_step item on item.deal_id = u.deal_id
 			and 'deal-item:' || item.id::text = u.checklist_item_ref
 		cross join lateral (
 			select (u.kind = 'tour_feedback' or u.checklist_item_ref is not null)

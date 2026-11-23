@@ -54,12 +54,14 @@ For a single check on an existing local throwaway server, `TEST_DATABASE_URL`
 defaults to `postgres://postgres@127.0.0.1:5432/postgres`.
 The loader accepts only loopback hosts without URL query parameters, creates a
 random database, and drops it in `finally`. Never point it at a server with
-business data. A check opens roughly one connection per CPU core, plus sessions
-for tests that exercise concurrent writes. More simultaneous checks need more
-connections.
+business data. On small machines, the check runs up to six test files at once,
+with at most two per CPU. It keeps Node's default when that permits more files.
+A check opens roughly one connection per concurrent test file, plus sessions
+for tests that exercise concurrent writes.
 
 Each check restores `schema/business.sql` once, generates ignored `src/database.d.ts`
-with `kysely-codegen`, and runs TypeScript and tests against that database.
+with `kysely-codegen`, and runs TypeScript and tests in parallel once the database
+types are ready.
 A test that needs its own database copies that restore, because one restore
 holds about 2,100 locks and many at once exhaust the server's lock table (#237).
 Use `Kysely<DB>` with the generated `DB` for business queries. Raw SQL bypasses
@@ -122,8 +124,8 @@ for a match, 1 for differences or unsettled requests and 2 for failure.
 
 For the new section, `nextTransaction(connectionString, "read" | "save", run)`
 passes a `Transaction<DB>` from `src/next-database.d.ts` to `run`. It pins
-`search_path` to `next, pg_temp` and the time zone to UTC. Reads use a repeatable-read,
-read-only snapshot under `engine_reader`. Saves use a read-committed transaction
+`search_path` and the time zone to UTC. Reads use `next_partner, next, pg_temp` and a repeatable-read,
+read-only snapshot under `engine_reader`. Saves use `next, pg_temp` and a read-committed transaction
 under `engine`, with the existing column grants. The supplied SQL-created login
 must belong to the selected role. The reader's has no other grants; the writer's,
 `engine_business_writer`, keeps its old-table grants until the switch revokes them
@@ -133,7 +135,7 @@ save's answer, and `changeDeal` refuses a crossed deal edit and answers `rebased
 over an unseen change to another field.
 The health probe appends `next_section_readable` after its existing fields.
 
-Each check also loads `schema/next.sql` into `next` in a copy of that restore and
+Each check loads `schema/next.sql` and `schema/add-call-read-policies.sql` in a copy of that restore and
 generates ignored `src/next-database.d.ts` from it with `npm run types:next`, so a
 column change in the schema reaches the code's types on the next check.
 The same template holds the copy attribution functions. Each copy fixture clones

@@ -5,7 +5,7 @@ import {
 	PARTNERS,
 	refusalOf,
 } from "../clients/read.ts";
-import { nextTransaction } from "../next-connection.ts";
+import { nextPartnerRead } from "../next-connection.ts";
 import { type DatabaseEnv, readSnapshot } from "../reader.ts";
 import { isUuid } from "../request-shape.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
@@ -37,9 +37,9 @@ relationships.get("/relationships", async (c) => {
 		)
 			throw new BusinessRefusal({ error: "QUERY_INVALID" });
 		if (fromNext) {
-			return await nextTransaction(
+			return await nextPartnerRead(
 				database.connectionString,
-				"read",
+				partner,
 				async (db) => {
 					const snapshot = await readNextNetwork(db);
 					const focusedStep =

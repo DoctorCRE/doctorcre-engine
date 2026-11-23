@@ -515,7 +515,7 @@ end $$;
 create trigger deal_parked_or_flagged_by_a_user before insert or update of parking_reason, parking_note, needs_attention
 	on deal for each row execute function deal_parked_or_flagged_by_a_user();
 
--- Import history only: another system's id for a record, such as Salesforce's or a roster's. People never search by it.
+-- Import history only: another system's id for a record, such as Salesforce's or a roster's.
 create table outside_id (
 	source text not null check (source ~ '^[a-z][a-z0-9_]*$'),
 	value text not null check (value ~ '^\S(.*\S)?$'),
@@ -526,6 +526,8 @@ create table outside_id (
 	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id, email_activity_id) = 1),
 	primary key (source, value)
 );
+-- Reads find a party's old ids by party.
+create index outside_id_by_party on outside_id (party_id);
 
 create table phase (
 	slug text primary key,
@@ -647,6 +649,7 @@ begin
 	update weekly_review set deal_id = new_deal_id, party_id = null
 	where week_of = monday and party_id = prospect_id;
 end $$;
+revoke execute on function carry_weekly_review(uuid, uuid) from public;
 
 do $$ begin
 	execute format('alter function carry_weekly_review set search_path = %I, pg_temp', current_schema());
@@ -1889,6 +1892,7 @@ begin
 		new.merged_step_id := nullif(current_setting('engine.proposal_merged_step', true), '')::uuid;
 		if new.merged_step_id is not null then return new; end if;
 		-- The decision can override the step owner without changing the suggestion.
+		-- The call-read migration stamps proposal provenance for every target on insert.
 		insert into next_step (id, what, owner_party_id, due_on, deal_id, party_id, property_id,
 			call_activity_id, call_evidence_quote)
 		values (new.id, new.what, coalesce(nullif(current_setting('engine.proposal_step_owner', true), '')::uuid, new.owner_party_id),
@@ -3475,6 +3479,7 @@ begin
 	where id = survivor;
 	perform set_config('engine.merge', '', true);
 end $$;
+revoke execute on function merge_party(uuid, uuid) from public;
 
 -- Pinned, with pg_temp last, so a caller's own tables cannot stand in for these.
 do $$ begin
@@ -3532,6 +3537,8 @@ begin
 	));
 	return null;
 end $$;
+-- Only the owner can attach this trigger to a table.
+revoke execute on function record_change() from public;
 
 -- Each of these rows says which user or job last changed it and when, set by the database, never by the statement.
 -- The check holds the owner's load of old rows too, which turns the trigger off.
@@ -4072,11 +4079,7 @@ revoke insert on deal_open_name from engine;
 revoke insert on change, imported_change, imported_deal_history from engine;
 -- Only the owner's copy adds the old system's earlier people, owners and board facts.
 revoke insert on imported_automatic_phase_move, imported_deal_party, imported_deal_owner, imported_deal_invoiced, imported_deal_board from engine;
--- Checked when a trigger is made, so only the owner attaches it, even to a temporary table.
-revoke execute on function record_change from public;
-revoke execute on function merge_party from public;
 grant execute on function merge_party to engine;
-revoke execute on function carry_weekly_review from public;
 grant execute on function carry_weekly_review to engine;
 grant execute on function lock_weekly_review(date, uuid, uuid) to engine;
 grant execute on function npi_check_digit_holds(text), is_time_zone(text) to engine;

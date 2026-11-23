@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { nextTransaction } from "../next-connection.ts";
+import { nextPartnerRead, nextTransaction } from "../next-connection.ts";
 import { readSnapshot } from "../reader.ts";
 import { copyTest, readSchema } from "../test-copy.ts";
 import worker from "../worker.ts";
@@ -219,7 +219,7 @@ async function oldPage(deal: string) {
 }
 
 async function newPage(deal: string) {
-	const page = await nextTransaction(connectionString, "read", (tx) =>
+	const page = await nextPartnerRead(connectionString, "partner_one", (tx) =>
 		readNextDealDetail(tx, deal),
 	);
 	assert.ok(!("error" in page));
