@@ -63,6 +63,11 @@ function stepRows(
 	today: typeof homeDay,
 ) {
 	return sql<Step>`
+		-- One pass over step history; the protected view cannot use the record index per step.
+		with step_history as materialized (
+			select id, record ->> 'id' as step_id, action, changed_by_user_id, old_value, new_value
+			from change where table_name = 'next_step' and record - 'id' = '{}'
+		)
 		select s.id, s.what, s.item_title, s.status, s.deal_id, s.party_id, s.property_id,
 			${stepTargetFields(db, today)},
 			s.due_on, s.created_at, setter.name as set_by,
@@ -94,20 +99,18 @@ function stepRows(
 			and (accepted.activity_kind <> 'call' or exists (
 				select from activity a where a.id = accepted.activity_id and ${visibleCall(userId)}
 			))
-		left join lateral (
-			select changed_by_user_id from change
-			where table_name = 'next_step' and record = jsonb_build_object('id', s.id) and action = 'insert'
-			order by id limit 1
-		) origin on true
+		left join (
+			select distinct on (step_id) step_id, changed_by_user_id from step_history
+			where action = 'insert' order by step_id, id
+		) origin on origin.step_id = s.id::text
 		left join party setter on setter.id = origin.changed_by_user_id
 		left join home_mark m on m.user_id = ${userId}::uuid
 			and m.item_id = s.id
 			and m.item_kind = case when s.call_activity_id is null then 'next_step' else 'call_follow_up' end
-		left join lateral (
-			select id, changed_by_user_id, old_value, new_value from change
-			where table_name = 'next_step' and record = jsonb_build_object('id', s.id)
-			order by id desc limit 1
-		) step_change on true
+		left join (
+			select distinct on (step_id) step_id, id, changed_by_user_id, old_value, new_value
+			from step_history order by step_id, id desc
+		) step_change on step_change.step_id = s.id::text
 		left join lateral (
 			select max(id) as id
 			from change where table_name = 'home_mark'
