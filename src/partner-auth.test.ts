@@ -847,35 +847,34 @@ test("partner sessions in PostgreSQL", async (t) => {
 		});
 
 		await t.test("auth login stays within the auth store", async () => {
-			const { rows } = await db.query(
-				`
-				with outside_auth as (
-					select oid, nspname from pg_namespace
-					where nspname !~ '^pg_' and nspname not in ('information_schema', 'doctorcre_auth')
-				)
-				select nspname as unexpected from outside_auth
-				where has_schema_privilege($1, oid, 'CREATE')
-					or (nspname <> 'public' and has_schema_privilege($1, oid, 'USAGE'))
-				union all
-				select format('%I.%I', nspname, relname) from pg_class c join outside_auth n on n.oid = c.relnamespace
-				where case when relkind = 'S' then has_sequence_privilege($1, c.oid, 'SELECT, UPDATE, USAGE')
-					when relkind in ('r','p','v','m','f') then
-						has_table_privilege($1, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN')
-						or has_any_column_privilege($1, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')
-					else false end
-				union all
-				select format('%I.%I', nspname, proname) from pg_proc p join outside_auth n on n.oid = p.pronamespace
-				where prosecdef and has_function_privilege($1, p.oid, 'EXECUTE')
-				union all
-				select 'write access beyond session fields' where
-					has_schema_privilege($1, 'doctorcre_auth', 'CREATE')
-					or has_table_privilege($1, 'doctorcre_auth.account', 'DELETE')
-					or has_column_privilege($1, 'doctorcre_auth."user"', 'partner_user_id', 'UPDATE')
-					or has_column_privilege($1, 'doctorcre_auth.session', 'token', 'UPDATE')
-			`,
-				[role],
-			);
-			assert.deepEqual(rows, []);
+			const audit = await readSchema("partner-auth-permissions.sql");
+			await db.query("begin");
+			try {
+				await db.query(`set local role ${role}`);
+				assert.deepEqual((await db.query(audit)).rows, []);
+				await db.query("reset role");
+
+				await db.query(`grant select (slug) on public.actor to ${role}`);
+				await db.query(
+					`grant update ("accountId") on doctorcre_auth.account to ${role};
+					grant truncate on doctorcre_auth.session to ${role};
+					grant update (value) on doctorcre_auth.verification to ${role} with grant option`,
+				);
+				await db.query(
+					"revoke delete on doctorcre_auth.session from engine_partner_auth",
+				);
+				await db.query(`set local role ${role}`);
+				const { rows } = await db.query<{ finding: string }>(audit);
+				assert.deepEqual(rows.map(({ finding }) => finding).sort(), [
+					"missing DELETE on doctorcre_auth.session",
+					"public.actor",
+					"unexpected TRUNCATE on doctorcre_auth.session",
+					"unexpected UPDATE WITH GRANT OPTION on doctorcre_auth.verification.value",
+					'unexpected UPDATE on doctorcre_auth.account."accountId"',
+				]);
+			} finally {
+				await db.query("rollback");
+			}
 		});
 
 		await t.test("existing legacy receipt trigger still runs", async () => {

@@ -34,6 +34,10 @@
 		{
 			"binding": "DATABASE_WRITER",
 			"id": "d46799ae4b584b4d9fe954b7cc0ddf43"
+		},
+		{
+			"binding": "PARTNER_AUTH_DATABASE",
+			"id": "9890d06fa69545e1a4a102e2ffa26dea"
 		}
 	],
 	"r2_buckets": [
@@ -45,6 +49,7 @@
 		"DOC_BACKUP_MODEL": "claude-sonnet-5-5",
 		"EMAIL_FILING_JUDGMENT": "true",
 		"POST_MEDIA_BUCKET": "doctorcre-post-media",
+		"PARTNER_APP_ORIGIN": "https://app.doctorcre.com",
 		"CLIENT_WEBSITE_ORIGIN": "https://share.doctorcre.com",
 		"DEALS_READ_SCHEMA": "next",
 		"HOME_INBOX_READ_SCHEMA": "next",

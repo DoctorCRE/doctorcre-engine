@@ -64,6 +64,142 @@ Both requests use the jobs Access credentials and `Engine-Job: sign-in-rehearsal
 
 Only the rehearsal function writes fixture receipts. The prepared receipt holds the exact insert audit IDs from its transaction. Cleanup checks for replaced records, removes the run's rows, and retains the cleaned receipt. An unexpected dependency causes the cleanup to roll back. The database keeps its ordinary audit history.
 
+## Prepare production while the app uses CARR
+
+Keep `PARTNER_SIGN_IN=carr` in the app. After the owner's approval, verify that the migration and auth connections use the direct endpoint for the production Neon branch. Run the database and Wrangler commands in a private terminal with credentials from the private store.
+
+Before the first secret write or engine deployment, record the active production engine version serving 100% as `PREVIOUS_ENGINE_VERSION_ID`. Confirm that the engine's `/health` reports `ok: true` and that version ID. Keep the recorded ID through provisioning and release verification.
+
+```sh
+./node_modules/.bin/wrangler deployments status --name doctorcre-engine --json
+curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
+```
+
+1. If `doctorcre_auth` is absent, apply the approved `schema/partner-auth.sql` as the migration owner.
+
+   ```sh
+   psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL" -f schema/partner-auth.sql
+   ```
+
+2. As the migration owner, apply the separately approved `schema/restrict-shared-definer-execute.sql` to restrict public execution of security-definer routines. [Permissions migration (#1201)](https://github.com/DoctorCRE/doctorcre-engine/issues/1201)
+
+3. If the dedicated login is absent, create it as the migration owner. Verify the direct Neon endpoint for the production branch. On that connection, confirm `show log_statement` returns `none` and `show log_min_error_statement` returns `panic`. Stop if either setting differs.
+
+   Generate a random password in memory. Use a private runner with shell tracing and SQL echo disabled. Set `PARTNER_AUTH_PASSWORD` only in the child `psql` environment and feed the following block to `psql -X -w -v ON_ERROR_STOP=1 -f -` on stdin. Neon rejects the password verifier sent by `\password`.
+
+   ```sql
+   \getenv auth_password PARTNER_AUTH_PASSWORD
+   begin;
+   create role engine_partner_auth_login
+       login nosuperuser nocreatedb nocreaterole noreplication nobypassrls
+       password :'auth_password';
+   grant engine_partner_auth to engine_partner_auth_login;
+   commit;
+   ```
+
+   For the audit, set `PGHOST` and `PGDATABASE` to the verified direct endpoint and database. Set `PGUSER=engine_partner_auth_login` and pass the same in-memory password as `PGPASSWORD`. Use `PGSSLMODE=verify-full` with a trusted root certificate. Run the [effective permission audit](../schema/partner-auth-permissions.sql) and stop if it fails or returns any rows.
+
+   ```sh
+   psql -X -w -Atq -v ON_ERROR_STOP=1 \
+       -c 'begin read only' -f schema/partner-auth-permissions.sql -c 'rollback'
+   ```
+
+   After a zero-row audit, keep the direct login URL in memory and pass it to the uncached Hyperdrive in step 5. Keep the password and URL out of files, command output, and logs.
+
+4. Write the two verified mappings in a private CSV with the header `partner_user_id,email,google_subject`. Keep it outside the repo. Open `psql -X -v ON_ERROR_STOP=1 "$PRODUCTION_MIGRATION_DATABASE_URL"` as the migration owner and replace the example CSV path below. Run the block through the final `select`, then compare the two joined rows to the approved mappings in the same private session. Enter `commit;` only if both match. On any error or mismatch, enter `rollback;`. Report only the number of confirmed mappings.
+
+   ```sql
+   begin;
+   set local lock_timeout = '1s';
+   create temp table approved_partner (
+       partner_user_id uuid primary key,
+       email text not null unique,
+       google_subject text not null unique
+   ) on commit drop;
+   \copy approved_partner from '/private/path/approved-partners.csv' with (format csv, header true)
+   lock table doctorcre_auth."user", doctorcre_auth.account in share row exclusive mode;
+
+   insert into doctorcre_auth."user"
+       (id, partner_user_id, name, email, "emailVerified", "createdAt", "updatedAt")
+   select gen_random_uuid()::text, u.id, p.name, a.email, true, now(), now()
+   from approved_partner a
+   join next.app_user u on u.id = a.partner_user_id and u.is_account_partner
+   join next.party p on p.id = u.id
+   on conflict do nothing;
+
+   insert into doctorcre_auth.account
+       (id, "userId", "providerId", "accountId", "createdAt", "updatedAt")
+   select gen_random_uuid()::text, u.id, 'google', a.google_subject, now(), now()
+   from approved_partner a
+   join doctorcre_auth."user" u on u.partner_user_id = a.partner_user_id and u.email = a.email
+   on conflict do nothing;
+
+   do $$ begin
+       if (select count(*) from approved_partner) <> 2
+           or (select count(*) from doctorcre_auth."user") <> 2
+           or (select count(*) from doctorcre_auth.account) <> 2
+           or (select count(*) from approved_partner a
+               join doctorcre_auth.partner p on p.app_user_id = a.partner_user_id
+               join doctorcre_auth."user" u on u.id = p.auth_user_id
+                   and u.email = a.email and u."emailVerified"
+               join doctorcre_auth.account g on g."userId" = u.id
+                   and g."providerId" = 'google' and g."accountId" = a.google_subject) <> 2 then
+           raise exception 'Expected exactly two approved, eligible Google mappings';
+       end if;
+   end $$;
+
+   select p.app_user_id, u.email, g."accountId" as google_subject
+   from doctorcre_auth.partner p
+   join doctorcre_auth."user" u on u.id = p.auth_user_id
+   join doctorcre_auth.account g on g."userId" = u.id
+   order by p.app_user_id;
+   ```
+
+   An exact existing pair is accepted. A matching user with a missing account is completed. A conflicting pair aborts the transaction for both mappings.
+
+5. Check `./node_modules/.bin/wrangler hyperdrive list` for `doctorcre-engine-partner-auth`. If it is absent, create it using the direct connection URL for `engine_partner_auth_login`.
+
+   ```sh
+   ./node_modules/.bin/wrangler hyperdrive create doctorcre-engine-partner-auth \
+       --connection-string "$PRODUCTION_PARTNER_AUTH_DATABASE_URL" --caching-disabled
+   ```
+
+   Check the returned ID with `./node_modules/.bin/wrangler hyperdrive get "$PRODUCTION_PARTNER_AUTH_HYPERDRIVE_ID"`. Verify the production Neon host, database, `engine_partner_auth_login`, and `caching.disabled=true`. In `wrangler.jsonc`, replace the all-zero production `PARTNER_AUTH_DATABASE` ID with this ID. Keep staging's own Hyperdrive on the rehearsal branch. A merge to `main` starts a production upload, so commit and review the real ID before queuing the merge. [Hyperdrive commands](https://developers.cloudflare.com/workers/wrangler/commands/hyperdrive/)
+
+6. For the production Google client, confirm the redirect URI is `https://app.doctorcre.com/auth/callback/google`. If any of the three production secrets are missing, set them with the approved values at the interactive prompts. Each `secret put` deploys a version of the named engine Worker.
+
+   ```sh
+   ./node_modules/.bin/wrangler secret put PARTNER_AUTH_SECRET --name doctorcre-engine
+   ./node_modules/.bin/wrangler secret put PARTNER_GOOGLE_CLIENT_ID --name doctorcre-engine
+   ./node_modules/.bin/wrangler secret put PARTNER_GOOGLE_CLIENT_SECRET --name doctorcre-engine
+   ```
+
+7. After the engine release, read back the active versions. For each Worker, take the `version_id` serving 100% from `deployments status`.
+
+   ```sh
+   ./node_modules/.bin/wrangler deployments status --name doctorcre-engine --json
+   ./node_modules/.bin/wrangler versions view "$ENGINE_VERSION_ID" --name doctorcre-engine --json |
+       jq '.resources.bindings[] | select(.name | startswith("PARTNER_"))'
+   ./node_modules/.bin/wrangler deployments status --name doctorcre-app --json
+   ./node_modules/.bin/wrangler versions view "$APP_VERSION_ID" --name doctorcre-app --json |
+       jq '.resources.bindings[] | select(.name == "PARTNER_SIGN_IN")'
+   ```
+
+   Verify `PARTNER_APP_ORIGIN=https://app.doctorcre.com`, the approved `PARTNER_AUTH_DATABASE` ID, and the three secret names on the engine. Verify `PARTNER_SIGN_IN=carr` on the app. [Workers commands](https://developers.cloudflare.com/workers/wrangler/commands/workers/)
+
+### Restore the previous engine version
+
+If provisioning or release verification fails, stop the rollout and keep `PARTNER_SIGN_IN=carr`. If an engine release is still running, let it finish before restoring so it cannot overwrite the rollback. Check the active engine version. If a secret write or release changed it, restore the version recorded before provisioning.
+
+```sh
+./node_modules/.bin/wrangler rollback "$PREVIOUS_ENGINE_VERSION_ID" \
+    --name doctorcre-engine --yes --message "Restore engine after sign-in preparation"
+./node_modules/.bin/wrangler deployments status --name doctorcre-engine --json
+curl --fail --silent --show-error "$PRODUCTION_ENGINE_ORIGIN/health"
+```
+
+Verify the recorded version serves 100% and `/health` returns `ok: true` with that version. Confirm the app still uses CARR by opening a protected page through the usual sign-in. Hold subsequent engine releases until the config is corrected. Worker rollback restores the release. Keep the database and Hyperdrive in place for the next attempt. [Cloudflare Worker rollbacks](https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/)
+
 ## Switch after hours with advance notice
 
 1. Deploy the engine, app and old-session rollback changes ahead of the switch. Keep the app's `PARTNER_SIGN_IN` release setting on `carr`. In staging, run both modes against a production-shaped copy with fixture identities and do a real Google round trip with approved test accounts. Test browser and installed-app contexts, sign in as both partners, reopen each from a saved link, and check that the displayed identity and saved attribution agree. Rehearse rollback and switch again.
