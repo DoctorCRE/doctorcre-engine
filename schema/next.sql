@@ -526,6 +526,8 @@ create table outside_id (
 	constraint outside_id_one_record check (num_nonnulls(party_id, deal_id, email_activity_id) = 1),
 	primary key (source, value)
 );
+-- Leads, quiet follow-ups and action links find a party's copied old-system ids.
+create index outside_id_by_party on outside_id (party_id);
 
 create table phase (
 	slug text primary key,
