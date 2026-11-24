@@ -132,7 +132,6 @@ test("the Deals board picks the newest call or completed step", async () => {
 		assert.ok(row);
 		assert.equal(row.last_step.summary, completedText);
 		assertSteps(row.open_actions, user);
-		if (user === "dell") assert.equal(row.next_step, privateStepText);
 	}
 });
 

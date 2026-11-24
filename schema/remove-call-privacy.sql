@@ -23,8 +23,18 @@ do $$ begin
 end $$;
 drop table if exists call_audit_evidence;
 
--- The old partner activity view is the only thing that holds activity.call_shared.
-drop schema if exists next_partner cascade;
+-- Without cascade, so anything else that depends on these views stops the migration.
+drop view if exists next_partner.deal_next_date;
+drop view if exists next_partner.deal_imported_history;
+drop view if exists next_partner.imported_change;
+drop view if exists next_partner.change;
+drop view if exists next_partner.home_update;
+drop view if exists next_partner.lead_stage_move;
+drop view if exists next_partner.proposal;
+drop view if exists next_partner.imported_automatic_phase_move;
+drop view if exists next_partner.deal_phase_change;
+drop view if exists next_partner.next_step;
+drop view if exists next_partner.activity;
 
 drop trigger if exists zz_keep_call_audience on activity;
 drop function if exists keep_call_audience();
@@ -73,7 +83,7 @@ end;
 
 -- From here to the end, the same text as schema/next.sql.
 -- The partner login reads through these views, never the tables. Both partners see every call.
-create schema next_partner;
+create schema if not exists next_partner;
 grant usage on schema next_partner to engine, engine_reader;
 
 create view next_partner.activity as
