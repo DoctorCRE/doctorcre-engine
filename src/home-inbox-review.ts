@@ -140,6 +140,8 @@ function draftRows(
 				having count(*) = 1
 			)
 			where r.owner_user_id = ${userId}::uuid
+				and not exists (select from home_mark m where m.user_id = r.owner_user_id
+					and m.item_kind = 'reply_draft' and m.item_id = r.id and m.disposition = 'dropped')
 				${draftId ? sql`and r.id = ${draftId}` : sql``}
 				${mailGroups ? sql`and ${mailGroup} in (${mailGroups})` : sql``}
 				and ${sourceInMailbox(sql.ref("r.email_activity_id"), userId)}
@@ -993,13 +995,21 @@ export async function readHomeReviewDisposition(
 	const item_id = `${kind}:${id}`;
 	if (kind === "reply_draft") {
 		const draft = await db
-			.selectFrom("reply_draft")
-			.select(["status", "dismiss_reason"])
-			.where("id", "=", id)
-			.where("owner_user_id", "=", userId)
-			.where(sourceInMailbox(sql.ref("email_activity_id"), userId))
+			.selectFrom("reply_draft as r")
+			.leftJoin("home_mark as m", (join) =>
+				join
+					.onRef("m.reply_draft_id", "=", "r.id")
+					.onRef("m.user_id", "=", "r.owner_user_id")
+					.on("m.disposition", "=", "dropped"),
+			)
+			.select(["r.status", "r.dismiss_reason", "m.drop_reason"])
+			.where("r.id", "=", id)
+			.where("r.owner_user_id", "=", userId)
+			.where(sourceInMailbox(sql.ref("r.email_activity_id"), userId))
 			.executeTakeFirst();
 		if (draft?.status === "sent") return { item_id, state: "done" };
+		if (draft?.drop_reason)
+			return { item_id, state: "dropped", reason: draft.drop_reason };
 		if (draft?.status === "dismissed")
 			return {
 				item_id,

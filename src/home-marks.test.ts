@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
+import { copyTest, readSchema } from "./test-copy.ts";
 import { doorTest } from "./test-door.ts";
 
 const { db, setup, cleanup, save, request } = doorTest();
@@ -345,4 +346,118 @@ test("tour feedback appears on Home and supports Done and Undo through door 24",
 	assert.equal(undoneStatus, 200, JSON.stringify(undone));
 	assert.match(String(undone.base_version), /:0:inbox$/);
 	assert.equal((await readCard())?.base_version, undone.base_version);
+});
+
+async function failedReply(failure_reason: string) {
+	const [email, draft] = [randomUUID(), randomUUID()];
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${email}', 'email', '2026-01-02T12:00:00Z');
+		insert into email (activity_id, message_id, sender, subject, body)
+			values ('${email}', '<${email}@example.test>', 'pat@example.test', 'Floor plan', 'Please send the plan.');
+		insert into email_mailbox (activity_id, user_id) values ('${email}', '${owner}');
+		insert into activity_about (activity_id, party_id) values ('${email}', '${owner}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+			values ('${draft}', '${email}', '${owner}', 'old_system', 'Re: Floor plan', 'Here it is.', 'Please send the plan.');
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${owner}', true);
+		update reply_draft set status = 'approved', to_address = 'pat@example.test', cc_address = 'copy@example.test'
+			where id = '${draft}';
+		select set_config('engine.job', 'mail_capture', true);
+		update reply_draft set status = 'failed', failure_reason = '${failure_reason}' where id = '${draft}';
+		commit;`);
+	const item_id = `reply_draft:${draft}`;
+	const base_version = await cardVersion(item_id);
+	assert.ok(base_version, failure_reason);
+	return { item_id, base_version };
+}
+
+const dropReason = { reason: "  Answered by phone  " };
+
+test("drops a reply that failed for good with a reason, and refuses one that may still go out", async () => {
+	for (const reason of [
+		"aborted_before_dispatch",
+		"submission_recipients_invalid",
+		"unconfirmed_after_30",
+	]) {
+		const draft = await failedReply(reason);
+		const [status, refusal] = await command(draft, "drop", alex, dropReason);
+		assert.equal(status, 422, reason);
+		assert.partialDeepStrictEqual(refusal, {
+			error: "invalid_field_value",
+			fields: ["action"],
+		});
+		assert.equal(await cardVersion(draft.item_id), draft.base_version);
+	}
+	const draft = await failedReply("invalid_submission");
+	assert.equal((await command(draft, "drop"))[0], 400);
+	assert.deepEqual(await command(draft, "drop", alex, dropReason), [
+		200,
+		{ ok: true, item_id: draft.item_id },
+	]);
+	assert.equal(await cardVersion(draft.item_id), undefined);
+	assert.equal((await command(draft, "unsnooze"))[0], 404);
+	const link = await request(
+		alex,
+		`home/cards/${draft.item_id}`,
+		{ method: "GET" },
+		{ HOME_INBOX_READ_SCHEMA: "next" },
+	);
+	assert.deepEqual(await link.json(), {
+		item_id: draft.item_id,
+		state: "dropped",
+		reason: "Answered by phone",
+	});
+	const {
+		rows: [saved],
+	} = await db.query(
+		`select m.drop_reason, r.status from home_mark m join reply_draft r on r.id = m.reply_draft_id
+			where 'reply_draft:' || r.id = $1`,
+		[draft.item_id],
+	);
+	assert.deepEqual(saved, {
+		drop_reason: "Answered by phone",
+		status: "failed",
+	});
+});
+
+test("the failed-reply drop migration gives an existing schema the same rule and can run twice", async (t) => {
+	const old = copyTest();
+	await old.setup();
+	t.after(old.cleanup);
+	const [email, failed, missing] = [randomUUID(), randomUUID(), randomUUID()];
+	await old.db.query(`drop trigger home_mark_drops_failed_reply on home_mark;
+		drop function home_mark_drops_failed_reply();
+		alter table home_mark drop constraint home_mark_drop_kind, add constraint home_mark_drop_kind
+			check (disposition is distinct from 'dropped' or item_kind in ('call_follow_up', 'home_update'));
+		begin; set local engine.job = 'old_system';
+		insert into party (id, kind, name) values ('${owner}', 'person', 'Alex Example');
+		insert into app_user (id, slug) values ('${owner}', 'alex');
+		insert into activity (id, kind, happened_at) values ('${email}', 'email', now());
+		insert into email (activity_id, message_id, sender, subject, body)
+			values ('${email}', '<${email}@example.test>', 'pat@example.test', 'Floor plan', 'Please send the plan.');
+		insert into activity_about (activity_id, party_id) values ('${email}', '${owner}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence) values
+			('${failed}', '${email}', '${owner}', 'old_system', 'Re: Floor plan', 'Here it is.', 'Please send the plan.');
+		set local engine.job = ''; set local engine.user_id = '${owner}';
+		update reply_draft set status = 'approved', to_address = 'pat@example.test', cc_address = 'copy@example.test';
+		set local engine.job = 'mail_capture';
+		update reply_draft set status = 'failed', failure_reason = 'invalid_submission';
+		commit;`);
+	const migration = await readSchema("add-failed-reply-drop.sql");
+	await old.db.query(migration);
+	await old.db.query(migration);
+	const drop = (draft: string) =>
+		old.db.query(`begin; set local role engine; set local engine.user_id = '${owner}';
+			insert into home_mark (user_id, reply_draft_id, disposition, drop_reason)
+				values ('${owner}', '${draft}', 'dropped', 'Answered by phone');
+			commit;`);
+	await assert.rejects(drop(missing), {
+		constraint: "home_mark_drops_failed_reply",
+	});
+	await old.db.query("rollback");
+	await drop(failed);
+	assert.equal(
+		(await old.db.query("select from home_mark where disposition = 'dropped'"))
+			.rowCount,
+		1,
+	);
 });
