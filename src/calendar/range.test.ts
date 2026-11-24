@@ -60,6 +60,9 @@ after(async () => {
 	await cleanup();
 });
 
+const mail = (user: string, body: object) =>
+	save({ job: "mail_capture", for_user: user }, "calendar/agenda", body, "PUT");
+
 async function range(search: string, user = "joe", env: object = reader) {
 	const r = await request(
 		{ user },
@@ -98,13 +101,6 @@ test("the range read refuses a bad request before reading", async () => {
 
 test("either partner reads both partners' meetings and planned tours for six weeks", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now });
-	const mail = (user: string, body: object) =>
-		save(
-			{ job: "mail_capture", for_user: user },
-			"calendar/agenda",
-			body,
-			"PUT",
-		);
 	const saved = await Promise.all([
 		mail(
 			"joe",
@@ -186,4 +182,80 @@ test("either partner reads both partners' meetings and planned tours for six wee
 			},
 		],
 	});
+});
+
+test("a meeting awaiting its outcome review leaves the calendar ready while Home still asks", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now });
+	const ended = meeting(
+		"2026-01-14T22:30:00-06:00",
+		"2026-01-14T23:05:00-06:00",
+		"Site visit",
+	);
+	const key = "0123456789abcdef";
+	const [saved] = await mail("joe", {
+		...agenda(now, [{ ...ended, key }]),
+		follow_up_reviews: [
+			{
+				...ended,
+				key,
+				state: "needs_review",
+				prompt: "Confirm whether this meeting happened.",
+			},
+		],
+	});
+	assert.equal(saved, 200);
+	const [status, body] = await range("?from=2026-01-14&to=2026-01-15");
+	assert.equal(status, 200);
+	assert.partialDeepStrictEqual(
+		body.meetings?.find((m) => m.partner === "joe"),
+		{ state: "ready", notes: [], items: [{ title: "Site visit" }] },
+	);
+	const home = await request(
+		{ user: "joe" },
+		"home/today",
+		{ method: "GET" },
+		reader,
+	);
+	const { meetings } = (await home.json()) as {
+		meetings: { follow_up_reviews: Row[] };
+	};
+	assert.deepEqual(
+		meetings.follow_up_reviews.map((r) => r.key),
+		[key],
+	);
+});
+
+test("a range day that ends daylight saving time runs to Central midnight", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now });
+	const [saved] = await mail(
+		"joe",
+		agenda(now, [
+			meeting(
+				"2026-10-31T23:00:00-05:00",
+				"2026-10-31T23:59:00-05:00",
+				"Saturday night",
+			),
+			meeting(
+				"2026-11-01T00:00:00-05:00",
+				"2026-11-01T00:30:00-05:00",
+				"Sunday start",
+			),
+			meeting(
+				"2026-11-01T23:00:00-06:00",
+				"2026-11-01T23:59:00-06:00",
+				"Sunday night",
+			),
+			meeting(
+				"2026-11-02T00:00:00-06:00",
+				"2026-11-02T00:30:00-06:00",
+				"Monday start",
+			),
+		]),
+	);
+	assert.equal(saved, 200);
+	const [, body] = await range("?from=2026-11-01&to=2026-11-01");
+	assert.deepEqual(
+		body.meetings?.find((m) => m.partner === "joe")?.items.map((i) => i.title),
+		["Sunday start", "Sunday night"],
+	);
 });

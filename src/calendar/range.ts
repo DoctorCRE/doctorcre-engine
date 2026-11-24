@@ -47,7 +47,7 @@ async function readCalendarMeetings(
 	for (const partner of clock.partners) {
 		const { follow_up_reviews: _, ...section } = await isolate(
 			db,
-			() => readMeetings(db, partner.id, window),
+			() => readMeetings(db, partner.id, window, false),
 			noMeetings(`${partner.name}'s meetings could not be loaded.`),
 		);
 		meetings.push({ partner: partner.slug, name: partner.name, ...section });

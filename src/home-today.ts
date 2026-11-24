@@ -82,6 +82,7 @@ export async function readMeetings(
 	db: Transaction<DB>,
 	userId: string,
 	clock: Record<"today" | "now_at" | "from_at" | "until_at", string>,
+	reviews: boolean,
 ) {
 	const stored = await readStoredAgenda(db, userId);
 	if (stored === null)
@@ -90,6 +91,7 @@ export async function readMeetings(
 		fromMs: Date.parse(clock.from_at),
 		untilMs: Date.parse(clock.until_at),
 		handledReviewKeys: handledReviewKeys(stored),
+		reviews,
 	});
 	if (!section || section.state === "unavailable")
 		return noMeetings("Outlook calendar data could not be read.");
@@ -245,11 +247,16 @@ async function readHomeToday(
 	const meetings = await isolate(
 		db,
 		() =>
-			readMeetings(db, userId, {
-				...clock,
-				from_at: clock.today_start,
-				until_at: clock.tomorrow_start,
-			}),
+			readMeetings(
+				db,
+				userId,
+				{
+					...clock,
+					from_at: clock.today_start,
+					until_at: clock.tomorrow_start,
+				},
+				true,
+			),
 		noMeetings("Today's meetings could not be loaded."),
 	);
 	const reminders = await isolate(
