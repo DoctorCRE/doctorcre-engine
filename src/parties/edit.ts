@@ -17,7 +17,7 @@ const isSeen = (value: unknown): value is Seen =>
 export const edit = <T>(check: Check<T>) =>
 	optional(fitting({ from: isSeen, to: orNull(check) }));
 
-export const trimmed = (value: unknown) =>
+const trimmed = (value: unknown) =>
 	typeof value === "string" ? value.trim() || null : value;
 
 const same = (seen: unknown, current: unknown) =>

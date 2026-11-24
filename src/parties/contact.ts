@@ -16,8 +16,6 @@ export function phoneNumber(typed: string): Phone | undefined {
 		: undefined;
 }
 
-export type Contact = NonNullable<Awaited<ReturnType<typeof contactOf>>>;
-
 // A person or company with its primary email and phone and, for a person, their current company.
 export function contactOf(db: Transaction<DB>, party_id: string) {
 	return db
