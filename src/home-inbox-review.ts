@@ -173,6 +173,10 @@ export const visibleSuggestion = (
 	userId: string | Expression<string>,
 ) => sql<boolean>`
 	case
+		when p.kind in ('file_to_deal', 'possible_new_deal') and p.status = 'pending' and exists (
+			select from email own join party_email pe on (pe.party_id, pe.address) = (${userId}::uuid, own.sender)
+			where own.activity_id = p.activity_id
+		) then false
 		when p.kind = 'file_to_deal' and p.status = 'pending'
 			and not (${filingReviewNeeded(sql.ref("p.activity_id"), sql.ref("p.deal_id"))}) then false
 		when p.kind = 'possible_new_deal' and p.status = 'pending' and (

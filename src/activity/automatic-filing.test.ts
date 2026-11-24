@@ -69,7 +69,7 @@ function mail(
 			message_id: `${name}@example.test`,
 			conversation_id,
 			sender: "contact@example.test",
-			recipients: [],
+			recipients: [] as { address: string; kind: "to" }[],
 			subject: "Floor plan",
 			body: evidence,
 		},
@@ -828,3 +828,25 @@ async function claimFiling(owner: string, activity: string) {
 			finish({ kind: "answered", result: { facts } }),
 	};
 }
+
+test("a partner's own sent mail asks that partner no filing question", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party_email (party_id, address, label) values ('${joe}', 'own-partner@example.test', 'work');
+		commit;`);
+	const thread = "Own sent mail";
+	await store(mail("own-first", thread, [{ deal_id: deal }], true));
+	await store(mail("own-second", thread, [{ deal_id: otherDeal }], true));
+	const message = mail("own-sent", thread);
+	message.email.sender = "own-partner@example.test";
+	message.email.recipients = [{ address: "contact@example.test", kind: "to" }];
+	const activity = await captureForJudgment(message);
+	assert.equal(await captureForJudgment(message, secondMailbox), activity);
+	const { rows } = await db.query<{ owner_user_id: string }>(
+		"select owner_user_id from doc_judgment_job where kind = 'email_filing' and activity_id = $1",
+		[activity],
+	);
+	assert.deepEqual(rows, [{ owner_user_id: dell }]);
+	const filing = await propose(activity);
+	assert.deepEqual(await cards(filing), []);
+	assert.equal((await mailboxCards({ user: "dell" }, filing)).length, 1);
+});
