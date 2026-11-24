@@ -12,6 +12,8 @@ type HistoryRow = {
 	source: "change" | "imported";
 	key: string;
 	changed_at: string;
+	// Microseconds since 1970 as int8 text, so the two sources merge in the order they happened.
+	micros: string;
 	who: string;
 	deal_id: string | null;
 	party_id: string | null;
@@ -161,7 +163,8 @@ const readable = (fields: [string, unknown][]) =>
 
 async function readNative(db: Transaction<DB>, before: number) {
 	const { rows } = await sql<HistoryRow>`
-		select 'change' as source, c.id::text as key, c.changed_at, ${who("c")} as who,
+		select 'change' as source, c.id::text as key, c.changed_at,
+			(extract(epoch from c.changed_at) * 1000000)::int8 as micros, ${who("c")} as who,
 			coalesce(d.id, s.deal_id) as deal_id, s.party_id, s.id as step_id,
 			coalesce(d.name, sd.name, sp.name) as record, coalesce(c.new_value ->> 'what', s.what) as step,
 			c.table_name, c.action, null as field, c.new_value,
@@ -188,7 +191,8 @@ async function readNative(db: Transaction<DB>, before: number) {
 
 async function readImported(db: Transaction<DB>, after: string | null) {
 	const { rows } = await sql<HistoryRow>`
-		select 'imported' as source, i.id::text as key, i.changed_at, ${who("i")} as who,
+		select 'imported' as source, i.id::text as key, i.changed_at,
+			(extract(epoch from i.changed_at) * 1000000)::int8 as micros, ${who("i")} as who,
 			coalesce(d.id, about.deal_id) as deal_id, p.id as party_id, null as step_id,
 			coalesce(d.name, ad.name, p.name) as record, null as step, i.table_name, null as action, i.field,
 			null as new_value, null as phase, null as owner, null as market
@@ -221,9 +225,8 @@ function parseCursor(before: string | undefined): Cursor | Refusal {
 async function readChanges(db: Transaction<DB>, cursor: Cursor) {
 	const native = await readNative(db, cursor.change);
 	const imported = await readImported(db, cursor.imported);
-	const time = (row: HistoryRow) => new Date(row.changed_at).getTime();
 	const page = [...native, ...imported]
-		.sort((a, b) => time(b) - time(a))
+		.sort((a, b) => Number(BigInt(b.micros) - BigInt(a.micros)))
 		.slice(0, PAGE);
 	const last = (rows: HistoryRow[]) =>
 		rows.findLast((row) => page.includes(row))?.key;
