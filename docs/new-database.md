@@ -1653,6 +1653,13 @@ Add deal sends `role=client` so the limit applies to people and companies with t
 
 No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated `kind` or `role` values return 400. Session and database refusals use the shared read rules. App #977 routes the deal-page picker to this door.
 
+### Record introductions
+
+A partner records an introduction that happened, as § "Vendors" describes it. A referral is one the vendor made. Offered and requested introductions stay links (§ "Who knows whom"). These saves use the signed-in session, the shared replay rules, and change history.
+
+- `POST /api/engine/introductions` takes `idempotency_key`, `vendor_id`, `made_by` (`vendor` or `team`), `introduced_party_id`, `introduced_on`, a nonblank `note`, and optionally `deal_id`. One the team made names the signed-in partner. It answers `201 { introduction_id, vendor_id, made_by, introduced_by, introduced_party_id, introduced_on, deal_id, note }`, with `introduced_by` the partner's sign-in name or null. The vendor introduced to itself answers `400 invalid_field_value` naming `introduced_party_id`, and a missing vendor, introduced party or deal answers `404 not_found`. A record without the vendor role is refused by rule 50 (`422 database_refused_the_statement` naming the rule).
+- `POST /api/engine/introductions/{id}` changes `introduced_on`, `deal_id` or `note`, each as `{ from, to }` with the value the partner saw. A deal can be cleared; the date and note cannot. A missing introduction or deal answers `404 not_found`. A field changed since returns `409 version_conflict` with `fields` and `current`. Who it joins and who made it never change, so the door takes no other field and the engine login has no grant to update them.
+
 ## Global Search and Recent Activity
 
 Set `SEARCH_READ_SCHEMA=next` for `GET /api/engine/find` and `ACTIVITY_READ_SCHEMA=next` for `GET /api/engine/recent-activity`. Each read uses the public schema until its variable is set to `next`.

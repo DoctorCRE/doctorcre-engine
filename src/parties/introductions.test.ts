@@ -1,0 +1,148 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { after, before, test } from "node:test";
+import { doorTest } from "../test-door.ts";
+
+const { db, setup, cleanup, save } = doorTest();
+const joe = { user: "joe" };
+const key = () => ({ idempotency_key: randomUUID() });
+const joeId = randomUUID();
+const vendor = randomUUID();
+const avery = randomUUID();
+const notVendor = randomUUID();
+const deal = randomUUID();
+
+before(async () => {
+	await setup();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into party (id, kind, name) values
+			('${joeId}', 'person', 'Example Partner One'), ('${vendor}', 'company', 'Example Lending'),
+			('${avery}', 'person', 'Avery Example'), ('${notVendor}', 'person', 'Blake Example');
+		insert into app_user (id, slug) values ('${joeId}', 'joe');
+		insert into role (slug, label) values ('vendor', 'Vendor') on conflict do nothing;
+		insert into party_role (party_id, role) values ('${vendor}', 'vendor');
+		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Deal', '${joeId}');
+		commit;`);
+});
+after(cleanup);
+
+const introduce = (fields: object) =>
+	save(joe, "introductions", {
+		...key(),
+		vendor_id: vendor,
+		made_by: "vendor",
+		introduced_party_id: avery,
+		introduced_on: "2026-01-05",
+		note: "Example referral",
+		...fields,
+	});
+
+test("an introduction the team made names the signed-in partner, and one the vendor made names none", async () => {
+	const args = {
+		...key(),
+		vendor_id: vendor,
+		made_by: "team",
+		introduced_party_id: avery,
+		introduced_on: "2026-01-05",
+		note: " Met over an example lunch ",
+		deal_id: deal,
+	};
+	const [status, added] = await save(joe, "introductions", args);
+	assert.equal(status, 201, JSON.stringify(added));
+	assert.deepEqual(added, {
+		introduction_id: added.introduction_id,
+		vendor_id: vendor,
+		made_by: "team",
+		introduced_by: "joe",
+		introduced_party_id: avery,
+		introduced_on: "2026-01-05",
+		deal_id: deal,
+		note: "Met over an example lunch",
+	});
+	assert.deepEqual(await save(joe, "introductions", args), [
+		201,
+		{ ...added, replayed: true },
+	]);
+	const [, referral] = await introduce({});
+	assert.partialDeepStrictEqual(referral, {
+		made_by: "vendor",
+		introduced_by: null,
+		deal_id: null,
+	});
+	const { rows } = await db.query(
+		`select c.action, u.slug from change c join app_user u on u.id = c.changed_by_user_id
+		where c.table_name = 'introduction' and c.record ->> 'id' = $1`,
+		[added.introduction_id],
+	);
+	assert.deepEqual(rows, [{ action: "insert", slug: "joe" }]);
+});
+
+test("an introduction is with a vendor, of someone else, about a deal that exists, with a note", async () => {
+	for (const [fields, status, rule] of [
+		[{ vendor_id: notVendor }, 422, "introduction_vendor_id_vendor_role_fkey"],
+		[{ introduced_party_id: vendor.toUpperCase() }, 400],
+		[{ vendor_id: randomUUID() }, 404],
+		[{ introduced_party_id: randomUUID() }, 404],
+		[{ deal_id: randomUUID() }, 404],
+		[{ note: "   " }, 400],
+		[{ note: undefined }, 400],
+		[{ introduced_on: undefined }, 400],
+		[{ made_by: "requested" }, 400],
+	] as const) {
+		const [actual, refusal] = await introduce(fields);
+		assert.equal(actual, status, JSON.stringify(fields));
+		if (rule) assert.equal(refusal.rule, rule);
+	}
+});
+
+test("an introduction's date, deal and note change from what the partner saw", async () => {
+	const [, added] = await introduce({});
+	const edit = (fields: object) =>
+		save(joe, `introductions/${added.introduction_id}`, {
+			...key(),
+			...fields,
+		});
+	const [status, edited] = await edit({
+		deal_id: { from: null, to: deal },
+		introduced_on: { from: "2026-01-05", to: "2026-01-07" },
+		note: { from: "Example referral", to: " Became a client " },
+	});
+	assert.equal(status, 200, JSON.stringify(edited));
+	assert.partialDeepStrictEqual(edited, {
+		deal_id: deal,
+		introduced_on: "2026-01-07",
+		note: "Became a client",
+	});
+	const [stale, conflict] = await edit({
+		note: { from: "Example referral", to: "Other" },
+	});
+	assert.equal(stale, 409);
+	assert.partialDeepStrictEqual(conflict, {
+		error: "version_conflict",
+		fields: ["note"],
+	});
+	assert.equal(
+		(await edit({ deal_id: { from: deal, to: randomUUID() } }))[0],
+		404,
+	);
+	const [cleared, unlinked] = await edit({ deal_id: { from: deal, to: null } });
+	assert.equal(cleared, 200);
+	assert.equal(unlinked.deal_id, null);
+	for (const fields of [
+		{ vendor_id: { from: vendor, to: avery } },
+		{ note: { from: "Became a client", to: " " } },
+		{ introduced_on: { from: "2026-01-07", to: null } },
+		{},
+	])
+		assert.equal((await edit(fields))[0], 400, JSON.stringify(fields));
+	const missing = await save(joe, `introductions/${randomUUID()}`, {
+		...key(),
+		note: { from: null, to: "Example" },
+	});
+	assert.equal(missing[0], 404);
+	const { rows } = await db.query(
+		`select count(*)::int as edits from change where table_name = 'introduction' and action = 'update' and record ->> 'id' = $1`,
+		[added.introduction_id],
+	);
+	assert.deepEqual(rows, [{ edits: 2 }]);
+});
