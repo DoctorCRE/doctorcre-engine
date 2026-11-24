@@ -1654,6 +1654,14 @@ These saves follow the same session, replay and `{ from, to }` edit rules as peo
 - `POST /api/engine/vendors` takes `party_id` and optionally `categories` (vendor category role slugs), `stage`, `relationship_level` (0 to 3), `owner` (`joe` or `dell`; the signed-in partner when absent), `offers`, `seeking`, `is_target`, `disposition` and `disposition_reason`. It adds the vendor role and a role for each category, and answers `201 { party_id, stage, relationship_level, owner, offers, seeking, is_target, disposition, disposition_reason, categories }`. A record that is already a vendor returns `409 already_vendor`.
 - `POST /api/engine/vendors/{id}` changes any of those fields. `categories` is the whole list, so a removed category's role is removed and a new one added. A ruling without a reason, or an avoided target, is refused by the database's vendor rules (`422 database_refused_the_statement` naming the rule).
 
+### Link people and companies
+
+These saves follow the same session, replay and `{ from, to }` edit rules. They keep the links in § "Who knows whom"; recorded introductions stay with vendors.
+
+- `POST /api/engine/party-links` takes `kind` (`knows` or `can_introduce`), `party_id`, `other_party_id`, and optionally `started_on` and `note`. For `can_introduce`, `party_id` can introduce the team to `other_party_id`. It answers `201 { link_id, kind, party_id, other_party_id, started_on, ended_on, note }`. A link of the same kind between the same parties that has not ended returns `409 already_linked` with its `link_id`; a knows link matches either order. The same party twice returns 400 and an unknown party 404.
+- `POST /api/engine/party-links/{id}` changes `started_on`, `ended_on` or `note`. Ending a link keeps its row; a later link is a new one. An end before the start is refused by the database (`party_link_ends_after_it_starts`).
+- Relationships shows a link as an edge `link:{link_id}` while it is current.
+
 ## Global Search and Recent Activity
 
 Set `SEARCH_READ_SCHEMA=next` for `GET /api/engine/find` and `ACTIVITY_READ_SCHEMA=next` for `GET /api/engine/recent-activity`. Each read uses the public schema until its variable is set to `next`.

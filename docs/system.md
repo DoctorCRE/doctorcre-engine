@@ -182,6 +182,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Deal page people and company search                      | § "People and company search for the deal page"                                                                                     |
 | Add and edit people and companies                        | § "Add and edit people and companies"                                                                                               |
 | Add and edit clients and vendors                         | § "Add and edit clients and vendors"                                                                                                |
+| Link people and companies                                | § "Link people and companies"                                                                                                       |
 | Owner decisions the doors raised                         | § "Owner decisions"                                                                                                                 |
 | Home screen                                              | `docs/screens/home-inbox.md`                                                                                                        |
 | Deals screen                                             | `docs/screens/deals.md`                                                                                                             |
