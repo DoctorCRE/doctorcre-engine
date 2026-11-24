@@ -115,14 +115,14 @@ export async function readNextRecentActivity(
 			order by link.activity_id, f.rank
 		)
 		select entry_kind, ${isoMillis(sql.ref("at"))} as occurred_at,
-			actor, verb, summary, detail, deal_id, email_subject, null as owed, filed_on
+			actor, verb, summary, detail, deal_id, email_subject, null as owed, step_owner, filed_on
 		from (
 			select 'activity' as entry_kind, a.id, a.happened_at as at,
 				coalesce(u.slug, a.changed_by_job) as actor, a.kind as verb,
 				coalesce(nullif(btrim(a.summary), ''), e.subject) as summary, e.body as detail,
 				(select min(about.deal_id::text) from activity_about about
 					where about.activity_id = a.id and about.deal_id is not null
-					having count(*) = 1) as deal_id, e.subject as email_subject,
+					having count(*) = 1) as deal_id, e.subject as email_subject, null as step_owner,
 				${filedOn(sql.ref("filed"))} as filed_on
 			from filed join activity a on a.id = filed.activity_id
 			left join app_user u on u.id = a.changed_by_user_id
@@ -130,9 +130,10 @@ export async function readNextRecentActivity(
 			union all
 			select 'event', s.id, coalesce(s.done_at, s.resolved_at, s.created_at),
 				coalesce(u.slug, s.changed_by_job), 'next_step', s.what, null, s.deal_id::text, null,
-				${filedOn(sql.ref("f"))}
+				owner.slug, ${filedOn(sql.ref("f"))}
 			from filed_to f join next_step s on s.deal_id = f.deal_id or s.party_id = f.party_id
 			left join app_user u on u.id = s.changed_by_user_id
+			left join app_user owner on owner.id = s.owner_party_id
 		) entries order by at desc, entry_kind, id limit ${limit}`.execute(db);
 	return {
 		state: "completed",
