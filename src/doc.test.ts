@@ -1394,6 +1394,155 @@ async function exampleClient(name: string) {
 	return id;
 }
 
+test("a first question and follow-ups cite the exact records and ask which lead when names match", async () => {
+	const send = client();
+	const credential = await issue(owner);
+	const shared = await sharedDeal();
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		update deal set name = 'Example Cedar Lease' from stamp where id = $1`,
+		[shared.ref.id],
+	);
+	const north = await exampleLead("Example Juniper", "person");
+	const south = await exampleLead("Example Juniper", "person");
+	await db.query(
+		`with stamp as (select set_config('engine.job', 'old_system', true))
+		update party set city = case id when $1 then 'Sample North' else 'Sample South' end
+		from stamp where id in ($1, $2)`,
+		[north.ref.id, south.ref.id],
+	);
+	const mcp = (claim_id: string) => async (name: string, args: object) => {
+		const response = await mac.request(
+			"/mcp",
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${credential}`,
+					"Doc-Claim-Id": claim_id,
+					"Content-Type": "application/json",
+					Accept: "application/json, text/event-stream",
+				},
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "tools/call",
+					params: { name, arguments: args },
+				}),
+			},
+			{ DATABASE_WRITER: { connectionString }, DATABASE: { connectionString } },
+		);
+		const { result } = await response.json<{
+			result: { isError?: boolean; content: { text: string }[] };
+		}>();
+		assert.ok(!result.isError, JSON.stringify(result));
+		return JSON.parse(result.content[0]?.text ?? "null");
+	};
+	let chat: string | undefined;
+	async function ask(
+		question: string,
+		model: (
+			tool: ReturnType<typeof mcp>,
+			cited: { ref: { id: string }; label: string }[],
+		) => Promise<object>,
+	) {
+		const queued = await send("/turns", 202, {
+			idempotency_key: randomUUID(),
+			question,
+			...(chat && { conversation_id: chat }),
+		});
+		chat = queued.conversation_id;
+		const work = await claim(credential);
+		assert.equal(work.turn.question, question);
+		const cited = work.history.at(-1)?.answer.sources ?? [];
+		const answer = await model(mcp(work.claim_id), cited);
+		const finished = await complete(credential, {
+			kind: "answered",
+			claim_id: work.claim_id,
+			answer,
+		});
+		assert.equal(finished.status, 204);
+		const { turns } = await send(`/conversations/${chat}`, 200);
+		return turns.at(-1)?.answer;
+	}
+	const cite = (tool: ReturnType<typeof mcp>, source: string) =>
+		tool("validate_answer", {
+			kind: "answer",
+			text: "Sample",
+			sources: [source],
+		});
+	const dealSource = { ...shared, label: "Example Cedar Lease" };
+
+	const first = await ask("Who owns Example Cedar Lease?", async (tool) => {
+		const [match] = await tool("find", {
+			query: "Example Cedar Lease",
+			kind: "deal",
+		});
+		assert.equal((await tool("read", { source: match.source })).owner, "dell");
+		return cite(tool, match.source);
+	});
+	assert.deepEqual(first, {
+		kind: "answer",
+		text: "Sample",
+		sources: [dealSource],
+		proposal: null,
+	});
+
+	const followUp = await ask(
+		"What else should I know about it?",
+		async (tool, cited) => {
+			const [previous] = cited;
+			const [match] = await tool("find", {
+				query: previous?.ref.id,
+				kind: "deal",
+			});
+			await tool("read", { source: match.source });
+			return cite(tool, match.source);
+		},
+	);
+	assert.deepEqual(followUp, first);
+
+	const choice = await ask("How is Example Juniper doing?", async (tool) => {
+		const clarification = await tool("find", {
+			query: "Example Juniper",
+			kind: "lead",
+		});
+		assert.equal(clarification.kind, "clarification");
+		return tool("validate_answer", {
+			kind: "answer",
+			text: "Guessed.",
+			sources: [],
+		});
+	});
+	assert.deepEqual(choice, {
+		kind: "clarification",
+		text: "Which of these records did you mean?",
+		sources: [
+			{ ...north, label: "Example Juniper (Sample North)" },
+			{ ...south, label: "Example Juniper (Sample South)" },
+		].sort((a, b) => (a.ref.id < b.ref.id ? -1 : 1)),
+		proposal: null,
+	});
+
+	const picked = await ask("The one in Sample South.", async (tool, cited) => {
+		const chosen = cited.find(({ label }) => label.endsWith("(Sample South)"));
+		const [match] = await tool("find", {
+			query: chosen?.ref.id,
+			kind: "lead",
+		});
+		assert.equal(
+			(await tool("read", { source: match.source })).stage,
+			"Qualified",
+		);
+		return cite(tool, match.source);
+	});
+	assert.deepEqual(picked, {
+		kind: "answer",
+		text: "Sample",
+		sources: [{ ...south, label: "Example Juniper" }],
+		proposal: null,
+	});
+});
+
 async function answeredProposal(proposal: object, partner = owner) {
 	const id = randomUUID();
 	const conversation_id = randomUUID();
