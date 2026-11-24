@@ -1,5 +1,6 @@
 import { sql, type Transaction } from "kysely";
 import { hasToolCallMarkup, isoMillis } from "../answer.ts";
+import { homeDayAt } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
 import { matchingContacts, matchingDealSubjects } from "../search/next-find.ts";
 
@@ -26,32 +27,27 @@ async function activityCandidates(
 
 type FiledOn = { kind: "deal" | "company" | "person"; name: string };
 
-// Rank 0 is the record itself; a client's history adds its deals, then its current companies and their people.
-function filedTo(kind: string, id: string) {
+// Rank 0 is the record; a client adds its deals, then a person's current companies (not coworkers) or a company's current people.
+function filedTo(kind: string, id: string, now: string) {
 	if (kind === "deal")
 		return sql`select ${id}::uuid as deal_id, null::uuid as party_id, 0 as rank, null::text as kind, null::text as name`;
-	const current = sql`(pc.started_on is null or pc.started_on <= current_date)
-		and (pc.ended_on is null or pc.ended_on > current_date)`;
+	const today = homeDayAt(sql`${now}::timestamptz`);
+	const current = sql`(pc.started_on is null or pc.started_on <= ${today})
+		and (pc.ended_on is null or pc.ended_on > ${today})`;
 	return sql`
 		select null::uuid as deal_id, ${id}::uuid as party_id, 0 as rank, null::text as kind, null::text as name
 		union all
 		select d.id, null, 1, 'deal', d.name
 		from client c join deal_party dp on dp.party_id = c.party_id and dp.role = 'client'
 		join deal d on d.id = dp.deal_id where c.party_id = ${id}
-		union all (
-			with companies as (
-				select p.id from client c join party p on p.id = c.party_id
-				where c.party_id = ${id} and p.kind = 'company'
-				union
-				select pc.company_id from client c join party_company pc on pc.person_id = c.party_id
-				where c.party_id = ${id} and ${current}
-			)
-			select null::uuid, p.id, 2, p.kind, p.name from companies join party p using (id) where p.id <> ${id}
-			union
-			select null::uuid, p.id, 3, p.kind, p.name
-			from companies join party_company pc on pc.company_id = companies.id and ${current}
-			join party p on p.id = pc.person_id where p.id <> ${id}
-		)`;
+		union
+		select null::uuid, p.id, 2, p.kind, p.name
+		from client c join party_company pc on pc.person_id = c.party_id and ${current}
+		join party p on p.id = pc.company_id where c.party_id = ${id}
+		union
+		select null::uuid, p.id, 3, p.kind, p.name
+		from client c join party_company pc on pc.company_id = c.party_id and ${current}
+		join party p on p.id = pc.person_id where c.party_id = ${id}`;
 }
 
 const filedOn = (row: ReturnType<typeof sql.ref>) =>
@@ -65,7 +61,8 @@ export async function readNextRecentActivity(
 		query,
 		limit,
 		ref,
-	}: { query: string; limit: number; ref: string | undefined },
+		now,
+	}: { query: string; limit: number; ref: string | undefined; now: string },
 ) {
 	const byRef = ref ? await activityCandidates(db, ref, true) : [];
 	const matching =
@@ -110,7 +107,7 @@ export async function readNextRecentActivity(
 	if (calendar.rows.length > 5000)
 		return { error: "calendar_history_too_large" } as const;
 	const timeline = await sql`
-		with filed_to as (${filedTo(kind, id)}),
+		with filed_to as (${filedTo(kind, id, now)}),
 		filed as (
 			select distinct on (link.activity_id) link.activity_id, f.rank, f.kind, f.name
 			from filed_to f join activity_about link

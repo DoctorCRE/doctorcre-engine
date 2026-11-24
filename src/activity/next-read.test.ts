@@ -14,6 +14,7 @@ const [joe, client, company, coworker, formerCompany, deal, otherDeal] = [
 	id(6),
 	id(7),
 ];
+const [group, frontDesk, leaving, joining] = [id(20), id(21), id(22), id(23)];
 
 before(async () => {
 	await setup();
@@ -24,19 +25,23 @@ before(async () => {
 		insert into party (id, kind, name) values
 			('${joe}', 'person', 'Example Partner One'), ('${client}', 'person', 'Example Dentist'),
 			('${company}', 'company', 'Example Dental Group'), ('${coworker}', 'person', 'Example Office Manager'),
-			('${formerCompany}', 'company', 'Example Former Practice');
+			('${formerCompany}', 'company', 'Example Former Practice'),
+			('${group}', 'company', 'Example Imaging Group'), ('${frontDesk}', 'person', 'Example Front Desk'),
+			('${leaving}', 'person', 'Example Radiologist'), ('${joining}', 'person', 'Example Technologist');
 		insert into how_found (slug, label) values ('referral', 'Referral');
-		update party set how_found = 'referral' where id = '${client}';
+		update party set how_found = 'referral' where id in ('${client}', '${group}');
 		insert into app_user (id, slug) values ('${joe}', 'joe');
 		insert into role (slug, label) values ('client', 'Client');
-		insert into party_role (party_id, role) values ('${client}', 'client');
-		insert into client (party_id) values ('${client}');
+		insert into party_role (party_id, role) values ('${client}', 'client'), ('${group}', 'client');
+		insert into client (party_id) values ('${client}'), ('${group}');
 		insert into deal (id, name, owner_user_id) values
 			('${deal}', 'Example Suite Lease', '${joe}'), ('${otherDeal}', 'Example Unrelated Lease', '${joe}');
 		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${client}', 'client');
 		insert into party_company (person_id, company_id, started_on, ended_on) values
 			('${client}', '${company}', null, null), ('${coworker}', '${company}', '2026-01-01', null),
-			('${client}', '${formerCompany}', '2020-01-01', '2021-01-01');
+			('${client}', '${formerCompany}', '2020-01-01', '2021-01-01'),
+			('${frontDesk}', '${group}', null, null), ('${leaving}', '${group}', null, '2026-11-24'),
+			('${joining}', '${group}', '2026-11-24', null);
 		insert into activity (id, kind, happened_at, summary) values
 			('${id(10)}', 'call', '2026-11-01T12:00:00Z', 'Called the dentist'),
 			('${id(11)}', 'note', '2026-11-02T12:00:00Z', 'Toured the suite'),
@@ -44,12 +49,17 @@ before(async () => {
 			('${id(13)}', 'call', '2026-11-04T12:00:00Z', 'Called the office manager'),
 			('${id(14)}', 'note', '2026-11-05T12:00:00Z', 'Old practice note'),
 			('${id(15)}', 'note', '2026-11-06T12:00:00Z', 'Unrelated deal note'),
-			('${id(16)}', 'email', '2026-11-07T12:00:00Z', 'Sent the plan to the dentist');
+			('${id(16)}', 'email', '2026-11-07T12:00:00Z', 'Sent the plan to the dentist'),
+			('${id(17)}', 'call', '2026-11-09T12:00:00Z', 'Called the front desk'),
+			('${id(18)}', 'call', '2026-11-10T12:00:00Z', 'Called the radiologist'),
+			('${id(19)}', 'call', '2026-11-11T12:00:00Z', 'Called the technologist');
 		insert into activity_about (activity_id, deal_id, party_id) values
 			('${id(10)}', null, '${client}'), ('${id(11)}', '${deal}', null),
 			('${id(12)}', null, '${company}'), ('${id(13)}', null, '${coworker}'),
 			('${id(14)}', null, '${formerCompany}'), ('${id(15)}', '${otherDeal}', null),
-			('${id(16)}', '${deal}', null), ('${id(16)}', null, '${client}');
+			('${id(16)}', '${deal}', null), ('${id(16)}', null, '${client}'),
+			('${id(17)}', null, '${frontDesk}'), ('${id(18)}', null, '${leaving}'),
+			('${id(19)}', null, '${joining}');
 		insert into next_step (deal_id, what, created_at) values
 			('${deal}', 'Send the lease draft', '2026-11-08T12:00:00Z');
 	`);
@@ -69,7 +79,7 @@ async function recent(query: string, limit = 20) {
 	return body as { catch_up: { timeline: Record<string, unknown>[] } };
 }
 
-test("a client's history includes its deals, current company and the company's people", async () => {
+test("a person client's history includes its deals and current company but not its coworkers", async () => {
 	const { catch_up } = await recent("Example Dentist");
 	assert.deepEqual(
 		catch_up.timeline.map(({ summary, deal_id, filed_on }) => ({
@@ -89,11 +99,6 @@ test("a client's history includes its deals, current company and the company's p
 				filed_on: null,
 			},
 			{
-				summary: "Called the office manager",
-				deal_id: null,
-				filed_on: { kind: "person", name: "Example Office Manager" },
-			},
-			{
 				summary: "Met the group",
 				deal_id: null,
 				filed_on: { kind: "company", name: "Example Dental Group" },
@@ -110,6 +115,46 @@ test("a client's history includes its deals, current company and the company's p
 		(await recent("Example Dentist", 2)).catch_up.timeline.length,
 		2,
 	);
+});
+
+const summaries = (timeline: Record<string, unknown>[]) =>
+	timeline.map(({ summary, filed_on }) => ({ summary, filed_on }));
+
+test("a company client's history includes its current people", async (t) => {
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2026-11-24T18:00:00Z"),
+	});
+	const { catch_up } = await recent("Example Imaging Group");
+	assert.deepEqual(summaries(catch_up.timeline), [
+		{
+			summary: "Called the technologist",
+			filed_on: { kind: "person", name: "Example Technologist" },
+		},
+		{
+			summary: "Called the front desk",
+			filed_on: { kind: "person", name: "Example Front Desk" },
+		},
+	]);
+});
+
+test("a company's current people are counted on the partners' Chicago day", async (t) => {
+	// 9pm in Chicago on Nov 23 is already Nov 24 in UTC.
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2026-11-24T03:00:00Z"),
+	});
+	const { catch_up } = await recent("Example Imaging Group");
+	assert.deepEqual(summaries(catch_up.timeline), [
+		{
+			summary: "Called the radiologist",
+			filed_on: { kind: "person", name: "Example Radiologist" },
+		},
+		{
+			summary: "Called the front desk",
+			filed_on: { kind: "person", name: "Example Front Desk" },
+		},
+	]);
 });
 
 test("a deal's history stays the deal's own", async () => {
