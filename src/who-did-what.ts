@@ -203,6 +203,8 @@ async function readImported(db: Transaction<DB>, after: string | null) {
 				then (i.record ->> 'id')::uuid end, about.party_id)
 		where (${after}::uuid is null or (i.changed_at, i.id)
 				< (select changed_at, id from imported_change where id = ${after}::uuid))
+			-- The old system's own automations moved ownership in bulk; that history stays on the deal timeline.
+			and i.changed_by_job is distinct from 'old_system'
 			and i.table_name || '.' || i.field = any(${sql.val(Object.keys(IMPORTED))}::text[])
 			and coalesce(d.id, ad.id, p.id) is not null
 		order by i.changed_at desc, i.id desc limit ${PAGE + 1}
