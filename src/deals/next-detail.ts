@@ -18,6 +18,11 @@ import {
 import { readHomeReviewCards } from "../home-inbox-review.ts";
 import { stepCopy } from "../home-steps.ts";
 import type { DB, JsonObject, JsonValue } from "../next-database.d.ts";
+import {
+	nameOldRecords,
+	readOldRecordNames,
+	recordLinks,
+} from "../old-record-names.ts";
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
@@ -300,12 +305,27 @@ export async function readNextDealDetail(
 				: [],
 		),
 	);
+	const names = await readOldRecordNames(db, [
+		...detail.thread.map(({ text }) => text),
+		...detail.activities.map(({ summary }) => summary),
+		...detail.next_actions.flatMap(({ description, title }) => [
+			description,
+			title,
+		]),
+	]);
+	const named = (text: string | null) => text && nameOldRecords(text, names);
 	return {
 		...detail,
+		thread: detail.thread.map((note) => ({ ...note, text: named(note.text) })),
+		activities: detail.activities.map((activity) => ({
+			...activity,
+			summary: named(activity.summary),
+		})),
+		record_links: recordLinks(names),
 		next_actions: detail.next_actions.map((step) => {
 			const { title, instruction } = stepCopy({
-				what: step.description,
-				item_title: step.title,
+				what: nameOldRecords(step.description, names),
+				item_title: named(step.title),
 				context_label: detail.name,
 			});
 			return {

@@ -17,7 +17,7 @@
 ## Drawer
 
 - [ ] The lead's name opens its drawer with owner, stage, contact details, plans, timing, research, correspondence and stage history. Older correspondence and stage changes load on request.
-- [ ] Plans and research use plain words. Handling advice appears when it applies to this lead. Phones use a readable format, estimated lease dates are labeled, and dates outside this year include the year.
+- [ ] Plans and research use plain words. An old record code in the notes, such as `C-013`, reads as that record's name and opens it. Handling advice appears when it applies to this lead. Phones use a readable format, estimated lease dates are labeled, and dates outside this year include the year.
 - [ ] A quiet lead's drawer shows its last contact date or says no contact was recorded and shows when it was added. It also shows when follow-up is due.
 - [ ] Claim follows the board's rule. “Link to client” names the suggested client and uses the selected match. Once linked, the lead leaves the board.
 - [ ] If a Claim or Link save is unconfirmed, Check outcome is available in the drawer and checks the same request.

@@ -1,6 +1,11 @@
 import { type RawBuilder, sql, type Transaction } from "kysely";
 import { isCalendarDate } from "../calendar-date.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
+import {
+	nameOldRecords,
+	readOldRecordNames,
+	recordLinks,
+} from "../old-record-names.ts";
 import { inJsonbOrder, type Reader } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 import { readLeadBoard, readNextLeadBoard } from "./board.ts";
@@ -282,11 +287,19 @@ export async function readNextLeadDetail(
 	if ("error" in board) return board;
 	const lead = board.leads.find((l) => l.party_id === opened?.id);
 	if (!opened || !lead) return { ...board, detail: null };
-	const detail = openLead({ ...lead, id: leadId }, opened.fields);
+	const names = await readOldRecordNames(db, [opened.fields.notes]);
+	const detail = openLead(
+		{ ...lead, id: leadId },
+		{
+			...opened.fields,
+			notes: opened.fields.notes && nameOldRecords(opened.fields.notes, names),
+		},
+	);
 	return {
 		...board,
 		detail: {
 			...detail,
+			record_links: recordLinks(names),
 			plans: (detail.notes ?? "")
 				.replace(
 					/^[ \t]*(?:\[(?:web sweep \d{1,2}\/\d{1,2} · finder conf (?:LOW|MEDIUM|HIGH) · verify: UNVERIFIED(?: \([^)\r\n]*\))?|finder conf (?:LOW|MEDIUM|HIGH))\](?=[ \t]|\r?$)[ \t]*)+/gim,

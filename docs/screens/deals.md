@@ -9,6 +9,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 ## Everywhere on Deals
 
 - [ ] Dates and times read as words in Central time with no zone label: "Due Thu, Nov 19", "2 days late", "Moved automatically Mon, Oct 19". Never `2026-11-19` or `10/19`. Only a time shown in another zone names its zone (owner ruling, 2026-11-24).
+- [ ] An old record code in a note or step, such as `C-013`, reads as that record's name and opens it; one that matches no record reads "an old record".
 - [ ] No internal codes or system words: no client, lead or vendor codes, "The Deal Room", "workspace", "loaded", "retained text", "portal", "CARR", "landlord_side", "Request unavailable or version changed".
 - [ ] A section that has nothing says so in plain words. "Unavailable" shows only when a read really failed, with Retry.
 - [ ] If someone else saved the same field since the partner opened the deal, the save says so and offers to reload the deal. Nothing is overwritten.
