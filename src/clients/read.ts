@@ -110,8 +110,8 @@ export function refusalOf(error: unknown) {
 
 export const isOneOf = <T extends string>(
 	allowed: readonly T[],
-	value: string,
-): value is T => (allowed as readonly string[]).includes(value);
+	value: unknown,
+): value is T => (allowed as readonly unknown[]).includes(value);
 
 const DATASETS = {
 	clients: {

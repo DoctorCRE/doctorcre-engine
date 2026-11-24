@@ -72,6 +72,11 @@ test("a client needs how they were found when the record has none, and known cho
 	const [missing, refusal] = await add({});
 	assert.equal(missing, 400);
 	assert.deepEqual(refusal.fields, ["how_found"]);
+	const [notRecorded, notRecordedRefusal] = await add({
+		how_found: "not_recorded",
+	});
+	assert.equal(notRecorded, 400);
+	assert.deepEqual(notRecordedRefusal.fields, ["how_found"]);
 	const [unknown, named] = await add({
 		how_found: "referral",
 		client_type: "spa",
@@ -123,11 +128,37 @@ test("a client edit changes what the partner saw and refuses what changed since"
 		fields: ["status"],
 		current: { status: "paused" },
 	});
-	const [cleared, answer] = await edit({
-		vertical: { from: "Dental", to: null },
+	const [unsaid, unsaidRefusal] = await edit({
+		how_found: { from: "referral", to: "not_recorded" },
 	});
-	assert.equal(cleared, 200);
-	assert.equal(answer.vertical, null);
+	assert.equal(unsaid, 400);
+	assert.deepEqual(unsaidRefusal.fields, ["how_found"]);
+
+	const practiceType = async (fields: object) => {
+		const [code, client] = await edit(fields);
+		assert.equal(code, 200, JSON.stringify(client));
+		return [client.vertical, client.subtype];
+	};
+	assert.deepEqual(
+		await practiceType({ subtype: { from: null, to: "Pediatric" } }),
+		["Dental", "Pediatric"],
+	);
+	assert.deepEqual(
+		await practiceType({ vertical: { from: "Dental", to: " Dental " } }),
+		["Dental", "Pediatric"],
+	);
+	assert.deepEqual(
+		await practiceType({ vertical: { from: "Dental", to: "Orthodontics" } }),
+		["Orthodontics", null],
+	);
+	assert.deepEqual(
+		await practiceType({ subtype: { from: null, to: "Adult" } }),
+		["Orthodontics", "Adult"],
+	);
+	assert.deepEqual(
+		await practiceType({ vertical: { from: "Orthodontics", to: null } }),
+		[null, null],
+	);
 	assert.equal((await edit({ status: { from: "paused", to: null } }))[0], 400);
 	assert.equal((await edit({}))[0], 400);
 });

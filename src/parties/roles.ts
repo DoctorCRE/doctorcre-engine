@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { Refusal } from "../answer.ts";
+import { isOneOf } from "../clients/read.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
@@ -16,12 +17,9 @@ import {
 import { SaveRefusal } from "../save.ts";
 import { changing, edit, unchangedSince } from "./edit.ts";
 
-const oneOf =
-	<T extends string | number>(...allowed: T[]): Check<T> =>
-	(value): value is T =>
-		allowed.includes(value as T);
+const STATUSES = ["roster", "cold", "engaged", "paused"] as const;
 const CLIENT = {
-	status: oneOf("roster", "cold", "engaged", "paused"),
+	status: (value: unknown) => isOneOf(STATUSES, value),
 	client_type: isStoredText,
 	how_found: isStoredText,
 	vertical: isStoredText,
@@ -32,7 +30,6 @@ const CLIENT_FIELDS = Object.keys(CLIENT) as (keyof typeof CLIENT)[];
 type Values<S extends Shape> = {
 	[K in keyof S]: S[K] extends Check<infer T> ? T : never;
 };
-type Changes<S extends Shape> = { [K in keyof S]?: Values<S>[K] | null };
 
 const optionalAll = <S extends Shape>(shape: S) =>
 	Object.fromEntries(
@@ -41,7 +38,7 @@ const optionalAll = <S extends Shape>(shape: S) =>
 const editAll = <S extends Shape>(shape: S) =>
 	Object.fromEntries(
 		Object.entries(shape).map(([field, check]) => [field, edit(check)]),
-	) as { [K in keyof S]: ReturnType<typeof edit> };
+	) as { [K in keyof S]: ReturnType<typeof edit<Values<S>[K]>> };
 
 export const clientRead = (tx: Transaction<DB>, party_id: string) =>
 	tx
@@ -61,6 +58,13 @@ export const clientRead = (tx: Transaction<DB>, party_id: string) =>
 		.where("c.party_id", "=", party_id)
 		.executeTakeFirst();
 
+// The client a save has just written or locked.
+async function savedClient(tx: Transaction<DB>, party_id: string) {
+	const client = await clientRead(tx, party_id);
+	if (!client) throw new Error(`client ${party_id} is missing after its save`);
+	return client;
+}
+
 const invalid = (fields: string[]) =>
 	new SaveRefusal(new Refusal(400, "invalid_field_value", { fields }));
 
@@ -76,8 +80,10 @@ async function refuseUnknown(
 		select field from (values
 			('client_type', ${request.client_type ?? null}::text is null
 				or exists (select from client_type where slug = ${request.client_type ?? null})),
+			-- Not recorded marks a copied record a partner has yet to ask about, so a partner never sends it.
 			('how_found', ${request.how_found ?? null}::text is null
-				or exists (select from how_found where slug = ${request.how_found ?? null}))
+				or ${request.how_found ?? null} <> 'not_recorded'
+				and exists (select from how_found where slug = ${request.how_found ?? null}))
 		) known (field, ok) where not ok`.execute(tx);
 	if (rows.length) throw invalid(rows.map(({ field }) => field));
 }
@@ -158,38 +164,41 @@ async function addClient(tx: Transaction<DB>, request: NewClient) {
 		})
 		.execute();
 	await setVertical(tx, party_id, request.vertical, request.subtype);
-	return { ...(await clientRead(tx, party_id)) };
+	return savedClient(tx, party_id);
 }
 
-function parseEdit<S extends Shape>(
-	shape: S,
-	fields: readonly (keyof S & string)[],
-	party_id: string,
-	body: JsonObject,
-) {
+// What each changed field becomes, from a request fitted to its role's edit shape.
+function parseEdit<
+	Field extends string,
+	Request extends { idempotency_key: string } & {
+		[K in Field]?: { to: unknown };
+	},
+>(party_id: string, request: Request | Refusal, fields: readonly Field[]) {
 	if (!isUuid(party_id)) return new Refusal(404, "not_found");
-	const refused = fit(body, { idempotency_key: isUuid, ...editAll(shape) }, [
-		"idempotency_key",
-	]);
-	if (refused instanceof Refusal) return refused;
-	// Each field fitted { from, to } above.
-	const seen = body as { idempotency_key: string } & JsonObject &
-		Partial<Record<keyof S & string, { from: unknown; to: unknown }>>;
-	const changed = changing(seen, fields);
+	if (request instanceof Refusal) return request;
+	const changed = changing(request, fields);
 	if (!changed.length)
 		return new Refusal(400, "missing_required", { fields: [...fields] });
 	const to = Object.fromEntries(
-		changed.map((field) => [field, seen[field]?.to]),
-	) as Changes<S>;
+		changed.map((field) => [field, request[field]?.to]),
+	) as { [K in Field]?: NonNullable<Request[K]>["to"] };
 	return {
-		idempotency_key: seen.idempotency_key,
+		idempotency_key: request.idempotency_key,
 		party_id,
 		changed,
-		request: seen,
+		request,
 		to,
 	};
 }
-type ClientEdit = Exclude<ReturnType<typeof parseEdit<typeof CLIENT>>, Refusal>;
+
+const CLIENT_EDIT = { idempotency_key: isUuid, ...editAll(CLIENT) };
+const parseClientEdit = (party_id: string, body: JsonObject) =>
+	parseEdit(
+		party_id,
+		fit(body, CLIENT_EDIT, ["idempotency_key"]),
+		CLIENT_FIELDS,
+	);
+type ClientEdit = Exclude<ReturnType<typeof parseClientEdit>, Refusal>;
 
 async function editClient(
 	tx: Transaction<DB>,
@@ -219,14 +228,19 @@ async function editClient(
 			})
 			.where("party_id", "=", party_id)
 			.execute();
-	if ("vertical" in to || "subtype" in to)
+	if ("vertical" in to || "subtype" in to) {
+		const vertical =
+			"vertical" in to ? to.vertical?.trim() || null : current.vertical;
+		// A subtype belongs to the practice type it was recorded under.
+		const kept = vertical === current.vertical ? current.subtype : null;
 		await setVertical(
 			tx,
 			party_id,
-			"vertical" in to ? to.vertical : current.vertical,
-			"subtype" in to ? to.subtype : current.subtype,
+			vertical,
+			"subtype" in to ? to.subtype : kept,
 		);
-	return { ...(await clientRead(tx, party_id)) };
+	}
+	return savedClient(tx, party_id);
 }
 
 // Only an id, so the directory's old refs stay with its reads.
@@ -246,7 +260,7 @@ export const partyRoles = new Hono<NextSaveEnv>()
 		answerNextSave(
 			c,
 			"edit-client",
-			(body) => parseEdit(CLIENT, CLIENT_FIELDS, c.req.param("party"), body),
+			(body) => parseClientEdit(c.req.param("party"), body),
 			editClient,
 		),
 	);
