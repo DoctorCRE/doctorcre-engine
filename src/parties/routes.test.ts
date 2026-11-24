@@ -258,6 +258,32 @@ test("an edit changes what the partner saw and refuses what changed since", asyn
 	);
 });
 
+test("an email or phone sent unchanged keeps its row", async () => {
+	const party = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into party (id, kind, name) values ('${party}', 'person', 'Example Unchanged');
+		insert into party_email (party_id, address, label, is_primary)
+			values ('${party}', 'same@example.test', 'personal', true);
+		insert into party_phone (party_id, number, extension, label, is_primary)
+			values ('${party}', '+12025550109', '7', 'personal', true);
+		commit;`);
+	const rows = () =>
+		db.query(
+			`select e.id as email, e.label as email_label, p.id as phone, p.label as phone_label
+			from party_email e, party_phone p where e.party_id = $1 and p.party_id = $1`,
+			[party],
+		);
+	const before = (await rows()).rows;
+	const [status, answer] = await save(joe, `parties/${party}`, {
+		...key(),
+		email: { from: "same@example.test", to: " Same@Example.test " },
+		phone: { from: "+12025550109 x7", to: "(202) 555-0109 x7" },
+	});
+	assert.equal(status, 200, JSON.stringify(answer));
+	assert.deepEqual((await rows()).rows, before);
+	assert.equal(before[0]?.email_label, "personal");
+});
+
 test("a copied record with a blank name can be named, and an unknown one is not found", async () => {
 	const [status, named] = await save(joe, `parties/${copied}`, {
 		...key(),

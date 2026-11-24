@@ -85,6 +85,7 @@ const HINTS = {
 	invoice_already_paid:
 		"This invoice cannot be undone because its payment was marked paid.",
 	payment_date_out_of_range: "Use a date from the invoice date through today.",
+	invalid_range: "Use a `to` on or after `from`, at most 42 days in all.",
 	old_system_required:
 		"The engine does not finish this save. Send it to the old system unchanged.",
 	actor_not_provisioned: "The authenticated actor is not provisioned.",
@@ -315,6 +316,7 @@ type Verb =
 	| "list-practice-origination"
 	| "quiet-follow-ups"
 	| "read-activity-deal-attribution"
+	| "read-calendar-meetings-v1"
 	| "read-call-outcomes"
 	| "read-changes"
 	| "read-client-leases"
@@ -326,6 +328,7 @@ type Verb =
 	| "read-home-mail-priorities-v1"
 	| "read-home-today-v1"
 	| "read-invoice-tracker"
+	| "read-market-terms"
 	| "read-markets"
 	| "read-national-account-locations"
 	| "read-party"
