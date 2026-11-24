@@ -21,7 +21,7 @@ import {
 import { SaveRefusal } from "../save.ts";
 import { contactOf, type Phone, phoneNumber } from "./contact.ts";
 import { changing, edit, unchangedSince } from "./edit.ts";
-import { clientRead, vendorRead } from "./roles.ts";
+import { clientRead } from "./roles.ts";
 
 const isKind = (value: unknown): value is "person" | "company" =>
 	value === "person" || value === "company";
@@ -334,11 +334,8 @@ export const parties = new Hono<NextSaveEnv>()
 		return answerNextRead(c, "read-party", async (db) => {
 			const contact = await contactOf(db, party_id);
 			if (!contact) return new Refusal(404, "not_found");
-			const [client, vendor] = await Promise.all([
-				clientRead(db, party_id),
-				vendorRead(db, party_id),
-			]);
-			return { ...contact, client: client ?? null, vendor: vendor ?? null };
+			const client = await clientRead(db, party_id);
+			return { ...contact, client: client ?? null };
 		});
 	})
 	.post("/parties", (c) =>

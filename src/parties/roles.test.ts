@@ -11,21 +11,17 @@ const joeId = randomUUID();
 const dellId = randomUUID();
 const practice = randomUUID();
 const unrecorded = randomUUID();
-const lender = randomUUID();
 
 before(async () => {
 	await setup();
 	await db.query(`begin; set local engine.job = 'old_system';
-		insert into role (slug, label, category_of) values ('client', 'Client', null), ('vendor', 'Vendor', null),
-			('lender', 'Lender', 'vendor'), ('contractor', 'Contractor', 'vendor');
-		insert into stage (role, slug, label) values ('vendor', 'prospect', 'Prospect'), ('vendor', 'working', 'Working');
+		insert into role (slug, label) values ('client', 'Client');
 		insert into how_found (slug, label) values ('referral', 'Referral'), ('not_recorded', 'Not recorded');
 		insert into client_type (slug, label) values ('independent', 'Independent'), ('dso', 'DSO');
 		insert into party (id, kind, name, how_found) values
 			('${joeId}', 'person', 'Example Partner One', null), ('${dellId}', 'person', 'Example Partner Two', null),
 			('${practice}', 'company', 'Example Smile Studio', 'referral'),
-			('${unrecorded}', 'person', 'Example Doctor', 'not_recorded'),
-			('${lender}', 'company', 'Example Community Bank', null);
+			('${unrecorded}', 'person', 'Example Doctor', 'not_recorded');
 		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
 		insert into outside_id (source, value, party_id) values ('old_system', '${randomUUID()}', '${unrecorded}');
 		commit;`);
@@ -61,7 +57,6 @@ test("a client is added over a record with its status, type, practice type and o
 	assert.partialDeepStrictEqual(record, {
 		name: "Example Smile Studio",
 		client,
-		vendor: null,
 	});
 	const [again, refusal] = await save(dell, "clients", {
 		...key(),
@@ -135,94 +130,4 @@ test("a client edit changes what the partner saw and refuses what changed since"
 	assert.equal(answer.vertical, null);
 	assert.equal((await edit({ status: { from: "paused", to: null } }))[0], 400);
 	assert.equal((await edit({}))[0], 400);
-});
-
-test("a vendor is added with its categories, stage, level and relationship partner", async () => {
-	const args = {
-		...key(),
-		party_id: lender,
-		categories: ["lender"],
-		stage: "prospect",
-		relationship_level: 0,
-		offers: "SBA loans",
-	};
-	const [status, vendor] = await save(dell, "vendors", args);
-	assert.equal(status, 201, JSON.stringify(vendor));
-	assert.deepEqual(vendor, {
-		party_id: lender,
-		stage: "prospect",
-		relationship_level: 0,
-		owner: "dell",
-		offers: "SBA loans",
-		seeking: null,
-		is_target: false,
-		disposition: null,
-		disposition_reason: null,
-		categories: ["lender"],
-	});
-	assert.equal(
-		(await save(dell, "vendors", { ...key(), party_id: lender }))[0],
-		409,
-	);
-	const [unknown, refusal] = await save(joe, "vendors", {
-		...key(),
-		party_id: practice,
-		categories: ["florist"],
-		stage: "unknown",
-	});
-	assert.equal(unknown, 400);
-	assert.deepEqual([...(refusal.fields as string[])].sort(), [
-		"categories",
-		"stage",
-	]);
-});
-
-test("a vendor edit moves its stage, categories and ruling, and the database keeps a ruling's reason", async () => {
-	const edit = (fields: object, caller = joe) =>
-		save(caller, `vendors/${lender}`, { ...key(), ...fields });
-	const [status, edited] = await edit({
-		stage: { from: "prospect", to: "working" },
-		relationship_level: { from: 0, to: 1 },
-		owner: { from: "dell", to: "joe" },
-		categories: { from: ["lender"], to: ["contractor", "lender"] },
-		is_target: { from: false, to: true },
-	});
-	assert.equal(status, 200, JSON.stringify(edited));
-	assert.partialDeepStrictEqual(edited, {
-		stage: "working",
-		relationship_level: 1,
-		owner: "joe",
-		is_target: true,
-		categories: ["contractor", "lender"],
-	});
-	const [noReason, refusal] = await edit({
-		disposition: { from: null, to: "parked" },
-	});
-	assert.equal(noReason, 422);
-	assert.equal(refusal.rule, "party_role_ruling_has_a_reason");
-	const [ruled, answer] = await edit({
-		disposition: { from: null, to: "parked" },
-		disposition_reason: { from: null, to: "Example reason" },
-		categories: { from: ["lender", "contractor"], to: [] },
-	});
-	assert.equal(ruled, 200, JSON.stringify(answer));
-	assert.partialDeepStrictEqual(answer, {
-		disposition: "parked",
-		disposition_reason: "Example reason",
-		categories: [],
-	});
-	const [stale] = await edit(
-		{ stage: { from: "prospect", to: "working" } },
-		dell,
-	);
-	assert.equal(stale, 409);
-	assert.equal(
-		(
-			await save(joe, `vendors/${practice}`, {
-				...key(),
-				stage: { from: null, to: "working" },
-			})
-		)[0],
-		404,
-	);
 });
