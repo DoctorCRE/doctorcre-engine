@@ -15,6 +15,8 @@ const northDeal = randomUUID();
 const dentalDeal = randomUUID();
 const southDeal = randomUUID();
 const lease = randomUUID();
+const unsignedLease = randomUUID();
+const dealless = randomUUID();
 const loi = randomUUID();
 const signed = randomUUID();
 const amendment = randomUUID();
@@ -46,7 +48,8 @@ before(async () => {
 			('${northDeal}', '${northClinic}'), ('${dentalDeal}', '${northDental}'), ('${southDeal}', '${southClinic}');
 		insert into deal_party (deal_id, party_id, role) values
 			('${northDeal}', '${tenant}', 'client'), ('${northDeal}', '${landlord}', 'landlord'),
-			('${dentalDeal}', '${landlord}', 'landlord'), ('${southDeal}', '${landlord}', 'landlord');
+			('${dentalDeal}', '${landlord}', 'landlord'), ('${southDeal}', '${landlord}', 'landlord'),
+			('${southDeal}', '${tenant}', 'client');
 		insert into document (id, name, r2_key, r2_bucket, content_type) values
 			('${loi}', 'Example LOI.pdf', 'example-loi', 'deal_documents', 'application/pdf'),
 			('${signed}', 'Example lease.pdf', 'example-lease', 'deal_documents', 'application/pdf'),
@@ -58,10 +61,15 @@ before(async () => {
 		insert into offer (deal_id, property_id, round, answers_round, from_party_id, from_role, offered_at, status, rent_per_sf_yr)
 			values ('${northDeal}', '${northClinic}', 2, 1, '${tenant}', 'client', '2026-04-01 15:00Z', 'accepted', 31);
 		insert into offer_document select id, '${loi}' from offer where deal_id = '${northDeal}' and round = 1;
-		insert into lease (id, party_id, property_id, deal_id) values ('${lease}', '${tenant}', '${northClinic}', '${northDeal}');
+		insert into lease (id, party_id, property_id, deal_id) values
+			('${lease}', '${tenant}', '${northClinic}', '${northDeal}'),
+			('${unsignedLease}', '${tenant}', '${southClinic}', '${southDeal}'),
+			('${dealless}', '${tenant}', '${southClinic}', null);
 		insert into lease_version (lease_id, version, document_id, executed_on, expiration_on, rent_per_sf_yr, nnn_per_sf_yr, expense_structure) values
 			('${lease}', 1, '${signed}', '2026-05-01', '2031-05-31', 31, 9.25, 'NNN'),
-			('${lease}', 2, '${amendment}', '2026-09-01', '2033-05-31', 33, null, 'NNN');
+			('${lease}', 2, '${amendment}', '2026-09-01', '2033-05-31', 33, null, 'NNN'),
+			('${unsignedLease}', 1, '${signed}', null, '2031-05-31', 27, null, null),
+			('${dealless}', 1, '${signed}', '2026-02-01', '2031-05-31', 99, null, null);
 		commit;`);
 });
 after(cleanup);
@@ -134,6 +142,17 @@ test("as of a date shows only what was recorded by then, and what had replaced i
 			"Example North Clinic round 1 rent_per_sf_yr 32.5 false",
 			"Example North Clinic round 1 ti_per_sf 40 false",
 		],
+	);
+});
+
+test("an unsigned lease shows until a date is asked for, and a lease with no deal never shows", async () => {
+	assert.deepEqual(summary(await read("?market=Example South")), [
+		"Example South Clinic round 1 rent_per_sf_yr 26 false",
+		"Example South Clinic lease 1 rent_per_sf_yr 27 false",
+	]);
+	assert.deepEqual(
+		summary(await read("?market=Example South&as_of=2026-12-31")),
+		["Example South Clinic round 1 rent_per_sf_yr 26 false"],
 	);
 });
 
