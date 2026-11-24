@@ -43,7 +43,7 @@ const stateCodes = `{
 
 const wins = (db: Transaction<DB>) =>
 	db
-		.selectFrom(selectNextDeals(db).select("d.market_id").as("d"))
+		.selectFrom(selectNextDeals(db).as("d"))
 		.leftJoin("client_vertical as cv", "cv.party_id", "d.client_id")
 		.leftJoin("lease", "lease.deal_id", "d.id")
 		.leftJoin("property as premises", "premises.id", "lease.property_id")
