@@ -215,10 +215,7 @@ function updateText(update: HomeUpdate) {
 		const item = homeStepText(update.checklist_item_title ?? update.title);
 		return {
 			title: homeTitle("checklist", deal),
-			why: homeWhy(
-				item,
-				update.due_on ? `Due ${homeDate(update.due_on)}` : null,
-			),
+			why: homeWhy(item),
 			primary_action: "Open checklist item",
 		};
 	}
