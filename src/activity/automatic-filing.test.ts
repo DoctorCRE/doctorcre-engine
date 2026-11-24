@@ -69,7 +69,7 @@ function mail(
 			message_id: `${name}@example.test`,
 			conversation_id,
 			sender: "contact@example.test",
-			recipients: [],
+			recipients: [] as { address: string; kind: "to" }[],
 			subject: "Floor plan",
 			body: evidence,
 		},
@@ -828,3 +828,48 @@ async function claimFiling(owner: string, activity: string) {
 			finish({ kind: "answered", result: { facts } }),
 	};
 }
+
+test("mail sent by either partner still queues filing but asks neither partner", async () => {
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party_email (party_id, address, label) values
+			('${joe}', 'first-partner@example.test', 'work'), ('${dell}', 'second-partner@example.test', 'work');
+		commit;`);
+	const senders = [
+		"first-partner@example.test",
+		"second-partner@example.test",
+		"contact@example.test",
+	];
+	const shown = [];
+	for (const [index, sender] of senders.entries()) {
+		const thread = `Sent mail ${index}`;
+		await store(mail(`sent-${index}-first`, thread, [{ deal_id: deal }], true));
+		await store(
+			mail(`sent-${index}-second`, thread, [{ deal_id: otherDeal }], true),
+		);
+		const message = mail(`sent-${index}`, thread);
+		message.email.sender = sender;
+		message.email.recipients = [
+			{ address: "vendor-contact@example.test", kind: "to" },
+		];
+		const activity = await captureForJudgment(message);
+		assert.equal(await captureForJudgment(message, secondMailbox), activity);
+		const { rows } = await db.query<{ owner_user_id: string }>(
+			"select owner_user_id from doc_judgment_job where kind = 'email_filing' and activity_id = $1 order by owner_user_id",
+			[activity],
+		);
+		assert.deepEqual(
+			rows.map((row) => row.owner_user_id),
+			[joe, dell].sort(),
+		);
+		const filing = await propose(activity);
+		shown.push([
+			(await cards(filing)).length,
+			(await mailboxCards({ user: "dell" }, filing)).length,
+		]);
+	}
+	assert.deepEqual(shown, [
+		[0, 0],
+		[0, 0],
+		[1, 1],
+	]);
+});
