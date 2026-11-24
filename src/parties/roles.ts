@@ -201,7 +201,9 @@ async function setCategories(
 		.where("role", "in", (eb) =>
 			eb.selectFrom("role").select("slug").where("category_of", "=", "vendor"),
 		)
-		.where("role", "not in", [...categories, ""])
+		.$if(categories.length > 0, (query) =>
+			query.where("role", "not in", categories),
+		)
 		.execute();
 	if (categories.length)
 		await tx
@@ -399,12 +401,12 @@ async function editVendor(
 	const columns = {
 		...role,
 		...(is_target !== undefined && { is_target }),
-		...(role.offers !== undefined && { offers: role.offers?.trim() || null }),
+		...(role.offers !== undefined && { offers: role.offers?.trim() ?? null }),
 		...(role.seeking !== undefined && {
-			seeking: role.seeking?.trim() || null,
+			seeking: role.seeking?.trim() ?? null,
 		}),
 		...(role.disposition_reason !== undefined && {
-			disposition_reason: role.disposition_reason?.trim() || null,
+			disposition_reason: role.disposition_reason?.trim() ?? null,
 		}),
 		...(owner !== undefined && {
 			owner_user_id: owner ? await userId(tx, owner) : null,

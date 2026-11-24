@@ -208,10 +208,15 @@ test("a vendor is added with its categories, stage, level and relationship partn
 		disposition_reason: null,
 		categories: ["lender"],
 	});
-	assert.equal(
-		(await save(dell, "vendors", { ...key(), party_id: lender }))[0],
-		409,
-	);
+	const [again, already] = await save(dell, "vendors", {
+		...key(),
+		party_id: lender,
+	});
+	assert.equal(again, 409);
+	assert.partialDeepStrictEqual(already, {
+		error: "already_vendor",
+		party_id: lender,
+	});
 	const [unknown, refusal] = await save(joe, "vendors", {
 		...key(),
 		party_id: practice,
