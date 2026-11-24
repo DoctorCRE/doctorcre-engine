@@ -31,7 +31,7 @@ import { SaveRefusal } from "../save.ts";
 import { latestChange, seenAnswer, unseenChanges } from "../seen-change.ts";
 import { UUID } from "../uuid.ts";
 import { linkMarketAgent, marketClient } from "./national-market.ts";
-import { automaticPhaseReceipt } from "./phase-receipt.ts";
+import { automaticPhaseReceipt, withinUndoWindow } from "./phase-receipt.ts";
 import { ENDED_PHASES, isLostDeal } from "./shared.ts";
 
 // The database checks each value against its own rules, such as a known kind.
@@ -387,7 +387,7 @@ async function lockDeal(tx: Transaction<DB>, deal_id: string) {
 const latestDealPhase = (tx: Transaction<DB>, deal_id: string) =>
 	tx
 		.selectFrom("deal_phase_change")
-		.select(["phase", "happened_at"])
+		.select(["phase", "happened_at", "changed_at"])
 		.where("deal_id", "=", deal_id)
 		.orderBy("happened_at", "desc")
 		.limit(1);
@@ -455,7 +455,12 @@ async function undoAutomaticPhaseMove(
 		.leftJoin("imported_deal_board as imported", (join) =>
 			join.on("imported.deal_id", "=", deal_id),
 		)
-		.select(["latest.phase", "receipt.prior_phase", "receipt.undoable"])
+		.select((eb) => [
+			"latest.phase",
+			"receipt.prior_phase",
+			"receipt.undoable",
+			withinUndoWindow(eb.ref("latest.changed_at")).as("recent"),
+		])
 		.where((eb) =>
 			eb.not(isLostDeal(eb.ref("latest.phase"), eb.ref("latest.happened_at"))),
 		)
@@ -463,6 +468,13 @@ async function undoAutomaticPhaseMove(
 	if (!current?.prior_phase || current_version !== base_version)
 		throw new SaveRefusal(
 			new Refusal(409, "version_conflict", { current_version }),
+		);
+	if (!current.recent)
+		throw new SaveRefusal(
+			new Refusal(409, "version_conflict", {
+				current_version,
+				hint: "Undo is only offered for 7 days after an automatic move.",
+			}),
 		);
 	if (!current.undoable)
 		throw new SaveRefusal(
