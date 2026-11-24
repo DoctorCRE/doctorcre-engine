@@ -133,6 +133,39 @@ test("an add waits for another save of the same email, then offers its record", 
 	assert.partialDeepStrictEqual(refusal, { candidates: [{ id: other }] });
 });
 
+test("an email edit takes the address before the record, as lead intake does", async () => {
+	const [, person] = await add({ kind: "person", name: "Example Lock Order" });
+	await db.query(`begin;
+		select pg_advisory_xact_lock(hashtextextended('order@example.test', 0))`);
+	let finished = false;
+	const pending = save(joe, `parties/${person.party_id}`, {
+		...key(),
+		email: { from: null, to: "Order@Example.test" },
+	}).finally(() => {
+		finished = true;
+	});
+	let waited = false;
+	try {
+		const deadline = AbortSignal.timeout(10_000);
+		while (!finished && !waited) {
+			deadline.throwIfAborted();
+			const { rows } = await db.query(`select from pg_locks
+				where locktype = 'advisory' and not granted
+				and pg_backend_pid() = any(pg_blocking_pids(pid))`);
+			waited = rows.length > 0;
+		}
+		await db.query("select from party where id = $1 for update nowait", [
+			person.party_id,
+		]);
+	} finally {
+		await db.query("commit");
+	}
+	const [status, answer] = await pending;
+	assert.ok(waited, "the edit must wait for the address lock");
+	assert.equal(status, 200, JSON.stringify(answer));
+	assert.equal(answer.email, "order@example.test");
+});
+
 test("malformed contacts, blank names and misplaced company fields are refused", async () => {
 	for (const [fields, refused] of [
 		[

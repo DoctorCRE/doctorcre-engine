@@ -131,6 +131,7 @@ test("an introduction's date, deal and note change from what the partner saw", a
 	for (const fields of [
 		{ vendor_id: { from: vendor, to: avery } },
 		{ note: { from: "Became a client", to: " " } },
+		{ note: { from: "Became a client", to: null } },
 		{ introduced_on: { from: "2026-01-07", to: null } },
 		{},
 	])
