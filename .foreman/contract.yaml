@@ -1,0 +1,6 @@
+# NODE_OPTIONS reaches the node --test run inside scripts/database-check.ts, so the check writes JUnit without a script change.
+check: mkdir -p out && NODE_OPTIONS='--test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=out/junit.xml' npm run check
+test_report: out/junit.xml
+setup:
+  - npm ci
+verify_skill: .claude/skills/verify-engine/SKILL.md
