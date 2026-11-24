@@ -335,7 +335,7 @@ test("the deal page shares the card's copied phase, outcome and close date", asy
 
 test("copied ended renewals show the unrecorded lease and copied parking names automation", async () => {
 	await nextTransaction(connectionString, "read", async (tx) => {
-		const board = await readNextBoard(tx, { partner: "partner_one" });
+		const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
 		const closed = board.closed_deals.find((deal) => deal.id === id(39));
 		const renewal = {
 			kind: null,
@@ -420,7 +420,7 @@ test("Deals reads show separate kind and reason and the earliest confirmed open 
 			await sql`update critical_date set status = 'done', resolution_reason = 'Example completed'
 				where id = ${id(503)}`.execute(tx);
 
-			const board = await readNextBoard(tx, { partner: "partner_one" });
+			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
 			const facts = {
 				kind: "purchase",
 				reason: "renewal",
@@ -485,7 +485,7 @@ test("National counts a late open step once and skips retained completion and ch
 				tx,
 			);
 
-			const board = await readNextBoard(tx, { partner: "partner_one" });
+			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
 			assert.partialDeepStrictEqual(
 				board.deals.find((deal) => deal.id === id(31)),
 				{
