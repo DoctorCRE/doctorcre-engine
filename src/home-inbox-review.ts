@@ -134,6 +134,8 @@ function draftRows(
 					and record = jsonb_build_object('id', r.id)) as draft_change_id,
 				${mailGroup} as mail_group, 'email:' || md5(${mailGroup}) as mail_card_id,
 				${repliedFromOutlook} as replaced,
+				exists (select from home_mark m where m.user_id = r.owner_user_id
+					and m.item_kind = 'reply_draft' and m.item_id = r.id and m.disposition = 'dropped') as dropped,
 				coalesce(r.sent_at, r.changed_at) as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
 				a.happened_at as email_at, ${senderLabel("e")} as email_sender,
 				case when strpos(e.body, r.evidence) > 0 then r.evidence end as email_quote,
@@ -162,8 +164,8 @@ function draftRows(
 					or r.sent_at >= now() - interval '7 days'
 				)
 		)
-		-- A replaced draft keeps its rank so an older draft in the answered conversation stays hidden.
-		select * from drafts where position = 1 and not replaced
+		-- A replaced or dropped draft keeps its rank so an older draft in the same conversation stays hidden.
+		select * from drafts where position = 1 and not replaced and not dropped
 	`;
 }
 
@@ -1009,9 +1011,16 @@ export async function readHomeReviewDisposition(
 	if (kind === "reply_draft") {
 		const draft = await db
 			.selectFrom("reply_draft as r")
+			.leftJoin("home_mark as m", (join) =>
+				join
+					.onRef("m.reply_draft_id", "=", "r.id")
+					.onRef("m.user_id", "=", "r.owner_user_id")
+					.on("m.disposition", "=", "dropped"),
+			)
 			.select([
 				"r.status",
 				"r.dismiss_reason",
+				"m.drop_reason",
 				repliedFromOutlook.as("replied"),
 			])
 			.where("r.id", "=", id)
@@ -1019,6 +1028,8 @@ export async function readHomeReviewDisposition(
 			.where(sourceInMailbox(sql.ref("r.email_activity_id"), userId))
 			.executeTakeFirst();
 		if (draft?.status === "sent") return { item_id, state: "done" };
+		if (draft?.drop_reason)
+			return { item_id, state: "dropped", reason: draft.drop_reason };
 		if (draft?.replied) return { item_id, state: "replaced" };
 		if (draft?.status === "dismissed")
 			return {

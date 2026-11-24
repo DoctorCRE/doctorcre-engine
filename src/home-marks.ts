@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import pg from "pg";
 import { Refusal } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import { lockHomeReview } from "./home-inbox-review.ts";
@@ -43,7 +44,11 @@ const actions = [
 ] as const;
 const isAction = (value: unknown): value is (typeof actions)[number] =>
 	actions.some((action) => value === action);
-const droppableKinds = new Set<ItemKind>(["call_follow_up", "home_update"]);
+const droppableKinds = new Set<ItemKind>([
+	"call_follow_up",
+	"home_update",
+	"reply_draft",
+]);
 const isParty = (value: unknown): value is "party" => value === "party";
 const shape = {
 	idempotency_key: isUuid,
@@ -237,7 +242,18 @@ async function saveMark(tx: Transaction<DB>, request: MarkRequest) {
 			on conflict (user_id, item_kind, item_id) do update set
 				(disposition, snoozed_until, drop_reason, waiting_on_party_id, waiting_reason) =
 				('dropped', null, excluded.drop_reason, null, null)
-		`.execute(tx);
+		`
+			.execute(tx)
+			.catch((error: unknown) => {
+				if (
+					error instanceof pg.DatabaseError &&
+					error.constraint === "home_mark_drops_failed_reply"
+				)
+					throw new SaveRefusal(
+						new Refusal(422, "invalid_field_value", { fields: ["action"] }),
+					);
+				throw error;
+			});
 		return { ok: true, item_id };
 	}
 

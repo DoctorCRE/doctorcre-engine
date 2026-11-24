@@ -7524,6 +7524,44 @@ for (const [label, sql, refusal] of REPLY_DRAFT_REFUSALS) {
 		}));
 }
 
+const dropReply = (mark: Record<string, string | null> = {}) =>
+	`${OWNER}; ${newMark({ next_step_id: null, reply_draft_id: REPLY, disposition: "dropped", snoozed_until: null, drop_reason: "Answered by phone", ...mark })}`;
+const failedForGood = `${approved}; ${reply(OWNERS_MAILBOX, FAIL("invalid_submission"))}`;
+// biome-ignore format: one refusal case per row
+const REPLY_DROP_REFUSALS: [string, string, Refusal][] = [
+	["a pending draft", `${newReply()}; ${dropReply()}`, "home_mark_drops_failed_reply"],
+	["an approved draft", `${approved}; ${dropReply()}`, "home_mark_drops_failed_reply"],
+	...[ABORTED, "submission_recipients_invalid", UNCONFIRMED].map((reason): [string, string, Refusal] =>
+		[`a draft that failed with ${reason}`, `${approved}; ${reply(OWNERS_MAILBOX, FAIL(reason))}; ${dropReply()}`, "home_mark_drops_failed_reply"]),
+	["a snooze turned into a drop on a pending draft",
+		`${newReply()}; ${dropReply({ disposition: "snoozed", snoozed_until: "2099-01-01T00:00:00Z", drop_reason: null })};
+		update home_mark set disposition = 'dropped', snoozed_until = null, drop_reason = 'Example' where reply_draft_id = '${REPLY}'`,
+		"home_mark_drops_failed_reply"],
+	["another user's drop", `${failedForGood}; ${dropReply({ user_id: TEAMMATE })}`, "home_mark_reply_draft_id_user_id_fkey"],
+];
+for (const [label, sql, refusal] of REPLY_DROP_REFUSALS) {
+	test(`Home marks refuse dropping ${label}`, () =>
+		rolledBack(async () => {
+			await assert.rejects(db.query(sql), expected(refusal));
+		}));
+}
+
+test("the owner drops a reply that failed for good from Home, and the draft stays failed", () =>
+	rolledBack(async () => {
+		await db.query(`${failedForGood}; ${dropReply()}`);
+		const { rows } = await db.query(
+			`select m.drop_reason, r.status, r.failure_reason from home_mark m
+				join reply_draft r on r.id = m.reply_draft_id`,
+		);
+		assert.deepEqual(rows, [
+			{
+				drop_reason: "Answered by phone",
+				status: "failed",
+				failure_reason: "invalid_submission",
+			},
+		]);
+	}));
+
 test("a reply draft goes out once: the owner edits and approves it, and the owner's mailbox records each try", () =>
 	rolledBack(async () => {
 		await db.query(
