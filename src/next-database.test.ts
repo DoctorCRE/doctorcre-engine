@@ -1042,12 +1042,21 @@ const RULES: Record<string, Case[]> = {
 			"deal_party_pkey",
 		],
 	],
-	"a person or company has a known kind": [
+	"a person or company has a known kind, and a name the engine saves is never blank":
 		[
-			"insert into party (kind, name) values ('household', 'Example')",
-			"party_kind_check",
+			[
+				"insert into party (kind, name) values ('household', 'Example')",
+				"party_kind_check",
+			],
+			[
+				`${asUser(USER)}; insert into party (kind, name) values ('person', ' ')`,
+				"party_name_saved_nonblank",
+			],
+			[
+				`${asUser(USER)}; update party set name = '' where id = '${AGENT}'`,
+				"party_name_saved_nonblank",
+			],
 		],
-	],
 	"an NPI is ten digits ending in its check digit, and is held by one person or company":
 		[
 			...[
