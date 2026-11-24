@@ -4977,7 +4977,7 @@ test("a link either way round is two links only for can introduce, and a merge k
 		]);
 	}));
 
-test("a merge collapses two current links or two from one start date, keeping the survivor's row, and keeps can introduce's direction", () =>
+test("a merge collapses two current links, keeping the survivor's row, and keeps can introduce's direction", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
 			insert into party_link (id, kind, party_id, other_party_id, started_on, ended_on, note) values
@@ -5053,6 +5053,29 @@ test("a merge collapses two current links or two from one start date, keeping th
 				started_on: "2022-03-01",
 				note: "Example: survivor",
 			},
+		]);
+	}));
+
+test("a merge keeps an ended link beside a current one from the same start date", () =>
+	rolledBack(async () => {
+		const [first, second] = [id(810), id(811)];
+		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example'),
+				('${first}', 'company', 'Example First Office'), ('${second}', 'company', 'Example Second Office');
+			insert into party_link (id, kind, party_id, other_party_id, started_on, ended_on) values
+				('${id(812)}', 'knows', '${AGENT}', '${first}', null, '2024-06-28'),
+				('${id(813)}', 'knows', '${DUPLICATE}', '${first}', null, null),
+				('${id(814)}', 'knows', '${AGENT}', '${second}', '2023-01-02', null),
+				('${id(815)}', 'knows', '${second}', '${DUPLICATE}', '2023-01-02', '2024-06-28');
+			select merge_party('${DUPLICATE}', '${AGENT}')`);
+		const { rows } = await db.query(
+			`select id, ended_on::text from party_link
+			where id between '${id(812)}' and '${id(815)}' order by id`,
+		);
+		assert.deepEqual(rows, [
+			{ id: id(812), ended_on: "2024-06-28" },
+			{ id: id(813), ended_on: null },
+			{ id: id(814), ended_on: null },
+			{ id: id(815), ended_on: "2024-06-28" },
 		]);
 	}));
 

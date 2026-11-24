@@ -5,11 +5,19 @@ import { isCalendarDate } from "../calendar-date.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
-import { fit, isStoredText, isUuid, optional } from "../request-shape.ts";
+import {
+	fit,
+	isStoredText,
+	isUuid,
+	optional,
+	orNull,
+} from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
+import { lock } from "./contact.ts";
 import { changing, edit, unchangedSince } from "./edit.ts";
 
-const isKind = (value: unknown): value is "knows" | "can_introduce" =>
+type Kind = "knows" | "can_introduce";
+const isKind = (value: unknown): value is Kind =>
 	value === "knows" || value === "can_introduce";
 
 const NEW_LINK = {
@@ -22,9 +30,9 @@ const NEW_LINK = {
 };
 const EDIT_LINK = {
 	idempotency_key: isUuid,
-	started_on: edit(isCalendarDate),
-	ended_on: edit(isCalendarDate),
-	note: edit(isStoredText),
+	started_on: edit(orNull(isCalendarDate)),
+	ended_on: edit(orNull(isCalendarDate)),
+	note: edit(orNull(isStoredText)),
 };
 const EDITABLE = ["started_on", "ended_on", "note"] as const;
 
@@ -40,8 +48,8 @@ const linkRead = (tx: Transaction<DB>, id: string) =>
 			sql<string | null>`ended_on::text`.as("ended_on"),
 			"note",
 		])
-		.where("id", "=", id)
-		.executeTakeFirst();
+		.$narrowType<{ kind: Kind }>()
+		.where("id", "=", id);
 
 function parseLink(body: JsonObject) {
 	const request = fit(body, NEW_LINK, [
@@ -64,7 +72,7 @@ function parseLink(body: JsonObject) {
 }
 
 type Pair = {
-	kind: string;
+	kind: Kind;
 	party_id: string;
 	other_party_id: string;
 };
@@ -76,9 +84,7 @@ async function refuseLinked(
 	{ kind, party_id, other_party_id }: Pair,
 ) {
 	const ends = [party_id, other_party_id].sort();
-	await sql`select pg_advisory_xact_lock(hashtextextended('party link:' || ${kind} || ${ends.join(":")}, 0))`.execute(
-		tx,
-	);
+	await lock(tx, `party link:${kind}${ends.join(":")}`);
 	const current = await tx
 		.selectFrom("party_link")
 		.select("id")
@@ -109,7 +115,7 @@ async function refuseLinked(
 
 // The link a save has just written or locked.
 async function savedLink(tx: Transaction<DB>, link_id: string) {
-	const link = await linkRead(tx, link_id);
+	const link = await linkRead(tx, link_id).executeTakeFirst();
 	if (!link) throw new Error(`party link ${link_id} is missing after its save`);
 	return link;
 }
@@ -158,13 +164,7 @@ async function editLink(
 	request: Exclude<ReturnType<typeof parseEdit>, Refusal>,
 ) {
 	const { link_id } = request;
-	const locked = await tx
-		.selectFrom("party_link")
-		.select("id")
-		.where("id", "=", link_id)
-		.forUpdate()
-		.executeTakeFirst();
-	const current = locked && (await linkRead(tx, link_id));
+	const current = await linkRead(tx, link_id).forUpdate().executeTakeFirst();
 	if (!current) throw new SaveRefusal(new Refusal(404, "not_found"));
 	unchangedSince(request, request.fields, current);
 	if (current.ended_on !== null && request.ended_on?.to === null)
@@ -174,7 +174,7 @@ async function editLink(
 		.set({
 			...(request.started_on && { started_on: request.started_on.to }),
 			...(request.ended_on && { ended_on: request.ended_on.to }),
-			...(request.note && { note: request.note.to?.trim() || null }),
+			...(request.note && { note: request.note.to?.trim() ?? null }),
 		})
 		.where("id", "=", link_id)
 		.execute();

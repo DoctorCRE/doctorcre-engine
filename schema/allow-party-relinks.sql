@@ -66,13 +66,13 @@ begin
 	delete from lead_stage_move d using lead_stage_move s
 	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
 		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
-	-- A link between the two says nothing once they are one. Of two current links, or two from one start date,
-	-- that become one, the survivor's stays.
+	-- A link between the two says nothing once they are one. Of two current links that become one, the survivor's
+	-- stays; ended links are history and both stay.
 	delete from party_link where duplicate in (party_id, other_party_id) and survivor in (party_id, other_party_id);
 	delete from party_link d using party_link s
 	where duplicate in (d.party_id, d.other_party_id) and survivor in (s.party_id, s.other_party_id)
 		and s.kind = d.kind
-		and (s.started_on is not distinct from d.started_on or s.ended_on is null and d.ended_on is null)
+		and s.ended_on is null and d.ended_on is null
 		and case d.party_id when duplicate then d.other_party_id else d.party_id end
 			= case s.party_id when survivor then s.other_party_id else s.party_id end
 		and (d.kind = 'knows' or (d.party_id = duplicate) = (s.party_id = survivor));
