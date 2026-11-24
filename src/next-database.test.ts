@@ -6065,42 +6065,69 @@ for (const source of ["public_records", "vendor"]) {
 		}));
 }
 
-for (const [sql, refusal] of [
+for (const [label, sql, refusal] of [
 	[
+		"a new draft that skips the human send",
 		newLeadDraft({ requires_human_send: "false" }),
 		notGranted("lead_contact_draft"),
 	],
-	[newLeadDraft({ dispatchable: "true" }), notGranted("lead_contact_draft")],
-	[newLeadDraft({ approved: "true" }), notGranted("lead_contact_draft")],
-	[newLeadDraft({ subject: " " }), "lead_contact_draft_subject_check"],
-	[newLeadDraft({ body: " " }), "lead_contact_draft_body_check"],
-	[newLeadDraft({ time_zone: " " }), "lead_contact_draft_time_zone_check"],
 	[
+		"a new draft marked dispatchable",
+		newLeadDraft({ dispatchable: "true" }),
+		notGranted("lead_contact_draft"),
+	],
+	[
+		"a new draft marked approved",
+		newLeadDraft({ approved: "true" }),
+		notGranted("lead_contact_draft"),
+	],
+	[
+		"a blank subject",
+		newLeadDraft({ subject: " " }),
+		"lead_contact_draft_subject_check",
+	],
+	[
+		"a blank body",
+		newLeadDraft({ body: " " }),
+		"lead_contact_draft_body_check",
+	],
+	[
+		"a blank time zone",
+		newLeadDraft({ time_zone: " " }),
+		"lead_contact_draft_time_zone_check",
+	],
+	[
+		"an owner who is not a user",
 		newLeadDraft({ owner_user_id: CLIENT }),
 		"lead_contact_draft_owner_user_id_fkey",
 	],
 	[
+		"a party that is not a lead",
 		`${newLeadDraft({ party_id: DOCTOR })}; ${CHECK_AT_COMMIT}`,
 		"lead_contact_draft_party_id_role_fkey",
 	],
 	[
+		"a second draft for the same lead",
 		`${newLeadDraft()}; ${newLeadDraft({ id: id(741) })}`,
 		"lead_contact_draft_party_id_key",
 	],
 	[
+		"approval by an agent job",
 		`${newLeadDraft()}; update party_role set stage = 'qualified' where party_id = '${LEAD}'; ${asJob("agent")}; update lead_contact_draft set approved = true`,
 		"lead_contact_draft_user_approves",
 	],
 	[
+		"marking a saved draft dispatchable",
 		"update lead_contact_draft set dispatchable = true",
 		notGranted("lead_contact_draft"),
 	],
 	[
+		"changing a draft's revision",
 		"update lead_contact_draft set revision = 5",
 		notGranted("lead_contact_draft"),
 	],
-] satisfies Case[]) {
-	test(`outreach draft refuses ${refusal}`, () =>
+] satisfies [string, string, Refusal][]) {
+	test(`outreach draft refuses ${label}`, () =>
 		rolledBack(async () => {
 			await assert.rejects(db.query(sql), expected(refusal));
 		}));

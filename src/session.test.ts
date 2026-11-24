@@ -184,17 +184,23 @@ for (const [name, reply] of [
 	});
 }
 
-for (const [kind, reply] of [
-	["status 500", () => new Response(cookie, { status: 500 })],
+for (const [cause, kind, reply] of [
+	["a 500 response", "status 500", () => new Response(cookie, { status: 500 })],
 	[
+		"a thrown error",
 		"Error",
 		() => {
 			throw new Error(cookie);
 		},
 	],
-	["malformed", () => Response.json({ ...session, csrf_token: "" })],
-	["malformed", () => new Response(cookie)],
 	[
+		"an empty CSRF token",
+		"malformed",
+		() => Response.json({ ...session, csrf_token: "" }),
+	],
+	["a body that is not JSON", "malformed", () => new Response(cookie)],
+	[
+		"an error named with the cookie",
 		"unknown",
 		() => {
 			const error = new Error("made-up failure");
@@ -202,8 +208,8 @@ for (const [kind, reply] of [
 			throw error;
 		},
 	],
-] satisfies [string, () => Response][]) {
-	test(`CARR failure logs only its kind (${kind})`, async () => {
+] satisfies [string, string, () => Response][]) {
+	test(`CARR failure from ${cause} logs only its kind (${kind})`, async () => {
 		const response = await worker.request(
 			path,
 			{ headers: { Cookie: cookie } },
