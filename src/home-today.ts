@@ -40,7 +40,7 @@ type StepRow = Parameters<typeof stepCopy>[0] &
 
 const emailsOf = (m: Meeting) =>
 	[m.organizer, ...m.attendees].flatMap((p) => p.email ?? []);
-const noMeetings = (reason: string) => ({
+export const noMeetings = (reason: string) => ({
 	state: "unavailable" as const,
 	reason,
 	observed_at: null,
@@ -50,7 +50,7 @@ const noMeetings = (reason: string) => ({
 	follow_up_reviews: [] as never[],
 });
 
-async function isolate<T, F>(
+export async function isolate<T, F>(
 	db: Transaction<DB>,
 	read: () => Promise<T>,
 	fallback: F,
@@ -77,17 +77,18 @@ function handledReviewKeys(stored: unknown) {
 	);
 }
 
-async function readTodayMeetings(
+// One partner's stored Outlook occurrences that overlap [from_at, until_at).
+export async function readMeetings(
 	db: Transaction<DB>,
 	userId: string,
-	clock: Clock,
+	clock: Record<"today" | "now_at" | "from_at" | "until_at", string>,
 ) {
 	const stored = await readStoredAgenda(db, userId);
 	if (stored === null)
 		return noMeetings("No calendar snapshot has been synced from Outlook yet.");
 	const section = meetingsFromSnapshot(stored, new Date(clock.now_at), {
-		fromMs: Date.parse(clock.today_start),
-		untilMs: Date.parse(clock.tomorrow_start),
+		fromMs: Date.parse(clock.from_at),
+		untilMs: Date.parse(clock.until_at),
 		handledReviewKeys: handledReviewKeys(stored),
 	});
 	if (!section || section.state === "unavailable")
@@ -243,7 +244,12 @@ async function readHomeToday(
 	if (!clock?.is_partner) return new Refusal(403, "AUTHORIZATION_REFUSED");
 	const meetings = await isolate(
 		db,
-		() => readTodayMeetings(db, userId, clock),
+		() =>
+			readMeetings(db, userId, {
+				...clock,
+				from_at: clock.today_start,
+				until_at: clock.tomorrow_start,
+			}),
 		noMeetings("Today's meetings could not be loaded."),
 	);
 	const reminders = await isolate(
