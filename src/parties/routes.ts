@@ -1,5 +1,11 @@
 import { Hono } from "hono";
-import { sql, type Transaction } from "kysely";
+import {
+	type Expression,
+	type ExpressionBuilder,
+	type SqlBool,
+	sql,
+	type Transaction,
+} from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
@@ -37,6 +43,7 @@ const EDIT_PARTY = {
 	city: edit(isStoredText),
 	email: edit(isStoredText),
 	phone: edit(isStoredText),
+	force_new: optional(isBoolean),
 };
 const EDITABLE = ["name", "city", "email", "phone"] as const;
 
@@ -128,39 +135,61 @@ async function addPhone(
 		.execute();
 }
 
-async function refuseDuplicate(tx: Transaction<DB>, request: NewParty) {
-	await sql`select pg_advisory_xact_lock(hashtextextended('party name:' || ${request.kind} || lower(${request.name}), 0))`.execute(
+// The lock the email-lead promotion takes, so two saves cannot give one address to two records unseen.
+async function lockAddress(tx: Transaction<DB>, address: string) {
+	await sql`select pg_advisory_xact_lock(hashtextextended(${address}, 0))`.execute(
 		tx,
 	);
-	if (request.force_new) return;
+}
+
+const hasAddress = (eb: ExpressionBuilder<DB, "party">, address: string) =>
+	eb.exists(
+		eb
+			.selectFrom("party_email")
+			.whereRef("party_email.party_id", "=", "party.id")
+			.where("address", "=", address),
+	);
+
+async function refuseCandidates(
+	tx: Transaction<DB>,
+	match: (eb: ExpressionBuilder<DB, "party">) => Expression<SqlBool>,
+) {
 	const candidates = await tx
 		.selectFrom("party")
 		.select(["id", "name", "kind"])
 		.select(partyMatchFields)
-		.where((eb) =>
-			eb.or([
-				eb.and([
-					eb("kind", "=", request.kind),
-					eb(sql`lower(btrim(name))`, "=", sql`lower(${request.name})`),
-				]),
-				...(request.email
-					? [
-							eb.exists(
-								eb
-									.selectFrom("party_email")
-									.whereRef("party_email.party_id", "=", "party.id")
-									.where("address", "=", request.email),
-							),
-						]
-					: []),
-			]),
-		)
+		.where(match)
 		.orderBy("name")
 		.orderBy("id")
 		.limit(10)
 		.execute();
 	if (candidates.length)
 		throw new SaveRefusal(new Refusal(409, "party_exists", { candidates }));
+}
+
+async function refuseDuplicate(tx: Transaction<DB>, request: NewParty) {
+	await sql`select pg_advisory_xact_lock(hashtextextended('party name:' || ${request.kind} || lower(${request.name}), 0))`.execute(
+		tx,
+	);
+	const { email } = request;
+	if (email) await lockAddress(tx, email);
+	if (request.force_new) return;
+	await refuseCandidates(tx, (eb) =>
+		eb.or([
+			eb.and([
+				eb("kind", "=", request.kind),
+				eb(sql`lower(btrim(name))`, "=", sql`lower(${request.name})`),
+			]),
+			...(email ? [hasAddress(eb, email)] : []),
+		]),
+	);
+}
+
+// The record a save has just written or locked.
+async function saved(tx: Transaction<DB>, party_id: string) {
+	const contact = await contactOf(tx, party_id);
+	if (!contact) throw new Error(`party ${party_id} is missing after its save`);
+	return contact;
 }
 
 async function addParty(tx: Transaction<DB>, request: NewParty) {
@@ -201,7 +230,7 @@ async function addParty(tx: Transaction<DB>, request: NewParty) {
 				changed_at: sql<string>`now()`,
 			})
 			.execute();
-	return { ...(await contactOf(tx, party_id)) };
+	return saved(tx, party_id);
 }
 
 function parseEdit(party_id: string, body: JsonObject) {
@@ -231,13 +260,20 @@ async function editParty(tx: Transaction<DB>, request: Edit) {
 		.forUpdate()
 		.executeTakeFirst();
 	if (!locked) throw new SaveRefusal(new Refusal(404, "not_found"));
-	const current = await contactOf(tx, party_id);
-	if (!current) throw new SaveRefusal(new Refusal(404, "not_found"));
-	unchangedSince(request, request.fields, {
+	const current = await saved(tx, party_id);
+	unchangedSince(request, request.fields, current, {
 		...current,
 		phone: current.phone?.shown ?? null,
 	});
 	await refuseMalformed(tx, to);
+	const { email } = to;
+	if (request.email && email) {
+		await lockAddress(tx, email);
+		if (!request.force_new)
+			await refuseCandidates(tx, (eb) =>
+				eb.and([eb("id", "!=", party_id), hasAddress(eb, email)]),
+			);
+	}
 	const name = trimmed(request.name?.to);
 	if (name !== null || request.city)
 		await tx
@@ -282,7 +318,7 @@ async function editParty(tx: Transaction<DB>, request: Edit) {
 			.execute();
 		if (to.phone) await addPhone(tx, party_id, to.phone);
 	}
-	return { ...(await contactOf(tx, party_id)) };
+	return saved(tx, party_id);
 }
 
 // Only an id, so /parties/search stays the search's.

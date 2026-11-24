@@ -99,6 +99,40 @@ test("a likely duplicate is offered back until the partner confirms a separate r
 	assert.equal(forced, 201);
 });
 
+test("an add waits for another save of the same email, then offers its record", async () => {
+	const other = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		select pg_advisory_xact_lock(hashtextextended('race@example.test', 0));
+		insert into party (id, kind, name) values ('${other}', 'person', 'Example Racer');
+		insert into party_email (party_id, address, label, is_primary)
+			values ('${other}', 'race@example.test', 'work', true)`);
+	let finished = false;
+	const pending = add({
+		kind: "person",
+		name: "Example Second Racer",
+		email: "Race@Example.test",
+	}).finally(() => {
+		finished = true;
+	});
+	let waited = false;
+	try {
+		const deadline = AbortSignal.timeout(10_000);
+		while (!finished && !waited) {
+			deadline.throwIfAborted();
+			const { rows } = await db.query(`select from pg_locks
+				where locktype = 'advisory' and not granted
+				and pg_backend_pid() = any(pg_blocking_pids(pid))`);
+			waited = rows.length > 0;
+		}
+	} finally {
+		await db.query("commit");
+	}
+	const [status, refusal] = await pending;
+	assert.ok(waited, "the add must wait for the email lock");
+	assert.equal(status, 409, JSON.stringify(refusal));
+	assert.partialDeepStrictEqual(refusal, { candidates: [{ id: other }] });
+});
+
 test("malformed contacts, blank names and misplaced company fields are refused", async () => {
 	for (const [fields, refused] of [
 		[
@@ -175,9 +209,36 @@ test("an edit changes what the partner saw and refuses what changed since", asyn
 		fields: ["name"],
 		current: { name: "Blake Q. Example" },
 	});
+	const [, phoneConflict] = await edit({
+		phone: { from: "+12025550102", to: null },
+	});
+	assert.deepEqual(phoneConflict.current, edited);
+
+	const [taken, takenRefusal] = await edit({
+		email: { from: "blake.q@example.test", to: "Front@Example.test" },
+	});
+	assert.equal(taken, 409);
+	assert.partialDeepStrictEqual(takenRefusal, {
+		error: "party_exists",
+		candidates: [{ id: company }],
+	});
+	assert.equal(
+		(
+			await edit({
+				email: { from: "blake.q@example.test", to: "blake.q@example.test" },
+			})
+		)[0],
+		200,
+	);
+	const [shared, sharedAnswer] = await edit({
+		email: { from: "blake.q@example.test", to: "front@example.test" },
+		force_new: true,
+	});
+	assert.equal(shared, 200, JSON.stringify(sharedAnswer));
+	assert.equal(sharedAnswer.email, "front@example.test");
 
 	const [cleared, answer] = await edit({
-		email: { from: "blake.q@example.test", to: null },
+		email: { from: "front@example.test", to: null },
 		phone: { from: "+12025550103", to: null },
 		city: { from: "Shelbyville", to: null },
 	});
