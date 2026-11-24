@@ -62,7 +62,15 @@ async function recordFacts(
 	switch (kind) {
 		case "deal": {
 			const deal = await readNextDealDetail(db, id);
-			return "error" in deal ? null : { owner: deal.owner, phase: deal.phase };
+			if ("error" in deal) return null;
+			// The deal detail's owner is a sign-in name; Doc names people as leads and clients do.
+			const { owner } = await db
+				.selectFrom("deal")
+				.innerJoin("party", "party.id", "deal.owner_user_id")
+				.select("party.name as owner")
+				.where("deal.id", "=", id)
+				.executeTakeFirstOrThrow();
+			return { owner, phase: deal.phase };
 		}
 		case "lead": {
 			const lead = await readNextLeadDetail(db, id, {

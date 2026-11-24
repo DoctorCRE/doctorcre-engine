@@ -1477,7 +1477,10 @@ test("a first question and follow-ups cite the exact records and ask which lead 
 			query: "Example Cedar Lease",
 			kind: "deal",
 		});
-		assert.equal((await tool("read", { source: match.source })).owner, "dell");
+		assert.equal(
+			(await tool("read", { source: match.source })).owner,
+			"Example Two",
+		);
 		return cite(tool, match.source);
 	});
 	assert.deepEqual(first, {
