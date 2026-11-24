@@ -1674,7 +1674,7 @@ create table home_mark (
 	constraint home_mark_snoozed_until check ((disposition is not distinct from 'snoozed') = (snoozed_until is not null)),
 	constraint home_mark_drop_reason check ((disposition is not distinct from 'dropped') = (drop_reason is not null)
 		and (disposition is distinct from 'dropped' or waiting_on_party_id is null)),
-	constraint home_mark_drop_kind check (disposition is distinct from 'dropped' or item_kind in ('call_follow_up', 'home_update')),
+	constraint home_mark_drop_kind check (disposition is distinct from 'dropped' or item_kind in ('call_follow_up', 'home_update', 'reply_draft')),
 	constraint home_mark_waiting_has_a_reason check ((waiting_on_party_id is null) = (waiting_reason is null)),
 	constraint home_mark_marks_something check (disposition is not null or waiting_on_party_id is not null)
 );
@@ -2087,6 +2087,23 @@ create table reply_draft (
 
 alter table home_mark add foreign key (proposal_id) references proposal on delete cascade;
 alter table home_mark add foreign key (reply_draft_id, user_id) references reply_draft (id, owner_user_id);
+
+-- Rule 99 keeps any other failure failed, so the drop stays true of the draft.
+create function home_mark_drops_failed_reply() returns trigger
+language plpgsql as $$
+begin
+	if not exists (select from reply_draft where id = new.reply_draft_id and status = 'failed'
+		and failure_reason not in ('aborted_before_dispatch', 'submission_recipients_invalid')
+		and failure_reason !~ '^unconfirmed_after_[0-9]+$') then
+		raise exception 'only a reply that failed for good is dropped from Home'
+			using errcode = 'check_violation', constraint = 'home_mark_drops_failed_reply';
+	end if;
+	return new;
+end $$;
+
+create trigger home_mark_drops_failed_reply before insert or update on home_mark
+	for each row when (new.disposition = 'dropped' and new.reply_draft_id is not null)
+	execute function home_mark_drops_failed_reply();
 
 create function reply_draft_delivery() returns trigger
 language plpgsql as $$
