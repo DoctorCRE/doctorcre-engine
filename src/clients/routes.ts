@@ -1,6 +1,7 @@
 import { type Context, Hono } from "hono";
 import { nextPartnerRead } from "../next-connection.ts";
 import { type DatabaseEnv, type Reader, readSnapshot } from "../reader.ts";
+import { isOneOf } from "../request-shape.ts";
 import { UUID } from "../uuid.ts";
 import {
 	readNextVendor,
@@ -17,7 +18,6 @@ import {
 	type Contract,
 	type Dataset,
 	invalid,
-	isOneOf,
 	type ListQuery,
 	PAGE_SIZE,
 	PARTNERS,

@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
-import { isOneOf, PARTNERS } from "../clients/read.ts";
+import { PARTNERS } from "../clients/read.ts";
 import type { DatabaseEnv } from "../reader.ts";
+import { isOneOf } from "../request-shape.ts";
 import {
 	type MeetingsQuery,
 	pageAfter,

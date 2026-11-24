@@ -34,6 +34,10 @@ export const isInstant: Check<string> = (value): value is string =>
 	!value.startsWith("0000-") &&
 	isCalendarDate(value.slice(0, 10)) &&
 	Number.isFinite(Date.parse(value));
+export const isOneOf = <T extends string | number>(
+	allowed: readonly T[],
+	value: unknown,
+): value is T => (allowed as readonly unknown[]).includes(value);
 export const optional =
 	<T>(check: Check<T>): Check<T | undefined> =>
 	(value): value is T | undefined =>

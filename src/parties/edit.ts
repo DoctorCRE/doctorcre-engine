@@ -1,6 +1,6 @@
 import { Refusal } from "../answer.ts";
 import type { JsonObject } from "../database.d.ts";
-import { type Check, fitting, optional, orNull } from "../request-shape.ts";
+import { type Check, fitting, optional } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
 
 type Seen = string | number | boolean | string[] | null;
@@ -15,16 +15,20 @@ const isSeen = (value: unknown): value is Seen =>
 
 // A field a partner changes names the value they saw, so a change made since is not overwritten.
 export const edit = <T>(check: Check<T>) =>
-	optional(fitting({ from: isSeen, to: orNull(check) }));
+	optional(fitting({ from: isSeen, to: check }));
 
-const trimmed = (value: unknown) =>
-	typeof value === "string" ? value.trim() || null : value;
+export const trimmed = (value: string | null | undefined) =>
+	value?.trim() || null;
+
+const comparable = (value: unknown) =>
+	Array.isArray(value)
+		? [...value].sort()
+		: typeof value === "string"
+			? trimmed(value)
+			: value;
 
 const same = (seen: unknown, current: unknown) =>
-	JSON.stringify(Array.isArray(seen) ? [...seen].sort() : trimmed(seen)) ===
-	JSON.stringify(
-		Array.isArray(current) ? [...current].sort() : trimmed(current),
-	);
+	JSON.stringify(comparable(seen)) === JSON.stringify(comparable(current));
 
 // The fields a request changes, refused together with the current record if any changed since.
 // `shown` is each field as the partner sees it, when that differs from the record.

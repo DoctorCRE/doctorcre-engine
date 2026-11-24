@@ -218,10 +218,12 @@ export function meetingsFromSnapshot(
 		fromMs,
 		untilMs,
 		handledReviewKeys,
+		reviews: withReviews = true,
 	}: {
 		fromMs?: number;
 		untilMs?: number;
 		handledReviewKeys?: ReadonlySet<string>;
+		reviews?: boolean;
 	} = {},
 ) {
 	if (snapshot === undefined || snapshot === null) return null;
@@ -290,6 +292,7 @@ export function meetingsFromSnapshot(
 	const reviews = valid
 		.filter(
 			(review) =>
+				withReviews &&
 				!stale &&
 				!future &&
 				!handledReviewKeys?.has(review.key) &&
@@ -302,10 +305,11 @@ export function meetingsFromSnapshot(
 			end: iso(review.end),
 		}))
 		.sort((a, b) => b.end.localeCompare(a.end) || a.key.localeCompare(b.key));
-	const malformedReviews =
-		parsed.length -
-		valid.length +
-		(listed !== undefined && !Array.isArray(listed) ? 1 : 0);
+	const malformedReviews = withReviews
+		? parsed.length -
+			valid.length +
+			(listed !== undefined && !Array.isArray(listed) ? 1 : 0)
+		: 0;
 
 	const warnings = field(snapshot, "warnings");
 	const notes = (Array.isArray(warnings) ? warnings : []).map(warningNote);
@@ -351,7 +355,7 @@ export function meetingsFromSnapshot(
 		},
 		...(malformed ? { malformed_items: malformed } : {}),
 		items: fromMs === undefined ? meetings.slice(0, SHOWN) : meetings,
-		...(listed !== undefined
+		...(withReviews && listed !== undefined
 			? { follow_up_reviews: reviews.slice(0, SHOWN) }
 			: {}),
 	} as const;

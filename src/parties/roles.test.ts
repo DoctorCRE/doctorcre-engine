@@ -12,6 +12,7 @@ const dellId = randomUUID();
 const practice = randomUUID();
 const unrecorded = randomUUID();
 const lender = randomUUID();
+const dealClient = randomUUID();
 
 before(async () => {
 	await setup();
@@ -25,7 +26,9 @@ before(async () => {
 			('${joeId}', 'person', 'Example Partner One', null), ('${dellId}', 'person', 'Example Partner Two', null),
 			('${practice}', 'company', 'Example Smile Studio', 'referral'),
 			('${unrecorded}', 'person', 'Example Doctor', 'not_recorded'),
-			('${lender}', 'company', 'Example Community Bank', null);
+			('${lender}', 'company', 'Example Community Bank', null),
+			('${dealClient}', 'company', 'Example Deal Client', 'referral');
+		insert into party_role (party_id, role) values ('${dealClient}', 'client');
 		insert into app_user (id, slug) values ('${joeId}', 'joe'), ('${dellId}', 'dell');
 		insert into outside_id (source, value, party_id) values ('old_system', '${randomUUID()}', '${unrecorded}');
 		commit;`);
@@ -88,10 +91,13 @@ test("a client needs how they were found when the record has none, and known cho
 	});
 	assert.equal(unknown, 400);
 	assert.deepEqual(named.fields, ["client_type"]);
-	assert.equal(
-		(await add({ how_found: "referral", subtype: "Ortho" }))[0],
-		400,
-	);
+	const [subtypeOnly, subtypeRefusal] = await add({
+		how_found: "referral",
+		client_type: "spa",
+		subtype: "Ortho",
+	});
+	assert.equal(subtypeOnly, 400);
+	assert.deepEqual(subtypeRefusal.fields, ["subtype"]);
 	assert.equal(
 		(await add({ how_found: "referral", status: "active_deal" }))[0],
 		400,
@@ -148,10 +154,16 @@ test("a client edit changes what the partner saw and refuses what changed since"
 		await practiceType({ subtype: { from: null, to: "Pediatric" } }),
 		["Dental", "Pediatric"],
 	);
+	const written = () =>
+		db.query("select xmin::text from client_vertical where party_id = $1", [
+			practice,
+		]);
+	const before = (await written()).rows;
 	assert.deepEqual(
 		await practiceType({ vertical: { from: "Dental", to: " Dental " } }),
 		["Dental", "Pediatric"],
 	);
+	assert.deepEqual((await written()).rows, before);
 	assert.deepEqual(
 		await practiceType({ vertical: { from: "Dental", to: "Orthodontics" } }),
 		["Orthodontics", null],
@@ -164,7 +176,12 @@ test("a client edit changes what the partner saw and refuses what changed since"
 		await practiceType({ vertical: { from: "Orthodontics", to: null } }),
 		[null, null],
 	);
-	assert.equal((await edit({ status: { from: "paused", to: null } }))[0], 400);
+	const [cleared, clearedRefusal] = await edit({
+		status: { from: "paused", to: null },
+		how_found: { from: "referral", to: "referral" },
+	});
+	assert.equal(cleared, 400);
+	assert.deepEqual(clearedRefusal.fields, ["status"]);
 	assert.equal((await edit({}))[0], 400);
 });
 
@@ -256,4 +273,34 @@ test("a vendor edit moves its stage, categories and ruling, and the database kee
 		)[0],
 		404,
 	);
+});
+
+test("a client role a deal opened gets its profile", async () => {
+	const [status, client] = await save(joe, "clients", {
+		...key(),
+		party_id: dealClient,
+	});
+	assert.equal(status, 201, JSON.stringify(client));
+	assert.partialDeepStrictEqual(client, { status: "roster", owner: "joe" });
+});
+
+test("clearing practice type and subtype together saves", async () => {
+	const party = randomUUID();
+	await db.query(`begin; set local engine.job = 'old_system';
+		insert into party (id, kind, name, how_found) values ('${party}', 'company', 'Example Two', 'referral');
+		commit;`);
+	const [status, client] = await save(joe, "clients", {
+		...key(),
+		party_id: party,
+		vertical: "Dental",
+		subtype: "Pediatric",
+	});
+	assert.equal(status, 201, JSON.stringify(client));
+	const [cleared, answer] = await save(joe, `clients/${party}`, {
+		...key(),
+		vertical: { from: "Dental", to: null },
+		subtype: { from: "Pediatric", to: null },
+	});
+	assert.equal(cleared, 200, JSON.stringify(answer));
+	assert.partialDeepStrictEqual(answer, { vertical: null, subtype: null });
 });
