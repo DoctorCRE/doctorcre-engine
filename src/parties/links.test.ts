@@ -69,6 +69,10 @@ test("a knows link is stored once whichever party it names first", async () => {
 test("a link names two known, different parties and a kept kind", async () => {
 	for (const [fields, status] of [
 		[{ kind: "knows", party_id: avery, other_party_id: avery }, 400],
+		[
+			{ kind: "knows", party_id: avery, other_party_id: avery.toUpperCase() },
+			400,
+		],
 		[{ kind: "knows", party_id: avery, other_party_id: randomUUID() }, 404],
 		[{ kind: "works_with", party_id: avery, other_party_id: blake }, 400],
 	] as const)
