@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath, URL } from "node:url";
+import { Kysely, PostgresDialect } from "kysely";
+import pg from "pg";
+import { readHomeEmailThread } from "./home-email-thread.ts";
+import type { DB } from "./next-database.d.ts";
 import { copyTest } from "./test-copy.ts";
 
 const id = (n: number) =>
@@ -333,6 +338,28 @@ describe("recover-email-text", () => {
 			"(select jsonb_agg(to_jsonb(e)-array['authored','history','message_id','changed_by_user_id','changed_by_job','changed_for_user_id','changed_at'] order by activity_id) from email e) as email_rest";
 		return (await rec.db.query(`select ${cols.join(",")},${rest}`)).rows[0];
 	};
+	const readThreads = async (sources: number[]) => {
+		const pool = new pg.Pool({
+			connectionString: rec.connectionString,
+			options: "-c search_path=next -c TimeZone=UTC",
+		});
+		const closed: Promise<unknown>[] = [];
+		pool.on("connect", (c) => closed.push(once(c, "end")));
+		const k = new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
+		try {
+			const results = [];
+			for (const n of sources) {
+				const { thread } = await k
+					.transaction()
+					.execute((trx) => readHomeEmailThread(trx, ONE, id(n)));
+				results.push(thread.map((e) => [e.activity_id, e.body, e.folded]));
+			}
+			return results;
+		} finally {
+			await k.destroy();
+			await Promise.all(closed);
+		}
+	};
 
 	before(async () => {
 		await rec.setup();
@@ -387,6 +414,36 @@ describe("recover-email-text", () => {
 		assert.deepEqual(await saved(rec.db), original);
 	});
 
+	test("waits for capture's, filing's and target row locks on dry run and changes nothing on lock timeout", async () => {
+		const original = await saved(rec.db);
+		const lock =
+			"select pg_advisory_xact_lock(hashtextextended('email ' || $1, 0))";
+		const blockers: [string, string, string][] = [
+			["input message_id", lock, mid("23-other")],
+			["stored message_id", lock, mid(23)],
+			["filing activity_id", lock, id(21)],
+			[
+				"target row",
+				"select from email where activity_id = $1 for update",
+				id(21),
+			],
+		];
+		const load = loadSql(applyInputs);
+		for (const [name, sql, param] of blockers) {
+			await rec.db.query("begin");
+			try {
+				await rec.db.query(sql, [param]);
+				const r = run(load, "off", { PGOPTIONS: "-c lock_timeout=100ms" });
+				assert.notEqual(r.status, 0, name);
+				assert.equal(r.stdout, "", name);
+				assert.match(r.stderr, /lock timeout/, name);
+			} finally {
+				await rec.db.query("rollback");
+			}
+		}
+		assert.deepEqual(await saved(rec.db), original);
+	});
+
 	test("dry run rolls back in any time zone, apply fills only missing fields stamped old_system, and rerun is idempotent", async () => {
 		const original = await saved(rec.db);
 		const untouched = await guarded();
@@ -414,7 +471,8 @@ describe("recover-email-text", () => {
 		const { rows } = await rec.db.query({
 			text: `select activity_id, message_id, authored, history, changed_by_job, changed_by_user_id, changed_for_user_id,
 			 (select count(*)::int from change c where c.table_name='email' and c.action='update' and c.record=jsonb_build_object('activity_id',e.activity_id))
-			 from email e order by activity_id`,
+			 from email e where activity_id = any ($1::uuid[]) order by activity_id`,
+			values: [applyEmails.map((e) => id(e.n))],
 			rowMode: "array",
 		});
 		const exp = (
@@ -445,5 +503,46 @@ describe("recover-email-text", () => {
 		assert.deepEqual(lines(rerun.stdout), counts(second, "applied"));
 		assert.deepEqual(await saved(rec.db), applied);
 		assert.deepEqual(await guarded(), untouched);
+		assert.deepEqual(await readThreads([20, 24]), [
+			[[id(20), authored(20), history(20)]],
+			[[id(24), authored(24), null]],
+		]);
+	});
+
+	test("Home shows a recovered message's authored text, and its captured and imported copies stay one entry whichever is opened", async () => {
+		const messageId = mid("thread");
+		const sent = happenedAt(40);
+		await rec.db.query(`begin; select set_config('engine.job', 'intake', true);
+		 insert into activity (id, kind, happened_at) values
+		  ('${id(40)}', 'email', '${sent}'),
+		  ('${id(41)}', 'email', '${sent}');
+		 insert into email (activity_id, message_id, conversation_id, sender, subject, body, authored, history, imported) values
+		  ('${id(40)}', '${messageId}', 'conv-merge', '${DOCTOR}', '${subject(40)}', '${body(40)}', null, null, false),
+		  ('${id(41)}', null, 'conv-merge', '${DOCTOR}', '${subject(40)}', '${body(40)}', null, null, true);
+		 insert into activity_about (activity_id, party_id) values ('${id(40)}', '${ONE}'), ('${id(41)}', '${ONE}');
+		 insert into email_mailbox (activity_id, user_id) values ('${id(40)}', '${ONE}'), ('${id(41)}', '${ONE}');
+		 commit;`);
+
+		const result = run(
+			loadSql([
+				{
+					n: 41,
+					happenedAt: sent,
+					subject: subject(40),
+					bodySha: sha(body(40)),
+					messageId,
+				},
+			]),
+			"on",
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(result.stderr, "");
+		assert.deepEqual(
+			lines(result.stdout),
+			counts([0, 0, 0, 1, 0, 0, 0, 0, 1, 0], "applied"),
+		);
+
+		const expected = [[id(41), authored(41), history(41)]];
+		assert.deepEqual(await readThreads([40, 41]), [expected, expected]);
 	});
 });
