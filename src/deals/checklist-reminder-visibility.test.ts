@@ -145,8 +145,8 @@ test("the morning window follows Central calendar days across midnight and DST",
 	}
 });
 
-test("a queued checklist reminder loses its private title when the step is reassigned", async (t) => {
-	const { db, request, save, user, deal } = await reminderDeal(t);
+test("a queued checklist reminder stays its partner's own after the step is reassigned", async (t) => {
+	const { db, save, user, deal } = await reminderDeal(t);
 	const [caller, call, step] = Array.from({ length: 3 }, () => randomUUID());
 	const title = "Example private checklist";
 	await db.query(`
@@ -174,31 +174,27 @@ test("a queued checklist reminder loses its private title when the step is reass
 		set local engine.user_id = '${caller}';
 		update next_step set owner_party_id = '${caller}' where id = '${step}';
 	`);
-	const reassigned = await updates();
-	assert.ok(!JSON.stringify(reassigned).includes(title));
-	assert.equal(reassigned.unread_count, 0);
 	const visible = randomUUID();
 	await db.query(`
 		set local engine.user_id = '${user}';
 		insert into home_update (id, user_id, deal_id, what)
 		values ('${visible}', '${user}', '${deal}', 'Example visible update')
 	`);
+	const {
+		rows: [reminder],
+	} = await db.query<{ id: string }>(
+		"select id from home_update where checklist_item_ref = $1",
+		[`deal-item:${step}`],
+	);
+	assert.ok(reminder);
 	const [markStatus, marked] = await save(partner, "updates/read", {
 		idempotency_key: randomUUID(),
-		update_ids: [visible],
+		update_ids: [visible, reminder.id],
 	});
 	assert.equal(markStatus, 200, JSON.stringify(marked));
 	assert.equal(marked.unread_count, (await updates()).unread_count);
 	assert.equal(marked.unread_count, 0);
-
-	const home = await request(
-		partner,
-		"home/inbox?view=dashboard",
-		{ method: "GET" },
-		{
-			HOME_INBOX_READ_SCHEMA: "next",
-		},
-	);
-	assert.equal(home.status, 200);
-	assert.ok(!(await home.text()).includes(title));
+	// Only the partner it was queued for reads it.
+	const [, other] = await save({ user: "dell" }, "updates", {}, "GET");
+	assert.ok(!JSON.stringify(other).includes(title));
 });

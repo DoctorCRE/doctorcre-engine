@@ -153,7 +153,7 @@ test("accepting a copied call log leaves one call and adds one note at the call'
 	}
 });
 
-test("accepted private call logs stay on the call and appear only for its partner", async () => {
+test("accepted call logs stay on the call and appear for both partners", async () => {
 	for (const [index, summary] of [null, "", "Original summary."].entries()) {
 		const callId = id(100 + index);
 		const happenedAt = `2026-01-${17 + index}T15:00:00.000Z`;
@@ -222,9 +222,13 @@ test("accepted private call logs stay on the call and appear only for its partne
 			const entry = await readEntry("alex", target);
 			assert.equal(entry?.actor, "alex");
 			assert.equal(entry?.summary, acceptedSummary);
-			assert.equal(await readEntry("blair", target), undefined);
+			// Both partners see every call.
+			assert.equal(
+				(await readEntry("blair", target))?.summary,
+				acceptedSummary,
+			);
 		}
-		assert.equal(beforeAccept, undefined);
+		assert.ok(beforeAccept, "Both partners see the call before acceptance");
 		assert.deepEqual(
 			(
 				await db.query(

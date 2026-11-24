@@ -101,28 +101,9 @@ function findRow(rows: unknown, key: string, id: string) {
 	return row;
 }
 
-function assertPrivateSourceHidden(value: unknown, call = privateCall.call) {
-	const json = JSON.stringify(value);
-	for (const secret of [call, contactName, summary, evidence])
-		assert.ok(
-			!json.includes(secret),
-			`Private call field reached the assignee: ${secret}`,
-		);
-}
+// Both partners see every call, so the assignee reads the other partner's call and its text.
 
-// No call is private: the assignee may see which call a step came from.
-// The reader views still withhold its text until they stop filtering calls.
-function assertCallShownWithoutItsText(value: unknown, call: string) {
-	const json = JSON.stringify(value);
-	assert.ok(json.includes(call), `Missing the source call ${call}`);
-	for (const secret of [contactName, summary, evidence])
-		assert.ok(
-			!json.includes(secret),
-			`Call text reached the assignee: ${secret}`,
-		);
-}
-
-test("Home proposal detail shows the assigned wording and hides private evidence", async () => {
+test("Home proposal detail shows the assigned wording and the call's evidence", async () => {
 	for (const [fixture, idKey, text] of [
 		[privateCall, "proposal", proposed],
 		[privateCall, "review", held],
@@ -137,91 +118,73 @@ test("Home proposal detail shows the assigned wording and hides private evidence
 		);
 		assert.equal(status, 200);
 		assert.equal(detail.what, text);
-		if (fixture === privateCall) {
-			assertPrivateSourceHidden(detail);
-			assert.partialDeepStrictEqual(detail, {
-				evidence: "",
-				source_activity: null,
-			});
-		} else {
-			assert.partialDeepStrictEqual(detail, {
-				evidence,
-				source_activity: { id: fixture.call, summary },
-			});
-		}
+		assert.partialDeepStrictEqual(detail, {
+			evidence,
+			source_activity: { id: fixture.call, summary },
+		});
 	}
 });
 
-test("Home suggestion cards and member lists hide the assigned proposal's private source", async () => {
+test("Home suggestion cards show the other partner's call as their source", async () => {
 	const { items } = await readHome("home/inbox");
-	const hidden = findRow(items, "proposal_id", privateCall.proposal);
-	assert.equal(hidden.why, `${proposed}.`);
-	assert.partialDeepStrictEqual(hidden, {
-		suggestions: [{ id: privateCall.proposal }],
-		source_activity: null,
-	});
-	assertCallShownWithoutItsText(hidden, privateCall.call);
-	const shared = findRow(items, "proposal_id", copiedCall.proposal);
-	assert.ok(typeof shared.why === "string" && shared.why.includes(evidence));
-	assert.partialDeepStrictEqual(shared, {
-		source_activity: { id: copiedCall.call },
-	});
+	for (const fixture of [privateCall, copiedCall]) {
+		const card = findRow(items, "proposal_id", fixture.proposal);
+		assert.ok(typeof card.why === "string" && card.why.includes(evidence));
+		assert.partialDeepStrictEqual(card, {
+			suggestions: [{ id: fixture.proposal }],
+			source_activity: { id: fixture.call },
+		});
+	}
 });
 
-test("Home follow-ups keep the assigned step, its mark key, and a usable link", async () => {
+test("Home follow-ups keep the assigned step, its mark key, a usable link and the call", async () => {
 	const { items } = await readHome("home/inbox");
-	const hidden = findRow(items, "action_id", privateCall.step);
-	assert.equal(hidden.title, followUp);
-	assertPrivateSourceHidden(hidden);
-	assert.partialDeepStrictEqual(hidden, {
+	const own = findRow(items, "action_id", privateCall.step);
+	assert.equal(own.title, followUp);
+	assert.partialDeepStrictEqual(own, {
 		item_id: `capture_post_call_action:${privateCall.step}`,
-		open_url: `/deals?deal=${privateCall.followUpDeal}&focus=next-step&step=${privateCall.step}`,
+		// The call is visible to both partners, so the follow-up opens it.
+		open_url: `/calls?session=${privateCall.call}`,
 		primary_action: "Mark done",
-		source_activity: null,
 	});
-	const shared = findRow(items, "action_id", copiedCall.step);
-	assert.partialDeepStrictEqual(shared, {
-		source_activity: {
-			id: copiedCall.call,
-			contact: contactName,
-			summary,
-			quote: evidence,
-		},
-	});
+	for (const fixture of [privateCall, copiedCall])
+		assert.partialDeepStrictEqual(findRow(items, "action_id", fixture.step), {
+			source_activity: {
+				id: fixture.call,
+				contact: contactName,
+				summary,
+				quote: evidence,
+			},
+		});
 	const { reminders } = await readHome("home/today");
 	assert.ok(isArguments(reminders));
 	assert.partialDeepStrictEqual(
 		findRow(reminders.late, "id", privateCall.step),
-		{ open_url: hidden.open_url, home_item_id: hidden.item_id },
+		{ open_url: own.open_url, home_item_id: own.item_id },
 	);
 });
 
-test("Home completion cards keep the review and step wording without private evidence", async () => {
+test("Home completion cards keep the review and step wording with the call's evidence", async () => {
 	const { items } = await readHome("home/inbox");
-	const hidden = findRow(items, "source_id", privateCall.review);
-	assert.equal(hidden.why, `${held}.`);
-	assertPrivateSourceHidden(hidden);
-	assert.partialDeepStrictEqual(hidden, {
+	const card = findRow(items, "source_id", privateCall.review);
+	assert.partialDeepStrictEqual(card, {
 		completion_review: { proposal_id: privateCall.review, can_resolve: true },
-		source_activity: null,
 	});
-	const shared = findRow(items, "source_id", copiedCall.review);
-	assert.partialDeepStrictEqual(shared, {
-		source_activity: { id: copiedCall.call, summary, quote: evidence },
-	});
+	for (const fixture of [privateCall, copiedCall])
+		assert.partialDeepStrictEqual(findRow(items, "source_id", fixture.review), {
+			source_activity: { id: fixture.call, summary, quote: evidence },
+		});
 });
 
-test("held-step reviews hide the private evidence while keeping the assignee's step", async () => {
+test("held-step reviews show the call's evidence with the assignee's step", async () => {
 	const { proposals } = await readHome("home/held-steps");
-	const hidden = findRow(proposals, "proposal_id", privateCall.review);
-	assertPrivateSourceHidden(hidden);
-	assert.partialDeepStrictEqual(hidden, { what: held, can_resolve: true });
-	const shared = findRow(proposals, "proposal_id", copiedCall.review);
-	assert.partialDeepStrictEqual(shared, {
-		activity_id: copiedCall.call,
-		summary,
-		evidence,
-	});
+	const review = findRow(proposals, "proposal_id", privateCall.review);
+	assert.partialDeepStrictEqual(review, { what: held, can_resolve: true });
+	for (const fixture of [privateCall, copiedCall])
+		assert.partialDeepStrictEqual(
+			findRow(proposals, "proposal_id", fixture.review),
+			{ activity_id: fixture.call, summary, evidence },
+		);
 });
 
 test("the assignee can accept the step proposal and decide the completion review", async () => {
@@ -236,15 +199,12 @@ test("the assignee can accept the step proposal and decide the completion review
 	const { items } = await readHome("home/inbox");
 	const step = findRow(items, "action_id", decisions.proposal);
 	assert.equal(step.title, proposed);
-	assertCallShownWithoutItsText(step, decisions.call);
+	assert.partialDeepStrictEqual(step, {
+		source_activity: { id: decisions.call },
+	});
 });
 
-test("Today hides a private call follow-up owned by the other partner", async () => {
-	const { reminders } = await readHome("home/today");
-	const payload = JSON.stringify(reminders);
-	assert.ok(!payload.includes(recorderStep));
-	assert.ok(!payload.includes(recorderWording));
-
+test("Today shows the recorder's own call follow-up", async () => {
 	const own = await readHome("home/today", recorder);
 	assert.ok(isArguments(own.reminders));
 	assert.equal(

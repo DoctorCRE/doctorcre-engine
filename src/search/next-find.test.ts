@@ -406,7 +406,7 @@ test("Recent Activity asks which person to open when two people share a name", a
 	});
 });
 
-test("Recent Activity hides a private call from the other partner on a person with several roles", async () => {
+test("Recent Activity shows the other partner's call on a person with several roles", async () => {
 	const result = await recent("Sample Practice", undefined, "dell");
 	assert.partialDeepStrictEqual(result, {
 		state: "completed",
@@ -415,7 +415,7 @@ test("Recent Activity hides a private call from the other partner on a person wi
 			timeline: [{ summary: "Discussed the site" }],
 		},
 	});
-	assert.doesNotMatch(
+	assert.match(
 		JSON.stringify(result),
 		/Private call about the example practice/,
 	);

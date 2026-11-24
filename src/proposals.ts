@@ -8,8 +8,8 @@ import { isCalendarDate } from "./calendar-date.ts";
 import type { JsonObject } from "./database.d.ts";
 import {
 	copiedCallStep,
+	decidableCallProposal,
 	lockOpenDealStep,
-	visibleCallProposal,
 } from "./deals/call-review.ts";
 import { sourceInMailbox } from "./home-email-thread.ts";
 import { readProposal } from "./home-inbox-review.ts";
@@ -422,7 +422,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						${sourceInMailbox(sql.ref("p.activity_id"), ACTING_USER)})`)
 					.where(
 						sql<boolean>`(p.activity_kind is distinct from 'call'
-							or ${visibleCallProposal(ACTING_USER)}
+							or ${decidableCallProposal(ACTING_USER)}
 							or (p.kind = 'next_step' and p.owner_party_id = ${ACTING_USER})
 							or (p.kind = 'next_step_done' and step.owner_party_id = ${ACTING_USER}
 								and (p.status <> 'pending' or step.status = 'open')))`,

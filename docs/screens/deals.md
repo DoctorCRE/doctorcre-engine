@@ -161,7 +161,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] Vendors on the deal, each opening its vendor page.
 - [ ] Watch settings and the deal page's call recorder work as they do today. After the switch, watch settings use the old tables and cover copied deals only (#805).
 - [ ] The deal page's call review shows recent recorded calls for that deal and the evidence and state of each visible suggestion. The partner confirms or dismisses pending suggestions through the same decision as Home. [Deal call outcomes](../new-database.md#deal-call-outcomes).
-- [ ] Accepting a private call log saves its text on the call. When the assignee already has a conflicting open ordinary next step, the card explains why Accept is unavailable and still offers Dismiss. Open checklist items leave Accept available.
+- [ ] Accepting a call log saves its text on the call. When the assignee already has a conflicting open ordinary next step, the card explains why Accept is unavailable and still offers Dismiss. Open checklist items leave Accept available.
 
 ### Tabs
 
