@@ -1645,6 +1645,15 @@ These saves use the signed-in partner's session, `idempotency_key` and the share
 - `POST /api/engine/parties/{id}` changes any of `name`, `city`, `email` and `phone`. Each is `{ from, to }`, where `from` is the value the partner saw (the phone's `shown`) and `to` the new value, or null to clear it. A name cannot be cleared. A field whose current value differs from `from` returns `409 version_conflict` with those `fields` and the `current` record; fields changed by someone else and not sent stand. A changed email or phone removes the primary row and any row with the new value, and adds the new value as the primary work row. It answers `200` with the record.
 - The database refuses a blank name from the engine (`party_name_saved_nonblank`). Copied blank names stay until a partner names them.
 
+### Add and edit clients and vendors
+
+These saves follow the same session, replay and `{ from, to }` edit rules as people and companies. Choices come from their lists: an unknown `client_type`, `how_found`, vendor `stage` or vendor category returns `400 invalid_field_value` naming it, and the Clients and Vendors list facets supply the labels.
+
+- `POST /api/engine/clients` takes `party_id` and optionally `status` (`roster`, `cold`, `engaged` or `paused`; roster when absent), `client_type`, `how_found`, `vertical` and `subtype`. A record whose how found is empty or Not recorded needs `how_found`. A subtype needs a practice type. It adds the client role and profile, owned by the signed-in partner, and answers `201 { party_id, status, client_type, how_found, vertical, subtype, owner }`. A record that is already a client returns `409 already_client`.
+- `POST /api/engine/clients/{id}` changes any of those fields. Status and how found cannot be cleared. Clearing the practice type clears its subtype.
+- `POST /api/engine/vendors` takes `party_id` and optionally `categories` (vendor category role slugs), `stage`, `relationship_level` (0 to 3), `owner` (`joe` or `dell`; the signed-in partner when absent), `offers`, `seeking`, `is_target`, `disposition` and `disposition_reason`. It adds the vendor role and a role for each category, and answers `201 { party_id, stage, relationship_level, owner, offers, seeking, is_target, disposition, disposition_reason, categories }`. A record that is already a vendor returns `409 already_vendor`.
+- `POST /api/engine/vendors/{id}` changes any of those fields. `categories` is the whole list, so a removed category's role is removed and a new one added. A ruling without a reason, or an avoided target, is refused by the database's vendor rules (`422 database_refused_the_statement` naming the rule).
+
 ## Global Search and Recent Activity
 
 Set `SEARCH_READ_SCHEMA=next` for `GET /api/engine/find` and `ACTIVITY_READ_SCHEMA=next` for `GET /api/engine/recent-activity`. Each read uses the public schema until its variable is set to `next`.

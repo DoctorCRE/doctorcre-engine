@@ -63,6 +63,7 @@ import { mondayReviewReads } from "./monday-review/read.ts";
 import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { automaticStepUndo, nextSteps } from "./next-steps.ts";
+import { partyRoles } from "./parties/roles.ts";
 import { parties } from "./parties/routes.ts";
 import { partnerGoogle } from "./partner-google.ts";
 import {
@@ -159,6 +160,7 @@ partnerApi.route("/api/engine", dealCallContext);
 partnerApi.route("/api/engine", leadChanges);
 partnerApi.route("/api/engine", partySearch);
 partnerApi.route("/api/engine", parties);
+partnerApi.route("/api/engine", partyRoles);
 partnerApi.route("/api/engine", propertySearch);
 partnerApi.route("/api/engine", clientLeases);
 partnerApi.route("/api/engine", closingAnniversaries);
