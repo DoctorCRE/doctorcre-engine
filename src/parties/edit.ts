@@ -27,13 +27,15 @@ const same = (seen: unknown, current: unknown) =>
 	);
 
 // The fields a request changes, refused together with the current record if any changed since.
+// `shown` is each field as the partner sees it, when that differs from the record.
 export function unchangedSince<Field extends string>(
 	request: Partial<Record<Field, { from: unknown } | undefined>>,
 	fields: readonly Field[],
 	current: Record<Field, unknown> & JsonObject,
+	shown: Record<Field, unknown> = current,
 ) {
 	const stale = fields.filter(
-		(field) => !same(request[field]?.from, current[field]),
+		(field) => !same(request[field]?.from, shown[field]),
 	);
 	if (stale.length)
 		throw new SaveRefusal(
