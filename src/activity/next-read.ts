@@ -24,6 +24,40 @@ async function activityCandidates(
 	return named.length > 0 ? named : matches;
 }
 
+type FiledOn = { kind: "deal" | "company" | "person"; name: string };
+
+// Rank 0 is the record itself; a client's history adds its deals, then its current companies and their people.
+function filedTo(kind: string, id: string) {
+	if (kind === "deal")
+		return sql`select ${id}::uuid as deal_id, null::uuid as party_id, 0 as rank, null::text as kind, null::text as name`;
+	const current = sql`(pc.started_on is null or pc.started_on <= current_date)
+		and (pc.ended_on is null or pc.ended_on > current_date)`;
+	return sql`
+		select null::uuid as deal_id, ${id}::uuid as party_id, 0 as rank, null::text as kind, null::text as name
+		union all
+		select d.id, null, 1, 'deal', d.name
+		from client c join deal_party dp on dp.party_id = c.party_id and dp.role = 'client'
+		join deal d on d.id = dp.deal_id where c.party_id = ${id}
+		union all (
+			with companies as (
+				select p.id from client c join party p on p.id = c.party_id
+				where c.party_id = ${id} and p.kind = 'company'
+				union
+				select pc.company_id from client c join party_company pc on pc.person_id = c.party_id
+				where c.party_id = ${id} and ${current}
+			)
+			select null::uuid, p.id, 2, p.kind, p.name from companies join party p using (id) where p.id <> ${id}
+			union
+			select null::uuid, p.id, 3, p.kind, p.name
+			from companies join party_company pc on pc.company_id = companies.id and ${current}
+			join party p on p.id = pc.person_id where p.id <> ${id}
+		)`;
+}
+
+const filedOn = (row: ReturnType<typeof sql.ref>) =>
+	sql<FiledOn | null>`case when ${row}.rank > 0
+		then jsonb_build_object('kind', ${row}.kind, 'name', ${row}.name) end`;
+
 export async function readNextRecentActivity(
 	db: Transaction<DB>,
 	userId: string,
@@ -76,23 +110,32 @@ export async function readNextRecentActivity(
 	if (calendar.rows.length > 5000)
 		return { error: "calendar_history_too_large" } as const;
 	const timeline = await sql`
+		with filed_to as (${filedTo(kind, id)}),
+		filed as (
+			select distinct on (link.activity_id) link.activity_id, f.rank, f.kind, f.name
+			from filed_to f join activity_about link
+				on link.deal_id = f.deal_id or link.party_id = f.party_id
+			order by link.activity_id, f.rank
+		)
 		select entry_kind, ${isoMillis(sql.ref("at"))} as occurred_at,
-			actor, verb, summary, detail, deal_id, email_subject, null as owed
+			actor, verb, summary, detail, deal_id, email_subject, null as owed, filed_on
 		from (
 			select 'activity' as entry_kind, a.id, a.happened_at as at,
 				coalesce(u.slug, a.changed_by_job) as actor, a.kind as verb,
 				coalesce(nullif(btrim(a.summary), ''), e.subject) as summary, e.body as detail,
 				(select min(about.deal_id::text) from activity_about about
 					where about.activity_id = a.id and about.deal_id is not null
-					having count(*) = 1) as deal_id, e.subject as email_subject
-			${filed} left join app_user u on u.id = a.changed_by_user_id
+					having count(*) = 1) as deal_id, e.subject as email_subject,
+				${filedOn(sql.ref("filed"))} as filed_on
+			from filed join activity a on a.id = filed.activity_id
+			left join app_user u on u.id = a.changed_by_user_id
 			left join email e on e.activity_id = a.id
-			where link.${subject} = ${id}
 			union all
 			select 'event', s.id, coalesce(s.done_at, s.resolved_at, s.created_at),
-				coalesce(u.slug, s.changed_by_job), 'next_step', s.what, null, s.deal_id::text, null
-			from next_step s left join app_user u on u.id = s.changed_by_user_id
-			where s.${subject} = ${id}
+				coalesce(u.slug, s.changed_by_job), 'next_step', s.what, null, s.deal_id::text, null,
+				${filedOn(sql.ref("f"))}
+			from filed_to f join next_step s on s.deal_id = f.deal_id or s.party_id = f.party_id
+			left join app_user u on u.id = s.changed_by_user_id
 		) entries order by at desc, entry_kind, id limit ${limit}`.execute(db);
 	return {
 		state: "completed",
