@@ -177,6 +177,11 @@ test("a client edit changes what the partner saw and refuses what changed since"
 	});
 	assert.equal(cleared, 400);
 	assert.deepEqual(clearedRefusal.fields, ["status"]);
+	const [staleCleared, staleClearedRefusal] = await edit({
+		how_found: { from: "not what was saved", to: null },
+	});
+	assert.equal(staleCleared, 400);
+	assert.deepEqual(staleClearedRefusal.fields, ["how_found"]);
 	assert.equal((await edit({}))[0], 400);
 });
 

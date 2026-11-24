@@ -215,14 +215,14 @@ async function editClient(
 	tx: Transaction<DB>,
 	{ party_id, changed, request, to }: ClientEdit,
 ) {
-	await lockParty(tx, party_id);
-	const current = await clientRead(tx, party_id);
-	if (!current) throw new SaveRefusal(new Refusal(404, "not_found"));
-	unchangedSince(request, changed, current);
 	const cleared = (["status", "how_found"] as const).filter(
 		(field) => to[field] === null,
 	);
 	if (cleared.length) throw invalid([...cleared]);
+	await lockParty(tx, party_id);
+	const current = await clientRead(tx, party_id);
+	if (!current) throw new SaveRefusal(new Refusal(404, "not_found"));
+	unchangedSince(request, changed, current);
 	const vertical = "vertical" in to ? trimmed(to.vertical) : current.vertical;
 	// A subtype belongs to the practice type it was recorded under.
 	const practice = practiceOf(
