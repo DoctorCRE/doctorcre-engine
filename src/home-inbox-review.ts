@@ -109,6 +109,18 @@ type Suggestion = ReviewRow &
 const mailSource = sql`coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id)`;
 const sourceKey = sql<string>`coalesce(${mailSource}, a.id::text, p.id::text)`;
 
+// The owner answered a draft that can never send by replying from Outlook; an unconfirmed one waits for the Sent check.
+const repliedFromOutlook = sql<boolean>`r.status = 'failed'
+	and r.failure_reason !~ '^unconfirmed_after_[0-9]+$'
+	and exists (
+		select from email reply
+		join activity sent on sent.id = reply.activity_id
+		join email_mailbox m on (m.activity_id, m.user_id) = (reply.activity_id, r.owner_user_id)
+		join party_email pe on (pe.party_id, pe.address) = (r.owner_user_id, reply.sender)
+		where reply.conversation_id = (select conversation_id from email where activity_id = r.email_activity_id)
+			and sent.happened_at > r.decided_at
+	)`;
+
 function draftRows(
 	userId: string,
 	mailGroups: RawBuilder<unknown> | undefined,
@@ -147,6 +159,7 @@ function draftRows(
 					r.status in ('pending', 'approved', 'failed')
 					or r.sent_at >= now() - interval '7 days'
 				)
+				and not (${repliedFromOutlook})
 		)
 		select * from drafts where position = 1
 	`;
@@ -993,13 +1006,18 @@ export async function readHomeReviewDisposition(
 	const item_id = `${kind}:${id}`;
 	if (kind === "reply_draft") {
 		const draft = await db
-			.selectFrom("reply_draft")
-			.select(["status", "dismiss_reason"])
-			.where("id", "=", id)
-			.where("owner_user_id", "=", userId)
-			.where(sourceInMailbox(sql.ref("email_activity_id"), userId))
+			.selectFrom("reply_draft as r")
+			.select([
+				"r.status",
+				"r.dismiss_reason",
+				repliedFromOutlook.as("replied"),
+			])
+			.where("r.id", "=", id)
+			.where("r.owner_user_id", "=", userId)
+			.where(sourceInMailbox(sql.ref("r.email_activity_id"), userId))
 			.executeTakeFirst();
 		if (draft?.status === "sent") return { item_id, state: "done" };
+		if (draft?.replied) return { item_id, state: "replaced" };
 		if (draft?.status === "dismissed")
 			return {
 				item_id,

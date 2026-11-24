@@ -327,6 +327,64 @@ test("dashboard keeps one conversation card while delivery is unconfirmed", asyn
 	assert.deepEqual(await linked.json(), waiting[0]);
 });
 
+test("a failed reply leaves Home once its owner replies from Outlook, while an unconfirmed one keeps waiting", async () => {
+	const owner = id(91);
+	const user = "outlook-replier";
+	const [failed, unconfirmed] = [id(92), id(93)];
+	const [failedEmail, unconfirmedEmail] = [id(94), id(95)];
+	const replies = [id(96), id(97)];
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${owner}', 'person', 'Example Replier');
+		insert into app_user (id, slug) values ('${owner}', '${user}');
+		insert into party_email (party_id, address, label) values ('${owner}', 'replier@example.test', 'work');
+		insert into activity (id, kind, happened_at) values
+			('${failedEmail}', 'email', '2026-01-02'), ('${unconfirmedEmail}', 'email', '2026-01-02');
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body) values
+			('${failedEmail}', '<${failedEmail}@example.test>', 'Failed thread', 'pat@example.test', 'Plan', 'Please send the plan.'),
+			('${unconfirmedEmail}', '<${unconfirmedEmail}@example.test>', 'Unconfirmed thread', 'pat@example.test', 'Plan', 'Please send the plan.');
+		insert into email_mailbox (activity_id, user_id) values ('${failedEmail}', '${owner}'), ('${unconfirmedEmail}', '${owner}');
+		insert into activity_about (activity_id, party_id) values ('${failedEmail}', '${owner}'), ('${unconfirmedEmail}', '${owner}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence) values
+			('${failed}', '${failedEmail}', '${owner}', 'old_system', 'Plan', 'Here it is.', 'Please send the plan.'),
+			('${unconfirmed}', '${unconfirmedEmail}', '${owner}', 'old_system', 'Plan', 'Here it is.', 'Please send the plan.');
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${owner}', true);
+		update reply_draft set status = 'approved', to_address = 'pat@example.test', cc_address = 'copy@example.test'
+			where id in ('${failed}', '${unconfirmed}');
+		select set_config('engine.job', 'old_system', true);
+		update reply_draft set status = 'failed', failure_reason = 'attachment_missing' where id = '${failed}';
+		update reply_draft set status = 'failed', failure_reason = 'unconfirmed_after_3' where id = '${unconfirmed}';
+		commit;`);
+	const before = await dashboard(user);
+	assert.equal(
+		before.reminders.find((card) => card.reply_draft_id === failed)
+			?.primary_action,
+		"Review delivery",
+	);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values
+			('${replies[0]}', 'email', clock_timestamp()), ('${replies[1]}', 'email', clock_timestamp());
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body) values
+			('${replies[0]}', '<${replies[0]}@example.test>', 'Failed thread', 'replier@example.test', 'RE: Plan', 'Attached.'),
+			('${replies[1]}', '<${replies[1]}@example.test>', 'Unconfirmed thread', 'replier@example.test', 'RE: Plan', 'Here it is.');
+		insert into email_mailbox (activity_id, user_id) values ('${replies[0]}', '${owner}'), ('${replies[1]}', '${owner}');
+		insert into activity_about (activity_id, party_id) values ('${replies[0]}', '${owner}'), ('${replies[1]}', '${owner}');
+		commit;`);
+	const { reminders, waiting } = await dashboard(user);
+	assert.deepEqual(reminders, []);
+	assert.deepEqual(
+		waiting.map((card) => card.reply_draft_id),
+		[unconfirmed],
+	);
+	const linked = await linkedCard(`reply_draft:${failed}`, user);
+	assert.equal(linked.status, 200);
+	assert.deepEqual(await linked.json(), {
+		item_id: `reply_draft:${failed}`,
+		state: "replaced",
+	});
+});
+
 test("Home shows only its partner's active drafts and one per known conversation", async () => {
 	const drafts = (await inbox()).filter(
 		(card) => card.kind_label === "Reply draft" && card.source_state !== "done",
