@@ -38,6 +38,7 @@ import {
 import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { dealDocumentText, deals } from "./deals/routes.ts";
+import { dealStars } from "./deals/stars.ts";
 import { dealTours } from "./deals/tours.ts";
 import { type DealWatchEnv, dealWatch } from "./deals/watch.ts";
 import { docRoutes } from "./doc.ts";
@@ -165,6 +166,7 @@ partnerApi.route("/api/engine", closingAnniversaries);
 partnerApi.route("/api/engine", prospectReads);
 partnerApi.route("/api/engine", prospectChanges);
 partnerApi.route("/api/engine", nextDeals);
+partnerApi.route("/api/engine", dealStars);
 partnerApi.route("/api/engine", automaticPhaseUndo);
 partnerApi.route("/api/engine", nationalAccounts);
 partnerApi.route("/api/engine", dealParticipants);

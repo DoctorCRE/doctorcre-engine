@@ -48,6 +48,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`email_summary`**: a recorded summary result for that email, with its source, generator and recorded time. `email_current_summary` gives the one current text when any result has text.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
 - **`weekly_review`**: one deal or prospect marked reviewed in one week's Monday review.
+- **`deal_star`**: one partner's star on one deal, which keeps the deal at the top of that partner's Deals board and list.
 - **`commission`**: a deal's commission, once: what an open deal is expected to bring, the gross the brokerage collects, and the closing user's part on this deal when it overrides their ladder.
 - **`commission_payment`**: one part of the gross, with when it was invoiced, falls due and was received.
 - **`commission_share`**: what goes to someone other than the users, such as a referring agent or the brokerage, as a share of the whole.
@@ -1619,6 +1620,16 @@ A copied or fresh automatic call move appears as `phase_change` on the board and
 All next-schema automatic receipts give `event_id` (UUID), `prior_phase`, `phase`, nullable `reason`, Chicago `evidence_date` (the phase's effective day), `recorded_at` (the save time), and `automatic: true`. An automatic invoice close gives `source: "invoice"` and `call: null`. A copied receipt gives `source: "copied"`, its original event ID, and `call: null`. It uses the phase row's reason if the copied reason is empty. A fresh call receipt gives `source: "call_capture"`, the phase save's idempotency key as its event ID, and `call: { activity_id, happened_at }` with the stored call's UUID and start timestamp. Use `evidence_date` for the move caption. The receipt sets `undoable: false` for a copied close with an invoice date and no invoice application for the current move. The receipt and invoice date stay visible, with Undo hidden. Other receipts set `undoable: true` and follow the usual Undo rules.
 
 The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `POST /api/engine/deals/{deal_id}/phase/undo`. Use the card's `seen` value as `base_version`. Undo locks the deal and checks that version and exact current move before appending the previous phase today through the usual phase save. It returns `{ deal_id, phase, phase_changed_at }`. Change history records the partner's save. A stale card or a move that is no longer current returns `409 version_conflict { current_version }`. Undo returns the same status and error for a previous phase of Closed, Invoiced, or Dead, with a hint that Undo would return the deal to Closed deals or Lost deals. A copied invoice-dated close returns the same status and error with the hint "Closed because an invoice was recorded; Undo isn't available". A same-key retry returns the original answer.
+
+### Starred deals
+
+Each partner keeps their own starred deals (owner, 2026-11-24, #1240). `deal_star` holds one row per user and deal. The database refuses a second row for the same pair, refuses a star that names anyone but the user saving it, and so refuses one from a job, and removes a deal's stars with the deal. Change history keeps each star and unstar.
+
+Each open deal in the new board read's `deals` gives `starred`, true when the signed-in partner starred it. The old read omits it. The app puts starred deals first in each column and in the list, keeping their usual order among themselves.
+
+`POST /api/engine/deals/{deal_id}/star` and `POST /api/engine/deals/{deal_id}/unstar` take `idempotency_key` and answer `200 { deal_id, starred }` for the signed-in partner. Starring a starred deal or unstarring an unstarred one answers the same. An unknown deal returns `404 not_found`. Jobs have no star route. Shared retry rules apply.
+
+On an existing `next` schema, apply [the deal stars migration](../schema/add-deal-stars.sql) after the owner approves it for production, before deploying the engine that reads stars. It can be applied twice. Fresh schemas include the table.
 
 ### App work for the Deals switch
 

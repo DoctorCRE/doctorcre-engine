@@ -23,6 +23,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Each open deal shows once, in its phase column. A parked deal shows only in the Parked lane.
 - [ ] With `deals-from-engine` on, the board stays current without the old live feed: it reloads from the engine when the tab is shown or focused, after each save, and about every minute while in use, and says when it last updated. National Accounts' pending confirmations load on their own (coordinator, 2026-11-20).
 - [ ] List: one row per open deal with its name, deal owner, phase and next step. The List shows the deal owner's step when both partners have one. It shows an automatic move without Undo.
+- [ ] Each card and List row has a star. A partner's starred deals sit first in their column on Board and first in List, in their usual order among themselves. Each partner sees only their own stars, and starring twice or unstarring an unstarred deal changes nothing (owner, 2026-11-24).
 - [ ] Add deal asks for the deal name, the client (picked by name), the deal kind, the deal reason, the phase and the deal owner. Kind and reason may each be left unknown. When the reason is renewal, it also asks which existing lease the deal renews, and saves only with one. The lease picker shows "already renewed by <deal>" when a deal already links to that lease (owner, 2026-11-19).
 - [ ] In each name picker, a match shows its city when known and how many deals it is on. A company that is already a national account offers "Open account" (owner, 2026-11-19).
 

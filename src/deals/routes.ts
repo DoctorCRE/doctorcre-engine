@@ -56,7 +56,9 @@ deals.get("/deals", async (c): Promise<Response> => {
 		account_client_id: params.get("account_client_id"),
 	};
 	return c.env.DEALS_READ_SCHEMA === "next"
-		? answerNextRead(c, "deal-room-board", (db) => readNextBoard(db, input))
+		? answerNextRead(c, "deal-room-board", (db, userId) =>
+				readNextBoard(db, userId, input),
+			)
 		: answer(c, "deal-room-board", (db) => readBoard(db, input));
 });
 
