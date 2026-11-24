@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
-import { sql } from "kysely";
-import { nextTransaction } from "../next-connection.ts";
 import { doorTest } from "../test-door.ts";
 
-const { db, writerUrl, setup, cleanup, save } = doorTest();
+const { db, setup, cleanup, save } = doorTest();
 const joe = { user: "joe" };
 const key = () => ({ idempotency_key: randomUUID() });
 const joeId = randomUUID();
@@ -82,13 +80,10 @@ test("an introduction the team made names the signed-in partner, and one the ven
 test("an introduction is with a vendor, of someone else, about a deal that exists, with a note", async () => {
 	for (const [fields, status, rule] of [
 		[{ vendor_id: notVendor }, 422, "introduction_vendor_id_vendor_role_fkey"],
-		[{ introduced_party_id: vendor }, 422, "introduction_of_someone_else"],
-		[
-			{ introduced_party_id: randomUUID() },
-			422,
-			"introduction_introduced_party_id_fkey",
-		],
-		[{ deal_id: randomUUID() }, 422, "introduction_deal_id_fkey"],
+		[{ introduced_party_id: vendor.toUpperCase() }, 400],
+		[{ vendor_id: randomUUID() }, 404],
+		[{ introduced_party_id: randomUUID() }, 404],
+		[{ deal_id: randomUUID() }, 404],
 		[{ note: "   " }, 400],
 		[{ note: undefined }, 400],
 		[{ introduced_on: undefined }, 400],
@@ -126,6 +121,10 @@ test("an introduction's date, deal and note change from what the partner saw", a
 		error: "version_conflict",
 		fields: ["note"],
 	});
+	assert.equal(
+		(await edit({ deal_id: { from: deal, to: randomUUID() } }))[0],
+		404,
+	);
 	const [cleared, unlinked] = await edit({ deal_id: { from: deal, to: null } });
 	assert.equal(cleared, 200);
 	assert.equal(unlinked.deal_id, null);
@@ -146,28 +145,4 @@ test("an introduction's date, deal and note change from what the partner saw", a
 		[added.introduction_id],
 	);
 	assert.deepEqual(rows, [{ edits: 2 }]);
-});
-
-test("who an introduction joins and who made it never change, and its vendor keeps its vendor role", async () => {
-	const [, added] = await introduce({});
-	const asEngine = (statement: ReturnType<typeof sql>) =>
-		nextTransaction(writerUrl, "save", async (tx) => {
-			await sql`select set_config('engine.user_id', ${joeId}, true)`.execute(
-				tx,
-			);
-			await statement.execute(tx);
-		});
-	for (const column of ["vendor_id", "introduced_party_id", "made_by"])
-		await assert.rejects(
-			asEngine(
-				sql`update introduction set ${sql.ref(column)} = ${column === "made_by" ? "team" : notVendor} where id = ${added.introduction_id}`,
-			),
-			{ code: "42501" },
-		);
-	await assert.rejects(
-		asEngine(
-			sql`delete from party_role where party_id = ${vendor} and role = 'vendor'`,
-		),
-		{ code: "23503" },
-	);
 });

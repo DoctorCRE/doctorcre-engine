@@ -61,8 +61,8 @@ const introductionRead = (tx: Transaction<DB>, id: string) =>
 		.where("i.id", "=", id)
 		.executeTakeFirst();
 
-const parseIntroduction = (body: JsonObject) =>
-	fit(body, NEW_INTRODUCTION, [
+function parseIntroduction(body: JsonObject) {
+	const request = fit(body, NEW_INTRODUCTION, [
 		"idempotency_key",
 		"vendor_id",
 		"made_by",
@@ -70,12 +70,45 @@ const parseIntroduction = (body: JsonObject) =>
 		"introduced_on",
 		"note",
 	]);
+	if (request instanceof Refusal) return request;
+	if (
+		request.vendor_id.toLowerCase() ===
+		request.introduced_party_id.toLowerCase()
+	)
+		return new Refusal(400, "invalid_field_value", {
+			fields: ["introduced_party_id"],
+		});
+	return request;
+}
 
-// The database refuses a vendor without its vendor role, the vendor itself, and a missing party or deal.
+const notFound = () => new SaveRefusal(new Refusal(404, "not_found"));
+
+// Key-share locks keep what a save names from being deleted before it commits.
+async function lockDeal(tx: Transaction<DB>, deal_id: string | null) {
+	if (deal_id === null) return;
+	const deal = await tx
+		.selectFrom("deal")
+		.select("id")
+		.where("id", "=", deal_id)
+		.forKeyShare()
+		.executeTakeFirst();
+	if (!deal) throw notFound();
+}
+
+// The database refuses a vendor without its vendor role.
 async function addIntroduction(
 	tx: Transaction<DB>,
 	request: Exclude<ReturnType<typeof parseIntroduction>, Refusal>,
 ) {
+	const parties = await tx
+		.selectFrom("party")
+		.select("id")
+		.where("id", "in", [request.vendor_id, request.introduced_party_id].sort())
+		.orderBy("id")
+		.forKeyShare()
+		.execute();
+	if (parties.length !== 2) throw notFound();
+	await lockDeal(tx, request.deal_id ?? null);
 	const { id } = await tx
 		.insertInto("introduction")
 		.values({
@@ -116,7 +149,7 @@ async function editIntroduction(
 		.forUpdate()
 		.executeTakeFirst();
 	const current = locked && (await introductionRead(tx, introduction_id));
-	if (!current) throw new SaveRefusal(new Refusal(404, "not_found"));
+	if (!current) throw notFound();
 	const stale = request.fields.filter(
 		(field) => request[field]?.from !== current[field],
 	);
@@ -124,6 +157,7 @@ async function editIntroduction(
 		throw new SaveRefusal(
 			new Refusal(409, "version_conflict", { fields: stale, current }),
 		);
+	if (request.deal_id) await lockDeal(tx, request.deal_id.to);
 	await tx
 		.updateTable("introduction")
 		.set({
