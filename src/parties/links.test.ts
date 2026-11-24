@@ -104,6 +104,20 @@ test("a link's dates and note change from what the partner saw, and an ended lin
 	});
 	assert.equal(backwards, 422);
 	assert.equal(refusal.rule, "party_link_ends_after_it_starts");
+	assert.equal(
+		(await edit({ started_on: { from: null, to: "2026-01-05" } }))[0],
+		200,
+	);
+	const [cleared, clearedLink] = await edit({
+		started_on: { from: "2026-01-05", to: null },
+		note: { from: "Moved away", to: null },
+	});
+	assert.equal(cleared, 200, JSON.stringify(clearedLink));
+	assert.partialDeepStrictEqual(clearedLink, {
+		started_on: null,
+		ended_on: "2026-02-01",
+		note: null,
+	});
 	const [renewed] = await link({
 		kind: "can_introduce",
 		party_id: avery,
