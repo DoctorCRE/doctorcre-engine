@@ -491,7 +491,21 @@ Home's email review, reply draft detail, and email proposal detail use the same 
 
 Use a private list of stored Home email activity ids and their verified mailbox and Outlook item locators. For copied emails, `outside_id` links back to the old activity, where `email_identity` can name the mailbox and an `hxstore-key:` item id (`lib/outlook_intake.py`). Resolve the locator in that mailbox's Outlook index or store copy. An `intake:` fingerprint by itself supplies no item locator. Require one matching message and corroborate it with the stored sender, sent time, subject, and any known Message-ID. Leave an unavailable, incomplete, or ambiguous match on the legacy cleaner.
 
-Run a read-only dry run on a practice copy before seeking approval for the production replay. Count candidates, verified matches, missing or ambiguous locators, incomplete bodies, conflicts, and fields to fill. Keep row ids and expected values in the private input and log only counts and reasons. Use the capture splitter on each verified complete original. The apply step locks each target, checks its expected source fields and authorized mailbox, and fills only the missing pair and a missing Message-ID proved by Outlook. Preserve the unique Message-ID constraint. If the id already belongs to another row, report the conflict and leave the id unset on the target. A verified pair can still be filled, and the display groups the rows if their fallback tuples agree. Report unresolved duplicates for review. A rerun converges without overwriting a split or a Message-ID, adding an activity or mailbox membership, or routing an email again.
+Count candidates, verified matches, missing or ambiguous locators, incomplete bodies, conflicts, and fields to fill. Keep row ids and expected values in the private input and log only counts and reasons. Use the capture splitter on each verified complete original. The apply step locks each target, checks its expected source fields and authorized mailbox, and fills only the missing pair and a missing Message-ID proved by Outlook. Preserve the unique Message-ID constraint. If the id already belongs to another row, report the conflict and leave the id unset on the target. A verified pair can still be filled, and the display groups the rows if their fallback tuples agree. Report unresolved duplicates for review. A rerun converges without overwriting a split or a Message-ID, adding an activity or mailbox membership, or routing an email again.
+
+The recovery runs in these steps:
+
+1. `schema/email-text-recovery-candidates.sql` writes the private candidates CSV, one row per email and mailbox, with its locator and reason.
+2. A read-only carr-system dry run on a practice copy re-reads each located item from Outlook and splits it with the capture splitter.
+3. Load the verified rows into `pg_temp.email_text_recovery` (`activity_id`, `user_id`, `sender`, `happened_at`, `subject`, `body_sha256` as in the candidates CSV, plus `authored`, `history` and an optional `message_id`). In the same session, run `schema/recover-email-text.sql` without `apply`. It does the whole fill, prints the counts and rolls back.
+4. The owner approves the counts.
+5. Run the same load and script with `-v apply=on`, for example `psql -X -f load.sql -v apply=on -f schema/recover-email-text.sql`.
+
+The apply script refuses, with no write, a missing input table, a repeated `activity_id`, a row without its key, expected source or split, a blank or padded `message_id`, or an `apply` other than `on` or `off`. It stamps each filled row `changed_by_job = 'old_system'`, with no user, so history records the fill and nothing is routed again. It takes capture's lock on each Message-ID, and filing's on each target without one, before it locks the target rows. Its stdout is the count of each outcome, then `dry_run` or `applied`:
+
+- `not_found`, `not_in_mailbox` and `source_changed` leave the row untouched.
+- Every other row is `pair_filled` or `pair_kept`.
+- It is also one of `message_id_filled`, `message_id_kept`, `message_id_differs` (the stored id is kept), `message_id_conflict` (another email holds the id, or a lower activity id in the input fills it first) or `message_id_not_given`.
 
 ## Worked example: an LOI response by email
 
