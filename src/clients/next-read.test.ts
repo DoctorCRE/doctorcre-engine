@@ -23,6 +23,7 @@ type ClientRow = {
 };
 type TypeFacet = { slug: string; label: string };
 type ClientRecord = ClientRow & {
+	party_id: string;
 	acquisition_source: string;
 	phone: string | null;
 	cell: string | null;
@@ -145,6 +146,7 @@ test("Clients opens a location saved through Deals and shows the next owner of a
 		assert.equal(response.status, 200, await response.clone().text());
 		const { record }: { record: ClientRecord } = await response.json();
 		assert.equal(record.id, requestedId);
+		assert.equal(record.party_id, copied);
 		assert.equal(record.name, "Example Copied Client");
 		assert.equal(record.owner_label, "Example Corrected Owner");
 		assert.equal(record.owned_by_viewer, false);

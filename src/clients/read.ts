@@ -659,7 +659,10 @@ export async function readNextClient(
 	return recordAnswer(
 		"clients",
 		viewer,
-		shaped({ ...record, id: requestedUuid ?? record.id }, contract),
+		shaped(
+			{ ...record, id: requestedUuid ?? record.id, party_id: record.id },
+			contract,
+		),
 		null,
 		stamp,
 		nextClientDataset,
