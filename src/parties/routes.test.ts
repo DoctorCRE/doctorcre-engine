@@ -265,7 +265,7 @@ test("an email or phone sent unchanged keeps its row", async () => {
 		insert into party_email (party_id, address, label, is_primary)
 			values ('${party}', 'same@example.test', 'personal', true);
 		insert into party_phone (party_id, number, extension, label, is_primary)
-			values ('${party}', '+12025550109', '7', 'personal', true);
+			values ('${party}', '+12025550109', '7', 'mobile', true);
 		commit;`);
 	const rows = () =>
 		db.query(
@@ -281,7 +281,9 @@ test("an email or phone sent unchanged keeps its row", async () => {
 	});
 	assert.equal(status, 200, JSON.stringify(answer));
 	assert.deepEqual((await rows()).rows, before);
-	assert.equal(before[0]?.email_label, "personal");
+	assert.partialDeepStrictEqual(before, [
+		{ email_label: "personal", phone_label: "mobile" },
+	]);
 });
 
 test("a copied record with a blank name can be named, and an unknown one is not found", async () => {
