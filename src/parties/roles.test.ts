@@ -56,6 +56,13 @@ test("a client is added over a record with its status, type, practice type and o
 		201,
 		{ ...client, replayed: true },
 	]);
+	const [read, record] = await save(joe, `parties/${practice}`, {}, "GET");
+	assert.equal(read, 200);
+	assert.partialDeepStrictEqual(record, {
+		name: "Example Smile Studio",
+		client,
+		vendor: null,
+	});
 	const [again, refusal] = await save(dell, "clients", {
 		...key(),
 		party_id: practice,
