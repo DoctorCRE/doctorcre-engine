@@ -15,7 +15,7 @@ Use the Node version in `.node-version` and `psql`. Install the locked dependenc
 npm ci
 ```
 
-Database tests need a local, disposable PostgreSQL 18 server with `pgcrypto` and `pg_trgm`. Start one as the README describes, or use one already on loopback. Set `TEST_DATABASE_URL` to it. The loader accepts only a loopback host, makes a random database and drops it afterwards. Never point it at a server holding business data, and never use a Neon or production URL.
+Database tests need a local, disposable PostgreSQL 18 server with `pgcrypto` and `pg_trgm`. With the `postgres:18` image already pulled, use the README's Docker block: it starts a server with `max_locks_per_transaction=256` (#420), runs the check against it, and removes it on exit. Otherwise use a server already on loopback and set `TEST_DATABASE_URL` to it. The loader accepts only a loopback host, makes a random database and drops it afterwards. Never point it at a server holding business data, and never use a Neon or production URL.
 
 ## Doctor
 
@@ -31,13 +31,13 @@ If no server can start (no Docker image cached and no network), say so and repor
 
 Read the pull request's diff and the issue it closes. Then:
 
-1. Run the test files for the changed behavior first, by name:
+1. For a change to an HTTP door or pure code, run its test file first, by name:
 
    ```sh
    node --test src/<changed>.test.ts
    ```
 
-   HTTP doors are driven through `src/worker.ts`'s default export with a made-up `env`, as the existing door tests do (for example `src/compare-door.test.ts`). Database rules are driven through the tests that load `schema/` files into the test database.
+   Door tests drive `src/worker.ts`'s default export with a made-up `env`, as `src/compare-door.test.ts` does. Database and copy tests need the snapshots that only `npm run check` sets up; run alone, they stop or rebuild the schema slowly, which is not a failure of the change. Step 2 is their evidence.
 2. Run the full check, which CI runs and nothing else:
 
    ```sh
