@@ -5,7 +5,7 @@ import {
 	type Transaction,
 } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
-import { sharedCopiedCall, visibleCall } from "./activity/call-visibility.ts";
+import { callFollowUpFor } from "./activity/call-recorder.ts";
 import {
 	filingChoices,
 	filingReviewNeeded,
@@ -164,28 +164,16 @@ export const visibleSuggestion = (
 		) then false
 		when p.kind = 'next_step' and p.owner_party_id is not null then p.owner_party_id = ${userId}::uuid
 		when p.kind = 'email_lead' then p.changed_for_user_id = ${userId}::uuid
-		when p.kind = 'log_call' then ${visibleCall(userId)}
-			and (not ${sharedCopiedCall} or (p.proposed_by_job = 'old_system'
-				and p.changed_for_user_id = ${userId}::uuid))
+		-- A call's follow-up goes to whoever recorded the call, whoever edited it since.
+		when p.kind = 'log_call' or p.activity_kind = 'call' then ${callFollowUpFor(userId)}
 		else p.changed_for_user_id = ${userId}::uuid
 			or (p.status <> 'pending' and exists (
 				select from change where table_name = 'proposal' and action = 'insert'
 					and record = jsonb_build_object('id', p.id) and changed_for_user_id = ${userId}::uuid
 			))
 			or exists (select from email_mailbox m where m.activity_id = a.id and m.user_id = ${userId}::uuid)
-			or (p.activity_kind = 'call' and ${visibleCall(userId)} and not ${sharedCopiedCall})
 			or (p.activity_kind = 'meeting' and ${userId}::uuid in (a.changed_by_user_id, a.changed_for_user_id))
 	end
-`;
-
-const visibleProposalSource = (userId: string) =>
-	sql<boolean>`(p.activity_kind is distinct from 'call' or ${visibleCall(userId)})`;
-
-const visibleHomeSuggestion = (userId: string) => sql<boolean>`
-	(${visibleSuggestion(userId)}) and (
-		${visibleProposalSource(userId)}
-		or (p.kind = 'next_step' and p.owner_party_id = ${userId}::uuid)
-	)
 `;
 
 export const visibleProposalDetail = (userId: string) => sql<boolean>`
@@ -193,7 +181,7 @@ export const visibleProposalDetail = (userId: string) => sql<boolean>`
 	and ${sourceInMailbox(sql.ref("p.activity_id"), userId)}
 	and case when p.kind = 'next_step_done'
 		then step.owner_party_id = ${userId}::uuid and step.status = 'open'
-		else ${visibleHomeSuggestion(userId)} end
+		else ${visibleSuggestion(userId)} end
 `;
 
 export async function readProposal(
@@ -260,9 +248,7 @@ export async function readProposal(
 		])
 		.select((eb) => [
 			filingScope("p").as("filing_scope"),
-			sql<string>`case when ${visibleProposalSource(userId)} then p.evidence else '' end`.as(
-				"evidence",
-			),
+			"p.evidence",
 			sql<
 				string | null
 			>`case when p.activity_kind = 'email' then p.activity_id end`.as(
@@ -296,7 +282,6 @@ export async function readProposal(
 						.selectFrom("activity as source")
 						.leftJoin("email as e", "e.activity_id", "source.id")
 						.whereRef("source.id", "=", "a.id")
-						.where(visibleProposalSource(userId))
 						.select((source) => [
 							"source.id",
 							"source.kind",
@@ -336,22 +321,22 @@ function suggestionRows(
 ) {
 	return sql`
 		with visible as (
-			select p.id, p.kind, p.status, case when source_access.visible then a.id end as activity_id,
+			select p.id, p.kind, p.status, a.id as activity_id,
 				case when lead_email.activity_id is not null then 'email' else coalesce(a.kind, p.activity_kind) end as activity_kind,
 				p.created_at as activity_at, p.due_on,
 				p.deal_id is not null or exists (
 					select from party_role where party_id = p.party_id and role = 'vendor'
 				) as late_target,
 				contact.name as contact_name,
-				case when source_access.visible then a.summary end as source_summary,
-				case when source_access.visible then p.evidence end as evidence,
+				a.summary as source_summary,
+				p.evidence,
 				case when p.kind = 'possible_new_deal' then ${filingScope("p")} end as filing_scope,
 				coalesce(phase.label, lead_stage.label) as decision_label,
 				(select coalesce(max(id), 0) from change where table_name = 'proposal'
 					and record = jsonb_build_object('id', p.id)) as proposal_version,
 				coalesce(d.name, party.name, property.name, property.address, candidate.name,
 					${senderLabel("e")}) as context_label,
-				case when p.activity_kind = 'call' then case when source_access.visible then '/calls?session=' || a.id end
+				case when p.activity_kind = 'call' then '/calls?session=' || a.id
 					when d.id is not null then '/deals?deal=' || d.id
 					when party.id is not null then '/relationships?node=party:' || party.id end as open_url,
 				case
@@ -373,7 +358,7 @@ function suggestionRows(
 				end as suggestion_title,
 				coalesce(${senderLabel("e")}, nullif(btrim(candidate.name), ''), candidate.source_row->>'address') as email_sender,
 				case when strpos(e.body, p.evidence) > 0 then p.evidence end as email_quote,
-				case when source_access.visible then a.happened_at end as source_at,
+				a.happened_at as source_at,
 				coalesce(a.happened_at::text, candidate.source_row->>'first_seen_at') as email_at,
 				${mailSource} as mail_group,
 				${sourceKey} as source_key,
@@ -382,7 +367,7 @@ function suggestionRows(
 				coalesce(lead_email.activity_id, a.id) as group_activity_id,
 				coalesce(lead_email.happened_at, a.happened_at) as group_source_at,
 				jsonb_build_object(
-					'id', p.id, 'kind', p.kind, 'activity_id', case when source_access.visible then p.activity_id end,
+					'id', p.id, 'kind', p.kind, 'activity_id', p.activity_id,
 					'activity_kind', p.activity_kind, 'deal_id', p.deal_id, 'party_id', p.party_id,
 					'property_id', p.property_id, 'candidate_id', p.candidate_id
 				) as reference
@@ -404,8 +389,7 @@ function suggestionRows(
 			left join activity a on a.id = coalesce(p.activity_id,
 				case when lead_email.exact_message then lead_email.activity_id end)
 			left join email e on e.activity_id = a.id
-			cross join lateral (select ${visibleProposalSource(userId)} as visible) source_access
-			left join party contact on source_access.visible and contact.id = a.from_party_id
+			left join party contact on contact.id = a.from_party_id
 			left join deal d on d.id = p.deal_id
 			left join party on party.id = p.party_id
 			left join property on property.id = p.property_id
@@ -413,7 +397,7 @@ function suggestionRows(
 			left join stage lead_stage on lead_stage.role = 'lead' and lead_stage.slug = p.to_stage
 			where p.kind <> 'next_step_done'
 				${mailGroups ? sql`and ${mailSource} in (${mailGroups})` : sql``}
-				and ${visibleHomeSuggestion(userId)}
+				and ${visibleSuggestion(userId)}
 				and ${sourceInMailbox(sql.ref("p.activity_id"), userId)}
 				and (p.kind <> 'email_lead' or not exists (
 					select from party_email pe left join app_user u on u.id = pe.party_id
@@ -1035,7 +1019,7 @@ export async function readHomeReviewDisposition(
 			])
 			.where("p.id", "=", id)
 			.where("p.kind", "not in", ["next_step_done", "email_lead"])
-			.where(visibleHomeSuggestion(userId))
+			.where(visibleSuggestion(userId))
 			.where(sourceInMailbox(sql.ref("p.activity_id"), userId))
 			.executeTakeFirst();
 		if (proposal?.status === "accepted")

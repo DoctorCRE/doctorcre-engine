@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { jsonArrayFrom } from "kysely/helpers/postgres";
-import { visibleCall } from "../activity/call-visibility.ts";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
@@ -59,7 +58,6 @@ export function callOutcomeQuery(
 		.selectFrom("activity as a")
 		.selectAll("a")
 		.where("a.kind", "=", "call")
-		.where(visibleCall(userId))
 		.where(({ exists, selectFrom }) =>
 			exists(
 				selectFrom("activity_about as link")

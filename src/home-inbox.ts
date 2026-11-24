@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { visibleCall } from "./activity/call-visibility.ts";
 import { answerNextRead, checkFields, Refusal, refuse } from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import {
@@ -92,13 +91,10 @@ function stepRows(
 		left join deal d on d.id = s.deal_id
 		left join party p on p.id = s.party_id
 		left join property on property.id = s.property_id
-		left join activity c on c.id = s.call_activity_id and ${visibleCall(userId, "c")}
+		left join activity c on c.id = s.call_activity_id
 		left join party contact on c.id is not null and contact.id = coalesce(s.call_contact_party_id, c.from_party_id)
 		left join proposal accepted on accepted.id = s.id and accepted.kind = 'next_step'
 			and accepted.status = 'accepted'
-			and (accepted.activity_kind <> 'call' or exists (
-				select from activity a where a.id = accepted.activity_id and ${visibleCall(userId)}
-			))
 		left join (
 			select distinct on (step_id) step_id, changed_by_user_id from step_history
 			where action = 'insert' order by step_id, id
@@ -273,7 +269,6 @@ async function readHomeInbox(
 		: rows;
 	const reviews = await readCompletionReviews(
 		db,
-		userId,
 		eligibleSteps
 			.filter((step) => step.status === "open")
 			.map((step) => step.id),

@@ -110,6 +110,18 @@ function assertPrivateSourceHidden(value: unknown, call = privateCall.call) {
 		);
 }
 
+// No call is private: the assignee may see which call a step came from.
+// The reader views still withhold its text until they stop filtering calls.
+function assertCallShownWithoutItsText(value: unknown, call: string) {
+	const json = JSON.stringify(value);
+	assert.ok(json.includes(call), `Missing the source call ${call}`);
+	for (const secret of [contactName, summary, evidence])
+		assert.ok(
+			!json.includes(secret),
+			`Call text reached the assignee: ${secret}`,
+		);
+}
+
 test("Home proposal detail shows the assigned wording and hides private evidence", async () => {
 	for (const [fixture, idKey, text] of [
 		[privateCall, "proposal", proposed],
@@ -148,7 +160,7 @@ test("Home suggestion cards and member lists hide the assigned proposal's privat
 		suggestions: [{ id: privateCall.proposal }],
 		source_activity: null,
 	});
-	assertPrivateSourceHidden(hidden);
+	assertCallShownWithoutItsText(hidden, privateCall.call);
 	const shared = findRow(items, "proposal_id", copiedCall.proposal);
 	assert.ok(typeof shared.why === "string" && shared.why.includes(evidence));
 	assert.partialDeepStrictEqual(shared, {
@@ -224,7 +236,7 @@ test("the assignee can accept the step proposal and decide the completion review
 	const { items } = await readHome("home/inbox");
 	const step = findRow(items, "action_id", decisions.proposal);
 	assert.equal(step.title, proposed);
-	assertPrivateSourceHidden(step, decisions.call);
+	assertCallShownWithoutItsText(step, decisions.call);
 });
 
 test("Today hides a private call follow-up owned by the other partner", async () => {

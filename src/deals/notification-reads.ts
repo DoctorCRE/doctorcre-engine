@@ -59,11 +59,10 @@ function checklistDeals(db: Transaction<DB>) {
 
 const openChecklistItems = (day: string) => sql`
 	select deal_id, 'critical-date:' || id as item_ref, kind as title,
-		due_on, true as standard, null::timestamptz as created_at,
-		null::uuid as call_activity_id, null::uuid as owner_party_id
+		due_on, true as standard, null::timestamptz as created_at
 	from critical_date where status = 'open' and due_on between date '0001-01-01' and ${day}::date
 	union all
-	select deal_id, 'deal-item:' || id, item_title, due_on, false, created_at, call_activity_id, owner_party_id
+	select deal_id, 'deal-item:' || id, item_title, due_on, false, created_at
 	from next_step where status = 'open' and item_title is not null
 		and source_ref ~ '[^[:space:]]' and due_on between date '0001-01-01' and ${day}::date
 `;
@@ -90,7 +89,6 @@ async function checklistReminders(db: Transaction<DB>, dealId: string) {
 		select item_ref, title, due_on::text, standard
 		from (${openChecklistItems(deal.observed_on)}) due
 		where deal_id = ${dealId}
-		and call_step_visible_to(call_activity_id, owner_party_id)
 		and not exists (
 			select from home_update u where u.user_id = ${deal.owner_user_id} and u.deal_id = ${dealId}
 			and u.checklist_item_ref = due.item_ref and u.due_on = due.due_on
@@ -119,7 +117,6 @@ async function queueChecklistReminders(
 			select deal_id, owner_user_id, item_ref, due_on
 			from (${openChecklistItems(run_date)}) item
 			join (${checklistDeals(db)}) deal using (deal_id) where deal.eligible
-			and call_step_visible_to(item.call_activity_id, item.owner_party_id, deal.owner_user_id)
 		), local_times as (
 			select owner_user_id, coalesce(p.time_zone, 'America/Chicago') as zone,
 				${new Date().toISOString()}::timestamptz as queued_at,
@@ -230,10 +227,8 @@ async function dealWatch(db: Transaction<DB>, watch: Watch) {
 				when 'deal' then c.record = jsonb_build_object('id', ${dealId}::uuid)
 				when 'deal_phase_change' then c.record ->> 'deal_id' = ${dealId}::text
 				when 'next_step' then case when c.action = 'delete' then c.old_value ->> 'deal_id' = ${dealId}::text
-					and call_step_visible_to((c.old_value ->> 'call_activity_id')::uuid, (c.old_value ->> 'owner_party_id')::uuid)
 					else exists (
 						select from next_step s where s.deal_id = ${dealId} and c.record = jsonb_build_object('id', s.id)
-						and call_step_visible_to(s.call_activity_id, s.owner_party_id)
 					) end
 				when 'critical_date' then exists (
 					select from critical_date d where c.record = jsonb_build_object('id', d.id)
