@@ -13,6 +13,7 @@ const imported = randomUUID();
 // Old history a copy rerun brings in after an engine save, dated a microsecond after it.
 const rerun = randomUUID();
 const ignored = randomUUID();
+const automated = randomUUID();
 const joe = { user: "joe" };
 const dell = { user: "dell" };
 const as = (user: string, statement: string) =>
@@ -35,6 +36,10 @@ before(async () => {
 			jsonb_build_object('id', id, 'verb', 'update-deal', 'cause', 'human_stated', 'actor_id', 'example'),
 			'${blair}', '2001-01-01T15:00Z'
 		from (values ('${imported}'::uuid, 'owner_user_id'), ('${ignored}'::uuid, 'salesforce_id')) v(id, field);
+		insert into imported_change (id, table_name, record, old_value_absent, new_value_absent, field, source_event, changed_by_job, changed_at)
+		values ('${automated}', 'deal', '{"id":"${deal}"}', false, false, 'owner_user_id',
+			jsonb_build_object('id', '${automated}'::uuid, 'verb', 'set-lead', 'cause', 'automation_job', 'actor_id', 'example'),
+			'old_system', '2001-01-02T15:00Z');
 		alter table imported_change enable trigger stamp_imported_change;
 		commit;`);
 	await as(alex, `update deal set closed_value = 1200000 where id = '${deal}'`);
@@ -148,12 +153,14 @@ test("Each change says who changed which record, what changed, and where to open
 	});
 });
 
-test("Copies, internal fields and a partner's private settings stay out, for either partner", async () => {
+test("Copies, the old system's own automations, internal fields and a partner's private settings stay out, for either partner", async () => {
 	const seen = async (caller: typeof joe) =>
 		(await everything(caller)).flat().map((c) => c.what);
 	const forJoe = await seen(joe);
 	assert.equal(forJoe.length, 61);
 	assert.ok(!forJoe.includes("opened the deal"));
+	const ids = (await everything(joe)).flat().map((c) => c.id);
+	assert.ok(!ids.includes(`imported:${automated}`));
 	assert.ok(
 		forJoe.every((what) => typeof what === "string" && what.length > 0),
 	);
