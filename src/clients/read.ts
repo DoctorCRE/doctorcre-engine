@@ -3,6 +3,11 @@ import type { DB } from "../database.d.ts";
 import { isOpenBoardDeal, selectNextDeals } from "../deals/next-board.ts";
 import { failureKind } from "../failure.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
+import {
+	nameOldRecords,
+	readOldRecordNames,
+	recordLinks,
+} from "../old-record-names.ts";
 import { asText } from "../reader.ts";
 import { UUID } from "../uuid.ts";
 
@@ -651,11 +656,18 @@ export async function readNextClient(
 		])
 		.executeTakeFirst();
 	if (!record) throw new BusinessRefusal({ error: "RECORD_NOT_FOUND" });
+	const names = await readOldRecordNames(db, [record.notes]);
 	return recordAnswer(
 		"clients",
 		viewer,
 		shaped(
-			{ ...record, id: requestedUuid ?? record.id, party_id: record.id },
+			{
+				...record,
+				id: requestedUuid ?? record.id,
+				party_id: record.id,
+				notes: record.notes && nameOldRecords(record.notes, names),
+				record_links: recordLinks(names),
+			},
 			contract,
 		),
 		null,

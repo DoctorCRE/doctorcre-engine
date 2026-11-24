@@ -2,6 +2,7 @@ import { sql, type Transaction } from "kysely";
 import { hasToolCallMarkup, isoMillis } from "../answer.ts";
 import { homeDayAt } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
+import { nameOldRecords, readOldRecordNames } from "../old-record-names.ts";
 import { matchingContacts, matchingDealSubjects } from "../search/next-find.ts";
 
 async function activityCandidates(
@@ -106,7 +107,7 @@ export async function readNextRecentActivity(
 		order by a.calendar_review_key limit 5001`.execute(db);
 	if (calendar.rows.length > 5000)
 		return { error: "calendar_history_too_large" } as const;
-	const timeline = await sql`
+	const timeline = await sql<{ summary: string | null }>`
 		with filed_to as (${filedTo(kind, id, now)}),
 		filed as (
 			select distinct on (link.activity_id) link.activity_id, f.rank, f.kind, f.name
@@ -135,13 +136,20 @@ export async function readNextRecentActivity(
 			left join app_user u on u.id = s.changed_by_user_id
 			left join app_user owner on owner.id = s.owner_party_id
 		) entries order by at desc, entry_kind, id limit ${limit}`.execute(db);
+	const names = await readOldRecordNames(
+		db,
+		timeline.rows.map(({ summary }) => summary),
+	);
 	return {
 		state: "completed",
 		query,
 		match: { kind, name, target },
 		catch_up: {
 			subject: { type: kind, id },
-			timeline: timeline.rows,
+			timeline: timeline.rows.map((row) => ({
+				...row,
+				summary: row.summary && nameOldRecords(row.summary, names),
+			})),
 			calendar_history: calendar.rows,
 		},
 	};
