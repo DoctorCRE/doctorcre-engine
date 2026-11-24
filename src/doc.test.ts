@@ -14,8 +14,8 @@ import { finishDocJudgment, finishDocTurn } from "./doc-queue.ts";
 import { findDocRecords } from "./doc-reads.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { nextTransaction } from "./next-connection.ts";
-import { jobStamp, type NextSaveEnv } from "./next-door.ts";
-import { replyJobs } from "./reply-drafts.ts";
+import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
+import { replyDrafts, replyJobs } from "./reply-drafts.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
 const { db, setup, cleanup, connectionString } = copyTest();
@@ -90,6 +90,7 @@ function client(user = "joe", writer = connectionString) {
 	});
 	app.route("/", api);
 	app.route("/", homeInbox);
+	app.use("/reply-drafts/*", userStamp).route("/", replyDrafts);
 	return async <Path extends string>(
 		path: Path,
 		status: number | number[],
@@ -2284,6 +2285,40 @@ test("Doc saves one pending reply, opens its review, and preserves it on repeat"
 		result: replyReceipt(draft.id, true),
 	});
 	assert.deepEqual((await drafts()).rows, [draft]);
+});
+
+test("Confirming a Doc reply again opens the same draft with the partner's review edits", async () => {
+	const mail = await replyEmail();
+	const send = client();
+	const first = await newReply(mail);
+	const { result } = await send(first.path, 200, newReplyEdits());
+	assert.ok(result && typeof result === "object" && "id" in result);
+	const id = String(result.id);
+	const review = `/reply-drafts/${id}`;
+	const edited = { subject: "Re: Plan for Thursday", body: "Thursday at 3." };
+	const edit = { idempotency_key: randomUUID(), version: 1, ...edited };
+	await send(`${review}/edit`, 200, edit);
+	assert.equal(
+		(await send(first.path, 409, newReplyEdits())).error,
+		"already_confirmed",
+	);
+	const repeat = await newReply(mail);
+	const doc = { subject: "Re: Plan", body: "Friday works." };
+	assert.deepEqual(
+		await send(repeat.path, 200, { ...newReplyEdits(), edits: doc }),
+		{ result: replyReceipt(id, true) },
+	);
+	assert.partialDeepStrictEqual(await send(review, 200), {
+		draft_id: id,
+		status: "pending",
+		version: 2,
+		...edited,
+	});
+	const drafts = await db.query(
+		"select confirmed_doc_turn_id from reply_draft where email_activity_id = $1",
+		[mail],
+	);
+	assert.deepEqual(drafts.rows, [{ confirmed_doc_turn_id: first.id }]);
 });
 
 async function openNewReply(mail: string) {

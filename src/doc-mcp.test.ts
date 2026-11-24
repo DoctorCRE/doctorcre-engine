@@ -441,6 +441,57 @@ test("Doc cites the exact authorized mail review and treats the message as evide
 	);
 });
 
+test("Doc's link can propose a reply but cannot approve or send it", async () => {
+	const { credential } = await issue(other);
+	const request = send(credential, await claim(other));
+	const source = `email:${foreignMail}`;
+	await tool(request, "read_mail", { activity_id: foreignMail });
+	const reply = { source, subject: "Re: Foreign subject", body: "Sent." };
+	const to = "tour@example.test";
+	const proposed = await tool(request, "propose_save", {
+		kind: "reply_draft",
+		...reply,
+	});
+	assert.equal(proposed.kind, "reply_draft");
+	for (const kind of ["reply_submission", "reply_send"])
+		await tool(request, "propose_save", { kind, ...reply }, true);
+	await tool(request, "send_reply", { draft_id: draft, to, ...reply }, true);
+	const submission = {
+		idempotency_key: randomUUID(),
+		version: 1,
+		to,
+		cc: "",
+		subject: reply.subject,
+		body: reply.body,
+		document_ids: [],
+	};
+	for (const path of [
+		`/api/engine/reply-drafts/${draft}/submission`,
+		`/api/engine/doc/turns/${randomUUID()}/confirmation`,
+	]) {
+		const response = await worker.request(
+			path,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${credential}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(submission),
+			},
+			env,
+		);
+		assert.equal(response.status, 401, path);
+	}
+	const { rows } = await db.query(
+		"select status, revision, to_address, decided_at from reply_draft where id = $1",
+		[draft],
+	);
+	assert.deepEqual(rows, [
+		{ status: "pending", revision: 1, to_address: null, decided_at: null },
+	]);
+});
+
 test("Doc refuses foreign and unassigned mail and refuses citations replayed into another claim", async () => {
 	const { credential } = await issue(owner);
 	const request = send(credential, await claim(owner));
