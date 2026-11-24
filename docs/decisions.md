@@ -400,3 +400,5 @@ Doc link requires an individual plan confirmed by `claude auth status`. It refus
 209\. **Gr8r Studio is the design reference for app screens (2026-11-23).** The owner finds its boards, list view, calendar and file drop clearer than ours, so app screens follow its look. Only the look: its code has no license and is never copied. The Deals board was the first screen restyled after it (#1228).
 
 210\. **No private calls (2026-11-23).** Joe ruled that a call about a deal or vendor is business for both partners; both partners see every call. A call's follow-up still goes to the partner who recorded it (#1233).
+
+211\. **The factory verifies engine changes with one repo skill (2026-11-24).** The owner asked for `.claude/skills/verify-engine/SKILL.md` so the factory's Verify stage drives each engine pull request before review. It is the one tracked skill this repo keeps, an exception to "never copy or wrap a skill". It names only the existing check and tests, adds no script, hook or CI job, and reports anything that needs the network as unverified. Biome skips `.claude/skills` because its Markdown formatter breaks the front matter the factory reads (#1238).
