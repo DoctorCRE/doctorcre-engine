@@ -48,6 +48,7 @@ activity.get("/recent-activity", async (c) => {
 					query: trimmed,
 					limit,
 					ref: params.get("ref")?.trim(),
+					now: new Date().toISOString(),
 				}),
 			),
 		);
