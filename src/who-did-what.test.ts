@@ -19,6 +19,8 @@ const as = (user: string, statement: string) =>
 	db.query(
 		`select set_config('engine.user_id', '${user}', true); ${statement}`,
 	);
+const agentFor = (user: string, statement: string) =>
+	as(user, `select set_config('engine.job', 'agent', true); ${statement}`);
 
 before(async () => {
 	await setup();
@@ -50,7 +52,7 @@ before(async () => {
 		alex,
 		`insert into next_step (id, what, deal_id) values ('${step}', 'Call the landlord', '${deal}')`,
 	);
-	await as(
+	await agentFor(
 		alex,
 		`insert into deal_phase_change (deal_id, happened_at, phase) values ('${deal}', now(), 'loi')`,
 	);
@@ -126,6 +128,7 @@ test("Each change says who changed which record, what changed, and where to open
 	const said = (what: string) => all.find((c) => c.what === what);
 	assert.partialDeepStrictEqual(said("set the deal value to $1,200,000"), {
 		who: "Alex Example",
+		job: null,
 		record: "Example Dental",
 		open_url: `/deals?deal=${deal}`,
 	});
@@ -138,7 +141,8 @@ test("Each change says who changed which record, what changed, and where to open
 		{ who: "Blair Example" },
 	);
 	assert.partialDeepStrictEqual(said("moved the deal to LOI"), {
-		who: "Alex Example",
+		who: null,
+		job: "agent",
 	});
 	assert.partialDeepStrictEqual(said("changed the deal owner"), {
 		id: `imported:${imported}`,
