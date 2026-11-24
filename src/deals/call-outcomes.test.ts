@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { after, before, test } from "node:test";
-import { sql } from "kysely";
 import { z } from "zod";
 import { nextTransaction } from "../next-connection.ts";
 import { withPartnerAuth } from "../partner-auth.ts";
@@ -245,44 +244,6 @@ test("call outcomes are scoped to the session partner and deal", async () => {
 	const empty = await read(emptyDeal);
 	assert.equal(empty.status, 200);
 	assert.deepEqual(callIds.parse(await empty.json()).calls, []);
-});
-
-test("call visibility pins its search path in fresh and migrated databases", async () => {
-	for (const migration of [false, true]) {
-		if (migration) await db.query(await readSchema("add-call-visibility.sql"));
-		const result = await db.query(`select proconfig from pg_proc
-			where oid = 'next.call_visible_to(uuid,text,uuid,uuid)'::regprocedure`);
-		assert.deepEqual(result.rows[0].proconfig, ["search_path=next, pg_temp"]);
-	}
-});
-
-test("the database call rule uses the current viewer and shares copied calls", async () => {
-	for (const [viewer, expected] of [
-		[joe, [call, copiedCall, ordinaryCall]],
-		[dell, [privateCall, copiedCall]],
-		["", [copiedCall]],
-	] as const) {
-		await nextTransaction(readerUrl, "read", async (tx) => {
-			if (viewer) {
-				await sql`select set_config('engine.user_id', ${viewer}, true)`.execute(
-					tx,
-				);
-			}
-			const rows = await tx
-				.selectFrom("activity")
-				.select("id")
-				.where("id", "in", [call, privateCall, copiedCall, ordinaryCall])
-				.where(
-					sql<boolean>`call_visible_to(changed_by_user_id, changed_by_job, changed_for_user_id)`,
-				)
-				.orderBy("id")
-				.execute();
-			assert.deepEqual(
-				rows.map(({ id }) => id),
-				expected,
-			);
-		});
-	}
 });
 
 test("call outcomes require a PartnerApp session and an existing deal", async () => {

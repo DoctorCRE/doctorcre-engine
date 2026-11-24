@@ -1,5 +1,4 @@
 import { sql, type Transaction } from "kysely";
-import { visibleCall } from "./activity/call-visibility.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	dealStepUrl,
@@ -78,7 +77,6 @@ type CompletionReview = Omit<DealNotice, "title"> & {
 
 export async function readCompletionReviews(
 	db: Transaction<DB>,
-	userId: string,
 	stepIds: string[],
 ) {
 	const { rows } = await sql<CompletionReview>`
@@ -97,7 +95,6 @@ export async function readCompletionReviews(
 		join next_step s on s.id = p.next_step_id
 		join deal d on d.id = p.deal_id
 		left join activity a on a.id = p.activity_id
-			and (a.kind <> 'call' or ${visibleCall(userId)})
 		where p.status = 'pending'
 	`.execute(db);
 	return new Map(

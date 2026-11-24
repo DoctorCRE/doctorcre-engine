@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { visibleCall } from "./activity/call-visibility.ts";
 import { answerNextRead, checkFields, Refusal, refuse } from "./answer.ts";
 import { type Meeting, meetingsFromSnapshot } from "./calendar/meetings.ts";
 import { readStoredAgenda } from "./calendar/next-agenda.ts";
@@ -177,7 +176,7 @@ async function readTodayReminders(
 			case when s.due_on < ${requestDay} then (${requestDay} - s.due_on)::int end as days_late,
 			u.slug as owner, s.owner_party_id = ${userId}::uuid as is_viewer, s.deal_id, s.party_id,
 			s.call_activity_id is not null as call_follow_up,
-			(select a.id from activity a where a.id = s.call_activity_id and ${visibleCall(userId)}) as call_id,
+			(select a.id from activity a where a.id = s.call_activity_id) as call_id,
 			s.deal_id is not null and not exists (
 				select from (${openDeals}) as open_deal where open_deal.id = s.deal_id
 			) as deal_ended
@@ -192,7 +191,7 @@ async function readTodayReminders(
 	const shown = rows.filter(homeStepShown);
 	const viewerSteps = shown.filter((r) => r.is_viewer).map((r) => r.id);
 	const reviews = viewerSteps.length
-		? await readCompletionReviews(db, userId, viewerSteps)
+		? await readCompletionReviews(db, viewerSteps)
 		: null;
 	const list = shown.map((r) => {
 		const review = reviews?.get(r.id);

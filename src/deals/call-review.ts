@@ -1,13 +1,10 @@
 import { type Expression, sql, type Transaction } from "kysely";
-import { sharedCopiedCall, visibleCall } from "../activity/call-visibility.ts";
 import { visibleSuggestion } from "../home-inbox-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { ACTING_USER } from "../next-save.ts";
 
 export const visibleCallProposal = (userId: string | Expression<string>) =>
-	sql<boolean>`(${visibleCall(userId)}
-		and (not (${sharedCopiedCall}) or p.proposed_by_job = 'old_system')
-		and case when p.kind = 'next_step_done' then
+	sql<boolean>`(case when p.kind = 'next_step_done' then
 			step.owner_party_id = ${userId}::uuid and (p.status <> 'pending' or step.status = 'open')
 		else p.decided_by_user_id = ${userId}::uuid or ${visibleSuggestion(userId)} end)`;
 

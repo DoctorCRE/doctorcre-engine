@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { visibleCall } from "./activity/call-visibility.ts";
 import { Refusal, refuse } from "./answer.ts";
 import { failureKind } from "./failure.ts";
 import { nextTransaction } from "./next-connection.ts";
@@ -15,11 +14,7 @@ const heldSteps = (tx: Transaction<DB>) =>
 		.selectFrom("proposal as p")
 		.innerJoin("next_step as s", "s.id", "p.next_step_id")
 		.innerJoin("deal as d", "d.id", "s.deal_id")
-		.leftJoin("activity as a", (join) =>
-			join
-				.onRef("a.id", "=", "p.activity_id")
-				.on(sql<boolean>`(a.kind <> 'call' or ${visibleCall(ACTING_USER)})`),
-		)
+		.leftJoin("activity as a", "a.id", "p.activity_id")
 		.select([
 			"p.id as proposal_id",
 			"d.id as deal_id",
