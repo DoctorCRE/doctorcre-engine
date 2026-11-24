@@ -32,6 +32,7 @@ const HINTS = {
 	account_name_exists:
 		"Choose an existing company or confirm a separate company.",
 	already_national_account: "This company is already a national account.",
+	party_exists: "Choose an existing record or confirm a separate one.",
 	not_a_deal: "Choose a deal record, not a client or lead.",
 	not_a_prospect: "This person or company is outside the Prospects lane.",
 	account_changed: "Reload Leads under the current account before saving.",
@@ -330,6 +331,7 @@ type Verb =
 	| "read-market-terms"
 	| "read-markets"
 	| "read-national-account-locations"
+	| "read-party"
 	| "read-proposal"
 	| "read-preferences"
 	| "read-prospects"

@@ -67,6 +67,7 @@ import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { automaticStepUndo, nextSteps } from "./next-steps.ts";
 import { introductions } from "./parties/introductions.ts";
+import { parties } from "./parties/routes.ts";
 import { partnerGoogle } from "./partner-google.ts";
 import {
 	type PartnerSessionEnv,
@@ -162,6 +163,7 @@ partnerApi.route("/api/engine", engine);
 partnerApi.route("/api/engine", dealCallContext);
 partnerApi.route("/api/engine", leadChanges);
 partnerApi.route("/api/engine", partySearch);
+partnerApi.route("/api/engine", parties);
 partnerApi.route("/api/engine", introductions);
 partnerApi.route("/api/engine", propertySearch);
 partnerApi.route("/api/engine", clientLeases);
