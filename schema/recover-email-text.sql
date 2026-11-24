@@ -30,6 +30,7 @@ set local time zone 'UTC';
 select set_config('engine.job', 'old_system', true) as recovery_job,
 	set_config('engine.user_id', '', true) as recovery_user \gset
 
+-- Postgres text cannot hold NUL, so a load containing one fails before this script runs.
 do $$ begin
 	if exists (select from pg_temp.email_text_recovery group by activity_id having count(*) > 1) then
 		raise exception 'an activity_id appears twice in pg_temp.email_text_recovery';
@@ -58,12 +59,9 @@ begin
 	loop
 		perform pg_advisory_xact_lock(hashtextextended('email ' || locked, 0));
 	end loop;
+	perform 1 from email where activity_id in (select activity_id from pg_temp.email_text_recovery)
+	order by activity_id for update;
 end $$;
-
-select count(*) as locked_emails from (
-	select from email where activity_id in (select activity_id from pg_temp.email_text_recovery)
-	order by activity_id for update
-) targets \gset
 
 -- Each row is classified once; the fill and the counts read the same outcome.
 create temporary table email_text_recovery_outcome on commit drop as
