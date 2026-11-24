@@ -108,11 +108,6 @@ export function refusalOf(error: unknown) {
 	return new BusinessRefusal({ error: "INTERNAL_ERROR" });
 }
 
-export const isOneOf = <T extends string>(
-	allowed: readonly T[],
-	value: string,
-): value is T => (allowed as readonly string[]).includes(value);
-
 const DATASETS = {
 	clients: {
 		source: "client",
@@ -659,7 +654,10 @@ export async function readNextClient(
 	return recordAnswer(
 		"clients",
 		viewer,
-		shaped({ ...record, id: requestedUuid ?? record.id }, contract),
+		shaped(
+			{ ...record, id: requestedUuid ?? record.id, party_id: record.id },
+			contract,
+		),
 		null,
 		stamp,
 		nextClientDataset,

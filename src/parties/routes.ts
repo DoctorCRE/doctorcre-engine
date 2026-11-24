@@ -28,6 +28,7 @@ import {
 	phoneNumber,
 } from "./contact.ts";
 import { changing, edit, trimmed, unchangedSince } from "./edit.ts";
+import { clientRead } from "./roles.ts";
 
 const isKind = (value: unknown): value is "person" | "company" =>
 	value === "person" || value === "company";
@@ -328,12 +329,12 @@ export const parties = new Hono<NextSaveEnv>()
 		if (refused) return refuse(c, refused);
 		const party_id = c.req.param("party");
 		if (!isUuid(party_id)) return refuse(c, new Refusal(404, "not_found"));
-		return answerNextRead(
-			c,
-			"read-party",
-			async (db) =>
-				(await contactOf(db, party_id)) ?? new Refusal(404, "not_found"),
-		);
+		return answerNextRead(c, "read-party", async (db) => {
+			const contact = await contactOf(db, party_id);
+			if (!contact) return new Refusal(404, "not_found");
+			const client = await clientRead(db, party_id);
+			return { ...contact, client: client ?? null };
+		});
 	})
 	.post("/parties", (c) =>
 		answerNextSave(c, "add-party", parseNewParty, addParty, 201),

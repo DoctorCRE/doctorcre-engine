@@ -1,4 +1,5 @@
-import { isOneOf, PARTNERS } from "../clients/read.ts";
+import { PARTNERS } from "../clients/read.ts";
+import { isOneOf } from "../request-shape.ts";
 
 export class SettingsError extends Error {}
 
