@@ -64,7 +64,10 @@ test("a new person is stored with a primary email, a converted phone and their c
 		201,
 		{ ...added, replayed: true },
 	]);
-	assert.deepEqual(await read(added.party_id), [200, added]);
+	assert.deepEqual(await read(added.party_id), [
+		200,
+		{ ...added, client: null, vendor: null },
+	]);
 	const { rows } = await db.query(
 		"select changed_by_user_id from party where id = $1",
 		[added.party_id],

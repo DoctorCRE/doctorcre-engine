@@ -59,7 +59,7 @@ const editAll = <S extends Shape>(shape: S) =>
 		Object.entries(shape).map(([field, check]) => [field, edit(check)]),
 	) as { [K in keyof S]: ReturnType<typeof edit> };
 
-const clientRead = (tx: Transaction<DB>, party_id: string) =>
+export const clientRead = (tx: Transaction<DB>, party_id: string) =>
 	tx
 		.selectFrom("client as c")
 		.innerJoin("party as p", "p.id", "c.party_id")
@@ -77,7 +77,7 @@ const clientRead = (tx: Transaction<DB>, party_id: string) =>
 		.where("c.party_id", "=", party_id)
 		.executeTakeFirst();
 
-const vendorRead = (tx: Transaction<DB>, party_id: string) =>
+export const vendorRead = (tx: Transaction<DB>, party_id: string) =>
 	tx
 		.selectFrom("party_role as v")
 		.leftJoin("app_user as owner", "owner.id", "v.owner_user_id")
