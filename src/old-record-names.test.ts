@@ -135,6 +135,8 @@ test("only a copied code reads as a record", () => {
 		"Signed 2026-01-02; call 555-0100 ext. 12; rent is $1,200-1,450.",
 		"Mail C-013@example.test or see example.test/clients/C-013?ref=L-032&id=P-0010.",
 		"Open https://example.test/#C-013 and file=V-CPA-006 or X-C-013.",
+		"See https://example.test/view?ids=C-013,L-032 and ?q=Dental+C-013.",
+		"Files /a.C-013, /(C-013) and x/C-013;L-032 moved.",
 		"Codes like C-13, C-01300 and c-013 are not copied codes.",
 	];
 	assert.deepEqual(
