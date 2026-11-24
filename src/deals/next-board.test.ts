@@ -528,6 +528,47 @@ test("National counts a late open step once and skips retained completion and ch
 	);
 });
 
+test("a deal with no step of its own shows its client's step when it is the client's only open deal", async () => {
+	const rollback = new Error("roll back example client steps");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			const before = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const clientOf = (deal: number) =>
+				before.deals.find((row) => row.id === id(deal))?.client_id;
+			await sql`insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on) values
+				(${id(520)}, null, ${clientOf(34)}, ${id(1)}, 'Example call the former location', '2000-02-01'),
+				(${id(521)}, null, ${clientOf(31)}, ${id(1)}, 'Example call the doctor', null),
+				(${id(522)}, ${id(30)}, null, ${id(1)}, 'Example send the clinic plans', null),
+				(${id(523)}, null, ${clientOf(30)}, ${id(2)}, 'Example call the clinic', null)`.execute(
+				tx,
+			);
+			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const actions = (deal: number) =>
+				board.deals.find((row) => row.id === id(deal))?.open_actions;
+			assert.deepEqual(actions(34), [
+				{
+					id: id(520),
+					owner: "partner_one",
+					due_on: "2000-02-01",
+					item_id: `next_action:${id(520)}`,
+					description: "Example call the former location",
+					client_step: true,
+				},
+			]);
+			assert.deepEqual(actions(31), []);
+			assert.deepEqual(actions(37), []);
+			assert.deepEqual(
+				actions(30)?.map(({ description }) => description),
+				["Example send the clinic plans"],
+			);
+			assert.ok(board.deals.every((deal) => !("client_actions" in deal)));
+			throw rollback;
+		}),
+		rollback,
+	);
+});
+
 test("a deal stays won with its latest close date when it moves to Invoiced", async () => {
 	const rollback = new Error("roll back test phase moves");
 	await assert.rejects(
