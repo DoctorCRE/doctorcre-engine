@@ -367,6 +367,10 @@ export async function readNextBoard(db: Transaction<DB>, input: BoardInputs) {
 			clientWebsiteOf(db, eb.ref("board.id"), eb.ref("board.client_id")).as(
 				"client_portal_url",
 			),
+			sql<boolean>`exists (select from deal_star s join app_user u on u.id = s.user_id
+				where s.deal_id = board.id and u.slug = ${input.partner})`.as(
+				"starred",
+			),
 			sql`(select coalesce(json_agg(action order by due_on nulls last, id), '[]') from (
 				select s.id, u.slug as owner, s.due_on, 'next_action:' || s.id as item_id, s.what as description
 				from next_step s left join app_user u on u.id = s.owner_party_id
