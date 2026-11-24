@@ -180,6 +180,7 @@ The city or metro area where the client needs space.
 _Avoid_: territory, submarket
 _Database_: `deal.city`, shown as `market` in `v_deal_room_board`.
 _Engine_: `market` on the board; the deal page renames it back to `city`.
+_Engine, new database_: `market` is an imported deal's recorded city until a user changes its market, and `market_id` is always the deal's named market, so a filter can match it.
 _New database_: a named market (`market`), by the counties it covers, and `deal.market_id` for a deal's. A vendor's "market" is a whole territory, and a `market` row is one named piece of one.
 
 **Territory**:
@@ -206,6 +207,12 @@ A flag a user sets on a deal to say it needs a look. Nothing sets it on its own.
 _Avoid_: flagged, urgent, priority
 _Database_: `deal.attention` today; `deal.needs_attention` in the new database.
 _Engine_: `attention`.
+
+**Star**:
+A partner's own mark on a deal that keeps it at the top of their Deals board and list. The other partner never sees it.
+_Avoid_: favorite, bookmark, pin
+_New database_: `deal_star`.
+_Engine_: `starred` on each board deal.
 
 **Pipeline call**:
 A sitting where a partner goes through the open deals and marks each reviewed or skipped.

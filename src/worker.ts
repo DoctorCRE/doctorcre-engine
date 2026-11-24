@@ -10,6 +10,7 @@ import { activity } from "./activity/routes.ts";
 import { attachmentFiles, attachments, dealDocuments } from "./attachments.ts";
 import { cadence } from "./cadence.ts";
 import { calendarDismissal, nextAgenda } from "./calendar/next-agenda.ts";
+import { calendarMeetings } from "./calendar/range.ts";
 import { directory } from "./clients/routes.ts";
 import {
 	accessDoor,
@@ -28,6 +29,7 @@ import { dealClientWebsite } from "./deals/client-website.ts";
 import { openClientWebsite } from "./deals/client-website-access.ts";
 import { closingAnniversaries } from "./deals/closing-anniversaries.ts";
 import { criticalDates } from "./deals/critical-dates.ts";
+import { marketTerms } from "./deals/market-terms.ts";
 import { nationalAccounts } from "./deals/national-accounts.ts";
 import {
 	automaticPhaseUndo,
@@ -37,6 +39,7 @@ import {
 import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
 import { dealDocumentText, deals } from "./deals/routes.ts";
+import { dealStars } from "./deals/stars.ts";
 import { dealTours } from "./deals/tours.ts";
 import { type DealWatchEnv, dealWatch } from "./deals/watch.ts";
 import { docRoutes } from "./doc.ts";
@@ -63,6 +66,7 @@ import { mondayReviewReads } from "./monday-review/read.ts";
 import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
 import { nextStep } from "./next-step.ts";
 import { automaticStepUndo, nextSteps } from "./next-steps.ts";
+import { introductions } from "./parties/introductions.ts";
 import { partyLinks } from "./parties/links.ts";
 import { partyRoles } from "./parties/roles.ts";
 import { parties } from "./parties/routes.ts";
@@ -134,6 +138,7 @@ app.get("/health", (c) => {
 const engine = new Hono<WorkerEnv>()
 	.get("/whoami", (c) => c.json(c.get("partner")))
 	.route("/", activity)
+	.route("/", calendarMeetings)
 	.route("/", directory)
 	.route("/", connection)
 	.route("/", deals)
@@ -163,12 +168,15 @@ partnerApi.route("/api/engine", partySearch);
 partnerApi.route("/api/engine", parties);
 partnerApi.route("/api/engine", partyRoles);
 partnerApi.route("/api/engine", partyLinks);
+partnerApi.route("/api/engine", introductions);
 partnerApi.route("/api/engine", propertySearch);
 partnerApi.route("/api/engine", clientLeases);
+partnerApi.route("/api/engine", marketTerms);
 partnerApi.route("/api/engine", closingAnniversaries);
 partnerApi.route("/api/engine", prospectReads);
 partnerApi.route("/api/engine", prospectChanges);
 partnerApi.route("/api/engine", nextDeals);
+partnerApi.route("/api/engine", dealStars);
 partnerApi.route("/api/engine", automaticPhaseUndo);
 partnerApi.route("/api/engine", nationalAccounts);
 partnerApi.route("/api/engine", dealParticipants);

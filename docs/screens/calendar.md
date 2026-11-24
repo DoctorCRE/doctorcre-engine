@@ -17,4 +17,6 @@
 
 The app uses [the Calendar read](../new-database.md#calendar-read) with `deals-from-engine` on. The new-schema read includes `next_steps`. Older engine versions and the legacy read can return just critical dates.
 
+Both partners' Outlook meetings and planned tours for the shown period come from [the Calendar meetings read](../new-database.md#calendar-meetings-read), one call per month or week. Each partner's meetings keep Today's freshness notes, and a failed partner section is not an empty period.
+
 A 404 from the new read allows the app to use the board and individual deal reads while the engine and app are on different versions.

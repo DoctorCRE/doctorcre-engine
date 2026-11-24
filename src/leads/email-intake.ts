@@ -12,6 +12,7 @@ import { nextTransaction } from "../next-connection.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { ACTING_USER, stampNextSave } from "../next-save.ts";
+import { lock, lockAddress } from "../parties/contact.ts";
 import {
 	fit,
 	fitting,
@@ -211,11 +212,9 @@ async function saveIntake(tx: Transaction<DB>, request: Intake | StoredIntake) {
 	}
 	if (stored?.about_deal) return reject("This email is already about a deal.");
 
-	for (const contact of [prospect.email, prospect.phone]) {
-		if (contact && !preview)
-			await sql`select pg_advisory_xact_lock(hashtextextended(${`lead intake ${contact}`}, 0))`.execute(
-				tx,
-			);
+	if (!preview) {
+		if (prospect.email) await lockAddress(tx, prospect.email);
+		if (prospect.phone) await lock(tx, `lead intake ${prospect.phone}`);
 	}
 	const {
 		rows: [match, another],
