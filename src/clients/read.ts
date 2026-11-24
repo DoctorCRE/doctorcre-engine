@@ -108,7 +108,7 @@ export function refusalOf(error: unknown) {
 	return new BusinessRefusal({ error: "INTERNAL_ERROR" });
 }
 
-export const isOneOf = <T extends string>(
+export const isOneOf = <T extends string | number>(
 	allowed: readonly T[],
 	value: unknown,
 ): value is T => (allowed as readonly unknown[]).includes(value);

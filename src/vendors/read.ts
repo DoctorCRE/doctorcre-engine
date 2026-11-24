@@ -566,7 +566,7 @@ export async function readNextVendor(
 		"vendors",
 		viewer,
 		rateNextVendor(
-			{ ...record, id: requestedUuid ?? record.id },
+			{ ...record, id: requestedUuid ?? record.id, party_id: record.id },
 			stamp.observedAt.valueOf(),
 		),
 		null,
