@@ -2208,7 +2208,7 @@ const RULES: Record<string, Case[]> = {
 				notGranted("home_mark"),
 			],
 		],
-	"a knows or can-introduce link joins two different records, ends no earlier than it starts, and is stored once":
+	"a knows or can-introduce link joins two different records, ends no earlier than it starts, and a pair has one current link of each kind":
 		[
 			[newLink({ kind: "introduced" }), "party_link_kind_check"],
 			[newLink({ other_party_id: DOCTOR }), "party_link_two_parties"],
@@ -2221,17 +2221,24 @@ const RULES: Record<string, Case[]> = {
 			[newLink({ note: " " }), "party_link_note_check"],
 			[
 				newLink({ party_id: AGENT, other_party_id: DOCTOR }),
-				"party_link_party_id_other_party_id_kind_started_on_key",
+				"party_link_knows_once",
 			],
 			[newLink({}), "party_link_knows_once"],
+			[newLink({ started_on: "2025-01-01" }), "party_link_knows_once"],
 			[
 				newLink({
 					kind: "can_introduce",
 					party_id: VENDOR,
-					started_on: null,
+					started_on: "2025-01-01",
 					other_party_id: DOCTOR,
 				}),
-				"party_link_party_id_other_party_id_kind_started_on_key",
+				"party_link_can_introduce_once",
+			],
+			[
+				`update party_link set ended_on = '2025-01-01' where kind = 'knows';
+				${newLink({ started_on: "2025-02-01" })};
+				update party_link set ended_on = null where kind = 'knows' and started_on = '2024-05-01'`,
+				"party_link_knows_once",
 			],
 			[
 				`update party_link set other_party_id = '${CLIENT}'`,
@@ -4970,22 +4977,24 @@ test("a link either way round is two links only for can introduce, and a merge k
 		]);
 	}));
 
-test("a merge collapses only the same link on the same start date, keeping the survivor's row, and keeps can introduce's direction", () =>
+test("a merge collapses two current links, keeping the survivor's row, and keeps can introduce's direction", () =>
 	rolledBack(async () => {
 		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example');
-			insert into party_link (id, kind, party_id, other_party_id, started_on, note) values
-				('${id(800)}', 'can_introduce', '${AGENT}', '${CLIENT}', null, 'Example: survivor'),
-				('${id(801)}', 'can_introduce', '${DUPLICATE}', '${CLIENT}', null, 'Example: duplicate'),
-				('${id(802)}', 'can_introduce', '${AGENT}', '${LENDERS[0]}', null, null),
-				('${id(803)}', 'can_introduce', '${LENDERS[0]}', '${DUPLICATE}', null, null),
-				('${id(804)}', 'knows', '${AGENT}', '${BROKERAGES[0]}', null, 'Example: survivor'),
-				('${id(805)}', 'knows', '${BROKERAGES[0]}', '${DUPLICATE}', null, 'Example: duplicate'),
-				('${id(806)}', 'knows', '${AGENT}', '${BROKERAGES[1]}', '2020-01-06', null),
-				('${id(807)}', 'knows', '${DUPLICATE}', '${BROKERAGES[1]}', '2021-01-04', null);
+			insert into party_link (id, kind, party_id, other_party_id, started_on, ended_on, note) values
+				('${id(800)}', 'can_introduce', '${AGENT}', '${CLIENT}', null, null, 'Example: survivor'),
+				('${id(801)}', 'can_introduce', '${DUPLICATE}', '${CLIENT}', null, null, 'Example: duplicate'),
+				('${id(802)}', 'can_introduce', '${AGENT}', '${LENDERS[0]}', null, null, null),
+				('${id(803)}', 'can_introduce', '${LENDERS[0]}', '${DUPLICATE}', null, null, null),
+				('${id(804)}', 'knows', '${AGENT}', '${BROKERAGES[0]}', null, null, 'Example: survivor'),
+				('${id(805)}', 'knows', '${BROKERAGES[0]}', '${DUPLICATE}', null, null, 'Example: duplicate'),
+				('${id(806)}', 'knows', '${AGENT}', '${BROKERAGES[1]}', '2020-01-06', '2020-12-31', null),
+				('${id(807)}', 'knows', '${DUPLICATE}', '${BROKERAGES[1]}', '2021-01-04', null, null),
+				('${id(808)}', 'knows', '${AGENT}', '${LENDERS[1]}', '2022-03-01', null, 'Example: survivor'),
+				('${id(809)}', 'knows', '${LENDERS[1]}', '${DUPLICATE}', '2023-05-02', null, 'Example: duplicate');
 			select merge_party('${DUPLICATE}', '${AGENT}')`);
 		const { rows } = await db.query(
 			`select id, kind, party_id, other_party_id, started_on::text, note from party_link
-			where id between '${id(800)}' and '${id(807)}' order by id`,
+			where id between '${id(800)}' and '${id(809)}' order by id`,
 		);
 		assert.deepEqual(rows, [
 			{
@@ -5036,6 +5045,37 @@ test("a merge collapses only the same link on the same start date, keeping the s
 				started_on: "2021-01-04",
 				note: null,
 			},
+			{
+				id: id(808),
+				kind: "knows",
+				party_id: AGENT,
+				other_party_id: LENDERS[1],
+				started_on: "2022-03-01",
+				note: "Example: survivor",
+			},
+		]);
+	}));
+
+test("a merge keeps an ended link beside a current one from the same start date", () =>
+	rolledBack(async () => {
+		const [first, second] = [id(810), id(811)];
+		await db.query(`insert into party (id, kind, name) values ('${DUPLICATE}', 'person', 'A. Example'),
+				('${first}', 'company', 'Example First Office'), ('${second}', 'company', 'Example Second Office');
+			insert into party_link (id, kind, party_id, other_party_id, started_on, ended_on) values
+				('${id(812)}', 'knows', '${AGENT}', '${first}', null, '2024-06-28'),
+				('${id(813)}', 'knows', '${DUPLICATE}', '${first}', null, null),
+				('${id(814)}', 'knows', '${AGENT}', '${second}', '2023-01-02', null),
+				('${id(815)}', 'knows', '${second}', '${DUPLICATE}', '2023-01-02', '2024-06-28');
+			select merge_party('${DUPLICATE}', '${AGENT}')`);
+		const { rows } = await db.query(
+			`select id, ended_on::text from party_link
+			where id between '${id(812)}' and '${id(815)}' order by id`,
+		);
+		assert.deepEqual(rows, [
+			{ id: id(812), ended_on: "2024-06-28" },
+			{ id: id(813), ended_on: null },
+			{ id: id(814), ended_on: null },
+			{ id: id(815), ended_on: "2024-06-28" },
 		]);
 	}));
 
@@ -5697,7 +5737,7 @@ const MERGE_KEYS = [
 	"party_document_pkey",
 	"party_email_address_party_id_key",
 	"party_email_one_primary",
-	"party_link_party_id_other_party_id_kind_started_on_key",
+	"party_link_can_introduce_once",
 	"party_phone_number_extension_party_id_key",
 	"party_phone_one_primary",
 	"party_role_pkey",
