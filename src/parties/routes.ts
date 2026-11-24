@@ -6,17 +6,15 @@ import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { partyMatchFields } from "../party-match.ts";
 import {
-	type Check,
 	fit,
-	fitting,
 	isBoolean,
 	isStoredText,
 	isUuid,
 	optional,
-	orNull,
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
-import { type Contact, contactOf, type Phone, phoneNumber } from "./contact.ts";
+import { contactOf, type Phone, phoneNumber } from "./contact.ts";
+import { changing, edit, unchangedSince } from "./edit.ts";
 
 const isKind = (value: unknown): value is "person" | "company" =>
 	value === "person" || value === "company";
@@ -32,14 +30,6 @@ const NEW_PARTY = {
 	title: optional(isStoredText),
 	force_new: optional(isBoolean),
 };
-
-// A copied value may be blank, so what a partner saw is any text.
-const isSeen = (value: unknown): value is string =>
-	typeof value === "string" && !value.includes("\0");
-
-// A field a partner changes names the value they saw, so a change made since is not overwritten.
-const edit = <T>(check: Check<T>) =>
-	optional(fitting({ from: orNull(isSeen), to: orNull(check) }));
 
 const EDIT_PARTY = {
 	idempotency_key: isUuid,
@@ -218,7 +208,7 @@ function parseEdit(party_id: string, body: JsonObject) {
 	if (!isUuid(party_id)) return new Refusal(404, "not_found");
 	const request = fit(body, EDIT_PARTY, ["idempotency_key"]);
 	if (request instanceof Refusal) return request;
-	const fields = EDITABLE.filter((field) => request[field] !== undefined);
+	const fields = changing(request, EDITABLE);
 	if (!fields.length)
 		return new Refusal(400, "missing_required", { fields: [...EDITABLE] });
 	if (request.name?.to === null)
@@ -232,9 +222,6 @@ function parseEdit(party_id: string, body: JsonObject) {
 }
 type Edit = Exclude<ReturnType<typeof parseEdit>, Refusal>;
 
-const shown = (contact: Contact, field: (typeof EDITABLE)[number]) =>
-	field === "phone" ? (contact.phone?.shown ?? null) : contact[field];
-
 async function editParty(tx: Transaction<DB>, request: Edit) {
 	const { party_id, to } = request;
 	const locked = await tx
@@ -246,13 +233,10 @@ async function editParty(tx: Transaction<DB>, request: Edit) {
 	if (!locked) throw new SaveRefusal(new Refusal(404, "not_found"));
 	const current = await contactOf(tx, party_id);
 	if (!current) throw new SaveRefusal(new Refusal(404, "not_found"));
-	const stale = request.fields.filter(
-		(field) => trimmed(request[field]?.from) !== trimmed(shown(current, field)),
-	);
-	if (stale.length)
-		throw new SaveRefusal(
-			new Refusal(409, "version_conflict", { fields: stale, current }),
-		);
+	unchangedSince(request, request.fields, {
+		...current,
+		phone: current.phone?.shown ?? null,
+	});
 	await refuseMalformed(tx, to);
 	const name = trimmed(request.name?.to);
 	if (name !== null || request.city)
