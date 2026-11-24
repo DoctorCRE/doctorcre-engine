@@ -109,6 +109,19 @@ type Suggestion = ReviewRow &
 const mailSource = sql`coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id)`;
 const sourceKey = sql<string>`coalesce(${mailSource}, a.id::text, p.id::text)`;
 
+// The owner answered a draft that can never send by replying to its recipient from Outlook; an unconfirmed one waits for the Sent check.
+const repliedFromOutlook = sql<boolean>`r.status = 'failed'
+	and r.failure_reason !~ '^unconfirmed_after_[0-9]+$'
+	and exists (
+		select from email reply
+		join activity sent on sent.id = reply.activity_id
+		join email_mailbox m on (m.activity_id, m.user_id) = (reply.activity_id, r.owner_user_id)
+		join party_email pe on (pe.party_id, pe.address) = (r.owner_user_id, reply.sender)
+		join email_recipient er on (er.activity_id, er.address) = (reply.activity_id, r.to_address)
+		where reply.conversation_id = (select conversation_id from email where activity_id = r.email_activity_id)
+			and sent.happened_at > r.decided_at
+	)`;
+
 function draftRows(
 	userId: string,
 	mailGroups: RawBuilder<unknown> | undefined,
@@ -120,6 +133,9 @@ function draftRows(
 				(select coalesce(max(id), 0) from change where table_name = 'reply_draft'
 					and record = jsonb_build_object('id', r.id)) as draft_change_id,
 				${mailGroup} as mail_group, 'email:' || md5(${mailGroup}) as mail_card_id,
+				${repliedFromOutlook} as replaced,
+				exists (select from home_mark m where m.user_id = r.owner_user_id
+					and m.item_kind = 'reply_draft' and m.item_id = r.id and m.disposition = 'dropped') as dropped,
 				coalesce(r.sent_at, r.changed_at) as activity_at, e.activity_id as email_activity_id, d.id as deal_id,
 				a.happened_at as email_at, ${senderLabel("e")} as email_sender,
 				case when strpos(e.body, r.evidence) > 0 then r.evidence end as email_quote,
@@ -140,8 +156,6 @@ function draftRows(
 				having count(*) = 1
 			)
 			where r.owner_user_id = ${userId}::uuid
-				and not exists (select from home_mark m where m.user_id = r.owner_user_id
-					and m.item_kind = 'reply_draft' and m.item_id = r.id and m.disposition = 'dropped')
 				${draftId ? sql`and r.id = ${draftId}` : sql``}
 				${mailGroups ? sql`and ${mailGroup} in (${mailGroups})` : sql``}
 				and ${sourceInMailbox(sql.ref("r.email_activity_id"), userId)}
@@ -150,7 +164,8 @@ function draftRows(
 					or r.sent_at >= now() - interval '7 days'
 				)
 		)
-		select * from drafts where position = 1
+		-- A replaced or dropped draft keeps its rank so an older draft in the same conversation stays hidden.
+		select * from drafts where position = 1 and not replaced and not dropped
 	`;
 }
 
@@ -1002,7 +1017,12 @@ export async function readHomeReviewDisposition(
 					.onRef("m.user_id", "=", "r.owner_user_id")
 					.on("m.disposition", "=", "dropped"),
 			)
-			.select(["r.status", "r.dismiss_reason", "m.drop_reason"])
+			.select([
+				"r.status",
+				"r.dismiss_reason",
+				"m.drop_reason",
+				repliedFromOutlook.as("replied"),
+			])
 			.where("r.id", "=", id)
 			.where("r.owner_user_id", "=", userId)
 			.where(sourceInMailbox(sql.ref("r.email_activity_id"), userId))
@@ -1010,6 +1030,7 @@ export async function readHomeReviewDisposition(
 		if (draft?.status === "sent") return { item_id, state: "done" };
 		if (draft?.drop_reason)
 			return { item_id, state: "dropped", reason: draft.drop_reason };
+		if (draft?.replied) return { item_id, state: "replaced" };
 		if (draft?.status === "dismissed")
 			return {
 				item_id,

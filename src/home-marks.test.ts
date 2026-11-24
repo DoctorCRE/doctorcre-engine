@@ -348,12 +348,13 @@ test("tour feedback appears on Home and supports Done and Undo through door 24",
 	assert.equal((await readCard())?.base_version, undone.base_version);
 });
 
-async function failedReply(failure_reason: string) {
+async function failedReply(failure_reason: string, conversation?: string) {
 	const [email, draft] = [randomUUID(), randomUUID()];
 	await db.query(`begin; select set_config('engine.job', 'old_system', true);
 		insert into activity (id, kind, happened_at) values ('${email}', 'email', '2026-01-02T12:00:00Z');
-		insert into email (activity_id, message_id, sender, subject, body)
-			values ('${email}', '<${email}@example.test>', 'pat@example.test', 'Floor plan', 'Please send the plan.');
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body)
+			values ('${email}', '<${email}@example.test>', ${conversation ? `'${conversation}'` : "null"},
+				'pat@example.test', 'Floor plan', 'Please send the plan.');
 		insert into email_mailbox (activity_id, user_id) values ('${email}', '${owner}');
 		insert into activity_about (activity_id, party_id) values ('${email}', '${owner}');
 		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
@@ -417,6 +418,29 @@ test("drops a reply that failed for good with a reason, and refuses one that may
 		drop_reason: "Answered by phone",
 		status: "failed",
 	});
+});
+
+test("dropping a failed reply keeps the conversation's older draft off Home", async () => {
+	const [conversation, olderEmail, older] = [
+		randomUUID(),
+		randomUUID(),
+		randomUUID(),
+	];
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${olderEmail}', 'email', '2026-01-01T12:00:00Z');
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body)
+			values ('${olderEmail}', '<${olderEmail}@example.test>', '${conversation}', 'pat@example.test', 'Floor plan', 'Any plan yet?');
+		insert into email_mailbox (activity_id, user_id) values ('${olderEmail}', '${owner}');
+		insert into activity_about (activity_id, party_id) values ('${olderEmail}', '${owner}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+			values ('${older}', '${olderEmail}', '${owner}', 'old_system', 'Re: Floor plan', 'Soon.', 'Any plan yet?');
+		commit;`);
+	const draft = await failedReply("invalid_submission", conversation);
+	const olderItem = `reply_draft:${older}`;
+	assert.equal(await cardVersion(olderItem), undefined);
+	assert.equal((await command(draft, "drop", alex, dropReason))[0], 200);
+	assert.equal(await cardVersion(draft.item_id), undefined);
+	assert.equal(await cardVersion(olderItem), undefined);
 });
 
 test("the failed-reply drop migration gives an existing schema the same rule and can run twice", async (t) => {
