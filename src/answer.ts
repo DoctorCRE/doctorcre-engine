@@ -12,6 +12,7 @@ const HINTS = {
 	phase_not_eligible:
 		"The quote does not support a move from the current phase.",
 	already_client: "Choose Add deal for this client.",
+	already_vendor: "Open the existing vendor to change it.",
 	already_decided: "This suggestion has already been decided.",
 	user_decides: "A partner must decide this suggestion directly.",
 	length_required: "Supply the file length.",

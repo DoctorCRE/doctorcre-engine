@@ -127,6 +127,7 @@ test("copied vendors open directly by UUID or typed ref", async () => {
 	] as const) {
 		assert.partialDeepStrictEqual(await drawer(ref), {
 			id: expectedId,
+			party_id: architect,
 			ref: "V-102",
 			owner_label: "Example Dell",
 		});
