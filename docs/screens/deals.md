@@ -31,6 +31,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 - [ ] A card shows the deal's short name, then one row with the deal owner's next-step due date ("Due Jan 17", "Due today", or with the year when it is not this year), the “Needs attention” badge when there is one, and the deal owner's initial. A click, tap or keyboard activation of the name opens the deal page.
 - [ ] One small “Needs attention” badge appears when a partner flagged the deal or the deal owner's next step is late. Its accessible name gives the reason, such as “Needs attention: Step 3 days late.” A deal without a next step gets a badge only if flagged.
+- [ ] When an open deal has no open step of its own and is its client's only open deal, its List row shows the client's open step, marked "Client step: <what>", and its card shows that step's due date. The board reads it from the client and moves nothing. A deal with no step on it or its client shows "No next step set".
 - [ ] Dragging a card to another column, or the same move by keyboard, asks for the phase move's details and moves it only on Move to [phase].
 
 ### Moving a phase

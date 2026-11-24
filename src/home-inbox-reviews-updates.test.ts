@@ -165,7 +165,7 @@ async function checkCompletionReview(callFollowUp: boolean) {
 	if (callFollowUp) {
 		assert.partialDeepStrictEqual(dismissed, {
 			title: "Send the survey",
-			why: "Call on Feb 4, 2001. Due Feb 1, 2001.",
+			why: "Call on Feb 4, 2001.",
 			open_url: `/calls?session=${call}`,
 		});
 	}
@@ -301,7 +301,7 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 		item_id: `notification:${update}`,
 		kind_label: "Update",
 		title: "Review the checklist item for Example Survey",
-		why: "Review the survey. Due Feb 1, 2001.",
+		why: "Review the survey.",
 		primary_action: "Open checklist item",
 		context_label: "Example Survey",
 		open_url: `/deals?deal=${deal}`,
@@ -340,7 +340,7 @@ test("updates respect recipient, read time, snoozes and mark revisions", async (
 	const [revised] = await cards(alex, deal);
 	assert.partialDeepStrictEqual(revised, {
 		title: "Review the checklist item for Example Survey",
-		why: "Review the revised survey. Due Feb 1, 2001.",
+		why: "Review the revised survey.",
 		section: "inbox",
 	});
 	await db.query(`begin; select set_config('engine.user_id', '${owner}', true);
@@ -372,7 +372,7 @@ test("a checklist reminder uses the decision title when its item is a status lab
 	);
 	assert.partialDeepStrictEqual(card, {
 		title: `Review the checklist item for ${dealName}`,
-		why: "Follow-up set for Morgan. Due Feb 1, 2001.",
+		why: "Follow-up set for Morgan.",
 	});
 });
 

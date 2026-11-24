@@ -1,4 +1,9 @@
-import { type Expression, sql, type Transaction } from "kysely";
+import {
+	type Expression,
+	type RawBuilder,
+	sql,
+	type Transaction,
+} from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
@@ -358,6 +363,26 @@ export const readNextBoardDeals = (
 	list?: BoardList,
 ) => nextBoardQuery(db, scope, list).execute();
 
+type OpenAction = {
+	id: string;
+	owner: string | null;
+	due_on: string | null;
+	item_id: string;
+	description: string;
+	client_step?: true;
+};
+
+const openActions = (about: RawBuilder<unknown>, clientStep = false) =>
+	sql<
+		OpenAction[]
+	>`(select coalesce(json_agg(action order by due_on nulls last, id), '[]') from (
+		select s.id, u.slug as owner, s.due_on, 'next_action:' || s.id as item_id, s.what as description
+			${clientStep ? sql`, true as client_step` : sql``}
+		from next_step s left join app_user u on u.id = s.owner_party_id
+		where ${about} and s.status = 'open' and s.item_title is null
+		order by s.due_on nulls last, s.id limit 3
+	) action)`;
+
 export async function readNextBoard(
 	db: Transaction<DB>,
 	viewerId: string,
@@ -380,12 +405,8 @@ export async function readNextBoard(
 						.where("deal_star.user_id", "=", viewerId),
 				)
 				.as("starred"),
-			sql`(select coalesce(json_agg(action order by due_on nulls last, id), '[]') from (
-				select s.id, u.slug as owner, s.due_on, 'next_action:' || s.id as item_id, s.what as description
-				from next_step s left join app_user u on u.id = s.owner_party_id
-				where s.deal_id = board.id and s.status = 'open' and s.item_title is null
-				order by s.due_on nulls last, s.id limit 3
-			) action)`.as("open_actions"),
+			openActions(sql`s.deal_id = board.id`).as("open_actions"),
+			openActions(sql`s.party_id = board.client_id`, true).as("client_actions"),
 			// Deal notes have their own section and did not feed the old card summary.
 			sql`(select to_jsonb(latest) - 'id' from (
 				select a.id, a.kind, a.summary, a.happened_at as occurred_at
@@ -398,6 +419,8 @@ export async function readNextBoard(
 			) latest)`.as("last_step"),
 		])
 		.execute();
+	// A client's deals share its workspace and account, so the scoped list holds all its open deals.
+	const openDeals = Map.groupBy(deals, (deal) => deal.client_id);
 	const closed_deals = await readNextBoardDeals(db, scope, "closed");
 	const lost_deals = await readNextBoardDeals(db, scope, "lost");
 	// The client copy leaves prospects outside national_account.
@@ -424,8 +447,13 @@ export async function readNextBoard(
 	return {
 		schema_version: "local-deals-board.v2",
 		actor: input.partner,
-		deals: deals.map((deal) => ({
+		deals: deals.map(({ client_actions, ...deal }) => ({
 			...deal,
+			open_actions:
+				deal.open_actions.length === 0 &&
+				openDeals.get(deal.client_id)?.length === 1
+					? client_actions
+					: deal.open_actions,
 			item_schema_version: "deal-items.v1",
 			next_step_required: deal.next_step === null || deal.next_date === null,
 		})),
