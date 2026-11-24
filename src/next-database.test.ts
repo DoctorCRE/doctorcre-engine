@@ -2656,7 +2656,7 @@ const CHANGEABLE: Record<string, string[]> = {
 	deal_kind: ["label"],
 	deal_reason: ["label"],
 	specialty: ["label"],
-	party: ["how_found", "how_found_detail", "name", "npi"],
+	party: ["city", "how_found", "how_found_detail", "name", "npi"],
 	property: [
 		"address",
 		"building_class",

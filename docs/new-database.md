@@ -224,7 +224,7 @@ The role reads rows in every table, adds rows in every table except `app_user`, 
 
 - a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's, a how-found's or a claim type's label;
 - a vendor role's stage, relationship level, relationship partner, disposition, reason and target, a lead role's stage, owner and Needs attention flag, an introduction's date, deal and note, and a knows or can-introduce link's dates and note;
-- a party's, market's, territory's, deal's, document's or design template's name, a party's NPI and how found, and a property's address, county and point;
+- a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, how found and city, and a property's address, county and point;
 - a deal's kind, reason, lease it renews, deal owner, market, closed value, parking reason and note, and whether it needs attention;
 - a person-at-company link's title and dates, and a territory link's dates;
 - an email's or phone number's label and whether it is primary;
@@ -1634,6 +1634,16 @@ The response is `200 { ok: true, schema_version: "party-search.v1", parties }`. 
 Add deal sends `role=client` so the limit applies to people and companies with the client role. Use their `id` as `client_id` when saving the deal.
 
 No match returns an empty `parties` list. Missing, blank, overlong, or repeated query values, queries containing a NUL character, and invalid or repeated `kind` or `role` values return 400. Session and database refusals use the shared read rules. App #977 routes the deal-page picker to this door.
+
+### Add and edit people and companies
+
+These saves use the signed-in partner's session, `idempotency_key` and the shared replay rules. Apply [the party edit install](../schema/allow-party-edits.sql) to an existing database first.
+
+- `POST /api/engine/parties` takes `kind` (`person` or `company`) and a nonblank `name`, and optionally `email`, `phone`, `city`, and for a person `company_id` and `title`. It stores the email lower case and the phone in E.164 as primary work rows (§ "Emails and phone numbers"). A ten-digit number in any punctuation becomes +1 and its digits, and a trailing `x12` becomes the extension. A malformed email or phone, a company field on a company or without `company_id`, and a `company_id` that is not a company return `400 invalid_field_value` with the fields. A person's company becomes a current `party_company` row with the title.
+- A same-kind name that matches ignoring case and surrounding spaces, or an email already on a record, returns `409 party_exists` with up to 10 `candidates`, carrying the deal-page search's match fields. Use a candidate, or resend with `force_new: true` to keep a separate record. The save answers `201` with the record.
+- `GET /api/engine/parties/{id}` answers `{ party_id, kind, name, city, email, phone, company }`. `email` and `phone` are the primary rows, `phone` as `{ number, extension, shown }`, and `company` the current company link as `{ company_id, name, title }`, each or null.
+- `POST /api/engine/parties/{id}` changes any of `name`, `city`, `email` and `phone`. Each is `{ from, to }`, where `from` is the value the partner saw (the phone's `shown`) and `to` the new value, or null to clear it. A name cannot be cleared. A field whose current value differs from `from` returns `409 version_conflict` with those `fields` and the `current` record; fields changed by someone else and not sent stand. A changed email or phone removes the primary row and any row with the new value, and adds the new value as the primary work row. It answers `200` with the record.
+- The database refuses a blank name from the engine (`party_name_saved_nonblank`). Copied blank names stay until a partner names them.
 
 ## Global Search and Recent Activity
 

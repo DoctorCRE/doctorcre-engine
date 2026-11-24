@@ -46,6 +46,20 @@ end $$;
 create trigger party_never_merged after insert on party
 	for each row execute function party_never_merged();
 
+-- Some copied names are blank, so the owner's load may store one. A name the engine saves never is.
+create function party_name_saved_nonblank() returns trigger
+language plpgsql as $$
+begin
+	if not pg_has_role((select relowner from pg_catalog.pg_class where oid = tg_relid), 'USAGE') then
+		raise exception 'a saved name is not blank'
+			using errcode = 'check_violation', constraint = 'party_name_saved_nonblank';
+	end if;
+	return new;
+end $$;
+
+create trigger party_name_saved_nonblank before insert or update of name on party
+	for each row when (new.name !~ '\S') execute function party_name_saved_nonblank();
+
 -- A person who uses the system, and the home for their own preferences. "user" is reserved in PostgreSQL.
 create table app_user (
 	id uuid primary key,
@@ -4119,7 +4133,7 @@ grant update (introduced_on, deal_id, note) on introduction to engine;
 grant update (started_on, ended_on, note) on party_link to engine;
 grant update (name) on party, market, territory, deal, document, design_template to engine;
 grant update (kind, reason, renews_lease_id, owner_user_id, market_id, closed_value, parking_reason, parking_note, needs_attention) on deal to engine;
-grant update (npi, how_found) on party to engine;
+grant update (npi, how_found, city) on party to engine;
 grant update (until_date) on do_not_contact to engine;
 grant update (address, county_fips, latitude, longitude, name, building_class, building_type, year_built, stories) on property to engine;
 grant update (title, started_on, ended_on) on party_company to engine;
