@@ -31,7 +31,7 @@ before(async () => {
 		insert into deal_reason values ('renewal', 'Renewal');
 		insert into deal (id, name, owner_user_id)
 			select ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid, 'Example Deal ' || n, '${ALEX}'
-			from generate_series(10, 30) n;
+			from generate_series(10, 32) n;
 		insert into deal_party (deal_id, party_id, role)
 			select id, '${CLIENT}', 'client' from deal
 			where id between '${id(15)}' and '${id(17)}' or id in ('${id(25)}', '${id(26)}', '${id(28)}', '${id(29)}');
@@ -459,6 +459,50 @@ test("an invoice-dated copied close keeps its receipt and refuses phase Undo", a
 		closed_deals: [{ id: deal, ...facts }],
 	});
 });
+
+for (const { deal, days, undoable } of [
+	{ deal: id(31), days: 6, undoable: true },
+	{ deal: id(32), days: 8, undoable: false },
+]) {
+	test(`Undo on an automatic move recorded ${days} days ago is ${undoable ? "offered" : "refused"}`, async () => {
+		const event_id = randomUUID();
+		await db.query(`begin; select set_config('engine.job', 'old_system', true);
+			alter table deal_phase_change disable trigger stamp_change;
+			insert into deal_phase_change (deal_id, happened_at, phase, changed_by_job, changed_at)
+			values ('${deal}', '2026-01-06T15:00Z', 'negotiation', 'old_system', now() - interval '${days} days');
+			alter table deal_phase_change enable trigger stamp_change;
+			insert into imported_automatic_phase_move (source_event_id, deal_id, happened_at, prior_phase, reason)
+			values ('${event_id}', '${deal}', '2026-01-06T15:00Z', 'touring', 'Example automatic move');
+			commit;`);
+		const response = await request(
+			partner,
+			`deals/${deal}`,
+			{ method: "GET" },
+			{ DEALS_READ_SCHEMA: "next" },
+		);
+		assert.partialDeepStrictEqual(await response.json(), {
+			phase_change: { event_id, undoable },
+		});
+		const [status, body] = await saveAt(partner, `deals/${deal}/phase/undo`, {
+			idempotency_key: randomUUID(),
+			event_id,
+			base_version: await seen(deal),
+		});
+		if (undoable) {
+			assert.equal(status, 200, JSON.stringify(body));
+		} else {
+			assert.equal(status, 409, JSON.stringify(body));
+			assert.equal(
+				body.hint,
+				"Undo is only offered for 7 days after an automatic move.",
+			);
+		}
+		assert.equal(
+			(await dealNow(deal)).phase,
+			undoable ? "touring" : "negotiation",
+		);
+	});
+}
 
 for (const { deal, priorPhase } of [
 	{ deal: id(23), priorPhase: "closed" },

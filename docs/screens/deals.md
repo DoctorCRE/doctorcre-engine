@@ -8,7 +8,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 ## Everywhere on Deals
 
-- [ ] Dates read as words in Central time: "Due Thu, Nov 19", "2 days late", "Moved automatically Mon, Oct 19". Never `2026-11-19` or `10/19`.
+- [ ] Dates and times read as words in Central time with no zone label: "Due Thu, Nov 19", "2 days late", "Moved automatically Mon, Oct 19". Never `2026-11-19` or `10/19`. Only a time shown in another zone names its zone (owner ruling, 2026-11-24).
 - [ ] An old record code in a note or step, such as `C-013`, reads as that record's name and opens it; one that matches no record reads "an old record".
 - [ ] No internal codes or system words: no client, lead or vendor codes, "The Deal Room", "workspace", "loaded", "retained text", "portal", "CARR", "landlord_side", "Request unavailable or version changed".
 - [ ] A section that has nothing says so in plain words. "Unavailable" shows only when a read really failed, with Retry.
@@ -20,7 +20,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 - [ ] Two tabs: Local Deals and National Accounts.
 - [ ] All, Joe and Dell choose whose deals show. Board, List, Closed deals and Lost deals choose the view. Parked shows or hides the Parked lane on Board and List.
-- [ ] Board: seven columns in order, Prospective Client, Research, Site Selection, Negotiating, Legal, Due Diligence, Closing. The phase name and count fit on one line, even when collapsed and on a phone; a name too long for a narrow column ends in an ellipsis. Each column is a faint, borderless panel as tall as its cards; an open column ends with **+ Add deal**, which opens Add deal set to that phase. On a wide desktop the seven columns share the width beside Today without scrolling sideways; when the sidebar and Today crowd them, columns keep a minimum width and the board scrolls sideways. A closed deal leaves the board for Closed deals or Lost deals (owner, 2026-11-23).
+- [ ] Board: seven columns in order, Prospective Client, Research, Site Selection, Negotiating, Legal, Due Diligence, Closing. The phase name and count fit on one line, even when collapsed and on a phone. Each column is a faint, borderless panel as tall as its cards; an open column ends with **+ Add deal**, which opens Add deal set to that phase. Today starts collapsed on Board and List and keeps each partner's own choice. With Today closed, all columns fit at 1280 and 1440 wide with every phase name whole and no sideways scrolling. With Today open, the board scrolls sideways inside itself. On a computer the board fills the screen below the heading, the page does not scroll, and a full column scrolls inside itself with its phase name in view. On a phone the board scrolls with the page. A closed deal leaves the board for Closed deals or Lost deals (owner, 2026-11-23).
 - [ ] The headline counts every open deal, including those in collapsed columns, and every parked deal, whether the Parked lane is open or not: "38 open deals · 27 parked".
 - [ ] Each open deal shows once, in its phase column. A parked deal shows only in the Parked lane.
 - [ ] With `deals-from-engine` on, the board stays current without the old live feed: it reloads from the engine when the tab is shown or focused, after each save, and about every minute while in use, and says when it last updated. National Accounts' pending confirmations load on their own (coordinator, 2026-11-20).
@@ -65,7 +65,7 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 
 ### Prospects lane
 
-- [ ] Local Deals' Board shows a Prospects lane before Prospective Client, with its count. List shows the prospects after the deals, one row each.
+- [ ] Local Deals' Board shows a Prospects lane before Prospective Client, with its count. On a phone it comes after the deal phases. List shows the prospects after the deals, one row each.
 - [ ] The headline counts them: "38 open deals · 27 parked · 9 prospects".
 - [ ] All, Joe and Dell show the prospects that partner claimed. An unclaimed prospect shows under all three.
 - [ ] Each card shows the name, who claimed it or "Unclaimed", the newest note's first line with who wrote it and when in words, and the soonest open follow-up with whose it is, such as "Joe · Due Thu, Nov 19", or "No follow-up set". A late follow-up says how late.
@@ -133,7 +133,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 
 ## Deal page
 
-The header shows the deal's name, client, phase, deal owner and next critical date, once each. Back to deals returns to the board where the partner left it.
+The header shows the deal's name, client, phase, deal owner and next critical date, once each. Back to deals returns to the board where the partner left it. On a computer, Back to deals and the deal name share one row. All seven tabs show whole on one row at 1280 and 1440, and wrap on narrower screens instead of scrolling.
 
 ### Overview
 
@@ -152,7 +152,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] A lost deal's page shows the reason for loss and the close date in words. A copied loss with no recorded reason says "Not recorded before this system." If there is no close date, it says "Close date not recorded".
 - [ ] Phase, deal owner and Park, with the same rules as the board. Park asks the reason (client paused, prospect never active, or other) and takes an optional note.
 - [ ] A parked deal shows the reason, note when present, and date. If the old automation parked it, the page says “Parked automatically.”
-- [ ] The current automatic call move or copied automatic move shows “Moved automatically” with its date in words and offers Undo. If Undo would return the deal to Closed deals or Lost deals, it explains why the deal stays in its current phase.
+- [ ] The current automatic call move or copied automatic move shows “Moved automatically” with its date in words and offers Undo for 7 days from when the move was recorded. After that the mark stays without Undo (owner ruling, 2026-11-24). If Undo would return the deal to Closed deals or Lost deals, it explains why the deal stays in its current phase.
 - [ ] Needs attention: a partner sets and clears it. Nothing sets it on its own.
 - [ ] Checklist: the deal's checklist items, each with its due date in words. Clicking one opens it.
 - [ ] Checklist progress uses plain labels like "Lease expiration for renewal", "Invoice" and "Commission received". It shows which confirmed dates are due. Commission received is complete when all saved payments have receipt dates, even if the deal still has an expected amount.
@@ -169,7 +169,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ### Tabs
 
-- [ ] Compare terms: recorded terms from deals in the same market and use type, each value with where it came from: offer rounds and signed lease versions on properties in that market, with their documents. See [Compare terms](../new-database.md#compare-terms).
+- [ ] Compare terms: recorded terms from deals in the same market and use type, each value with where it came from: offer rounds and signed lease versions on properties in that market, with their documents. With no market recorded, it compares all markets and its heading says "Compared with all markets". See [Compare terms](../new-database.md#compare-terms).
 - [ ] Timeline lists phase moves, notes, next steps, critical dates, documents, and changes, newest first. Each says which partner or job saved it and when. A note with a matching event appears once.
 - [ ] Timeline uses the parking reason labels and note wording from Overview. An entry with no note shows only the reason. Timeline uses "Deal kind" and "Deal reason" as in Add deal, including in imported deal openings. It says "Not recorded" for unknown values in those fields.
 - [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. An attachment action already shown as a document event appears once. Copied notes show their words and dates in readable form. Empty notes and technical lines stay in the old system. Owner changes marked as automatic are credited to the move.
@@ -197,7 +197,7 @@ See [Planned tours on a deal](../new-database.md#planned-tours-on-a-deal).
 
 1. Answered on 2026-11-18 (#728). The new database keeps each deal's client website registration.
 2. Answered on 2026-11-18 (#718): Checklist progress comes from the deal's saved facts after the switch. Pass D found zero document requests to move.
-3. Answered on 2026-11-18. Copied automatic phase moves keep the “Moved automatically” mark and Undo on the deal page (updated 2026-11-20). List shows the mark.
+3. Answered on 2026-11-18. Copied automatic phase moves keep the “Moved automatically” mark on the deal page, with Undo for 7 days (updated 2026-11-20; owner ruling 2026-11-24). List shows the mark.
 4. Answered on 2026-11-18. A person who is a client may belong to a national account.
 5. Answered on 2026-11-19. When both partners have an open next step on one deal, the deal page shows both. The Board uses the deal owner's step to decide whether to show a late badge (updated 2026-11-20).
 6. Answered on 2026-11-18. Set up client website stays below the deal's facts and asks for a website name and a password.
