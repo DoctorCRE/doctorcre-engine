@@ -10,7 +10,7 @@ const blair = randomUUID();
 const deal = randomUUID();
 const step = randomUUID();
 const imported = randomUUID();
-// Old history a copy rerun brings in after an engine save, dated between engine saves.
+// Old history a copy rerun brings in after an engine save, dated a microsecond after it.
 const rerun = randomUUID();
 const ignored = randomUUID();
 const joe = { user: "joe" };
@@ -45,7 +45,7 @@ before(async () => {
 		insert into imported_change (id, table_name, record, old_value_absent, new_value_absent, field, source_event, changed_by_user_id, changed_at)
 		values ('${rerun}', 'deal', '{"id":"${deal}"}', false, false, 'needs_attention',
 			jsonb_build_object('id', '${rerun}'::uuid, 'verb', 'update-deal', 'cause', 'human_stated', 'actor_id', 'example'),
-			'${alex}', clock_timestamp());
+			'${alex}', (select max(changed_at) + interval '1 microsecond' from change where new_value ? 'closed_value'));
 		alter table imported_change enable trigger stamp_imported_change;
 		commit;`);
 	await as(
