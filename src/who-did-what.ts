@@ -14,7 +14,8 @@ type HistoryRow = {
 	changed_at: string;
 	// Microseconds since 1970 as int8 text, so the two sources merge in the order they happened.
 	micros: string;
-	who: string;
+	who: string | null;
+	job: string | null;
 	deal_id: string | null;
 	party_id: string | null;
 	step_id: string | null;
@@ -153,10 +154,10 @@ const openUrl = (row: HistoryRow) => {
 	return `/relationships?node=party:${row.party_id}${step}`;
 };
 
-const who = (stamp: string) => sql<string>`coalesce(
-	(select name from party where id = ${sql.ref(`${stamp}.changed_by_user_id`)}),
-	(select label from job where slug = ${sql.ref(`${stamp}.changed_by_job`)})
-		|| coalesce(' for ' || (select name from party where id = ${sql.ref(`${stamp}.changed_for_user_id`)}), ''))`;
+// The app names a job, as it does on notes and the timeline.
+const who = (stamp: string) =>
+	sql`(select name from party where id = ${sql.ref(`${stamp}.changed_by_user_id`)}) as who,
+		${sql.ref(`${stamp}.changed_by_job`)} as job`;
 
 const readable = (fields: [string, unknown][]) =>
 	sql.val(fields.map(([field]) => field));
@@ -164,7 +165,7 @@ const readable = (fields: [string, unknown][]) =>
 async function readNative(db: Transaction<DB>, before: number) {
 	const { rows } = await sql<HistoryRow>`
 		select 'change' as source, c.id::text as key, c.changed_at,
-			(extract(epoch from c.changed_at) * 1000000)::int8 as micros, ${who("c")} as who,
+			(extract(epoch from c.changed_at) * 1000000)::int8 as micros, ${who("c")},
 			coalesce(d.id, s.deal_id) as deal_id, s.party_id, s.id as step_id,
 			coalesce(d.name, sd.name, sp.name) as record, coalesce(c.new_value ->> 'what', s.what) as step,
 			c.table_name, c.action, null as field, c.new_value,
@@ -192,7 +193,7 @@ async function readNative(db: Transaction<DB>, before: number) {
 async function readImported(db: Transaction<DB>, after: string | null) {
 	const { rows } = await sql<HistoryRow>`
 		select 'imported' as source, i.id::text as key, i.changed_at,
-			(extract(epoch from i.changed_at) * 1000000)::int8 as micros, ${who("i")} as who,
+			(extract(epoch from i.changed_at) * 1000000)::int8 as micros, ${who("i")},
 			coalesce(d.id, about.deal_id) as deal_id, p.id as party_id, null as step_id,
 			coalesce(d.name, ad.name, p.name) as record, null as step, i.table_name, null as action, i.field,
 			null as new_value, null as phase, null as owner, null as market
@@ -242,6 +243,7 @@ async function readChanges(db: Transaction<DB>, cursor: Cursor) {
 			id: `${row.source}:${row.key}`,
 			changed_at: new Date(row.changed_at).toISOString(),
 			who: row.who,
+			job: row.job,
 			record: row.record,
 			what: whatChanged(row),
 			open_url: openUrl(row),
