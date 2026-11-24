@@ -51,29 +51,31 @@ function parseLink(body: JsonObject) {
 		"other_party_id",
 	]);
 	if (request instanceof Refusal) return request;
-	if (request.party_id === request.other_party_id)
+	if (request.party_id.toLowerCase() === request.other_party_id.toLowerCase())
 		return new Refusal(400, "invalid_field_value", {
 			fields: ["other_party_id"],
 		});
-	return { ...request, note: request.note?.trim() ?? null };
+	return {
+		...request,
+		party_id: request.party_id.toLowerCase(),
+		other_party_id: request.other_party_id.toLowerCase(),
+		note: request.note?.trim() ?? null,
+	};
 }
 
-// A knows link goes both ways, so either order finds it. A lapsed link leaves room for a new one.
-async function addLink(
+type Pair = {
+	kind: string;
+	party_id: string;
+	other_party_id: string;
+};
+
+// The database keeps one current link per pair and kind; this names it in the refusal.
+// A knows link goes both ways, so either order finds it.
+async function refuseLinked(
 	tx: Transaction<DB>,
-	request: Exclude<ReturnType<typeof parseLink>, Refusal>,
+	{ kind, party_id, other_party_id }: Pair,
 ) {
-	const { kind, party_id, other_party_id } = request;
 	const ends = [party_id, other_party_id].sort();
-	const parties = await tx
-		.selectFrom("party")
-		.select("id")
-		.where("id", "in", ends)
-		.orderBy("id")
-		.forKeyShare()
-		.execute();
-	if (parties.length !== 2)
-		throw new SaveRefusal(new Refusal(404, "not_found"));
 	await sql`select pg_advisory_xact_lock(hashtextextended('party link:' || ${kind} || ${ends.join(":")}, 0))`.execute(
 		tx,
 	);
@@ -97,30 +99,48 @@ async function addLink(
 					: []),
 			]),
 		)
-		.where((eb) =>
-			eb.or([
-				eb("ended_on", "is", null),
-				eb("ended_on", ">", sql<string>`current_date`),
-			]),
-		)
+		.where("ended_on", "is", null)
 		.executeTakeFirst();
 	if (current)
 		throw new SaveRefusal(
 			new Refusal(409, "already_linked", { link_id: current.id }),
 		);
+}
+
+// The link a save has just written or locked.
+async function savedLink(tx: Transaction<DB>, link_id: string) {
+	const link = await linkRead(tx, link_id);
+	if (!link) throw new Error(`party link ${link_id} is missing after its save`);
+	return link;
+}
+
+async function addLink(
+	tx: Transaction<DB>,
+	request: Exclude<ReturnType<typeof parseLink>, Refusal>,
+) {
+	const parties = await tx
+		.selectFrom("party")
+		.select("id")
+		.where("id", "in", [request.party_id, request.other_party_id].sort())
+		.orderBy("id")
+		.forKeyShare()
+		.execute();
+	if (parties.length !== 2)
+		throw new SaveRefusal(new Refusal(404, "not_found"));
+	await refuseLinked(tx, request);
 	const { id } = await tx
 		.insertInto("party_link")
 		.values({
-			kind,
-			party_id,
-			other_party_id,
+			kind: request.kind,
+			party_id: request.party_id,
+			other_party_id: request.other_party_id,
 			started_on: request.started_on ?? null,
 			note: request.note,
 			changed_at: sql<string>`now()`,
 		})
 		.returning("id")
 		.executeTakeFirstOrThrow();
-	return { ...(await linkRead(tx, id)) };
+	return savedLink(tx, id);
 }
 
 function parseEdit(link_id: string, body: JsonObject) {
@@ -147,6 +167,8 @@ async function editLink(
 	const current = locked && (await linkRead(tx, link_id));
 	if (!current) throw new SaveRefusal(new Refusal(404, "not_found"));
 	unchangedSince(request, request.fields, current);
+	if (current.ended_on !== null && request.ended_on?.to === null)
+		await refuseLinked(tx, current);
 	await tx
 		.updateTable("party_link")
 		.set({
@@ -156,7 +178,7 @@ async function editLink(
 		})
 		.where("id", "=", link_id)
 		.execute();
-	return { ...(await linkRead(tx, link_id)) };
+	return savedLink(tx, link_id);
 }
 
 export const partyLinks = new Hono<NextSaveEnv>()

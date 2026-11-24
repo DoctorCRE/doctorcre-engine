@@ -975,13 +975,15 @@ create table party_link (
 	ended_on date,
 	note text check (note ~ '\S'),
 	constraint party_link_two_parties check (party_id <> other_party_id),
-	constraint party_link_ends_after_it_starts check (ended_on >= started_on),
-	unique nulls not distinct (party_id, other_party_id, kind, started_on)
+	constraint party_link_ends_after_it_starts check (ended_on >= started_on)
 );
 
--- Knowing goes both ways, so a knows link is stored once whichever party it names first.
+-- A pair has one current link of each kind; ended links stay as history, so the pair can link again.
+-- Knowing goes both ways, so a current knows link is one whichever party it names first.
 create unique index party_link_knows_once on party_link
-	(least(party_id, other_party_id), greatest(party_id, other_party_id), started_on) nulls not distinct where kind = 'knows';
+	(least(party_id, other_party_id), greatest(party_id, other_party_id)) where kind = 'knows' and ended_on is null;
+create unique index party_link_can_introduce_once on party_link
+	(party_id, other_party_id) where kind = 'can_introduce' and ended_on is null;
 
 -- From deal history only: the deals a vendor worked in a vendor role, and the deals its introductions led to.
 create view vendor_track_record as
@@ -3359,11 +3361,13 @@ begin
 	delete from lead_stage_move d using lead_stage_move s
 	where d.party_id = duplicate and s.party_id = survivor and s.from_stage = d.from_stage
 		and s.to_stage = d.to_stage and s.activity_id = d.activity_id;
-	-- A link between the two says nothing once they are one. Of two links that become one, the survivor's stays.
+	-- A link between the two says nothing once they are one. Of two current links, or two from one start date,
+	-- that become one, the survivor's stays.
 	delete from party_link where duplicate in (party_id, other_party_id) and survivor in (party_id, other_party_id);
 	delete from party_link d using party_link s
 	where duplicate in (d.party_id, d.other_party_id) and survivor in (s.party_id, s.other_party_id)
-		and s.kind = d.kind and s.started_on is not distinct from d.started_on
+		and s.kind = d.kind
+		and (s.started_on is not distinct from d.started_on or s.ended_on is null and d.ended_on is null)
 		and case d.party_id when duplicate then d.other_party_id else d.party_id end
 			= case s.party_id when survivor then s.other_party_id else s.party_id end
 		and (d.kind = 'knows' or (d.party_id = duplicate) = (s.party_id = survivor));

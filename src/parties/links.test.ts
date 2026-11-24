@@ -113,3 +113,35 @@ test("a link's dates and note change from what the partner saw, and an ended lin
 	});
 	assert.equal(missing[0], 404);
 });
+
+test("a pair links again after an undated link ends, and an ended link reopens only while no other is current", async () => {
+	const [, first] = await link({
+		kind: "knows",
+		party_id: joeId.toUpperCase(),
+		other_party_id: blake.toUpperCase(),
+	});
+	assert.partialDeepStrictEqual(first, {
+		party_id: joeId,
+		other_party_id: blake,
+	});
+	const [ended] = await save(joe, `party-links/${first.link_id}`, {
+		...key(),
+		ended_on: { from: null, to: "2026-02-01" },
+	});
+	assert.equal(ended, 200);
+	const [relinked, second] = await link({
+		kind: "knows",
+		party_id: blake,
+		other_party_id: joeId,
+	});
+	assert.equal(relinked, 201, JSON.stringify(second));
+	const [reopened, refusal] = await save(joe, `party-links/${first.link_id}`, {
+		...key(),
+		ended_on: { from: "2026-02-01", to: null },
+	});
+	assert.equal(reopened, 409);
+	assert.deepEqual(
+		{ error: refusal.error, link_id: refusal.link_id },
+		{ error: "already_linked", link_id: second.link_id },
+	);
+});

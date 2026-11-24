@@ -961,14 +961,20 @@ test("the reviewed partner alias resolves brokers without changing ordinary link
 			await rows(
 				`select id, party_id, other_party_id from party_link where id in ('${id(97)}', '${id(98)}') order by id`,
 			),
-			[
-				{ id: id(97), party_id: id(10), other_party_id: id(11) },
-				{ id: id(98), party_id: contact, other_party_id: id(11) },
-			],
+			[{ id: id(98), party_id: contact, other_party_id: id(11) }],
 		);
+		// The broker resolves to the current link from 10 to 11 already copied, so the pair keeps that one.
 		assert.deepEqual(
-			listed?.filter(([oldId]) => oldId === id(99)),
-			[[id(99), "party_link", "referral", "no copied vendor on either side"]],
+			listed?.filter(([oldId]) => oldId === id(97) || oldId === id(99)),
+			[
+				[
+					id(97),
+					"party_link",
+					"can_introduce",
+					"the same link is kept already",
+				],
+				[id(99), "party_link", "referral", "no copied vendor on either side"],
+			],
 		);
 	}));
 
