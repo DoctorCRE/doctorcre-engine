@@ -241,6 +241,7 @@ export const selectNextDeals = (
 			) then imported.city else (select name from market where id = d.market_id) end`.as(
 				"market",
 			),
+			"d.market_id",
 			sql<number>`(select coalesce(max(ch.id), 0)::float8 from change ch
 				where ch.table_name = 'deal' and ch.record = jsonb_build_object('id', d.id))`.as(
 				"seen",

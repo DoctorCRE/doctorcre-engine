@@ -270,6 +270,32 @@ test("open cards keep the recorded city, including cities without a named market
 	);
 });
 
+test("imported deals keep their recorded city and carry their named market", async () => {
+	const { rows } = await db.query<{ id: string }>(
+		"select id from market where name = 'Example Bay'",
+	);
+	await nextTransaction(connectionString, "read", async (tx) => {
+		const board = await readNextBoardDeals(tx, allBoards);
+		const detail = await readNextDealDetail(tx, id(31));
+		assert.ok(!("error" in detail));
+		assert.deepEqual(
+			[board.find((deal) => deal.id === id(31)), detail].map((deal) => [
+				deal?.market,
+				deal?.market_id,
+			]),
+			[
+				["Example Bay", rows[0]?.id],
+				["Example Bay", rows[0]?.id],
+			],
+		);
+		const national = board.find((deal) => deal.id === id(30));
+		assert.deepEqual(
+			[national?.market, national?.market_id],
+			[null, rows[0]?.id],
+		);
+	});
+});
+
 test("an imported loss without phase events stays off the open board", async () => {
 	const deals = await nextTransaction(connectionString, "read", (tx) =>
 		readNextBoardDeals(tx, allBoards),

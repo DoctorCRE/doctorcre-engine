@@ -180,6 +180,7 @@ The city or metro area where the client needs space.
 _Avoid_: territory, submarket
 _Database_: `deal.city`, shown as `market` in `v_deal_room_board`.
 _Engine_: `market` on the board; the deal page renames it back to `city`.
+_Engine, new database_: `market` is an imported deal's recorded city until a user changes its market, and `market_id` is always the deal's named market, so a filter can match it.
 _New database_: a named market (`market`), by the counties it covers, and `deal.market_id` for a deal's. A vendor's "market" is a whole territory, and a `market` row is one named piece of one.
 
 **Territory**:
