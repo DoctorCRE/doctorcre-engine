@@ -448,8 +448,13 @@ test("Doc's link can propose a reply but cannot approve or send it", async () =>
 	await tool(request, "read_mail", { activity_id: foreignMail });
 	const reply = { source, subject: "Re: Foreign subject", body: "Sent." };
 	const to = "tour@example.test";
+	const proposed = await tool(request, "propose_save", {
+		kind: "reply_draft",
+		...reply,
+	});
+	assert.equal(proposed.kind, "reply_draft");
 	for (const kind of ["reply_submission", "reply_send"])
-		await tool(request, "propose_save", { kind, to, ...reply }, true);
+		await tool(request, "propose_save", { kind, ...reply }, true);
 	await tool(request, "send_reply", { draft_id: draft, to, ...reply }, true);
 	const submission = {
 		idempotency_key: randomUUID(),
