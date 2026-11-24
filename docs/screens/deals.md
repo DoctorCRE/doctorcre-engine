@@ -13,6 +13,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] A section that has nothing says so in plain words. "Unavailable" shows only when a read really failed, with Retry.
 - [ ] If someone else saved the same field since the partner opened the deal, the save says so and offers to reload the deal. Nothing is overwritten.
 - [ ] Every deal requires an owner. The deal's Owner list offers only the partners.
+- [ ] Writing a partner did not do names its writer plainly wherever an author shows, on deal notes, the timeline, client activity and Updates: "Written by the assistant", "Copied from the old system", "Mail filing". Never "Agent for" a partner, and never "Doc (assistant)" for a copy (#1281).
 
 ## Deal board
 
