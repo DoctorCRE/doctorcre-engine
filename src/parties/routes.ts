@@ -251,6 +251,8 @@ const samePhone = (a: Phone | null, b: Phone | null) =>
 
 async function editParty(tx: Transaction<DB>, request: Edit) {
 	const { party_id, to } = request;
+	// Address before row, the order lead intake takes them in.
+	if (request.email && to.email) await lockAddress(tx, to.email);
 	const locked = await tx
 		.selectFrom("party")
 		.select("id")
@@ -267,13 +269,10 @@ async function editParty(tx: Transaction<DB>, request: Edit) {
 	const { email } = to;
 	const emailChanged = request.email && email !== current.email;
 	const phoneChanged = request.phone && !samePhone(to.phone, current.phone);
-	if (emailChanged && email) {
-		await lockAddress(tx, email);
-		if (!request.force_new)
-			await refuseCandidates(tx, (eb) =>
-				eb.and([eb("id", "!=", party_id), hasAddress(eb, email)]),
-			);
-	}
+	if (emailChanged && email && !request.force_new)
+		await refuseCandidates(tx, (eb) =>
+			eb.and([eb("id", "!=", party_id), hasAddress(eb, email)]),
+		);
 	const name = trimmed(request.name?.to);
 	if (name !== null || request.city)
 		await tx

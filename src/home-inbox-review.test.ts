@@ -327,6 +327,129 @@ test("dashboard keeps one conversation card while delivery is unconfirmed", asyn
 	assert.deepEqual(await linked.json(), waiting[0]);
 });
 
+test("a failed reply leaves Home once its owner replies from Outlook, while an unconfirmed one keeps waiting", async () => {
+	const owner = id(91);
+	const user = "outlook-replier";
+	const [failed, unconfirmed] = [id(92), id(93)];
+	const [failedEmail, unconfirmedEmail] = [id(94), id(95)];
+	const replies = [id(96), id(97)];
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${owner}', 'person', 'Example Replier');
+		insert into app_user (id, slug) values ('${owner}', '${user}');
+		insert into party_email (party_id, address, label) values ('${owner}', 'replier@example.test', 'work');
+		insert into activity (id, kind, happened_at) values
+			('${failedEmail}', 'email', '2026-01-02'), ('${unconfirmedEmail}', 'email', '2026-01-02');
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body) values
+			('${failedEmail}', '<${failedEmail}@example.test>', 'Failed thread', 'pat@example.test', 'Plan', 'Please send the plan.'),
+			('${unconfirmedEmail}', '<${unconfirmedEmail}@example.test>', 'Unconfirmed thread', 'pat@example.test', 'Plan', 'Please send the plan.');
+		insert into email_mailbox (activity_id, user_id) values ('${failedEmail}', '${owner}'), ('${unconfirmedEmail}', '${owner}');
+		insert into activity_about (activity_id, party_id) values ('${failedEmail}', '${owner}'), ('${unconfirmedEmail}', '${owner}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence) values
+			('${failed}', '${failedEmail}', '${owner}', 'old_system', 'Plan', 'Here it is.', 'Please send the plan.'),
+			('${unconfirmed}', '${unconfirmedEmail}', '${owner}', 'old_system', 'Plan', 'Here it is.', 'Please send the plan.');
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${owner}', true);
+		update reply_draft set status = 'approved', to_address = 'pat@example.test', cc_address = 'copy@example.test'
+			where id in ('${failed}', '${unconfirmed}');
+		select set_config('engine.job', 'old_system', true);
+		update reply_draft set status = 'failed', failure_reason = 'attachment_missing' where id = '${failed}';
+		update reply_draft set status = 'failed', failure_reason = 'unconfirmed_after_3' where id = '${unconfirmed}';
+		commit;`);
+	const before = await dashboard(user);
+	assert.equal(
+		before.reminders.find((card) => card.reply_draft_id === failed)
+			?.primary_action,
+		"Review delivery",
+	);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values
+			('${replies[0]}', 'email', clock_timestamp()), ('${replies[1]}', 'email', clock_timestamp());
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body) values
+			('${replies[0]}', '<${replies[0]}@example.test>', 'Failed thread', 'replier@example.test', 'RE: Plan', 'Attached.'),
+			('${replies[1]}', '<${replies[1]}@example.test>', 'Unconfirmed thread', 'replier@example.test', 'RE: Plan', 'Here it is.');
+		insert into email_mailbox (activity_id, user_id) values ('${replies[0]}', '${owner}'), ('${replies[1]}', '${owner}');
+		insert into email_recipient (activity_id, position, address, kind) values
+			('${replies[0]}', 0, 'pat@example.test', 'to'), ('${replies[1]}', 0, 'pat@example.test', 'to');
+		insert into activity_about (activity_id, party_id) values ('${replies[0]}', '${owner}'), ('${replies[1]}', '${owner}');
+		commit;`);
+	const { reminders, waiting } = await dashboard(user);
+	assert.deepEqual(reminders, []);
+	assert.deepEqual(
+		waiting.map((card) => card.reply_draft_id),
+		[unconfirmed],
+	);
+	const linked = await linkedCard(`reply_draft:${failed}`, user);
+	assert.equal(linked.status, 200);
+	assert.deepEqual(await linked.json(), {
+		item_id: `reply_draft:${failed}`,
+		state: "replaced",
+	});
+});
+
+test("only a reply to the draft's recipient replaces it, and hides the conversation's older draft and fallback", async () => {
+	const owner = id(110);
+	const user = "outlook-forwarder";
+	const [older, failed, suggestion] = [id(111), id(112), id(113)];
+	const [olderEmail, newerEmail, forward, reply] = [
+		id(114),
+		id(115),
+		id(116),
+		id(117),
+	];
+	const sent = (activity: string, subject: string, to: string) =>
+		db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${activity}', 'email', clock_timestamp());
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body) values
+			('${activity}', '<${activity}@example.test>', 'Answered thread', 'forwarder@example.test', '${subject}', 'See below.');
+		insert into email_mailbox (activity_id, user_id) values ('${activity}', '${owner}');
+		insert into activity_about (activity_id, party_id) values ('${activity}', '${owner}');
+		insert into email_recipient (activity_id, position, address, kind) values ('${activity}', 0, '${to}', 'to');
+		commit;`);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${owner}', 'person', 'Example Forwarder');
+		insert into app_user (id, slug) values ('${owner}', '${user}');
+		insert into party_email (party_id, address, label) values ('${owner}', 'forwarder@example.test', 'work');
+		insert into activity (id, kind, happened_at) values
+			('${olderEmail}', 'email', '2026-01-01'), ('${newerEmail}', 'email', '2026-01-02');
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body) values
+			('${olderEmail}', '<${olderEmail}@example.test>', 'Answered thread', 'pat@example.test', 'Plan', 'Please send the plan.'),
+			('${newerEmail}', '<${newerEmail}@example.test>', 'Answered thread', 'pat@example.test', 'RE: Plan', 'Still need the plan.');
+		insert into email_mailbox (activity_id, user_id) values ('${olderEmail}', '${owner}'), ('${newerEmail}', '${owner}');
+		insert into activity_about (activity_id, party_id) values ('${olderEmail}', '${owner}'), ('${newerEmail}', '${owner}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence) values
+			('${older}', '${olderEmail}', '${owner}', 'old_system', 'Plan', 'Here it is.', 'Please send the plan.'),
+			('${failed}', '${newerEmail}', '${owner}', 'old_system', 'Plan', 'Here it is.', 'Still need the plan.');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
+			values ('${suggestion}', 'next_step', '${newerEmail}', 'email', 'Still need the plan.', 'old_system',
+				'${deal}', 'Send the plan', '${owner}');
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${owner}', true);
+		update reply_draft set status = 'approved', to_address = 'pat@example.test', cc_address = 'copy@example.test'
+			where id = '${failed}';
+		select set_config('engine.job', 'old_system', true);
+		update reply_draft set status = 'failed', failure_reason = 'attachment_missing' where id = '${failed}';
+		commit;`);
+	const withFallback = {
+		proposal_id: suggestion,
+		fallback_reply_draft: { id: failed, status: "failed" },
+	};
+	const cards = async () => (await dashboard(user)).reminders;
+	assert.equal((await cards()).length, 1);
+	assert.partialDeepStrictEqual((await cards())[0], withFallback);
+	await sent(forward, "FW: Plan", "colleague@example.test");
+	assert.equal((await cards()).length, 1);
+	assert.partialDeepStrictEqual((await cards())[0], withFallback);
+	await sent(reply, "RE: Plan", "pat@example.test");
+	const answered = await cards();
+	assert.deepEqual(
+		answered.map((card) => [card.proposal_id, card.reply_draft_id ?? null]),
+		[[suggestion, null]],
+	);
+	assert.ok(answered[0] && !("fallback_reply_draft" in answered[0]));
+});
+
 test("Home shows only its partner's active drafts and one per known conversation", async () => {
 	const drafts = (await inbox()).filter(
 		(card) => card.kind_label === "Reply draft" && card.source_state !== "done",
