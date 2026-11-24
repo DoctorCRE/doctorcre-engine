@@ -10,6 +10,7 @@ import { activity } from "./activity/routes.ts";
 import { attachmentFiles, attachments, dealDocuments } from "./attachments.ts";
 import { cadence } from "./cadence.ts";
 import { calendarDismissal, nextAgenda } from "./calendar/next-agenda.ts";
+import { calendarMeetings } from "./calendar/range.ts";
 import { directory } from "./clients/routes.ts";
 import {
 	accessDoor,
@@ -133,6 +134,7 @@ app.get("/health", (c) => {
 const engine = new Hono<WorkerEnv>()
 	.get("/whoami", (c) => c.json(c.get("partner")))
 	.route("/", activity)
+	.route("/", calendarMeetings)
 	.route("/", directory)
 	.route("/", connection)
 	.route("/", deals)
