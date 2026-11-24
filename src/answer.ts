@@ -325,6 +325,7 @@ type Verb =
 	| "read-home-mail-priorities-v1"
 	| "read-home-today-v1"
 	| "read-invoice-tracker"
+	| "read-market-terms"
 	| "read-markets"
 	| "read-national-account-locations"
 	| "read-proposal"

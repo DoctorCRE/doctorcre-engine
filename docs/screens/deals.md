@@ -165,7 +165,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ### Tabs
 
-- [ ] Compare terms: recorded terms from deals in the same submarket and use type, each value with where it came from.
+- [ ] Compare terms: recorded terms from deals in the same market and use type, each value with where it came from: offer rounds and signed lease versions on properties in that market, with their documents. See [Compare terms](../new-database.md#compare-terms).
 - [ ] Timeline lists phase moves, notes, next steps, critical dates, documents, and changes, newest first. Each says which partner or job saved it and when. A note with a matching event appears once.
 - [ ] Timeline uses the parking reason labels and note wording from Overview. An entry with no note shows only the reason. Timeline uses "Deal kind" and "Deal reason" as in Add deal, including in imported deal openings. It says "Not recorded" for unknown values in those fields.
 - [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. An attachment action already shown as a document event appears once. Copied notes show their words and dates in readable form. Empty notes and technical lines stay in the old system. Owner changes marked as automatic are credited to the move.

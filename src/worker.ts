@@ -28,6 +28,7 @@ import { dealClientWebsite } from "./deals/client-website.ts";
 import { openClientWebsite } from "./deals/client-website-access.ts";
 import { closingAnniversaries } from "./deals/closing-anniversaries.ts";
 import { criticalDates } from "./deals/critical-dates.ts";
+import { marketTerms } from "./deals/market-terms.ts";
 import { nationalAccounts } from "./deals/national-accounts.ts";
 import {
 	automaticPhaseUndo,
@@ -159,6 +160,7 @@ partnerApi.route("/api/engine", leadChanges);
 partnerApi.route("/api/engine", partySearch);
 partnerApi.route("/api/engine", propertySearch);
 partnerApi.route("/api/engine", clientLeases);
+partnerApi.route("/api/engine", marketTerms);
 partnerApi.route("/api/engine", closingAnniversaries);
 partnerApi.route("/api/engine", prospectReads);
 partnerApi.route("/api/engine", prospectChanges);
