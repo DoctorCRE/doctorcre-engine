@@ -16,6 +16,17 @@ export function phoneNumber(typed: string): Phone | undefined {
 		: undefined;
 }
 
+// One save at a time per key, until the transaction ends.
+export async function lock(db: Transaction<DB>, key: string) {
+	await sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`.execute(
+		db,
+	);
+}
+
+// Every save of an email takes the bare address, as the email-lead promotion does in the database.
+export const lockAddress = (db: Transaction<DB>, address: string) =>
+	lock(db, address);
+
 // A person or company with its primary email and phone and, for a person, their current company.
 export function contactOf(db: Transaction<DB>, party_id: string) {
 	return db

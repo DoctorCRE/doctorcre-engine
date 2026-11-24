@@ -17,10 +17,17 @@ import {
 	isStoredText,
 	isUuid,
 	optional,
+	orNull,
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
-import { contactOf, type Phone, phoneNumber } from "./contact.ts";
-import { changing, edit, unchangedSince } from "./edit.ts";
+import {
+	contactOf,
+	lock,
+	lockAddress,
+	type Phone,
+	phoneNumber,
+} from "./contact.ts";
+import { changing, edit, trimmed, unchangedSince } from "./edit.ts";
 
 const isKind = (value: unknown): value is "person" | "company" =>
 	value === "person" || value === "company";
@@ -40,14 +47,12 @@ const NEW_PARTY = {
 const EDIT_PARTY = {
 	idempotency_key: isUuid,
 	name: edit(isStoredText),
-	city: edit(isStoredText),
-	email: edit(isStoredText),
-	phone: edit(isStoredText),
+	city: edit(orNull(isStoredText)),
+	email: edit(orNull(isStoredText)),
+	phone: edit(orNull(isStoredText)),
 	force_new: optional(isBoolean),
 };
 const EDITABLE = ["name", "city", "email", "phone"] as const;
-
-const trimmed = (value: string | undefined | null) => value?.trim() || null;
 
 // Each contact is stored in one form; the database checks the form, so the door converts first.
 function storedContact(fields: {
@@ -135,13 +140,6 @@ async function addPhone(
 		.execute();
 }
 
-// The lock the email-lead promotion takes, so two saves cannot give one address to two records unseen.
-async function lockAddress(tx: Transaction<DB>, address: string) {
-	await sql`select pg_advisory_xact_lock(hashtextextended(${address}, 0))`.execute(
-		tx,
-	);
-}
-
 const hasAddress = (eb: ExpressionBuilder<DB, "party">, address: string) =>
 	eb.exists(
 		eb
@@ -168,9 +166,7 @@ async function refuseCandidates(
 }
 
 async function refuseDuplicate(tx: Transaction<DB>, request: NewParty) {
-	await sql`select pg_advisory_xact_lock(hashtextextended('party name:' || ${request.kind} || lower(${request.name}), 0))`.execute(
-		tx,
-	);
+	await lock(tx, `party name:${request.kind}${request.name.toLowerCase()}`);
 	const { email } = request;
 	if (email) await lockAddress(tx, email);
 	if (request.force_new) return;
@@ -240,8 +236,6 @@ function parseEdit(party_id: string, body: JsonObject) {
 	const fields = changing(request, EDITABLE);
 	if (!fields.length)
 		return new Refusal(400, "missing_required", { fields: [...EDITABLE] });
-	if (request.name?.to === null)
-		return new Refusal(400, "invalid_field_value", { fields: ["name"] });
 	const to = storedContact({
 		email: request.email?.to,
 		phone: request.phone?.to,
@@ -250,6 +244,9 @@ function parseEdit(party_id: string, body: JsonObject) {
 	return { ...request, party_id, fields, to };
 }
 type Edit = Exclude<ReturnType<typeof parseEdit>, Refusal>;
+
+const samePhone = (a: Phone | null, b: Phone | null) =>
+	a?.number === b?.number && a?.extension === b?.extension;
 
 async function editParty(tx: Transaction<DB>, request: Edit) {
 	const { party_id, to } = request;
@@ -267,7 +264,9 @@ async function editParty(tx: Transaction<DB>, request: Edit) {
 	});
 	await refuseMalformed(tx, to);
 	const { email } = to;
-	if (request.email && email) {
+	const emailChanged = request.email && email !== current.email;
+	const phoneChanged = request.phone && !samePhone(to.phone, current.phone);
+	if (emailChanged && email) {
 		await lockAddress(tx, email);
 		if (!request.force_new)
 			await refuseCandidates(tx, (eb) =>
@@ -285,7 +284,7 @@ async function editParty(tx: Transaction<DB>, request: Edit) {
 			.where("id", "=", party_id)
 			.execute();
 	// A changed address or number is a removed row and a new one.
-	if (request.email) {
+	if (emailChanged) {
 		await tx
 			.deleteFrom("party_email")
 			.where("party_id", "=", party_id)
@@ -298,7 +297,7 @@ async function editParty(tx: Transaction<DB>, request: Edit) {
 			.execute();
 		if (to.email) await addEmail(tx, party_id, to.email);
 	}
-	if (request.phone) {
+	if (phoneChanged) {
 		await tx
 			.deleteFrom("party_phone")
 			.where("party_id", "=", party_id)

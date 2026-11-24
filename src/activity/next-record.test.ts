@@ -849,6 +849,33 @@ test("concurrent phone matches converge and later intake preserves claim and ack
 	);
 });
 
+test("intake waits for a partner's save of the same email", async () => {
+	await db.query(
+		"begin; select pg_advisory_xact_lock(hashtextextended('race@clinic.example.test', 0))",
+	);
+	let finished = false;
+	const pending = intake(
+		notice("race", {}, "race@clinic.example.test"),
+	).finally(() => {
+		finished = true;
+	});
+	let waited = false;
+	try {
+		const deadline = AbortSignal.timeout(10_000);
+		while (!finished && !waited) {
+			deadline.throwIfAborted();
+			const { rows } = await db.query(`select from pg_locks
+				where locktype = 'advisory' and not granted
+				and pg_backend_pid() = any(pg_blocking_pids(pid))`);
+			waited = rows.length > 0;
+		}
+	} finally {
+		await db.query("commit");
+	}
+	assert.ok(waited, "intake must take the bare address lock");
+	assert.equal((await pending).status, 201);
+});
+
 test("later notices match contact facts first recorded on an existing lead", async () => {
 	const phone = "+15125550102";
 	const first = await intake(notice("contact-original"));

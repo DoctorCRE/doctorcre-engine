@@ -7,15 +7,14 @@ import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
 import { ACTING_USER } from "../next-save.ts";
 import {
-	type Check,
 	fit,
-	fitting,
 	isStoredText,
 	isUuid,
 	optional,
 	orNull,
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
+import { changing, edit, unchangedSince } from "./edit.ts";
 
 const isMaker = (value: unknown): value is "vendor" | "team" =>
 	value === "vendor" || value === "team";
@@ -29,12 +28,6 @@ const NEW_INTRODUCTION = {
 	note: isStoredText,
 	deal_id: optional(isUuid),
 };
-
-// A change names the value the partner saw, so one made since is not overwritten.
-const isSeen = (value: unknown): value is string | null =>
-	value === null || typeof value === "string";
-const edit = <T>(check: Check<T>) =>
-	optional(fitting({ from: isSeen, to: check }));
 
 const EDIT_INTRODUCTION = {
 	idempotency_key: isUuid,
@@ -130,7 +123,7 @@ function parseEdit(introduction_id: string, body: JsonObject) {
 	if (!isUuid(introduction_id)) return new Refusal(404, "not_found");
 	const request = fit(body, EDIT_INTRODUCTION, ["idempotency_key"]);
 	if (request instanceof Refusal) return request;
-	const fields = EDITABLE.filter((field) => request[field] !== undefined);
+	const fields = changing(request, EDITABLE);
 	if (!fields.length)
 		return new Refusal(400, "missing_required", { fields: [...EDITABLE] });
 	return { ...request, introduction_id, fields };
@@ -150,13 +143,7 @@ async function editIntroduction(
 		.executeTakeFirst();
 	const current = locked && (await introductionRead(tx, introduction_id));
 	if (!current) throw notFound();
-	const stale = request.fields.filter(
-		(field) => request[field]?.from !== current[field],
-	);
-	if (stale.length)
-		throw new SaveRefusal(
-			new Refusal(409, "version_conflict", { fields: stale, current }),
-		);
+	unchangedSince(request, request.fields, current);
 	if (request.deal_id) await lockDeal(tx, request.deal_id.to);
 	await tx
 		.updateTable("introduction")
