@@ -15,6 +15,7 @@ const [joe, client, company, coworker, formerCompany, deal, otherDeal] = [
 	id(7),
 ];
 const [group, frontDesk, leaving, joining] = [id(20), id(21), id(22), id(23)];
+const [dell, sharedDeal] = [id(24), id(25)];
 
 before(async () => {
 	await setup();
@@ -27,15 +28,17 @@ before(async () => {
 			('${company}', 'company', 'Example Dental Group'), ('${coworker}', 'person', 'Example Office Manager'),
 			('${formerCompany}', 'company', 'Example Former Practice'),
 			('${group}', 'company', 'Example Imaging Group'), ('${frontDesk}', 'person', 'Example Front Desk'),
-			('${leaving}', 'person', 'Example Radiologist'), ('${joining}', 'person', 'Example Technologist');
+			('${leaving}', 'person', 'Example Radiologist'), ('${joining}', 'person', 'Example Technologist'),
+			('${dell}', 'person', 'Example Partner Two');
 		insert into how_found (slug, label) values ('referral', 'Referral');
 		update party set how_found = 'referral' where id in ('${client}', '${group}');
-		insert into app_user (id, slug) values ('${joe}', 'joe');
+		insert into app_user (id, slug) values ('${joe}', 'joe'), ('${dell}', 'dell');
 		insert into role (slug, label) values ('client', 'Client');
 		insert into party_role (party_id, role) values ('${client}', 'client'), ('${group}', 'client');
 		insert into client (party_id) values ('${client}'), ('${group}');
 		insert into deal (id, name, owner_user_id) values
-			('${deal}', 'Example Suite Lease', '${joe}'), ('${otherDeal}', 'Example Unrelated Lease', '${joe}');
+			('${deal}', 'Example Suite Lease', '${joe}'), ('${otherDeal}', 'Example Unrelated Lease', '${joe}'),
+			('${sharedDeal}', 'Example Shared Lease', '${joe}');
 		insert into deal_party (deal_id, party_id, role) values ('${deal}', '${client}', 'client');
 		insert into party_company (person_id, company_id, started_on, ended_on) values
 			('${client}', '${company}', null, null), ('${coworker}', '${company}', '2026-01-01', null),
@@ -62,6 +65,9 @@ before(async () => {
 			('${id(19)}', null, '${joining}');
 		insert into next_step (deal_id, what, created_at) values
 			('${deal}', 'Send the lease draft', '2026-11-08T12:00:00Z');
+		insert into next_step (deal_id, what, owner_party_id, created_at) values
+			('${sharedDeal}', 'Run the rent comparison', '${joe}', '2026-11-12T12:00:00Z'),
+			('${sharedDeal}', 'Run the rent comparison', '${dell}', '2026-11-13T12:00:00Z');
 	`);
 });
 after(cleanup);
@@ -166,5 +172,24 @@ test("a deal's history stays the deal's own", async () => {
 			{ summary: "Sent the plan to the dentist", filed_on: null },
 			{ summary: "Toured the suite", filed_on: null },
 		],
+	);
+});
+
+test("each partner's step names its owner", async () => {
+	const { catch_up } = await recent("Example Shared Lease");
+	assert.deepEqual(
+		catch_up.timeline.map(({ summary, step_owner }) => ({
+			summary,
+			step_owner,
+		})),
+		[
+			{ summary: "Run the rent comparison", step_owner: "dell" },
+			{ summary: "Run the rent comparison", step_owner: "joe" },
+		],
+	);
+	const dentist = await recent("Example Dentist");
+	assert.deepEqual(
+		dentist.catch_up.timeline.map(({ step_owner }) => step_owner),
+		[null, null, null, null, null],
 	);
 });
