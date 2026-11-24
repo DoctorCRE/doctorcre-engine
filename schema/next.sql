@@ -4498,7 +4498,6 @@ language sql security definer as $$
 		where e.activity_id = email_id and current_setting('engine.job', true) = 'mail_capture'
 			and m.user_id = nullif(current_setting('engine.user_id', true), '')::uuid
 			and exists (select from app_user u where u.id = m.user_id and u.is_account_partner)
-			and not exists (select from party_email pe where (pe.party_id, pe.address) = (m.user_id, e.sender))
 			and not exists (select from lead_email_source l where l.activity_id = e.activity_id)
 			and not exists (select from lead_source_sender l
 				where lower(l.address) = e.sender or l.domain = split_part(e.sender, '@', 2))
