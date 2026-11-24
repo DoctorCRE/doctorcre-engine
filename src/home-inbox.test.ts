@@ -376,14 +376,16 @@ test("A held follow-up explains the saved hold", async () => {
 test("A lease reminder shows its saved title and full instruction", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(leaseReminder), {
 		title: "Lease event",
-		why: "Lease event — Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone. Follow-up set on Nov 21, 2026. Due Nov 19, 2026.",
+		why: "Lease event — Example Dental, Springfield, est. December 1, 2026. Last window before leverage is gone. Follow-up set on Nov 21, 2026.",
+		due_on: "2026-11-19",
 	});
 });
 
 test("A long lease reminder keeps both the event and the saved instruction", async () => {
 	assert.partialDeepStrictEqual((await inbox()).get(pastLeaseReminder), {
 		title: "Lease event",
-		why: "Lease event — Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans. Follow-up set on Nov 21, 2026. Due Nov 19, 2026.",
+		why: "Lease event — Example Dental, Springfield, est. October 1, 2026. The estimated renewal window has passed. Confirm renewal plans. Follow-up set on Nov 21, 2026.",
+		due_on: "2026-11-19",
 	});
 });
 

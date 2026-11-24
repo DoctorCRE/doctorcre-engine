@@ -122,7 +122,6 @@ export function stepCopy({ what, item_title, context_label }: StepWording) {
 
 export function homeStepCopy(step: HomeStep, evidence: StepEvidence) {
 	const { title, instruction } = stepCopy(step);
-	const due = step.due_on ? `Due ${homeDate(step.due_on)}` : null;
 	const hold =
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
@@ -151,12 +150,10 @@ export function homeStepCopy(step: HomeStep, evidence: StepEvidence) {
 						"Call details unavailable",
 				),
 				hold,
-				due,
 			)
 		: homeWhy(
 				hold || set,
 				extraEvidence(homeDisplayText(evidence.source_evidence)),
-				due,
 			);
 	return { title, why: homeWhy(instruction, details) };
 }
