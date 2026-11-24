@@ -4,21 +4,33 @@ import type { DB } from "./next-database.d.ts";
 type RecordLink = { text: string; url: string };
 type OldRecordNames = ReadonlyMap<string, RecordLink>;
 
-const oldRecordCode = /\b[CLPV]-(?:[A-Z][A-Z0-9]*-)*\d+\b/g;
-// A suite or unit number such as "Suite C-101" has the same shape.
-const unitLabel = /(?:\b(?:suite|ste|unit|bldg|building|room)\.?|#)\s*#?\s*$/i;
+const unitLabel = String.raw`(?:\b(?:suite|ste|unit|bldg|building|room|space|level|floor|fl|lot|bay|apt|office)s?\b\.?\s*#?|#)`;
+const unitNumber = String.raw`(?=[a-z-]*\d)[a-z0-9]+(?:-[a-z0-9]+)*`;
+const codeShape = String.raw`[CLPTV]-(?:[A-Z]+-)?\d{3,4}`;
+// Unit numbers such as "Suites C-101 and C-102" can look like codes and stay as written.
+// The i flag is for the unit labels; a code is upper case.
+const oldRecordCode = new RegExp(
+	String.raw`${unitLabel}\s*${unitNumber}(?:\s*(?:,|&|and)\s*(?:and\s*)?#?\s*${unitNumber})*` +
+		String.raw`|(?<![\w/=?&@-])(?<code>${codeShape})(?![\w@/-]|\.\w)`,
+	"gi",
+);
 
 const codesIn = (text: string) =>
-	[...text.matchAll(oldRecordCode)].filter(
-		({ index }) => !unitLabel.test(text.slice(Math.max(0, index - 16), index)),
-	);
+	[...text.matchAll(oldRecordCode)].flatMap(({ groups, index }) => {
+		const found = groups?.code;
+		return found && found === found.toUpperCase()
+			? [{ code: found, index }]
+			: [];
+	});
 
 export async function readOldRecordNames(
 	db: Transaction<DB>,
 	texts: (string | null)[],
 ): Promise<OldRecordNames> {
 	const codes = [
-		...new Set(texts.flatMap((text) => codesIn(text ?? "").map(([c]) => c))),
+		...new Set(
+			texts.flatMap((text) => codesIn(text ?? "").map(({ code }) => code)),
+		),
 	];
 	if (codes.length === 0) return new Map();
 	const rows = await db
@@ -40,7 +52,7 @@ export async function readOldRecordNames(
 export function nameOldRecords(text: string, names: OldRecordNames) {
 	let named = "";
 	let end = 0;
-	for (const { 0: code, index } of codesIn(text)) {
+	for (const { code, index } of codesIn(text)) {
 		const before = text.slice(0, index).trimEnd();
 		const unknown = /(?:^|[.!?:])$/.test(before)
 			? "An old record"
