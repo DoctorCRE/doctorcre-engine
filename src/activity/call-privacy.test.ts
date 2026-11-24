@@ -7,7 +7,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { sql } from "kysely";
 import { registerDocTools } from "../doc-tools.ts";
 import { nextPartnerRead, nextTransaction } from "../next-connection.ts";
-import { readSchema } from "../test-copy.ts";
 import { doorTest } from "../test-door.ts";
 
 const door = doorTest();
@@ -77,8 +76,8 @@ after(() => door.cleanup());
 
 type Partner = "joe" | "dell";
 const partners = ["joe", "dell"] as const;
-const expected = (user: Partner) =>
-	user === "joe" ? [privateText, sharedText] : [sharedText];
+// Both partners see every call, including one the other partner recorded.
+const expected = (_user: Partner) => [privateText, sharedText];
 
 async function read<T>(user: Partner, path: string) {
 	const response = await door.request(
@@ -99,13 +98,13 @@ async function read<T>(user: Partner, path: string) {
 type Summary = { summary: string };
 const summaries = (entries: Summary[]) => entries.map(({ summary }) => summary);
 
-function assertSteps(result: unknown, user: Partner) {
+function assertSteps(result: unknown, _user: Partner) {
 	const text = JSON.stringify(result);
 	assert.ok(text.includes(assignedText));
-	assert.equal(text.includes(privateStepText), user === "joe");
+	assert.ok(text.includes(privateStepText));
 }
 
-test("each partner's deal timeline shows their visible calls, history and steps", async () => {
+test("each partner's deal timeline shows every call, its history and steps", async () => {
 	for (const user of partners) {
 		const { activities, events, next_actions } = await read<{
 			activities: Summary[];
@@ -113,16 +112,13 @@ test("each partner's deal timeline shows their visible calls, history and steps"
 			next_actions: { description: string }[];
 		}>(user, `deals/${deal}`);
 		assert.deepEqual(summaries(activities), expected(user));
-		assert.equal(
-			events.some(({ activity_id }) => activity_id === privateCall),
-			user === "joe",
-		);
+		assert.ok(events.some(({ activity_id }) => activity_id === privateCall));
 		assert.ok(events.some(({ activity_id }) => activity_id === shared));
 		assertSteps(next_actions, user);
 	}
 });
 
-test("the Deals board picks the newest visible call or completed step", async () => {
+test("the Deals board picks the newest call or completed step", async () => {
 	for (const user of partners) {
 		const { deals } = await read<{
 			deals: {
@@ -134,16 +130,12 @@ test("the Deals board picks the newest visible call or completed step", async ()
 		}>(user, "deals");
 		const row = deals.find(({ id }) => id === deal);
 		assert.ok(row);
-		assert.equal(
-			row.last_step.summary,
-			user === "joe" ? completedText : sharedText,
-		);
+		assert.equal(row.last_step.summary, completedText);
 		assertSteps(row.open_actions, user);
-		if (user === "dell") assert.equal(row.next_step, assignedText);
 	}
 });
 
-test("lead correspondence includes only visible calls", async () => {
+test("lead correspondence includes every call", async () => {
 	for (const user of partners) {
 		const { detail } = await read<{ detail: { correspondence: Summary[] } }>(
 			user,
@@ -153,7 +145,7 @@ test("lead correspondence includes only visible calls", async () => {
 	}
 });
 
-test("vendor last contact and recent entries include only visible calls", async () => {
+test("vendor last contact and recent entries include every call", async () => {
 	for (const user of partners) {
 		const {
 			record: { relationship },
@@ -209,7 +201,7 @@ test("Doc's record tool reads calls for the partner whose turn it is", async () 
 	}
 });
 
-test("Recent Activity still includes shared calls and hides the other partner's call", async () => {
+test("Recent Activity includes the call the other partner recorded", async () => {
 	for (const user of partners) {
 		const { catch_up } = await read<{
 			catch_up: { timeline: (Summary & { verb: string })[] };
@@ -222,7 +214,7 @@ test("Recent Activity still includes shared calls and hides the other partner's 
 	}
 });
 
-test("Calendar shows private follow-ups to their call's partner and their assignee", async () => {
+test("Calendar shows every call follow-up to both partners", async () => {
 	for (const user of partners) {
 		const body = await read(user, "calendar/critical-dates");
 		assertSteps(body, user);
@@ -230,37 +222,46 @@ test("Calendar shows private follow-ups to their call's partner and their assign
 	}
 });
 
-test("Updates history filters private call step wording", async () => {
+test("Updates history shows call step wording to both partners", async () => {
 	for (const user of partners) {
 		assertSteps(await read(user, "updates/changes"), user);
 	}
 });
 
-test("direct reads without a viewer expose neither private calls nor their audit text", async () => {
+test("direct reads without a viewer show every call and its audit text", async () => {
 	await nextTransaction(door.readerUrl, "read", async (tx) => {
+		const calls = await tx
+			.selectFrom("activity")
+			.select("summary")
+			.where("kind", "=", "call")
+			.orderBy("summary")
+			.execute();
 		assert.deepEqual(
-			await tx.selectFrom("activity").select("summary").execute(),
-			[{ summary: sharedText }],
+			calls.map(({ summary }) => summary),
+			[privateText, sharedText],
 		);
 		const changes = await tx
 			.selectFrom("change")
 			.select(["old_value", "new_value"])
 			.where("table_name", "=", "activity")
 			.execute();
-		assert.doesNotMatch(
-			JSON.stringify(changes),
-			/Example (private|deleted) call/,
-		);
+		assert.match(JSON.stringify(changes), /Example private call/);
 		const imported = await tx
 			.selectFrom("imported_change")
 			.select("source_event")
 			.execute();
 		assert.match(JSON.stringify(imported), /Example shared call/);
-		assert.doesNotMatch(JSON.stringify(imported), /Example private call/);
+		assert.match(JSON.stringify(imported), /Example private call/);
 	});
 });
 
-test("only a partner who can see the call can correct its caller", async () => {
+test("either partner, and only a partner, can correct a call's caller", async () => {
+	const outsider = randomUUID();
+	await door.db.query(`
+		set local engine.job = 'old_system';
+		insert into party (id, kind, name) values ('${outsider}', 'person', 'Example Outsider');
+		insert into app_user (id, slug) values ('${outsider}', 'example-outsider');
+	`);
 	const correct = (viewer: string, call = privateCall) =>
 		nextTransaction(door.writerUrl, "save", async (tx) => {
 			await sql`select set_config('engine.user_id', ${viewer}, true)`.execute(
@@ -272,7 +273,8 @@ test("only a partner who can see the call can correct its caller", async () => {
 				.where("id", "=", call)
 				.execute();
 		});
-	await assert.rejects(correct(dell), { code: "42501" });
+	await assert.rejects(correct(outsider), { code: "42501" });
+	await correct(dell);
 	await correct(joe);
 	const canRead = (viewer: Partner, call = privateCall) =>
 		nextPartnerRead(door.readerUrl, viewer, (tx) =>
@@ -282,13 +284,13 @@ test("only a partner who can see the call can correct its caller", async () => {
 				.where("id", "=", call)
 				.executeTakeFirst(),
 		);
-	assert.deepEqual(await canRead("joe"), { summary: privateText });
-	assert.equal(await canRead("dell"), undefined);
-	await correct(joe, shared);
+	for (const user of partners)
+		assert.deepEqual(await canRead(user), { summary: privateText });
+	await correct(dell, shared);
 	assert.deepEqual(await canRead("dell", shared), { summary: sharedText });
 });
 
-test("private phase reasons stay private while the moved or lost phase remains visible", async () => {
+test("both partners see a call's phase reason and the moved or lost phase", async () => {
 	const moved = randomUUID();
 	await door.db.query(`
 		set local engine.user_id = '${joe}';
@@ -311,9 +313,7 @@ test("private phase reasons stay private while the moved or lost phase remains v
 	for (const user of partners)
 		assert.partialDeepStrictEqual(await details(user), {
 			phase: "touring",
-			phase_change: {
-				reason: user === "joe" ? "Example private phase reason" : null,
-			},
+			phase_change: { reason: "Example private phase reason" },
 		});
 	await move("dead", "2025-01-08");
 	await nextPartnerRead(door.readerUrl, "dell", async (tx) => {
@@ -322,10 +322,7 @@ test("private phase reasons stay private while the moved or lost phase remains v
 			.select("new_value")
 			.where("table_name", "=", "deal_phase_change")
 			.execute();
-		assert.doesNotMatch(
-			JSON.stringify(history),
-			/Example private phase reason/,
-		);
+		assert.match(JSON.stringify(history), /Example private phase reason/);
 	});
 	await assert.rejects(
 		nextPartnerRead(door.readerUrl, "dell", (tx) =>
@@ -338,11 +335,11 @@ test("private phase reasons stay private while the moved or lost phase remains v
 	for (const user of partners)
 		assert.partialDeepStrictEqual(await details(user), {
 			phase: "dead",
-			lost_reason: user === "joe" ? "Example private phase reason" : null,
+			lost_reason: "Example private phase reason",
 		});
 });
 
-test("watch and reminder readers use call and step ownership for checklist wording", async () => {
+test("watch and reminder readers show checklist wording from a call to both partners", async () => {
 	const gone = randomUUID();
 	const watched = randomUUID();
 	await door.db.query(`
@@ -367,8 +364,8 @@ test("watch and reminder readers use call and step ownership for checklist wordi
 		assert.equal(status, 200);
 		const text = JSON.stringify(watch);
 		assert.match(text, /Assigned checklist/);
-		assert.equal(text.includes("Private checklist"), user === "joe");
-		assert.equal(text.includes("Deleted checklist"), user === "joe");
+		assert.match(text, /Private checklist/);
+		assert.match(text, /Deleted checklist/);
 	}
 	const [status, reminders] = await door.save(
 		job,
@@ -378,10 +375,10 @@ test("watch and reminder readers use call and step ownership for checklist wordi
 	);
 	assert.equal(status, 200);
 	assert.match(JSON.stringify(reminders), /Assigned checklist/);
-	assert.doesNotMatch(JSON.stringify(reminders), /Private checklist/);
+	assert.match(JSON.stringify(reminders), /Private checklist/);
 });
 
-test("the assigned partner can read step wording in audit without the source quote", async () => {
+test("the other partner reads a call's step wording and its quote in audit", async () => {
 	const rows = await nextPartnerRead(door.readerUrl, "dell", (tx) =>
 		tx
 			.selectFrom("change")
@@ -389,28 +386,15 @@ test("the assigned partner can read step wording in audit without the source quo
 			.where("table_name", "=", "next_step")
 			.execute(),
 	);
-	assert.match(JSON.stringify(rows), /Send the brochure/);
-	assert.doesNotMatch(
-		JSON.stringify(rows),
-		/Example private call|Review the private plan/,
-	);
-	const evidence = await door.db.query(
-		`select e.new_value from call_audit_evidence e join change c on c.id = e.change_id
-		where c.new_value ->> 'what' = $1`,
+	const text = JSON.stringify(rows);
+	for (const wording of [assignedText, privateStepText, privateText])
+		assert.ok(text.includes(wording), wording);
+	const { rows: stored } = await door.db.query(
+		`select new_value ->> 'call_evidence_quote' as quote from change
+		where table_name = 'next_step' and new_value ->> 'what' = $1`,
 		[assignedText],
 	);
-	assert.deepEqual(evidence.rows, [{ new_value: privateText }]);
-});
-
-test("call privacy migration can safely be applied twice", async () => {
-	const migration = await readSchema("add-call-read-policies.sql");
-	try {
-		await door.db.query(migration);
-		await door.db.query(migration);
-	} catch (error) {
-		await door.db.query("rollback");
-		throw error;
-	}
+	assert.deepEqual(stored, [{ quote: privateText }]);
 });
 
 test("the partner reader can narrow step history with the change index", async () => {
@@ -453,8 +437,7 @@ test("the partner login has no direct read permission on call-bearing text", asy
 			('change', 'old_value'), ('change', 'new_value'), ('imported_change', 'source_event'),
 			('imported_deal_history', 'old_value'), ('imported_deal_history', 'new_value'),
 			('imported_deal_history', 'human_quote'), ('imported_deal_history', 'agent_rationale'),
-			('home_update', 'what'), ('doc_turn', 'answer'), ('doc_turn', 'claim_state'),
-			('call_audit_evidence', 'old_value'), ('call_audit_evidence', 'new_value')
+			('home_update', 'what'), ('doc_turn', 'answer'), ('doc_turn', 'claim_state')
 		) census(tab, col)
 		where has_column_privilege($1, 'next.' || census.tab, census.col, 'SELECT')`,
 		[new URL(door.readerUrl).username],
@@ -463,7 +446,7 @@ test("the partner login has no direct read permission on call-bearing text", asy
 });
 
 for (const kind of ["deal", "person", "company", "property"] as const) {
-	test(`an accepted private-call step keeps its source on a ${kind}`, async () => {
+	test(`both partners read an accepted call step and its source on a ${kind}`, async () => {
 		const target = randomUUID();
 		const column =
 			kind === "deal"
@@ -514,29 +497,66 @@ for (const kind of ["deal", "person", "company", "property"] as const) {
 					.select("what")
 					.where("id", "=", id)
 					.executeTakeFirst();
-				assert.deepEqual(
-					step,
-					user === "joe" ? { what: "Example private instruction" } : undefined,
-				);
+				assert.deepEqual(step, { what: "Example private instruction" });
 				const entries = await tx
 					.selectFrom("change")
 					.select("new_value")
 					.where("table_name", "=", "next_step")
 					.where(sql<boolean>`record = jsonb_build_object('id', ${id}::uuid)`)
 					.execute();
-				assert.equal(
-					JSON.stringify(entries).includes("Example private instruction"),
-					user === "joe",
-				);
+				assert.match(JSON.stringify(entries), /Example private instruction/);
+				const source = await tx
+					.selectFrom("proposal")
+					.select("activity_id")
+					.where("id", "=", id)
+					.executeTakeFirst();
+				assert.deepEqual(source, { activity_id: privateCall });
 			});
 		}
-		const { rows } = await door.db.query(
-			"select call_activity_id as source from step_call_provenance where step_id = $1",
-			[id],
-		);
-		assert.deepEqual(rows, [{ source: privateCall }]);
 	});
 }
+
+test("the other partner reads a call's step quote, resolution reason and proposal evidence", async () => {
+	const [ended, proposal] = [randomUUID(), randomUUID()];
+	const reason = "Example private resolution";
+	const evidence = "Example private evidence";
+	await door.db.query(`
+		set local engine.job = 'agent';
+		set local engine.user_id = '${joe}';
+		insert into next_step (id, deal_id, owner_party_id, what, resolution, resolved_at, resolution_reason,
+			call_activity_id, call_evidence_quote)
+		values ('${ended}', '${deal}', '${joe}', 'Example ended step', 'cancelled', '2025-01-06', '${reason}',
+			'${privateCall}', '${privateText}');
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, owner_party_id, what, evidence)
+		values ('${proposal}', 'next_step', '${privateCall}', 'call', 'agent', '${deal}', '${joe}',
+			'Example proposed step', '${evidence}');
+	`);
+	await nextPartnerRead(door.readerUrl, "dell", async (tx) => {
+		assert.deepEqual(
+			await tx
+				.selectFrom("next_step")
+				.select(["call_evidence_quote", "resolution_reason"])
+				.where("id", "=", ended)
+				.executeTakeFirst(),
+			{ call_evidence_quote: privateText, resolution_reason: reason },
+		);
+		assert.deepEqual(
+			await tx
+				.selectFrom("proposal")
+				.select("evidence")
+				.where("id", "=", proposal)
+				.executeTakeFirst(),
+			{ evidence },
+		);
+		const history = await tx
+			.selectFrom("change")
+			.select("new_value")
+			.where("table_name", "=", "next_step")
+			.where(sql<boolean>`record = jsonb_build_object('id', ${ended}::uuid)`)
+			.execute();
+		assert.match(JSON.stringify(history), new RegExp(reason));
+	});
+});
 
 test("a registered job reads the latest private step’s ID and due date without a viewer", async () => {
 	const [target, latest] = Array.from({ length: 2 }, () => randomUUID());

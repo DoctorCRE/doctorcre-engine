@@ -217,6 +217,7 @@ test("a deal’s recorded calls include the proposal evidence and current decisi
 		],
 	});
 	assert.deepEqual(callIds.parse(result).calls, [
+		{ activity_id: privateCall, proposals: [] },
 		{
 			activity_id: call,
 			proposals: [pending, accepted, dismissed].map((proposal_id) => ({
@@ -233,7 +234,7 @@ test("call outcomes are scoped to the session partner and deal", async () => {
 	assert.equal(asOther.status, 200);
 	assert.deepEqual(
 		callIds.parse(await asOther.json()).calls.map((row) => row.activity_id),
-		[privateCall],
+		[privateCall, call, noSuggestions],
 	);
 	const elsewhere = await read(otherDeal);
 	assert.equal(elsewhere.status, 200);
@@ -344,8 +345,9 @@ test("accepting a private log appends to its call and writes no shared note", as
 			.rows[0].summary,
 		"The tour is booked.\n\nReview the example plan.",
 	);
+	// Both partners see every call.
 	assert.ok(
-		!callIds
+		callIds
 			.parse(await (await read(deal, "dell")).json())
 			.calls.some((row) => row.activity_id === call),
 	);
@@ -545,7 +547,7 @@ test("matching checklist and property steps do not get merged", async () => {
 	);
 });
 
-test("the latest 50 visible calls bound proposal aggregation", async (t) => {
+test("the latest 50 calls bound proposal aggregation", async (t) => {
 	const historyDeal = id(14);
 	await db.query(`
 		begin;
@@ -557,12 +559,13 @@ test("the latest 50 visible calls bound proposal aggregation", async (t) => {
 			select 'call', '2000-01-01'::timestamptz + n * interval '1 day'
 			from generate_series(1, 5000) n returning id
 		) insert into activity_about (activity_id, deal_id) select id, '${historyDeal}' from history;
-		select set_config('engine.job', 'call_capture', true), set_config('engine.user_id', '${dell}', true);
-		with hidden as (
+		-- The viewer recorded the newest calls, so each has a proposal the viewer can decide.
+		select set_config('engine.job', 'call_capture', true), set_config('engine.user_id', '${joe}', true);
+		with recent as (
 			insert into activity (kind, happened_at)
 			select 'call', '2025-01-01'::timestamptz + n * interval '1 day'
 			from generate_series(1, 60) n returning id
-		) insert into activity_about (activity_id, deal_id) select id, '${historyDeal}' from hidden;
+		) insert into activity_about (activity_id, deal_id) select id, '${historyDeal}' from recent;
 		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${joe}', true);
 		insert into proposal (kind, activity_id, activity_kind, proposed_by_job, deal_id, what, evidence)
 			select 'log_call', activity_id, 'call', 'old_system', deal_id, 'Example note', 'Example evidence'

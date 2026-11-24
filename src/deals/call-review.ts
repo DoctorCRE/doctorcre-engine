@@ -3,7 +3,7 @@ import { visibleSuggestion } from "../home-inbox-review.ts";
 import type { DB } from "../next-database.d.ts";
 import { ACTING_USER } from "../next-save.ts";
 
-export const visibleCallProposal = (userId: string | Expression<string>) =>
+export const decidableCallProposal = (userId: string | Expression<string>) =>
 	sql<boolean>`(case when p.kind = 'next_step_done' then
 			step.owner_party_id = ${userId}::uuid and (p.status <> 'pending' or step.status = 'open')
 		else p.decided_by_user_id = ${userId}::uuid or ${visibleSuggestion(userId)} end)`;

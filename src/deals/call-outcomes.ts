@@ -6,9 +6,9 @@ import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../uuid.ts";
 import {
+	decidableCallProposal,
 	openCopiedCallStepText,
 	stepTextKey,
-	visibleCallProposal,
 } from "./call-review.ts";
 
 const MAX_CALLS = 50;
@@ -53,7 +53,7 @@ export function callOutcomeQuery(
 		.leftJoin("next_step as step", "step.id", "p.next_step_id")
 		.where(sql<boolean>`p.activity_id = a.id`)
 		.where("p.deal_id", "=", dealId)
-		.where(visibleCallProposal(userId));
+		.where(decidableCallProposal(userId));
 	const recentCalls = db
 		.selectFrom("activity as a")
 		.selectAll("a")

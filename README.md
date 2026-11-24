@@ -135,7 +135,7 @@ save's answer, and `changeDeal` refuses a crossed deal edit and answers `rebased
 over an unseen change to another field.
 The health probe appends `next_section_readable` after its existing fields.
 
-Each check loads `schema/next.sql` and `schema/add-call-read-policies.sql` in a copy of that restore and
+Each check loads `schema/next.sql` in a copy of that restore and
 generates ignored `src/next-database.d.ts` from it with `npm run types:next`, so a
 column change in the schema reaches the code's types on the next check.
 The same template holds the copy attribution functions. Each copy fixture clones
