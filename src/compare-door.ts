@@ -1,8 +1,9 @@
 import { type Context, Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { isOneOf, PARTNERS } from "./clients/read.ts";
+import { PARTNERS } from "./clients/read.ts";
 import { failureKind } from "./failure.ts";
+import { isOneOf } from "./request-shape.ts";
 import { isArguments } from "./save-door.ts";
 import type { SessionEnv } from "./session.ts";
 

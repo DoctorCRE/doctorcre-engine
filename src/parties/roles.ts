@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { Refusal } from "../answer.ts";
-import { isOneOf } from "../clients/read.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "../next-door.ts";
@@ -9,13 +8,15 @@ import { ACTING_USER } from "../next-save.ts";
 import {
 	type Check,
 	fit,
+	isOneOf,
 	isStoredText,
 	isUuid,
 	optional,
+	orNull,
 	type Shape,
 } from "../request-shape.ts";
 import { SaveRefusal } from "../save.ts";
-import { changing, edit, unchangedSince } from "./edit.ts";
+import { changing, edit, trimmed, unchangedSince } from "./edit.ts";
 
 const STATUSES = ["roster", "cold", "engaged", "paused"] as const;
 const CLIENT = {
@@ -37,8 +38,8 @@ const optionalAll = <S extends Shape>(shape: S) =>
 	) as { [K in keyof S]: Check<Values<S>[K] | undefined> };
 const editAll = <S extends Shape>(shape: S) =>
 	Object.fromEntries(
-		Object.entries(shape).map(([field, check]) => [field, edit(check)]),
-	) as { [K in keyof S]: ReturnType<typeof edit<Values<S>[K]>> };
+		Object.entries(shape).map(([field, check]) => [field, edit(orNull(check))]),
+	) as { [K in keyof S]: ReturnType<typeof edit<Values<S>[K] | null>> };
 
 export const clientRead = (tx: Transaction<DB>, party_id: string) =>
 	tx
@@ -99,11 +100,22 @@ async function lockParty(tx: Transaction<DB>, party_id: string) {
 	return party;
 }
 
-async function setVertical(
-	tx: Transaction<DB>,
-	party_id: string,
+type Practice = { vertical: string | null; subtype: string | null };
+
+// A subtype names a kind of practice type, so it needs one.
+function practiceOf(
 	vertical: string | null | undefined,
 	subtype: string | null | undefined,
+): Practice {
+	const practice = { vertical: trimmed(vertical), subtype: trimmed(subtype) };
+	if (practice.subtype && !practice.vertical) throw invalid(["subtype"]);
+	return practice;
+}
+
+async function setPractice(
+	tx: Transaction<DB>,
+	party_id: string,
+	{ vertical, subtype }: Practice,
 ) {
 	await tx
 		.deleteFrom("client_vertical")
@@ -112,14 +124,8 @@ async function setVertical(
 	if (vertical)
 		await tx
 			.insertInto("client_vertical")
-			.values({
-				party_id,
-				vertical: vertical.trim(),
-				subtype: subtype?.trim() || null,
-				changed_at: sql<string>`now()`,
-			})
+			.values({ party_id, vertical, subtype, changed_at: sql<string>`now()` })
 			.execute();
-	else if (subtype) throw invalid(["subtype"]);
 }
 
 function parseNew<S extends Shape>(shape: S, body: JsonObject) {
@@ -134,6 +140,7 @@ type NewClient = Exclude<ReturnType<typeof parseNew<typeof CLIENT>>, Refusal>;
 async function addClient(tx: Transaction<DB>, request: NewClient) {
 	const { party_id } = request;
 	const party = await lockParty(tx, party_id);
+	const practice = practiceOf(request.vertical, request.subtype);
 	if (await clientRead(tx, party_id))
 		throw new SaveRefusal(new Refusal(409, "already_client", { party_id }));
 	const unrecorded =
@@ -149,9 +156,13 @@ async function addClient(tx: Transaction<DB>, request: NewClient) {
 			.set({ how_found: request.how_found })
 			.where("id", "=", party_id)
 			.execute();
+	// A deal can make a record a client before anyone fills in its profile.
 	await tx
 		.insertInto("party_role")
 		.values({ party_id, role: "client", changed_at: sql<string>`now()` })
+		.onConflict((conflict) =>
+			conflict.columns(["party_id", "role"]).doNothing(),
+		)
 		.execute();
 	await tx
 		.insertInto("client")
@@ -163,7 +174,7 @@ async function addClient(tx: Transaction<DB>, request: NewClient) {
 			changed_at: sql<string>`now()`,
 		})
 		.execute();
-	await setVertical(tx, party_id, request.vertical, request.subtype);
+	await setPractice(tx, party_id, practice);
 	return savedClient(tx, party_id);
 }
 
@@ -208,10 +219,20 @@ async function editClient(
 	const current = await clientRead(tx, party_id);
 	if (!current) throw new SaveRefusal(new Refusal(404, "not_found"));
 	unchangedSince(request, changed, current);
-	if (to.status === null || to.how_found === null)
-		throw invalid(
-			changed.filter((field) => field === "status" || field === "how_found"),
-		);
+	const cleared = (["status", "how_found"] as const).filter(
+		(field) => to[field] === null,
+	);
+	if (cleared.length) throw invalid([...cleared]);
+	const vertical = "vertical" in to ? trimmed(to.vertical) : current.vertical;
+	// A subtype belongs to the practice type it was recorded under.
+	const practice = practiceOf(
+		vertical,
+		"subtype" in to
+			? to.subtype
+			: vertical === current.vertical
+				? current.subtype
+				: null,
+	);
 	await refuseUnknown(tx, to);
 	if (to.how_found)
 		await tx
@@ -228,18 +249,11 @@ async function editClient(
 			})
 			.where("party_id", "=", party_id)
 			.execute();
-	if ("vertical" in to || "subtype" in to) {
-		const vertical =
-			"vertical" in to ? to.vertical?.trim() || null : current.vertical;
-		// A subtype belongs to the practice type it was recorded under.
-		const kept = vertical === current.vertical ? current.subtype : null;
-		await setVertical(
-			tx,
-			party_id,
-			vertical,
-			"subtype" in to ? to.subtype : kept,
-		);
-	}
+	if (
+		practice.vertical !== current.vertical ||
+		practice.subtype !== current.subtype
+	)
+		await setPractice(tx, party_id, practice);
 	return savedClient(tx, party_id);
 }
 
