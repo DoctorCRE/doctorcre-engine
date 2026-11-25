@@ -377,7 +377,7 @@ type OpenAction = {
 	client_step?: true;
 };
 
-// Reads only: saves compare and lock the stored wording.
+// Only the read output changes; the stored wording stays as saved.
 export const checkInNextStep =
 	(names: OldRecordNames) =>
 	<Deal extends { next_step: string | null }>(deal: Deal) => ({
