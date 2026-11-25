@@ -1785,7 +1785,7 @@ The response is `{ ok: true, schema_version: "home-today.v1", today, viewer, own
 
 `meetings.items` lists the signed-in partner's stored occurrences that overlap today's Central calendar day, including those that already ended. Each row carries its Outlook event `key` when present. The row includes attendees and location from the snapshot. Non-user organizer and attendee emails match to open deals and parties (`possible_deals`, `context_label`, `open_url`).
 
-`meetings.meetings_may_be_missing` is true when a successful agenda has an `undecoded` warning. The shared Today panel shows meetings when present. A valid read with no items says “No meetings today.” When the flag is true, Today adds “Calendar may be incomplete” below that message. A failed or invalid read says “Couldn’t load meetings.”
+`meetings.meetings_may_be_missing` is true when a successful agenda has an `undecoded` warning. The shared Today panel shows meetings when present. A valid read with no items says “No meetings today.” Today never shows the flag to partners (owner, 2026-11-25). A failed or invalid read says “Couldn’t load meetings.”
 
 `follow_up_reviews` omits dismissed and confirmed reviews. Answering a review leaves its meeting in `meetings.items`. If the snapshot has only a review for an occurrence, the engine uses its key, title, and times for that meeting. The complete list and full details for ended meetings depend on the Outlook publisher sending their calendar rows. [Outlook publisher change](https://github.com/DoctorCRE/carr-system/issues/3265)
 
