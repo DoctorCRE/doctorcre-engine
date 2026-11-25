@@ -1,7 +1,14 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
+import { jsonArrayFrom } from "kysely/helpers/postgres";
 import { recordActivity } from "../activity/next-record.ts";
-import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
+import {
+	answerNextRead,
+	checkFields,
+	isoMillis,
+	Refusal,
+	refuse,
+} from "../answer.ts";
 import { isCalendarDate } from "../calendar-date.ts";
 import type { JsonObject } from "../database.d.ts";
 import type { DB } from "../next-database.d.ts";
@@ -111,16 +118,34 @@ function requireOpenRevision(
 
 async function listPlans(db: Db, deal: string) {
 	if (!(await findDeal(db, deal))) return new Refusal(404, "not_found");
-	const tours = await db
-		.selectFrom("tour_plan")
+	const plans = db.selectFrom("tour_plan").where("deal_id", "=", deal);
+	const tours = await plans
 		.select(["id", "planned_on"])
-		.where("deal_id", "=", deal)
 		.where("completed_activity_id", "is", null)
 		.where("cancelled_at", "is", null)
 		.orderBy("planned_on")
 		.orderBy("id")
 		.execute();
-	return { tours };
+	const past_tours = await plans
+		.innerJoin("activity", "activity.id", "completed_activity_id")
+		.select((eb) => [
+			"tour_plan.id",
+			"activity.id as activity_id",
+			isoMillis(eb.ref("activity.happened_at")).as("happened_at"),
+			jsonArrayFrom(
+				eb
+					.selectFrom("activity_about")
+					.innerJoin("property", "property.id", "property_id")
+					.select(["property_id", "address", "name"])
+					.whereRef("activity_id", "=", "activity.id")
+					.orderBy("address")
+					.orderBy("property_id"),
+			).as("properties"),
+		])
+		.orderBy("activity.happened_at", "desc")
+		.orderBy("tour_plan.id", "desc")
+		.execute();
+	return { tours, past_tours };
 }
 
 async function readPlan(db: Db, deal: string, tour: string) {
