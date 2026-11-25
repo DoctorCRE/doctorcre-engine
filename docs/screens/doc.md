@@ -4,7 +4,7 @@
 - **Must** answer questions about deals, leads, clients, and the partner's own mail. Keep each partner's conversations private.
 - **Must** wait for the partner to confirm a note, next step, or pending reply draft. Sending a reply stays in the existing review.
 
-- [ ] **Doc link** in account settings shows the signed-in partner's Mac status. It uses the queued-question wording for setup, offline, sign-in and plan limits. A ready Mac shows "Doc is ready on your Mac." The partner can make, replace or revoke their own link code. Each new code appears once.
+- [ ] **Doc link** on Settings, opened from the account menu, shows the signed-in partner's Mac status. It uses the queued-question wording for setup, offline, sign-in and plan limits. A ready Mac shows "Doc is ready on your Mac." The partner can make, replace or revoke their own link code. Each new code appears once.
 
 ## Open a conversation
 
