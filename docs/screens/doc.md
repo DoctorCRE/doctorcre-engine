@@ -2,7 +2,7 @@
 
 - **For** each signed-in partner, on a computer or phone.
 - **Must** answer questions about deals, leads, clients, and the partner's own mail. Keep each partner's conversations private.
-- **Must** wait for the partner to confirm a note, next step, or pending reply draft. Sending a reply stays in the existing review.
+- **Must** wait for the partner to confirm a note, next step, or pending reply draft. A reply started on Home still sends from its review. An email written in a [Doc session started from a button](#start-doc-from-a-button) sends from that session, only on **Approve and send**.
 
 The owner approved this design on 2026-11-25. Check each line on a signed-in app against the practice copy, at 1280x640 and 1440x900 on a computer and at 390px on a phone, with made-up data.
 
@@ -14,7 +14,7 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 - [ ] The page never scrolls. Only the conversation scrolls, and the chats list scrolls on its own when it is long. A chat opens at its latest turn.
 - [ ] The chats list is always open on the left, 264px wide, with no heading. Each row is one 36px line with no underline. It shows the start of the chat's first question, and its time on the right. Newest chat first. The open chat's row has a filled background.
 - [ ] A row's time is the time of the chat's newest message. A message from today shows its time ("2:14 PM"). One from the last 6 days shows its weekday ("Tue"). An older one shows the month and day ("Nov 12"), with the year when it is not this year ("Nov 12, 2025").
-- [ ] A chat's row shows a spinner while Doc works on it, and an amber dot while a save waits for the partner's OK.
+- [ ] A chat's row shows a spinner while Doc works on it, and an amber dot while a save waits for the partner's OK or Doc has a question for the partner.
 - [ ] The **New chat** pencil sits at the top of the list. **Older chats** is a quiet last row that loads the next page, shown only when there is one.
 - [ ] The top bar reads "Ask Doc / " and the open chat's first question. The title shows once.
 - [ ] The conversation is one centered column 728px wide. The partner's question is a rounded box on the right, at most 80% of the column. Doc's answer is plain text on the page, with no box, and may use bold names and bullets.
@@ -74,6 +74,38 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 - [ ] **Save draft and open review** opens the review for the exact new draft, even if another reply leads the conversation card on Home. A draft already on the email, or a pending draft answering another email in the same conversation and mailbox, keeps its saved text, and Doc's new wording is not used. Doc then stays on the chat and shows "Opened your saved draft. Doc's new wording wasn't used." with an **Open reply review** link to that draft. The partner reviews and submits mail in that review.
 - [ ] **Talk to Doc about this draft** in reply review opens Doc with the exact pending draft and its source email. Doc can propose a revised subject, body, or both. Edit the proposed text and choose **Save revision** to update that draft and return to its review. A newer revision or a draft that has left pending needs a fresh review. **Send reply** stays in reply review.
 - [ ] If a save fails, the edit stays visible and the message says what happened. A lost response offers **Retry** for the same save. A target or step that changed asks the partner to open the record or ask Doc again. Reloading after success shows the saved result once.
+
+## Start Doc from a button
+
+One pattern serves every button that hands a job to Doc: **Build client website**, **Draft requirement email** and **Compare LOIs** on a deal, and **Reach out** on a lead. A new job adds one row to the [skill list](../new-database.md#doc-skill-sessions), not a new screen. What each skill does inside its session is not designed here. The engine parts are not built yet.
+
+- [ ] The button sits on the record and starts with a verb that says what Doc will do.
+- [ ] Clicking it opens Ask Doc in a new chat named for the job and the record, such as "Ask Doc / Client website for Example Dental". The chat's first line says where it started, such as "Started from Example Dental, second office · Client website". The record's name opens the record.
+- [ ] Doc checks the records before it asks anything. Its first message lists what it already has, then asks only for what is missing, as a short numbered list.
+- [ ] The partner answers in the chat. A file dropped on the typing box is filed to the record's Documents and shows as a chip, and Doc reads it there. The box's placeholder names what the job wants, such as "Drop MLS reports or paste property links".
+- [ ] A long job runs on its own. Doc says "You will get a notification when it is ready, or sooner if I have a question." The partner can leave.
+- [ ] When the job finishes or Doc has a question, the partner gets an app update and a phone push, such as "Client website ready for Example Dental" or "Doc has a question about Example Dental's website". It opens the result or the chat.
+- [ ] From then on the button shows the job's state, such as "Building client website · Started 2:14 PM", "Doc has a question · Answer", then "Update client website · Built Nov 9". Clicking it reopens the same chat.
+- [ ] The result is saved to the record: the website on the deal, the comparison sheet in the deal's Documents, or the sent email in the deal's or lead's Activity.
+
+| Button                                                   | Where                               | Doc first checks                                                   | Doc asks for                                                                       | Result                                         |
+| -------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **Build client website**, then **Update client website** | Deal Overview, Client portal, Tours | Client, market, size, use, must-haves from calls and notes         | Which properties (MLS reports dropped in, or links), what to show, what to feature | The site, linked on the deal                   |
+| **Draft requirement email**                              | Deal Overview                       | Requirements, market, timing, brokers already on the deal          | Anything missing, and who it goes to                                               | An email, approved and sent                    |
+| **Compare LOIs**                                         | Deal Overview                       | Every LOI filed on the deal                                        | Missing LOIs, dropped in                                                           | A comparison sheet in the deal's Documents     |
+| **Reach out**                                            | Each lead                           | The lead's record and earlier contact, then research on the person | A few questions                                                                    | An email, approved and sent, saved to the lead |
+
+### Approve and send
+
+A job that writes an email ends with one card in the chat. The requirement email, lead outreach and any later email job use it.
+
+- [ ] The card shows To, Subject and the body, each a plain text box the partner can type in. Under its top line it says where the email goes from and where it is saved, such as "Email from your CARR mailbox · saved to the lead when sent".
+- [ ] **Approve and send** is the one orange button. It sends exactly the text on the card from the signed-in partner's own mailbox. Nothing sends before that click.
+- [ ] **Ask Doc to revise** returns to the typing box. Doc rewrites the same card and keeps the partner's edits unless asked to change them.
+- [ ] After sending, the card becomes one line with a check, such as "Sent to Example Dental · saved to the lead". If sending fails it says "Couldn't send. Your draft is saved." and offers **Retry**.
+- [ ] A requirement email lists each broker on the To line, and each broker gets their own copy.
+
+See [Send a new email from Doc](../new-database.md#send-a-new-email-from-doc).
 
 ## Kept from our rules
 
