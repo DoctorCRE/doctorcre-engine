@@ -107,8 +107,18 @@ function stepInstruction(what: string) {
 	);
 }
 
+// The old nightly cadence saved its rule template, e.g. "Relationship touch — Name. 90-day vendor cadence."
+const cadenceTouch =
+	/^\p{Lu}\p{Ll}* touch\s*[—–:-]\s*(.+?)(?:\.\s*\d+-day ([a-z ]+) cadence)?\.?$/u;
+
+function checkIn(wording: string) {
+	const [, name, role] = wording.match(cadenceTouch) ?? [];
+	return name && `Check in with ${name}${role ? ` (${role})` : ""}`;
+}
+
 export function stepCopy({ what, item_title }: StepWording) {
-	const instruction = stepInstruction(what);
+	const wording = stepInstruction(what);
+	const instruction = checkIn(wording) || wording;
 	const title =
 		item_title?.trim() || shortHomeTitle(instruction) || "Next step";
 	return {

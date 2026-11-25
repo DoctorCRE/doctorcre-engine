@@ -39,6 +39,34 @@ for (const [scenario, item_title, what, title, instruction = what] of [
 		null,
 	],
 	["a long word", null, "e\u0301".repeat(91), `${"e\u0301".repeat(89)}…`],
+	[
+		"an automatic vendor check-in",
+		null,
+		"Relationship touch — V-ABC-001 Example Supply. 90-day vendor cadence.",
+		"Check in with Example Supply (vendor)",
+		null,
+	],
+	[
+		"an automatic client check-in",
+		null,
+		"Relationship touch: Example Clinic. 60-day client cadence.",
+		"Check in with Example Clinic (client)",
+		null,
+	],
+	[
+		"an automatic check-in without a cadence",
+		null,
+		"Nurture touch — Example Place",
+		"Check in with Example Place",
+		null,
+	],
+	[
+		"a saved title on an automatic check-in",
+		"Call Pat",
+		"Relationship touch — Example Contact. 90-day contact cadence.",
+		"Call Pat",
+		"Check in with Example Contact (contact)",
+	],
 ] as const) {
 	test(`shows distinct heading and body text for ${scenario}`, () => {
 		assert.deepEqual(stepCopy({ what, item_title }), {
