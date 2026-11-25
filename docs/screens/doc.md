@@ -110,14 +110,30 @@ See [Send a new email from Doc](../new-database.md#send-a-new-email-from-doc).
 ## Kept from our rules
 
 - [ ] **Send** is neutral. The save button is the one orange button in view.
-- [ ] No model picker, microphone, right-hand panel, search over chats, or rows that list Doc's steps.
+- [ ] No microphone, right-hand panel, search over chats, rows that list Doc's steps, or model picker in the chat. The model choice lives on Settings.
 - [ ] Tones, type sizes and spacing come from the app's tokens. A chat uses three text sizes, and a new chat four. See [design principles](../design-principles.md).
+
+## Choose who answers, watch it arrive, see it drawn
+
+The owner approved these on 2026-11-25. None is built yet. Each line replaces any line above that says otherwise once its unit ships. The engine side is [Planned Doc changes](../new-database.md#planned-doc-changes).
+
+- [ ] **Who answers** on Settings, under Doc link, lists each model the partner's Mac reports: Claude, Codex, Grok and Gemini. Each row shows "Ready", "Sign in on your Mac" or "Paused until 4:40 AM". A partner whose Mac reports only Claude sees no picker.
+- [ ] The partner picks a first choice and may pick a second. Each choice offers the models and effort levels its tool lists, with the tool's default first. Saving applies from the next question in every chat.
+- [ ] A chat started on one model continues on another with its earlier questions and answers.
+- [ ] When the plan limit gives a reset time, the waiting line reads "Doc is paused until 4:40 AM". Without one it reads "Doc is paused until your Claude plan resets", with the paused model's name in place of Claude.
+- [ ] An answer from any model but Claude on the Mac has a small grey line under it, "Answered by Codex", "Answered by Grok", "Answered by Gemini" or "Answered by backup".
+- [ ] While Doc works, the answer appears as Doc writes it, as plain text. Before the first words the working line says what Doc is doing, such as "Looking up Example Dental · 4s". Source chips, visuals, suggestions and a save card appear when the answer finishes.
+- [ ] While a question is queued or working and the typing box is empty, **Send** becomes a square **Stop**. Stop cancels that question, and its line reads "Stopped". The partner can ask again.
+- [ ] Once the partner types, the button is **Send** again, and the question waits as a grey line under the current answer, "Sends when Doc finishes", with **Edit** and **Remove**. Only one question can wait, so **Send** is grey while one does. The waiting question sends itself when the answer ahead ends.
+- [ ] Up to three suggestion chips sit under an answer, such as "Draft a reply to the landlord". Tapping one fills the typing box and sends nothing.
+- [ ] When a visual explains better than text, the answer shows a table, a chart or a diagram under its text, each with a short title.
+- [ ] A table has headings and rows. A cell that names a record opens it.
+- [ ] A chart is bars or a line with labelled values. Hovering or tapping a bar or point shows its value and the records it came from, and each record opens.
+- [ ] A diagram is a flowchart or timeline drawn in the app's tones. A record it names appears as a source chip.
+- [ ] A visual fits the 728px column. A wide table or diagram scrolls sideways inside its own box, never the page. On a phone it fits the screen the same way.
 
 ## Coming later
 
-These need new engine work first and are not current behavior.
-
 - **Attach a file.** The paperclip will attach a PDF or photo for Doc to read, shown as a chip in the typing box with an x to remove it. It needs a design in `docs/new-database.md` first.
-- **Stop.** A square button will take the place of **Send** while Doc works and cancel that question.
 
 The engine owns the [conversation and turn contract](../new-database.md#doc-conversations-and-turns). Mail jobs that need judgment use the partner's link after any waiting chat turns and stay out of the chats list. Verify these lines as both partners, including a mailbox the other partner cannot open.
