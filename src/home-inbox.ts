@@ -28,7 +28,6 @@ import {
 	stepTargetFields,
 } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
-import { jobMeetingDate } from "./next-steps.ts";
 import type { DatabaseEnv } from "./reader.ts";
 import { isUuid } from "./request-shape.ts";
 
@@ -40,7 +39,6 @@ interface Step extends HomeStep, HomeStepTarget {
 	prospect: boolean;
 	created_at: string;
 	set_by: string | null;
-	set_by_job: string | null;
 	source_ref: string | null;
 	activity_at: string;
 	completed_at: string | null;
@@ -68,12 +66,12 @@ function stepRows(
 	return sql<Step>`
 		-- One pass over step history; the protected view cannot use the record index per step.
 		with step_history as materialized (
-			select id, record ->> 'id' as step_id, action, changed_by_user_id, changed_by_job, old_value, new_value
+			select id, record ->> 'id' as step_id, action, changed_by_user_id, old_value, new_value
 			from change where table_name = 'next_step' and record - 'id' = '{}'
 		)
 		select s.id, s.what, s.item_title, s.source_ref, s.status, s.deal_id, s.party_id, s.property_id,
 			${stepTargetFields(db, today)},
-			s.due_on, s.created_at, setter.name as set_by, origin.changed_by_job as set_by_job,
+			s.due_on, s.created_at, setter.name as set_by,
 			coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
 			case when s.hold_until > ${today}
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
@@ -101,7 +99,7 @@ function stepRows(
 			and accepted.status = 'accepted'
 		left join activity source on source.id = accepted.activity_id
 		left join (
-			select distinct on (step_id) step_id, changed_by_user_id, changed_by_job from step_history
+			select distinct on (step_id) step_id, changed_by_user_id from step_history
 			where action = 'insert' order by step_id, id
 		) origin on origin.step_id = s.id::text
 		left join party setter on setter.id = origin.changed_by_user_id
@@ -144,41 +142,57 @@ const monthDay = new Intl.DateTimeFormat("en-US", {
 	timeZone: "America/Chicago",
 });
 
-// The meeting job's wording embeds the meeting's date and subject, so its copies on attendees' records are one follow-up.
-function copyKey(step: Step) {
-	if (step.status !== "open") return step.id;
-	const source =
-		step.source_kind === "meeting"
-			? `meeting:${step.source_id}`
-			: step.set_by_job && jobMeetingDate(step.what)
-				? "meeting job"
-				: `record:${recordId(step)}`;
-	return JSON.stringify([source, step.item_title, step.source_ref, step.what]);
+type Copies = [Step, ...Step[]];
+
+// Copies share a card only in one Home state, so a snooze, hold or review on one never hides or finishes another.
+function copyKeys(step: Step, reviewed: boolean) {
+	if (step.status !== "open" || reviewed) return [step.id];
+	const state = [
+		step.item_title,
+		step.source_ref,
+		step.what,
+		step.due_on,
+		step.snoozed_until,
+		step.hold_until,
+		step.waiting_reason,
+	];
+	const sources = [`record:${recordId(step)}`];
+	// Only an accepted suggestion records its meeting, so only it joins copies across records.
+	if (step.source_kind === "meeting") sources.push(`meeting:${step.source_id}`);
+	return sources.map((source) => JSON.stringify([source, ...state]));
 }
 
-function groupCopies(steps: Step[]) {
-	const newestFirst = steps.toSorted(
-		(a, b) =>
-			iso(b.created_at).localeCompare(iso(a.created_at)) ||
-			a.id.localeCompare(b.id),
+const newestFirst = (a: Step, b: Step) =>
+	iso(b.created_at).localeCompare(iso(a.created_at)) ||
+	a.id.localeCompare(b.id);
+
+function groupCopies(steps: Step[], reviewed: (step: Step) => boolean) {
+	const keys = new Map(
+		steps.map((step) => [step, copyKeys(step, reviewed(step))]),
 	);
-	const groups = new Map<string, [Step, ...Step[]]>();
-	for (const step of newestFirst) {
-		const key = copyKey(step);
-		const group = groups.get(key);
-		if (group) group.push(step);
-		else groups.set(key, [step]);
+	const groupOf = new Map<string, Copies>();
+	for (const [step, stepKeys] of keys) {
+		const joined = new Set(stepKeys.flatMap((key) => groupOf.get(key) ?? []));
+		const group: Copies = [step, ...joined];
+		for (const copy of group)
+			for (const key of keys.get(copy) ?? []) groupOf.set(key, group);
 	}
-	return [...groups.values()];
+	return [...new Set(groupOf.values())].map((group) => group.sort(newestFirst));
 }
 
-function meetingTitle([step, ...copies]: [Step, ...Step[]]) {
-	if (copies.every((copy) => recordId(copy) === recordId(step))) return null;
-	const date =
-		step.source_kind === "meeting" && step.source_at
-			? monthDay.format(new Date(step.source_at))
-			: jobMeetingDate(step.what);
-	return date && `Follow up on the ${date} meeting`;
+function meetingHeading(copies: Copies) {
+	const [step] = copies;
+	if (copies.every((copy) => recordId(copy) === recordId(step)))
+		return undefined;
+	const meetings = new Map(
+		copies.flatMap(({ source_kind, source_id, source_at }) =>
+			source_kind === "meeting" && source_at ? [[source_id, source_at]] : [],
+		),
+	);
+	const [at, ...others] = meetings.values();
+	return at && others.length === 0
+		? `Follow up on the ${monthDay.format(new Date(at))} meeting`
+		: undefined;
 }
 
 const stepDisposition = (step: Step) =>
@@ -191,15 +205,19 @@ const stepWrite = (step: Step) => ({
 	base_version: `${step.step_version}:${step.mark_version ?? "0"}:${stepDisposition(step)}`,
 });
 
-function stepCard(copies: [Step, ...Step[]]) {
+function stepCard(copies: Copies) {
 	const [step] = copies;
 	const completed_at = optionalIso(step.completed_at);
 	const done = step.status === "done";
 	const snoozed_until = done ? null : optionalIso(step.snoozed_until);
 	const hold_until = done ? null : optionalIso(step.hold_until);
 	const disposition = stepDisposition(step);
+	const covers = copies.map((copy) => ({
+		...stepWrite(copy),
+		record_name: homeDisplayText(copy.context_label),
+	}));
 	const { item_id, action_id, action_version, base_version } = stepWrite(step);
-	const copy = homeStepCopy(step, step);
+	const copy = homeStepCopy(step, step, meetingHeading(copies));
 	const section = done
 		? "done"
 		: disposition === "inbox" && hold_until
@@ -219,7 +237,6 @@ function stepCard(copies: [Step, ...Step[]]) {
 		source_state: done ? "done" : "needs_attention",
 		base_version,
 		...copy,
-		title: meetingTitle(copies) ?? copy.title,
 		primary_action: done ? "Open" : "Mark done",
 		activity_at: iso(step.activity_at),
 		completed_at,
@@ -234,13 +251,10 @@ function stepCard(copies: [Step, ...Step[]]) {
 		kind_label: step.call_follow_up ? "Call follow-up" : "Task",
 		action_id,
 		action_version,
-		covers: copies.map((copy) => ({
-			...stepWrite(copy),
-			record_name: homeDisplayText(copy.context_label),
-		})),
+		covers,
 		undo_completion: step.undo_completion,
 		deal_id: step.deal_id,
-		merged_source_ids: [step.id],
+		merged_source_ids: covers.map((cover) => cover.action_id),
 		waiting_version: 0,
 		waiting_on: null,
 		source_activity:
@@ -342,23 +356,24 @@ async function readHomeInbox(
 			.filter((step) => step.status === "open")
 			.map((step) => step.id),
 	);
-	const steps = groupCopies(eligibleSteps).map((copies) => {
-		const [step] = copies;
-		const review = reviews.get(step.id);
-		const card = stepCard(copies);
-		const waiting = dashboard && (step.hold_until || step.waiting_reason);
-		const visible =
-			review && !step.snoozed_until && !waiting
-				? completionReviewCard(review, card)
-				: card;
-		return {
-			...visible,
-			covers: card.covers,
-			waiting_reason: homeDisplayText(step.waiting_reason) || null,
-			late_target:
-				!step.hold_until && ["deal", "vendor"].includes(homeStepTarget(step)),
-		};
-	});
+	const steps = groupCopies(eligibleSteps, (step) => reviews.has(step.id)).map(
+		(copies) => {
+			const [step] = copies;
+			const review = reviews.get(step.id);
+			const card = stepCard(copies);
+			const waiting = dashboard && (step.hold_until || step.waiting_reason);
+			const visible =
+				review && !step.snoozed_until && !waiting
+					? completionReviewCard(review, card)
+					: card;
+			return {
+				...visible,
+				waiting_reason: homeDisplayText(step.waiting_reason) || null,
+				late_target:
+					!step.hold_until && ["deal", "vendor"].includes(homeStepTarget(step)),
+			};
+		},
+	);
 	const limit = dashboard ? null : LIMIT + 1;
 	const updates = await readHomeUpdates(
 		db,

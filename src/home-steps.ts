@@ -107,18 +107,22 @@ function stepInstruction(what: string) {
 	);
 }
 
-export function stepCopy({ what, item_title }: StepWording) {
+export function stepCopy({ what, item_title }: StepWording, heading?: string) {
 	const instruction = stepInstruction(what);
 	const title =
-		item_title?.trim() || shortHomeTitle(instruction) || "Next step";
+		heading || item_title?.trim() || shortHomeTitle(instruction) || "Next step";
 	return {
 		title,
 		instruction: instruction && instruction !== title ? instruction : null,
 	};
 }
 
-export function homeStepCopy(step: HomeStep, evidence: StepEvidence) {
-	const { title, instruction } = stepCopy(step);
+export function homeStepCopy(
+	step: HomeStep,
+	evidence: StepEvidence,
+	heading?: string,
+) {
+	const { title, instruction } = stepCopy(step, heading);
 	const hold =
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
