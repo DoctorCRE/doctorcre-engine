@@ -11,7 +11,11 @@ import {
 	decidableCallProposal,
 	lockOpenDealStep,
 } from "./deals/call-review.ts";
-import { decisionKey, sourceInMailbox } from "./home-email-thread.ts";
+import {
+	decisionKey,
+	decisionSource,
+	sourceInMailbox,
+} from "./home-email-thread.ts";
 import { readProposal, replacedStepReason } from "./home-inbox-review.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
@@ -337,21 +341,16 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 	);
 
 const filingKinds = ["file_to_deal", "possible_new_deal"];
-const threadDecisionKinds = [...filingKinds, "next_step"];
+const groupedDecisionKinds = [...filingKinds, "next_step"];
 
-// A decision settles its pending siblings on the thread. Decisions and mail jobs take the same email locks first.
+// A decision settles the pending siblings Home shows it in place of. Decisions and mail jobs take the same email locks first.
 async function lockDecision(tx: Transaction<DB>, id: string) {
 	const { rows } = await sql<{ id: string; message_id: string | null }>`
 		select sibling.id, coalesce(e.message_id, e.activity_id::text) as message_id
 		from proposal clicked
 		join proposal sibling on sibling.id = clicked.id or (sibling.status = 'pending'
 			and ${decisionKey("sibling")} = ${decisionKey("clicked")}
-			and sibling.activity_id in (
-				select thread.activity_id from email source
-				join email thread on thread.activity_id = source.activity_id
-					or thread.conversation_id = source.conversation_id
-				where source.activity_id = clicked.activity_id
-			)
+			and ${decisionSource("sibling")} = ${decisionSource("clicked")}
 			and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)})
 		left join email e on e.activity_id = sibling.activity_id
 		where clicked.id = ${id}::uuid
@@ -390,7 +389,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 					.where("id", "=", r.proposal_id)
 					.executeTakeFirst();
 				const members =
-					clicked && threadDecisionKinds.includes(clicked.kind)
+					clicked && groupedDecisionKinds.includes(clicked.kind)
 						? await lockDecision(tx, r.proposal_id)
 						: [r.proposal_id];
 				const p = await tx

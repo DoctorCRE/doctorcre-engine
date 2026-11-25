@@ -31,7 +31,17 @@ export const mailGroup = sql<
 	string | null
 >`coalesce('conversation:' || e.conversation_id, 'email:' || e.activity_id)`;
 
-// Suggestions on one thread are one decision when they file it the same way or set one person's next step for one owner.
+// Suggestions share a source when they come from one email thread, else one call or meeting.
+export function decisionSource(
+	proposal: string,
+	mail: Expression<string | null> = sql`(select ${mailGroup} from email e
+		where e.activity_id = ${sql.ref(`${proposal}.activity_id`)})`,
+) {
+	const column = (name: string) => sql.ref(`${proposal}.${name}`);
+	return sql<string>`coalesce(${mail}, ${column("activity_id")}::text, ${column("id")}::text)`;
+}
+
+// Suggestions on one source are one decision when they file it the same way or set one person's next step for one owner.
 export function decisionKey(proposal: string) {
 	const column = (name: string) => sql.ref(`${proposal}.${name}`);
 	return sql<string>`case
