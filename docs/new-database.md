@@ -2058,6 +2058,59 @@ The confirmation locks the partner's turn and uses the existing `runNextSave` re
 - **Reply draft.** Use the [pending draft rules](#22-reply-drafts-and-their-delivery) and the partner's mailbox membership in `next.email_mailbox`. Both the intake store and Doc take the existing mailbox and Outlook conversation lock before any draft check or insert. If a draft exists for this email, return it unchanged. Otherwise, if a pending draft exists for this mailbox and Outlook conversation, return it unchanged. If neither exists, insert one pending draft at revision 1 with the confirmed subject and body. The first 2,000 characters of the source email's body supply the evidence, with the sender as a fallback for blank text. The existing review supplies recipients. A missing email or mailbox membership returns `404 not_found`. Retain `unique (email_activity_id, owner_user_id)`. Add nullable `confirmed_doc_turn_id` to `reply_draft`, unique and paired with `owner_user_id` in a foreign key to `doc_turn (id, owner_user_id)`. Exactly one origin is required, either `proposed_by_job` or `confirmed_doc_turn_id`. The Doc insert requires the signed-in owner and the matching turn's reply proposal for that email. The confirm route never approves a draft or queues delivery.
 - **Reply revision.** **Save revision** locks the exact draft and uses its proposal's version in the ordinary [pending draft edit](#open-save-or-decline-a-reply-draft-from-home). It changes only the subject and body. A field omitted from both the edits and proposal keeps its saved text. A newer version returns `409 version_conflict`. A draft at that version that has left pending returns `409 draft_changed`. A retry with the same key and edits returns the original receipt. Submission remains a separate save.
 
+### Planned Doc changes
+
+Decisions 217 to 220 add these. None is built yet. The behavior above holds until each unit lands and moves its part into the sections above.
+
+#### Model choice
+
+`next.doc_model_choice` keeps at most one row per account partner: `owner_user_id`, `first_provider`, nullable `first_model` and `first_effort`, nullable `second_provider`, `second_model` and `second_effort`, and `updated_at`. A provider is `claude`, `codex`, `grok` or `gemini`. A model is nonblank text of at most 100 characters and never `default` in any case. A null model runs the tool's own default. An effort is `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, or null. The second provider differs from the first, and its model and effort are null without it. No row means `claude` with its defaults. The partner's stamped writer manages the row, with the same row security as `next.doc_link`. Replacing or revoking the link credential keeps the choice.
+
+`next.doc_link_provider` keeps one row per partner and provider the link reports: `readiness` of `ready`, `signed_out` or `plan_limited`, nullable `resets_at`, present only with `plan_limited`, `checked_at`, and `models`, the JSON list the tool reported, each entry `{ id, label, efforts }`. Issuing a replacement credential removes the partner's rows.
+
+The claim request may carry a JSON body `{ providers: [{ provider, readiness, resets_at, models }] }`. The engine replaces the partner's rows with it. A poll with only `Doc-Link-Readiness` reports `claude`, so older runners keep working. The link counts as `ready` when its first or second choice is ready. Otherwise it is `plan_limited` with the earliest reset among the limited choices, or else `signed_out`. Backup eligibility in decision 204 uses that combined readiness. A claim answer adds `choice: { first, second }`, each `{ provider, model, effort }` or null for the second.
+
+| App request                        | Answer                                                                                                                                                                                                                                                                                       |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/engine/doc/link`         | Adds `resets_at` to the link status, `providers: [{ provider, readiness, resets_at, checked_at, models }]` and the saved `choice`.                                                                                                                                                           |
+| `POST /api/engine/doc/link/choice` | Send `{ idempotency_key, first, second }` with the write proofs. `200 { choice }`. A provider the link has never reported, or a model or effort missing from that provider's last reported list, returns `422 invalid_field_value { fields }`. A `second` equal to `first` returns the same. |
+
+The runner skips a saved model or effort the tool no longer lists and runs the tool's default. A first choice that reports `plan_limited` or `signed_out` during a turn posts `{ claim_id, kind, provider, resets_at }` to the result door. The engine records that provider's readiness and returns the turn to the queue, so the next claim runs the second choice. An answered result adds `provider`. `doc_turn.answered_by` becomes one of the four providers or `backup`, and the migration changes `'mac'` to `'claude'`. History stays plain questions and answers, so a chat continues on whichever provider answers. A new choice applies from the next claim. Mail judgment jobs always run on `claude`.
+
+Each driver runs its tool unattended with the Doc MCP server only. The Claude driver keeps today's flags. The Codex driver uses `codex app-server` and the Grok and Gemini drivers use the Agent Client Protocol, each refusing every command, file and permission request, under the separate account in decision 219. A plan limit is its own outcome with the tool's reset time, never a generic failure. The runner stops a tool only after the tool says its turn started. Completion, stop, error and process exit each end the claim.
+
+The managed-source check in [Doc link on macOS](#doc-link-on-macos) allows the Studio's one file from decision 217. Any other managed source still pauses polling.
+
+#### Live answer and Stop
+
+The runner posts `POST /api/engine/doc/link/progress` with the Bearer credential about once a second while a turn runs, sending `{ claim_id, text }` with the answer text so far, at most 8,000 characters. The engine keeps it in `claim_state` and never in a business table. The engine sets the current step itself from its own tool route, such as "Looking up" and the record label a `find` or `read` resolved, never from model text. Each returned turn adds nullable `progress: { text, step }` while working. Partial text is unvalidated. The app shows it as plain text, with no links, visuals or proposal, and the finished answer replaces it. A missing, foreign or expired claim returns `404`.
+
+The progress answer is `200 { cancel }`. `POST /api/engine/doc/turns/{id}/cancel` takes `{}` with the write proofs. A queued or waiting turn becomes `cancelled` at once. A working turn records the request in `claim_state`, the next progress answer says `cancel: true`, and the runner stops the tool and posts `{ claim_id, kind: "cancelled" }`. A working turn whose claim expires with a cancel request becomes `cancelled`, not queued. The door answers `200 { turn }`, again for an already cancelled turn. An answered or failed turn returns `409 turn_finished`. The database allows `cancelled`, and a cancelled turn has no claim fields or answer.
+
+#### The next question
+
+`POST /turns` while the chat has a queued or working turn saves the new turn as `waiting`. A second partial unique index allows one `waiting` turn per chat, and another ask returns `409 turn_waiting`. When the turn ahead is answered, fails or is cancelled, the same transaction moves the waiting turn to `queued` with a fresh queue time. `POST /api/engine/doc/turns/{id}/question` takes `{ question }` and changes a waiting turn's text. Any other state returns `409 turn_started`. The conversation read leaves out a turn cancelled while waiting.
+
+#### Suggestions
+
+An `answer` or `clarification` may carry `suggestions`, at most three plain-text follow-up questions of up to 60 characters each, with no links. They arrive in the same answer and cost no extra request. `validate_answer` checks them. A refusal has none.
+
+#### Attachments
+
+Attaching a PDF or photo gets its own design here before any build: storage for the file, a table tying it to its turn, and a `read_attachment` Doc tool that returns the PDF's text or the image, since Doc's own file tools stay off.
+
+#### Visual answers
+
+An `answer` may carry `visuals`, at most three blocks shown after `text` in order. Each has a `title` of up to 80 characters and a `kind`.
+
+| `kind`    | Shape and limits                                                                                                                                                                                |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `table`   | `columns`, 2 to 6 headings, and `rows`, 1 to 20, each one cell per column. A cell is `{ text }` of up to 120 characters, or `{ text, source }` to link a record.                                |
+| `chart`   | `chart` of `bar` or `line`, nullable `unit` of `usd`, `sqft`, `percent` or `days`, and `points`, 1 to 24, each `{ label, value, sources }`. A line chart's labels are dates or months in order. |
+| `diagram` | `mermaid`, at most 2,000 characters, and `sources`, the records it draws. The first line is `flowchart TD`, `flowchart LR` or `timeline`. Node labels are plain text.                           |
+
+The engine validates visuals with the rest of the answer, in `validate_answer` and again on the result. Every `source` is a key from an authorized read in this claim, resolved to the engine's label and link. A chart point's value is either a number in its one source's read facts or the count of the distinct sources it lists, so the engine keeps each read's numeric facts in `claim_state`. A diagram refuses `click`, `href`, `%%{`, `style`, `classDef`, `<` and any URL. A bad block returns the same `422` as any invalid answer, naming the block, so the model can correct it within the claim. History carries visuals as JSON. The fixed system prompt, on the Mac and on the backup, asks for a visual when it explains better than text and never for a number Doc did not read.
+
 ## Doors the old system calls
 
 These are the engine requests old-system programs 26, 27 and 28 will make, fixed before either side is built so both can be built at once. Where the engine side is unbuilt, this is the shape it implements. Old callers were read at `carr-system` `e5966a7`, which already keeps each email's Message-ID (slice 2).
