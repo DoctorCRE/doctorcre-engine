@@ -53,7 +53,9 @@ before(async () => {
 		insert into next_step (party_id, owner_party_id, what, due_on, resolution) values
 			('${earlier}', '${dellId}', 'Email', '2024-03-05', null),
 			('${earlier}', '${joeId}', 'Call', '2024-03-03', null),
-			('${later}', '${dellId}', 'Ask', '2024-03-04', null);
+			('${later}', '${dellId}', 'Ask', '2024-03-04', null),
+			('${highlighted}', '${dellId}', 'Relationship touch — C-0420. 60-day client cadence.', '2024-03-06', null);
+		insert into outside_id (source, value, party_id) values ('old_system_ref', 'C-0420', '${qualified}');
 		insert into next_step (id, party_id, owner_party_id, what, due_on, created_at, resolution, done_at) values
 			('${completedStep}', '${later}', '${joeId}', 'Past step', '2024-02-02', '2024-02-01', 'done', now());
 		insert into activity (id, kind, from_party_id, happened_at, summary) values
@@ -125,6 +127,32 @@ test("lane includes only eligible leads and orders attention, follow-up date, th
 		(await request({ job: "agent" }, "prospects", { method: "GET" })).status,
 		404,
 	);
+});
+
+test("a check-in follow-up names who to check in with and keeps its stored wording for the editor", async () => {
+	const read = async (path: string): Promise<unknown> =>
+		(await request(joe, path, { method: "GET" })).json();
+	const prospects = field(await read("prospects"), "prospects");
+	assert.ok(Array.isArray(prospects));
+	for (const prospect of [
+		prospects[0],
+		await read(`prospects/${highlighted}`),
+	]) {
+		const followUps = field(prospect, "follow_ups");
+		assert.ok(Array.isArray(followUps));
+		assert.deepEqual(
+			followUps.map((step) => ({
+				what: field(step, "what"),
+				display_title: field(step, "display_title"),
+			})),
+			[
+				{
+					what: "Relationship touch — C-0420. 60-day client cadence.",
+					display_title: "Check in with Example Person (client)",
+				},
+			],
+		);
+	}
 });
 
 test("only ordinary party steps appear as a prospect's follow-ups", async () => {

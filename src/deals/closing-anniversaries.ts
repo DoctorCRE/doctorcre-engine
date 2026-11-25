@@ -94,9 +94,11 @@ export const closingAnniversaries = new Hono<DatabaseEnv>()
 		return answerNextRead(c, "read-closing-anniversaries", async (db) => {
 			const afterWindow = chicagoToday();
 			afterWindow.setUTCDate(afterWindow.getUTCDate() + windowDays + 1);
-			const dates = (await closedWonDeals(db)).map((deal) =>
-				isoDate(anniversaryFrom(deal.closed_on, afterWindow).on),
-			);
-			return { next_anniversary_on: dates.sort()[0] ?? null };
+			let next: string | null = null;
+			for (const deal of await closedWonDeals(db)) {
+				const on = isoDate(anniversaryFrom(deal.closed_on, afterWindow).on);
+				if (next === null || on < next) next = on;
+			}
+			return { next_anniversary_on: next };
 		});
 	});

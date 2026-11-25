@@ -43,15 +43,16 @@ before(async () => {
 			) f(id, name) where u.slug = 'example-owner';
 		insert into deal_party (deal_id, party_id, role)
 			select id, '${clientId}', 'client' from deal where name <> 'Example Without a client';
+		-- Each excluded deal's anniversary would change one test's answer if it leaked in.
 		insert into imported_deal_board (deal_id, phase, outcome, closed_on)
 			select d.id, f.phase, f.outcome, f.closed_on::date from deal d
 			join (values
 				('Example Leap Day lease', 'invoiced', 'won', '2020-02-29'),
 				('Example Following day', 'closed', 'won', '2021-03-31'),
-				('Example Without a client', 'closed', 'won', '2021-02-28'),
+				('Example Without a client', 'closed', 'won', '2021-04-10'),
 				('Example Without a date', 'closed', 'won', null),
-				('Example Lost deal', 'closed', 'lost', '2021-02-28'),
-				('Example Unknown outcome', 'closed', null, '2021-02-28'),
+				('Example Lost deal', 'closed', 'lost', '2021-03-10'),
+				('Example Unknown outcome', 'closed', null, '2021-07-15'),
 				('Example Open deal', 'research', null, null),
 				('Example New closing', 'closed', 'won', '2025-02-28')
 			) f(name, phase, outcome, closed_on) using (name);
@@ -162,6 +163,22 @@ test("next names the first anniversary after the window, from Chicago midnight",
 		200,
 		{ next_anniversary_on: "2026-02-28" },
 	]);
+});
+
+test("next answers null when no closed-won deal has a client", async () => {
+	const links = (statement: string) =>
+		db.query(`begin; select set_config('engine.job', 'old_system', true);
+			${statement}; commit;`);
+	await links(`delete from deal_party where party_id = '${clientId}'`);
+	try {
+		assert.deepEqual(await save(reader, `${path}/next`, {}, "GET"), [
+			200,
+			{ next_anniversary_on: null },
+		]);
+	} finally {
+		await links(`insert into deal_party (deal_id, party_id, role)
+			select id, '${clientId}', 'client' from deal where name <> 'Example Without a client'`);
+	}
 });
 
 test("next keeps February 29 in leap years", async (t) => {
