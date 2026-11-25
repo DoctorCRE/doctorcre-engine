@@ -147,16 +147,14 @@ const searchRecords = (query: string) =>
 test("Global Search returns a party once with its roles and openable deal matches", async () => {
 	assert.partialDeepStrictEqual(await searchRecords("Sample Practice"), {
 		schema_version: "search.v1",
-		parties: [
-			{ id: copiedClient, name: "Sample Practice", roles: ["client", "lead"] },
-		],
+		parties: [{ id: copiedClient, name: "Sample Practice", roles: ["client"] }],
 		deals: [],
 	});
 	assert.partialDeepStrictEqual(await searchRecords("Orchard"), {
 		parties: [
 			{
 				id: lead,
-				roles: ["lead"],
+				roles: [],
 				lead_id: null,
 				deals: [{ id: deal, name: "Orchard Clinic Lease" }],
 			},
@@ -178,6 +176,35 @@ test("Global Search returns a party once with its roles and openable deal matche
 			parties: [{ id: dental, lead_id: id(18) }],
 		},
 	);
+});
+
+test("Global Search labels a lead only when it opens on Leads", async () => {
+	const topResult = async (query: string) => {
+		const { parties } = (await searchRecords(query)) as {
+			parties: [{ id: string; roles: string[]; lead_id: string | null }];
+		};
+		const [party] = parties;
+		return {
+			id: party.id,
+			lead: party.roles.includes("lead"),
+			lead_id: party.lead_id,
+		};
+	};
+	assert.deepStrictEqual(await topResult("Sample Practice"), {
+		id: copiedClient,
+		lead: false,
+		lead_id: null,
+	});
+	assert.deepStrictEqual(await topResult("Orchard Lead"), {
+		id: lead,
+		lead: false,
+		lead_id: null,
+	});
+	assert.deepStrictEqual(await topResult("Example Pediatric Dental"), {
+		id: dental,
+		lead: true,
+		lead_id: id(18),
+	});
 });
 
 test("Global Search matches a full email or exact domain from stored addresses", async () => {

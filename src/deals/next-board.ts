@@ -5,6 +5,7 @@ import {
 	type Transaction,
 } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
+import { stepItemId } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
@@ -367,16 +368,22 @@ type OpenAction = {
 	id: string;
 	owner: string | null;
 	due_on: string | null;
-	item_id: string;
+	call_follow_up: boolean;
 	description: string;
 	client_step?: true;
 };
+
+const withItemId = ({ call_follow_up, ...action }: OpenAction) => ({
+	...action,
+	item_id: stepItemId({ id: action.id, call_follow_up }),
+});
 
 const openActions = (about: RawBuilder<unknown>, clientStep = false) =>
 	sql<
 		OpenAction[]
 	>`(select coalesce(json_agg(action order by due_on nulls last, id), '[]') from (
-		select s.id, u.slug as owner, s.due_on, 'next_action:' || s.id as item_id, s.what as description
+		select s.id, u.slug as owner, s.due_on, s.call_activity_id is not null as call_follow_up,
+			s.what as description
 			${clientStep ? sql`, true as client_step` : sql``}
 		from next_step s left join app_user u on u.id = s.owner_party_id
 		where ${about} and s.status = 'open' and s.item_title is null
@@ -449,11 +456,11 @@ export async function readNextBoard(
 		actor: input.partner,
 		deals: deals.map(({ client_actions, ...deal }) => ({
 			...deal,
-			open_actions:
-				deal.open_actions.length === 0 &&
-				openDeals.get(deal.client_id)?.length === 1
-					? client_actions
-					: deal.open_actions,
+			open_actions: (deal.open_actions.length === 0 &&
+			openDeals.get(deal.client_id)?.length === 1
+				? client_actions
+				: deal.open_actions
+			).map(withItemId),
 			item_schema_version: "deal-items.v1",
 			next_step_required: deal.next_step === null || deal.next_date === null,
 		})),

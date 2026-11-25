@@ -73,10 +73,10 @@ export function searchRecordsQuery(db: Transaction<DB>, input: string) {
 			select jsonb_agg(to_jsonb(result) - '{exact_name,score}'::text[]
 				order by result.exact_name desc, result.score desc, lower(result.name), result.id) from (
 				select p.*, array(
-					select role from party_role where party_id = p.id
-						and (role in ('lead', 'vendor') or
-							(role = 'client' and exists (select from client where party_id = p.id)))
-					order by role
+					select r.role from party_role r where r.party_id = p.id
+						and (r.role = 'vendor' or ${searchableLead} or
+							(r.role = 'client' and exists (select from client where party_id = p.id)))
+					order by r.role
 				) as roles, (
 					select coalesce((
 						select min(value) from outside_id where party_id = p.id and source = 'old_system_lead'
