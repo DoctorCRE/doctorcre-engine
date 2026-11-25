@@ -30,7 +30,7 @@ type Match = Record<"email" | "party_name", string> &
 type StepRow = Parameters<typeof stepCopy>[0] &
 	HomeStepTarget &
 	Record<"id" | "due_on" | "owner", string> &
-	Record<"party_id" | "call_id", string | null> & {
+	Record<"party_id" | "call_id" | "context_label", string | null> & {
 		call_follow_up: boolean;
 		days_late: number | null;
 		is_viewer: boolean;

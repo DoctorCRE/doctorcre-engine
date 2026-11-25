@@ -29,6 +29,8 @@ const callOffice =
 	"Call the office. If no one answers, leave a message and retry tomorrow.";
 const callPlan =
 	"(202) 555-0142 — Call about the floor plan. If no one answers, leave a message with the office and retry later.";
+const callPlanTitle =
+	"(202) 555-0142 — Call about the floor plan. If no one answers, leave a message with the…";
 
 before(async () => {
 	await setup();
@@ -152,11 +154,11 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		`${id(32)}|Review the ended deal|5 days late|dell|null|/deals?deal=${id(9)}&focus=next-step&step=${id(32)}`,
 		`${id(21)}|send status unknown — re-touch or drop|3 days late|joe|next_action:${id(21)}|/deals?deal=${id(7)}&focus=next-step&step=${id(21)}`,
 		`${id(28)}|${reviewTitle}|2 days late|dell|null|/deals?deal=${id(8)}&focus=next-step&step=${id(28)}`,
-		`${id(23)}|Other Clinic, Austin|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
+		`${id(23)}|${callPlanTitle}|1 day late|joe|capture_post_call_action:${id(23)}|/calls?session=${id(11)}`,
 	]);
 	// Client and lead steps live on their records, not on Today.
 	assert.deepEqual(body.reminders?.upcoming.map(row), [
-		`${id(30)}|100 Example Way|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
+		`${id(30)}|Next step|null|joe|next_action:${id(30)}|/deals?deal=${id(7)}`,
 	]);
 	assert.deepEqual(
 		body.reminders?.late.map((item) => [item.id, item.deal_ended]),
@@ -176,7 +178,7 @@ test("Today shows plain reminder titles and flags ended deals for Deals", async 
 		(i) => i.item_id === `next_action:${id(30)}`,
 	);
 	assert.ok(typeof buildingCard?.title === "string");
-	assert.equal(buildingCard.title, "100 Example Way");
+	assert.equal(buildingCard.title, "Next step");
 	const ids = new Set(inbox.items.map((i) => i.item_id));
 	const { late = [], upcoming = [] } = body.reminders ?? {};
 	for (const i of [...late, ...upcoming])
@@ -209,7 +211,7 @@ for (const [example, caller, step, title] of [
 		id(21),
 		"send status unknown — re-touch or drop",
 	],
-	["long phone instructions", joe, id(23), "Other Clinic, Austin"],
+	["long phone instructions", joe, id(23), callPlanTitle],
 	[
 		"call instructions without a phone number",
 		{ user: "dell" },
