@@ -2373,6 +2373,8 @@ After owner approval, run [the one-time preference repair](../schema/repair-pref
 
 `POST /api/engine/preferences` saves all four fields with `idempotency_key` and the `base_version` read. The time zone must be one the database knows; otherwise the save returns `400 invalid_field_value { fields: ["time_zone"] }`. Quiet hours are both set or both null, and they may run past midnight, such as `22:00` to `07:00`. Equal or half-set quiet hours return `400 invalid_field_value { fields: ["quiet_from", "quiet_until"] }`. A change after the read returns `409 version_conflict { current_version }`. The answer is `200 { ok: true, time_zone, quiet_from, quiet_until, push_to_device, base_version }` with the new version. The shared retry rules apply.
 
+- [ ] In Settings, quiet hours that are not set show empty boxes with the placeholder "Not set", never times that look saved.
+
 #### Who did what
 
 `GET /api/engine/updates/changes` lists recent changes to the records both partners share, newest first, 50 a page, for the Updates page (#1014). The answer is `{ changes, next_before }`. Each change is `{ id, changed_at, who, job, record, what, open_url }`: who made it, by name, or null when a job made it; the job's slug, such as `agent`, or null for a person; the name of the deal, or of the person or company a step or old change is about; what changed in plain words; and where it opens. `next_before` is null on the last page; otherwise pass it back as `?before=` for the next. Any other `before` returns `400 invalid_field_value`. These are settled rules, coordinator decisions (seat bl, 2026-11-21, #1014):

@@ -26,6 +26,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] Each open deal shows once, in its phase column. A parked deal shows only in the Parked lane.
 - [ ] With `deals-from-engine` on, the board stays current without the old live feed: it reloads from the engine when the tab is shown or focused, after each save, and about every minute while in use, and says when it last updated. National Accounts' pending confirmations load on their own (coordinator, 2026-11-20).
 - [ ] List: one row per open deal with its name, deal owner, phase and next step. The List shows the deal owner's step when both partners have one. It shows an automatic move without Undo.
+- [ ] On a computer, the List and the Prospects lane scroll together inside the board's box, with Prospects after the last deal. No deal row sits under the Prospects lane, the lane shows whole with its Add prospect form, and the page does not scroll. Check at 1280 and 1440 wide, with Today open and closed.
 - [ ] Each card and List row has a star. A partner's starred deals sit first in their column on Board and first in List, in their usual order among themselves. Each partner sees only their own stars, and starring twice or unstarring an unstarred deal changes nothing (owner, 2026-11-24).
 - [ ] Add deal asks for the deal name, the client (picked by name), the deal kind, the deal reason, the phase and the deal owner. Kind and reason may each be left unknown. When the reason is renewal, it also asks which existing lease the deal renews, and saves only with one. The lease picker shows "already renewed by <deal>" when a deal already links to that lease (owner, 2026-11-19).
 - [ ] In each name picker, a match shows its city when known and how many deals it is on. A company that is already a national account offers "Open account" (owner, 2026-11-19).
@@ -138,7 +139,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 
 ## Deal page
 
-The header shows the deal's name, client, phase, deal owner and next critical date, once each. Back to deals returns to the board where the partner left it. On a computer, Back to deals and the deal name share one row. All seven tabs show whole on one row at 1280 and 1440, and wrap on narrower screens instead of scrolling.
+The header shows the deal's name, client, phase, deal owner and next critical date, once each. Back to deals returns to the board where the partner left it. On a computer, Back to deals and the deal name share one row, and the header stays pinned flush under the top bar while the page scrolls, with no strip of the page showing above it. All seven tabs show whole on one row at 1280 and 1440, and wrap on narrower screens instead of scrolling.
 
 ### Overview
 
@@ -174,7 +175,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 
 ### Tabs
 
-- [ ] Compare terms: recorded terms from deals in the same market and use type, each value with where it came from: offer rounds and signed lease versions on properties in that market, with their documents. With no market recorded, it compares all markets and its heading says "Compared with all markets". See [Compare terms](../new-database.md#compare-terms).
+- [ ] Compare terms: recorded terms from deals in the same market and use type, each value with where it came from: offer rounds and signed lease versions on properties in that market, with their documents. It starts on the deal's market only when the engine's market list has that market, by its link or by a name equal to the deal's Market fact. A deal with no market record, including one whose Market fact is only copied city text, compares all markets and its heading says "Compared with all markets". See [Compare terms](../new-database.md#compare-terms).
 - [ ] Timeline lists phase moves, notes, next steps, critical dates, documents, and changes, newest first. Each says which partner or job saved it and when. A note with a matching event appears once.
 - [ ] Timeline uses the parking reason labels and note wording from Overview. An entry with no note shows only the reason. Timeline uses "Deal kind" and "Deal reason" as in Add deal, including in imported deal openings. It says "Not recorded" for unknown values in those fields.
 - [ ] The deal page shows older events with no other home in read-only imported history. Each entry shows when it was recorded, the user or job, and what happened. Missing facts stay blank. A deal owner or assignee set from a partner's machine sign-in (`joe-local`, `dell-local`) reads as that partner, Joe or Dell. An owner with no name, such as an old automation, is left out, and the change itself still shows. An entry whose author is a machine sign-in or an old automation reads "Automatically". An attachment action already shown as a document event appears once. Copied notes show their words and dates in readable form. Empty notes and technical lines stay in the old system. Owner changes marked as automatic are credited to the move.

@@ -12,6 +12,11 @@ The vendor count and the All, Joe and Dell chips sit in the top bar beside the t
 
 A deal count of zero is hidden in the row and the drawer, because the engine sends zero when no deal history is recorded. The drawer labels the owner.
 
+- [ ] A vendor's Territory shows once in the drawer, under Where, and not again above the contact list.
+- [ ] A person vendor is listed under Contacts & offices with their own phone, mobile and email. The drawer does not repeat Phone, Mobile or Email elsewhere. A contact shows Phone and Mobile as separate fields. A company vendor keeps its own company line.
+- [ ] Contact status reads "Active", "Nurture", "Paused" or "Do not contact", never the stored code, in the vendor and client drawers.
+- [ ] A drawer section with nothing to show is not drawn. A vendor with no deal history and no note has no Partnership block, and the last contact draws no second divider over the next section.
+
 ## Meeting planner
 
 Research shows vendor contacts and their possible meetings. For a person with a vendor role, it shows that person. For a company with a vendor role, it shows the people with open company links, or a row with no contact. Each vendor link uses the party ID. Copied vendors keep their recorded vendor ref.

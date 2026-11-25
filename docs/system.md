@@ -189,6 +189,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Deals screen                                             | `docs/screens/deals.md`                                                                                                             |
 | Calendar screen                                          | [Calendar](screens/calendar.md)                                                                                                     |
 | Clients screen                                           | [Clients](screens/clients.md)                                                                                                       |
+| Relationships screen                                     | [Relationships](screens/relationships.md)                                                                                           |
 | Leads screen                                             | `docs/screens/leads.md`                                                                                                             |
 | Invoices screen                                          | [Invoices](screens/invoices.md)                                                                                                     |
 | Global Search screen                                     | [Search](screens/search.md)                                                                                                         |
