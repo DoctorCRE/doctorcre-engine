@@ -28,6 +28,7 @@ import {
 	stepTargetFields,
 } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
+import { jobMeetingDate } from "./next-steps.ts";
 import type { DatabaseEnv } from "./reader.ts";
 import { isUuid } from "./request-shape.ts";
 
@@ -39,6 +40,8 @@ interface Step extends HomeStep, HomeStepTarget {
 	prospect: boolean;
 	created_at: string;
 	set_by: string | null;
+	set_by_job: string | null;
+	source_ref: string | null;
 	activity_at: string;
 	completed_at: string | null;
 	snoozed_until: string | null;
@@ -53,6 +56,7 @@ interface Step extends HomeStep, HomeStepTarget {
 	source_id: string | null;
 	source_kind: "call" | "email" | "meeting" | null;
 	source_evidence: string | null;
+	source_at: string | null;
 }
 
 function stepRows(
@@ -64,12 +68,12 @@ function stepRows(
 	return sql<Step>`
 		-- One pass over step history; the protected view cannot use the record index per step.
 		with step_history as materialized (
-			select id, record ->> 'id' as step_id, action, changed_by_user_id, old_value, new_value
+			select id, record ->> 'id' as step_id, action, changed_by_user_id, changed_by_job, old_value, new_value
 			from change where table_name = 'next_step' and record - 'id' = '{}'
 		)
-		select s.id, s.what, s.item_title, s.status, s.deal_id, s.party_id, s.property_id,
+		select s.id, s.what, s.item_title, s.source_ref, s.status, s.deal_id, s.party_id, s.property_id,
 			${stepTargetFields(db, today)},
-			s.due_on, s.created_at, setter.name as set_by,
+			s.due_on, s.created_at, setter.name as set_by, origin.changed_by_job as set_by_job,
 			coalesce(s.done_at, s.changed_at) as activity_at, s.done_at as completed_at,
 			case when s.hold_until > ${today}
 				then s.hold_until::timestamp at time zone 'America/Chicago' end as hold_until,
@@ -86,7 +90,7 @@ function stepRows(
 			s.call_activity_id is not null as call_follow_up, c.id as call_id, c.happened_at as call_at, contact.name as call_contact,
 			c.summary as call_summary, case when c.id is not null then s.call_evidence_quote end as call_quote,
 			accepted.activity_id as source_id, accepted.activity_kind as source_kind,
-			accepted.evidence as source_evidence
+			accepted.evidence as source_evidence, source.happened_at as source_at
 		from next_step s
 		left join deal d on d.id = s.deal_id
 		left join party p on p.id = s.party_id
@@ -95,8 +99,9 @@ function stepRows(
 		left join party contact on c.id is not null and contact.id = coalesce(s.call_contact_party_id, c.from_party_id)
 		left join proposal accepted on accepted.id = s.id and accepted.kind = 'next_step'
 			and accepted.status = 'accepted'
+		left join activity source on source.id = accepted.activity_id
 		left join (
-			select distinct on (step_id) step_id, changed_by_user_id from step_history
+			select distinct on (step_id) step_id, changed_by_user_id, changed_by_job from step_history
 			where action = 'insert' order by step_id, id
 		) origin on origin.step_id = s.id::text
 		left join party setter on setter.id = origin.changed_by_user_id
@@ -130,12 +135,71 @@ const iso = (timestamp: string) => new Date(timestamp).toISOString();
 const optionalIso = (timestamp: string | null) =>
 	timestamp === null ? null : iso(timestamp);
 
-function stepCard(step: Step) {
+const recordId = (step: Step) =>
+	step.deal_id ?? step.party_id ?? step.property_id;
+
+const monthDay = new Intl.DateTimeFormat("en-US", {
+	month: "short",
+	day: "numeric",
+	timeZone: "America/Chicago",
+});
+
+// The meeting job's wording embeds the meeting's date and subject, so its copies on attendees' records are one follow-up.
+function copyKey(step: Step) {
+	if (step.status !== "open") return step.id;
+	const source =
+		step.source_kind === "meeting"
+			? `meeting:${step.source_id}`
+			: step.set_by_job && jobMeetingDate(step.what)
+				? "meeting job"
+				: `record:${recordId(step)}`;
+	return JSON.stringify([source, step.item_title, step.source_ref, step.what]);
+}
+
+function groupCopies(steps: Step[]) {
+	const newestFirst = steps.toSorted(
+		(a, b) =>
+			iso(b.created_at).localeCompare(iso(a.created_at)) ||
+			a.id.localeCompare(b.id),
+	);
+	const groups = new Map<string, [Step, ...Step[]]>();
+	for (const step of newestFirst) {
+		const key = copyKey(step);
+		const group = groups.get(key);
+		if (group) group.push(step);
+		else groups.set(key, [step]);
+	}
+	return [...groups.values()];
+}
+
+function meetingTitle([step, ...copies]: [Step, ...Step[]]) {
+	if (copies.every((copy) => recordId(copy) === recordId(step))) return null;
+	const date =
+		step.source_kind === "meeting" && step.source_at
+			? monthDay.format(new Date(step.source_at))
+			: jobMeetingDate(step.what);
+	return date && `Follow up on the ${date} meeting`;
+}
+
+const stepDisposition = (step: Step) =>
+	step.status !== "done" && step.snoozed_until ? "snoozed" : "inbox";
+
+const stepWrite = (step: Step) => ({
+	item_id: stepItemId(step),
+	action_id: step.id,
+	action_version: Number(step.step_version),
+	base_version: `${step.step_version}:${step.mark_version ?? "0"}:${stepDisposition(step)}`,
+});
+
+function stepCard(copies: [Step, ...Step[]]) {
+	const [step] = copies;
 	const completed_at = optionalIso(step.completed_at);
 	const done = step.status === "done";
 	const snoozed_until = done ? null : optionalIso(step.snoozed_until);
 	const hold_until = done ? null : optionalIso(step.hold_until);
-	const disposition = snoozed_until ? "snoozed" : "inbox";
+	const disposition = stepDisposition(step);
+	const { item_id, action_id, action_version, base_version } = stepWrite(step);
+	const copy = homeStepCopy(step, step);
 	const section = done
 		? "done"
 		: disposition === "inbox" && hold_until
@@ -148,13 +212,14 @@ function stepCard(step: Step) {
 	const open_url = stepOpenUrl(step);
 
 	return {
-		item_id: stepItemId(step),
+		item_id,
 		source_type,
 		source_id: step.id,
 		source_version,
 		source_state: done ? "done" : "needs_attention",
-		base_version: `${source_version}:${step.mark_version ?? "0"}:${disposition}`,
-		...homeStepCopy(step, step),
+		base_version,
+		...copy,
+		title: meetingTitle(copies) ?? copy.title,
 		primary_action: done ? "Open" : "Mark done",
 		activity_at: iso(step.activity_at),
 		completed_at,
@@ -167,8 +232,12 @@ function stepCard(step: Step) {
 		context_label: step.context_label,
 		open_url,
 		kind_label: step.call_follow_up ? "Call follow-up" : "Task",
-		action_id: step.id,
-		action_version: Number(step.step_version),
+		action_id,
+		action_version,
+		covers: copies.map((copy) => ({
+			...stepWrite(copy),
+			record_name: homeDisplayText(copy.context_label),
+		})),
 		undo_completion: step.undo_completion,
 		deal_id: step.deal_id,
 		merged_source_ids: [step.id],
@@ -273,9 +342,10 @@ async function readHomeInbox(
 			.filter((step) => step.status === "open")
 			.map((step) => step.id),
 	);
-	const steps = eligibleSteps.map((step) => {
+	const steps = groupCopies(eligibleSteps).map((copies) => {
+		const [step] = copies;
 		const review = reviews.get(step.id);
-		const card = stepCard(step);
+		const card = stepCard(copies);
 		const waiting = dashboard && (step.hold_until || step.waiting_reason);
 		const visible =
 			review && !step.snoozed_until && !waiting
@@ -283,6 +353,7 @@ async function readHomeInbox(
 				: card;
 		return {
 			...visible,
+			covers: card.covers,
 			waiting_reason: homeDisplayText(step.waiting_reason) || null,
 			late_target:
 				!step.hold_until && ["deal", "vendor"].includes(homeStepTarget(step)),

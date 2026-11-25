@@ -246,6 +246,12 @@ export async function cancelCurrentStep(
 const JOB_CALENDAR_SUBJECT =
 	/^([\s\S]+), (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (0?[1-9]|[12][0-9]|3[01]) (?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM)/;
 
+const JOB_MEETING_STEP =
+	/^Follow up on the ((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2}) meeting: /;
+
+export const jobMeetingDate = (what: string) =>
+	JOB_MEETING_STEP.exec(what)?.[1] ?? null;
+
 function jobStepWording(what: string): string {
 	const match = JOB_CALENDAR_SUBJECT.exec(what);
 	if (!match || match[0] !== what) return what;

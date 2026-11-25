@@ -279,6 +279,133 @@ test("dashboard counts only eligible cards and separates waiting from deal and v
 	assert.deepEqual([...next.waiting.values()], [...waiting.values()]);
 });
 
+test("dashboard shows each copy of a follow-up once and keeps distinct steps apart", async () => {
+	const viewer = randomUUID();
+	const [maya, sam, lee, pat, otherPat, kim, ana, gus] = Array.from(
+		{ length: 8 },
+		randomUUID,
+	);
+	const [jobMaya, jobSam, otherMeeting, partnerLee, patStep, otherPatStep] =
+		Array.from({ length: 6 }, randomUUID);
+	const [firstVisit, secondVisit, visitMeeting] = Array.from(
+		{ length: 3 },
+		randomUUID,
+	);
+	const kimProposal = randomUUID();
+	const anaProposal = randomUUID();
+	const subject =
+		"Quarterly planning review for the Example Dental expansion and parking";
+	const meetingWording = `Follow up on the Oct 27 meeting: ${subject}`;
+	await db
+		.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${viewer}', 'person', 'Copy Viewer'),
+			('${maya}', 'person', 'Maya Example'), ('${sam}', 'person', 'Sam Example'),
+			('${lee}', 'person', 'Lee Example'), ('${pat}', 'person', 'Pat Example'),
+			('${otherPat}', 'person', 'Pat Example'), ('${kim}', 'person', 'Kim Example'),
+			('${ana}', 'person', 'Ana Example'), ('${gus}', 'person', 'Gus Example');
+		insert into app_user (id, slug) values ('${viewer}', 'copy-viewer');
+		insert into party_role (party_id, role)
+			select id, 'vendor' from party where id in
+				('${maya}', '${sam}', '${lee}', '${pat}', '${otherPat}', '${kim}', '${ana}', '${gus}');
+		insert into next_step (id, party_id, owner_party_id, what, created_at) values
+			('${jobMaya}', '${maya}', '${viewer}', '${meetingWording}', '2026-10-28T12:00Z'),
+			('${jobSam}', '${sam}', '${viewer}', '${meetingWording}', '2026-10-28T13:00Z'),
+			('${otherMeeting}', '${gus}', '${viewer}', 'Follow up on the Oct 28 meeting: ${subject}', '2026-10-29T12:00Z');
+		insert into activity (id, kind, happened_at, from_party_id, summary)
+			values ('${visitMeeting}', 'meeting', '2026-11-03 16:00+00', '${kim}', 'Site visit.');
+		insert into activity_about (activity_id, party_id) values ('${visitMeeting}', '${kim}'), ('${visitMeeting}', '${ana}');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, party_id, what, owner_party_id) values
+			('${kimProposal}', 'next_step', '${visitMeeting}', 'meeting', 'Asked for the site plan.', 'old_system', '${kim}', 'Send the site plan', '${viewer}'),
+			('${anaProposal}', 'next_step', '${visitMeeting}', 'meeting', 'Asked for the site plan.', 'old_system', '${ana}', 'Send the site plan', '${viewer}');
+		select set_config('engine.job', '', true), set_config('engine.user_id', '${viewer}', true);
+		update proposal set status = 'accepted' where id in ('${kimProposal}', '${anaProposal}');
+		insert into next_step (id, party_id, owner_party_id, what) values
+			('${partnerLee}', '${lee}', '${viewer}', '${meetingWording}'),
+			('${patStep}', '${pat}', '${viewer}', 'Send the floor plan'),
+			('${otherPatStep}', '${otherPat}', '${viewer}', 'Send the floor plan');
+		insert into next_step (id, property_id, owner_party_id, what, created_at) values
+			('${firstVisit}', '${building}', '${viewer}', '${meetingWording}', '2026-10-28T12:00Z'),
+			('${secondVisit}', '${building}', '${viewer}', '${meetingWording}', '2026-10-28T13:00Z');
+		commit;`)
+		.catch(async (error: unknown) => {
+			await db.query("rollback");
+			throw error;
+		});
+	const response = await request(
+		{ user: "copy-viewer" },
+		`${path}?view=dashboard`,
+		{ method: "GET" },
+		reader,
+	);
+	assert.equal(response.status, 200);
+	const result: unknown = await response.json();
+	assert.ok(
+		isArguments(result) &&
+			isArguments(result.reminders) &&
+			Array.isArray(result.reminders.items),
+	);
+	const cards = new Map(
+		result.reminders.items
+			.filter(isArguments)
+			.map((card) => [card.source_id, card]),
+	);
+	const [visitLead] = [kimProposal, anaProposal].toSorted();
+	const covers = (id: string | undefined) => {
+		const { covers } = cards.get(id) ?? {};
+		assert.ok(Array.isArray(covers));
+		return covers.filter(isArguments).map((cover) => cover.action_id);
+	};
+	assert.deepEqual(
+		new Set(cards.keys()),
+		new Set([
+			jobSam,
+			otherMeeting,
+			partnerLee,
+			patStep,
+			otherPatStep,
+			secondVisit,
+			visitLead,
+		]),
+	);
+	const samCard = cards.get(jobSam);
+	assert.partialDeepStrictEqual(samCard, {
+		title: "Follow up on the Oct 27 meeting",
+		covers: [
+			{
+				item_id: `next_action:${jobSam}`,
+				action_id: jobSam,
+				action_version: samCard?.action_version,
+				base_version: samCard?.base_version,
+				record_name: "Sam Example",
+			},
+			{
+				item_id: `next_action:${jobMaya}`,
+				action_id: jobMaya,
+				record_name: "Maya Example",
+			},
+		],
+	});
+	assert.partialDeepStrictEqual(cards.get(visitLead), {
+		title: "Follow up on the Nov 3 meeting",
+	});
+	assert.deepEqual(
+		new Set(covers(visitLead)),
+		new Set([kimProposal, anaProposal]),
+	);
+	assert.partialDeepStrictEqual(cards.get(secondVisit), {
+		title:
+			"Follow up on the Oct 27 meeting: Quarterly planning review for the Example Dental…",
+	});
+	assert.deepEqual(covers(secondVisit), [secondVisit, firstVisit]);
+	for (const single of [otherMeeting, partnerLee, patStep, otherPatStep])
+		assert.deepEqual(covers(single), [single]);
+	assert.partialDeepStrictEqual(cards.get(patStep), {
+		title: "Send the floor plan",
+		covers: [{ record_name: "Pat Example" }],
+	});
+});
+
 test("switch off leaves the inbox on CARR and the read refuses a caller-supplied actor", async () => {
 	assert.equal((await request(user, path, { method: "GET" })).status, 404);
 	assert.equal(
