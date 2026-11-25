@@ -10,6 +10,7 @@ import {
 	stepTargetFields,
 } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
+import { readOldRecordNames } from "../old-record-names.ts";
 import { asText, type Reader } from "../reader.ts";
 import { isOpenBoardDeal, selectNextDeals } from "./next-board.ts";
 
@@ -119,8 +120,13 @@ async function readCalendarSteps(db: Transaction<DB>, now: string) {
 		${datedPartnerSteps(at)}
 		order by s.due_on, s.id
 	`.execute(db);
-	return rows.filter(homeStepShown).map((step) => {
-		const { title, instruction } = stepCopy(step);
+	const shown = rows.filter(homeStepShown);
+	const names = await readOldRecordNames(
+		db,
+		shown.map(({ what }) => what),
+	);
+	return shown.map((step) => {
+		const { title, instruction } = stepCopy(step, names);
 		return {
 			id: step.id,
 			what: title,

@@ -64,7 +64,7 @@ before(async () => {
 			('${id(17)}', null, '${frontDesk}'), ('${id(18)}', null, '${leaving}'),
 			('${id(19)}', null, '${joining}');
 		insert into next_step (deal_id, what, created_at) values
-			('${deal}', 'Send the lease draft', '2026-11-08T12:00:00Z');
+			('${deal}', 'Nurture touch — Example Dentist (C-013). 45-day client cadence.', '2026-11-08T12:00:00Z');
 		insert into next_step (deal_id, what, owner_party_id, created_at) values
 			('${sharedDeal}', 'Run the rent comparison', '${joe}', '2026-11-12T12:00:00Z'),
 			('${sharedDeal}', 'Run the rent comparison', '${dell}', '2026-11-13T12:00:00Z');
@@ -95,7 +95,7 @@ test("a person client's history includes its deals and current company but not i
 		})),
 		[
 			{
-				summary: "Send the lease draft",
+				summary: "Check in with Example Dentist (client)",
 				deal_id: deal,
 				filed_on: { kind: "deal", name: "Example Suite Lease" },
 			},
@@ -168,7 +168,7 @@ test("a deal's history stays the deal's own", async () => {
 	assert.deepEqual(
 		catch_up.timeline.map(({ summary, filed_on }) => ({ summary, filed_on })),
 		[
-			{ summary: "Send the lease draft", filed_on: null },
+			{ summary: "Check in with Example Dentist (client)", filed_on: null },
 			{ summary: "Sent the plan to the dentist", filed_on: null },
 			{ summary: "Toured the suite", filed_on: null },
 		],

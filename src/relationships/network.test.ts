@@ -273,7 +273,7 @@ test("the switched graph shows current owners and opens Home steps on new and co
 			('${vendor}', 'team', '${person}', '${ME}', 'Partner made the introduction'),
 			('${vendor}', 'team', '${ME}', '${ME}', 'Partner already an endpoint');
 		insert into next_step (id, party_id, owner_party_id, what)
-			select '${copiedStep}', party_id, '${ME}', 'Call the copied client' from outside_id
+			select '${copiedStep}', party_id, '${ME}', 'Relationship touch — Example Copied Client (C-013). 90-day client cadence.' from outside_id
 			where source = 'old_system' and value = '${clientId}';
 		insert into activity (id, kind, happened_at, summary) values
 			('${id(820)}', 'meeting', '2026-01-04', 'Talked about the new contact');
@@ -445,6 +445,7 @@ test("the switched graph shows current owners and opens Home steps on new and co
 	assert.ok(Number.isFinite(Date.parse(step.set_at)));
 	assert.partialDeepStrictEqual(await focused("joe", copiedStep), {
 		id: copiedStep,
+		what: "Check in with Example Copied Client (client)",
 		set_by: null,
 		set_from: null,
 	});

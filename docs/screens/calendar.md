@@ -11,8 +11,8 @@
 - [ ] Day view is an hour-by-hour timeline, like Outlook's day view. Meetings and tours sit at their times. All-day items, such as next steps and critical dates, sit in a band at the top (owner, 2026-11-24).
 - [ ] Items without a date show as a chip, such as "3 without a date". It opens their list in the Calendar panel.
 - [ ] Select a day or item to see that day's list in the always-open Calendar panel. On phones the panel sits below the grid. Each row says “Critical date” or “Next step,” shows the date kind or step title and owner, and links to the record. A step title follows the Home card title rules in [Home inbox](home-inbox.md#every-card). Show the full instruction below its heading when the wording differs. A building step with no single open deal shows the building inline.
-- [ ] Late steps stay on their own due day, and each shows how many days late it is. Keep critical dates on their recorded day. Snoozed, held and dropped steps are excluded under the same rules as Today reminders.
-- [ ] Coming up lists the items in the 14 days after today or the selected day, whichever is later. Selecting a date opens its entries in the same panel.
+- [ ] Late steps stay on their own due day, and each shows how many days late it is. Today's list also starts with a Late group of every late step, and the grid shows a single late-step count for today. Keep critical dates on their recorded day. Snoozed, held and dropped steps are excluded under the same rules as Today reminders.
+- [ ] Coming up lists up to five dates with items in the 14 days after today. It counts from today, not from the selected day. Selecting a date opens its entries in the same panel.
 - [ ] An empty period says that it has no critical dates or next steps. The Updated time shows the last successful read. Refresh reads again. Month and week navigation reuse the items already read.
 - [ ] Proposals, including automation-added dates copied from the old Calendar, stay on their deal pages. Calendar lists a proposal after a partner confirms it if the deal is open.
 

@@ -18,6 +18,7 @@ import {
 	stepTargetFields,
 } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
+import { readOldRecordNames } from "./old-record-names.ts";
 import type { DatabaseEnv } from "./reader.ts";
 import { isArguments } from "./save-door.ts";
 
@@ -196,9 +197,13 @@ async function readTodayReminders(
 	const reviews = viewerSteps.length
 		? await readCompletionReviews(db, viewerSteps)
 		: null;
+	const names = await readOldRecordNames(
+		db,
+		shown.map(({ what }) => what),
+	);
 	const list = shown.map((r) => {
 		const review = reviews?.get(r.id);
-		const { title, instruction } = stepCopy(r);
+		const { title, instruction } = stepCopy(r, names);
 		return {
 			id: r.id,
 			kind: r.call_follow_up ? ("call_follow_up" as const) : ("step" as const),
