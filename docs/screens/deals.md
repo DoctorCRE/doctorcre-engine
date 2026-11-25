@@ -112,7 +112,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] A deal closed or lost and a prospect dropped this week stay in place, saying so, so the count holds.
 - [ ] Parked deals come last in the Monday review, after prospects (owner, 2026-11-18).
 - [ ] The top says how far along it is: "31 of 47 reviewed this week". Not reviewed only hides the reviewed ones.
-- [ ] One at a time shows one deal or prospect: its name, owner, phase or "Prospect", Needs attention, next step or follow-up, its latest notes and the note box. Next and Back move through the list.
+- [ ] One at a time shows one deal or prospect: its name, owner, phase or "Prospect", Needs attention, next step or follow-up, its latest notes and the note box. Next and Back move through the list. An automatic check-in reads as on [Home](home-inbox.md#every-card), such as "Check in with Example Clinic (client)".
 - [ ] As a list shows the same items, one row each, with the note box and the next step or follow-up opening in place.
 - [ ] Change next step on a deal and Follow-up on a prospect save as they do on the deal page and the prospect. A note saved here shows on the other partner's open review within five seconds, as on a prospect.
 - [ ] Reviewed marks the item reviewed this week, saying who and when, and goes to the next. Undo removes the mark, also after a reload.

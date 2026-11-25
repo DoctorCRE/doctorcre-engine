@@ -433,7 +433,12 @@ test("Home shows the partner's pending holds with the linked update or call", as
 });
 
 test("Home names who to check in with on a held step and an automatic completion", async () => {
-	const checkIn = "Relationship touch — Example Supply. 90-day vendor cadence.";
+	await db.query(
+		`begin; select set_config('engine.job', 'old_system', true);
+		insert into outside_id (source, value, party_id) values ('old_system_ref', 'C-0934', '${teammateId}');
+		commit;`,
+	);
+	const checkIn = "Relationship touch — C-0934. 90-day vendor cadence.";
 	const held = await fixture("note", true, checkIn);
 	const completed = await fixture("note", true, checkIn);
 	const [stored, { proposal_id }] = await hold(held);
@@ -448,7 +453,7 @@ test("Home names who to check in with on a held step and an automatic completion
 				(item) => item.next_step_id === completed.next_step_id,
 			)?.what,
 		],
-		Array(2).fill("Check in with Example Supply (vendor)"),
+		Array(2).fill("Check in with Blair Example (vendor)"),
 	);
 });
 

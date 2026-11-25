@@ -43,12 +43,13 @@ before(async () => {
 			('${duplicate}', 'lead', 'qualified', '${other}'),
 			('${client}', 'client', null, null);
 		insert into client (party_id, owner_user_id) values ('${client}', '${other}');
-		insert into outside_id (source, value, party_id) values ('old_system_lead', '${copiedLead}', '${lead}');
+		insert into outside_id (source, value, party_id) values ('old_system_lead', '${copiedLead}', '${lead}'),
+			('old_system_ref', 'C-0933', '${client}');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Cedar Lease', '${owner}');
 		insert into deal_phase_change (deal_id, happened_at, phase) values ('${deal}', '2026-01-01', 'pending');
 		insert into next_step (deal_id, what, owner_party_id, due_on) values
 			('${deal}', 'Review the floor plan', '${owner}', '2026-12-14'),
-			('${deal}', 'Periodic touch — Example Cedar Landlord. 90-day landlord cadence.', '${other}', '2026-12-21');
+			('${deal}', 'Periodic touch — C-0933. 90-day landlord cadence.', '${other}', '2026-12-21');
 		with a as (insert into activity (kind, happened_at, summary)
 			values ('note', '2026-01-02', 'The west entrance needs a ramp.') returning id)
 		insert into activity_about (activity_id, deal_id) select id, '${deal}' from a;
@@ -257,10 +258,7 @@ test("Doc reads shared records, validates citations and proposes a save without 
 	assert.equal(facts.phase, "pending");
 	assert.deepEqual(
 		facts.next_steps.map(({ what }: { what: string }) => what),
-		[
-			"Review the floor plan",
-			"Check in with Example Cedar Landlord (landlord)",
-		],
+		["Review the floor plan", "Check in with Example Elm Clinic (landlord)"],
 	);
 	assert.equal(facts.activity[0].summary, "The west entrance needs a ramp.");
 	assert.equal(facts.activity.length, 1);
@@ -351,7 +349,7 @@ test("Doc reads shared records, validates citations and proposes a save without 
 		[
 			{ what: "Review the floor plan" },
 			{
-				what: "Periodic touch — Example Cedar Landlord. 90-day landlord cadence.",
+				what: "Periodic touch — C-0933. 90-day landlord cadence.",
 			},
 		],
 	);

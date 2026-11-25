@@ -377,6 +377,14 @@ type OpenAction = {
 	client_step?: true;
 };
 
+// Only the read output changes; the stored wording stays as saved.
+export const checkInNextStep =
+	(names: OldRecordNames) =>
+	<Deal extends { next_step: string | null }>(deal: Deal) => ({
+		...deal,
+		next_step: deal.next_step && checkInWording(deal.next_step, names),
+	});
+
 const boardAction =
 	(names: OldRecordNames) =>
 	({ call_follow_up, ...action }: OpenAction) => ({
@@ -435,16 +443,17 @@ export async function readNextBoard(
 		.execute();
 	// A client's deals share its workspace and account, so the scoped list holds all its open deals.
 	const openDeals = Map.groupBy(deals, (deal) => deal.client_id);
-	const names = await readOldRecordNames(
-		db,
-		deals.flatMap((deal) =>
-			[...deal.open_actions, ...deal.client_actions].map(
-				({ description }) => description,
-			),
-		),
-	);
 	const closed_deals = await readNextBoardDeals(db, scope, "closed");
 	const lost_deals = await readNextBoardDeals(db, scope, "lost");
+	const names = await readOldRecordNames(db, [
+		...deals.flatMap((deal) => [
+			deal.next_step,
+			...[...deal.open_actions, ...deal.client_actions].map(
+				({ description }) => description,
+			),
+		]),
+		...[...closed_deals, ...lost_deals].map(({ next_step }) => next_step),
+	]);
 	// The client copy leaves prospects outside national_account.
 	const { rows: accounts } = await sql`
 		select na.party_id as account_client_id, p.name as account_name, u.slug as account_owner,
@@ -470,7 +479,7 @@ export async function readNextBoard(
 		schema_version: "local-deals-board.v2",
 		actor: input.partner,
 		deals: deals.map(({ client_actions, ...deal }) => ({
-			...deal,
+			...checkInNextStep(names)(deal),
 			open_actions: (deal.open_actions.length === 0 &&
 			openDeals.get(deal.client_id)?.length === 1
 				? client_actions
@@ -479,8 +488,8 @@ export async function readNextBoard(
 			item_schema_version: "deal-items.v1",
 			next_step_required: deal.next_step === null || deal.next_date === null,
 		})),
-		closed_deals,
-		lost_deals,
+		closed_deals: closed_deals.map(checkInNextStep(names)),
+		lost_deals: lost_deals.map(checkInNextStep(names)),
 		accounts,
 		open_session: null,
 	};

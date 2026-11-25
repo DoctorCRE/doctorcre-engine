@@ -625,6 +625,37 @@ test("a deal with no step of its own shows its client's step, check-ins named, w
 	);
 });
 
+test("the board and deal page name an old record code in a deal's check-in", async () => {
+	const rollback = new Error("roll back example code check-in");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			const before = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const client = before.deals.find((row) => row.id === id(34));
+			assert.ok(client?.client_id);
+			await sql`insert into outside_id (source, value, party_id)
+				values ('old_system_ref', 'C-0931', ${client.client_id})`.execute(tx);
+			await sql`insert into next_step (id, deal_id, owner_party_id, what) values
+				(${id(526)}, ${id(34)}, ${id(1)}, 'Relationship touch — C-0931. 60-day client cadence.')`.execute(
+				tx,
+			);
+			const checkIn = `Check in with ${client.client_name} (client)`;
+			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const deal = board.deals.find((row) => row.id === id(34));
+			assert.equal(deal?.next_step, checkIn);
+			assert.deepEqual(
+				deal?.open_actions.map(({ description }) => description),
+				[checkIn],
+			);
+			const page = await readNextDealDetail(tx, id(34));
+			assert.ok(!("error" in page));
+			assert.equal(page.next_step, checkIn);
+			throw rollback;
+		}),
+		rollback,
+	);
+});
+
 test("a deal stays won with its latest close date when it moves to Invoiced", async () => {
 	const rollback = new Error("roll back test phase moves");
 	await assert.rejects(

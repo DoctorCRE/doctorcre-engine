@@ -2,11 +2,15 @@ import { Hono } from "hono";
 import { type Expression, sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { isCalendarDate } from "../calendar-date.ts";
-import { isOpenBoardDeal, selectNextDeals } from "../deals/next-board.ts";
+import {
+	checkInNextStep,
+	isOpenBoardDeal,
+	selectNextDeals,
+} from "../deals/next-board.ts";
 import { ENDED_PHASES } from "../deals/shared.ts";
 import type { DB } from "../next-database.d.ts";
-import { prospectQuery } from "../prospects/read.ts";
-
+import { readOldRecordNames } from "../old-record-names.ts";
+import { type FollowUp, prospectQuery, titled } from "../prospects/read.ts";
 import type { DatabaseEnv } from "../reader.ts";
 
 export const isMonday = (day: unknown): day is string =>
@@ -114,8 +118,12 @@ function reviewItems(db: Transaction<DB>, week: string) {
 	`;
 }
 
+type ReviewItem =
+	| { deal_id: string; next_step: string | null }
+	| { party_id: string; follow_ups: FollowUp[] };
+
 async function readReview(db: Transaction<DB>, week: string) {
-	const { rows } = await sql<{ item: object }>`
+	const { rows } = await sql<{ item: ReviewItem }>`
 		select i.fields || jsonb_strip_nulls(jsonb_build_object('deal_id', i.deal_id, 'party_id', i.party_id))
 			|| jsonb_build_object('state', i.state, 'seen_change_id', ${reviewVersion(sql.val(week), sql`i.deal_id`, sql`i.party_id`)},
 				'reviewed', case when mark.id is not null then
@@ -128,7 +136,22 @@ async function readReview(db: Transaction<DB>, week: string) {
 			case when i.section in (2, 3) then i.arrived_at end,
 			case when i.section in (1, 4) then i.name end, i.sort_id
 	`.execute(db);
-	return { items: rows.map(({ item }) => item) };
+	const items = rows.map(({ item }) => item);
+	const names = await readOldRecordNames(
+		db,
+		items.flatMap((item) =>
+			"deal_id" in item
+				? [item.next_step]
+				: item.follow_ups.map(({ what }) => what),
+		),
+	);
+	return {
+		items: items.map((item) =>
+			"deal_id" in item
+				? checkInNextStep(names)(item)
+				: { ...item, follow_ups: item.follow_ups.map(titled(names)) },
+		),
+	};
 }
 
 export const mondayReviewReads = new Hono<DatabaseEnv>().get(
