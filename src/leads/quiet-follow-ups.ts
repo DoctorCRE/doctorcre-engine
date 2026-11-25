@@ -7,6 +7,7 @@ import {
 } from "./follow-up-reads.ts";
 
 export type Cadence = { lead_days: number; vendor_days: number };
+export const DEFAULT_CADENCE: Cadence = { lead_days: 45, vendor_days: 90 };
 
 type Proposal = {
 	subject_type: "lead" | "vendor";

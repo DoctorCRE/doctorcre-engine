@@ -13,7 +13,7 @@ import {
 	readLeadDetail,
 	readNextLeadDetail,
 } from "./detail.ts";
-import { readQuietFollowUps } from "./quiet-follow-ups.ts";
+import { DEFAULT_CADENCE, readQuietFollowUps } from "./quiet-follow-ups.ts";
 import { readReasonsToReachOut } from "./reasons-to-reach-out.ts";
 
 const BOARD_FIELDS = [
@@ -67,8 +67,12 @@ leads.get("/quiet-follow-ups", async (c) => {
 	});
 	if (refused) return refuse(c, refused);
 	// The old read checked neither whole numbers nor their 1 to 365 range.
-	const lead_days = Number(params.get("lead_days") ?? 45);
-	const vendor_days = Number(params.get("vendor_days") ?? 90);
+	const lead_days = Number(
+		params.get("lead_days") ?? DEFAULT_CADENCE.lead_days,
+	);
+	const vendor_days = Number(
+		params.get("vendor_days") ?? DEFAULT_CADENCE.vendor_days,
+	);
 	const [ownerSlug = null, ...more] = params.getAll("owner_slug");
 	// Its own error code was not public, so the old system answered generically.
 	if (

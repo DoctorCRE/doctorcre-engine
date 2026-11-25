@@ -1831,6 +1831,12 @@ The list and drawer show live vendors and their current relationship partner. Co
 
 Track record counts come from `vendor_track_record`. A deal counts even when its work date is unknown. The first and last work dates use participation saved through the new system. A dated introduction that led to a deal can also set the Last deal date. The old coverage verification timestamp, manual override and rating edit version return null.
 
+### Vendor category counts
+
+`GET /api/engine/vendor-summary` takes an optional `owner` of `all` (the default), `joe` or `dell`, and counts that partner's vendors from the new schema. It answers `{ schema_version: "vendor-summary.v1", owner, quiet_days, all_vendors, categories, no_category }`. Each tile is `{ vendors, quiet, relationships }`, and each entry of `categories` also has the category role's `slug` and `label`, ordered by label. Every vendor category role appears, even one with no vendors. A vendor with two categories counts under both, so `all_vendors` holds the true total. `no_category` counts vendors with no category role.
+
+`relationships` counts each vendor once under one word. A ruling outranks the level: `avoid` and `parked` come from the disposition, at any level. With no ruling, level 3 is `core`, 2 `established`, 1 `building`, 0 `prospective`, and no level `not_rated`. `quiet` counts vendors that `GET /api/engine/quiet-follow-ups` would list at its default vendor cadence, `quiet_days` (90): no ruling, no active do-not-contact, no open next step, and no email, call or meeting in that many Central days, counted from when the vendor role was added if there was none. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
+
 **Later.** The copy leaves vendor work dates unknown. Preserving them needs a design decision about a nullable participation date or a field for its source.
 
 ## Doc conversations and turns
