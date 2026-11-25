@@ -8,6 +8,18 @@ import { isUuid } from "./request-shape.ts";
 
 const PAGE = 50;
 
+// The old system's causes that name a machine or a bulk load, not a person's own edit.
+const AUTOMATIC_CAUSES = [
+	"automation_job",
+	"learning_job",
+	"ingest_email",
+	"ingest_calendar",
+	"ingest_webhook",
+	"system",
+	"import_migration",
+	"import_salesforce",
+];
+
 type HistoryRow = {
 	source: "change" | "imported";
 	key: string;
@@ -210,6 +222,8 @@ async function readImported(db: Transaction<DB>, after: string | null) {
 				< (select changed_at, id from imported_change where id = ${after}::uuid))
 			-- The old system's own automations moved ownership in bulk; that history stays on the deal timeline.
 			and i.changed_by_job is distinct from 'old_system'
+			-- Old jobs also ran under a partner's sign-in, so their cause, not the sign-in, says who did it.
+			and (i.changed_by_user_id is null or i.source_event ->> 'cause' <> all(${sql.val(AUTOMATIC_CAUSES)}::text[]))
 			and i.table_name || '.' || i.field = any(${sql.val(Object.keys(IMPORTED))}::text[])
 			and coalesce(d.id, ad.id, p.id) is not null
 		order by i.changed_at desc, i.id desc limit ${PAGE + 1}
