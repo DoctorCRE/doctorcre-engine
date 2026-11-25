@@ -10,7 +10,7 @@ The owner's rulings win. Where a reference app does something the owner ruled ag
 
 **Seen.** Gr8r Studio's list rows are 40px, or 34px in its compact setting, and its buttons are 26 to 36px tall. One Linear screenshot shows about 13 two-line notifications beside an open issue. T3 Code's screenshot fits a project, a title and a branch into each thread row.
 
-**Rule.** On a computer a one-line row is 34 to 40px tall, a two-line row is at most 64px, and a control is 28 to 32px. A phone keeps 44px touch targets.
+**Rule.** Sizes follow the pointer, not the window width. With a mouse or trackpad (a fine pointer) a one-line row is 34 to 40px tall, a two-line row is at most 64px, and a control is 28 to 32px, at any width. With touch (a coarse pointer) a control and a touch target are 44px. Layout breakpoints stay width-based.
 
 **Test.** At 1280x640, a list of 20 records shows at least 11 one-line rows or 7 two-line rows without scrolling.
 
@@ -38,9 +38,9 @@ A detail page may add back/title, the facts line its screen file requires and a 
 
 **Seen.** Gr8r Studio sets row and card names at one body size, metadata and controls a step smaller, and only a page heading larger. Linear keeps one face for the interface and a display cut for headings. T3 Code sets a thread's title at body size and separates the title from the lines around it by brightness alone.
 
-**Rule.** A screen uses at most four text sizes, all from the app's type tokens. Body text comes from one token. It is 14px on a computer and 16px on a phone. Rows, cards and controls use the body size for the name and the caption size for everything else. Weight and the muted tone make the rest of the hierarchy.
+**Rule.** A screen uses at most four text sizes, all from the app's type tokens. Body text comes from one token. It is 14px with a fine pointer at any width and 16px with a coarse pointer. Rows, cards and controls use the body size for the name and the caption size for everything else. Weight and the muted tone make the rest of the hierarchy.
 
-**Test.** The screenshot has four or fewer distinct text sizes. Body text measures 14px on a computer and 16px on a phone. No text inside a row, card or control is larger than body text.
+**Test.** The screenshot has four or fewer distinct text sizes. Body text measures 14px with a fine pointer and 16px with a coarse pointer. No text inside a row, card or control is larger than body text.
 
 ## 5. Color and borders: neutrals carry the screen and lines stay faint
 
