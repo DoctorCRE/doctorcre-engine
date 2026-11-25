@@ -18,15 +18,15 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 ## Deal board
 
-- [ ] Two tabs: Local Deals and National Accounts.
-- [ ] "Local Deals" shows once, as the top bar title.
+- [ ] The top bar names the page once: Local Deals, with National Accounts beside it as a quieter link. On a phone narrower than 480 the link reads "National".
+- [ ] All, Joe, Dell and the view choices share the top bar when they fit. When they do not, as at 1280 with Today open, they move to their own row under it. No control is ever cut off.
 - [ ] All, Joe and Dell choose whose deals show. Board, List, Closed deals and Lost deals choose the view. Parked shows or hides the Parked lane on Board and List.
-- [ ] Board: seven columns in order, Prospective Client, Research, Site Selection, Negotiating, Legal, Due Diligence, Closing. The phase name and count fit on one line, even when collapsed and on a phone. Each column is a faint, borderless panel as tall as its cards; an open column ends with **+ Add deal**, which opens Add deal set to that phase. Today starts collapsed on Board and List and keeps each partner's own choice. With Today closed, all columns fit at 1280 and 1440 wide with every phase name whole and no sideways scrolling. With Today open, the board scrolls sideways inside itself. On a computer the board fills the screen below the heading, the page does not scroll, and a full column scrolls inside itself with its phase name in view. On a phone the board scrolls with the page. A closed deal leaves the board for Closed deals or Lost deals (owner, 2026-11-23).
+- [ ] Board: seven columns in order, Prospective Client, Research, Site Selection, Negotiating, Legal, Due Diligence, Closing. The phase name and count fit on one line, even when collapsed and on a phone. Each column is a faint, borderless panel as tall as its cards; an open column ends with **+ Add deal**, which opens Add deal set to that phase. Today starts collapsed on Board and List and keeps each partner's own choice, separate from National Accounts and Monday review. With Today closed, all columns fit at 1280 and 1440 wide with every phase name whole and no sideways scrolling. With Today open, the board scrolls sideways inside itself. On a computer the board fills the screen below the heading, the page does not scroll, and a full column scrolls inside itself with its phase name in view. On a phone the board scrolls with the page. A closed deal leaves the board for Closed deals or Lost deals (owner, 2026-11-23).
 - [ ] The headline counts every open deal, including those in collapsed columns, and every parked deal, whether the Parked lane is open or not: "38 open deals · 27 parked".
 - [ ] Each open deal shows once, in its phase column. A parked deal shows only in the Parked lane.
 - [ ] With `deals-from-engine` on, the board stays current without the old live feed: it reloads from the engine when the tab is shown or focused, after each save, and about every minute while in use, and says when it last updated. National Accounts' pending confirmations load on their own (coordinator, 2026-11-20).
 - [ ] List: one row per open deal with its name, deal owner, phase and next step. The List shows the deal owner's step when both partners have one. It shows an automatic move without Undo.
-- [ ] On a computer, the List and the Prospects lane scroll together inside the board's box, with Prospects after the last deal. No deal row sits under the Prospects lane, the lane shows whole with its Add prospect form, and the page does not scroll. Check at 1280 and 1440 wide, with Today open and closed.
+- [ ] On a computer, the List and the Prospects lane scroll together inside the board's box, with Prospects after the last deal. No deal row sits under the Prospects lane, the lane shows whole with its **+ Add prospect** control, and the page does not scroll. Check at 1280 and 1440 wide, with Today open and closed.
 - [ ] Each card and List row has a star. A partner's starred deals sit first in their column on Board and first in List, in their usual order among themselves. Each partner sees only their own stars, and starring twice or unstarring an unstarred deal changes nothing (owner, 2026-11-24).
 - [ ] Add deal asks for the deal name, the client (picked by name), the deal kind, the deal reason, the phase and the deal owner. Kind and reason may each be left unknown. When the reason is renewal, it also asks which existing lease the deal renews, and saves only with one. The lease picker shows "already renewed by <deal>" when a deal already links to that lease (owner, 2026-11-19).
 - [ ] In each name picker, a match shows its city when known and how many deals it is on. A company that is already a national account offers "Open account" (owner, 2026-11-19).
@@ -77,11 +77,11 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 
 ### Adding a prospect
 
-- [ ] Add prospect is one line at the top of the lane: a name, then an optional note. Enter saves.
-- [ ] For someone new, the same line requires one tap to choose person or company and one to choose how found (owner, 2026-11-18).
-- [ ] It is never refused because the person or practice is not a client or not in the system yet. A blank name, or a save that fails, keeps the line open with the typed name and note and says what is missing or what went wrong.
+- [ ] **+ Add prospect** at the top of the lane opens the quick add in its place, with the name focused: a name, then an optional note. Enter saves. **Cancel** or Esc closes it and puts focus back on **+ Add prospect**.
+- [ ] For someone new, the quick add requires one tap to choose person or company and one to choose how found (owner, 2026-11-18).
+- [ ] It is never refused because the person or practice is not a client or not in the system yet. A blank name, or a save that fails, keeps the quick add open with the typed name and note and says what is missing or what went wrong.
 - [ ] While the partner types, people and companies already in the system with that name are offered. Picking one puts it in the lane, asking how found only when it has none. Picking a prospect already in the lane adds the note to it. Picking a client who is on no deal offers Add deal for them instead.
-- [ ] Picking someone already on a deal keeps the add line open, says they are already on a deal and offers to open their deals.
+- [ ] Picking someone already on a deal keeps the quick add open, says they are already on a deal and offers to open their deals.
 - [ ] Adding a dropped person or company through Add prospect brings them back to the lane.
 - [ ] A new prospect is unclaimed until a partner clicks Claim (owner, 2026-11-18: leads "go to no one until they are claimed").
 
@@ -131,8 +131,8 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] Add market deal lists markets and the account's current locations by name. Pick a market and a location, or add a person or company as the location. An optional market agent is picked from existing people.
 - [ ] A new location client under a national account has "national account or corporate lead" as how found (owner, 2026-11-18).
 - [ ] National-account deals whose client is a person show under their account (owner answer, 2026-11-18).
-- [ ] The account name shows once, in the top bar. Open deals, Closed deals and the last update time sit in the top bar next to Local Deals and National Accounts. On a phone the update time ends the toolbar instead.
-- [ ] One toolbar row holds All national accounts, the account owner ("Owned by Dell", which opens Change account owner), **Show**, search, Review deals or Monday review, and Add national account or Add market deal. It stays one row at 1280 and 1440 with Today open. The account cards view shows only search, Add national account and the update time. Today starts collapsed and keeps each partner's own choice.
+- [ ] The top bar reads Local Deals, then National Accounts as the page title. An open account's name follows it once, as does "Search results" during a search. Open deals, Closed deals and the last update time sit in the top bar beside them when they fit. On a phone the update time ends the toolbar instead.
+- [ ] One toolbar row holds All national accounts, the account owner ("Owned by Dell", which opens Change account owner), **Show**, search, Review deals or Monday review, and Add national account or Add market deal. It stays one row at 1280 and 1440 with Today open. The account cards view shows only search, Add national account and the update time. Today starts collapsed and keeps each partner's own choice for National Accounts, separate from Local Deals.
 - [ ] **Show** has a visible label and one choice of Active, Mine, Needs attention, Flagged, Gone quiet, Missing next step, Changed since review or Parked. It is outlined when anything but Active is chosen.
 - [ ] Each row opens the deal page. Park and the phase work as they do on the board. On a computer the phase reads as text, and the phase arrow, Park and needs attention show when the pointer is on the row or keyboard focus reaches it. Touch screens always show them.
 - [ ] A flagged deal says "Needs attention" on its row without hover. A late next step says "N days late", and a flagged late row shows both.
