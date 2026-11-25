@@ -31,16 +31,35 @@ export const mailGroup = sql<
 	string | null
 >`coalesce('conversation:' || e.conversation_id, 'email:' || e.activity_id)`;
 
-// A job suggests filing on each message of a conversation; every screen shows that decision once, as its newest pending suggestion.
+// Suggestions share a source when they come from one email thread, else one call or meeting.
+export function decisionSource(
+	proposal: string,
+	mail: Expression<string | null> = sql`(select ${mailGroup} from email e
+		where e.activity_id = ${sql.ref(`${proposal}.activity_id`)})`,
+) {
+	const column = (name: string) => sql.ref(`${proposal}.${name}`);
+	return sql<string>`coalesce(${mail}, ${column("activity_id")}::text, ${column("id")}::text)`;
+}
+
+// Suggestions on one source are one decision when they file it the same way or set one person's next step for one owner.
+export function decisionKey(proposal: string) {
+	const column = (name: string) => sql.ref(`${proposal}.${name}`);
+	return sql<string>`case
+		when ${column("kind")} in ('file_to_deal', 'possible_new_deal') and ${filingScope(proposal)} is null
+			then ${column("kind")} || ':' || coalesce(${column("deal_id")}::text, '')
+		when ${column("kind")} = 'next_step' and ${column("party_id")} is not null
+			then 'next_step:' || ${column("party_id")} || ':' || coalesce(${column("owner_party_id")}::text, '')
+		else ${column("id")}::text end`;
+}
+
+// Every screen shows a decision once, as its newest pending suggestion.
 export function decisionPosition(
 	proposal: string,
 	source: Expression<string | null>,
 ) {
 	const column = (name: string) => sql.ref(`${proposal}.${name}`);
 	return sql<number>`row_number() over (
-		partition by ${source}, case when ${column("kind")} = 'possible_new_deal' and ${filingScope(proposal)} is not null
-			then ${column("id")}::text when ${column("kind")} in ('file_to_deal', 'possible_new_deal')
-			then ${column("kind")} || ':' || coalesce(${column("deal_id")}::text, '') else ${column("id")}::text end
+		partition by ${source}, ${decisionKey(proposal)}
 		order by (${column("status")} = 'pending') desc, ${column("created_at")} desc, ${column("id")})`;
 }
 
@@ -50,7 +69,6 @@ type ThreadRow = Sender & {
 	activity_id: string;
 	happened_at: string;
 	exact_happened_at: string;
-	saved_sender_name: string | null;
 	summary: DB["activity"]["summary"];
 } & Pick<
 		DB["email"],
@@ -512,8 +530,7 @@ export async function readHomeEmailThread(
 	sourceId: string,
 ) {
 	const { rows } = await sql<ThreadRow>`
-		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name,
-			e.sender_name as saved_sender_name, a.summary,
+		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name, a.summary,
 			${isoMillis(sql.ref("a.happened_at"))} as happened_at,
 			a.happened_at::text as exact_happened_at, e.message_id, e.subject, e.body, e.authored, e.history
 		from email source
@@ -545,7 +562,7 @@ export async function readHomeEmailThread(
 		id: source.activity_id,
 		kind: "email",
 		sender: source.sender,
-		sender_name: source.saved_sender_name,
+		sender_name: source.sender_name,
 		subject: source.subject,
 		body: source.body,
 		happened_at: source.happened_at,

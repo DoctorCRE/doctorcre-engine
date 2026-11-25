@@ -43,15 +43,16 @@ before(async () => {
 			) f(id, name) where u.slug = 'example-owner';
 		insert into deal_party (deal_id, party_id, role)
 			select id, '${clientId}', 'client' from deal where name <> 'Example Without a client';
+		-- Each excluded deal's anniversary would change one test's answer if it leaked in.
 		insert into imported_deal_board (deal_id, phase, outcome, closed_on)
 			select d.id, f.phase, f.outcome, f.closed_on::date from deal d
 			join (values
 				('Example Leap Day lease', 'invoiced', 'won', '2020-02-29'),
 				('Example Following day', 'closed', 'won', '2021-03-31'),
-				('Example Without a client', 'closed', 'won', '2021-02-28'),
+				('Example Without a client', 'closed', 'won', '2021-04-10'),
 				('Example Without a date', 'closed', 'won', null),
-				('Example Lost deal', 'closed', 'lost', '2021-02-28'),
-				('Example Unknown outcome', 'closed', null, '2021-02-28'),
+				('Example Lost deal', 'closed', 'lost', '2021-03-10'),
+				('Example Unknown outcome', 'closed', null, '2021-07-15'),
 				('Example Open deal', 'research', null, null),
 				('Example New closing', 'closed', 'won', '2025-02-28')
 			) f(name, phase, outcome, closed_on) using (name);
@@ -144,6 +145,65 @@ test("requires a provisioned partner and takes no caller-supplied date", async (
 	);
 	assert.partialDeepStrictEqual(
 		await save(reader, `${path}?as_of=2025-02-28`, {}, "GET"),
+		[400, { error: "unregistered_operation_fields" }],
+	);
+});
+
+test("next names the first anniversary after the window, from Chicago midnight", async (t) => {
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2025-03-01T05:59:59Z"),
+	});
+	assert.deepEqual(await save(reader, `${path}/next`, {}, "GET"), [
+		200,
+		{ next_anniversary_on: "2025-03-31" },
+	]);
+	t.mock.timers.setTime(Date.parse("2025-03-01T06:00:00Z"));
+	assert.deepEqual(await save(owner, `${path}/next`, {}, "GET"), [
+		200,
+		{ next_anniversary_on: "2026-02-28" },
+	]);
+});
+
+test("next answers null when no closed-won deal has a client", async () => {
+	const links = (statement: string) =>
+		db.query(`begin; select set_config('engine.job', 'old_system', true);
+			${statement}; commit;`);
+	await links(`delete from deal_party where party_id = '${clientId}'`);
+	try {
+		assert.deepEqual(await save(reader, `${path}/next`, {}, "GET"), [
+			200,
+			{ next_anniversary_on: null },
+		]);
+	} finally {
+		await links(`insert into deal_party (deal_id, party_id, role)
+			select id, '${clientId}', 'client' from deal where name <> 'Example Without a client'`);
+	}
+});
+
+test("next keeps February 29 in leap years", async (t) => {
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2023-12-15T12:00:00Z"),
+	});
+	assert.deepEqual(await save(reader, `${path}/next`, {}, "GET"), [
+		200,
+		{ next_anniversary_on: "2024-02-29" },
+	]);
+});
+
+test("next requires a provisioned partner and takes no fields", async () => {
+	const signedOut = await request(reader, `${path}/next`, {
+		method: "GET",
+		headers: { Cookie: "" },
+	});
+	assert.equal(signedOut.status, 401);
+	assert.partialDeepStrictEqual(
+		await save({ user: "unprovisioned-example" }, `${path}/next`, {}, "GET"),
+		[422, { error: "unauthenticated" }],
+	);
+	assert.partialDeepStrictEqual(
+		await save(reader, `${path}/next?as_of=2025-02-28`, {}, "GET"),
 		[400, { error: "unregistered_operation_fields" }],
 	);
 });

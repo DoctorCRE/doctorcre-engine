@@ -16,6 +16,7 @@ import {
 import { isoMillis, Refusal } from "./answer.ts";
 import {
 	decisionPosition,
+	decisionSource,
 	mailGroup,
 	readHomeEmailThread,
 	senderLabel,
@@ -106,8 +107,12 @@ type Suggestion = ReviewRow &
 		member_ids: string[];
 	};
 
-const mailSource = sql`coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id)`;
-const sourceKey = sql<string>`coalesce(${mailSource}, a.id::text, p.id::text)`;
+export const replacedStepReason =
+	"Replaced by the accepted next step for this person";
+const mailSource = sql<
+	string | null
+>`coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id)`;
+const sourceKey = decisionSource("p", mailSource);
 
 // The owner answered a draft that can never send by replying to its recipient from Outlook; an unconfirmed one waits for the Sent check.
 const repliedFromOutlook = sql<boolean>`r.status = 'failed'
@@ -309,7 +314,7 @@ export async function readProposal(
 							"source.kind",
 							"source.summary",
 							"e.sender",
-							"e.sender_name",
+							senderLabel("e", false).as("sender_name"),
 							"e.subject",
 							"e.body",
 							isoMillis(source.ref("source.happened_at")).as("happened_at"),
@@ -1067,7 +1072,10 @@ export async function readHomeReviewDisposition(
 		if (proposal?.status === "dismissed")
 			return {
 				item_id,
-				state: "dropped",
+				state:
+					proposal.dismiss_reason === replacedStepReason
+						? "replaced"
+						: "dropped",
 				...(proposal.dismiss_reason && { reason: proposal.dismiss_reason }),
 			};
 		if (proposal?.status === "superseded")

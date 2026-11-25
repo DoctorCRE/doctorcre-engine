@@ -122,6 +122,10 @@ before(async () => {
 		insert into imported_deal_board (deal_id, phase, phase_at)
 			values ('${undated}', 'closed', '2026-11-17 10:00Z');
 		insert into weekly_review (week_of, deal_id) values ('${week}', '${parked}');
+		insert into outside_id (source, value, party_id) values ('old_system_ref', 'C-0932', '${localClient}');
+		insert into next_step (deal_id, party_id, owner_party_id, what) values
+			('${moved}', null, '${dellId}', 'Relationship touch — C-0932. 60-day client cadence.'),
+			(null, '${oldLead}', '${joeId}', 'Relationship touch — C-0932. 30-day client cadence.');
 		alter table deal_phase_change enable trigger stamp_change;
 		commit;`);
 });
@@ -190,6 +194,21 @@ test("the review keeps Monday order, retains departures and adds arrivals ahead 
 	});
 	assert.ok(
 		!(await items(joe, "2026-11-23")).some((item) => item.party_id === dropped),
+	);
+});
+
+test("the review names an old record code in deal and prospect check-ins", async () => {
+	const review = await items();
+	const checkIn = "Check in with Example Practice (client)";
+	assert.equal(review.find((i) => i.deal_id === moved)?.next_step, checkIn);
+	assert.partialDeepStrictEqual(
+		review.find((i) => i.party_id === oldLead)?.follow_ups,
+		[
+			{
+				what: "Relationship touch — C-0932. 30-day client cadence.",
+				display_title: checkIn,
+			},
+		],
 	);
 });
 

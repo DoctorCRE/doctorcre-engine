@@ -27,6 +27,7 @@ import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
 import {
+	checkInNextStep,
 	clientWebsiteOf,
 	parkingNoteForDisplay,
 	selectNextDealsWithFacts,
@@ -306,6 +307,7 @@ export async function readNextDealDetail(
 		),
 	);
 	const names = await readOldRecordNames(db, [
+		detail.next_step,
 		...detail.thread.map(({ text }) => text),
 		...detail.activities.map(({ summary }) => summary),
 		...detail.next_actions.flatMap(({ description, title }) => [
@@ -315,7 +317,7 @@ export async function readNextDealDetail(
 	]);
 	const named = (text: string | null) => text && nameOldRecords(text, names);
 	return {
-		...detail,
+		...checkInNextStep(names)(detail),
 		thread: detail.thread.map((note) => ({ ...note, text: named(note.text) })),
 		activities: detail.activities.map((activity) => ({
 			...activity,
@@ -323,11 +325,13 @@ export async function readNextDealDetail(
 		})),
 		record_links: recordLinks(names),
 		next_actions: detail.next_actions.map((step) => {
-			const { title, instruction } = stepCopy({
-				what: nameOldRecords(step.description, names),
-				item_title: named(step.title),
-				context_label: detail.name,
-			});
+			const { title, instruction } = stepCopy(
+				{
+					what: nameOldRecords(step.description, names),
+					item_title: named(step.title),
+				},
+				names,
+			);
 			return {
 				...step,
 				display_title: title,
@@ -368,7 +372,7 @@ const correspondenceOf = (deal: Expression<string>) => sql<Correspondence[]>`(
 				from activity_about visited join property p on p.id = visited.property_id
 				where visited.activity_id = a.id having count(*) > 0
 			), '{}')
-		else jsonb_build_object('sender', e.sender, 'sender_name', e.sender_name, 'subject', e.subject)
+		else jsonb_build_object('sender', e.sender, 'sender_name', ${senderLabel("e", false)}, 'subject', e.subject)
 		end
 		order by a.happened_at desc, a.id desc
 	), '[]')
@@ -473,7 +477,7 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			jsonBuildObject({
 				activity_id: eb.ref("e.activity_id"),
 				sender: eb.ref("e.sender"),
-				sender_name: eb.ref("e.sender_name"),
+				sender_name: senderLabel("e", false),
 				subject: eb.ref("e.subject"),
 				happened_at: asText(eb.ref("a.happened_at")),
 				summary: eb.ref("a.summary"),

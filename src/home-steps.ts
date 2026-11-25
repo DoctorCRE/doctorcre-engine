@@ -1,7 +1,12 @@
 import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
-import { savedHomeTitle, stripHomeTitlePrefixes } from "./home-title.ts";
+import { shortHomeTitle, stripHomeTitlePrefixes } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
+import {
+	isOldRecordCode,
+	nameOldRecords,
+	type OldRecordNames,
+} from "./old-record-names.ts";
 
 const stepMetadata =
 	/\b(?:[CL]-\d+|V-[A-Z0-9]+(?:-[A-Z0-9]+)*-\d+|T\s*[-−]\s*\d+\s*(?:days?|weeks?|months?|years?)|loop\s*#\s*\d+)\b/gi;
@@ -46,10 +51,10 @@ export function homeStepText(text: string) {
 type StepWording = {
 	what: string;
 	item_title: string | null;
-	context_label: string | null;
 };
 
 export type HomeStep = StepWording & {
+	context_label: string | null;
 	status: string | null;
 	due_on: string | null;
 	hold_until: string | null;
@@ -107,21 +112,73 @@ function stepInstruction(what: string) {
 	);
 }
 
-export function stepCopy({ what, item_title, context_label }: StepWording) {
-	const instruction = stepInstruction(what);
-	const title =
-		item_title?.trim() ||
-		savedHomeTitle(instruction) ||
-		homeDisplayText(context_label) ||
-		"Next step";
+// The old nightly cadence saved its rule templates, "<Prefix> touch — {subject} ({ref}). N-day <role> cadence."
+const cadencePrefixes = ["Relationship", "Nurture", "Periodic"];
+const cadenceTouch = new RegExp(
+	String.raw`^(?:${cadencePrefixes.join("|")}) touch\s*[—–:-]\s*(?<subject>.+?)(?:\.\s*\d+-day (?<role>\p{L}[\p{L} -]*?) cadence(?:\.\s*(?<rest>.*?))?)?\.?$`,
+	"u",
+);
+const refAside = /\s*\([^()]*\)$/;
+// Some subjects are "<company>. <person> (ref)"; "Dr. Pat Example" is one name.
+const personSentence =
+	/^(?<company>.*\S(?<!\b(?:Dr|Mrs?|Ms|St|Ste|Mt|Ft|Jr|Sr)))\.\s+(?<person>\p{Lu}[^.]*\([^()]*\))$/u;
+
+function cadenceCheckIn(what: string, names: OldRecordNames) {
+	const {
+		subject = "",
+		role,
+		rest,
+	} = what.trim().match(cadenceTouch)?.groups ?? {};
+	if (/\bcadence\b/i.test(subject)) return null;
+	const { company = subject.replace(refAside, ""), person } =
+		subject.match(personSentence)?.groups ?? {};
+	const name = isOldRecordCode(company)
+		? (names.get(company)?.text ?? "an old record")
+		: stepInstruction(company);
+	if (!name) return null;
+	const instruction = [person && nameOldRecords(person, names), rest]
+		.map((text) => text && stepInstruction(text))
+		.filter(Boolean)
+		.join(". ");
+	return {
+		title: `Check in with ${name}${role ? ` (${role})` : ""}`,
+		instruction: instruction || null,
+	};
+}
+
+// For reads that show the stored wording whole, where a partner can't edit it.
+export function checkInWording(what: string, names: OldRecordNames) {
+	const checkIn = cadenceCheckIn(what, names);
+	return checkIn
+		? [checkIn.title, checkIn.instruction].filter(Boolean).join(". ")
+		: what;
+}
+
+export function stepCopy(
+	{ what, item_title }: StepWording,
+	names: OldRecordNames,
+	heading?: string,
+) {
+	const saved = heading || item_title?.trim();
+	const checkIn = cadenceCheckIn(what, names);
+	if (checkIn && !saved) return checkIn;
+	const instruction = checkIn
+		? checkInWording(what, names)
+		: stepInstruction(what);
+	const title = saved || shortHomeTitle(instruction) || "Next step";
 	return {
 		title,
 		instruction: instruction && instruction !== title ? instruction : null,
 	};
 }
 
-export function homeStepCopy(step: HomeStep, evidence: StepEvidence) {
-	const { title, instruction } = stepCopy(step);
+export function homeStepCopy(
+	step: HomeStep,
+	evidence: StepEvidence,
+	names: OldRecordNames,
+	heading?: string,
+) {
+	const { title, instruction } = stepCopy(step, names, heading);
 	const hold =
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`

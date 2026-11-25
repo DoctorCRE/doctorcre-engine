@@ -5,8 +5,12 @@ import {
 	type Transaction,
 } from "kysely";
 import { jsonObjectFrom } from "kysely/helpers/postgres";
-import { stepItemId } from "../home-steps.ts";
+import { checkInWording, stepItemId } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
+import {
+	type OldRecordNames,
+	readOldRecordNames,
+} from "../old-record-names.ts";
 import { asText } from "../reader.ts";
 import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
@@ -373,10 +377,21 @@ type OpenAction = {
 	client_step?: true;
 };
 
-const withItemId = ({ call_follow_up, ...action }: OpenAction) => ({
-	...action,
-	item_id: stepItemId({ id: action.id, call_follow_up }),
-});
+// Only the read output changes; the stored wording stays as saved.
+export const checkInNextStep =
+	(names: OldRecordNames) =>
+	<Deal extends { next_step: string | null }>(deal: Deal) => ({
+		...deal,
+		next_step: deal.next_step && checkInWording(deal.next_step, names),
+	});
+
+const boardAction =
+	(names: OldRecordNames) =>
+	({ call_follow_up, ...action }: OpenAction) => ({
+		...action,
+		description: checkInWording(action.description, names),
+		item_id: stepItemId({ id: action.id, call_follow_up }),
+	});
 
 const openActions = (about: RawBuilder<unknown>, clientStep = false) =>
 	sql<
@@ -430,6 +445,15 @@ export async function readNextBoard(
 	const openDeals = Map.groupBy(deals, (deal) => deal.client_id);
 	const closed_deals = await readNextBoardDeals(db, scope, "closed");
 	const lost_deals = await readNextBoardDeals(db, scope, "lost");
+	const names = await readOldRecordNames(db, [
+		...deals.flatMap((deal) => [
+			deal.next_step,
+			...[...deal.open_actions, ...deal.client_actions].map(
+				({ description }) => description,
+			),
+		]),
+		...[...closed_deals, ...lost_deals].map(({ next_step }) => next_step),
+	]);
 	// The client copy leaves prospects outside national_account.
 	const { rows: accounts } = await sql`
 		select na.party_id as account_client_id, p.name as account_name, u.slug as account_owner,
@@ -455,17 +479,17 @@ export async function readNextBoard(
 		schema_version: "local-deals-board.v2",
 		actor: input.partner,
 		deals: deals.map(({ client_actions, ...deal }) => ({
-			...deal,
+			...checkInNextStep(names)(deal),
 			open_actions: (deal.open_actions.length === 0 &&
 			openDeals.get(deal.client_id)?.length === 1
 				? client_actions
 				: deal.open_actions
-			).map(withItemId),
+			).map(boardAction(names)),
 			item_schema_version: "deal-items.v1",
 			next_step_required: deal.next_step === null || deal.next_date === null,
 		})),
-		closed_deals,
-		lost_deals,
+		closed_deals: closed_deals.map(checkInNextStep(names)),
+		lost_deals: lost_deals.map(checkInNextStep(names)),
 		accounts,
 		open_session: null,
 	};

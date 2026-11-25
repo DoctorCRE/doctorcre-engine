@@ -2,7 +2,7 @@ import { sql, type Transaction } from "kysely";
 import type { DB } from "./next-database.d.ts";
 
 type RecordLink = { text: string; url: string };
-type OldRecordNames = ReadonlyMap<string, RecordLink>;
+export type OldRecordNames = ReadonlyMap<string, RecordLink>;
 
 const unitLabel = String.raw`(?:\b(?:suite|ste|unit|bldg|building|room|space|level|floor|fl|lot|bay|apt|office)s?\b\.?\s*#?|#)`;
 const unitNumber = String.raw`(?=[a-z-]*\d)[a-z0-9]+(?:-[a-z0-9]+)*`;
@@ -14,6 +14,9 @@ const oldRecordCode = new RegExp(
 	String.raw`${linkLike}|${unitList}|(?<![\w-])(?<code>${codeShape})(?![\w-]|\.\w)`,
 	"g",
 );
+
+export const isOldRecordCode = (text: string) =>
+	new RegExp(`^${codeShape}$`).test(text);
 
 const codesIn = (text: string) =>
 	[...text.matchAll(oldRecordCode)].flatMap(({ groups, index }) =>

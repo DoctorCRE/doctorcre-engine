@@ -561,7 +561,30 @@ test("a call follow-up on the board has the item id Home gives it", async () => 
 	);
 });
 
-test("a deal with no step of its own shows its client's step when it is the client's only open deal", async () => {
+test("the board never lists a cancelled step", async () => {
+	const rollback = new Error("roll back example cancelled steps");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			const before = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const client = before.deals.find((row) => row.id === id(34))?.client_id;
+			await sql`insert into next_step (id, deal_id, party_id, owner_party_id, what, resolution, resolution_reason) values
+				(${id(524)}, ${id(37)}, null, ${id(1)}, 'Example check the old record', 'cancelled', 'Example replaced'),
+				(${id(525)}, null, ${client}, ${id(1)}, 'Example check the old client', 'cancelled', 'Example replaced')`.execute(
+				tx,
+			);
+			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const ids = board.deals.flatMap((deal) =>
+				deal.open_actions.map((action) => action.id),
+			);
+			assert.ok(!ids.includes(id(524)) && !ids.includes(id(525)), ids.join());
+			throw rollback;
+		}),
+		rollback,
+	);
+});
+
+test("a deal with no step of its own shows its client's step, check-ins named, when it is the client's only open deal", async () => {
 	const rollback = new Error("roll back example client steps");
 	await assert.rejects(
 		nextTransaction(connectionString, "save", async (tx) => {
@@ -570,7 +593,7 @@ test("a deal with no step of its own shows its client's step when it is the clie
 			const clientOf = (deal: number) =>
 				before.deals.find((row) => row.id === id(deal))?.client_id;
 			await sql`insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on) values
-				(${id(520)}, null, ${clientOf(34)}, ${id(1)}, 'Example call the former location', '2000-02-01'),
+				(${id(520)}, null, ${clientOf(34)}, ${id(1)}, 'Nurture touch — Example Former Clinic. 45-day client cadence.', '2000-02-01'),
 				(${id(521)}, null, ${clientOf(31)}, ${id(1)}, 'Example call the doctor', null),
 				(${id(522)}, ${id(30)}, null, ${id(1)}, 'Example send the clinic plans', null),
 				(${id(523)}, null, ${clientOf(30)}, ${id(2)}, 'Example call the clinic', null)`.execute(
@@ -585,7 +608,7 @@ test("a deal with no step of its own shows its client's step when it is the clie
 					owner: "partner_one",
 					due_on: "2000-02-01",
 					item_id: `next_action:${id(520)}`,
-					description: "Example call the former location",
+					description: "Check in with Example Former Clinic (client)",
 					client_step: true,
 				},
 			]);
@@ -596,6 +619,37 @@ test("a deal with no step of its own shows its client's step when it is the clie
 				["Example send the clinic plans"],
 			);
 			assert.ok(board.deals.every((deal) => !("client_actions" in deal)));
+			throw rollback;
+		}),
+		rollback,
+	);
+});
+
+test("the board and deal page name an old record code in a deal's check-in", async () => {
+	const rollback = new Error("roll back example code check-in");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			const before = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const client = before.deals.find((row) => row.id === id(34));
+			assert.ok(client?.client_id);
+			await sql`insert into outside_id (source, value, party_id)
+				values ('old_system_ref', 'C-0931', ${client.client_id})`.execute(tx);
+			await sql`insert into next_step (id, deal_id, owner_party_id, what) values
+				(${id(526)}, ${id(34)}, ${id(1)}, 'Relationship touch — C-0931. 60-day client cadence.')`.execute(
+				tx,
+			);
+			const checkIn = `Check in with ${client.client_name} (client)`;
+			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const deal = board.deals.find((row) => row.id === id(34));
+			assert.equal(deal?.next_step, checkIn);
+			assert.deepEqual(
+				deal?.open_actions.map(({ description }) => description),
+				[checkIn],
+			);
+			const page = await readNextDealDetail(tx, id(34));
+			assert.ok(!("error" in page));
+			assert.equal(page.next_step, checkIn);
 			throw rollback;
 		}),
 		rollback,

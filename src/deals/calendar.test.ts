@@ -300,7 +300,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			},
 			{
 				id: id(49),
-				what: cadence,
+				what: "Check in with Example Contact (vendor)",
 				why: null,
 				owner: "joe",
 				record_label: "Example Contact",
@@ -311,7 +311,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 			},
 			{
 				id: id(40),
-				what: "Example Supply",
+				what: "Ask Example Supply whether the expansion order can ship before the tenant improvements…",
 				why: longWording,
 				owner: "joe",
 				record_label: "Example Supply",
