@@ -326,7 +326,6 @@ export async function readNextDealDetail(
 			const { title, instruction } = stepCopy({
 				what: nameOldRecords(step.description, names),
 				item_title: named(step.title),
-				context_label: detail.name,
 			});
 			return {
 				...step,

@@ -536,7 +536,7 @@ test("Home keeps undated steps and cleans their titles without rewriting saved w
 			items.filter((item) => item.source_id === example.id),
 			[
 				{
-					title: example.title || "Example Vendor",
+					title: example.title || "Next step",
 					why: "Follow-up set on Nov 17, 2026.",
 					primary_action: "Mark done",
 					due_on: null,
@@ -564,18 +564,22 @@ for (const [scenario, what, title] of [
 	[
 		"a long step with two sentences",
 		`Send the site plan. ${longAction}.`,
-		"Example Lost Deal",
+		"Send the site plan. Confirm the accessibility requirements for the proposed suite with…",
 	],
-	["a long instruction", longAction, "Example Lost Deal"],
+	[
+		"a long instruction",
+		longAction,
+		"Confirm the accessibility requirements for the proposed suite with the landlord and ask…",
+	],
 	[
 		"an initial in a long instruction",
 		"Send the revised floor plan to Á. Morgan and include the accessibility notes from the most recent walkthrough",
-		"Example Lost Deal",
+		"Send the revised floor plan to Á. Morgan and include the accessibility notes from the…",
 	],
 	[
 		"a long call with common abbreviations",
 		`Call Dr. Example and Mr. Reed at St. Example Inc. about the plan. ${longAction}.`,
-		"Example Lost Deal",
+		"Call Dr. Example and Mr. Reed at St. Example Inc. about the plan. Confirm the…",
 	],
 	[
 		"a call from the office",
@@ -634,7 +638,7 @@ for (const [scenario, what, title] of [
 			assert.ok(card);
 			assert.equal(card.title, title);
 			assert.ok(typeof card.why === "string");
-			const firstWords = title === "Example Lost Deal" ? what : "Follow-up set";
+			const firstWords = title.endsWith("…") ? what : "Follow-up set";
 			assert.ok(card.why.startsWith(firstWords), card.why);
 		} finally {
 			await db.query("rollback");

@@ -561,6 +561,29 @@ test("a call follow-up on the board has the item id Home gives it", async () => 
 	);
 });
 
+test("the board never lists a cancelled step", async () => {
+	const rollback = new Error("roll back example cancelled steps");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			const before = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const client = before.deals.find((row) => row.id === id(34))?.client_id;
+			await sql`insert into next_step (id, deal_id, party_id, owner_party_id, what, resolution, resolution_reason) values
+				(${id(524)}, ${id(37)}, null, ${id(1)}, 'Example check the old record', 'cancelled', 'Example replaced'),
+				(${id(525)}, null, ${client}, ${id(1)}, 'Example check the old client', 'cancelled', 'Example replaced')`.execute(
+				tx,
+			);
+			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			const ids = board.deals.flatMap((deal) =>
+				deal.open_actions.map((action) => action.id),
+			);
+			assert.ok(!ids.includes(id(524)) && !ids.includes(id(525)), ids.join());
+			throw rollback;
+		}),
+		rollback,
+	);
+});
+
 test("a deal with no step of its own shows its client's step when it is the client's only open deal", async () => {
 	const rollback = new Error("roll back example client steps");
 	await assert.rejects(
