@@ -31,16 +31,25 @@ export const mailGroup = sql<
 	string | null
 >`coalesce('conversation:' || e.conversation_id, 'email:' || e.activity_id)`;
 
-// A job suggests filing on each message of a conversation; every screen shows that decision once, as its newest pending suggestion.
+// Suggestions on one thread are one decision when they file it the same way or set one person's next step for one owner.
+export function decisionKey(proposal: string) {
+	const column = (name: string) => sql.ref(`${proposal}.${name}`);
+	return sql<string>`case
+		when ${column("kind")} in ('file_to_deal', 'possible_new_deal') and ${filingScope(proposal)} is null
+			then ${column("kind")} || ':' || coalesce(${column("deal_id")}::text, '')
+		when ${column("kind")} = 'next_step' and ${column("party_id")} is not null
+			then 'next_step:' || ${column("party_id")} || ':' || coalesce(${column("owner_party_id")}::text, '')
+		else ${column("id")}::text end`;
+}
+
+// Every screen shows a decision once, as its newest pending suggestion.
 export function decisionPosition(
 	proposal: string,
 	source: Expression<string | null>,
 ) {
 	const column = (name: string) => sql.ref(`${proposal}.${name}`);
 	return sql<number>`row_number() over (
-		partition by ${source}, case when ${column("kind")} = 'possible_new_deal' and ${filingScope(proposal)} is not null
-			then ${column("id")}::text when ${column("kind")} in ('file_to_deal', 'possible_new_deal')
-			then ${column("kind")} || ':' || coalesce(${column("deal_id")}::text, '') else ${column("id")}::text end
+		partition by ${source}, ${decisionKey(proposal)}
 		order by (${column("status")} = 'pending') desc, ${column("created_at")} desc, ${column("id")})`;
 }
 

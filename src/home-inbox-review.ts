@@ -106,6 +106,8 @@ type Suggestion = ReviewRow &
 		member_ids: string[];
 	};
 
+export const replacedStepReason =
+	"Replaced by the accepted next step for this person";
 const mailSource = sql`coalesce(${mailGroup}, 'conversation:' || lead_email.conversation_id)`;
 const sourceKey = sql<string>`coalesce(${mailSource}, a.id::text, p.id::text)`;
 
@@ -1067,7 +1069,10 @@ export async function readHomeReviewDisposition(
 		if (proposal?.status === "dismissed")
 			return {
 				item_id,
-				state: "dropped",
+				state:
+					proposal.dismiss_reason === replacedStepReason
+						? "replaced"
+						: "dropped",
 				...(proposal.dismiss_reason && { reason: proposal.dismiss_reason }),
 			};
 		if (proposal?.status === "superseded")

@@ -11,8 +11,8 @@ import {
 	decidableCallProposal,
 	lockOpenDealStep,
 } from "./deals/call-review.ts";
-import { sourceInMailbox } from "./home-email-thread.ts";
-import { readProposal } from "./home-inbox-review.ts";
+import { decisionKey, sourceInMailbox } from "./home-email-thread.ts";
+import { readProposal, replacedStepReason } from "./home-inbox-review.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
 import { ACTING_USER } from "./next-save.ts";
@@ -337,33 +337,24 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 	);
 
 const filingKinds = ["file_to_deal", "possible_new_deal"];
+const threadDecisionKinds = [...filingKinds, "next_step"];
 
-// Filing decisions and mail jobs take the same email locks before changing proposals.
-async function lockFiling(
-	tx: Transaction<DB>,
-	p: {
-		id: string;
-		kind: string;
-		activity_id: string | null;
-		deal_id: string | null;
-		filing_scope: string | null;
-	},
-) {
+// A decision settles its pending siblings on the thread. Decisions and mail jobs take the same email locks first.
+async function lockDecision(tx: Transaction<DB>, id: string) {
 	const { rows } = await sql<{ id: string; message_id: string | null }>`
 		select sibling.id, coalesce(e.message_id, e.activity_id::text) as message_id
-		from proposal sibling
-		left join email e on e.activity_id = sibling.activity_id
-		where sibling.id = ${p.id}::uuid or (${p.filing_scope}::text is null
-			and ${filingScope("sibling")} is null and sibling.kind = ${p.kind}
-			and sibling.deal_id is not distinct from ${p.deal_id}::uuid
-			and sibling.status = 'pending'
+		from proposal clicked
+		join proposal sibling on sibling.id = clicked.id or (sibling.status = 'pending'
+			and ${decisionKey("sibling")} = ${decisionKey("clicked")}
 			and sibling.activity_id in (
 				select thread.activity_id from email source
 				join email thread on thread.activity_id = source.activity_id
 					or thread.conversation_id = source.conversation_id
-				where source.activity_id = ${p.activity_id}::uuid
+				where source.activity_id = clicked.activity_id
 			)
 			and ${sourceInMailbox(sql.ref("sibling.activity_id"), sql<string>`current_setting('engine.user_id')`)})
+		left join email e on e.activity_id = sibling.activity_id
+		where clicked.id = ${id}::uuid
 	`.execute(tx);
 	for (const messageId of [
 		...new Set(rows.map((row) => row.message_id)),
@@ -372,7 +363,7 @@ async function lockFiling(
 	const { rows: members } = await sql<{ id: string }>`
 		select sibling.id from proposal sibling
 		where sibling.id = any(${rows.map((row) => row.id)}::uuid[])
-			and (sibling.id = ${p.id}::uuid or (sibling.status = 'pending' and
+			and (sibling.id = ${id}::uuid or (sibling.status = 'pending' and
 				(sibling.kind <> 'file_to_deal' or
 					${filingReviewNeeded(sql.ref("sibling.activity_id"), sql.ref("sibling.deal_id"))})))
 		order by sibling.id for update
@@ -395,18 +386,12 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 			async (tx, r) => {
 				const clicked = await tx
 					.selectFrom("proposal")
-					.select([
-						"id",
-						"kind",
-						"activity_id",
-						"deal_id",
-						filingScope("proposal").as("filing_scope"),
-					])
+					.select("kind")
 					.where("id", "=", r.proposal_id)
 					.executeTakeFirst();
 				const members =
-					clicked && filingKinds.includes(clicked.kind)
-						? await lockFiling(tx, clicked)
+					clicked && threadDecisionKinds.includes(clicked.kind)
+						? await lockDecision(tx, r.proposal_id)
 						: [r.proposal_id];
 				const p = await tx
 					.selectFrom("proposal as p")
@@ -484,6 +469,11 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 				const { owner_party_id: editedOwner, what, due_on } = r.edits ?? {};
 				const ownerEdit = isUuid(editedOwner) ? editedOwner : undefined;
 				const owner = ownerEdit ?? p.owner_party_id;
+				// Accepting saves one step, so the person's other suggested steps on the thread are recorded as replaced.
+				const replaced =
+					accepts && p.kind === "next_step"
+						? members.filter((id) => id !== p.id)
+						: [];
 				const updateDecision = () =>
 					sql<{
 						id: string;
@@ -492,10 +482,12 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						filed_deal_id: string | null;
 						merged_step_id: string | null;
 					}>`update proposal
-   set status = ${accepts ? "accepted" : "dismissed"}, filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
+   set status = case when id = any(${replaced}::uuid[]) then 'dismissed' else ${accepts ? "accepted" : "dismissed"} end,
+    filed_deal_id = ${accepts ? (r.deal_id ?? null) : null}::uuid,
 	${r.vendor_id ? sql`filed_vendor_id = ${r.vendor_id}::uuid,` : sql``}
     filing_reason = ${accepts ? (r.reason ?? null) : null},
-    dismiss_reason = ${accepts ? null : (r.reason?.trim() ?? null)} where id = any(${members}::uuid[])
+    dismiss_reason = case when id = any(${replaced}::uuid[]) then ${replacedStepReason}
+     else ${accepts ? null : (r.reason?.trim() ?? null)} end where id = any(${members}::uuid[])
    returning id, status, decided_at::text, filed_deal_id, merged_step_id`.execute(
 						tx,
 					);
