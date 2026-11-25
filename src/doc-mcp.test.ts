@@ -46,8 +46,9 @@ before(async () => {
 		insert into outside_id (source, value, party_id) values ('old_system_lead', '${copiedLead}', '${lead}');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Cedar Lease', '${owner}');
 		insert into deal_phase_change (deal_id, happened_at, phase) values ('${deal}', '2026-01-01', 'pending');
-		insert into next_step (deal_id, what, owner_party_id, due_on)
-			values ('${deal}', 'Review the floor plan', '${owner}', '2026-12-14');
+		insert into next_step (deal_id, what, owner_party_id, due_on) values
+			('${deal}', 'Review the floor plan', '${owner}', '2026-12-14'),
+			('${deal}', 'Periodic touch — Example Cedar Landlord. 90-day landlord cadence.', '${other}', '2026-12-21');
 		with a as (insert into activity (kind, happened_at, summary)
 			values ('note', '2026-01-02', 'The west entrance needs a ramp.') returning id)
 		insert into activity_about (activity_id, deal_id) select id, '${deal}' from a;
@@ -254,7 +255,13 @@ test("Doc reads shared records, validates citations and proposes a save without 
 	]);
 	const facts = await tool(request, "read", { source });
 	assert.equal(facts.phase, "pending");
-	assert.equal(facts.next_steps[0].what, "Review the floor plan");
+	assert.deepEqual(
+		facts.next_steps.map(({ what }: { what: string }) => what),
+		[
+			"Review the floor plan",
+			"Check in with Example Cedar Landlord (landlord)",
+		],
+	);
 	assert.equal(facts.activity[0].summary, "The west entrance needs a ramp.");
 	assert.equal(facts.activity.length, 1);
 	const [sharedClient] = await tool(request, "find", {
@@ -339,9 +346,15 @@ test("Doc reads shared records, validates citations and proposes a save without 
 			{ kind: "email", summary: "Private synthetic mail summary." },
 		],
 	);
-	assert.deepEqual((await db.query("select what from next_step")).rows, [
-		{ what: "Review the floor plan" },
-	]);
+	assert.deepEqual(
+		(await db.query("select what from next_step order by due_on")).rows,
+		[
+			{ what: "Review the floor plan" },
+			{
+				what: "Periodic touch — Example Cedar Landlord. 90-day landlord cadence.",
+			},
+		],
+	);
 	assert.equal(
 		(await db.query("select idempotency_key from save_receipt")).rowCount,
 		0,

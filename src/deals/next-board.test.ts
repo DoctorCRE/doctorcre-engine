@@ -584,7 +584,7 @@ test("the board never lists a cancelled step", async () => {
 	);
 });
 
-test("a deal with no step of its own shows its client's step when it is the client's only open deal", async () => {
+test("a deal with no step of its own shows its client's step, check-ins named, when it is the client's only open deal", async () => {
 	const rollback = new Error("roll back example client steps");
 	await assert.rejects(
 		nextTransaction(connectionString, "save", async (tx) => {
@@ -593,7 +593,7 @@ test("a deal with no step of its own shows its client's step when it is the clie
 			const clientOf = (deal: number) =>
 				before.deals.find((row) => row.id === id(deal))?.client_id;
 			await sql`insert into next_step (id, deal_id, party_id, owner_party_id, what, due_on) values
-				(${id(520)}, null, ${clientOf(34)}, ${id(1)}, 'Example call the former location', '2000-02-01'),
+				(${id(520)}, null, ${clientOf(34)}, ${id(1)}, 'Nurture touch — Example Former Clinic. 45-day client cadence.', '2000-02-01'),
 				(${id(521)}, null, ${clientOf(31)}, ${id(1)}, 'Example call the doctor', null),
 				(${id(522)}, ${id(30)}, null, ${id(1)}, 'Example send the clinic plans', null),
 				(${id(523)}, null, ${clientOf(30)}, ${id(2)}, 'Example call the clinic', null)`.execute(
@@ -608,7 +608,7 @@ test("a deal with no step of its own shows its client's step when it is the clie
 					owner: "partner_one",
 					due_on: "2000-02-01",
 					item_id: `next_action:${id(520)}`,
-					description: "Example call the former location",
+					description: "Check in with Example Former Clinic (client)",
 					client_step: true,
 				},
 			]);

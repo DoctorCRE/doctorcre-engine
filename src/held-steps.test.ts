@@ -22,7 +22,11 @@ before(async () => {
 });
 after(cleanup);
 
-async function fixture(kind: "note" | "call", current = true) {
+async function fixture(
+	kind: "note" | "call",
+	current = true,
+	what = "Send the survey",
+) {
 	const deal_id = randomUUID();
 	const activity_id = randomUUID();
 	const next_step_id = randomUUID();
@@ -34,7 +38,7 @@ async function fixture(kind: "note" | "call", current = true) {
 		select set_config('engine.user_id', '', true);
 		insert into activity_about (activity_id, deal_id) values ('${activity_id}', '${deal_id}');
 		insert into next_step (id, deal_id, owner_party_id, what, due_on, created_at) values
-			('${next_step_id}', '${deal_id}', '${ownerId}', 'Send the survey', '2001-02-01', '${current ? "2001-01-03" : "2001-01-01"}'),
+			('${next_step_id}', '${deal_id}', '${ownerId}', '${what}', '2001-02-01', '${current ? "2001-01-03" : "2001-01-01"}'),
 			(gen_random_uuid(), '${deal_id}', '${teammateId}', 'Call the lender', '2001-02-02', '2001-01-02');
 		commit;`);
 	return { deal_id, activity_id, next_step_id };
@@ -425,6 +429,26 @@ test("Home shows the partner's pending holds with the linked update or call", as
 		pending.every(
 			(item) => ![p.proposal_id, n.proposal_id].includes(item.proposal_id),
 		),
+	);
+});
+
+test("Home names who to check in with on a held step and an automatic completion", async () => {
+	const checkIn = "Relationship touch — Example Supply. 90-day vendor cadence.";
+	const held = await fixture("note", true, checkIn);
+	const completed = await fixture("note", true, checkIn);
+	const [stored, { proposal_id }] = await hold(held);
+	assert.equal(stored, 201);
+	assert.equal((await end(completed.next_step_id))[0], 200);
+	const [, { proposals, automatic_resolutions }] = await home(alex);
+	assert.ok(Array.isArray(proposals) && Array.isArray(automatic_resolutions));
+	assert.deepEqual(
+		[
+			proposals.find((item) => item.proposal_id === proposal_id)?.what,
+			automatic_resolutions.find(
+				(item) => item.next_step_id === completed.next_step_id,
+			)?.what,
+		],
+		Array(2).fill("Check in with Example Supply (vendor)"),
 	);
 });
 

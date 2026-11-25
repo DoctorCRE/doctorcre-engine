@@ -2,11 +2,13 @@ import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
 import { Refusal, refuse } from "./answer.ts";
 import { failureKind } from "./failure.ts";
+import { checkInWording } from "./home-steps.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import type { NextSaveEnv } from "./next-door.ts";
 import { ACTING_USER, stampNextSave } from "./next-save.ts";
 import { automaticResolutions } from "./next-steps.ts";
+import { type OldRecordNames, readOldRecordNames } from "./old-record-names.ts";
 import { SaveRefusal } from "./save.ts";
 
 const heldSteps = (tx: Transaction<DB>) =>
@@ -72,6 +74,13 @@ async function recentAutomaticResolutions(tx: Transaction<DB>) {
 	}));
 }
 
+const checkInStep =
+	(names: OldRecordNames) =>
+	<Step extends { what: string }>(step: Step) => ({
+		...step,
+		what: checkInWording(step.what, names),
+	});
+
 export const heldStepReviews = new Hono<NextSaveEnv>().get(
 	"/home/held-steps",
 	async (c) => {
@@ -81,9 +90,15 @@ export const heldStepReviews = new Hono<NextSaveEnv>().get(
 			return c.json(
 				await nextTransaction(reader.connectionString, "read", async (tx) => {
 					await stampNextSave(tx, c.get("stamp"));
+					const proposals = await heldSteps(tx).execute();
+					const resolutions = await recentAutomaticResolutions(tx);
+					const names = await readOldRecordNames(
+						tx,
+						[...proposals, ...resolutions].map(({ what }) => what),
+					);
 					return {
-						proposals: await heldSteps(tx).execute(),
-						automatic_resolutions: await recentAutomaticResolutions(tx),
+						proposals: proposals.map(checkInStep(names)),
+						automatic_resolutions: resolutions.map(checkInStep(names)),
 					};
 				}),
 			);

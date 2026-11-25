@@ -3,7 +3,12 @@ import { etag } from "hono/etag";
 import { sql, type Transaction } from "kysely";
 import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { PARTNERS } from "../clients/read.ts";
+import { checkInWording } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
+import {
+	type OldRecordNames,
+	readOldRecordNames,
+} from "../old-record-names.ts";
 import type { DatabaseEnv } from "../reader.ts";
 import { isUuid } from "../request-shape.ts";
 import { type StepOrigin, selectStepsWithOrigin } from "../step-origin.ts";
@@ -141,21 +146,38 @@ export function prospectQuery(
 	`;
 }
 
-function prospectCard({
-	notes,
-	completed_follow_up: _completedFollowUp,
-	entered_at: _enteredAt,
-	dropped: _drop,
-	...prospect
-}: Prospect) {
-	const note = notes[0];
-	return {
-		...prospect,
-		latest_note: note
-			? { summary: note.summary, by: note.by, at: note.at }
-			: null,
+const followUpNames = (db: Transaction<DB>, rows: Prospect[]) =>
+	readOldRecordNames(
+		db,
+		rows.flatMap(({ follow_ups, completed_follow_up }) =>
+			[...follow_ups, completed_follow_up].map((step) => step?.what ?? null),
+		),
+	);
+
+// The follow-up editor prefills from `what`, so the readable wording is a field of its own.
+const titled = (names: OldRecordNames) => (step: FollowUp) => ({
+	...step,
+	display_title: checkInWording(step.what, names),
+});
+
+const prospectCard =
+	(names: OldRecordNames) =>
+	({
+		notes,
+		completed_follow_up: _completedFollowUp,
+		entered_at: _enteredAt,
+		dropped: _drop,
+		...prospect
+	}: Prospect) => {
+		const note = notes[0];
+		return {
+			...prospect,
+			follow_ups: prospect.follow_ups.map(titled(names)),
+			latest_note: note
+				? { summary: note.summary, by: note.by, at: note.at }
+				: null,
+		};
 	};
-}
 
 export const prospectReads = new Hono<DatabaseEnv>()
 	.get("/prospects", async (c): Promise<Response> => {
@@ -168,7 +190,11 @@ export const prospectReads = new Hono<DatabaseEnv>()
 			const { rows } = await prospectQuery(db, {
 				owner: params.get("owner") ?? "all",
 			}).execute(db);
-			return { prospects: rows.map(prospectCard), count: rows.length };
+			const names = await followUpNames(db, rows);
+			return {
+				prospects: rows.map(prospectCard(names)),
+				count: rows.length,
+			};
 		});
 	})
 	.get("/prospects/:party_id", etag(), async (c): Promise<Response> => {
@@ -194,15 +220,16 @@ export const prospectReads = new Hono<DatabaseEnv>()
 				includeDropped: true,
 				stepId,
 			}).execute(db);
-			return row
-				? {
-						...prospectCard(row),
-						notes: row.notes,
-						...(stepId !== null && {
-							completed_follow_up: row.completed_follow_up,
-						}),
-						...(row.dropped && { state: "dropped", dropped: row.dropped }),
-					}
-				: new Refusal(404, "not_found");
+			if (!row) return new Refusal(404, "not_found");
+			const names = await followUpNames(db, [row]);
+			const completed = row.completed_follow_up;
+			return {
+				...prospectCard(names)(row),
+				notes: row.notes,
+				...(stepId !== null && {
+					completed_follow_up: completed && titled(names)(completed),
+				}),
+				...(row.dropped && { state: "dropped", dropped: row.dropped }),
+			};
 		});
 	});

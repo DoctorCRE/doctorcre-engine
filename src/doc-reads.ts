@@ -2,8 +2,10 @@ import { sql, type Transaction } from "kysely";
 import { BusinessRefusal, readNextClient } from "./clients/read.ts";
 import type { JsonObject } from "./database.d.ts";
 import { readNextDealDetail } from "./deals/next-detail.ts";
+import { checkInWording } from "./home-steps.ts";
 import { readNextLeadDetail } from "./leads/detail.ts";
 import type { DB } from "./next-database.d.ts";
+import { readOldRecordNames } from "./old-record-names.ts";
 import { readSearchRecords } from "./search/records.ts";
 
 type RecordKind = "deal" | "lead" | "client";
@@ -115,7 +117,7 @@ export async function readDocRecord(
 	const targetColumn = sql.ref(target);
 	const {
 		rows: [related],
-	} = await sql<JsonObject>`
+	} = await sql<{ next_steps: { what: string }[]; activity: JsonObject[] }>`
 		select
 			(select coalesce(jsonb_agg(to_jsonb(step)), '[]') from (
 				select s.what, s.due_on, owner.name as owner
@@ -130,5 +132,18 @@ export async function readDocRecord(
 				order by a.happened_at desc, a.id desc limit 5
 			) entry) as activity
 	`.execute(db);
-	return { name: source.label, ...facts, ...related };
+	if (!related) throw new Error("Doc record read returned no row");
+	const names = await readOldRecordNames(
+		db,
+		related.next_steps.map(({ what }) => what),
+	);
+	return {
+		name: source.label,
+		...facts,
+		...related,
+		next_steps: related.next_steps.map((step) => ({
+			...step,
+			what: checkInWording(step.what, names),
+		})),
+	};
 }
