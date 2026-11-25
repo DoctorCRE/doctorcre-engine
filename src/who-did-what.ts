@@ -210,6 +210,8 @@ async function readImported(db: Transaction<DB>, after: string | null) {
 				< (select changed_at, id from imported_change where id = ${after}::uuid))
 			-- The old system's own automations moved ownership in bulk; that history stays on the deal timeline.
 			and i.changed_by_job is distinct from 'old_system'
+			-- Old jobs also ran under a partner's sign-in; only a person's cause makes it the partner's work.
+			and (i.changed_by_user_id is null or i.source_event ->> 'cause' in ('human_stated', 'human_correction'))
 			and i.table_name || '.' || i.field = any(${sql.val(Object.keys(IMPORTED))}::text[])
 			and coalesce(d.id, ad.id, p.id) is not null
 		order by i.changed_at desc, i.id desc limit ${PAGE + 1}
@@ -223,6 +225,30 @@ function parseCursor(before: string | undefined): Cursor | Refusal {
 	return /^\d+$/.test(change) && (imported === "top" || isUuid(imported))
 		? { change: Number(change), imported: imported === "top" ? null : imported }
 		: new Refusal(400, "invalid_field_value", { fields: ["before"] });
+}
+
+type Change = {
+	changed_at: string;
+	job: string | null;
+	what: string | undefined;
+	count: number;
+};
+
+// A job's identical changes in the same minute are one run, shown once as its newest change.
+function runs<T extends Change>(changes: T[]) {
+	const kept: T[] = [];
+	for (const change of changes) {
+		const last = kept.at(-1);
+		if (
+			change.job !== null &&
+			last?.job === change.job &&
+			last.what === change.what &&
+			last.changed_at.slice(0, 16) === change.changed_at.slice(0, 16)
+		)
+			last.count++;
+		else kept.push(change);
+	}
+	return kept;
 }
 
 async function readChanges(db: Transaction<DB>, cursor: Cursor) {
@@ -239,15 +265,18 @@ async function readChanges(db: Transaction<DB>, cursor: Cursor) {
 			last(imported) ?? (imported.length ? (cursor.imported ?? "top") : SPENT),
 	};
 	return {
-		changes: page.map((row) => ({
-			id: `${row.source}:${row.key}`,
-			changed_at: new Date(row.changed_at).toISOString(),
-			who: row.who,
-			job: row.job,
-			record: row.record,
-			what: whatChanged(row),
-			open_url: openUrl(row),
-		})),
+		changes: runs(
+			page.map((row) => ({
+				id: `${row.source}:${row.key}`,
+				changed_at: new Date(row.changed_at).toISOString(),
+				who: row.who,
+				job: row.job,
+				record: row.record,
+				what: whatChanged(row),
+				open_url: openUrl(row),
+				count: 1,
+			})),
+		),
 		next_before:
 			native.length + imported.length > PAGE
 				? `${next.change}_${next.imported}`

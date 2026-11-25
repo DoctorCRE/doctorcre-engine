@@ -14,6 +14,10 @@ const imported = randomUUID();
 const rerun = randomUUID();
 const ignored = randomUUID();
 const automated = randomUUID();
+const clinic = randomUUID();
+// An old job that ran under a partner's sign-in.
+const signedIn = randomUUID();
+const flagged = [randomUUID(), randomUUID(), randomUUID()];
 const joe = { user: "joe" };
 const dell = { user: "dell" };
 const as = (user: string, statement: string) =>
@@ -31,6 +35,8 @@ before(async () => {
 		insert into app_user (id, slug) values ('${alex}', '${joe.user}'), ('${blair}', '${dell.user}');
 		insert into phase values ('loi', 'LOI');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${alex}');
+		insert into party (id, kind, name) values ('${clinic}', 'company', 'Example Clinic');
+		insert into deal (id, name, owner_user_id) select id, 'Example Ortho ' || n, '${alex}' from unnest('{${flagged}}'::uuid[]) with ordinality f(id, n);
 		set local role none;
 		alter table imported_change disable trigger stamp_imported_change;
 		insert into imported_change (id, table_name, record, old_value_absent, new_value_absent, field, source_event, changed_by_user_id, changed_at)
@@ -42,6 +48,10 @@ before(async () => {
 		values ('${automated}', 'deal', '{"id":"${deal}"}', false, false, 'owner_user_id',
 			jsonb_build_object('id', '${automated}'::uuid, 'verb', 'set-lead', 'cause', 'automation_job', 'actor_id', 'example'),
 			'old_system', '2001-01-02T15:00Z');
+		insert into imported_change (id, table_name, record, old_value_absent, new_value_absent, field, source_event, changed_by_user_id, changed_at)
+		values ('${signedIn}', 'client', '{"party_id":"${clinic}"}', false, false, 'status',
+			jsonb_build_object('id', '${signedIn}'::uuid, 'verb', 'update-client', 'cause', 'automation_job', 'actor_id', 'example'),
+			'${blair}', '2001-01-03T15:00Z');
 		alter table imported_change enable trigger stamp_imported_change;
 		commit;`);
 	await as(alex, `update deal set closed_value = 1200000 where id = '${deal}'`);
@@ -60,6 +70,10 @@ before(async () => {
 	await agentFor(
 		alex,
 		`insert into deal_phase_change (deal_id, happened_at, phase) values ('${deal}', now(), 'loi')`,
+	);
+	await agentFor(
+		alex,
+		`update deal set needs_attention = true where id = any('{${flagged}}')`,
 	);
 	await as(
 		blair,
@@ -112,7 +126,7 @@ test("Who did what pages newest first through native and imported history", asyn
 	const pages = await everything(joe);
 	assert.deepEqual(
 		pages.map((p) => p.length),
-		[50, 11],
+		[50, 12],
 	);
 	const all = pages.flat();
 	assert.equal(new Set(all.map((c) => c.id)).size, all.length);
@@ -161,14 +175,28 @@ test("Copies, the old system's own automations, internal fields and a partner's 
 	const seen = async (caller: typeof joe) =>
 		(await everything(caller)).flat().map((c) => c.what);
 	const forJoe = await seen(joe);
-	assert.equal(forJoe.length, 61);
+	assert.equal(forJoe.length, 62);
 	assert.ok(!forJoe.includes("opened the deal"));
 	const ids = (await everything(joe)).flat().map((c) => c.id);
 	assert.ok(!ids.includes(`imported:${automated}`));
+	assert.ok(!ids.includes(`imported:${signedIn}`));
 	assert.ok(
 		forJoe.every((what) => typeof what === "string" && what.length > 0),
 	);
 	assert.deepEqual(await seen(dell), forJoe);
+});
+
+test("A job's identical changes in one run show once with their count", async () => {
+	const all = (await everything(joe)).flat();
+	const runs = all.filter((c) => c.what === "flagged the deal for attention");
+	assert.equal(runs.length, 1);
+	assert.partialDeepStrictEqual(runs[0], {
+		who: null,
+		job: "agent",
+		count: 3,
+	});
+	assert.match(String(runs[0]?.record), /^Example Ortho /);
+	assert.ok(all.every((c) => c.count === 1 || c.what === runs[0]?.what));
 });
 
 test("A malformed cursor is refused", async () => {
