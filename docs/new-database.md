@@ -760,6 +760,8 @@ A vendor's relationship partner is optional and lives on its vendor role as `par
 
 A vendor's disposition is the team's ruling on it, and its target flag says the team wants to meet it. Both sit on the vendor role next to its stage and level (owner, #258). A disposition is parked, deliberately dormant and on drip only, or avoid, ruled out as a partner. No disposition is active, in the network. A ruling always carries its reason, so a vendor never leaves play without one. An avoided vendor cannot be a target. Disposition and target are not stages: today's stage list once held them, and the old system's migration 0047 split them out because a stage mixed how well the team knows a vendor, a ruling and an intent.
 
+A vendor's relationship, the one word screens show for where the team stands, is read from its ruling and level and stores nothing (owner, 2026-11-25). Avoid or Parked when it has that ruling, at any level. Otherwise its level's label, or Not rated when it has no level. Want to meet is the target flag, shown beside the relationship. In relationship order the words run Core, Established, Building, Prospective, Not rated, Parked, Avoid.
+
 An introduction is one `introduction` row, made either way: the vendor introducing someone to the team, such as a new client, or the team introducing someone to the vendor. It names the vendor, who made it, whom it introduced, when, a note, and the deal it led to, which can be set when one comes of it. One the team made names the user who made it.
 
 `vendor_track_record` gives each vendor's record from deal history only. Nothing stores a rating (owner, #257). It counts the deals the vendor worked in any vendor role, how many of them closed and how many died, by each deal's latest phase, and the deals that its introductions to the team, and the team's to it, led to. A deal counts once, however many roles or introductions tie it to the vendor.
@@ -1675,7 +1677,7 @@ These saves follow the same session, replay and `{ from, to }` edit rules as peo
 - `GET /api/engine/parties/{id}` also answers the stored `client` and `vendor` profiles in these shapes, or null. A client's stored status is the manual one, not the computed directory status.
 - `POST /api/engine/clients/{id}` changes any of those fields. Status and how found cannot be cleared. A subtype belongs to the practice type it was recorded under, so clearing or changing the practice type clears the subtype unless the edit also sends one.
 - `POST /api/engine/vendors` takes `party_id` and optionally `categories` (vendor category role slugs), `stage`, `relationship_level` (0 to 3), `owner` (`joe` or `dell`; the signed-in partner when absent), `offers`, `seeking`, `is_target`, `disposition` and `disposition_reason`. It adds the vendor role and a role for each category, and answers `201 { party_id, stage, relationship_level, owner, offers, seeking, is_target, disposition, disposition_reason, categories }`. A record that is already a vendor returns `409 already_vendor`.
-- `POST /api/engine/vendors/{id}` changes any of those fields. `categories` is the whole list, so a removed category's role is removed and a new one added, and `categories: null` removes every category. `is_target` cannot be cleared. `owner` can be cleared to null, leaving the vendor without a relationship partner, as some copied vendors are. A ruling without a reason, or an avoided target, is refused by the database's vendor rules (`422 database_refused_the_statement` naming the rule).
+- `POST /api/engine/vendors/{id}` changes any of those fields. `categories` is the whole list, so a removed category's role is removed and a new one added, and `categories: null` removes every category. An `is_target` edit to false turns Want to meet off, and one to null returns `400 invalid_field_value`, because the flag is never unknown. `owner` can be cleared to null, leaving the vendor without a relationship partner, as some copied vendors are. A ruling without a reason, or an avoided target, is refused by the database's vendor rules (`422 database_refused_the_statement` naming the rule).
 
 ### Record introductions
 
@@ -1785,7 +1787,7 @@ The response is `{ ok: true, schema_version: "home-today.v1", today, viewer, own
 
 `meetings.items` lists the signed-in partner's stored occurrences that overlap today's Central calendar day, including those that already ended. Each row carries its Outlook event `key` when present. The row includes attendees and location from the snapshot. Non-user organizer and attendee emails match to open deals and parties (`possible_deals`, `context_label`, `open_url`).
 
-`meetings.meetings_may_be_missing` is true when a successful agenda has an `undecoded` warning. The shared Today panel shows meetings when present. A valid read with no items says “No meetings today.” When the flag is true, Today adds “Calendar may be incomplete” below that message. A failed or invalid read says “Couldn’t load meetings.”
+`meetings.meetings_may_be_missing` is true when a successful agenda has an `undecoded` warning. The shared Today panel shows meetings when present. A valid read with no items says “No meetings today.” Today never shows the flag to partners (owner, 2026-11-25). A failed or invalid read says “Couldn’t load meetings.”
 
 `follow_up_reviews` omits dismissed and confirmed reviews. Answering a review leaves its meeting in `meetings.items`. If the snapshot has only a review for an occurrence, the engine uses its key, title, and times for that meeting. The complete list and full details for ended meetings depend on the Outlook publisher sending their calendar rows. [Outlook publisher change](https://github.com/DoctorCRE/carr-system/issues/3265)
 
@@ -1838,6 +1840,21 @@ Track record counts come from `vendor_track_record`. A deal counts even when its
 `relationships` counts each vendor once under one word. A ruling outranks the level: `avoid` and `parked` come from the disposition, at any level. With no ruling, level 3 is `core`, 2 `established`, 1 `building`, 0 `prospective`, and no level `not_rated`. `quiet` counts vendors that `GET /api/engine/quiet-follow-ups` would list at its default vendor cadence, `quiet_days` (90): no ruling, no active do-not-contact, no open next step, and no email, call or meeting in that many Central days, counted from when the vendor role was added if there was none. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
 
 **Later.** The copy leaves vendor work dates unknown. Preserving them needs a design decision about a nullable participation date or a field for its source.
+
+### Vendors redesign reads
+
+The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 needs the reads below. None is built yet. Each reads live vendors from the new schema as the list does, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
+
+**Vendor summary.** `GET /api/engine/vendors/summary`, optional `owner`, `all` when absent, answers the category tiles in one read: `{ all, no_category, categories: [{ slug, label, ...counts }] }`. Each `counts` is `{ count, relationship: { core, established, building, prospective, not_rated, parked, avoid }, quiet }`. `categories` lists every vendor category in label order, with zeros for one no vendor holds. A vendor counts once in each category it holds, so the categories can add up to more than `all`. `no_category` counts vendors that hold only the vendor role.
+
+**The list read.** `GET /api/engine/vendors` changes in these ways:
+
+- With `category`, or `no_category=true` for vendors with no category, it answers every matching vendor in one answer, with no next page. Other lists keep pages of 25.
+- Each row answers `categories`, every category the vendor holds as `{ slug, label }` in label order, beside today's single category until the app stops reading it.
+- Each row answers `quiet`, true or false, and `quiet_days`, the whole Central days since its last contact while quiet, otherwise null.
+- `sort=relationship` orders by relationship order, then by name, and is the default. The other sorts stay.
+
+**Markets a vendor covers.** The territory tiles are the 19 named markets. A list row answers `markets`, each `{ id, name }` that one of its current territories covers: a market piece names it, or a state piece holds the market's counties. A vendor under no market but with a territory is under Elsewhere, which includes a typed territory not yet drawn into pieces. A vendor with no current territory is under No territory. Matching typed territories to markets is data work on production, with the owner's yes on the reviewed file, and nothing in it is guessed.
 
 ## Doc conversations and turns
 
