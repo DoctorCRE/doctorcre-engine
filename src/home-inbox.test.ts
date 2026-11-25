@@ -158,7 +158,10 @@ test("dashboard counts only eligible cards and separates waiting from deal and v
 		buildingTask,
 		checklist,
 		feedback,
-	] = Array.from({ length: 12 }, randomUUID);
+		note,
+		review,
+		reviewedStep,
+	] = Array.from({ length: 15 }, randomUUID);
 	await db
 		.query(`begin;
 		select set_config('engine.job', 'old_system', true);
@@ -204,16 +207,19 @@ test("dashboard counts only eligible cards and separates waiting from deal and v
 			from next_step where id in ('${open}', '${future}');
 		insert into home_update (id, user_id, deal_id, kind, property_id, what)
 			values ('${feedback}', '${viewer}', '${deal}', 'tour_feedback', '${building}', 'Parking felt tight');
+		insert into activity (id, kind, happened_at, summary)
+			values ('${note}', 'note', now(), 'The site plan was checked.');
+		insert into activity_about (activity_id, deal_id) values ('${note}', '${dashboardDeal}');
 		commit;`)
 		.catch(async (error: unknown) => {
 			await db.query("rollback");
 			throw error;
 		});
 	const caller = { user: "dashboard-viewer" };
-	const read = async () => {
+	const read = async (contract = "") => {
 		const response = await request(
 			caller,
-			`${path}?view=dashboard`,
+			`${path}?view=dashboard${contract && `&contract=${contract}`}`,
 			{ method: "GET" },
 			reader,
 		);
@@ -224,6 +230,7 @@ test("dashboard counts only eligible cards and separates waiting from deal and v
 				isArguments(result.reminders) &&
 				isArguments(result.waiting),
 		);
+		assert.equal(result.schema_version, contract || "home-inbox.v5");
 		const group = (value: Record<string, unknown>) => {
 			assert.ok(Array.isArray(value.items));
 			assert.equal(value.count, value.items.length);
@@ -236,6 +243,7 @@ test("dashboard counts only eligible cards and separates waiting from deal and v
 		return {
 			reminders: group(result.reminders),
 			waiting: group(result.waiting),
+			inbox: isArguments(result.inbox) ? group(result.inbox) : null,
 		};
 	};
 	const { reminders, waiting } = await read();
@@ -277,6 +285,72 @@ test("dashboard counts only eligible cards and separates waiting from deal and v
 	const next = await read();
 	assert.deepEqual([...next.reminders.values()], [...reminders.values()]);
 	assert.deepEqual([...next.waiting.values()], [...waiting.values()]);
+	assert.equal(next.inbox, null);
+
+	await db
+		.query(`begin;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${viewer}', true);
+		insert into next_step (id, deal_id, owner_party_id, what, due_on)
+			values ('${reviewedStep}', '${dashboardDeal}', '${viewer}', 'Check the plan',
+				(now() at time zone 'America/Chicago')::date - 2);
+		insert into proposal (id, kind, activity_id, activity_kind, proposed_by_job, deal_id, next_step_id, evidence)
+			values ('${review}', 'next_step_done', '${note}', 'note', 'old_system', '${dashboardDeal}', '${reviewedStep}', 'The site plan was checked.');
+		commit;`)
+		.catch(async (error: unknown) => {
+			await db.query("rollback");
+			throw error;
+		});
+	const split = await read("home-inbox.v6");
+	assert.deepEqual(
+		new Set(split.reminders.keys()),
+		new Set([open, dueToday, vendorStep, buildingTask, checklist]),
+	);
+	assert.deepEqual(new Set(split.inbox?.keys()), new Set([review, feedback]));
+	assert.partialDeepStrictEqual(split.inbox?.get(review), {
+		item_id: `next_action:${reviewedStep}`,
+		kind_label: "Task",
+		tile: "inbox",
+	});
+	assert.ok(
+		[...split.reminders.values()].every((card) => card.tile === "reminders"),
+	);
+	assert.deepEqual([...split.waiting.values()], [...waiting.values()]);
+	const merged = await read();
+	assert.equal(
+		merged.reminders.size,
+		split.reminders.size + (split.inbox?.size ?? 0),
+	);
+});
+
+test("the v6 dashboard keeps call follow-ups in Reminders and refuses a contract on the flat list", async () => {
+	const response = await request(
+		user,
+		`${path}?view=dashboard&contract=home-inbox.v6`,
+		{ method: "GET" },
+		reader,
+	);
+	assert.equal(response.status, 200);
+	const result: unknown = await response.json();
+	assert.ok(isArguments(result) && isArguments(result.reminders));
+	assert.ok(Array.isArray(result.reminders.items));
+	assert.partialDeepStrictEqual(
+		result.reminders.items.find(
+			(card) => isArguments(card) && card.source_id === followUp,
+		),
+		{ kind_label: "Call follow-up", tile: "reminders" },
+	);
+	for (const query of [
+		"contract=home-inbox.v6",
+		"view=dashboard&contract=home-inbox.v5",
+	]) {
+		const refused = await request(
+			user,
+			`${path}?${query}`,
+			{ method: "GET" },
+			reader,
+		);
+		assert.equal(refused.status, 400);
+	}
 });
 
 test("dashboard shows each copy of a follow-up once and keeps distinct steps apart", async () => {

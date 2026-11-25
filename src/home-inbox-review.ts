@@ -658,6 +658,7 @@ function reviewCard(
 		unseen: false,
 		context_label: row.context_label,
 		open_url: row.open_url,
+		tile: "inbox" as const,
 		action_id: null,
 		action_version: null,
 		waiting_version: 0,

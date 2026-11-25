@@ -250,6 +250,7 @@ function stepCard(copies: Copies, names: OldRecordNames) {
 		context_label: step.context_label,
 		open_url,
 		kind_label: step.call_follow_up ? "Call follow-up" : "Task",
+		tile: "reminders" as const,
 		action_id,
 		action_version,
 		covers,
@@ -339,12 +340,17 @@ function dashboardCard<Item extends HomeCardTiming>(item: Item, today: string) {
 	};
 }
 
+type HomeView = "list" | "home-inbox.v5" | "home-inbox.v6";
+
+const group = <Card>(items: Card[]) => ({ count: items.length, items });
+
 async function readHomeInbox(
 	db: Transaction<DB>,
 	userId: string,
-	dashboard: boolean,
+	view: HomeView,
 	now: string,
 ) {
+	const dashboard = view !== "list";
 	const day = homeDayAt(sql`${now}::timestamptz`);
 	const today = await readHomeDay(db, day);
 	const { rows } = await stepRows(db, userId, dashboard, day).execute(db);
@@ -399,22 +405,29 @@ async function readHomeInbox(
 	);
 	const contract = {
 		ok: true,
-		schema_version: "home-inbox.v5",
 		home_mark_drop: true,
 		home_proposal_drop: true,
 	};
 	if (dashboard) {
 		const cards = items.map((item) => dashboardCard(item, today));
-		const reminders = cards.filter((card) => !card.waiting_reason);
-		const waiting = cards.filter((card) => card.waiting_reason);
+		const open = cards.filter((card) => !card.waiting_reason);
+		const tiles =
+			view === "home-inbox.v5"
+				? { reminders: group(open) }
+				: {
+						reminders: group(open.filter((card) => card.tile === "reminders")),
+						inbox: group(open.filter((card) => card.tile === "inbox")),
+					};
 		return {
 			...contract,
-			reminders: { count: reminders.length, items: reminders },
-			waiting: { count: waiting.length, items: waiting },
+			schema_version: view,
+			...tiles,
+			waiting: group(cards.filter((card) => card.waiting_reason)),
 		};
 	}
 	return {
 		...contract,
+		schema_version: "home-inbox.v5",
 		items: items.slice(0, LIMIT).map((item) => {
 			const { card, days_late } = homeCardTiming(item, today);
 			return { ...card, days_late };
@@ -432,13 +445,27 @@ export const homeInbox = new Hono<
 homeInbox.get("/home/inbox", (c) => {
 	if (c.env.HOME_INBOX_READ_SCHEMA !== "next") return c.notFound();
 	const params = new URL(c.req.url).searchParams;
-	const refused = checkFields(params, ["view"], {
-		vocabularies: { view: ["dashboard"] },
+	const refused = checkFields(params, ["view", "contract"], {
+		vocabularies: { view: ["dashboard"], contract: ["home-inbox.v6"] },
 	});
 	if (refused) return refuse(c, refused);
+	const dashboard = params.get("view") === "dashboard";
+	const split = params.has("contract");
+	if (split && !dashboard)
+		return refuse(
+			c,
+			new Refusal(400, "invalid_field_value", { fields: ["contract"] }),
+		);
+	const view: HomeView = !dashboard
+		? "list"
+		: split
+			? "home-inbox.v6"
+			: "home-inbox.v5";
 	const now = new Date().toISOString();
-	return answerNextRead(c, "read-home-inbox-v5", (db, userId) =>
-		readHomeInbox(db, userId, params.get("view") === "dashboard", now),
+	return answerNextRead(
+		c,
+		view === "home-inbox.v6" ? "read-home-inbox-v6" : "read-home-inbox-v5",
+		(db, userId) => readHomeInbox(db, userId, view, now),
 	);
 });
 

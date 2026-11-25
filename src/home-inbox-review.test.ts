@@ -145,10 +145,10 @@ async function inbox(user = "example") {
 	return items;
 }
 
-async function dashboard(user = "example") {
+async function dashboard(user = "example", contract = "") {
 	const response = await request(
 		{ user },
-		"home/inbox?view=dashboard",
+		`home/inbox?view=dashboard${contract && `&contract=${contract}`}`,
 		{ method: "GET" },
 		{ HOME_INBOX_READ_SCHEMA: "next" },
 	);
@@ -164,7 +164,11 @@ async function dashboard(user = "example") {
 		assert.equal(group.count, group.items.length);
 		return group.items.filter(isArguments);
 	};
-	return { reminders: items(result.reminders), waiting: items(result.waiting) };
+	return {
+		reminders: items(result.reminders),
+		waiting: items(result.waiting),
+		...(isArguments(result.inbox) && { inbox: items(result.inbox) }),
+	};
 }
 
 function linkedCard(itemId: string, user = "example") {
@@ -196,6 +200,29 @@ test("a linked draft is the same grouped card as Home", async () => {
 			...(itemId !== cardId && { requested_item_id: itemId }),
 		});
 	}
+});
+
+test("the v6 dashboard answers every reply draft, suggestion and call review in the Inbox", async () => {
+	const v5 = await dashboard();
+	const {
+		reminders,
+		inbox = [],
+		waiting,
+	} = await dashboard("example", "home-inbox.v6");
+	assert.deepEqual(
+		new Set(reminders.map((card) => [card.kind_label, card.tile].join())),
+		new Set(["Task,reminders"]),
+	);
+	assert.deepEqual(
+		new Set(inbox.map((card) => [card.kind_label, card.tile].join())),
+		new Set(["Reply draft,inbox", "Suggestion,inbox", "Call,inbox"]),
+	);
+	assert.deepEqual(
+		v5.reminders.filter((card) => card.tile === "inbox"),
+		inbox,
+	);
+	assert.equal(v5.reminders.length, reminders.length + inbox.length);
+	assert.deepEqual(waiting, v5.waiting);
 });
 
 test("linked reviews show only the recorded disposition once finished", async () => {
