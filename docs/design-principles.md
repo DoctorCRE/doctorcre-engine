@@ -36,9 +36,9 @@ The owner's rulings win. Where a reference app does something the owner ruled ag
 
 **Seen.** Gr8r Studio sets row and card names at one body size, metadata and controls a step smaller, and only a page heading larger. Linear keeps one face for the interface and a display cut for headings. T3 Code sets a thread's title at body size and separates the title from the lines around it by brightness alone.
 
-**Rule.** A screen uses at most four text sizes, all from the app's type tokens. Rows, cards and controls use the body size for the name and the caption size for everything else. Weight and the muted tone make the rest of the hierarchy.
+**Rule.** A screen uses at most four text sizes, all from the app's type tokens. Body text comes from one token. It is 14px on a computer and 16px on a phone. Rows, cards and controls use the body size for the name and the caption size for everything else. Weight and the muted tone make the rest of the hierarchy.
 
-**Test.** The screenshot has four or fewer distinct text sizes, and no text inside a row, card or control is larger than body text.
+**Test.** The screenshot has four or fewer distinct text sizes. Body text measures 14px on a computer and 16px on a phone. No text inside a row, card or control is larger than body text.
 
 ## 5. Color and borders: neutrals carry the screen and lines stay faint
 
