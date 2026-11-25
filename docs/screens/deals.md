@@ -67,10 +67,10 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 
 ### Prospects lane
 
-- [ ] Local Deals' Board shows a Prospects lane before Prospective Client, with its count. On a phone it comes after the deal phases. List shows the prospects after the deals, one row each.
+- [ ] Local Deals' Board shows a Prospects lane before Prospective Client, with its count. Its header sits on the phase headers' line, with the count right after the name. On a phone it comes after the deal phases. List shows the prospects after the deals, one row each.
 - [ ] The headline counts them: "38 open deals · 27 parked · 9 prospects".
 - [ ] All, Joe and Dell show the prospects that partner claimed. An unclaimed prospect shows under all three.
-- [ ] Each card shows the name, who claimed it or "Unclaimed", the newest note's first line with who wrote it and when in words, and the soonest open follow-up with whose it is, such as "Joe · Due Thu, Nov 19", or "No follow-up set". An automatic check-in reads as on [Home](home-inbox.md#every-card), such as "Check in with Example Clinic (client)". A late follow-up says how late.
+- [ ] Each card shows the name, who claimed it or "Unclaimed", the newest note's first line with who wrote it and when in words, and the soonest open follow-up whoever owns it, as its wording over whose it is and when, such as "Call about the lease" over "Joe · Due Thu, Nov 19", or "No follow-up set". A follow-up with no shorter title shows its stored wording, never a blank line. An automatic check-in reads as on [Home](home-inbox.md#every-item), such as "Check in with Example Clinic (client)". A late follow-up says how late.
 - [ ] Needs attention shows when a partner set it. It is the owner's "highlight".
 - [ ] Order: Needs attention first, then by that follow-up date, soonest first, then those with none, newest first.
 - [ ] Clicking the name opens the prospect.
@@ -112,7 +112,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] A deal closed or lost and a prospect dropped this week stay in place, saying so, so the count holds.
 - [ ] Parked deals come last in the Monday review, after prospects (owner, 2026-11-18).
 - [ ] The top says how far along it is: "31 of 47 reviewed this week". Not reviewed only hides the reviewed ones.
-- [ ] One at a time shows one deal or prospect: its name, owner, phase or "Prospect", Needs attention, next step or follow-up, its latest notes and the note box. Next and Back move through the list. An automatic check-in reads as on [Home](home-inbox.md#every-card), such as "Check in with Example Clinic (client)".
+- [ ] One at a time shows one deal or prospect: its name, owner, phase or "Prospect", Needs attention, next step or follow-up, its latest notes and the note box. Next and Back move through the list. An automatic check-in reads as on [Home](home-inbox.md#every-item), such as "Check in with Example Clinic (client)".
 - [ ] As a list shows the same items, one row each, with the note box and the next step or follow-up opening in place.
 - [ ] Change next step on a deal and Follow-up on a prospect save as they do on the deal page and the prospect. A note saved here shows on the other partner's open review within five seconds, as on a prospect.
 - [ ] Reviewed marks the item reviewed this week, saying who and when, and goes to the next. Undo removes the mark, also after a reload.
@@ -147,7 +147,7 @@ The header shows the deal's name, client, phase, deal owner and next critical da
 - [ ] The new database keeps each deal's client website registration so the deal page can still show its Client website link after the switch (owner, 2026-11-18, #728).
 - [ ] A deal with no website says "No client website linked."
 - [ ] Set up client website stays below the deal's facts and asks for the website name and a password (owner, 2026-11-18).
-- [ ] Next steps uses the [Home step title rule](home-inbox.md#every-card) and shows the full instruction beneath the heading when the wording differs. Still needed and its item detail follow the same rule. Each distinct open step wording appears once. When both partners have steps with the same wording, show both owners beneath it with their own due dates and Done buttons. Use each owner's first name and show due dates in words. Each open step says who set it and when. If the setter was not recorded, it shows when alone. A late step also shows "N days late". A Home card for one of the steps opens here with that step in view.
+- [ ] Next steps uses the [Home step title rule](home-inbox.md#every-item) and shows the full instruction beneath the heading when the wording differs. Still needed and its item detail follow the same rule. Each distinct open step wording appears once. When both partners have steps with the same wording, show both owners beneath it with their own due dates and Done buttons. Use each owner's first name and show due dates in words. Each open step says who set it and when. If the setter was not recorded, it shows when alone. A late step also shows "N days late". A Home row for one of the steps opens here with that step in view.
 - [ ] Closing or losing a deal leaves its steps unchanged. On the deal page, steps still open appear under "Open before this deal ended" with their due dates. Ended deals never count a step as late anywhere on Deals.
 - [ ] Either partner can choose Done on any open next step on a deal they can open, including a step owned by the other partner or still open on an ended deal. Each owner’s details sit next to their own keyboard-accessible Done button with a touch target at least 44 pixels tall and wide. Rows use the app's colors in both themes without individual card outlines.
 - [ ] Done uses the same engine save as Home's Mark done (door 18, end by step ID). It sends the version shown on the deal page. After saving, the step leaves the open list and Timeline shows its completion and who marked it done.
