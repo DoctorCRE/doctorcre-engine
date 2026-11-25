@@ -4,6 +4,7 @@ import { answerNextRead, checkFields, Refusal, refuse } from "../answer.ts";
 import { isCalendarDate } from "../calendar-date.ts";
 import type { DB } from "../next-database.d.ts";
 import type { DatabaseEnv } from "../reader.ts";
+import { isUuid } from "../request-shape.ts";
 
 // The figures a round and a signed lease version both record, in display order.
 const TERMS = [
@@ -16,13 +17,28 @@ const TERMS = [
 ] as const;
 
 type Documents = { id: string; name: string }[];
-type Filters = { market?: string; use_type?: string; as_of?: string };
+type Filters = {
+	market?: string;
+	use_type?: string;
+	as_of?: string;
+	exclude_deal_id?: string;
+};
+const FIELDS = ["market", "use_type", "as_of", "exclude_deal_id"] as const;
+const CHECKED = [
+	["as_of", isCalendarDate],
+	["exclude_deal_id", isUuid],
+] as const;
 const onOrBefore = (asOf: string | undefined, date: RawBuilder<unknown>) =>
 	asOf ? sql<boolean>`${date} <= ${asOf}::date` : sql<boolean>`true`;
 
 // A market's terms are those on properties in its counties (docs/new-database.md, Markets and territories).
-const propertyMatches = ({ market, use_type }: Filters) => sql<boolean>`
-	(${market ?? null}::text is null or exists (select from market_county mc join market m on m.id = mc.market_id
+const comparable = ({
+	market,
+	use_type,
+	exclude_deal_id,
+}: Filters) => sql<boolean>`
+	d.id is distinct from ${exclude_deal_id ?? null}::uuid
+	and (${market ?? null}::text is null or exists (select from market_county mc join market m on m.id = mc.market_id
 		where mc.county_fips = p.county_fips and lower(m.name) = lower(${market ?? null})))
 	and (${use_type ?? null}::text is null or lower(btrim(p.building_type)) = lower(${use_type ?? null}))`;
 
@@ -60,7 +76,7 @@ function rounds(db: Transaction<DB>, filters: Filters) {
 				where od.offer_id = o.id)`.as("documents"),
 		])
 		.where(onOrBefore(filters.as_of, offeredOn))
-		.where(propertyMatches(filters));
+		.where(comparable(filters));
 }
 
 function leaseVersions(db: Transaction<DB>, filters: Filters) {
@@ -92,7 +108,7 @@ function leaseVersions(db: Transaction<DB>, filters: Filters) {
 			])
 			// A version without its signing date has no place in a dated comparison.
 			.where(onOrBefore(filters.as_of, sql`v.executed_on`))
-			.where(propertyMatches(filters))
+			.where(comparable(filters))
 	);
 }
 
@@ -139,17 +155,21 @@ export const marketTerms = new Hono<DatabaseEnv>().get(
 	"/market-terms",
 	async (c): Promise<Response> => {
 		const params = new URL(c.req.url).searchParams;
-		const refused = checkFields(params, ["market", "use_type", "as_of"]);
+		const refused = checkFields(params, FIELDS);
 		if (refused) return refuse(c, refused);
 		const filters: Filters = {};
-		for (const field of ["market", "use_type", "as_of"] as const) {
+		for (const field of FIELDS) {
 			const value = params.get(field)?.trim();
 			if (value) filters[field] = value;
 		}
-		if (filters.as_of !== undefined && !isCalendarDate(filters.as_of))
+		const invalid = CHECKED.filter(
+			([field, valid]) =>
+				filters[field] !== undefined && !valid(filters[field]),
+		).map(([field]) => field);
+		if (invalid.length)
 			return refuse(
 				c,
-				new Refusal(400, "invalid_field_value", { fields: ["as_of"] }),
+				new Refusal(400, "invalid_field_value", { fields: invalid }),
 			);
 		return answerNextRead(c, "read-market-terms", (db) =>
 			readMarketTerms(db, filters),

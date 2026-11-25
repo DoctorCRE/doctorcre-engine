@@ -162,10 +162,26 @@ test("blank filters cover every market, and an unknown market has no terms", asy
 	assert.deepEqual((await read("?market=Example East")).rows, []);
 });
 
-test("refuses a date that is not a calendar date and an unknown field", async () => {
+test("leaves out the open deal's own rounds and leases, in its market and across all markets", async () => {
+	assert.deepEqual(
+		summary(await read(`?market=Example North&exclude_deal_id=${northDeal}`)),
+		["Example North Dental round 1 rent_per_sf_yr 29 false"],
+	);
+	const all = await read(`?exclude_deal_id=${southDeal}`);
+	assert.deepEqual([...new Set(all.rows.map((row) => row.deal_name))].sort(), [
+		"Example North Clinic",
+		"Example North Dental",
+	]);
+});
+
+test("refuses a date that is not a calendar date, a deal that is not an id, and an unknown field", async () => {
 	assert.partialDeepStrictEqual(
 		await save(user, "market-terms?as_of=2026-02-30", {}, "GET"),
 		[400, { error: "invalid_field_value", fields: ["as_of"] }],
+	);
+	assert.partialDeepStrictEqual(
+		await save(user, "market-terms?exclude_deal_id=example-deal", {}, "GET"),
+		[400, { error: "invalid_field_value", fields: ["exclude_deal_id"] }],
 	);
 	assert.partialDeepStrictEqual(
 		await save(user, "market-terms?submarket=Example North", {}, "GET"),
