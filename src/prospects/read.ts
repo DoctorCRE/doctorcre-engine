@@ -26,7 +26,7 @@ type Drop = {
 	reason: string;
 };
 
-type FollowUp = StepOrigin & {
+export type FollowUp = StepOrigin & {
 	next_step_id: string;
 	owner: string;
 	what: string;
@@ -155,7 +155,7 @@ const followUpNames = (db: Transaction<DB>, rows: Prospect[]) =>
 	);
 
 // The follow-up editor prefills from `what`, so the readable wording is a field of its own.
-const titled = (names: OldRecordNames) => (step: FollowUp) => ({
+export const titled = (names: OldRecordNames) => (step: FollowUp) => ({
 	...step,
 	display_title: checkInWording(step.what, names),
 });

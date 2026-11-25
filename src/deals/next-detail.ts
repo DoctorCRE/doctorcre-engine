@@ -27,6 +27,7 @@ import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
 import { checklistOf, criticalDateLabel } from "./checklist.ts";
 import {
+	checkInNextStep,
 	clientWebsiteOf,
 	parkingNoteForDisplay,
 	selectNextDealsWithFacts,
@@ -306,6 +307,7 @@ export async function readNextDealDetail(
 		),
 	);
 	const names = await readOldRecordNames(db, [
+		detail.next_step,
 		...detail.thread.map(({ text }) => text),
 		...detail.activities.map(({ summary }) => summary),
 		...detail.next_actions.flatMap(({ description, title }) => [
@@ -315,7 +317,7 @@ export async function readNextDealDetail(
 	]);
 	const named = (text: string | null) => text && nameOldRecords(text, names);
 	return {
-		...detail,
+		...checkInNextStep(names)(detail),
 		thread: detail.thread.map((note) => ({ ...note, text: named(note.text) })),
 		activities: detail.activities.map((activity) => ({
 			...activity,

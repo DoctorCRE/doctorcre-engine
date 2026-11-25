@@ -194,6 +194,7 @@ test("prospect detail returns just the requested completion outside the open fol
 	assert.partialDeepStrictEqual(field(detail, "completed_follow_up"), {
 		next_step_id: completedStep,
 		what: "Past step",
+		display_title: "Past step",
 		set_by: "Example Person",
 		set_at: "2024-02-01T00:00:00+00:00",
 	});
