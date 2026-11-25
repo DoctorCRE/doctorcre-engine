@@ -55,7 +55,12 @@ afterEach(() =>
 );
 after(cleanup);
 
-type Chat = { id: string; title: string };
+type Chat = {
+	id: string;
+	title: string;
+	last_message_at: string;
+	state: "working" | "waiting_ok" | null;
+};
 type Turn = {
 	id: string;
 	idempotency_key: string;
@@ -1123,6 +1128,56 @@ test("bounds questions and pages stable ties by conversation ID", async () => {
 	assert.equal(conversation.title, "📋".repeat(80));
 });
 
+test("lists chats by their newest message and marks busy or waiting chats", async () => {
+	const [working, waiting, idle] = [randomUUID(), randomUUID(), randomUUID()];
+	const proposal = {
+		kind: "answer",
+		text: "Proposed save",
+		sources: [],
+		proposal: { kind: "note", text: "Sample" },
+	};
+	await db.query(
+		`insert into doc_conversation (id, owner_user_id, created_at) values
+			($1, $4, '2001-01-01'), ($2, $4, '2002-01-01'), ($3, $4, '2003-01-01')`,
+		[working, waiting, idle, owner],
+	);
+	await db.query(
+		`insert into doc_turn (conversation_id, owner_user_id, position, created_at, idempotency_key,
+			request_hash, question, state, answer)
+		select chat, $4, position, at, gen_random_uuid(), 'example', 'Sample', state, answer
+		from (values
+			($1::uuid, 1, '2001-01-01'::timestamptz, 'answered', $5::jsonb),
+			($1, 2, '2005-01-01', 'queued', null),
+			($2, 1, '2002-01-01', 'answered', $5),
+			($2, 2, '2004-01-01', 'answered', $6),
+			($3, 1, '2003-01-01', 'failed', null)
+		) turn (chat, position, at, state, answer)`,
+		[working, waiting, idle, owner, refusal, proposal],
+	);
+	const send = client();
+	const marks = async (
+		path: "/conversations" | `/conversations?before=${string}`,
+	) =>
+		(await send(path, 200)).conversations.map(
+			({ id, last_message_at, state }) => ({
+				id,
+				last: new Date(last_message_at).toISOString(),
+				state,
+			}),
+		);
+	assert.deepEqual(await marks("/conversations"), [
+		{ id: working, last: "2005-01-01T00:00:00.000Z", state: "working" },
+		{ id: waiting, last: "2004-01-01T00:00:00.000Z", state: "waiting_ok" },
+		{ id: idle, last: "2003-01-01T00:00:00.000Z", state: null },
+	]);
+	assert.deepEqual(
+		(await marks(`/conversations?before=${waiting}`)).map(({ id }) => id),
+		[idle],
+	);
+	const { conversation } = await send(`/conversations/${working}`, 200);
+	assert.equal(conversation.state, "working");
+});
+
 test("the database enforces private ownership and valid turn rows", async () => {
 	const conversation = randomUUID();
 	const working = randomUUID();
@@ -1593,6 +1648,9 @@ test("Doc confirms exactly one edited note as the recorded partner", async () =>
 		).rows;
 	assert.deepEqual(await notes(), []);
 	const send = client();
+	const mark = async () =>
+		(await send("/conversations", 200)).conversations[0]?.state;
+	assert.equal(await mark(), "waiting_ok");
 	const idempotency_key = randomUUID();
 	const edits = { text: "Confirmed note" };
 	assert.equal(
@@ -1600,6 +1658,7 @@ test("Doc confirms exactly one edited note as the recorded partner", async () =>
 		"invalid_field_value",
 	);
 	const { result } = await send(path, 200, { idempotency_key, edits });
+	assert.equal(await mark(), null);
 	const stored = await notes();
 	assert.deepEqual(stored, [
 		{
