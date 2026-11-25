@@ -1563,6 +1563,49 @@ test("Home opens each visible suggestion with its original evidence and proposed
 	assert.equal((await read(41)).status, 404);
 });
 
+test("a review card and a reply draft name the one contact who owns a nameless sender's address", async () => {
+	const noMailbox = id(120);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into activity (id, kind, happened_at) values ('${noMailbox}', 'email', '2026-01-09');
+		insert into email (activity_id, message_id, sender, subject, body)
+			values ('${noMailbox}', '<no-mailbox@example.test>', 'pat@example.test', 'Floor plan', 'Please send the plan.');
+		insert into activity_about (activity_id, deal_id) values ('${noMailbox}', '${deal}');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, owner_party_id)
+			values ('${id(121)}', 'next_step', '${noMailbox}', 'email', 'Please send the plan.', 'old_system', '${deal}', 'Send the plan', '${partner}');
+		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
+			values ('${id(122)}', '${noMailbox}', '${partner}', 'old_system', 'Re: Floor plan', 'Here it is.', 'Please send the plan.');
+		commit;`);
+	const source = async (path: string, user: string) => {
+		const response = await request({ user }, path, { method: "GET" });
+		assert.equal(response.status, 200);
+		const detail: unknown = await response.json();
+		assert.ok(isArguments(detail));
+		return detail.source_activity;
+	};
+	const pat = { sender: "pat@example.test", sender_name: "Known Contact" };
+	try {
+		const reads: [string, string][] = [
+			[`proposals/${id(32)}`, "example"],
+			[`reply-drafts/${id(22)}`, "other"],
+			[`proposals/${id(121)}`, "example"],
+			[`reply-drafts/${id(122)}`, "example"],
+		];
+		for (const [path, user] of reads) {
+			assert.partialDeepStrictEqual(await source(path, user), pat, path);
+		}
+		assert.partialDeepStrictEqual(
+			await source(`reply-drafts/${id(26)}`, "example"),
+			{ sender: "shared@example.test", sender_name: null },
+		);
+	} finally {
+		await db.query(`begin;
+			select set_config('engine.job', 'old_system', true);
+			delete from reply_draft where id = '${id(122)}';
+			delete from proposal where id = '${id(121)}'; commit;`);
+	}
+});
+
 test("draft and proposal details return only the viewer's distinct messages in the exact Outlook thread", async () => {
 	const get = async (path: string, user = "example") => {
 		const response = await request({ user }, path, { method: "GET" });

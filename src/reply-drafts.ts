@@ -4,7 +4,11 @@ import { sql, type Transaction } from "kysely";
 import { jsonArrayFrom, jsonObjectFrom } from "kysely/helpers/postgres";
 import { answerNextRead, isoMillis, Refusal, refuse } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
-import { readHomeEmailThread, sourceInMailbox } from "./home-email-thread.ts";
+import {
+	readHomeEmailThread,
+	senderLabel,
+	sourceInMailbox,
+} from "./home-email-thread.ts";
 import { nextTransaction } from "./next-connection.ts";
 import type { DB } from "./next-database.d.ts";
 import { answerNextSave, type NextSaveEnv } from "./next-door.ts";
@@ -356,7 +360,7 @@ replyDrafts
 								"a.id",
 								"a.kind",
 								"e.sender",
-								"e.sender_name",
+								senderLabel("e", false).as("sender_name"),
 								"e.subject",
 								"e.body",
 							])
