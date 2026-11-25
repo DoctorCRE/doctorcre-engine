@@ -6,9 +6,11 @@ Each vendor row shows the last contact date only.
 
 On a computer the list starts on the first screen and the page does not scroll. Each vendor is one row, with each fact in its own column. Search, Category, Stage, Disposition, Sort, Territory, Reset, refresh and Show quiet vendors share one toolbar row that stays in place. Filters and search apply as they change, so a computer shows no Apply. On a phone, filters fold under Filters and sort with Apply and Reset.
 
+Vendor rows share one column grid, so Category, Territory, Location and Last contacted line up row to row. Filters show their whole choice. Slash-joined territories wrap after a slash, never mid-word.
+
 The vendor count and the All, Joe and Dell chips sit in the top bar beside the title. On a phone the count is not shown, so the owner chips fit. People worth meeting is a tab beside the list. Today starts collapsed on Vendors and remembers the partner's choice.
 
-A deal count of zero is hidden in the row and the drawer, because the engine sends zero when no deal history is recorded.
+A deal count of zero is hidden in the row and the drawer, because the engine sends zero when no deal history is recorded. The drawer labels the owner.
 
 ## Meeting planner
 
