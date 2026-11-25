@@ -1231,6 +1231,219 @@ test("Two accepts of different suggestions in one filing settle it once", {
 	);
 });
 
+test("Home shows the newest next step per person on a thread, and a partner's decision settles the older ones", async () => {
+	const [samFirst, samSecond, lee] = [randomUUID(), randomUUID(), randomUUID()];
+	const [first, second, otherThread] = [
+		randomUUID(),
+		randomUUID(),
+		randomUUID(),
+	];
+	const step = (
+		target: string,
+		email: string,
+		created: string,
+		what: string,
+	) => {
+		const proposal = randomUUID();
+		const about = target === deal ? "deal_id" : "party_id";
+		return {
+			proposal,
+			sql: `insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, ${about}, what, owner_party_id, created_at)
+				values ('${proposal}', 'next_step', '${email}', 'email', 'Please follow up.', 'old_system', '${target}', '${what}', '${partner}', '2026-02-${created}');`,
+		};
+	};
+	const olderSam = step(samFirst, first, "01", "Call Sam about the tour");
+	const newerSam = step(
+		samFirst,
+		second,
+		"02",
+		"Call Sam about the new tour date",
+	);
+	const olderNamesake = step(samSecond, first, "01", "Send Sam the floor plan");
+	const newerNamesake = step(
+		samSecond,
+		second,
+		"02",
+		"Send Sam the revised plan",
+	);
+	const leeStep = step(lee, second, "02", "Ask Lee for the lease");
+	const loi = step(deal, first, "01", "Send the LOI");
+	const tour = step(deal, second, "02", "Book the tour");
+	const laterSam = step(
+		samFirst,
+		otherThread,
+		"03",
+		"Confirm parking with Sam",
+	);
+	const all = [
+		olderSam,
+		newerSam,
+		olderNamesake,
+		newerNamesake,
+		leeStep,
+		loi,
+		tour,
+		laterSam,
+	];
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${samFirst}', 'person', 'Sam Sample'),
+			('${samSecond}', 'person', 'Sam Sample'), ('${lee}', 'person', 'Lee Sample');
+		insert into activity (id, kind, happened_at) values ('${first}', 'email', '2026-02-01'),
+			('${second}', 'email', '2026-02-02'), ('${otherThread}', 'email', '2026-02-03');
+		insert into email (activity_id, message_id, conversation_id, sender, subject, body) values
+			('${first}', '<${first}@example.test>', 'Outlook-step-siblings', 'sam@example.test', 'Tour', 'Can we tour?'),
+			('${second}', '<${second}@example.test>', 'Outlook-step-siblings', 'sam@example.test', 'Tour', 'New date?'),
+			('${otherThread}', '<${otherThread}@example.test>', 'Outlook-step-other', 'sam@example.test', 'Parking', 'Parking?');
+		insert into email_mailbox (activity_id, user_id)
+			select id, '${partner}' from activity where id in ('${first}', '${second}', '${otherThread}');
+		insert into activity_about (activity_id, deal_id) values ('${first}', '${deal}'), ('${second}', '${deal}');
+		insert into activity_about (activity_id, party_id) values ('${first}', '${samFirst}'), ('${first}', '${samSecond}'),
+			('${second}', '${samFirst}'), ('${second}', '${samSecond}'), ('${second}', '${lee}'), ('${otherThread}', '${samFirst}');
+		${all.map(({ sql }) => sql).join("\n")}
+		commit;`);
+	const shown = async () =>
+		(await inbox())
+			.map(({ suggestions }) =>
+				(Array.isArray(suggestions) ? suggestions.filter(isArguments) : [])
+					.map(({ id }) => String(id))
+					.filter((id) => all.some(({ proposal }) => proposal === id))
+					.sort(),
+			)
+			.filter((ids) => ids.length > 0)
+			.sort();
+	const sorted = (...steps: typeof all) =>
+		steps.map(({ proposal }) => proposal).sort();
+	assert.deepEqual(
+		await shown(),
+		[
+			sorted(newerSam, newerNamesake, leeStep, loi, tour),
+			sorted(laterSam),
+		].sort(),
+	);
+	for (const [clicked, decision] of [
+		[newerSam, { decision: "accept" }],
+		[newerNamesake, { decision: "dismiss", reason: "Sam already has it." }],
+	] as const) {
+		const [status] = await save(
+			{ user: "example" },
+			`proposals/${clicked.proposal}/decision`,
+			{
+				idempotency_key: randomUUID(),
+				...decision,
+			},
+		);
+		assert.equal(status, 200);
+	}
+	const { rows } = await db.query(
+		`select id, status, dismiss_reason, decided_by_user_id from proposal where id = any($1::uuid[])`,
+		[all.map(({ proposal }) => proposal)],
+	);
+	const settled = (
+		{ proposal }: (typeof all)[number],
+		status: string,
+		reason: string | null,
+		by: string | null,
+	) => ({
+		id: proposal,
+		status,
+		dismiss_reason: reason,
+		decided_by_user_id: by,
+	});
+	const replaced = "Replaced by the accepted next step for this person";
+	assert.deepEqual(
+		rows.sort((a, b) => a.id.localeCompare(b.id)),
+		[
+			settled(olderSam, "dismissed", replaced, partner),
+			settled(newerSam, "accepted", null, partner),
+			settled(olderNamesake, "dismissed", "Sam already has it.", partner),
+			settled(newerNamesake, "dismissed", "Sam already has it.", partner),
+			...[leeStep, loi, tour, laterSam].map((pending) =>
+				settled(pending, "pending", null, null),
+			),
+		].sort((a, b) => a.id.localeCompare(b.id)),
+	);
+	assert.deepEqual(
+		await shown(),
+		[sorted(leeStep, loi, tour), sorted(laterSam)].sort(),
+	);
+	const linked = await linkedCard(`suggestion:${olderSam.proposal}`);
+	assert.equal(linked.status, 200);
+	assert.deepEqual(await linked.json(), {
+		item_id: `suggestion:${olderSam.proposal}`,
+		state: "replaced",
+		reason: replaced,
+	});
+});
+
+test("On a meeting or a call, accepting the newest next step for a person settles the older one", async () => {
+	const sources = ["meeting", "call"].map((kind) => {
+		const [activity, person] = [randomUUID(), randomUUID()];
+		const step = (created: string, what: string) => ({
+			id: randomUUID(),
+			created,
+			what,
+		});
+		return {
+			kind,
+			activity,
+			person,
+			older: step("2026-03-01", `Older ${kind} step`),
+			newer: step("2026-03-02", `Newer ${kind} step`),
+		};
+	});
+	await db.query(`begin; select set_config('engine.job', 'old_system', true);
+		${sources
+			.map(
+				({ kind, activity, person, older, newer }) => `
+		insert into party (id, kind, name) values ('${person}', 'person', 'Example ${kind} guest');
+		insert into activity (id, kind, happened_at) values ('${activity}', '${kind}', '2026-03-01');
+		insert into activity_about (activity_id, party_id) values ('${activity}', '${person}');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, party_id, what, owner_party_id, created_at)
+			values ${[older, newer].map((s) => `('${s.id}', 'next_step', '${activity}', '${kind}', 'Follow up.', 'old_system', '${person}', '${s.what}', '${partner}', '${s.created}')`).join(", ")};`,
+			)
+			.join("\n")}
+		commit;`);
+	const ours: string[] = sources.flatMap(({ older, newer }) => [
+		older.id,
+		newer.id,
+	]);
+	const shown = async () =>
+		(await inbox())
+			.flatMap(({ suggestions }) =>
+				Array.isArray(suggestions) ? suggestions.filter(isArguments) : [],
+			)
+			.map(({ id }) => String(id))
+			.filter((id) => ours.includes(id))
+			.sort();
+	assert.deepEqual(await shown(), sources.map(({ newer }) => newer.id).sort());
+	for (const { newer } of sources) {
+		const [status] = await save(
+			{ user: "example" },
+			`proposals/${newer.id}/decision`,
+			{ idempotency_key: randomUUID(), decision: "accept" },
+		);
+		assert.equal(status, 200);
+	}
+	const { rows } = await db.query(
+		`select id, status, dismiss_reason from proposal where id = any($1::uuid[])`,
+		[ours],
+	);
+	assert.deepEqual(
+		rows.sort((a, b) => a.id.localeCompare(b.id)),
+		sources
+			.flatMap(({ older, newer }) => [
+				{
+					id: older.id,
+					status: "dismissed",
+					dismiss_reason: "Replaced by the accepted next step for this person",
+				},
+				{ id: newer.id, status: "accepted", dismiss_reason: null },
+			])
+			.sort((a, b) => a.id.localeCompare(b.id)),
+	);
+	assert.deepEqual(await shown(), []);
+});
+
 test("A copied email lead suggestion keeps its mailbox and intake reading on Home", async () => {
 	const candidateId = id(40);
 	const proposalId = id(41);
