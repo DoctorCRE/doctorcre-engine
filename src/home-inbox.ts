@@ -28,6 +28,7 @@ import {
 	stepTargetFields,
 } from "./home-steps.ts";
 import type { DB } from "./next-database.d.ts";
+import { type OldRecordNames, readOldRecordNames } from "./old-record-names.ts";
 import type { DatabaseEnv } from "./reader.ts";
 import { isUuid } from "./request-shape.ts";
 
@@ -205,7 +206,7 @@ const stepWrite = (step: Step) => ({
 	base_version: `${step.step_version}:${step.mark_version ?? "0"}:${stepDisposition(step)}`,
 });
 
-function stepCard(copies: Copies) {
+function stepCard(copies: Copies, names: OldRecordNames) {
 	const [step] = copies;
 	const completed_at = optionalIso(step.completed_at);
 	const done = step.status === "done";
@@ -217,7 +218,7 @@ function stepCard(copies: Copies) {
 		record_name: homeDisplayText(copy.context_label),
 	}));
 	const { item_id, action_id, action_version, base_version } = stepWrite(step);
-	const copy = homeStepCopy(step, step, meetingHeading(copies));
+	const copy = homeStepCopy(step, step, names, meetingHeading(copies));
 	const section = done
 		? "done"
 		: disposition === "inbox" && hold_until
@@ -356,11 +357,15 @@ async function readHomeInbox(
 			.filter((step) => step.status === "open")
 			.map((step) => step.id),
 	);
+	const names = await readOldRecordNames(
+		db,
+		eligibleSteps.map(({ what }) => what),
+	);
 	const steps = groupCopies(eligibleSteps, (step) => reviews.has(step.id)).map(
 		(copies) => {
 			const [step] = copies;
 			const review = reviews.get(step.id);
-			const card = stepCard(copies);
+			const card = stepCard(copies, names);
 			const waiting = dashboard && (step.hold_until || step.waiting_reason);
 			const visible =
 				review && !step.snoozed_until && !waiting

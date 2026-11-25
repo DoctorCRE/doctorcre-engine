@@ -323,10 +323,13 @@ export async function readNextDealDetail(
 		})),
 		record_links: recordLinks(names),
 		next_actions: detail.next_actions.map((step) => {
-			const { title, instruction } = stepCopy({
-				what: nameOldRecords(step.description, names),
-				item_title: named(step.title),
-			});
+			const { title, instruction } = stepCopy(
+				{
+					what: nameOldRecords(step.description, names),
+					item_title: named(step.title),
+				},
+				names,
+			);
 			return {
 				...step,
 				display_title: title,

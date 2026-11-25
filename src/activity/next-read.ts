@@ -1,6 +1,6 @@
 import { sql, type Transaction } from "kysely";
 import { hasToolCallMarkup, isoMillis } from "../answer.ts";
-import { homeDayAt } from "../home-steps.ts";
+import { checkInWording, homeDayAt } from "../home-steps.ts";
 import type { DB } from "../next-database.d.ts";
 import { nameOldRecords, readOldRecordNames } from "../old-record-names.ts";
 import { matchingContacts, matchingDealSubjects } from "../search/next-find.ts";
@@ -107,7 +107,7 @@ export async function readNextRecentActivity(
 		order by a.calendar_review_key limit 5001`.execute(db);
 	if (calendar.rows.length > 5000)
 		return { error: "calendar_history_too_large" } as const;
-	const timeline = await sql<{ summary: string | null }>`
+	const timeline = await sql<{ entry_kind: string; summary: string | null }>`
 		with filed_to as (${filedTo(kind, id, now)}),
 		filed as (
 			select distinct on (link.activity_id) link.activity_id, f.rank, f.kind, f.name
@@ -148,7 +148,14 @@ export async function readNextRecentActivity(
 			subject: { type: kind, id },
 			timeline: timeline.rows.map((row) => ({
 				...row,
-				summary: row.summary && nameOldRecords(row.summary, names),
+				summary:
+					row.summary &&
+					nameOldRecords(
+						row.entry_kind === "event"
+							? checkInWording(row.summary, names)
+							: row.summary,
+						names,
+					),
 			})),
 			calendar_history: calendar.rows,
 		},

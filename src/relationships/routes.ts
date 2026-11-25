@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { BusinessRefusal, PARTNERS, refusalOf } from "../clients/read.ts";
+import { checkInWording } from "../home-steps.ts";
 import { nextPartnerRead } from "../next-connection.ts";
+import { readOldRecordNames } from "../old-record-names.ts";
 import { type DatabaseEnv, readSnapshot } from "../reader.ts";
 import { isOneOf, isUuid } from "../request-shape.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
@@ -52,10 +54,20 @@ relationships.get("/relationships", async (c) => {
 									.where("s.party_id", "is not", null)
 									.where("s.status", "in", ["open", "done"])
 									.executeTakeFirst();
+					const names = await readOldRecordNames(db, [
+						focusedStep?.what ?? null,
+					]);
 					return c.json({
 						...projectNetwork(snapshot, new Date()),
 						can_request_introductions: false,
-						...(step !== null && { focused_step: focusedStep ?? null }),
+						...(step !== null && {
+							focused_step: focusedStep
+								? {
+										...focusedStep,
+										what: checkInWording(focusedStep.what, names),
+									}
+								: null,
+						}),
 					});
 				},
 			);
