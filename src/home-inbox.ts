@@ -1,6 +1,12 @@
 import { Hono } from "hono";
 import { sql, type Transaction } from "kysely";
-import { answerNextRead, checkFields, Refusal, refuse } from "./answer.ts";
+import {
+	answerNextRead,
+	checkFields,
+	Refusal,
+	refuse,
+	type Verb,
+} from "./answer.ts";
 import { isCalendarDate } from "./calendar-date.ts";
 import {
 	type HomeReviewLink,
@@ -16,6 +22,7 @@ import {
 import {
 	type HomeStep,
 	type HomeStepTarget,
+	type HomeTile,
 	homeDay,
 	homeDayAt,
 	homeDisplayText,
@@ -206,7 +213,7 @@ const stepWrite = (step: Step) => ({
 	base_version: `${step.step_version}:${step.mark_version ?? "0"}:${stepDisposition(step)}`,
 });
 
-function stepCard(copies: Copies, names: OldRecordNames) {
+function stepCard(copies: Copies, names: OldRecordNames, tile: HomeTile) {
 	const [step] = copies;
 	const completed_at = optionalIso(step.completed_at);
 	const done = step.status === "done";
@@ -250,7 +257,7 @@ function stepCard(copies: Copies, names: OldRecordNames) {
 		context_label: step.context_label,
 		open_url,
 		kind_label: step.call_follow_up ? "Call follow-up" : "Task",
-		tile: "reminders" as const,
+		tile,
 		action_id,
 		action_version,
 		covers,
@@ -342,6 +349,15 @@ function dashboardCard<Item extends HomeCardTiming>(item: Item, today: string) {
 
 type HomeView = "list" | "home-inbox.v5" | "home-inbox.v6";
 
+const homeViews: Partial<Record<string, { view: HomeView; verb: Verb }>> = {
+	"null:null": { view: "list", verb: "read-home-inbox-v5" },
+	"dashboard:null": { view: "home-inbox.v5", verb: "read-home-inbox-v5" },
+	"dashboard:home-inbox.v6": {
+		view: "home-inbox.v6",
+		verb: "read-home-inbox-v6",
+	},
+};
+
 const group = <Card>(items: Card[]) => ({ count: items.length, items });
 
 async function readHomeInbox(
@@ -371,7 +387,7 @@ async function readHomeInbox(
 		(copies) => {
 			const [step] = copies;
 			const review = reviews.get(step.id);
-			const card = stepCard(copies, names);
+			const card = stepCard(copies, names, review ? "inbox" : "reminders");
 			const waiting = dashboard && (step.hold_until || step.waiting_reason);
 			const visible =
 				review && !step.snoozed_until && !waiting
@@ -449,23 +465,15 @@ homeInbox.get("/home/inbox", (c) => {
 		vocabularies: { view: ["dashboard"], contract: ["home-inbox.v6"] },
 	});
 	if (refused) return refuse(c, refused);
-	const dashboard = params.get("view") === "dashboard";
-	const split = params.has("contract");
-	if (split && !dashboard)
+	const view = homeViews[`${params.get("view")}:${params.get("contract")}`];
+	if (!view)
 		return refuse(
 			c,
 			new Refusal(400, "invalid_field_value", { fields: ["contract"] }),
 		);
-	const view: HomeView = !dashboard
-		? "list"
-		: split
-			? "home-inbox.v6"
-			: "home-inbox.v5";
 	const now = new Date().toISOString();
-	return answerNextRead(
-		c,
-		view === "home-inbox.v6" ? "read-home-inbox-v6" : "read-home-inbox-v5",
-		(db, userId) => readHomeInbox(db, userId, view, now),
+	return answerNextRead(c, view.verb, (db, userId) =>
+		readHomeInbox(db, userId, view.view, now),
 	);
 });
 

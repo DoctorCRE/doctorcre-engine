@@ -320,6 +320,23 @@ test("dashboard counts only eligible cards and separates waiting from deal and v
 		merged.reminders.size,
 		split.reminders.size + (split.inbox?.size ?? 0),
 	);
+
+	await db
+		.query(`begin;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '${viewer}', true);
+		insert into home_mark (user_id, next_step_id, disposition, snoozed_until)
+			values ('${viewer}', '${reviewedStep}', 'snoozed', '2999-01-01');
+		commit;`)
+		.catch(async (error: unknown) => {
+			await db.query("rollback");
+			throw error;
+		});
+	const snoozed = await read("home-inbox.v6");
+	assert.equal(snoozed.inbox?.has(review), false);
+	assert.partialDeepStrictEqual(snoozed.waiting.get(reviewedStep), {
+		waiting_reason: "Snoozed",
+		tile: "inbox",
+	});
 });
 
 test("the v6 dashboard keeps call follow-ups in Reminders and refuses a contract on the flat list", async () => {
