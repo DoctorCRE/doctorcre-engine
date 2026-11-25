@@ -528,6 +528,39 @@ test("National counts a late open step once and skips retained completion and ch
 	);
 });
 
+test("a call follow-up on the board has the item id Home gives it", async () => {
+	const rollback = new Error("roll back example call follow-up");
+	await assert.rejects(
+		nextTransaction(connectionString, "save", async (tx) => {
+			await stampNextSave(tx, { user: "partner_one" });
+			await sql`insert into activity (id, kind, happened_at)
+				values (${id(530)}, 'call', '2000-03-01T18:00:00Z')`.execute(tx);
+			await sql`insert into activity_about (activity_id, deal_id) values (${id(530)}, ${id(37)})`.execute(
+				tx,
+			);
+			await sql`insert into next_step (id, deal_id, owner_party_id, what, due_on, call_activity_id, call_evidence_quote)
+				values (${id(531)}, ${id(37)}, ${id(1)}, 'Example send the call notes', '2000-03-02', ${id(530)}, 'Example quote')`.execute(
+				tx,
+			);
+			const board = await readNextBoard(tx, id(1), { partner: "partner_one" });
+			assert.deepEqual(
+				board.deals.find((deal) => deal.id === id(37))?.open_actions,
+				[
+					{
+						id: id(531),
+						owner: "partner_one",
+						due_on: "2000-03-02",
+						item_id: `capture_post_call_action:${id(531)}`,
+						description: "Example send the call notes",
+					},
+				],
+			);
+			throw rollback;
+		}),
+		rollback,
+	);
+});
+
 test("a deal with no step of its own shows its client's step when it is the client's only open deal", async () => {
 	const rollback = new Error("roll back example client steps");
 	await assert.rejects(
