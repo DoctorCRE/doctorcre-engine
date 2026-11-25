@@ -42,7 +42,14 @@ const SHARED_FIELDS = [
 ];
 const LIST_FIELDS = {
 	clients: [...SHARED_FIELDS, "status", "type", "pipeline"],
-	vendors: [...SHARED_FIELDS, "category", "stage", "disposition", "territory"],
+	vendors: [
+		...SHARED_FIELDS,
+		"category",
+		"stage",
+		"disposition",
+		"territory",
+		"quiet",
+	],
 };
 const RECORD_FIELDS = ["viewer", "contract"];
 const SCOPES = ["team", "mine"] as const;
@@ -151,6 +158,8 @@ const vendorQuery = (params: URLSearchParams, viewer: string): VendorQuery => ({
 	category: slug(params, "category"),
 	stage: slug(params, "stage"),
 	disposition: slug(params, "disposition"),
+	// Absent unless asked, so an unfiltered list keeps its old echo.
+	...(oneOf(params, "quiet", ["true"], null) && { quiet: true }),
 });
 
 // The old door's correlation id: the caller's own, if it is a UUID.
@@ -251,6 +260,8 @@ directory.get("/vendors", (c) =>
 			return {
 				next: (db, stamp) => readNextVendorList(db, viewer, query, stamp),
 			};
+		if (query.quiet)
+			throw invalid({ parameter: "quiet", reason: "unsupported" });
 		return (db, stamp) => readVendorList(db, viewer, query, stamp);
 	}),
 );

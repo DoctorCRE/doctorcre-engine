@@ -8,6 +8,7 @@ Each vendor row shows the last contact date only.
 - [ ] On a computer each vendor row is one line. A vendor with deal history (Referred, Worked, Win rate) takes two lines.
 - [ ] An empty list shows one line, such as "No vendors match these filters", with Clear all filters when filters are on.
 - [ ] On a phone a vendor's last contact and owner share one line.
+- [ ] Show quiet vendors narrows the same list to the vendors due a follow-up, the ones Quiet follow-ups proposes at its 90-day vendor cadence. It stays pressed and combines with search, owner and the other filters. Pressing it again shows every vendor.
 
 On a computer the list starts on the first screen and the page does not scroll. Each vendor is one row, with each fact in its own column. Search, Category, Stage, Disposition, Sort, Territory, Reset, refresh and Show quiet vendors share one toolbar row that stays in place. Filters and search apply as they change, so a computer shows no Apply. On a phone, filters fold under Filters and sort with Apply and Reset.
 

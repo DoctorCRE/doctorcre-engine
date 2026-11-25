@@ -14,6 +14,7 @@ import {
 	viewerIdOf,
 } from "../clients/read.ts";
 import type { DB } from "../database.d.ts";
+import { quietVendorParties } from "../leads/quiet-follow-ups.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText, inJsonbOrder } from "../reader.ts";
 import { UUID } from "../uuid.ts";
@@ -34,6 +35,7 @@ export type VendorQuery = ListQuery<
 	category: string | null;
 	stage: string | null;
 	disposition: string | null;
+	quiet?: true;
 };
 
 // The legacy `category` column has no lookup key; `category_slug` does.
@@ -442,13 +444,15 @@ export async function readNextVendorList(
 	const ownerId = await nextViewerId(db, viewer);
 	if (query.scope === "mine" && ownerId === null)
 		throw new BusinessRefusal({ error: "VIEWER_OWNER_UNKNOWN" });
-	const { category, disposition, owner, q, scope, stage, territory } = query;
+	const { category, disposition, owner, q, quiet, scope, stage, territory } =
+		query;
 	const term = q === null ? null : `%${q.replace(/([\\%_])/g, "\\$1")}%`;
 	const matching = liveNextVendors(db).where(sql<boolean>`
 		(${scope === "team"} or pr.owner_user_id = ${ownerId}::uuid)
 		and (${owner === "all"} or ou.slug = ${owner})
 		and (${stage}::text is null or pr.stage = ${stage})
 		and (${disposition}::text is null or ${nextDisposition} = ${disposition})
+		and (not ${quiet === true} or p.id in (${quietVendorParties}))
 		and (${category}::text is null or exists (select from party_role cr join role r on r.slug = cr.role
 			where cr.party_id = p.id and r.category_of = 'vendor' and cr.role = ${category}))
 		and (${territory}::text is null or ${nextTerritory} = ${territory} or exists

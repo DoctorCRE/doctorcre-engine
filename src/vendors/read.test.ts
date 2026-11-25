@@ -45,6 +45,17 @@ test("the vendor list refuses client keys and bad vendor filters with the old bo
 			invalid({ parameter: "disposition", reason: "malformed" }),
 		],
 		[
+			"?quiet=yes",
+			400,
+			invalid({ parameter: "quiet", reason: "unsupported_value" }),
+		],
+		// Only the new database knows which vendors are quiet.
+		[
+			"?quiet=true",
+			400,
+			invalid({ parameter: "quiet", reason: "unsupported" }),
+		],
+		[
 			`?sort=territory&territory=${" x".repeat(40)}`,
 			503,
 			{ error: "DEPENDENCY_UNAVAILABLE" },

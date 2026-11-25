@@ -7,6 +7,7 @@ import {
 } from "./follow-up-reads.ts";
 
 export type Cadence = { lead_days: number; vendor_days: number };
+export const DEFAULT_CADENCE: Cadence = { lead_days: 45, vendor_days: 90 };
 
 type Proposal = {
 	subject_type: "lead" | "vendor";
@@ -37,11 +38,7 @@ const OPEN_STAGES = [
 
 const today = sql`(now() at time zone 'America/Chicago')::date`;
 
-const proposals = (
-	db: Transaction<DB>,
-	cadence: Cadence,
-	ownerSlug: string | null,
-) =>
+const dueProposals = (cadence: Cadence, ownerSlug: string | null) =>
 	sql<Proposal>`with subjects as (
 		select r.role as subject_type, coalesce(legacy.value, p.id::text) as subject_id, p.id as party_id,
 			coalesce(legacy.registry_ref, vendor.ref, legacy.value, p.id::text) as ref,
@@ -94,15 +91,22 @@ const proposals = (
 		${today} - d.due_on as days_overdue
 	from due d
 	where d.due_on <= ${today}
-	order by d.due_on, d.subject_type, d.subject_id
-	limit ${LIMIT + 1}`.execute(db);
+	order by d.due_on, d.subject_type, d.subject_id`;
+
+// The parties of the vendors Quiet follow-ups proposes at the default cadence.
+export const quietVendorParties = sql<{
+	party_id: string;
+}>`select q.party_id from (${dueProposals(DEFAULT_CADENCE, null)}) q where q.subject_type = 'vendor'`;
 
 export async function readQuietFollowUps(
 	db: Transaction<DB>,
 	cadence: Cadence,
 	ownerSlug: string | null,
 ) {
-	const { rows } = await proposals(db, cadence, ownerSlug);
+	const { rows } =
+		await sql<Proposal>`${dueProposals(cadence, ownerSlug)} limit ${LIMIT + 1}`.execute(
+			db,
+		);
 	if (rows.length > LIMIT) return { error: "limit_exceeded" } as const;
 	return {
 		schema_version: "quiet-follow-ups.v1",

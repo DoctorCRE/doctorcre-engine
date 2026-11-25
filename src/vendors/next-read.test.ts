@@ -206,3 +206,22 @@ test("unswitched vendors still use the public route and reject typed refs", asyn
 	);
 	assert.equal((await get("/V-102", false)).status, 404);
 });
+
+test("the vendor list narrows to the vendors Quiet follow-ups proposes", async () => {
+	const quiet = id(105);
+	await door.db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values ('${quiet}', 'person', 'Made-up Quiet Vendor');
+		insert into party_role (party_id, role, owner_user_id, created_at)
+			values ('${quiet}', 'vendor', '${joe}', now() - interval '200 days');
+		commit;`);
+	assert.partialDeepStrictEqual(await list("quiet=true"), {
+		query: { quiet: true },
+		total: 1,
+		rows: [{ id: quiet, name: "Made-up Quiet Vendor" }],
+	});
+	assert.partialDeepStrictEqual(await list("quiet=true&owner=dell"), {
+		total: 0,
+	});
+	const { query } = (await list("q=Made-up")) as { query: object };
+	assert.equal("quiet" in query, false);
+});
