@@ -519,9 +519,10 @@ export async function readNextVendor(
 	const value = requestedUuid?.toLowerCase() ?? id;
 	const ownerId = await nextViewerId(db, viewer);
 	const record = await nextVendorRows(liveNextVendors(db), ownerId, contract)
-		.where(sql<boolean>`p.id = ${requestedUuid}::uuid
+		// Kysely joins raw SQL to the other conditions as is, so its ors need their own parentheses.
+		.where(sql<boolean>`(p.id = ${requestedUuid}::uuid
 			or p.id = (select party_id from outside_id where source = ${source} and value = ${value})
-			or p.id = (select survivor_id from merged_party where id = ${requestedUuid}::uuid)`)
+			or p.id = (select survivor_id from merged_party where id = ${requestedUuid}::uuid))`)
 		.orderBy(sql`p.id = ${requestedUuid}::uuid`, "desc")
 		.leftJoin("active_do_not_contact as dnc", "dnc.party_id", "p.id")
 		.select((eb) => [

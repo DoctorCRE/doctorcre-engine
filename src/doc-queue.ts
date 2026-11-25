@@ -307,10 +307,10 @@ export async function saveDocJudgment(
 		.where("id", "=", job.id)
 		.where("claim_id", "=", claim_id)
 		.where(unexpired)
-		.where(sql<boolean>`${kind} <> 'answered' or exists (
+		.where(sql<boolean>`(${kind} <> 'answered' or exists (
 			select 1 from email e
 			where e.activity_id = doc_judgment_job.activity_id and ${sourceHash} = claim_source_hash
-		)`)
+		))`)
 		.executeTakeFirst();
 	if (!saved.numUpdatedRows) return 404;
 	if (job.kind === "email_filing" && state !== "queued")
