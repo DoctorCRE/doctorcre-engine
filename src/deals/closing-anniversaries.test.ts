@@ -147,3 +147,46 @@ test("requires a provisioned partner and takes no caller-supplied date", async (
 		[400, { error: "unregistered_operation_fields" }],
 	);
 });
+
+test("next names the first anniversary after the window, from Chicago midnight", async (t) => {
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2025-03-01T05:59:59Z"),
+	});
+	assert.deepEqual(await save(reader, `${path}/next`, {}, "GET"), [
+		200,
+		{ next_anniversary_on: "2025-03-31" },
+	]);
+	t.mock.timers.setTime(Date.parse("2025-03-01T06:00:00Z"));
+	assert.deepEqual(await save(owner, `${path}/next`, {}, "GET"), [
+		200,
+		{ next_anniversary_on: "2026-02-28" },
+	]);
+});
+
+test("next keeps February 29 in leap years", async (t) => {
+	t.mock.timers.enable({
+		apis: ["Date"],
+		now: Date.parse("2023-12-15T12:00:00Z"),
+	});
+	assert.deepEqual(await save(reader, `${path}/next`, {}, "GET"), [
+		200,
+		{ next_anniversary_on: "2024-02-29" },
+	]);
+});
+
+test("next requires a provisioned partner and takes no fields", async () => {
+	const signedOut = await request(reader, `${path}/next`, {
+		method: "GET",
+		headers: { Cookie: "" },
+	});
+	assert.equal(signedOut.status, 401);
+	assert.partialDeepStrictEqual(
+		await save({ user: "unprovisioned-example" }, `${path}/next`, {}, "GET"),
+		[422, { error: "unauthenticated" }],
+	);
+	assert.partialDeepStrictEqual(
+		await save(reader, `${path}/next?as_of=2025-02-28`, {}, "GET"),
+		[400, { error: "unregistered_operation_fields" }],
+	);
+});

@@ -157,8 +157,9 @@ export function checkInWording(what: string, names: OldRecordNames) {
 export function stepCopy(
 	{ what, item_title }: StepWording,
 	names: OldRecordNames,
+	heading?: string,
 ) {
-	const saved = item_title?.trim();
+	const saved = heading || item_title?.trim();
 	const checkIn = cadenceCheckIn(what, names);
 	if (checkIn && !saved) return checkIn;
 	const instruction = checkIn
@@ -175,8 +176,9 @@ export function homeStepCopy(
 	step: HomeStep,
 	evidence: StepEvidence,
 	names: OldRecordNames,
+	heading?: string,
 ) {
-	const { title, instruction } = stepCopy(step, names);
+	const { title, instruction } = stepCopy(step, names, heading);
 	const hold =
 		step.status === "open" && step.hold_until
 			? `Held until ${homeDate(step.hold_until)}`
