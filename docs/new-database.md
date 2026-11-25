@@ -1833,19 +1833,13 @@ The list and drawer show live vendors and their current relationship partner. Co
 
 Track record counts come from `vendor_track_record`. A deal counts even when its work date is unknown. The first and last work dates use participation saved through the new system. A dated introduction that led to a deal can also set the Last deal date. The old coverage verification timestamp, manual override and rating edit version return null.
 
-### Vendor category counts
-
-`GET /api/engine/vendor-summary` takes an optional `owner` of `all` (the default), `joe` or `dell`, and counts that partner's vendors from the new schema. It answers `{ schema_version: "vendor-summary.v1", owner, quiet_days, all_vendors, categories, no_category }`. Each tile is `{ vendors, quiet, relationships }`, and each entry of `categories` also has the category role's `slug` and `label`, ordered by label. Every vendor category role appears, even one with no vendors. A vendor with two categories counts under both, so `all_vendors` holds the true total. `no_category` counts vendors with no category role.
-
-`relationships` counts each vendor once under one word. A ruling outranks the level: `avoid` and `parked` come from the disposition, at any level. With no ruling, level 3 is `core`, 2 `established`, 1 `building`, 0 `prospective`, and no level `not_rated`. `quiet` counts vendors that `GET /api/engine/quiet-follow-ups` would list at its default vendor cadence, `quiet_days` (90): no ruling, no active do-not-contact, no open next step, and no email, call or meeting in that many Central days, counted from when the vendor role was added if there was none. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
-
 **Later.** The copy leaves vendor work dates unknown. Preserving them needs a design decision about a nullable participation date or a field for its source.
 
 ### Vendors redesign reads
 
-The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 needs the reads below. None is built yet. Each reads live vendors from the new schema as the list does, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
+The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 needs the reads below. Only the vendor summary is built. Each reads live vendors from the new schema as the list does, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
 
-**Vendor summary.** `GET /api/engine/vendors/summary`, optional `owner`, `all` when absent, answers the category tiles in one read: `{ all, no_category, categories: [{ slug, label, ...counts }] }`. Each `counts` is `{ count, relationship: { core, established, building, prospective, not_rated, parked, avoid }, quiet }`. `categories` lists every vendor category in label order, with zeros for one no vendor holds. A vendor counts once in each category it holds, so the categories can add up to more than `all`. `no_category` counts vendors that hold only the vendor role.
+**Vendor summary.** `GET /api/engine/vendors/summary`, optional `owner`, `all` when absent, answers the category tiles in one read: `{ all, no_category, categories: [{ slug, label, ...counts }] }`. Each `counts` is `{ count, relationship: { core, established, building, prospective, not_rated, parked, avoid }, quiet }`. `categories` lists every vendor category in label order, with zeros for one no vendor holds. A vendor counts once in each category it holds, so the categories can add up to more than `all`. `no_category` counts vendors that hold only the vendor role. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
 
 **The list read.** `GET /api/engine/vendors` changes in these ways:
 
