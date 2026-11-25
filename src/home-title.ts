@@ -58,8 +58,8 @@ export function stripHomeTitlePrefixes(text: string) {
 	}
 }
 
-function titleLimitIndex(text: string) {
-	let remaining = 90;
+function titleLimitIndex(text: string, limit = 90) {
+	let remaining = limit;
 	for (const { index } of titleCharacters.segment(text)) {
 		if (--remaining < 0) return index;
 	}
@@ -93,4 +93,13 @@ export function homeTitle(
 
 export function savedHomeTitle(text: string) {
 	return fitsLength(text) ? text : "";
+}
+
+export function shortHomeTitle(text: string) {
+	if (!text || fitsLength(text)) return text;
+	const head = text.slice(0, titleLimitIndex(text, 89));
+	const words = /^\s/.test(text.slice(head.length))
+		? head
+		: head.replace(/\s+\S*$/, "");
+	return `${(words || head).replace(/[\s,;:.·–—-]+$/, "")}…`;
 }
