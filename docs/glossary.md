@@ -209,7 +209,7 @@ _Database_: `deal.attention` today; `deal.needs_attention` in the new database.
 _Engine_: `attention`.
 
 **Star**:
-A partner's own mark on a deal that keeps it at the top of their Deals board and list. The other partner never sees it.
+A partner's own mark on a deal. The other partner never sees it. The app shows no stars for now (owner, 2026-11-25).
 _Avoid_: favorite, bookmark, pin
 _New database_: `deal_star`.
 _Engine_: `starred` on each board deal.

@@ -60,7 +60,7 @@ A detail page may add back/title, the facts line its screen file requires and a 
 
 **Test.** Each card in the screenshot sits in a board lane, in a Home tile, or where its screen file names cards. A deal card in a phase column shows no next step, due date, late count or automatic-move notice. No bordered or shadowed box holds another one.
 
-**Ruling.** The owner ruled on 2026-11-20 that a deal card shows only the deal's name, its owner and one attention badge. That ruling wins over a screen file, and [Deals](screens/deals.md#card) follows it. The star on each card is a later owner ruling (2026-11-24).
+**Ruling.** The owner ruled on 2026-11-20 that a deal card shows only the deal's name, its owner and one attention badge. That ruling wins over a screen file, and [Deals](screens/deals.md#card) follows it.
 
 ## 7. Empty states: one plain line, or nothing
 

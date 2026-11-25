@@ -48,7 +48,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`email_summary`**: a recorded summary result for that email, with its source, generator and recorded time. `email_current_summary` gives the one current text when any result has text.
 - **`next_step`**: what is due next, with its owner, due date and the time it was done.
 - **`weekly_review`**: one deal or prospect marked reviewed in one week's Monday review.
-- **`deal_star`**: one partner's star on one deal, which keeps the deal at the top of that partner's Deals board and list.
+- **`deal_star`**: one partner's star on one deal. The app shows no stars for now (owner, 2026-11-25).
 - **`commission`**: a deal's commission, once: what an open deal is expected to bring, the gross the brokerage collects, and the closing user's part on this deal when it overrides their ladder.
 - **`commission_payment`**: one part of the gross, with when it was invoiced, falls due and was received.
 - **`commission_share`**: what goes to someone other than the users, such as a referring agent or the brokerage, as a share of the whole.
@@ -1629,7 +1629,7 @@ The signed-in partner sends `{ idempotency_key, event_id, base_version }` to `PO
 
 Each partner keeps their own starred deals (owner, 2026-11-24, #1240). `deal_star` holds one row per user and deal. The database refuses a second row for the same pair, refuses a star that names anyone but the user saving it, and so refuses one from a job, and removes a deal's stars with the deal. Change history keeps each star and unstar.
 
-Each open deal in the new board read's `deals` gives `starred`, true when the signed-in partner starred it. The old read omits it. The app puts starred deals first in each column and in the list, keeping their usual order among themselves.
+Each open deal in the new board read's `deals` gives `starred`, true when the signed-in partner starred it. The old read omits it. The app shows no star and does not sort by it (owner, 2026-11-25: "every deal is important"); the stars stay stored.
 
 `POST /api/engine/deals/{deal_id}/star` and `POST /api/engine/deals/{deal_id}/unstar` take `idempotency_key` and answer `200 { deal_id, starred }` for the signed-in partner. Starring a starred deal or unstarring an unstarred one answers the same. An unknown deal returns `404 not_found`. Jobs have no star route. Shared retry rules apply.
 
