@@ -368,7 +368,7 @@ const correspondenceOf = (deal: Expression<string>) => sql<Correspondence[]>`(
 				from activity_about visited join property p on p.id = visited.property_id
 				where visited.activity_id = a.id having count(*) > 0
 			), '{}')
-		else jsonb_build_object('sender', e.sender, 'sender_name', e.sender_name, 'subject', e.subject)
+		else jsonb_build_object('sender', e.sender, 'sender_name', ${senderLabel("e", false)}, 'subject', e.subject)
 		end
 		order by a.happened_at desc, a.id desc
 	), '[]')
@@ -473,7 +473,7 @@ const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			jsonBuildObject({
 				activity_id: eb.ref("e.activity_id"),
 				sender: eb.ref("e.sender"),
-				sender_name: eb.ref("e.sender_name"),
+				sender_name: senderLabel("e", false),
 				subject: eb.ref("e.subject"),
 				happened_at: asText(eb.ref("a.happened_at")),
 				summary: eb.ref("a.summary"),
