@@ -5,7 +5,7 @@ Home gives a signed-in partner the work that needs their attention and a place t
 ## The dashboard
 
 - [ ] The first view starts with work tiles. Home has no right panel, hero, greeting, date banner, section explainers, Mail priorities, Refresh inbox, or Search inbox.
-- [ ] The tiles sit side by side on a computer and form one column on a phone. Each tile shows its item count and previews its first few cards. **See all** opens the rest of that tile's list when there are more cards. Empty tiles stay off the screen.
+- [ ] The tiles sit side by side on a computer and fill the screen under the top bar. Reminders fills its column, the last tile beside it reaches the bottom, and each tile scrolls its own cards, so the page never scrolls. On a phone they form one column. Each tile shows its item count and previews its first few cards. **See all** opens the rest of that tile's list when there are more cards. Empty tiles stay off the screen.
 - [ ] **Reminders** shows due-today and late deal and vendor follow-ups and decisions. It also shows undated deal and vendor follow-ups and pending work such as reply drafts, suggestion reviews, lease facts, and tour feedback that need a partner. **Today** and **Needs your attention** have no separate sections.
 - [ ] **Late** appears within **Reminders** only when a deal or vendor follow-up or decision is past due. Show how late in Central calendar days, such as "3 days late". Future follow-ups and automatic check-ins first appear on their due day.
 - [ ] A nightly checklist reminder first appears when the deal owner's [morning window](../new-database.md#deal-watches-and-nightly-checklist-reminders) opens.
