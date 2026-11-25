@@ -203,7 +203,7 @@ _Engine_: `operating_state`.
 _New database_: `deal.parking_reason`, none when active, `deal.parking_note`, and who last parked it and when in `deal.parked_by_user_id`, `deal.parked_automatically` and `deal.parked_at`.
 
 **Needs attention**:
-A flag a user sets on a deal to say it needs a look. Nothing sets it on its own.
+A deal's mark that it needs a look, with the reason. Under the approved redesign the system sets it from the [attention rules](new-database.md#deal-attention) and no partner sets or clears it on a deal (owner, 2026-11-25; not built yet). A prospect's is set by a partner.
 _Avoid_: flagged, urgent, priority
 _Database_: `deal.attention` today; `deal.needs_attention` in the new database.
 _Engine_: `attention`.

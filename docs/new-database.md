@@ -1692,6 +1692,39 @@ These saves follow the same session, replay and `{ from, to }` edit rules. They 
 - `POST /api/engine/party-links/{id}` changes `started_on`, `ended_on` or `note`. Ending a link keeps its row; a later link is a new one. Clearing the end date of a link whose pair has another current link of its kind returns `409 already_linked` with that link's `link_id`. An end before the start is refused by the database (`party_link_ends_after_it_starts`).
 - Relationships shows a link as an edge `link:{link_id}` from its start date, when it has one, until its end date, when it has one. A link ended on a later date still shows until then, though it no longer counts as current for the rule above.
 
+## Deal page redesign
+
+The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. None of it is built yet.
+
+### Deal attention
+
+The system decides when a deal needs attention and says why. A deal needs attention when any of these holds:
+
+- An open step is late.
+- A critical date is within 7 days or past, and not done.
+- The deal has no open step and no pending suggestion.
+- An email from the client or a broker has had no answer for 2 working days.
+- A suggestion has waited 2 days for a partner.
+- Nothing has happened on the deal for 14 days.
+
+The numbers are a starting guess. The board and deal reads give one reason and when it started, in a sentence the board badge and the deal page's Needs attention line both show. A partner gets one alert per new reason through Updates, not one a day. For deals the computed answer replaces the hand-set `needs_attention` flag, which no screen sets any more. A prospect keeps its hand-set flag.
+
+### Invoice dates
+
+The deal page shows three dates for each commission payment: triggered, sent and paid. Sent is the payment's `invoiced_on` and paid is its `received_on`. Triggered is the day the event happened that lets the brokerage invoice. Before it, the screen names the event, such as "Goes out when the lease is signed". No column holds it yet. Not decided: which event triggers the invoice for each deal kind, and whether triggered is stored or read from the checklist. A new column needs the owner's yes before production.
+
+### Checklist under the phases
+
+The `deal-checklist.v1` groups become the eight phases. Research, Site selection, Negotiation, Legal and Closing go under the phase of the same meaning, and Invoice's two items go under Closed. A purchase's diligence items stay under Legal. Prospective Client and Due Diligence have no items until the partners' workflow table arrives. Items still tick themselves from what is filed and recorded.
+
+### Doc skill sessions
+
+A button on a deal or lead starts a Doc session for one record and one skill, as [Doc](screens/doc.md#start-doc-from-a-button) describes. A typed list in engine code names each skill, `client_website`, `requirement_email`, `compare_lois` and `lead_outreach`, with its record kind, its chat title and the skill Doc runs. A session is a [Doc conversation](#doc-conversations-and-turns) tied to its record and skill, so the button reopens the same chat. The deal and lead reads give each skill's state: not started, working, waiting on the partner, or done on a date. A finished job or a question from Doc sends one update and one phone push through Updates. A file dropped in the session goes through the existing upload door to the record's documents, and Doc reads its extracted text. Not decided: the storage that ties a conversation to its record and skill, and what the other partner sees, since a Doc conversation is private to its owner.
+
+### Send a new email from Doc
+
+**Approve and send** sends a new email, not a reply, from the signed-in partner's own mailbox, with exactly the recipients, subject and body on the card. Each recipient gets their own copy. Only the partner's click sends, under the [confirmed save](#confirmed-saves-and-receipts) rules, and the model has no route to send. The engine files the sent email to the deal or lead and answers sent or failed. A failed send keeps the draft for **Retry**. Not checked: how much of [reply delivery](#22-reply-drafts-and-their-delivery) and the 2026-11-21 change that lets Doc start a reply already covers this.
+
 ## Global Search and Recent Activity
 
 Set `SEARCH_READ_SCHEMA=next` for `GET /api/engine/find` and `ACTIVITY_READ_SCHEMA=next` for `GET /api/engine/recent-activity`. Each read uses the public schema until its variable is set to `next`.
