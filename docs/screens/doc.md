@@ -12,7 +12,8 @@ The owner approved this design on 2026-11-25. Check each line on a signed-in app
 
 - [ ] **Ask Doc** in the app shell opens `/doc-chats`. The search orb still searches. Any partner-facing instruction to ask Doc points to this chat. The chat shows only questions, answers, and proposals for the signed-in partner.
 - [ ] The page never scrolls. Only the conversation scrolls, and the chats list scrolls on its own when it is long. A chat opens at its latest turn.
-- [ ] The chats list is always open on the left, 264px wide, with no heading. Each row is one 36px line with no underline. It shows the start of the chat's first question, and on the right its time ("9:12 AM"), day ("Tue") or date ("Nov 20"). Newest chat first. The open chat's row has a filled background.
+- [ ] The chats list is always open on the left, 264px wide, with no heading. Each row is one 36px line with no underline. It shows the start of the chat's first question, and its time on the right. Newest chat first. The open chat's row has a filled background.
+- [ ] A row's time is the time of the chat's newest message. A message from today shows its time ("2:14 PM"). One from the last 6 days shows its weekday ("Tue"). An older one shows the month and day ("Nov 12"), with the year when it is not this year ("Nov 12, 2025").
 - [ ] A chat's row shows a spinner while Doc works on it, and an amber dot while a save waits for the partner's OK.
 - [ ] The **New chat** pencil sits at the top of the list. **Older chats** is a quiet last row that loads the next page, shown only when there is one.
 - [ ] The top bar reads "Ask Doc / " and the open chat's first question. The title shows once.
