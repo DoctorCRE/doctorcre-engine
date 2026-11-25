@@ -4,11 +4,13 @@
 - **Must** answer questions about deals, leads, clients, and the partner's own mail. Keep each partner's conversations private.
 - **Must** wait for the partner to confirm a note, next step, or pending reply draft. Sending a reply stays in the existing review.
 
-- [ ] **Doc link** in account settings shows the signed-in partner's Mac status. It uses the queued-question wording for setup, offline, sign-in and plan limits. A ready Mac shows "Doc is ready on your Mac." The partner can make, replace or revoke their own link code. Each new code appears once.
+- [ ] **Doc link** on Settings, opened from the account menu, shows the signed-in partner's Mac status. It uses the queued-question wording for setup, offline, sign-in and plan limits. A ready Mac shows "Doc is ready on your Mac." The partner can make, replace or revoke their own link code. Each new code appears once.
 
 ## Open a conversation
 
 - [ ] **Ask Doc** in the app shell opens `/doc-chats`. The search orb still searches. Any partner-facing instruction to ask Doc points to this chat. The chat shows only questions, answers, and proposals for the signed-in partner.
+- [ ] Every partner screen in the app layout has the Today button in the top bar and the same Today panel. It starts open and keeps one open-or-closed choice across screens. Deals Board and List start closed and keep their own choice. Home and Calendar show today themselves and have no panel.
+- [ ] Settings opens from the account menu. It holds device push and quiet hours, Doc link, and phone notifications, with no time zone field. Updates shows the feed and Who did what only.
 - [ ] The page opens with a place to type, **Send**, **New chat**, and **Recent chats**. A partner with an empty list sees "No conversations yet" and can send a first question. **New chat** clears the composer and starts an empty chat. The first send creates the conversation.
 - [ ] Recent chats show the start of each first question, newest chat first. Select a chat to reopen its saved questions and answers in order. **Show older chats** loads the next page when there is one. Reloading an open chat brings back the saved conversation. Switching partners clears the previous partner's chat from the screen.
 - [ ] While recent chats or an open chat loads, the page says it is loading. If the read fails, it says the chats could not be loaded and offers **Retry**. An old `/doc-chats?id=…` or exact-turn link that refers to an old conversation says "This older conversation wasn't kept" and offers **New chat**. An unknown new link says "Conversation unavailable".

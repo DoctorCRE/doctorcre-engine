@@ -2361,7 +2361,7 @@ A suggestion group uses the most recent mark revision among its proposals, inclu
 
 ### Updates and notification settings
 
-The app's Updates page reads and saves these on the new schema directly, with no engine switch. The app's own routing moves the page. The coordinator settled the rules below on 2026-11-21 (#1014).
+The app's Settings page, opened from the account menu, reads and saves notification preferences (`/preferences`). The app's Updates page lists and marks updates (`/updates`, `/updates/read`, `/updates/changes`). It reads preferences only to show quiet hours and times in the saved zone, and does not save them. Both use the new schema directly, with no engine switch. The app's own routing moves the pages. The coordinator settled the rules below on 2026-11-21 (#1014).
 
 `GET /api/engine/updates` lists the signed-in partner's own Home updates, read and unread, newest first by creation time, at most 100. The answer is `{ unread_count, updates }`. `unread_count` counts every unread update the list would show, not just the first 100. Each item is the update card Home gives (§ "Home inbox reads for the app"), plus `read_at`, null while unread. `unseen` is true while unread. A read update's `base_version` ends in `:done`. A Home update the partner dropped stays off Updates too, so it never counts as unread. Updates and the unread count use the same checklist eligibility as Home. The stored reminders remain in the database as history.
 
