@@ -6,6 +6,7 @@ import { type Caller, doorTest } from "../test-door.ts";
 const { db, setup, cleanup, save, request } = doorTest();
 const [alex, blair, deal, otherDeal, planned, cancelled, completed, meeting] =
 	Array.from({ length: 8 }, () => randomUUID());
+const [earlier, earlierMeeting] = [randomUUID(), randomUUID()];
 const property = randomUUID();
 const client = randomUUID();
 const owner = { user: "alex" };
@@ -32,23 +33,45 @@ before(async () => {
 		insert into property (id, address) values ('${property}', '1 Example Way');
 		insert into tour_plan (id, deal_id, planned_on) values
 			('${planned}', '${deal}', '2026-12-01'), ('${cancelled}', '${deal}', '2026-12-02'),
-			('${completed}', '${deal}', '2026-12-03');
+			('${completed}', '${deal}', '2026-12-03'), ('${earlier}', '${deal}', '2026-11-02');
 		insert into tour_stop (tour_plan_id, property_id, position) values
-			('${planned}', '${property}', 1), ('${cancelled}', '${property}', 1), ('${completed}', '${property}', 1);
+			('${planned}', '${property}', 1), ('${cancelled}', '${property}', 1), ('${completed}', '${property}', 1),
+			('${earlier}', '${property}', 1);
 		update property set address = '10 Example Way' where id = '${property}';
 		update tour_plan set cancelled_at = now() where id = '${cancelled}';
-		insert into activity (id, kind, happened_at) values ('${meeting}', 'meeting', now());
-		insert into activity_about (activity_id, deal_id) values ('${meeting}', '${deal}');
+		insert into activity (id, kind, happened_at) values
+			('${meeting}', 'meeting', '2026-11-20 15:00Z'), ('${earlierMeeting}', 'meeting', '2026-11-02 16:30Z');
+		insert into activity_about (activity_id, deal_id, property_id) values
+			('${meeting}', '${deal}', null), ('${meeting}', null, '${property}'), ('${earlierMeeting}', '${deal}', null);
 		update tour_plan set completed_activity_id = '${meeting}' where id = '${completed}';
+		update tour_plan set completed_activity_id = '${earlierMeeting}' where id = '${earlier}';
 		commit;`);
 });
 after(cleanup);
 
-test("both partners see only the deal's planned tours and jobs cannot list them", async () => {
+test("both partners see the deal's planned tours and its past tours newest first, and jobs cannot list them", async () => {
 	for (const caller of [owner, partner]) {
 		assert.deepEqual(await save(caller, path, {}, "GET"), [
 			200,
-			{ tours: [{ id: planned, planned_on: fields.planned_on }] },
+			{
+				tours: [{ id: planned, planned_on: fields.planned_on }],
+				past_tours: [
+					{
+						id: completed,
+						activity_id: meeting,
+						happened_at: "2026-11-20T15:00:00.000Z",
+						properties: [
+							{ property_id: property, address: "10 Example Way", name: null },
+						],
+					},
+					{
+						id: earlier,
+						activity_id: earlierMeeting,
+						happened_at: "2026-11-02T16:30:00.000Z",
+						properties: [],
+					},
+				],
+			},
 		]);
 	}
 	assert.equal((await save({ job: "agent" }, path, {}, "GET"))[0], 404);
