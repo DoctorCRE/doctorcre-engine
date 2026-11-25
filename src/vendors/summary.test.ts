@@ -29,16 +29,16 @@ const recentTouch = (n: number) => `
 		values ('call', now(), 'Example touch') returning id)
 	insert into activity_about (activity_id, party_id) select id, '${uuid(n)}' from contact;`;
 
-type Tile = {
-	vendors: number;
+type Counts = {
+	count: number;
+	relationship: Record<string, number>;
 	quiet: number;
-	relationships: Record<string, number>;
 };
 type Body = {
 	error?: string;
-	all_vendors: Tile;
-	categories: (Tile & { slug: string })[];
-	no_category: Tile;
+	all: Counts;
+	no_category: Counts;
+	categories: (Counts & { slug: string })[];
 	proposals: { subject_type: string }[];
 };
 
@@ -75,14 +75,13 @@ function inCategory(body: Body, slug: string) {
 	return found;
 }
 
-const tile = (
-	vendors: number,
+const counts = (
+	count: number,
 	quiet: number,
 	words: Partial<Record<string, number>>,
 ) => ({
-	vendors,
-	quiet,
-	relationships: {
+	count,
+	relationship: {
 		core: 0,
 		established: 0,
 		building: 0,
@@ -92,6 +91,7 @@ const tile = (
 		avoid: 0,
 		...words,
 	},
+	quiet,
 });
 
 test("each category tile counts its vendors by relationship word", async (t) => {
@@ -107,13 +107,10 @@ test("each category tile counts its vendors by relationship word", async (t) => 
 			vendor(16, { level: 2, disposition: "avoid" }),
 		].join(""),
 	);
-	const { status, body } = await get("vendor-summary");
+	const { status, body } = await get("vendors/summary");
 	assert.equal(status, 200);
 	assert.deepEqual(body, {
-		schema_version: "vendor-summary.v1",
-		owner: "all",
-		quiet_days: 90,
-		all_vendors: tile(7, 0, {
+		all: counts(7, 0, {
 			core: 1,
 			established: 1,
 			building: 1,
@@ -122,20 +119,20 @@ test("each category tile counts its vendors by relationship word", async (t) => 
 			parked: 1,
 			avoid: 1,
 		}),
+		no_category: counts(1, 0, { avoid: 1 }),
 		categories: [
 			{
 				slug: "attorney",
 				label: "Attorney",
-				...tile(3, 0, { core: 1, prospective: 1, not_rated: 1 }),
+				...counts(3, 0, { core: 1, prospective: 1, not_rated: 1 }),
 			},
-			{ slug: "cpa", label: "CPA", ...tile(0, 0, {}) },
+			{ slug: "cpa", label: "CPA", ...counts(0, 0, {}) },
 			{
 				slug: "lender",
 				label: "Lender",
-				...tile(4, 0, { core: 1, established: 1, building: 1, parked: 1 }),
+				...counts(4, 0, { core: 1, established: 1, building: 1, parked: 1 }),
 			},
 		],
-		no_category: tile(1, 0, { avoid: 1 }),
 	});
 });
 
@@ -156,14 +153,14 @@ test("quiet counts the same vendors as quiet follow-ups", async (t) => {
 			vendor(16),
 		].join(""),
 	);
-	const summary = await get("vendor-summary");
+	const summary = await get("vendors/summary");
 	const quiet = await get("quiet-follow-ups");
 	assert.equal(quiet.status, 200);
 	const quietVendors = quiet.body.proposals.filter(
 		(p) => p.subject_type === "vendor",
 	);
 	assert.equal(quietVendors.length, 2);
-	assert.equal(summary.body.all_vendors.quiet, quietVendors.length);
+	assert.equal(summary.body.all.quiet, quietVendors.length);
 	assert.equal(inCategory(summary.body, "lender").quiet, 1);
 	assert.equal(summary.body.no_category.quiet, 1);
 });
@@ -178,13 +175,13 @@ test("a partner's summary counts only that partner's vendors", async (t) => {
 		].join(""),
 	);
 	const cpa = async (owner: string) =>
-		inCategory((await get(`vendor-summary?owner=${owner}`)).body, "cpa");
-	assert.equal((await cpa("joe")).relationships.building, 1);
-	assert.equal((await cpa("joe")).vendors, 1);
-	assert.equal((await cpa("dell")).relationships.established, 1);
-	assert.equal((await cpa("dell")).vendors, 1);
-	assert.equal((await cpa("all")).vendors, 3);
-	const refused = await get("vendor-summary?owner=someone");
+		inCategory((await get(`vendors/summary?owner=${owner}`)).body, "cpa");
+	assert.equal((await cpa("joe")).relationship.building, 1);
+	assert.equal((await cpa("joe")).count, 1);
+	assert.equal((await cpa("dell")).relationship.established, 1);
+	assert.equal((await cpa("dell")).count, 1);
+	assert.equal((await cpa("all")).count, 3);
+	const refused = await get("vendors/summary?owner=someone");
 	assert.equal(refused.status, 400);
 	assert.equal(refused.body.error, "value_not_in_declared_vocabulary");
 });

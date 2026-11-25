@@ -19,13 +19,13 @@ const NO_VENDORS = {
 	parked: 0,
 	avoid: 0,
 };
-type Tile = {
-	vendors: number;
+type Counts = {
+	count: number;
+	relationship: typeof NO_VENDORS;
 	quiet: number;
-	relationships: typeof NO_VENDORS;
 };
-type Counted = Tile & { across: boolean; category: string | null };
-const EMPTY: Tile = { vendors: 0, quiet: 0, relationships: NO_VENDORS };
+type Counted = Counts & { across: boolean; category: string | null };
+const EMPTY: Counts = { count: 0, relationship: NO_VENDORS, quiet: 0 };
 
 const OWNERS = ["all", ...PARTNERS] as const;
 type Owner = (typeof OWNERS)[number];
@@ -63,9 +63,9 @@ const tiles = (db: Transaction<DB>, owner: Owner) =>
 			on cr.party_id = v.party_id
 	)
 	select grouping(category) = 1 as across, category,
-		count(distinct party_id)::int as vendors,
-		count(distinct party_id) filter (where quiet)::int as quiet,
-		json_build_object(${byRelationship}) as relationships
+		count(distinct party_id)::int as count,
+		json_build_object(${byRelationship}) as relationship,
+		count(distinct party_id) filter (where quiet)::int as quiet
 	from placed group by grouping sets ((), (category))`.execute(db);
 
 async function readVendorSummary(db: Transaction<DB>, owner: Owner) {
@@ -77,28 +77,21 @@ async function readVendorSummary(db: Transaction<DB>, owner: Owner) {
 		.orderBy("label")
 		.orderBy("slug")
 		.execute();
-	const tileOf = (row?: Counted): Tile =>
+	const countsOf = (row?: Counted): Counts =>
 		row
-			? {
-					vendors: row.vendors,
-					quiet: row.quiet,
-					relationships: row.relationships,
-				}
+			? { count: row.count, relationship: row.relationship, quiet: row.quiet }
 			: EMPTY;
 	const inCategory = (slug: string | null) =>
-		tileOf(rows.find((row) => !row.across && row.category === slug));
+		countsOf(rows.find((row) => !row.across && row.category === slug));
 	return {
-		schema_version: "vendor-summary.v1",
-		owner,
-		quiet_days: DEFAULT_CADENCE.vendor_days,
-		all_vendors: tileOf(rows.find((row) => row.across)),
-		categories: categories.map((c) => ({ ...c, ...inCategory(c.slug) })),
+		all: countsOf(rows.find((row) => row.across)),
 		no_category: inCategory(null),
+		categories: categories.map((c) => ({ ...c, ...inCategory(c.slug) })),
 	};
 }
 
 export const vendorSummary = new Hono<DatabaseEnv>().get(
-	"/vendor-summary",
+	"/vendors/summary",
 	async (c) => {
 		const params = new URL(c.req.url).searchParams;
 		const refused = checkFields(params, ["owner"], {
