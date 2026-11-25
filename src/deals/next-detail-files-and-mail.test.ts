@@ -350,6 +350,51 @@ test("both partners see individual correspondence and can decide email suggestio
 	);
 });
 
+test("a deal email with no saved sender name names the one contact who owns its address", async () => {
+	const deal = id(70);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true);
+		insert into deal (id, name, kind, owner_user_id) values ('${deal}', 'Example named lease', 'lease', '${id(1)}');
+		insert into deal_phase_change (deal_id, happened_at, phase) values ('${deal}', '2026-01-01', 'research');
+		insert into party (id, kind, name) values ('${id(71)}', 'person', 'Robin Example'),
+			('${id(72)}', 'person', 'Lee Example'), ('${id(73)}', 'person', 'Lee Other');
+		insert into party_email (party_id, address, label) values ('${id(71)}', 'robin@example.test', 'work'),
+			('${id(72)}', 'shared@example.test', 'work'), ('${id(73)}', 'shared@example.test', 'work');
+		insert into activity (id, kind, happened_at) values ('${id(74)}', 'email', '2026-01-20T16:00:00Z'),
+			('${id(75)}', 'email', '2026-01-21T16:00:00Z');
+		insert into email (activity_id, message_id, sender, subject, body) values
+			('${id(74)}', 'named@example.test', 'robin@example.test', 'Example tour times', 'Tuesday works.'),
+			('${id(75)}', 'shared-sender@example.test', 'shared@example.test', 'Example shared inbox', 'Hello.');
+		insert into activity_about (activity_id, deal_id) values ('${id(74)}', '${deal}'), ('${id(75)}', '${deal}');
+		insert into proposal (id, kind, activity_id, activity_kind, evidence, proposed_by_job, deal_id, what, created_at)
+			values ('${id(76)}', 'next_step', '${id(74)}', 'email', 'Tuesday works.', 'old_system',
+				'${deal}', 'Book the tour', '2026-01-20'),
+				('${id(77)}', 'next_step', '${id(75)}', 'email', 'Hello.', 'old_system',
+				'${deal}', 'Answer the shared inbox', '2026-01-21');
+		commit;`);
+	const page = await detail(alex, deal);
+	assert.partialDeepStrictEqual(page, {
+		email_follow_ups: [
+			{
+				proposal_id: id(77),
+				email: { sender: "shared@example.test", sender_name: null },
+			},
+			{
+				proposal_id: id(76),
+				email: { sender: "robin@example.test", sender_name: "Robin Example" },
+			},
+		],
+		correspondence: [
+			{ activity_id: id(75), sender: "shared@example.test", sender_name: null },
+			{
+				activity_id: id(74),
+				sender: "robin@example.test",
+				sender_name: "Robin Example",
+			},
+		],
+	});
+});
+
 test("an unsummarized filing uses the sender address in the Home and deal titles", async () => {
 	const messages = `array['${id(60)}', '${id(61)}', '${id(62)}']::uuid[]`;
 	await db.query(`begin;

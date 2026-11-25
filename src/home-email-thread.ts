@@ -50,7 +50,6 @@ type ThreadRow = Sender & {
 	activity_id: string;
 	happened_at: string;
 	exact_happened_at: string;
-	saved_sender_name: string | null;
 	summary: DB["activity"]["summary"];
 } & Pick<
 		DB["email"],
@@ -512,8 +511,7 @@ export async function readHomeEmailThread(
 	sourceId: string,
 ) {
 	const { rows } = await sql<ThreadRow>`
-		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name,
-			e.sender_name as saved_sender_name, a.summary,
+		select e.activity_id, e.sender, ${senderLabel("e", false)} as sender_name, a.summary,
 			${isoMillis(sql.ref("a.happened_at"))} as happened_at,
 			a.happened_at::text as exact_happened_at, e.message_id, e.subject, e.body, e.authored, e.history
 		from email source
@@ -545,7 +543,7 @@ export async function readHomeEmailThread(
 		id: source.activity_id,
 		kind: "email",
 		sender: source.sender,
-		sender_name: source.saved_sender_name,
+		sender_name: source.sender_name,
 		subject: source.subject,
 		body: source.body,
 		happened_at: source.happened_at,

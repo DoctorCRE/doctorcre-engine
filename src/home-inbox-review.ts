@@ -309,7 +309,7 @@ export async function readProposal(
 							"source.kind",
 							"source.summary",
 							"e.sender",
-							"e.sender_name",
+							senderLabel("e", false).as("sender_name"),
 							"e.subject",
 							"e.body",
 							isoMillis(source.ref("source.happened_at")).as("happened_at"),
