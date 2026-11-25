@@ -90,6 +90,10 @@ Still on the old API with no switch yet:
 
 When `data-deals-saves-from-engine` or `data-updates-from-engine` is on, Updates and its navigation badge use the engine endpoints `/updates`, `/updates/read` and `/updates/changes`, and the Settings page in the account menu reads and saves `/preferences` (§ "Updates and notification settings").
 
+Every partner screen in the app layout has the Today button in the top bar and the same Today panel. It starts open and keeps one open-or-closed choice across screens. Deals Board and List start closed and keep their own choice. Home and Calendar show today themselves and have no panel.
+
+Settings opens from the account menu. It holds device push and quiet hours, Doc link, and phone notifications, with no time zone field. Updates shows the feed and Who did what, plus the quiet-now banner, and does not save preferences.
+
 The signed-in Prospects lane, detail, quick add and Monday review use the new schema directly. The app enables them when `deals-saves-from-engine` is on.
 
 Quiet leads and quiet vendor follow-ups use the new schema when `leads-from-engine` routes their shared read to the engine.
