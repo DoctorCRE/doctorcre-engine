@@ -1549,6 +1549,8 @@ The window includes today and the next 30 calendar days in `America/Chicago`. A 
 
 The response is an array ordered by `anniversary_on`, with `deal_id` breaking ties. Each row has `client_id` (party UUID), `client_name`, `deal_id` (deal UUID), `deal_name`, `closed_on`, `anniversary_on`, `years`, and `days_until`. Dates use `YYYY-MM-DD`. When the window has no matches, the response is `200 []`.
 
+`GET /api/engine/closing-anniversaries/next` takes the same partner, deals and February rule. It answers `{ "next_anniversary_on": "YYYY-MM-DD" }`, the earliest anniversary after the window, or `null` when no deal qualifies. The screen shows it when the window is empty.
+
 ### Compare terms
 
 `GET /api/engine/market-terms` serves the deal page's Compare terms tab. It takes optional `market`, `use_type` and `as_of`, requires the same signed-in partner as the Deals board, and reads the new schema as `engine_reader`. It needs no table of its own, as [Markets and territories](#markets-and-territories) rules: it reads each offer round and each signed lease version on a deal, on a property in the named market's counties whose `building_type` matches the use type. Both matches ignore case, and a blank or missing filter matches everything. An unknown market has no terms. `as_of` is a calendar date, or the read refuses with `invalid_field_value`. With it, a round counts when it was offered by that date in Central time and a lease version when it was signed by then; a version with no signing date is left out.
