@@ -31,6 +31,8 @@ const leadContact = id(47);
 const formerVendorContact = id(48);
 const futureVendorContact = id(52);
 const futureVendorStep = id(53);
+const building = id(54);
+const buildingStep = id(55);
 const cadence = "Relationship touch — Example Contact. 90-day vendor cadence.";
 const longWording =
 	"Ask Example Supply whether the expansion order can ship before the tenant improvements finish next spring";
@@ -118,6 +120,9 @@ before(async () => {
 			('${id(50)}', null, '${leadContact}', '${alex}', 'Ask about the introduction', '2001-01-10', null, null),
 			('${id(51)}', null, '${formerVendorContact}', '${alex}', 'Ask about the move', '2001-01-10', null, null),
 			('${futureVendorStep}', null, '${futureVendorContact}', '${alex}', 'Confirm the delivery slot', '2001-01-10', null, null);
+		insert into property (id, address, name) values ('${building}', '100 Example Way', 'Example Tower');
+		insert into next_step (id, property_id, owner_party_id, what, due_on)
+			values ('${buildingStep}', '${building}', '${alex}', 'Ask about the parking deck', '2001-01-19');
 		insert into home_mark (user_id, next_step_id, disposition, snoozed_until)
 			values ('${casey}', '${id(34)}', 'snoozed', 'infinity');
 		commit;
@@ -281,6 +286,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 				what: "Send revised offer. Before sending, check the suite number.",
 				why: null,
 				owner: "joe",
+				record_kind: "deal",
 				record_label: "Example lease",
 				due_on: "2001-01-12",
 				display_on: today,
@@ -292,6 +298,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 				what: "call Example Owner at (555) 010-0199 about the renewal",
 				why: null,
 				owner: "dell",
+				record_kind: "deal",
 				record_label: "Example lease",
 				due_on: "2001-01-13",
 				display_on: today,
@@ -303,6 +310,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 				what: "Check in with Example Contact (vendor)",
 				why: null,
 				owner: "joe",
+				record_kind: "vendor",
 				record_label: "Example Contact",
 				due_on: "2001-01-17",
 				display_on: "2001-01-17",
@@ -314,6 +322,7 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 				what: "Ask Example Supply whether the expansion order can ship before the tenant improvements…",
 				why: longWording,
 				owner: "joe",
+				record_kind: "vendor",
 				record_label: "Example Supply",
 				due_on: "2001-01-18",
 				display_on: "2001-01-18",
@@ -321,10 +330,23 @@ test("both partners see overdue steps on the request day and upcoming steps on t
 				open_url: `/relationships?node=party:${supplier}&step=${id(40)}`,
 			},
 			{
+				id: buildingStep,
+				what: "Ask about the parking deck",
+				why: null,
+				owner: "joe",
+				record_kind: "building",
+				record_label: "Example Tower",
+				due_on: "2001-01-19",
+				display_on: "2001-01-19",
+				days_late: 0,
+				open_url: null,
+			},
+			{
 				id: id(32),
 				what: "Ask Example Clinic about the expansion",
 				why: null,
 				owner: "dell",
+				record_kind: "vendor",
 				record_label: "Example Clinic",
 				due_on: "2001-01-20",
 				display_on: "2001-01-20",
@@ -358,7 +380,7 @@ test("Calendar and Today still show dated steps when open steps have infinite du
 				]);
 				assert.deepEqual(
 					rowIds(calendar.next_steps),
-					[31, 42, 39, 49, 40, 32].map(id),
+					[31, 42, 39, 49, 40, 55, 32].map(id),
 				);
 			},
 		);
@@ -370,7 +392,7 @@ test("Calendar and Today still show dated steps when open steps have infinite du
 			assert.equal(body.reminders.state, "ready");
 			assert.deepEqual(
 				rowIds(body.reminders.late),
-				[31, 42, 39, 49, 40, 32].map(id),
+				[31, 42, 39, 49, 40, 55, 32].map(id),
 			);
 		});
 	} finally {
