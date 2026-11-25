@@ -5,11 +5,12 @@
 
 ## List and totals
 
+- [ ] On a computer, Owed to DoctorCRE, Awaiting invoice, Paid and the Outstanding age buckets share one summary strip. The table fills the rest of the screen and scrolls inside itself under its column names, and the page does not scroll. On a phone the totals share one row, All ages spans the next, and the four age buckets wrap into two columns above the table.
 - [ ] Owed to DoctorCRE adds the recorded amounts on unpaid rows. It gives the unpaid count and says how many lack a recorded amount when the total is partial. If none have an amount, it says “No invoice amounts recorded yet” and gives the unpaid count.
 - [ ] Awaiting invoice counts rows waiting for an invoice date. Paid counts rows with a recorded payment receipt. All, Unpaid, Awaiting invoice and Paid show their matching rows.
 - [ ] Each row shows its deal and owner, the invoice date when known, the commission amount when known, and one status. Unpaid rows show days outstanding. Paid rows show days to payment.
 - [ ] Search narrows by deal name. Owner filters the list and totals. The list heading counts visible rows. Clear filters restores the full list.
-- [ ] Outstanding groups unpaid invoices by days since invoicing. Each bucket shows its count, the total of recorded amounts when present, and how many amounts are missing when a total is partial. A bucket filters the list to its age range. All ages clears that range.
+- [ ] Outstanding groups unpaid invoices by days since invoicing. Each bucket shows its age range, a count badge, the total of recorded amounts when present, and how many amounts are missing when a total is partial. Its full words, such as “2 invoices · 1 without a recorded amount”, are its spoken name and tooltip. A bucket filters the list to its age range. All ages clears that range. The active bucket, All ages included, has an accent border.
 - [ ] Refresh reads the latest tracker and shows when it last updated. A failed refresh explains the problem and keeps the last available snapshot.
 
 ## Drawer

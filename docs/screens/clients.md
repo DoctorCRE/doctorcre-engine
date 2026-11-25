@@ -1,5 +1,7 @@
 # Clients
 
+- [ ] On a computer, Search, Status, Client type, Pipeline, Sort, refresh and Clear share one toolbar row that stays in place. The client count and the All, Joe and Dell chips sit in the top bar beside the title. The list fills the page below and scrolls inside itself, and the page does not scroll.
+- [ ] Filters apply as they change, so there is no Apply. Clear shows only when a search, filter, sort or owner is set, and undoes them all. Active-filter chips show only on a phone, with Clear all. On a phone, filters fold under Filters and sort so the first client shows at the top of the screen.
 - [ ] The list and drawer show each of the client's deals from Open on the Deals board. Each name opens that deal at `/deals?deal=<id>`.
 - [ ] A client with no active deal has no deal link. The list shows recorded facts without an alarm badge for inactive clients or a list of blank fields. The list and drawer use Territory.
 - [ ] The drawer uses the glossary’s How found labels, including Not recorded. It shows clean North American phone numbers as `(202) 555-0100` and preserves other numbers and extensions.
