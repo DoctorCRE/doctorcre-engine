@@ -2,6 +2,7 @@ import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
 import {
 	dealStepUrl,
+	type HomeTile,
 	homeDate,
 	homeDay,
 	homeDisplayText,
@@ -26,12 +27,14 @@ function noticeCard(
 		item_id,
 		open_url,
 		kind_label,
+		tile,
 		source_version,
 		snoozed_until = null,
 	}: {
 		item_id: string;
 		open_url: string;
 		kind_label: "Task" | "Update" | "Tour feedback";
+		tile: HomeTile;
 		source_version: string;
 		snoozed_until?: string | null;
 	},
@@ -55,6 +58,7 @@ function noticeCard(
 		context_label: notice.deal_name,
 		open_url,
 		kind_label,
+		tile,
 		action_id: null,
 		action_version: null,
 		deal_id: notice.deal_id,
@@ -134,6 +138,7 @@ export function completionReviewCard(
 			item_id,
 			open_url: dealStepUrl(review.deal_id, review.next_step_id),
 			kind_label: "Task",
+			tile: "inbox",
 			source_version,
 		}),
 		base_version,
@@ -283,6 +288,7 @@ export async function readHomeUpdates(
 					? `/deals?deal=${update.deal_id}&property=${update.property_id}`
 					: `/deals?deal=${update.deal_id}`,
 			kind_label: tourFeedback ? "Tour feedback" : "Update",
+			tile: tourFeedback ? "inbox" : "reminders",
 			source_version: update.source_version,
 			snoozed_until: update.snoozed_until,
 		});

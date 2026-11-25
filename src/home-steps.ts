@@ -48,6 +48,9 @@ export function homeStepText(text: string) {
 	return stripHomeTitlePrefixes(homeDisplayText(text));
 }
 
+// Reminders are steps to go and do; the Inbox holds decisions to answer.
+export type HomeTile = "reminders" | "inbox";
+
 type StepWording = {
 	what: string;
 	item_title: string | null;

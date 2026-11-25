@@ -304,7 +304,7 @@ const isKnownPartner = async (db: Reader, slug: string) =>
 		.executeTakeFirst()) !== undefined;
 
 // The old tools whose reads the engine serves. A failed read's body names one.
-type Verb =
+export type Verb =
 	| "calendar-critical-dates"
 	| "capture-queue"
 	| "deal-room-board"
@@ -327,6 +327,7 @@ type Verb =
 	| "read-deal-tour"
 	| "read-home-card"
 	| "read-home-inbox-v5"
+	| "read-home-inbox-v6"
 	| "read-home-mail-priorities-v1"
 	| "read-home-today-v1"
 	| "read-invoice-tracker"
