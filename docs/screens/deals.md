@@ -139,7 +139,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 
 ## Deal page
 
-The header shows the deal's name, client, phase, deal owner and next critical date, once each. Back to deals returns to the board where the partner left it. On a computer, Back to deals and the deal name share one row, and the header stays pinned flush under the top bar while the page scrolls, with no strip of the page showing above it. All seven tabs show whole on one row at 1280 and 1440, and wrap on narrower screens instead of scrolling.
+The header shows the deal's name, client, phase, deal owner and next critical date, once each. Back to deals returns to the board where the partner left it. On a computer, Back to deals and the deal name share one row, and the header stays pinned flush under the top bar while the page scrolls, with no strip of the page showing above it. All seven tabs show whole on one row at 1280 and 1440, and wrap between phone width and 1280. On a phone they are one row that scrolls sideways, each tab keeps its full name on one line, and the chosen tab scrolls into view (coordinator ruling, 2026-11-25).
 
 ### Overview
 
