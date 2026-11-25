@@ -5,14 +5,15 @@
 
 ## Board
 
-- [ ] The header counts leads matching all current filters, including cards beyond the first five in a stage. The first load says “Loading leads…” until the count is known. An empty filter result offers Reset filters.
-- [ ] Search, Owner, Market, Specialty and Stage narrow the same board. Owner includes Unclaimed. Stage includes Opportunity and Archived. Contact evidence appears when there are both reachable and research leads.
+- [ ] The count beside the Leads title counts leads matching all current filters, including cards beyond the first five in a stage. The title also shows when the board was last updated. The first load says “Loading leads…” until the count is known. An empty filter result offers Reset filters.
+- [ ] The board starts reading leads while sign-in is checked, and shows nothing until sign-in is confirmed. A failed refresh shows a short warning above the board.
+- [ ] Search, Owner, Market, Specialty, Quiet leads, Contact evidence and Stage share one toolbar row on a computer and narrow the same board. Owner includes Unclaimed. Stage includes Opportunity and Archived. Contact evidence appears when there are both reachable and research leads.
 - [ ] Quiet leads filters the board to due follow-ups using the latest saved contact and current open next steps. It combines with the other filters and shows “Showing N quiet leads” using the same count.
-- [ ] Stage names and counts sit above a thin divider. Spacing separates the columns. On a computer, stages share one row that can scroll sideways. A selected stage uses the board's width. Columns stack on a phone, with controls at least 44 pixels tall and wide.
+- [ ] Stage names and counts sit above a thin divider. Spacing separates the columns. On a computer, the board fills the screen below the toolbar and the page does not scroll. Each stage scrolls inside itself. As many whole stages as fit share the width; the rest scroll sideways and stop at a stage's edge. The stage header row shows “N more ›” when stages sit off to the right and a back arrow, read aloud as “N earlier stages”, when they sit off to the left. A selected stage uses the board's width. Columns stack on a phone, with controls at least 44 pixels tall and wide.
 - [ ] Each card shows the lead's name and owner, or “Unclaimed.” An overdue quiet follow-up adds one “Follow-up late” badge. A newly created email lead shows “New from email” until it is acknowledged. Change stage by using the drawer or moving the card and confirming the change.
 - [ ] Claim appears on every unclaimed lead outside Archived and gives it to the partner who clicks. Claimed leads and archived leads have no Claim action.
-- [ ] Territory shows market counts and an optional map. Picking a market filters the board. A marker can open its lead or a chooser for that place. The board is the list of leads across markets.
-- [ ] Reasons to reach out shows recorded reasons and their sources. Source coverage appears for sources with coverage or blocked updates.
+- [ ] Territory is one line under Reasons to reach out. It shows market counts and an optional map. Picking a market filters the board. A marker can open its lead or a chooser for that place. The board is the list of leads across markets.
+- [ ] Reasons to reach out is a one-line strip that opens. It shows a count of the reasons it shows, such as “(4)”, with “+” when there are more. Open, it shows recorded reasons and their sources. Home's “All reasons” link opens it. Source coverage appears for sources with coverage or blocked updates.
 
 ## Drawer
 
