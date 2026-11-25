@@ -23,14 +23,14 @@ for (const [scenario, item_title, what, title, instruction = what] of [
 		"Send the plan",
 		null,
 	],
-	["a long single sentence", null, longInstruction, "Example Vendor"],
 	[
-		"a long URL with a query string",
+		"a long single sentence",
 		null,
-		`Review ${longUrl}`,
-		"Example Vendor",
+		longInstruction,
+		"Confirm the accessibility requirements for the proposed suite with the landlord and ask…",
 	],
-	["an empty display instruction", null, "C-026", "Example Vendor", null],
+	["a long URL with a query string", null, `Review ${longUrl}`, "Review…"],
+	["an empty display instruction", null, "C-026", "Next step", null],
 	[
 		"a short URL",
 		null,
@@ -38,16 +38,13 @@ for (const [scenario, item_title, what, title, instruction = what] of [
 		"Read https://example.test/plan?a=b",
 		null,
 	],
-	["a long word", null, "e\u0301".repeat(91), "Example Vendor"],
+	["a long word", null, "e\u0301".repeat(91), `${"e\u0301".repeat(89)}…`],
 ] as const) {
 	test(`shows distinct heading and body text for ${scenario}`, () => {
-		assert.deepEqual(
-			stepCopy({ what, item_title, context_label: "Example Vendor" }),
-			{
-				title,
-				instruction,
-			},
-		);
+		assert.deepEqual(stepCopy({ what, item_title }), {
+			title,
+			instruction,
+		});
 	});
 }
 
@@ -58,12 +55,13 @@ for (const opening of [
 	"Use https://example.test/plan? and",
 	"Send the plan. then",
 ]) {
-	test(`uses the record name for a long instruction starting with "${opening}"`, () => {
+	test(`shortens a long instruction starting with "${opening}" into its title`, () => {
 		const what = `${opening} check the final signed drawing with the site manager before sending the revised plan to the tenant.`;
-		assert.deepEqual(
-			stepCopy({ what, item_title: null, context_label: "Example Deal" }),
-			{ title: "Example Deal", instruction: what },
-		);
+		const { title, instruction } = stepCopy({ what, item_title: null });
+		assert.equal(instruction, what);
+		assert.match(title, /…$/);
+		assert.ok(what.startsWith(title.slice(0, -1)), title);
+		assert.ok([...title].length <= 90, title);
 	});
 }
 
@@ -77,7 +75,6 @@ for (const url of [
 			stepCopy({
 				what: `Read [the plan](${url}) before replying`,
 				item_title: "Review the plan",
-				context_label: "Example Deal",
 			}),
 			{
 				title: "Review the plan",
@@ -97,7 +94,6 @@ for (const what of [
 			stepCopy({
 				what,
 				item_title: "Review the plan",
-				context_label: "Example Deal",
 			}),
 			{ title: "Review the plan", instruction: what },
 		);

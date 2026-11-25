@@ -1,6 +1,6 @@
 import { sql, type Transaction } from "kysely";
 import { isOpenBoardDeal, selectNextDeals } from "./deals/next-board.ts";
-import { savedHomeTitle, stripHomeTitlePrefixes } from "./home-title.ts";
+import { shortHomeTitle, stripHomeTitlePrefixes } from "./home-title.ts";
 import type { DB } from "./next-database.d.ts";
 
 const stepMetadata =
@@ -46,10 +46,10 @@ export function homeStepText(text: string) {
 type StepWording = {
 	what: string;
 	item_title: string | null;
-	context_label: string | null;
 };
 
 export type HomeStep = StepWording & {
+	context_label: string | null;
 	status: string | null;
 	due_on: string | null;
 	hold_until: string | null;
@@ -107,13 +107,10 @@ function stepInstruction(what: string) {
 	);
 }
 
-export function stepCopy({ what, item_title, context_label }: StepWording) {
+export function stepCopy({ what, item_title }: StepWording) {
 	const instruction = stepInstruction(what);
 	const title =
-		item_title?.trim() ||
-		savedHomeTitle(instruction) ||
-		homeDisplayText(context_label) ||
-		"Next step";
+		item_title?.trim() || shortHomeTitle(instruction) || "Next step";
 	return {
 		title,
 		instruction: instruction && instruction !== title ? instruction : null,
