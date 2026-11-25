@@ -18,9 +18,11 @@ The owner's rulings win. Where a reference app does something the owner ruled ag
 
 **Seen.** Gr8r Studio's top bar is 46px and its view toolbar is one 44px row. Linear's refresh post draws a location bar, a view bar, then content. T3 Code's screenshot shows one bar of about 50px with the thread's title and three icon buttons.
 
-**Rule.** Above the main view sit one 48px top bar with the page title and its actions, and at most one 48px toolbar row. A second title, a title card, a count line or a legend row never sits there.
+**Rule.** On a list or board page, above the main view sit one 48px top bar with the page title and its actions, and at most one 48px toolbar row. A second title, a title card, a count line or a legend row never sits there.
 
 **Test.** The first row of the main view starts 112px or less from the top of the window, and the page title shows once.
+
+A detail page may add back/title, the facts line its screen file requires and a tab strip, and the tab strip ends within about 200px of the top at 1280x640. Calendar keeps the header count `docs/screens/calendar.md` requires.
 
 **Ruling.** Gr8r Studio's Home adds a greeting and a subtitle under its top bar. The owner ruled for compact headers (2026-11-24) and against a greeting on Home (2026-11-20).
 
