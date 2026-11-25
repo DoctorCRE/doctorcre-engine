@@ -67,10 +67,10 @@ A prospect is someone who may become a deal but is not one yet. The owner's word
 
 ### Prospects lane
 
-- [ ] Local Deals' Board shows a Prospects lane before Prospective Client, with its count. On a phone it comes after the deal phases. List shows the prospects after the deals, one row each.
+- [ ] Local Deals' Board shows a Prospects lane before Prospective Client, with its count. Its header sits on the phase headers' line, with the count right after the name. On a phone it comes after the deal phases. List shows the prospects after the deals, one row each.
 - [ ] The headline counts them: "38 open deals · 27 parked · 9 prospects".
 - [ ] All, Joe and Dell show the prospects that partner claimed. An unclaimed prospect shows under all three.
-- [ ] Each card shows the name, who claimed it or "Unclaimed", the newest note's first line with who wrote it and when in words, and the soonest open follow-up with whose it is, such as "Joe · Due Thu, Nov 19", or "No follow-up set". An automatic check-in reads as on [Home](home-inbox.md#every-item), such as "Check in with Example Clinic (client)". A late follow-up says how late.
+- [ ] Each card shows the name, who claimed it or "Unclaimed", the newest note's first line with who wrote it and when in words, and the soonest open follow-up whoever owns it, as its wording over whose it is and when, such as "Call about the lease" over "Joe · Due Thu, Nov 19", or "No follow-up set". A follow-up with no shorter title shows its stored wording, never a blank line. An automatic check-in reads as on [Home](home-inbox.md#every-item), such as "Check in with Example Clinic (client)". A late follow-up says how late.
 - [ ] Needs attention shows when a partner set it. It is the owner's "highlight".
 - [ ] Order: Needs attention first, then by that follow-up date, soonest first, then those with none, newest first.
 - [ ] Clicking the name opens the prospect.
