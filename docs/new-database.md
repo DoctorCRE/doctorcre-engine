@@ -23,7 +23,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`relationship_level`**: the four levels of how well the team knows a vendor, from 0, Prospective, to 3, Core.
 - **`introduction`**: one introduction between a vendor and the team, made either way, and the deal it led to.
 - **`property`**: a building, by address, with its county and its point on the map once geocoded, and its name, class, type, year built and stories when known.
-- **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`).
+- **`market`**: a named market, such as a metro area, by the counties it covers (`market_county`) and, for a market named for an area, the towns inside it (`market_city`).
 - **`territory`**: the area someone serves, as a set of `territory_piece` rows.
 - **`deal`**: one piece of brokerage work, with its kind, its reason, its deal owner, its market, its closed value, why it is parked, if it is, with who parked it and when, and whether it needs attention.
 - **`deal_client_website`**: a deal's client website registration, with the client it was set up for, its unique website name, its password verifier and when it was disabled, if applicable. A deal can have one active registration.
@@ -149,7 +149,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 39. An outside id is for exactly one person, company, deal or email, is stored once per source, and the engine never rewrites or removes one. A merge moves it to the survivor. Its source is a lower-case name, and its value has no space around it.
 40. A territory piece is exactly one of a whole state, a named market, or a distance of more than zero miles from a base point, and a territory holds each piece once.
 41. A state is a two-digit and a county a five-digit Census FIPS code. A latitude is between -90 and 90 and a longitude between -180 and 180, and a property has both or neither.
-42. A market's name is never blank and is used once, and a market holds each county once. A territory's name is never blank.
+42. A market's name is never blank and is used once, and a market holds each county once. A market lists each town once, ignoring case, by a nonblank name without surrounding spaces. A territory's name is never blank.
 43. Someone serves a territory that exists, ends no earlier than they started, and is linked once per start date.
 44. A merge joins two different people or two different companies, neither merged away. It never merges a user away, and never two records that each hold an NPI.
 45. A merge moves everything that points at the duplicate, in every table, to the survivor, and removes the duplicate. Where both hold the same link, the survivor's row stays, and so do its primary email and primary phone. Do not contact keeps the longest restriction and its reason. A second merge onto the same records waits for the first.
@@ -1075,7 +1075,7 @@ When a role moves to a different party and arrives as a lead, the board, drawer 
 
 The score and old prospect engagement fields are empty. Timing events and research findings are empty lists. The legacy Undo control is absent.
 
-Each board lead carries `market`, the `id` and `name` of the one market whose name matches its city, ignoring case and surrounding spaces, or null when its city matches no market or more than one. This is the city half of the market rule; matching by county waits until a lead has a county (#1370). `market_counts` lists every market by name with its `id` and the `count` of board leads placed in it, zero included.
+Each board lead carries `market`, the `id` and `name` of the one market whose name or one of whose `market_city` towns matches its city, ignoring case and surrounding spaces, or null when its city matches no market or more than one. A market named for an area, such as Eastern Shore, places leads only by its towns. This is the city half of the market rule; matching by county waits until a lead has a county (#1370). `market_counts` lists every market by name with its `id` and the `count` of board leads placed in it, zero included.
 
 The drawer's `plans` text omits old research tags. The read keeps the original note in `notes`, with old record codes named as on the deal page.
 
@@ -1088,6 +1088,8 @@ For an existing schema, apply `schema/add-lead-email-ack-grant.sql` after produc
 The board suggests clients with the same name after trimming and ignoring case. Link stores the chosen client's exact party ID in `party_role.lead_client_id`. The database lets a direct partner set the link once to an existing same-name client on a different party. If the selected client exists and its name no longer matches or was never a match, the save returns `409 client_not_suggested`. The card leaves Leads. Both parties keep their roles and histories, and the link has no effect on Deals Prospects.
 
 On an existing `next` schema, apply `schema/add-lead-client-link.sql` as the schema owner before deploying the engine that serves these saves. Fresh schemas include the column and its constraints.
+
+On an existing `next` schema, apply `schema/add-market-cities.sql` as the schema owner before deploying the engine that reads market towns, then `schema/seed-market-cities.sql`, each after the owner approves it for production. Both can run twice. The seed lists the towns of Orange Beach / Gulf Shores, Eastern Shore and 30A / Santa Rosa Beach, as the owner ruled on #1374, by market name, and skips a market that does not exist yet. Fresh schemas include the empty table.
 
 ## Copying today's leads and clients
 
