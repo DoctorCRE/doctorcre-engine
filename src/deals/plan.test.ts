@@ -486,6 +486,45 @@ test("move-in has no day until one is recorded, and the 90-day check-in follows 
 	});
 });
 
+test("a finished 90-day check-in shows finished on its day", () => {
+	const plan = planOf(
+		facts({
+			checklist: checklist({
+				move_in: "2030-06-01",
+				check_in_90_day: "2030-08-15",
+			}),
+		}),
+	);
+	const check = row(plan, "check_in_90_day");
+	assert.equal(check?.state, "finished");
+	assert.equal(
+		check?.state === "finished" ? check.from_on : null,
+		"2030-08-15",
+	);
+	assert.equal(check?.state === "finished" ? check.to_on : null, "2030-08-15");
+});
+
+test("an unfinished move-in with a finished_on value is not finished", () => {
+	const list = checklist();
+	const plan = planOf(
+		facts({
+			checklist: {
+				phases: list.phases.map((phase) => ({
+					...phase,
+					items: phase.items.map((item) =>
+						item.id === "move_in"
+							? { ...item, finished_on: "2030-06-01" }
+							: item,
+					),
+				})),
+			},
+		}),
+	);
+	const move = row(plan, "move_in");
+	assert.equal(move?.state, "undated");
+	assert.equal(move && "to_on" in move, false);
+});
+
 test("a deal sitting more than twice the typical length on its to-do is stale and expects nothing", () => {
 	const plan = planOf(facts({ today: "2030-07-20" }));
 	assert.deepEqual(plan.stale, { phase: "negotiation", days: 45 });
