@@ -342,6 +342,8 @@ export const proposalJobs = new Hono<NextSaveEnv>()
 
 const filingKinds = ["file_to_deal", "possible_new_deal"];
 const groupedDecisionKinds = [...filingKinds, "next_step"];
+const opensStep = (kind: string) =>
+	kind === "next_step" || kind === "workflow_step";
 
 // A decision settles the pending siblings Home shows it in place of. Decisions and mail jobs take the same email locks first.
 async function lockDecision(tx: Transaction<DB>, id: string) {
@@ -422,7 +424,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 				const accepts = r.decision === "accept";
 				const filing = filingKinds.includes(p.kind);
 				if (
-					(r.edits && p.kind !== "next_step") ||
+					(r.edits && !opensStep(p.kind)) ||
 					(r.deal_id && !filing) ||
 					(r.vendor_id &&
 						(!accepts ||
@@ -491,7 +493,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 						tx,
 					);
 				const { rows } =
-					accepts && p.kind === "next_step"
+					accepts && opensStep(p.kind)
 						? await saveOpenStep(
 								tx,
 								{ ...p, owner_party_id: owner },
@@ -563,7 +565,7 @@ export const proposalDecisions = new Hono<NextSaveEnv>().post(
 				const created =
 					r.decision === "dismiss" || p.kind === "next_step_done"
 						? {}
-						: p.kind === "next_step"
+						: opensStep(p.kind)
 							? { next_step_id: stepId }
 							: p.kind === "phase_move"
 								? { deal_id: p.deal_id }
