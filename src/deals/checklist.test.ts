@@ -41,11 +41,27 @@ const itemIds = (checklist: ReturnType<typeof checklistOf>) =>
 	);
 
 test("the deal type picks the items each phase lists", () => {
-	assert.deepEqual(itemIds(checklistOf(facts())), {
+	const checklist = checklistOf(facts());
+	assert.deepEqual(
+		checklist.phases.map((phase) => [phase.id, phase.label]),
+		[
+			["pending", "Prospective Client"],
+			["research", "Research"],
+			["site_selection", "Site Selection"],
+			["negotiation", "Negotiating"],
+			["legal", "Legal"],
+			["due_diligence", "Due Diligence"],
+			["closing", "Closing"],
+			["closed", "Closed"],
+		],
+	);
+	assert.deepEqual(itemIds(checklist), {
+		pending: [],
 		research: ["representation", "requirements"],
 		site_selection: ["market_survey", "tour_notes"],
 		negotiation: ["loi_submission", "loi_grid", "business_terms"],
 		legal: ["contract_draft", "attorney_comments", "legal_review", "ti_scope"],
+		due_diligence: [],
 		closing: [
 			"executed_lease",
 			"commencement_letter",
@@ -54,7 +70,7 @@ test("the deal type picks the items each phase lists", () => {
 			"move_in",
 			"check_in_90_day",
 		],
-		invoice: ["invoice_recorded", "commission_received"],
+		closed: ["invoice_recorded", "commission_received"],
 	});
 	const land = itemIds(
 		checklistOf(facts({ deal: { ...facts().deal, type: "land" } })),
@@ -190,17 +206,20 @@ test("recorded facts complete items and requests set owner, date and status", ()
 		request: "per-deal standard checklist",
 		record_verb: "record-deal-invoice",
 	});
-	assert.deepEqual(checklist.phases[3]?.items.at(-1), {
-		id: "critical-date:example-date",
-		label: "Due diligence end",
-		status: "overdue",
-		due_on: "2030-06-01",
-		evidence_ref: "example-lease",
-		finished_on: null,
-		owner: "example-partner",
-		document_type: null,
-		source: { record_verb: "add-critical-date" },
-	});
+	assert.deepEqual(
+		checklist.phases.find((phase) => phase.id === "legal")?.items.at(-1),
+		{
+			id: "critical-date:example-date",
+			label: "Due diligence end",
+			status: "overdue",
+			due_on: "2030-06-01",
+			evidence_ref: "example-lease",
+			finished_on: null,
+			owner: "example-partner",
+			document_type: null,
+			source: { record_verb: "add-critical-date" },
+		},
+	);
 	assert.deepEqual(
 		checklist.due_items.map((i) => [i.id, i.status]),
 		[

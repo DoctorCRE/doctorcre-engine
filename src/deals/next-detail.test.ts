@@ -774,7 +774,7 @@ test("the renewal checklist tracks confirmed deadlines and a saved receipt", asy
 					items: [{ id: "executed_lease", status: "not_recorded" }],
 				},
 				{
-					id: "invoice",
+					id: "closed",
 					items: [{ id: "commission_received", status: "complete" }],
 				},
 			],
@@ -838,7 +838,7 @@ test("the checklist records an invoice and completes receipt only when all payme
 			checklist: {
 				phases: [
 					{
-						id: "invoice",
+						id: "closed",
 						items: [
 							{
 								id: "invoice_recorded",

@@ -109,7 +109,7 @@ test("Mark paid completes the deal checklist despite a copied expected amount", 
 		checklist: {
 			phases: [
 				{
-					id: "invoice",
+					id: "closed",
 					items: [
 						{
 							id: "commission_received",
