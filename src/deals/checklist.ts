@@ -114,6 +114,13 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 		],
 	},
 ];
+// A deal type's to-dos in workflow order, with the checklist phase each sits under.
+export const todosOf = (type: DealType) =>
+	PHASES.flatMap(({ id: phase, rows }) =>
+		rows
+			.filter(([, , types]) => !types || types.includes(type))
+			.map(([todo, label]) => ({ todo, phase, label })),
+	);
 // Items the partners record as facts, not documents a client sends.
 const NOT_DOCUMENTS = new Set([
 	"executed_comp",
