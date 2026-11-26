@@ -68,9 +68,10 @@ type Sender = { sender: string; sender_name: string | null };
 // A partner's own address always reads as "Joe" or "Dell", whatever display name the message carried.
 const partnerName = sql<
 	string | null
->`(select initcap(app_user.slug) from party_email
+>`(select initcap(min(app_user.slug)) from party_email
 	join app_user on app_user.id = party_email.party_id and app_user.is_account_partner
-	where party_email.address = e.sender)`;
+	where party_email.address = e.sender
+	having count(*) = 1)`;
 
 type ThreadRow = Sender & {
 	partner_name: string | null;

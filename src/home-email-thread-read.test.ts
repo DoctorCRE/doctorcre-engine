@@ -18,6 +18,8 @@ const duplicateDraft = id(8);
 const headerProposal = id(9);
 const partnerProposal = id(61);
 const dell = id(70);
+const sharedProposal = id(63);
+const sharedPartners = [id(71), id(72)];
 const start = "2026-01-05T15:00:00.000001Z";
 const nextMicrosecond = "2026-01-05T15:00:00.000002Z";
 const footer = "Please copy the surveyor.\nThanks again.";
@@ -154,6 +156,22 @@ const messages: {
 		conversation: "Partner thread",
 		sender: ["dell@example.test", "Wayne Example"],
 	},
+	{
+		id: 64,
+		at: start,
+		body: captured,
+		messageId: "<shared@example.test>",
+		conversation: "Shared thread",
+		sender: ["shared@example.test", "Casey Example"],
+	},
+	{
+		id: 65,
+		at: nextMicrosecond,
+		body: authored,
+		messageId: "<outsider@example.test>",
+		conversation: "Shared thread",
+		sender: ["outsider@example.test", "Riley Outsider"],
+	},
 ];
 
 before(async () => {
@@ -161,8 +179,12 @@ before(async () => {
 	await db.query(`begin;
 		select set_config('engine.job', 'old_system', true);
 		insert into party (id, kind, name) values
-			('${viewer}', 'person', 'Example Reviewer'), ('${other}', 'person', 'Other Reviewer'), ('${dell}', 'person', 'Wayne Example');
-		insert into app_user (id, slug) values ('${viewer}', 'thread-reviewer'), ('${other}', 'other-reviewer'), ('${dell}', 'dell');
+			('${viewer}', 'person', 'Example Reviewer'), ('${other}', 'person', 'Other Reviewer'), ('${dell}', 'person', 'Wayne Example'),
+			('${sharedPartners[0]}', 'person', 'Shared One'), ('${sharedPartners[1]}', 'person', 'Shared Two');
+		insert into app_user (id, slug) values ('${viewer}', 'thread-reviewer'), ('${other}', 'other-reviewer'), ('${dell}', 'dell'),
+			('${sharedPartners[0]}', 'shared-one'), ('${sharedPartners[1]}', 'shared-two');
+		insert into party_email (party_id, address, label) values
+			('${sharedPartners[0]}', 'shared@example.test', 'work'), ('${sharedPartners[1]}', 'shared@example.test', 'work');
 		insert into party_email (party_id, address, label) values ('${dell}', 'dell@example.test', 'work');
 		insert into deal (id, name, owner_user_id) values ('${deal}', 'Example Dental', '${viewer}');`);
 	// Current insert rules prevent creating these historical duplicates.
@@ -202,6 +224,7 @@ before(async () => {
 			('${filing}', 'file_to_deal', '${id(10)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
 			('${duplicateProposal}', 'file_to_deal', '${id(40)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
 			('${headerProposal}', 'file_to_deal', '${id(50)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
+			('${sharedProposal}', 'file_to_deal', '${id(64)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null),
 			('${partnerProposal}', 'file_to_deal', '${id(60)}', 'email', 'I sent the plan.', 'old_system', '${deal}', null, null);
 		insert into reply_draft (id, email_activity_id, owner_user_id, proposed_by_job, subject, body, evidence)
 		values ('${draft}', '${id(10)}', '${viewer}', 'old_system', 'Re: Suite plan', 'Thanks.', 'I sent the plan.'),
@@ -323,4 +346,18 @@ test("names a message from a partner's mailbox address by the partner, not its d
 		({ sender_name }) => sender_name,
 	);
 	assert.deepEqual(names, [null, "Dell"]);
+});
+
+test("reads a thread when one address belongs to two partners, naming no partner", async () => {
+	const names = (await thread(`proposals/${sharedProposal}`)).map(
+		({ sender_name }) => sender_name,
+	);
+	assert.deepEqual(names, ["Casey Example", "Riley Outsider"]);
+});
+
+test("keeps the display name of a sender who is not a partner", async () => {
+	const names = (await thread(`proposals/${sharedProposal}`)).map(
+		({ sender_name }) => sender_name,
+	);
+	assert.equal(names[1], "Riley Outsider");
 });
