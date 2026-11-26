@@ -44,7 +44,7 @@ What the assistant could not settle alone. The goal is zero.
 - [ ] The tile shows the current Central day's meetings and planned tours in time order, with a line at the current time. Tours have no hour and sit first, marked **Tour**. Ended meetings stay through the end of the day, dimmed and marked **Ended**, even after a partner answers their review.
 - [ ] The tile title and its **Calendar** link open Calendar on today.
 - [ ] Each occurrence is identified by its Outlook event key, so separate invites with the same title and time each show. A meeting row opens its attendees, location and deal link when available. If Outlook supplies an outcome review for a meeting in the tile, it is reviewed in the Inbox.
-- [ ] A stale calendar shows the last successful sync time.
+- [ ] Today's meetings shows no sync status or other system note. A failed meetings read shows "Meetings could not be loaded. Refresh to try again."
 
   Full details for ended meetings depend on the Outlook publisher sending their calendar rows. While it sends only a review for an ended meeting, the tile can show the title and times from that review. [Outlook publisher change](https://github.com/DoctorCRE/carr-system/issues/3265)
 
