@@ -1,5 +1,10 @@
 import { type Context, Hono } from "hono";
-import { type Selectable, sql, type Transaction } from "kysely";
+import {
+	type RawBuilder,
+	type Selectable,
+	sql,
+	type Transaction,
+} from "kysely";
 import { Refusal, refuse, unregisteredFields } from "./answer.ts";
 import type { JsonObject } from "./database.d.ts";
 import {
@@ -102,7 +107,13 @@ async function parseAsk(c: Context<DocEnv>): Promise<Ask> {
 	};
 }
 
-type Conversation = { id: string; created_at: string; title: string };
+type Conversation = {
+	id: string;
+	created_at: string;
+	title: string;
+	last_message_at: string;
+	state: "working" | "waiting_ok" | null;
+};
 type Turn = Pick<
 	Selectable<DB["doc_turn"]>,
 	| "id"
@@ -124,10 +135,25 @@ type Turn = Pick<
 	} | null;
 };
 
+const latestTurn = (
+	conversation: string | RawBuilder<unknown>,
+) => sql`select created_at, state from doc_turn
+	where conversation_id = ${conversation} and owner_user_id = ${ACTING_USER}
+	order by position desc limit 1`;
+
+// Only a chat's latest turn can be queued or working.
 const conversations = sql`
-	select c.id, to_jsonb(c.created_at) #>> '{}' as created_at, left(t.question, 80) as title
+	select c.id, to_jsonb(c.created_at) #>> '{}' as created_at, left(t.question, 80) as title,
+		to_jsonb(latest.created_at) #>> '{}' as last_message_at,
+		case when latest.state in ('queued', 'working') then 'working'
+			when exists (select from doc_turn p
+				where p.conversation_id = c.id and p.owner_user_id = c.owner_user_id
+					and p.confirmation_key is null and jsonb_typeof(p.answer -> 'proposal') = 'object')
+			then 'waiting_ok'
+		end as state
 	from doc_conversation c join doc_turn t
 	  on t.conversation_id = c.id and t.owner_user_id = c.owner_user_id and t.position = 1
+	cross join lateral (${latestTurn(sql`c.id`)}) latest
 	where c.owner_user_id = ${ACTING_USER}`;
 
 const queued = sql`(t.state = 'queued' or t.claim_until <= statement_timestamp())`;
@@ -172,11 +198,10 @@ async function listChats(tx: DocTransaction, before?: string) {
 	)
 		reject(404, "not_found");
 	const cursor = before
-		? sql`and (c.created_at, c.id) < (select created_at, id
-		from doc_conversation where id = ${before} and owner_user_id = ${ACTING_USER})`
+		? sql`and (latest.created_at, c.id) < ((select created_at from (${latestTurn(before)}) b), ${before}::uuid)`
 		: sql``;
 	const { rows } = await sql<Conversation>`${conversations} ${cursor}
-		order by c.created_at desc, c.id desc limit 31`.execute(tx);
+		order by latest.created_at desc, c.id desc limit 31`.execute(tx);
 	return {
 		conversations: rows.slice(0, 30),
 		next_before: rows[30] ? rows[29]?.id : null,

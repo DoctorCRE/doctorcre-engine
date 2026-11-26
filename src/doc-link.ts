@@ -133,7 +133,7 @@ export async function recordDocPoll(
 		})
 		.where("owner_user_id", "=", owner)
 		.where(
-			sql<boolean>`(${presenceDue}) or readiness is distinct from ${nextReadiness}`,
+			sql<boolean>`((${presenceDue}) or readiness is distinct from ${nextReadiness})`,
 		)
 		.execute();
 }

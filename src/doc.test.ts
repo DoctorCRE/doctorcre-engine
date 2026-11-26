@@ -7,14 +7,20 @@ import { sql } from "kysely";
 import pg from "pg";
 import { docRoutes, recentDocTurns } from "./doc.ts";
 import { dispatchDocBackup } from "./doc-backup.ts";
-import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
+import {
+	docLinkOwnerTransaction,
+	issueDocLink,
+	recordDocPoll,
+} from "./doc-link.ts";
 import { claimDocLink, completeDocLink } from "./doc-link-routes.ts";
 import { docMcp } from "./doc-mcp.ts";
 import { finishDocJudgment, finishDocTurn } from "./doc-queue.ts";
 import { findDocRecords } from "./doc-reads.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { nextTransaction } from "./next-connection.ts";
+import type { DB as NextDB } from "./next-database.d.ts";
 import { jobStamp, type NextSaveEnv, userStamp } from "./next-door.ts";
+import { connect } from "./reader.ts";
 import { replyDrafts, replyJobs } from "./reply-drafts.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
@@ -55,7 +61,12 @@ afterEach(() =>
 );
 after(cleanup);
 
-type Chat = { id: string; title: string };
+type Chat = {
+	id: string;
+	title: string;
+	last_message_at: string;
+	state: "working" | "waiting_ok" | null;
+};
 type Turn = {
 	id: string;
 	idempotency_key: string;
@@ -377,6 +388,40 @@ test("backup gives a ready Mac first chance and skips its active judgment claim"
 	);
 	await tick();
 	assert.equal(fetch.mock.callCount(), 1);
+});
+
+test("a Mac's judgment answer lands on its own claim and leaves the partner's other claimed job working", async () => {
+	const answered = await queueMailJudgment();
+	const other = await queueMailJudgment();
+	const credential = await issue(owner);
+	await db.query(
+		"update doc_judgment_job set created_at = now() - interval '2 minutes' where id = $1",
+		[answered.id],
+	);
+	const claimed = await poll(credential, "ready", "judgment");
+	assert.equal(claimed.status, 200);
+	const { claim_id } = await claimed.json<{ claim_id: string }>();
+	await db.query(
+		`update doc_judgment_job j set state = 'working', claim_id = gen_random_uuid(),
+			claim_until = now() + interval '1 minute',
+			claim_source_hash = sha256(convert_to(jsonb_build_array(e.subject, e.body)::text, 'UTF8'))
+		from email e where e.activity_id = j.activity_id and j.id = $1`,
+		[other.id],
+	);
+	const done = await complete(credential, {
+		claim_id,
+		kind: "judgment",
+		outcome: { kind: "answered", result: summaryAnswer },
+	});
+	assert.equal(done.status, 204);
+	const { rows } = await db.query(
+		"select id, state from doc_judgment_job where id in ($1, $2) order by id = $1 desc",
+		[answered.id, other.id],
+	);
+	assert.deepEqual(rows, [
+		{ id: answered.id, state: "answered" },
+		{ id: other.id, state: "working" },
+	]);
 });
 
 test("backup skips a filing job that the Mac is committing as failed", async (t) => {
@@ -924,6 +969,29 @@ test("presence-only polls keep the last readiness report visible", async () => {
 	}
 });
 
+test("a Mac poll records only its own partner's link even without the row policy", async () => {
+	await issue(owner);
+	await issue(other);
+	await db.query(
+		"update doc_link set readiness = 'signed_out', last_seen_at = '-infinity' where owner_user_id = $1",
+		[other],
+	);
+	const admin = connect<NextDB>(connectionString);
+	try {
+		await admin.transaction().execute(async (tx) => {
+			await sql`set local search_path = next`.execute(tx);
+			await recordDocPoll(tx, owner, "ready");
+		});
+	} finally {
+		await admin.destroy();
+	}
+	const { rows } = await db.query(
+		"select readiness, last_seen_at = '-infinity' as unseen from doc_link where owner_user_id = $1",
+		[other],
+	);
+	assert.deepEqual(rows, [{ readiness: "signed_out", unseen: true }]);
+});
+
 test("reports why a question waits and claims it when ready", async () => {
 	const send = client("dell");
 	const credential = await issue(other);
@@ -1121,6 +1189,56 @@ test("bounds questions and pages stable ties by conversation ID", async () => {
 		200,
 	);
 	assert.equal(conversation.title, "📋".repeat(80));
+});
+
+test("lists chats by their newest message and marks busy or waiting chats", async () => {
+	const [working, waiting, idle] = [randomUUID(), randomUUID(), randomUUID()];
+	const proposal = {
+		kind: "answer",
+		text: "Proposed save",
+		sources: [],
+		proposal: { kind: "note", text: "Sample" },
+	};
+	await db.query(
+		`insert into doc_conversation (id, owner_user_id, created_at) values
+			($1, $4, '2001-01-01'), ($2, $4, '2002-01-01'), ($3, $4, '2003-01-01')`,
+		[working, waiting, idle, owner],
+	);
+	await db.query(
+		`insert into doc_turn (conversation_id, owner_user_id, position, created_at, idempotency_key,
+			request_hash, question, state, answer)
+		select chat, $4, position, at, gen_random_uuid(), 'example', 'Sample', state, answer
+		from (values
+			($1::uuid, 1, '2001-01-01'::timestamptz, 'answered', $5::jsonb),
+			($1, 2, '2005-01-01', 'queued', null),
+			($2, 1, '2002-01-01', 'answered', $5),
+			($2, 2, '2004-01-01', 'answered', $6),
+			($3, 1, '2003-01-01', 'failed', null)
+		) turn (chat, position, at, state, answer)`,
+		[working, waiting, idle, owner, refusal, proposal],
+	);
+	const send = client();
+	const marks = async (
+		path: "/conversations" | `/conversations?before=${string}`,
+	) =>
+		(await send(path, 200)).conversations.map(
+			({ id, last_message_at, state }) => ({
+				id,
+				last: new Date(last_message_at).toISOString(),
+				state,
+			}),
+		);
+	assert.deepEqual(await marks("/conversations"), [
+		{ id: working, last: "2005-01-01T00:00:00.000Z", state: "working" },
+		{ id: waiting, last: "2004-01-01T00:00:00.000Z", state: "waiting_ok" },
+		{ id: idle, last: "2003-01-01T00:00:00.000Z", state: null },
+	]);
+	assert.deepEqual(
+		(await marks(`/conversations?before=${waiting}`)).map(({ id }) => id),
+		[idle],
+	);
+	const { conversation } = await send(`/conversations/${working}`, 200);
+	assert.equal(conversation.state, "working");
 });
 
 test("the database enforces private ownership and valid turn rows", async () => {
@@ -1593,6 +1711,9 @@ test("Doc confirms exactly one edited note as the recorded partner", async () =>
 		).rows;
 	assert.deepEqual(await notes(), []);
 	const send = client();
+	const mark = async () =>
+		(await send("/conversations", 200)).conversations[0]?.state;
+	assert.equal(await mark(), "waiting_ok");
 	const idempotency_key = randomUUID();
 	const edits = { text: "Confirmed note" };
 	assert.equal(
@@ -1600,6 +1721,7 @@ test("Doc confirms exactly one edited note as the recorded partner", async () =>
 		"invalid_field_value",
 	);
 	const { result } = await send(path, 200, { idempotency_key, edits });
+	assert.equal(await mark(), null);
 	const stored = await notes();
 	assert.deepEqual(stored, [
 		{

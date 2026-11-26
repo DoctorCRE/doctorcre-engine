@@ -7,10 +7,10 @@ Home answers three questions on one screen, left to right: what do I have to do,
 - [ ] On a computer Home is three columns under the top bar. Left: **Reminders**. Middle: **Inbox**, with **In motion and waiting** under it. Right: **Today's meetings**, **Deals**, **Coming up** and **Leads**, top to bottom.
 - [ ] The page never scrolls on a computer. A tile with more rows than fit scrolls inside itself. At 1440x900 and 1280x640 every tile's heading is in view.
 - [ ] At 1280x640 the Deals tile folds its attention list to one line ("5 need attention") and Coming up folds to one line ("4 dates in the next 14 days"). Each folded line opens what it counts. At 1440x900 both show their rows.
-- [ ] On a phone the tiles are one column and the page scrolls, in this order: Today's meetings, Reminders, Inbox, Deals, Coming up, Leads, In motion and waiting. Reminders previews its first rows with **See all** and the count. Text is 16px and touch targets are 44px.
+- [ ] On a phone the tiles are one column and the page scrolls, in this order: Today's meetings, Reminders, Inbox, Deals, Coming up, Leads, In motion and waiting. Reminders previews its first rows with **See all** and the count. With touch, text is 16px and touch targets are 44px.
 - [ ] Home has no permanent right panel, hero, greeting, date banner, explainer text, Mail priorities, Refresh inbox, Search inbox, **Done today** or **Earlier completions**. Finished work stays openable from its record's history with any Undo still available there.
 - [ ] Each tile heading shows its count. A tile with nothing in it is not drawn, and the other tiles take its space.
-- [ ] Rows, not cards. Tiles are a slightly lighter surface with no outline. Body text is 14px and captions 12px on a computer. Color marks only late (red text), flagged (amber dot) and new leads (blue dot). See [design principles](../design-principles.md).
+- [ ] Rows, not cards. Tiles are a slightly lighter surface with no outline. Body text is 14px and captions 12px with a mouse or trackpad. Color marks only late (red text), flagged (amber dot) and new leads (blue dot). See [design principles](../design-principles.md).
 
 ## Reminders
 
@@ -44,7 +44,7 @@ What the assistant could not settle alone. The goal is zero.
 - [ ] The tile shows the current Central day's meetings and planned tours in time order, with a line at the current time. Tours have no hour and sit first, marked **Tour**. Ended meetings stay through the end of the day, dimmed and marked **Ended**, even after a partner answers their review.
 - [ ] The tile title and its **Calendar** link open Calendar on today.
 - [ ] Each occurrence is identified by its Outlook event key, so separate invites with the same title and time each show. A meeting row opens its attendees, location and deal link when available. If Outlook supplies an outcome review for a meeting in the tile, it is reviewed in the Inbox.
-- [ ] A stale calendar shows the last successful sync time.
+- [ ] Today's meetings shows no sync status or other system note. A failed meetings read shows "Meetings could not be loaded. Refresh to try again."
 
   Full details for ended meetings depend on the Outlook publisher sending their calendar rows. While it sends only a review for an ended meeting, the tile can show the title and times from that review. [Outlook publisher change](https://github.com/DoctorCRE/carr-system/issues/3265)
 

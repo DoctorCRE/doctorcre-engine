@@ -184,6 +184,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Invoice capture, application and payment                 | § "Invoice email capture and list"; § "Invoice application"; § "Mark paid"                                                          |
 | Deals reads, their switch and cutover needs              | § "Deals reads for the app"                                                                                                         |
 | Deal page people and company search                      | § "People and company search for the deal page"                                                                                     |
+| Deal plan, typical lengths and the Deals timeline        | § "Deal plan"                                                                                                                       |
 | Add and edit people and companies                        | § "Add and edit people and companies"                                                                                               |
 | Add and edit clients and vendors                         | § "Add and edit clients and vendors"                                                                                                |
 | Link people and companies                                | § "Link people and companies"                                                                                                       |
@@ -196,6 +197,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Clients screen                                           | [Clients](screens/clients.md)                                                                                                       |
 | Relationships screen                                     | [Relationships](screens/relationships.md)                                                                                           |
 | Leads screen                                             | `docs/screens/leads.md`                                                                                                             |
+| Vendors screen                                           | [Vendors](screens/vendors.md)                                                                                                       |
 | Invoices screen                                          | [Invoices](screens/invoices.md)                                                                                                     |
 | Global Search screen                                     | [Search](screens/search.md)                                                                                                         |
 | Doc screen and engine contract                           | [Doc](screens/doc.md) and [Doc conversations and turns](new-database.md#doc-conversations-and-turns)                                |

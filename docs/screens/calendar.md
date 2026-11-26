@@ -10,7 +10,7 @@
 - [ ] The whole month fits one screen at common laptop and desktop sizes, without the page scrolling (owner, 2026-11-24).
 - [ ] Day view is an hour-by-hour timeline, like Outlook's day view. Meetings and tours sit at their times. All-day items, such as next steps and critical dates, sit in a band at the top (owner, 2026-11-24).
 - [ ] Items without a date show as a chip, such as "3 without a date". It opens their list in the Calendar panel.
-- [ ] Select a day or item to see that day's list in the always-open Calendar panel. On phones the panel sits below the grid.
+- [ ] Select any day, empty or not, or an item to see that day's list in the always-open Calendar panel. A click anywhere on a day opens it, and an empty day says “No events scheduled.” (owner, 2026-11-25). On phones the panel sits below the grid.
 - [ ] Every entry follows one template, in this order (owner, 2026-11-25):
   1. What it is and who owns it: “Next step”, “Critical date”, “Meeting” or “Tour”, then “Joe”, “Dell” or “Joe and Dell”.
   2. What to do: the step title, the date kind, the meeting title, or the tour's stops. A step title follows the Home step title rule in [Home inbox](home-inbox.md#every-item). The full instruction follows when the wording differs.
@@ -27,6 +27,6 @@
 
 The app uses [the Calendar read](../new-database.md#calendar-read) with `deals-from-engine` on. The new-schema read includes `next_steps`. The app places each step on its `due_on` day and does not use `display_on`. Older engine versions and the legacy read can return just critical dates.
 
-Both partners' Outlook meetings and planned tours for the shown period come from [the Calendar meetings read](../new-database.md#calendar-meetings-read), one call per month or week. Each partner's meetings keep Today's freshness notes, and a failed partner section is not an empty period.
+Both partners' Outlook meetings and planned tours for the shown period come from [the Calendar meetings read](../new-database.md#calendar-meetings-read), one call per month or week. A partner's Outlook sync state, such as a missing, late or incomplete snapshot, is for whoever runs the system and never shows on a partner screen (owner, 2026-11-25). A failed meetings or tours read says so with Refresh.
 
 A 404 from the new read allows the app to use the board and individual deal reads while the engine and app are on different versions.
