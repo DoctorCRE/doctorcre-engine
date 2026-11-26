@@ -1550,7 +1550,7 @@ Each new-schema board row and deal detail returns separate `kind` and `reason` s
 
 Each national account's `overdue_deals` counts its active open deals with at least one open ordinary next step due before today in Central time. A retained date from a completed step and a checklist item's due date do not qualify.
 
-The detail sends `checklist` as `deal-checklist.v1`. The template lives in engine code and needs no doctrine hash check. Its labels use sentence case and display as sent. Saved deal items and their due dates still come from `next_step`. The template shows progress from `current_lease` and its source file, the deal's invoice date, and commission payments. A copied renewal without a source lease shows the common checklist until a partner links the source lease. Commission received is complete when the deal has at least one saved payment and each payment has a receipt date. The expected amount is a forecast and has no effect on receipt progress. Confirmed open critical dates count as due or overdue by the Central calendar day. Document requests stay on the old side because Pass D found no rows to move (#718).
+The detail sends `checklist` as `deal-checklist.v1`, with one group for each of the eight phases in [Checklist under the phases](#checklist-under-the-phases). The template lives in engine code and needs no doctrine hash check. Its labels use sentence case and display as sent. Saved deal items and their due dates still come from `next_step`. The template shows progress from `current_lease` and its source file, the deal's invoice date, and commission payments. A copied renewal without a source lease shows the common checklist until a partner links the source lease. Commission received is complete when the deal has at least one saved payment and each payment has a receipt date. The expected amount is a forecast and has no effect on receipt progress. Confirmed open critical dates count as due or overdue by the Central calendar day. Document requests stay on the old side because Pass D found no rows to move (#718).
 
 Both partners' detail reads return every file filed to the deal, including earlier versions. Each `documents` entry gives `id`, `name`, `kind`, `note`, `version`, `bytes`, `content_type` and `prepared_at`. Open the file by its `id` through `GET /api/engine/documents/{id}` (door 20).
 
@@ -1713,7 +1713,7 @@ These saves follow the same session, replay and `{ from, to }` edit rules. They 
 
 ## Deal page redesign
 
-The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. None of it is built yet.
+The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping is on the deal read. The rest is not built yet.
 
 ### Deal attention
 
@@ -1734,7 +1734,7 @@ The deal page shows three dates for each commission payment: triggered, sent and
 
 ### Checklist under the phases
 
-The `deal-checklist.v1` groups become the eight phases. Research, Site selection, Negotiation, Legal and Closing go under the phase of the same meaning, and Invoice's two items go under Closed. A purchase's diligence items stay under Legal. Prospective Client and Due Diligence have no items until the partners' workflow table arrives. Items still tick themselves from what is filed and recorded.
+The `deal-checklist.v1` read groups items under the eight deal phases, in order: `pending` Prospective Client, `research` Research, `site_selection` Site Selection, `negotiation` Negotiating, `legal` Legal, `due_diligence` Due Diligence, `closing` Closing, `closed` Closed. Research, Site Selection, Negotiating, Legal and Closing keep the items of the old groups with the same meaning. Invoice's two items sit under Closed. A purchase's diligence items stay under Legal. Prospective Client and Due Diligence have no items until the partners' workflow table arrives. Items still tick themselves from what is filed and recorded.
 
 ### Deal plan
 
@@ -1779,7 +1779,7 @@ Once a to-do has five finished examples with recorded days, the panel shows the 
 
 `plan` is `{ phases, rows, arrows, expected_signing_on, stale }`. Recorded days are `from_on` and `to_on`; expected days are `expected_from_on` and `expected_to_on`, so no field holds both.
 
-- `phases` lists the eight phases in order, each with its last recorded span's `from_on` and `to_on` up to the current phase, `expected_from_on` for a phase ahead and `expected_to_on` for the current phase and those ahead. The checklist's Invoice group and an invoiced deal count as Closed.
+- `phases` lists the eight phases in order, each with its last recorded span's `from_on` and `to_on` up to the current phase, `expected_from_on` for a phase ahead and `expected_to_on` for the current phase and those ahead. Invoice's checklist items are already on Closed, and an invoiced deal counts as Closed.
 - A `todo` row has `id` (the checklist slug), `phase`, `label`, `state`, `typical_days` and `day`. `state` is `finished`, `current`, `expected`, `not_recorded` or `undated`. The to-do the deal is on is the first unfinished one in the current phase; a phase with none leaves the chain to start today. Its `day` counts from its start, the start being day 1; a start no record holds gives no `day`, never stale, and an expected end its typical length after today. A to-do past its typical length but not stale is expected to end today. Move-in and the 90-day check-in are `undated` until move-in is recorded; then the check-in is expected 90 days later. Prospective Client's stay (`before_research`) leads the chain without a row.
 - A `step` row (`step:<id>`) is an open or done step with `owner`, `state` (`open`, `late` or `done`), `from_on` its set day, `to_on` its due day and `done_on`. It sits under the phase the deal was in on its set day. Cancelled and expired steps are left out.
 - A `critical_date` row (`critical-date:<id>`) is a proposed, open or cleared date with `label`, `on`, `status` and `at_risk`, under the phase of the to-do it follows, else no phase. A cleared date is never at risk.

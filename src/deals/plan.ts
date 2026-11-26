@@ -10,7 +10,7 @@ const PHASES = [
 ] as const;
 type Phase = (typeof PHASES)[number];
 
-// The checklist's Invoice group is the Closed phase, and an invoiced deal is past Closed.
+// Invoiced is Closed. A checklist group still named invoice is too.
 const phaseOf = (slug: string | null): Phase | null =>
 	slug === "invoice" || slug === "invoiced"
 		? "closed"

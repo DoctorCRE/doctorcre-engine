@@ -38,8 +38,10 @@ type Row = [
 	types: DealType[] | null,
 	source: Source | RecordSource,
 ];
+// Prospective Client and Due Diligence stay empty until the workflow table. Diligence items stay on Legal.
 // biome-ignore format: one row per item reads as a table.
 const PHASES: { id: string; label: string; rows: Row[] }[] = [
+	{ id: "pending", label: "Prospective Client", rows: [] },
 	{
 		id: "research",
 		label: "Research",
@@ -53,7 +55,7 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 	},
 	{
 		id: "site_selection",
-		label: "Site selection",
+		label: "Site Selection",
 		rows: [
 			["market_survey", "Market survey and alternatives", ANY, KIT],
 			["tour_notes", "Tours and tour notes", ["lease", ...OWNED], KIT_TOURS],
@@ -62,7 +64,7 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 	},
 	{
 		id: "negotiation",
-		label: "Negotiation / LOI",
+		label: "Negotiating",
 		rows: [
 			["loi_submission", "RFP / LOI versions and submission", ANY, KIT_TOURS],
 			["loi_grid", "Live terms comparison and counters", ANY, KIT],
@@ -71,7 +73,7 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 	},
 	{
 		id: "legal",
-		label: "Legal / lease",
+		label: "Legal",
 		rows: [
 			["contract_draft", "Lease / PSA draft to attorney", ANY, KIT],
 			["attorney_comments", "Attorney review and comments", ANY, KIT_TOURS],
@@ -91,6 +93,7 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 			["entitlements", "Plans, utilities and city approvals", ["land"], LAND],
 		],
 	},
+	{ id: "due_diligence", label: "Due Diligence", rows: [] },
 	{
 		id: "closing",
 		label: "Closing",
@@ -106,8 +109,8 @@ const PHASES: { id: string; label: string; rows: Row[] }[] = [
 		],
 	},
 	{
-		id: "invoice",
-		label: "Invoice",
+		id: "closed",
+		label: "Closed",
 		rows: [
 			["invoice_recorded", "Invoice", ANY, recordedBy("record-deal-invoice")],
 			["commission_received", "Commission received", ANY, recordedBy("record-commission-receipt")],

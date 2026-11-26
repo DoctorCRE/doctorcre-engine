@@ -11,16 +11,14 @@ import { latestChange } from "../seen-change.ts";
 import { todosOf } from "./checklist.ts";
 
 // Lease to-dos come from the checklist; move_in sits on its own date, and a deal's phase before
-// Research has no checklist row, so it leads the list. The checklist's Invoice phase is the Closed phase.
+// Research has no checklist row, so it leads the list. Invoice items already sit on Closed.
 const LEASE_TODOS = [
 	{
 		todo: "before_research",
 		phase: "pending",
 		label: "Before Research begins",
 	},
-	...todosOf("lease")
-		.filter(({ todo }) => todo !== "move_in")
-		.map((t) => ({ ...t, phase: t.phase === "invoice" ? "closed" : t.phase })),
+	...todosOf("lease").filter(({ todo }) => todo !== "move_in"),
 ];
 const TODOS_BY_KIND = new Map([["lease", LEASE_TODOS]]);
 const MIN_MEASURED = 5;
