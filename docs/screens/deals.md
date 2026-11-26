@@ -20,7 +20,7 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 
 - [ ] The top bar names the page once: Local Deals, with National Accounts beside it as a quieter link. On a phone narrower than 480 the link reads "National".
 - [ ] All, Joe, Dell and the view choices share the top bar when they fit. When they do not, as at 1280 with Today open, they move to their own row under it. No control is ever cut off.
-- [ ] All, Joe and Dell choose whose deals show. Board, List, Closed deals and Lost deals choose the view. Parked shows or hides the Parked lane on Board and List.
+- [ ] All, Joe and Dell choose whose deals show. Board, List, Timeline, Closed deals and Lost deals choose the view. Parked shows or hides the Parked lane on Board and List.
 - [ ] Board: seven columns in order, Prospective Client, Research, Site Selection, Negotiating, Legal, Due Diligence, Closing. The phase name and count fit on one line, even when collapsed and on a phone. Each column is a faint, borderless panel as tall as its cards; an open column ends with **+ Add deal**, which opens Add deal set to that phase. Today starts collapsed on Board and List and keeps each partner's own choice, separate from National Accounts and Monday review. With Today closed, all columns fit at 1280 and 1440 wide with every phase name whole and no sideways scrolling. With Today open, the board scrolls sideways inside itself. On a computer the board fills the screen below the heading, the page does not scroll, and a full column scrolls inside itself with its phase name in view. The board and its columns show no scroll bar; a thin, faint thumb shows on a column only while it scrolls (owner, 2026-11-25). On a phone the board scrolls with the page. A closed deal leaves the board for Closed deals or Lost deals (owner, 2026-11-23).
 - [ ] The headline counts every open deal, including those in collapsed columns, and every parked deal, whether the Parked lane is open or not: "38 open deals · 27 parked".
 - [ ] Each open deal shows once, in its phase column. A parked deal shows only in the Parked lane.
@@ -30,6 +30,21 @@ The owner's test, in his words: "deal board+deal pages are fully built out, incl
 - [ ] No card or List row has a star, and stars do not change the order (owner, 2026-11-25: "every deal is important").
 - [ ] Add deal asks for the deal name, the client (picked by name), the deal kind, the deal reason, the phase and the deal owner. Kind and reason may each be left unknown. When the reason is renewal, it also asks which existing lease the deal renews, and saves only with one. The lease picker shows "already renewed by <deal>" when a deal already links to that lease (owner, 2026-11-19).
 - [ ] In each name picker, a match shows its city when known and how many deals it is on. A company that is already a national account offers "Open account" (owner, 2026-11-19).
+
+### Timeline
+
+The owner approved the timeline design on 2026-11-25, with every change it proposed. Timeline draws every open deal in time, using the same plan as each deal's [Plan](#plan) tab.
+
+- [ ] Timeline is a third view after Board and List. Its controls sit in the top bar, so the first deal starts 100px from the top. 14 deal rows fit at 1280x640 and 22 at 1440x900.
+- [ ] One folded row per open deal shows its name, the "Needs attention" dot when there is one, its phase and its deal owner. The row's bar is the deal's phases end to end, each in its phase color: bright for time spent, dim for expected. A hollow diamond marks the expected lease signing with its date and "exp.".
+- [ ] Opening a deal's row shows its current phase's to-dos, steps and critical dates with the same bars and arrows as its Plan. The deal's name opens the deal page.
+- [ ] Deals sort furthest along first, Closing at the top. The other sorts are by deal owner and by expected signing. All, Joe and Dell choose whose deals show.
+- [ ] Week and Month zoom. The left list has Milestones (the next critical dates and expected signings, each with its deal's name) and the saved views My deals, At risk and Next two weeks.
+- [ ] A stale deal shows one solid bar and how long it has sat, such as "148 days in Prospective Client", with nothing expected.
+- [ ] Dragging a step's end there moves its due date, as on Plan.
+- [ ] On a phone the chart stays, with a narrow name column and no dragging.
+
+A Leases ending lane at the bottom waits until the first lease ending is recorded.
 
 ### Card
 
@@ -144,7 +159,7 @@ The owner approved this design on 2026-11-25, with every change it proposed. On 
 ### Header
 
 - [ ] The top bar reads "Deals / " and the deal's name. **Deals** returns to the board where the partner left it.
-- [ ] One row of tabs: Overview, Activity, Tours, Documents and Client portal.
+- [ ] One row of tabs: Overview, Plan, Activity, Tours, Documents and Client portal.
 - [ ] On the right of the tab row, in the muted tone: the client, the phase, the deal owner, then deal kind, deal reason and market, and the market agent on a national-account deal. The client's name opens the client. The deal owner opens the choice of Joe or Dell. A deal with no market says "No market recorded".
 
 ### Overview
@@ -182,6 +197,31 @@ Overview answers four questions on one screen: which dates matter, where the dea
 - [ ] The deal page's call recorder works as it does today (owner, 2026-11-18).
 
 The redesign removed Mark needs attention, deal watch settings (every deal is watched), Client and vendor context, the phase dropdown, Set up client website, the Email follow-ups heading and the Compare terms tab.
+
+### Plan
+
+Plan answers "when, and are we on pace". It draws the deal's checklist and steps in time, one row each under its phase, with what is recorded solid and what is expected dashed. The engine lays it out; see [Deal plan](../new-database.md#deal-plan). On a computer it fills the page below the tabs and the chart scrolls both ways inside itself.
+
+- [ ] Plan is the second tab, after Overview. Overview's path does not change.
+- [ ] The left list has one row per to-do, step and critical date under its phase, each with a mark, its name and a date: a green check for finished, a filled ring for the to-do the deal is on, a dashed ring for expected, the owner's initial for a step, a diamond for a critical date, and a red **!** for a late step or anything at risk.
+- [ ] Each phase row folds, shows its count such as "1 of 3" and a thin bar over the phase's days. Finished phases start folded. The fold is remembered on the device.
+- [ ] Time runs along the top with Day, Week and Month. Weekends are shaded. An orange pill and line mark today, and **Today** brings it back into view.
+- [ ] Recorded bars are solid in their phase's color and sit on recorded days. The to-do the deal is on is solid up to today and says how far along it is, such as "day 9 of 21". There is no percent done.
+- [ ] Expected bars are dashed, and every expected date says "exp.". **Recorded only** hides everything expected.
+- [ ] Steps are thinner pills with their owner's initial, from the day set to the day due. A late step is outlined red.
+- [ ] Critical dates are diamonds on their days; a proposed one is hollow. A to-do expected to finish after a critical date it must beat turns its arrow red, and the date says "at risk".
+- [ ] Arrows follow the workflow's order with right-angle routes, and break around a label.
+- [ ] A deal sitting more than twice the typical length on its to-do shows no expected dates. Its row says how long it has sat.
+- [ ] Milestones lists the deal's critical dates soonest first, plus the expected lease signing; a click scrolls to it. Saved views are My steps, At risk and Next two weeks, each with its count, then Recorded only. Both, Dell and Joe choose whose steps show.
+- [ ] Pointing at a bar brightens it and its arrows, fades the rest, and a note gives its dates and where they come from.
+- [ ] Clicking a bar opens it on the right. A step offers Mark done and Change date. A critical date offers Confirm or Mark done, and Drop. A to-do shows its facts and offers Set your own date.
+- [ ] Dragging a step's end moves its due date through the same save Home and Calendar use. Dragging an expected bar's end sets the partner's own date for that to-do on this deal, and what follows moves with it while dragging. A dashed outline keeps the old place and a label gives the new date.
+- [ ] Letting go saves. The footer says what changed, such as "Terms comparison: expected by Mon, Dec 14. What follows moved with it.", with **Undo**. **Reset to typical** clears the deal's own dates after one confirmation.
+- [ ] A critical date, a bar's start, a finished bar and a phase bar never drag. A drag cannot set a past day. Dragging works at Day and Week zoom only. With the keyboard, a focused bar's end moves a day with the arrow keys and a week with Shift; Enter saves and Esc cancels.
+- [ ] Either partner can drag either partner's step. If the step changed since the page loaded, it says "This step changed. Review the latest version." and reloads.
+- [ ] **Typical lengths**, bottom left, opens the table of typical days per to-do. A partner edits any number there and it saves; no confirmation step. Once a to-do has five finished examples, the measured number shows beside it with **Use measured**, and nothing changes without that click.
+- [ ] The current phase's tile on Overview gains one quiet line, such as "Lease signing expected Mar 5", which opens Plan.
+- [ ] Expected dates never show on Home or Calendar.
 
 ### Activity
 
@@ -225,6 +265,7 @@ Coming later, once the engine can edit a site's contents: **Editing** puts a pen
 
 - [ ] The page is one column and scrolls, with 16px text and 44px buttons. The deal name comes first, then the facts line, then the tabs as one row that scrolls sideways with the chosen tab in view.
 - [ ] Critical dates are one row that scrolls sideways. The path is one row that scrolls sideways and opens on the current phase. Next steps, Latest activity, Ask Doc to, Invoice, People and Park deal follow.
+- [ ] Plan keeps the chart, with a narrower name column and no side list. It scrolls sideways, a tap opens a bar, and nothing drags.
 - [ ] A phase click opens the same question as a sheet from the bottom. An Activity row opens full screen with Back. Tours shows the tour first, with its stops and **Generate tour packet**, then the properties.
 
 ## Questions for the owner
