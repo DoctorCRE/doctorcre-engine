@@ -344,21 +344,38 @@ export function checklistOf(facts: Facts) {
 	return { ...head, phases, due_items, requests_state: "current" };
 }
 
-const FINISHED_CHECKLIST = new Set(["complete", "received"]);
+const FINISHED_CHECKLIST: ReadonlySet<Status> = new Set([
+	"complete",
+	"received",
+]);
+
+export const checklistType = (deal: {
+	reason: string | null;
+	type: string | null;
+	kind: string | null;
+	renewal_lease_unrecorded: boolean;
+}) =>
+	deal.renewal_lease_unrecorded
+		? deal.kind
+		: deal.reason === "renewal"
+			? deal.reason
+			: deal.type;
 
 export function nextChecklistStep(
 	phases: {
 		id: string;
 		label: string;
-		items: { id: string; label: string; status: string }[];
+		items: { id: string; label: string; status: Status }[];
 	}[],
 	phaseId: string | null,
+	settled: ReadonlySet<string> = new Set(),
 ) {
 	const phase = phases.find((item) => item.id === phaseId);
 	const next = phase?.items.find(
 		(item) =>
 			!item.id.startsWith("critical-date:") &&
-			!FINISHED_CHECKLIST.has(item.status),
+			!FINISHED_CHECKLIST.has(item.status) &&
+			!settled.has(item.label),
 	);
 	return next && phase
 		? { todo: next.id, label: next.label, phaseLabel: phase.label }

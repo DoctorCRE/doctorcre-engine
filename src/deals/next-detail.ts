@@ -25,7 +25,7 @@ import {
 } from "../old-record-names.ts";
 import { asText } from "../reader.ts";
 import { selectStepsWithOrigin } from "../step-origin.ts";
-import { checklistOf, criticalDateLabel } from "./checklist.ts";
+import { checklistOf, checklistType, criticalDateLabel } from "./checklist.ts";
 import {
 	checkInNextStep,
 	clientWebsiteOf,
@@ -206,27 +206,7 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 					.orderBy("suggestion.created_at")
 					.orderBy("suggestion.id"),
 			).as("workflow_suggestions"),
-			jsonObjectFrom(
-				eb
-					.selectFrom("current_lease as lease")
-					.innerJoin("document as file", "file.id", "lease.document_id")
-					.select((eb) => [
-						"lease.id",
-						"lease.version",
-						asText(eb.ref("lease.executed_on")).as("executed_on"),
-						asText(eb.ref("lease.commencement_on")).as("commencement_on"),
-						asText(eb.ref("lease.expiration_on")).as("expiration_on"),
-						chicagoDay(
-							eb
-								.selectFrom("lease_version as first")
-								.select((eb) => eb.fn.min("first.created_at").as("at"))
-								.whereRef("first.lease_id", "=", "lease.lease_id"),
-						).as("recorded_on"),
-						"file.name as evidence_ref",
-						sql.lit("current").as("status"),
-					])
-					.whereRef("lease.deal_id", "=", "d.id"),
-			).as("lease"),
+			jsonObjectFrom(currentLeaseOf(db, eb.ref("d.id"))).as("lease"),
 			sql<
 				ImportedDealEvent[]
 			>`coalesce((select events from deal_imported_history h where h.deal_id = d.id), '[]')`.as(
@@ -325,13 +305,11 @@ export async function readNextDealDetail(
 		typical_lengths,
 		...detail
 	} = record;
-	const checklistType =
-		detail.reason === "renewal" ? detail.reason : detail.type;
 	const checklist = checklistOf({
 		deal: {
 			id: detail.deal_id,
 			owner: detail.owner,
-			type: detail.renewal_lease_unrecorded ? detail.kind : checklistType,
+			type: checklistType(detail),
 			invoiced_on: detail.invoiced_on,
 		},
 		lease: detail.lease,
@@ -496,6 +474,27 @@ const dealEmailFollowUpKinds = [
 	"file_to_deal",
 	"phase_move",
 ] as const;
+
+export const currentLeaseOf = (db: Transaction<DB>, deal: Expression<string>) =>
+	db
+		.selectFrom("current_lease as lease")
+		.innerJoin("document as file", "file.id", "lease.document_id")
+		.select((eb) => [
+			"lease.id",
+			"lease.version",
+			asText(eb.ref("lease.executed_on")).as("executed_on"),
+			asText(eb.ref("lease.commencement_on")).as("commencement_on"),
+			asText(eb.ref("lease.expiration_on")).as("expiration_on"),
+			chicagoDay(
+				eb
+					.selectFrom("lease_version as first")
+					.select((eb) => eb.fn.min("first.created_at").as("at"))
+					.whereRef("first.lease_id", "=", "lease.lease_id"),
+			).as("recorded_on"),
+			"file.name as evidence_ref",
+			sql.lit("current").as("status"),
+		])
+		.where("lease.deal_id", "=", deal);
 
 const emailFollowUpsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 	db

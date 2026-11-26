@@ -31,6 +31,7 @@ const path = "deals/workflow-suggestions";
 const job = { job: "workflow_suggestions" };
 const run = (key = randomUUID()) => save(job, path, { idempotency_key: key });
 const what = "RFP / LOI versions and submission";
+const counters = "Live terms comparison and counters";
 const evidence = `From the checklist · ${what} is next in Negotiating`;
 
 before(async () => {
@@ -212,7 +213,7 @@ test("the deal read shows the suggestion and Home does not", async () => {
 	assert.equal(JSON.stringify(await home.json()).includes(row.id), false);
 });
 
-test("Accept saves the clicking partner's step, and Dismiss lets a later run propose again", async () => {
+test("Accept saves the clicking partner's step, and a decided to-do is never proposed again", async () => {
 	const proposalId = async (deal: string | undefined) => {
 		assert.ok(deal);
 		const { rows } = await db.query<{ id: string }>(
@@ -221,6 +222,13 @@ test("Accept saves the clicking partner's step, and Dismiss lets a later run pro
 		);
 		return rows[0]?.id;
 	};
+	const pendingWhat = async (deal: string | undefined) =>
+		(
+			await db.query<{ what: string }>(
+				`select what from proposal where deal_id = $1 and kind = 'workflow_step' and status = 'pending'`,
+				[deal],
+			)
+		).rows[0]?.what;
 	const dismissed = await proposalId(moved);
 	assert.ok(dismissed);
 	assert.equal(
@@ -235,7 +243,7 @@ test("Accept saves the clicking partner's step, and Dismiss lets a later run pro
 	assert.deepEqual(await run(), [200, { proposed: 1, already_proposed: 1 }]);
 	const again = await proposalId(moved);
 	assert.ok(again);
-	assert.notEqual(again, dismissed);
+	assert.equal(await pendingWhat(moved), counters);
 	const [accepted, answer] = await save(
 		{ user: "joe" },
 		`proposals/${again}/decision`,
@@ -252,7 +260,7 @@ test("Accept saves the clicking partner's step, and Dismiss lets a later run pro
 	);
 	assert.deepEqual(step, {
 		owner: "joe",
-		what,
+		what: counters,
 		due_on: (
 			await db.query<{ due_on: string }>(
 				"select due_on::text from proposal where id = $1",
@@ -290,4 +298,10 @@ test("Accept saves the clicking partner's step, and Dismiss lets a later run pro
 		due_on: "2030-04-01",
 	});
 	assert.deepEqual(await run(), [200, { proposed: 0, already_proposed: 0 }]);
+	await db.query(`begin;
+		select set_config('engine.job', 'old_system', true), set_config('engine.user_id', '', true);
+		update next_step set resolution = 'done', done_at = now() where id = '${edited}';
+		commit;`);
+	assert.deepEqual(await run(), [200, { proposed: 1, already_proposed: 0 }]);
+	assert.equal(await pendingWhat(lease), counters);
 });
