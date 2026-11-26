@@ -50,7 +50,7 @@ A Leases ending lane at the bottom waits until the first lease ending is recorde
 
 - [ ] A card shows the deal's short name, then one row with the “Needs attention” badge when there is one and the deal owner's initial. The next step, its due date and late counts stay on the deal page (owner, 2026-11-20). A click, tap or keyboard activation of the name opens the deal page.
 - [ ] One small “Needs attention” badge appears when the system says the deal needs attention. Its reason shows on hover and is its accessible name, the same sentence as the deal page's Needs attention line. No partner sets or clears it on a deal (owner, 2026-11-25).
-- [ ] When an open deal has no open step of its own and is its client's only open deal, its List row shows the client's open step, marked "Client step: <what>". The board reads it from the client and moves nothing. When neither the deal nor its client has a step, the List row shows "No next step set".
+- [ ] When an open deal has no open step of its own and is its client's only open deal, its List row shows the client's open step, marked "Client step: <what>". The board reads it from the client and moves nothing. When neither the deal nor its client has a step, the List row shows "No next step set". A step with no date still shows, and it counts as a next step. Home's "N have no next step" counts the open deals whose row says "No next step set".
 - [ ] Dragging a card to another column, or the same move by keyboard, asks the same short question as a phase click on the deal page and moves it only on Move to [phase].
 
 ### Moving a phase
