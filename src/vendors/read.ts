@@ -14,7 +14,11 @@ import {
 	viewerIdOf,
 } from "../clients/read.ts";
 import type { DB } from "../database.d.ts";
-import { quietVendorParties } from "../leads/quiet-follow-ups.ts";
+import {
+	lastRecordedContacts,
+	vendorIsQuiet,
+} from "../leads/follow-up-reads.ts";
+import { DEFAULT_CADENCE } from "../leads/quiet-follow-ups.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText, inJsonbOrder } from "../reader.ts";
 import { UUID } from "../uuid.ts";
@@ -447,12 +451,16 @@ export async function readNextVendorList(
 	const { category, disposition, owner, q, quiet, scope, stage, territory } =
 		query;
 	const term = q === null ? null : `%${q.replace(/([\\%_])/g, "\\$1")}%`;
-	const matching = liveNextVendors(db).where(sql<boolean>`
+	const matching = liveNextVendors(db)
+		.leftJoin(sql`(${lastRecordedContacts})`.as("recorded"), (join) =>
+			join.on(sql<boolean>`recorded.party_id = p.id`),
+		)
+		.where(sql<boolean>`
 		(${scope === "team"} or pr.owner_user_id = ${ownerId}::uuid)
 		and (${owner === "all"} or ou.slug = ${owner})
 		and (${stage}::text is null or pr.stage = ${stage})
 		and (${disposition}::text is null or ${nextDisposition} = ${disposition})
-		and (not ${quiet === true} or p.id in (${quietVendorParties}))
+		and (not ${quiet === true} or ${vendorIsQuiet("pr", "recorded", DEFAULT_CADENCE.vendor_days)})
 		and (${category}::text is null or exists (select from party_role cr join role r on r.slug = cr.role
 			where cr.party_id = p.id and r.category_of = 'vendor' and cr.role = ${category}))
 		and (${territory}::text is null or ${nextTerritory} = ${territory} or exists
@@ -523,9 +531,10 @@ export async function readNextVendor(
 	const value = requestedUuid?.toLowerCase() ?? id;
 	const ownerId = await nextViewerId(db, viewer);
 	const record = await nextVendorRows(liveNextVendors(db), ownerId, contract)
-		.where(sql<boolean>`p.id = ${requestedUuid}::uuid
+		// Kysely joins raw SQL to the other conditions as is, so its ors need their own parentheses.
+		.where(sql<boolean>`(p.id = ${requestedUuid}::uuid
 			or p.id = (select party_id from outside_id where source = ${source} and value = ${value})
-			or p.id = (select survivor_id from merged_party where id = ${requestedUuid}::uuid)`)
+			or p.id = (select survivor_id from merged_party where id = ${requestedUuid}::uuid))`)
 		.orderBy(sql`p.id = ${requestedUuid}::uuid`, "desc")
 		.leftJoin("active_do_not_contact as dnc", "dnc.party_id", "p.id")
 		.select((eb) => [

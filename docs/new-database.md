@@ -760,6 +760,8 @@ A vendor's relationship partner is optional and lives on its vendor role as `par
 
 A vendor's disposition is the team's ruling on it, and its target flag says the team wants to meet it. Both sit on the vendor role next to its stage and level (owner, #258). A disposition is parked, deliberately dormant and on drip only, or avoid, ruled out as a partner. No disposition is active, in the network. A ruling always carries its reason, so a vendor never leaves play without one. An avoided vendor cannot be a target. Disposition and target are not stages: today's stage list once held them, and the old system's migration 0047 split them out because a stage mixed how well the team knows a vendor, a ruling and an intent.
 
+A vendor's relationship, the one word screens show for where the team stands, is read from its ruling and level and stores nothing (owner, 2026-11-25). Avoid or Parked when it has that ruling, at any level. Otherwise its level's label, or Not rated when it has no level. Want to meet is the target flag, shown beside the relationship. In relationship order the words run Core, Established, Building, Prospective, Not rated, Parked, Avoid.
+
 An introduction is one `introduction` row, made either way: the vendor introducing someone to the team, such as a new client, or the team introducing someone to the vendor. It names the vendor, who made it, whom it introduced, when, a note, and the deal it led to, which can be set when one comes of it. One the team made names the user who made it.
 
 `vendor_track_record` gives each vendor's record from deal history only. Nothing stores a rating (owner, #257). It counts the deals the vendor worked in any vendor role, how many of them closed and how many died, by each deal's latest phase, and the deals that its introductions to the team, and the team's to it, led to. A deal counts once, however many roles or introductions tie it to the vendor.
@@ -1072,6 +1074,8 @@ The board uses the copied lead ID when available and otherwise uses the party ID
 When a role moves to a different party and arrives as a lead, the board, drawer and saves count that audit entry toward the destination lead's version. Later changes to that lead role advance its version.
 
 The score and old prospect engagement fields are empty. Timing events and research findings are empty lists. The legacy Undo control is absent.
+
+Each board lead carries `market`, the `id` and `name` of the one market whose name matches its city, ignoring case and surrounding spaces, or null when its city matches no market or more than one. This is the city half of the market rule; matching by county waits until a lead has a county (#1370). `market_counts` lists every market by name with its `id` and the `count` of board leads placed in it, zero included.
 
 The drawer's `plans` text omits old research tags. The read keeps the original note in `notes`, with old record codes named as on the deal page.
 
@@ -1675,7 +1679,7 @@ These saves follow the same session, replay and `{ from, to }` edit rules as peo
 - `GET /api/engine/parties/{id}` also answers the stored `client` and `vendor` profiles in these shapes, or null. A client's stored status is the manual one, not the computed directory status.
 - `POST /api/engine/clients/{id}` changes any of those fields. Status and how found cannot be cleared. A subtype belongs to the practice type it was recorded under, so clearing or changing the practice type clears the subtype unless the edit also sends one.
 - `POST /api/engine/vendors` takes `party_id` and optionally `categories` (vendor category role slugs), `stage`, `relationship_level` (0 to 3), `owner` (`joe` or `dell`; the signed-in partner when absent), `offers`, `seeking`, `is_target`, `disposition` and `disposition_reason`. It adds the vendor role and a role for each category, and answers `201 { party_id, stage, relationship_level, owner, offers, seeking, is_target, disposition, disposition_reason, categories }`. A record that is already a vendor returns `409 already_vendor`.
-- `POST /api/engine/vendors/{id}` changes any of those fields. `categories` is the whole list, so a removed category's role is removed and a new one added, and `categories: null` removes every category. `is_target` cannot be cleared. `owner` can be cleared to null, leaving the vendor without a relationship partner, as some copied vendors are. A ruling without a reason, or an avoided target, is refused by the database's vendor rules (`422 database_refused_the_statement` naming the rule).
+- `POST /api/engine/vendors/{id}` changes any of those fields. `categories` is the whole list, so a removed category's role is removed and a new one added, and `categories: null` removes every category. An `is_target` edit to false turns Want to meet off, and one to null returns `400 invalid_field_value`, because the flag is never unknown. `owner` can be cleared to null, leaving the vendor without a relationship partner, as some copied vendors are. A ruling without a reason, or an avoided target, is refused by the database's vendor rules (`422 database_refused_the_statement` naming the rule).
 
 ### Record introductions
 
@@ -1691,6 +1695,39 @@ These saves follow the same session, replay and `{ from, to }` edit rules. They 
 - `POST /api/engine/party-links` takes `kind` (`knows` or `can_introduce`), `party_id`, `other_party_id`, and optionally `started_on` and `note`. For `can_introduce`, `party_id` can introduce the team to `other_party_id`. It answers `201 { link_id, kind, party_id, other_party_id, started_on, ended_on, note }`. A link of the same kind between the same parties with no end date returns `409 already_linked` with its `link_id`; a knows link matches either order. The same party twice returns 400 and an unknown party 404. Party ids are stored lower case, so one party spelled two ways is the same party and finds the same current link.
 - `POST /api/engine/party-links/{id}` changes `started_on`, `ended_on` or `note`. Ending a link keeps its row; a later link is a new one. Clearing the end date of a link whose pair has another current link of its kind returns `409 already_linked` with that link's `link_id`. An end before the start is refused by the database (`party_link_ends_after_it_starts`).
 - Relationships shows a link as an edge `link:{link_id}` from its start date, when it has one, until its end date, when it has one. A link ended on a later date still shows until then, though it no longer counts as current for the rule above.
+
+## Deal page redesign
+
+The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. None of it is built yet.
+
+### Deal attention
+
+The system decides when a deal needs attention and says why. A deal needs attention when any of these holds:
+
+- An open step is late.
+- A critical date is within 7 days or past, and not done.
+- The deal has no open step and no pending suggestion.
+- An email from the client or a broker has had no answer for 2 working days.
+- A suggestion has waited 2 days for a partner.
+- Nothing has happened on the deal for 14 days.
+
+The numbers are a starting guess. The board and deal reads give one reason and when it started, in a sentence the board badge and the deal page's Needs attention line both show. A partner gets one alert per new reason through Updates, not one a day. For deals the computed answer replaces the hand-set `needs_attention` flag, which no screen sets any more. A prospect keeps its hand-set flag.
+
+### Invoice dates
+
+The deal page shows three dates for each commission payment: triggered, sent and paid. Sent is the payment's `invoiced_on` and paid is its `received_on`. Triggered is the day the event happened that lets the brokerage invoice. Before it, the screen names the event, such as "Goes out when the lease is signed". No column holds it yet. Not decided: which event triggers the invoice for each deal kind, and whether triggered is stored or read from the checklist. A new column needs the owner's yes before production.
+
+### Checklist under the phases
+
+The `deal-checklist.v1` groups become the eight phases. Research, Site selection, Negotiation, Legal and Closing go under the phase of the same meaning, and Invoice's two items go under Closed. A purchase's diligence items stay under Legal. Prospective Client and Due Diligence have no items until the partners' workflow table arrives. Items still tick themselves from what is filed and recorded.
+
+### Doc skill sessions
+
+A button on a deal or lead starts a Doc session for one record and one skill, as [Doc](screens/doc.md#start-doc-from-a-button) describes. A typed list in engine code names each skill, `client_website`, `requirement_email`, `compare_lois` and `lead_outreach`, with its record kind, its chat title and the skill Doc runs. A session is a [Doc conversation](#doc-conversations-and-turns) tied to its record and skill, so the button reopens the same chat. The deal and lead reads give each skill's state: not started, working, waiting on the partner, or done on a date. A finished job or a question from Doc sends one update and one phone push through Updates. A file dropped in the session goes through the existing upload door to the record's documents, and Doc reads its extracted text. Not decided: the storage that ties a conversation to its record and skill, and what the other partner sees, since a Doc conversation is private to its owner.
+
+### Send a new email from Doc
+
+**Approve and send** sends a new email, not a reply, from the signed-in partner's own mailbox, with exactly the recipients, subject and body on the card. Each recipient gets their own copy. Only the partner's click sends, under the [confirmed save](#confirmed-saves-and-receipts) rules, and the model has no route to send. The engine files the sent email to the deal or lead and answers sent or failed. A failed send keeps the draft for **Retry**. Not checked: how much of [reply delivery](#22-reply-drafts-and-their-delivery) and the 2026-11-21 change that lets Doc start a reply already covers this.
 
 ## Global Search and Recent Activity
 
@@ -1785,7 +1822,7 @@ The response is `{ ok: true, schema_version: "home-today.v1", today, viewer, own
 
 `meetings.items` lists the signed-in partner's stored occurrences that overlap today's Central calendar day, including those that already ended. Each row carries its Outlook event `key` when present. The row includes attendees and location from the snapshot. Non-user organizer and attendee emails match to open deals and parties (`possible_deals`, `context_label`, `open_url`).
 
-`meetings.meetings_may_be_missing` is true when a successful agenda has an `undecoded` warning. The shared Today panel shows meetings when present. A valid read with no items says “No meetings today.” When the flag is true, Today adds “Calendar may be incomplete” below that message. A failed or invalid read says “Couldn’t load meetings.”
+`meetings.meetings_may_be_missing` is true when a successful agenda has an `undecoded` warning. The shared Today panel shows meetings when present. A valid read with no items says “No meetings today.” Today never shows the flag to partners (owner, 2026-11-25). A failed or invalid read says “Couldn’t load meetings.”
 
 `follow_up_reviews` omits dismissed and confirmed reviews. Answering a review leaves its meeting in `meetings.items`. If the snapshot has only a review for an occurrence, the engine uses its key, title, and times for that meeting. The complete list and full details for ended meetings depend on the Outlook publisher sending their calendar rows. [Outlook publisher change](https://github.com/DoctorCRE/carr-system/issues/3265)
 
@@ -1832,6 +1869,21 @@ The list and drawer show live vendors and their current relationship partner. Co
 Track record counts come from `vendor_track_record`. A deal counts even when its work date is unknown. The first and last work dates use participation saved through the new system. A dated introduction that led to a deal can also set the Last deal date. The old coverage verification timestamp, manual override and rating edit version return null.
 
 **Later.** The copy leaves vendor work dates unknown. Preserving them needs a design decision about a nullable participation date or a field for its source.
+
+### Vendors redesign reads
+
+The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 needs the reads below. Only the vendor summary is built. Each reads live vendors from the new schema as the list does, and `owner` is `all`, `joe` or `dell`, the vendor's relationship partner. A vendor with no partner counts only under `all`. Relationship is the word from § "Vendors", and quiet is the vendor rule of `GET /api/engine/quiet-follow-ups`: an active vendor with no contact in 90 days and no open next step.
+
+**Vendor summary.** `GET /api/engine/vendors/summary`, optional `owner`, `all` when absent, answers the category tiles in one read: `{ all, no_category, categories: [{ slug, label, ...counts }] }`. Each `counts` is `{ count, relationship: { core, established, building, prospective, not_rated, parked, avoid }, quiet }`. `categories` lists every vendor category in label order, with zeros for one no vendor holds. A vendor counts once in each category it holds, so the categories can add up to more than `all`. `no_category` counts vendors that hold only the vendor role. An unknown `owner` returns `400 value_not_in_declared_vocabulary`.
+
+**The list read.** `GET /api/engine/vendors` changes in these ways:
+
+- With `category`, or `no_category=true` for vendors with no category, it answers every matching vendor in one answer, with no next page. Other lists keep pages of 25.
+- Each row answers `categories`, every category the vendor holds as `{ slug, label }` in label order, beside today's single category until the app stops reading it.
+- Each row answers `quiet`, true or false, and `quiet_days`, the whole Central days since its last contact while quiet, otherwise null.
+- `sort=relationship` orders by relationship order, then by name, and is the default. The other sorts stay.
+
+**Markets a vendor covers.** The territory tiles are the 19 named markets. A list row answers `markets`, each `{ id, name }` that one of its current territories covers: a market piece names it, or a state piece holds the market's counties. A vendor under no market but with a territory is under Elsewhere, which includes a typed territory not yet drawn into pieces. A vendor with no current territory is under No territory. Matching typed territories to markets is data work on production, with the owner's yes on the reviewed file, and nothing in it is guessed.
 
 ## Doc conversations and turns
 
@@ -2007,6 +2059,59 @@ The confirmation locks the partner's turn and uses the existing `runNextSave` re
 - **Next step.** Use the ordinary step save in [door 18](#18-next-steps), with the confirmed text and due date for the deal or party. The confirming partner owns it. A conflicting open step stays in place and the partner gets its ID and the record link. Either partner can confirm their own proposal for a shared record.
 - **Reply draft.** Use the [pending draft rules](#22-reply-drafts-and-their-delivery) and the partner's mailbox membership in `next.email_mailbox`. Both the intake store and Doc take the existing mailbox and Outlook conversation lock before any draft check or insert. If a draft exists for this email, return it unchanged. Otherwise, if a pending draft exists for this mailbox and Outlook conversation, return it unchanged. If neither exists, insert one pending draft at revision 1 with the confirmed subject and body. The first 2,000 characters of the source email's body supply the evidence, with the sender as a fallback for blank text. The existing review supplies recipients. A missing email or mailbox membership returns `404 not_found`. Retain `unique (email_activity_id, owner_user_id)`. Add nullable `confirmed_doc_turn_id` to `reply_draft`, unique and paired with `owner_user_id` in a foreign key to `doc_turn (id, owner_user_id)`. Exactly one origin is required, either `proposed_by_job` or `confirmed_doc_turn_id`. The Doc insert requires the signed-in owner and the matching turn's reply proposal for that email. The confirm route never approves a draft or queues delivery.
 - **Reply revision.** **Save revision** locks the exact draft and uses its proposal's version in the ordinary [pending draft edit](#open-save-or-decline-a-reply-draft-from-home). It changes only the subject and body. A field omitted from both the edits and proposal keeps its saved text. A newer version returns `409 version_conflict`. A draft at that version that has left pending returns `409 draft_changed`. A retry with the same key and edits returns the original receipt. Submission remains a separate save.
+
+### Planned Doc changes
+
+Decisions 217 to 220 add these. None is built yet. The behavior above holds until each unit lands and moves its part into the sections above.
+
+#### Model choice
+
+`next.doc_model_choice` keeps at most one row per account partner: `owner_user_id`, `first_provider`, nullable `first_model` and `first_effort`, nullable `second_provider`, `second_model` and `second_effort`, and `updated_at`. A provider is `claude`, `codex`, `grok` or `gemini`. A model is nonblank text of at most 100 characters and never `default` in any case. A null model runs the tool's own default. An effort is `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, or null. The second provider differs from the first, and its model and effort are null without it. No row means `claude` with its defaults. The partner's stamped writer manages the row, with the same row security as `next.doc_link`. Replacing or revoking the link credential keeps the choice.
+
+`next.doc_link_provider` keeps one row per partner and provider the link reports: `readiness` of `ready`, `signed_out` or `plan_limited`, nullable `resets_at`, present only with `plan_limited`, `checked_at`, and `models`, the JSON list the tool reported, each entry `{ id, label, efforts }`. Issuing a replacement credential removes the partner's rows.
+
+The claim request may carry a JSON body `{ providers: [{ provider, readiness, resets_at, models }] }`. The engine replaces the partner's rows with it. A poll with only `Doc-Link-Readiness` reports `claude`, so older runners keep working. The link counts as `ready` when its first or second choice is ready. Otherwise it is `plan_limited` with the earliest reset among the limited choices, or else `signed_out`. Backup eligibility in decision 204 uses that combined readiness. A claim answer adds `choice: { first, second }`, each `{ provider, model, effort }` or null for the second.
+
+| App request                        | Answer                                                                                                                                                                                                                                                                                       |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/engine/doc/link`         | Adds `resets_at` to the link status, `providers: [{ provider, readiness, resets_at, checked_at, models }]` and the saved `choice`.                                                                                                                                                           |
+| `POST /api/engine/doc/link/choice` | Send `{ idempotency_key, first, second }` with the write proofs. `200 { choice }`. A provider the link has never reported, or a model or effort missing from that provider's last reported list, returns `422 invalid_field_value { fields }`. A `second` equal to `first` returns the same. |
+
+The runner skips a saved model or effort the tool no longer lists and runs the tool's default. A first choice that reports `plan_limited` or `signed_out` during a turn posts `{ claim_id, kind, provider, resets_at }` to the result door. The engine records that provider's readiness and returns the turn to the queue, so the next claim runs the second choice. An answered result adds `provider`. `doc_turn.answered_by` becomes one of the four providers or `backup`, and the migration changes `'mac'` to `'claude'`. History stays plain questions and answers, so a chat continues on whichever provider answers. A new choice applies from the next claim. Mail judgment jobs always run on `claude`.
+
+Each driver runs its tool unattended with the Doc MCP server only. The Claude driver keeps today's flags. The Codex driver uses `codex app-server` and the Grok and Gemini drivers use the Agent Client Protocol, each refusing every command, file and permission request, under the separate account in decision 219. A plan limit is its own outcome with the tool's reset time, never a generic failure. The runner stops a tool only after the tool says its turn started. Completion, stop, error and process exit each end the claim.
+
+The managed-source check in [Doc link on macOS](#doc-link-on-macos) allows the Studio's one file from decision 217. Any other managed source still pauses polling.
+
+#### Live answer and Stop
+
+The runner posts `POST /api/engine/doc/link/progress` with the Bearer credential about once a second while a turn runs, sending `{ claim_id, text }` with the answer text so far, at most 8,000 characters. The engine keeps it in `claim_state` and never in a business table. The engine sets the current step itself from its own tool route, such as "Looking up" and the record label a `find` or `read` resolved, never from model text. Each returned turn adds nullable `progress: { text, step }` while working. Partial text is unvalidated. The app shows it as plain text, with no links, visuals or proposal, and the finished answer replaces it. A missing, foreign or expired claim returns `404`.
+
+The progress answer is `200 { cancel }`. `POST /api/engine/doc/turns/{id}/cancel` takes `{}` with the write proofs. A queued or waiting turn becomes `cancelled` at once. A working turn records the request in `claim_state`, the next progress answer says `cancel: true`, and the runner stops the tool and posts `{ claim_id, kind: "cancelled" }`. A working turn whose claim expires with a cancel request becomes `cancelled`, not queued. The door answers `200 { turn }`, again for an already cancelled turn. An answered or failed turn returns `409 turn_finished`. The database allows `cancelled`, and a cancelled turn has no claim fields or answer.
+
+#### The next question
+
+`POST /turns` while the chat has a queued or working turn saves the new turn as `waiting`. A second partial unique index allows one `waiting` turn per chat, and another ask returns `409 turn_waiting`. When the turn ahead is answered, fails or is cancelled, the same transaction moves the waiting turn to `queued` with a fresh queue time. `POST /api/engine/doc/turns/{id}/question` takes `{ question }` and changes a waiting turn's text. Any other state returns `409 turn_started`. The conversation read leaves out a turn cancelled while waiting.
+
+#### Suggestions
+
+An `answer` or `clarification` may carry `suggestions`, at most three plain-text follow-up questions of up to 60 characters each, with no links. They arrive in the same answer and cost no extra request. `validate_answer` checks them. A refusal has none.
+
+#### Attachments
+
+Attaching a PDF or photo gets its own design here before any build: storage for the file, a table tying it to its turn, and a `read_attachment` Doc tool that returns the PDF's text or the image, since Doc's own file tools stay off.
+
+#### Visual answers
+
+An `answer` may carry `visuals`, at most three blocks shown after `text` in order. Each has a `title` of up to 80 characters and a `kind`.
+
+| `kind`    | Shape and limits                                                                                                                                                                                |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `table`   | `columns`, 2 to 6 headings, and `rows`, 1 to 20, each one cell per column. A cell is `{ text }` of up to 120 characters, or `{ text, source }` to link a record.                                |
+| `chart`   | `chart` of `bar` or `line`, nullable `unit` of `usd`, `sqft`, `percent` or `days`, and `points`, 1 to 24, each `{ label, value, sources }`. A line chart's labels are dates or months in order. |
+| `diagram` | `mermaid`, at most 2,000 characters, and `sources`, the records it draws. The first line is `flowchart TD`, `flowchart LR` or `timeline`. Node labels are plain text.                           |
+
+The engine validates visuals with the rest of the answer, in `validate_answer` and again on the result. Every `source` is a key from an authorized read in this claim, resolved to the engine's label and link. A chart point's value is either a number in its one source's read facts or the count of the distinct sources it lists, so the engine keeps each read's numeric facts in `claim_state`. A diagram refuses `click`, `href`, `%%{`, `style`, `classDef`, `<` and any URL. A bad block returns the same `422` as any invalid answer, naming the block, so the model can correct it within the claim. History carries visuals as JSON. The fixed system prompt, on the Mac and on the backup, asks for a visual when it explains better than text and never for a number Doc did not read.
 
 ## Doors the old system calls
 

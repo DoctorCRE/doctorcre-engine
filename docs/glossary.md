@@ -80,19 +80,29 @@ _Avoid_: status, phase (deals have phases)
 _Database_: `vendor.stage` and `vendor_stage` today; `party_role.stage` on the vendor role and `stage` in the new database.
 
 **Relationship level**:
-How well the team knows a vendor: 0 Prospective, 1 Building, 2 Established, 3 Core. None means not yet judged.
+How well the team knows a vendor: 0 Prospective, 1 Building, 2 Established, 3 Core. None means not yet judged (see Not rated).
 _Avoid_: contact level, rating, tier
 _Database_: `vendor.relationship_level` and `vendor_relationship_level` today; `party_role.relationship_level` and `relationship_level` in the new database.
 
 **Disposition**:
-The team's ruling on a vendor: active, parked (deliberately dormant, drip only) or avoid (ruled out as a partner). A parked or avoided vendor has a reason.
-_Avoid_: stage, status
+The team's ruling on a vendor: active, parked (deliberately dormant, drip only) or avoid (ruled out as a partner). A parked or avoided vendor has a reason. Screens show Parked or Avoid and never the word Disposition. A ruling outranks the relationship level.
+_Avoid_: stage, status, workable, not workable
 _Database_: `vendor.disposition` and `vendor_disposition` today; `party_role.disposition` and `party_role.disposition_reason` on the vendor role in the new database, where none is active.
 
 **Target**:
-A vendor the team wants to meet.
+A vendor the team wants to meet. Screens call it Want to meet.
 _Avoid_: target stage
 _Database_: `vendor.is_target` today; `party_role.is_target` on the vendor role in the new database.
+
+**Want to meet**:
+The screen word for a Target vendor, shown as a tag after its name. An avoided vendor is never one.
+_Avoid_: target, on a screen
+_Database_: `party_role.is_target` on the vendor role.
+
+**Not rated**:
+A vendor with no relationship level and no ruling: nobody has judged it yet. It is not Prospective, which is level 0.
+_Avoid_: unrated, workable
+_Database_: no `party_role.relationship_level` and no `party_role.disposition` on the vendor role.
 
 **Introduction**:
 A vendor introducing someone to the team, or the team introducing someone to a vendor, and the deal it led to. One the team made names the user who made it.
@@ -203,7 +213,7 @@ _Engine_: `operating_state`.
 _New database_: `deal.parking_reason`, none when active, `deal.parking_note`, and who last parked it and when in `deal.parked_by_user_id`, `deal.parked_automatically` and `deal.parked_at`.
 
 **Needs attention**:
-A flag a user sets on a deal to say it needs a look. Nothing sets it on its own.
+A deal's mark that it needs a look, with the reason. Under the approved redesign the system sets it from the [attention rules](new-database.md#deal-attention) and no partner sets or clears it on a deal (owner, 2026-11-25; not built yet). A prospect's is set by a partner.
 _Avoid_: flagged, urgent, priority
 _Database_: `deal.attention` today; `deal.needs_attention` in the new database.
 _Engine_: `attention`.
