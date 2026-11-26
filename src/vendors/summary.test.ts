@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { type TestContext, test } from "node:test";
+import { VENDOR_RELATIONSHIPS } from "../leads/follow-up-reads.ts";
 import { doorTest } from "../test-door.ts";
 
 const uuid = (n: number) =>
@@ -134,6 +135,28 @@ test("each category tile counts its vendors by relationship word", async (t) => 
 			},
 		],
 	});
+});
+
+test("every relationship word counts its vendors", async (t) => {
+	const get = await summaryDoor(
+		t,
+		VENDOR_RELATIONSHIPS.map((r, i) =>
+			vendor(
+				10 + i,
+				"ruling" in r
+					? { disposition: r.word }
+					: r.level === null
+						? {}
+						: { level: r.level },
+			),
+		).join(""),
+	);
+	const { all } = (await get("vendors/summary")).body;
+	assert.equal(all.count, VENDOR_RELATIONSHIPS.length);
+	assert.deepEqual(
+		all.relationship,
+		Object.fromEntries(VENDOR_RELATIONSHIPS.map(({ word }) => [word, 1])),
+	);
 });
 
 test("quiet counts the same vendors as quiet follow-ups", async (t) => {
