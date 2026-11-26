@@ -234,7 +234,7 @@ test("keeps an ambiguous message, case-distinct IDs and empty captures separate"
 	assert.partialDeepStrictEqual(entries[1], entry(21, carried, null));
 });
 
-test("the legacy cleaner counts messages once and excludes evidence from another mailbox", async () => {
+test("the cleaner counts messages once and excludes evidence from another mailbox", async () => {
 	const entries = (await thread())
 		.filter(({ activity_id }) =>
 			[25, 30, 31, 32].some((n) => activity_id === id(n)),

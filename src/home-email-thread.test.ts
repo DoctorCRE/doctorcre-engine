@@ -533,8 +533,8 @@ test("moves a plain-text Outlook reply header block out of stored authored ahead
 		]),
 		[
 			{
-				body: "",
-				folded: `________________________________\n${outlookHeader}\n\n${quotedEarlier}\n\n${storedHistory}`,
+				body: `________________________________\n${outlookHeader}\n\n${quotedEarlier}`,
+				folded: storedHistory,
 			},
 		],
 	);
@@ -560,5 +560,101 @@ test("moves a plain-text Outlook reply header block out of stored authored ahead
 		"Walkthrough details.\nDate: January 5, 2026\nSubject: Building walkthrough\nMeet at the west door.";
 	assert.deepEqual(cleanEmailThread([splitMessage(noteOnly, storedHistory)]), [
 		{ body: noteOnly, folded: storedHistory },
+	]);
+});
+
+test("cleans a stored authored part like an unsplit body and folds stored history after it", () => {
+	const storedHistory = "> Can we meet Tuesday at two?";
+	const dana = (authored: string) => ({
+		...splitMessage(authored, storedHistory, "dana@example.test"),
+		sender_name: "Dana Example",
+	});
+	const signature = "Best regards,\nDana Example\nAgent\nDirect: 555-010-3000";
+	const partner =
+		"Best regards, Dana  JORDAN 'DANA' EXAMPLE Agent | Example Panhandle REALTY";
+	const contact =
+		"Dana Q. Example 555-010-3434 Telephone 555-010-6121 Fax dana@example.test";
+	const teamsInvite = [
+		"________________________________________________________________________________",
+		"Microsoft Teams meeting",
+		"Join: https://teams.microsoft.com/meet/123456789?p=example",
+		"Meeting ID: 123 456 789 012",
+		"Passcode: Ab12Cd",
+		"________________________________",
+		"Need help?<https://aka.ms/JoinTeamsMeeting?omkt=en-US>",
+		"Dial in by phone",
+		"+1 555-010-1111,,123456789# United States, Example City",
+		"Find a local number<https://example.test/local>",
+		"Phone conference ID: 123 456 789#",
+		"For organizers: Meeting options<https://example.test/options> | Reset dial-in PIN<https://example.test/pin>",
+		"________________________________________________________________________________",
+	].join("\n");
+
+	assert.deepEqual(
+		cleanEmailThread([
+			dana(`Tuesday works.\n\n${signature}`),
+			dana(`Tuesday works. ${partner}`),
+			dana(`Just let me know.  ${contact}`),
+			dana(`See you Tuesday.\n\n${teamsInvite}`),
+		]),
+		[
+			{ body: "Tuesday works.", folded: `${signature}\n\n${storedHistory}` },
+			{ body: "Tuesday works.", folded: `${partner}\n\n${storedHistory}` },
+			{ body: "Just let me know.", folded: `${contact}\n\n${storedHistory}` },
+			{ body: "See you Tuesday.", folded: storedHistory },
+		],
+	);
+});
+
+test("a sign-off folds only a known title or contact details after the name, never a sentence", () => {
+	const sam = (body: string) => ({
+		body,
+		sender: "sam@example.test",
+		sender_name: "Sam Example",
+	});
+	const kept = [
+		"Here it is.\nThanks, Sam Example Call Me Soon",
+		"Here it is.\nThanks, Sam Example Agent called me",
+		"Here it is. Thanks, Sam Example Call 555-010-2000 to confirm",
+		"Here it is. Sam called Example Realty",
+	];
+	for (const note of kept) {
+		assert.deepEqual(cleanEmailThread([sam(note)]), [
+			{ body: note, folded: null },
+		]);
+	}
+	const folds: [note: string, signature: string][] = [
+		["Here it is.\nThanks, Sam Example", "Thanks, Sam Example"],
+		["Here it is.\nThanks,\nSam", "Thanks,\nSam"],
+		[
+			"Here it is.\nThanks, Sam Example Agent | Example Realty",
+			"Thanks, Sam Example Agent | Example Realty",
+		],
+	];
+	for (const [note, signature] of folds) {
+		assert.deepEqual(cleanEmailThread([sam(note)]), [
+			{ body: "Here it is.", folded: signature },
+		]);
+	}
+});
+
+test("a sign-off stands for the name of a signature the sender is stored under only in part", () => {
+	const rob = (body: string) => ({
+		body,
+		sender: "rob@example.test",
+		sender_name: "Rob",
+	});
+	for (const signature of [
+		"Thanks,\nRobert C. Jackson\n(555) 010-2000\nFax (555) 010-2001",
+		"Thanks\nRobert Jackson\nAgent\nDirect: 555-010-2000",
+	]) {
+		assert.deepEqual(
+			cleanEmailThread([rob(`Plan attached.\n\n${signature}`)]),
+			[{ body: "Plan attached.", folded: signature }],
+		);
+	}
+	const sentence = "Plan attached.\nThanks,\nCall Me Soon\nPlease use the door";
+	assert.deepEqual(cleanEmailThread([rob(sentence)]), [
+		{ body: sentence, folded: null },
 	]);
 });
