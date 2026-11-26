@@ -53,7 +53,7 @@ export async function readDealDetail(db: Kysely<DB>, deal: string) {
 			type: record.type,
 			invoiced_on: record.invoiced_on,
 		},
-		lease ?? null,
+		lease ? { ...lease, recorded_on: null } : null,
 		criticalDates,
 	);
 

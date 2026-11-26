@@ -155,8 +155,8 @@ before(async () => {
 			('${id(84)}', 'Example lease.pdf', 'example-lease', 'deal_documents', 'application/pdf');
 		insert into lease (id, deal_id, party_id, property_id)
 		values ('${id(85)}', '${id(30)}', '${id(11)}', '${id(83)}');
-		insert into lease_version (lease_id, version, document_id, executed_on, expiration_on)
-		values ('${id(85)}', 1, '${id(84)}', '2025-01-01', '2030-01-01');
+		insert into lease_version (lease_id, version, document_id, executed_on, expiration_on, created_at)
+		values ('${id(85)}', 1, '${id(84)}', '2025-01-01', '2030-01-01', '2025-01-03T03:00:00Z');
 		insert into deal_reason (slug, label) values ('renewal', 'Renewal') on conflict do nothing;
 		insert into deal (id, name, kind, reason, renews_lease_id, owner_user_id)
 		values ('${id(33)}', 'Example renewal', 'lease', 'renewal', '${id(85)}', '${id(2)}'),
@@ -175,8 +175,8 @@ before(async () => {
 			('${id(89)}', '${id(33)}', 100, '2025-02-01', '2025-02-03'),
 			('${id(93)}', '${id(34)}', 100, '2025-02-01', '2025-02-03'),
 			('${id(94)}', '${id(34)}', 100, '2025-02-02', null);
-		insert into next_step (deal_id, what, resolution, done_at)
-		values ('${id(32)}', 'Example confirm terms', 'done', '2025-02-04T18:00:00Z');
+		insert into next_step (deal_id, what, resolution, created_at, done_at)
+		values ('${id(32)}', 'Example confirm terms', 'done', '2025-02-01T03:00:00Z', '2025-02-04T18:00:00Z');
 		update deal set closed_value = 1250, parking_reason = 'other', parking_note = 'Example waiting for plans'
 		where id = '${id(31)}';
 		update deal set owner_user_id = '${id(2)}', market_id = '${id(92)}' where id = '${id(32)}';
@@ -342,6 +342,33 @@ test("an equal-time automatic move shows in history and a copied phase without a
 		seeded.events.filter(({ field }) => field === "phase"),
 		[],
 	);
+});
+
+test("the deal read gives each phase's days and each step's set and done days in Central time", async () => {
+	const read = async (deal: string) => {
+		const page = await nextTransaction(connectionString, "read", (tx) =>
+			readNextDealDetail(tx, deal),
+		);
+		assert.ok(!("error" in page));
+		return page;
+	};
+	const moved = await read(id(35));
+	assert.deepEqual(moved.phase_spans, [
+		{ phase: "touring", from_on: "2025-01-04", to_on: "2025-01-05" },
+		{ phase: "negotiation", from_on: "2025-01-05", to_on: null },
+	]);
+	const seeded = await read(id(32));
+	assert.deepEqual(seeded.phase_spans, [
+		{ phase: "negotiation", from_on: null, to_on: null },
+	]);
+	assert.partialDeepStrictEqual(seeded.next_actions, [
+		{ description: "Example prepare the lease", done_on: null },
+		{
+			description: "Example confirm terms",
+			set_on: "2025-01-31",
+			done_on: "2025-02-04",
+		},
+	]);
 });
 
 const get = (path: string, schema?: string, partner = "partner_one") =>
@@ -661,11 +688,13 @@ test("signed-in detail shows saved items and checklist progress from lease facts
 							id: "executed_lease",
 							status: "complete",
 							evidence_ref: "Example lease.pdf",
+							finished_on: "2025-01-01",
 						},
 						{
 							id: "expiration_recorded",
 							status: "complete",
 							evidence_ref: "Example lease.pdf",
+							finished_on: "2025-01-02",
 						},
 					],
 				},

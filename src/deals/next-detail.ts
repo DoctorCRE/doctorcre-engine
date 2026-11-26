@@ -35,6 +35,20 @@ import {
 
 const HISTORY_CAP = 500;
 
+const chicagoDay = (instant: Expression<unknown>) =>
+	asText(sql`(${instant} at time zone 'America/Chicago')::date`);
+
+// An import can seed the phase at the last observed time without move evidence.
+const seededWithoutMove = sql`(p.changed_by_job is not distinct from 'old_system' and p.happened_at = p.changed_at
+	and not exists (select from deal_phase_change prior
+		where prior.deal_id = p.deal_id and prior.happened_at < p.happened_at))`;
+
+type PhaseSpan = {
+	phase: string;
+	from_on: string | null;
+	to_on: string | null;
+};
+
 type DealEvent = {
 	id: string;
 	activity_id: string | null;
@@ -112,6 +126,14 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 					.orderBy("p.id"),
 			).as("properties"),
 			jsonArrayFrom(stepsOf(db, eb.ref("d.id"))).as("next_actions"),
+			sql<PhaseSpan[]>`(select coalesce(jsonb_agg(jsonb_build_object(
+					'phase', phase, 'from_on', from_on, 'to_on', to_on) order by happened_at), '[]')
+				from (select p.phase, p.happened_at,
+					case when not ${seededWithoutMove} then (p.happened_at at time zone 'America/Chicago')::date end as from_on,
+					(lead(p.happened_at) over (order by p.happened_at) at time zone 'America/Chicago')::date as to_on
+					from deal_phase_change p where p.deal_id = d.id) spans)`.as(
+				"phase_spans",
+			),
 			jsonArrayFrom(
 				selectDealParties(db, eb.ref("d.id"))
 					.select(["dp.role", "p.name", "u.slug as actor", "dp.party_id"])
@@ -172,6 +194,7 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 						asText(eb.ref("lease.executed_on")).as("executed_on"),
 						asText(eb.ref("lease.commencement_on")).as("commencement_on"),
 						asText(eb.ref("lease.expiration_on")).as("expiration_on"),
+						chicagoDay(eb.ref("lease.created_at")).as("recorded_on"),
 						"file.name as evidence_ref",
 						sql.lit("current").as("status"),
 					])
@@ -204,11 +227,7 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 					p.changed_at, coalesce(u.slug, p.changed_by_job), 'move-phase',
 					'phase', null::jsonb, to_jsonb(p.phase), null::text
 				from deal_phase_change p left join app_user u on u.id = p.changed_by_user_id
-				where p.deal_id = d.id
-					-- An import can seed the phase at the last observed time without move evidence.
-					and (p.changed_by_job is distinct from 'old_system' or p.happened_at <> p.changed_at
-						or exists (select from deal_phase_change prior
-							where prior.deal_id = p.deal_id and prior.happened_at < p.happened_at))
+				where p.deal_id = d.id and not ${seededWithoutMove}
 				union all
 				select c.id || ':' || edit.key, c.changed_at, coalesce(u.slug, c.changed_by_job), 'update-deal',
 					case edit.key
@@ -501,6 +520,8 @@ const stepsOf = (db: Transaction<DB>, deal: Expression<string>) =>
 			"s.item_bullets as bullets",
 			"s.source_ref",
 			asText(eb.ref("s.due_on")).as("due_on"),
+			chicagoDay(eb.ref("s.created_at")).$notNull().as("set_on"),
+			chicagoDay(eb.ref("s.done_at")).as("done_on"),
 			"s.status",
 			sql<number | null>`case when s.status = 'open' then (
 				select coalesce(max(c.id), 0) from change c
