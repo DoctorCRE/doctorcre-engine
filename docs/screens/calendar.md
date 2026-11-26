@@ -10,9 +10,16 @@
 - [ ] The whole month fits one screen at common laptop and desktop sizes, without the page scrolling (owner, 2026-11-24).
 - [ ] Day view is an hour-by-hour timeline, like Outlook's day view. Meetings and tours sit at their times. All-day items, such as next steps and critical dates, sit in a band at the top (owner, 2026-11-24).
 - [ ] Items without a date show as a chip, such as "3 without a date". It opens their list in the Calendar panel.
-- [ ] Select any day, empty or not, or an item to see that day's list in the always-open Calendar panel. A click anywhere on a day opens it, and an empty day says “No events scheduled.” (owner, 2026-11-25). On phones the panel sits below the grid. Each row says “Critical date” or “Next step,” shows the date kind or step title and owner, and links to the record. A step title follows the Home step title rule in [Home inbox](home-inbox.md#every-item). Show the full instruction below its heading when the wording differs. A building step with no single open deal shows the building inline.
-- [ ] Late steps stay on their own due day, and each shows how many days late it is. Today's list also starts with a Late group of every late step, and the grid shows a single late-step count for today. Keep critical dates on their recorded day. Snoozed, held and dropped steps are excluded under the same rules as Today reminders.
-- [ ] Coming up lists up to five dates with items in the 14 days after today. It counts from today, not from the selected day. Selecting a date opens its entries in the same panel.
+- [ ] Select any day, empty or not, or an item to see that day's list in the always-open Calendar panel. A click anywhere on a day opens it, and an empty day says “No events scheduled.” (owner, 2026-11-25). On phones the panel sits below the grid.
+- [ ] Every entry follows one template, in this order (owner, 2026-11-25):
+  1. What it is and who owns it: “Next step”, “Critical date”, “Meeting” or “Tour”, then “Joe”, “Dell” or “Joe and Dell”.
+  2. What to do: the step title, the date kind, the meeting title, or the tour's stops. A step title follows the Home step title rule in [Home inbox](home-inbox.md#every-item). The full instruction follows when the wording differs.
+  3. What it is for, linked: “Deal”, “Vendor” or “Building” and its name. A meeting names its matched deals, or else the matched person or company, and leaves this line out when nothing matches. A building step with no single open deal names the building without a link.
+  4. When: the due day, with how many days late when it is late, or the meeting's time.
+  5. Reserved: a short assistant-written summary of the record's history. It is later engine work and is not shown yet.
+- [ ] Month cells show each entry's action as space allows. Week and Day cells add what it is for and the owner.
+- [ ] Late steps stay on their own due day. Today's list also starts with a Late group of every late step. Today's cell lists those late steps like any other entries, never as a bare count. Keep critical dates on their recorded day. Snoozed, held and dropped steps are excluded under the same rules as Today reminders.
+- [ ] Coming up lists up to five dates with items in the 14 days after today. It counts from today, not from the selected day. Each item follows the template without the day it sits under. Selecting a date opens its entries in the same panel.
 - [ ] An empty period says that it has no critical dates or next steps. The Updated time shows the last successful read. Refresh reads again. Month and week navigation reuse the items already read.
 - [ ] Proposals, including automation-added dates copied from the old Calendar, stay on their deal pages. Calendar lists a proposal after a partner confirms it if the deal is open.
 

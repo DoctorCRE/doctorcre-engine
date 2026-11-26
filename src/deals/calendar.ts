@@ -109,6 +109,10 @@ type CalendarStep = Parameters<typeof stepRecordUrl>[0] &
 		days_late: number;
 	};
 
+// The schema gives each step exactly one record, and Calendar shows only vendor parties.
+const recordKind = (step: CalendarStep) =>
+	step.deal_id ? "deal" : step.property_id ? "building" : "vendor";
+
 async function readCalendarSteps(db: Transaction<DB>, now: string) {
 	const at = sql`${now}::timestamptz`;
 	const today = homeDayAt(at);
@@ -132,6 +136,7 @@ async function readCalendarSteps(db: Transaction<DB>, now: string) {
 			what: title,
 			why: instruction,
 			owner: step.owner,
+			record_kind: recordKind(step),
 			record_label: step.context_label,
 			due_on: step.due_on,
 			display_on: step.display_on,
