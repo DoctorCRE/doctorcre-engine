@@ -10,6 +10,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`user_preference`**: a user's own settings and notification choices: their time zone, quiet hours and whether notifications reach their devices.
 - **`home_mark`**: a user's own mark on an item on their Home: snoozed until a time, dropped with a reason, and whom it waits on and why.
 - **`home_update`**: an update about a deal for one user (`update` or `tour_feedback`), with the words shown on Home, the checklist reference or property when applicable, an optional morning hold, and when it was read.
+- **`deal_attention_alert`**: the current alerted attention reason for each open deal, with its `since` date, alerted owner and `home_update` row, so staying reasons do not repeat and a reason that clears and returns later alerts again.
 - **`job`**: the short list of automatic jobs that change rows, such as the mail capture and the publisher, by slug and label.
 - **`do_not_contact`**: a person or company nobody may reach out to, in any role, with the reason and an optional until-date.
 - **`specialty`**: the list of a doctor's specialties, such as general dentistry. Like roles, a label can be renamed.
@@ -1713,11 +1714,13 @@ These saves follow the same session, replay and `{ from, to }` edit rules. They 
 
 ## Deal page redesign
 
-The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping and deal attention are on the deal read. The rest of this section is not built yet.
+The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping, deal attention and attention alerts are built. The rest of this section is not built yet.
 
 ### Deal attention
 
-The deal read and the board read answer `attention` as `{ reason, since }` or null. `reason` is one sentence. `since` is the Central date (`America/Chicago`, `YYYY-MM-DD`) that sentence starts from. The board badge and the deal page's Needs attention line both show that sentence. One alert per new reason is not built yet.
+The deal read and the board read answer `attention` as `{ reason, since }` or null. `reason` is one sentence. `since` is the Central date (`America/Chicago`, `YYYY-MM-DD`) that sentence starts from. The board badge and the deal page's Needs attention line both show that sentence.
+
+`POST /jobs/deals/attention-alerts` requires the jobs Access token, `Engine-Job: attention_alerts` and an `idempotency_key` UUID. It sweeps every deal in one transaction under a transaction advisory lock (`sweepDealAttentionAlerts`), comparing computed attention for open deals owned by an account partner against `deal_attention_alert`. When a deal gains a new reason or changes owner while attention holds, it inserts one `home_update` (`kind: "update"`, `what` set to the reason sentence, null `checklist_item_ref`) and upserts `deal_attention_alert`. The update appears on `/api/engine/updates` and its unread badge, not on Home Reminders. When the sweep runs inside the owner's `user_preference` quiet hours, `held_until` holds the update until `quiet_until` in the owner's time zone. A staying reason for the same owner does not repeat. When attention clears, or the deal is parked, ended or not owned by a partner, the `deal_attention_alert` row is deleted so a returning reason alerts again. The answer is `{ alerted, unchanged, cleared }`. Existing databases need [the deal attention alerts migration](../schema/add-deal-attention-alerts.sql) after owner approval before deploying the sweep. The phone push joins when engine Web Push ships (T3 idea 3).
 
 The first match wins, in this order:
 

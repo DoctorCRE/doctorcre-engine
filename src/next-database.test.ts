@@ -2729,6 +2729,13 @@ const CHANGEABLE: Record<string, string[]> = {
 		"waiting_reason",
 	],
 	home_update: ["read_at"],
+	deal_attention_alert: [
+		"alerted_at",
+		"home_update_id",
+		"owner_user_id",
+		"reason",
+		"since",
+	],
 	document: ["bytes", "content_type", "deal_id", "kind", "name", "sha256"],
 	document_kind: ["label"],
 	offer: ["status"],
@@ -2812,6 +2819,7 @@ const REMOVABLE = [
 	"doc_link",
 	"deal_client_website_attempt",
 	"deal_client_website_grant",
+	"deal_attention_alert",
 	...STORED_AT.filter(
 		(table) =>
 			![
