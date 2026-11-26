@@ -38,9 +38,10 @@ begin
 end $$;
 
 \pset format csv
+-- A later capture's queued_at is not this transaction's now(). Count every existing job as already queued.
 select count(*) as unsplit,
 	count(*) filter (where queued_at = now()) as queued,
-	count(*) filter (where queued_at < now()) as already_queued,
+	count(*) filter (where queued_at is not null and queued_at <> now()) as already_queued,
 	count(*) filter (where queued_at is null) as not_queued
 from email e, lateral (
 	select min(created_at) as queued_at from doc_judgment_job

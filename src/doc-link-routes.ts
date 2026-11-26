@@ -95,11 +95,11 @@ export function claimDocLink(c: Context<WriterEnv>) {
 				? await claimDocWork(
 						tx,
 						owner,
-						asked.has("email_split")
-							? "mac_with_split"
-							: asked.has("judgment")
-								? "mac_with_judgment"
-								: "mac",
+						asked.has("judgment")
+							? asked.has("email_split")
+								? "mac_with_split"
+								: "mac_with_judgment"
+							: "mac",
 					)
 				: null;
 		return work

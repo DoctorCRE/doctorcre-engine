@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { after, before, test } from "node:test";
+import { setTimeout } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
-import { docLinkOwnerTransaction } from "./doc-link.ts";
+import { Hono } from "hono";
+import pg from "pg";
+import { docLinkOwnerTransaction, issueDocLink } from "./doc-link.ts";
+import { claimDocLink } from "./doc-link-routes.ts";
 import { claimDocWork, finishDocJudgment } from "./doc-queue.ts";
 import { copyTest, readSchema } from "./test-copy.ts";
 
@@ -98,6 +102,7 @@ test("the migration gives an existing queue the split kind and its enqueue", asy
 			await db.query(`select
 				(select pg_get_constraintdef(oid) from pg_constraint
 					where conrelid = 'doc_judgment_job'::regclass and conname = 'doc_judgment_job_kind_check') as kinds,
+				(select indexdef from pg_indexes where indexname = 'doc_judgment_job_one_split') as one_split,
 				(select pg_get_functiondef(p.oid) || coalesce(array_to_string(p.proconfig, ','), '')
 					|| has_function_privilege('engine', p.oid, 'execute')
 					|| has_function_privilege('engine_reader', p.oid, 'execute')
@@ -106,12 +111,23 @@ test("the migration gives an existing queue the split kind and its enqueue", asy
 	const fresh = await catalog();
 	await db.query(`alter table doc_judgment_job drop constraint doc_judgment_job_kind_check,
 		add constraint doc_judgment_job_kind_check check (kind in ('email_summary', 'email_filing'));
-		drop function queue_email_split(uuid)`);
+		drop function queue_email_split(uuid);
+		drop index doc_judgment_job_one_split`);
 	const migration = await readSchema("add-email-split-job.sql");
 	await db.query(migration);
 	await db.query(migration);
 	assert.deepEqual(await catalog(), fresh);
 	assert.match(fresh?.kinds, /email_split/);
+	assert.match(fresh?.one_split, /UNIQUE INDEX doc_judgment_job_one_split/);
+	assert.match(
+		fresh?.one_split,
+		/\(activity_id\) WHERE \(kind = 'email_split'::text\)/,
+	);
+	assert.match(fresh?.enqueue, /on conflict do nothing/);
+	assert.doesNotMatch(
+		fresh?.enqueue,
+		/on conflict \(owner_user_id, idempotency_key\)/,
+	);
 	assert.match(fresh?.enqueue, /SECURITY DEFINER[\s\S]*truefalse$/);
 });
 
@@ -229,4 +245,101 @@ test("the backfill queues one split for each unsplit email and prints counts onl
 		],
 	);
 	assert.equal(run("on"), `${counts}5,0,3,2\napplied\n`);
+});
+
+test("Doc-Link-Work claims a split only together with judgment", async () => {
+	const activity = await email(30, "Please split this note.", [JOE]);
+	await queue(activity, JOE);
+	const { credential } = await docLinkOwnerTransaction(
+		connectionString,
+		JOE,
+		(tx) => issueDocLink(tx, JOE),
+	);
+	const mac = new Hono<{
+		Bindings: { DATABASE_WRITER: { connectionString: string } };
+	}>().post("/claim", claimDocLink);
+	const poll = (work: string) =>
+		mac.request(
+			"/claim",
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${credential}`,
+					"Doc-Link-Readiness": "ready",
+					"Doc-Link-Work": work,
+				},
+			},
+			{ DATABASE_WRITER: { connectionString } },
+		);
+
+	assert.equal((await poll("email_split")).status, 204);
+	assert.equal((await poll("judgment")).status, 204);
+	const claimed = await poll("judgment, email_split");
+	assert.equal(claimed.status, 200);
+	const body: unknown = await claimed.json();
+	assert.equal(
+		body !== null && typeof body === "object" && "kind" in body
+			? body.kind
+			: undefined,
+		"email_split",
+	);
+});
+
+test("two mailboxes enqueue one split when they run together", async () => {
+	const activity = await email(31, "Shared inbox.", [JOE, DELL]);
+	const open = async (user: string) => {
+		const client = new pg.Client({
+			connectionString,
+			options: "-c search_path=next -c TimeZone=UTC",
+		});
+		await client.connect();
+		await client.query("begin");
+		await client.query(
+			"select set_config('engine.job', 'mail_capture', true), set_config('engine.user_id', $1, true)",
+			[user],
+		);
+		return client;
+	};
+	const joe = await open(JOE);
+	const dell = await open(DELL);
+	try {
+		await joe.query("select queue_email_split($1)", [activity]);
+		const pid = (
+			await dell.query<{ pid: number }>("select pg_backend_pid() as pid")
+		).rows[0]?.pid;
+		let settled = false;
+		const second = dell
+			.query("select queue_email_split($1)", [activity])
+			.finally(() => {
+				settled = true;
+			});
+		const started = Date.now();
+		while (!settled && Date.now() - started < 5000) {
+			const { rows } = await db.query<{ wait_event_type: string | null }>(
+				"select wait_event_type from pg_stat_activity where pid = $1",
+				[pid],
+			);
+			if (rows[0]?.wait_event_type === "Lock") break;
+			await setTimeout(20);
+		}
+		if (!settled && Date.now() - started >= 5000)
+			throw new Error("second enqueue did not finish or wait");
+		await joe.query("commit");
+		await second;
+		await dell.query("commit");
+		assert.equal(
+			(
+				await db.query(
+					"select count(*)::int as n from doc_judgment_job where activity_id = $1 and kind = 'email_split'",
+					[activity],
+				)
+			).rows[0].n,
+			1,
+		);
+	} finally {
+		await joe.query("rollback").catch(() => undefined);
+		await dell.query("rollback").catch(() => undefined);
+		await joe.end();
+		await dell.end();
+	}
 });

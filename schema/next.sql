@@ -4465,6 +4465,9 @@ end $$;
 revoke execute on function queue_email_summary from public;
 grant execute on function queue_email_summary to engine;
 
+-- Two captures can both pass the not-exists check. The index keeps one row.
+create unique index doc_judgment_job_one_split on doc_judgment_job (activity_id) where kind = 'email_split';
+
 -- One split per email, whichever mailbox captured it first.
 create function queue_email_split(email_id uuid) returns void
 language sql security definer as $$
@@ -4481,7 +4484,7 @@ language sql security definer as $$
 			select from lead_source_sender s
 			where lower(s.address) = e.sender or s.domain = split_part(e.sender, '@', 2)
 		)
-	on conflict (owner_user_id, idempotency_key) do nothing;
+	on conflict do nothing;
 $$;
 
 do $$ begin

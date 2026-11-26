@@ -14,6 +14,10 @@ alter table doc_judgment_job
 	drop constraint if exists doc_judgment_job_kind_check,
 	add constraint doc_judgment_job_kind_check check (kind in ('email_summary', 'email_filing', 'email_split'));
 
+-- Two captures can both pass the not-exists check. One transaction, so the index is not concurrent.
+create unique index if not exists doc_judgment_job_one_split
+	on doc_judgment_job (activity_id) where kind = 'email_split';
+
 -- One split per email, whichever mailbox captured it first.
 create or replace function queue_email_split(email_id uuid) returns void
 language sql security definer as $$
@@ -30,7 +34,7 @@ language sql security definer as $$
 			select from lead_source_sender s
 			where lower(s.address) = e.sender or s.domain = split_part(e.sender, '@', 2)
 		)
-	on conflict (owner_user_id, idempotency_key) do nothing;
+	on conflict do nothing;
 $$;
 
 do $$ begin
@@ -41,10 +45,13 @@ grant execute on function queue_email_split to engine;
 
 commit;
 
--- Read back the kind check and the enqueue function. Expect the three kinds, one security-definer
--- function with the fixed search path, engine execute, and no reader or public execute.
+-- Read back the kind check, the one-split index and the enqueue function. Expect the three kinds,
+-- one partial unique index on activity_id, one security-definer function with the fixed search path,
+-- engine execute, and no reader or public execute.
 -- select pg_get_constraintdef(oid) from pg_constraint
 -- where conrelid = 'next.doc_judgment_job'::regclass and conname = 'doc_judgment_job_kind_check';
+-- select indexdef from pg_indexes
+-- where schemaname = 'next' and indexname = 'doc_judgment_job_one_split';
 -- select p.prosecdef, p.proconfig,
 --   has_function_privilege('engine', p.oid, 'execute') as engine_execute,
 --   has_function_privilege('engine_reader', p.oid, 'execute') as reader_execute,
