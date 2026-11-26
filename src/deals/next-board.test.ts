@@ -618,6 +618,20 @@ test("a deal with no step of its own shows its client's step, check-ins named, w
 				actions(30)?.map(({ description }) => description),
 				["Example send the clinic plans"],
 			);
+			const missing = (deal: number) =>
+				board.deals.find((row) => row.id === id(deal))?.next_step_required;
+			assert.equal(missing(34), false, "a borrowed client step is a next step");
+			assert.equal(missing(30), false, "an undated step is a next step");
+			assert.equal(
+				missing(31),
+				true,
+				"a client step hidden from the row is not a next step",
+			);
+			assert.equal(
+				missing(37),
+				true,
+				"a deal with no shown step has no next step",
+			);
 			assert.ok(board.deals.every((deal) => !("client_actions" in deal)));
 			throw rollback;
 		}),

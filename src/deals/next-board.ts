@@ -478,16 +478,24 @@ export async function readNextBoard(
 	return {
 		schema_version: "local-deals-board.v2",
 		actor: input.partner,
-		deals: deals.map(({ client_actions, ...deal }) => ({
-			...checkInNextStep(names)(deal),
-			open_actions: (deal.open_actions.length === 0 &&
-			openDeals.get(deal.client_id)?.length === 1
-				? client_actions
-				: deal.open_actions
-			).map(boardAction(names)),
-			item_schema_version: "deal-items.v1",
-			next_step_required: deal.next_step === null || deal.next_date === null,
-		})),
+		deals: deals.map(({ client_actions, ...deal }) => {
+			const open_actions = (
+				deal.open_actions.length === 0 &&
+				openDeals.get(deal.client_id)?.length === 1
+					? client_actions
+					: deal.open_actions
+			).map(boardAction(names));
+			return {
+				...checkInNextStep(names)(deal),
+				open_actions,
+				item_schema_version: "deal-items.v1",
+				// The list row shows these steps. A date is not required, and a
+				// borrowed client step counts when it is the step on the row.
+				next_step_required: !open_actions.some(
+					(action) => action.description.trim() !== "",
+				),
+			};
+		}),
 		closed_deals: closed_deals.map(checkInNextStep(names)),
 		lost_deals: lost_deals.map(checkInNextStep(names)),
 		accounts,
