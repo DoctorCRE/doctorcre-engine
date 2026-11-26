@@ -308,6 +308,165 @@ test("only LOI expiry and lease commencement wait on a to-do, and one expected t
 	assert.equal(cleared.arrows.at(-1)?.at_risk, false);
 });
 
+test("a recorded move-in sits on its own day and does not push the invoice", () => {
+	const closed = {
+		phase: "closed",
+		phase_spans: [
+			{ phase: "closing", from_on: "2030-05-01", to_on: "2030-05-28" },
+			{ phase: "closed", from_on: "2030-05-28", to_on: null },
+		],
+	};
+	const without = planOf(
+		facts({
+			...closed,
+			checklist: checklist({
+				expiration_recorded: "2030-05-20",
+				invoice_recorded: "2030-06-10",
+			}),
+		}),
+	);
+	const recorded = planOf(
+		facts({
+			...closed,
+			checklist: checklist({
+				expiration_recorded: "2030-05-20",
+				move_in: "2030-06-01",
+				invoice_recorded: "2030-06-10",
+			}),
+		}),
+	);
+	const invoice = row(recorded, "invoice_recorded");
+	const move = row(recorded, "move_in");
+	assert.equal(
+		invoice?.state === "finished" ? invoice.from_on : null,
+		"2030-05-28",
+	);
+	assert.equal(
+		invoice?.state === "finished" ? invoice.from_on : null,
+		row(without, "invoice_recorded")?.state === "finished"
+			? row(without, "invoice_recorded")?.from_on
+			: null,
+	);
+	assert.equal(move?.state, "finished");
+	assert.equal(move?.state === "finished" ? move.from_on : null, "2030-06-01");
+	assert.equal(move?.state === "finished" ? move.to_on : null, "2030-06-01");
+	assert.ok(
+		!recorded.arrows.some(
+			(arrow) => arrow.from === "move_in" || arrow.to === "move_in",
+		),
+	);
+});
+
+test("a current to-do with no typical length, and every to-do after it, is expected with no days", () => {
+	const plan = planOf(
+		facts({
+			lengths: {},
+			checklist: checklist(),
+			phase_spans: [
+				{ phase: "negotiation", from_on: "2030-06-01", to_on: null },
+			],
+			today: "2030-06-15",
+		}),
+	);
+	const submission = row(plan, "loi_submission");
+	const grid = row(plan, "loi_grid");
+	assert.equal(submission?.state, "expected");
+	assert.equal(
+		submission?.state === "expected"
+			? submission.expected_from_on
+			: "still-current",
+		null,
+	);
+	assert.equal(
+		submission?.state === "expected"
+			? submission.expected_to_on
+			: "still-current",
+		null,
+	);
+	assert.equal(
+		submission && "from_on" in submission ? submission.from_on : null,
+		null,
+	);
+	assert.equal(submission && "day" in submission ? submission.day : null, null);
+	assert.equal(grid?.state, "expected");
+	assert.equal(
+		grid?.state === "expected" ? grid.expected_from_on : "dated",
+		null,
+	);
+	assert.equal(
+		grid?.state === "expected" ? grid.expected_to_on : "dated",
+		null,
+	);
+});
+
+type Todo = NonNullable<ReturnType<typeof row>>;
+type FinishedTodo = Extract<Todo, { state: "finished" }>;
+type CurrentTodo = Extract<Todo, { state: "current" }>;
+type ExpectedTodo = Extract<Todo, { state: "expected" }>;
+type DaylessTodo = Extract<Todo, { state: "not_recorded" | "undated" }>;
+type Assert<T extends true> = T;
+type No<T, K extends string> = K extends keyof T ? false : true;
+type Yes<T, K extends string> = K extends keyof T ? true : false;
+type FinishedKeepsRecordedDays = [
+	Assert<No<FinishedTodo, "expected_from_on">>,
+	Assert<No<FinishedTodo, "expected_to_on">>,
+	Assert<Yes<FinishedTodo, "from_on">>,
+	Assert<Yes<FinishedTodo, "to_on">>,
+];
+type CurrentHoldsTheMix = [
+	Assert<Yes<CurrentTodo, "from_on">>,
+	Assert<Yes<CurrentTodo, "expected_to_on">>,
+	Assert<Yes<CurrentTodo, "day">>,
+	Assert<No<CurrentTodo, "to_on">>,
+	Assert<No<CurrentTodo, "expected_from_on">>,
+];
+type ExpectedKeepsExpectedDays = [
+	Assert<Yes<ExpectedTodo, "expected_from_on">>,
+	Assert<Yes<ExpectedTodo, "expected_to_on">>,
+	Assert<No<ExpectedTodo, "from_on">>,
+	Assert<No<ExpectedTodo, "to_on">>,
+];
+type DaylessKeepsNoDays = [
+	Assert<No<DaylessTodo, "from_on">>,
+	Assert<No<DaylessTodo, "to_on">>,
+	Assert<No<DaylessTodo, "expected_from_on">>,
+	Assert<No<DaylessTodo, "expected_to_on">>,
+	Assert<No<DaylessTodo, "day">>,
+];
+
+test("only the current to-do can hold a recorded start and an expected end", () => {
+	const plan = planOf(facts());
+	const finished = row(plan, "loi_submission");
+	const current = row(plan, "loi_grid");
+	const ahead = row(plan, "business_terms");
+	const missing = row(plan, "tour_notes");
+	const shape: [
+		FinishedKeepsRecordedDays,
+		CurrentHoldsTheMix,
+		ExpectedKeepsExpectedDays,
+		DaylessKeepsNoDays,
+	] = [
+		[true, true, true, true],
+		[true, true, true, true, true],
+		[true, true, true, true],
+		[true, true, true, true, true],
+	];
+	assert.equal(shape.length, 4);
+	assert.equal(finished?.state, "finished");
+	assert.equal(finished && "expected_from_on" in finished, false);
+	assert.equal(finished && "expected_to_on" in finished, false);
+	assert.equal(current?.state, "current");
+	assert.equal(current && "from_on" in current, true);
+	assert.equal(current && "expected_to_on" in current, true);
+	assert.equal(current && "to_on" in current, false);
+	assert.equal(current && "expected_from_on" in current, false);
+	assert.equal(ahead && "from_on" in ahead, false);
+	assert.equal(ahead && "to_on" in ahead, false);
+	assert.equal(missing?.state, "not_recorded");
+	assert.equal(missing && "from_on" in missing, false);
+	assert.equal(missing && "expected_to_on" in missing, false);
+});
+
 test("move-in has no day until one is recorded, and the 90-day check-in follows a recorded move-in", () => {
 	const plan = planOf(facts());
 	assert.partialDeepStrictEqual(row(plan, "move_in"), {
