@@ -21,6 +21,7 @@ if (args.includes("auth")) {
 } else {
 	const input = JSON.parse(readFileSync(0, "utf8"));
 	const question = input.turn?.question ?? input.subject;
+	let prompt = "";
 	if (!input.turn) {
 		const valueAfter = (flag: string) => args[args.indexOf(flag) + 1];
 		assert.ok(args.includes("--strict-mcp-config"));
@@ -29,7 +30,7 @@ if (args.includes("auth")) {
 			mcpServers: {},
 		});
 		assert.equal(process.env.DOC_LINK_CREDENTIAL, undefined);
-		const prompt = valueAfter("--system-prompt") ?? "";
+		prompt = valueAfter("--system-prompt") ?? "";
 		assert.match(prompt, /untrusted data/);
 		assert.ok(!prompt.includes(input.body));
 	}
@@ -50,12 +51,20 @@ if (args.includes("auth")) {
 		process.exitCode = 1;
 	} else if (!input.turn) {
 		const quote = input.body.split("\n")[0];
+		const authored = input.body
+			.split(/\n\n/)
+			.map((part: string) => part.trim())
+			.filter(Boolean);
 		finished(
-			input.destinations
-				? {
-						facts: [{ destination: input.destinations[0], text: quote, quote }],
-					}
-				: { summary: quote, action_title: null, quote },
+			prompt.includes('{"authored"')
+				? { authored }
+				: input.destinations
+					? {
+							facts: [
+								{ destination: input.destinations[0], text: quote, quote },
+							],
+						}
+					: { summary: quote, action_title: null, quote },
 		);
 	} else {
 		emit({ type: "system", subtype: "init" });
