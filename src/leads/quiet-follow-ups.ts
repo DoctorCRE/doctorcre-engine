@@ -1,12 +1,15 @@
 import { sql, type Transaction } from "kysely";
 import type { DB } from "../next-database.d.ts";
 import {
+	chicagoDay,
 	copiedLeadIdentity,
 	lastRecordedContacts,
 	openPartySteps,
+	vendorIsQuiet,
 } from "./follow-up-reads.ts";
 
 export type Cadence = { lead_days: number; vendor_days: number };
+export const DEFAULT_CADENCE: Cadence = { lead_days: 45, vendor_days: 90 };
 
 type Proposal = {
 	subject_type: "lead" | "vendor";
@@ -35,7 +38,7 @@ const OPEN_STAGES = [
 	"nurture",
 ];
 
-const today = sql`(now() at time zone 'America/Chicago')::date`;
+const today = chicagoDay(sql`now()`);
 
 const proposals = (
 	db: Transaction<DB>,
@@ -73,13 +76,13 @@ const proposals = (
 						and ch.record = jsonb_build_object('id', n.id)
 				)
 		) steps
-		where ((r.role = 'lead' and r.stage = any(${OPEN_STAGES}::text[]))
-			or (r.role = 'vendor' and r.disposition is null))
-			and not exists (select from active_do_not_contact dnc where dnc.party_id = p.id)
-			and coalesce(c.status, '') not in ('cold', 'paused')
-			and (${ownerSlug}::text is null or u.slug = ${ownerSlug}::text)
-			and not steps.has_open_step
-			and (c.party_id = p.id or not exists (${openPartySteps(sql.ref("c.party_id"))}))
+		where (${ownerSlug}::text is null or u.slug = ${ownerSlug}::text)
+			and ((r.role = 'lead' and r.stage = any(${OPEN_STAGES}::text[])
+				and not exists (select from active_do_not_contact dnc where dnc.party_id = p.id)
+				and coalesce(c.status, '') not in ('cold', 'paused')
+				and not steps.has_open_step
+				and (c.party_id = p.id or not exists (${openPartySteps(sql.ref("c.party_id"))})))
+			or (r.role = 'vendor' and ${vendorIsQuiet("r", "recorded", cadence.vendor_days)}))
 	), due as (
 		select s.*, coalesce(last_contact_on, created_on) as anchor_on,
 			coalesce(next_action_date, coalesce(last_contact_on, created_on) + interval_days) as due_on

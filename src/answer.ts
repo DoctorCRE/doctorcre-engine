@@ -343,6 +343,7 @@ export type Verb =
 	| "read-tour-stop-list"
 	| "read-updates"
 	| "read-vendor-meetings"
+	| "read-vendor-summary"
 	| "resolve-action-link"
 	| "search-parties-v1"
 	| "search-properties";
