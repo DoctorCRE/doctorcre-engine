@@ -84,13 +84,21 @@ export function claimDocLink(c: Context<WriterEnv>) {
 			);
 
 		await recordDocPoll(tx, owner, readiness);
+		const asked = new Set(
+			c.req
+				.header("Doc-Link-Work")
+				?.split(",")
+				.map((token) => token.trim()),
+		);
 		const work =
 			readiness === "ready"
 				? await claimDocWork(
 						tx,
 						owner,
-						c.req.header("Doc-Link-Work") === "judgment"
-							? "mac_with_judgment"
+						asked.has("judgment")
+							? asked.has("email_split")
+								? "mac_with_split"
+								: "mac_with_judgment"
 							: "mac",
 					)
 				: null;
