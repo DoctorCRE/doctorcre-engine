@@ -605,3 +605,56 @@ test("cleans a stored authored part like an unsplit body and folds stored histor
 		],
 	);
 });
+
+test("a sign-off folds only a known title or contact details after the name, never a sentence", () => {
+	const sam = (body: string) => ({
+		body,
+		sender: "sam@example.test",
+		sender_name: "Sam Example",
+	});
+	const kept = [
+		"Here it is.\nThanks, Sam Example Call Me Soon",
+		"Here it is.\nThanks, Sam Example Agent called me",
+		"Here it is. Thanks, Sam Example Call 555-010-2000 to confirm",
+		"Here it is. Sam called Example Realty",
+	];
+	for (const note of kept) {
+		assert.deepEqual(cleanEmailThread([sam(note)]), [
+			{ body: note, folded: null },
+		]);
+	}
+	const folds: [note: string, signature: string][] = [
+		["Here it is.\nThanks, Sam Example", "Thanks, Sam Example"],
+		["Here it is.\nThanks,\nSam", "Thanks,\nSam"],
+		[
+			"Here it is.\nThanks, Sam Example Agent | Example Realty",
+			"Thanks, Sam Example Agent | Example Realty",
+		],
+	];
+	for (const [note, signature] of folds) {
+		assert.deepEqual(cleanEmailThread([sam(note)]), [
+			{ body: "Here it is.", folded: signature },
+		]);
+	}
+});
+
+test("a sign-off stands for the name of a signature the sender is stored under only in part", () => {
+	const rob = (body: string) => ({
+		body,
+		sender: "rob@example.test",
+		sender_name: "Rob",
+	});
+	for (const signature of [
+		"Thanks,\nRobert C. Jackson\n(555) 010-2000\nFax (555) 010-2001",
+		"Thanks\nRobert Jackson\nAgent\nDirect: 555-010-2000",
+	]) {
+		assert.deepEqual(
+			cleanEmailThread([rob(`Plan attached.\n\n${signature}`)]),
+			[{ body: "Plan attached.", folded: signature }],
+		);
+	}
+	const sentence = "Plan attached.\nThanks,\nCall Me Soon\nPlease use the door";
+	assert.deepEqual(cleanEmailThread([rob(sentence)]), [
+		{ body: sentence, folded: null },
+	]);
+});

@@ -278,6 +278,7 @@ function signatureName(name: string) {
 }
 
 const titleParts = /^[A-Z][\w'&.-]*(?: [A-Z][\w'&.-]*)*$/;
+const nameLine = /^[A-Z][\w'.-]*(?: [A-Z][\w'.-]*){1,3}$/;
 
 function inlineSignature(line: string, signer: RegExp) {
 	const match = [...line.matchAll(signer)].at(-1);
@@ -298,11 +299,16 @@ function inlineSignature(line: string, signer: RegExp) {
 		const end = Math.min(line.length, detailStart + index + 1);
 		if (contactDetails(line.slice(detailStart, end))) return { start, end };
 	}
-	const titles = details.trim() ? details.trimEnd().split(/\s*\|\s*/) : [];
+	const [title, ...rest] = details.trim()
+		? details.trimEnd().split(/\s*\|\s*/)
+		: [];
+	// A title must be a known one; a Capitalized run alone can be a sentence ("Call Me Soon").
 	if (
 		signed &&
 		details.length <= 120 &&
-		titles.every((part) => titleParts.test(part))
+		(!title ||
+			(signatureDetail.test(title) &&
+				rest.every((part) => titleParts.test(part))))
 	)
 		return { start, end: line.length };
 }
@@ -315,18 +321,35 @@ function footerRanges(body: string, name: string) {
 	let start = 0;
 	let hasContact = false;
 	let hasName = false;
+	let signed = false;
+	let named = false;
+	let afterSignOff = false;
 	let offset = 0;
 	const signer = signatureName(name);
 	for (const raw of body.split("\n")) {
 		const line = raw.trim();
 		const lower = line.toLowerCase();
-		const named = !!name && (lower === name || lower === name.split(" ", 1)[0]);
+		const isName =
+			!!name && (lower === name || lower === name.split(" ", 1)[0]);
+		const isSignOff = signOff.test(line);
+		// A sign-off stands for the name, and a Title-Case line right after it is the name.
+		const nameAfterSignOff = afterSignOff && nameLine.test(line);
 		const contact = line.length <= 500 && contactDetails(line);
-		if (contact || named || signOff.test(line) || signatureDetail.test(line)) {
+		if (
+			contact ||
+			isName ||
+			isSignOff ||
+			nameAfterSignOff ||
+			signatureDetail.test(line)
+		) {
 			hasContact ||= contact;
-			hasName ||= named;
+			hasName ||= isName || isSignOff || nameAfterSignOff;
+			named ||= isName;
+			signed ||= isSignOff;
+			afterSignOff = isSignOff;
 		} else {
-			if (hasContact && hasName) ranges.push({ start, end: offset - 1 });
+			if ((hasContact && hasName) || (signed && named))
+				ranges.push({ start, end: offset - 1 });
 			const inline = signer && inlineSignature(raw, signer);
 			if (inline)
 				ranges.push({ start: offset + inline.start, end: offset + inline.end });
@@ -336,10 +359,14 @@ function footerRanges(body: string, name: string) {
 			start = offset + raw.length + 1;
 			hasContact = false;
 			hasName = false;
+			signed = false;
+			named = false;
+			afterSignOff = false;
 		}
 		offset += raw.length + 1;
 	}
-	if (hasContact && hasName) ranges.push({ start, end: body.length });
+	if ((hasContact && hasName) || (signed && named))
+		ranges.push({ start, end: body.length });
 	return ranges;
 }
 
