@@ -60,7 +60,7 @@ before(async () => {
 		insert into role (slug, label) values
 			('client', 'Client'), ('client_contact', 'Client contact'),
 			('listing_agent', 'Listing agent'), ('landlord_rep', 'Landlord rep');
-		insert into phase (slug, label) values ('closed', 'Closed');
+		insert into phase (slug, label) values ('closed', 'Closed'), ('negotiation', 'Negotiation');
 		insert into party (id, kind, name) values
 			('${joe}', 'person', 'Joe'), ('${dell}', 'person', 'Dell'),
 			('${broker}', 'person', 'Example Broker');
@@ -359,4 +359,49 @@ test("a hand-set flag is not the deal's attention", async () => {
 	);
 	assert.equal(rows[0]?.needs_attention, true);
 	assert.equal((await seen(flagged)).attention, null);
+});
+
+test("an invoiced deal with a late step answers null", async () => {
+	const invoiced = await deal("Example invoiced late", addDays(today, -30));
+	await step(invoiced, addDays(today, -2), addDays(today, -20));
+	await job(`insert into imported_deal_invoiced (deal_id, invoiced_on) values
+		('${invoiced}', '${today}');`);
+
+	const result = await seen(invoiced);
+	assert.equal(result.attention, null);
+	assert.equal(result.onBoard, false);
+});
+
+test("imported history that ends a deal answers null", async () => {
+	const ended = await deal("Example imported ended", addDays(today, -30));
+	await step(ended, addDays(today, -2), addDays(today, -20));
+	const happened = "2020-01-15 15:00:00+00";
+	await job(`insert into deal_phase_change (deal_id, happened_at, phase) values
+		('${ended}', '${happened}', 'negotiation');
+		insert into imported_deal_board (deal_id, phase, phase_at, outcome, closed_on) values
+		('${ended}', 'closed', '${happened}', 'won', '2020-01-15');`);
+
+	const result = await seen(ended);
+	assert.equal(result.attention, null);
+	assert.equal(result.onBoard, false);
+});
+
+test("the first matching rule wins when two rules match", async () => {
+	const lateAndDated = await deal(
+		"Example late and dated",
+		addDays(today, -30),
+	);
+	await step(lateAndDated, addDays(today, -1), addDays(today, -20));
+	await job(`insert into critical_date (deal_id, kind, due_on, source) values
+		('${lateAndDated}', 'loi_expiry', '${addDays(today, 1)}', 'Example lease');`);
+	const quiet = await deal("Example quiet and stepless", addDays(today, -30));
+
+	assert.deepEqual((await seen(lateAndDated)).attention, {
+		reason: "A next step is late.",
+		since: today,
+	});
+	assert.deepEqual((await seen(quiet)).attention, {
+		reason: "This deal has no next step and no suggestion.",
+		since: addDays(today, -30),
+	});
 });

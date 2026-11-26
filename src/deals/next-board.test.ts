@@ -526,6 +526,18 @@ test("National counts a late open step once and skips retained completion and ch
 			assert.partialDeepStrictEqual(board.accounts, [
 				{ account_client_id: id(16), overdue_deals: 1 },
 			]);
+			const account = board.accounts.find(
+				(row) => row.account_client_id === id(16),
+			);
+			assert.ok(account);
+			const badges = board.deals.filter(
+				(deal) =>
+					deal.account_client_id === id(16) &&
+					deal.operating_state === "active" &&
+					deal.attention != null,
+			);
+			assert.equal(account.attention_deals, badges.length);
+			assert.ok(badges.some((deal) => deal.id === id(30)));
 			throw rollback;
 		}),
 		rollback,

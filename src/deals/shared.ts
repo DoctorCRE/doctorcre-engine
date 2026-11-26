@@ -8,7 +8,7 @@ export const RETIRED_ITEM_STATUSES = ["dropped", "expired"] as const;
 export const CLOSED_PHASES = ["closed", "invoiced"];
 export const ENDED_PHASES = [...CLOSED_PHASES, "dead"];
 
-export const importedPhaseIsCurrent = (phaseAt: Expression<string | null>) =>
+const importedPhaseIsCurrent = (phaseAt: Expression<string | null>) =>
 	sql<boolean>`imported.phase is not null and imported.phase_at is not distinct from ${phaseAt}`;
 
 export const isLostDeal = (
@@ -16,6 +16,35 @@ export const isLostDeal = (
 	phaseAt: Expression<string | null>,
 ) => sql<boolean>`case when ${importedPhaseIsCurrent(phaseAt)} then imported.outcome is not distinct from 'lost'
 	else ${phase} is not distinct from 'dead' end`;
+
+// One derivation for the board columns and deal attention. Aliases match selectNextDeals.
+const phaseAt = sql<string | null>`p.happened_at`;
+const boardImportedHistory = importedPhaseIsCurrent(phaseAt);
+export const boardLost = isLostDeal(sql`p.phase`, phaseAt);
+export const boardPhase = sql<
+	string | null
+>`case when ${boardImportedHistory} then imported.phase else p.phase end`;
+export const boardOutcome = sql<
+	"won" | "lost" | null
+>`case when ${boardLost} then 'lost' when ${boardImportedHistory} then imported.outcome
+	when last_close.happened_at is not null then 'won' end`;
+export const boardClosedOn = sql<
+	string | null
+>`case when ${boardImportedHistory} then imported.closed_on
+	when p.phase = 'dead' then (p.happened_at at time zone 'America/Chicago')::date
+	else (last_close.happened_at at time zone 'America/Chicago')::date end`;
+export const boardInvoicedOn = sql<
+	string | null
+>`(select invoiced_on from deal_invoiced where deal_id = d.id)`;
+
+export const openBoardDeal = (
+	phase: Expression<unknown>,
+	outcome: Expression<unknown>,
+	closedOn: Expression<unknown>,
+	invoicedOn: Expression<unknown>,
+) =>
+	sql<boolean>`${outcome} is null and ${closedOn} is null and ${invoicedOn} is null
+		and (${phase} is null or ${phase} not in (${sql.join(ENDED_PHASES)}))`;
 
 // Over a deal board view aliased "b".
 export const nextStepRequired =

@@ -1,5 +1,11 @@
 import { sql } from "kysely";
-import { ENDED_PHASES } from "./shared.ts";
+import {
+	boardClosedOn,
+	boardInvoicedOn,
+	boardOutcome,
+	boardPhase,
+	openBoardDeal,
+} from "./shared.ts";
 
 // The deal and board reads share this. It uses the select's aliases
 // (d, p, imported, last_close) and unqualified names, so a partner read
@@ -7,18 +13,12 @@ import { ENDED_PHASES } from "./shared.ts";
 // First match wins, in the order in docs/new-database.md#deal-attention.
 // A parked or ended deal stays on its list and answers null. The stored
 // needs_attention flag is not read.
-const importedCurrent = sql`imported.phase is not null
-	and imported.phase_at is not distinct from p.happened_at`;
-const openDeal = sql`d.parking_reason is null
-	and not exists (select from deal_invoiced where deal_id = d.id)
-	and (case when ${importedCurrent} then imported.outcome
-		when p.phase is not distinct from 'dead' then 'lost'
-		when last_close.happened_at is not null then 'won' end) is null
-	and (case when ${importedCurrent} then imported.closed_on
-		when p.phase = 'dead' then (p.happened_at at time zone 'America/Chicago')::date
-		else (last_close.happened_at at time zone 'America/Chicago')::date end) is null
-	and coalesce(case when ${importedCurrent} then imported.phase else p.phase end, '')
-		not in (${sql.join(ENDED_PHASES)})`;
+const openDeal = sql`d.parking_reason is null and ${openBoardDeal(
+	boardPhase,
+	boardOutcome,
+	boardClosedOn,
+	boardInvoicedOn,
+)}`;
 
 const central = (at: ReturnType<typeof sql>) =>
 	sql`(${at} at time zone 'America/Chicago')::date`;

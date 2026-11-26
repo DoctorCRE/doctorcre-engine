@@ -17,16 +17,23 @@ import type { BoardInputs, Scope } from "./board.ts";
 import { CLIENT_WEBSITE_ORIGIN } from "./client-website.ts";
 import { automaticPhaseReceipt, phaseReceiptFields } from "./phase-receipt.ts";
 import {
+	boardClosedOn,
+	boardInvoicedOn,
+	boardLost,
+	boardOutcome,
+	boardPhase,
 	CLOSED_PHASES,
-	ENDED_PHASES,
-	importedPhaseIsCurrent,
-	isLostDeal,
+	openBoardDeal,
 } from "./shared.ts";
 
 type BoardList = "open" | "closed" | "lost";
 // Keep this in step with sync_deal_open_name in schema/next.sql.
-export const isOpenBoardDeal = sql<boolean>`outcome is null and closed_on is null
-	and invoiced_on is null and (phase is null or phase not in (${sql.join(ENDED_PHASES)}))`;
+export const isOpenBoardDeal = openBoardDeal(
+	sql`phase`,
+	sql`outcome`,
+	sql`closed_on`,
+	sql`invoiced_on`,
+);
 // Today's board groups by brand and owner as they stand on the partners' calendar day.
 const covers = (
 	from: Expression<string>,
@@ -133,26 +140,10 @@ export const selectNextDeals = (
 		)
 		.select((eb) => {
 			const phaseAt = eb.ref("p.happened_at");
-			const importedHistory = importedPhaseIsCurrent(phaseAt);
-			const lost = isLostDeal(eb.ref("p.phase"), phaseAt);
-			const outcome = sql<
-				"won" | "lost" | null
-			>`case when ${lost} then 'lost' when ${importedHistory} then imported.outcome
-				when last_close.happened_at is not null then 'won' end`;
 			return [
-				eb
-					.case()
-					.when(importedHistory)
-					.then(eb.ref("imported.phase"))
-					.else(eb.ref("p.phase"))
-					.end()
-					.as("phase"),
-				outcome.as("outcome"),
-				sql<string | null>`(case when ${importedHistory} then imported.closed_on
-					when p.phase = 'dead' then (p.happened_at at time zone 'America/Chicago')::date
-					else (last_close.happened_at at time zone 'America/Chicago')::date end)::text`.as(
-					"closed_on",
-				),
+				boardPhase.as("phase"),
+				boardOutcome.as("outcome"),
+				sql<string | null>`(${boardClosedOn})::text`.as("closed_on"),
 				sql<string | null>`case when p.phase = 'dead' then p.reason end`.as(
 					"lost_reason",
 				),
@@ -173,7 +164,7 @@ export const selectNextDeals = (
 				"a.account_owner",
 				eb
 					.case()
-					.when(lost)
+					.when(boardLost)
 					.then(null)
 					.else(
 						eb.fn.coalesce(
@@ -236,11 +227,7 @@ export const selectNextDeals = (
 			];
 		})
 		.select([
-			sql<
-				string | null
-			>`(select invoiced_on::text from deal_invoiced where deal_id = d.id)`.as(
-				"invoiced_on",
-			),
+			sql<string | null>`(${boardInvoicedOn})::text`.as("invoiced_on"),
 			sql<
 				string | null
 			>`(select due_on::text from deal_next_date where deal_id = d.id)`.as(
@@ -456,7 +443,18 @@ export async function readNextBoard(
 		...[...closed_deals, ...lost_deals].map(({ next_step }) => next_step),
 	]);
 	// The client copy leaves prospects outside national_account.
-	const { rows: accounts } = await sql`
+	const { rows: accounts } = await sql<{
+		account_client_id: string;
+		account_name: string;
+		account_owner: string | null;
+		base_version: number;
+		account_client_ref: string | null;
+		open_deals: number;
+		parked_deals: number;
+		attention_deals: number;
+		overdue_deals: number;
+		stale_deals: number;
+	}>`
 		select na.party_id as account_client_id, p.name as account_name, u.slug as account_owner,
 			(select coalesce(max(ch.id), 0)::float8 from change ch
 				where ch.table_name = 'national_account_owner' and ch.record = jsonb_build_object('id', o.id)) as base_version,
