@@ -98,7 +98,7 @@ const replyOpenerEnd = new RegExp(`${replyOpener.source}$`, "i");
 const forwarded =
 	/\bBegin forwarded message:|(?<!-)-{2,} *(?:original|forwarded) message *-{2,}/i;
 const headerField =
-	/(?<![^\s.…>])\*?(From|Sent|Date|To|Cc|Bcc|Subject):\*?(?=\s|$)/gi;
+	/(?<![^\s.…>])\*{0,2}(From|Sent|Date|To|Cc|Bcc|Subject)(?::\*{0,2}|\*{1,2}:)(?=\s|$)/gi;
 const phone = /(?:\+?1[ .-]*)?(?:\(\d{3}\)|\d{3})[ .-]*\d{3}[ .-]*\d{4}/;
 const address = /[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+/;
 const website = /(?:https?:\/\/|www\.)[^\s<>]+/i;
@@ -201,7 +201,8 @@ function headerStart(body: string, limit = body.length) {
 		const labels = new Set<string>();
 		for (const [offset, next] of fields.slice(index, index + 7).entries()) {
 			if (next.index - field.index > 3500) break;
-			const label = next[1]?.toLowerCase() ?? "";
+			const raw = next[1]?.toLowerCase() ?? "";
+			const label = raw === "sent" ? "date" : raw;
 			if (labels.has(label)) break;
 			const value = body
 				.slice(next.index + next[0].length, fields[index + offset + 1]?.index)
@@ -212,13 +213,27 @@ function headerStart(body: string, limit = body.length) {
 				labels.has("from") &&
 				labels.has("to") &&
 				labels.has("subject") &&
-				(labels.has("sent") || labels.has("date"))
+				labels.has("date")
 			)
 				return true;
 		}
 		return false;
 	});
 	return fields[header]?.index ?? body.length;
+}
+
+function leadingDivider(body: string, boundary: number) {
+	if (boundary >= body.length) return boundary;
+	const quoted = body
+		.slice(0, boundary)
+		.search(/(?:^|(?<=[\r\n]))[ \t]*>[> \t]*$/);
+	const start = quoted >= 0 ? quoted : boundary;
+	const divider = body
+		.slice(0, start)
+		.search(
+			/(?:(?<!_)_{8,}|(?:^|(?<=[\r\n]))[ \t]*[-_=*]{3,}[ \t]*[\r\n])\s*$/,
+		);
+	return divider >= 0 ? divider : start;
 }
 
 function historyStart(body: string) {
@@ -228,9 +243,20 @@ function historyStart(body: string) {
 			(at) => at >= 0,
 		),
 	);
-	const boundary = Math.min(headerStart(body, start), start);
-	const divider = body.slice(0, boundary).search(/(?<!_)_{8,}\s*$/);
-	return boundary < body.length && divider >= 0 ? divider : boundary;
+	return leadingDivider(body, Math.min(headerStart(body, start), start));
+}
+
+function splitStoredAuthored(authored: string, history: string) {
+	const start = leadingDivider(authored, headerStart(authored));
+	if (start >= authored.length) {
+		return { body: authored, folded: history || null };
+	}
+	const moved = authored.slice(start).trim();
+	const stored = history.trim();
+	return {
+		body: authored.slice(0, start).trimEnd(),
+		folded: stored ? `${moved}\n\n${stored}` : moved,
+	};
 }
 
 function contactDetails(line: string) {
@@ -418,26 +444,43 @@ function partitionBody(
 	return { body: removed.size ? hidden : original, folded: null };
 }
 
-export function cleanEmailThread(messages: (Sender & { body: string })[]) {
+export function cleanEmailThread(
+	messages: (Sender & {
+		body: string;
+		authored?: string | null;
+		history?: string | null;
+	})[],
+) {
 	const earlier = new Set<string>();
 	const senders = new Map<string, MailLine[][]>();
-	const cleaned = messages.map(({ body, sender, sender_name }) => {
-		const lines = mailLines(body);
-		const content = lines.filter(({ text }) => text.trim());
-		const removed = historyLines(content, earlier);
-		for (const { key } of content) {
-			if (key) earlier.add(key);
-		}
+	const cleaned = messages.map(
+		({ body, authored = null, history = null, sender, sender_name }) => {
+			const lines = mailLines(body);
+			const content = lines.filter(({ text }) => text.trim());
+			const removed = historyLines(content, earlier);
+			for (const { key } of content) {
+				if (key) earlier.add(key);
+			}
 
-		const address = sender.trim().toLowerCase();
-		if (address) {
-			const own = content.filter((line) => !removed.has(line));
-			const group = senders.get(address);
-			if (group) group.push(own);
-			else senders.set(address, [own]);
-		}
-		return { body, lines, content, removed, sender_name, sender };
-	});
+			const address = sender.trim().toLowerCase();
+			if (address) {
+				const own = content.filter((line) => !removed.has(line));
+				const group = senders.get(address);
+				if (group) group.push(own);
+				else senders.set(address, [own]);
+			}
+			return {
+				body,
+				authored,
+				history,
+				lines,
+				content,
+				removed,
+				sender_name,
+				sender,
+			};
+		},
+	);
 
 	const recurring = new Set<MailLine>();
 	for (const group of senders.values()) {
@@ -448,6 +491,9 @@ export function cleanEmailThread(messages: (Sender & { body: string })[]) {
 	}
 
 	return cleaned.map((message) => {
+		if (message.authored !== null) {
+			return splitStoredAuthored(message.authored, message.history ?? "");
+		}
 		const { body, lines, content, removed } = message;
 		let inInvite = false;
 		for (const line of content) {
@@ -551,11 +597,8 @@ export async function readHomeEmailThread(
 			activity_id,
 			sender_name,
 			happened_at,
-			body: display.authored ?? cleaned?.body ?? display.body,
-			folded:
-				display.authored === null
-					? (cleaned?.folded ?? null)
-					: display.history || null,
+			body: cleaned?.body ?? display.body,
+			folded: cleaned?.folded ?? null,
 		};
 	});
 	const sourceActivity = source && {
