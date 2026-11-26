@@ -8,6 +8,7 @@ import { filingReviewNeeded } from "../activity/filing-evidence.ts";
 import {
 	decisionPosition,
 	mailGroup,
+	readHomeEmailThread,
 	senderLabel,
 } from "../home-email-thread.ts";
 import {
@@ -288,6 +289,24 @@ export async function readNextDealDocumentText(
 		)
 		.executeTakeFirst();
 	return file ? { pages: file.pages ?? [] } : null;
+}
+
+// The conversation of an email filed to the deal, as Home shows it to the same partner.
+export async function readNextDealEmailThread(
+	db: Transaction<DB>,
+	userId: string,
+	{ deal, email }: { deal: string; email: string },
+) {
+	const filed = await db
+		.selectFrom("activity_about as ab")
+		.innerJoin("email as e", "e.activity_id", "ab.activity_id")
+		.select("e.activity_id")
+		.where("ab.deal_id", "=", deal)
+		.where("ab.activity_id", "=", email)
+		.executeTakeFirst();
+	if (!filed) return null;
+	const { thread } = await readHomeEmailThread(db, userId, email);
+	return { thread };
 }
 
 export async function readNextDealDetail(

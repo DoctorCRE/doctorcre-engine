@@ -16,26 +16,45 @@ import { decodeCursor, readChanges } from "./changes.ts";
 import { readClientFit } from "./client-fit.ts";
 import { readDealDetail } from "./detail.ts";
 import { readNextBoard } from "./next-board.ts";
-import { readNextDealDetail, readNextDealDocumentText } from "./next-detail.ts";
+import {
+	readNextDealDetail,
+	readNextDealDocumentText,
+	readNextDealEmailThread,
+} from "./next-detail.ts";
 import { lookupRefusal } from "./resolve.ts";
 
-export const dealDocumentText = new Hono<DatabaseEnv>().get(
-	"/deals/:deal/documents/:document/text",
-	async (c): Promise<Response> => {
+export const dealSourceReads = new Hono<DatabaseEnv>()
+	.get(
+		"/deals/:deal/documents/:document/text",
+		async (c): Promise<Response> => {
+			const refused = checkFields(new URL(c.req.url).searchParams, []);
+			if (refused) return refuse(c, refused);
+			const { deal, document } = c.req.param();
+			if (!isUuid(deal) || !isUuid(document))
+				return refuse(c, new Refusal(404, "not_found"));
+			return answerNextRead(
+				c,
+				"read-deal-document-text",
+				async (db) =>
+					(await readNextDealDocumentText(db, { deal, document })) ??
+					new Refusal(404, "not_found"),
+			);
+		},
+	)
+	.get("/deals/:deal/emails/:email", async (c): Promise<Response> => {
 		const refused = checkFields(new URL(c.req.url).searchParams, []);
 		if (refused) return refuse(c, refused);
-		const { deal, document } = c.req.param();
-		if (!isUuid(deal) || !isUuid(document))
+		const { deal, email } = c.req.param();
+		if (!isUuid(deal) || !isUuid(email))
 			return refuse(c, new Refusal(404, "not_found"));
 		return answerNextRead(
 			c,
-			"read-deal-document-text",
-			async (db) =>
-				(await readNextDealDocumentText(db, { deal, document })) ??
+			"read-deal-email-thread",
+			async (db, userId) =>
+				(await readNextDealEmailThread(db, userId, { deal, email })) ??
 				new Refusal(404, "not_found"),
 		);
-	},
-);
+	});
 
 export const deals = new Hono<
 	DatabaseEnv & {
