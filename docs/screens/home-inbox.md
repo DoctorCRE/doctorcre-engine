@@ -10,7 +10,7 @@ Home answers three questions on one screen, left to right: what do I have to do,
 - [ ] On a phone the tiles are one column and the page scrolls, in this order: Today's meetings, Reminders, Inbox, Deals, Coming up, Leads, In motion and waiting. Every list tile (Reminders, Inbox, In motion and waiting) previews its first four rows with **See all** and the count. With touch, text is 16px and touch targets are 44px.
 - [ ] Home has no permanent right panel, hero, greeting, date banner, explainer text, Mail priorities, Refresh inbox, Search inbox, **Done today** or **Earlier completions**. Finished work stays openable from its record's history with any Undo still available there.
 - [ ] Each tile heading shows its count. A tile with nothing in it is not drawn, and the other tiles take its space.
-- [ ] Rows, not cards. Tiles are a slightly lighter surface with no outline. Body text is 14px and captions 12px with a mouse or trackpad. Color marks only late (red text), flagged (amber dot) and new leads (blue dot). See [design principles](../design-principles.md).
+- [ ] Rows, not cards. Tiles are a slightly lighter surface with no outline. Body text is 14px and captions 12px with a mouse or trackpad. Color marks only late (red text), needs attention (amber dot) and new leads (blue dot). See [design principles](../design-principles.md).
 
 ## Reminders
 

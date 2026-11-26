@@ -127,7 +127,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] A deal closed or lost and a prospect dropped this week stay in place, saying so, so the count holds.
 - [ ] Parked deals come last in the Monday review, after prospects (owner, 2026-11-18).
 - [ ] The top says how far along it is: "31 of 47 reviewed this week". Not reviewed only hides the reviewed ones.
-- [ ] One at a time shows one deal or prospect: its name, owner, phase or "Prospect", Needs attention, next step or follow-up, its latest notes and the note box. Next and Back move through the list. An automatic check-in reads as on [Home](home-inbox.md#every-item), such as "Check in with Example Clinic (client)".
+- [ ] One at a time shows one deal or prospect: its name, owner, phase or "Prospect", Needs attention (a deal's when the review read gives its [attention](../new-database.md#deal-attention) a reason, a prospect's when a partner set it), next step or follow-up, its latest notes and the note box. Next and Back move through the list. An automatic check-in reads as on [Home](home-inbox.md#every-item), such as "Check in with Example Clinic (client)".
 - [ ] As a list shows the same items, one row each, with the note box and the next step or follow-up opening in place.
 - [ ] Change next step on a deal saves as **Add step** does on the deal page, and Follow-up on a prospect as it does on the prospect. A note saved here shows on the other partner's open review within five seconds, as on a prospect.
 - [ ] Reviewed marks the item reviewed this week, saying who and when, and goes to the next. Undo removes the mark, also after a reload.
@@ -150,7 +150,7 @@ The owner's words: every Monday they went over "all the deals we had, all the po
 - [ ] One toolbar row holds All national accounts, the account owner ("Owned by Dell", which opens Change account owner), **Show**, search, Review deals or Monday review, and Add national account or Add market deal. It stays one row at 1280 and 1440 with Today open. The account cards view shows only search, Add national account and the update time. Today starts collapsed and keeps each partner's own choice for National Accounts, separate from Local Deals.
 - [ ] **Show** has a visible label and one choice of Active, Mine, Needs attention, Gone quiet, Missing next step, Changed since review or Parked. It is outlined when anything but Active is chosen.
 - [ ] Each row opens the deal page. Park and the phase work as they do on the board. On a computer the phase reads as text, and the phase arrow and Park show when the pointer is on the row or keyboard focus reaches it. Touch screens always show them.
-- [ ] A deal that needs attention says "Needs attention" on its row without hover. A late next step also says "N days late".
+- [ ] A deal says "Needs attention" on its row without hover when the board read gives it a reason, as on the board's badge. **Show**'s Needs attention lists those deals. No partner sets or clears it here, and the row has no flag control. A late next step also says "N days late".
 
 ## Deal page
 
