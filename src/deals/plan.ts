@@ -142,20 +142,19 @@ export function planOf(facts: PlanFacts) {
 				label: item.label,
 				typical_days,
 			};
-			// A recorded move-in sits on its own day. It must not move the next start.
+			// A finished off-chain item sits on its own day. It must not move the next start.
 			if (OFF_CHAIN.has(item.id)) {
-				const recorded = item.id === "move_in" ? item.finished_on : null;
 				const moved = chain.find((entry) => entry.id === "move_in");
 				const movedOn =
 					item.id === "check_in_90_day" && !lost && moved?.state === "finished"
 						? moved.to_on
 						: null;
-				if (recorded)
+				if (FINISHED.has(item.status))
 					chain.push({
 						...base,
 						state: "finished",
-						from_on: recorded,
-						to_on: recorded,
+						from_on: item.finished_on,
+						to_on: item.finished_on,
 					});
 				else if (movedOn)
 					chain.push({
