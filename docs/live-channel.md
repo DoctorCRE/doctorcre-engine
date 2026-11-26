@@ -37,7 +37,7 @@ The object never reads the database and never calls another service. Its storage
 
 ## What a notice carries
 
-A notice is `{ seq, topic, id, version }`. `topic` is a record kind or one of the event topics below. `id` is the record's key. `version` is the id of the latest `change` row behind it, so a tab that already read that version skips the re-read. A notice never carries record text, names or values; a tab or program re-reads through its usual door, which applies every read rule as today.
+The object sends three JSON frames: `hello` (`{ type: "hello", epoch, seq }`), `reset` (`{ type: "reset", epoch, seq }`), and `notice` (`{ type: "notice", seq, topic, id, version }`). `topic` is a record kind or one of the event topics below. `id` is the record's key. `version` is the id of the latest `change` row behind it (or `null` when no change row backs it), so a tab that already read that version skips the re-read. A notice never carries record text, names or values; a tab or program re-reads through its usual door, which applies every read rule as today.
 
 The engine keeps one table, `src/live/topics.ts`, mapping each stamped table to its topic and audience. A test fails when a stamped table in `schema/next.sql` is missing from it, so a new table cannot go silent.
 
@@ -89,7 +89,7 @@ The switch is the day the app and program switches send every save to the new da
 
 ## Missed notices
 
-The object numbers notices with `seq` and keeps the last 24 hours, up to 2,000, in its storage, under an `epoch` it chose when its storage was first written. A tab reconnects with `after=<epoch>:<seq>`. The object then sends the newer notices, one per topic and id, or `reset` when the epoch differs or the cursor is older than what it kept. On `reset` the tab re-reads every view it shows, once.
+The object numbers notices with `seq` and keeps the last 24 hours, up to 2,000, in its storage, under an `epoch` it chose when its storage was first written. On a fresh connection, the object sends `hello` (`{ type: "hello", epoch, seq }`). A tab reconnects with `after=<epoch>:<seq>`. The object then sends the newer `notice` frames, one per topic and id, followed by `hello`, or sends `reset` (`{ type: "reset", epoch, seq }`) when the epoch differs or the cursor is older than what it kept. On `reset` the tab re-reads every view it shows, once.
 
 The cursor is the object's `seq`, not a `change` id. Identity values are handed out when a row is written, not when its transaction commits, so a later id can commit first and a cursor on ids could skip a change. Reading change history on every reconnect would also wake the database. `version` still names the change, for de-duplication.
 

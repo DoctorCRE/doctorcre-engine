@@ -73,7 +73,7 @@ test("tag routing isolates tabs, per-user tabs, Macs, jobs and broken sockets", 
 test("connect sends hello, replays deduplicated filtered notices, and resets on epoch or gap", () => {
 	const h = harness();
 	const tabA = h.add(live.tabTags("u-a", "s-1"));
-	assert.equal(h.connect(tabA).kind, "hello");
+	h.connect(tabA);
 	assert.deepEqual(tabA.received, [{ type: "hello", epoch: "ep-1", seq: 0 }]);
 
 	h.publish(
@@ -84,8 +84,7 @@ test("connect sends hello, replays deduplicated filtered notices, and resets on 
 	h.publish(msg("lead", "l-1", 3), msg("deal", "d-1", 4));
 
 	const ws = h.add(live.tabTags("u-a", "s-2"));
-	const res = h.connect(ws, "ep-1:1");
-	assert.deepEqual([res.kind, res.replayed], ["replay", 2]);
+	h.connect(ws, "ep-1:1");
 	assert.deepEqual(ws.received, [
 		{ type: "notice", seq: 3, topic: "lead", id: "l-1", version: 3 },
 		{ type: "notice", seq: 4, topic: "deal", id: "d-1", version: 4 },
@@ -93,8 +92,12 @@ test("connect sends hello, replays deduplicated filtered notices, and resets on 
 	]);
 	for (const bad of ["ep-other:1", "ep-1:99", "bad", ":1", "ep-1:-1"]) {
 		const s = h.add(live.tabTags("u-a", "s-bad"));
-		assert.equal(h.connect(s, bad).kind, "reset", bad);
-		assert.deepEqual(s.received, [{ type: "reset", epoch: "ep-1", seq: 4 }]);
+		h.connect(s, bad);
+		assert.deepEqual(
+			s.received,
+			[{ type: "reset", epoch: "ep-1", seq: 4 }],
+			bad,
+		);
 	}
 	assert.deepEqual(live.parseCursor("a:b:42"), { epoch: "a:b", seq: 42 });
 });
@@ -103,34 +106,38 @@ test("24-hour and 2,000-notice limits prune history and reset only when evicted 
 	const h = harness();
 	const total = live.MAX_REPLAY_NOTICES + 5;
 	for (let i = 1; i <= total; i++) h.publish(msg("deal", `d-${i}`, i));
-	const tab = () => h.add(live.tabTags("u-a", "s"));
-	assert.equal(h.connect(tab(), "ep-1:4").kind, "reset");
-	const ok = h.connect(tab(), "ep-1:5");
-	assert.deepEqual([ok.kind, ok.replayed], ["replay", live.MAX_REPLAY_NOTICES]);
+	const connect = (after: string) => {
+		const ws = h.add(live.tabTags("u-a", "s"));
+		h.connect(ws, after);
+		return ws.received;
+	};
+	const reset = [{ type: "reset", epoch: "ep-1", seq: total }];
+	const hello = { type: "hello", epoch: "ep-1", seq: total };
+	assert.deepEqual(connect("ep-1:4"), reset);
+	const ok = connect("ep-1:5");
+	assert.equal(ok.length, live.MAX_REPLAY_NOTICES + 1);
+	assert.equal(ok[0]?.type, "notice");
+	assert.deepEqual(ok.at(-1), hello);
 
 	h.advance(live.REPLAY_WINDOW_MS + 1);
-	assert.equal(h.connect(tab(), `ep-1:${total - 1}`).kind, "reset");
-	const latest = h.connect(tab(), `ep-1:${total}`);
-	assert.deepEqual([latest.kind, latest.replayed], ["replay", 0]);
+	assert.deepEqual(connect(`ep-1:${total - 1}`), reset);
+	assert.deepEqual(connect(`ep-1:${total}`), [hello]);
 });
 
 test("once-a-second merge sends first notice at once and delivers the last notice at the flush", () => {
 	const h = harness(10_000);
 	const tab = h.add(live.tabTags("u-a", "s-1"));
 	const first = h.publish(msg("doc_turn", "t-1", 1), msg("doc_turn", "t-1", 2));
-	assert.deepEqual(
-		[first.sent.length, first.sent[0]?.version, first.held, first.nextAlarm],
-		[1, 2, 0, null],
-	);
+	assert.equal(first.nextAlarm, null);
+	assert.deepEqual(tab.received, [
+		{ type: "notice", seq: 1, topic: "doc_turn", id: "t-1", version: 2 },
+	]);
 
 	h.advance(200);
 	h.publish(msg("doc_turn", "t-1", 3));
 	h.advance(300);
 	const held = h.publish(msg("doc_turn", "t-1", 4));
-	assert.deepEqual(
-		[held.sent.length, held.held, held.nextAlarm, tab.received.length],
-		[0, 1, 11_000, 1],
-	);
+	assert.deepEqual([held.nextAlarm, tab.received.length], [11_000, 1]);
 
 	// Reload from JSON to prove the last notice survives eviction before the flush.
 	const restored: live.ChannelState = JSON.parse(JSON.stringify(h.state));
@@ -149,8 +156,7 @@ test("once-a-second merge sends first notice at once and delivers the last notic
 test("due-time table picks the earliest alarm across flush, day and work items", () => {
 	const h = harness(20_000);
 	const tab = h.add(live.tabTags("u-a", "s-1"));
-	const addDue = (e: live.DueEntry, mode?: "replace" | "earliest") =>
-		live.scheduleDue(h.state, e, mode);
+	const addDue = (e: live.DueEntry) => live.scheduleDue(h.state, e);
 	const backup: live.DueEntry = {
 		key: "backup:u-a",
 		kind: "backup",
@@ -163,19 +169,16 @@ test("due-time table picks the earliest alarm across flush, day and work items",
 		userId: "u-a",
 		dueAt: 26_000,
 	};
+	const claim: live.DueEntry = {
+		key: "claim:w-1",
+		kind: "claim_expiry",
+		userId: "u-a",
+		workId: "w-1",
+		dueAt: 22_000,
+	};
 	assert.equal(addDue(backup), 25_000);
-	assert.equal(addDue({ ...backup, dueAt: 29_000 }, "earliest"), 25_000);
 	assert.equal(addDue(retry), 25_000);
-	assert.equal(
-		addDue({
-			key: "claim:w-1",
-			kind: "claim_expiry",
-			userId: "u-a",
-			workId: "w-1",
-			dueAt: 22_000,
-		}),
-		22_000,
-	);
+	assert.equal(addDue(claim), 22_000);
 	assert.equal(
 		addDue({ key: "day", kind: "day", day: "2026-11-26", dueAt: 30_000 }),
 		22_000,
@@ -200,9 +203,14 @@ test("due-time table picks the earliest alarm across flush, day and work items",
 		[f2.flushed.map((n) => [n.id, n.version]), f2.nextAlarm],
 		[[["d-b", 2]], 22_000],
 	);
-	assert.equal(live.cancelDue(h.state, "claim:w-1"), 25_000);
+	h.advance(800);
+	assert.deepEqual(h.alarm(), {
+		dueItems: [claim],
+		flushed: [],
+		nextAlarm: 25_000,
+	});
 
-	h.advance(8_800);
+	h.advance(8_000);
 	const final = h.alarm();
 	assert.deepEqual(final.dueItems, [backup, retry]);
 	assert.deepEqual(final.flushed, [

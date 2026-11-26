@@ -26,7 +26,6 @@ type StoredNotice = Notice & {
 	readonly emittedAt: number;
 };
 type PendingNotice = NoticeInput & {
-	readonly mergeKey: string;
 	readonly flushAt: number;
 };
 export type ServerMessage =
@@ -94,7 +93,9 @@ export const macTags = (userId: string, linkId: string): SocketTag[] => [
 ];
 export const jobTags = (slug: string): SocketTag[] => ["job", `job:${slug}`];
 
-function audienceTags(a: Audience): readonly [SocketTag, ...SocketTag[]] {
+function audienceTags(
+	a: Audience,
+): readonly [SocketTag] | readonly [SocketTag, SocketTag] {
 	if (a.kind === "tabs") return ["tab"];
 	if (a.kind === "job") return [`job:${a.slug}`];
 	return [a.kind === "user_tabs" ? "tab" : "mac", `user:${a.userId}`];
@@ -104,12 +105,10 @@ const matchesAudience = (tags: readonly string[], a: Audience) =>
 	audienceTags(a).every((tag) => tags.includes(tag));
 
 function routeSockets(hub: SocketHub, a: Audience) {
-	// Query the narrowest tag first, then verify compound tags (tab/mac + user).
-	const tags = audienceTags(a);
-	const found = hub.getWebSockets(tags[tags.length - 1] ?? tags[0]);
-	return tags.length === 1
-		? found
-		: found.filter((ws) => matchesAudience(hub.getTags(ws), a));
+	const [first, last] = audienceTags(a);
+	return last
+		? hub.getWebSockets(last).filter((ws) => hub.getTags(ws).includes(first))
+		: hub.getWebSockets(first);
 }
 
 export function parseCursor(raw: string) {
@@ -128,22 +127,8 @@ const earliest = (times: Iterable<number>) => {
 export const nextAlarmAt = (due: Readonly<Record<string, DueEntry>>) =>
 	earliest(Object.values(due).map((e) => e.dueAt));
 
-export function scheduleDue(
-	state: ChannelState,
-	entry: DueEntry,
-	mode: "replace" | "earliest" = "replace",
-): number | null {
-	const prev = Object.hasOwn(state.due, entry.key)
-		? state.due[entry.key]
-		: undefined;
-	if (mode === "earliest" && prev && prev.dueAt <= entry.dueAt)
-		return nextAlarmAt(state.due);
+export function scheduleDue(state: ChannelState, entry: DueEntry) {
 	state.due[entry.key] = entry;
-	return nextAlarmAt(state.due);
-}
-
-export function cancelDue(state: ChannelState, key: string): number | null {
-	delete state.due[key];
 	return nextAlarmAt(state.due);
 }
 
@@ -227,15 +212,9 @@ export function connectSocket(
 ) {
 	pruneHistory(state, now);
 	const { epoch, seq } = state;
-	const done = (kind: "hello" | "replay" | "reset", replayed = 0) => ({
-		kind,
-		epoch,
-		seq,
-		replayed,
-	});
 	if (after === undefined || after === null) {
 		safeSend(socket, { type: "hello", epoch, seq });
-		return done("hello");
+		return { epoch, seq };
 	}
 	const cursor = parseCursor(after);
 	if (
@@ -245,7 +224,7 @@ export function connectSocket(
 		cursor.seq > seq
 	) {
 		safeSend(socket, { type: "reset", epoch, seq });
-		return done("reset");
+		return { epoch, seq };
 	}
 	const tags = hub.getTags(socket);
 	const latest = new Map<string, Notice>();
@@ -255,14 +234,11 @@ export function connectSocket(
 		const version = mergeVersion(latest.get(key)?.version ?? null, n.version);
 		latest.set(key, { seq: n.seq, topic: n.topic, id: n.id, version });
 	}
-	let replayed = 0;
 	for (const notice of [...latest.values()].sort((a, b) => a.seq - b.seq)) {
-		if (!safeSend(socket, { type: "notice", ...notice }))
-			return done("replay", replayed);
-		replayed += 1;
+		if (!safeSend(socket, { type: "notice", ...notice })) return { epoch, seq };
 	}
 	safeSend(socket, { type: "hello", epoch, seq });
-	return done("replay", replayed);
+	return { epoch, seq };
 }
 
 export function publishNotices(
@@ -272,8 +248,7 @@ export function publishNotices(
 	now: number,
 ) {
 	const sent: Notice[] = [];
-	if (notices.length === 0)
-		return { sent, held: 0, nextAlarm: nextAlarmAt(state.due) };
+	if (notices.length === 0) return { sent, nextAlarm: nextAlarmAt(state.due) };
 	pruneLastSent(state, now);
 	const batch = new Map<string, NoticeInput>();
 	for (const n of notices) {
@@ -283,7 +258,6 @@ export function publishNotices(
 			version: mergeVersion(batch.get(key)?.version ?? null, n.version),
 		});
 	}
-	let held = 0;
 	for (const [key, n] of batch) {
 		const lastAt = state.lastSent[key];
 		const version = mergeVersion(
@@ -291,39 +265,27 @@ export function publishNotices(
 			n.version,
 		);
 		if (lastAt !== undefined && now < lastAt + MERGE_WINDOW_MS) {
-			state.pending[key] = {
-				...n,
-				version,
-				mergeKey: key,
-				flushAt: lastAt + MERGE_WINDOW_MS,
-			};
-			held += 1;
+			state.pending[key] = { ...n, version, flushAt: lastAt + MERGE_WINDOW_MS };
 		} else {
 			sent.push(sendTracked(state, hub, key, { ...n, version }, now));
 		}
 	}
 	syncFlushDue(state);
-	return { sent, held, nextAlarm: nextAlarmAt(state.due) };
+	return { sent, nextAlarm: nextAlarmAt(state.due) };
 }
 
 export function runAlarm(state: ChannelState, hub: SocketHub, now: number) {
 	pruneLastSent(state, now);
-	const dueNow = Object.values(state.due)
-		.filter((e) => e.dueAt <= now)
-		.sort((a, b) => a.dueAt - b.dueAt || a.key.localeCompare(b.key));
+	const dueNow = Object.values(state.due).filter((e) => e.dueAt <= now);
 	for (const e of dueNow) delete state.due[e.key];
 	const dueItems: WorkDue[] = [];
 	const flushed: Notice[] = [];
 	for (const e of dueNow) {
 		if (e.kind === "flush") {
-			const ready = Object.values(state.pending)
-				.filter((p) => p.flushAt <= now)
-				.sort(
-					(a, b) =>
-						a.flushAt - b.flushAt || a.mergeKey.localeCompare(b.mergeKey),
-				);
-			for (const p of ready)
-				flushed.push(sendTracked(state, hub, p.mergeKey, p, now));
+			for (const [key, p] of Object.entries(state.pending)) {
+				if (p.flushAt <= now)
+					flushed.push(sendTracked(state, hub, key, p, now));
+			}
 			syncFlushDue(state);
 		} else if (e.kind === "day") {
 			const day: NoticeInput = {
