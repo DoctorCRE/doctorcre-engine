@@ -194,7 +194,12 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 						asText(eb.ref("lease.executed_on")).as("executed_on"),
 						asText(eb.ref("lease.commencement_on")).as("commencement_on"),
 						asText(eb.ref("lease.expiration_on")).as("expiration_on"),
-						chicagoDay(eb.ref("lease.created_at")).as("recorded_on"),
+						chicagoDay(
+							eb
+								.selectFrom("lease_version as first")
+								.select((eb) => eb.fn.min("first.created_at").as("at"))
+								.whereRef("first.lease_id", "=", "lease.lease_id"),
+						).as("recorded_on"),
 						"file.name as evidence_ref",
 						sql.lit("current").as("status"),
 					])

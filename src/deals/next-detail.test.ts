@@ -156,7 +156,8 @@ before(async () => {
 		insert into lease (id, deal_id, party_id, property_id)
 		values ('${id(85)}', '${id(30)}', '${id(11)}', '${id(83)}');
 		insert into lease_version (lease_id, version, document_id, executed_on, expiration_on, created_at)
-		values ('${id(85)}', 1, '${id(84)}', '2025-01-01', '2030-01-01', '2025-01-03T03:00:00Z');
+		values ('${id(85)}', 1, '${id(84)}', '2025-01-01', '2030-01-01', '2025-01-03T03:00:00Z'),
+			('${id(85)}', 2, '${id(84)}', '2025-01-01', '2030-01-01', '2025-02-10T18:00:00Z');
 		insert into deal_reason (slug, label) values ('renewal', 'Renewal') on conflict do nothing;
 		insert into deal (id, name, kind, reason, renews_lease_id, owner_user_id)
 		values ('${id(33)}', 'Example renewal', 'lease', 'renewal', '${id(85)}', '${id(2)}'),
