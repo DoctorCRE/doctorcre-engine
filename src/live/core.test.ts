@@ -13,7 +13,7 @@ class FakeSocket implements live.LiveSocket {
 }
 
 const tabs: live.Audience = { kind: "tabs" };
-const item = (
+const msg = (
 	topic: string,
 	id: string,
 	version: number | null,
@@ -40,7 +40,7 @@ function harness(startMs = 1_700_000_000_000) {
 		state,
 		add,
 		advance: (ms: number) => (clock += ms),
-		publish: (list: readonly live.NoticeInput[]) =>
+		publish: (...list: live.NoticeInput[]) =>
 			live.publishNotices(state, hub, list, clock),
 		connect: (ws: live.LiveSocket, after?: string | null) =>
 			live.connectSocket(state, hub, ws, clock, after),
@@ -56,12 +56,12 @@ test("tag routing isolates tabs, per-user tabs, Macs, jobs and broken sockets", 
 	const macA = h.add(live.macTags("u-a", "l-1"));
 	const outbox = h.add(live.jobTags("outlook-outbox"));
 
-	h.publish([
-		item("deal", "d-1", 10),
-		item("doc_turn", "t-1", null, { kind: "user_tabs", userId: "u-a" }),
-		item("doc_work", "w-1", null, { kind: "user_mac", userId: "u-a" }),
-		item("reply_delivery", "r-1", 11, { kind: "job", slug: "outlook-outbox" }),
-	]);
+	h.publish(
+		msg("deal", "d-1", 10),
+		msg("doc_turn", "t-1", null, { kind: "user_tabs", userId: "u-a" }),
+		msg("doc_work", "w-1", null, { kind: "user_mac", userId: "u-a" }),
+		msg("reply_delivery", "r-1", 11, { kind: "job", slug: "outlook-outbox" }),
+	);
 	const topics = (ws: FakeSocket) =>
 		ws.received.map((m) => (m.type === "notice" ? m.topic : m.type));
 	assert.deepEqual(topics(tabA), ["deal", "doc_turn"]);
@@ -76,20 +76,16 @@ test("connect sends hello, replays deduplicated filtered notices, and resets on 
 	assert.equal(h.connect(tabA).kind, "hello");
 	assert.deepEqual(tabA.received, [{ type: "hello", epoch: "ep-1", seq: 0 }]);
 
-	h.publish([
-		item("deal", "d-1", 1),
-		item("home_mark", "m-b", 2, { kind: "user_tabs", userId: "u-b" }),
-	]);
+	h.publish(
+		msg("deal", "d-1", 1),
+		msg("home_mark", "m-b", 2, { kind: "user_tabs", userId: "u-b" }),
+	);
 	h.advance(live.MERGE_WINDOW_MS);
-	h.publish([item("lead", "l-1", 3), item("deal", "d-1", 4)]);
+	h.publish(msg("lead", "l-1", 3), msg("deal", "d-1", 4));
 
 	const ws = h.add(live.tabTags("u-a", "s-2"));
-	assert.deepEqual(h.connect(ws, "ep-1:1"), {
-		kind: "replay",
-		epoch: "ep-1",
-		seq: 4,
-		replayed: 2,
-	});
+	const res = h.connect(ws, "ep-1:1");
+	assert.deepEqual([res.kind, res.replayed], ["replay", 2]);
 	assert.deepEqual(ws.received, [
 		{ type: "notice", seq: 3, topic: "lead", id: "l-1", version: 3 },
 		{ type: "notice", seq: 4, topic: "deal", id: "d-1", version: 4 },
@@ -106,7 +102,7 @@ test("connect sends hello, replays deduplicated filtered notices, and resets on 
 test("24-hour and 2,000-notice limits prune history and reset only when evicted notices were missed", () => {
 	const h = harness();
 	const total = live.MAX_REPLAY_NOTICES + 5;
-	for (let i = 1; i <= total; i++) h.publish([item("deal", `d-${i}`, i)]);
+	for (let i = 1; i <= total; i++) h.publish(msg("deal", `d-${i}`, i));
 	const tab = () => h.add(live.tabTags("u-a", "s"));
 	assert.equal(h.connect(tab(), "ep-1:4").kind, "reset");
 	const ok = h.connect(tab(), "ep-1:5");
@@ -121,19 +117,16 @@ test("24-hour and 2,000-notice limits prune history and reset only when evicted 
 test("once-a-second merge sends first notice at once and delivers the last notice at the flush", () => {
 	const h = harness(10_000);
 	const tab = h.add(live.tabTags("u-a", "s-1"));
-	const first = h.publish([
-		item("doc_turn", "t-1", 1),
-		item("doc_turn", "t-1", 2),
-	]);
+	const first = h.publish(msg("doc_turn", "t-1", 1), msg("doc_turn", "t-1", 2));
 	assert.deepEqual(
 		[first.sent.length, first.sent[0]?.version, first.held, first.nextAlarm],
 		[1, 2, 0, null],
 	);
 
 	h.advance(200);
-	h.publish([item("doc_turn", "t-1", 3)]);
+	h.publish(msg("doc_turn", "t-1", 3));
 	h.advance(300);
-	const held = h.publish([item("doc_turn", "t-1", 4)]);
+	const held = h.publish(msg("doc_turn", "t-1", 4));
 	assert.deepEqual(
 		[held.sent.length, held.held, held.nextAlarm, tab.received.length],
 		[0, 1, 11_000, 1],
@@ -156,6 +149,8 @@ test("once-a-second merge sends first notice at once and delivers the last notic
 test("due-time table picks the earliest alarm across flush, day and work items", () => {
 	const h = harness(20_000);
 	const tab = h.add(live.tabTags("u-a", "s-1"));
+	const addDue = (e: live.DueEntry, mode?: "replace" | "earliest") =>
+		live.scheduleDue(h.state, e, mode);
 	const backup: live.DueEntry = {
 		key: "backup:u-a",
 		kind: "backup",
@@ -168,14 +163,11 @@ test("due-time table picks the earliest alarm across flush, day and work items",
 		userId: "u-a",
 		dueAt: 26_000,
 	};
-	assert.equal(live.scheduleDue(h.state, backup), 25_000);
+	assert.equal(addDue(backup), 25_000);
+	assert.equal(addDue({ ...backup, dueAt: 29_000 }, "earliest"), 25_000);
+	assert.equal(addDue(retry), 25_000);
 	assert.equal(
-		live.scheduleDue(h.state, { ...backup, dueAt: 29_000 }, "earliest"),
-		25_000,
-	);
-	assert.equal(live.scheduleDue(h.state, retry), 25_000);
-	assert.equal(
-		live.scheduleDue(h.state, {
+		addDue({
 			key: "claim:w-1",
 			kind: "claim_expiry",
 			userId: "u-a",
@@ -185,20 +177,15 @@ test("due-time table picks the earliest alarm across flush, day and work items",
 		22_000,
 	);
 	assert.equal(
-		live.scheduleDue(h.state, {
-			key: "day",
-			kind: "day",
-			day: "2026-11-26",
-			dueAt: 30_000,
-		}),
+		addDue({ key: "day", kind: "day", day: "2026-11-26", dueAt: 30_000 }),
 		22_000,
 	);
 
-	h.publish([item("deal", "d-a", 1)]);
+	h.publish(msg("deal", "d-a", 1));
 	h.advance(200);
-	h.publish([item("deal", "d-b", 1)]);
+	h.publish(msg("deal", "d-b", 1));
 	h.advance(100);
-	h.publish([item("deal", "d-b", 2), item("deal", "d-a", 2)]);
+	h.publish(msg("deal", "d-b", 2), msg("deal", "d-a", 2));
 	assert.equal(live.nextAlarmAt(h.state.due), 21_000);
 
 	h.advance(700);

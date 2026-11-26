@@ -14,13 +14,13 @@ export type Audience =
 	| { readonly kind: "user_mac"; readonly userId: string }
 	| { readonly kind: "job"; readonly slug: string };
 
-type NoticeBody = {
+type Body = {
 	readonly topic: string;
 	readonly id: string;
 	readonly version: number | null;
 };
-export type NoticeInput = NoticeBody & { readonly audience: Audience };
-export type Notice = NoticeBody & { readonly seq: number };
+export type NoticeInput = Body & { readonly audience: Audience };
+export type Notice = Body & { readonly seq: number };
 type StoredNotice = Notice & {
 	readonly audience: Audience;
 	readonly emittedAt: number;
@@ -29,7 +29,6 @@ type PendingNotice = NoticeInput & {
 	readonly mergeKey: string;
 	readonly flushAt: number;
 };
-
 export type ServerMessage =
 	| {
 			readonly type: "hello" | "reset";
@@ -38,7 +37,7 @@ export type ServerMessage =
 	  }
 	| ({ readonly type: "notice" } & Notice);
 
-type WorkDueEntry = (
+type WorkDue = (
 	| { readonly kind: "backup" | "credit_retry"; readonly userId: string }
 	| {
 			readonly kind: "claim_expiry";
@@ -55,7 +54,7 @@ export type DueEntry =
 			readonly dueAt: number;
 			readonly day: string;
 	  }
-	| WorkDueEntry;
+	| WorkDue;
 
 export type ChannelState = {
 	epoch: string;
@@ -66,7 +65,6 @@ export type ChannelState = {
 	pending: Record<string, PendingNotice>;
 	due: Record<string, DueEntry>;
 };
-
 export interface LiveSocket {
 	send(message: string): void;
 }
@@ -84,7 +82,6 @@ export const createChannelState = (epoch: string): ChannelState => ({
 	pending: {},
 	due: {},
 });
-
 export const tabTags = (userId: string, session: string): SocketTag[] => [
 	"tab",
 	`user:${userId}`,
@@ -99,9 +96,8 @@ export const jobTags = (slug: string): SocketTag[] => ["job", `job:${slug}`];
 
 function audienceTags(a: Audience): readonly [SocketTag, ...SocketTag[]] {
 	if (a.kind === "tabs") return ["tab"];
-	if (a.kind === "user_tabs") return ["tab", `user:${a.userId}`];
-	if (a.kind === "user_mac") return ["mac", `user:${a.userId}`];
-	return [`job:${a.slug}`];
+	if (a.kind === "job") return [`job:${a.slug}`];
+	return [a.kind === "user_tabs" ? "tab" : "mac", `user:${a.userId}`];
 }
 
 const matchesAudience = (tags: readonly string[], a: Audience) =>
@@ -129,7 +125,6 @@ const earliest = (times: Iterable<number>) => {
 	for (const t of times) if (min === null || t < min) min = t;
 	return min;
 };
-
 export const nextAlarmAt = (due: Readonly<Record<string, DueEntry>>) =>
 	earliest(Object.values(due).map((e) => e.dueAt));
 
@@ -141,9 +136,8 @@ export function scheduleDue(
 	const prev = Object.hasOwn(state.due, entry.key)
 		? state.due[entry.key]
 		: undefined;
-	if (mode === "earliest" && prev && prev.dueAt <= entry.dueAt) {
+	if (mode === "earliest" && prev && prev.dueAt <= entry.dueAt)
 		return nextAlarmAt(state.due);
-	}
 	state.due[entry.key] = entry;
 	return nextAlarmAt(state.due);
 }
@@ -212,6 +206,18 @@ function emit(
 	return notice;
 }
 
+function sendTracked(
+	state: ChannelState,
+	hub: SocketHub,
+	key: string,
+	input: NoticeInput,
+	now: number,
+): Notice {
+	delete state.pending[key];
+	state.lastSent[key] = now;
+	return emit(state, hub, input, now);
+}
+
 export function connectSocket(
 	state: ChannelState,
 	hub: SocketHub,
@@ -272,29 +278,29 @@ export function publishNotices(
 	const batch = new Map<string, NoticeInput>();
 	for (const n of notices) {
 		const key = mergeKeyFor(n);
-		const version = mergeVersion(batch.get(key)?.version ?? null, n.version);
-		batch.set(key, { ...n, version });
+		batch.set(key, {
+			...n,
+			version: mergeVersion(batch.get(key)?.version ?? null, n.version),
+		});
 	}
 	let held = 0;
-	for (const [mergeKey, n] of batch) {
-		const lastAt = state.lastSent[mergeKey];
+	for (const [key, n] of batch) {
+		const lastAt = state.lastSent[key];
 		const version = mergeVersion(
-			state.pending[mergeKey]?.version ?? null,
+			state.pending[key]?.version ?? null,
 			n.version,
 		);
 		if (lastAt !== undefined && now < lastAt + MERGE_WINDOW_MS) {
-			state.pending[mergeKey] = {
+			state.pending[key] = {
 				...n,
 				version,
-				mergeKey,
+				mergeKey: key,
 				flushAt: lastAt + MERGE_WINDOW_MS,
 			};
 			held += 1;
-			continue;
+		} else {
+			sent.push(sendTracked(state, hub, key, { ...n, version }, now));
 		}
-		delete state.pending[mergeKey];
-		sent.push(emit(state, hub, { ...n, version }, now));
-		state.lastSent[mergeKey] = now;
 	}
 	syncFlushDue(state);
 	return { sent, held, nextAlarm: nextAlarmAt(state.due) };
@@ -306,7 +312,7 @@ export function runAlarm(state: ChannelState, hub: SocketHub, now: number) {
 		.filter((e) => e.dueAt <= now)
 		.sort((a, b) => a.dueAt - b.dueAt || a.key.localeCompare(b.key));
 	for (const e of dueNow) delete state.due[e.key];
-	const dueItems: WorkDueEntry[] = [];
+	const dueItems: WorkDue[] = [];
 	const flushed: Notice[] = [];
 	for (const e of dueNow) {
 		if (e.kind === "flush") {
@@ -316,29 +322,18 @@ export function runAlarm(state: ChannelState, hub: SocketHub, now: number) {
 					(a, b) =>
 						a.flushAt - b.flushAt || a.mergeKey.localeCompare(b.mergeKey),
 				);
-			for (const p of ready) {
-				delete state.pending[p.mergeKey];
-				flushed.push(emit(state, hub, p, now));
-				state.lastSent[p.mergeKey] = now;
-			}
+			for (const p of ready)
+				flushed.push(sendTracked(state, hub, p.mergeKey, p, now));
 			syncFlushDue(state);
 		} else if (e.kind === "day") {
-			flushed.push(
-				emit(
-					state,
-					hub,
-					{
-						topic: "day",
-						id: e.day,
-						version: null,
-						audience: { kind: "tabs" },
-					},
-					now,
-				),
-			);
-		} else {
-			dueItems.push(e);
-		}
+			const day: NoticeInput = {
+				topic: "day",
+				id: e.day,
+				version: null,
+				audience: { kind: "tabs" },
+			};
+			flushed.push(emit(state, hub, day, now));
+		} else dueItems.push(e);
 	}
 	return { dueItems, flushed, nextAlarm: nextAlarmAt(state.due) };
 }
