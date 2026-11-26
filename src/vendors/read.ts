@@ -452,15 +452,20 @@ export async function readNextVendorList(
 		query;
 	const term = q === null ? null : `%${q.replace(/([\\%_])/g, "\\$1")}%`;
 	const matching = liveNextVendors(db)
-		.leftJoin(sql`(${lastRecordedContacts})`.as("recorded"), (join) =>
-			join.on(sql<boolean>`recorded.party_id = p.id`),
+		.$if(quiet === true, (qb) =>
+			qb
+				.leftJoin(sql`(${lastRecordedContacts})`.as("recorded"), (join) =>
+					join.on(sql<boolean>`recorded.party_id = p.id`),
+				)
+				.where(
+					sql<boolean>`${vendorIsQuiet("pr", "recorded", DEFAULT_CADENCE.vendor_days)}`,
+				),
 		)
 		.where(sql<boolean>`
 		(${scope === "team"} or pr.owner_user_id = ${ownerId}::uuid)
 		and (${owner === "all"} or ou.slug = ${owner})
 		and (${stage}::text is null or pr.stage = ${stage})
 		and (${disposition}::text is null or ${nextDisposition} = ${disposition})
-		and (not ${quiet === true} or ${vendorIsQuiet("pr", "recorded", DEFAULT_CADENCE.vendor_days)})
 		and (${category}::text is null or exists (select from party_role cr join role r on r.slug = cr.role
 			where cr.party_id = p.id and r.category_of = 'vendor' and cr.role = ${category}))
 		and (${territory}::text is null or ${nextTerritory} = ${territory} or exists
