@@ -642,22 +642,22 @@ test("a sign-off folds only a known title or contact details after the name, nev
 });
 
 test("a sign-off stands for the name of a signature the sender is stored under only in part", () => {
-	const rob = (body: string) => ({
+	const alex = (body: string) => ({
 		body,
-		sender: "rob@example.test",
-		sender_name: "Rob",
+		sender: "alex@example.test",
+		sender_name: "Alex",
 	});
 	for (const signature of [
-		"Thanks,\nRobert C. Jackson\n(555) 010-2000\nFax (555) 010-2001",
-		"Thanks\nRobert Jackson\nAgent\nDirect: 555-010-2000",
+		"Thanks,\nAlexander C. Example\n(555) 010-2000\nFax (555) 010-2001",
+		"Thanks\nAlexander Example\nAgent\nDirect: 555-010-2000",
 	]) {
 		assert.deepEqual(
-			cleanEmailThread([rob(`Plan attached.\n\n${signature}`)]),
+			cleanEmailThread([alex(`Plan attached.\n\n${signature}`)]),
 			[{ body: "Plan attached.", folded: signature }],
 		);
 	}
 	const sentence = "Plan attached.\nThanks,\nCall Me Soon\nPlease use the door";
-	assert.deepEqual(cleanEmailThread([rob(sentence)]), [
+	assert.deepEqual(cleanEmailThread([alex(sentence)]), [
 		{ body: sentence, folded: null },
 	]);
 });
