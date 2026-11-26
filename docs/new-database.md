@@ -713,7 +713,7 @@ A deal names its market from the `market` list, which can be set when the deal o
 
 A parked deal is not active work for now, and says why in `parking_reason`: the client paused, the prospect was never active, or another reason, with an optional note. No reason means the deal is active, as no disposition means a vendor is. Parking is not a phase and never changes one, so reviving a deal, which clears its reason and note, leaves it in the phase it was in. The deal keeps who last parked it and when in `parked_at`, `parked_by_user_id` and `parked_automatically`, apart from its last-change stamp. The database allows an automatic parker only on a parked deal with no user parker. Changing the parking reason or note stamps the acting user and clears the automatic attribution. Reviving a deal clears its parking time and attribution. Change history keeps every earlier parking and revival.
 
-`needs_attention` is a flag a user sets on a deal and clears, never worked out from anything else. Change history keeps who set it and when. Parking, reviving and flagging are each a user's act, or an agent's working for one, so a job working for no one, such as the publisher, cannot do them; it can still change the deal's other columns. A copy of today's parked deals turns that check off, as it does the stamp, so it invents no acting user, and brings each one's own parking stamp instead (see below).
+`needs_attention` is a flag a user sets on a deal and clears, never worked out from anything else. The deal and board reads do not return it. They answer the computed [deal attention](#deal-attention). Change history keeps who set the flag and when. Parking, reviving and flagging are each a user's act, or an agent's working for one, so a job working for no one, such as the publisher, cannot do them; it can still change the deal's other columns. A copy of today's parked deals turns that check off, as it does the stamp, so it invents no acting user, and brings each one's own parking stamp instead (see below).
 
 The Deals board groups a deal under a national account when its client is a current location of that account. The grouping comes from the client's dated brand membership.
 
@@ -1713,20 +1713,22 @@ These saves follow the same session, replay and `{ from, to }` edit rules. They 
 
 ## Deal page redesign
 
-The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping is on the deal read. The rest is not built yet.
+The owner approved the [deal page](screens/deals.md#deal-page) redesign on 2026-11-25. These lines are its design for the engine. The checklist grouping and deal attention are on the deal read. The rest of this section is not built yet.
 
 ### Deal attention
 
-The system decides when a deal needs attention and says why. A deal needs attention when any of these holds:
+The deal read and the board read answer `attention` as `{ reason, since }` or null. `reason` is one sentence. `since` is the Central date (`America/Chicago`, `YYYY-MM-DD`) that sentence starts from. The board badge and the deal page's Needs attention line both show that sentence. One alert per new reason is not built yet.
 
-- An open step is late.
-- A critical date is within 7 days or past, and not done.
-- The deal has no open step and no pending suggestion.
-- An email from the client or a broker has had no answer for 2 working days.
-- A suggestion has waited 2 days for a partner.
-- Nothing has happened on the deal for 14 days.
+The first match wins, in this order:
 
-The numbers are a starting guess. The board and deal reads give one reason and when it started, in a sentence the board badge and the deal page's Needs attention line both show. A partner gets one alert per new reason through Updates, not one a day. For deals the computed answer replaces the hand-set `needs_attention` flag, which no screen sets any more. A prospect keeps its hand-set flag.
+1. An open step is late. A step is a `next_step` on the deal with no checklist title (`item_title` is null). It is late when `due_on` is before today. Due today is not late. `since` is the earliest such `due_on` plus one day. Reason: "A next step is late."
+2. A critical date is proposed or open, and `due_on` is today or within the next 7 days, or earlier. Done, dropped and passed dates do not count. `since` is the earliest such `due_on` minus 7 days. Reason: "A critical date is within 7 days or past and not done."
+3. The deal has no open step and no pending suggestion. A checklist item is not a step. `since` is the latest Central day among finished steps (`done_at` or `resolved_at` on a step that is not open) and decided suggestions (`decided_at` on a proposal that is not pending). When none of those exist, `since` is the day the deal was created. Reason: "This deal has no next step and no suggestion."
+4. An email filed to the deal has had no answer for 2 working days. The sender's address is on a person or company on the deal in the role client, client contact, listing agent or landlord rep, and that address is not on an `app_user` with `is_account_partner`. An answer is a later email on the same deal sent from an `app_user` with `is_account_partner`. It has to be in the same conversation when the inbound email has a conversation id. When the inbound email has none, any later partner email on the deal is an answer. A working day is a Monday through Friday. Holidays are ordinary working days. The wait is the second working day strictly after the email's Central day, and the rule matches when that day is today or earlier. `since` is the earliest such day. Reason: "A client or broker email has had no answer for 2 working days."
+5. A pending suggestion's Central created day plus 2 calendar days is today or earlier. These are calendar days, not working days. `since` is the earliest such created day plus 2. Reason: "A suggestion has waited 2 days."
+6. Nothing has happened for 14 days. The latest Central day among the deal's activities, its steps' created and done times, its phase changes and the day the deal was created, plus 14, is today or earlier. A day exactly 14 days ago matches. A cancellation's `resolved_at` and a suggestion's decision do not count as something happening. `since` is that day plus 14. Reason: "Nothing has happened for 14 days."
+
+A parked deal, and a deal that is closed, lost, invoiced or otherwise ended, answers null. A parked deal still appears on the open board. A deal that matches none of the six answers null, including one whose stored `needs_attention` flag is set. The flag and its save stay. No screen reads the flag for a deal. A prospect keeps its hand-set flag. The numbers are the starting guess from the approved design.
 
 ### Invoice dates
 
