@@ -476,6 +476,14 @@ create table deal_kind (
 	label text not null
 );
 
+-- Typical number of days a workflow to-do takes for one deal kind, adjustable by partners.
+create table typical_length (
+	deal_kind text not null references deal_kind,
+	todo text not null check (todo ~ '^[a-z][a-z0-9_]*$'),
+	days integer not null check (days > 0),
+	primary key (deal_kind, todo)
+);
+
 -- Why the client is taking space, such as a start-up or a relocation. Like roles, a label can be renamed.
 create table deal_reason (
 	slug text primary key,
@@ -3597,7 +3605,7 @@ do $$
 declare
 	stamped text;
 begin
-	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
+	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'typical_length', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
 		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'market_city', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity', 'tour_plan', 'tour_stop',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
@@ -4166,6 +4174,7 @@ grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, pa
 -- Ids, created_at and the records a link or an about row joins never change; a different link is a removed row and a new one.
 -- Who sent an activity and who owns a next step can be corrected.
 grant update (label) on table role, stage, phase, specialty, document_kind, deal_kind, deal_reason, how_found, claim_type to engine;
+grant update (days) on typical_length to engine;
 grant update (lead_client_id) on party_role to engine;
 grant update (relationship_origin, rivalry_note, refers_business, offers, seeking, stage, relationship_level, disposition, disposition_reason, is_target, owner_user_id, needs_attention) on party_role to engine;
 grant update (acknowledged_by_user_id, acknowledged_at) on lead_email_attention to engine;

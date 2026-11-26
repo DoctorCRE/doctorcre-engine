@@ -341,6 +341,7 @@ export type Verb =
 	| "read-weekly-reviews"
 	| "read-reply-draft"
 	| "read-tour-stop-list"
+	| "read-typical-lengths"
 	| "read-updates"
 	| "read-vendor-meetings"
 	| "read-vendor-summary"

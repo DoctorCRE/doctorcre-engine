@@ -30,6 +30,7 @@ The engine will move to a new, cleanly connected database in one planned step, a
 - **`deal_client_website_attempt`**: the active failed-password window for one website.
 - **`deal_client_website_grant`**: a short-lived link grant, with the signed-in user who requested it and the website it opens.
 - **`deal_kind`**: the list of kinds of transaction, such as lease and purchase. Like roles, a label can be renamed.
+- **`typical_length`**: typical number of days a workflow to-do takes for one deal kind, with who last changed it and when.
 - **`deal_reason`**: the list of reasons a client takes space, such as a start-up or a relocation. Like roles, a label can be renamed.
 - **`phase`**: the list of deal phases, from negotiating to closed, plus dead. Like roles, a label can be renamed.
 - **`deal_phase_change`**: one row each time a deal changes phase, with when, the new phase and the reason. A deal's phase is its latest row.
@@ -212,6 +213,7 @@ Each rule has a test in `src/next-database.test.ts` that fails without it. The t
 98. A property's known name, class and type are never blank. A known year built is from 1800 to 2100 and known stories from 1 to 60, the old system's ranges.
 99. A reply draft answers one email for one owner, once. It starts pending, from a job or the owner's confirmed Doc proposal for that email. Only its owner edits its text, recipients and attachments, while pending or as they approve it, and approves it with one recipient and one copy, or dismisses it with a reason; a job may also dismiss it. Only a job working for the owner records a try as sent or failed, and a try changes nothing that was approved. An owner change is allowed only while pending or when approving a failed draft again. A failure whose reason is `aborted_before_dispatch` or `submission_recipients_invalid` may be approved again, one matching `unconfirmed_after_<n>` may only become sent, and any other stays failed. Sent and dismissed are final, and one sent message settles one draft.
 100. A practice type is trimmed and nonblank and belongs to an existing client role. A client role has at most one. Its subtype, when present, is also trimmed and nonblank. Research also belongs to an existing client role. Each item has a nonblank kind and source, a yes-or-no result, a finite observation time and a finite expiry if supplied. Each fact names its research item and has a distinct, nonblank field name. The result has its own column, so no fact repeats the `found` field.
+101. A typical length belongs to a known deal kind, names its to-do with a lowercase slug, holds a positive whole number of days, and is stored once per deal kind and to-do. The engine updates only its days and never removes rows.
 
 Research facts are unconfirmed candidates. For an identity observation, `found` says the tool found a candidate. The candidate stays in research until a partner confirms it. Confirmation will save the value to its proper client record and record who confirmed it and when.
 
@@ -223,7 +225,7 @@ Two people adding different links to one deal at the same time both keep theirs,
 
 The role reads rows in every table, adds rows in every table except `app_user`, `job`, `merged_party`, `change`, `imported_change`, `email_summary`, `platform_metric`, `platform_format` and `relationship_level`, and empties none. A social account it adds has no `engine_publishes_from`, so removing an account and adding it back cannot set one. A text version and a review it adds take the stamp's time, the clock's, which no statement sets. It removes rows only outside history, and changes only these columns:
 
-- a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's, a how-found's or a claim type's label;
+- a role's, a stage's, a phase's, a deal kind's, a deal reason's, a specialty's, a how-found's or a claim type's label, and a typical length's days;
 - a vendor role's stage, relationship level, relationship partner, disposition, reason and target, a lead role's stage, owner and Needs attention flag, an introduction's date, deal and note, and a knows or can-introduce link's dates and note;
 - a party's, market's, territory's, deal's, document's or design template's name, a party's NPI, how found and city, and a property's address, county and point;
 - a deal's kind, reason, lease it renews, deal owner, market, closed value, parking reason and note, and whether it needs attention;
@@ -1725,7 +1727,7 @@ The `deal-checklist.v1` groups become the eight phases. Research, Site selection
 
 ### Deal plan
 
-The owner approved the timeline design on 2026-11-25. The deal page's [Plan](screens/deals.md#plan) tab and Deals [Timeline](screens/deals.md#timeline) draw each deal's checklist and steps in time. Only the recorded days on the deal read are built.
+The owner approved the timeline design on 2026-11-25. The deal page's [Plan](screens/deals.md#plan) tab and Deals [Timeline](screens/deals.md#timeline) draw each deal's checklist and steps in time. Recorded days on the deal read and typical lengths are built; the plan layout and own dates follow.
 
 **Placement.** The workflow is the [checklist under the phases](#checklist-under-the-phases), in its fixed order. Each row is recorded or expected, never both.
 
@@ -1755,6 +1757,8 @@ The owner approved the timeline design on 2026-11-25. The deal page's [Plan](scr
 | Closed             | Invoice 3 · Commission received 30                                                                                                                |
 
 Once a to-do has five finished examples with recorded days, the panel shows the measured median beside the default and offers **Use measured**. A number changes only on a partner's edit or click.
+
+`typical_length` stores `(deal_kind, todo, days)` with the standard change stamps (`schema/add-typical-lengths.sql`, seeded for `lease` by `schema/seed-typical-lengths.sql`). Prospective Client's stay uses the slug `before_research`; the other lease rows use their checklist item slugs (`move_in` sits on its own date and has no row). `GET /api/engine/typical-lengths` takes an optional `deal_kind` (default `lease`) and returns `{ deal_kind, items }` in workflow order, each with `phase`, `todo`, `label`, `days`, `changed_by` (the partner slug, or null while still the seeded default), `changed_at`, `base_version`, `measured_days` (rounded median when at least five positive recorded examples exist for that deal kind, else null) and `measured_count`. `POST /api/engine/typical-lengths` takes `{ idempotency_key, deal_kind, todo, days, base_version }` for a signed-in partner, checks `base_version` against the row's latest change id (`409 version_conflict`), saves the positive whole-day count and returns `{ deal_kind, todo, days, changed_by, changed_at, base_version }`.
 
 **Expected signing date.** Each open lease deal's expected signing date is the day its Executed lease to-do is recorded or expected to finish. A stale deal has none.
 
