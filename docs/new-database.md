@@ -1919,6 +1919,7 @@ The [Vendors](screens/vendors.md) redesign the owner approved on 2026-11-25 need
 
 - With `category`, or `no_category=true` for vendors with no category, it answers every matching vendor in one answer, with no next page. Other lists keep pages of 25.
 - Each row answers `categories`, every category the vendor holds as `{ slug, label }` in label order, beside today's single category until the app stops reading it.
+- `quiet=true` narrows the list to the vendors the summary counts as quiet, by the same rule at the default 90-day cadence. It combines with the other filters, is echoed in `query` only when asked for, and is refused on the legacy list.
 - Each row answers `quiet`, true or false, and `quiet_days`, the whole Central days since its last contact while quiet, otherwise null.
 - `sort=relationship` orders by relationship order, then by name, and is the default. The other sorts stay.
 

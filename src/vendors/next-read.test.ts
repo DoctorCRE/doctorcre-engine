@@ -225,3 +225,49 @@ test("a vendor's details show the ruling and owner of its vendor role, not of it
 		owner_label: "Example Dell",
 	});
 });
+
+async function summaryQuiet(owner: string, category?: string) {
+	const response = await door.request(
+		{ user: "joe" },
+		`vendors/summary?owner=${owner}`,
+		{ method: "GET" },
+		{ DIRECTORY_READ_SCHEMA: "next" },
+	);
+	assert.equal(response.status, 200);
+	const body = (await response.json()) as {
+		all: { quiet: number };
+		categories: { slug: string; quiet: number }[];
+	};
+	return category === undefined
+		? body.all.quiet
+		: body.categories.find((c) => c.slug === category)?.quiet;
+}
+
+test("the vendor list narrows to the vendors Quiet follow-ups proposes", async () => {
+	const [quietLender, quietOther] = [id(105), id(106)];
+	await door.db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into party (id, kind, name) values
+			('${quietLender}', 'person', 'Made-up Quiet Lender'), ('${quietOther}', 'person', 'Made-up Quiet Vendor');
+		insert into party_role (party_id, role, owner_user_id, created_at) values
+			('${quietLender}', 'vendor', '${joe}', now() - interval '200 days'),
+			('${quietOther}', 'vendor', '${joe}', now() - interval '200 days');
+		insert into party_role (party_id, role) values ('${quietLender}', 'lender');
+		commit;`);
+	assert.partialDeepStrictEqual(await list("quiet=true&category=lender"), {
+		query: { quiet: true },
+		total: 1,
+		rows: [{ id: quietLender }],
+	});
+	for (const [query, owner, category] of [
+		["quiet=true", "all", undefined],
+		["quiet=true&category=lender", "all", "lender"],
+		["quiet=true&owner=joe", "joe", undefined],
+		["quiet=true&owner=dell", "dell", undefined],
+	] as const) {
+		const { total } = (await list(query)) as { total: number };
+		assert.equal(total, await summaryQuiet(owner, category), query);
+	}
+	assert.equal(((await list("quiet=true")) as { total: number }).total, 2);
+	const { query } = (await list("q=Made-up")) as { query: object };
+	assert.equal("quiet" in query, false);
+});

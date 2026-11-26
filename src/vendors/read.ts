@@ -14,6 +14,11 @@ import {
 	viewerIdOf,
 } from "../clients/read.ts";
 import type { DB } from "../database.d.ts";
+import {
+	lastRecordedContacts,
+	vendorIsQuiet,
+} from "../leads/follow-up-reads.ts";
+import { DEFAULT_CADENCE } from "../leads/quiet-follow-ups.ts";
 import type { DB as NextDB } from "../next-database.d.ts";
 import { asText, inJsonbOrder } from "../reader.ts";
 import { UUID } from "../uuid.ts";
@@ -34,6 +39,7 @@ export type VendorQuery = ListQuery<
 	category: string | null;
 	stage: string | null;
 	disposition: string | null;
+	quiet?: true;
 };
 
 // The legacy `category` column has no lookup key; `category_slug` does.
@@ -442,9 +448,20 @@ export async function readNextVendorList(
 	const ownerId = await nextViewerId(db, viewer);
 	if (query.scope === "mine" && ownerId === null)
 		throw new BusinessRefusal({ error: "VIEWER_OWNER_UNKNOWN" });
-	const { category, disposition, owner, q, scope, stage, territory } = query;
+	const { category, disposition, owner, q, quiet, scope, stage, territory } =
+		query;
 	const term = q === null ? null : `%${q.replace(/([\\%_])/g, "\\$1")}%`;
-	const matching = liveNextVendors(db).where(sql<boolean>`
+	const matching = liveNextVendors(db)
+		.$if(quiet === true, (qb) =>
+			qb
+				.leftJoin(sql`(${lastRecordedContacts})`.as("recorded"), (join) =>
+					join.on(sql<boolean>`recorded.party_id = p.id`),
+				)
+				.where(
+					sql<boolean>`${vendorIsQuiet("pr", "recorded", DEFAULT_CADENCE.vendor_days)}`,
+				),
+		)
+		.where(sql<boolean>`
 		(${scope === "team"} or pr.owner_user_id = ${ownerId}::uuid)
 		and (${owner === "all"} or ou.slug = ${owner})
 		and (${stage}::text is null or pr.stage = ${stage})
