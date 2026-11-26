@@ -211,7 +211,7 @@ export async function readLeadBoard(db: Reader) {
 // A city that names no market, or more than one, places the lead nowhere.
 const marketByCity = sql`select case when count(*) = 1
 	then jsonb_build_object('id', min(m.id::text), 'name', min(m.name)) end
-	from market m where lower(btrim(m.name)) = lower(p.city)`;
+	from market m where lower(btrim(m.name)) = lower(btrim(p.city))`;
 
 export async function readNextLeadBoard(db: Transaction<NextDB>) {
 	const { rows } = await sql<Row>`
