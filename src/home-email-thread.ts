@@ -113,6 +113,8 @@ const signatureDetail =
 	/^(?:(?:[A-Z]{2} )?(?:license|lic\.|dre|bre|nmls)[ :#]+[\w-]*\d[\w-]*|(?:(?:general|regional|office|transaction|leasing|commercial|managing|associate|executive|chief|operating|vice|senior) ){0,4}(?:dentist|director|manager|broker|agent|president|partner|associate|coordinator|officer)|(?:[\w-]+\.)+(?:com|org|net|co|io)|\d+ [\w. ]+ (?:st\.?|street|road|rd\.?|avenue|ave\.?|lane|ln\.?|drive|dr\.?|blvd\.?)\.?|[\w. ]+, [A-Z]{2} \d{5}(?:-\d{4})?)$/i;
 const legalFooter =
 	/(?:^|(?<=[.!?])[ \t]+)this\s+(?:e-?mail|message|communication)(?:\s+and\s+(?:any|its)\s+attachments)?\s+(?:may\s+contain|contains?)\s+(?:confidential(?:\s+and\s+(?:legally\s+)?privileged)?|(?:legally\s+)?privileged(?:\s+and\s+confidential)?)\s+information\.(?=\s|$)|(?:^|(?<=[.!?])[ \t]+)if\s+you\s+(?:received\s+it\s+in\s+error|(?:have\s+)?received\s+this\s+(?:e-?mail|message)\s+in\s+error|are\s+not\s+the\s+intended\s+recipient),?\s+please\s+(?:delete\s+it|notify\s+the\s+sender(?:\s+and\s+delete\s+(?:it|this\s+message))?)\.(?=\s|$)/gim;
+// Outlook pads signatures with zero-width spaces, which JavaScript does not count as whitespace.
+const zeroWidth = /[\u200B-\u200D\u2060\uFEFF]/g;
 const deviceFooter = /^sent from my (?:iphone|ipad|android|mobile device)$/i;
 const imageFooter = /^\[cid:[^\]]+\](?:\s*<https?:\/\/[^>]+>)?$/i;
 const signOff =
@@ -267,17 +269,45 @@ function contactDetails(line: string) {
 type TextRange = { start: number; end: number };
 type PositionedLine = TextRange & { line: MailLine; text: string };
 
-// A signature can repeat the name with a middle initial or nickname, as in "Sam Q. Example".
+// A signature can expand the name ("Rob" as "Robert C. Example") or quote a nickname ("JORDAN 'SAM' EXAMPLE").
 function signatureName(name: string) {
-	const words = name.split(/\s+/).filter(Boolean);
-	if (!words.length) return;
-	const pattern = words
-		.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-		.join(String.raw`(?:\s+[^\s.!?,;:]+\.?){0,2}\s+`);
-	return new RegExp(String.raw`(?<!\S)${pattern}(?![\w'])`, "gi");
+	const words = name
+		.split(/\s+/)
+		.filter(Boolean)
+		.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+	const [first, ...rest] = words;
+	if (!first) return;
+	const pattern = [
+		rest.length ? String.raw`['"‘’]?${first}\p{L}*['"‘’]?` : first,
+		...rest,
+	].join(String.raw`(?:\s+[^\s.!?,;:]+\.?){0,2}\s+`);
+	return {
+		inline: new RegExp(
+			String.raw`(?<![\p{L}\d])${pattern}(?![\p{L}\d'])`,
+			"giu",
+		),
+		line: new RegExp(String.raw`^(?:[\p{L}'.-]+\s+){0,2}${pattern}$`, "iu"),
+	};
 }
 
-const titleParts = /^[A-Z][\w'&.-]*(?: [A-Z][\w'&.-]*)*$/;
+// A capitalized instruction ("Call Landlord Tomorrow") is part of the message, not a signature line.
+const instruction =
+	/^(?:please|call|send|text|email|tell|ask|let|bring|check|review|follow|get|make|confirm|remind|schedule|sign|submit|pay|reply|forward|add)\b/i;
+const joiner = /^(?:of|and|the|at|for|in|on|by|&)$/;
+
+// Names, titles, companies and places in a signature are capitalized; a sentence has lowercase words.
+function signatureTail(text: string) {
+	return text
+		.replace(contactValue, " ")
+		.split(/[\s|,·•]+/)
+		.filter(Boolean)
+		.every(
+			(word) =>
+				joiner.test(word) ||
+				(/^['"(]?[A-Z\d]/.test(word) && !/[?!]$/.test(word)),
+		);
+}
+
 const nameLine = /^[A-Z][\w'.-]*(?: [A-Z][\w'.-]*){1,3}$/;
 
 function inlineSignature(line: string, signer: RegExp) {
@@ -305,10 +335,8 @@ function inlineSignature(line: string, signer: RegExp) {
 	// A title must be a known one; a Capitalized run alone can be a sentence ("Call Me Soon").
 	if (
 		signed &&
-		details.length <= 120 &&
-		(!title ||
-			(signatureDetail.test(title) &&
-				rest.every((part) => titleParts.test(part))))
+		details.length <= 200 &&
+		(!title || (signatureDetail.test(title) && signatureTail(rest.join(" "))))
 	)
 		return { start, end: line.length };
 }
@@ -324,33 +352,48 @@ function footerRanges(body: string, name: string) {
 	let signed = false;
 	let named = false;
 	let afterSignOff = false;
+	let shaped = false;
 	let offset = 0;
 	const signer = signatureName(name);
 	for (const raw of body.split("\n")) {
 		const line = raw.trim();
 		const lower = line.toLowerCase();
 		const isName =
-			!!name && (lower === name || lower === name.split(" ", 1)[0]);
+			!!name &&
+			(lower === name ||
+				lower === name.split(" ", 1)[0] ||
+				!!signer?.line.test(line));
 		const isSignOff = signOff.test(line);
 		// A sign-off stands for the name, and a Title-Case line right after it is the name.
 		const nameAfterSignOff = afterSignOff && nameLine.test(line);
 		const contact = line.length <= 500 && contactDetails(line);
-		if (
+		const known =
 			contact ||
 			isName ||
 			isSignOff ||
 			nameAfterSignOff ||
-			signatureDetail.test(line)
-		) {
+			signatureDetail.test(line);
+		// After the name, a signature runs on through separators, companies, places and blank lines before its contact details, never a header or a sentence.
+		const tail =
+			!known &&
+			hasName &&
+			(line
+				? line.length <= 120 &&
+					!instruction.test(line) &&
+					!/:|\p{L}{4}[.?!]$/u.test(line) &&
+					signatureTail(line)
+				: !hasContact);
+		if (known || tail) {
+			shaped ||= tail && !!line;
 			hasContact ||= contact;
 			hasName ||= isName || isSignOff || nameAfterSignOff;
 			named ||= isName;
 			signed ||= isSignOff;
 			afterSignOff = isSignOff;
 		} else {
-			if ((hasContact && hasName) || (signed && named))
+			if ((hasContact && hasName) || (signed && named && !shaped))
 				ranges.push({ start, end: offset - 1 });
-			const inline = signer && inlineSignature(raw, signer);
+			const inline = signer && inlineSignature(raw, signer.inline);
 			if (inline)
 				ranges.push({ start: offset + inline.start, end: offset + inline.end });
 			if (deviceFooter.test(line) || imageFooter.test(line)) {
@@ -362,10 +405,11 @@ function footerRanges(body: string, name: string) {
 			signed = false;
 			named = false;
 			afterSignOff = false;
+			shaped = false;
 		}
 		offset += raw.length + 1;
 	}
-	if ((hasContact && hasName) || (signed && named))
+	if ((hasContact && hasName) || (signed && named && !shaped))
 		ranges.push({ start, end: body.length });
 	return ranges;
 }
@@ -491,7 +535,7 @@ export function cleanEmailThread(
 	const senders = new Map<string, MailLine[][]>();
 	const cleaned = messages.map(
 		({ body, authored = null, history = null, ...sender }) => {
-			const text = authored ?? body;
+			const text = (authored ?? body).replace(zeroWidth, "");
 			const lines = mailLines(text);
 			const content = lines.filter(({ text }) => text.trim());
 			const removed = historyLines(content, earlier);
