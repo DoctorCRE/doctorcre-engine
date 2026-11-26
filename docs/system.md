@@ -184,6 +184,7 @@ The owner's open questions live on one list, "What we need from you" on the road
 | Invoice capture, application and payment                 | § "Invoice email capture and list"; § "Invoice application"; § "Mark paid"                                                          |
 | Deals reads, their switch and cutover needs              | § "Deals reads for the app"                                                                                                         |
 | Deal page people and company search                      | § "People and company search for the deal page"                                                                                     |
+| Deal plan, typical lengths and the Deals timeline        | § "Deal plan"                                                                                                                       |
 | Add and edit people and companies                        | § "Add and edit people and companies"                                                                                               |
 | Add and edit clients and vendors                         | § "Add and edit clients and vendors"                                                                                                |
 | Link people and companies                                | § "Link people and companies"                                                                                                       |

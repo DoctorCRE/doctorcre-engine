@@ -1721,6 +1721,45 @@ The deal page shows three dates for each commission payment: triggered, sent and
 
 The `deal-checklist.v1` groups become the eight phases. Research, Site selection, Negotiation, Legal and Closing go under the phase of the same meaning, and Invoice's two items go under Closed. A purchase's diligence items stay under Legal. Prospective Client and Due Diligence have no items until the partners' workflow table arrives. Items still tick themselves from what is filed and recorded.
 
+### Deal plan
+
+The owner approved the timeline design on 2026-11-25. The deal page's [Plan](screens/deals.md#plan) tab and Deals [Timeline](screens/deals.md#timeline) draw each deal's checklist and steps in time. None of it is built yet.
+
+**Placement.** The workflow is the [checklist under the phases](#checklist-under-the-phases), in its fixed order. Each row is recorded or expected, never both.
+
+1. A finished to-do ends on the day it was recorded as finished. It starts on the day the to-do before it finished, or the day its phase began.
+2. The to-do the deal is on starts where the last one finished, or at the last phase move. It runs to today and reports its day against its typical length, such as "day 9 of 21". Nothing records a percent done.
+3. Each to-do ahead is expected. It starts where the one before is expected to end and runs its typical length, or ends on the partner's own date when one is set. Phases follow each other the same way.
+4. Arrows follow the workflow's order. No link between to-dos is stored.
+5. A step runs from its `created_at` day to its `due_on`. Both are recorded, so a step is never expected. A late step is marked late.
+6. A critical date sits on its own day; a proposed one is marked proposed. A date whose kind names a to-do that must finish first gets an arrow from that to-do: LOI expiry follows Terms comparison, and lease commencement follows Commencement letter. Other kinds get no arrow.
+7. A to-do expected to finish after the critical date it must beat makes that date at risk.
+8. Each phase spans its days from `deal_phase_change`: spent time up to today, then expected time.
+9. Move-in and the 90-day check-in sit outside the chain. Move-in sits on the deal's target move-in date when one is recorded, and the check-in 90 days after it.
+10. A deal that has sat on its current to-do for more than twice its typical length is stale. It gets no expected days, and the plan says how long it has sat.
+11. A to-do in a finished phase that never ticked is "not recorded" and has no days.
+
+**Typical lengths.** One row per deal kind and to-do holds its typical days and who last changed it and when. They ship as these defaults for a lease deal and partners edit them in the Typical lengths panel; there is no confirmation step. Only the phase totals were measured, from at most three finished stays per phase. Purchase and land deals get their own rows later; until then they show order with no expected days.
+
+| Phase              | To-do and typical days                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prospective Client | 7 days before Research begins                                                                                                                     |
+| Research           | Representation agreement 7 · Intake and requirements 7                                                                                            |
+| Site Selection     | Market survey 7 · Tours and tour notes 12                                                                                                         |
+| Negotiating        | LOIs sent 14 · Terms comparison 21 · Agreed business terms 20                                                                                     |
+| Legal              | Lease draft to attorney 10 · Attorney comments 21 · Healthcare lease review 10 · TI scope and bids 14                                             |
+| Due Diligence      | Nothing listed for a lease                                                                                                                        |
+| Closing            | Executed lease 14 · Commencement letter 10 · Executed comp 7 · Lease end recorded 6 · Move-in on its date · 90-day check-in 90 days after move-in |
+| Closed             | Invoice 3 · Commission received 30                                                                                                                |
+
+Once a to-do has five finished examples with recorded days, the panel shows the measured median beside the default and offers **Use measured**. A number changes only on a partner's edit or click.
+
+**Expected signing date.** Each open lease deal's expected signing date is the day its Executed lease to-do is recorded or expected to finish. A stale deal has none.
+
+**A partner's own date.** A partner may set their own end day on one of a deal's to-dos by dragging its expected bar. It is the only plan date stored. It saves through the change history, so Undo restores the one before, and Reset to typical clears the deal's own dates. It cannot be a past day. The column or table needs the owner's yes on the schema file's commit before production.
+
+**The plan read.** One pure engine function takes a deal's checklist, phase changes, steps, critical dates, own dates, the typical lengths and today in Central time. It returns every row with its recorded or expected days and state, the arrows, the at-risk dates, the expected signing date and the stale flag. The deal read serves it as `plan`. The board read gives each open deal its phase spans, expected signing date, stale flag, at-risk count and current phase's rows from the same function. Expected days are worked out on every read and never saved, so they never appear on Home or Calendar.
+
 ### Doc skill sessions
 
 A button on a deal or lead starts a Doc session for one record and one skill, as [Doc](screens/doc.md#start-doc-from-a-button) describes. A typed list in engine code names each skill, `client_website`, `requirement_email`, `compare_lois` and `lead_outreach`, with its record kind, its chat title and the skill Doc runs. A session is a [Doc conversation](#doc-conversations-and-turns) tied to its record and skill, so the button reopens the same chat. The deal and lead reads give each skill's state: not started, working, waiting on the partner, or done on a date. A finished job or a question from Doc sends one update and one phone push through Updates. A file dropped in the session goes through the existing upload door to the record's documents, and Doc reads its extracted text. Not decided: the storage that ties a conversation to its record and skill, and what the other partner sees, since a Doc conversation is private to its owner.

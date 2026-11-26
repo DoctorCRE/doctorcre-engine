@@ -52,6 +52,8 @@ A detail page may add back/title, the facts line its screen file requires and a 
 
 **Ruling.** Gr8r Studio draws a line beside its sidebar and around each board column. The owner ruled against a border around phase columns, a visible sidebar border and bordered toggles (2026-11-20).
 
+**Exception.** On the Plan tab and Deals Timeline, bars are colored by phase (owner, 2026-11-25). Red still means late or at risk, amber within 7 days, and orange marks only today and a bar being dragged.
+
 ## 6. Cards and rows: rows for lists, cards for lanes and tiles
 
 **Seen.** Gr8r Studio shows tasks as rows in its list and table, and as cards only on its board, where each card is dragged between columns. Its Home panels hold plain rows. Linear's inbox and T3 Code's thread list are rows.
