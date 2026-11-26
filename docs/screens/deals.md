@@ -160,7 +160,7 @@ The owner approved this design on 2026-11-25, with every change it proposed. On 
 
 - [ ] The top bar reads "Deals / " and the deal's name. **Deals** returns to the board where the partner left it.
 - [ ] One row of tabs: Overview, Plan, Activity, Tours, Documents and Client portal.
-- [ ] On the right of the tab row, in the muted tone: the client, the phase, the deal owner, then deal kind, deal reason and market, and the market agent on a national-account deal. The client's name opens the client. The deal owner opens the choice of Joe or Dell. A deal with no market says "No market recorded".
+- [ ] On the right of the tab row, in the muted tone: the client, the phase, the deal owner, then deal kind, deal reason and market, and the market agent on a national-account deal. The next critical date is not in the header; it is the first row of Overview. The client's name opens the client. The deal owner opens the choice of Joe or Dell. A deal with no market says "No market recorded".
 
 ### Overview
 

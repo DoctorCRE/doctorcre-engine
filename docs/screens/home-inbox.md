@@ -19,7 +19,7 @@ Things the partner has to go and do on a deal or a vendor.
 - [ ] Reminders holds the partner's open deal and vendor next steps, call follow-ups and checklist reminders that are late, due today or have no date. Future steps and automatic check-ins first appear on their due day.
 - [ ] Rows sit under **Late**, **Today** and **No date**. An empty group is not drawn. The heading reads "Reminders 13 · 3 late". The total counts every row, folded ones included. The late count is the rows under **Late** and leaves out the folded ones.
 - [ ] Each row is two lines. Line one is the action ("Call Dr. Lane with the second tour times"). Line two is the deal or vendor and the reason ("Example Dental · She asked for Thursday afternoon"). The right edge says "3 days late" in Central calendar days, or "Today".
-- [ ] The circle on the left marks the step done. **Snooze** and **Drop** show when the pointer or keyboard focus is on the row, and inside the open item. Clicking the row opens the step beside the list.
+- [ ] The circle on the left marks the step done. **Snooze** and **Drop** show when the pointer or keyboard focus is on the row, and inside the open item. Clicking the row opens the step beside the list. The open step has its own **Mark done**, which saves as the row's circle does.
 - [ ] Reminders 15 or more Central calendar days late fold into one line at the bottom, "3 more than two weeks late". A reminder 14 days late stays under **Late**. They stay open, and one click shows them in place.
 - [ ] On a computer the first-visit walkthrough sits beside the left rail, level with the control it describes, and the page moves over to make room, so no step covers Home. On a phone it sits at the top or bottom of the screen.
 - [ ] A nightly checklist reminder first appears when the deal owner's [morning window](../new-database.md#deal-watches-and-nightly-checklist-reminders) opens.
@@ -50,11 +50,12 @@ What the assistant could not settle alone. The goal is zero.
 
 ## Deals
 
-- [ ] The heading reads "Deals 38 open · 4 parked · 6 in national accounts · 9 prospects". A count of zero is left out. The counts add up to the Monday review total. **Board** opens the Deals board.
+- [ ] The title row reads **Deals** with **Board** on the right, and **Board** opens the Deals board.
+- [ ] One counts line under it reads "38 open · 4 parked · 6 national · 9 prospects". A count of zero is left out. The counts add up to the Monday review total, and the line opens the Deals board.
 - [ ] The seven phases follow, each with its count of open deals, in board column order. A phase opens the board at that column.
 - [ ] **Needs attention** lists by name the deals that carry the board's Needs attention badge, with its reason, such as "Step 3 days late" or "Flagged". Each name opens the deal page.
 - [ ] "7 have no next step" opens the Deals list showing Missing next step.
-- [ ] **Monday review** shows this week's progress, "31 of 47", and opens the review.
+- [ ] **Monday review** shows this week's progress, "31 of 47", and opens the review. When a deal closed or was lost or a prospect was dropped this week, it adds "includes 1 closed or lost and 2 dropped this week" so the total still holds.
 - [ ] Every number matches what the Deals board, Deals list and Monday review show at the same moment. See [Deals](deals.md).
 
 ## Coming up
@@ -71,7 +72,7 @@ What the assistant could not settle alone. The goal is zero.
 - [ ] Clicking a Reminders or Inbox row opens it over the middle and right columns. Reminders stays in view. Close, or **Escape** anywhere on the page, returns to the three columns.
 - [ ] The pane heading is the row's action, with "1 of 5" and **Next**. **Next** opens the following item in the same tile, so a partner can clear the Inbox without going back and forth.
 - [ ] **Send reply** is the only orange button on the screen.
-- [ ] On a phone the item opens full screen, and Back returns to the same scroll position.
+- [ ] Below three columns, on a phone, an opened item fills the screen and its close button reads **Back**. **Back** returns to the same place in the list.
 
 ## Refresh and failures
 
