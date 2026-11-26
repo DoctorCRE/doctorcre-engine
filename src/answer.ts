@@ -324,6 +324,7 @@ export type Verb =
 	| "read-client-leases"
 	| "read-closing-anniversaries"
 	| "read-deal-document-text"
+	| "read-deal-email-thread"
 	| "read-deal-tour"
 	| "read-home-card"
 	| "read-home-drop-reasons"

@@ -39,7 +39,7 @@ import {
 } from "./deals/next-change.ts";
 import { notificationReads } from "./deals/notification-reads.ts";
 import { dealParticipants } from "./deals/participants.ts";
-import { dealDocumentText, deals } from "./deals/routes.ts";
+import { dealSourceReads, deals } from "./deals/routes.ts";
 import { dealStars } from "./deals/stars.ts";
 import { dealTours } from "./deals/tours.ts";
 import { typicalLengths } from "./deals/typical-lengths.ts";
@@ -167,7 +167,7 @@ const engine = new Hono<WorkerEnv>()
 const partnerApi = new Hono<WorkerEnv>();
 partnerApi.use("/api/engine/*", userStamp);
 partnerApi.route("/api/engine", dealTours);
-partnerApi.route("/api/engine", dealDocumentText);
+partnerApi.route("/api/engine", dealSourceReads);
 partnerApi.route("/api/engine", engine);
 partnerApi.route("/api/engine", dealCallContext);
 partnerApi.route("/api/engine", leadChanges);
