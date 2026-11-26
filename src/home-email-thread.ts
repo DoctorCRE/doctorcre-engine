@@ -269,7 +269,7 @@ function contactDetails(line: string) {
 type TextRange = { start: number; end: number };
 type PositionedLine = TextRange & { line: MailLine; text: string };
 
-// A signature can expand the name ("Rob" as "Robert C. Example") or quote a nickname ("JORDAN 'SAM' EXAMPLE").
+// A signature can expand the name ("Alex" as "Alexander C. Example") or quote a nickname ("JORDAN 'SAM' EXAMPLE").
 function signatureName(name: string) {
 	const words = name
 		.split(/\s+/)

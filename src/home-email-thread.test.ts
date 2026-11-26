@@ -664,18 +664,18 @@ test("a sign-off stands for the name of a signature the sender is stored under o
 
 test("folds Outlook signatures padded with zero-width spaces under a longer or quoted name", () => {
 	const pad = "\u200b\u200c\u200d\u2060\ufeff";
-	const rob = (body: string) => ({
+	const alex = (body: string) => ({
 		body,
-		sender: "rob@example.test",
-		sender_name: "Rob Example",
+		sender: "alex@example.test",
+		sender_name: "Alex Example",
 	});
 	const sam = (body: string) => ({
 		body,
 		sender: "sam@example.test",
 		sender_name: "Sam Example",
 	});
-	const robSignature =
-		"Robert C. Example 555-010-3434 Telephone 555-010-6121 Fax rob@example.test";
+	const alexSignature =
+		"Alexander C. Example 555-010-3434 Telephone 555-010-6121 Fax alex@example.test";
 	const flatSignature =
 		"Best regards, Sam  JORDAN 'SAM' EXAMPLE Agent | Example Region GROUP 555.010.6555 sam@example.test Licensed in State A & State B";
 	const lineSignature = [
@@ -691,7 +691,7 @@ test("folds Outlook signatures padded with zero-width spaces under a longer or q
 	].join("\n");
 	assert.deepEqual(
 		cleanEmailThread([
-			rob(`Thanks. Just let me know. ${pad} ${robSignature}`),
+			alex(`Thanks. Just let me know. ${pad} ${alexSignature}`),
 			sam(
 				`We can help with that. ${flatSignature.replace("Sam ", `Sam ${pad}`)}`,
 			),
@@ -700,7 +700,7 @@ test("folds Outlook signatures padded with zero-width spaces under a longer or q
 			),
 		]),
 		[
-			{ body: "Thanks. Just let me know.", folded: robSignature },
+			{ body: "Thanks. Just let me know.", folded: alexSignature },
 			{ body: "We can help with that.", folded: flatSignature },
 			{
 				body: "Sam\n\nBtw - Please let us know if you need anything.",
