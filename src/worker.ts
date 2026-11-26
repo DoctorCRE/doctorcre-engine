@@ -51,6 +51,7 @@ import {
 } from "./doc-link-routes.ts";
 import { docMcp } from "./doc-mcp.ts";
 import { heldStepReviews } from "./held-steps.ts";
+import { homeDropReasons } from "./home-drop-reasons.ts";
 import { homeInbox } from "./home-inbox.ts";
 import { homeMarks } from "./home-marks.ts";
 import { homeToday } from "./home-today.ts";
@@ -147,6 +148,7 @@ const engine = new Hono<WorkerEnv>()
 	.route("/", dealField)
 	.route("/", dealClosing)
 	.route("/", dealUpdate)
+	.route("/", homeDropReasons)
 	.route("/", homeInbox)
 	.route("/", homeToday)
 	.route("/", invoices)

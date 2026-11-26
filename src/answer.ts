@@ -326,6 +326,7 @@ export type Verb =
 	| "read-deal-document-text"
 	| "read-deal-tour"
 	| "read-home-card"
+	| "read-home-drop-reasons"
 	| "read-home-inbox-v5"
 	| "read-home-inbox-v6"
 	| "read-home-mail-priorities-v1"
