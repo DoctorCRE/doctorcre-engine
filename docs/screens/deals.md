@@ -255,11 +255,11 @@ See [Planned tours on a deal](../new-database.md#planned-tours-on-a-deal).
 
 ### Client portal
 
-- [ ] Client portal is the partners' view of what the client sees. A line at the top shows the site's name, when the client last opened it, **Copy client link** and **Open as client**. Open as client opens the site already unlocked in a new tab and never asks for a password. Under the line, the client's site shows as the client sees it.
+- [ ] Client portal is the partners' view of what the client sees. A line at the top shows the site's name, **Copy client link** and **Open as client**. Open as client opens the site already unlocked in a new tab and never asks for a password. Copy client link copies the client's own address, which asks for their password, and the button says Copied. Under the line, a large link with the site's address opens it the same way as Open as client. The share site refuses to be shown inside another page, so the site always opens in its own tab.
 - [ ] A deal with no website shows one line and **Build client website**.
 - [ ] The new database keeps each deal's client website registration (owner, 2026-11-18, #728).
 
-Coming later, once the engine can edit a site's contents: **Editing** puts a pencil and an x on every property and document, adds **+ Add a property** or **+ Add a document** to each section, and lets sections be reordered. With Editing off the page is exactly the client's view.
+Coming later: when the client last opened the site, once the engine records it. And once the engine can edit a site's contents: **Editing** puts a pencil and an x on every property and document, adds **+ Add a property** or **+ Add a document** to each section, and lets sections be reordered. With Editing off the page is exactly the client's view.
 
 ### On a phone
 
