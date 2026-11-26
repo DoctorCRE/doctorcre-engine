@@ -715,7 +715,7 @@ test("bad timing on any lead, then the first lead past 500 findings or activitie
 		});
 	}));
 
-describe("the new Leads read places a lead in a market by its city", () => {
+describe("the new Leads read places a lead in a market by its city or town", () => {
 	const copy = copyTest();
 	const read = async () => {
 		const answer = await nextTransaction(copy.connectionString, "read", (tx) =>
@@ -727,6 +727,7 @@ describe("the new Leads read places a lead in a market by its city", () => {
 	const marketOf = async (party: number) =>
 		(await read()).leads.find((l) => l.party_id === uuid(party))?.market;
 	const bay = { id: uuid(901), name: "Example Bay" };
+	const sandy = { id: uuid(905), name: "Example Bay / Sandy Point" };
 
 	// Every market, city and lead name is made up.
 	before(async () => {
@@ -737,13 +738,19 @@ describe("the new Leads read places a lead in a market by its city", () => {
 			insert into stage (role, slug, label) values ('lead', 'new', 'New');
 			insert into market (id, name) values ('${uuid(901)}', 'Example Bay'),
 				('${uuid(902)}', 'Twin Falls Example'), ('${uuid(903)}', 'TWIN FALLS EXAMPLE'),
-				('${uuid(904)}', 'Empty Harbor Example');
+				('${uuid(904)}', 'Empty Harbor Example'), ('${uuid(905)}', 'Example Bay / Sandy Point'),
+				('${uuid(906)}', 'Example Shore');
+			insert into market_city (market_id, city) values ('${uuid(905)}', 'Sandy Point'),
+				('${uuid(905)}', 'Shell Harbor'), ('${uuid(905)}', 'Dune Example'), ('${uuid(906)}', 'Dune Example');
 			insert into party (id, kind, name, city, how_found) values
 				('${uuid(911)}', 'person', 'Example City Match', 'Example Bay', 'referral'),
 				('${uuid(912)}', 'person', 'Example Case Match', 'example bay', 'referral'),
 				('${uuid(913)}', 'person', 'Example Ambiguous', 'Twin Falls Example', 'referral'),
 				('${uuid(914)}', 'person', 'Example Outside', 'Nowhere Example', 'referral'),
-				('${uuid(915)}', 'person', 'Example No City', null, 'referral');
+				('${uuid(915)}', 'person', 'Example No City', null, 'referral'),
+				('${uuid(916)}', 'person', 'Example Town Match', 'Sandy Point', 'referral'),
+				('${uuid(917)}', 'person', 'Example Town Case', 'shell harbor', 'referral'),
+				('${uuid(918)}', 'person', 'Example Shared Town', 'Dune Example', 'referral');
 			insert into party_role (party_id, role, stage)
 				select id, 'lead', 'new' from party where name like 'Example %';
 			commit;`);
@@ -760,8 +767,19 @@ describe("the new Leads read places a lead in a market by its city", () => {
 				{ id: uuid(902), name: "Twin Falls Example", count: 0 },
 				{ id: uuid(903), name: "TWIN FALLS EXAMPLE", count: 0 },
 				{ id: uuid(904), name: "Empty Harbor Example", count: 0 },
+				{ ...sandy, count: 2 },
+				{ id: uuid(906), name: "Example Shore", count: 0 },
 			],
 		);
+	});
+
+	test("a town listed in a market places the lead there", async () => {
+		assert.deepEqual(await marketOf(916), sandy);
+		assert.deepEqual(await marketOf(917), sandy);
+	});
+
+	test("a town listed in two markets places the lead nowhere", async () => {
+		assert.equal(await marketOf(918), null);
 	});
 
 	test("a city naming more than one market places the lead nowhere", async () => {

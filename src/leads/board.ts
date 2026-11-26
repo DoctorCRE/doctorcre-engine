@@ -37,9 +37,9 @@ type WorkspaceLead = {
 	event_confidence: string | null;
 	next_action_date: string | null;
 	opportunity_timing: OpportunityTiming;
-	market?: Market | null;
 };
-type Market = { id: string; name: string };
+// The new read also places each lead in one market, or none.
+type NextLead = WorkspaceLead & { market: { id: string; name: string } | null };
 type Hold = { reason: "contact_ineligible" | "unsupported_stage" };
 
 const CONTACTABLE_STATES = new Set(["active", "nurture"]);
@@ -143,7 +143,7 @@ const leadsInBoardOrder = (db: Reader) =>
 
 // The view drops suppressed leads, and a do-not-contact stage is always
 // suppressed, so neither old check can fail here.
-function advise(lead: WorkspaceLead) {
+function advise<Lead extends WorkspaceLead>(lead: Lead) {
 	const contact_eligible = CONTACTABLE_STATES.has(lead.contact_state);
 	const open = OPEN_OBJECTIVES.get(lead.stage);
 	const closed = CLOSED_OBJECTIVES.get(lead.stage);
@@ -181,13 +181,10 @@ function advise(lead: WorkspaceLead) {
 	};
 }
 
-type Row = Awaited<ReturnType<typeof leadsInBoardOrder>>[number];
-
-// The served lead: the row as `to_jsonb` printed it, then the old projection.
-type BoardLead = WorkspaceLead &
-	ReturnType<typeof advise> & {
-		reachability: Awaited<ReturnType<typeof reachability>>;
-	};
+type Row<Lead extends WorkspaceLead = WorkspaceLead> = Omit<
+	Awaited<ReturnType<typeof leadsInBoardOrder>>[number],
+	"lead"
+> & { lead: Lead };
 
 // The old projection threw on bad timing at once but on a limit only after an
 // await, so bad timing on any lead beat a limit on an earlier one.
@@ -208,13 +205,14 @@ export async function readLeadBoard(db: Reader) {
 }
 
 // The city half of the deal copy's market rule; county matching waits for a lead county (#1370).
-// A city that names no market, or more than one, places the lead nowhere.
+// A city that names no market or town, or towns in more than one market, places the lead nowhere.
 const marketByCity = sql`select case when count(*) = 1
 	then jsonb_build_object('id', min(m.id::text), 'name', min(m.name)) end
-	from market m where lower(btrim(m.name)) = lower(btrim(p.city))`;
+	from market m where lower(btrim(m.name)) = lower(btrim(p.city))
+		or exists (select from market_city c where c.market_id = m.id and lower(c.city) = lower(btrim(p.city)))`;
 
 export async function readNextLeadBoard(db: Transaction<NextDB>) {
-	const { rows } = await sql<Row>`
+	const { rows } = await sql<Row<NextLead>>`
 		with board as (
 			select coalesce(legacy.value, p.id::text) as id,
 				p.id as party_id, p.name, p.name as entity_name,
@@ -306,7 +304,7 @@ export async function readNextLeadBoard(db: Transaction<NextDB>) {
 	};
 }
 
-async function leadBoard(rows: Row[]) {
+async function leadBoard<Lead extends WorkspaceLead>(rows: Row<Lead>[]) {
 	const error = refusal(rows);
 	if (error) return { error } as const;
 	const now = Date.now();
@@ -314,7 +312,7 @@ async function leadBoard(rows: Row[]) {
 		schema_version: "lead-workspace.v1",
 		generated_at: new Date(now).toISOString(),
 		leads: await Promise.all(
-			rows.map(async ({ lead, findings, contact }): Promise<BoardLead> => {
+			rows.map(async ({ lead, findings, contact }) => {
 				const advised = advise(lead);
 				return {
 					...advised,

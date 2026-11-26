@@ -368,6 +368,15 @@ create table market_county (
 	primary key (market_id, county_fips)
 );
 
+-- A market named for an area, not one city, also holds the towns inside it, so a lead's city can place it there.
+create table market_city (
+	market_id uuid not null references market,
+	city text not null check (city ~ '\S' and city = btrim(city)),
+	created_at timestamptz not null default now(),
+	primary key (market_id, city)
+);
+create unique index market_city_once on market_city (market_id, lower(city));
+
 -- The area someone serves. A vendor's market and a user's or a lead's territory are one idea.
 create table territory (
 	id uuid primary key default gen_random_uuid(),
@@ -3589,7 +3598,7 @@ declare
 	stamped text;
 begin
 	foreach stamped in array array['role', 'stage', 'phase', 'deal_kind', 'deal_reason', 'how_found', 'lead_lane', 'candidate', 'lead_contact_draft', 'party', 'party_email', 'party_phone', 'party_role', 'vendor_vertical', 'vendor_loan_program', 'party_company',
-		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'territory',
+		'do_not_contact', 'specialty', 'party_specialty', 'outside_id', 'property', 'market', 'market_county', 'market_city', 'territory',
 		'territory_piece', 'party_territory', 'party_territory_review', 'deal', 'introduction', 'party_link', 'deal_phase_change', 'deal_property', 'deal_party', 'deal_client_website', 'imported_deal_party', 'imported_deal_owner', 'imported_deal_invoiced', 'imported_deal_board', 'activity', 'tour_plan', 'tour_stop',
 		'calendar_agenda', 'calendar_review_dismissal', 'activity_about', 'proposal', 'reply_draft', 'reply_draft_document', 'lead_stage_move', 'next_step', 'user_preference', 'home_mark', 'home_update', 'document_kind', 'document', 'document_extraction', 'email', 'email_recipient', 'email_mailbox', 'offer', 'offer_document', 'claim_type', 'offer_claim', 'lease', 'lease_version', 'lease_option', 'critical_date', 'social_account', 'idea',
 		'design_template', 'post', 'post_text', 'post_media', 'post_review', 'measurement', 'weekly_review', 'deal_star',
@@ -4150,7 +4159,7 @@ grant execute on function deal_filing_reason(uuid, uuid) to engine, engine_reade
 revoke insert on social_account from engine;
 grant insert (id, created_at, platform, owner_party_id, handle, platform_account_id) on social_account to engine;
 
-grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county,
+grant delete on client_vertical, vendor_vertical, vendor_loan_program, party, party_email, party_phone, do_not_contact, party_specialty, property, market, market_county, market_city,
 	territory, territory_piece, party_territory, party_territory_review, deal, party_role, party_company, deal_property, deal_party, activity,
 	activity_about, email, next_step, home_mark, social_account, idea, design_template, introduction, party_link, weekly_review, deal_star to engine;
 
