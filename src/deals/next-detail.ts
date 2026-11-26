@@ -32,6 +32,7 @@ import {
 	parkingNoteForDisplay,
 	selectNextDealsWithFacts,
 } from "./next-board.ts";
+import { planOf } from "./plan.ts";
 
 const HISTORY_CAP = 500;
 
@@ -133,6 +134,12 @@ export function nextDealDetailQuery(db: Transaction<DB>, deal: string) {
 					(lead(p.happened_at) over (order by p.happened_at) at time zone 'America/Chicago')::date as to_on
 					from deal_phase_change p where p.deal_id = d.id) spans)`.as(
 				"phase_spans",
+			),
+			sql<
+				Record<string, number>
+			>`(select coalesce(jsonb_object_agg(t.todo, t.days), '{}')
+				from typical_length t where t.deal_kind = d.kind)`.as(
+				"typical_lengths",
 			),
 			jsonArrayFrom(
 				selectDealParties(db, eb.ref("d.id"))
@@ -295,8 +302,14 @@ export async function readNextDealDetail(
 ) {
 	const record = await nextDealDetailQuery(db, deal).executeTakeFirst();
 	if (!record) return { error: "not_found" as const };
-	const { today, commissions, critical_dates, email_follow_ups, ...detail } =
-		record;
+	const {
+		today,
+		commissions,
+		critical_dates,
+		email_follow_ups,
+		typical_lengths,
+		...detail
+	} = record;
 	const checklistType =
 		detail.reason === "renewal" ? detail.reason : detail.type;
 	const checklist = checklistOf({
@@ -340,6 +353,10 @@ export async function readNextDealDetail(
 		]),
 	]);
 	const named = (text: string | null) => text && nameOldRecords(text, names);
+	const labeledDates = critical_dates.map((date) => ({
+		...date,
+		label: criticalDateLabel(date.kind),
+	}));
 	return {
 		...checkInNextStep(names)(detail),
 		thread: detail.thread.map((note) => ({ ...note, text: named(note.text) })),
@@ -376,11 +393,18 @@ export async function readNextDealDetail(
 					}),
 			}),
 		),
-		critical_dates: critical_dates.map((date) => ({
-			...date,
-			label: criticalDateLabel(date.kind),
-		})),
+		critical_dates: labeledDates,
 		checklist,
+		plan: planOf({
+			phase: detail.phase,
+			outcome: detail.outcome,
+			checklist,
+			phase_spans: detail.phase_spans,
+			steps: detail.next_actions,
+			critical_dates: labeledDates,
+			lengths: typical_lengths,
+			today,
+		}),
 	};
 }
 

@@ -184,6 +184,7 @@ before(async () => {
 		update deal set parking_reason = 'client_paused' where id = '${id(32)}';
 		update deal set parking_note = 'Example pause' where id = '${id(32)}';
 		update deal set parking_reason = null, parking_note = null where id = '${id(32)}';
+		insert into typical_length (deal_kind, todo, days) values ('lease', 'loi_submission', 14);
 		commit;`);
 });
 after(cleanup);
@@ -370,6 +371,29 @@ test("the deal read gives each phase's days and each step's set and done days in
 			done_on: "2025-02-04",
 		},
 	]);
+});
+
+test("the deal read lays out its plan from the typical lengths of its kind", async () => {
+	const page = await nextTransaction(connectionString, "read", (tx) =>
+		readNextDealDetail(tx, id(32)),
+	);
+	assert.ok(!("error" in page));
+	assert.partialDeepStrictEqual(page.plan.rows.slice(4, 6), [
+		{
+			id: "loi_submission",
+			state: "current",
+			typical_days: 14,
+			from_on: null,
+			day: null,
+		},
+		{
+			id: "loi_grid",
+			state: "expected",
+			typical_days: null,
+			expected_to_on: null,
+		},
+	]);
+	assert.equal(page.plan.expected_signing_on, null);
 });
 
 const get = (path: string, schema?: string, partner = "partner_one") =>
