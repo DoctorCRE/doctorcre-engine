@@ -481,3 +481,84 @@ test("preserves large folded lines and removes individually matched lines in a c
 		...replies,
 	]);
 });
+
+function splitMessage(
+	authored: string,
+	history = "",
+	sender = "maya@example.test",
+) {
+	return {
+		...message([authored, history].filter(Boolean).join("\n\n"), sender),
+		authored,
+		history,
+	};
+}
+
+test("moves a plain-text Outlook reply header block out of stored authored ahead of stored history", () => {
+	const outlookHeader =
+		"From: Sam Example <sam@example.test>\nSent: Mon, Jan 5, 2026 9:30 AM\nTo: Maya Example <maya@example.test>\nSubject: Suite 200";
+	const singleStarred =
+		"*From:* Sam Example <sam@example.test>\n*Sent:* Mon, Jan 5, 2026 9:30 AM\n*To:* Maya Example <maya@example.test>\n*Subject:* Suite 200";
+	const doubleStarred =
+		"**From:** Sam Example <sam@example.test>\n**Sent:** Mon, Jan 5, 2026 9:30 AM\n**To:** Maya Example <maya@example.test>\n**Subject:** Suite 200";
+	const quotedEarlier = "Can we meet Tuesday at two?";
+	const storedHistory = "Earlier thread history.";
+
+	for (const block of [
+		`${outlookHeader}\n\n${quotedEarlier}`,
+		`${singleStarred}\n\n${quotedEarlier}`,
+		`${doubleStarred}\n\n${quotedEarlier}`,
+		`________________________________\n${outlookHeader}\n\n${quotedEarlier}`,
+		`--------\n${singleStarred}\n\n${quotedEarlier}`,
+		`> ${outlookHeader.replaceAll("\n", "\n> ")}\n>\n> ${quotedEarlier}`,
+	]) {
+		assert.deepEqual(
+			cleanEmailThread([splitMessage(`Tuesday works.\n\n${block}`)]),
+			[{ body: "Tuesday works.", folded: block }],
+		);
+		assert.deepEqual(
+			cleanEmailThread([
+				splitMessage(`Tuesday works.\n\n${block}`, storedHistory),
+			]),
+			[{ body: "Tuesday works.", folded: `${block}\n\n${storedHistory}` }],
+		);
+	}
+
+	assert.deepEqual(
+		cleanEmailThread([
+			splitMessage(
+				`________________________________\n${outlookHeader}\n\n${quotedEarlier}`,
+				storedHistory,
+			),
+		]),
+		[
+			{
+				body: "",
+				folded: `________________________________\n${outlookHeader}\n\n${quotedEarlier}\n\n${storedHistory}`,
+			},
+		],
+	);
+
+	const proseDate =
+		"Walkthrough details.\nDate: January 5, 2026\nMeet at the west door.";
+	assert.deepEqual(
+		cleanEmailThread([
+			splitMessage(
+				`${proseDate}\n\n${outlookHeader}\n\n${quotedEarlier}`,
+				storedHistory,
+			),
+		]),
+		[
+			{
+				body: proseDate,
+				folded: `${outlookHeader}\n\n${quotedEarlier}\n\n${storedHistory}`,
+			},
+		],
+	);
+
+	const noteOnly =
+		"Walkthrough details.\nDate: January 5, 2026\nSubject: Building walkthrough\nMeet at the west door.";
+	assert.deepEqual(cleanEmailThread([splitMessage(noteOnly, storedHistory)]), [
+		{ body: noteOnly, folded: storedHistory },
+	]);
+});
