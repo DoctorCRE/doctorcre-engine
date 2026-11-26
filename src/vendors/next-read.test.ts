@@ -206,3 +206,22 @@ test("unswitched vendors still use the public route and reject typed refs", asyn
 	);
 	assert.equal((await get("/V-102", false)).status, 404);
 });
+
+test("a vendor's details show the ruling and owner of its vendor role, not of its category", async () => {
+	const builder = id(104);
+	await door.db.query(`begin; select set_config('engine.job', 'old_system', true);
+		insert into role (slug, label, category_of) values ('contractor', 'Contractor', 'vendor');
+		insert into party (id, kind, name) values ('${builder}', 'person', 'Made-up Builder');
+		insert into party_role (party_id, role) values ('${builder}', 'contractor');
+		insert into party_role (party_id, role, disposition, disposition_reason, owner_user_id)
+			values ('${builder}', 'vendor', 'avoid', 'Made-up reason', '${dell}');
+		insert into outside_id (source, value, party_id) values ('old_system', '${builder}', '${builder}');
+		commit;`);
+	assert.partialDeepStrictEqual(await drawer(builder), {
+		recorded_category: "contractor",
+		recorded_disposition: "avoid",
+		recorded_disposition_label: "Avoid",
+		recorded_disposition_workable: false,
+		owner_label: "Example Dell",
+	});
+});
