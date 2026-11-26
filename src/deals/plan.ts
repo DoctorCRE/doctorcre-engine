@@ -74,19 +74,32 @@ type PlanFacts = {
 	lengths: Record<string, number>;
 	today: string;
 };
-type TodoRow = {
+type TodoBase = {
 	kind: "todo";
 	id: string;
 	phase: Phase;
 	label: string;
-	state: "finished" | "current" | "expected" | "not_recorded" | "undated";
 	typical_days: number | null;
-	day: number | null;
-	from_on: string | null;
-	to_on: string | null;
-	expected_from_on: string | null;
-	expected_to_on: string | null;
 };
+type TodoRow =
+	| (TodoBase & {
+			state: "finished";
+			from_on: string | null;
+			to_on: string | null;
+	  })
+	| (TodoBase & {
+			state: "current";
+			from_on: string | null;
+			day: number | null;
+			expected_to_on: string | null;
+	  })
+	| (TodoBase & {
+			state: "expected";
+			expected_from_on: string | null;
+			expected_to_on: string | null;
+	  })
+	| (TodoBase & { state: "not_recorded" })
+	| (TodoBase & { state: "undated" });
 
 export function planOf(facts: PlanFacts) {
 	const { today, lengths } = facts;
@@ -122,54 +135,60 @@ export function planOf(facts: PlanFacts) {
 		const expected_from_on = rank > at ? cursor : null;
 		for (const item of items.get(phase) ?? []) {
 			const typical_days = lengths[item.id] ?? null;
-			const row = (fields: Partial<TodoRow> & Pick<TodoRow, "state">) =>
-				chain.push({
-					kind: "todo",
-					id: item.id,
-					phase,
-					label: item.label,
-					typical_days,
-					day: null,
-					from_on: null,
-					to_on: null,
-					expected_from_on: null,
-					expected_to_on: null,
-					...fields,
-				});
-			if (FINISHED.has(item.status)) {
+			const base = {
+				kind: "todo" as const,
+				id: item.id,
+				phase,
+				label: item.label,
+				typical_days,
+			};
+			// A recorded move-in sits on its own day. It must not move the next start.
+			if (OFF_CHAIN.has(item.id)) {
+				const recorded = item.id === "move_in" ? item.finished_on : null;
+				const moved = chain.find((entry) => entry.id === "move_in");
+				const movedOn =
+					item.id === "check_in_90_day" && !lost && moved?.state === "finished"
+						? moved.to_on
+						: null;
+				if (recorded)
+					chain.push({
+						...base,
+						state: "finished",
+						from_on: recorded,
+						to_on: recorded,
+					});
+				else if (movedOn)
+					chain.push({
+						...base,
+						state: "expected",
+						expected_from_on: null,
+						expected_to_on: addDays(movedOn, CHECK_IN_DAYS),
+					});
+				else chain.push({ ...base, state: "undated" });
+			} else if (FINISHED.has(item.status)) {
 				const end = item.finished_on;
 				const starts = [lastFinish, lastSpan(phase)?.from_on ?? null];
-				row({
+				chain.push({
+					...base,
 					state: "finished",
 					from_on: end && latest(...starts.filter((day) => day && day <= end)),
 					to_on: end,
 				});
 				lastFinish = latest(lastFinish, end);
-			} else if (OFF_CHAIN.has(item.id)) {
-				const movedIn =
-					item.id === "check_in_90_day" && !lost
-						? chain.find((r) => r.id === "move_in")?.to_on
-						: null;
-				row(
-					movedIn
-						? {
-								state: "expected",
-								expected_to_on: addDays(movedIn, CHECK_IN_DAYS),
-							}
-						: { state: "undated" },
-				);
-			} else if (rank < at || lost) row({ state: "not_recorded" });
-			else if (rank === at && !onCurrent) {
+			} else if (rank < at || lost)
+				chain.push({ ...base, state: "not_recorded" });
+			else if (rank === at && !onCurrent && typical_days) {
 				onCurrent = true;
 				const from = latest(lastFinish, lastSpan(phase)?.from_on ?? null);
 				const sat = from === null ? null : daysBetween(from, today);
-				if (typical_days && sat !== null && sat > 2 * typical_days) {
+				if (sat !== null && sat > 2 * typical_days) {
 					stale = { phase, days: sat };
 					cursor = null;
-				} else if (cursor && typical_days)
+				} else if (cursor)
 					cursor = latest(addDays(from ?? today, typical_days), today);
 				else cursor = null;
-				row({
+				chain.push({
+					...base,
 					state: "current",
 					from_on: from,
 					day: sat === null ? null : sat + 1,
@@ -178,14 +197,21 @@ export function planOf(facts: PlanFacts) {
 			} else if (cursor && typical_days) {
 				const from = cursor;
 				cursor = addDays(from, typical_days);
-				row({
+				chain.push({
+					...base,
 					state: "expected",
 					expected_from_on: from,
 					expected_to_on: cursor,
 				});
 			} else {
+				if (rank === at && !onCurrent) onCurrent = true;
 				cursor = null;
-				row({ state: "expected" });
+				chain.push({
+					...base,
+					state: "expected",
+					expected_from_on: null,
+					expected_to_on: null,
+				});
 			}
 		}
 		const span = rank <= at ? lastSpan(phase) : undefined;
@@ -200,8 +226,18 @@ export function planOf(facts: PlanFacts) {
 
 	const todos = chain.filter((row) => row.id !== BEFORE_RESEARCH);
 	const todo = (id: string) => todos.find((row) => row.id === id);
+	const recordedOrExpectedEnd = (item: TodoRow | undefined) => {
+		if (item?.state === "finished") return item.to_on;
+		if (item?.state === "current" || item?.state === "expected")
+			return item.expected_to_on;
+		return null;
+	};
+	const expectedEnd = (item: TodoRow | undefined) =>
+		item?.state === "current" || item?.state === "expected"
+			? item.expected_to_on
+			: null;
 	const drawn = todos.filter(
-		(row) => !OFF_CHAIN.has(row.id) && (row.to_on || row.expected_to_on),
+		(row) => !OFF_CHAIN.has(row.id) && recordedOrExpectedEnd(row),
 	);
 	const arrows = drawn.flatMap((row, i) => {
 		const next = drawn[i + 1];
@@ -213,10 +249,9 @@ export function planOf(facts: PlanFacts) {
 		)
 		.map((date) => {
 			const before = todo(FOLLOWS.get(date.kind) ?? "");
+			const end = expectedEnd(before);
 			const at_risk = Boolean(
-				date.status !== "cleared" &&
-					before?.expected_to_on &&
-					before.expected_to_on > date.due_on,
+				date.status !== "cleared" && end && end > date.due_on,
 			);
 			const id = `critical-date:${date.id}`;
 			if (before) arrows.push({ from: before.id, to: id, at_risk });
@@ -255,7 +290,7 @@ export function planOf(facts: PlanFacts) {
 		phases,
 		rows: [...todos, ...steps, ...dates],
 		arrows,
-		expected_signing_on: signing?.to_on ?? signing?.expected_to_on ?? null,
+		expected_signing_on: recordedOrExpectedEnd(signing),
 		stale,
 	};
 }

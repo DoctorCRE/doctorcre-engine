@@ -79,6 +79,12 @@ const row = (plan: Plan, id: string) =>
 		(r): r is Extract<Plan["rows"][number], { kind: "todo" }> =>
 			r.kind === "todo" && r.id === id,
 	);
+const expectedTo = (plan: Plan, id: string) => {
+	const item = row(plan, id);
+	return item?.state === "current" || item?.state === "expected"
+		? item.expected_to_on
+		: null;
+};
 const date = (kind: string, due_on: string, status = "open") => ({
 	id: `example-${kind}`,
 	kind,
@@ -93,7 +99,6 @@ test("a finished to-do runs from the later of the last finish and its phase's st
 		state: "finished",
 		from_on: "2030-05-01",
 		to_on: "2030-05-10",
-		expected_to_on: null,
 	});
 	assert.partialDeepStrictEqual(row(plan, "loi_submission"), {
 		from_on: "2030-06-01",
@@ -102,12 +107,11 @@ test("a finished to-do runs from the later of the last finish and its phase's st
 });
 
 test("a to-do in a finished phase that never ticked is not recorded and has no days", () => {
-	assert.partialDeepStrictEqual(row(planOf(facts()), "tour_notes"), {
-		state: "not_recorded",
-		from_on: null,
-		to_on: null,
-		expected_to_on: null,
-	});
+	const missed = row(planOf(facts()), "tour_notes");
+	assert.equal(missed?.state, "not_recorded");
+	assert.equal(missed && "from_on" in missed, false);
+	assert.equal(missed && "to_on" in missed, false);
+	assert.equal(missed && "expected_to_on" in missed, false);
 });
 
 test("the to-do the deal is on counts its day from the last finish and is expected to end after its typical length", () => {
@@ -115,20 +119,18 @@ test("the to-do the deal is on counts its day from the last finish and is expect
 	assert.partialDeepStrictEqual(row(plan, "loi_grid"), {
 		state: "current",
 		from_on: "2030-06-05",
-		to_on: null,
 		day: 11,
 		typical_days: 21,
 		expected_to_on: "2030-06-26",
 	});
 	const late = planOf(facts({ today: "2030-07-10" }));
-	assert.equal(row(late, "loi_grid")?.expected_to_on, "2030-07-10");
+	assert.equal(expectedTo(late, "loi_grid"), "2030-07-10");
 });
 
 test("to-dos ahead are expected one after another, and phases ahead follow them", () => {
 	const plan = planOf(facts());
 	assert.partialDeepStrictEqual(row(plan, "business_terms"), {
 		state: "expected",
-		from_on: null,
 		expected_from_on: "2030-06-26",
 		expected_to_on: "2030-07-16",
 	});
@@ -167,7 +169,7 @@ test("to-dos ahead are expected one after another, and phases ahead follow them"
 		},
 	]);
 	assert.equal(plan.expected_signing_on, "2030-09-23");
-	assert.equal(row(plan, "commission_received")?.expected_to_on, "2030-11-18");
+	assert.equal(expectedTo(plan, "commission_received"), "2030-11-18");
 });
 
 test("arrows follow the workflow order between to-dos that have days", () => {
@@ -336,6 +338,7 @@ test("a recorded move-in sits on its own day and does not push the invoice", () 
 		}),
 	);
 	const invoice = row(recorded, "invoice_recorded");
+	const sameInvoice = row(without, "invoice_recorded");
 	const move = row(recorded, "move_in");
 	assert.equal(
 		invoice?.state === "finished" ? invoice.from_on : null,
@@ -343,9 +346,7 @@ test("a recorded move-in sits on its own day and does not push the invoice", () 
 	);
 	assert.equal(
 		invoice?.state === "finished" ? invoice.from_on : null,
-		row(without, "invoice_recorded")?.state === "finished"
-			? row(without, "invoice_recorded")?.from_on
-			: null,
+		sameInvoice?.state === "finished" ? sameInvoice.from_on : null,
 	);
 	assert.equal(move?.state, "finished");
 	assert.equal(move?.state === "finished" ? move.from_on : null, "2030-06-01");
@@ -469,15 +470,13 @@ test("only the current to-do can hold a recorded start and an expected end", () 
 
 test("move-in has no day until one is recorded, and the 90-day check-in follows a recorded move-in", () => {
 	const plan = planOf(facts());
-	assert.partialDeepStrictEqual(row(plan, "move_in"), {
-		state: "undated",
-		to_on: null,
-		expected_to_on: null,
-	});
-	assert.partialDeepStrictEqual(row(plan, "check_in_90_day"), {
-		state: "undated",
-		expected_to_on: null,
-	});
+	const move = row(plan, "move_in");
+	const check = row(plan, "check_in_90_day");
+	assert.equal(move?.state, "undated");
+	assert.equal(move && "to_on" in move, false);
+	assert.equal(move && "expected_to_on" in move, false);
+	assert.equal(check?.state, "undated");
+	assert.equal(check && "expected_to_on" in check, false);
 	const movedIn = planOf(
 		facts({ checklist: checklist({ move_in: "2030-06-01" }) }),
 	);
@@ -533,15 +532,14 @@ test("a deal in Prospective Client expects Research after its typical stay, or i
 
 test("a lost deal expects nothing, and a to-do without a typical length ends what can be expected", () => {
 	const lost = planOf(facts({ outcome: "lost" }));
-	assert.partialDeepStrictEqual(row(lost, "loi_grid"), {
-		state: "not_recorded",
-		expected_to_on: null,
-	});
+	const lostGrid = row(lost, "loi_grid");
+	assert.equal(lostGrid?.state, "not_recorded");
+	assert.equal(lostGrid && "expected_to_on" in lostGrid, false);
 	assert.equal(lost.expected_signing_on, null);
 	const { business_terms: _, ...gap } = LENGTHS;
 	const broken = planOf(facts({ lengths: gap }));
-	assert.equal(row(broken, "business_terms")?.expected_to_on, null);
-	assert.equal(row(broken, "contract_draft")?.expected_to_on, null);
+	assert.equal(expectedTo(broken, "business_terms"), null);
+	assert.equal(expectedTo(broken, "contract_draft"), null);
 	assert.equal(broken.expected_signing_on, null);
 });
 
