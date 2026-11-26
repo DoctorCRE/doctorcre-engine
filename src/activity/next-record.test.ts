@@ -140,7 +140,7 @@ test("mail capture queues each new message once per mailbox partner", async () =
 	assert.equal(other.body.activity_id, one.body.activity_id);
 	const { rows } = await db.query(
 		`select activity_id, owner_user_id, idempotency_key, kind from doc_judgment_job
-		where activity_id in ($1, $2) order by activity_id, owner_user_id`,
+		where activity_id in ($1, $2) and kind <> 'email_split' order by activity_id, owner_user_id`,
 		[one.body.activity_id, two.body.activity_id],
 	);
 	assert.deepEqual(
@@ -157,6 +157,29 @@ test("mail capture queues each new message once per mailbox partner", async () =
 			`${two.body.activity_id}:${JOE}`,
 		].sort(),
 	);
+});
+
+test("mail capture queues one split for an email that arrives without it", async () => {
+	const unsplit = mail("split-job-unsplit");
+	const split = mail("split-job-split", {
+		authored: "Example body",
+		history: "",
+	});
+	const first = await viaJob(unsplit);
+	const second = await viaJob(
+		{ ...unsplit, idempotency_key: randomUUID() },
+		{ ...MAIL_CAPTURE, "Engine-For-User": "dell" },
+	);
+	const whole = await viaJob(split);
+	assert.equal(second.body.activity_id, first.body.activity_id);
+	const { rows } = await db.query(
+		`select activity_id, owner_user_id from doc_judgment_job
+		where kind = 'email_split' and activity_id in ($1, $2)`,
+		[first.body.activity_id, whole.body.activity_id],
+	);
+	assert.deepEqual(rows, [
+		{ activity_id: first.body.activity_id, owner_user_id: JOE },
+	]);
 });
 
 test("mail capture skips lead notices and available summaries", async () => {
@@ -208,8 +231,10 @@ test("mail capture skips lead notices and available summaries", async () => {
 	}
 });
 
-test("mail capture succeeds before the enqueue migration", async () => {
-	await db.query("drop function queue_email_summary(uuid)");
+test("mail capture succeeds before the enqueue migrations", async () => {
+	await db.query(
+		"drop function queue_email_summary(uuid); drop function queue_email_split(uuid)",
+	);
 	try {
 		const response = await viaJob(mail("summary-before-enqueue-migration"));
 		assert.equal(response.status, 201);
@@ -226,6 +251,7 @@ test("mail capture succeeds before the enqueue migration", async () => {
 		);
 	} finally {
 		await db.query(await readSchema("add-queue-email-summary.sql"));
+		await db.query(await readSchema("add-email-split-job.sql"));
 	}
 });
 

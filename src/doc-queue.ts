@@ -62,8 +62,9 @@ async function claimDocTurn(
 	};
 }
 
+type JudgmentKind = "email_summary" | "email_filing" | "email_split";
 type JudgmentInput = {
-	kind: "email_summary" | "email_filing";
+	kind: JudgmentKind;
 	activity_id: string;
 	subject: string;
 	body: string;
@@ -76,10 +77,20 @@ const judgmentInput = sql`j.kind, j.activity_id, e.subject, e.body,
 		'id', coalesce(deal_id, vendor_id)
 	) order by position) from doc_judgment_destination where job_id = j.id), '[]') as destinations`;
 
+const mail = ["email_summary", "email_filing"] satisfies JudgmentKind[];
+// Splits run only on the partner's own Mac, once its runner asks for them.
+const mailKinds = {
+	mac: [],
+	mac_with_judgment: mail,
+	mac_with_split: [...mail, "email_split"],
+	backup: [],
+	backup_mail: mail,
+} satisfies Record<string, JudgmentKind[]>;
+
 export async function claimDocWork(
 	tx: Transaction<DB>,
 	owner: string,
-	runner: "mac" | "mac_with_judgment" | "backup" | "backup_mail",
+	runner: keyof typeof mailKinds,
 ) {
 	await sql`select pg_advisory_xact_lock(hashtextextended(${`doc queue ${owner}`}, 0))`.execute(
 		tx,
@@ -89,7 +100,7 @@ export async function claimDocWork(
 			? sql`${queuedAt} <= statement_timestamp() - interval '2 minutes'
 				or (select status from ${docLinkState(owner)} link) <> 'ready'`
 			: sql`true`;
-	const claimsMail = runner === "backup_mail" || runner === "mac_with_judgment";
+	const kinds: JudgmentKind[] = mailKinds[runner];
 	const turnQueuedAt = sql`coalesce(requeued_at, created_at)`;
 	const mailQueuedAt = sql`created_at`;
 	// Turns still run before the separate judgment storage migration.
@@ -99,7 +110,7 @@ export async function claimDocWork(
 	const mailQueue = storage?.installed
 		? sql`
 		union all
-		select 'mail', id, created_at, state, claim_id, claim_until,
+		select 'mail', kind, id, created_at, state, claim_id, claim_until,
 			(${eligible(mailQueuedAt)}) as eligible from doc_judgment_job
 		where owner_user_id = ${owner} and state in ('queued', 'working')
 	`
@@ -115,13 +126,13 @@ export async function claimDocWork(
 			claim_until: string | null;
 		}>`
 			with pending as (
-				select 'turn' as queue, id, created_at, state, claim_id, claim_until,
+				select 'turn' as queue, null as kind, id, created_at, state, claim_id, claim_until,
 					(${eligible(turnQueuedAt)}) as eligible from doc_turn
 				where owner_user_id = ${owner} and state in ('queued', 'working')
 				${mailQueue}
 			)
 			select queue, id, state, claim_id, claim_until::text from pending
-			where eligible and (queue = 'turn' or ${claimsMail})
+			where eligible and (queue = 'turn' or kind = any(${kinds}::text[]))
 			  and not exists (select 1 from pending where claim_until > statement_timestamp())
 			order by queue <> 'turn', created_at, id
 			limit 1
@@ -219,9 +230,35 @@ const filingResult = z.strictObject({
 	),
 });
 
+const splitResult = z.strictObject({ authored: z.array(text) });
+
+// The sender's paragraphs must appear in the body in order; the rest of the body is the earlier text.
+function splitBody(body: string, paragraphs: string[]) {
+	const rest: string[] = [];
+	let at = 0;
+	for (const paragraph of paragraphs) {
+		const start = body.indexOf(paragraph, at);
+		if (start < 0) return undefined;
+		rest.push(body.slice(at, start));
+		at = start + paragraph.length;
+	}
+	rest.push(body.slice(at));
+	return {
+		authored: paragraphs.join("\n\n"),
+		history: rest
+			.map((part) => part.trim())
+			.filter(Boolean)
+			.join("\n\n"),
+	};
+}
+
 function validateJudgment(outcome: unknown, work: JudgmentInput) {
 	const quotesEmail = (quote: string) =>
 		work.body.includes(quote) || work.subject.includes(quote);
+	if (work.kind === "email_split") {
+		const result = splitResult.safeParse(outcome).data;
+		return result && splitBody(work.body, result.authored);
+	}
 	if (work.kind === "email_summary") {
 		const result = summaryResult.safeParse(outcome).data;
 		return result && quotesEmail(result.quote) ? result : undefined;
@@ -289,6 +326,7 @@ export async function saveDocJudgment(
 	}
 
 	const summary = result && "summary" in result ? result : null;
+	const split = result && "authored" in result ? result : null;
 	if (summary)
 		await sql`select pg_advisory_xact_lock(hashtextextended(${`email summary ${job.activity_id}`}, 0))`.execute(
 			tx,
@@ -319,10 +357,18 @@ export async function saveDocJudgment(
 			job,
 			result && "facts" in result ? result.facts : [],
 		);
-	if (summary) {
+	if (summary || split)
 		await sql`select set_config('engine.job', 'mail_capture', true)`.execute(
 			tx,
 		);
+	if (split)
+		await tx
+			.updateTable("email")
+			.set(split)
+			.where("activity_id", "=", job.activity_id)
+			.where("authored", "is", null)
+			.execute();
+	if (summary) {
 		await sql`
 			select record_email_summary(${job.activity_id}, ${job.source_hash}, 'doc-link.email-summary.v1',
 				'available', ${summary.summary}, jsonb_build_object(
